@@ -8,9 +8,12 @@
 #![allow(dead_code)]
 
 pub mod chart;
+pub mod gimmicks;
 pub mod history;
 pub mod state;
+pub mod sv_curves;
 pub mod timing;
+pub mod tools;
 pub mod view;
 
 use std::path::{Path, PathBuf};

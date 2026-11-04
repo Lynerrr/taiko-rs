@@ -14,11 +14,16 @@ use winit::keyboard::KeyCode;
 use super::chart::{HitObject, Taiko};
 use super::state::{Editor, Tool};
 use super::timing::{self, SNAP_DIVISORS};
+use super::tools::{GimmickTool, SvParams, Target};
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, OSU_TIMING_MS};
 use crate::game::Game;
 use crate::render::{Canvas, accent, rgba};
 use crate::video::FRAME_VW;
+
+mod panel;
+
+use panel::{GFlag, GParam};
 
 pub type TrackResult = Result<Arc<Track>, String>;
 
@@ -69,6 +74,19 @@ pub enum Btn {
     Dec(Field),
     Inc(Field),
     Edit(Field),
+    /// Switches the right-hand panel between the inspector and the gimmick tools.
+    Gimmicks,
+    GPage(u8),
+    GTool(GimmickTool),
+    GStep(GParam, i32),
+    GFlag(GFlag),
+    GCurve(i32),
+    GApply(Target),
+    GGenerate,
+    GPreview,
+    GKeep,
+    GCancel,
+    GBase,
 }
 
 #[derive(Clone, Copy)]
@@ -153,6 +171,13 @@ pub struct View {
     typing: Option<(Field, String)>,
     mouse: (f32, f32),
     pub width: f32,
+    /// The right-hand panel shows the gimmick tools.
+    pub gimmicks: bool,
+    g_page: u8,
+    g_tool: GimmickTool,
+    g_sv: SvParams,
+    /// A gimmick was applied as a preview and can still be cancelled.
+    g_pending: bool,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -199,6 +224,11 @@ impl View {
             typing: None,
             mouse: (0.0, 0.0),
             width: 853.0,
+            gimmicks: false,
+            g_page: 0,
+            g_tool: GimmickTool::BarlineNote,
+            g_sv: SvParams::default(),
+            g_pending: false,
         };
         v.follow(true);
         Ok(v)
@@ -438,7 +468,11 @@ impl View {
         );
         self.draw_bar(c);
         self.draw_preview(c, scroll_speed);
-        self.draw_inspector(c);
+        if self.gimmicks {
+            self.draw_gimmicks(c);
+        } else {
+            self.draw_inspector(c);
+        }
         self.draw_timeline(c);
         self.draw_graph(c);
         self.draw_footer(c);
@@ -520,7 +554,9 @@ impl View {
             Btn::Play,
             self.playing.is_some(),
         )];
-        self.row(c, x, y, &play);
+        x = self.row(c, x, y, &play) + 6.0;
+        let panel = [("Gimmicks".to_string(), Btn::Gimmicks, self.gimmicks)];
+        self.row(c, x, y, &panel);
     }
 
     fn draw_preview(&mut self, c: &mut Canvas, scroll_speed: f64) {
@@ -1533,6 +1569,21 @@ impl View {
                     self.typing = Some((f, String::new()));
                 }
             }
+            Btn::Gimmicks => self.gimmicks = !self.gimmicks,
+            Btn::GPage(p) => self.g_page = p,
+            Btn::GTool(t) => self.g_tool = t,
+            Btn::GStep(p, dir) => self.step_param(p, dir as f64, keys.shift),
+            Btn::GFlag(f) => self.toggle_flag(f),
+            Btn::GCurve(d) => self.cycle_curve(d),
+            Btn::GApply(t) => self.gimmick_apply(t, false),
+            Btn::GGenerate => self.gimmick_generate(false),
+            Btn::GPreview => self.gimmick_preview(),
+            Btn::GKeep => self.settle_preview(),
+            Btn::GCancel => self.gimmick_cancel(),
+            Btn::GBase => {
+                self.ed.reset_base();
+                self.status = "base timing is now the current chart".into();
+            }
         }
     }
 
@@ -1643,6 +1694,7 @@ impl View {
             KeyCode::KeyY if keys.ctrl => self.press(Btn::Redo, keys, audio),
             KeyCode::KeyS if keys.ctrl => self.save(),
             KeyCode::KeyG if !keys.ctrl && !repeat => self.press(Btn::AddGreen, keys, audio),
+            KeyCode::Tab if !repeat => self.gimmicks = !self.gimmicks,
             _ => return KeyResult::Pass,
         }
         KeyResult::Handled
@@ -1669,6 +1721,7 @@ fn digit(c: KeyCode) -> Option<char> {
 mod tests {
     use super::*;
     use crate::editor::chart::tests::MAP;
+    use crate::editor::sv_curves::Curve;
 
     fn view() -> View {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1841,6 +1894,69 @@ mod tests {
         v.key(KeyCode::Digit0, false, Keys::default(), None);
         v.key(KeyCode::Enter, false, Keys::default(), None);
         assert_eq!(v.ed.chart.timing[1].sv(), 2.0);
+    }
+
+    fn press(v: &mut View, b: Btn) {
+        v.press(b, Keys::default(), None);
+    }
+
+    #[test]
+    fn the_gimmick_panel_applies_previews_and_cancels() {
+        let mut v = view();
+        press(&mut v, Btn::Gimmicks);
+        assert!(v.gimmicks);
+        v.ed.time = 4000.0;
+        let lines = v.ed.chart.timing.len();
+        press(&mut v, Btn::GTool(GimmickTool::FakeNote));
+        press(&mut v, Btn::GApply(Target::Playhead(true)));
+        assert!(v.ed.chart.timing.len() > lines, "{}", v.status);
+        assert!(!v.g_pending);
+        assert!(v.ed.undo());
+        // A preview can be cancelled, and kept.
+        press(&mut v, Btn::GPreview);
+        assert!(v.g_pending);
+        press(&mut v, Btn::GCancel);
+        assert_eq!(v.ed.chart.timing.len(), lines);
+        press(&mut v, Btn::GPreview);
+        press(&mut v, Btn::GKeep);
+        assert!(!v.g_pending && v.ed.chart.timing.len() > lines);
+        // The panel draws, on both pages.
+        draw(&mut v);
+        press(&mut v, Btn::GPage(1));
+        draw(&mut v);
+    }
+
+    #[test]
+    fn the_panels_numbers_and_switches_change_what_a_tool_writes() {
+        let mut v = view();
+        press(&mut v, Btn::GStep(GParam::GimmickBpm, 1));
+        assert_eq!(v.ed.gimmick.gimmick_bpm, 61_000.0);
+        press(&mut v, Btn::GStep(GParam::KatSpacing, 1));
+        assert_eq!(
+            (v.ed.gimmick.kat_spacing1_ms, v.ed.gimmick.kat_spacing2_ms),
+            (2, 4)
+        );
+        press(&mut v, Btn::GFlag(GFlag::Hide));
+        assert!(!v.ed.gimmick.hide_note);
+        press(&mut v, Btn::GCurve(1));
+        assert_eq!(v.g_sv.curve, Curve::Exp(1.3));
+        press(&mut v, Btn::GStep(GParam::SvTo, 1));
+        assert!((v.g_sv.to - 2.1).abs() < 1e-9);
+        v.ed.time = 2000.0;
+        press(&mut v, Btn::GPage(1));
+        press(&mut v, Btn::GGenerate);
+        assert!(v.status.starts_with("SV:"), "{}", v.status);
+    }
+
+    #[test]
+    fn a_wall_without_notes_says_why_and_writes_nothing() {
+        let mut v = view();
+        v.ed.chart.objects.clear();
+        press(&mut v, Btn::GTool(GimmickTool::AntiBarline));
+        let lines = v.ed.chart.timing.len();
+        press(&mut v, Btn::GApply(Target::Selection));
+        assert_eq!(v.ed.chart.timing.len(), lines);
+        assert!(v.status.contains("no notes"), "{}", v.status);
     }
 
     #[test]

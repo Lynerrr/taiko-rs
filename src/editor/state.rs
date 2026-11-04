@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::chart::{Chart, HitObject, Taiko, TimingPoint};
+use super::gimmicks::GimmickConfig;
 use super::history::{Command, History};
 use super::timing;
 
@@ -33,6 +34,14 @@ pub struct Editor {
     /// Place the finisher version of a note.
     pub big: bool,
     clipboard: Vec<HitObject>,
+    /// The gimmick tools' settings.
+    pub gimmick: GimmickConfig,
+    /// The timing the gimmick tools read BPM and SV from: the chart as it was before any gimmick
+    /// (taken at first use; see `Editor::reset_base`).
+    pub base: Option<Vec<TimingPoint>>,
+    /// Read the chart's SV as the curves it was drawn with (ramps between notes) rather than as
+    /// osu! steps, for the anti-barline wall.
+    pub sv_curves: bool,
 }
 
 impl Editor {
@@ -51,6 +60,9 @@ impl Editor {
             tool: Tool::Select,
             big: false,
             clipboard: Vec::new(),
+            gimmick: GimmickConfig::default(),
+            base: None,
+            sv_curves: false,
         }
     }
 
@@ -175,7 +187,7 @@ impl Editor {
         }
     }
 
-    fn selected(&self) -> Vec<HitObject> {
+    pub(super) fn selected(&self) -> Vec<HitObject> {
         self.chart
             .objects
             .iter()

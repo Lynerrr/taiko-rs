@@ -1,0 +1,566 @@
+//! The Gimmicks panel: pick a structure, set its numbers, aim it at the playhead or the selected
+//! notes, preview it on the playfield (it is really applied; Cancel undoes it) and keep it. A
+//! second page generates SV curves.
+
+use super::{Btn, View};
+use crate::editor::gimmicks::GimmickConfig;
+use crate::editor::sv_curves::Curve;
+use crate::editor::timing::SNAP_DIVISORS;
+use crate::editor::tools::{GimmickTool, Target};
+use crate::render::{Canvas, rgba};
+
+/// A number a gimmick tool takes.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum GParam {
+    GimmickBpm,
+    Spacing,
+    KatSpacing,
+    Offset,
+    ShinyOffset,
+    ShinyCount,
+    FakeSv,
+    RedBpm,
+    RedOffset,
+    Meter,
+    Lines,
+    DonTicks,
+    KatTicks,
+    Window,
+    // Generate SV
+    SvFrom,
+    SvTo,
+    SvDivisor,
+}
+
+/// A switch a gimmick tool has.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum GFlag {
+    Hide,
+    Omit,
+    PlaceNote,
+    Mirror,
+    RestoreAfter,
+    ShinyRed,
+    SvCurves,
+    Oscillate,
+    PerPair,
+    Relative,
+}
+
+impl GParam {
+    fn label(self) -> &'static str {
+        match self {
+            GParam::GimmickBpm => "Line BPM",
+            GParam::Spacing => "Spacing ms",
+            GParam::KatSpacing => "Kat spacing ms",
+            GParam::Offset => "Offset ms",
+            GParam::ShinyOffset => "Glow offset ms",
+            GParam::ShinyCount => "Glow count",
+            GParam::FakeSv => "Hide SV",
+            GParam::RedBpm => "BPM",
+            GParam::RedOffset => "Offset ms",
+            GParam::Meter => "Meter",
+            GParam::Lines => "Bars/beat",
+            GParam::DonTicks => "Don slit",
+            GParam::KatTicks => "Kat slit",
+            GParam::Window => "Slit window 1/",
+            GParam::SvFrom => "From x",
+            GParam::SvTo => "To x",
+            GParam::SvDivisor => "Every 1/",
+        }
+    }
+}
+
+impl GFlag {
+    fn label(self) -> &'static str {
+        match self {
+            GFlag::Hide => "Hide the note",
+            GFlag::Omit => "Omit bar",
+            GFlag::PlaceNote => "Place note",
+            GFlag::Mirror => "Mirror kat",
+            GFlag::RestoreAfter => "Restore after",
+            GFlag::ShinyRed => "Glow line",
+            GFlag::SvCurves => "SV curves",
+            GFlag::Oscillate => "Oscillate",
+            GFlag::PerPair => "Per pair",
+            GFlag::Relative => "Relative",
+        }
+    }
+}
+
+/// The numbers and switches a tool shows.
+fn controls(tool: GimmickTool) -> (&'static [GParam], &'static [GFlag]) {
+    match tool {
+        GimmickTool::BarlineNote => (
+            &[GParam::GimmickBpm, GParam::Spacing, GParam::KatSpacing],
+            &[GFlag::Hide, GFlag::PlaceNote, GFlag::Mirror],
+        ),
+        GimmickTool::FakeSlider | GimmickTool::FakeBig => {
+            (&[GParam::Offset], &[GFlag::Omit, GFlag::RestoreAfter])
+        }
+        GimmickTool::Shiny => (
+            &[GParam::ShinyCount, GParam::ShinyOffset],
+            &[GFlag::Omit, GFlag::ShinyRed],
+        ),
+        GimmickTool::FakeNote => (
+            &[GParam::Offset, GParam::FakeSv, GParam::GimmickBpm],
+            &[GFlag::Hide, GFlag::Omit],
+        ),
+        GimmickTool::RedLine => (&[GParam::RedBpm, GParam::RedOffset, GParam::Meter], &[]),
+        GimmickTool::AntiBarline => (
+            &[
+                GParam::Lines,
+                GParam::DonTicks,
+                GParam::KatTicks,
+                GParam::GimmickBpm,
+            ],
+            &[GFlag::Hide, GFlag::SvCurves],
+        ),
+        GimmickTool::HiddenAnti => (&[GParam::Window], &[GFlag::Hide]),
+    }
+}
+
+fn tool_offset_is_shiny(tool: GimmickTool) -> bool {
+    tool == GimmickTool::Shiny
+}
+
+impl View {
+    fn param_text(&self, p: GParam) -> String {
+        let c = &self.ed.gimmick;
+        let s = &self.g_sv;
+        let v = match p {
+            GParam::GimmickBpm => format!("{}", c.gimmick_bpm),
+            GParam::Spacing => c.spacing_ms.to_string(),
+            GParam::KatSpacing => c.kat_spacing1_ms.to_string(),
+            GParam::Offset => c.fake_slider_offset_ms.to_string(),
+            GParam::ShinyOffset => c.shiny_offset_ms.to_string(),
+            GParam::ShinyCount => c.shiny_count.to_string(),
+            GParam::FakeSv => format!("x{}", c.fake_slider_sv),
+            GParam::RedBpm => c
+                .red_line_bpm
+                .map_or("base".to_string(), |b| format!("{b}")),
+            GParam::RedOffset => c.red_line_offset_ms.to_string(),
+            GParam::Meter => c.red_line_meter.to_string(),
+            GParam::Lines => c.anti_lines_per_beat.to_string(),
+            GParam::DonTicks => c.anti_don_ticks.to_string(),
+            GParam::KatTicks => c.anti_kat_ticks.to_string(),
+            GParam::Window => c.hidden_window_divisor.to_string(),
+            GParam::SvFrom => format!("{:.2}", s.from),
+            GParam::SvTo => format!("{:.2}", s.to),
+            GParam::SvDivisor => s.divisor.to_string(),
+        };
+        format!("{}: {v}", p.label())
+    }
+
+    fn flag_on(&self, f: GFlag) -> bool {
+        let c = &self.ed.gimmick;
+        match f {
+            GFlag::Hide => c.hide_note,
+            GFlag::Omit => c.omit_barline,
+            GFlag::PlaceNote => c.place_notes,
+            GFlag::Mirror => c.mirror_kat_lines,
+            GFlag::RestoreAfter => c.fake_slider_restore_after,
+            GFlag::ShinyRed => c.shiny_red_line,
+            GFlag::SvCurves => self.ed.sv_curves,
+            GFlag::Oscillate => self.g_sv.oscillate,
+            GFlag::PerPair => self.g_sv.per_pair,
+            GFlag::Relative => self.g_sv.relative,
+        }
+    }
+
+    pub(super) fn toggle_flag(&mut self, f: GFlag) {
+        let on = !self.flag_on(f);
+        let c = &mut self.ed.gimmick;
+        match f {
+            GFlag::Hide => c.hide_note = on,
+            GFlag::Omit => c.omit_barline = on,
+            GFlag::PlaceNote => c.place_notes = on,
+            GFlag::Mirror => c.mirror_kat_lines = on,
+            GFlag::RestoreAfter => c.fake_slider_restore_after = on,
+            GFlag::ShinyRed => c.shiny_red_line = on,
+            GFlag::SvCurves => self.ed.sv_curves = on,
+            GFlag::Oscillate => self.g_sv.oscillate = on,
+            GFlag::PerPair => self.g_sv.per_pair = on,
+            GFlag::Relative => self.g_sv.relative = on,
+        }
+    }
+
+    pub(super) fn step_param(&mut self, p: GParam, dir: f64, big: bool) {
+        let k = if big { 10.0 } else { 1.0 };
+        let tool = self.g_tool;
+        let c: &mut GimmickConfig = &mut self.ed.gimmick;
+        let whole = |v: i64, step: f64, min: i64, max: i64| -> i64 {
+            (v + (dir * step * k) as i64).clamp(min, max)
+        };
+        match p {
+            GParam::GimmickBpm => c.gimmick_bpm = (c.gimmick_bpm + dir * 1000.0 * k).max(100.0),
+            GParam::Spacing => c.spacing_ms = whole(c.spacing_ms, 1.0, 1, 1000),
+            GParam::KatSpacing => {
+                let n = whole(c.kat_spacing1_ms, 1.0, 1, 1000);
+                c.kat_spacing1_ms = n;
+                c.kat_spacing2_ms = n + 2;
+                c.kat_spacing3_ms = n + 4;
+            }
+            GParam::Offset => {
+                if tool_offset_is_shiny(tool) {
+                    c.shiny_offset_ms = whole(c.shiny_offset_ms, 1.0, 1, 1000);
+                } else {
+                    c.fake_slider_offset_ms = whole(c.fake_slider_offset_ms, 1.0, 1, 1000);
+                }
+            }
+            GParam::ShinyOffset => c.shiny_offset_ms = whole(c.shiny_offset_ms, 1.0, 1, 1000),
+            GParam::ShinyCount => {
+                c.shiny_count = whole(c.shiny_count as i64, 1.0, 1, 16) as usize;
+            }
+            GParam::FakeSv => c.fake_slider_sv = (c.fake_slider_sv + dir * 0.5 * k).max(0.1),
+            GParam::RedBpm => {
+                let now = c.red_line_bpm.unwrap_or(0.0);
+                let next = if now == 0.0 {
+                    if dir > 0.0 { 180.0 } else { 0.0 }
+                } else {
+                    now + dir * 10.0 * k
+                };
+                c.red_line_bpm = (next >= 1.0).then_some(next);
+            }
+            GParam::RedOffset => {
+                c.red_line_offset_ms = whole(c.red_line_offset_ms, 1.0, -1000, 1000)
+            }
+            GParam::Meter => c.red_line_meter = whole(c.red_line_meter as i64, 1.0, 1, 64) as i32,
+            GParam::Lines => {
+                c.anti_lines_per_beat = whole(c.anti_lines_per_beat as i64, 6.0, 1, 512) as i32;
+            }
+            GParam::DonTicks => {
+                c.anti_don_ticks = whole(c.anti_don_ticks as i64, 1.0, 1, 32) as usize
+            }
+            GParam::KatTicks => {
+                c.anti_kat_ticks = whole(c.anti_kat_ticks as i64, 1.0, 1, 32) as usize
+            }
+            GParam::Window => {
+                c.hidden_window_divisor = whole(c.hidden_window_divisor as i64, 1.0, 1, 64) as i32;
+            }
+            GParam::SvFrom => self.g_sv.from = (self.g_sv.from + dir * 0.1 * k).clamp(0.01, 10.0),
+            GParam::SvTo => self.g_sv.to = (self.g_sv.to + dir * 0.1 * k).clamp(0.01, 10.0),
+            GParam::SvDivisor => {
+                let at = SNAP_DIVISORS
+                    .iter()
+                    .position(|&d| d >= self.g_sv.divisor)
+                    .unwrap_or(0) as i32;
+                let next = (at + dir as i32).clamp(0, SNAP_DIVISORS.len() as i32 - 1);
+                self.g_sv.divisor = SNAP_DIVISORS[next as usize];
+            }
+        }
+    }
+
+    pub(super) fn cycle_curve(&mut self, dir: i32) {
+        let all = Curve::ALL;
+        let at = all.iter().position(|c| *c == self.g_sv.curve).unwrap_or(0) as i32;
+        let n = all.len() as i32;
+        self.g_sv.curve = all[((at + dir).rem_euclid(n)) as usize].clone();
+    }
+
+    /// One row of "-  Label: value  +" controls. Returns the next y.
+    fn param_row(&mut self, c: &mut Canvas, x: f32, y: f32, w: f32, params: &[GParam]) -> f32 {
+        if params.is_empty() {
+            return y;
+        }
+        let cell = (w / params.len() as f32).min(180.0);
+        for (i, p) in params.iter().enumerate() {
+            let cx = x + cell * i as f32;
+            let text = self.param_text(*p);
+            let tw = cell - 40.0;
+            self.button(c, [cx, y, 14.0, 14.0], "-", Btn::GStep(*p, -1), false);
+            c.text(
+                cx + 18.0,
+                y + 4.0,
+                6.5,
+                rgba(0xffffff, 1.0),
+                &Canvas::fit(6.5, tw, &text),
+            );
+            self.button(
+                c,
+                [cx + cell - 20.0, y, 14.0, 14.0],
+                "+",
+                Btn::GStep(*p, 1),
+                false,
+            );
+        }
+        y + 18.0
+    }
+
+    fn flag_row(&mut self, c: &mut Canvas, x: f32, y: f32, flags: &[GFlag]) -> f32 {
+        let items: Vec<(String, Btn, bool)> = flags
+            .iter()
+            .map(|f| (f.label().to_string(), Btn::GFlag(*f), self.flag_on(*f)))
+            .collect();
+        if items.is_empty() {
+            return y;
+        }
+        self.row(c, x, y, &items);
+        y + 20.0
+    }
+
+    pub(super) fn draw_gimmicks(&mut self, c: &mut Canvas) {
+        let [x, y, w, h] = self.layout.inspector;
+        c.round_rect(
+            [x, y],
+            [w, h],
+            3.0,
+            rgba(0x15151d, 0.92),
+            rgba(0x2a2a38, 1.0),
+            1.0,
+        );
+        let (x, mut y) = (x + 8.0, y + 6.0);
+        let inner = w - 16.0;
+        let dim = rgba(0x9a9ab0, 1.0);
+        let tabs = [
+            ("Structures".to_string(), Btn::GPage(0), self.g_page == 0),
+            ("Generate SV".to_string(), Btn::GPage(1), self.g_page == 1),
+            ("Inspector (Tab)".to_string(), Btn::Gimmicks, false),
+        ];
+        self.row(c, x, y, &tabs);
+        y += 20.0;
+        if self.g_page == 0 {
+            let tools: Vec<(String, Btn, bool)> = GimmickTool::ALL
+                .iter()
+                .map(|t| (t.label().to_string(), Btn::GTool(*t), self.g_tool == *t))
+                .collect();
+            let (a, b) = tools.split_at(4);
+            self.row(c, x, y, a);
+            self.row(c, x, y + 19.0, b);
+            y += 40.0;
+            c.text(x, y, 6.0, dim, &Canvas::fit(6.0, inner, self.g_tool.help()));
+            y += 10.0;
+            let (params, flags) = controls(self.g_tool);
+            y = self.param_row(c, x, y, inner, params);
+            y = self.flag_row(c, x, y, flags);
+            let wall = self.g_tool.is_wall();
+            let mut items = Vec::new();
+            if wall {
+                items.push((
+                    "Apply to selection".to_string(),
+                    Btn::GApply(Target::Selection),
+                    false,
+                ));
+            } else {
+                items.push((
+                    "At playhead: don".to_string(),
+                    Btn::GApply(Target::Playhead(false)),
+                    false,
+                ));
+                items.push((
+                    "kat".to_string(),
+                    Btn::GApply(Target::Playhead(true)),
+                    false,
+                ));
+                items.push((
+                    "On selection".to_string(),
+                    Btn::GApply(Target::Selection),
+                    false,
+                ));
+            }
+            let ex = self.row(c, x, y, &items);
+            if self.g_pending {
+                self.row(
+                    c,
+                    ex + 6.0,
+                    y,
+                    &[
+                        ("Keep".to_string(), Btn::GKeep, true),
+                        ("Cancel".to_string(), Btn::GCancel, false),
+                    ],
+                );
+            } else {
+                self.row(
+                    c,
+                    ex + 6.0,
+                    y,
+                    &[("Preview".to_string(), Btn::GPreview, false)],
+                );
+            }
+            y += 20.0;
+            let base = if self.ed.base_looks_gimmicked() {
+                "Base timing already has gimmick lines. "
+            } else {
+                ""
+            };
+            c.text(
+                x,
+                y,
+                6.0,
+                if base.is_empty() {
+                    dim
+                } else {
+                    rgba(0xfcb806, 1.0)
+                },
+                &Canvas::fit(
+                    6.0,
+                    inner - 126.0,
+                    &format!("{base}BPM and SV come from the base timing."),
+                ),
+            );
+            self.button(
+                c,
+                [x + inner - 120.0, y - 3.0, 120.0, 14.0],
+                "Use current as base",
+                Btn::GBase,
+                false,
+            );
+        } else {
+            let s = self.g_sv.clone();
+            let (a, b) = self.ed.sv_range();
+            c.text(
+                x,
+                y,
+                6.5,
+                rgba(0xffffff, 1.0),
+                &Canvas::fit(
+                    6.5,
+                    inner,
+                    &format!("{} - {}", super::fmt_time(a), super::fmt_time(b)),
+                ),
+            );
+            y += 11.0;
+            y = self.param_row(
+                c,
+                x,
+                y,
+                inner,
+                &[GParam::SvFrom, GParam::SvTo, GParam::SvDivisor],
+            );
+            let name = s.curve.name();
+            self.button(c, [x, y, 14.0, 14.0], "<", Btn::GCurve(-1), false);
+            c.text(
+                x + 18.0,
+                y + 4.0,
+                6.5,
+                rgba(0xffffff, 1.0),
+                &format!("Curve: {name}"),
+            );
+            self.button(c, [x + 120.0, y, 14.0, 14.0], ">", Btn::GCurve(1), false);
+            y += 18.0;
+            y = self.flag_row(
+                c,
+                x,
+                y,
+                &[GFlag::Oscillate, GFlag::PerPair, GFlag::Relative],
+            );
+            let mut items = vec![("Generate".to_string(), Btn::GGenerate, false)];
+            if self.g_pending {
+                items.push(("Keep".to_string(), Btn::GKeep, true));
+                items.push(("Cancel".to_string(), Btn::GCancel, false));
+            } else {
+                items.push(("Preview".to_string(), Btn::GPreview, false));
+            }
+            self.row(c, x, y, &items);
+            // The curve, drawn: what Generate writes.
+            self.draw_curve(
+                c,
+                [
+                    x + inner - 130.0,
+                    self.layout.inspector[1] + 66.0,
+                    130.0,
+                    66.0,
+                ],
+            );
+        }
+    }
+
+    /// The SV curve Generate would write, as a small plot.
+    fn draw_curve(&mut self, c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
+        c.rect(x, y, w, h, rgba(0x0c0c12, 0.9));
+        let s = &self.g_sv;
+        let n = 24;
+        let values = if s.oscillate {
+            crate::editor::sv_curves::oscillating_series(
+                s.from,
+                s.to - s.from,
+                n,
+                &s.curve,
+                s.per_pair,
+            )
+        } else {
+            crate::editor::sv_curves::sweep(s.from, s.to, n, &s.curve)
+        };
+        let (lo, hi) = values
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| {
+                (l.min(v), h.max(v))
+            });
+        let span = (hi - lo).max(0.05);
+        let pt = |i: usize, v: f64| {
+            [
+                x + 4.0 + (w - 8.0) * i as f32 / (n - 1) as f32,
+                y + h - 4.0 - (h - 8.0) * ((v - lo) / span) as f32,
+            ]
+        };
+        for (i, v) in values.iter().enumerate() {
+            let a = pt(i, *v);
+            c.circle(a[0], a[1], 1.6, rgba(0x4fd16b, 1.0), rgba(0, 0.0), 0.0);
+        }
+        c.text(
+            x + 3.0,
+            y + 2.0,
+            5.5,
+            rgba(0x9a9ab0, 1.0),
+            &format!("{hi:.2}"),
+        );
+        c.text(
+            x + 3.0,
+            y + h - 8.0,
+            5.5,
+            rgba(0x9a9ab0, 1.0),
+            &format!("{lo:.2}"),
+        );
+    }
+
+    // ---- actions ----
+
+    pub(super) fn gimmick_apply(&mut self, target: Target, preview: bool) {
+        self.settle_preview();
+        match self.ed.apply_gimmick(self.g_tool, target) {
+            Ok(said) => {
+                self.status = format!("{}: {said}", self.g_tool.label());
+                self.g_pending = preview;
+                self.mark_stale();
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    pub(super) fn gimmick_generate(&mut self, preview: bool) {
+        self.settle_preview();
+        match self.ed.generate_sv(&self.g_sv.clone()) {
+            Ok(said) => {
+                self.status = format!("SV: {said}");
+                self.g_pending = preview;
+                self.mark_stale();
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    /// An earlier preview that wasn't cancelled is kept.
+    pub(super) fn settle_preview(&mut self) {
+        self.g_pending = false;
+    }
+
+    pub(super) fn gimmick_preview(&mut self) {
+        if self.g_page == 0 {
+            let target = if self.g_tool.is_wall() {
+                Target::Selection
+            } else {
+                Target::Playhead(false)
+            };
+            self.gimmick_apply(target, true);
+        } else {
+            self.gimmick_generate(true);
+        }
+    }
+
+    pub(super) fn gimmick_cancel(&mut self) {
+        if std::mem::take(&mut self.g_pending) && self.ed.undo() {
+            self.mark_stale();
+            self.status = "preview cancelled".into();
+        }
+    }
+}

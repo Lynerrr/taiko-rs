@@ -105,6 +105,25 @@ impl TimingPoint {
         TimingPoint::new(time, -100.0 / sv, false)
     }
 
+    /// A red line with an explicit meter and the omit-first-barline flag.
+    pub fn red_with(time: f64, bpm: f64, meter: i32, omit_barline: bool) -> TimingPoint {
+        let mut p = TimingPoint::red(time, bpm);
+        p.meter = meter;
+        p.set_omit_barline(omit_barline);
+        p
+    }
+
+    /// A green line that takes its hitsound settings, volume and kiai from `template`.
+    pub fn green_like(time: f64, sv: f64, template: &TimingPoint) -> TimingPoint {
+        let mut p = TimingPoint::green(time, sv);
+        p.sample_set = template.sample_set;
+        p.sample_index = template.sample_index;
+        p.volume = template.volume;
+        p.meter = template.meter;
+        p.effects = template.effects & EFFECT_KIAI;
+        p
+    }
+
     pub fn is_red(&self) -> bool {
         self.uninherited == 1
     }
@@ -295,6 +314,38 @@ impl HitObject {
     pub fn hit(time: f64, kat: bool, big: bool) -> HitObject {
         let sound = if kat { SOUND_WHISTLE } else { 0 } | if big { SOUND_FINISH } else { 0 };
         HitObject::bare(time, CIRCLE, sound, "0:0:0:0:".into())
+    }
+
+    /// A plain circle at (`x`, `y`) with the given hitsound bits.
+    pub fn circle_at(time: f64, x: f64, y: f64, sound: i32) -> HitObject {
+        let mut o = HitObject::bare(time, CIRCLE, sound, "0:0:0:0:".into());
+        o.x = x;
+        o.y = y;
+        o
+    }
+
+    /// A one-segment slider whose `length` is written as given (a gimmick's negative or tiny one
+    /// included), in the short form osu!stable reads: `curve,slides,length,sample`.
+    pub fn slider_at(time: f64, x: f64, y: f64, sound: i32, length: f64) -> HitObject {
+        let mut o = HitObject::bare(
+            time,
+            SLIDER,
+            sound,
+            format!(
+                "L|{}:{},1,{},0:0:0:0:",
+                fmt_num(x + 100.0),
+                fmt_num(y),
+                fmt_num(length)
+            ),
+        );
+        o.x = x;
+        o.y = y;
+        o
+    }
+
+    /// A circle (not a slider or swell).
+    pub fn is_circle(&self) -> bool {
+        self.kind & (CIRCLE | SLIDER | SPINNER) == CIRCLE
     }
 
     /// A drumroll `length` osu!pixels long.
