@@ -447,6 +447,10 @@ struct State {
     host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
     /// The lobby map was asked of the host: only then is what the host sends taken.
     host_map_asked: bool,
+    /// When the host was asked for it.
+    host_asked_at: Option<Instant>,
+    /// The lobby map last fetched by itself: each is tried once.
+    auto_fetched: Option<u64>,
     /// Local scores (index of saved replays).
     scores: Vec<scores::ScoreRow>,
     /// Working out the pp of scores saved before pp (started once, on the first frame).
@@ -8231,6 +8235,7 @@ impl State {
                         if self.host_transfer.is_none() {
                             s.client.send(net::ClientMsg::RequestMap);
                             self.host_map_asked = true;
+                            self.host_asked_at = Some(Instant::now());
                             self.toast("getting the map from the host...".into());
                         }
                     }
@@ -14709,19 +14714,62 @@ impl State {
         }
     }
 
-    /// The lobby map's download progress, for the lobby screen.
-    fn lobby_download_status(&self) -> Option<String> {
+    /// A lobby map we don't have comes by itself: from the host, who has it whatever it is, and
+    /// from the mirrors if that fails.
+    fn auto_fetch_lobby_map(&mut self) {
+        let missing = self
+            .mp
+            .as_ref()
+            .filter(|s| !s.is_host() && !s.have_map)
+            .and_then(|s| s.map.as_ref())
+            .map(|m| m.hash);
+        // Nothing's still being waited for once it's here, or we've left.
+        self.host_map_asked &= missing.is_some();
+        let busy = self.host_transfer.is_some() || self.lobby_download_status().is_some();
+        let waiting = self
+            .host_asked_at
+            .filter(|_| self.host_map_asked)
+            .map(|at| at.elapsed());
+        match multiplayer::next_fetch(missing, self.auto_fetched, busy, waiting) {
+            multiplayer::Fetch::Nothing => {}
+            multiplayer::Fetch::Tried(map) => self.auto_fetched = Some(map),
+            multiplayer::Fetch::AskHost(map) => {
+                self.auto_fetched = Some(map);
+                if let Some(s) = &self.mp {
+                    s.client.send(net::ClientMsg::RequestMap);
+                    self.host_map_asked = true;
+                    self.host_asked_at = Some(Instant::now());
+                }
+            }
+            multiplayer::Fetch::Mirrors => {
+                self.host_map_asked = false;
+                self.toast("the host isn't answering; trying the mirrors".into());
+                self.download_lobby_map();
+            }
+        }
+    }
+
+    /// The lobby map's download progress for the lobby screen: what's going on, and how much of
+    /// it is done once that's known.
+    fn lobby_download_status(&self) -> Option<(String, Option<f32>)> {
         if self.lobby_lookup.is_some() {
-            return Some("looking it up...".into());
+            return Some(("looking it up...".into(), None));
+        }
+        if self.host_map_asked {
+            return Some(("asking the host for the map...".into(), None));
         }
         let m = self.mp.as_ref()?.map.as_ref()?;
         let job = self.downloads.iter().find(|j| {
             Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
         })?;
-        Some(match job.fraction() {
-            Some(f) => format!("downloading {:.0}%", f * 100.0),
-            None => "downloading...".into(),
-        })
+        let done = job.fraction();
+        Some((
+            match done {
+                Some(f) => format!("downloading {:.0}%", f * 100.0),
+                None => "downloading...".into(),
+            },
+            done,
+        ))
     }
 
     /// Scores saved before pp get theirs worked out in the background, once, and the index is
@@ -14879,6 +14927,7 @@ impl State {
     }
 
     fn poll_downloads(&mut self) {
+        self.auto_fetch_lobby_map();
         self.poll_me();
         self.poll_pp_backfill();
         self.poll_online_scores();
@@ -16889,6 +16938,8 @@ impl State {
             preview_remote: false,
             host_transfer: None,
             host_map_asked: false,
+            host_asked_at: None,
+            auto_fetched: None,
             scores: scores::load_index(),
             pp_backfill: None,
             pp_backfill_started: false,
