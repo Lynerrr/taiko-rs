@@ -2186,6 +2186,22 @@ impl Game {
         })
     }
 
+    /// Defense: the map time a tower bought at `at` stops shooting at (it starts at the first
+    /// barline `TOWER_LEAD_MS` on and runs `TOWER_BARS` bars; infinity when the map runs out).
+    pub fn tower_until(&self, at: f64) -> f64 {
+        let bars = &self.map.barlines;
+        let first = bars.partition_point(|b| b.time < at + TOWER_LEAD_MS);
+        bars.get(first + TOWER_BARS)
+            .map_or(f64::INFINITY, |b| b.time)
+    }
+
+    /// Defense: a tower is up (building or shooting) at map time `t`.
+    pub fn tower_active(&self, t: f64) -> bool {
+        self.defense
+            .as_ref()
+            .is_some_and(|d| d.towers.iter().any(|tw| t < tw.to))
+    }
+
     /// Defense: something player `from` did, from the room (in the order it took them).
     pub fn defense_act(&mut self, from: u32, act: DefenseAct) {
         let Some(who) = self
@@ -2197,7 +2213,7 @@ impl Game {
         };
         let bars = self.defense.as_ref().map_or(1, |d| d.bars.max(1) as usize);
         let (at, what, about) = match act {
-            DefenseAct::Buy { item, at } => {
+            DefenseAct::Buy { item, at, .. } => {
                 match item {
                     DefenseItem::Slow => {
                         if let Some(d) = &mut self.defense {
@@ -2210,9 +2226,7 @@ impl Game {
                         let bars = &self.map.barlines;
                         let first = bars.partition_point(|b| b.time < at + TOWER_LEAD_MS);
                         let from = bars.get(first).map_or(f64::INFINITY, |b| b.time);
-                        let to = bars
-                            .get(first + TOWER_BARS)
-                            .map_or(f64::INFINITY, |b| b.time);
+                        let to = self.tower_until(at);
                         let notes = &self.map.notes;
                         let Some(d) = &mut self.defense else { return };
                         let k = d.towers.len() as u8;
@@ -5283,12 +5297,12 @@ impl Game {
         } else {
             0.0
         };
-        let (pw, x0, y0) = (220.0, w / 2.0 - 110.0 + shake, 8.0);
+        let (pw, ph, x0, y0) = (260.0, 46.0, w / 2.0 - 130.0 + shake, 8.0);
         if hurt > 0.0 {
             let slip = 3.0 + 4.0 * hurt;
             c.round_rect(
                 [x0 - slip, y0],
-                [pw, 34.0],
+                [pw, ph],
                 8.0,
                 rgba(SPLIT_RED, 0.45 * hurt),
                 rgba(0, 0.0),
@@ -5296,7 +5310,7 @@ impl Game {
             );
             c.round_rect(
                 [x0 + slip, y0],
-                [pw, 34.0],
+                [pw, ph],
                 8.0,
                 rgba(SPLIT_CYAN, 0.45 * hurt),
                 rgba(0, 0.0),
@@ -5305,7 +5319,7 @@ impl Game {
         }
         c.round_rect(
             [x0, y0],
-            [pw, 34.0],
+            [pw, ph],
             8.0,
             rgba(0x14141c, 0.85),
             rgba(team_colour(d.me), 0.9),
@@ -5337,14 +5351,25 @@ impl Game {
                 0.0,
             );
         }
+        // Row 1: the lives left, the shield on the right. Row 2: whose turn it is.
         let lives = d.lives;
-        let mut text =
-            tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";);
+        c.text(
+            x0 + 10.0,
+            y0 + 18.0,
+            7.0,
+            rgba(fill, 1.0),
+            &tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";),
+        );
         if st.shield > 0 {
             let shield = st.shield;
-            text.push_str(&tr!("  +{shield} shield", "  +{shield}シールド", "  +{shield} щит";));
+            c.text_right(
+                x0 + pw - 10.0,
+                y0 + 18.0,
+                7.0,
+                rgba(SPLIT_CYAN, 1.0),
+                &tr!("+{shield} shield", "+{shield}シールド", "+{shield} щит";),
+            );
         }
-        c.text(x0 + 10.0, y0 + 18.0, 7.0, rgba(fill, 1.0), &text);
         let (turn_text, col) = if wait == 0 {
             (
                 tr!("YOUR TURN", "あなたの番", "ТВОЙ ХОД").to_string(),
@@ -5352,13 +5377,19 @@ impl Game {
             )
         } else {
             let name = d.team.get(turn).map_or("?", |p| p.1.as_str());
-            let name = Canvas::fit(7.0, 80.0, name);
+            let name = Canvas::fit(7.0, 110.0, name);
             (
                 tr!("{name}  (you in {wait})", "{name}  (あと{wait}小節)", "{name}  (ты через {wait})";),
                 team_colour(turn),
             )
         };
-        c.text_right(x0 + pw - 10.0, y0 + 18.0, 7.0, rgba(col, 1.0), &turn_text);
+        c.text_centered(
+            x0 + pw / 2.0,
+            y0 + 31.0,
+            7.0,
+            rgba(col, 1.0),
+            &Canvas::fit(7.0, pw - 20.0, &turn_text),
+        );
 
         // What the team just did, and what it does, in a banner under the lives.
         let callout = d
@@ -5380,7 +5411,7 @@ impl Game {
             } else {
                 0.0
             };
-            let (bx, by) = (w / 2.0 - tw / 2.0 + jit, 48.0);
+            let (bx, by) = (w / 2.0 - tw / 2.0 + jit, 60.0);
             c.rect(bx - 2.0, by, tw, 18.0, rgba(SPLIT_RED, 0.35 * k));
             c.rect(bx + 2.0, by, tw, 18.0, rgba(SPLIT_CYAN, 0.35 * k));
             c.rect(bx, by, tw, 18.0, rgba(0x0b0b10, 0.92 * k));
@@ -5388,8 +5419,8 @@ impl Game {
             c.text_centered(w / 2.0 + jit, by + 5.0, 7.5, rgba(WHITE, k), &text);
         }
 
-        // The team panel, left under the drum.
-        let (x, mut y) = (10.0, 296.0);
+        // The team panel, right under the drum (the scoreboard has the left).
+        let (x, mut y) = (w - 198.0, 296.0);
         c.round_rect(
             [x - 4.0, y - 4.0],
             [192.0, 96.0],
@@ -5434,7 +5465,8 @@ impl Game {
         {
             let (cx, cy) = (x + (k % 2) as f32 * 94.0, y + (k / 2) as f32 * 11.0);
             let price = item.price(&st);
-            let can = st.gold >= price;
+            let tower = matches!(item, DefenseItem::DonTower | DefenseItem::KatTower);
+            let can = st.gold >= price && !(tower && self.tower_active(t));
             c.text(
                 cx,
                 cy,
@@ -5475,15 +5507,17 @@ impl Game {
         let w = c.width;
         if let Some(text) = &self.banner {
             let tw = Canvas::text_width(9.0, text);
+            // Defense has its lives panel up there: the banner goes under it.
+            let by = if self.defense.is_some() { 90.0 } else { 14.0 };
             c.round_rect(
-                [w / 2.0 - tw / 2.0 - 12.0, 14.0],
+                [w / 2.0 - tw / 2.0 - 12.0, by],
                 [tw + 24.0, 20.0],
                 10.0,
                 rgba(0x173049, 0.9),
                 rgba(0x4fb4ff, 1.0),
                 1.0,
             );
-            c.text_centered(w / 2.0, 19.5, 9.0, rgba(WHITE, 1.0), text);
+            c.text_centered(w / 2.0, by + 5.5, 9.0, rgba(WHITE, 1.0), text);
         }
 
         self.draw_defense(c, t, w);
@@ -8170,6 +8204,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::DonTower,
                 at: 2000.0,
+                until: 0.0,
             },
         );
         g.defense_act(
@@ -8177,6 +8212,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::Slow,
                 at: 5000.0,
+                until: 0.0,
             },
         );
         g.defense_act(
@@ -8184,6 +8220,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::KatTower,
                 at: 9000.0,
+                until: 0.0,
             },
         );
         g.set_team(TeamState {
@@ -8193,18 +8230,38 @@ mod tests {
             shield: 3,
             towers: 2,
             heals: 0,
+            shields: 0,
+            tower_buys: 2,
         });
+        g.banner = Some("WATCHING  -  quassbottle".into());
         let mut c = Canvas::default();
-        for t in [3200.0, 4700.0, 6500.0, 11_200.0] {
-            g.set_time(t - 400.0);
-            g.press_at(1, t - 400.0, None);
-            g.time = t;
-            c.clear(853.3);
-            g.draw_playfield(&mut c, 1.0);
-            g.draw_hud(&mut c);
-            let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
-            crate::debug::write_png(&dir.join(format!("defense-{t}.png")), w, h, &rgb).unwrap();
+        for lang in [crate::lang::Lang::En, crate::lang::Lang::Ru] {
+            crate::lang::set(lang);
+            for t in [3200.0, 4700.0, 6500.0, 11_200.0] {
+                g.set_time(t - 400.0);
+                g.press_at(1, t - 400.0, None);
+                g.time = t;
+                c.clear(853.3);
+                g.draw_playfield(&mut c, 1.0);
+                g.draw_hud(&mut c);
+                let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
+                let name = format!("defense-{}-{t}.png", lang.code());
+                crate::debug::write_png(&dir.join(name), w, h, &rgb).unwrap();
+                // The text of the HUD alone, audited: nothing off screen, cut off or over other text.
+                for width in [640.0, 853.3, 1100.0] {
+                    let mut a = Canvas {
+                        audit: true,
+                        ..Canvas::default()
+                    };
+                    a.clear(width);
+                    g.draw_hud(&mut a);
+                    for p in crate::debug::layout_problems(&a) {
+                        eprintln!("[defense {} {t} @{width}] {p}", lang.code());
+                    }
+                }
+            }
         }
+        crate::lang::set(crate::lang::Lang::En);
     }
     #[test]
     fn rails_leave_the_hit_target_heading_right_and_never_jump() {
@@ -8382,8 +8439,14 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::DonTower,
                 at: 6600.0,
+                until: 0.0,
             },
         );
+        // One tower at a time: it stands from the purchase until its fourth bar is over.
+        let until = g.tower_until(6600.0);
+        assert_eq!(until, g.defense.as_ref().unwrap().towers[0].to);
+        assert!(g.tower_active(6600.0) && g.tower_active(until - 1.0));
+        assert!(!g.tower_active(until));
         let d = g.defense.as_ref().unwrap();
         let taken: Vec<usize> = (0..64).filter(|&i| d.shot[i].is_some()).collect();
         assert_eq!(taken, (20..36).collect::<Vec<_>>());
@@ -8402,6 +8465,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::KatTower,
                 at: 20_000.0,
+                until: 0.0,
             },
         );
         assert!(g.defense.as_ref().unwrap().towers[1].notes.is_empty());
@@ -8411,6 +8475,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::DonTower,
                 at: 0.0,
+                until: 0.0,
             },
         );
         assert_eq!(g.defense.as_ref().unwrap().towers.len(), 2);
@@ -8535,6 +8600,7 @@ mod tests {
             DefenseAct::Buy {
                 item: DefenseItem::Slow,
                 at: 2000.0,
+                until: 0.0,
             },
         );
         assert_eq!(g.slow_factor(1900.0), 1.0);

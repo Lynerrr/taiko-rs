@@ -8124,11 +8124,27 @@ impl State {
                             ));
                             None
                         }
+                        (Some(net::DefenseItem::DonTower | net::DefenseItem::KatTower), _)
+                            if game.tower_active(t) =>
+                        {
+                            self.toast("a tower is already up".into());
+                            None
+                        }
                         (Some(net::DefenseItem::Heal), _) if team.lives >= team.max => {
                             self.toast("the team has all its lives".into());
                             None
                         }
-                        (Some(item), _) => Some(net::DefenseAct::Buy { item, at: t }),
+                        (Some(item), _) => {
+                            let until = if matches!(
+                                item,
+                                net::DefenseItem::DonTower | net::DefenseItem::KatTower
+                            ) {
+                                game.tower_until(t).min(f64::MAX) // JSON has no infinity
+                            } else {
+                                0.0
+                            };
+                            Some(net::DefenseAct::Buy { item, at: t, until })
+                        }
                         (None, KeyCode::KeyT) if can_tag => Some(net::DefenseAct::TagIn { at: t }),
                         (None, KeyCode::KeyT) => {
                             self.toast(
