@@ -24,6 +24,7 @@ mod debug;
 mod difficulty;
 mod discord;
 mod download;
+mod editor;
 mod font;
 mod game;
 mod genres;
