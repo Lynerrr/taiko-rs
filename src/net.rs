@@ -552,6 +552,9 @@ pub struct Live {
     /// GREATs so far (Defense pays the team a gold for each).
     #[serde(default)]
     pub great: u32,
+    /// OKs so far.
+    #[serde(default)]
+    pub ok: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

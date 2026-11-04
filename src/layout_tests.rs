@@ -149,7 +149,7 @@ const LONG_NAME: &str = "FriendWithAVeryLongName";
 
 /// A room hosted on this machine (`mapguessr`: playing mapguessr), filled with long names (its
 /// lobby, match and result screens).
-fn session(mapguessr: bool) -> multiplayer::Session {
+pub(crate) fn session(mapguessr: bool) -> multiplayer::Session {
     // Another test can take the free port found here before the room listens on it: try again.
     let mut s = (0..10)
         .find_map(|_| {
@@ -197,6 +197,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         miss: 12,
         progress: 0.5,
         great: 1234,
+        ok: 56,
     };
     let result = net::Final {
         score: 1_234_567,
@@ -236,6 +237,7 @@ fn session(mapguessr: bool) -> multiplayer::Session {
         })
         .collect();
     s.results = Some(s.players.clone());
+    s.contrib = (0..16).map(|i| (i, (99, 9))).collect();
     s.chat = (0..12)
         .map(|i| {
             (
@@ -1227,6 +1229,7 @@ fn assert_every_screen_fits() {
         miss: 12,
         progress: 0.5,
         great: 1234,
+        ok: 56,
     };
     check_draw("lobby", &mut out, |c| {
         multiplayer::draw_lobby(
@@ -1918,6 +1921,7 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
     // We're player 1; player 0 hosts.
     room.client.id = Some(1);
     room.map.as_mut().unwrap().mods = Mods::parse("DT,HD").list();
+    room.map.as_mut().unwrap().defense = None;
     s.mp = Some(room);
     s.scene = Scene::Lobby;
     s.cfg.mods = Mods::parse("FL");
@@ -1933,6 +1937,36 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
     // Not in a lobby (or as the host), the mod select shows just ours.
     s.scene = Scene::Select;
     assert_eq!(s.shown_mods(), s.cfg.mods);
+}
+
+#[test]
+fn in_defense_the_hosts_mods_are_everyones_and_a_guest_cant_change_them() {
+    let mut s = state();
+    let mut room = session(false);
+    room.client.id = Some(1);
+    {
+        let m = room.map.as_mut().unwrap();
+        m.defense = Some(net::Defense::DEFAULT);
+        // As the host's game sends them.
+        m.mods = Mods::parse("DT,HD,AT").lobby(m.defense).list();
+    }
+    s.mp = Some(room);
+    s.scene = Scene::Lobby;
+    s.cfg.mods = Mods::parse("FL");
+    let shown = s.shown_mods();
+    assert!(shown.has(mods::Mod::Hidden) && shown.has(mods::Mod::Maze));
+    assert!(
+        !shown.has(mods::Mod::Autoplay),
+        "a banned mod never gets to the team"
+    );
+    assert!(
+        !shown.has(mods::Mod::Flashlight),
+        "ours stay out of the team's match"
+    );
+    s.toggle_mod(mods::Mod::Flashlight);
+    assert_eq!(s.cfg.mods, Mods::parse("FL"), "a guest can't change them");
+    s.toggle_mod(mods::Mod::Hidden);
+    assert!(!s.cfg.mods.has(mods::Mod::Hidden));
 }
 
 #[test]

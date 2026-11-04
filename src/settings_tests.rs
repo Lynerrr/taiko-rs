@@ -164,6 +164,152 @@ fn the_menus_song_gives_way_to_the_next_when_it_ends() {
 }
 
 #[test]
+fn one_end_of_the_menus_song_moves_on_once() {
+    let mut s = layout_tests::state();
+    let t0 = Instant::now();
+    s.build_frame(&mut Canvas::default(), t0, 853.3);
+    s.play_when_scanned = false;
+    s.scene = Scene::Select;
+    s.main_menu = Some(menu::Menu::new());
+    let first = s.select.selected();
+    s.preview.song_ended();
+    s.build_frame(&mut Canvas::default(), t0, 853.3);
+    let second = s.select.selected();
+    assert_ne!(second, first);
+    for k in 1..=60u64 {
+        s.build_frame(
+            &mut Canvas::default(),
+            t0 + Duration::from_millis(50 * k),
+            853.3,
+        );
+        assert_eq!(
+            s.select.selected(),
+            second,
+            "still the next song after {k} frames"
+        );
+        assert!(!s.preview.take_finished(), "no second end after {k} frames");
+    }
+}
+
+/// A watched friend's play, as the server announces it.
+fn watched_play() -> online::SoloPlay {
+    online::SoloPlay {
+        map: net::MapInfo {
+            hash: 1,
+            artist: "artist".into(),
+            title: "title".into(),
+            version: "diff".into(),
+            rate: 1.0,
+            from: None,
+            set_id: None,
+            mods: Vec::new(),
+            multiverse: None,
+            shapeshift: None,
+            seed: None,
+            defense: None,
+            stats: None,
+        },
+        anti_mash: true,
+    }
+}
+
+#[test]
+fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let mut v = WatchView::new("bob".into());
+    v.play = Some(watched_play());
+    let map = beatmap::calibration_map(500.0, 0, 64);
+    let track = Arc::new(Track {
+        samples: Vec::new(),
+        rate: 1.0,
+    });
+    v.game = Some(Box::new(Game::new(map, track, None)));
+    v.clock = (30_000.0, Instant::now(), false);
+    s.scene = Scene::Watch(Box::new(v));
+
+    // They stop: we're seconds behind them, so the view plays on rather than going blank.
+    s.social_down(online::Down::WatchEnd {
+        player: "bob".into(),
+    });
+    let Scene::Watch(v) = &mut s.scene else {
+        panic!("still watching")
+    };
+    assert!(
+        v.game.is_some() && v.ending.is_some(),
+        "the end is still to be watched"
+    );
+    // Their next play starts meanwhile: it waits its turn.
+    s.social_down(online::Down::WatchStart {
+        player: "bob".into(),
+        play: watched_play(),
+        t: 0.0,
+        paused: false,
+        inputs: Vec::new(),
+    });
+    let Scene::Watch(v) = &mut s.scene else {
+        panic!("still watching")
+    };
+    assert!(v.game.is_some() && v.next.is_some());
+    // Once the view has got to where they stopped it moves on to that play.
+    v.game.as_mut().unwrap().time = 30_000.0;
+    s.watch_tick();
+    let Scene::Watch(v) = &s.scene else {
+        panic!("still watching")
+    };
+    assert!(v.game.is_none() && v.play.is_some() && v.next.is_none() && v.ending.is_none());
+}
+
+#[test]
+fn a_spectator_sees_the_last_seconds_before_the_results() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    let view = |games: Vec<(u32, Box<Game>)>| {
+        Scene::Spectate(Box::new(SpectateView {
+            rx: None,
+            loaded: None,
+            start: Instant::now(),
+            from: None,
+            rate: 1.0,
+            mods: Mods::NONE,
+            map: watched_play().map,
+            players: vec![(1, "a".into())],
+            games,
+            focus: Some(0),
+            pending: std::collections::HashMap::new(),
+            skipped: std::collections::HashSet::new(),
+            skip_done: false,
+            zones: Vec::new(),
+            zones_at: None,
+            ended: None,
+        }))
+    };
+    let game = || {
+        let map = beatmap::calibration_map(500.0, 0, 8);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        Box::new(Game::new(map, track, None))
+    };
+    s.mp = Some(layout_tests::session(false));
+    // Joined late, nothing on screen yet: straight to the results.
+    s.scene = view(Vec::new());
+    s.handle_server_msg(net::ServerMsg::Results(Vec::new()));
+    assert!(matches!(s.scene, Scene::MpResults));
+    // Watching: the room is over, but the view is `SPECTATE_DELAY` behind.
+    s.scene = view(vec![(1, game())]);
+    s.handle_server_msg(net::ServerMsg::Results(Vec::new()));
+    let Scene::Spectate(v) = &mut s.scene else {
+        panic!("the last seconds are still to be watched")
+    };
+    assert!(v.ended.is_some());
+    v.ended = Some(Instant::now() - SPECTATE_DELAY - Duration::from_millis(600));
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(matches!(s.scene, Scene::MpResults), "then the results");
+}
+
+#[test]
 fn applying_the_offset_suggestion_has_no_key_until_given_one() {
     use keys::{Bindings, Chord, Hotkey, Place, Resolved};
     let (o, shift_o) = (

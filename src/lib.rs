@@ -220,6 +220,9 @@ struct SpectateView {
     /// was last drawn.
     zones: Vec<[f32; 4]>,
     zones_at: Option<Instant>,
+    /// The match is over (the results came); we're `SPECTATE_DELAY` behind, so the last seconds
+    /// are still to be watched.
+    ended: Option<Instant>,
 }
 
 impl SpectateView {
@@ -259,6 +262,19 @@ struct WatchView {
     held: bool,
     fetching: bool,
     looked: Option<Instant>,
+    /// They stopped playing: their map time at the end and when we heard (we're a little
+    /// behind them, so the last seconds are still to be watched before this one is over).
+    ending: Option<(f64, Instant)>,
+    /// Their next play, started while we were still watching the end of the last.
+    next: Option<WatchStart>,
+}
+
+/// A friend's play as the server announced it.
+struct WatchStart {
+    play: online::SoloPlay,
+    t: f64,
+    paused: bool,
+    inputs: Vec<(f64, u8)>,
 }
 
 impl WatchView {
@@ -274,7 +290,24 @@ impl WatchView {
             held: false,
             fetching: false,
             looked: None,
+            ending: None,
+            next: None,
         }
+    }
+
+    /// Starts watching `start`'s play (the map is looked for again).
+    fn begin(&mut self, start: WatchStart) {
+        self.play = Some(start.play);
+        self.inputs = start.inputs;
+        self.clock = (start.t, Instant::now(), start.paused);
+        self.game = None;
+        self.rx = None;
+        self.entry = None;
+        self.held = false;
+        self.fetching = false;
+        self.looked = None;
+        self.ending = None;
+        self.next = None;
     }
 
     /// Where the player is now (map time).
@@ -7766,15 +7799,22 @@ impl State {
         info.stats = self.map_stats(entry);
         info.seed = lobby_seed(Some(self.cfg.random_seed));
         // Defense stays on (with its rules) from one map to the next.
-        info.defense = self
-            .mp
-            .as_ref()
-            .and_then(|s| s.map.as_ref())
-            .and_then(|m| m.defense);
+        info.defense = self.lobby_defense();
+        let lobby_mods = self.cfg.mods.lobby(info.defense);
+        info.mods = lobby_mods.list();
+        (info.multiverse, info.shapeshift) = mod_settings(lobby_mods);
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
         self.scene = Scene::Lobby;
+    }
+
+    /// The lobby's Defense rules, when the map picked is a Defense match.
+    fn lobby_defense(&self) -> Option<net::Defense> {
+        self.mp
+            .as_ref()
+            .and_then(|s| s.map.as_ref())
+            .and_then(|m| m.defense)
     }
 
     /// T or a click on the chat line: the keys go to a message until Enter or Esc.
@@ -7963,9 +8003,9 @@ impl State {
                         self.cfg.rate = ((self.cfg.rate + step) * 100.0).round() / 100.0;
                         self.cfg.rate = self.cfg.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
                         self.cfg.save();
-                        let (rate, mods) =
-                            (self.cfg.mods.speed(self.cfg.rate, true).0, self.cfg.mods);
+                        let rate = self.cfg.mods.speed(self.cfg.rate, true).0;
                         if let Some(mut m) = s.map.clone() {
+                            let mods = self.cfg.mods.lobby(m.defense);
                             m.rate = rate;
                             m.mods = mods.list();
                             (m.multiverse, m.shapeshift) = mod_settings(mods);
@@ -8034,6 +8074,10 @@ impl State {
                                 return;
                             }
                         };
+                        // Defense takes the host's mods for everyone; an ordinary match, the speed's.
+                        let mods = self.cfg.mods.lobby(m.defense);
+                        m.mods = mods.list();
+                        (m.multiverse, m.shapeshift) = mod_settings(mods);
                         s.client.send(net::ClientMsg::SelectMap(m));
                         self.toast(text);
                     }
@@ -9246,6 +9290,16 @@ impl State {
     /// everyone (which can't be switched here) on top of our own.
     fn shown_mods(&self) -> Mods {
         match &self.mp {
+            // In Defense the host's mods are everyone's.
+            Some(s)
+                if matches!(self.scene, Scene::Lobby)
+                    && s.map.as_ref().is_some_and(|m| m.defense.is_some()) =>
+            {
+                match s.map.as_ref().filter(|_| !s.is_host()) {
+                    Some(m) => Mods::from_list(&m.mods),
+                    None => self.cfg.mods.lobby(self.lobby_defense()),
+                }
+            }
             Some(s) if matches!(self.scene, Scene::Lobby) && !s.is_host() => {
                 let lobby = s
                     .map
@@ -9270,6 +9324,34 @@ impl State {
             ));
             return;
         }
+        // In Defense the host picks all of them, from the ones a team can have.
+        if matches!(self.scene, Scene::Lobby)
+            && let Some(s) = self.mp.as_ref().filter(|_| self.lobby_defense().is_some())
+        {
+            if !s.is_host() {
+                self.toast(
+                    tr!(
+                        "in Defense the host picks the mods",
+                        "ディフェンスではホストがMODを選ぶ",
+                        "в Обороне моды выбирает хост"
+                    )
+                    .into(),
+                );
+                return;
+            }
+            if !m.defense_ok() {
+                self.toast(format!(
+                    "{} {}",
+                    m.acronym(),
+                    tr!(
+                        "doesn't work in Defense",
+                        "はディフェンスでは使えない",
+                        "не работает в Обороне"
+                    )
+                ));
+                return;
+            }
+        }
         self.cfg.mods.toggle(m);
         self.mods_changed();
     }
@@ -9277,7 +9359,12 @@ impl State {
     /// Tells the room the mods we picked ourselves, if it doesn't have them.
     fn send_my_mods(&self) {
         let Some(s) = &self.mp else { return };
-        let mine = self.cfg.mods.free().list();
+        // Our own others don't play in Defense: the host's are the whole team's.
+        let mine = if self.lobby_defense().is_some() {
+            Vec::new()
+        } else {
+            self.cfg.mods.free().list()
+        };
         if s.me().is_some_and(|p| p.mods != mine) {
             s.client.send(net::ClientMsg::Mods(mine));
         }
@@ -9293,15 +9380,17 @@ impl State {
 
     /// As the lobby host: tells the room the match's rate, mods and mod settings as they are now.
     fn update_lobby_map(&self) {
-        let (rate, mods) = (self.play_speed().0, self.cfg.mods);
+        let rate = self.play_speed().0;
         if let Some(s) = &self.mp
             && s.is_host()
             && !s.in_match
             && let Some(mut m) = s.map.clone()
         {
             m.rate = rate;
-            // Only the speed's: everyone picks their other mods themselves.
-            m.mods = mods.shared().list();
+            // Only the speed's: everyone picks their other mods themselves. In Defense, all of
+            // the host's (a team plays one set of notes).
+            let mods = self.cfg.mods.lobby(m.defense);
+            m.mods = mods.list();
             (m.multiverse, m.shapeshift) = mod_settings(mods);
             m.seed = lobby_seed(Some(self.cfg.random_seed));
             if Some(&m) != s.map.as_ref() {
@@ -10775,26 +10864,35 @@ impl State {
                 if let Scene::Watch(v) = &mut self.scene
                     && key(&v.player) == key(&player)
                 {
-                    v.play = Some(play);
-                    v.inputs = inputs;
-                    v.clock = (t, Instant::now(), paused);
-                    v.game = None;
-                    v.rx = None;
-                    v.entry = None;
-                    v.held = false;
-                    v.fetching = false;
-                    v.looked = None;
-                    if let Some(a) = &self.audio {
-                        a.stop();
+                    let start = WatchStart {
+                        play,
+                        t,
+                        paused,
+                        inputs,
+                    };
+                    if v.ending.is_some() && v.game.is_some() {
+                        // Finish the last play first.
+                        v.next = Some(start);
+                    } else {
+                        v.begin(start);
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
                     }
                 }
             }
             Down::WatchFrame { t, paused, inputs } => {
                 if let Scene::Watch(v) = &mut self.scene {
-                    v.clock = (t, Instant::now(), paused);
-                    match v.game.as_mut().and_then(|g| g.replay.as_mut()) {
-                        Some((list, _)) => list.extend_from_slice(&inputs),
-                        None => v.inputs.extend_from_slice(&inputs),
+                    if let Some(n) = &mut v.next {
+                        n.t = t;
+                        n.paused = paused;
+                        n.inputs.extend_from_slice(&inputs);
+                    } else if v.ending.is_none() {
+                        v.clock = (t, Instant::now(), paused);
+                        match v.game.as_mut().and_then(|g| g.replay.as_mut()) {
+                            Some((list, _)) => list.extend_from_slice(&inputs),
+                            None => v.inputs.extend_from_slice(&inputs),
+                        }
                     }
                 }
             }
@@ -10802,10 +10900,15 @@ impl State {
                 if let Scene::Watch(v) = &mut self.scene
                     && key(&v.player) == key(&player)
                 {
-                    let name = v.player.clone();
-                    **v = WatchView::new(name);
-                    if let Some(a) = &self.audio {
-                        a.stop();
+                    if v.game.is_some() && v.ending.is_none() {
+                        // Watch the rest of it: we're a couple of seconds behind.
+                        v.ending = Some((v.their_time(), Instant::now()));
+                    } else if v.game.is_none() {
+                        let name = v.player.clone();
+                        **v = WatchView::new(name);
+                        if let Some(a) = &self.audio {
+                            a.stop();
+                        }
                     }
                 }
             }
@@ -10945,9 +11048,23 @@ impl State {
             }
         }
         let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
-        let target = v.their_time() - WATCH_DELAY_MS * rate;
+        // Once they've stopped, play on to where they stopped.
+        let target = match v.ending {
+            Some((end, _)) => end,
+            None => v.their_time() - WATCH_DELAY_MS * rate,
+        };
+        let mut over = false;
         if let Some(g) = &mut v.game {
-            if !v.held && g.time > target + 250.0 {
+            if let Some((end, heard)) = v.ending {
+                // Their last note is on screen; or the view stalled / the map ended.
+                over = g.time >= end - 50.0
+                    || heard.elapsed()
+                        > Duration::from_millis((WATCH_DELAY_MS * 2.0 + 4000.0) as u64);
+                if v.held {
+                    g.resume(self.audio.as_ref());
+                    v.held = false;
+                }
+            } else if !v.held && g.time > target + 250.0 {
                 g.pause(self.audio.as_ref());
                 v.held = true;
             } else if v.held && target >= g.time {
@@ -10956,6 +11073,18 @@ impl State {
             } else if !v.held && g.time < target - 4000.0 * rate {
                 // Far behind (they skipped the intro, or we stalled): jump to them.
                 g.seek(target, self.audio.as_ref(), self.play_offset);
+            }
+        }
+        if over {
+            match v.next.take() {
+                Some(next) => v.begin(next),
+                None => {
+                    let name = v.player.clone();
+                    *v = WatchView::new(name);
+                }
+            }
+            if let Some(a) = &self.audio {
+                a.stop();
             }
         }
         self.scene = Scene::Watch(v);
@@ -11018,7 +11147,11 @@ impl State {
                 let game_over = s.in_match && !in_match;
                 s.players = players;
                 // The room learns our own mods (on joining, and if it has others).
-                let mine = self.cfg.mods.free().list();
+                let mine = if map.as_ref().is_some_and(|m| m.defense.is_some()) {
+                    Vec::new()
+                } else {
+                    self.cfg.mods.free().list()
+                };
                 if !mapguessr && s.me().is_some_and(|p| p.mods != mine) {
                     s.client.send(net::ClientMsg::Mods(mine));
                 }
@@ -11055,7 +11188,8 @@ impl State {
                 }
             }
             ServerMsg::Prepare(map) => {
-                let Some(s) = &self.mp else { return };
+                let Some(s) = &mut self.mp else { return };
+                s.contrib.clear();
                 // Not in a position to play (single-player song, calibration): sit this one out.
                 if matches!(
                     self.scene,
@@ -11069,10 +11203,14 @@ impl State {
                         self.stop_audio();
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
-                        // The host's speed mods, and our own others.
-                        let mods = Mods::from_list(&map.mods)
-                            .shared()
-                            .plus(self.cfg.mods.free());
+                        // The host's speed mods, and our own others; in Defense the host's all.
+                        let mods = if map.defense.is_some() {
+                            Mods::from_list(&map.mods)
+                        } else {
+                            Mods::from_list(&map.mods)
+                                .shared()
+                                .plus(self.cfg.mods.free())
+                        };
                         let rx = self.load_with(i, map.rate, mods);
                         self.scene = Scene::MpWait {
                             rx: Some(rx),
@@ -11093,7 +11231,8 @@ impl State {
             }
             ServerMsg::MapRequested { from } => self.send_map_to(from),
             ServerMsg::Spectate { map, at, players } => {
-                let Some(s) = &self.mp else { return };
+                let Some(s) = &mut self.mp else { return };
+                s.contrib.clear();
                 match find_map(&self.library, &map) {
                     Some(i) => {
                         let start = s.client.local_instant(at);
@@ -11117,6 +11256,7 @@ impl State {
                             skip_done: false,
                             zones: Vec::new(),
                             zones_at: None,
+                            ended: None,
                         }));
                     }
                     None => {
@@ -11148,15 +11288,24 @@ impl State {
                     }
                 }
             }
-            ServerMsg::Defense { from, act } => match &mut self.scene {
-                Scene::MpPlay { game, .. } => game.defense_act(from, act),
-                Scene::Spectate(v) => {
-                    for (_, g) in v.games.iter_mut() {
-                        g.defense_act(from, act);
+            ServerMsg::Defense { from, act } => {
+                if let Some(s) = &mut self.mp {
+                    let c = s.contrib.entry(from).or_default();
+                    match act {
+                        net::DefenseAct::Buy { .. } => c.0 += 1,
+                        net::DefenseAct::TagIn { .. } => c.1 += 1,
                     }
                 }
-                _ => {}
-            },
+                match &mut self.scene {
+                    Scene::MpPlay { game, .. } => game.defense_act(from, act),
+                    Scene::Spectate(v) => {
+                        for (_, g) in v.games.iter_mut() {
+                            g.defense_act(from, act);
+                        }
+                    }
+                    _ => {}
+                }
+            }
             ServerMsg::SkipVotes { votes, of } => {
                 if let Some(s) = &mut self.mp {
                     s.skip_votes = Some((votes, of));
@@ -11175,9 +11324,14 @@ impl State {
                 if let Some(s) = &mut self.mp {
                     s.results = Some(r);
                 }
-                if matches!(self.scene, Scene::Spectate(_)) {
-                    self.stop_audio();
-                    self.scene = Scene::MpResults;
+                if let Scene::Spectate(v) = &mut self.scene {
+                    if v.games.is_empty() {
+                        self.stop_audio();
+                        self.scene = Scene::MpResults;
+                    } else {
+                        // Watch the rest of it: the view is `SPECTATE_DELAY` behind.
+                        v.ended.get_or_insert_with(Instant::now);
+                    }
                 }
             }
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
@@ -13467,6 +13621,14 @@ impl State {
                         Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
                     }
                 }
+                if v.ended
+                    .is_some_and(|t| now >= t + SPECTATE_DELAY + Duration::from_millis(500))
+                {
+                    if let Some(a) = &self.audio {
+                        a.stop();
+                    }
+                    next = Some(Scene::MpResults);
+                }
                 // Start once the map is ready and the delay has passed: the music where the
                 // players were SPECTATE_DELAY ago, every player's game snapping to it.
                 if v.games.is_empty()
@@ -13492,7 +13654,11 @@ impl State {
                             .and_then(|s| s.players.iter().find(|p| p.id == *id))
                             .map(|p| Mods::from_list(&p.mods).free())
                             .unwrap_or(Mods::NONE);
-                        let mut mods = v.mods.shared().plus(own);
+                        let mut mods = if v.map.defense.is_some() {
+                            v.mods
+                        } else {
+                            v.mods.shared().plus(own)
+                        };
                         if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                             mods.toggle(mods::Mod::Maze);
                         }
