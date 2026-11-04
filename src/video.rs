@@ -1128,6 +1128,7 @@ mod tests {
         let track = Track {
             samples: vec![0.25; 2 * 2000],
             rate: 1.5,
+            stream: None,
         };
         let sounds = std::array::from_fn(|i| {
             std::sync::Arc::from(if i == 0 { vec![0.5; 10] } else { vec![0.0; 1] })
@@ -1189,6 +1190,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: vec![0.0; 2 * 48000],
             rate: 1.0,
+            stream: None,
         });
         let map = crate::beatmap::calibration_map(500.0, 0, 8);
         let replay: Replay = serde_json::from_str(r#"{"version":1,"map_hash":1,"map_path":"","map_label":"m","player":"p","date":0,"rate":1.0,"anti_mash":false,"score":0,"accuracy":1.0,"max_combo":0,"great":0,"ok":0,"miss":0,"ur":0.0,"inputs":[]}"#).unwrap();

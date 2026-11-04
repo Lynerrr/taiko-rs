@@ -81,6 +81,7 @@ impl Round {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );

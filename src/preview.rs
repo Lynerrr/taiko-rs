@@ -465,6 +465,18 @@ impl Preview {
                         let Some(_alone) = audio::prepare_alone() else {
                             return;
                         };
+                        // A long song plays as it's decoded, unless its pitch is being moved.
+                        if shift == 1.0 {
+                            let constant = crate::mods::Speed::constant(speed);
+                            if let Ok(Some(track)) =
+                                crate::stream::open(&song, sr, constant, keep_pitch)
+                            {
+                                if !wanted_now.load(Ordering::Relaxed) {
+                                    let _ = tx.send((song, Some((track, 0, true))));
+                                }
+                                return;
+                            }
+                        }
                         let track = audio::decode_shared(&song, sr).ok().map(|t| {
                             let track = if shift == 1.0 {
                                 audio::with_rate(t, sr, speed, keep_pitch)
@@ -1380,6 +1392,7 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
         Arc::new(Track {
             samples: Vec::new(),
             rate,
+            stream: None,
         }),
         None,
     );

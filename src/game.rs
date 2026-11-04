@@ -6459,6 +6459,7 @@ impl Game {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let map = beatmap::calibration_map(500.0, 0, 64);
         let mut g = Game::with_mods(map, track, None, Mods::parse("HD"));
@@ -7106,6 +7107,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mut g = Game::with_seed(map, track, None, mods, 42);
         g.hidden = hud::Parts::NONE;
@@ -7147,6 +7149,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mods = Mods::parse(Mod::Loop.acronym());
         let mut g = Game::with_seed(map, track, None, mods, 42);
@@ -7190,6 +7193,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mods = Mods::parse(Mod::Zigzag.acronym());
         let mut g = Game::with_seed(map, track, None, mods, 42);
@@ -7239,6 +7243,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mods = Mods::parse(Mod::Shapeshift.acronym());
         let mut g = Game::with_seed(map, track, None, mods, 42);
@@ -7306,6 +7311,7 @@ mod tests {
             let track = Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             });
             let mut optimized = Game::with_seed(map.clone(), track.clone(), None, mods, 42);
             let mut reference = Game::with_seed(map.clone(), track, None, mods, 42);
@@ -7343,6 +7349,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )
@@ -7366,6 +7373,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         Game::new(map, track, None)
     }
@@ -7387,6 +7395,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mut g = Game::with_seed(map, track, None, Mods::parse("MZ"), 42);
         g.time = 1990.0;
@@ -7429,6 +7438,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse(mods),
@@ -7443,6 +7453,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
                 Mods::parse("RD"),
@@ -7549,6 +7560,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("AL"),
@@ -7588,6 +7600,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("AL"),
@@ -7696,6 +7709,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate,
+                    stream: None,
                 }),
                 None,
             );
@@ -7721,6 +7735,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8045,6 +8060,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::NONE,
@@ -8209,6 +8225,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse(mods),
@@ -8247,6 +8264,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
             );
@@ -8286,6 +8304,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
             )
@@ -8366,6 +8385,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8390,6 +8410,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8415,6 +8436,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8442,6 +8464,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8461,6 +8484,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8606,6 +8630,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8647,6 +8672,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8701,6 +8727,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8718,6 +8745,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8739,6 +8767,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8754,6 +8783,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8794,6 +8824,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("EC"),
@@ -8974,6 +9005,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9128,6 +9160,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("MZ"),
@@ -9304,6 +9337,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9355,6 +9389,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9378,6 +9413,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mut g = Game::with_seed(map, track, None, mods, 7);
         g.set_defense(
@@ -9561,6 +9597,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9594,6 +9631,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9889,6 +9927,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse(mods),
@@ -9963,6 +10002,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
             );

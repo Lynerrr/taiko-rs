@@ -75,6 +75,7 @@ mod skin;
 mod social;
 mod splash;
 mod stars;
+mod stream;
 mod style;
 mod tact;
 mod tls;
@@ -2118,8 +2119,19 @@ impl State {
 
     /// Loads `entry` for a play at `rate` with `mods` (`keep_pitch` unless NC/DC say otherwise).
     fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
+        self.load(entry, rate, mods, true)
+    }
+
+    /// `load_with` for what reads the whole song itself (a video): never a stream.
+    fn load_whole(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
+        self.load(entry, rate, mods, false)
+    }
+
+    fn load(&mut self, entry: usize, rate: f64, mods: Mods, may_stream: bool) -> Receiver<Loaded> {
         let (rate, keep_pitch) = mods.speed(rate, self.cfg.rate_keep_pitch);
-        let cached = self.cached_track(entry, rate, keep_pitch);
+        let cached = self
+            .cached_track(entry, rate, keep_pitch)
+            .filter(|t| may_stream || t.stream.is_none());
         self.pending_mods = mods;
         if cached.is_none()
             && self.preview.release_long_music()
@@ -2127,7 +2139,7 @@ impl State {
         {
             a.stop();
         }
-        self.spawn_loader(entry, rate, keep_pitch, mods, cached)
+        self.spawn_loader(entry, rate, keep_pitch, mods, cached, may_stream)
     }
 
     /// Speed the preview plays at: the match rate for the lobby map, else the selected rate.
@@ -2205,7 +2217,7 @@ impl State {
         };
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
-        let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
+        let rx = self.load_whole(entry, r.rate, Mods::from_list(&r.mods));
         self.video_status = if video::find_ffmpeg().is_some() {
             String::new()
         } else {
@@ -2995,6 +3007,7 @@ impl State {
         keep_pitch: bool,
         mods: Mods,
         cached: Option<Arc<Track>>,
+        may_stream: bool,
     ) -> Receiver<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
@@ -3009,6 +3022,15 @@ impl State {
                 let track = match (cached, rate) {
                     (Some(track), _) => track,
                     (None, Some(rate)) => {
+                        // A long song plays as it's decoded: held whole it's gigabytes.
+                        let streamed = if may_stream {
+                            stream::open(&audio_path, rate, speed, keep_pitch)?
+                        } else {
+                            None
+                        };
+                        if let Some(track) = streamed {
+                            return Ok((map, track));
+                        }
                         // Shared with the preview's full decode if that is still running.
                         let track = audio::decode_shared(&audio_path, rate)?;
                         if speed.is_constant() {
@@ -3025,6 +3047,7 @@ impl State {
                     (None, None) => Arc::new(Track {
                         samples: Vec::new(),
                         rate: 1.0,
+                        stream: None,
                     }),
                 };
                 Ok((map, track))
