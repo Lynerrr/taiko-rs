@@ -30,6 +30,13 @@ everywhere, move the offset; if they drift the longer the song goes, the BPM is 
 with several tempos needs a red line (`Ctrl+P`) at each change: time the later part by ear the same
 way. F3 Timing edits the lines, F6 lists all of them.
 
+## The song folder
+
+File > Open song folder shows the map's folder in the file manager. While the editor is open the
+game watches that folder: a `.osu` or `.tko` dropped into it (another difficulty, a map from a
+friend) joins the song list within a second, and one you change or delete there is updated or
+removed, with no restart. A file that is still being copied in is picked up once it stops growing.
+
 ## Layout
 
 - Menu bar: File, Edit, View, Timing, Help. Every command is in a menu with its key beside it.

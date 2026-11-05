@@ -49,6 +49,8 @@ The editor makes taiko maps. What you save as .osu plays the same in osu!stable;
 - Hover anything for a tip. Every command is in the menus with its key beside it.
 
 > Save often: Ctrl+S. The first save keeps a .bak of the original. Ctrl+Z undoes, Ctrl+L reverts to the last save (press twice).
+
+File > Open song folder shows the map's folder. Drop another difficulty (.osu or .tko) into it and it joins your song list within a second, no restart.
 ",
     },
     Chapter {
@@ -279,6 +281,8 @@ static RU: [Chapter; COUNT] = [
 - Наведите на что угодно — появится подсказка. Все команды есть в меню с клавишами рядом.
 
 > Сохраняйтесь чаще: Ctrl+S. Первое сохранение оставляет .bak оригинала. Ctrl+Z отменяет, Ctrl+L возвращает к последнему сохранению (нажать дважды).
+
+File > Open song folder открывает папку карты. Бросьте в неё другую сложность (.osu или .tko), и она появится в списке песен за секунду, без перезапуска.
 ",
     },
     Chapter {

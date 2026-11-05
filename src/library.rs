@@ -467,7 +467,7 @@ fn is_dir(e: &std::fs::DirEntry) -> bool {
 }
 
 /// A chart file: `.osu`, or `.tko` (an `.osu` with the client's own gimmicks added).
-fn is_map_file(p: &Path) -> bool {
+pub(crate) fn is_map_file(p: &Path) -> bool {
     p.extension()
         .is_some_and(|x| x.eq_ignore_ascii_case("osu") || x.eq_ignore_ascii_case("tko"))
 }

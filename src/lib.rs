@@ -27,6 +27,7 @@ mod discord;
 mod download;
 mod drum_nav;
 mod editor;
+mod folder_watch;
 mod font;
 mod game;
 mod genres;
@@ -607,6 +608,8 @@ struct State {
     /// asked for this library.
     custom_call: Option<Receiver<CustomKnown>>,
     custom_asked: bool,
+    /// The folder of the map in the editor, looked at for maps dropped into it.
+    folder_watch: Option<folder_watch::Watch>,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`), with
     /// the map it was on.
@@ -2422,6 +2425,69 @@ impl State {
                 }
             }
         }
+    }
+
+    /// Maps dropped into (or taken out of) the folder of the map being edited: new ones join the
+    /// library, rewritten ones are read again in place (indices stay valid), removed ones leave
+    /// the list.
+    fn folder_changed(&mut self, news: folder_watch::Changes) {
+        let mut added = Vec::new();
+        let mut changed = Vec::new();
+        let mut unreadable = Vec::new();
+        for path in news.changed {
+            let Some(meta) = beatmap::read_meta_file(&path) else {
+                unreadable.push(path);
+                continue;
+            };
+            let entry = Entry::new(path.clone(), meta);
+            match self.library.iter().position(|e| e.path == path) {
+                Some(i) => {
+                    let old = &self.library[i];
+                    if (old.size, old.modified) != (entry.size, entry.modified) {
+                        changed.push((i, path.clone(), entry.modified, entry.size));
+                        self.library[i] = entry;
+                    }
+                    self.select.gone.remove(&path);
+                    self.select.edited.remove(&path);
+                }
+                None => added.push(entry),
+            }
+        }
+        for path in news.gone {
+            if self.library.iter().any(|e| e.path == path) {
+                self.select.gone.insert(path);
+            }
+        }
+        if let Some(info) = &self.mapinfo {
+            info.extend(changed);
+            self.mapinfo_sorted = false;
+        }
+        added.sort_by(|a, b| a.path.cmp(&b.path));
+        let paths: Vec<PathBuf> = added.iter().map(|e| e.path.clone()).collect();
+        let n = paths.len();
+        self.append_maps(added);
+        if n > 0 {
+            // Listed in song select, which stays where the player left it.
+            self.select.pin(&self.library, paths);
+            self.toast(if n == 1 {
+                tr!(
+                    "picked up 1 new map from the song folder",
+                    "曲フォルダから譜面を1つ追加しました",
+                    "из папки песни подхвачена 1 новая карта"
+                )
+                .to_string()
+            } else {
+                tr!("picked up {n} new maps from the song folder", "曲フォルダから譜面を{n}個追加しました", "из папки песни подхвачено новых карт: {n}";)
+            });
+        }
+        for path in unreadable {
+            let file = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.toast(tr!("{file} isn't a taiko map the game can read", "{file}は読み込めない譜面です", "{file} — не читается как карта";));
+        }
+        self.select.refilter(&self.library);
     }
 
     /// The library entry of a map file; one that isn't in the library (a map made just now, a file
@@ -13953,6 +14019,8 @@ impl State {
         let size_label = format!("Playfield {}", self.playfield_label());
         let mut finish_calibration = false;
         let mut editor_reload: Option<(usize, f64)> = None;
+        let mut editor_folder: Option<PathBuf> = None;
+        let mut folder_news: Option<folder_watch::Changes> = None;
         let mut home_out: Option<editor::home::Out> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
@@ -15288,6 +15356,14 @@ impl State {
                 if let Some(speed) = view.take_rate_request() {
                     editor_reload = Some((view.entry, speed));
                 }
+                editor_folder = view.take_folder_request();
+                // Maps dropped into its folder (or taken out) join the list as they come.
+                if let Some(dir) = view.ed.path.parent() {
+                    if self.folder_watch.as_ref().map(|w| w.folder()) != Some(dir) {
+                        self.folder_watch = Some(folder_watch::Watch::new(dir, now));
+                    }
+                    folder_news = self.folder_watch.as_mut().and_then(|w| w.poll(now));
+                }
                 view.draw(canvas, self.cfg.scroll_speed, self.cfg.autoplay);
                 if view.take_tour_ended() && !self.cfg.editor_tour_done {
                     self.cfg.editor_tour_done = true;
@@ -15629,6 +15705,12 @@ impl State {
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 dd.draw(canvas, &groups, saved, current, screen, playfield);
             }
+        }
+        if let Some(file) = editor_folder {
+            self.show_in_folder(&file);
+        }
+        if let Some(news) = folder_news {
+            self.folder_changed(news);
         }
         if let Some((entry, speed)) = editor_reload {
             let (rx, rate) = self.spawn_track_loader(entry, speed);
@@ -18481,6 +18563,7 @@ impl State {
             loved_asked: false,
             custom_call: None,
             custom_asked: false,
+            folder_watch: None,
             playing: None,
             status_wait: None,
             scene_kind: None,

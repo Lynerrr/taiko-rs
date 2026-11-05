@@ -301,6 +301,8 @@ pub struct View {
     audio_rate: f64,
     pub rate: u32,
     pub want_rate: Option<f64>,
+    /// The player asked to see the map's folder (File > Open song folder).
+    want_folder: bool,
     game: Option<Box<Game>>,
     game_err: Option<String>,
     /// The chart changed at this moment and the preview hasn't caught up.
@@ -436,6 +438,7 @@ impl View {
             audio_rate: 48000.0,
             rate: 100,
             want_rate: None,
+            want_folder: false,
             game: None,
             game_err: None,
             stale: Some(Instant::now()),
@@ -521,6 +524,11 @@ impl View {
     pub fn set_track_loader(&mut self, rx: Receiver<TrackResult>, audio_rate: f64) {
         self.track_rx = Some(rx);
         self.audio_rate = audio_rate;
+    }
+
+    /// The map file to show in its folder, once asked for.
+    pub fn take_folder_request(&mut self) -> Option<std::path::PathBuf> {
+        std::mem::take(&mut self.want_folder).then(|| self.ed.path.clone())
     }
 
     pub fn take_rate_request(&mut self) -> Option<f64> {
