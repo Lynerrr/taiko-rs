@@ -643,7 +643,13 @@ fn route(state: &State, req: &Req) -> Reply {
             200,
             "Performance Ranking",
             "rankings",
-            pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS)),
+            pages::rankings(&state.scores.lock().unwrap().rankings(RANKINGS), false),
+        ),
+        ["rankings", "relax"] => req.page(
+            200,
+            "Relax Ranking",
+            "rankings",
+            pages::rankings(&state.scores.lock().unwrap().relax_rankings(RANKINGS), true),
         ),
         ["medals"] => {
             let (view, table) = state.medals_page(None);
@@ -667,6 +673,9 @@ fn route(state: &State, req: &Req) -> Reply {
             None => req.not_found("There is no player by that name"),
         },
         ["api", "rankings"] => Reply::json(&state.scores.lock().unwrap().rankings(RANKINGS)),
+        ["api", "rankings", "relax"] => {
+            Reply::json(&state.scores.lock().unwrap().relax_rankings(RANKINGS))
+        }
         ["download"] => req
             .page(200, "Download", "download", pages::download(req.os))
             .per_visitor(),
@@ -812,12 +821,17 @@ fn route(state: &State, req: &Req) -> Reply {
             pages::beatmaps(&state.scores.lock().unwrap().maps(MAPS)),
         ),
         ["api", "beatmaps"] => Reply::json(&state.scores.lock().unwrap().maps(MAPS)),
-        ["m", hash] | ["api", "m", hash] => {
+        ["m", hash] | ["api", "m", hash] | ["m", hash, "relax"] | ["api", "m", hash, "relax"] => {
             let Ok(map) = u64::from_str_radix(hash, 16) else {
                 return req.not_found("That is not a map link");
             };
             let scores = state.scores.lock().unwrap();
-            let rows = scores.map_scores(map);
+            let relax = segs.last() == Some(&"relax");
+            let rows = if relax {
+                scores.relax_map_scores(map)
+            } else {
+                scores.map_scores(map)
+            };
             if segs[0] == "api" {
                 return Reply::json(&rows);
             }
@@ -834,7 +848,7 @@ fn route(state: &State, req: &Req) -> Reply {
                         &m.name,
                         "beatmaps",
                         &pages::map_meta(&m, &rows),
-                        pages::map_page(&m, &rows, &love),
+                        pages::map_page(&m, &rows, &love, relax),
                     )
                 }
                 None => req.not_found("Nobody has sent a play on that map yet"),

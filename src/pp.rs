@@ -44,6 +44,7 @@ pub(crate) fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mod
         (Mod::Easy, GameMod::EasyTaiko(Default::default())),
         (Mod::Hidden, GameMod::HiddenTaiko(Default::default())),
         (Mod::HardRock, GameMod::HardRockTaiko(Default::default())),
+        (Mod::Relax, GameMod::RelaxTaiko(Default::default())),
         (
             Mod::Flashlight,
             GameMod::FlashlightTaiko(Default::default()),
@@ -61,10 +62,11 @@ pub(crate) fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mod
 }
 
 /// osu!'s mods that change the pp formula itself, with their (legacy) bits.
-const FORMULA: [(Mod, u32); 4] = [
+const FORMULA: [(Mod, u32); 5] = [
     (Mod::Easy, 2),
     (Mod::Hidden, 8),
     (Mod::HardRock, 16),
+    (Mod::Relax, 128),
     (Mod::Flashlight, 1024),
 ];
 /// Mods whose only effect on pp is the speed or the notes (`stars::load_played`), or none.
@@ -93,7 +95,7 @@ pub fn custom_factor(mods: Mods) -> f64 {
         .min(MAX_CUSTOM_FACTOR)
 }
 
-/// The pp of a play on the map at `path`. None for Autoplay / Relax, or a map that can't be read.
+/// The pp of a play on the map at `path`. None for Autoplay, or a map that can't be read.
 pub fn play_pp(path: &Path, p: &Play) -> Option<f64> {
     if p.mods.unranked() {
         return None;
@@ -280,7 +282,7 @@ pub struct Live {
 type Counts = (u32, u32, u32, u32);
 
 impl Live {
-    /// None for Autoplay / Relax (they get no pp).
+    /// None for Autoplay (it gets no pp).
     pub fn start(
         path: PathBuf,
         rate: f64,
@@ -492,6 +494,44 @@ mod tests {
         };
         assert!(random(1) != full && random(1) != random(2));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relax_gets_pp_for_its_own_lesser_difficulty_and_autoplay_gets_none() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-pp-rx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("map.osu");
+        let mut text = String::from(
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:6\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,300,4,1,0,100,1,0\n\n[HitObjects]\n",
+        );
+        for k in 0..400 {
+            let sound = if k % 3 == 0 { 2 } else { 0 };
+            text += &format!("256,192,{},1,{sound},0:0:0:0:\n", 1000 + k * 150);
+        }
+        std::fs::write(&path, text).unwrap();
+        let play = |mods: &str, scroll_speed: f64| Play {
+            great: 400,
+            ok: 0,
+            miss: 0,
+            max_combo: 400,
+            rate: 1.0,
+            mods: Mods::parse(mods),
+            scroll_speed,
+            seed: 0,
+            half: Default::default(),
+        };
+        let usual = play_pp(&path, &play("", 1.0)).unwrap();
+        let relax = play_pp(&path, &play("RX", 1.0)).unwrap();
+        assert!(relax > 0.0 && relax < usual, "{relax} against {usual}");
+        // At another scroll speed too (the mods go another way into the formula).
+        let slow = play_pp(&path, &play("RX", 0.8)).unwrap();
+        let usual_slow = play_pp(&path, &play("", 0.8)).unwrap();
+        assert!(
+            slow > 0.0 && slow < usual_slow,
+            "{slow} against {usual_slow}"
+        );
+        assert_eq!(play_pp(&path, &play("AT", 1.0)), None);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
