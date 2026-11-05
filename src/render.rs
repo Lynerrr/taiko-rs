@@ -2652,6 +2652,8 @@ pub enum Hit {
     ToMenu,
     /// A button of the first steps guide.
     Guide(crate::guide::Action),
+    /// A button or field of the editor's front door.
+    EditorHome(crate::editor::home::Act),
     /// The main menu's button to our Discord server.
     DiscordServer,
     /// A music button of the main menu or the player, and the player's timeline.
@@ -2972,6 +2974,30 @@ pub fn parse_accent(s: &str) -> Option<u32> {
 }
 
 const CLEAR: [f32; 4] = [0.0; 4];
+
+/// What `Canvas::rotate_since` does, on shapes that aren't on the canvas yet (copies of the
+/// playfield).
+pub fn rotate_shapes(
+    shapes: &mut [Shape],
+    pivot: [f32; 2],
+    angle: f32,
+    scale: f32,
+    dest: [f32; 2],
+) {
+    let (sin, cos) = angle.sin_cos();
+    for sh in shapes {
+        let (x, y) = (
+            (sh.center[0] - pivot[0]) * scale,
+            (sh.center[1] - pivot[1]) * scale,
+        );
+        sh.center = [dest[0] + x * cos - y * sin, dest[1] + x * sin + y * cos];
+        sh.half = [sh.half[0] * scale, sh.half[1] * scale];
+        sh.params[0] *= scale;
+        sh.params[1] *= scale;
+        sh.params[2] *= scale;
+        sh.angle += angle;
+    }
+}
 
 impl Canvas {
     pub fn clear(&mut self, width: f32) {
@@ -3373,19 +3399,7 @@ impl Canvas {
         scale: f32,
         dest: [f32; 2],
     ) {
-        let (sin, cos) = angle.sin_cos();
-        for sh in &mut self.shapes[start..] {
-            let (x, y) = (
-                (sh.center[0] - pivot[0]) * scale,
-                (sh.center[1] - pivot[1]) * scale,
-            );
-            sh.center = [dest[0] + x * cos - y * sin, dest[1] + x * sin + y * cos];
-            sh.half = [sh.half[0] * scale, sh.half[1] * scale];
-            sh.params[0] *= scale;
-            sh.params[1] *= scale;
-            sh.params[2] *= scale;
-            sh.angle += angle;
-        }
+        rotate_shapes(&mut self.shapes[start..], pivot, angle, scale, dest);
     }
 
     /// Squeezes every shape drawn since `start` horizontally towards x = `cx` by `fx`; a negative

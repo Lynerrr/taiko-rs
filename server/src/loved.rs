@@ -86,9 +86,12 @@ pub fn set(set: u32, love: bool, by: &str, now: u64) -> bool {
     changed
 }
 
-/// Whether plays on `set` give pp: loved here, else what osu! says (`covers`).
-pub fn gives_pp(set: Option<u32>) -> Option<bool> {
-    if contains(set) {
+/// Whether plays on `set` (the map `hash`) give pp: a custom map by its approval, loved here,
+/// else what osu! says (`covers`).
+pub fn gives_pp(set: Option<u32>, hash: u64) -> Option<bool> {
+    if crate::custom::by_hash(hash).is_some() {
+        Some(crate::custom::approved(hash))
+    } else if contains(set) {
         Some(true)
     } else {
         crate::covers::gives_pp(set)

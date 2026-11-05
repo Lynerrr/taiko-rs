@@ -12,6 +12,11 @@
 //!   /s/<id>/card.png  its card (`card.rs`), for Discord   /api/s/<id>
 //!   /mods             the mod select, and clips of what the mods do
 //!   /loved            the maps loved here (they give pp)
+//!   /custom           maps made in the editor and sent here   /api/custom   /api/custom/status
+//!   /c/<id>           a custom set; /c/<id>/download its .osz, /c/<id>/bg its background
+//!   /custom/upload    POST (an .osz, the game's token as a bearer; ?id=N updates one's own set)
+//!   /c/<id>/approve   POST: a loved nominator approves a custom set (on=0: takes it back)
+//!   /c/<id>/delete    POST: its sender (or an admin) deletes it
 //!   /a/<name>         a player's profile picture
 //!   /avatar           POST (a form with a file): set your picture; /avatar/remove takes it off
 //!   /shot             POST (a JPEG, the game's token as a bearer): a chat screenshot; its id back
@@ -138,6 +143,31 @@ impl Web {
     }
 }
 
+/// Custom maps being received at once: each one is kept in memory while it comes.
+static UPLOADS: AtomicUsize = AtomicUsize::new(0);
+const MAX_UPLOADS: usize = 3;
+
+struct UploadSlot;
+
+impl UploadSlot {
+    fn take() -> Option<UploadSlot> {
+        let mut n = UPLOADS.load(Ordering::Acquire);
+        while n < MAX_UPLOADS {
+            match UPLOADS.compare_exchange(n, n + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(UploadSlot),
+                Err(now) => n = now,
+            }
+        }
+        None
+    }
+}
+
+impl Drop for UploadSlot {
+    fn drop(&mut self) {
+        UPLOADS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// A request, read and with its visitor worked out.
 struct Req<'a> {
     method: &'a str,
@@ -223,6 +253,15 @@ fn from_elsewhere(fetch_site: &str, origin: Option<&str>, host: &str) -> bool {
 }
 
 /// Where a form on a map's page goes back to, with nothing in it but the map's hash.
+/// The content type of a stored background (the two we keep).
+fn kind_static(kind: &str) -> &'static str {
+    if kind == "image/png" {
+        "image/png"
+    } else {
+        "image/jpeg"
+    }
+}
+
 fn map_page(back: &str) -> bool {
     back.strip_prefix("/m/")
         .is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -307,11 +346,20 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
         && (path == "/avatar" || (path.starts_with("/u/") && path.ends_with("/avatar")));
     // A chat screenshot comes from the game: the file is the body, the token its bearer.
     let shot = method == "POST" && path == "/shot";
+    // A custom map comes from the editor the same way, only bigger: for a logged-in sender
+    // and a few at a time (each is held in memory).
+    let sending = method == "POST" && path == "/custom/upload";
+    let slot = (sending && bearer.as_deref().is_some_and(|t| state.user(t).is_some()))
+        .then(UploadSlot::take)
+        .flatten();
+    let custom = slot.is_some();
     // Claude's answers too (a long one in Cyrillic is ~6 bytes a letter).
     let claude = bearer.as_deref().is_some_and(crate::discord::claude_key);
     let mailer = bearer.as_deref().is_some_and(crate::mail::mailer_key);
     let max_body = if shot {
         crate::shots::MAX_BYTES
+    } else if custom {
+        crate::custom::MAX_OSZ
     } else if upload {
         crate::avatars::MAX_BYTES + MAX_FORM
     } else if claude {
@@ -321,7 +369,7 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     };
     let mut body = Vec::new();
     if method == "POST" && length <= max_body {
-        if upload || claude || shot {
+        if upload || claude || shot || custom {
             reader.get_mut().set_limit(max_body as u64);
         }
         body.resize(length, 0);
@@ -331,17 +379,17 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     }
     let viewer = token
         .as_deref()
-        .or(bearer.as_deref().filter(|_| shot))
+        .or(bearer.as_deref().filter(|_| shot || custom))
         .and_then(|t| state.user(t));
     let file = upload
         .then(|| crate::avatars::multipart_file(&content_type, &body, "avatar").map(<[u8]>::to_vec))
         .flatten()
-        .or_else(|| shot.then(|| body.clone()));
+        .or_else(|| (shot || custom).then(|| body.clone()));
     let req = Req {
         method,
         path,
         query,
-        form: if upload || shot {
+        form: if upload || shot || custom {
             HashMap::new()
         } else {
             form(&body)
@@ -356,6 +404,11 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
     };
     let mut reply = if !mailer && !web.allow(ip) {
         Reply::text(429, "too many requests, wait a minute")
+    } else if sending && !custom {
+        Reply::text(
+            429,
+            "log in first, and wait if other maps are being sent just now",
+        )
     } else if method == "POST"
         && (from_elsewhere(&fetch_site, origin.as_deref(), &host) || length > max_body)
     {
@@ -384,6 +437,9 @@ fn answer(state: &State, web: &Web, stream: TcpStream) {
                 COOKIE_DAYS * 86_400
             }
         );
+    }
+    if let Some(name) = &reply.attachment {
+        extra += &format!("Content-Disposition: attachment; filename=\"{name}\"\r\n");
     }
     if reply.kind.starts_with("text/html") {
         extra += "Vary: Cookie\r\n";
@@ -517,6 +573,8 @@ struct Reply {
     cache: &'static str,
     /// Byte ranges may be asked for (the clips).
     ranges: bool,
+    /// The file name to save it as, for a download.
+    attachment: Option<String>,
 }
 
 impl Reply {
@@ -529,6 +587,7 @@ impl Reply {
             cookie: None,
             cache: "public, max-age=30",
             ranges: false,
+            attachment: None,
         }
     }
 
@@ -828,6 +887,7 @@ fn route(state: &State, req: &Req) -> Reply {
                         loved: m.set_id.and_then(crate::loved::get),
                         can_love: req.key().is_some_and(|me| state.is_nominator(&me)),
                         notice: req.arg("msg"),
+                        custom: crate::custom::by_hash(map),
                     };
                     req.page_with(
                         200,
@@ -900,6 +960,95 @@ fn route(state: &State, req: &Req) -> Reply {
             sets.sort_by_key(|r| std::cmp::Reverse(r.loved.at));
             req.page(200, "Loved here", "loved", pages::loved(&sets))
         }
+        ["custom"] => {
+            let query = req.arg("q").unwrap_or_default();
+            req.page(
+                200,
+                "Custom maps",
+                "custom",
+                pages::custom_list(&crate::custom::list(&query), &query),
+            )
+        }
+        ["api", "custom"] => {
+            // ?ids=1,2,3 picks sets by number (the game asks about the ones it has).
+            let ids: Option<Vec<u32>> = req.arg("ids").map(|v| {
+                v.split(',')
+                    .take(500)
+                    .filter_map(|i| i.trim().parse().ok())
+                    .collect()
+            });
+            let sets: Vec<_> = crate::custom::list(&req.arg("q").unwrap_or_default())
+                .iter()
+                .filter(|s| ids.as_ref().is_none_or(|ids| ids.contains(&s.id)))
+                .map(crate::custom::Set::public)
+                .collect();
+            Reply::json(&sets)
+        }
+        ["api", "custom", "status"] => {
+            // ?hashes=<hex>,<hex>: where each of these maps stands, those that are custom only.
+            let hashes: Vec<u64> = req
+                .arg("hashes")
+                .unwrap_or_default()
+                .split(',')
+                .take(500)
+                .filter_map(|h| u64::from_str_radix(h.trim(), 16).ok())
+                .collect();
+            let found: HashMap<String, crate::custom::Status> = crate::custom::statuses(&hashes)
+                .into_iter()
+                .map(|(h, s)| (format!("{h:x}"), s))
+                .collect();
+            Reply::json(&found)
+        }
+        ["c", id] | ["api", "c", id] => {
+            let Some(set) = id.parse().ok().and_then(crate::custom::get) else {
+                return req.not_found("There is no custom set by that number");
+            };
+            if segs[0] == "api" {
+                return Reply::json(&set.public());
+            }
+            let me = req.key();
+            let view = pages::CustomView {
+                can_approve: me.as_ref().is_some_and(|k| state.is_nominator(k)),
+                can_delete: me
+                    .as_ref()
+                    .is_some_and(|k| *k == set.owner || crate::is_admin(k)),
+                notice: req.arg("msg"),
+            };
+            let title = format!("{} - {}", set.artist, set.title);
+            req.page(200, &title, "custom", pages::custom_page(&set, &view))
+        }
+        ["c", id, "download"] => match id.parse().ok().and_then(crate::custom::get) {
+            Some(set) => match crate::custom::file(set.id) {
+                Some(bytes) => {
+                    crate::custom::count_download(set.id);
+                    let bytes = crate::custom::with_sidecar(&bytes, set.id).unwrap_or(bytes);
+                    let name: String = format!("c{} {} - {}.osz", set.id, set.artist, set.title)
+                        .chars()
+                        .map(|c| {
+                            if c.is_alphanumeric() || " -_.()".contains(c) {
+                                c
+                            } else {
+                                '_'
+                            }
+                        })
+                        .collect();
+                    Reply {
+                        attachment: Some(name),
+                        cache: "no-store",
+                        ..Reply::new(200, "application/octet-stream", Cow::Owned(bytes))
+                    }
+                }
+                None => Reply::text(404, "the file is gone"),
+            },
+            None => Reply::text(404, "no such custom set"),
+        },
+        ["c", id, "bg"] => match id.parse().ok().and_then(crate::custom::background) {
+            Some((kind, bytes)) => Reply {
+                cache: "public, max-age=3600",
+                ..Reply::new(200, kind_static(&kind), Cow::Owned(bytes))
+            },
+            None => Reply::text(404, "no background"),
+        },
         ["shot", id] => match crate::shots::load(id) {
             Some(bytes) => Reply::new(200, "image/jpeg", Cow::Owned(bytes)),
             None => Reply::text(404, "no such screenshot"),
@@ -1170,6 +1319,90 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                 Err(e) => Reply::see_other(format!("/u/{}?msg={}", p.name, encode(&e))),
             }
         }
+        ["custom", "upload"] => {
+            let Some(name) = &req.viewer else {
+                return Reply::text(403, "log in to send maps");
+            };
+            let key = name.to_ascii_lowercase();
+            if state.is_banned(&key) {
+                return Reply::text(403, "you can't send maps");
+            }
+            let id = match req.arg("id") {
+                Some(id) => match id.parse::<u32>() {
+                    Ok(id) => Some(id),
+                    Err(_) => return Reply::text(400, "id is a set's number"),
+                },
+                None => None,
+            };
+            let file = req.upload.as_deref().unwrap_or_default();
+            match crate::custom::upload(
+                &key,
+                &state.display_name(&key),
+                id,
+                file,
+                crate::now_secs(),
+            ) {
+                Ok(set) => {
+                    println!(
+                        "custom set {} v{} by {name}: {} - {}",
+                        set.id, set.version, set.artist, set.title
+                    );
+                    Reply::json(&serde_json::json!({
+                        "id": set.id,
+                        "version": set.version,
+                        "url": format!("/c/{}", set.id),
+                    }))
+                }
+                Err(e) => Reply::text(400, &e),
+            }
+        }
+        ["c", id, "approve"] => {
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Ok(id) = id.parse::<u32>() else {
+                return req.not_found("There is no custom set by that number");
+            };
+            let on = req.field("on") != "0";
+            let msg = if !state.is_nominator(&key) {
+                "only loved nominators can approve maps".to_string()
+            } else {
+                let name = state.display_name(&key);
+                match crate::custom::approve(id, on, &name, crate::now_secs()) {
+                    Ok(true) => {
+                        state.scores.lock().unwrap().count_pp();
+                        println!(
+                            "custom set {id} {} by {name}",
+                            if on { "approved" } else { "unapproved" }
+                        );
+                        if on {
+                            "Approved: plays on it give pp now".into()
+                        } else {
+                            "Approval taken back".into()
+                        }
+                    }
+                    Ok(false) => "Nothing changed".into(),
+                    Err(e) => e,
+                }
+            };
+            Reply::see_other(format!("/c/{id}?msg={}", encode(&msg)))
+        }
+        ["c", id, "delete"] => {
+            let Some(key) = req.key() else {
+                return Reply::see_other("/login".into());
+            };
+            let Ok(id) = id.parse::<u32>() else {
+                return req.not_found("There is no custom set by that number");
+            };
+            match crate::custom::delete(id, &key, crate::is_admin(&key)) {
+                Ok(()) => {
+                    state.scores.lock().unwrap().count_pp();
+                    println!("custom set {id} deleted by {key}");
+                    Reply::see_other(format!("/custom?q={}", encode("")))
+                }
+                Err(e) => Reply::see_other(format!("/c/{id}?msg={}", encode(&e))),
+            }
+        }
         ["love", set] => {
             let Some(key) = req.key() else {
                 return Reply::see_other("/login".into());
@@ -1285,7 +1518,124 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
 
 #[cfg(test)]
 mod tests {
-    use super::{byte_range, decode, encode, form, from_elsewhere, map_page};
+    use super::{Req, byte_range, decode, encode, form, from_elsewhere, map_page, route};
+    use std::collections::HashMap;
+    use std::io::Write;
+
+    fn osz() -> Vec<u8> {
+        let mut map = String::from(
+            "osu file format v14\r\n\r\n[General]\r\nAudioFilename: audio.mp3\r\nMode: 1\r\n\r\n[Metadata]\r\nTitle:Route Song\r\nArtist:Route Band\r\nCreator:me\r\nVersion:Oni\r\n\r\n[HitObjects]\r\n",
+        );
+        for k in 0..20 {
+            map += &format!("256,192,{},1,0,0:0:0:0:\r\n", 1000 + k * 250);
+        }
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("a [Oni].osu", stored).unwrap();
+        zip.write_all(map.as_bytes()).unwrap();
+        zip.start_file("audio.mp3", stored).unwrap();
+        zip.write_all(&[0; 32]).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn request<'a>(
+        method: &'a str,
+        path: &'a str,
+        query: &'a str,
+        viewer: Option<&str>,
+        upload: Option<Vec<u8>>,
+        form: &[(&str, &str)],
+    ) -> Req<'a> {
+        Req {
+            method,
+            path,
+            query,
+            form: form
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<_, _>>(),
+            upload,
+            os: crate::pages::Os::of(""),
+            ip: [127, 0, 0, 1].into(),
+            token: None,
+            viewer: viewer.map(str::to_string),
+            claude: false,
+            mailer: false,
+        }
+    }
+
+    #[test]
+    fn a_custom_map_goes_up_shows_on_the_site_downloads_and_is_approved_by_a_nominator() {
+        let dir = std::env::temp_dir().join(format!("taiko-web-custom-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::custom::init(Some(dir.clone()));
+        let (state, _wake) = crate::State::load(dir.join("accounts.json"));
+        let body = |r: &super::Reply| String::from_utf8_lossy(&r.body).into_owned();
+        // Nobody logged in can't send.
+        let r = route(
+            &state,
+            &request("POST", "/custom/upload", "", None, Some(osz()), &[]),
+        );
+        assert_eq!(r.status, 403);
+        // A sender can; the answer names the set.
+        let r = route(
+            &state,
+            &request("POST", "/custom/upload", "", Some("Amy"), Some(osz()), &[]),
+        );
+        assert_eq!(r.status, 200, "{}", body(&r));
+        let id = serde_json::from_str::<serde_json::Value>(&body(&r)).unwrap()["id"]
+            .as_u64()
+            .unwrap();
+        // The list, the page and the API tell about it.
+        let list = route(&state, &request("GET", "/custom", "", None, None, &[]));
+        assert!(body(&list).contains("Route Song") && body(&list).contains(">CUSTOM<"));
+        let page = route(
+            &state,
+            &request("GET", &format!("/c/{id}"), "", None, None, &[]),
+        );
+        assert!(body(&page).contains("Route Band") && !body(&page).contains("/approve"));
+        let api = route(&state, &request("GET", "/api/custom", "", None, None, &[]));
+        assert!(body(&api).contains("\"approved\":false"));
+        // The download is an archive with the set's number in it.
+        let path = format!("/c/{id}/download");
+        let file = route(&state, &request("GET", &path, "", None, None, &[]));
+        assert_eq!(file.status, 200);
+        assert!(
+            file.attachment
+                .as_deref()
+                .is_some_and(|n| n.ends_with(".osz"))
+        );
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(file.body.to_vec())).unwrap();
+        assert!(zip.by_name("taiko-rs.custom").is_ok());
+        // Not a nominator: nothing changes. An admin approves it, and it says so.
+        let path = format!("/c/{id}/approve");
+        route(&state, &request("POST", &path, "", Some("amy"), None, &[]));
+        assert!(!crate::custom::get(id as u32).unwrap().is_approved());
+        route(
+            &state,
+            &request("POST", &path, "", Some("auneu"), None, &[]),
+        );
+        assert!(crate::custom::get(id as u32).unwrap().is_approved());
+        let page = route(
+            &state,
+            &request("GET", &format!("/c/{id}"), "", None, None, &[]),
+        );
+        assert!(body(&page).contains("APPROVED CUSTOM"));
+        // Only the sender or an admin deletes.
+        let path = format!("/c/{id}/delete");
+        route(&state, &request("POST", &path, "", Some("bob"), None, &[]));
+        assert!(crate::custom::get(id as u32).is_some());
+        route(&state, &request("POST", &path, "", Some("amy"), None, &[]));
+        assert!(crate::custom::get(id as u32).is_none());
+        let gone = route(
+            &state,
+            &request("GET", &format!("/c/{id}"), "", None, None, &[]),
+        );
+        assert_eq!(gone.status, 404);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn posts_only_come_from_the_site_itself() {

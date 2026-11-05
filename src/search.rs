@@ -20,6 +20,9 @@ pub const RANKED: u8 = 4;
 pub const APPROVED: u8 = 5;
 pub const QUALIFIED: u8 = 6;
 pub const LOVED: u8 = 7;
+/// Made in the editor and sent to taiko.rs: public, no pp; and once approved there, with pp.
+pub const CUSTOM: u8 = 8;
+pub const CUSTOM_APPROVED: u8 = 9;
 
 /// The status code for the mirrors' status name.
 pub fn status_code(name: &str) -> Option<u8> {
@@ -186,7 +189,7 @@ fn length(s: &str) -> Option<(f64, f64)> {
 
 /// The codes a typed status (a prefix of its name) stands for.
 fn statuses(s: &str) -> Option<Vec<u8>> {
-    let names: [(&str, &[u8]); 9] = [
+    let names: [(&str, &[u8]); 11] = [
         ("ranked", &[RANKED]),
         ("approved", &[APPROVED]),
         ("qualified", &[QUALIFIED]),
@@ -197,6 +200,8 @@ fn statuses(s: &str) -> Option<Vec<u8>> {
         ("graveyard", &[GRAVEYARD, PENDING]),
         ("notsubmitted", &[NOT_SUBMITTED]),
         ("unknown", &[UNKNOWN]),
+        ("custom", &[CUSTOM, CUSTOM_APPROVED]),
+        ("customapproved", &[CUSTOM_APPROVED]),
     ];
     let s = s.replace([' ', '_', '-'], "");
     if s.is_empty() {
@@ -358,6 +363,9 @@ impl Query {
                         let rank = |c: u8| {
                             if c == GRAVEYARD {
                                 PENDING as f64
+                            } else if c >= CUSTOM {
+                                // Not on osu!'s ladder: with the maps that aren't submitted.
+                                NOT_SUBMITTED as f64
                             } else {
                                 c as f64
                             }
