@@ -23,6 +23,7 @@ use crate::video::FRAME_VW;
 
 mod chrome;
 mod cmd;
+mod curves;
 mod help;
 mod keys;
 mod lines;
@@ -33,6 +34,7 @@ mod run;
 
 use cmd::Cmd;
 pub use cmd::Mode;
+use curves::{SAct, SF};
 use keys::KAct;
 use lines::TAct;
 use nodes::NAct;
@@ -63,6 +65,8 @@ pub enum Field {
     Volume,
     Meter,
     Time,
+    /// A number of the SV tool.
+    S(SF),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -89,6 +93,8 @@ pub enum Btn {
     K(KAct),
     N(NAct),
     T(TAct),
+    /// The SV tool and the velocity graph.
+    S(SAct),
     /// A command by name (the same ones the keys and the menus run).
     C(Cmd),
     /// Opens or closes the menu at this position of the bar.
@@ -154,6 +160,17 @@ enum Drag {
     },
     Pan {
         last: (f32, f32),
+    },
+    /// A curve drawn across the graph, in map ms and the graph's unit.
+    Brush {
+        t0: f64,
+        v0: f64,
+        t1: f64,
+        v1: f64,
+    },
+    /// The end of the picked curve being dragged (false: its start).
+    Handle {
+        end: bool,
     },
 }
 
@@ -339,6 +356,7 @@ pub struct View {
     t_factor: f64,
     /// The modifier keys as of the last pointer event, for the scrolling that carries on without one.
     held: Keys,
+    svt: curves::SvtUi,
     /// The last `update`, for how long the view scrolls at an edge.
     last_tick: Option<Instant>,
 }
@@ -429,6 +447,7 @@ impl View {
             t_value: 1.0,
             t_factor: 1.1,
             held: Keys::default(),
+            svt: curves::SvtUi::new(),
             last_tick: None,
         };
         v.follow(true);
@@ -656,6 +675,7 @@ impl View {
         self.layout = Layout::new(c.width, self.mode);
         self.buttons.clear();
         self.tips.clear();
+        self.svt.live = false;
         self.modal_from = 0;
         self.refresh_game();
         self.sync_game(autoplay);
@@ -1197,15 +1217,21 @@ impl View {
         (lo / 1.15, hi * 1.15)
     }
 
-    fn sv_y(&self, sv: f64, range: (f64, f64)) -> f32 {
+    /// The part of the graph values are drawn in: the top strip holds its buttons and hint.
+    pub(super) fn plot(&self) -> (f32, f32) {
         let [_, y, _, h] = self.layout.graph;
+        (y + h - 4.0, h - 22.0)
+    }
+
+    fn sv_y(&self, sv: f64, range: (f64, f64)) -> f32 {
+        let (bottom, span) = self.plot();
         let f = (sv.max(1e-3).ln() - range.0.ln()) / (range.1.ln() - range.0.ln());
-        y + h - 4.0 - (f.clamp(0.0, 1.0) as f32) * (h - 8.0)
+        bottom - (f.clamp(0.0, 1.0) as f32) * span
     }
 
     fn y_sv(&self, py: f32, range: (f64, f64)) -> f64 {
-        let [_, y, _, h] = self.layout.graph;
-        let f = ((y + h - 4.0 - py) / (h - 8.0)).clamp(0.0, 1.0) as f64;
+        let (bottom, span) = self.plot();
+        let f = ((bottom - py) / span).clamp(0.0, 1.0) as f64;
         (range.0.ln() + f * (range.1.ln() - range.0.ln())).exp()
     }
 
@@ -1224,10 +1250,21 @@ impl View {
         );
         let start = c.shapes.len();
         let range = self.graph_range();
-        // 1.0x and the round multiples.
-        for v in [0.5, 1.0, 2.0, 4.0] {
-            if v > range.0 && v < range.1 {
-                let ly = self.sv_y(v, range);
+        let volume = self.svt.volume_view;
+        let line_col = if volume {
+            curves::VOLUME_COL
+        } else {
+            GREEN_LINE
+        };
+        // 1.0x and the round multiples, or the quarters of the volume.
+        let marks: &[f64] = if volume {
+            &[25.0, 50.0, 75.0]
+        } else {
+            &[0.5, 1.0, 2.0, 4.0]
+        };
+        for &v in marks {
+            if volume || (v > range.0 && v < range.1) {
+                let ly = self.val_y(v, range);
                 c.rect(
                     x + 1.0,
                     ly,
@@ -1235,51 +1272,53 @@ impl View {
                     1.0,
                     rgba(0xffffff, if v == 1.0 { 0.22 } else { 0.08 }),
                 );
-                c.text(
-                    x + 3.0,
-                    ly - 8.0,
-                    6.0,
-                    rgba(0x6a6a80, 1.0),
-                    &format!("x{v}"),
-                );
+                let label = if volume {
+                    format!("{v}")
+                } else {
+                    format!("x{v}")
+                };
+                c.text(x + 3.0, ly - 8.0, 6.0, rgba(0x6a6a80, 1.0), &label);
             }
         }
-        // The velocity as the game reads it: a step at each line.
+        // The value as the game reads it: a step at each line.
         let (from, to) = (self.view_start, self.view_end());
         let pts = &self.ed.chart.timing;
         let first = pts.partition_point(|p| p.time <= from).saturating_sub(1);
         let mut prev_x = x;
-        let mut prev_sv = timing::sv_at(pts, from);
+        let mut prev_sv = self.val_at(from);
         for p in pts[first..].iter().filter(|p| p.time > from) {
             if p.time > to {
                 break;
             }
             let px = self.x_of(p.time);
-            let (ya, yb) = (self.sv_y(prev_sv, range), self.sv_y(p.sv(), range));
+            let (ya, yb) = (
+                self.val_y(prev_sv, range),
+                self.val_y(self.graph_val(p), range),
+            );
             c.rect(
                 prev_x,
                 ya - 0.5,
                 (px - prev_x).max(1.0),
                 1.5,
-                rgba(GREEN_LINE, 0.9),
+                rgba(line_col, 0.9),
             );
             c.rect(
                 px - 0.5,
                 ya.min(yb),
                 1.5,
                 (ya - yb).abs().max(1.0),
-                rgba(GREEN_LINE, 0.5),
+                rgba(line_col, 0.5),
             );
             prev_x = px;
-            prev_sv = p.sv();
+            prev_sv = self.graph_val(p);
         }
-        let ya = self.sv_y(prev_sv, range);
+        let ya = self.val_y(prev_sv, range);
         c.rect(
             prev_x,
             ya - 0.5,
             (x + w - prev_x).max(1.0),
             1.5,
-            rgba(GREEN_LINE, 0.9),
+            rgba(line_col, 0.9),
         );
         // The lines themselves.
         for p in pts[first..].iter().take_while(|p| p.time <= to) {
@@ -1289,34 +1328,48 @@ impl View {
             let px = self.x_of(p.time);
             if p.is_red() {
                 c.rect(px - 0.5, y + 1.0, 1.0, h - 2.0, rgba(RED_LINE, 0.55));
-            } else {
+            }
+            if !p.is_red() || volume {
                 let on = self.selected_lines().contains(&p.id);
+                let base = if p.is_red() { RED_LINE } else { line_col };
                 c.circle(
                     px,
-                    self.sv_y(p.sv(), range),
+                    self.val_y(self.graph_val(p), range),
                     if on { 4.5 } else { 3.5 },
-                    rgba(if on { 0xffffff } else { GREEN_LINE }, 1.0),
+                    rgba(if on { 0xffffff } else { base }, 1.0),
                     rgba(0x000000, 0.8),
                     1.0,
                 );
             }
         }
+        self.draw_curve_layer(c, range);
+        self.draw_svt_ghost(c, range);
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 0.8));
         c.clip_since(start, x, y, w, h);
         self.draw_line_selection(c);
-        let hint = if self.mode == Mode::Timing {
-            "Slider velocity   click: add a line   drag a dot: change it   drag a box: select several   right click: delete"
+        let hint = if self.mode == Mode::Timing && self.svt.brush {
+            "Brush: drag from where the curve starts to where it ends   Shift: free time"
+        } else if self.mode == Mode::Timing && volume {
+            "Volume   click: add a line   drag a dot: change it   drag a box: select several   right click: delete"
+        } else if self.mode == Mode::Timing {
+            "Slider velocity   click: add a line   drag a dot: change it (Alt: add)   drag a box: select   click a curve label: edit it"
         } else {
             "Slider velocity (read only here: edit it in Timing mode, F3)"
         };
+        let reserve = if self.mode == Mode::Timing {
+            140.0
+        } else {
+            0.0
+        };
         c.text(
-            x + w - 6.0 - Canvas::text_width(6.0, hint),
+            x + w - 6.0 - reserve - Canvas::text_width(6.0, hint),
             y + 3.0,
             6.0,
             rgba(0x6a6a80, 1.0),
             hint,
         );
+        self.draw_graph_corner(c);
     }
 
     // ---- the pointer ----
@@ -1371,7 +1424,10 @@ impl View {
             .last_tick
             .replace(now)
             .map_or(0.0, |p| now.duration_since(p).as_secs_f64().min(0.1));
-        let graph = matches!(self.drag, Drag::GBox { .. } | Drag::Lines { .. });
+        let graph = matches!(
+            self.drag,
+            Drag::GBox { .. } | Drag::Lines { .. } | Drag::Brush { .. }
+        );
         if dt == 0.0
             || !(graph
                 || matches!(
@@ -1470,6 +1526,8 @@ impl View {
             Drag::Place { .. } => {}
             Drag::Lines { anchor } => self.line_drag(anchor, x, y, keys),
             Drag::GBox { from, .. } => self.drag = Drag::GBox { from, to: (x, y) },
+            Drag::Brush { .. } => self.brush_move(x, y, keys),
+            Drag::Handle { end } => self.handle_drag(end, y),
             Drag::Key { index } => self.key_graph_drag(index, x, y),
             Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
             Drag::Wire { .. } | Drag::None => {}
@@ -1500,7 +1558,8 @@ impl View {
                 return I::Grabbing;
             }
             Drag::Resize { .. } | Drag::Scrub | Drag::Overview => return I::EwResize,
-            Drag::Box { .. } | Drag::Place { .. } => return I::Crosshair,
+            Drag::Box { .. } | Drag::Place { .. } | Drag::Brush { .. } => return I::Crosshair,
+            Drag::Handle { .. } => return I::NsResize,
             _ => {}
         }
         if self.modal.is_some() || self.tour.is_some() || self.sheet || self.list {
@@ -1550,9 +1609,9 @@ impl View {
             .chart
             .timing
             .iter()
-            .filter(|p| !p.is_red())
+            .filter(|p| !p.is_red() || self.svt.volume_view)
             .filter(|p| {
-                let (px, py) = (self.x_of(p.time), self.sv_y(p.sv(), range));
+                let (px, py) = (self.x_of(p.time), self.val_y(self.graph_val(p), range));
                 (px - x).abs() <= 7.0 && (py - y).abs() <= 7.0
             })
             .min_by(|a, b| a.time.total_cmp(&b.time))
@@ -1809,6 +1868,8 @@ impl View {
                 self.mark_stale();
             }
             Drag::GBox { from, .. } => self.line_box_up(from, x, y, keys),
+            Drag::Brush { t0, v0, t1, v1 } => self.brush_up(t0, v0, t1, v1),
+            Drag::Handle { .. } => self.handle_up(),
             Drag::Move { .. } | Drag::Resize { .. } | Drag::Key { .. } => {
                 self.k_frozen = None;
                 self.ed.end_drag();
@@ -1922,6 +1983,9 @@ impl View {
     }
 
     fn change(&mut self, f: Field, dir: f64, keys: Keys) {
+        if let Field::S(s) = f {
+            return self.svt_step(s, dir, keys);
+        }
         let Some(id) = self.sel_line else { return };
         let k = if keys.shift {
             10.0
@@ -1944,6 +2008,7 @@ impl View {
                 Field::Volume => p.volume = (p.volume + (dir * 5.0 * k) as i32).clamp(0, 100),
                 Field::Meter => p.meter = (p.meter + (dir * k.max(1.0)) as i32).max(1),
                 Field::Time => p.time = (p.time + dir * k).max(0.0),
+                Field::S(_) => {}
             },
             false,
         );
@@ -1954,6 +2019,13 @@ impl View {
     }
 
     fn apply_typed(&mut self, f: Field, text: &str) {
+        if let Field::S(s) = f {
+            match text.trim().parse::<f64>() {
+                Ok(v) => self.svt_set(s, v),
+                Err(_) => self.status = "not a number".into(),
+            }
+            return;
+        }
         let Some(id) = self.sel_line else { return };
         let Ok(v) = text.trim().parse::<f64>() else {
             self.status = "not a number".into();
@@ -1973,6 +2045,7 @@ impl View {
                 Field::Volume => p.volume = v as i32,
                 Field::Meter => p.meter = v as i32,
                 Field::Time => p.time = v,
+                Field::S(_) => {}
             },
             false,
         );
@@ -2056,7 +2129,7 @@ impl View {
             Btn::Dec(f) => self.change(f, -1.0, keys),
             Btn::Inc(f) => self.change(f, 1.0, keys),
             Btn::Edit(f) => {
-                if self.sel_line.is_some() {
+                if self.sel_line.is_some() || matches!(f, Field::S(_)) {
                     self.typing = Some((f, String::new()));
                 }
             }
@@ -2076,6 +2149,7 @@ impl View {
             Btn::K(a) => self.press_key_action(a, keys.shift, keys.alt),
             Btn::N(a) => self.press_node_action(a, keys.shift),
             Btn::T(a) => self.press_line_action(a),
+            Btn::S(a) => self.press_svt(a),
             Btn::GBase => {
                 self.ed.reset_base();
                 self.status = "base timing is now the current chart".into();
@@ -2208,8 +2282,10 @@ fn digit(c: KeyCode) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::chart::TimingPoint;
     use crate::editor::chart::tests::MAP;
     use crate::editor::sv_curves::Curve;
+    use crate::editor::svt::Shape;
 
     fn view() -> View {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2439,6 +2515,208 @@ mod tests {
         assert_eq!(v.ed.chart.timing_point(id).unwrap().sv(), before);
         assert!(v.ed.undo());
         assert_eq!(v.ed.chart.timing.iter().filter(|p| !p.is_red()).count(), 1);
+    }
+
+    fn greens(v: &View) -> Vec<TimingPoint> {
+        v.ed.chart
+            .timing
+            .iter()
+            .filter(|p| !p.is_red())
+            .cloned()
+            .collect()
+    }
+
+    /// A stroke of the brush from (`t0`, `v0`) to (`t1`, `v1`) in the graph.
+    fn stroke(v: &mut View, (t0, v0): (f64, f64), (t1, v1): (f64, f64)) {
+        let range = v.graph_range();
+        let (a, b) = (
+            (v.x_of(t0), v.val_y(v0, range)),
+            (v.x_of(t1), v.val_y(v1, range)),
+        );
+        v.mouse_down(a.0, a.1, Keys::default(), None);
+        v.mouse_move((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, Keys::default());
+        v.mouse_move(b.0, b.1, Keys::default());
+        draw(v);
+        v.mouse_up(b.0, b.1, Keys::default());
+    }
+
+    #[test]
+    fn the_brush_draws_a_curve_over_the_notes_and_its_ends_reshape_it() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        crowd(&mut v, 5000.0, 7000.0);
+        press(&mut v, Btn::S(SAct::Brush));
+        draw(&mut v);
+        let before = greens(&v).len();
+        stroke(&mut v, (5000.0, 1.0), (7000.0, 2.0));
+        let made = greens(&v);
+        assert_eq!(made.len(), before + 51, "one line for each of the 51 notes");
+        let first = made
+            .iter()
+            .find(|p| p.time == 4999.0)
+            .expect("a ms before the first note");
+        assert!((first.sv() - 1.0).abs() < 0.02, "{}", first.sv());
+        let last = made.iter().find(|p| p.time == 6999.0).unwrap();
+        assert!((last.sv() - 2.0).abs() < 0.02, "{}", last.sv());
+        assert!(v.svt.picked.is_some(), "the new curve is picked");
+        // The chart reads it back as a curve with a chip, and the ends have handles.
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| matches!(b, Btn::S(SAct::Pick(_))))
+        );
+        assert_eq!(v.svt.handles.len(), 2);
+        // Dragging the end handle up raises the last line and keeps the shape; one undo step.
+        let (r, _) = v.svt.handles[1];
+        let (hx, hy) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        v.mouse_down(hx, hy, Keys::default(), None);
+        for i in 1..=4 {
+            v.mouse_move(hx, hy - 5.0 * i as f32, Keys::default());
+        }
+        v.mouse_up(hx, hy - 20.0, Keys::default());
+        let after = greens(&v);
+        let raised = after.iter().find(|p| p.time == 6999.0).unwrap().sv();
+        assert!(raised > last.sv() + 0.1, "{raised}");
+        let mid = after.iter().find(|p| p.time == 5999.0).unwrap().sv();
+        assert!(mid > 1.4 && mid < raised, "{mid}");
+        assert!(v.ed.undo());
+        let back = greens(&v);
+        assert!((back.iter().find(|p| p.time == 6999.0).unwrap().sv() - last.sv()).abs() < 1e-6);
+        assert!(v.ed.undo());
+        assert_eq!(greens(&v).len(), before);
+    }
+
+    #[test]
+    fn a_picked_curve_takes_another_shape_in_one_undo_step() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        crowd(&mut v, 5000.0, 7000.0);
+        press(&mut v, Btn::S(SAct::Brush));
+        draw(&mut v);
+        stroke(&mut v, (5000.0, 1.0), (7000.0, 2.0));
+        press(&mut v, Btn::S(SAct::Brush));
+        draw(&mut v);
+        let at = |v: &View| greens(v).iter().find(|p| p.time == 5999.0).unwrap().sv();
+        let linear = at(&v);
+        assert!((linear - 1.5).abs() < 0.05, "{linear}");
+        // Geometric: halfway is the geometric mean, sqrt(2).
+        press(&mut v, Btn::S(SAct::Shape(1)));
+        assert!((at(&v) - 2f64.sqrt()).abs() < 0.05, "{}", at(&v));
+        draw(&mut v);
+        assert!(v.svt.picked.is_some(), "still the same curve");
+        assert!(v.ed.undo());
+        assert!((at(&v) - linear).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_sv_tool_applies_between_selected_lines_and_previews_first() {
+        let (mut v, ids) = lines_view();
+        v.sel_line = Some(ids[0]);
+        v.sel_extra = [ids[2]].into();
+        press(&mut v, Btn::S(SAct::Tab(1)));
+        press(&mut v, Btn::S(SAct::Preset(1)));
+        draw(&mut v);
+        // The ghost shows what Apply would do and nothing has been written yet.
+        let ghost = v.svt.ghost.as_ref().unwrap().result.as_ref().unwrap();
+        assert_eq!(
+            ghost.timing.iter().map(|p| p.time).collect::<Vec<_>>(),
+            vec![999.0, 1999.0, 2999.0]
+        );
+        assert_eq!(greens(&v).len(), 4, "the map's own line at 4000 stays");
+        press(&mut v, Btn::S(SAct::Apply));
+        let g = greens(&v);
+        assert_eq!(g.len(), 4);
+        let mid = g
+            .iter()
+            .find(|p| p.time == 1999.0)
+            .expect("beside the old line");
+        assert!((mid.sv() - 2f64.sqrt()).abs() < 1e-6, "{}", mid.sv());
+        assert!(v.ed.undo());
+        assert_eq!(
+            greens(&v).iter().find(|p| p.time == 2000.0).unwrap().sv(),
+            1.5
+        );
+    }
+
+    #[test]
+    fn alt_adds_to_the_selected_dots_instead_of_scaling_them() {
+        let (mut v, ids) = lines_view();
+        v.sel_line = Some(ids[1]);
+        v.sel_extra = [ids[2]].into();
+        let range = v.graph_range();
+        let (x, y) = (v.x_of(2000.0), v.sv_y(1.5, range));
+        let drag = |v: &mut View, keys: Keys| {
+            v.mouse_down(x, y, keys, None);
+            v.mouse_move(x, y - 10.0, keys);
+            v.mouse_up(x, y - 10.0, keys);
+            let sv = |id| v.ed.chart.timing_point(id).unwrap().sv();
+            (sv(ids[1]), sv(ids[2]))
+        };
+        let (a, b) = drag(&mut v, Keys::default());
+        assert!(
+            ((b / 2.0) - (a / 1.5)).abs() < 0.02,
+            "scaled together: {a} {b}"
+        );
+        assert!(v.ed.undo());
+        let alt = Keys {
+            alt: true,
+            ..Keys::default()
+        };
+        let (a, b) = drag(&mut v, alt);
+        assert!(
+            ((b - 2.0) - (a - 1.5)).abs() < 0.02,
+            "moved by the same amount: {a} {b}"
+        );
+    }
+
+    #[test]
+    fn the_volume_view_edits_volume_and_leaves_the_speed() {
+        let (mut v, ids) = lines_view();
+        press(&mut v, Btn::S(SAct::VolumeView(true)));
+        draw(&mut v);
+        let line = v.ed.chart.timing_point(ids[1]).unwrap().clone();
+        let (x, y) = (
+            v.x_of(2000.0),
+            v.val_y(f64::from(line.volume), v.graph_range()),
+        );
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_move(x, y + 15.0, Keys::default());
+        v.mouse_move(x, y + 30.0, Keys::default());
+        v.mouse_up(x, y + 30.0, Keys::default());
+        let now = v.ed.chart.timing_point(ids[1]).unwrap().clone();
+        assert!(
+            now.volume < line.volume,
+            "{} -> {}",
+            line.volume,
+            now.volume
+        );
+        assert_eq!(now.sv(), line.sv());
+        assert_eq!(now.time, line.time);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.chart.timing_point(ids[1]).unwrap().volume, line.volume);
+        draw(&mut v);
+    }
+
+    #[test]
+    fn a_number_of_the_sv_tool_is_typed_and_stepped() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        press(&mut v, Btn::S(SAct::Tab(1)));
+        draw(&mut v);
+        press(&mut v, Btn::Edit(Field::S(SF::Offset)));
+        for k in [KeyCode::Minus, KeyCode::Digit2, KeyCode::Enter] {
+            v.key(k, false, Keys::default(), None);
+        }
+        assert_eq!(v.svt.params.offset, -2);
+        press(&mut v, Btn::Inc(Field::S(SF::Offset)));
+        assert_eq!(v.svt.params.offset, -1);
+        press(&mut v, Btn::S(SAct::Shape(2)));
+        press(&mut v, Btn::Inc(Field::S(SF::Exponent)));
+        assert!(
+            matches!(v.svt.params.shape, Shape::Between(Curve::Exp(n)) if (n - 0.6).abs() < 1e-9)
+        );
+        draw(&mut v);
     }
 
     /// A Timing-mode view with green lines at 1000, 2000 and 3000 ms, velocities 1.0, 1.5, 2.0.

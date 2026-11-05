@@ -9,11 +9,15 @@
 use super::chart::TimingPoint;
 use super::timing::sv_at;
 
+/// The range of `Curve::Exp`'s exponent.
+pub const MIN_EXPONENT: f64 = 0.1;
+pub const MAX_EXPONENT: f64 = 10.0;
+
 /// A growth function for Generate SV and the oscillating series.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Curve {
     Linear,
-    /// `t^n`, n >= 1.
+    /// `t^n`: below 1 it starts fast and settles (a slowdown), above 1 it starts slow.
     Exp(f64),
     /// Fast at the start, slow at the end (TaikoEditor's naming, the inverse of easings.net).
     SinIn,
@@ -52,7 +56,7 @@ impl Curve {
         match self {
             Curve::SinIn => (t * std::f64::consts::FRAC_PI_2).sin(),
             Curve::SinOut => 1.0 - (t * std::f64::consts::FRAC_PI_2).cos(),
-            Curve::Exp(n) => t.powf(n.max(1.0)),
+            Curve::Exp(n) => t.powf(n.clamp(MIN_EXPONENT, MAX_EXPONENT)),
             Curve::TrueExp => true_exp(t, initial, final_),
             Curve::Sin => -((std::f64::consts::PI * t).cos() - 1.0) / 2.0,
             Curve::Linear => t,
@@ -250,7 +254,7 @@ fn fitted_exponent(anchors: &[Anchor]) -> Option<Curve> {
     }
     named.sort_by(f64::total_cmp);
     let exponent = named[named.len() / 2];
-    if !(1.0..=10.0).contains(&exponent) {
+    if !(MIN_EXPONENT..=MAX_EXPONENT).contains(&exponent) {
         return None;
     }
     let curve = Curve::Exp((exponent * 100.0).round() / 100.0);

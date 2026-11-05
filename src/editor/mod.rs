@@ -11,6 +11,7 @@ pub mod keyframes;
 pub mod nodes;
 pub mod state;
 pub mod sv_curves;
+pub mod svt;
 pub mod timing;
 pub mod tools;
 pub mod view;

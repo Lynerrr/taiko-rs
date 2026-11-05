@@ -178,6 +178,9 @@ pub struct History {
     saved: Option<usize>,
     /// The last command may still take a drag step.
     open: bool,
+    /// Counts every change to the chart (and every undo and redo), so a cache of something
+    /// derived from the chart knows when it is out of date.
+    rev: u64,
 }
 
 impl History {
@@ -203,9 +206,15 @@ impl History {
         self.open = false;
     }
 
+    /// Changes whenever the chart does.
+    pub fn rev(&self) -> u64 {
+        self.rev
+    }
+
     fn push(&mut self, chart: &mut Chart, mut cmd: Command, drag: bool) {
         cmd.assign_ids(chart);
         cmd.apply(chart);
+        self.rev += 1;
         if !self.undone.is_empty() {
             self.undone.clear();
             // The saved state was among the redo steps: it can't be reached by undoing now.
@@ -231,6 +240,7 @@ impl History {
             return false;
         };
         cmd.revert(chart);
+        self.rev += 1;
         self.undone.push(cmd);
         true
     }
@@ -241,6 +251,7 @@ impl History {
             return false;
         };
         cmd.apply(chart);
+        self.rev += 1;
         self.done.push(cmd);
         true
     }

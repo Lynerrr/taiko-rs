@@ -660,7 +660,7 @@ impl Editor {
             if let Some(why) = a.problem() {
                 return Err(why);
             }
-            if a.time != b.time || a.beat_length != b.beat_length {
+            if a.time != b.time || a.beat_length != b.beat_length || a.volume != b.volume {
                 before.push(b);
                 after.push(a);
             }

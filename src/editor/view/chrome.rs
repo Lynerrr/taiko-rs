@@ -3,7 +3,7 @@
 
 use super::cmd::{Cmd, Mode};
 use super::menu;
-use super::{Btn, Field, RED_LINE, View, fmt_time};
+use super::{Btn, Field, RED_LINE, SAct, View, fmt_time};
 use crate::editor::chart::{HitObject, Taiko};
 use crate::editor::state::Tool;
 use crate::editor::timing;
@@ -443,6 +443,23 @@ impl View {
         let (x, mut y) = self.panel_frame(c, r, "TIMING LINES");
         let w = r[2] - 16.0;
         let white = rgba(0xffffff, 1.0);
+        let mut tx = r[0] + r[2] - 8.0;
+        for (label, tab) in [("SV tool", 1u8), ("Line", 0u8)] {
+            let bw = Canvas::text_width(6.5, label) + 12.0;
+            tx -= bw;
+            self.button(
+                c,
+                [tx, r[1] + 2.0, bw, 12.0],
+                label,
+                Btn::S(SAct::Tab(tab)),
+                self.svt.tab == tab,
+            );
+            tx -= 3.0;
+        }
+        if self.svt.tab == 1 {
+            self.draw_svt_panel(c, x, y, w);
+            return;
+        }
         if self.selected_lines().len() > 1 {
             self.draw_line_tools(c, x, y, w);
             return;

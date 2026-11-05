@@ -3,6 +3,7 @@
 
 use super::chrome::DIM;
 use super::{Btn, Drag, Keys, View};
+use crate::editor::timing;
 use crate::render::{Canvas, accent, rgba};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -59,10 +60,10 @@ impl View {
         };
         for p in &self.ed.chart.timing {
             let px = self.x_of(p.time);
-            let hit = if p.is_red() {
+            let hit = if p.is_red() && !self.svt.volume_view {
                 px >= x0 && px <= x1
             } else {
-                let py = self.sv_y(p.sv(), range);
+                let py = self.val_y(self.graph_val(p), range);
                 px >= x0 && px <= x1 && py >= y0 && py <= y1
             };
             if hit && !got.contains(&p.id) {
@@ -76,6 +77,12 @@ impl View {
     /// A press in the velocity graph (Timing mode): on a dot it selects and starts a drag of the
     /// selection, on empty space it starts a box (a plain click there adds a line).
     pub(super) fn line_graph_down(&mut self, x: f32, y: f32, keys: Keys) {
+        if self.handle_down(x, y) {
+            return;
+        }
+        if self.svt.brush {
+            return self.brush_down(x, y, keys);
+        }
         if let Some(id) = self.graph_dot_near(x, y) {
             if keys.shift {
                 self.toggle_line(id);
@@ -91,7 +98,7 @@ impl View {
                 .selected_lines()
                 .iter()
                 .filter_map(|l| self.ed.chart.timing_point(*l))
-                .map(|p| (p.id, p.time, p.sv()))
+                .map(|p| (p.id, p.time, self.graph_val(p)))
                 .collect();
             self.g_frozen = Some(self.graph_range());
             self.drag = Drag::Lines { anchor: id };
@@ -104,23 +111,32 @@ impl View {
     }
 
     pub(super) fn line_drag(&mut self, anchor: u64, x: f32, y: f32, keys: Keys) {
-        let Some(&(_, t0, sv0)) = self.line_origin.iter().find(|o| o.0 == anchor) else {
+        let Some(&(_, t0, v0)) = self.line_origin.iter().find(|o| o.0 == anchor) else {
             return;
         };
         let want_t = self.ed.snapped(self.t_at(x));
         let range = self.graph_range();
-        let want_sv = ((self.y_sv(y, range) * 100.0).round() / 100.0).max(0.01);
+        let want = self.y_val(y, range).max(0.01);
         let dt = if keys.shift { 0.0 } else { want_t - t0 };
-        let k = want_sv / sv0.max(1e-9);
+        let volume = self.svt.volume_view;
+        // Speeds scale together (Alt: add the same amount instead), volumes shift together.
+        let k = want / v0.max(1e-9);
+        let add = want - v0;
+        let by_add = keys.alt || volume;
         let origin = self.line_origin.clone();
         let ids: Vec<u64> = origin.iter().map(|o| o.0).collect();
         let moved = self.ed.edit_timings(
             &ids,
             |p| {
-                if let Some(&(_, ot, osv)) = origin.iter().find(|o| o.0 == p.id) {
-                    p.time = (ot + dt).max(0.0).round();
-                    if !p.is_red() {
-                        let _ = p.set_sv((((osv * k) * 100.0).round() / 100.0).max(0.01));
+                if let Some(&(_, ot, ov)) = origin.iter().find(|o| o.0 == p.id) {
+                    if !(volume && p.is_red()) {
+                        p.time = (ot + dt).max(0.0).round();
+                    }
+                    if volume {
+                        p.volume = (ov + add).round().clamp(0.0, 100.0) as i32;
+                    } else if !p.is_red() {
+                        let v = if by_add { ov + add } else { ov * k };
+                        let _ = p.set_sv(((v * 100.0).round() / 100.0).max(0.01));
                     }
                 }
             },
@@ -138,9 +154,18 @@ impl View {
             // A click on empty space: a new green line right there.
             let time = self.ed.snapped(self.t_at(x));
             let range = self.graph_range();
-            let sv = ((self.y_sv(y, range) * 100.0).round() / 100.0).max(0.01);
+            let value = self.y_val(y, range);
+            let sv = if self.svt.volume_view {
+                timing::sv_at(&self.ed.chart.timing, time)
+            } else {
+                value.max(0.01)
+            };
             match self.ed.add_green(time, sv) {
                 Ok(id) => {
+                    if self.svt.volume_view {
+                        let v = value.round() as i32;
+                        let _ = self.ed.edit_timing(id, |p| p.volume = v, false);
+                    }
                     self.select_line(Some(id));
                     self.mark_stale();
                 }
