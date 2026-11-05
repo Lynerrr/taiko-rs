@@ -22,7 +22,14 @@ use Item::{Do, Sep};
 pub const MENUS: &[Menu] = &[
     Menu {
         name: "File",
-        items: &[Do(Cmd::Save), Do(Cmd::Revert), Sep, Do(Cmd::Leave)],
+        items: &[
+            Do(Cmd::Save),
+            Do(Cmd::Revert),
+            Sep,
+            Do(Cmd::Upload),
+            Sep,
+            Do(Cmd::Leave),
+        ],
     },
     Menu {
         name: "Edit",

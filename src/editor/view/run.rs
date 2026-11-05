@@ -130,6 +130,7 @@ impl View {
         match cmd {
             Cmd::Save => self.save(),
             Cmd::Revert => self.revert(),
+            Cmd::Upload => self.open_upload(),
             Cmd::Leave => self.leave(audio),
             Cmd::LeaveSave => {
                 self.modal = None;

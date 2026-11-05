@@ -99,6 +99,10 @@ pub struct Select {
     pub status: std::collections::HashMap<std::path::PathBuf, u8>,
     /// Map sets loved on the online server (they give pp there, whatever osu! says).
     pub server_loved: std::collections::HashSet<u32>,
+    /// Map folders sent to (or downloaded from) taiko.rs custom maps: their set number there.
+    pub custom_folder: std::collections::HashMap<std::path::PathBuf, u32>,
+    /// Custom sets the server has approved.
+    pub custom_approved: std::collections::HashSet<u32>,
     /// The account logged in is a loved nominator: the right-click menu can love sets.
     pub nominator: bool,
     /// osu! collections: (name, library indices).
@@ -297,6 +301,8 @@ fn status_heading(code: u8) -> (&'static str, u32) {
         LOVED => ("Loved", 0xff66aa),
         PENDING | GRAVEYARD => ("Pending / Graveyard", 0xb0a06a),
         NOT_SUBMITTED => ("Not submitted", 0x8a8aa0),
+        CUSTOM => ("taiko.rs custom", 0x9b6cff),
+        CUSTOM_APPROVED => ("Custom, approved", 0x4fd1b0),
         _ => ("Status not known yet", 0x8a8aa0),
     }
 }
@@ -335,6 +341,8 @@ impl Select {
             played: std::collections::HashMap::new(),
             status: std::collections::HashMap::new(),
             server_loved: std::collections::HashSet::new(),
+            custom_folder: std::collections::HashMap::new(),
+            custom_approved: std::collections::HashSet::new(),
             nominator: false,
             collections: Vec::new(),
             collection: None,
@@ -516,6 +524,13 @@ impl Select {
     fn status_of(&self, e: &Entry) -> u8 {
         if self.edited.contains(&e.path) {
             return crate::search::NOT_SUBMITTED;
+        }
+        if let Some(id) = e.path.parent().and_then(|d| self.custom_folder.get(d)) {
+            return if self.custom_approved.contains(id) {
+                crate::search::CUSTOM_APPROVED
+            } else {
+                crate::search::CUSTOM
+            };
         }
         match e.set_id() {
             Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,

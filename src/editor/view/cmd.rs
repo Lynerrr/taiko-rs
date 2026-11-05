@@ -56,6 +56,7 @@ pub enum Cmd {
     // File.
     Save,
     Revert,
+    Upload,
     Leave,
     // Edit.
     Undo,
@@ -118,6 +119,7 @@ impl Cmd {
         match self {
             Cmd::Save => "Save",
             Cmd::Revert => "Revert to last save",
+            Cmd::Upload => "Upload to taiko.rs",
             Cmd::Leave => "Exit editor",
             Cmd::Undo => "Undo",
             Cmd::Redo => "Redo",
@@ -180,6 +182,7 @@ impl Cmd {
         match self {
             Cmd::Save => "Writes the map. The first save keeps a .bak of the original.",
             Cmd::Revert => "Throws away every change since the last save.",
+            Cmd::Upload => "Sends the saved map to taiko.rs: public as CUSTOM, pp once approved.",
             Cmd::Leave => "Back to song select.",
             Cmd::Undo => "Takes back the last change.",
             Cmd::Redo => "Does the undone change again.",

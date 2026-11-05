@@ -32,6 +32,7 @@ mod nodes;
 mod panel;
 mod run;
 mod timing_win;
+mod upload;
 
 use cmd::Cmd;
 pub use cmd::Mode;
@@ -99,6 +100,8 @@ pub enum Btn {
     S(SAct),
     /// A command by name (the same ones the keys and the menus run).
     C(Cmd),
+    /// The upload window.
+    U(upload::UpAct),
     /// Opens or closes the menu at this position of the bar.
     Menu(usize),
     TourNext,
@@ -278,6 +281,8 @@ impl Layout {
 enum Modal {
     /// Leaving with unsaved changes.
     Leave,
+    /// Sending the map to taiko.rs.
+    Upload,
 }
 
 pub struct View {
@@ -342,6 +347,10 @@ pub struct View {
     menu: Option<usize>,
     /// A question that has to be answered before anything else.
     modal: Option<Modal>,
+    /// The upload window's state.
+    upload: upload::UploadUi,
+    /// The game's token, when logged in to taiko.rs (set by the screen).
+    pub account: Option<String>,
     /// Set when the editor should close (the screen asks `take_exit`).
     exit: bool,
     /// The shortcut sheet is open.
@@ -456,6 +465,8 @@ impl View {
             n_clip: 0,
             menu: None,
             modal: None,
+            upload: upload::UploadUi::default(),
+            account: None,
             exit: false,
             sheet: false,
             tw: false,
@@ -572,6 +583,7 @@ impl View {
 
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) {
         self.edge_scroll(now);
+        self.poll_upload();
         if let Some(rx) = &self.track_rx
             && let Ok(result) = rx.try_recv()
         {
@@ -2159,6 +2171,7 @@ impl View {
         }
         match b {
             Btn::C(cmd) => self.run(cmd, audio),
+            Btn::U(act) => self.press_upload(act),
             Btn::Menu(i) => self.menu = if self.menu == Some(i) { None } else { Some(i) },
             Btn::TourNext => {
                 let at = self.tour.unwrap_or(0);
@@ -3822,6 +3835,9 @@ mod tests {
             draw(&mut v);
             v.tw = false;
             v.modal = Some(Modal::Leave);
+            draw(&mut v);
+            v.modal = None;
+            v.open_upload();
             draw(&mut v);
             v.modal = None;
         }

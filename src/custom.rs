@@ -1,0 +1,363 @@
+//! Custom maps from the game's side: packing a map's folder into an `.osz`, sending it to the
+//! server (`server/src/custom.rs`), and the little file that remembers which set on the server
+//! the folder is, so the next upload updates it instead of making another.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::online::WEBSITE;
+
+/// The file in a map's folder that keeps its number on the server.
+pub const SIDECAR: &str = "taiko-rs.custom";
+/// Fewest notes a difficulty needs to be sent (the server's rule too).
+pub const MIN_NOTES: usize = 10;
+/// The biggest set the server takes.
+pub const MAX_OSZ: usize = 40 << 20;
+/// The most files in one.
+const MAX_FILES: usize = 200;
+/// How deep into the folder the packer looks (storyboard elements sit in subfolders).
+const MAX_DEPTH: usize = 3;
+const SENDABLE: [&str; 14] = [
+    "osu", "tko", "osb", "mp3", "ogg", "wav", "flac", "m4a", "opus", "png", "jpg", "jpeg", "mp4",
+    "avi",
+];
+/// Already compressed: keeping them as they are is faster and no bigger.
+const PACKED: [&str; 8] = ["mp3", "ogg", "m4a", "opus", "png", "jpg", "jpeg", "mp4"];
+
+/// Where a set's page is on the website.
+pub fn page_url(id: u32) -> String {
+    format!("{WEBSITE}/c/{id}")
+}
+
+/// The set number the folder was sent as, if it was.
+pub fn sidecar_id(folder: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(folder.join(SIDECAR)).ok()?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("id")?
+        .as_u64()
+        .and_then(|id| u32::try_from(id).ok())
+}
+
+pub fn write_sidecar(folder: &Path, id: u32) {
+    let _ = std::fs::write(folder.join(SIDECAR), format!("{{\"id\": {id}}}\n"));
+}
+
+/// `(mode, note count)` of a map file's text: the taiko ones are mode 1.
+pub fn mode_and_notes(text: &str) -> (Option<u8>, usize) {
+    let (mut section, mut mode, mut notes) = ("", None, 0);
+    for line in text.lines() {
+        let line = line.trim_start_matches('\u{feff}').trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name;
+        } else if section == "HitObjects" && !line.is_empty() {
+            notes += 1;
+        } else if section == "General"
+            && mode.is_none()
+            && let Some(v) = line.strip_prefix("Mode:")
+        {
+            mode = v.trim().parse().ok();
+        }
+    }
+    (mode, notes)
+}
+
+/// A folder packed for sending.
+#[derive(Debug)]
+pub struct Packed {
+    pub bytes: Vec<u8>,
+    /// The taiko difficulties that went (their file names).
+    pub sent: Vec<String>,
+    /// Difficulties left out, and why.
+    pub left_out: Vec<String>,
+}
+
+fn extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
+fn collect(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = read.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let path = e.path();
+        let hidden = e.file_name().to_string_lossy().starts_with('.');
+        let Ok(kind) = e.file_type() else { continue };
+        if hidden || kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if depth < MAX_DEPTH {
+                collect(&path, depth + 1, out);
+            }
+        } else if SENDABLE.contains(&extension(&path).as_str()) {
+            out.push(path);
+        }
+    }
+}
+
+/// Packs the folder: the taiko difficulties with enough notes, and everything else a map of
+/// the set needs (music, pictures, storyboard, hitsounds). Other modes' maps, backups
+/// (`.bak`, `.osu.old`) and the sidecar stay behind.
+pub fn pack(folder: &Path) -> Result<Packed, String> {
+    let mut paths = Vec::new();
+    collect(folder, 0, &mut paths);
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let (mut files, mut sent, mut left_out) = (0usize, Vec::new(), Vec::new());
+    for path in paths {
+        let ext = extension(&path);
+        let name = path
+            .strip_prefix(folder)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes = std::fs::read(&path).map_err(|e| format!("{name}: {e}"))?;
+        if ext == "osu" || ext == "tko" {
+            let (mode, notes) = mode_and_notes(&String::from_utf8_lossy(&bytes));
+            if mode != Some(1) {
+                continue;
+            }
+            if notes < MIN_NOTES {
+                left_out.push(format!("{name} (fewer than {MIN_NOTES} notes)"));
+                continue;
+            }
+            sent.push(name.clone());
+        }
+        let method = if PACKED.contains(&ext.as_str()) {
+            zip::CompressionMethod::Stored
+        } else {
+            zip::CompressionMethod::Deflated
+        };
+        zip.start_file(
+            name.as_str(),
+            zip::write::SimpleFileOptions::default().compression_method(method),
+        )
+        .map_err(|e| e.to_string())?;
+        zip.write_all(&bytes).map_err(|e| e.to_string())?;
+        files += 1;
+        if files > MAX_FILES {
+            return Err(format!(
+                "too many files in the folder (at most {MAX_FILES})"
+            ));
+        }
+    }
+    if sent.is_empty() {
+        return Err(format!(
+            "no taiko difficulty with at least {MIN_NOTES} notes in the map's folder"
+        ));
+    }
+    let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
+    if bytes.len() > MAX_OSZ {
+        return Err(format!(
+            "the set is {} MB, the server takes {} MB at most",
+            bytes.len() >> 20,
+            MAX_OSZ >> 20
+        ));
+    }
+    Ok(Packed {
+        bytes,
+        sent,
+        left_out,
+    })
+}
+
+/// What the server said about a set it took.
+#[derive(Debug, PartialEq)]
+pub struct Sent {
+    pub id: u32,
+    pub version: u32,
+}
+
+/// Sends a packed set with the game's `token`: a new set, or a new version of `id`.
+pub fn upload(token: &str, id: Option<u32>, osz: &[u8]) -> Result<Sent, String> {
+    let url = match id {
+        Some(id) => format!("{WEBSITE}/custom/upload?id={id}"),
+        None => format!("{WEBSITE}/custom/upload"),
+    };
+    let reply = ureq::post(url)
+        .config()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(300)))
+        .build()
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/octet-stream")
+        .send(osz);
+    let mut reply = reply.map_err(|e| e.to_string())?;
+    let ok = reply.status().is_success();
+    let text = reply
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    if !ok {
+        return Err(text);
+    }
+    answer(&text)
+}
+
+/// Which of these custom sets the website has approved; None when it can't be asked.
+pub fn approved_of(ids: &[u32]) -> Option<Vec<u32>> {
+    let list: Vec<String> = ids.iter().map(u32::to_string).collect();
+    let mut reply = ureq::get(format!("{WEBSITE}/api/custom?ids={}", list.join(",")))
+        .config()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
+        .call()
+        .ok()?;
+    let text = reply.body_mut().read_to_string().ok()?;
+    approved_in(&text)
+}
+
+fn approved_in(text: &str) -> Option<Vec<u32>> {
+    let sets: serde_json::Value = serde_json::from_str(text).ok()?;
+    Some(
+        sets.as_array()?
+            .iter()
+            .filter(|s| s.get("approved").and_then(serde_json::Value::as_bool) == Some(true))
+            .filter_map(|s| s.get("id")?.as_u64().and_then(|i| u32::try_from(i).ok()))
+            .collect(),
+    )
+}
+
+fn answer(text: &str) -> Result<Sent, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| "the server's answer made no sense".to_string())?;
+    let field = |k: &str| {
+        json.get(k)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+    };
+    Ok(Sent {
+        id: field("id").ok_or("the server's answer made no sense")?,
+        version: field("version").unwrap_or(1),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    fn map(mode: u8, notes: usize) -> String {
+        let mut text = format!(
+            "osu file format v14\r\n\r\n[General]\r\nAudioFilename: audio.mp3\r\nMode: {mode}\r\n\r\n[HitObjects]\r\n"
+        );
+        for k in 0..notes {
+            text += &format!("256,192,{},1,0\r\n", 1000 + k * 200);
+        }
+        text
+    }
+
+    fn folder(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("taiko-custom-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sb")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn mode_and_notes_are_read() {
+        assert_eq!(mode_and_notes(&map(1, 12)), (Some(1), 12));
+        assert_eq!(mode_and_notes(&map(0, 3)), (Some(0), 3));
+        assert_eq!(mode_and_notes("nothing"), (None, 0));
+    }
+
+    #[test]
+    fn the_sidecar_remembers_the_set() {
+        let dir = folder("sidecar");
+        assert_eq!(sidecar_id(&dir), None);
+        write_sidecar(&dir, 42);
+        assert_eq!(sidecar_id(&dir), Some(42));
+        std::fs::write(dir.join(SIDECAR), "junk").unwrap();
+        assert_eq!(sidecar_id(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn packing_takes_the_set_and_leaves_the_rest() {
+        let dir = folder("pack");
+        std::fs::write(dir.join("a [Oni].osu"), map(1, 20)).unwrap();
+        std::fs::write(dir.join("a [Inner].tko"), map(1, 30)).unwrap();
+        std::fs::write(dir.join("a [Empty].osu"), map(1, 2)).unwrap();
+        std::fs::write(dir.join("a [Std].osu"), map(0, 50)).unwrap();
+        std::fs::write(dir.join("a [Oni].osu.old"), map(1, 20)).unwrap();
+        std::fs::write(dir.join("a [Oni].osu.bak"), map(1, 20)).unwrap();
+        std::fs::write(dir.join("audio.mp3"), [1u8; 64]).unwrap();
+        std::fs::write(dir.join("bg.png"), [2u8; 16]).unwrap();
+        std::fs::write(dir.join("sb/star.png"), [3u8; 16]).unwrap();
+        std::fs::write(dir.join("notes.txt"), "mine").unwrap();
+        write_sidecar(&dir, 7);
+        let packed = pack(&dir).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(packed.bytes.clone())).unwrap();
+        let mut names: Vec<String> = (0..zip.len())
+            .map(|i| {
+                zip.by_index(i)
+                    .unwrap()
+                    .enclosed_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "a [Inner].tko",
+                "a [Oni].osu",
+                "audio.mp3",
+                "bg.png",
+                "sb/star.png"
+            ]
+        );
+        assert_eq!(packed.sent, ["a [Inner].tko", "a [Oni].osu"]);
+        assert_eq!(packed.left_out.len(), 1);
+        assert!(packed.left_out[0].contains("Empty"));
+        // What went in is the file itself, byte for byte (the server hashes it).
+        let mut got = Vec::new();
+        zip.by_name("a [Oni].osu")
+            .unwrap()
+            .read_to_end(&mut got)
+            .unwrap();
+        assert_eq!(got, std::fs::read(dir.join("a [Oni].osu")).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_without_a_sendable_map_is_refused_in_words() {
+        let dir = folder("none");
+        std::fs::write(dir.join("a.osu"), map(1, 3)).unwrap();
+        std::fs::write(dir.join("audio.mp3"), [1u8; 8]).unwrap();
+        assert!(pack(&dir).unwrap_err().contains("at least 10 notes"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_servers_answer_is_read() {
+        assert_eq!(
+            answer(r#"{"id": 5, "version": 2, "url": "/c/5"}"#),
+            Ok(Sent { id: 5, version: 2 })
+        );
+        assert!(answer("nope").is_err());
+        assert!(answer("{}").is_err());
+    }
+
+    #[test]
+    fn approved_sets_are_picked_from_the_list() {
+        let text = r#"[{"id": 1, "approved": true}, {"id": 2, "approved": false}, {"id": 3, "approved": true}]"#;
+        assert_eq!(approved_in(text), Some(vec![1, 3]));
+        assert_eq!(approved_in("[]"), Some(vec![]));
+        assert_eq!(approved_in("oops"), None);
+    }
+
+    #[test]
+    fn a_sets_page_is_on_our_site() {
+        assert_eq!(page_url(9), format!("{WEBSITE}/c/9"));
+    }
+}

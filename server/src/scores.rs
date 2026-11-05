@@ -128,7 +128,7 @@ pub struct Scores {
     submits: HashMap<String, Vec<Instant>>,
     /// Whether plays on a set give pp (None: not known yet).
     pub medals: Medals,
-    gives_pp: fn(Option<u32>) -> Option<bool>,
+    gives_pp: fn(Option<u32>, u64) -> Option<bool>,
     /// Whether a `.osu` (by MD5) is one of the set's own on osu! (not an edited copy).
     official: fn(Option<u32>, &str) -> bool,
     /// Indexes into `all` (oldest first): each player's plays and each map's, so a submit, a
@@ -283,7 +283,7 @@ impl Scores {
 
     /// Whether a play counts for medals that want a real map: unknown doesn't do, unlike for pp.
     fn gives(&self, s: &Stored) -> bool {
-        (self.gives_pp)(s.score.set_id) == Some(true)
+        (self.gives_pp)(s.score.set_id, s.score.map_hash) == Some(true)
             && s.md5
                 .as_deref()
                 .is_none_or(|m| (self.official)(s.score.set_id, m))
@@ -495,12 +495,15 @@ impl Scores {
     /// Counts the pp of plays on sets that give it, and not of the others. A set not known yet
     /// counts until it is. Called again as sets become known.
     pub fn count_pp(&mut self) {
-        let mut sets: HashMap<Option<u32>, bool> = HashMap::new();
+        // By set and map: a custom map counts by its own approval, whatever set it names.
+        let mut sets: HashMap<(Option<u32>, u64), bool> = HashMap::new();
         let mut changed: HashSet<String> = HashSet::new();
         for s in &mut self.all {
             let set = *sets
-                .entry(s.score.set_id)
-                .or_insert_with(|| (self.gives_pp)(s.score.set_id) != Some(false));
+                .entry((s.score.set_id, s.score.map_hash))
+                .or_insert_with(|| {
+                    (self.gives_pp)(s.score.set_id, s.score.map_hash) != Some(false)
+                });
             let gives = set
                 && s.md5
                     .as_deref()
@@ -750,7 +753,7 @@ impl Scores {
             self.count_play(player, ms, false);
         }
         let map = stored.score.map_hash;
-        let gives = (self.gives_pp)(stored.score.set_id) != Some(false)
+        let gives = (self.gives_pp)(stored.score.set_id, map) != Some(false)
             && stored
                 .md5
                 .as_deref()
@@ -1401,7 +1404,7 @@ pub(crate) mod tests {
     fn only_plays_on_ranked_and_loved_sets_count_pp() {
         let mut s = Scores::load(None);
         // Set 1 ranked, 2 graveyard, 3 not known yet; maps with no set never give pp.
-        s.gives_pp = |set| match set {
+        s.gives_pp = |set, _| match set {
             Some(1) => Some(true),
             Some(3) => None,
             _ => Some(false),
@@ -1440,16 +1443,31 @@ pub(crate) mod tests {
             "shown without pp"
         );
         // Set 3 turns out graveyard, and set 2 gets loved.
-        s.gives_pp = |set| matches!(set, Some(1 | 2)).into();
+        s.gives_pp = |set, _| matches!(set, Some(1 | 2)).into();
         s.count_pp();
         assert!((s.profile("a", "A", 0).pp - (500.0 + 95.0)).abs() < 1e-9);
         assert_eq!(s.rankings(10)[0].pp, s.profile("a", "A", 0).pp);
     }
 
     #[test]
+    fn a_map_without_a_set_gives_pp_by_its_own_approval() {
+        let mut s = Scores::load(None);
+        // Custom maps have no set: only the approved one (map 7) gives pp.
+        s.gives_pp = |_, hash| Some(hash == 7);
+        let a = s.submit("a", "A", play(7, 100, 100.0), 1).unwrap().1;
+        assert_eq!(a, 100.0);
+        let b = s.submit("a", "A", play(8, 100, 500.0), 2).unwrap().1;
+        assert_eq!(b, 100.0, "the other one is public but gives none");
+        // It gets approved afterwards: its old play counts then.
+        s.gives_pp = |_, hash| Some(hash == 7 || hash == 8);
+        s.count_pp();
+        assert!((s.profile("a", "A", 0).pp - (500.0 + 95.0)).abs() < 1e-9);
+    }
+
+    #[test]
     fn an_edited_copy_of_a_ranked_map_gives_no_pp() {
         let mut s = Scores::load(None);
-        s.gives_pp = |_| Some(true);
+        s.gives_pp = |_, _| Some(true);
         s.official = |_, md5| md5 == "aa11";
         let on = |map: u64, md5: Option<&str>| {
             let mut p = play(map, 100, 100.0);
@@ -1555,7 +1573,7 @@ pub(crate) mod tests {
             );
         }
         // Sets that stop giving pp take it out of the rows too.
-        s.gives_pp = |set| Some(set.is_some_and(|set| set % 2 == 0));
+        s.gives_pp = |set, _| Some(set.is_some_and(|set| set % 2 == 0));
         s.count_pp();
         let mut fresh = Scores::load(Some(dir.clone()));
         fresh.gives_pp = s.gives_pp;

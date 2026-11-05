@@ -16,6 +16,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 webpki-roots = "1"
 # Score cards (`card.rs`) as PNGs.
 miniz_oxide = "0.8"
+# Custom maps (`custom.rs`): looking into the `.osz` archives sent in.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"

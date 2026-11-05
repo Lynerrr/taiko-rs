@@ -20,6 +20,7 @@ mod clipboard;
 mod clock;
 mod config;
 mod cursor;
+mod custom;
 mod debug;
 mod difficulty;
 mod discord;
@@ -392,6 +393,8 @@ struct FrameStats {
 type SetCheck = (u32, Receiver<Result<(bool, Vec<PathBuf>), String>>);
 type BoardFetch = (u64, Receiver<Result<Vec<online::OnlineScore>, String>>);
 type LovedCall = (Receiver<Result<online::Reply, String>>, Option<(u32, bool)>);
+/// Custom sets known: map folder -> set number, and the numbers the server has approved.
+type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
 
 /// Everything the input and render threads share. The render thread holds the lock only while
 /// building a frame (well under a millisecond) and never across a GPU wait, so key presses are
@@ -595,6 +598,10 @@ struct State {
     /// way, for the message), and whether it's been asked since starting.
     loved_call: Option<LovedCall>,
     loved_asked: bool,
+    /// Asking the website which custom sets in the library are approved, and whether it's been
+    /// asked for this library.
+    custom_call: Option<Receiver<CustomKnown>>,
+    custom_asked: bool,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`).
     playing: Option<f64>,
@@ -9389,6 +9396,56 @@ impl State {
         self.loved_call = Some((rx, change));
     }
 
+    /// Which map folders of the library were sent to (or came from) the custom maps, and which
+    /// of those sets are approved: one question per library, on a thread.
+    fn poll_custom(&mut self) {
+        if !self.custom_asked
+            && self.custom_call.is_none()
+            && !self.library.is_empty()
+            && self.cfg.online_server == online::DEFAULT_SERVER
+        {
+            self.custom_asked = true;
+            let mut folders: Vec<PathBuf> = self
+                .library
+                .iter()
+                .filter_map(|e| e.path.parent().map(Path::to_path_buf))
+                .collect();
+            folders.sort();
+            folders.dedup();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let known: std::collections::HashMap<PathBuf, u32> = folders
+                    .into_iter()
+                    .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
+                    .collect();
+                if known.is_empty() {
+                    let _ = tx.send((known, Vec::new()));
+                    return;
+                }
+                let mut ids: Vec<u32> = known.values().copied().collect();
+                ids.sort_unstable();
+                ids.dedup();
+                // A failed answer keeps them listed as custom, not approved.
+                let approved = custom::approved_of(&ids).unwrap_or_default();
+                let _ = tx.send((known, approved));
+            });
+            self.custom_call = Some(rx);
+        }
+        let Some(rx) = &self.custom_call else { return };
+        match rx.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => self.custom_call = None,
+            Ok((folders, approved)) => {
+                self.custom_call = None;
+                self.select.custom_folder = folders;
+                self.select.custom_approved = approved.into_iter().collect();
+                if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
+                    self.select.refilter(&self.library);
+                }
+            }
+        }
+    }
+
     /// The loved sets as the server has them, once it answers.
     fn poll_loved(&mut self) {
         if !self.loved_asked && self.loved_call.is_none() {
@@ -9424,6 +9481,7 @@ impl State {
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
         self.poll_loved();
+        self.poll_custom();
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
             menu.session_loaded = true;
@@ -9645,6 +9703,9 @@ impl State {
         let played = std::mem::take(&mut self.select.played);
         let status = std::mem::take(&mut self.select.status);
         let server_loved = std::mem::take(&mut self.select.server_loved);
+        let custom_folder = std::mem::take(&mut self.select.custom_folder);
+        let custom_approved = std::mem::take(&mut self.select.custom_approved);
+        self.custom_asked = false;
         let nominator = self.select.nominator;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
@@ -9654,6 +9715,8 @@ impl State {
         self.select.played = played;
         self.select.status = status;
         self.select.server_loved = server_loved;
+        self.select.custom_folder = custom_folder;
+        self.select.custom_approved = custom_approved;
         self.select.nominator = nominator;
         self.select.sort = sort;
         self.select.headings = self.cfg.song_headings;
@@ -14661,6 +14724,13 @@ impl State {
                 );
             }
             Scene::Editor(view) => {
+                // Uploading needs the game's account on our own server.
+                let token = (self.cfg.online_server == online::DEFAULT_SERVER
+                    && !self.cfg.online_token.is_empty())
+                .then_some(&self.cfg.online_token);
+                if view.account.as_ref() != token {
+                    view.account = token.cloned();
+                }
                 view.update(now, self.audio.as_ref());
                 if let Some(speed) = view.take_rate_request() {
                     editor_reload = Some((view.entry, speed));
@@ -14671,6 +14741,8 @@ impl State {
                     self.cfg.save();
                 }
                 if view.take_exit() {
+                    // It may have been sent just now: ask which sets are custom again.
+                    self.custom_asked = false;
                     next = Some(Scene::Select);
                 }
             }
@@ -17791,6 +17863,8 @@ impl State {
             set_status_rx,
             loved_call: None,
             loved_asked: false,
+            custom_call: None,
+            custom_asked: false,
             playing: None,
             status_wait: None,
             scene_kind: None,

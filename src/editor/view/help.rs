@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::chrome::{DIM, WARN, wrap};
 use super::cmd::{BINDS, Cmd, MOUSE, Mode};
-use super::{Btn, Layout, View, inside};
+use super::{Btn, Layout, Modal, View, inside};
 use crate::render::{Canvas, accent, rgba};
 
 // ---- the tour ----
@@ -217,9 +217,16 @@ impl View {
             self.modal_from = self.buttons.len();
             self.draw_sheet(c);
         }
-        if self.modal.is_some() {
-            self.modal_from = self.buttons.len();
-            self.draw_question(c);
+        match self.modal {
+            Some(Modal::Leave) => {
+                self.modal_from = self.buttons.len();
+                self.draw_question(c);
+            }
+            Some(Modal::Upload) => {
+                self.modal_from = self.buttons.len();
+                self.draw_upload(c);
+            }
+            None => {}
         }
         if self.tour.is_some() {
             self.modal_from = self.buttons.len();
