@@ -2770,14 +2770,18 @@ mod tests {
         assert!(v.n_sel.is_none());
         let before = v.to_world(ex, ey);
         v.mouse = (ex, ey);
-        v.wheel(-3, Keys::default());
+        v.wheel(3, Keys::default());
         assert!(v.n_zoom > 1.0 && v.n_zoom <= nodes::MAX_ZOOM);
         let after = v.to_world(ex, ey);
         assert!((before.0 - after.0).abs() < 0.01 && (before.1 - after.1).abs() < 0.01);
-        for _ in 0..30 {
-            v.wheel(1, Keys::default());
+        for _ in 0..60 {
+            v.wheel(-1, Keys::default());
         }
         assert_eq!(v.n_zoom, nodes::MIN_ZOOM);
+        // Far out the canvas still draws (boxes shrink to blocks), and Fit frames every node.
+        draw(&mut v);
+        v.node_fit();
+        assert!(v.n_zoom >= nodes::MIN_ZOOM && v.n_zoom <= 1.0);
         draw(&mut v);
         // Deleting a node (right-click on its body) unwires what it fed.
         let r = v.node_rect(v.ed.node(a).unwrap());

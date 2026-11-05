@@ -34,7 +34,10 @@ pub enum NAct {
     Clip,
     Delete,
     Seed(i32),
+    /// Back to 100% at the origin.
     Home,
+    /// Frame every node.
+    Fit,
 }
 
 const NODE_W: f32 = 104.0;
@@ -45,8 +48,11 @@ const GRAB: f32 = 6.0;
 /// How long after it fires a node stays lit (ms).
 const LIT_MS: f64 = 250.0;
 
-pub const MIN_ZOOM: f32 = 0.6;
-pub const MAX_ZOOM: f32 = 1.6;
+pub const MIN_ZOOM: f32 = 0.05;
+pub const MAX_ZOOM: f32 = 3.0;
+/// Below this the boxes lose their port labels and parameters; below `ZOOM_BLOCKS` they are plain blocks.
+const ZOOM_TITLES: f32 = 0.5;
+const ZOOM_BLOCKS: f32 = 0.3;
 
 fn colour(c: Category) -> u32 {
     match c {
@@ -280,7 +286,10 @@ impl View {
         );
         let start = c.shapes.len();
         // A faint grid that moves with the pan, so panning can be seen.
-        let step = 40.0 * self.n_zoom;
+        let mut step = 40.0 * self.n_zoom;
+        while step < 12.0 {
+            step *= 2.0;
+        }
         let (ox, oy) = self.to_screen(0.0, 0.0);
         let mut gx = x + (ox - x).rem_euclid(step);
         while gx < x + w {
@@ -302,13 +311,16 @@ impl View {
                 };
                 let kind = n.kind.inputs()[port].1;
                 let on = self.lit(src.id);
-                View::wire(
-                    c,
-                    self.out_pos(src),
-                    self.in_pos(n, port),
-                    wire_colour(kind),
-                    if on { 1.0 } else { 0.55 },
-                );
+                let (a, b) = (self.out_pos(src), self.in_pos(n, port));
+                // A wire wholly off the canvas costs nothing to skip (the elbow stays within a run of its ends).
+                if a.0.max(b.0) + 12.0 < x
+                    || a.0.min(b.0) - 12.0 > x + w
+                    || a.1.max(b.1) < y
+                    || a.1.min(b.1) > y + h
+                {
+                    continue;
+                }
+                View::wire(c, a, b, wire_colour(kind), if on { 1.0 } else { 0.55 });
             }
         }
         if let Drag::Wire { from } = self.drag
@@ -354,7 +366,10 @@ impl View {
                 [nx, ny, nw, HEAD * z],
                 format!("{}\n{}", n.kind.label(), n.kind.about()),
             ));
-            let size = 6.5 * z;
+            if z < ZOOM_BLOCKS {
+                continue;
+            }
+            let size = (6.5 * z).max(4.0);
             c.text(
                 nx + 4.0 * z,
                 ny + (HEAD * z - size) / 2.0,
@@ -362,6 +377,10 @@ impl View {
                 rgba(0xffffff, 1.0),
                 &Canvas::fit(size, nw - 8.0 * z, n.kind.label()),
             );
+            if z < ZOOM_TITLES {
+                // Zoomed far out: the box and its title are all that can be read.
+                continue;
+            }
             for (port, (name, kind)) in n.kind.inputs().iter().enumerate() {
                 let (px, py) = self.in_pos(n, port);
                 let wired = n.inputs.get(port).copied().flatten().is_some();
@@ -696,7 +715,8 @@ impl View {
                 &[
                     ("-".into(), Btn::N(NAct::Seed(-1)), false),
                     ("+".into(), Btn::N(NAct::Seed(1)), false),
-                    ("Reset view".into(), Btn::N(NAct::Home), false),
+                    ("Fit".into(), Btn::N(NAct::Fit), false),
+                    ("100%".into(), Btn::N(NAct::Home), false),
                 ],
             );
             return;
@@ -891,6 +911,7 @@ impl View {
                 self.n_pan = (0.0, 0.0);
                 self.n_zoom = 1.0;
             }
+            NAct::Fit => self.node_fit(),
         }
     }
 
@@ -980,10 +1001,36 @@ impl View {
     }
 
     /// Zoom about the pointer.
+    /// Pans and zooms so every node is in view.
+    pub(super) fn node_fit(&mut self) {
+        let [_, _, w, h] = self.layout.nodes;
+        let Some(g) = self.ed.gimmick() else { return };
+        if g.graph.nodes.is_empty() {
+            self.n_pan = (0.0, 0.0);
+            self.n_zoom = 1.0;
+            return;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for n in &g.graph.nodes {
+            x0 = x0.min(n.x);
+            y0 = y0.min(n.y);
+            x1 = x1.max(n.x + NODE_W);
+            y1 = y1.max(n.y + HEAD + ROW * rows(n) as f32);
+        }
+        let pad = 12.0;
+        let z = ((w - 2.0 * pad) / (x1 - x0).max(1.0)).min((h - 2.0 * pad) / (y1 - y0).max(1.0));
+        self.n_zoom = z.clamp(MIN_ZOOM, 1.0);
+        self.n_pan = (
+            (x0 + x1) / 2.0 - w / 2.0 / self.n_zoom,
+            (y0 + y1) / 2.0 - h / 2.0 / self.n_zoom,
+        );
+    }
+
     pub(super) fn node_zoom(&mut self, notches: i32) {
         let (mx, my) = self.mouse;
         let before = self.to_world(mx, my);
-        let f = if notches > 0 { 0.85 } else { 1.0 / 0.85 };
+        // Wheel up (away from you) zooms in, like every canvas.
+        let f = 1.18f32.powi(notches.clamp(-8, 8));
         self.n_zoom = (self.n_zoom * f).clamp(MIN_ZOOM, MAX_ZOOM);
         let after = self.to_world(mx, my);
         self.n_pan.0 += before.0 - after.0;
