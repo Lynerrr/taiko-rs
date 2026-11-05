@@ -48,6 +48,7 @@ pub enum Item {
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
+    MenuGlitch,
     BlackLane,
     DrumMenus,
     HideGreat,
@@ -117,7 +118,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 129] = [
+pub const ITEMS: [(&str, Item); 130] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -145,6 +146,7 @@ pub const ITEMS: [(&str, Item); 129] = [
     ("VIEW", Item::BackgroundDim),
     ("VIEW", Item::BackgroundDimBlack),
     ("VIEW", Item::KiaiEffects),
+    ("VIEW", Item::MenuGlitch),
     ("VIEW", Item::BlackLane),
     ("INPUT", Item::Key(0)),
     ("INPUT", Item::Key(1)),
@@ -516,6 +518,7 @@ impl Item {
                 "Колесо меняет размер поля"
             ),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
+            Item::MenuGlitch => tr!("Menu glitch", "メニューのグリッチ", "Глитч в меню"),
             Item::BlackLane => tr!("Black lane", "黒いレーン", "Чёрная дорожка"),
             Item::DrumMenus => tr!(
                 "Drum keys in menus",
@@ -721,6 +724,7 @@ impl Item {
             | Item::BackgroundDimBlack
             | Item::Interface
             | Item::KiaiEffects
+            | Item::MenuGlitch
             | Item::BlackLane
             | Item::DrumMenus
             | Item::MapSkins
@@ -941,6 +945,11 @@ impl Item {
                 "The lane the notes scroll on, and the drum's panel, are pure black: no kiai tint, no skin's lane picture.",
                 "ノーツが流れるレーンと太鼓のパネルを真っ黒に。キアイの色もスキンのレーン画像もなし。",
                 "Дорожка, по которой едут ноты, и панель барабана полностью чёрные: без подсветки киай и картинки дорожки из скина."
+            ),
+            Item::MenuGlitch => tr!(
+                "Notes on the main menu glitch when hit, and the whole screen with them and between menus. Off: they still spin and jump.",
+                "メインメニューのノーツが叩くとグリッチし、画面全体もそのときとメニューの切り替えでグリッチします。オフでも回って跳ねます。",
+                "Ноты в главном меню глитчат от удара, а весь экран вместе с ними и при переходе между меню. Выкл.: они всё равно крутятся и подпрыгивают."
             ),
             Item::KiaiEffects => tr!(
                 "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",

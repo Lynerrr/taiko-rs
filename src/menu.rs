@@ -27,11 +27,25 @@ pub const ITEMS: [Item; 7] = [
     Item::Exit,
 ];
 
-/// How long a hit note shows before its screen opens (ms): the menu fades out meanwhile.
-const LEAVE_MS: f32 = 220.0;
 /// How long the menu takes to fade in, opened or come back to (ms).
-pub const FADE_MS: f32 = 220.0;
+pub const FADE_MS: f32 = 120.0;
 const SHAKE_MS: f32 = 300.0;
+/// A hit note's turn, glitching as it goes.
+const SPIN_MS: f32 = 180.0;
+/// The jump in a hit note, as long as its turn: how long it takes to go down, how much it
+/// shrinks and how far its name goes with it.
+const PRESS_DOWN_MS: f32 = 30.0;
+const PRESS_SHRINK: f32 = 0.12;
+const PRESS_DIP: f32 = 2.0;
+/// How far up the spring back throws a note, per unit of `press_depth` under 0: about 10 at the
+/// top of the jump, which is what the panel has room for over a selected note.
+const PRESS_JUMP: f32 = 40.0;
+/// How long each look of the glitch lasts, and how many rows tear together.
+const GLITCH_MS: f32 = 28.0;
+const TEAR_ROWS: usize = 4;
+/// The furthest the rows tear (art pixels) and the colours split (units), at the start of a turn.
+const TEAR_MAX: i32 = 5;
+const SPLIT_MAX: f32 = 6.0;
 const FLASH_MS: f32 = 200.0;
 const BURST_MS: f32 = 520.0;
 
@@ -410,6 +424,8 @@ pub struct Frame<'a> {
     pub paused: bool,
     /// How long the game has been running and how long of it was in songs (seconds).
     pub session: (f64, f64),
+    /// Hit notes glitch as they spin, and the screen with them (the player's setting).
+    pub glitch: bool,
 }
 
 pub struct Menu {
@@ -438,8 +454,13 @@ pub struct Menu {
     beats: Option<f64>,
     /// A hit: when, and on what.
     burst: Option<(f32, Item)>,
+    /// The note last hit, and when: it turns once.
+    spin: Option<(f32, usize)>,
+    /// As last drawn: hit notes glitch (`Frame::glitch`).
+    glitch: bool,
     shake: f32,
-    leaving: Option<(Item, f32)>,
+    /// A note was hit whose screen opens on the next frame.
+    leaving: Option<Item>,
     /// Kiai: how far into it (0 to 1, easing both ways), whether it's on, when it opened, the
     /// beat it's on and when that came, and what's flying.
     kiai: f32,
@@ -478,6 +499,8 @@ impl Menu {
             face: (f32::MIN, 1),
             beats: None,
             burst: None,
+            spin: None,
+            glitch: true,
             shake: f32::MIN,
             leaving: None,
             kiai: 0.0,
@@ -534,12 +557,20 @@ impl Menu {
     pub fn hit(&mut self) -> Item {
         let item = self.current();
         self.burst = Some((self.clock, item));
+        self.spin = Some((self.clock, self.index()));
         if item == Item::Editor {
             self.shake = self.clock;
         } else {
-            self.leaving = Some((item, self.clock + LEAVE_MS));
+            self.leaving = Some(item);
         }
         item
+    }
+
+    /// How far through its turn note `i` is (0 to 1), while it's turning.
+    fn spinning(&self, i: usize) -> Option<f32> {
+        let (at, _) = self.spin.filter(|s| s.1 == i && render::animations())?;
+        let k = (self.clock - at) / SPIN_MS;
+        (k < 1.0).then_some(k.max(0.0))
     }
 
     /// A note was hit and its screen is about to open.
@@ -551,33 +582,23 @@ impl Menu {
         self.leaving = None;
     }
 
-    /// The screen to open now, once the hit has had its moment. Shown again later (back from
+    /// The screen to open now, at once like any other screen's. Shown again later (back from
     /// that screen), the menu fades in.
     pub fn ready(&mut self) -> Option<Item> {
-        let (item, at) = self.leaving?;
-        (self.clock >= at).then(|| {
-            self.leaving = None;
-            self.appear = self.clock;
-            item
-        })
+        let item = self.leaving.take()?;
+        self.appear = self.clock;
+        Some(item)
     }
 
-    /// How much of the menu shows: fading in after it appears, out while leaving (but not for
-    /// Exit, which only asks).
+    /// How much of the menu shows, fading in after it appears.
     fn opacity(&self) -> f32 {
-        let fade_in = ((self.clock - self.appear) / FADE_MS).clamp(0.0, 1.0);
-        let fade_out = match self.leaving {
-            Some((item, at)) if item != Item::Exit => {
-                ((at - self.clock) / LEAVE_MS).clamp(0.0, 1.0)
-            }
-            _ => 1.0,
-        };
-        let k = fade_in.min(fade_out);
+        let k = ((self.clock - self.appear) / FADE_MS).clamp(0.0, 1.0);
         k * k * (3.0 - 2.0 * k)
     }
 
     pub fn draw(&mut self, c: &mut Canvas, f: &Frame) {
         self.clock += c.dt_ms;
+        self.glitch = f.glitch;
         let target = self.index() as f32;
         approach(&mut self.shown, target, c.dt_ms, 45.0);
         if (self.shown - target).abs() < 0.002 || !render::animations() {
@@ -613,8 +634,14 @@ impl Menu {
         self.draw_kiai(c);
         self.draw_title(c, f.maps);
         draw_footer(c, f);
-        // Coming in out of black, and going to black when it leaves: the next screen comes up
-        // out of it.
+        // The whole screen glitches with a hit note, over as its turn is.
+        let spin = self
+            .spin
+            .filter(|(_, i)| self.glitch && ITEMS[*i] != Item::Exit);
+        if let Some(k) = spin.and_then(|(_, i)| self.spinning(i)) {
+            c.glitch = Some([1.0 - k, (self.clock / GLITCH_MS) as u32 as f32 % 4096.0]);
+        }
+        // Coming in out of black.
         let shown = if render::animations() {
             self.opacity()
         } else {
@@ -976,7 +1003,9 @@ impl Menu {
             let hop = self.kick() * if high { 12.0 } else { 5.0 } + float;
             // The selected one grows as the selector gets to it, and shrinks back as it goes.
             let near = (1.0 - (self.shown - i as f32).abs()).clamp(0.0, 1.0);
-            let grown = r * (1.0 + GROW * near);
+            let spin = self.spinning(i);
+            let pressed = spin.map_or(0.0, |k| press_depth(k * SPIN_MS));
+            let grown = r * (1.0 + GROW * near) * (1.0 - PRESS_SHRINK * pressed);
             // It stands out: a glow of its colour behind it, the others dimmed.
             if near > 0.01 {
                 c.glow(
@@ -988,13 +1017,26 @@ impl Menu {
                 );
             }
             let start = c.shapes.len();
-            draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, grown, 1.0);
+            match spin {
+                Some(k) => draw_spin(
+                    c,
+                    &self.arts[i],
+                    [x + dx, NOTE_Y - hop],
+                    grown,
+                    k,
+                    pressed,
+                    // Exit asks a calm question: it turns, but stays whole.
+                    (self.glitch && *item != Item::Exit).then_some((self.clock / GLITCH_MS) as u32),
+                ),
+                None => draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, grown, 1.0),
+            }
             if near < 0.99 {
                 c.fade_since(start, 1.0, 0.55 + 0.45 * near);
             }
             let hovered = c.hovered(left + i as f32 * slot, LANE_TOP, slot, LANE_H);
             let on = self.is_selected(i);
             let w = Canvas::text_width(size, names[i]);
+            let label_y = label_y + PRESS_DIP * pressed.max(0.0);
             if on {
                 let (pw, ph) = (w + 14.0, size + 8.0);
                 c.round_rect(
@@ -1188,6 +1230,11 @@ fn draw_session(c: &mut Canvas, (running, playing): (f64, f64)) {
 /// A note `r` units in radius, its pixels a whole number of screen pixels: it grows in steps,
 /// staying sharp.
 fn draw_note(c: &mut Canvas, art: &Art, x: f32, y: f32, r: f32, alpha: f32) {
+    draw_shadow(c, x, y, r, alpha);
+    draw_art(c, art, x, y, r, alpha);
+}
+
+fn draw_shadow(c: &mut Canvas, x: f32, y: f32, r: f32, alpha: f32) {
     let px = pixel_size(r / NOTE_R);
     pixel_ring(
         c,
@@ -1198,6 +1245,107 @@ fn draw_note(c: &mut Canvas, art: &Art, x: f32, y: f32, r: f32, alpha: f32) {
         px,
         rgba(0x000000, 0.35 * alpha),
     );
+}
+
+/// `art` turned by `angle` (radians, clockwise) about its middle, pixel by pixel so it stays
+/// pixel art.
+fn turned(art: &Art, angle: f32) -> Art {
+    let (sin, cos) = angle.sin_cos();
+    let mut out = [[0; ART]; ART];
+    for (y, row) in out.iter_mut().enumerate() {
+        for (x, px) in row.iter_mut().enumerate() {
+            let (dx, dy) = (x as f32 - ART_MID, y as f32 - ART_MID);
+            let from_x = (ART_MID + dx * cos + dy * sin).round();
+            let from_y = (ART_MID - dx * sin + dy * cos).round();
+            if (0.0..ART as f32).contains(&from_x) && (0.0..ART as f32).contains(&from_y) {
+                *px = art[from_y as usize][from_x as usize];
+            }
+        }
+    }
+    out
+}
+
+/// A number that's the same for the same `look` and `n`, and looks random between them.
+fn scramble(look: u32, n: u32) -> u32 {
+    let h = look.wrapping_mul(0x9E37_79B1) ^ n.wrapping_mul(0x85EB_CA6B);
+    (h ^ (h >> 15)).wrapping_mul(0x2C1B_3C6D)
+}
+
+/// `art` with bands of its rows torn sideways, up to `most` pixels; `look` picks which and how.
+fn torn(art: &Art, look: u32, most: i32) -> Art {
+    let mut out = *art;
+    if most <= 0 {
+        return out;
+    }
+    for (y, row) in out.iter_mut().enumerate() {
+        let h = scramble(look, (y / TEAR_ROWS) as u32);
+        if h >> 30 == 0 {
+            continue;
+        }
+        let by = (h >> 8) as i32 % (2 * most + 1) - most;
+        row.rotate_right(by.rem_euclid(ART as i32) as usize);
+    }
+    out
+}
+
+/// The whole screen's glitch `ms` after going from one menu to another: as a hit note's, and over
+/// as soon.
+pub fn screen_glitch(ms: f32) -> Option<[f32; 2]> {
+    (ms < SPIN_MS).then(|| [1.0 - ms / SPIN_MS, (ms / GLITCH_MS).floor()])
+}
+
+/// How far a hit note is pressed in, `ms` after the hit: quickly all the way down (1), then a
+/// spring back that jumps a little past its rest (under 0) and settles.
+fn press_depth(ms: f32) -> f32 {
+    if ms < PRESS_DOWN_MS {
+        let t = (ms / PRESS_DOWN_MS).max(0.0);
+        return 1.0 - (1.0 - t) * (1.0 - t);
+    }
+    let t = (ms - PRESS_DOWN_MS) / (SPIN_MS - PRESS_DOWN_MS);
+    if t >= 1.0 {
+        return 0.0;
+    }
+    (1.0 - t) * (1.0 - t) * (t * std::f32::consts::TAU).cos()
+}
+
+/// The note in the middle of its turn, `k` of the way (fast, slowing to a stop), glitching less
+/// the further it's got: rows tearing, red and cyan copies split off either side of it. `pressed`:
+/// how far it's gone down onto its shadow (see `press_depth`). `look` changes the glitch; None:
+/// no glitch.
+fn draw_spin(
+    c: &mut Canvas,
+    art: &Art,
+    at: [f32; 2],
+    r: f32,
+    k: f32,
+    pressed: f32,
+    look: Option<u32>,
+) {
+    let [x, y] = at;
+    let turn = std::f32::consts::TAU * (1.0 - (1.0 - k).powi(3));
+    let left = 1.0 - k;
+    let art = turned(art, turn);
+    draw_shadow(c, x, y, r, 1.0);
+    let y = y + if pressed > 0.0 {
+        pressed * pixel_size(r / NOTE_R) * 2.0
+    } else {
+        pressed * PRESS_JUMP
+    };
+    let Some(look) = look else {
+        draw_art(c, &art, x, y, r, 1.0);
+        return;
+    };
+    let art = torn(&art, look, (TEAR_MAX as f32 * left).round() as i32);
+    let split = SPLIT_MAX * left * (0.5 + (scramble(look, 99) >> 24) as f32 / 510.0);
+    for (colour, side) in [(GLITCH_RED, -1.0), (GLITCH_CYAN, 1.0)] {
+        let flat = art.map(|row| row.map(|p| if p == 0 { 0 } else { colour }));
+        draw_art(c, &flat, x + side * split, y, r, 0.85);
+    }
+    draw_art(c, &art, x, y, r, 1.0);
+}
+
+fn draw_art(c: &mut Canvas, art: &Art, x: f32, y: f32, r: f32, alpha: f32) {
+    let px = pixel_size(r / NOTE_R);
     let half = ART as f32 * px / 2.0;
     let (left, top) = (snap_to_grid(x - half), snap_to_grid(y - half));
     for (row, line) in art.iter().enumerate() {
@@ -1396,17 +1544,102 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_is_only_shaken_the_rest_open_after_the_hit() {
+    fn the_editor_is_only_shaken_the_rest_open_at_once() {
         let mut m = Menu::new();
         m.pick(5);
         assert_eq!(m.hit(), Item::Editor);
         assert!(!m.is_leaving());
         m.pick(0);
         assert_eq!(m.hit(), Item::Play);
-        assert_eq!(m.ready(), None);
-        m.clock += LEAVE_MS;
         assert_eq!(m.ready(), Some(Item::Play));
         assert_eq!(m.ready(), None);
+    }
+
+    #[test]
+    fn a_press_goes_down_at_once_jumps_past_its_rest_and_settles() {
+        assert_eq!(press_depth(0.0), 0.0);
+        assert!(press_depth(PRESS_DOWN_MS / 2.0) > 0.7);
+        assert!((press_depth(PRESS_DOWN_MS) - 1.0).abs() < 0.001);
+        let back = (PRESS_DOWN_MS as i32..SPIN_MS as i32).map(|ms| press_depth(ms as f32));
+        let lowest = back.fold(1.0f32, f32::min);
+        assert!((-0.3..-0.1).contains(&lowest), "{lowest}");
+        assert_eq!(press_depth(SPIN_MS), 0.0);
+    }
+
+    #[test]
+    fn the_screen_glitches_only_while_a_note_turns() {
+        let mut m = Menu::new();
+        assert_eq!(frame(&mut m, 16.0).glitch, None);
+        m.pick(5);
+        m.hit();
+        let during = frame(&mut m, SPIN_MS / 2.0).glitch;
+        if render::animations() {
+            assert!(during.is_some_and(|[strength, _]| strength > 0.0 && strength < 1.0));
+        }
+        assert_eq!(frame(&mut m, SPIN_MS).glitch, None);
+    }
+
+    #[test]
+    fn with_the_setting_off_notes_still_turn_but_nothing_glitches() {
+        let mut m = Menu::new();
+        m.glitch = false;
+        m.pick(5);
+        m.hit();
+        m.clock += SPIN_MS / 2.0;
+        if render::animations() {
+            assert_eq!(m.spinning(5), Some(0.5));
+        }
+        assert_eq!(frame(&mut m, 16.0).glitch, None);
+    }
+
+    #[test]
+    fn exit_turns_without_glitching_the_screen() {
+        let mut m = Menu::new();
+        m.pick(ITEMS.iter().position(|i| *i == Item::Exit).unwrap());
+        m.hit();
+        assert_eq!(frame(&mut m, SPIN_MS / 2.0).glitch, None);
+    }
+
+    #[test]
+    fn a_note_turned_all_the_way_round_is_itself_and_half_way_is_upside_down() {
+        let art = Item::Play.art();
+        assert_eq!(turned(&art, 0.0), art);
+        assert_eq!(turned(&art, std::f32::consts::TAU), art);
+        let upside_down = turned(&art, std::f32::consts::PI);
+        for (y, row) in art.iter().enumerate() {
+            for (x, p) in row.iter().enumerate() {
+                assert_eq!(upside_down[ART - 1 - y][ART - 1 - x], *p);
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_note_hit_turns_and_then_it_stops() {
+        let mut m = Menu::new();
+        m.pick(2);
+        assert_eq!(m.spinning(2), None);
+        m.hit();
+        m.clock += SPIN_MS / 2.0;
+        if render::animations() {
+            assert_eq!(m.spinning(2), Some(0.5));
+        }
+        assert_eq!(m.spinning(1), None);
+        m.clock += SPIN_MS;
+        assert_eq!(m.spinning(2), None);
+    }
+
+    #[test]
+    fn the_glitch_tears_rows_only_sideways_and_stops_with_the_turn() {
+        let art = Item::Play.art();
+        assert_eq!(torn(&art, 3, 0), art);
+        let glitched = torn(&art, 3, TEAR_MAX);
+        assert_ne!(glitched, art);
+        for (row, was) in glitched.iter().zip(&art) {
+            let (mut a, mut b) = (*row, *was);
+            a.sort_unstable();
+            b.sort_unstable();
+            assert_eq!(a, b);
+        }
     }
 
     #[test]
@@ -1480,6 +1713,7 @@ mod tests {
             maps: 0,
             paused: false,
             session: (0.0, 0.0),
+            glitch: m.glitch,
         };
         m.draw(&mut c, &f);
         c
@@ -1599,30 +1833,22 @@ mod tests {
     }
 
     #[test]
-    fn the_menu_fades_in_and_out_but_not_for_exit() {
+    fn the_menu_fades_in_and_leaves_at_once() {
         let mut m = Menu::new();
         assert_eq!(m.opacity(), 0.0, "it fades in");
         m.clock = FADE_MS / 2.0;
         assert!(m.opacity() > 0.0 && m.opacity() < 1.0);
         m.clock = FADE_MS;
         assert_eq!(m.opacity(), 1.0);
-        // Opening something fades it out until it goes.
+        // Opening something goes straight there, with no fade out first.
         m.pick(2);
         m.hit();
         assert_eq!(m.opacity(), 1.0);
-        m.clock += LEAVE_MS / 2.0;
-        assert!(m.opacity() < 1.0 && m.opacity() > 0.0);
-        m.clock += LEAVE_MS / 2.0;
-        assert_eq!(m.opacity(), 0.0);
         assert_eq!(m.ready(), Some(Item::Download));
+        assert!(!m.is_leaving());
         // Back from there, it fades in again.
         assert_eq!(m.opacity(), 0.0);
         m.clock += FADE_MS;
-        assert_eq!(m.opacity(), 1.0);
-        // Exit only asks: the menu stays.
-        m.pick(6);
-        m.hit();
-        m.clock += LEAVE_MS * 0.9;
         assert_eq!(m.opacity(), 1.0);
     }
 

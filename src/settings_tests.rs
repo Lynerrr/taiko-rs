@@ -477,6 +477,60 @@ fn beatmap_skins_stay_off_after_a_restart() {
 }
 
 #[test]
+fn the_screen_glitches_between_menus_only_and_only_with_the_setting_on() {
+    let mut s = layout_tests::state();
+    s.cfg.animations = true;
+    s.play_when_scanned = false;
+    let at = Instant::now();
+    let glitch = |s: &mut State, ms: u64| {
+        let mut c = Canvas::default();
+        s.glitch_between_menus(&mut c, at + Duration::from_millis(ms));
+        c.glitch
+    };
+    s.main_menu = None;
+    s.scene = Scene::Select;
+    assert_eq!(glitch(&mut s, 0), None, "the first screen just appears");
+    assert_eq!(glitch(&mut s, 1), None);
+
+    s.scene = Scene::Download;
+    assert!(glitch(&mut s, 2).is_some_and(|[strength, _]| strength > 0.9));
+    assert!(glitch(&mut s, 100).is_some(), "the same change carries on");
+    assert_eq!(glitch(&mut s, 2000), None, "and it's over");
+
+    // In and out of a song is no change between menus.
+    s.scene = std::mem::replace(&mut in_a_song(false).scene, Scene::Select);
+    assert_eq!(glitch(&mut s, 3000), None);
+    s.scene = Scene::Select;
+    assert_eq!(glitch(&mut s, 3001), None);
+
+    s.cfg.menu_glitch = false;
+    s.scene = Scene::Download;
+    assert_eq!(glitch(&mut s, 4000), None);
+}
+
+#[test]
+fn the_menu_glitch_setting_stays_off_after_a_restart() {
+    let mut cfg = config::Config::default();
+    assert!(cfg.menu_glitch);
+    cfg.menu_glitch = false;
+    assert!(!config::Config::parse_text(&cfg.to_text()).menu_glitch);
+}
+
+#[test]
+fn the_exit_question_slides_in_from_above_and_stops() {
+    let mut s = layout_tests::state();
+    s.cfg.animations = true;
+    s.ask_quit();
+    let at = s.quit_asked_at.unwrap();
+    assert_eq!(s.quit_slide(at), 0.0);
+    let early = s.quit_slide(at + Duration::from_millis(40));
+    assert!(early > 0.4 && early < 1.0, "{early}");
+    assert_eq!(s.quit_slide(at + Duration::from_millis(200)), 1.0);
+    s.cfg.animations = false;
+    assert_eq!(s.quit_slide(at), 1.0);
+}
+
+#[test]
 fn a_songs_menu_likes_it() {
     let mut s = layout_tests::state();
     s.play_when_scanned = false;

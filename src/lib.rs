@@ -601,6 +601,10 @@ struct State {
     last_key: (KeyCode, Instant),
     /// The quick retry key being held in a song: which key, and since when.
     retry_hold: Option<(KeyCode, Instant)>,
+    /// The menu screen showing as of the last frame (`menu_screen`), and when it last changed to
+    /// another, for the glitch between them.
+    menu_screen_seen: Option<u8>,
+    menu_changed_at: Option<Instant>,
     /// How fast the replay being watched is going against how it was played, what's asked for
     /// (the music takes a moment), and that music on its way.
     replay_speed: f64,
@@ -630,6 +634,8 @@ struct State {
     quit: bool,
     /// "Exit taiko.rs?" is up (Ctrl+Q, Esc in song select, the window's close button).
     quit_asked: bool,
+    /// When the exit question came up, for its slide in.
+    quit_asked_at: Option<Instant>,
     /// The game crashed last time: its report, offered to copy (`draw_crash`).
     crash: Option<String>,
     /// That report is on its way to the server (`send_crash_report`).
@@ -3333,6 +3339,38 @@ impl State {
     }
 
     /// The main menu is what's showing.
+    /// Which menu screen is showing, if one is. Songs, loading and the editors aren't: going into
+    /// or out of them never glitches, so nothing gets in the way of a play.
+    fn menu_screen(&self) -> Option<u8> {
+        match self.scene {
+            Scene::Select if self.on_menu() => Some(0),
+            Scene::Select => Some(1),
+            Scene::Results { .. } => Some(2),
+            Scene::Settings { .. } => Some(3),
+            Scene::Download => Some(4),
+            Scene::MpMenu => Some(5),
+            Scene::Lobby => Some(6),
+            Scene::MpResults => Some(7),
+            _ => None,
+        }
+    }
+
+    /// Glitches the whole screen for a moment when one menu screen gives way to another.
+    fn glitch_between_menus(&mut self, canvas: &mut Canvas, now: Instant) {
+        let screen = self.menu_screen();
+        let was = std::mem::replace(&mut self.menu_screen_seen, screen);
+        if was.is_some() && screen.is_some() && was != screen {
+            self.menu_changed_at = Some(now);
+        }
+        if !self.cfg.menu_glitch || !self.cfg.animations {
+            return;
+        }
+        let ms = self
+            .menu_changed_at
+            .map(|at| now.saturating_duration_since(at).as_secs_f32() * 1000.0);
+        canvas.glitch = ms.and_then(menu::screen_glitch);
+    }
+
     fn on_menu(&self) -> bool {
         self.main_menu.is_some()
             && matches!(self.scene, Scene::Select)
@@ -3846,6 +3884,7 @@ impl State {
             Item::WheelResize => on(c.wheel_resizes_playfield),
             Item::BackgroundDimBlack => on(c.bg_dim_black),
             Item::KiaiEffects => on(c.kiai_effects),
+            Item::MenuGlitch => on(c.menu_glitch),
             Item::BlackLane => on(c.black_lane),
             Item::DrumMenus => on(c.drum_menus),
             Item::MapSkins => on(c.map_skins),
@@ -4188,6 +4227,7 @@ impl State {
             }
             Item::BackgroundDimBlack => self.cfg.bg_dim_black = !self.cfg.bg_dim_black,
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
+            Item::MenuGlitch => self.cfg.menu_glitch = !self.cfg.menu_glitch,
             Item::BlackLane => self.cfg.black_lane = !self.cfg.black_lane,
             Item::DrumMenus => {
                 self.cfg.drum_menus = !self.cfg.drum_menus;
@@ -12178,6 +12218,7 @@ impl State {
             self.quit = true;
         } else {
             self.quit_asked = true;
+            self.quit_asked_at = Some(Instant::now());
         }
     }
 
@@ -12336,17 +12377,34 @@ impl State {
         );
     }
 
-    /// The exit question over everything.
-    fn draw_quit(&self, c: &mut Canvas) {
+    /// How far in the exit question has slid at `now`, 0 to 1: fast, then easing to a stop.
+    fn quit_slide(&self, now: Instant) -> f32 {
+        let Some(at) = self.quit_asked_at.filter(|_| self.cfg.animations) else {
+            return 1.0;
+        };
+        let ms = now.saturating_duration_since(at).as_secs_f32() * 1000.0;
+        1.0 - (1.0 - (ms / QUIT_SLIDE_MS).min(1.0)).powi(3)
+    }
+
+    /// The exit question over everything, sliding down from above the screen.
+    fn draw_quit(&self, c: &mut Canvas, now: Instant) {
         if !self.quit_asked {
             return;
         }
         // The main menu's look: one panel, the two answers as notes on it (Exit a don, Stay a kat),
         // the selector on the one Enter picks, or on the one under the pointer.
         let w = c.width;
-        c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
+        let slide = self.quit_slide(now);
+        c.rect(
+            0.0,
+            0.0,
+            w,
+            render::VIRTUAL_HEIGHT,
+            rgba(0x000000, 0.6 * slide),
+        );
         let (bw, bh) = (340.0f32.min(w - 32.0), 124.0);
-        let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
+        let (x, rest) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
+        let y = -bh + (rest + bh) * slide;
         style::panel(c, x, y, bw, bh);
         let title = tr!(
             "Exit taiko.rs?",
@@ -12397,7 +12455,13 @@ impl State {
                     rgba(0, 0.0),
                     0.0,
                 );
-                style::selector(c, "quit", [ox - 3.0, oy - 3.0, button + 6.0, 46.0]);
+                // Its easing would trail behind the panel: until that's still, it just stays on.
+                let around = [ox - 3.0, oy - 3.0, button + 6.0, 46.0];
+                if slide < 1.0 {
+                    style::brackets(c, around, 1.0);
+                } else {
+                    style::selector(c, "quit", around);
+                }
             }
             c.hit(ox, oy, button, 40.0, hit);
             let (nx, ny, r) = (ox + 20.0, oy + 20.0, if selected { 10.0 } else { 8.0 });
@@ -13339,6 +13403,7 @@ impl State {
         canvas.avatar_slots = self.avatars.slots();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
+        self.glitch_between_menus(canvas, now);
         let idle_allowed = self.idle_allowed();
         self.idle
             .update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
@@ -13724,6 +13789,7 @@ impl State {
                             now.saturating_duration_since(self.started).as_secs_f64(),
                             self.session_play_ms / 1000.0,
                         ),
+                        glitch: self.cfg.menu_glitch,
                     };
                     m.draw(canvas, &frame);
                 }
@@ -15270,7 +15336,7 @@ impl State {
         );
         self.draw_drag_hover(canvas, now);
         self.draw_crash(canvas);
-        self.draw_quit(canvas);
+        self.draw_quit(canvas, now);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
@@ -16674,6 +16740,8 @@ const STATUS_ROUND_SECS: u64 = 45;
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
 /// How long the quick retry key is held for the map to restart (ms).
+/// How long the exit question takes to slide in.
+const QUIT_SLIDE_MS: f32 = 160.0;
 const RETRY_HOLD_MS: f64 = 150.0;
 /// A replay's music made at another speed, and that speed.
 type ReplayMusic = Result<(Arc<Track>, f64), String>;
@@ -17036,6 +17104,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 .map(|(range, r)| (range, to_fraction(r))),
         );
         renderer.disc = canvas.disc.map(|d| (d, vw));
+        renderer.glitch = canvas.glitch;
         let t1 = timing.then(Instant::now);
         let shot = renderer.submit(
             frame,
@@ -17786,6 +17855,8 @@ impl State {
             session_play_ms: 0.0,
             last_key: (KeyCode::Escape, Instant::now()),
             retry_hold: None,
+            menu_screen_seen: None,
+            menu_changed_at: None,
             replay_speed: 1.0,
             replay_speed_wanted: 1.0,
             replay_speed_rx: None,
@@ -17860,6 +17931,7 @@ impl State {
             exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
             quit: false,
             quit_asked: false,
+            quit_asked_at: None,
             screenshot_due: false,
             smooth: std::env::var_os("TAIKO_STATS")
                 .is_some()

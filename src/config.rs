@@ -224,6 +224,9 @@ pub struct Config {
     pub show_fps: bool,
     /// Kiai time effects on the lane (tint, pulsing glow).
     pub kiai_effects: bool,
+    /// Hit notes on the main menu glitch as they spin, and the screen glitches with them and
+    /// between menus.
+    pub menu_glitch: bool,
     /// How autoplay hits: playstyle, binding and hand (taiko_arranger's).
     pub autoplay: crate::autoplay::Settings,
     /// GREAT hits without their flash and label (only OKs and misses show).
@@ -414,6 +417,7 @@ impl Default for Config {
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
             kiai_effects: true,
+            menu_glitch: true,
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
             black_lane: false,
@@ -1002,6 +1006,7 @@ impl Config {
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
+                "menu_glitch" => cfg.menu_glitch = v != "false",
                 "autoplay_style" => {
                     cfg.autoplay.style =
                         crate::autoplay::Style::parse(v).unwrap_or(cfg.autoplay.style)
@@ -1293,6 +1298,10 @@ impl Config {
         out.push_str(&format!(
             "# draw maps with the skin images in their own folder\nmap_skins = {}\n",
             self.map_skins
+        ));
+        out.push_str(&format!(
+            "# main menu notes glitch when hit, and the whole screen with them and between menus\nmenu_glitch = {}\n",
+            self.menu_glitch
         ));
         out.push_str(&format!(
             "# interface colour: red (the default), pink, purple, blue, teal, green, yellow, orange or #rrggbb\naccent = {}\n",
