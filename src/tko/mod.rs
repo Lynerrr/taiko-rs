@@ -10,6 +10,7 @@
 
 pub mod format;
 pub mod gimmick;
+pub mod graph;
 pub mod runtime;
 pub mod track;
 

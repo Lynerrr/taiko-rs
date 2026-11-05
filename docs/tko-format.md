@@ -60,3 +60,44 @@ and compare).
 - Limits (a file can't make the player hold an unbounded amount): 10,000 keys per track, 256
   groups, 200,000 grouped notes in all, 4 MiB of JSON. Values are held inside each property's range
   and unknown properties are dropped when a file is read.
+
+## Node graph
+
+`graph` in the same JSON adds events, logic and actions on top of the keyframes. Like them it only
+moves what is drawn.
+
+```
+"graph": {
+  "seed": 0,
+  "nodes": [
+    { "id": 1, "kind": "on_beat", "x": 20, "y": 20, "p": [1, 0] },
+    { "id": 2, "kind": "pulse", "x": 260, "y": 20, "p": [0.2, 250], "ease": "quad_out",
+      "target": "field.zoom", "inputs": [1] }
+  ]
+}
+```
+
+- `p` are the node's numbers, in the order its kind lists them (missing ones take their defaults,
+  out-of-range ones are held in range). `inputs` lists, per input port, the id of the node feeding
+  it, or `null`. `x`/`y` only place the box in the editor.
+- Two kinds of wire. A *trigger* carries moments in time; a *number* carries a value that can be
+  read at any time. A wire that joins the wrong kinds, comes from a missing node, or would close a
+  loop is dropped when a file is read.
+- Events (trigger sources): `on_start`, `on_time`, `on_beat` (every N beats from an offset, on the
+  map's beat grid; a green line doesn't restart it), `on_kiai_start`, `on_kiai_end`,
+  `on_note_reach` (a group's notes), and the play events `on_hit` (group, judge), `on_miss`
+  (group), `on_combo` (every N). Play events are told to the graph by the game as notes are
+  judged, so a replay draws the same.
+- Triggers: `delay`, `counter` (every Nth), `once`, `gate` (passes moments while a number is at
+  least 0.5), `merge`.
+- Values: `const`, `time`, `beat_phase`, `combo`, `accuracy`, `random` (steady within a beat, from
+  the graph `seed`), `wave`, `toggle` (flips at each moment), `envelope` (1 falling to 0 after
+  each moment). Math: `add`, `mul`, `compare`, `not`, `clamp`, `map` (times, plus). An unwired
+  number input reads 0 (1 for `mul`).
+- Actions end a chain and move a `target` (`field.<property>` or `group.<index>.<property>`): `drive`
+  (a number, times a gain), `pulse` (a kick that settles over a time), `tween` (flips between
+  nothing and a value at each moment), `shake` (random offset of the playfield, fading), `clip`
+  (a short run of keys played from each moment). What actions give is added to the property's own
+  keyframes and the sum is held inside the property's range.
+- Limits: 2,000 nodes, 20,000 moments per node, 10,000 node reads per frame (and a read chain at
+  most 512 deep). Randomness only comes from `seed` and the beat, never from the clock.

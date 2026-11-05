@@ -8,6 +8,7 @@ pub mod chart;
 pub mod gimmicks;
 pub mod history;
 pub mod keyframes;
+pub mod nodes;
 pub mod state;
 pub mod sv_curves;
 pub mod timing;

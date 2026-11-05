@@ -1841,10 +1841,21 @@ impl Game {
     ) -> Game {
         apply_to_map(&mut map, mods, seed, half);
         let tko = map.gimmick.clone().map(|g| {
-            crate::tko::runtime::Runtime::new(
+            let beats: Vec<crate::tko::runtime::BeatSection> = map
+                .control_points
+                .iter()
+                .map(|c| crate::tko::runtime::BeatSection {
+                    start: c.time,
+                    origin: c.beat_origin,
+                    length: c.beat_length,
+                    kiai: c.kiai,
+                })
+                .collect();
+            crate::tko::runtime::Runtime::with_beats(
                 g,
                 map.notes.iter().map(|n| n.time),
                 beatmap::OSU_TIMING_MS,
+                &beats,
             )
         });
         let first_note = map.notes.first().map(|n| n.time).unwrap_or(0.0);
@@ -2849,6 +2860,11 @@ impl Game {
         ((self.time - self.first_note) / (self.end_time - self.first_note).max(1.0)).clamp(0.0, 1.0)
     }
 
+    /// How long ago (ms) a `.tko` graph's trigger node last fired, for the editor to light it.
+    pub fn tko_fired_ago(&self, id: u32) -> Option<f64> {
+        self.tko.as_ref()?.fired_ago(id, self.time)
+    }
+
     fn expire(&mut self, t: f64) {
         for i in self.cursor..self.map.notes.len() {
             let n = &self.map.notes[i];
@@ -2986,6 +3002,21 @@ impl Game {
             }
         }
         self.last_judge = Some((judge, t));
+        // Tell a .tko graph what happened; it only ever draws from it.
+        if let Some(r) = self.tko.as_mut() {
+            use crate::tko::runtime::Verdict;
+            r.event(
+                t,
+                i,
+                match judge {
+                    Judge::Great => Verdict::Great,
+                    Judge::Ok => Verdict::Ok,
+                    Judge::Miss => Verdict::Miss,
+                },
+                self.stats.combo,
+                self.stats.accuracy(),
+            );
+        }
         if self.scoring == Scoring::Standard {
             self.rescore(judge, combo_before);
         }
@@ -3919,7 +3950,14 @@ impl Game {
         };
         let portal = self.portal_at(vt, lane_len);
         // A .tko map's playfield motion: what is drawn, never when a note is hit.
-        let tko_fx = self.tko.as_ref().map(|r| r.field(vt)).unwrap_or_default();
+        let tko_fx = self
+            .tko
+            .as_mut()
+            .map(|r| {
+                r.prepare(vt);
+                r.field(vt)
+            })
+            .unwrap_or_default();
         let scroll = Scroll {
             t: vt,
             speed: osu_speed_scale(w)
@@ -10146,6 +10184,98 @@ mod tests {
         let plain = run(None);
         assert!(plain.0 > 30, "autoplay hits the notes: {plain:?}");
         assert_eq!(run(Some(some_gimmick())), plain);
+    }
+
+    /// Beats, hits and combos wired to motion.
+    fn graph_gimmick() -> crate::tko::gimmick::Gimmick {
+        use crate::tko::gimmick::{FieldProp, Group, NoteProp};
+        use crate::tko::graph::{Kind, Target};
+        let mut g = crate::tko::gimmick::Gimmick::default();
+        g.groups.push(Group {
+            notes: (0..64)
+                .step_by(2)
+                .map(|b| b as f64 * 500.0 - beatmap::OSU_TIMING_MS)
+                .collect(),
+            ..Group::default()
+        });
+        let gr = &mut g.graph;
+        let mut add = |kind: Kind, p: &[f64], target: Option<Target>, from: &[u32]| {
+            let id = gr.add(kind, 0.0, 0.0).unwrap();
+            let n = gr.node_mut(id).unwrap();
+            n.p = p.to_vec();
+            n.target = target;
+            for (port, f) in from.iter().enumerate() {
+                gr.connect(*f, id, port).unwrap();
+            }
+            id
+        };
+        let beat = add(Kind::OnBeat, &[1.0, 0.0], None, &[]);
+        add(
+            Kind::Pulse,
+            &[0.2, 250.0],
+            Some(Target::Field(FieldProp::Zoom)),
+            &[beat],
+        );
+        let hit = add(Kind::OnHit, &[1.0, 0.0], None, &[]);
+        add(Kind::Shake, &[10.0, 300.0], None, &[hit]);
+        add(
+            Kind::Pulse,
+            &[30.0, 300.0],
+            Some(Target::Group(0, NoteProp::Dy)),
+            &[hit],
+        );
+        let miss = add(Kind::OnMiss, &[0.0], None, &[]);
+        add(
+            Kind::Pulse,
+            &[90.0, 500.0],
+            Some(Target::Field(FieldProp::Rotation)),
+            &[miss],
+        );
+        let combo = add(Kind::Combo, &[], None, &[]);
+        add(
+            Kind::Drive,
+            &[0.01],
+            Some(Target::Field(FieldProp::X)),
+            &[combo],
+        );
+        g.sanitize();
+        g
+    }
+
+    #[test]
+    fn a_node_graph_moves_the_field_on_hits_and_never_changes_judging() {
+        pin_drawing_globals();
+        let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
+            let mut g = tko_game(gimmick, Mods::NONE);
+            let mut frames = Vec::new();
+            let mut t = -2000.0;
+            while t < 34_000.0 {
+                g.time = t;
+                g.autoplay(None);
+                g.expire(t);
+                if (t as i64) % 1000 == 0 {
+                    frames.push(frame_bytes(&mut g, t));
+                }
+                t += 5.0;
+            }
+            let judged = (
+                g.stats.great,
+                g.stats.ok,
+                g.stats.miss,
+                g.stats.combo,
+                g.stats.max_combo,
+                g.stats.score,
+                g.stats.errors.clone(),
+            );
+            (judged, frames)
+        };
+        let (plain, plain_frames) = run(None);
+        let (graphed, graph_frames) = run(Some(graph_gimmick()));
+        let (_, again_frames) = run(Some(graph_gimmick()));
+        assert!(plain.0 > 30);
+        assert_eq!(graphed, plain, "the graph only draws");
+        assert!(plain_frames != graph_frames, "it did draw something");
+        assert!(graph_frames == again_frames, "and the same every time");
     }
 
     #[test]

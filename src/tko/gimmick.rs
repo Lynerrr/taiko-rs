@@ -1,5 +1,6 @@
 //! What a `.tko` map adds to its chart: keyframed motion of the playfield, and of groups of notes.
 
+use super::graph::Graph;
 use super::track::{Key, Track};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -136,9 +137,9 @@ pub struct Gimmick {
     pub field: BTreeMap<String, Track>,
     #[serde(default)]
     pub groups: Vec<Group>,
-    /// The node graph (see `tko::graph`), kept as the file has it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub graph: Option<serde_json::Value>,
+    /// Events, logic and actions that move the same things as the keyframes (see `graph`).
+    #[serde(default, skip_serializing_if = "Graph::is_empty")]
+    pub graph: Graph,
 }
 
 impl Gimmick {
@@ -148,7 +149,7 @@ impl Gimmick {
                 .groups
                 .iter()
                 .all(|g| g.tracks.values().all(Track::is_empty))
-            && self.graph.is_none()
+            && self.graph.is_empty()
     }
 
     pub fn field_track(&self, p: FieldProp) -> Option<&Track> {
@@ -218,6 +219,8 @@ impl Gimmick {
             }
         }
         self.field.retain(|_, t| !t.is_empty());
+        let groups = self.groups.len();
+        self.graph.sanitize(groups);
     }
 }
 

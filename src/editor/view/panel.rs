@@ -316,11 +316,14 @@ impl View {
             ("Structures".to_string(), Btn::GPage(0), self.g_page == 0),
             ("Generate SV".to_string(), Btn::GPage(1), self.g_page == 1),
             ("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2),
+            ("Nodes".to_string(), Btn::GPage(3), self.g_page == 3),
             ("Inspector (Tab)".to_string(), Btn::Gimmicks, false),
         ];
         self.row(c, x, y, &tabs);
         y += 20.0;
-        if self.g_page == 2 {
+        if self.g_page == 3 {
+            self.draw_nodes_page(c, x, y, inner);
+        } else if self.g_page == 2 {
             self.draw_keys_page(c, x, y, inner);
         } else if self.g_page == 0 {
             let tools: Vec<(String, Btn, bool)> = GimmickTool::ALL

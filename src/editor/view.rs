@@ -22,9 +22,11 @@ use crate::render::{Canvas, accent, rgba};
 use crate::video::FRAME_VW;
 
 mod keys;
+mod nodes;
 mod panel;
 
 use keys::KAct;
+use nodes::NAct;
 use panel::{GFlag, GParam};
 
 pub type TrackResult = Result<Arc<Track>, String>;
@@ -91,6 +93,7 @@ pub enum Btn {
     GCancel,
     GBase,
     K(KAct),
+    N(NAct),
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +106,9 @@ enum Drag {
     Place { start: f64, to: f64, swell: bool },
     Line { id: u64 },
     Key { index: usize },
+    Node { id: u32, dx: f32, dy: f32 },
+    Wire { from: u32 },
+    Pan { last: (f32, f32) },
 }
 
 const TOOLS: [(&str, Tool); 5] = [
@@ -130,6 +136,9 @@ pub struct Layout {
     pub inspector: [f32; 4],
     pub timeline: [f32; 4],
     pub graph: [f32; 4],
+    /// The node canvas and the strip above it, which take the timeline's place on the Nodes page.
+    pub nodes: [f32; 4],
+    pub strip: [f32; 4],
 }
 
 impl Layout {
@@ -142,6 +151,8 @@ impl Layout {
             inspector: [pw + 16.0, 46.0, (w - pw - 24.0).max(120.0), ph],
             timeline: [8.0, 240.0, w - 16.0, 104.0],
             graph: [8.0, 350.0, w - 16.0, 80.0],
+            strip: [8.0, 240.0, w - 16.0, 20.0],
+            nodes: [8.0, 264.0, w - 16.0, 166.0],
         }
     }
 }
@@ -191,6 +202,13 @@ pub struct View {
     k_ease: crate::tko::track::Ease,
     /// The graph's value range while a key is being dragged, so it doesn't rescale under the pointer.
     k_frozen: Option<(f64, f64)>,
+    /// Nodes page: the selected node, the canvas's pan and zoom, the palette's category, the clip
+    /// preset last given.
+    n_sel: Option<u32>,
+    n_pan: (f32, f32),
+    n_zoom: f32,
+    n_cat: usize,
+    n_clip: usize,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -248,6 +266,11 @@ impl View {
             k_sel: None,
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
+            n_sel: None,
+            n_pan: (0.0, 0.0),
+            n_zoom: 1.0,
+            n_cat: 0,
+            n_clip: 0,
         };
         v.follow(true);
         Ok(v)
@@ -488,8 +511,13 @@ impl View {
         } else {
             self.draw_inspector(c);
         }
-        self.draw_timeline(c);
-        self.draw_graph(c);
+        if self.node_mode() {
+            self.draw_node_strip(c);
+            self.draw_node_canvas(c);
+        } else {
+            self.draw_timeline(c);
+            self.draw_graph(c);
+        }
         self.draw_footer(c);
     }
 
@@ -1223,7 +1251,8 @@ impl View {
                 }
             }
             Drag::Key { index } => self.key_graph_drag(index, x, y),
-            Drag::None => {}
+            Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
+            Drag::Wire { .. } | Drag::None => {}
         }
     }
 
@@ -1249,6 +1278,16 @@ impl View {
         if let Some((_, b)) = self.buttons.iter().rev().find(|(r, _)| inside(*r, x, y)) {
             let b = *b;
             self.press(b, keys, audio);
+            return;
+        }
+        if self.node_mode() {
+            if inside(self.layout.strip, x, y) {
+                self.drag = Drag::Scrub;
+                let t = self.t_at(x);
+                self.set_time(t);
+            } else if inside(self.layout.nodes, x, y) {
+                self.node_down(x, y);
+            }
             return;
         }
         let tl = self.layout.timeline;
@@ -1376,12 +1415,20 @@ impl View {
                 self.ed.end_drag();
                 self.mark_stale();
             }
-            Drag::Scrub | Drag::None => {}
+            Drag::Node { .. } => self.ed.end_drag(),
+            Drag::Wire { from } => self.wire_dropped(from, x, y),
+            Drag::Scrub | Drag::Pan { .. } | Drag::None => {}
         }
     }
 
     /// Right click: deletes what's under the pointer.
     pub fn right_click(&mut self, x: f32, y: f32) {
+        if self.node_mode() {
+            if inside(self.layout.nodes, x, y) {
+                self.node_right(x, y);
+            }
+            return;
+        }
         if inside(self.layout.timeline, x, y) {
             if let Some(id) = self.object_at_x(x) {
                 self.ed.selection = [id].into();
@@ -1398,7 +1445,11 @@ impl View {
     }
 
     pub fn wheel(&mut self, notches: i32, keys: Keys) {
-        let (mx, _) = self.mouse;
+        let (mx, my) = self.mouse;
+        if self.node_mode() && inside(self.layout.nodes, mx, my) {
+            self.node_zoom(notches);
+            return;
+        }
         if keys.ctrl {
             self.zoom(if notches > 0 { 0.8 } else { 1.25 }, mx);
         } else if keys.alt {
@@ -1612,6 +1663,7 @@ impl View {
             Btn::GKeep => self.settle_preview(),
             Btn::GCancel => self.gimmick_cancel(),
             Btn::K(a) => self.press_key_action(a, keys.shift, keys.alt),
+            Btn::N(a) => self.press_node_action(a, keys.shift),
             Btn::GBase => {
                 self.ed.reset_base();
                 self.status = "base timing is now the current chart".into();
@@ -1703,6 +1755,7 @@ impl View {
                 self.ed.retype_selected(None, Some(big));
                 self.mark_stale();
             }
+            KeyCode::Delete | KeyCode::Backspace if self.node_mode() => self.delete_selected_node(),
             KeyCode::Delete | KeyCode::Backspace => self.press(Btn::Delete, keys, audio),
             KeyCode::KeyA if keys.ctrl => self.ed.select_all(),
             KeyCode::KeyC if keys.ctrl => {
@@ -2080,5 +2133,198 @@ mod tests {
             },
         );
         assert_eq!(v.ed.snap, 5);
+    }
+
+    use crate::tko::graph::Kind;
+
+    /// A view of a `.tko` map on the Nodes page.
+    fn nodes_view() -> View {
+        let mut v = view();
+        press(&mut v, Btn::Gimmicks);
+        press(&mut v, Btn::GPage(2));
+        press(&mut v, Btn::K(KAct::MakeTko));
+        press(&mut v, Btn::GPage(3));
+        draw(&mut v);
+        v
+    }
+
+    fn put(v: &mut View, kind: Kind, x: f32, y: f32) -> u32 {
+        let id = v.ed.add_node(kind, x, y).unwrap();
+        draw(v);
+        id
+    }
+
+    /// Drags from the output of `from` to input `port` of `to` with the mouse.
+    fn wire_up(v: &mut View, from: u32, to: u32, port: usize) {
+        let a = v.out_pos(v.ed.node(from).unwrap());
+        let b = v.in_pos(v.ed.node(to).unwrap(), port);
+        v.mouse_down(a.0, a.1, Keys::default(), None);
+        v.mouse_move((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, Keys::default());
+        v.mouse_up(b.0, b.1, Keys::default());
+    }
+
+    #[test]
+    fn the_nodes_page_needs_a_tko_and_replaces_the_timeline_with_a_canvas() {
+        let mut v = view();
+        press(&mut v, Btn::Gimmicks);
+        press(&mut v, Btn::GPage(3));
+        draw(&mut v);
+        assert!(!v.node_mode(), "a plain .osu has no nodes");
+        let mut v = nodes_view();
+        assert!(v.node_mode(), "{}", v.status);
+        let c = draw(&mut v);
+        assert!(!c.shapes.is_empty());
+        // A click on the strip moves the playhead; one on the canvas does not.
+        let s = v.layout.strip;
+        click(&mut v, 400.0, s[1] + 10.0);
+        assert!((v.ed.time - v.t_at(400.0)).abs() < 1.0);
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn nodes_are_added_from_the_palette_wired_by_dragging_and_edited() {
+        let mut v = nodes_view();
+        press(&mut v, Btn::N(NAct::Add(Kind::OnBeat)));
+        let beat = v.n_sel.unwrap();
+        press(&mut v, Btn::N(NAct::Cat(4)));
+        press(&mut v, Btn::N(NAct::Add(Kind::Pulse)));
+        let pulse = v.n_sel.unwrap();
+        assert_ne!(beat, pulse);
+        // Far apart, so the boxes don't cover each other's dots.
+        v.ed.move_node(beat, 20.0, 20.0, false);
+        v.ed.move_node(pulse, 260.0, 20.0, false);
+        draw(&mut v);
+        let wave = put(&mut v, Kind::Wave, 20.0, 90.0);
+        // A number into a trigger input is refused with a reason, and is no undo step.
+        wire_up(&mut v, wave, pulse, 0);
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [None]);
+        assert!(v.status.contains("trigger"), "{}", v.status);
+        wire_up(&mut v, beat, pulse, 0);
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [Some(beat)]);
+        // The wire is drawn and the preview still builds.
+        draw(&mut v);
+        assert!(v.game.is_some(), "{:?}", v.game_err);
+        // Numbers, target and easing of the selected node.
+        v.n_sel = Some(pulse);
+        press(&mut v, Btn::N(NAct::Param(0, 1)));
+        assert!(v.ed.node(pulse).unwrap().param(0) > 0.1);
+        press(&mut v, Btn::N(NAct::Target(1)));
+        assert!(v.ed.node(pulse).unwrap().target.is_some());
+        let ease = v.ed.node(pulse).unwrap().ease;
+        press(&mut v, Btn::N(NAct::Ease));
+        assert_ne!(v.ed.node(pulse).unwrap().ease, ease);
+        press(&mut v, Btn::N(NAct::NoTarget));
+        assert!(v.ed.node(pulse).unwrap().target.is_none());
+        // Right-click on an input dot lifts the wire; undo puts it back.
+        let p = v.in_pos(v.ed.node(pulse).unwrap(), 0);
+        v.right_click(p.0, p.1);
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [None]);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [Some(beat)]);
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn a_wire_picked_up_by_its_end_moves_and_dropping_on_nothing_removes_it() {
+        let mut v = nodes_view();
+        let beat = put(&mut v, Kind::OnBeat, 20.0, 20.0);
+        let a = put(&mut v, Kind::Once, 260.0, 20.0);
+        let b = put(&mut v, Kind::Once, 260.0, 90.0);
+        wire_up(&mut v, beat, a, 0);
+        assert_eq!(v.ed.node(a).unwrap().inputs, [Some(beat)]);
+        // Take it off `a` and drop it on `b`.
+        let from = v.in_pos(v.ed.node(a).unwrap(), 0);
+        let to = v.in_pos(v.ed.node(b).unwrap(), 0);
+        v.mouse_down(from.0, from.1, Keys::default(), None);
+        assert!(matches!(v.drag, Drag::Wire { from } if from == beat));
+        v.mouse_up(to.0, to.1, Keys::default());
+        assert_eq!(v.ed.node(a).unwrap().inputs, [None]);
+        assert_eq!(v.ed.node(b).unwrap().inputs, [Some(beat)]);
+        // Dropped on nothing: gone.
+        let from = v.in_pos(v.ed.node(b).unwrap(), 0);
+        v.mouse_down(from.0, from.1, Keys::default(), None);
+        v.mouse_up(from.0 + 5.0, from.1 + 60.0, Keys::default());
+        assert_eq!(v.ed.node(b).unwrap().inputs, [None]);
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn nodes_drag_the_canvas_pans_and_zooms_and_delete_unwires() {
+        let mut v = nodes_view();
+        let a = put(&mut v, Kind::OnStart, 20.0, 20.0);
+        let b = put(&mut v, Kind::Once, 260.0, 20.0);
+        wire_up(&mut v, a, b, 0);
+        // Drag a node by its header: one undo step.
+        let r = v.node_rect(v.ed.node(b).unwrap());
+        let (x, y) = (r[0] + 30.0, r[1] + 4.0);
+        v.mouse_down(x, y, Keys::default(), None);
+        for i in 1..=8 {
+            v.mouse_move(x + i as f32 * 6.0, y + i as f32 * 3.0, Keys::default());
+        }
+        v.mouse_up(x + 48.0, y + 24.0, Keys::default());
+        let moved = v.ed.node(b).unwrap().x;
+        assert!(moved > 260.0 && v.n_sel == Some(b));
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.node(b).unwrap().x, 260.0);
+        // Dragging empty canvas pans it; the wheel zooms about the pointer.
+        let n = v.layout.nodes;
+        let (ex, ey) = (n[0] + n[2] - 40.0, n[1] + n[3] - 40.0);
+        v.mouse_down(ex, ey, Keys::default(), None);
+        v.mouse_move(ex - 30.0, ey - 10.0, Keys::default());
+        v.mouse_up(ex - 30.0, ey - 10.0, Keys::default());
+        assert!(v.n_pan.0 > 0.0 && v.n_pan.1 > 0.0);
+        assert!(v.n_sel.is_none());
+        let before = v.to_world(ex, ey);
+        v.mouse = (ex, ey);
+        v.wheel(-3, Keys::default());
+        assert!(v.n_zoom > 1.0 && v.n_zoom <= nodes::MAX_ZOOM);
+        let after = v.to_world(ex, ey);
+        assert!((before.0 - after.0).abs() < 0.01 && (before.1 - after.1).abs() < 0.01);
+        for _ in 0..30 {
+            v.wheel(1, Keys::default());
+        }
+        assert_eq!(v.n_zoom, nodes::MIN_ZOOM);
+        draw(&mut v);
+        // Deleting a node (right-click on its body) unwires what it fed.
+        let r = v.node_rect(v.ed.node(a).unwrap());
+        v.right_click(r[0] + r[2] / 2.0, r[1] + 3.0);
+        assert!(v.ed.node(a).is_none());
+        assert_eq!(v.ed.node(b).unwrap().inputs, [None]);
+        // Delete key on the selected node.
+        v.n_sel = Some(b);
+        v.key(KeyCode::Delete, false, Keys::default(), None);
+        assert!(v.ed.node(b).is_none());
+        assert!(v.ed.chart.dirty);
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn a_node_lights_up_while_it_fires_in_the_preview() {
+        let mut v = nodes_view();
+        let beat = put(&mut v, Kind::OnBeat, 20.0, 20.0);
+        let start = v.ed.chart.timing[0].time;
+        v.mark_stale();
+        v.set_time(start + 50.0);
+        draw(&mut v);
+        assert!(v.lit(beat), "just after a beat");
+        v.set_time(start + 400.0);
+        draw(&mut v);
+        assert!(!v.lit(beat), "between beats");
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn the_seed_steps_and_saves_with_the_map() {
+        let mut v = nodes_view();
+        press(&mut v, Btn::N(NAct::Seed(1)));
+        press(&mut v, Btn::N(NAct::Seed(1)));
+        assert_eq!(v.ed.gimmick().unwrap().graph.seed, 2);
+        press(&mut v, Btn::N(NAct::Seed(-1)));
+        assert_eq!(v.ed.gimmick().unwrap().graph.seed, 1);
+        put(&mut v, Kind::Random, 20.0, 20.0);
+        let text = v.ed.chart.to_text();
+        let back = crate::editor::chart::Chart::parse_tko(&text).unwrap();
+        assert_eq!(back.gimmick.unwrap().graph, v.ed.gimmick().unwrap().graph);
+        let _ = std::fs::remove_file(&v.ed.path);
     }
 }
