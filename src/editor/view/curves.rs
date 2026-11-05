@@ -879,7 +879,8 @@ impl View {
             "How the speed changes from the start to the end.\nLinear: evenly. Geometric: by the same factor each step (reads as an even acceleration). Poly: t^n, below 1 starts fast and settles. Sine: eases in and out.\nFlat + / x: add to or multiply the green lines already in range.\nFan: alternates around the start."
                 .to_string(),
         ));
-        let fw = ((w - 12.0) / 4.0).min(150.0);
+        let fw = ((w - 12.0) / 4.0).clamp(100.0, 150.0).min(w);
+        let per_row = (((w + 4.0) / (fw + 4.0)) as usize).max(1);
         let mut cells: Vec<SF> = Vec::new();
         if flat {
             cells.push(SF::Value);
@@ -895,9 +896,16 @@ impl View {
             }
         }
         for (i, f) in cells.iter().enumerate() {
-            self.svt_field(c, x + i as f32 * (fw + 4.0), y, fw, *f);
+            let (col, row) = (i % per_row, i / per_row);
+            self.svt_field(
+                c,
+                x + col as f32 * (fw + 4.0),
+                y + row as f32 * 18.0,
+                fw,
+                *f,
+            );
         }
-        y += 18.0;
+        y += 18.0 * cells.len().div_ceil(per_row) as f32;
         let snap = format!("Snaps {}/{}", p.snap_numer as i64, p.snap_denom as i64);
         let mut ax = self.row(
             c,
@@ -929,11 +937,20 @@ impl View {
             "Where the new lines go: on each note, on the beat grid (n/d of a beat), or on the green lines already there. Flat changes always use the lines already there.".to_string(),
         ));
         y += 19.0;
-        for (i, f) in [SF::Offset, SF::Buffer, SF::Spacing].iter().enumerate() {
-            self.svt_field(c, x + i as f32 * (fw + 4.0), y, fw, *f);
+        let advanced = [SF::Offset, SF::Buffer, SF::Spacing];
+        for (i, f) in advanced.iter().enumerate() {
+            let (col, row) = (i % per_row, i / per_row);
+            self.svt_field(
+                c,
+                x + col as f32 * (fw + 4.0),
+                y + row as f32 * 18.0,
+                fw,
+                *f,
+            );
         }
+        let adv_h = 18.0 * advanced.len().div_ceil(per_row) as f32;
         self.tips.push((
-            [x, y, 3.0 * (fw + 4.0), 14.0],
+            [x, y, w, adv_h],
             "Offset: ms from the object a line goes (negative: before it).\nBuffer: ms around the segment that count as in it, for notes that aren't perfectly snapped.\nMin spacing: lines closer than this collapse, and old green lines this close to a new one are replaced."
                 .to_string(),
         ));
@@ -949,8 +966,8 @@ impl View {
             let per_pair = matches!(p.shape, Shape::Fan { per_pair: true, .. });
             toggles.push(("Per pair".to_string(), Btn::S(SAct::PerPair), per_pair));
         }
-        self.row(c, x + 3.0 * (fw + 4.0) + 4.0, y - 1.0, &toggles);
-        y += 19.0;
+        y += adv_h;
+        y = self.wrap_row(c, x, y, w, &toggles);
         let presets: Vec<(String, Btn, bool)> = [
             "Ramp selected lines",
             "Geometric ramp lines",
@@ -961,13 +978,13 @@ impl View {
         .enumerate()
         .map(|(i, n)| (n.to_string(), Btn::S(SAct::Preset(i as u8)), false))
         .collect();
-        let end = self.row(c, x, y, &presets);
+        let top = y;
+        y = self.wrap_row(c, x, y, w, &presets);
         self.tips.push((
-            [x, y, end - x, 16.0],
+            [x, top, w, y - top],
             "Setups for the usual jobs. They only change the settings above; Apply writes."
                 .to_string(),
         ));
-        y += 19.0;
         let (note, ok) = match self.svt.ghost.as_ref().map(|g| &g.result) {
             Some(Ok(plan)) => (
                 format!(

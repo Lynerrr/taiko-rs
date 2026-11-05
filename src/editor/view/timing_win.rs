@@ -40,7 +40,7 @@ impl View {
     }
 
     pub(super) fn tw_rows(&self) -> usize {
-        (((self.layout.window[3] - 50.0) / ROW) as usize).max(1)
+        (((self.layout.window[3] - 62.0) / ROW) as usize).max(1)
     }
 
     /// A click on a row: select it and go there; Shift takes the rows up to it, Ctrl toggles it.

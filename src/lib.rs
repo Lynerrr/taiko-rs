@@ -12639,7 +12639,10 @@ impl State {
             return;
         }
         if !repeat
-            && !matches!(self.scene, Scene::MpMenu | Scene::Settings { .. })
+            && !matches!(
+                self.scene,
+                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_)
+            )
             && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
         {
