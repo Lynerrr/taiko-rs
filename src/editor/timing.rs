@@ -22,6 +22,7 @@ pub const ON_GRID_MS: f64 = 1.0;
 
 /// Nearest whole millisecond, halves up. For a position that isn't on a beat (the millisecond
 /// under the pointer on a free placement).
+#[cfg(test)]
 pub fn osu_round(v: f64) -> i64 {
     (v + 0.5).floor() as i64
 }
@@ -73,11 +74,6 @@ pub fn beat_length_at(points: &[TimingPoint], t: f64) -> f64 {
 /// The slider velocity in force at `t`. A red line resets it to 1.
 pub fn sv_at(points: &[TimingPoint], t: f64) -> f64 {
     active_at(points, t).map_or(1.0, TimingPoint::sv)
-}
-
-/// Whether `t` is in kiai time.
-pub fn kiai_at(points: &[TimingPoint], t: f64) -> bool {
-    active_at(points, t).is_some_and(TimingPoint::kiai)
 }
 
 /// The grid position nearest `t` at 1/`divisor` of a beat, exact (not yet a whole millisecond).
@@ -159,28 +155,6 @@ pub fn step(points: &[TimingPoint], t: f64, forward: bool, divisor: u32) -> f64 
     osu_snap_ms(target.max(0.0)) as f64
 }
 
-/// One barline per measure of each red section, as osu! draws them: `omit` skips a section's own.
-pub fn barlines(points: &[TimingPoint], until: f64, limit: usize) -> Vec<f64> {
-    let reds: Vec<&TimingPoint> = points.iter().filter(|p| playable_red(p)).collect();
-    let mut out = Vec::new();
-    for (i, p) in reds.iter().enumerate() {
-        let end = reds.get(i + 1).map_or(until, |n| n.time);
-        let measure = p.beat_length * p.meter.max(1) as f64;
-        let mut t = p.time;
-        if p.omits_barline() {
-            t += measure;
-        }
-        while t < end && out.len() < limit {
-            out.push(t);
-            if measure < 1.0 {
-                break;
-            }
-            t += measure;
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,14 +230,5 @@ mod tests {
         assert_eq!(own_divisor(&p, 1124.5, 1.0), Some(4));
         assert_eq!(resnap(&p, 1001.0), Some(1000));
         assert_eq!(resnap(&p, 1060.0), None, "put there on purpose");
-    }
-
-    #[test]
-    fn barlines_follow_the_meter_and_the_omit_flag() {
-        let mut p = pts(&[(0.0, 500.0, true), (4000.0, 500.0, true)]);
-        p[1].set_omit_barline(true);
-        p[1].meter = 3;
-        let bars = barlines(&p, 8000.0, 100);
-        assert_eq!(bars, [0.0, 2000.0, 5500.0, 7000.0]);
     }
 }

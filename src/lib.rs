@@ -78,6 +78,7 @@ mod splash;
 mod stars;
 mod style;
 mod tact;
+mod tko;
 mod tls;
 mod ui;
 mod update;
@@ -18153,7 +18154,10 @@ fn run(
     cfg.save();
 
     // A single .osu on the command line goes straight into gameplay.
-    let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
+    let play_when_scanned = args.len() == 1
+        && args[0]
+            .extension()
+            .is_some_and(|e| e == "osu" || e == "tko");
     // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
     let scripted =
         std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();

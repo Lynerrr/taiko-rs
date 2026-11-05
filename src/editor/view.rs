@@ -21,8 +21,10 @@ use crate::game::Game;
 use crate::render::{Canvas, accent, rgba};
 use crate::video::FRAME_VW;
 
+mod keys;
 mod panel;
 
+use keys::KAct;
 use panel::{GFlag, GParam};
 
 pub type TrackResult = Result<Arc<Track>, String>;
@@ -65,6 +67,7 @@ pub enum Btn {
     Play,
     Retype(Option<bool>, Option<bool>),
     Flip,
+    Resnap,
     Delete,
     AddRed,
     AddGreen,
@@ -87,6 +90,7 @@ pub enum Btn {
     GKeep,
     GCancel,
     GBase,
+    K(KAct),
 }
 
 #[derive(Clone, Copy)]
@@ -98,6 +102,7 @@ enum Drag {
     Resize { id: u64 },
     Place { start: f64, to: f64, swell: bool },
     Line { id: u64 },
+    Key { index: usize },
 }
 
 const TOOLS: [(&str, Tool); 5] = [
@@ -178,6 +183,14 @@ pub struct View {
     g_sv: SvParams,
     /// A gimmick was applied as a preview and can still be cancelled.
     g_pending: bool,
+    /// Keyframe page: editing the playfield's tracks (else a group's), which property, which key.
+    k_field: bool,
+    k_group: usize,
+    k_prop: usize,
+    k_sel: Option<usize>,
+    k_ease: crate::tko::track::Ease,
+    /// The graph's value range while a key is being dragged, so it doesn't rescale under the pointer.
+    k_frozen: Option<(f64, f64)>,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -229,6 +242,12 @@ impl View {
             g_tool: GimmickTool::BarlineNote,
             g_sv: SvParams::default(),
             g_pending: false,
+            k_field: true,
+            k_group: 0,
+            k_prop: 0,
+            k_sel: None,
+            k_ease: crate::tko::track::Ease::Linear,
+            k_frozen: None,
         };
         v.follow(true);
         Ok(v)
@@ -251,10 +270,6 @@ impl View {
 
     pub fn take_rate_request(&mut self) -> Option<f64> {
         self.want_rate.take()
-    }
-
-    pub fn is_playing(&self) -> bool {
-        self.playing.is_some()
     }
 
     fn speed(&self) -> f64 {
@@ -653,6 +668,7 @@ impl View {
                 ("Big".to_string(), Btn::Retype(None, Some(true)), false),
                 ("Small".to_string(), Btn::Retype(None, Some(false)), false),
                 ("Flip F".to_string(), Btn::Flip, false),
+                ("Resnap".to_string(), Btn::Resnap, false),
                 ("Delete".to_string(), Btn::Delete, false),
             ];
             self.row(c, x, y, &items);
@@ -995,6 +1011,9 @@ impl View {
     }
 
     fn draw_graph(&mut self, c: &mut Canvas) {
+        if self.keyframe_mode() {
+            return self.draw_key_graph(c);
+        }
         let [x, y, w, h] = self.layout.graph;
         c.round_rect(
             [x, y],
@@ -1203,6 +1222,7 @@ impl View {
                     self.mark_stale();
                 }
             }
+            Drag::Key { index } => self.key_graph_drag(index, x, y),
             Drag::None => {}
         }
     }
@@ -1302,6 +1322,9 @@ impl View {
     }
 
     fn graph_down(&mut self, x: f32, y: f32) {
+        if self.keyframe_mode() {
+            return self.key_graph_down(x, y);
+        }
         if let Some(id) = self.graph_dot_near(x, y) {
             self.sel_line = Some(id);
             self.drag = Drag::Line { id };
@@ -1348,7 +1371,8 @@ impl View {
                     self.mark_stale();
                 }
             }
-            Drag::Move { .. } | Drag::Resize { .. } | Drag::Line { .. } => {
+            Drag::Move { .. } | Drag::Resize { .. } | Drag::Line { .. } | Drag::Key { .. } => {
+                self.k_frozen = None;
                 self.ed.end_drag();
                 self.mark_stale();
             }
@@ -1364,6 +1388,8 @@ impl View {
                 self.ed.delete_selected();
                 self.mark_stale();
             }
+        } else if self.keyframe_mode() {
+            self.key_graph_right(x, y);
         } else if inside(self.layout.graph, x, y)
             && let Some(id) = self.graph_dot_near(x, y)
         {
@@ -1511,6 +1537,11 @@ impl View {
                 self.ed.flip_selected();
                 self.mark_stale();
             }
+            Btn::Resnap => {
+                let n = self.ed.resnap_selected();
+                self.status = format!("resnapped {n}");
+                self.mark_stale();
+            }
             Btn::Delete => {
                 self.ed.delete_selected();
                 self.mark_stale();
@@ -1580,6 +1611,7 @@ impl View {
             Btn::GPreview => self.gimmick_preview(),
             Btn::GKeep => self.settle_preview(),
             Btn::GCancel => self.gimmick_cancel(),
+            Btn::K(a) => self.press_key_action(a, keys.shift, keys.alt),
             Btn::GBase => {
                 self.ed.reset_base();
                 self.status = "base timing is now the current chart".into();
@@ -1946,6 +1978,72 @@ mod tests {
         press(&mut v, Btn::GPage(1));
         press(&mut v, Btn::GGenerate);
         assert!(v.status.starts_with("SV:"), "{}", v.status);
+    }
+
+    #[test]
+    fn the_keyframe_page_makes_a_tko_and_keys_a_track() {
+        use crate::editor::keyframes::Subject;
+        use crate::tko::gimmick::FieldProp;
+        let mut v = view();
+        press(&mut v, Btn::Gimmicks);
+        press(&mut v, Btn::GPage(2));
+        draw(&mut v);
+        assert!(!v.ed.is_tko());
+        // A click on a plain chart's graph still means a green line, not a key.
+        press(&mut v, Btn::K(KAct::MakeTko));
+        assert!(v.ed.is_tko(), "{}", v.status);
+        assert!(v.ed.path.extension().is_some_and(|e| e == "tko"));
+        press(&mut v, Btn::K(KAct::Prop(3)));
+        assert_eq!(v.subject(), Subject::Field(FieldProp::Zoom));
+        draw(&mut v);
+        // Click the graph twice: two keys on the zoom track.
+        let g = v.layout.graph;
+        click(&mut v, 300.0, g[1] + 20.0);
+        click(&mut v, 500.0, g[1] + 50.0);
+        let keys = v.ed.track_of(v.subject()).unwrap().keys.clone();
+        assert_eq!(keys.len(), 2);
+        assert!(keys[0].t < keys[1].t);
+        assert_eq!(v.k_sel, Some(1));
+        // Drag the second key: one undo step.
+        v.mouse_down(500.0, g[1] + 50.0, Keys::default(), None);
+        v.mouse_move(560.0, g[1] + 30.0, Keys::default());
+        v.mouse_up(560.0, g[1] + 30.0, Keys::default());
+        let moved = v.ed.track_of(v.subject()).unwrap().keys[1];
+        assert!(moved.t > keys[1].t);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.track_of(v.subject()).unwrap().keys[1].t, keys[1].t);
+        // The easing and value of the selected key, then deleting it.
+        press(&mut v, Btn::K(KAct::Ease));
+        assert_ne!(
+            v.ed.track_of(v.subject()).unwrap().keys[1].ease,
+            keys[1].ease
+        );
+        press(&mut v, Btn::K(KAct::Value(1)));
+        assert!(v.ed.track_of(v.subject()).unwrap().keys[1].v > keys[1].v);
+        press(&mut v, Btn::K(KAct::DeleteKey));
+        assert_eq!(v.ed.track_of(v.subject()).unwrap().keys.len(), 1);
+        // Right-click deletes too. A group needs notes selected first.
+        let (kx, ky) = {
+            let r = v.key_range();
+            (
+                v.x_of(v.ed.track_of(v.subject()).unwrap().keys[0].t),
+                v.key_y(v.ed.track_of(v.subject()).unwrap().keys[0].v, r),
+            )
+        };
+        v.right_click(kx, ky);
+        assert!(v.ed.track_of(v.subject()).is_none_or(|t| t.is_empty()));
+        press(&mut v, Btn::K(KAct::NewGroup));
+        assert!(v.status.contains("select"), "{}", v.status);
+        v.ed.select_all();
+        press(&mut v, Btn::K(KAct::NewGroup));
+        assert!(!v.k_field);
+        draw(&mut v);
+        press(&mut v, Btn::K(KAct::KeyHere));
+        assert_eq!(v.ed.track_of(v.subject()).unwrap().keys.len(), 1);
+        // The preview still builds from the chart with its gimmick.
+        draw(&mut v);
+        assert!(v.game.is_some(), "{:?}", v.game_err);
+        let _ = std::fs::remove_file(&v.ed.path);
     }
 
     #[test]

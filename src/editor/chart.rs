@@ -13,7 +13,6 @@ use std::path::Path;
 
 pub const CIRCLE: i32 = 1;
 pub const SLIDER: i32 = 2;
-pub const NEW_COMBO: i32 = 4;
 pub const SPINNER: i32 = 8;
 
 pub const SOUND_WHISTLE: i32 = 2;
@@ -568,6 +567,9 @@ pub struct Chart {
     pub dirty: bool,
     /// The file wasn't valid UTF-8: it can be saved as a new file but never over the original.
     pub lossy: bool,
+    /// The client gimmick of a `.tko` chart (`None` for a plain `.osu`). It is written after the
+    /// chart's own sections; the chart's lines never hold it.
+    pub gimmick: Option<crate::tko::gimmick::Gimmick>,
 }
 
 fn section_name(line: &str) -> Option<&str> {
@@ -592,6 +594,7 @@ impl Chart {
             next_id: 1,
             dirty: false,
             lossy: false,
+            gimmick: None,
         };
         let mut section = String::new();
         for line in &chart.lines.clone() {
@@ -624,8 +627,23 @@ impl Chart {
             Ok(t) => (t, false),
             Err(e) => (String::from_utf8_lossy(e.as_bytes()).into_owned(), true),
         };
-        let mut chart = Chart::parse(&text);
+        let mut chart =
+            if crate::beatmap::is_tko(path) || crate::tko::format::version_of(&text).is_some() {
+                Chart::parse_tko(&text)?
+            } else {
+                Chart::parse(&text)
+            };
         chart.lossy = lossy;
+        Ok(chart)
+    }
+
+    /// A `.tko` text: the chart, with the gimmick taken out of it. A newer format than this game
+    /// reads, or a broken section, is an error (the editor never rewrites what it doesn't understand).
+    pub fn parse_tko(text: &str) -> Result<Chart, String> {
+        let parsed = crate::tko::format::read(text).map_err(|e| e.to_string())?;
+        let (osu, _) = crate::tko::format::split(text);
+        let mut chart = Chart::parse(&osu);
+        chart.gimmick = Some(parsed.gimmick);
         Ok(chart)
     }
 
@@ -633,10 +651,6 @@ impl Chart {
         let id = self.next_id;
         self.next_id += 1;
         id
-    }
-
-    pub fn ending(&self) -> &'static str {
-        self.ending
     }
 
     fn sections(&self) -> Vec<Section> {
@@ -767,11 +781,7 @@ impl Chart {
         Some(self.objects.remove(at))
     }
 
-    pub fn timing_mut(&mut self, id: u64) -> Option<&mut TimingPoint> {
-        self.dirty = true;
-        self.timing.iter_mut().find(|p| p.id == id)
-    }
-
+    #[cfg(test)]
     pub fn object_mut(&mut self, id: u64) -> Option<&mut HitObject> {
         self.dirty = true;
         self.objects.iter_mut().find(|o| o.id == id)
@@ -789,6 +799,9 @@ impl Chart {
 
     /// Why the chart can't be written, if it can't: only points that were changed are checked.
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(g) = &self.gimmick {
+            crate::tko::format::write(&self.osu_text(), g).map_err(|e| e.to_string())?;
+        }
         for p in self.timing.iter().filter(|p| !p.untouched()) {
             if let Some(why) = p.problem() {
                 return Err(why);
@@ -831,7 +844,16 @@ impl Chart {
     }
 
     /// The file's text. An unedited chart gives back exactly what was read.
+    /// The file as it would be written: the chart, then (for a `.tko`) its gimmick.
     pub fn to_text(&self) -> String {
+        let base = self.osu_text();
+        match &self.gimmick {
+            Some(g) => crate::tko::format::write(&base, g).unwrap_or(base),
+            None => base,
+        }
+    }
+
+    fn osu_text(&self) -> String {
         if !self.dirty {
             return self.text.clone();
         }

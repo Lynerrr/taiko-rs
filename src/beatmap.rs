@@ -124,6 +124,9 @@ pub struct Meta {
     /// The genres its tags name (`genres::of`).
     #[serde(default)]
     pub genres: u32,
+    /// The `.tko` format version of a map that uses client gimmicks; 0 for a plain chart.
+    #[serde(default)]
+    pub tko_version: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -135,6 +138,9 @@ pub struct Beatmap {
     /// Scroll velocity (osu!px per ms) at the first timing point: what stable's PreEmpt, and so
     /// when spinners show, comes from (see game.rs).
     pub first_velocity: f64,
+    /// The client gimmick of a `.tko` map (visual only; its times are the chart's, before the
+    /// shift `from_text` applies).
+    pub gimmick: Option<std::sync::Arc<crate::tko::gimmick::Gimmick>>,
 }
 
 impl Meta {
@@ -245,12 +251,29 @@ pub const OSU_TIMING_MS: f64 = 23.0;
 
 pub fn load(path: &Path) -> Result<Beatmap, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if is_tko(path) && crate::tko::format::version_of(&text).is_none() {
+        return Err(crate::tko::format::Error::MissingVersion.to_string());
+    }
     from_text(&text)
+}
+
+/// Whether `path` is a `.tko` map.
+pub fn is_tko(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("tko"))
 }
 
 /// A map already in memory, converted exactly as `load` does (the editor's preview plays what the
 /// chart says right now).
 pub fn from_text(text: &str) -> Result<Beatmap, String> {
+    // A map that says it is a .tko brings its gimmick, or is refused (a newer format than this
+    // game knows, a broken section).
+    let gimmick = if crate::tko::format::version_of(text).is_some() {
+        let parsed = crate::tko::format::read(text).map_err(|e| e.to_string())?;
+        (!parsed.gimmick.is_empty()).then(|| std::sync::Arc::new(parsed.gimmick))
+    } else {
+        None
+    };
     let (meta, body) = parse_sections(text, false);
     if !meta.is_playable() {
         return Err(format!(
@@ -264,6 +287,7 @@ pub fn from_text(text: &str) -> Result<Beatmap, String> {
         barlines: Vec::new(),
         control_points: Vec::new(),
         first_velocity: 0.0,
+        gimmick,
     };
     convert(&mut map, body);
     if map.notes.is_empty() {
@@ -363,6 +387,7 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
                 Some(("Tags", v)) => meta.genres = crate::genres::of(v),
+                Some(("TkoVersion", v)) => meta.tko_version = v.trim().parse().unwrap_or(0),
                 Some(("BeatmapSetID", v)) => {
                     meta.set_id = v.trim().parse().ok().filter(|&id: &u32| id > 0)
                 }
@@ -677,6 +702,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
         barlines,
         control_points,
         first_velocity: velocity,
+        gimmick: None,
     }
 }
 
@@ -808,6 +834,7 @@ SliderTickRate:1
             barlines: Vec::new(),
             control_points: Vec::new(),
             first_velocity: 0.0,
+            gimmick: None,
         };
         convert(&mut map, body);
         map

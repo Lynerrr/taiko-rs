@@ -4,12 +4,10 @@
 //! `view` is the screen. `chart` holds the file and writes it back without touching what the editor doesn't model,
 //! `timing` is the snap grid and stable's millisecond rounding, `history` is undo and redo.
 
-// Until the editor scene is wired into the game.
-#![allow(dead_code)]
-
 pub mod chart;
 pub mod gimmicks;
 pub mod history;
+pub mod keyframes;
 pub mod state;
 pub mod sv_curves;
 pub mod timing;
@@ -23,6 +21,10 @@ use std::path::{Path, PathBuf};
 pub fn new_difficulty(source: &Path) -> Result<PathBuf, String> {
     let mut chart = chart::Chart::read(source)?;
     chart.objects.clear();
+    // A .tko keeps its kind but not its animations: they were made for the notes that are gone.
+    if chart.gimmick.is_some() {
+        chart.gimmick = Some(Default::default());
+    }
     chart.dirty = true;
     let version = chart
         .get_key("Metadata", "Version")
@@ -42,7 +44,8 @@ pub fn new_difficulty(source: &Path) -> Result<PathBuf, String> {
         None => stem.to_string(),
     };
     for n in 0.. {
-        let candidate = dir.join(format!("{base} [{}].osu", name(n)));
+        let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("osu");
+        let candidate = dir.join(format!("{base} [{}].{ext}", name(n)));
         if candidate.exists() {
             continue;
         }
@@ -58,6 +61,34 @@ pub fn new_difficulty(source: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_difficulty_of_a_tko_is_a_tko_without_the_animations() {
+        use crate::tko::gimmick::FieldProp;
+        let dir = std::env::temp_dir().join(format!("taiko-rs-newdiff-tko-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("Artist - Title (Mapper) [Oni].tko");
+        let mut g = crate::tko::gimmick::Gimmick::default();
+        g.key_field(
+            FieldProp::Zoom,
+            crate::tko::track::Key {
+                t: 0.0,
+                v: 2.0,
+                ease: Default::default(),
+            },
+        );
+        std::fs::write(
+            &src,
+            crate::tko::format::write(chart::tests::MAP, &g).unwrap(),
+        )
+        .unwrap();
+        let made = new_difficulty(&src).unwrap();
+        let chart = chart::Chart::read(&made).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(made.extension().unwrap(), "tko");
+        assert!(chart.objects.is_empty());
+        assert!(chart.gimmick.unwrap().is_empty());
+    }
 
     #[test]
     fn a_new_difficulty_keeps_the_timing_and_drops_the_notes() {

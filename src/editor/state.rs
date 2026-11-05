@@ -223,6 +223,40 @@ impl Editor {
         true
     }
 
+    /// Puts each selected object on the nearest line of the grid it is already on (the coarsest
+    /// division that fits), the way stable's editor writes it. An object on no grid within a
+    /// couple of milliseconds was put there on purpose and stays; so does one that would land on
+    /// another's millisecond. Returns how many moved.
+    pub fn resnap_selected(&mut self) -> usize {
+        let before = self.selected();
+        let mut taken: std::collections::HashSet<i64> = self
+            .chart
+            .objects
+            .iter()
+            .filter(|o| !self.selection.contains(&o.id))
+            .map(|o| o.time as i64)
+            .collect();
+        let (mut b, mut a) = (Vec::new(), Vec::new());
+        for o in before {
+            let Some(to) = timing::resnap(&self.chart.timing, o.time) else {
+                taken.insert(o.time as i64);
+                continue;
+            };
+            if to as f64 == o.time || taken.contains(&to) {
+                taken.insert(o.time as i64);
+                continue;
+            }
+            taken.insert(to);
+            a.push(o.shifted(to as f64 - o.time));
+            b.push(o);
+        }
+        let n = a.len();
+        if n > 0 {
+            self.edit(b, a, false);
+        }
+        n
+    }
+
     /// Makes the selected notes kat (`Some(true)`) or don, and big or small.
     pub fn retype_selected(&mut self, kat: Option<bool>, big: Option<bool>) {
         let before: Vec<HitObject> = self
@@ -674,5 +708,26 @@ mod tests {
         assert_eq!(e.object_at(5500.0, 0.0), Some(roll));
         assert_eq!(e.object_at(1003.0, 5.0), Some(e.chart.objects[0].id));
         assert_eq!(e.object_at(1200.0, 5.0), None);
+    }
+
+    #[test]
+    fn resnap_moves_what_is_a_hair_off_its_grid_and_leaves_what_is_on_purpose() {
+        let mut e = Editor::new(
+            Chart::parse(super::super::chart::tests::MAP),
+            PathBuf::from("t"),
+        );
+        e.chart.objects.clear();
+        // 120 BPM from 1000: a gridline every 125 ms at 1/4. 1251 is a ms off, 1380 is nowhere.
+        e.chart.insert_object(HitObject::hit(1251.0, false, false));
+        e.chart.insert_object(HitObject::hit(1380.0, true, false));
+        e.chart.insert_object(HitObject::hit(1500.0, false, false));
+        e.select_all();
+        assert_eq!(e.resnap_selected(), 1);
+        let times: Vec<f64> = e.chart.objects.iter().map(|o| o.time).collect();
+        assert_eq!(times, [1250.0, 1380.0, 1500.0]);
+        assert!(e.undo());
+        assert_eq!(e.chart.objects[0].time, 1251.0);
+        assert_eq!(e.resnap_selected(), 1, "the selection is still there");
+        assert_eq!(e.resnap_selected(), 0, "and now it is on the grid");
     }
 }

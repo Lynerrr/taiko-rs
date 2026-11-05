@@ -21,8 +21,6 @@ pub enum Curve {
     Sin,
     /// A geometric sweep: reads as an even acceleration whatever the range.
     TrueExp,
-    /// Holds the first value.
-    Flat,
 }
 
 impl Curve {
@@ -44,19 +42,6 @@ impl Curve {
             Curve::SinOut => "sin_out".into(),
             Curve::Sin => "sin".into(),
             Curve::TrueExp => "true_exp".into(),
-            Curve::Flat => "flat".into(),
-        }
-    }
-
-    pub fn from_name(name: &str) -> Curve {
-        match name {
-            "flat" => Curve::Flat,
-            "sin_in" => Curve::SinIn,
-            "sin_out" => Curve::SinOut,
-            "sin" => Curve::Sin,
-            "true_exp" => Curve::TrueExp,
-            n if n.starts_with("exp") => n[3..].parse().map_or(Curve::Linear, Curve::Exp),
-            _ => Curve::Linear,
         }
     }
 
@@ -65,7 +50,6 @@ impl Curve {
     pub fn ease(&self, t: f64, initial: Option<f64>, final_: Option<f64>) -> f64 {
         let t = t.clamp(0.0, 1.0);
         match self {
-            Curve::Flat => 0.0,
             Curve::SinIn => (t * std::f64::consts::FRAC_PI_2).sin(),
             Curve::SinOut => 1.0 - (t * std::f64::consts::FRAC_PI_2).cos(),
             Curve::Exp(n) => t.powf(n.max(1.0)),
@@ -160,7 +144,6 @@ pub struct Run {
     pub start: Anchor,
     pub end: Anchor,
     pub kind: RunKind,
-    pub count: usize,
 }
 
 impl Run {
@@ -228,7 +211,6 @@ fn run_of(anchors: &[Anchor], curve: &Curve) -> Run {
         start: anchors[0].clone(),
         end: anchors[anchors.len() - 1].clone(),
         kind: RunKind::Curve(curve.clone()),
-        count: anchors.len(),
     }
 }
 
@@ -355,7 +337,6 @@ pub fn detect_runs(found: &[Anchor], anti: bool) -> Vec<Run> {
                 start: group[start].clone(),
                 end: group[end].clone(),
                 kind,
-                count: end - start + 1,
             });
             start = end;
         }
@@ -422,10 +403,6 @@ impl SvModel {
         SvModel::new(runs, points, note_times)
     }
 
-    pub fn runs(&self) -> &[Run] {
-        &self.runs
-    }
-
     fn run_at(&self, time: f64) -> Option<&Run> {
         let index = self.runs.partition_point(|r| r.start.time <= time);
         let lo = index.saturating_sub(2);
@@ -484,7 +461,6 @@ mod tests {
             assert!(close(c.ease(0.0, Some(1.0), Some(4.0)), 0.0), "{c:?}");
             assert!(close(c.ease(1.0, Some(1.0), Some(4.0)), 1.0), "{c:?}");
         }
-        assert_eq!(Curve::Flat.ease(0.7, None, None), 0.0);
     }
 
     #[test]
@@ -508,11 +484,11 @@ mod tests {
     }
 
     #[test]
-    fn names_round_trip() {
-        for c in Curve::ALL {
-            assert_eq!(Curve::from_name(&c.name()), c);
-        }
-        assert_eq!(Curve::from_name("nonsense"), Curve::Linear);
+    fn every_curve_has_its_own_name() {
+        let mut names: Vec<String> = Curve::ALL.iter().map(Curve::name).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), Curve::ALL.len());
     }
 
     #[test]
@@ -564,7 +540,7 @@ mod tests {
         let runs = detect_runs(&anchors(&pts, &notes, 1000.0, 1500.0), false);
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].kind, RunKind::Curve(Curve::Sin));
-        assert_eq!(runs[0].count, 6);
+        assert_eq!((runs[0].start.time, runs[0].end.time), (1000.0, 1500.0));
     }
 
     #[test]

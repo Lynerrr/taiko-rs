@@ -674,16 +674,6 @@ pub fn hidden_anti_barline(
     points
 }
 
-/// A green line re-stating the SV in force at `time` at `restore_at`: a gimmick's red lines reset
-/// SV to 1.0x, which silently drops the chart's speed for everything after them.
-pub fn sv_restore_point(points: &[TimingPoint], time: f64, restore_at: f64) -> TimingPoint {
-    let ordered = sorted_by_time(points);
-    match active_at(&ordered, time) {
-        None => TimingPoint::green(restore_at, 1.0),
-        Some(active) => TimingPoint::green_like(restore_at, active.sv(), active),
-    }
-}
-
 /// Carries the map's kiai and hitsound volume at each point's time onto that point: otherwise the
 /// first generated line inside a chorus switches the chorus off, and a structure placed in a quiet
 /// section slams it back to full volume.
@@ -1005,14 +995,6 @@ mod tests {
         let mut b = barline_note(1000, &base(), &cfg(), NoteKind::Don);
         carry_active_state(&mut b.timing, &doc);
         assert!(b.timing.iter().all(|p| p.kiai() && p.volume == 60));
-    }
-
-    #[test]
-    fn an_sv_restore_point_re_states_the_speed_in_force() {
-        let p = sv_restore_point(&base(), 2500.0, 2501.0);
-        assert!((p.sv() - 1.5).abs() < 1e-9 && p.time == 2501.0);
-        let p = sv_restore_point(&base(), 1000.0, 1001.0);
-        assert_eq!(p.sv(), 1.0, "a red line resets SV");
     }
 
     #[test]

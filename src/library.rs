@@ -354,7 +354,13 @@ fn is_dir(e: &std::fs::DirEntry) -> bool {
         .is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()))
 }
 
-fn collect_osu(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+/// A chart file: `.osu`, or `.tko` (an `.osu` with the client's own gimmicks added).
+fn is_map_file(p: &Path) -> bool {
+    p.extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("osu") || x.eq_ignore_ascii_case("tko"))
+}
+
+pub(crate) fn collect_map_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -362,9 +368,9 @@ fn collect_osu(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if is_dir(&e) {
             if depth > 0 {
-                collect_osu(&p, depth - 1, out);
+                collect_map_files(&p, depth - 1, out);
             }
-        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osu")) {
+        } else if is_map_file(&p) {
             out.push(p);
         }
     }
@@ -536,7 +542,7 @@ fn scan_cached(
     let mut walked: Vec<(PathBuf, u128)> = Vec::new();
     let loose = |files: &mut Vec<(Option<usize>, PathBuf)>, dir: &Path| {
         let mut found = Vec::new();
-        collect_osu(dir, 1, &mut found);
+        collect_map_files(dir, 1, &mut found);
         files.extend(found.into_iter().map(|p| (None, p)));
     };
     for input in inputs {
@@ -545,7 +551,7 @@ fn scan_cached(
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
-            Some("osu") if input.is_file() => files.push((None, input.clone())),
+            Some("osu" | "tko") if input.is_file() => files.push((None, input.clone())),
             Some("osz") if input.is_file() => match extract_osz(input) {
                 Ok(dir) => loose(&mut files, &dir),
                 Err(e) => eprintln!("{}: {e}", input.display()),
@@ -576,12 +582,12 @@ fn scan_cached(
                                     unseen += 1;
                                 }
                                 let mut found = Vec::new();
-                                collect_osu(&p, 1, &mut found);
+                                collect_map_files(&p, 1, &mut found);
                                 files.extend(found.into_iter().map(|f| (Some(walked.len()), f)));
                                 walked.push((p, modified));
                             }
                         }
-                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osu")) {
+                    } else if is_map_file(&p) {
                         files.push((None, p));
                     } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osz")) {
                         // A Songs folder: also pick up .osz files dropped into it.
@@ -591,7 +597,10 @@ fn scan_cached(
                     }
                 }
             }
-            _ => eprintln!("skipping {}: not a .osu, .osz or folder", input.display()),
+            _ => eprintln!(
+                "skipping {}: not a .osu, .tko, .osz or folder",
+                input.display()
+            ),
         }
     }
     files.sort_by(|a, b| a.1.cmp(&b.1));

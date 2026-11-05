@@ -47,6 +47,7 @@ use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
 use crate::render::{Canvas, Font, Hit, Shape, Sprite, VIRTUAL_HEIGHT, accent, progress, rgba};
 use crate::shapeshift;
+use crate::tko::runtime::NoteFx;
 
 /// The drum on the left: lazer's input drum (180 of a 768-tall screen, in our 480 units).
 pub const PANEL_W: f32 = 112.5;
@@ -358,6 +359,8 @@ pub struct Game {
     /// The beat length covering the most map time: what pop-up fake sliders fade in by.
     main_beat: f64,
     visible: Vec<usize>,
+    /// The client gimmick of a `.tko` map: visual motion only, never read by judging.
+    tko: Option<crate::tko::runtime::Runtime>,
     /// Raw audio position seen by the last update, for diagnostics.
     pub last_audio_ms: Option<f64>,
     /// Over the frames with an audio position: how far the clock was from it (sum, frames, most
@@ -1837,6 +1840,13 @@ impl Game {
         half: crate::mods::HalfRule,
     ) -> Game {
         apply_to_map(&mut map, mods, seed, half);
+        let tko = map.gimmick.clone().map(|g| {
+            crate::tko::runtime::Runtime::new(
+                g,
+                map.notes.iter().map(|n| n.time),
+                beatmap::OSU_TIMING_MS,
+            )
+        });
         let first_note = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let end_time = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
         let start = (first_note - 2000.0).min(0.0).min(-map.meta.audio_lead_in);
@@ -1993,6 +2003,7 @@ impl Game {
             note_blocks,
             main_beat,
             visible: Vec::new(),
+            tko,
             last_audio_ms: None,
             clock_vs_audio: (0.0, 0, 0.0),
             raw_time: track_start,
@@ -3907,6 +3918,8 @@ impl Game {
             ],
         };
         let portal = self.portal_at(vt, lane_len);
+        // A .tko map's playfield motion: what is drawn, never when a note is hit.
+        let tko_fx = self.tko.as_ref().map(|r| r.field(vt)).unwrap_or_default();
         let scroll = Scroll {
             t: vt,
             speed: osu_speed_scale(w)
@@ -3917,7 +3930,7 @@ impl Game {
             lane: lane_len as f64,
             mods,
             warp,
-            live: self.miss_factor(t) * self.slow_factor(t),
+            live: self.miss_factor(t) * self.slow_factor(t) * tko_fx.scroll,
         };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
@@ -4049,45 +4062,51 @@ impl Game {
         };
         // A don or kat `s` along the lane (`k`th drawn, in a 1/`flow` stream): Snake swings it
         // sideways, Party pumps and squishes it. Nothing changes at the drum.
-        let draw_hit =
-            |c: &mut Canvas, s: f32, n: &beatmap::Note, k: usize, flow: u8, col: u32, a: f32| {
-                let mut side = 0.0;
-                if mods.has(Mod::Snake) {
-                    // Streams swing the most, triplets the other way, notes on the beat not at all.
-                    let (amp, flip) = match flow {
-                        1 => (0.0, 0.0),
-                        2 => (0.45, 0.0),
-                        0 => (0.6, 0.0),
-                        d if d % 3 == 0 => (1.0, PI),
-                        _ => (1.0, 0.0),
-                    };
-                    // The wave jolts forward on each beat.
-                    let u = (s / lane_len).max(0.0);
-                    let f = smooth(0.0, 0.3, u as f64) as f32;
-                    let jolt = beats.floor() + 1.0 - (1.0 - beat_phase).powi(3);
-                    side += 32.0
-                        * amp
-                        * f
-                        * (0.8 + 0.4 * pulse)
-                        * (TAU * 1.3 * u - PI * jolt + flip).sin();
-                }
-                let (x, y, _, mut size) = place(side_of(n.kind, s), side);
-                let mut squish = 1.0;
-                if party {
-                    // Each note pulses on its own grid: a 1/4 four times a beat.
-                    let own = (1.0 - (beats * flow.clamp(1, 8) as f32).rem_euclid(1.0)).powi(3);
-                    size *= 1.0 + 0.22 * own;
-                    squish = 1.0 + 0.3 * own * if k.is_multiple_of(2) { 1.0 } else { -1.0 };
-                }
-                let r = if n.big { BIG_R } else { NOTE_R } * size;
-                let first = c.shapes.len();
-                if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, n.big, col, a) {
-                    multiverse::note(c, uni.shape, x, y, r, col, a);
-                }
-                if squish != 1.0 {
-                    c.stretch_since(first, [x, y], squish, 1.0 / squish);
-                }
-            };
+        let draw_hit = |c: &mut Canvas,
+                        s: f32,
+                        n: &beatmap::Note,
+                        k: usize,
+                        flow: u8,
+                        col: u32,
+                        a: f32,
+                        fx: NoteFx| {
+            let mut side = 0.0;
+            if mods.has(Mod::Snake) {
+                // Streams swing the most, triplets the other way, notes on the beat not at all.
+                let (amp, flip) = match flow {
+                    1 => (0.0, 0.0),
+                    2 => (0.45, 0.0),
+                    0 => (0.6, 0.0),
+                    d if d % 3 == 0 => (1.0, PI),
+                    _ => (1.0, 0.0),
+                };
+                // The wave jolts forward on each beat.
+                let u = (s / lane_len).max(0.0);
+                let f = smooth(0.0, 0.3, u as f64) as f32;
+                let jolt = beats.floor() + 1.0 - (1.0 - beat_phase).powi(3);
+                side +=
+                    32.0 * amp * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt + flip).sin();
+            }
+            let (x, y, _, mut size) = place(side_of(n.kind, s), side);
+            // A .tko group's motion for this note.
+            let (x, y, a) = (x + fx.dx, y + fx.dy, a * fx.opacity);
+            size *= fx.scale;
+            let mut squish = 1.0;
+            if party {
+                // Each note pulses on its own grid: a 1/4 four times a beat.
+                let own = (1.0 - (beats * flow.clamp(1, 8) as f32).rem_euclid(1.0)).powi(3);
+                size *= 1.0 + 0.22 * own;
+                squish = 1.0 + 0.3 * own * if k.is_multiple_of(2) { 1.0 } else { -1.0 };
+            }
+            let r = if n.big { BIG_R } else { NOTE_R } * size;
+            let first = c.shapes.len();
+            if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, n.big, col, a) {
+                multiverse::note(c, uni.shape, x, y, r, col, a);
+            }
+            if squish != 1.0 {
+                c.stretch_since(first, [x, y], squish, 1.0 / squish);
+            }
+        };
         let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) {
             (GREY, GREY)
         } else {
@@ -4368,6 +4387,7 @@ impl Game {
                     self.decoy_flows[k],
                     if n.kind == Kind::Don { don } else { kat },
                     a,
+                    NoteFx::default(),
                 );
             }
         }
@@ -4593,7 +4613,12 @@ impl Game {
                                 } else {
                                     note_alpha(s) * radar_lit(s, n.time, n.velocity)
                                 };
-                                if a > 0.01 {
+                                let nfx = self
+                                    .tko
+                                    .as_ref()
+                                    .and_then(|r| r.note(i, vt))
+                                    .unwrap_or_default();
+                                if a > 0.01 && !nfx.hidden {
                                     draw_hit(
                                         c,
                                         s,
@@ -4602,6 +4627,7 @@ impl Game {
                                         self.flows[i],
                                         col,
                                         if theirs.is_some() { 0.3 * a } else { a },
+                                        nfx,
                                     );
                                     if let Some(ring) = theirs {
                                         let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
@@ -5155,6 +5181,10 @@ impl Game {
                 angle += TAU * smooth(0.0, 2.0 * b, vt - k) as f32;
             }
         }
+        angle += tko_fx.rotation.to_radians();
+        zoom *= tko_fx.zoom;
+        dx += tko_fx.x;
+        dy += tko_fx.y;
         let mut dest = pivot;
         if crossfire {
             dest = [w / 2.0, LANE_Y];
@@ -9996,5 +10026,161 @@ mod tests {
         // -100 lands at ~4881 and stops at the same ~238 ms on: 119 ms past its head's time, its
         // body's right end at the drum.
         assert!((fake_freeze(short, 5119.05 + 50.0) - 50.0).abs() < 0.05);
+    }
+
+    /// A calibration map with a `.tko` gimmick: rotation and scroll on the field, and the notes at
+    /// `grouped` hidden and shrunk.
+    fn tko_game(gimmick: Option<crate::tko::gimmick::Gimmick>, mods: Mods) -> Game {
+        let mut map = beatmap::calibration_map(500.0, 0, 64);
+        map.gimmick = gimmick.map(Arc::new);
+        let track = Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+        });
+        Game::with_seed(map, track, None, mods, 42)
+    }
+
+    fn some_gimmick() -> crate::tko::gimmick::Gimmick {
+        use crate::tko::gimmick::{FieldProp, Group, NoteProp};
+        use crate::tko::track::{Ease, Key};
+        let key = |t, v| Key {
+            t,
+            v,
+            ease: Ease::CubicInOut,
+        };
+        let mut g = crate::tko::gimmick::Gimmick::default();
+        g.key_field(FieldProp::Rotation, key(0.0, 0.0));
+        g.key_field(FieldProp::Rotation, key(20_000.0, 360.0));
+        g.key_field(FieldProp::Zoom, key(0.0, 1.0));
+        g.key_field(FieldProp::Zoom, key(10_000.0, 0.6));
+        g.key_field(FieldProp::X, key(0.0, 0.0));
+        g.key_field(FieldProp::X, key(10_000.0, 40.0));
+        g.key_field(FieldProp::Scroll, key(0.0, 1.0));
+        g.key_field(FieldProp::Scroll, key(10_000.0, 2.5));
+        g.groups.push(Group {
+            name: "every other".into(),
+            notes: (0..64)
+                .step_by(2)
+                .map(|b| b as f64 * 500.0 - beatmap::OSU_TIMING_MS)
+                .collect(),
+            ..Group::default()
+        });
+        g.key_note(0, NoteProp::Scale, key(0.0, 0.5));
+        g.key_note(0, NoteProp::Dy, key(0.0, 0.0));
+        g.key_note(0, NoteProp::Dy, key(10_000.0, 60.0));
+        g.key_note(0, NoteProp::Opacity, key(0.0, 0.5));
+        g
+    }
+
+    fn pin_drawing_globals() {
+        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
+        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
+        crate::render::set_animations(false);
+        crate::render::set_frame_time(Some(Instant::now()));
+    }
+
+    fn frame_bytes(g: &mut Game, time: f64) -> Vec<u8> {
+        g.time = time;
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        bytemuck::cast_slice::<_, u8>(&c.shapes).to_vec()
+    }
+
+    #[test]
+    fn a_tko_map_without_a_gimmick_draws_exactly_like_its_osu() {
+        pin_drawing_globals();
+        for mods in [Mods::NONE, Mods::parse("TC"), Mods::parse("WV")] {
+            let mut plain = tko_game(None, mods);
+            let mut empty = tko_game(Some(Default::default()), mods);
+            for time in [0.0, 1500.0, 9000.0, 15_000.0] {
+                assert!(
+                    frame_bytes(&mut plain, time) == frame_bytes(&mut empty, time),
+                    "mods={mods:?} time={time}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_gimmick_changes_what_is_drawn() {
+        pin_drawing_globals();
+        let mut plain = tko_game(None, Mods::NONE);
+        let mut moved = tko_game(Some(some_gimmick()), Mods::NONE);
+        assert!(frame_bytes(&mut plain, 9000.0) != frame_bytes(&mut moved, 9000.0));
+        // Before its keys have done anything the first frame is the same.
+        let a = frame_bytes(&mut plain, 0.0).len();
+        let b = frame_bytes(&mut moved, 0.0).len();
+        assert!(a > 0 && b > 0);
+    }
+
+    /// The whole point of version 1: the gimmick is only ever drawn. The same hits give the same
+    /// judgements, score and combo, with or without it.
+    #[test]
+    fn a_gimmick_never_changes_judging() {
+        pin_drawing_globals();
+        let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
+            let mut g = tko_game(gimmick, Mods::NONE);
+            let mut t = -2000.0;
+            while t < 34_000.0 {
+                g.time = t;
+                g.autoplay(None);
+                g.expire(t);
+                if (t as i64) % 2000 == 0 {
+                    let mut c = Canvas::default();
+                    c.clear(853.3);
+                    g.draw_playfield(&mut c, 1.0);
+                }
+                t += 5.0;
+            }
+            (
+                g.stats.great,
+                g.stats.ok,
+                g.stats.miss,
+                g.stats.combo,
+                g.stats.max_combo,
+                g.stats.score,
+                g.stats.errors.clone(),
+            )
+        };
+        let plain = run(None);
+        assert!(plain.0 > 30, "autoplay hits the notes: {plain:?}");
+        assert_eq!(run(Some(some_gimmick())), plain);
+    }
+
+    #[test]
+    fn a_hidden_group_is_not_drawn_but_the_notes_stay_hittable() {
+        use crate::tko::gimmick::{Gimmick, Group, NoteProp};
+        use crate::tko::track::{Ease, Key};
+        pin_drawing_globals();
+        let mut g = Gimmick::default();
+        g.groups.push(Group {
+            // The chart's own times: the game's clock is `OSU_TIMING_MS` ahead of them.
+            notes: (0..64)
+                .map(|b| b as f64 * 500.0 - beatmap::OSU_TIMING_MS)
+                .collect(),
+            ..Group::default()
+        });
+        g.key_note(
+            0,
+            NoteProp::Hidden,
+            Key {
+                t: 0.0,
+                v: 1.0,
+                ease: Ease::Step,
+            },
+        );
+        let mut plain = tko_game(None, Mods::NONE);
+        let mut hidden = tko_game(Some(g), Mods::NONE);
+        let a = frame_bytes(&mut plain, 3000.0).len();
+        let b = frame_bytes(&mut hidden, 3000.0).len();
+        assert!(b < a, "the notes are not drawn: {b} vs {a}");
+        hidden.time = 20_000.0;
+        for t in (0..40_000).step_by(5) {
+            hidden.time = t as f64 - 2000.0;
+            hidden.autoplay(None);
+            hidden.expire(hidden.time);
+        }
+        assert!(hidden.stats.great > 30 && hidden.stats.miss == 0);
     }
 }

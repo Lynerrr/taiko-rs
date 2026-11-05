@@ -21,6 +21,11 @@ pub enum Command {
         before: Vec<TimingPoint>,
         after: Vec<TimingPoint>,
     },
+    /// The `.tko` gimmick changed (keyframes, groups): the whole of it before and after.
+    Gimmick {
+        before: Box<crate::tko::gimmick::Gimmick>,
+        after: Box<crate::tko::gimmick::Gimmick>,
+    },
     /// One step made of several (a gimmick tool writes many lines and notes at once).
     Composite(Vec<Command>),
 }
@@ -78,6 +83,10 @@ impl Command {
             Command::InsertTiming(l) => insert_timing(c, l),
             Command::RemoveTiming(l) => remove_timing(c, l),
             Command::EditTiming { after, .. } => set_timing(c, after),
+            Command::Gimmick { after, .. } => {
+                c.gimmick = Some((**after).clone());
+                c.dirty = true;
+            }
             Command::Composite(l) => l.iter().for_each(|x| x.apply(c)),
         }
     }
@@ -90,6 +99,10 @@ impl Command {
             Command::InsertTiming(l) => remove_timing(c, l),
             Command::RemoveTiming(l) => insert_timing(c, l),
             Command::EditTiming { before, .. } => set_timing(c, before),
+            Command::Gimmick { before, .. } => {
+                c.gimmick = Some((**before).clone());
+                c.dirty = true;
+            }
             Command::Composite(l) => l.iter().rev().for_each(|x| x.revert(c)),
         }
     }
@@ -137,6 +150,12 @@ impl Command {
                 Some(Command::EditTiming {
                     before: before.clone(),
                     after: later_after.clone(),
+                })
+            }
+            (Command::Gimmick { before, .. }, Command::Gimmick { after, .. }) => {
+                Some(Command::Gimmick {
+                    before: before.clone(),
+                    after: after.clone(),
                 })
             }
             _ => None,
@@ -226,10 +245,12 @@ impl History {
         true
     }
 
+    #[cfg(test)]
     pub fn can_undo(&self) -> bool {
         !self.done.is_empty()
     }
 
+    #[cfg(test)]
     pub fn can_redo(&self) -> bool {
         !self.undone.is_empty()
     }
