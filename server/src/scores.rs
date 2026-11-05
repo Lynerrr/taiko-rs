@@ -63,6 +63,22 @@ pub struct Tally {
     pub ms: u64,
 }
 
+/// A map a player has played off the leaderboards, kept with its name: it may have no plays here.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+struct OtherMap {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    set_id: Option<u32>,
+    plays: u32,
+    /// Unix seconds.
+    last: u64,
+}
+
+/// Maps kept for one player's `OtherMap`s; past it only those already there go on counting.
+const MAX_OTHER_MAPS: usize = 5000;
+/// The longest map name kept, in characters.
+const MAX_MAP_NAME: usize = 300;
+
 /// The most of one play's time counted (longer is an odd clock).
 const MAX_PLAY_MS: u64 = 2 * 3600 * 1000;
 /// `Played` reports one account may send per minute.
@@ -106,6 +122,9 @@ pub struct Scores {
     /// DIR/playtime.json: each player's `Tally`.
     tally_file: Option<PathBuf>,
     tallies: HashMap<String, Tally>,
+    /// DIR/other-plays.json: each player's plays off the leaderboards, by map.
+    other_maps_file: Option<PathBuf>,
+    other_maps: HashMap<String, HashMap<u64, OtherMap>>,
     reports: HashMap<String, Vec<Instant>>,
     /// DIR/pp-overrides.json: pp admins have set for plays (by id), in place of what was sent.
     overrides_file: Option<PathBuf>,
@@ -229,6 +248,11 @@ impl Scores {
             .as_ref()
             .map(|f| crate::load_saved(f))
             .unwrap_or_default();
+        let other_maps_file = dir.as_ref().map(|d| d.join("other-plays.json"));
+        let other_maps = other_maps_file
+            .as_ref()
+            .map(|f| crate::load_saved(f))
+            .unwrap_or_default();
         let overrides_file = dir.as_ref().map(|d| d.join("pp-overrides.json"));
         let overrides = overrides_file
             .as_ref()
@@ -260,6 +284,8 @@ impl Scores {
             banned: HashSet::new(),
             tally_file,
             tallies,
+            other_maps_file,
+            other_maps,
             reports: HashMap::new(),
             replay_bytes: dir.as_ref().map_or(0, |d| dir_bytes(&d.join("replays"))),
             replay_limit: MAX_REPLAY_BYTES,
@@ -481,7 +507,12 @@ impl Scores {
     }
 
     /// A play `player` didn't send to the leaderboards (`Request::Played`).
-    pub fn played(&mut self, player: &str, ms: u64) -> Result<(), String> {
+    pub fn played(
+        &mut self,
+        player: &str,
+        ms: u64,
+        map: Option<online::PlayedMap>,
+    ) -> Result<(), String> {
         let times = self.reports.entry(player.to_string()).or_default();
         times.retain(|t| t.elapsed() < Duration::from_secs(60));
         if times.len() >= PLAYED_PER_MINUTE {
@@ -489,7 +520,35 @@ impl Scores {
         }
         times.push(Instant::now());
         self.count_play(player, ms, true);
+        if let Some(map) = map {
+            self.count_other_map(player, map);
+        }
         Ok(())
+    }
+
+    /// Adds a play off the leaderboards to `player`'s plays of `map`.
+    fn count_other_map(&mut self, player: &str, map: online::PlayedMap) {
+        let maps = self.other_maps.entry(player.to_string()).or_default();
+        if maps.len() >= MAX_OTHER_MAPS && !maps.contains_key(&map.hash) {
+            return;
+        }
+        let row = maps.entry(map.hash).or_insert_with(|| OtherMap {
+            name: map.name.chars().take(MAX_MAP_NAME).collect(),
+            set_id: map.set_id,
+            plays: 0,
+            last: 0,
+        });
+        row.plays += 1;
+        row.last = crate::now_secs();
+        self.save_other_maps();
+    }
+
+    fn save_other_maps(&self) {
+        if let Some(file) = &self.other_maps_file
+            && let Err(e) = save_json(file, &self.other_maps)
+        {
+            eprintln!("saving plays by map: {e}");
+        }
     }
 
     /// Counts the pp of plays on sets that give it, and not of the others. A set not known yet
@@ -595,6 +654,9 @@ impl Scores {
         if self.tallies.remove(player).is_some() {
             self.save_tallies();
         }
+        if self.other_maps.remove(player).is_some() {
+            self.save_other_maps();
+        }
         self.reindex();
         let rivals = self.rivals();
         self.medals
@@ -626,6 +688,10 @@ impl Scores {
             if let Some(t) = self.tallies.remove(from) {
                 self.tallies.insert(to.to_string(), t);
                 self.save_tallies();
+            }
+            if let Some(m) = self.other_maps.remove(from) {
+                self.other_maps.insert(to.to_string(), m);
+                self.save_other_maps();
             }
             if self.banned.remove(from) {
                 self.banned.insert(to.to_string());
@@ -1018,9 +1084,29 @@ impl Scores {
                 *mods.entry(m.as_str()).or_default() += 1;
             }
         }
+        let other = self.other_maps.get(player);
+        for (&m, row) in other.into_iter().flatten() {
+            *count.entry(m).or_default() += row.plays;
+        }
         let mut most_played: Vec<(MapRow, u32)> = count
             .into_iter()
-            .filter_map(|(m, n)| Some((self.map(m)?, n)))
+            .filter_map(|(m, n)| {
+                let played = other.and_then(|o| o.get(&m));
+                // Never sent to the leaderboards: known only from its plays, no `plays` of its own.
+                let mut row = self.map(m).or_else(|| {
+                    played.map(|p| MapRow {
+                        hash: m,
+                        name: p.name.clone(),
+                        set_id: p.set_id,
+                        stars: None,
+                        plays: 0,
+                        players: 0,
+                        last: 0,
+                    })
+                })?;
+                row.last = row.last.max(played.map_or(0, |p| p.last));
+                Some((row, n))
+            })
             .collect();
         most_played.sort_by(|a, b| b.1.cmp(&a.1).then(b.0.last.cmp(&a.0.last)));
         most_played.truncate(PROFILE_MAPS);
@@ -1276,8 +1362,8 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut s = Scores::load(Some(dir.clone()));
         s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
-        s.played("a", 30_000).unwrap();
-        s.played("a", 99 * 3600 * 1000).unwrap();
+        s.played("a", 30_000, None).unwrap();
+        s.played("a", 99 * 3600 * 1000, None).unwrap();
         let p = s.profile("a", "A", 0);
         assert_eq!((p.plays, p.play_ms), (3, 60_000 + 30_000 + MAX_PLAY_MS));
         assert_eq!(s.rankings(10)[0].plays, 3);
@@ -1291,9 +1377,58 @@ pub(crate) mod tests {
         );
         // Not too many at once.
         for _ in 0..PLAYED_PER_MINUTE {
-            let _ = s.played("b", 1);
+            let _ = s.played("b", 1, None);
         }
-        assert!(s.played("b", 1).is_err());
+        assert!(s.played("b", 1, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn most_played_counts_every_play_not_just_the_ones_sent() {
+        let dir = std::env::temp_dir().join(format!("taiko-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Scores::load(Some(dir.clone()));
+        let map = |hash, name: &str| online::PlayedMap {
+            hash,
+            name: name.into(),
+            set_id: Some(5),
+        };
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.submit("a", "A", play(8, 500, 100.0), 2).unwrap();
+        s.submit("a", "A", play(8, 600, 100.0), 3).unwrap();
+        // Failed on 7 twice: it's now ahead of 8, passed twice.
+        s.played("a", 1000, Some(map(7, "A - B [C]"))).unwrap();
+        s.played("a", 1000, Some(map(7, "A - B [C]"))).unwrap();
+        // Only ever failed: nobody has a score on it.
+        s.played("a", 1000, Some(map(9, "D - E [F]"))).unwrap();
+        // From a game that doesn't say which map.
+        s.played("a", 1000, None).unwrap();
+        let counts = |s: &Scores, who| {
+            s.extras(who)
+                .most_played
+                .iter()
+                .map(|(m, n)| (m.hash, *n))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(counts(&s, "a"), [(7, 3), (8, 2), (9, 1)]);
+
+        let unplayed = s.extras("a").most_played[2].0.clone();
+        assert_eq!(
+            (unplayed.name.as_str(), unplayed.set_id, unplayed.plays),
+            ("D - E [F]", Some(5), 0)
+        );
+        // On the profile only: not a map with plays on the site.
+        assert!(s.map(9).is_none());
+
+        // Kept across a restart, followed through a rename, gone with the account's plays.
+        let mut again = Scores::load(Some(dir.clone()));
+        assert_eq!(counts(&again, "a"), [(7, 3), (8, 2), (9, 1)]);
+        again.rename("a", "b", "B").unwrap();
+        assert_eq!(counts(&again, "b"), [(7, 3), (8, 2), (9, 1)]);
+        again.reset("b").unwrap();
+        assert!(counts(&again, "b").is_empty());
+        assert!(counts(&Scores::load(Some(dir.clone())), "b").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1377,8 +1512,8 @@ pub(crate) mod tests {
         s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
         s.submit("a", "A", play(8, 400, 50.0), 2).unwrap();
         s.submit("b", "B", play(7, 900, 200.0), 3).unwrap();
-        s.played("a", 60_000).unwrap();
-        s.played("b", 30_000).unwrap();
+        s.played("a", 60_000, None).unwrap();
+        s.played("b", 30_000, None).unwrap();
         let b_time = s.tally("b").ms;
         assert!(b_time >= 30_000);
         assert_eq!(s.reset("a").unwrap(), 2);
@@ -1665,7 +1800,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut s = Scores::load(Some(dir.clone()));
         s.submit("troll", "Troll", play(7, 500, 100.0), 1).unwrap();
-        s.played("troll", 5000).unwrap();
+        s.played("troll", 5000, None).unwrap();
         s.rename("troll", "nice", "Nice").unwrap();
         // Someone new takes the old name.
         s.submit("troll", "TROLL", play(8, 400, 50.0), 2).unwrap();

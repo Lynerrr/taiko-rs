@@ -130,6 +130,9 @@ pub enum Request {
     Played {
         token: String,
         ms: u64,
+        /// Which map, for the profile's most played (from games that send it).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        map: Option<PlayedMap>,
     },
     /// Every medal, and how `name` stands with them (`Reply::Medals`); no name: just the list.
     Medals {
@@ -193,6 +196,17 @@ pub struct PlayTiming {
     /// The output latency the clock took off, and what the stream itself said it was.
     pub latency_ms: f64,
     pub reported_latency_ms: f64,
+}
+
+/// The map of a play off the leaderboards: nobody may have sent a score on it yet, so its name
+/// comes along.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlayedMap {
+    pub hash: u64,
+    /// "Artist - Title [Version]".
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_id: Option<u32>,
 }
 
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so

@@ -424,6 +424,8 @@ pub struct Game {
     pub record: bool,
     /// Also keep `inputs` without saving a replay (a solo play streamed to watching friends).
     pub log_inputs: bool,
+    /// A replay stopped where it is, with no pause menu (`toggle_held`).
+    pub held: bool,
     /// Someone else's play being watched: no pause menu (it holds while they pause) and no
     /// skip prompt (it follows their skips).
     pub watched: bool,
@@ -2026,6 +2028,7 @@ impl Game {
             extra_taps: 0,
             record: false,
             log_inputs: false,
+            held: false,
             watched: false,
             inputs: Vec::new(),
             replay: None,
@@ -2466,7 +2469,7 @@ impl Game {
         if self.resuming.is_some_and(|(_, end)| now >= end) {
             self.resume(audio);
         }
-        if self.paused.is_some() {
+        if self.paused.is_some() || self.held {
             self.clock.hold(now);
             self.time = self.speed.map(self.raw_time - offset);
             return false;
@@ -2638,9 +2641,45 @@ impl Game {
         }
     }
 
+    /// Stops a replay where it is, or sets it going again.
+    pub fn toggle_held(&mut self, audio: Option<&Engine>) {
+        self.held = !self.held;
+        if let Some(a) = audio {
+            a.set_paused(self.held);
+        }
+    }
+
+    /// Whether the music can be swapped for one at another constant speed.
+    pub fn has_constant_speed(&self) -> bool {
+        self.speed.is_constant()
+    }
+
+    /// Plays on from where it is with `track`, made at `rate`. Everything is judged in map time,
+    /// so this changes how fast it goes by and nothing else.
+    pub fn change_speed(
+        &mut self,
+        track: Arc<Track>,
+        rate: f64,
+        audio: Option<&Engine>,
+        offset: f64,
+    ) {
+        self.speed = Speed::constant(rate);
+        let target = self.speed.track(self.time) + offset;
+        if let Some(a) = audio {
+            self.track_ms = track.frames() as f64 / a.rate as f64 * 1000.0;
+            a.play(track.clone(), target);
+            a.set_paused(self.held || self.paused.is_some());
+        }
+        self.track = track;
+        self.clock = GameClock::new(target, audio.is_some());
+        self.raw_time = target;
+    }
+
     pub fn pause(&mut self, audio: Option<&Engine>) {
         // Pausing again (e.g. losing focus) during the resume countdown shows the menu again.
         self.cancel_resume();
+        // The menu's Continue is what sets it going now.
+        self.held = false;
         if self.paused.is_none() {
             self.paused = Some(0);
             self.paused_at = Instant::now();
@@ -6459,6 +6498,7 @@ impl Game {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let map = beatmap::calibration_map(500.0, 0, 64);
         let mut g = Game::with_mods(map, track, None, Mods::parse("HD"));
@@ -7106,6 +7146,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mut g = Game::with_seed(map, track, None, mods, 42);
         g.hidden = hud::Parts::NONE;
@@ -7147,6 +7188,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mods = Mods::parse(Mod::Loop.acronym());
         let mut g = Game::with_seed(map, track, None, mods, 42);
@@ -7190,6 +7232,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mods = Mods::parse(Mod::Zigzag.acronym());
         let mut g = Game::with_seed(map, track, None, mods, 42);
@@ -7239,6 +7282,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mods = Mods::parse(Mod::Shapeshift.acronym());
         let mut g = Game::with_seed(map, track, None, mods, 42);
@@ -7306,9 +7350,14 @@ mod tests {
             let track = Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             });
             let mut optimized = Game::with_seed(map.clone(), track.clone(), None, mods, 42);
             let mut reference = Game::with_seed(map.clone(), track, None, mods, 42);
+            // Multiverse's universes are process-wide too: its own for each, not whatever
+            // another test has just set.
+            optimized.universes = Some(multiverse::classic());
+            reference.universes = Some(multiverse::classic());
             // One special block disables the new bounds, reproducing the original scan.
             reference.note_blocks = vec![NoteBlock {
                 range: 0..reference.map.notes.len(),
@@ -7343,6 +7392,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )
@@ -7366,6 +7416,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         Game::new(map, track, None)
     }
@@ -7387,6 +7438,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mut g = Game::with_seed(map, track, None, Mods::parse("MZ"), 42);
         g.time = 1990.0;
@@ -7429,6 +7481,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse(mods),
@@ -7443,6 +7496,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
                 Mods::parse("RD"),
@@ -7549,6 +7603,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("AL"),
@@ -7588,6 +7643,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("AL"),
@@ -7696,6 +7752,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate,
+                    stream: None,
                 }),
                 None,
             );
@@ -7721,6 +7778,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8045,6 +8103,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::NONE,
@@ -8209,6 +8268,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse(mods),
@@ -8247,6 +8307,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
             );
@@ -8286,6 +8347,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
             )
@@ -8366,6 +8428,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8390,6 +8453,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8415,6 +8479,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8442,6 +8507,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8461,6 +8527,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8606,6 +8673,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8647,6 +8715,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8701,6 +8770,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8718,6 +8788,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8739,6 +8810,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8754,6 +8826,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -8794,6 +8867,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("EC"),
@@ -8974,6 +9048,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9128,6 +9203,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse("MZ"),
@@ -9304,6 +9380,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9355,6 +9432,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9378,6 +9456,7 @@ mod tests {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         let mut g = Game::with_seed(map, track, None, mods, 7);
         g.set_defense(
@@ -9561,6 +9640,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9594,6 +9674,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         );
@@ -9889,6 +9970,7 @@ mod tests {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             Mods::parse(mods),
@@ -9963,6 +10045,7 @@ mod tests {
                 Arc::new(Track {
                     samples: Vec::new(),
                     rate: 1.0,
+                    stream: None,
                 }),
                 None,
             );
@@ -9996,5 +10079,28 @@ mod tests {
         // -100 lands at ~4881 and stops at the same ~238 ms on: 119 ms past its head's time, its
         // body's right end at the drum.
         assert!((fake_freeze(short, 5119.05 + 50.0) - 50.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn a_new_speed_carries_on_from_the_same_place_in_the_map() {
+        let map = crate::beatmap::calibration_map(500.0, 4, 64);
+        let track = |rate| {
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate,
+                stream: None,
+            })
+        };
+        let mut g = Game::new(map, track(1.0), None);
+        g.seek(4000.0, None, 0.0);
+        g.held = true;
+        g.change_speed(track(2.0), 2.0, None, 0.0);
+        assert_eq!(
+            g.raw_time, 2000.0,
+            "the track's own time, at twice the speed"
+        );
+        g.update(Instant::now(), None, 0.0);
+        assert_eq!(g.time, 4000.0);
+        assert_eq!(g.rate, 1.0, "what the play was, for its results");
     }
 }

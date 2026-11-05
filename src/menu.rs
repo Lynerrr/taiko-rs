@@ -408,6 +408,8 @@ pub struct Frame<'a> {
     pub song: Option<&'a str>,
     pub maps: usize,
     pub paused: bool,
+    /// How long the game has been running and how long of it was in songs (seconds).
+    pub session: (f64, f64),
 }
 
 pub struct Menu {
@@ -597,6 +599,7 @@ impl Menu {
             crate::menu_notes::draw(c, ghosts, self.clock, self.kiai, self.kick(), self.universe);
         }
         crate::settings::brand(c);
+        draw_session(c, f.session);
         self.draw_flashes(c);
         self.draw_panel(c);
         self.play_song(
@@ -1152,6 +1155,36 @@ impl Menu {
     }
 }
 
+/// `secs` as the menu shows it: "45s", "12m", "1h 02m".
+fn time_text(secs: f64) -> String {
+    let s = secs.max(0.0) as u64;
+    match (s / 3600, s / 60 % 60) {
+        (0, 0) => format!("{s}s"),
+        (0, m) => format!("{m}m"),
+        (h, m) => format!("{h}h {m:02}m"),
+    }
+}
+
+/// How long the game has been running, and how much of that was in songs.
+fn draw_session(c: &mut Canvas, (running, playing): (f64, f64)) {
+    let (running, playing) = (time_text(running), time_text(playing));
+    let text = tr!(
+        "Running {running}   In songs {playing}",
+        "起動 {running}   プレイ {playing}",
+        "Запущено {running}   В песнях {playing}";
+    );
+    let (w, h) = (Canvas::text_width(7.0, &text), Canvas::text_height(7.0));
+    c.round_rect(
+        [18.0, 47.5],
+        [w + 8.0, h + 4.0],
+        3.0,
+        rgba(0x0b0b10, 0.6),
+        rgba(0x0b0b10, 0.0),
+        0.0,
+    );
+    c.text(22.0, 50.0, 7.0, rgba(0xc8c8d8, 1.0), &text);
+}
+
 /// A note `r` units in radius, its pixels a whole number of screen pixels: it grows in steps,
 /// staying sharp.
 fn draw_note(c: &mut Canvas, art: &Art, x: f32, y: f32, r: f32, alpha: f32) {
@@ -1340,6 +1373,14 @@ fn draw_footer(c: &mut Canvas, f: &Frame) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn times_read_at_a_glance() {
+        assert_eq!(super::time_text(45.9), "45s");
+        assert_eq!(super::time_text(12.0 * 60.0), "12m");
+        assert_eq!(super::time_text(3720.0), "1h 02m");
+        assert_eq!(super::time_text(-1.0), "0s");
+    }
+
     use super::*;
 
     #[test]
@@ -1438,6 +1479,7 @@ mod tests {
             song: None,
             maps: 0,
             paused: false,
+            session: (0.0, 0.0),
         };
         m.draw(&mut c, &f);
         c

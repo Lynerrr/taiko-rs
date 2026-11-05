@@ -116,6 +116,8 @@ pub struct Preview {
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
     requested_pitch: f64,
+    /// The fullscreen preview is paused: the music holds, and the notes with it.
+    pub held: bool,
     /// After a speed change: map time to continue the music from once the new track is ready.
     resume_at: Option<f64>,
     bg_rx: Option<Receiver<(PathBuf, Option<Image>)>>,
@@ -219,7 +221,7 @@ fn song_length(
         .unwrap_or(map_end)
 }
 
-fn audio_path(e: &Entry) -> PathBuf {
+pub fn audio_path(e: &Entry) -> PathBuf {
     e.path
         .parent()
         .unwrap_or(Path::new("."))
@@ -465,6 +467,18 @@ impl Preview {
                         let Some(_alone) = audio::prepare_alone() else {
                             return;
                         };
+                        // A long song plays as it's decoded, unless its pitch is being moved.
+                        if shift == 1.0 {
+                            let constant = crate::mods::Speed::constant(speed);
+                            if let Ok(Some(track)) =
+                                crate::stream::open(&song, sr, constant, keep_pitch)
+                            {
+                                if !wanted_now.load(Ordering::Relaxed) {
+                                    let _ = tx.send((song, Some((track, 0, true))));
+                                }
+                                return;
+                            }
+                        }
                         let track = audio::decode_shared(&song, sr).ok().map(|t| {
                             let track = if shift == 1.0 {
                                 audio::with_rate(t, sr, speed, keep_pitch)
@@ -617,21 +631,31 @@ impl Preview {
         if let Some(target) = self.pending_seek {
             // The engine applies seeks on its next callback; rebuild once the music is there so
             // the notes in between aren't lost.
-            let arrived = engine
-                .position_ms(now)
-                .is_some_and(|p| (p * speed - target).abs() < 150.0 * speed);
+            // Held, the music has no position to arrive at.
+            let arrived = self.held
+                || engine
+                    .position_ms(now)
+                    .is_some_and(|p| (p * speed - target).abs() < 150.0 * speed);
             if arrived {
                 if let Some((_, map, _, _)) = &self.map
                     && !map.too_wild_to_preview()
                 {
                     let mut fresh = new_preview_game(map, speed);
                     fresh.skip_to(target - 50.0);
-                    fresh.update(now, Some(engine), offset);
+                    // Held, there's no music to go by: it's put there by hand.
+                    if self.held {
+                        fresh.seek(target, None, offset);
+                    } else {
+                        fresh.update(now, Some(engine), offset);
+                    }
                     self.last_time = fresh.time;
                     self.game = Some(fresh);
                 }
                 self.pending_seek = None;
             }
+            return;
+        }
+        if self.held {
             return;
         }
         let Some(game) = &mut self.game else { return };
@@ -1380,6 +1404,7 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
         Arc::new(Track {
             samples: Vec::new(),
             rate,
+            stream: None,
         }),
         None,
     );

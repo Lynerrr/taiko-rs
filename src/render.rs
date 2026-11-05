@@ -2669,6 +2669,8 @@ pub enum Hit {
     Overlay,
     /// The leaderboard's tabs: local (false) or online (true).
     BoardTab(bool),
+    /// Opens the selected map's page in the browser.
+    BoardWebsite,
     /// Lobby: give the host role to this player.
     GiveHost(u32),
     /// Lobby host: takes this player (id) out of the lobby.

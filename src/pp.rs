@@ -455,6 +455,7 @@ mod tests {
             std::sync::Arc::new(crate::audio::Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
             half,

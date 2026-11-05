@@ -49,6 +49,7 @@ pub enum Item {
     WheelResize,
     KiaiEffects,
     BlackLane,
+    DrumMenus,
     HideGreat,
     ChatFilter,
     MessageSound,
@@ -64,6 +65,7 @@ pub enum Item {
     DataFolder,
     MasterVolume,
     MusicVolume,
+    UnfocusedVolume,
     FxVolume,
     AudioBuffer,
     BackgroundDim,
@@ -107,6 +109,7 @@ pub enum Item {
     CrashReports,
     Skin,
     SkinFolder,
+    MapSkins,
     NoteColours,
     DonColour,
     KatColour,
@@ -114,7 +117,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 126] = [
+pub const ITEMS: [(&str, Item); 129] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -148,6 +151,7 @@ pub const ITEMS: [(&str, Item); 126] = [
     ("INPUT", Item::Key(2)),
     ("INPUT", Item::Key(3)),
     ("INPUT", Item::TouchLayout),
+    ("INPUT", Item::DrumMenus),
     ("INPUT", Item::PresetKey(0)),
     ("INPUT", Item::PresetKey(1)),
     ("INPUT", Item::Hotkey(0)),
@@ -197,6 +201,7 @@ pub const ITEMS: [(&str, Item); 126] = [
     ("AUDIO", Item::MasterVolume),
     ("AUDIO", Item::MusicVolume),
     ("AUDIO", Item::FxVolume),
+    ("AUDIO", Item::UnfocusedVolume),
     ("AUDIO", Item::AudioBuffer),
     ("VIDEO", Item::PresentMode),
     ("VIDEO", Item::Renderer),
@@ -214,6 +219,7 @@ pub const ITEMS: [(&str, Item); 126] = [
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
+    ("SKIN", Item::MapSkins),
     ("SKIN", Item::HitFlash),
     ("SKIN", Item::NoteColours),
     ("SKIN", Item::DonColour),
@@ -511,11 +517,17 @@ impl Item {
             ),
             Item::KiaiEffects => tr!("Kiai effects", "キアイの演出", "Эффекты киай"),
             Item::BlackLane => tr!("Black lane", "黒いレーン", "Чёрная дорожка"),
+            Item::DrumMenus => tr!(
+                "Drum keys in menus",
+                "メニューで太鼓のキーを使う",
+                "Клавиши барабана в меню"
+            ),
             Item::HideGreat => tr!(
                 "Hide GREAT splash",
                 "GREATの表示を隠す",
                 "Скрыть вспышку GREAT"
             ),
+            Item::MapSkins => tr!("Beatmap skins", "譜面のスキン", "Скины карт"),
             Item::HitFlash => tr!("Hit flash", "ヒット時の光", "Вспышка при попадании"),
             Item::ChatFilter => tr!("Chat filter", "チャットフィルター", "Фильтр чата"),
             Item::MessageSound => tr!("Message sound", "メッセージの音", "Звук сообщений"),
@@ -603,6 +615,11 @@ impl Item {
                 "メインメニューの背景のノーツ",
                 "Ноты за главным меню"
             ),
+            Item::UnfocusedVolume => tr!(
+                "Volume in the background",
+                "バックグラウンドの音量",
+                "Громкость в фоне"
+            ),
             Item::MenuNotesDim => tr!(
                 "Menu lane notes dim",
                 "メニューのレーンのノーツの暗さ",
@@ -664,6 +681,7 @@ impl Item {
             | Item::MasterVolume
             | Item::MusicVolume
             | Item::FxVolume
+            | Item::UnfocusedVolume
             | Item::BackgroundDim
             | Item::MenuNotesDim
             | Item::FpsCap
@@ -704,6 +722,8 @@ impl Item {
             | Item::Interface
             | Item::KiaiEffects
             | Item::BlackLane
+            | Item::DrumMenus
+            | Item::MapSkins
             | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::HitFlash
@@ -907,6 +927,16 @@ impl Item {
                 "リプレイ、スコア、動画、ダウンロードした譜面、スキン、キャッシュ。Enter: 別のフォルダやドライブへ移動。",
                 "Повторы, рекорды, видео, скачанные карты, скины и кэш. Enter: перенести в другую папку или на диск."
             ),
+            Item::DrumMenus => tr!(
+                "Song select, its mods and the pause menu follow the drum: the rims go up and down, either face picks. In song select Tab moves between the song list and the rows of buttons above and below it, and your drum keys don't type unless the search box is picked.",
+                "選曲、Mod選択、ポーズメニューを太鼓で操作します。フチで上下、面で決定。選曲ではTabで曲リストと上下のボタン列を移動します。検索欄を選んでいない間、太鼓のキーは文字を入力しません。",
+                "Выбор песни, его моды и меню паузы слушаются барабана: края двигают вверх и вниз, центр выбирает. В выборе песни Tab переключает между списком и рядами кнопок сверху и снизу, а клавиши барабана не печатают, пока не выбрано поле поиска."
+            ),
+            Item::MapSkins => tr!(
+                "Maps draw with the skin images in their own folder. Off: your skin everywhere. Right-click a song to turn one map's off.",
+                "譜面のフォルダにあるスキン画像で描きます。オフ: 常に自分のスキン。曲を右クリックでその譜面だけオフ。",
+                "Карты рисуются картинками скина из своей папки. Выкл.: всегда ваш скин. Правый клик по песне выключает скин одной карты."
+            ),
             Item::BlackLane => tr!(
                 "The lane the notes scroll on, and the drum's panel, are pure black: no kiai tint, no skin's lane picture.",
                 "ノーツが流れるレーンと太鼓のパネルを真っ黒に。キアイの色もスキンのレーン画像もなし。",
@@ -966,6 +996,11 @@ impl Item {
                 "Scales music and hitsounds. Anywhere: hold Alt and scroll the mouse wheel.",
                 "音楽とヒット音の音量。どこでも: Altを押しながらマウスホイール。",
                 "Громкость музыки и хитсаундов. Везде: Alt и колесо мыши."
+            ),
+            Item::UnfocusedVolume => tr!(
+                "How loud the game stays while another window has focus. 100% doesn't change it.",
+                "別のウィンドウを使っている間の音量です。100%で変わりません。",
+                "Насколько громкой остаётся игра, пока активно другое окно. 100% ничего не меняет."
             ),
             Item::MusicVolume | Item::FxVolume => tr!(
                 "Left / Right to adjust.",

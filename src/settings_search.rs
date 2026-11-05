@@ -30,6 +30,8 @@ fn words(item: Item) -> &'static str {
             "latency lag input delay задержка лаг"
         }
         Item::AudioBuffer => "latency lag crackle stutter wasapi задержка лаг треск заикание",
+        Item::DrumMenus => "navigate controller keys tab song select menu барабан меню навигация",
+        Item::UnfocusedVolume => "quiet alt tab focus background window lower тихо фон окно",
         Item::MasterVolume | Item::MusicVolume | Item::FxVolume => {
             "sound loud quiet mute audio звук громко тихо мьют音"
         }
@@ -59,6 +61,7 @@ fn words(item: Item) -> &'static str {
         | Item::ShowPlayfieldSize
         | Item::WheelResize => "size position resolution tablet размер позиция разрешение",
         Item::Skin | Item::SkinParts | Item::SkinFolder => "theme notes look тема внешний вид ноты",
+        Item::MapSkins => "beatmap map skin gimmick disable карта скин отключить",
         Item::Accent | Item::AccentHue => "theme color hue тема цвет оттенок",
         Item::NoteColours | Item::DonColour | Item::KatColour => {
             "color palette red blue цвет палитра красный синий"

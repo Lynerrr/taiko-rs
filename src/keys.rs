@@ -267,8 +267,10 @@ impl Hotkey {
             | Hotkey::Download
             | Hotkey::Sort
             | Hotkey::Collections => &[Place::Select],
-            Hotkey::Pause | Hotkey::ApplyOffset => &[Place::Play, Place::Paused],
-            Hotkey::SkipIntro | Hotkey::QuickRetry | Hotkey::MapInfo => &[Place::Play],
+            Hotkey::Pause | Hotkey::ApplyOffset | Hotkey::QuickRetry => {
+                &[Place::Play, Place::Paused]
+            }
+            Hotkey::SkipIntro | Hotkey::MapInfo => &[Place::Play],
             Hotkey::Restart => &[Place::Play, Place::Paused, Place::Results],
             Hotkey::Retry | Hotkey::WatchReplay | Hotkey::ExportVideo => &[Place::Results],
             _ => ANYWHERE,
@@ -374,9 +376,9 @@ impl Hotkey {
                 "Песня: пропустить вступление"
             ),
             Hotkey::QuickRetry => tr!(
-                "Song: quick retry",
-                "曲: すぐにやり直す",
-                "Песня: быстрый перезапуск"
+                "Song: quick retry (hold)",
+                "曲: すぐにやり直す (長押し)",
+                "Песня: быстрый перезапуск (удерживать)"
             ),
             Hotkey::Restart => tr!(
                 "Song / results: restart",

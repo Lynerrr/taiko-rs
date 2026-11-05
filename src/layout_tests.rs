@@ -482,6 +482,7 @@ fn assert_every_screen_fits() {
     s.select.menu = Some(ui::SongMenu {
         row: s.select.cursor(),
         header: true,
+        skin: false,
         x: 2000.0,
         y: 300.0,
     });
@@ -1108,6 +1109,7 @@ fn assert_every_screen_fits() {
         Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         }),
         None,
         s.cfg.mods,
@@ -1470,6 +1472,7 @@ fn watching_everyone_shows_where_each_player_plays() {
                     Arc::new(Track {
                         samples: Vec::new(),
                         rate: 1.0,
+                        stream: None,
                     }),
                     None,
                     Mods::parse(mods),

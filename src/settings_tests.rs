@@ -369,6 +369,113 @@ fn a_song_liked_on_song_select_is_a_favourite_for_the_player_too() {
     assert!(!s.select.is_liked(&s.library[i]));
 }
 
+/// A state on song select whose selected map's folder carries a skin image, with the song menu
+/// open on it as a right click would. Returns the folder.
+fn on_a_map_with_a_skin(s: &mut State) -> std::path::PathBuf {
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let i = s.select.selected().unwrap();
+    let dir = std::env::temp_dir().join(format!("taiko-rs-skin-toggle-{}", std::process::id()));
+    let dir = dir.join(format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+    std::fs::create_dir_all(&dir).unwrap();
+    image::RgbaImage::new(2, 2)
+        .save(dir.join("Taiko-Roll-End.png"))
+        .unwrap();
+    s.library[i].path = dir.join("map.osu");
+    s.select.menu = Some(ui::SongMenu {
+        row: s.select.cursor(),
+        header: true,
+        skin: s.menu_has_skin(s.select.cursor()),
+        x: 100.0,
+        y: 100.0,
+    });
+    dir
+}
+
+fn map_skin_item(s: &State) -> Option<(usize, String)> {
+    s.select
+        .menu_items(&s.library)
+        .into_iter()
+        .enumerate()
+        .find(|(_, (_, a))| *a == ui::MenuAction::MapSkin)
+        .map(|(k, (label, _))| (k, label))
+}
+
+#[test]
+fn a_maps_skin_is_turned_off_and_back_on_from_its_menu() {
+    let mut s = layout_tests::state();
+    let dir = on_a_map_with_a_skin(&mut s);
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+
+    let (k, label) = map_skin_item(&s).unwrap();
+    assert!(label.starts_with("Turn off"), "{label}");
+    s.click(render::Hit::SongMenu(k), None);
+    assert!(s.select.menu.is_none());
+    s.follow_map_skin();
+    assert_eq!(s.skin_map, None);
+
+    s.select.menu = Some(ui::SongMenu {
+        row: s.select.cursor(),
+        header: false,
+        skin: s.menu_has_skin(s.select.cursor()),
+        x: 100.0,
+        y: 100.0,
+    });
+    let (k, label) = map_skin_item(&s).unwrap();
+    assert!(label.starts_with("Use"), "{label}");
+    s.click(render::Hit::SongMenu(k), None);
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn beatmap_skins_off_in_settings_covers_every_map_and_its_menu() {
+    let mut s = layout_tests::state();
+    let dir = on_a_map_with_a_skin(&mut s);
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+
+    s.cfg.map_skins = false;
+    s.follow_map_skin();
+    assert_eq!(s.skin_map, None);
+    // Nothing for one map's switch to do while they're all off.
+    assert!(!s.menu_has_skin(s.select.cursor()));
+
+    s.cfg.map_skins = true;
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_map_without_a_skin_offers_no_switch() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let row = s.select.cursor();
+    assert!(!s.menu_has_skin(row));
+    s.select.menu = Some(ui::SongMenu {
+        row,
+        header: true,
+        skin: s.menu_has_skin(row),
+        x: 100.0,
+        y: 100.0,
+    });
+    assert!(map_skin_item(&s).is_none());
+}
+
+#[test]
+fn beatmap_skins_stay_off_after_a_restart() {
+    let mut cfg = config::Config::default();
+    assert!(cfg.map_skins);
+    cfg.map_skins = false;
+    assert!(!config::Config::parse_text(&cfg.to_text()).map_skins);
+}
+
 #[test]
 fn a_songs_menu_likes_it() {
     let mut s = layout_tests::state();
@@ -378,6 +485,7 @@ fn a_songs_menu_likes_it() {
     s.select.menu = Some(ui::SongMenu {
         row: s.select.cursor(),
         header: true,
+        skin: false,
         x: 100.0,
         y: 100.0,
     });
@@ -439,6 +547,7 @@ fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
     let track = Arc::new(Track {
         samples: Vec::new(),
         rate: 1.0,
+        stream: None,
     });
     v.game = Some(Box::new(Game::new(map, track, None)));
     v.clock = (30_000.0, Instant::now(), false);
@@ -505,6 +614,7 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
         let track = Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         });
         Box::new(Game::new(map, track, None))
     };
@@ -1095,6 +1205,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )),
@@ -1145,6 +1256,7 @@ fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )),
@@ -1264,6 +1376,7 @@ fn scroll_speed_changes_between_songs_only() {
         Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
+            stream: None,
         }),
         None,
     );
@@ -1311,6 +1424,7 @@ fn sets_loved_on_the_server_count_as_loved() {
     s.select.menu = Some(ui::SongMenu {
         row: 0,
         header: false,
+        skin: false,
         x: 0.0,
         y: 0.0,
     });
@@ -1345,6 +1459,7 @@ fn hotkeys_can_be_moved_and_removed() {
             Arc::new(Track {
                 samples: Vec::new(),
                 rate: 1.0,
+                stream: None,
             }),
             None,
         )),
@@ -2147,4 +2262,300 @@ fn pointing_at_a_main_menu_note_selects_it() {
         s.main_menu.as_ref().unwrap().current(),
         menu::ITEMS[medals + 1]
     );
+}
+
+/// In a song of the test library, with `paused` or not.
+fn in_a_song(paused: bool) -> State {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.play_when_scanned = false;
+    let map = beatmap::calibration_map(500.0, 4, 64);
+    let mut game = Game::new(
+        map,
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+    );
+    if paused {
+        game.paused = Some(0);
+    }
+    s.scene = Scene::Play {
+        game: Box::new(game),
+        entry: 0,
+        from: None,
+    };
+    s
+}
+
+fn restarted(s: &State) -> bool {
+    !matches!(s.scene, Scene::Play { .. })
+}
+
+#[test]
+fn quick_retry_needs_the_key_held_and_works_while_paused() {
+    for paused in [false, true] {
+        let mut s = in_a_song(paused);
+        let at = Instant::now();
+        s.key(KeyCode::Backquote, false, None, at, None);
+        assert!(!restarted(&s), "a press alone doesn't restart");
+        s.poll_retry(at + Duration::from_millis(149));
+        assert!(!restarted(&s), "not before it's been held");
+        let halfway = s.retry_progress(at + Duration::from_millis(75)).unwrap();
+        assert!((halfway - 0.5).abs() < 0.01, "{halfway}");
+        s.poll_retry(at + Duration::from_millis(150));
+        assert!(restarted(&s), "paused: {paused}");
+    }
+}
+
+#[test]
+fn letting_go_of_quick_retry_calls_it_off() {
+    let mut s = in_a_song(false);
+    let at = Instant::now();
+    s.key(KeyCode::Backquote, false, None, at, None);
+    // Another key coming up doesn't.
+    s.key_released(KeyCode::KeyD);
+    assert!(s.retry_hold.is_some());
+    s.key_released(KeyCode::Backquote);
+    s.poll_retry(at + Duration::from_secs(5));
+    assert!(!restarted(&s));
+    assert_eq!(s.retry_progress(at), None);
+}
+
+#[test]
+fn a_held_key_repeating_doesnt_start_the_hold_over() {
+    let mut s = in_a_song(false);
+    let at = Instant::now();
+    s.key(KeyCode::Backquote, false, None, at, None);
+    s.key(
+        KeyCode::Backquote,
+        true,
+        None,
+        at + Duration::from_millis(100),
+        None,
+    );
+    s.poll_retry(at + Duration::from_millis(150));
+    assert!(restarted(&s));
+}
+
+#[test]
+fn a_rebound_quick_retry_is_let_go_of_by_its_own_key() {
+    let mut s = in_a_song(false);
+    let chord = keys::Chord::plain(KeyCode::KeyQ);
+    s.cfg.hotkeys.set(keys::Hotkey::QuickRetry, Some(chord));
+    let at = Instant::now();
+    s.key(KeyCode::KeyQ, false, None, at, None);
+    assert!(s.retry_hold.is_some());
+    s.key_released(KeyCode::KeyQ);
+    assert!(s.retry_hold.is_none());
+}
+
+#[test]
+fn the_volume_drops_without_the_focus_and_comes_back() {
+    let mut s = layout_tests::state();
+    s.cfg.master_volume = 1.0;
+    s.cfg.music_volume = 0.8;
+    s.cfg.fx_volume = 0.4;
+    s.cfg.unfocused_volume = 0.5;
+    assert_eq!(s.heard_volumes(), (0.8, 0.4));
+    s.focused = false;
+    assert_eq!(s.heard_volumes(), (0.4, 0.2));
+    // What's saved stays as it was.
+    assert_eq!(s.cfg.volumes(), (0.8, 0.4));
+    s.cfg.unfocused_volume = 1.0;
+    assert_eq!(s.heard_volumes(), (0.8, 0.4));
+}
+
+#[test]
+fn the_drum_stays_out_of_menus_unless_asked_for() {
+    let mut s = in_a_song(true);
+    let rim = s.cfg.keys[3];
+    s.key(rim, false, None, Instant::now(), None);
+    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused == Some(0)));
+    s.cfg.drum_menus = true;
+    s.key(rim, false, None, Instant::now(), None);
+    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused == Some(1)));
+    let left = s.cfg.keys[0];
+    s.key(left, false, None, Instant::now(), None);
+    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused == Some(0)));
+}
+
+#[test]
+fn a_running_song_keeps_its_drum_with_drum_menus_on() {
+    let mut s = in_a_song(false);
+    s.cfg.drum_menus = true;
+    let rim = s.cfg.keys[3];
+    assert_eq!(s.drum_menu_key(rim), None);
+}
+
+/// On song select past the main menu, its buttons drawn. The menu comes up when the library is
+/// in, which takes a frame or more: that's over first.
+fn at_song_select(drum_menus: bool) -> State {
+    let mut s = layout_tests::state();
+    s.cfg.main_menu = true;
+    s.cfg.drum_menus = drum_menus;
+    s.play_when_scanned = false;
+    for _ in 0..3 {
+        s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+        s.main_menu = None;
+        s.scene = Scene::Select;
+    }
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.main_menu = None;
+    s.scene = Scene::Select;
+    s
+}
+
+#[test]
+fn song_select_follows_the_drum_and_tab_moves_to_the_buttons() {
+    let mut s = at_song_select(true);
+    let (rim, face) = (s.cfg.keys[0], s.cfg.keys[1]);
+    assert_eq!(s.drum_menu_key(rim), Some(KeyCode::ArrowUp));
+    assert_eq!(s.drum_menu_key(face), Some(KeyCode::Enter));
+
+    // Tab: the row above, on the search box; a face hit goes into it and the keys type.
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert!(
+        matches!(s.scene, Scene::Select),
+        "Tab doesn't open settings"
+    );
+    assert!(matches!(
+        s.select_zone,
+        drum_nav::Zone::Row { bottom: false, .. }
+    ));
+    assert_eq!(s.drum_menu_key(rim), Some(KeyCode::ArrowLeft));
+    s.key(face, false, None, Instant::now(), None);
+    assert!(s.select.searching);
+    assert_eq!(s.drum_menu_key(rim), None, "typing now");
+
+    // Tab leaves the box for the row below, and the list after it.
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert!(!s.select.searching);
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert_eq!(s.select_zone, drum_nav::Zone::List);
+}
+
+#[test]
+fn tab_opens_settings_as_ever_without_drum_menus() {
+    let mut s = at_song_select(false);
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert!(matches!(s.scene, Scene::Settings { .. }));
+}
+
+#[test]
+fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
+    let mut s = in_a_song(false);
+    let set = |s: &mut State, ms| {
+        if let Scene::Play { game, .. } = &mut s.scene {
+            game.played_ms = ms;
+        }
+    };
+    set(&mut s, 1000.0);
+    s.track_play();
+    set(&mut s, 2500.0);
+    s.track_play();
+    s.track_play();
+    assert_eq!(s.session_play_ms, 2500.0);
+    let (_, map) = s.playing.clone().unwrap();
+    let map = map.expect("the map goes with the play");
+    assert_eq!(map.hash, s.library[0].hash());
+    assert_eq!(map.name, s.library[0].label());
+
+    // Retried: the next play's time starts from nothing, and adds to what's there.
+    s.scene = Scene::Select;
+    s.track_play();
+    assert!(s.playing.is_none());
+    let library = std::mem::take(&mut s.library);
+    let mut next = in_a_song(false);
+    next.library = library;
+    next.session_play_ms = s.session_play_ms;
+    if let Scene::Play { game, .. } = &mut next.scene {
+        game.played_ms = 500.0;
+    }
+    next.track_play();
+    assert_eq!(next.session_play_ms, 3000.0);
+}
+
+#[test]
+fn the_website_button_goes_to_the_site_whatever_the_map() {
+    assert_eq!(map_url(0x1f3a), "https://rstaiko.auneu.space/m/1f3a");
+}
+
+fn watching_a_replay() -> State {
+    let mut s = in_a_song(false);
+    if let Scene::Play { game, .. } = &mut s.scene {
+        game.replay = Some((Vec::new(), 0));
+    }
+    s
+}
+
+fn held(s: &State) -> bool {
+    matches!(&s.scene, Scene::Play { game, .. } if game.held)
+}
+
+#[test]
+fn space_pauses_a_replay_without_a_menu_and_skips_in_a_play_as_ever() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    assert!(held(&s));
+    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused.is_none()));
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    assert!(!held(&s));
+
+    let mut s = in_a_song(false);
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    assert!(!held(&s));
+}
+
+#[test]
+fn a_held_replay_stays_where_it_is() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    let Scene::Play { game, .. } = &mut s.scene else {
+        panic!()
+    };
+    let now = Instant::now();
+    game.update(now, None, 0.0);
+    let at = game.time;
+    game.update(now + Duration::from_secs(5), None, 0.0);
+    assert_eq!(game.time, at);
+}
+
+#[test]
+fn the_pause_menu_takes_over_from_a_held_replay() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    let Scene::Play { game, .. } = &mut s.scene else {
+        panic!()
+    };
+    game.pause(None);
+    assert!(!game.held, "or Continue would leave it stopped");
+}
+
+#[test]
+fn a_replays_speed_goes_in_steps_and_stops_at_the_ends() {
+    let mut s = watching_a_replay();
+    let up = |s: &mut State| s.key(KeyCode::ArrowUp, false, None, Instant::now(), None);
+    let down = |s: &mut State| s.key(KeyCode::ArrowDown, false, None, Instant::now(), None);
+    up(&mut s);
+    assert_eq!(s.replay_speed_wanted, 1.25);
+    for _ in 0..9 {
+        up(&mut s);
+    }
+    assert_eq!(s.replay_speed_wanted, 2.0);
+    for _ in 0..9 {
+        down(&mut s);
+    }
+    assert_eq!(s.replay_speed_wanted, 0.25);
+}
+
+#[test]
+fn leaving_a_replay_forgets_its_speed() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::ArrowUp, false, None, Instant::now(), None);
+    s.scene = Scene::Select;
+    s.poll_replay_speed();
+    assert_eq!((s.replay_speed, s.replay_speed_wanted), (1.0, 1.0));
 }
