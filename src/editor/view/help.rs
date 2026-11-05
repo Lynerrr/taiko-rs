@@ -122,6 +122,18 @@ const STEPS: &[Step] = &[
         mode: Mode::Effects,
     },
     Step {
+        title: "Nodes",
+        text: "On the Nodes tab of Effects you wire an event (Every beat, a miss, kiai) to an action (Pulse the zoom, Shake). Click + Every beat, click + Pulse, drag from one dot to the other, pick the Pulse's target and press Space. A red ! on a node means it can't do anything yet. The Recipe menu drops ready-made groups.",
+        at: At::Panel,
+        mode: Mode::Effects,
+    },
+    Step {
+        title: "Manual and uploading",
+        text: "Help > Manual explains timing a song, the SV tool, nodes and more, step by step. File > Upload sends your map to taiko.rs: it is public as CUSTOM and gives pp once an admin approves it.",
+        at: At::Menu,
+        mode: Mode::Compose,
+    },
+    Step {
         title: "Saving",
         text: "Ctrl+S saves and keeps a .bak of the original the first time. Esc leaves; with unsaved changes you are asked first. Press ? at any time for every shortcut.",
         at: At::Modes,
@@ -225,6 +237,10 @@ impl View {
             Some(Modal::Upload) => {
                 self.modal_from = self.buttons.len();
                 self.draw_upload(c);
+            }
+            Some(Modal::Manual) => {
+                self.modal_from = self.buttons.len();
+                self.draw_manual(c);
             }
             None => {}
         }

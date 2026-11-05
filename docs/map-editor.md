@@ -1,9 +1,34 @@
 # Map editor
 
-The editor opens from the main menu and edits osu!stable-compatible taiko maps (`.osu`), or `.tko`
+The editor opens from the main menu (EDITOR, right after PLAY) and edits osu!stable-compatible taiko maps (`.osu`), or `.tko`
 maps (a `.osu` plus this client's own effects, see [tko-format.md](tko-format.md)). What it saves
 as `.osu` plays the same in osu!stable. The first time it opens it runs a short guided tour;
-Help > Take the tour shows it again, and `?` lists every key.
+Help > Take the tour shows it again, `?` lists every key, and **Help > Manual** is a full manual
+inside the editor (English and Russian): timing, the SV tool, nodes, uploading.
+
+## Making a map from a song
+
+EDITOR in the main menu opens the start screen. Drop an audio file (mp3, ogg, wav, flac) on it, or
+on the game window anywhere, or click to browse; recent maps and "pick in song select" are there for
+going on with a map you already have.
+
+1. **Details**: artist, title, mapper name, difficulty name, source, tags and a background picture.
+   A name with non-English letters wants a romanised version too (osu! rule). The names are guessed
+   from the file's name.
+2. **Timing**: the game finds the BPM and the moment of the first beat from the whole song and says
+   when it thinks the tempo changes. Tap the tempo with `T`, switch the metronome with `M`, loop 8
+   bars with `L`, say "the beat is here" with `B`, go back to what was found with `D`. The
+   waveform shows the beat grid; the wheel zooms.
+3. **Create** makes `Songs/<Artist> - <Title>` with the music, the background and a `.osu` (or
+   `.tko`), adds it to your list and opens it in the editor.
+
+### Timing a song
+
+Every note snaps to a grid made from the red line, so get it right first. Check by ear: put notes on
+four bars of beats, set Speed to 50% and play. If the notes are early or late by the same amount
+everywhere, move the offset; if they drift the longer the song goes, the BPM is a little off. A song
+with several tempos needs a red line (`Ctrl+P`) at each change: time the later part by ear the same
+way. F3 Timing edits the lines, F6 lists all of them.
 
 ## Layout
 
@@ -70,12 +95,42 @@ that is on). With two or more green lines selected Apply fills each consecutive 
 saved or reloaded: the chart and the preview update at once and undo takes it back.
 The tool is a port of svt-linux / svt-rs.
 
+**Presets** (SV tool, "between selected lines"): ramp, geometric ramp (reads as an even
+speed-up), multiply, a line on every note, ease in, ease out, S-curve, sine in and out, and a
+curved line on every note. A preset sets the shape and where it is written; Apply writes it.
+
+Recipes:
+
+- *Slow into a drop*: green lines at the start and end of the slow stretch, preset Ease out, from
+  x1.00 to x0.60.
+- *Build-up*: two lines across two bars, preset Geometric ramp, x0.80 to x2.00.
+- *Volume fade*: switch to Volume, ramp 100 to 30 across the last bars of a section.
+
 ## Effects (`.tko`)
 
 F4 opens the Effects page: *Keyframes* animates the playfield (move, look and clone properties,
 in tabs) and groups of notes over time, and *Nodes* wires events to actions on a canvas. Wheel up zooms in (far out for big projects, Fit frames everything, 100% resets). Click a
 node's number to type it, pick its target from the grouped list, and use "Group from selection" on
 a Note arrives node to follow the notes selected in Compose. The Recipe menu drops a ready-made
-node group (beat pulse, kiai drop, finisher build-up, combo zoom, miss glitch, echo trail, section
-sweep). `M` drops a named mark on the timeline for "At mark", "Between marks" and "Span progress".
+node group (17 of them: beat pulse, kiai drop, finisher build-up, combo zoom, miss glitch, echo
+trail, section sweep, kiai colour wash, drumroll shake, breathing vignette, build-up between marks,
+half turn every 4 bars, combo milestone flash, accuracy tint, hit jitter, kiai spin, big note
+slam). Nodes that can't do anything yet wear a red `!` (hover it for the reason), and an empty
+canvas shows the first steps of a first effect. See the [nodes guide](nodes-guide.md) for how
+nodes work, worked examples and every node. `M` drops a named mark on the timeline for "At mark", "Between marks" and "Span progress".
 Everything stays visual: judging, score and pp never change.
+
+## Uploading to taiko.rs
+
+File > Upload sends the saved map to the server. A checklist comes first: logged in, saved, a taiko
+map with at least 10 notes, artist / title / mapper filled in, the music in the folder, and your own
+map (no osu! `BeatmapSetID`). The map's folder is packed (every taiko difficulty with enough notes,
+the music, pictures, storyboard) and sent.
+
+- A set is public at once as **CUSTOM**: it is on the website's CUSTOM tab with a download, and gives
+  no pp.
+- An admin or a loved nominator can approve it: **APPROVED CUSTOM** gives pp, like a loved map.
+- The set's number is kept in the folder (`taiko-rs.custom`), so sending again updates the same set.
+  What was approved keeps counting; changed difficulties wait for another approval.
+- In the game custom maps have their own headings in song select, and `status:custom` finds them.
+- Limits: 30 sets per account, 40 MB each, one send per 30 seconds.

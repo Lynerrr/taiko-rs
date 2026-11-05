@@ -138,6 +138,76 @@ pub(super) struct HandleDrag {
     lines: Vec<(u64, f64)>,
 }
 
+/// What a preset of the SV tool's "between selected lines" list sets.
+enum PresetShape {
+    Curve(Curve),
+    /// Multiplies the lines by the tool's value.
+    Scale,
+}
+
+struct Preset {
+    name: &'static str,
+    /// Written on every note instead of on the lines already there.
+    on_notes: bool,
+    shape: PresetShape,
+}
+
+const fn preset(name: &'static str, on_notes: bool, shape: PresetShape) -> Preset {
+    Preset {
+        name,
+        on_notes,
+        shape,
+    }
+}
+
+/// The Presets list: a click sets the shape and where it is written, Apply writes it.
+#[cfg(test)]
+pub(super) const PRESET_COUNT: usize = PRESETS.len();
+const PRESETS: [Preset; 10] = [
+    preset(
+        "Ramp the selected lines",
+        false,
+        PresetShape::Curve(Curve::Linear),
+    ),
+    preset(
+        "Geometric ramp of the lines",
+        false,
+        PresetShape::Curve(Curve::TrueExp),
+    ),
+    preset("Multiply the selected lines", false, PresetShape::Scale),
+    preset(
+        "A line on every note",
+        true,
+        PresetShape::Curve(Curve::Linear),
+    ),
+    preset(
+        "Ease in: slow start, fast end",
+        false,
+        PresetShape::Curve(Curve::Exp(1.6)),
+    ),
+    preset(
+        "Ease out: fast start, settles",
+        false,
+        PresetShape::Curve(Curve::Exp(0.6)),
+    ),
+    preset("Smooth S-curve", false, PresetShape::Curve(Curve::Sin)),
+    preset(
+        "Fast start, slow end (sine)",
+        false,
+        PresetShape::Curve(Curve::SinIn),
+    ),
+    preset(
+        "Slow start, fast end (sine)",
+        false,
+        PresetShape::Curve(Curve::SinOut),
+    ),
+    preset(
+        "Curved line on every note",
+        true,
+        PresetShape::Curve(Curve::Exp(1.3)),
+    ),
+];
+
 pub(super) struct SvtUi {
     pub params: SvtParams,
     /// Typed over what the chart says at the ends of the segment.
@@ -1008,16 +1078,11 @@ impl View {
                     p.lines || flat,
                 ),
             ],
-            _ => [
-                "Ramp the selected lines",
-                "Geometric ramp of the lines",
-                "Multiply the selected lines",
-                "A line on every note",
-            ]
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.to_string(), Btn::S(SAct::Preset(i as u8)), false))
-            .collect(),
+            _ => PRESETS
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.name.to_string(), Btn::S(SAct::Preset(i as u8)), false))
+                .collect(),
         };
         let w = items
             .iter()
@@ -1361,14 +1426,16 @@ impl View {
             }
             SAct::Pick(i) => self.pick_run(i),
             SAct::Preset(i) => {
+                let Some(preset) = PRESETS.get(i as usize) else {
+                    return;
+                };
                 let value = self.svt.value.clamp(0.01, 10.0);
                 let p = &mut self.svt.params;
-                (p.lines, p.hits, p.snaps) = (i < 3, i >= 3, false);
+                (p.lines, p.hits, p.snaps) = (!preset.on_notes, preset.on_notes, false);
                 p.write_sv = true;
-                p.shape = match i {
-                    1 => Shape::Between(Curve::TrueExp),
-                    2 => Shape::Scale(value),
-                    _ => Shape::Between(Curve::Linear),
+                p.shape = match &preset.shape {
+                    PresetShape::Curve(c) => Shape::Between(c.clone()),
+                    PresetShape::Scale => Shape::Scale(value),
                 };
             }
             SAct::Apply => {

@@ -21,10 +21,30 @@ pub enum Recipe {
     EchoTrail,
     /// The playfield turns once from mark 1 to mark 2.
     SectionSweep,
+    /// Kiai tints the playfield, and the tint's hue drifts.
+    KiaiWash,
+    /// Every drumroll shakes the playfield as it arrives.
+    RollShake,
+    /// The screen's edges breathe in and out.
+    BreathingVignette,
+    /// Between mark 1 and mark 2 the zoom and the glare build up, slowly then fast.
+    BuildUp,
+    /// Every fourth bar the playfield turns half a revolution.
+    BarFlip,
+    /// Every 50 combo flashes and kicks the zoom.
+    ComboMilestone,
+    /// The worse the accuracy, the redder the playfield.
+    AccuracyTint,
+    /// Every hit gives a tiny jolt.
+    HitJitter,
+    /// Kiai starts with a full turn of the playfield.
+    KiaiSpin,
+    /// A finisher slams: zoom, shake and colour split, always the same.
+    BigNoteSlam,
 }
 
 impl Recipe {
-    pub const ALL: [Recipe; 7] = [
+    pub const ALL: [Recipe; 17] = [
         Recipe::BeatPulse,
         Recipe::KiaiDrop,
         Recipe::FinisherBuild,
@@ -32,6 +52,16 @@ impl Recipe {
         Recipe::MissGlitch,
         Recipe::EchoTrail,
         Recipe::SectionSweep,
+        Recipe::KiaiWash,
+        Recipe::RollShake,
+        Recipe::BreathingVignette,
+        Recipe::BuildUp,
+        Recipe::BarFlip,
+        Recipe::ComboMilestone,
+        Recipe::AccuracyTint,
+        Recipe::HitJitter,
+        Recipe::KiaiSpin,
+        Recipe::BigNoteSlam,
     ];
 
     pub fn label(self) -> &'static str {
@@ -43,6 +73,16 @@ impl Recipe {
             Recipe::MissGlitch => "Miss glitch",
             Recipe::EchoTrail => "Kiai echo trail",
             Recipe::SectionSweep => "Section sweep",
+            Recipe::KiaiWash => "Kiai colour wash",
+            Recipe::RollShake => "Drumroll shake",
+            Recipe::BreathingVignette => "Breathing vignette",
+            Recipe::BuildUp => "Build-up between marks",
+            Recipe::BarFlip => "Half turn every 4 bars",
+            Recipe::ComboMilestone => "Combo milestone flash",
+            Recipe::AccuracyTint => "Accuracy tint",
+            Recipe::HitJitter => "Hit jitter",
+            Recipe::KiaiSpin => "Kiai spin",
+            Recipe::BigNoteSlam => "Big note slam",
         }
     }
 
@@ -65,6 +105,30 @@ impl Recipe {
             Recipe::SectionSweep => {
                 "The playfield turns once, from mark 1 to mark 2 (place the marks with M)."
             }
+            Recipe::KiaiWash => {
+                "In kiai the playfield gets a colour wash whose hue drifts round and round."
+            }
+            Recipe::RollShake => "Each drumroll shakes the playfield when it arrives.",
+            Recipe::BreathingVignette => {
+                "The dark edges of the screen swell and fade, once every 4 beats."
+            }
+            Recipe::BuildUp => {
+                "From mark 1 to mark 2 the zoom and the white glare build up, slowly at first and then fast (place the marks with M)."
+            }
+            Recipe::BarFlip => {
+                "Every 16 beats (4 bars of 4/4) the playfield turns half a revolution, and back at the next."
+            }
+            Recipe::ComboMilestone => {
+                "Every 50 combo the screen flashes and the zoom kicks. Change the number in the first node."
+            }
+            Recipe::AccuracyTint => {
+                "A red wash that grows as the accuracy falls: clean play stays clear."
+            }
+            Recipe::HitJitter => "Every hit gives the playfield a tiny jolt.",
+            Recipe::KiaiSpin => "The moment kiai starts the playfield turns one full revolution.",
+            Recipe::BigNoteSlam => {
+                "Each finisher slams the same way: a zoom kick, a hard shake and a colour split."
+            }
         }
     }
 
@@ -77,6 +141,16 @@ impl Recipe {
             Recipe::MissGlitch => 3,
             Recipe::EchoTrail => 4,
             Recipe::SectionSweep => 2,
+            Recipe::KiaiWash => 4,
+            Recipe::RollShake => 2,
+            Recipe::BreathingVignette => 3,
+            Recipe::BuildUp => 4,
+            Recipe::BarFlip => 2,
+            Recipe::ComboMilestone => 3,
+            Recipe::AccuracyTint => 5,
+            Recipe::HitJitter => 2,
+            Recipe::KiaiSpin => 2,
+            Recipe::BigNoteSlam => 4,
         }
     }
 
@@ -228,6 +302,153 @@ impl Recipe {
                     &[s],
                 );
             }
+            Recipe::KiaiWash => {
+                let k = put(g, 0.0, 0.0, Kind::Kiai, &[], None, &[]);
+                put(
+                    g,
+                    1.0,
+                    0.0,
+                    Kind::Drive,
+                    &[0.35],
+                    field(FieldProp::Wash),
+                    &[k],
+                );
+                let w = put(g, 0.0, 1.0, Kind::Wave, &[8.0, 180.0, 1.0], None, &[]);
+                put(
+                    g,
+                    1.0,
+                    1.0,
+                    Kind::Drive,
+                    &[1.0],
+                    field(FieldProp::WashHue),
+                    &[w],
+                );
+            }
+            Recipe::RollShake => {
+                let n = put(g, 0.0, 0.0, Kind::OnNoteReach, &[0.0, 4.0, 0.0], None, &[]);
+                put(g, 1.0, 0.0, Kind::Shake, &[10.0, 250.0], None, &[n]);
+            }
+            Recipe::BreathingVignette => {
+                let w = put(g, 0.0, 0.0, Kind::Wave, &[4.0, 1.0, 0.0], None, &[]);
+                let m = put(g, 1.0, 0.0, Kind::Map, &[0.5, 0.5], None, &[w]);
+                put(
+                    g,
+                    2.0,
+                    0.0,
+                    Kind::Drive,
+                    &[0.45],
+                    field(FieldProp::Vignette),
+                    &[m],
+                );
+            }
+            Recipe::BuildUp => {
+                let s = put(g, 0.0, 0.0, Kind::Span, &[1.0, 2.0], None, &[]);
+                let p = put(g, 1.0, 0.0, Kind::Pow, &[2.5], None, &[s]);
+                put(
+                    g,
+                    2.0,
+                    -0.5,
+                    Kind::Drive,
+                    &[0.3],
+                    field(FieldProp::Zoom),
+                    &[p],
+                );
+                put(
+                    g,
+                    2.0,
+                    0.5,
+                    Kind::Drive,
+                    &[0.6],
+                    field(FieldProp::Flash),
+                    &[p],
+                );
+            }
+            Recipe::BarFlip => {
+                let b = put(g, 0.0, 0.0, Kind::OnBeat, &[16.0, 0.0], None, &[]);
+                put(
+                    g,
+                    1.0,
+                    0.0,
+                    Kind::Tween,
+                    &[180.0, 600.0],
+                    field(FieldProp::Rotation),
+                    &[b],
+                );
+            }
+            Recipe::ComboMilestone => {
+                let c = put(g, 0.0, 0.0, Kind::OnCombo, &[50.0], None, &[]);
+                put(
+                    g,
+                    1.0,
+                    -0.5,
+                    Kind::Pulse,
+                    &[0.5, 400.0],
+                    field(FieldProp::Flash),
+                    &[c],
+                );
+                put(
+                    g,
+                    1.0,
+                    0.5,
+                    Kind::Pulse,
+                    &[0.08, 350.0],
+                    field(FieldProp::Zoom),
+                    &[c],
+                );
+            }
+            Recipe::AccuracyTint => {
+                let one = put(g, 0.0, 0.0, Kind::Const, &[1.0], None, &[]);
+                let acc = put(g, 0.0, 1.0, Kind::Accuracy, &[], None, &[]);
+                let miss = put(g, 1.0, 0.5, Kind::Sub, &[], None, &[one, acc]);
+                let scaled = put(g, 2.0, 0.5, Kind::Map, &[4.0, 0.0], None, &[miss]);
+                put(
+                    g,
+                    3.0,
+                    0.5,
+                    Kind::Drive,
+                    &[1.0],
+                    field(FieldProp::Wash),
+                    &[scaled],
+                );
+            }
+            Recipe::HitJitter => {
+                let h = put(g, 0.0, 0.0, Kind::OnHit, &[0.0, 0.0, 0.0], None, &[]);
+                put(g, 1.0, 0.0, Kind::Shake, &[5.0, 150.0], None, &[h]);
+            }
+            Recipe::KiaiSpin => {
+                let k = put(g, 0.0, 0.0, Kind::OnKiaiStart, &[], None, &[]);
+                put(
+                    g,
+                    1.0,
+                    0.0,
+                    Kind::Tween,
+                    &[360.0, 1200.0],
+                    field(FieldProp::Rotation),
+                    &[k],
+                );
+            }
+            Recipe::BigNoteSlam => {
+                let n = put(g, 0.0, 0.0, Kind::OnNoteReach, &[0.0, 3.0, 0.0], None, &[]);
+                put(
+                    g,
+                    1.0,
+                    -0.5,
+                    Kind::Pulse,
+                    &[0.35, 400.0],
+                    field(FieldProp::Zoom),
+                    &[n],
+                );
+                put(g, 1.0, 0.5, Kind::Shake, &[30.0, 350.0], None, &[n]);
+                put(
+                    g,
+                    1.0,
+                    1.5,
+                    Kind::Pulse,
+                    &[12.0, 300.0],
+                    field(FieldProp::Chroma),
+                    &[n],
+                );
+            }
         }
         debug_assert_eq!(ids.len(), self.size());
         Ok(ids)
@@ -281,6 +502,50 @@ mod tests {
         }
         assert!(Recipe::BeatPulse.add(&mut full, 0.0, 0.0).is_err());
         assert_eq!(full.nodes.len(), MAX_NODES);
+    }
+
+    #[test]
+    fn the_build_up_climbs_between_its_marks_and_the_slam_hits_only_finishers() {
+        use crate::tko::gimmick::{Gimmick, Mark};
+        use crate::tko::runtime::{NoteClass, NoteInfo, Runtime};
+        use std::sync::Arc;
+        let mark = |time| Mark {
+            name: String::new(),
+            time,
+        };
+        let mut gm = Gimmick {
+            marks: vec![mark(1000.0), mark(5000.0)],
+            ..Gimmick::default()
+        };
+        Recipe::BuildUp.add(&mut gm.graph, 0.0, 0.0).unwrap();
+        gm.sanitize();
+        let mut rt = Runtime::with_beats(Arc::new(gm), std::iter::empty(), 0.0, &[]);
+        let zoom = |rt: &mut Runtime, t: f64| {
+            rt.prepare(t);
+            rt.field(t).zoom - 1.0
+        };
+        let (before, early, late, after) = (
+            zoom(&mut rt, 500.0),
+            zoom(&mut rt, 2000.0),
+            zoom(&mut rt, 4500.0),
+            zoom(&mut rt, 8000.0),
+        );
+        assert!(before.abs() < 1e-9, "{before}");
+        assert!(early > 0.0 && late > early, "{early} {late}");
+        assert!(late - early > early, "slowly, then fast: {early} {late}");
+        assert!(after >= late, "it stays built up: {after}");
+        // The slam kicks the zoom on a finisher and not on a plain note.
+        let mut gm = Gimmick::default();
+        Recipe::BigNoteSlam.add(&mut gm.graph, 0.0, 0.0).unwrap();
+        gm.sanitize();
+        let notes = [(1000.0, false), (3000.0, true)].map(|(time, big)| NoteInfo {
+            time,
+            class: NoteClass::Don,
+            big,
+        });
+        let mut rt = Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, &[]);
+        assert!(zoom(&mut rt, 1050.0).abs() < 1e-9, "a plain note");
+        assert!(zoom(&mut rt, 3050.0) > 0.1, "a finisher");
     }
 
     #[test]

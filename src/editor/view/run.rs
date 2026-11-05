@@ -345,6 +345,7 @@ impl View {
             }
             Cmd::Mode(m) => self.set_mode(m),
             Cmd::Tour => self.start_tour(),
+            Cmd::Manual => self.open_manual(),
             Cmd::Shortcuts => {
                 self.sheet = !self.sheet;
             }

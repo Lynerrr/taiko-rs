@@ -103,7 +103,7 @@ pub const MENUS: &[Menu] = &[
     },
     Menu {
         name: "Help",
-        items: &[Do(Cmd::Tour), Do(Cmd::Shortcuts)],
+        items: &[Do(Cmd::Manual), Do(Cmd::Tour), Do(Cmd::Shortcuts)],
     },
 ];
 

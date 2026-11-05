@@ -2,6 +2,7 @@
 //! open: boxes for events, logic, values and actions, wires between their ports, dragged the way
 //! a node editor is. Everything here edits `Graph` through the editor, one undo step each.
 
+use super::chrome::wrap;
 use super::{Btn, Drag, Mode, View, inside};
 use crate::render::{Canvas, rgba};
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
@@ -366,6 +367,21 @@ impl View {
                 [nx, ny, nw, HEAD * z],
                 format!("{}\n{}", n.kind.label(), n.kind.about()),
             ));
+            // A node that can't do anything yet wears a red "!" with the reason as its tip.
+            if let Some(why) = graph.problem(n.id) {
+                let s = (HEAD * z - 3.0).max(6.0);
+                let (bx, by) = (nx + nw - s - 2.0, ny + 1.5);
+                c.rect(bx, by, s, s, rgba(0xE2463C, 1.0));
+                c.text_centered(
+                    bx + s / 2.0,
+                    by + (s - 6.0) / 2.0,
+                    6.0,
+                    rgba(0xffffff, 1.0),
+                    "!",
+                );
+                self.tips
+                    .push(([bx, by, s, s], format!("Does nothing yet\n{why}")));
+            }
             if z < ZOOM_BLOCKS {
                 continue;
             }
@@ -466,6 +482,63 @@ impl View {
             "drag: move   dot to dot: wire   right-click: delete   wheel: zoom   drag empty: pan"
         };
         c.text(x + 4.0, y + h - 9.0, 6.0, rgba(0x6a6a80, 1.0), hint);
+        self.draw_first_steps(c, &graph);
+    }
+
+    /// A card over the canvas with the first steps of a first effect, each ticked off as it is
+    /// done. It goes away once all four are, or when the graph has grown past a first try.
+    fn draw_first_steps(&mut self, c: &mut Canvas, graph: &crate::tko::graph::Graph) {
+        let steps = graph.first_steps();
+        if steps.iter().all(|s| s.0) || graph.nodes.len() > 6 {
+            return;
+        }
+        let [x, y, w, _] = self.layout.nodes;
+        let cw = (w - 16.0).min(330.0);
+        let ch = 14.0 + steps.len() as f32 * 11.0 + 14.0;
+        let (cx, cy) = (x + w - cw - 8.0, y + 8.0);
+        c.round_rect(
+            [cx, cy],
+            [cw, ch],
+            3.0,
+            rgba(0x0c0c12, 0.92),
+            rgba(0x4a4a68, 1.0),
+            1.0,
+        );
+        c.text(
+            cx + 8.0,
+            cy + 5.0,
+            6.5,
+            rgba(0xffffff, 1.0),
+            "Your first effect",
+        );
+        for (i, (done, text)) in steps.iter().enumerate() {
+            let ty = cy + 17.0 + i as f32 * 11.0;
+            c.text(
+                cx + 8.0,
+                ty,
+                6.0,
+                rgba(if *done { 0x6fdc8c } else { 0x9a9ab0 }, 1.0),
+                &if *done {
+                    "OK".to_string()
+                } else {
+                    (i + 1).to_string()
+                },
+            );
+            c.text(
+                cx + 24.0,
+                ty,
+                6.0,
+                rgba(if *done { 0x6fdc8c } else { 0xd0d0e0 }, 1.0),
+                &Canvas::fit(6.0, cw - 32.0, text),
+            );
+        }
+        c.text(
+            cx + 8.0,
+            cy + ch - 11.0,
+            5.5,
+            rgba(0x7a7a90, 1.0),
+            "Then press Space: the playfield breathes. Help > Manual explains every node.",
+        );
     }
 
     /// The thin strip above the canvas: where the playhead is, and a click moves it.
@@ -517,7 +590,10 @@ impl View {
         let (x, y) = (cx + 8.0, cy + 8.0);
         let h = match pick {
             Pick::Target => 190.0,
-            Pick::Recipe => 14.0 + Recipe::ALL.len() as f32 * 26.0,
+            Pick::Recipe => {
+                let cols = ((w - 16.0) / 158.0).floor().max(1.0) as usize;
+                16.0 + Recipe::ALL.len().div_ceil(cols) as f32 * 22.0 + 30.0
+            }
         };
         c.round_rect(
             [x, y],
@@ -529,20 +605,30 @@ impl View {
         );
         match pick {
             Pick::Recipe => {
-                let mut ry = y + 8.0;
-                for r in Recipe::ALL {
-                    let rect = [x + 8.0, ry, 130.0, 18.0];
-                    self.button(c, rect, r.label(), Btn::N(NAct::AddRecipe(r)), false);
-                    self.tips
-                        .push((rect, format!("{}\n{}", r.label(), r.about())));
-                    c.text(
-                        x + 146.0,
-                        ry + 6.0,
-                        6.0,
-                        rgba(0x9a9ab0, 1.0),
-                        &Canvas::fit(6.0, w - 156.0, r.about()),
-                    );
-                    ry += 26.0;
+                // A grid of buttons; the one under the pointer says what it does below.
+                let cols = ((w - 16.0) / 158.0).floor().max(1.0) as usize;
+                let rows = Recipe::ALL.len().div_ceil(cols);
+                let mut said = None;
+                for (i, r) in Recipe::ALL.iter().enumerate() {
+                    let (col, row) = (i % cols, i / cols);
+                    let rect = [
+                        x + 8.0 + col as f32 * 158.0,
+                        y + 8.0 + row as f32 * 22.0,
+                        150.0,
+                        18.0,
+                    ];
+                    self.button(c, rect, r.label(), Btn::N(NAct::AddRecipe(*r)), false);
+                    if c.hovered(rect[0], rect[1], rect[2], rect[3]) {
+                        said = Some(*r);
+                    }
+                }
+                let line = said.map_or(
+                    "Pick one: its nodes are added, wired, and can be edited after.".to_string(),
+                    |r| r.about().to_string(),
+                );
+                let ty = y + 14.0 + rows as f32 * 22.0;
+                for (i, l) in wrap(6.0, w - 16.0, &line).iter().take(2).enumerate() {
+                    c.text(x + 8.0, ty + i as f32 * 8.0, 6.0, rgba(0x9a9ab0, 1.0), l);
                 }
             }
             Pick::Target => {
@@ -730,6 +816,17 @@ impl View {
         );
         y += 10.0;
         y = self.paragraph(c, x, y, inner, 6.0, 0x9a9ab0, n.kind.about());
+        if let Some(why) = self.ed.gimmick().and_then(|g| g.graph.problem(n.id)) {
+            y = self.paragraph(
+                c,
+                x,
+                y,
+                inner,
+                6.0,
+                0xE2463C,
+                &format!("Does nothing yet: {why}"),
+            );
+        }
         let wide = inner.min(300.0);
         for (i, d) in n.kind.params().iter().enumerate() {
             let typing = self.n_typing.as_ref().filter(|(k, _)| *k == i);

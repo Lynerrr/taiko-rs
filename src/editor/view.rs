@@ -27,6 +27,8 @@ mod curves;
 mod help;
 mod keys;
 mod lines;
+mod manual;
+mod manual_text;
 mod menu;
 mod nodes;
 mod panel;
@@ -102,6 +104,8 @@ pub enum Btn {
     C(Cmd),
     /// The upload window.
     U(upload::UpAct),
+    /// The manual.
+    Man(manual::ManAct),
     /// Opens or closes the menu at this position of the bar.
     Menu(usize),
     TourNext,
@@ -283,6 +287,8 @@ enum Modal {
     Leave,
     /// Sending the map to taiko.rs.
     Upload,
+    /// The manual.
+    Manual,
 }
 
 pub struct View {
@@ -349,6 +355,8 @@ pub struct View {
     modal: Option<Modal>,
     /// The upload window's state.
     upload: upload::UploadUi,
+    /// The manual's chapter and scroll.
+    manual: manual::ManualUi,
     /// The game's token, when logged in to taiko.rs (set by the screen).
     pub account: Option<String>,
     /// Set when the editor should close (the screen asks `take_exit`).
@@ -466,6 +474,7 @@ impl View {
             menu: None,
             modal: None,
             upload: upload::UploadUi::default(),
+            manual: manual::ManualUi::default(),
             account: None,
             exit: false,
             sheet: false,
@@ -2009,6 +2018,10 @@ impl View {
 
     pub fn wheel(&mut self, notches: i32, keys: Keys) {
         let (mx, my) = self.mouse;
+        if self.modal == Some(Modal::Manual) {
+            self.manual_scroll(-notches * 3);
+            return;
+        }
         if self.sheet || self.modal.is_some() || self.tour.is_some() {
             return;
         }
@@ -2172,6 +2185,7 @@ impl View {
         match b {
             Btn::C(cmd) => self.run(cmd, audio),
             Btn::U(act) => self.press_upload(act),
+            Btn::Man(act) => self.press_manual(act, audio),
             Btn::Menu(i) => self.menu = if self.menu == Some(i) { None } else { Some(i) },
             Btn::TourNext => {
                 let at = self.tour.unwrap_or(0);
@@ -2372,6 +2386,19 @@ impl View {
                     KeyCode::ArrowLeft => self.press(Btn::TourBack, keys, audio),
                     _ => {}
                 }
+            }
+            return KeyResult::Handled;
+        }
+        if self.modal == Some(Modal::Manual) {
+            let page = self.manual_page();
+            match code {
+                KeyCode::ArrowDown => self.manual_scroll(1),
+                KeyCode::ArrowUp => self.manual_scroll(-1),
+                KeyCode::PageDown | KeyCode::Space => self.manual_scroll(page),
+                KeyCode::PageUp => self.manual_scroll(-page),
+                KeyCode::Home => self.manual_scroll(i32::MIN / 2),
+                KeyCode::End => self.manual_scroll(i32::MAX / 2),
+                _ => {}
             }
             return KeyResult::Handled;
         }
@@ -2847,6 +2874,77 @@ mod tests {
         draw(&mut v);
         click(&mut v, 300.0, 470.0);
         assert!(v.svt.drop.is_none());
+    }
+
+    #[test]
+    fn the_manual_opens_from_the_help_menu_scrolls_and_shows_every_chapter() {
+        use crate::lang::{self, Lang};
+        let mut v = view();
+        assert!(menu::MENUS.iter().any(|m| {
+            m.name == "Help"
+                && m.items
+                    .iter()
+                    .any(|i| matches!(i, menu::Item::Do(Cmd::Manual)))
+        }));
+        press(&mut v, Btn::C(Cmd::Manual));
+        assert_eq!(v.modal, Some(Modal::Manual));
+        for language in [Lang::En, Lang::Ru] {
+            lang::set(language);
+            for i in 0..manual_text::COUNT {
+                press(&mut v, Btn::Man(manual::ManAct::Chapter(i as u8)));
+                draw(&mut v);
+                assert_eq!(v.manual.scroll, 0, "a new chapter starts at the top");
+            }
+        }
+        lang::set(Lang::En);
+        // The long chapter scrolls, and not past its end or above its start.
+        press(&mut v, Btn::Man(manual::ManAct::Chapter(6)));
+        draw(&mut v);
+        v.wheel(-2, Keys::default());
+        assert!(v.manual.scroll > 0);
+        v.wheel(1000, Keys::default());
+        assert_eq!(v.manual.scroll, 0);
+        v.wheel(-1000, Keys::default());
+        draw(&mut v);
+        let end = v.manual.scroll;
+        v.wheel(-5, Keys::default());
+        assert_eq!(v.manual.scroll, end);
+        // Esc closes it; a "try it" button closes it too and goes there.
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.modal.is_none());
+        press(&mut v, Btn::C(Cmd::Manual));
+        press(&mut v, Btn::Man(manual::ManAct::Chapter(1)));
+        press(&mut v, Btn::Man(manual::ManAct::Try));
+        assert!(
+            v.modal.is_none() && v.windowed(),
+            "the timing window opened"
+        );
+    }
+
+    #[test]
+    fn every_sv_preset_sets_where_and_how_it_writes() {
+        let mut v = view();
+        press(&mut v, Btn::S(SAct::Tab(1)));
+        for i in 0..curves::PRESET_COUNT {
+            press(&mut v, Btn::S(SAct::Preset(i as u8)));
+            let p = &v.svt.params;
+            assert!(p.write_sv, "{i}");
+            assert!(
+                p.lines != p.hits,
+                "{i}: written on lines or on notes, not both"
+            );
+        }
+        press(&mut v, Btn::S(SAct::Preset(4)));
+        assert!(matches!(
+            v.svt.params.shape,
+            crate::editor::svt::Shape::Between(crate::editor::sv_curves::Curve::Exp(n)) if n > 1.0
+        ));
+        press(&mut v, Btn::S(SAct::Preset(9)));
+        assert!(v.svt.params.hits);
+        // A number past the list does nothing.
+        press(&mut v, Btn::S(SAct::Preset(200)));
+        assert!(v.svt.params.hits);
+        draw(&mut v);
     }
 
     #[test]
@@ -3838,6 +3936,9 @@ mod tests {
             draw(&mut v);
             v.modal = None;
             v.open_upload();
+            draw(&mut v);
+            v.modal = None;
+            v.open_manual();
             draw(&mut v);
             v.modal = None;
         }

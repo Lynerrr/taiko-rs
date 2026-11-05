@@ -444,6 +444,72 @@ impl Graph {
         self.nodes.is_empty()
     }
 
+    /// Why node `id` can't do anything yet, in words for the editor; None when it is fine.
+    /// A target that is missing, a first input nothing feeds, an output nothing uses.
+    pub fn problem(&self, id: u32) -> Option<String> {
+        let n = self.node(id)?;
+        if n.kind.needs_target() && n.target.is_none() {
+            return Some("No target yet: pick what it moves in the list on the right.".into());
+        }
+        let wired = |port: usize| n.inputs.get(port).copied().flatten().is_some();
+        let inputs = n.kind.inputs();
+        if n.kind == Kind::Merge {
+            if !wired(0) && !wired(1) {
+                return Some("Nothing comes in: wire an event into 'a' or 'b'.".into());
+            }
+        } else if let Some((name, port)) = inputs.first()
+            && !wired(0)
+        {
+            return Some(match port {
+                Port::Trigger => {
+                    format!("Nothing sets it off: wire an event (orange dot) into '{name}'.")
+                }
+                Port::Number => {
+                    format!("Nothing feeds it: wire a number (cyan dot) into '{name}'.")
+                }
+            });
+        }
+        if n.kind.output().is_some() && !self.nodes.iter().any(|m| m.inputs.contains(&Some(id))) {
+            return Some("Nothing uses its output: wire it into another node.".into());
+        }
+        None
+    }
+
+    /// How many nodes can't do anything yet.
+    pub fn problem_count(&self) -> usize {
+        self.nodes
+            .iter()
+            .filter(|n| self.problem(n.id).is_some())
+            .count()
+    }
+
+    /// The first steps of a first effect, each with whether the graph has got that far.
+    pub fn first_steps(&self) -> [(bool, &'static str); 4] {
+        let has = |f: &dyn Fn(&Node) -> bool| self.nodes.iter().any(f);
+        let event = has(&|n| n.kind.category() == Category::Event);
+        let action = has(&|n| n.kind.is_action());
+        let wired = has(&|n| {
+            n.kind.is_action()
+                && n.inputs.first().copied().flatten().is_some_and(|src| {
+                    self.node(src)
+                        .is_some_and(|s| s.kind.category() == Category::Event)
+                })
+        });
+        let aimed = has(&|n| n.kind.is_action() && (!n.kind.needs_target() || n.target.is_some()));
+        [
+            (event, "Add an event: click \"+ Every beat\" on the right"),
+            (action, "Add an action: click \"+ Pulse\""),
+            (
+                wired,
+                "Wire them: drag from the event's right dot to the action's \"on\" dot",
+            ),
+            (
+                aimed,
+                "Pick the action's target, for example Zoom, in the list on the right",
+            ),
+        ]
+    }
+
     pub fn node(&self, id: u32) -> Option<&Node> {
         self.nodes.iter().find(|n| n.id == id)
     }
@@ -627,6 +693,44 @@ impl Graph {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nodes_that_do_nothing_say_why() {
+        let mut g = Graph::default();
+        let beat = g.add(Kind::OnBeat, 0.0, 0.0).unwrap();
+        let pulse = g.add(Kind::Pulse, 100.0, 0.0).unwrap();
+        // The event goes nowhere; the action has no event and no target.
+        assert!(g.problem(beat).unwrap().contains("Nothing uses"));
+        assert!(g.problem(pulse).unwrap().contains("No target"));
+        g.node_mut(pulse).unwrap().target = Some(Target::Field(FieldProp::Zoom));
+        assert!(g.problem(pulse).unwrap().contains("Nothing sets it off"));
+        g.connect(beat, pulse, 0).unwrap();
+        assert_eq!((g.problem(beat), g.problem(pulse)), (None, None));
+        assert_eq!(g.problem_count(), 0);
+        // A drive wants a number.
+        let drive = g.add(Kind::Drive, 0.0, 80.0).unwrap();
+        g.node_mut(drive).unwrap().target = Some(Target::Field(FieldProp::Zoom));
+        assert!(g.problem(drive).unwrap().contains("Nothing feeds it"));
+        // Either input of "Either" will do.
+        let merge = g.add(Kind::Merge, 0.0, 160.0).unwrap();
+        assert!(g.problem(merge).unwrap().contains("Nothing comes in"));
+        assert_eq!(g.problem(999), None);
+    }
+
+    #[test]
+    fn the_first_steps_tick_off_as_the_graph_grows() {
+        let mut g = Graph::default();
+        let done = |g: &Graph| g.first_steps().iter().filter(|s| s.0).count();
+        assert_eq!(done(&g), 0);
+        let beat = g.add(Kind::OnBeat, 0.0, 0.0).unwrap();
+        assert_eq!(done(&g), 1);
+        let pulse = g.add(Kind::Pulse, 100.0, 0.0).unwrap();
+        assert_eq!(done(&g), 2);
+        g.connect(beat, pulse, 0).unwrap();
+        assert_eq!(done(&g), 3);
+        g.node_mut(pulse).unwrap().target = Some(Target::Field(FieldProp::Zoom));
+        assert_eq!(done(&g), 4);
+    }
+
     use super::*;
 
     #[test]

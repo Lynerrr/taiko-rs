@@ -107,6 +107,7 @@ pub enum Cmd {
     // The editor itself.
     Mode(Mode),
     Tour,
+    Manual,
     Shortcuts,
     // Answers to the "unsaved changes" question.
     LeaveSave,
@@ -170,6 +171,7 @@ impl Cmd {
             Cmd::TimingList => "Timing window (all lines, their fields, the SV tool)",
             Cmd::Mode(m) => m.name(),
             Cmd::Tour => "Take the tour",
+            Cmd::Manual => "Manual",
             Cmd::Shortcuts => "Keyboard shortcuts",
             Cmd::LeaveSave => "Save and exit",
             Cmd::LeaveDiscard => "Exit without saving",
@@ -231,6 +233,7 @@ impl Cmd {
             Cmd::TimingList => "Every red and green line in a table.",
             Cmd::Mode(m) => m.about(),
             Cmd::Tour => "A short walk through the editor.",
+            Cmd::Manual => "How to time a song, use the SV tool and nodes, and upload a map.",
             Cmd::Shortcuts => "Every key and mouse action in one sheet.",
             Cmd::LeaveSave | Cmd::LeaveDiscard | Cmd::Stay => "",
         }
