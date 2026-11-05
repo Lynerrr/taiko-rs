@@ -1197,18 +1197,43 @@ fn ranking_row(r: &Ranked) -> String {
     )
 }
 
-pub fn rankings(rows: &[Ranked]) -> String {
+/// Links between a page's usual board and its Relax one.
+fn board_tabs(usual: &str, relax_link: &str, relax: bool) -> String {
+    let on = |yes: bool| if yes { " on" } else { "" };
+    format!(
+        "<div class=boards><a class=\"btn small{}\" href=\"{usual}\">Standard</a><a class=\"btn small{}\" href=\"{relax_link}\">Relax</a></div>",
+        on(!relax),
+        on(relax)
+    )
+}
+
+pub fn rankings(rows: &[Ranked], relax: bool) -> String {
     let body: String = rows.iter().map(ranking_row).collect();
     let table = if body.is_empty() {
-        "<p class=dim>Nobody has sent a play yet.</p>".into()
+        format!(
+            "<p class=dim>Nobody has sent a{} play yet.</p>",
+            if relax { " Relax" } else { "" }
+        )
     } else {
         format!(
             "<div class=scroll><table class=list>{}<tbody>{body}</tbody></table></div>",
             ranking_head()
         )
     };
+    let (title, lead) = if relax {
+        (
+            "RELAX RANKINGS",
+            "Everyone by total Relax pp, which counts apart from the usual total.",
+        )
+    } else {
+        (
+            "RANKINGS",
+            "Everyone by total pp, the best play counting most (osu!'s 95% weighting).",
+        )
+    };
+    let tabs = board_tabs("/rankings", "/rankings/relax", relax);
     format!(
-        "<div class=band><div class=inner><h1 class=glitch data-text=\"RANKINGS\">RANKINGS</h1><p class=dim>Everyone by total pp, the best play counting most (osu!'s 95% weighting).</p></div></div><div class=page><section class=panel>{table}</section></div>"
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"{title}\">{title}</h1><p class=dim>{lead}</p></div></div><div class=page>{tabs}<section class=panel>{table}</section></div>"
     )
 }
 
@@ -1378,6 +1403,30 @@ pub fn profile(
             .map(|(i, s)| play_row(s, Some(i), false))
             .collect::<String>()
     };
+    // Relax counts apart, so only those who play it get the panel.
+    let relax = if p.relax.plays == 0 {
+        String::new()
+    } else {
+        let place = p.relax.rank.map_or_else(
+            || "unranked".to_string(),
+            |r| format!("#{}", thousands(r as u64)),
+        );
+        let rows = if p.relax.top.is_empty() {
+            "<p class=dim>No performance records yet.</p>".to_string()
+        } else {
+            p.relax
+                .top
+                .iter()
+                .enumerate()
+                .map(|(i, s)| play_row(s, Some(i), false))
+                .collect()
+        };
+        format!(
+            "<section class=panel><div class=panel-head><h2>RELAX</h2><a class=more href=\"/rankings/relax\">{place} / {:.0}pp / {} plays</a></div>{rows}</section>",
+            p.relax.pp + 0.0,
+            thousands(p.relax.plays as u64)
+        )
+    };
     let firsts = if p.firsts.is_empty() {
         "<p class=dim>No first place ranks yet.</p>".into()
     } else {
@@ -1404,7 +1453,7 @@ pub fn profile(
          <div class=hudrow>{stats}</div>\
          <div class=cols-side><div class=main>\
              <section class=panel><div class=panel-head><h2>PP HISTORY</h2></div>{}</section>\
-             <section class=panel><div class=panel-head><h2>BEST PERFORMANCE</h2></div>{best}</section>\
+             <section class=panel><div class=panel-head><h2>BEST PERFORMANCE</h2></div>{best}</section>{relax}\
              <section class=panel><div class=panel-head><h2>FIRST PLACE RANKS <span class=count>{}</span></h2></div>{firsts}</section>\
              <section class=panel><div class=panel-head><h2>RECENT PLAYS</h2></div>{recent}</section>\
            </div><aside class=side>\
@@ -1554,7 +1603,7 @@ pub fn score_page(
     )
 }
 
-pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
+pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love, relax: bool) -> String {
     let (song, version) = split_map(&m.name);
     let (artist, title) = split_song(song);
     // A custom map has no osu! page: its own page and its status stand there.
@@ -1608,9 +1657,14 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
         thousands(m.plays as u64),
         m.players
     );
+    let tabs = board_tabs(
+        &format!("/m/{:x}", m.hash),
+        &format!("/m/{:x}/relax", m.hash),
+        relax,
+    );
     let Some(first) = rows.first() else {
         return format!(
-            "{head}<div class=page>{notice}<section class=panel><p class=dim>No scores yet.</p></section></div>"
+            "{head}<div class=page>{notice}{tabs}<section class=panel><p class=dim>No scores yet.</p></section></div>"
         );
     };
     let mods = if first.mods.is_empty() && (first.rate - 1.0).abs() < 1e-6 {
@@ -1660,7 +1714,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love) -> String {
         })
         .collect();
     format!(
-        "{head}<div class=page>{notice}{top}<section class=panel><div class=scroll><table class=list><thead><tr><th>Rank</th><th></th><th>Score</th><th>Acc</th><th>Player</th><th class=wide>Combo</th><th class=wide>Great</th><th class=wide>Ok</th><th class=wide>Miss</th><th>pp</th><th class=wide>Mods</th><th></th></tr></thead><tbody>{body}</tbody></table></div></section></div>"
+        "{head}<div class=page>{notice}{tabs}{top}<section class=panel><div class=scroll><table class=list><thead><tr><th>Rank</th><th></th><th>Score</th><th>Acc</th><th>Player</th><th class=wide>Combo</th><th class=wide>Great</th><th class=wide>Ok</th><th class=wide>Miss</th><th>pp</th><th class=wide>Mods</th><th></th></tr></thead><tbody>{body}</tbody></table></div></section></div>"
     )
 }
 
@@ -2353,7 +2407,7 @@ nav input::placeholder{color:var(--dim2)}nav input:focus{outline:none;border-col
 .btn{display:inline-flex;align-items:center;min-height:44px;padding:0 20px;background:var(--panel2);border:2px solid var(--line2);color:var(--white)!important;transition:border-color .12s,background .12s,transform .12s}
 .btn:hover{border-color:var(--acc);background:#2a1c22}.btn:active{transform:translateY(2px)}
 .btn.hot{background:var(--acc);border-color:var(--acc);font-size:24px;min-height:52px;padding:0 28px;box-shadow:4px 4px 0 #6b1d12}
-.btn.hot:hover{background:#ff5a3d;border-color:#ff5a3d}.btn.small{min-height:32px;padding:0 12px}.hint{color:var(--dim);margin-top:10px}
+.btn.hot:hover{background:#ff5a3d;border-color:#ff5a3d}.btn.small{min-height:32px;padding:0 12px}.btn.small.on{background:var(--acc);border-color:var(--acc)}.boards{display:flex;gap:8px;margin-bottom:12px}.hint{color:var(--dim);margin-top:10px}
 /* The glitch the logo has: the red and the blue slipping off the white. */
 .glitch{position:relative;display:inline-block;color:var(--white);text-shadow:-3px 0 var(--don),3px 0 var(--katl)}
 .glitch:before,.glitch:after{content:attr(data-text);position:absolute;inset:0;pointer-events:none}

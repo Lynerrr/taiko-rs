@@ -538,7 +538,9 @@ impl Mod {
             Flashlight => "Only a circle around the drum is lit; it shrinks at 100 and 200 combo.",
             Precise => "OD +2.",
             GreatOrNothing => "An OK counts as a miss (but doesn't fail you).",
-            Relax => "Colours don't matter: any key hits any note.",
+            Relax => {
+                "Colours don't matter: any key hits any note. Has its own leaderboards and pp."
+            }
             Autoplay => "Watch the map play itself.",
             Swap => "Dons become kats and kats become dons.",
             Random => "Every note gets a random colour.",
@@ -1076,8 +1078,14 @@ impl Mods {
     }
 
     /// Mods that make a play's score not count (no local score, replay or leaderboard row).
+    /// Relax counts, on boards and a pp total of its own (`relax`).
     pub fn unranked(self) -> bool {
-        self.has(Autoplay) || self.has(Relax)
+        self.has(Autoplay)
+    }
+
+    /// Whether a play goes on the Relax boards instead of the usual ones.
+    pub fn relax(self) -> bool {
+        self.has(Relax)
     }
 }
 
@@ -1241,6 +1249,21 @@ mod tests {
                 && !Mod::Hidden.shared()
                 && !Mod::Random.shared()
         );
+    }
+
+    #[test]
+    fn acronyms_are_two_letters_for_a_label_to_be_read_back() {
+        for m in ALL {
+            assert_eq!(m.acronym().len(), 2, "{}", m.acronym());
+        }
+    }
+
+    #[test]
+    fn only_autoplay_keeps_a_play_off_the_boards() {
+        assert!(Mods::parse("AT").unranked());
+        assert!(!Mods::parse("RX").unranked());
+        assert!(Mods::parse("RX").relax());
+        assert!(!Mods::parse("HD").relax());
     }
 
     #[test]

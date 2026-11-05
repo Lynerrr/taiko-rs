@@ -1058,6 +1058,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             );
             // Whether the map gives pp, so the total sent back is right.
             covers::learn(play.map.set_id);
+            let relax = play.map.mods.iter().any(|m| m == "RX");
             let mut scores = state.scores.lock().unwrap();
             match scores.submit(&key, &name, *play, now_secs()) {
                 Ok((map_rank, pp, rank)) => {
@@ -1072,6 +1073,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
                         medals.len()
                     );
                     Reply::Submitted {
+                        relax,
                         map_rank,
                         pp,
                         rank,
@@ -1081,7 +1083,14 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
                 Err(e) => Reply::Error(e),
             }
         }
-        Request::MapScores { map } => Reply::Scores(state.scores.lock().unwrap().map_scores(map)),
+        Request::MapScores { map, relax } => {
+            let scores = state.scores.lock().unwrap();
+            Reply::Scores(if relax {
+                scores.relax_map_scores(map)
+            } else {
+                scores.map_scores(map)
+            })
+        }
         Request::Medals { name } => {
             let key = name.trim().to_ascii_lowercase();
             let player = (!key.is_empty()).then_some(key.as_str());

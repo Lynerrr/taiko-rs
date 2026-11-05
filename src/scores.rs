@@ -61,7 +61,7 @@ pub struct ScoreRow {
     pub file: PathBuf,
     /// Mods, as "HDHR" ("" without).
     pub mods: String,
-    /// Performance points (None: not worked out yet, or Autoplay / Relax).
+    /// Performance points (None: not worked out yet).
     pub pp: Option<f64>,
 }
 
@@ -302,8 +302,19 @@ pub fn new_version() -> u32 {
 }
 
 /// The best scores on a map, highest first.
-pub fn top(rows: &[ScoreRow], map_hash: u64, n: usize) -> Vec<&ScoreRow> {
-    let mut v: Vec<&ScoreRow> = rows.iter().filter(|r| r.map_hash == map_hash).collect();
+impl ScoreRow {
+    /// A Relax play: on boards of its own. `mods` is a `Mods::label`, acronyms with nothing
+    /// between them, each two letters long.
+    fn relax(&self) -> bool {
+        self.mods.as_bytes().chunks(2).any(|m| m == b"RX")
+    }
+}
+
+pub fn top(rows: &[ScoreRow], map_hash: u64, n: usize, relax: bool) -> Vec<&ScoreRow> {
+    let mut v: Vec<&ScoreRow> = rows
+        .iter()
+        .filter(|r| r.map_hash == map_hash && r.relax() == relax)
+        .collect();
     v.sort_by(|a, b| b.score.cmp(&a.score).then(b.date.cmp(&a.date)));
     v.truncate(n);
     v
@@ -336,5 +347,51 @@ pub fn age(date: u64) -> String {
         3600..=86_399 => tr!("{}h", "{}時間", "{}ч"; s / 3600),
         86_400..=2_591_999 => tr!("{}d", "{}日", "{}д"; s / 86_400),
         _ => tr!("{}mo", "{}ヶ月", "{}мес"; s / 2_592_000),
+    }
+}
+
+#[cfg(test)]
+mod board_tests {
+    use super::*;
+
+    fn row(map_hash: u64, score: u64, mods: &str) -> ScoreRow {
+        ScoreRow {
+            map_hash,
+            date: 0,
+            score,
+            accuracy: 1.0,
+            max_combo: 1,
+            miss: 0,
+            rate: 1.0,
+            player: "p".into(),
+            file: PathBuf::new(),
+            mods: mods.into(),
+            pp: None,
+        }
+    }
+
+    #[test]
+    fn a_maps_local_board_keeps_relax_plays_apart() {
+        let rows = [
+            row(7, 1, ""),
+            row(7, 2, "HDRX"),
+            row(7, 3, "RX"),
+            row(8, 4, "RX"),
+        ];
+        let scores = |relax| -> Vec<u64> {
+            top(&rows, 7, usize::MAX, relax)
+                .iter()
+                .map(|r| r.score)
+                .collect()
+        };
+        assert_eq!(scores(false), [1]);
+        assert_eq!(scores(true), [3, 2]);
+    }
+
+    #[test]
+    fn relax_is_read_by_whole_acronyms() {
+        // An R ending one acronym and an X starting the next isn't Relax.
+        assert!(!row(7, 1, "PRXA").relax());
+        assert!(row(7, 1, "PRRX").relax());
     }
 }

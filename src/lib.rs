@@ -393,7 +393,9 @@ struct FrameStats {
 }
 
 type SetCheck = (u32, Receiver<Result<(bool, Vec<PathBuf>), String>>);
-type BoardFetch = (u64, Receiver<Result<Vec<online::OnlineScore>, String>>);
+/// An online leaderboard, or why there isn't one.
+type Board = Result<Vec<online::OnlineScore>, String>;
+type BoardFetch = ((u64, bool), Receiver<Board>);
 type LovedCall = (Receiver<Result<online::Reply, String>>, Option<(u32, bool)>);
 /// Custom sets known: map folder -> set number, and the numbers the server has approved.
 type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
@@ -495,6 +497,8 @@ struct State {
     /// The logged-in player's own pp total and rank online (for the account badge and the
     /// results' total), whose they are, and the fetch of them.
     me: Option<(f64, Option<u32>)>,
+    /// The same on the Relax boards, which count apart.
+    me_relax: Option<(f64, Option<u32>)>,
     me_for: String,
     me_fetch: Option<Receiver<Result<online::Profile, String>>>,
     /// The song select leaderboard shows the server's scores, not the local ones.
@@ -509,10 +513,9 @@ struct State {
     changelog: Option<changelog::View>,
     /// Update notes being fetched without opening an overlay or intercepting input.
     pending_changelog: Option<changelog::View>,
-    /// Online leaderboards fetched (by map hash: when, and the rows or why not), and the one
-    /// being fetched.
-    online_boards:
-        std::collections::HashMap<u64, (Instant, Result<Vec<online::OnlineScore>, String>)>,
+    /// Online leaderboards fetched (by map hash and whether it's the Relax board: when, and the
+    /// rows or why not), and the one being fetched.
+    online_boards: std::collections::HashMap<(u64, bool), (Instant, Board)>,
     board_fetch: Option<BoardFetch>,
     /// The replay to attach to the game being loaded.
     pending_replay: Option<scores::Replay>,
@@ -531,7 +534,7 @@ struct State {
     /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
     /// top), how far it goes, and where its rows were drawn (for the wheel).
     board_scroll: usize,
-    board_for: (u64, bool),
+    board_for: (u64, bool, bool),
     board_max: usize,
     board_rect: Option<[f32; 4]>,
     /// A song select divider being dragged: which, where the pointer started (virtual units)
@@ -990,7 +993,7 @@ fn score_video_width() -> f32 {
 
 /// The leaderboard's LOCAL / ONLINE tabs, and the map's website while that keeps clear of the
 /// rows' video buttons under it (ending at `right`); returns how wide they are.
-fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, right: f32) -> f32 {
+fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: f32) -> f32 {
     let mut tx = x;
     for (label, on) in [
         (tr!("LOCAL", "ローカル", "ЛОКАЛЬНО"), false),
@@ -1020,6 +1023,22 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, right: f32) -> f32 {
         c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
         tx += tw + 6.0;
     }
+    // With Relax on, these are its scores, which count apart.
+    if relax {
+        let label = "RELAX";
+        let tw = Canvas::text_width(7.0, label) + 10.0;
+        let h = Canvas::text_height(7.0) + 3.0;
+        c.round_rect(
+            [tx, y - 1.5],
+            [tw, h],
+            3.0,
+            rgba(0xFFD34D, 0.15),
+            rgba(0xFFD34D, 0.9),
+            1.0,
+        );
+        c.text(tx + 5.0, y + 1.5, 7.0, rgba(0xFFD34D, 1.0), label);
+        tx += tw + 6.0;
+    }
     let label = tr!("WEBSITE", "ウェブ", "САЙТ");
     let tw = Canvas::text_width(7.0, label) + 10.0;
     let h = Canvas::text_height(7.0) + 3.0;
@@ -1040,6 +1059,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, right: f32) -> f32 {
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
+#[allow(clippy::too_many_arguments)]
 fn draw_online_leaderboard(
     c: &mut Canvas,
     [x, y]: [f32; 2],
@@ -1048,8 +1068,9 @@ fn draw_online_leaderboard(
     me: &str,
     fits: usize,
     first: usize,
+    relax: bool,
 ) {
-    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true, x + w);
+    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true, relax, x + w);
     let at = x + 4.0 + tabs_w + 10.0;
     let note = match board {
         None => Some(tr!("loading...", "読み込み中...", "загрузка...").to_string()),
@@ -1161,6 +1182,7 @@ fn misses_and_age(miss: u32, date: u64) -> String {
 
 /// Local scores for the selected map, under the song select panel: `rows` from place `first`
 /// on, of `total`.
+#[allow(clippy::too_many_arguments)]
 fn draw_leaderboard(
     c: &mut Canvas,
     x: f32,
@@ -1169,8 +1191,9 @@ fn draw_leaderboard(
     rows: &[&scores::ScoreRow],
     first: usize,
     total: usize,
+    relax: bool,
 ) {
-    let label_w = board_tabs(c, x + 4.0, y + 1.0, false, x + w);
+    let label_w = board_tabs(c, x + 4.0, y + 1.0, false, relax, x + w);
     if rows.is_empty() {
         let at = x + 4.0 + label_w + 14.0;
         let none = tr!(
@@ -1591,14 +1614,20 @@ fn updating_badge(p: f32) -> String {
 }
 
 /// Fetches a map's online leaderboard on a background thread.
-fn fetch_board(server: String, map: u64) -> Receiver<Result<Vec<online::OnlineScore>, String>> {
+fn fetch_board(
+    server: String,
+    map: u64,
+    relax: bool,
+) -> Receiver<Result<Vec<online::OnlineScore>, String>> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let rows =
-            online::call(&server, online::Request::MapScores { map }).and_then(|r| match r {
-                online::Reply::Scores(rows) => Ok(rows),
-                _ => Err(crate::lang::odd_reply()),
-            });
+            online::call(&server, online::Request::MapScores { map, relax }).and_then(
+                |r| match r {
+                    online::Reply::Scores(rows) => Ok(rows),
+                    _ => Err(crate::lang::odd_reply()),
+                },
+            );
         let _ = tx.send(rows);
     });
     rx
@@ -2902,16 +2931,16 @@ impl State {
             .find(|row| row.file == file)
             .and_then(|row| row.pp);
         results.no_pp = mods.unranked().then_some(tr!(
-            "Autoplay and Relax get no pp",
-            "AutoplayとRelaxではppは付きません",
-            "Autoplay и Relax не дают pp"
+            "Autoplay gets no pp",
+            "Autoplayではppは付きません",
+            "Autoplay не даёт pp"
         ));
         results.opened = Some(ui::Opened {
             player: r.player.clone(),
             date: r.date,
             online: false,
         });
-        let all = scores::top(&self.scores, r.map_hash, usize::MAX);
+        let all = scores::top(&self.scores, r.map_hash, usize::MAX, mods.relax());
         results.rank = all
             .iter()
             .position(|row| row.file == file)
@@ -3102,9 +3131,9 @@ impl State {
         results.partial = true;
         results.pp = score.pp;
         results.no_pp = mods.unranked().then_some(tr!(
-            "Autoplay and Relax get no pp",
-            "AutoplayとRelaxではppは付きません",
-            "Autoplay и Relax не дают pp"
+            "Autoplay gets no pp",
+            "Autoplayではppは付きません",
+            "Autoplay не даёт pp"
         ));
         results.opened = Some(ui::Opened {
             player: score.player.clone(),
@@ -5649,11 +5678,15 @@ impl State {
             );
             c.hit(x, 2.0, w, 14.0, render::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
-            let (name, rest) = match (&self.mp_menu.account, self.me) {
+            // With Relax on, how they stand on its boards.
+            let relax = self.cfg.mods.relax();
+            let me = if relax { self.me_relax } else { self.me };
+            let (name, rest) = match (&self.mp_menu.account, me) {
                 (Some(name), Some((pp, rank))) => (
                     name.clone(),
                     format!(
-                        "  {pp:.0} pp{}",
+                        "  {}{pp:.0} pp{}",
+                        if relax { "RX " } else { "" },
                         rank.map(|r| format!("  #{r}")).unwrap_or_default()
                     ),
                 ),
@@ -11676,7 +11709,11 @@ impl State {
     }
 
     fn open_profile(&mut self, name: String) {
-        self.profile = Some(profile::View::open(self.cfg.online_server.clone(), name));
+        self.profile = Some(profile::View::open(
+            self.cfg.online_server.clone(),
+            name,
+            self.cfg.mods.relax(),
+        ));
     }
 
     /// Starts watching a friend's solo plays.
@@ -14277,13 +14314,14 @@ impl State {
                         let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
-                            if self.board_for != (hash, self.board_online) {
-                                self.board_for = (hash, self.board_online);
+                            let relax = self.cfg.mods.relax();
+                            if self.board_for != (hash, self.board_online, relax) {
+                                self.board_for = (hash, self.board_online, relax);
                                 self.board_scroll = 0;
                             }
                             self.board_rect = Some([x, top + 12.0, pw, fits as f32 * 18.0]);
                             if self.board_online {
-                                let board = self.online_board(hash).cloned();
+                                let board = self.online_board(hash, relax).cloned();
                                 let total = board
                                     .as_ref()
                                     .and_then(|b| b.as_ref().ok())
@@ -14298,6 +14336,7 @@ impl State {
                                     &self.cfg.online_user,
                                     fits,
                                     self.board_scroll,
+                                    relax,
                                 );
                                 self.online_leaderboard = match board {
                                     Some(Ok(rows)) => rows
@@ -14308,7 +14347,7 @@ impl State {
                                     _ => Vec::new(),
                                 };
                             } else {
-                                let all = scores::top(&self.scores, hash, usize::MAX);
+                                let all = scores::top(&self.scores, hash, usize::MAX, relax);
                                 self.board_max = all.len().saturating_sub(fits);
                                 self.board_scroll = self.board_scroll.min(self.board_max);
                                 let rows: Vec<&scores::ScoreRow> = all
@@ -14326,6 +14365,7 @@ impl State {
                                     &rows,
                                     self.board_scroll,
                                     all.len(),
+                                    relax,
                                 );
                             }
                         }
@@ -14593,7 +14633,7 @@ impl State {
                         half: game.half,
                     };
                     results.no_pp = if game.mods.unranked() {
-                        Some("Autoplay and Relax get no pp")
+                        Some("Autoplay gets no pp")
                     } else if failed {
                         Some("failed plays get no pp")
                     } else if from.is_some() {
@@ -14709,13 +14749,19 @@ impl State {
                             // Counted with the play itself.
                             self.playing = None;
                             results.total_due = true;
-                            self.online_boards.remove(&replay.map_hash);
+                            self.online_boards
+                                .remove(&(replay.map_hash, game.mods.relax()));
                         }
                         match scores::save(&replay, pp) {
                             Ok(row) => {
                                 results.replay = Some(row.file.clone());
                                 self.scores.push(row);
-                                let all = scores::top(&self.scores, replay.map_hash, usize::MAX);
+                                let all = scores::top(
+                                    &self.scores,
+                                    replay.map_hash,
+                                    usize::MAX,
+                                    game.mods.relax(),
+                                );
                                 let rank = all
                                     .iter()
                                     .position(|r| r.date == replay.date && r.score == replay.score)
@@ -16140,16 +16186,22 @@ impl State {
         for r in done {
             let text = match r {
                 Ok(online::Reply::Submitted {
+                    relax,
                     map_rank,
                     pp,
                     rank,
                     medals,
                 }) => {
                     self.medals_earned(medals);
-                    let before = self.me.map(|(b, _)| b);
+                    let mine = if relax {
+                        &mut self.me_relax
+                    } else {
+                        &mut self.me
+                    };
+                    let before = mine.map(|(b, _)| b);
                     // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
                     let pp = pp + 0.0;
-                    self.me = Some((pp, rank));
+                    *mine = Some((pp, rank));
                     if let Scene::Results { results, .. } = &mut self.scene
                         && results.opened.is_none()
                         && results.replay.is_some()
@@ -16160,11 +16212,12 @@ impl State {
                             rank,
                         });
                     }
+                    let board = if relax { " (Relax)" } else { "" };
                     let place = map_rank
-                        .map(|r| format!("#{r} on this map"))
+                        .map(|r| format!("#{r} on this map{board}"))
                         .unwrap_or_else(|| "sent (not your best here)".into());
                     let total = rank
-                        .map(|r| format!("  |  {pp:.0} pp, #{r} overall"))
+                        .map(|r| format!("  |  {pp:.0} pp, #{r} overall{board}"))
                         .unwrap_or_default();
                     format!("online: {place}{total}")
                 }
@@ -16191,15 +16244,23 @@ impl State {
     }
 
     /// The online leaderboard of map `hash` (fetched in the background; again after a minute).
-    fn online_board(&mut self, hash: u64) -> Option<&Result<Vec<online::OnlineScore>, String>> {
+    fn online_board(
+        &mut self,
+        hash: u64,
+        relax: bool,
+    ) -> Option<&Result<Vec<online::OnlineScore>, String>> {
+        let key = (hash, relax);
         let stale = self
             .online_boards
-            .get(&hash)
+            .get(&key)
             .is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(60));
         if stale && self.board_fetch.is_none() {
-            self.board_fetch = Some((hash, fetch_board(self.cfg.online_server.clone(), hash)));
+            self.board_fetch = Some((
+                key,
+                fetch_board(self.cfg.online_server.clone(), hash, relax),
+            ));
         }
-        self.online_boards.get(&hash).map(|(_, rows)| rows)
+        self.online_boards.get(&key).map(|(_, rows)| rows)
     }
 
     /// The logged-in player's own pp and rank, fetched once per login.
@@ -16208,6 +16269,7 @@ impl State {
         if account != self.me_for {
             self.me_for = account.clone();
             self.me = None;
+            self.me_relax = None;
             self.me_fetch = None;
             if !account.is_empty() {
                 let (server, (tx, rx)) = (self.cfg.online_server.clone(), mpsc::channel());
@@ -16226,6 +16288,7 @@ impl State {
             self.me_fetch = None;
             if let Ok(p) = result {
                 self.me = Some((p.pp + 0.0, p.rank));
+                self.me_relax = Some((p.relax.pp + 0.0, p.relax.rank));
             }
         }
     }
@@ -18359,6 +18422,7 @@ impl State {
             select_zone: drum_nav::Zone::List,
             select_rows: drum_nav::Rows::default(),
             me: None,
+            me_relax: None,
             me_for: String::new(),
             me_fetch: None,
             board_online: false,
@@ -18376,7 +18440,7 @@ impl State {
             tact_setup: None,
             leaderboard: Vec::new(),
             board_scroll: 0,
-            board_for: (0, false),
+            board_for: (0, false, false),
             board_max: 0,
             board_rect: None,
             split_drag: None,
