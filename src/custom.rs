@@ -302,7 +302,7 @@ mod tests {
                     .enclosed_name()
                     .unwrap()
                     .to_string_lossy()
-                    .to_string()
+                    .replace('\\', "/")
             })
             .collect();
         names.sort();
