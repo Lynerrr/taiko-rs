@@ -95,6 +95,35 @@ impl Default for NoteFx {
     }
 }
 
+/// What kind of note a note is, as the graph's events tell them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteClass {
+    Don,
+    Kat,
+    /// A drumroll or a swell.
+    Long,
+}
+
+/// A note of the map, as the runtime knows it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NoteInfo {
+    pub time: f64,
+    pub class: NoteClass,
+    /// A finisher.
+    pub big: bool,
+}
+
+/// Whether a note passes a node's `type` filter: 0 any, 1 don, 2 kat, 3 finisher, 4 roll or swell.
+fn is_type(n: &NoteInfo, ty: u8) -> bool {
+    match ty {
+        1 => n.class == NoteClass::Don,
+        2 => n.class == NoteClass::Kat,
+        3 => n.big,
+        4 => n.class == NoteClass::Long,
+        _ => true,
+    }
+}
+
 /// A stretch of the map with one beat grid and one kiai state, on the game's clock (what a
 /// `beatmap::ControlPoint` says).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -229,6 +258,8 @@ pub struct Runtime {
     dynamic: Vec<bool>,
     /// Per node: the moments of a trigger node (empty for the rest), ascending, chart time.
     lists: Vec<Vec<f64>>,
+    /// The map's notes in order, on the chart's clock.
+    notes: Vec<NoteInfo>,
     events: Vec<PlayEvent>,
     dirty: bool,
     /// What the graph adds to each playfield property, and to each group's, at the last
@@ -257,17 +288,32 @@ impl Runtime {
         note_times: impl Iterator<Item = f64>,
         shift: f64,
     ) -> Runtime {
-        Runtime::with_beats(gimmick, note_times, shift, &[])
+        Runtime::with_beats(
+            gimmick,
+            note_times.map(|time| NoteInfo {
+                time,
+                class: NoteClass::Don,
+                big: false,
+            }),
+            shift,
+            &[],
+        )
     }
 
     /// `beats`: the map's timing, on the game's clock.
     pub fn with_beats(
         gimmick: Arc<Gimmick>,
-        note_times: impl Iterator<Item = f64>,
+        notes: impl Iterator<Item = NoteInfo>,
         shift: f64,
         beats: &[BeatSection],
     ) -> Runtime {
-        let times: Vec<f64> = note_times.map(|t| t - shift).collect();
+        let notes: Vec<NoteInfo> = notes
+            .map(|n| NoteInfo {
+                time: n.time - shift,
+                ..n
+            })
+            .collect();
+        let times: Vec<f64> = notes.iter().map(|n| n.time).collect();
         let end = times.iter().copied().fold(0.0, f64::max) + 5000.0;
         let group_of = times
             .iter()
@@ -309,6 +355,7 @@ impl Runtime {
         let groups = gimmick.groups.len();
         let mut rt = Runtime {
             lists: vec![Vec::new(); nodes.len()],
+            notes,
             gimmick,
             group_of,
             shift,
@@ -375,6 +422,19 @@ impl Runtime {
         group == 0 || self.group_of(e.note) == Some(group - 1)
     }
 
+    fn event_is_type(&self, e: &PlayEvent, ty: u8) -> bool {
+        ty == 0 || self.notes.get(e.note).is_some_and(|n| is_type(n, ty))
+    }
+
+    /// The chart time of mark `k` (1 is the first); `fallback` for 0 (the map's start or end),
+    /// None for a mark that isn't there.
+    fn mark_time(&self, k: f64, fallback: f64) -> Option<f64> {
+        match k as usize {
+            0 => Some(fallback),
+            k => self.gimmick.marks.get(k - 1).map(|m| m.time),
+        }
+    }
+
     /// The moments of the trigger node at `idx`, from its kind and what feeds it.
     fn build(&self, idx: usize) -> Vec<f64> {
         let n = &self.gimmick.graph.nodes[idx];
@@ -394,16 +454,35 @@ impl Runtime {
                 }
                 out
             }
-            Kind::OnNoteReach => (n.param(0) as usize)
-                .checked_sub(1)
-                .and_then(|g| self.gimmick.groups.get(g))
-                .map_or_else(Vec::new, |g| g.notes.clone()),
+            Kind::OnNoteReach => {
+                let (group, ty, nth) = (n.param(0) as usize, n.param(1) as u8, n.param(2) as usize);
+                let mut times = self
+                    .notes
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, note)| {
+                        (group == 0 || self.group_of(*i) == Some(group - 1)) && is_type(note, ty)
+                    })
+                    .map(|(_, note)| note.time);
+                match nth {
+                    0 => times.collect(),
+                    k => times.nth(k - 1).into_iter().collect(),
+                }
+            }
+            Kind::OnMark => {
+                let marks = self.gimmick.marks.iter().map(|m| m.time);
+                match n.param(0) as usize {
+                    0 => marks.collect(),
+                    k => marks.skip(k - 1).take(1).collect(),
+                }
+            }
             Kind::OnHit => {
-                let (group, judge) = (n.param(0) as usize, n.param(1) as u8);
+                let (group, judge, ty) = (n.param(0) as usize, n.param(1) as u8, n.param(2) as u8);
                 self.events
                     .iter()
                     .filter(|e| {
-                        e.verdict != Verdict::Miss
+                        self.event_is_type(e, ty)
+                            && e.verdict != Verdict::Miss
                             && match judge {
                                 1 => e.verdict == Verdict::Great,
                                 2 => e.verdict == Verdict::Ok,
@@ -415,10 +494,14 @@ impl Runtime {
                     .collect()
             }
             Kind::OnMiss => {
-                let group = n.param(0) as usize;
+                let (group, ty) = (n.param(0) as usize, n.param(1) as u8);
                 self.events
                     .iter()
-                    .filter(|e| e.verdict == Verdict::Miss && self.in_group(e, group))
+                    .filter(|e| {
+                        e.verdict == Verdict::Miss
+                            && self.in_group(e, group)
+                            && self.event_is_type(e, ty)
+                    })
                     .map(|e| e.time)
                     .collect()
             }
@@ -561,6 +644,43 @@ impl Runtime {
             Kind::Const => n.param(0),
             Kind::Time => t / 1000.0,
             Kind::BeatPhase => self.beats_at(t).rem_euclid(1.0),
+            Kind::Beats => self.beats_at(t),
+            Kind::Kiai => flag(self.section_at(t).is_some_and(|s| s.kiai)),
+            Kind::Noise => {
+                let at = self.beats_at(t) / n.param(0).max(0.25);
+                let (i, f) = (at.floor(), at - at.floor());
+                let seed = self.gimmick.graph.seed ^ (n.param(1) as u64).wrapping_mul(0x9e37_79b9);
+                let (a, b) = (
+                    hash01(seed, 0, i as i64 as u64),
+                    hash01(seed, 0, (i + 1.0) as i64 as u64),
+                );
+                a + (b - a) * (f * f * (3.0 - 2.0 * f))
+            }
+            Kind::Count => Self::last_in(self.in_list(n, 0), t).1 as f64,
+            Kind::Progress => {
+                let list = self.in_list(n, 0);
+                if list.is_empty() {
+                    0.0
+                } else {
+                    Self::last_in(list, t).1 as f64 / list.len() as f64
+                }
+            }
+            Kind::Between => {
+                let from = self.mark_time(n.param(0), f64::NEG_INFINITY);
+                let to = self.mark_time(n.param(1), f64::INFINITY);
+                match (from, to) {
+                    (Some(a), Some(b)) => flag(t >= a && t < b),
+                    _ => 0.0,
+                }
+            }
+            Kind::Span => {
+                let from = self.mark_time(n.param(0), 0.0);
+                let to = self.mark_time(n.param(1), self.end);
+                match (from, to) {
+                    (Some(a), Some(b)) if b > a => ((t - a) / (b - a)).clamp(0.0, 1.0),
+                    _ => 0.0,
+                }
+            }
             Kind::Combo => self.last_event(t).map_or(0.0, |e| f64::from(e.combo)),
             Kind::Accuracy => self.last_event(t).map_or(1.0, |e| e.accuracy),
             Kind::Random => {
@@ -569,7 +689,20 @@ impl Runtime {
             }
             Kind::Wave => {
                 let turns = self.beats_at(t) / n.param(0).max(0.25);
-                (turns * std::f64::consts::TAU).sin() * n.param(1)
+                let phase = turns.rem_euclid(1.0);
+                let unit = match n.param(2) as u8 {
+                    1 => 1.0 - 4.0 * (phase - 0.5).abs(),
+                    2 => 2.0 * phase - 1.0,
+                    3 => {
+                        if phase < 0.5 {
+                            1.0
+                        } else {
+                            -1.0
+                        }
+                    }
+                    _ => (turns * std::f64::consts::TAU).sin(),
+                };
+                unit * n.param(1)
             }
             Kind::Toggle => flag(Self::last_in(self.in_list(n, 0), t).1 % 2 == 1),
             Kind::Envelope => match Self::last_in(self.in_list(n, 0), t).0 {
@@ -580,9 +713,36 @@ impl Runtime {
                 self.input_value(n, 0, t, ev).unwrap_or(0.0)
                     + self.input_value(n, 1, t, ev).unwrap_or(0.0)
             }
+            Kind::Sub => {
+                self.input_value(n, 0, t, ev).unwrap_or(0.0)
+                    - self.input_value(n, 1, t, ev).unwrap_or(0.0)
+            }
             Kind::Mul => {
                 self.input_value(n, 0, t, ev).unwrap_or(1.0)
                     * self.input_value(n, 1, t, ev).unwrap_or(1.0)
+            }
+            Kind::Abs => self.input_value(n, 0, t, ev).unwrap_or(0.0).abs(),
+            Kind::Min => self
+                .input_value(n, 0, t, ev)
+                .unwrap_or(0.0)
+                .min(self.input_value(n, 1, t, ev).unwrap_or(0.0)),
+            Kind::Max => self
+                .input_value(n, 0, t, ev)
+                .unwrap_or(0.0)
+                .max(self.input_value(n, 1, t, ev).unwrap_or(0.0)),
+            Kind::Mix => {
+                let a = self.input_value(n, 0, t, ev).unwrap_or(0.0);
+                let b = self.input_value(n, 1, t, ev).unwrap_or(0.0);
+                let by = self.input_value(n, 2, t, ev).unwrap_or(0.0);
+                a + (b - a) * by
+            }
+            Kind::Pow => {
+                let a = self.input_value(n, 0, t, ev).unwrap_or(0.0);
+                if a > 0.0 { a.powf(n.param(0)) } else { 0.0 }
+            }
+            Kind::Steps => {
+                let k = n.param(0).max(1.0);
+                (self.input_value(n, 0, t, ev).unwrap_or(0.0) * k).floor() / k
             }
             Kind::Compare => flag(
                 self.input_value(n, 0, t, ev).unwrap_or(0.0)
@@ -627,18 +787,29 @@ impl Runtime {
                 if !n.kind.is_action() {
                     continue;
                 }
-                let (last, count) = Self::last_in(self.in_list(n, 0), t);
+                let list = self.in_list(n, 0);
+                let (last, count) = Self::last_in(list, t);
                 let since = last.map(|m| t - m);
+                // The scale input, read at the moment a trigger happened (1 when unwired).
+                let scale = |m: f64| self.input_value(n, 1, m, &mut Eval::bare()).unwrap_or(1.0);
                 let amount = match n.kind {
                     Kind::Drive => self.input_value(n, 0, t, &mut ev).unwrap_or(0.0) * n.param(0),
-                    Kind::Pulse => match since {
-                        Some(d) if d < n.param(1) => {
-                            n.param(0) * (1.0 - n.ease.apply(d / n.param(1)))
+                    Kind::Pulse => match (since, last) {
+                        (Some(d), Some(m)) if d < n.param(1) => {
+                            n.param(0) * scale(m) * (1.0 - n.ease.apply(d / n.param(1)))
                         }
                         _ => 0.0,
                     },
                     Kind::Tween => {
-                        let to = |k: usize| if k % 2 == 1 { n.param(0) } else { 0.0 };
+                        // After k moments it sits at the value (k odd) or at nothing, the value
+                        // being worth what the scale was at the kth moment.
+                        let to = |k: usize| {
+                            if k % 2 == 1 {
+                                n.param(0) * scale(list[k - 1])
+                            } else {
+                                0.0
+                            }
+                        };
                         match since {
                             Some(d) => {
                                 let x = n.ease.apply((d / n.param(1)).min(1.0));
@@ -647,17 +818,17 @@ impl Runtime {
                             None => 0.0,
                         }
                     }
-                    Kind::Clip => match (since, n.clip.keys.last()) {
-                        (Some(d), Some(end)) if d <= end.t || n.param(0) >= 0.5 => {
-                            n.clip.value(d, 0.0)
+                    Kind::Clip => match (since, last, n.clip.keys.last()) {
+                        (Some(d), Some(m), Some(end)) if d <= end.t || n.param(0) >= 0.5 => {
+                            n.clip.value(d, 0.0) * scale(m)
                         }
                         _ => 0.0,
                     },
                     Kind::Shake => {
-                        if let Some(d) = since.filter(|d| *d < n.param(1)) {
+                        if let (Some(d), Some(m)) = (since.filter(|d| *d < n.param(1)), last) {
                             let slot = ((t / SHAKE_STEP_MS).floor() as i64) as u64;
                             let fade = 1.0 - d / n.param(1);
-                            let (a, id) = (n.param(0) * fade, u64::from(n.id));
+                            let (a, id) = (n.param(0) * scale(m) * fade, u64::from(n.id));
                             field[field_slot(FieldProp::X)] +=
                                 a * (hash01(seed, id * 2, slot) * 2.0 - 1.0);
                             field[field_slot(FieldProp::Y)] +=
@@ -944,12 +1115,23 @@ mod tests {
             gm.graph.seed = 7;
         }
         gm.sanitize();
-        Runtime::with_beats(
-            Arc::new(gm),
-            [1000.0, 2000.0, 3000.0].into_iter(),
-            0.0,
-            beats,
-        )
+        // A don, a big kat and a roll.
+        let notes = [
+            (1000.0, NoteClass::Don, false),
+            (2000.0, NoteClass::Kat, true),
+            (3000.0, NoteClass::Long, false),
+        ]
+        .map(|(time, class, big)| NoteInfo { time, class, big });
+        Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, beats)
+    }
+
+    fn xs() -> Option<Target> {
+        Some(Target::Field(FieldProp::X))
+    }
+
+    fn x_at(rt: &mut Runtime, t: f64) -> f32 {
+        rt.prepare(t);
+        rt.field(t).x
     }
 
     fn zoom_at(rt: &mut Runtime, t: f64) -> f32 {
@@ -1379,6 +1561,305 @@ mod tests {
         assert_eq!(rt.note(2, 0.0).unwrap().dx, 40.0);
         rt.prepare(1000.0);
         assert_eq!(rt.note(0, 1000.0).unwrap().dx, 0.0);
+    }
+
+    /// The notes `with` builds: a don at 1000, a big kat at 2000, a roll at 3000.
+    fn pulses(rt: &mut Runtime, at: &[f64]) -> Vec<f32> {
+        at.iter().map(|&t| zoom_at(rt, t) - 1.0).collect()
+    }
+
+    #[test]
+    fn note_events_pick_notes_by_type_and_by_which_of_them() {
+        let fired = |ty: f64, nth: f64, group: f64| {
+            let rt = with(
+                |g| {
+                    add(g, Kind::OnNoteReach, &[group, ty, nth], None, &[]);
+                },
+                &GRID,
+            );
+            rt.lists[0].clone()
+        };
+        assert_eq!(fired(0.0, 0.0, 0.0), [1000.0, 2000.0, 3000.0]);
+        assert_eq!(fired(1.0, 0.0, 0.0), [1000.0]);
+        assert_eq!(fired(2.0, 0.0, 0.0), [2000.0]);
+        assert_eq!(fired(3.0, 0.0, 0.0), [2000.0], "finishers");
+        assert_eq!(fired(4.0, 0.0, 0.0), [3000.0], "rolls and swells");
+        assert_eq!(fired(0.0, 2.0, 0.0), [2000.0], "the 2nd of all");
+        assert_eq!(fired(0.0, 9.0, 0.0), Vec::<f64>::new(), "there is no 9th");
+        assert_eq!(fired(0.0, 0.0, 1.0), [1000.0, 3000.0], "group 1");
+        assert_eq!(fired(0.0, 2.0, 1.0), [3000.0], "the 2nd of group 1");
+    }
+
+    #[test]
+    fn play_events_can_be_narrowed_to_a_note_type() {
+        let mut rt = with(
+            |g| {
+                add(g, Kind::OnHit, &[0.0, 0.0, 3.0], None, &[]);
+                add(g, Kind::OnMiss, &[0.0, 1.0], None, &[]);
+            },
+            &GRID,
+        );
+        rt.event(1000.0, 0, Verdict::Great, 1, 1.0);
+        rt.event(2000.0, 1, Verdict::Great, 2, 1.0);
+        rt.event(1000.0, 0, Verdict::Miss, 0, 0.5);
+        rt.event(2000.0, 1, Verdict::Miss, 0, 0.5);
+        rt.prepare(0.0);
+        assert_eq!(rt.lists[0], [2000.0], "only the finisher's hit");
+        assert_eq!(
+            rt.lists[1],
+            [1000.0, 2000.0]
+                .iter()
+                .copied()
+                .filter(|t| *t == 1000.0)
+                .collect::<Vec<_>>(),
+            "only the don's miss"
+        );
+    }
+
+    #[test]
+    fn marks_fire_events_and_bound_spans() {
+        let mut gm = Gimmick {
+            marks: vec![
+                crate::tko::gimmick::Mark {
+                    name: "a".into(),
+                    time: 1000.0,
+                },
+                crate::tko::gimmick::Mark {
+                    name: "b".into(),
+                    time: 3000.0,
+                },
+            ],
+            ..Gimmick::default()
+        };
+        let b = |g: &mut Graph| {
+            add(g, Kind::OnMark, &[0.0], None, &[]);
+            add(g, Kind::OnMark, &[2.0], None, &[]);
+            add(g, Kind::OnMark, &[9.0], None, &[]);
+            let inside = add(g, Kind::Between, &[1.0, 2.0], None, &[]);
+            add(g, Kind::Drive, &[1.0], zoom(), &[inside]);
+            let span = add(g, Kind::Span, &[1.0, 2.0], None, &[]);
+            add(
+                g,
+                Kind::Drive,
+                &[10.0],
+                Some(Target::Field(FieldProp::X)),
+                &[span],
+            );
+        };
+        b(&mut gm.graph);
+        gm.graph.seed = 1;
+        gm.sanitize();
+        let mut rt = Runtime::new(Arc::new(gm), [1000.0].into_iter(), 0.0);
+        assert_eq!(rt.lists[0], [1000.0, 3000.0]);
+        assert_eq!(rt.lists[1], [3000.0]);
+        assert!(rt.lists[2].is_empty(), "no 9th mark");
+        rt.prepare(500.0);
+        assert_eq!(rt.field(500.0).zoom, 1.0);
+        rt.prepare(2000.0);
+        assert_eq!((rt.field(2000.0).zoom, rt.field(2000.0).x), (2.0, 5.0));
+        rt.prepare(4000.0);
+        assert_eq!(rt.field(4000.0).x, 10.0, "stays at 1 after the span");
+    }
+
+    #[test]
+    fn counting_and_progress_build_up_over_a_triggers_moments() {
+        let mut rt = with(
+            |g| {
+                let n = add(g, Kind::OnNoteReach, &[0.0, 0.0, 0.0], None, &[]);
+                let c = add(g, Kind::Count, &[], None, &[n]);
+                add(g, Kind::Drive, &[0.1], zoom(), &[c]);
+                let p = add(g, Kind::Progress, &[], None, &[n]);
+                add(
+                    g,
+                    Kind::Drive,
+                    &[1.0],
+                    Some(Target::Field(FieldProp::X)),
+                    &[p],
+                );
+            },
+            &GRID,
+        );
+        let at = |rt: &mut Runtime, t: f64| {
+            rt.prepare(t);
+            let f = rt.field(t);
+            (f.zoom, f.x)
+        };
+        assert_eq!(at(&mut rt, 500.0), (1.0, 0.0));
+        let (z, x) = at(&mut rt, 1500.0);
+        assert!((z - 1.1).abs() < 1e-6 && (x - 1.0 / 3.0).abs() < 1e-6);
+        let (z, x) = at(&mut rt, 3500.0);
+        assert!((z - 1.3).abs() < 1e-6 && x == 1.0);
+    }
+
+    #[test]
+    fn a_scale_input_makes_each_moment_worth_what_the_number_was_then() {
+        // A pulse per note, each kicked by how far through the notes it is: 1/3, 2/3, 1.
+        let mut rt = with(
+            |g| {
+                let n = add(g, Kind::OnNoteReach, &[0.0, 0.0, 0.0], None, &[]);
+                let p = add(g, Kind::Progress, &[], None, &[n]);
+                add(g, Kind::Pulse, &[1.0, 400.0], zoom(), &[n, p]);
+            },
+            &GRID,
+        );
+        let kicks = pulses(&mut rt, &[1000.0, 2000.0, 3000.0]);
+        let want = [1.0 / 3.0, 2.0 / 3.0, 1.0];
+        for (k, w) in kicks.iter().zip(want) {
+            assert!((k - w).abs() < 1e-5, "{kicks:?}");
+        }
+        // Unwired it is plain.
+        let mut plain = with(
+            |g| {
+                let n = add(g, Kind::OnNoteReach, &[0.0, 0.0, 0.0], None, &[]);
+                add(g, Kind::Pulse, &[0.5, 400.0], zoom(), &[n]);
+            },
+            &GRID,
+        );
+        assert_eq!(pulses(&mut plain, &[1000.0, 2000.0]), [0.5, 0.5]);
+    }
+
+    #[test]
+    fn waves_come_in_four_shapes_and_noise_drifts_within_0_to_1() {
+        let at = |shape: f64, t: f64| {
+            let mut rt = with(
+                |g| {
+                    let w = add(g, Kind::Wave, &[4.0, 1.0, shape], None, &[]);
+                    add(g, Kind::Drive, &[1.0], xs(), &[w]);
+                },
+                &GRID,
+            );
+            x_at(&mut rt, t)
+        };
+        // 4 beats of 500 ms: a turn is 2000 ms; its quarter 500.
+        assert!((at(0.0, 500.0) - 1.0).abs() < 1e-5, "sine peaks");
+        assert!(
+            (at(1.0, 500.0) - 0.0).abs() < 1e-5 && (at(1.0, 1000.0) - 1.0).abs() < 1e-5,
+            "triangle"
+        );
+        assert!((at(2.0, 1500.0) - 0.5).abs() < 1e-5, "saw");
+        assert_eq!((at(3.0, 500.0), at(3.0, 1500.0)), (1.0, -1.0), "square");
+        let mut rt = with(
+            |g| {
+                let n = add(g, Kind::Noise, &[1.0, 3.0], None, &[]);
+                add(g, Kind::Drive, &[1.0], xs(), &[n]);
+            },
+            &GRID,
+        );
+        let vals: Vec<f32> = (0..40).map(|i| x_at(&mut rt, i as f64 * 77.0)).collect();
+        assert!(vals.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!(
+            vals.windows(2).all(|w| (w[0] - w[1]).abs() < 0.2),
+            "smooth: {vals:?}"
+        );
+        assert!(vals.iter().any(|v| *v != vals[0]), "and it moves");
+    }
+
+    #[test]
+    fn the_new_math_nodes_compute() {
+        let eval = |build: &dyn Fn(&mut Graph) -> u32| {
+            let mut rt = with(
+                |g| {
+                    let v = build(g);
+                    add(g, Kind::Drive, &[1.0], xs(), &[v]);
+                },
+                &GRID,
+            );
+            x_at(&mut rt, 100.0)
+        };
+        let num = |g: &mut Graph, v: f64| add(g, Kind::Const, &[v], None, &[]);
+        assert_eq!(
+            eval(&|g| {
+                let (a, b) = (num(g, 5.0), num(g, 2.0));
+                add(g, Kind::Sub, &[], None, &[a, b])
+            }),
+            3.0
+        );
+        assert_eq!(
+            eval(&|g| {
+                let a = num(g, -4.0);
+                add(g, Kind::Abs, &[], None, &[a])
+            }),
+            4.0
+        );
+        assert_eq!(
+            eval(&|g| {
+                let (a, b) = (num(g, 5.0), num(g, 2.0));
+                add(g, Kind::Min, &[], None, &[a, b])
+            }),
+            2.0
+        );
+        assert_eq!(
+            eval(&|g| {
+                let (a, b) = (num(g, 5.0), num(g, 2.0));
+                add(g, Kind::Max, &[], None, &[a, b])
+            }),
+            5.0
+        );
+        assert_eq!(
+            eval(&|g| {
+                let (a, b, k) = (num(g, 2.0), num(g, 6.0), num(g, 0.25));
+                add(g, Kind::Mix, &[], None, &[a, b, k])
+            }),
+            3.0
+        );
+        assert_eq!(
+            eval(&|g| {
+                let a = num(g, 3.0);
+                add(g, Kind::Pow, &[2.0], None, &[a])
+            }),
+            9.0
+        );
+        assert_eq!(
+            eval(&|g| {
+                let a = num(g, -3.0);
+                add(g, Kind::Pow, &[2.0], None, &[a])
+            }),
+            0.0
+        );
+        assert_eq!(
+            eval(&|g| {
+                let a = num(g, 0.77);
+                add(g, Kind::Steps, &[4.0], None, &[a])
+            }),
+            0.75
+        );
+    }
+
+    #[test]
+    fn beats_and_kiai_values_follow_the_timing() {
+        let beats = [
+            BeatSection {
+                start: 0.0,
+                origin: 0.0,
+                length: 500.0,
+                kiai: false,
+            },
+            BeatSection {
+                start: 2000.0,
+                origin: 0.0,
+                length: 500.0,
+                kiai: true,
+            },
+        ];
+        let mut rt = with(
+            |g| {
+                let k = add(g, Kind::Kiai, &[], None, &[]);
+                add(g, Kind::Drive, &[1.0], zoom(), &[k]);
+                let b = add(g, Kind::Beats, &[], None, &[]);
+                add(
+                    g,
+                    Kind::Drive,
+                    &[1.0],
+                    Some(Target::Field(FieldProp::X)),
+                    &[b],
+                );
+            },
+            &beats,
+        );
+        rt.prepare(1000.0);
+        assert_eq!((rt.field(1000.0).zoom, rt.field(1000.0).x), (1.0, 2.0));
+        rt.prepare(3000.0);
+        assert_eq!((rt.field(3000.0).zoom, rt.field(3000.0).x), (2.0, 6.0));
     }
 
     #[test]

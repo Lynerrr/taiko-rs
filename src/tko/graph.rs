@@ -176,10 +176,11 @@ kinds! {
     OnBeat => "Every beat", Event, [], Some(Port::Trigger), [p("every", 1.0, 1.0, 64.0, 1.0), p("offset", 0.0, 0.0, 63.0, 1.0)];
     OnKiaiStart => "Kiai starts", Event, [], Some(Port::Trigger), [];
     OnKiaiEnd => "Kiai ends", Event, [], Some(Port::Trigger), [];
-    OnNoteReach => "Note arrives", Event, [], Some(Port::Trigger), [p("group", 1.0, 1.0, 256.0, 1.0)];
-    OnHit => "Hit", Event, [], Some(Port::Trigger), [p("group", 0.0, 0.0, 256.0, 1.0), p("judge", 0.0, 0.0, 2.0, 1.0)];
-    OnMiss => "Miss", Event, [], Some(Port::Trigger), [p("group", 0.0, 0.0, 256.0, 1.0)];
+    OnNoteReach => "Note arrives", Event, [], Some(Port::Trigger), [p("group", 0.0, 0.0, 256.0, 1.0), p("type", 0.0, 0.0, 4.0, 1.0), p("nth", 0.0, 0.0, 1000.0, 1.0)];
+    OnHit => "Hit", Event, [], Some(Port::Trigger), [p("group", 0.0, 0.0, 256.0, 1.0), p("judge", 0.0, 0.0, 2.0, 1.0), p("type", 0.0, 0.0, 4.0, 1.0)];
+    OnMiss => "Miss", Event, [], Some(Port::Trigger), [p("group", 0.0, 0.0, 256.0, 1.0), p("type", 0.0, 0.0, 4.0, 1.0)];
     OnCombo => "Combo reaches", Event, [], Some(Port::Trigger), [p("every", 50.0, 1.0, 1000.0, 10.0)];
+    OnMark => "At mark", Event, [], Some(Port::Trigger), [p("mark", 0.0, 0.0, 256.0, 1.0)];
     // Triggers: reshape moments.
     Delay => "Delay", Logic, [Trigger "in"], Some(Port::Trigger), [p("ms", 250.0, 0.0, 60_000.0, 50.0)];
     Counter => "Every Nth", Logic, [Trigger "in"], Some(Port::Trigger), [p("n", 2.0, 1.0, 1000.0, 1.0)];
@@ -190,25 +191,39 @@ kinds! {
     Const => "Number", Value, [], Some(Port::Number), [p("value", 1.0, -1000.0, 1000.0, 0.5)];
     Time => "Seconds", Value, [], Some(Port::Number), [];
     BeatPhase => "Beat phase", Value, [], Some(Port::Number), [];
+    Beats => "Beat count", Value, [], Some(Port::Number), [];
+    Kiai => "In kiai", Value, [], Some(Port::Number), [];
     Combo => "Combo", Value, [], Some(Port::Number), [];
     Accuracy => "Accuracy", Value, [], Some(Port::Number), [];
     Random => "Random", Value, [], Some(Port::Number), [p("seed", 1.0, 0.0, 1_000_000.0, 1.0), p("beats", 1.0, 0.25, 64.0, 0.25)];
-    Wave => "Wave", Value, [], Some(Port::Number), [p("beats", 4.0, 0.25, 64.0, 0.25), p("amount", 1.0, -1000.0, 1000.0, 0.5)];
+    Noise => "Smooth noise", Value, [], Some(Port::Number), [p("beats", 1.0, 0.25, 64.0, 0.25), p("seed", 1.0, 0.0, 1_000_000.0, 1.0)];
+    Wave => "Wave", Value, [], Some(Port::Number), [p("beats", 4.0, 0.25, 64.0, 0.25), p("amount", 1.0, -1000.0, 1000.0, 0.5), p("shape", 0.0, 0.0, 3.0, 1.0)];
     Toggle => "Flip-flop", Value, [Trigger "flip"], Some(Port::Number), [];
     Envelope => "Fade out", Value, [Trigger "in"], Some(Port::Number), [p("ms", 300.0, 1.0, 60_000.0, 50.0)];
+    Count => "Count", Value, [Trigger "in"], Some(Port::Number), [];
+    Progress => "Progress", Value, [Trigger "in"], Some(Port::Number), [];
+    Between => "Between marks", Value, [], Some(Port::Number), [p("from", 1.0, 0.0, 256.0, 1.0), p("to", 2.0, 0.0, 256.0, 1.0)];
+    Span => "Span progress", Value, [], Some(Port::Number), [p("from", 1.0, 0.0, 256.0, 1.0), p("to", 2.0, 0.0, 256.0, 1.0)];
     // Math.
     Add => "Add", Math, [Number "a", Number "b"], Some(Port::Number), [];
+    Sub => "Subtract", Math, [Number "a", Number "b"], Some(Port::Number), [];
     Mul => "Multiply", Math, [Number "a", Number "b"], Some(Port::Number), [];
     Compare => "Greater than", Math, [Number "a", Number "b"], Some(Port::Number), [];
     Not => "Not", Math, [Number "a"], Some(Port::Number), [];
+    Abs => "Absolute", Math, [Number "a"], Some(Port::Number), [];
+    Min => "Smaller", Math, [Number "a", Number "b"], Some(Port::Number), [];
+    Max => "Larger", Math, [Number "a", Number "b"], Some(Port::Number), [];
+    Mix => "Blend", Math, [Number "a", Number "b", Number "by"], Some(Port::Number), [];
+    Pow => "Power", Math, [Number "a"], Some(Port::Number), [p("exp", 2.0, -8.0, 8.0, 0.5)];
+    Steps => "Steps", Math, [Number "a"], Some(Port::Number), [p("steps", 4.0, 1.0, 256.0, 1.0)];
     Clamp => "Clamp", Math, [Number "a"], Some(Port::Number), [p("min", 0.0, -1000.0, 1000.0, 0.5), p("max", 1.0, -1000.0, 1000.0, 0.5)];
     Map => "Scale", Math, [Number "a"], Some(Port::Number), [p("times", 1.0, -1000.0, 1000.0, 0.5), p("plus", 0.0, -1000.0, 1000.0, 0.5)];
     // Actions: motion, added to the property's own keyframes.
     Drive => "Drive", Action, [Number "value"], None, [p("gain", 1.0, -1000.0, 1000.0, 0.5)];
-    Pulse => "Pulse", Action, [Trigger "on"], None, [p("amount", 0.1, -1000.0, 1000.0, 0.05), p("ms", 300.0, 1.0, 60_000.0, 50.0)];
-    Tween => "Tween", Action, [Trigger "flip"], None, [p("to", 1.0, -1000.0, 1000.0, 0.5), p("ms", 300.0, 1.0, 60_000.0, 50.0)];
-    Shake => "Shake", Action, [Trigger "on"], None, [p("amount", 12.0, 0.0, 400.0, 2.0), p("ms", 300.0, 1.0, 60_000.0, 50.0)];
-    Clip => "Play clip", Action, [Trigger "on"], None, [p("hold", 0.0, 0.0, 1.0, 1.0)];
+    Pulse => "Pulse", Action, [Trigger "on", Number "scale"], None, [p("amount", 0.1, -1000.0, 1000.0, 0.05), p("ms", 300.0, 1.0, 60_000.0, 50.0)];
+    Tween => "Tween", Action, [Trigger "flip", Number "scale"], None, [p("to", 1.0, -1000.0, 1000.0, 0.5), p("ms", 300.0, 1.0, 60_000.0, 50.0)];
+    Shake => "Shake", Action, [Trigger "on", Number "scale"], None, [p("amount", 12.0, 0.0, 400.0, 2.0), p("ms", 300.0, 1.0, 60_000.0, 50.0)];
+    Clip => "Play clip", Action, [Trigger "on", Number "scale"], None, [p("hold", 0.0, 0.0, 1.0, 1.0)];
 }
 
 impl Kind {
@@ -216,18 +231,27 @@ impl Kind {
     pub fn about(self) -> &'static str {
         match self {
             Kind::OnStart => "Fires once, when the map starts.",
-            Kind::OnTime => "Fires once, at this many milliseconds into the map.",
+            Kind::OnTime => {
+                "Fires once, at this many milliseconds into the map. Prefer marks and notes: a time stops matching the moment the chart changes."
+            }
             Kind::OnBeat => {
                 "Fires on the beat grid: every N beats, starting this many beats in. The grid follows the red lines."
             }
             Kind::OnKiaiStart => "Fires each time kiai time begins.",
             Kind::OnKiaiEnd => "Fires each time kiai time ends.",
-            Kind::OnNoteReach => "Fires when a note of this group arrives at the hit circle.",
-            Kind::OnHit => {
-                "Fires when a note is hit. Group 0 is any note; judge 0 is any hit, 1 only great, 2 only ok."
+            Kind::OnNoteReach => {
+                "Fires when a note arrives at the hit circle. Group 0 is every note, or pick a group; type narrows it to dons, kats, finishers or rolls; nth picks only the Nth of those (0 is all of them)."
             }
-            Kind::OnMiss => "Fires when a note is missed. Group 0 is any note.",
+            Kind::OnHit => {
+                "Fires when a note is hit. Group 0 is any note; judge 0 is any hit, 1 only great, 2 only ok; type narrows it to dons, kats, finishers or rolls."
+            }
+            Kind::OnMiss => {
+                "Fires when a note is missed. Group 0 is any note; type narrows it to dons, kats, finishers or rolls."
+            }
             Kind::OnCombo => "Fires each time the combo reaches a multiple of this number.",
+            Kind::OnMark => {
+                "Fires at a mark you placed in the editor (M). Mark 0 fires at every mark, 1 at the first, and so on."
+            }
             Kind::Delay => "Passes each moment on after a pause.",
             Kind::Counter => "Passes on every Nth moment and swallows the rest.",
             Kind::Once => "Passes on only the first moment.",
@@ -236,33 +260,59 @@ impl Kind {
             Kind::Const => "A fixed number.",
             Kind::Time => "Seconds since the map started.",
             Kind::BeatPhase => "Climbs from 0 to 1 through each beat, then starts again.",
+            Kind::Beats => "How many beats of the map's grid have passed, with the fraction.",
+            Kind::Kiai => "1 during kiai time, 0 otherwise.",
             Kind::Combo => "The player's current combo.",
             Kind::Accuracy => "The player's accuracy so far, from 0 to 1.",
             Kind::Random => {
                 "A number that changes every few beats. It comes from the map's seed, so replays match."
             }
+            Kind::Noise => {
+                "A number from 0 to 1 that drifts smoothly, picking a new target every few beats (from the map's seed, so replays match)."
+            }
             Kind::Wave => {
-                "Swings smoothly between minus and plus the amount, once per this many beats."
+                "Swings between minus and plus the amount, once per this many beats. Shape 0 is a sine, 1 a triangle, 2 a saw, 3 a square."
             }
             Kind::Toggle => "Flips between 0 and 1 at each moment.",
             Kind::Envelope => "Jumps to 1 at each moment and falls to 0 over this time.",
+            Kind::Count => "How many moments have happened so far: 0, then 1, 2, 3 ...",
+            Kind::Progress => {
+                "How far through all its moments the trigger is: 0 before the first, 1 after the last, in even steps between. Wire it to a scale input for a build-up."
+            }
+            Kind::Between => {
+                "1 between two marks, 0 outside. Mark 0 stands for the start of the map (from) or its end (to)."
+            }
+            Kind::Span => {
+                "Climbs from 0 to 1 between two marks and stays there. Mark 0 stands for the start of the map (from) or its end (to)."
+            }
             Kind::Add => "a plus b.",
+            Kind::Sub => "a minus b.",
             Kind::Mul => "a times b.",
             Kind::Compare => "1 while a is greater than b, else 0.",
             Kind::Not => "1 when a is 0, else 0.",
+            Kind::Abs => "a without its sign.",
+            Kind::Min => "The smaller of a and b.",
+            Kind::Max => "The larger of a and b.",
+            Kind::Mix => "Slides from a to b as the third input goes from 0 to 1.",
+            Kind::Pow => "a to this power (a below 0 gives 0). Bends a 0 to 1 number into a curve.",
+            Kind::Steps => "Rounds a down to this many even steps between 0 and 1.",
             Kind::Clamp => "Keeps a between min and max.",
             Kind::Map => "a times this, plus that.",
             Kind::Drive => {
                 "Holds the target at this number times the gain, all the time. Added to its keyframes."
             }
             Kind::Pulse => {
-                "Kicks the target by an amount at each moment, then lets it settle back."
+                "Kicks the target by an amount at each moment, then lets it settle back. The scale input multiplies the kick, read at the moment it happens."
             }
-            Kind::Tween => "Moves the target to a value and back, one way at each moment.",
+            Kind::Tween => {
+                "Moves the target to a value and back, one way at each moment. The scale input multiplies the value, read at the moment it happens."
+            }
             Kind::Shake => {
-                "Jolts the whole playfield in random directions at each moment, fading out."
+                "Jolts the whole playfield in random directions at each moment, fading out. The scale input multiplies the strength, read at the moment it happens."
             }
-            Kind::Clip => "Plays a short ready-made run of keyframes at each moment.",
+            Kind::Clip => {
+                "Plays a short ready-made run of keyframes at each moment. The scale input multiplies it, read at the moment it happens."
+            }
         }
     }
 
@@ -660,7 +710,7 @@ mod tests {
             [None],
             "a number can't feed a trigger"
         );
-        assert_eq!(g.node(c).unwrap().p, [4.0, 1000.0]);
+        assert_eq!(g.node(c).unwrap().p, [4.0, 1000.0, 0.0]);
         assert_eq!(na.x, 0.0);
     }
 

@@ -599,6 +599,11 @@ impl View {
         for b in &self.ed.bookmarks {
             c.rect(px(*b) - 0.5, y, 1.5, h, rgba(0x4f9dff, 1.0));
         }
+        if let Some(g) = self.ed.gimmick() {
+            for m in &g.marks {
+                c.rect(px(m.time) - 0.5, y, 1.5, h, rgba(super::MARK_COL, 1.0));
+            }
+        }
         // What the timeline shows, and the playhead.
         let (a, b) = (px(self.view_start), px(self.view_end()));
         c.round_rect(

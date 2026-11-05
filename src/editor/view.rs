@@ -191,8 +191,10 @@ pub struct Layout {
     pub status: [f32; 4],
 }
 
+/// The colour of effect marks (.tko).
+pub(super) const MARK_COL: u32 = 0xB36BFF;
 /// How tall the ruler across the top of the timeline is.
-pub const RULER: f32 = 14.0;
+const RULER: f32 = 14.0;
 
 impl Layout {
     pub fn new(w: f32, mode: Mode) -> Layout {
@@ -282,6 +284,13 @@ pub struct View {
     n_pan: (f32, f32),
     n_zoom: f32,
     n_cat: usize,
+    /// A dropdown over the node canvas (targets, recipes), and which group it lists.
+    n_pick: Option<nodes::Pick>,
+    n_pick_group: usize,
+    /// A number being typed into parameter `.0` of the selected node.
+    n_typing: Option<(usize, String)>,
+    /// Which group of playfield properties the Keyframes page lists.
+    k_tab: usize,
     n_clip: usize,
     /// The menu bar's open menu.
     menu: Option<usize>,
@@ -383,6 +392,10 @@ impl View {
             n_pan: (0.0, 0.0),
             n_zoom: 1.0,
             n_cat: 0,
+            n_pick: None,
+            n_pick_group: 0,
+            n_typing: None,
+            k_tab: 0,
             n_clip: 0,
             menu: None,
             modal: None,
@@ -942,6 +955,32 @@ impl View {
             );
             c.rect(bx - 0.5, y + 1.0, 6.0, 5.0, rgba(0x4f9dff, 1.0));
         }
+        // Effect marks (.tko).
+        let marks: Vec<f64> = self
+            .ed
+            .gimmick()
+            .map_or_else(Vec::new, |g| g.marks.iter().map(|m| m.time).collect());
+        for (i, m) in marks.iter().enumerate() {
+            if *m < from || *m > to {
+                continue;
+            }
+            let mx = self.x_of(*m);
+            c.rect(
+                mx - 0.5,
+                lane_top,
+                1.0,
+                y + h - lane_top - 1.0,
+                rgba(MARK_COL, 0.6),
+            );
+            c.rect(mx - 0.5, y + 1.0, 14.0, 7.0, rgba(MARK_COL, 1.0));
+            c.text(
+                mx + 2.0,
+                y + 1.5,
+                5.5,
+                rgba(0xffffff, 1.0),
+                &format!("{}", i + 1),
+            );
+        }
         // Notes.
         let objs = &self.ed.chart.objects;
         let first = objs.partition_point(|o| o.time < from - 60_000.0);
@@ -1412,13 +1451,14 @@ impl View {
         }
         self.mouse = (x, y);
         self.typing = None;
+        self.n_typing = None;
         self.revert_armed = false;
         if let Some(b) = self.button_at(x, y) {
             self.press(b, keys, audio);
             return;
         }
         // A click that hits nothing closes what's open (a menu, the sheet or the list) and goes no further.
-        if self.menu.take().is_some() {
+        if self.menu.take().is_some() || self.n_pick.take().is_some() {
             return;
         }
         if self.modal_from > 0 {
@@ -1913,6 +1953,31 @@ impl View {
         keys: Keys,
         audio: Option<&Engine>,
     ) -> KeyResult {
+        if let Some((i, text)) = &mut self.n_typing {
+            match code {
+                KeyCode::Enter | KeyCode::NumpadEnter => {
+                    let (i, text) = (*i, std::mem::take(text));
+                    self.n_typing = None;
+                    if let (Some(id), Ok(v)) = (self.n_sel, text.trim().parse::<f64>())
+                        && self.ed.set_node_param(id, i, v)
+                    {
+                        self.mark_stale();
+                    }
+                }
+                KeyCode::Escape => self.n_typing = None,
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Period | KeyCode::NumpadDecimal => text.push('.'),
+                KeyCode::Minus | KeyCode::NumpadSubtract => text.push('-'),
+                c => {
+                    if let Some(d) = digit(c) {
+                        text.push(d);
+                    }
+                }
+            }
+            return KeyResult::Handled;
+        }
         if let Some((f, text)) = &mut self.typing {
             match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -1943,7 +2008,10 @@ impl View {
                 self.tour_end();
                 return KeyResult::Handled;
             }
-            if self.menu.take().is_some() || self.roll_start.take().is_some() {
+            if self.menu.take().is_some()
+                || self.n_pick.take().is_some()
+                || self.roll_start.take().is_some()
+            {
                 return KeyResult::Handled;
             }
             if self.modal.take().is_some() {
@@ -2554,10 +2622,10 @@ mod tests {
         let wave = put(&mut v, Kind::Wave, 20.0, 90.0);
         // A number into a trigger input is refused with a reason, and is no undo step.
         wire_up(&mut v, wave, pulse, 0);
-        assert_eq!(v.ed.node(pulse).unwrap().inputs, [None]);
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [None, None]);
         assert!(v.status.contains("trigger"), "{}", v.status);
         wire_up(&mut v, beat, pulse, 0);
-        assert_eq!(v.ed.node(pulse).unwrap().inputs, [Some(beat)]);
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [Some(beat), None]);
         // The wire is drawn and the preview still builds.
         draw(&mut v);
         assert!(v.game.is_some(), "{:?}", v.game_err);
@@ -2565,7 +2633,12 @@ mod tests {
         v.n_sel = Some(pulse);
         press(&mut v, Btn::N(NAct::Param(0, 1)));
         assert!(v.ed.node(pulse).unwrap().param(0) > 0.1);
-        press(&mut v, Btn::N(NAct::Target(1)));
+        press(
+            &mut v,
+            Btn::N(NAct::SetTarget(crate::tko::graph::Target::Field(
+                crate::tko::gimmick::FieldProp::Zoom,
+            ))),
+        );
         assert!(v.ed.node(pulse).unwrap().target.is_some());
         let ease = v.ed.node(pulse).unwrap().ease;
         press(&mut v, Btn::N(NAct::Ease));
@@ -2575,9 +2648,73 @@ mod tests {
         // Right-click on an input dot lifts the wire; undo puts it back.
         let p = v.in_pos(v.ed.node(pulse).unwrap(), 0);
         v.right_click(p.0, p.1);
-        assert_eq!(v.ed.node(pulse).unwrap().inputs, [None]);
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [None, None]);
         assert!(v.ed.undo());
-        assert_eq!(v.ed.node(pulse).unwrap().inputs, [Some(beat)]);
+        assert_eq!(v.ed.node(pulse).unwrap().inputs, [Some(beat), None]);
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn a_node_number_is_typed_picked_from_a_list_and_made_from_a_recipe() {
+        use crate::tko::graph::Target;
+        use crate::tko::recipes::Recipe;
+        let mut v = nodes_view();
+        press(&mut v, Btn::N(NAct::Cat(4)));
+        press(&mut v, Btn::N(NAct::Add(Kind::Pulse)));
+        let pulse = v.n_sel.unwrap();
+        // Click a number, type over it, Enter applies it (clamped by the node's own range).
+        press(&mut v, Btn::N(NAct::Edit(0)));
+        assert!(v.n_typing.is_some());
+        for k in [KeyCode::Digit0, KeyCode::Period, KeyCode::Digit2] {
+            v.key(k, false, Keys::default(), None);
+        }
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert!(v.n_typing.is_none());
+        assert!((v.ed.node(pulse).unwrap().param(0) - 0.2).abs() < 1e-9);
+        // Escape throws the typing away.
+        press(&mut v, Btn::N(NAct::Edit(0)));
+        v.key(KeyCode::Digit9, false, Keys::default(), None);
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!((v.ed.node(pulse).unwrap().param(0) - 0.2).abs() < 1e-9);
+        // The target comes from a dropdown that closes once something is picked.
+        press(&mut v, Btn::N(NAct::Open(nodes::Pick::Target)));
+        assert_eq!(v.n_pick, Some(nodes::Pick::Target));
+        draw(&mut v);
+        press(
+            &mut v,
+            Btn::N(NAct::SetTarget(Target::Field(
+                crate::tko::gimmick::FieldProp::Glitch,
+            ))),
+        );
+        assert_eq!(v.n_pick, None);
+        assert_eq!(
+            v.ed.node(pulse).unwrap().target,
+            Some(Target::Field(crate::tko::gimmick::FieldProp::Glitch))
+        );
+        // A recipe drops its wired nodes in one undo step.
+        let before = v.ed.gimmick().unwrap().graph.nodes.len();
+        press(&mut v, Btn::N(NAct::AddRecipe(Recipe::KiaiDrop)));
+        let after = v.ed.gimmick().unwrap().graph.nodes.len();
+        assert_eq!(after, before + 4);
+        draw(&mut v);
+        assert!(v.game.is_some(), "{:?}", v.game_err);
+        v.ed.undo();
+        assert_eq!(v.ed.gimmick().unwrap().graph.nodes.len(), before);
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn m_drops_a_mark_on_the_playhead_and_shift_m_takes_it_away() {
+        let mut v = nodes_view();
+        v.ed.time = 3000.0;
+        v.run(Cmd::EffectMark, None);
+        assert_eq!(v.ed.gimmick().unwrap().marks.len(), 1);
+        v.run(Cmd::EffectMark, None);
+        assert_eq!(v.ed.gimmick().unwrap().marks.len(), 1, "no doubles");
+        draw(&mut v);
+        v.ed.time = 3200.0;
+        v.run(Cmd::EffectUnmark, None);
+        assert!(v.ed.gimmick().unwrap().marks.is_empty());
         let _ = std::fs::remove_file(&v.ed.path);
     }
 

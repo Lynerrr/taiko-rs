@@ -306,6 +306,22 @@ impl View {
                     None => self.status = "no more bookmarks that way".into(),
                 }
             }
+            Cmd::EffectMark => {
+                self.status = if !self.ed.is_tko() {
+                    "Effect marks live in a .tko: make one on the Effects page first".into()
+                } else if self.ed.add_mark(t) {
+                    format!("mark added at {}", super::fmt_time(t))
+                } else {
+                    "there is a mark here already".into()
+                };
+            }
+            Cmd::EffectUnmark => {
+                self.status = if self.ed.remove_mark(t, 500.0) {
+                    "mark removed".into()
+                } else {
+                    "no effect mark within half a second of the playhead".into()
+                };
+            }
             Cmd::AddRed => self.press(Btn::AddRed, Keys::default(), audio),
             Cmd::AddGreen => self.press(Btn::AddGreen, Keys::default(), audio),
             Cmd::DeleteLine => match self.ed.delete_timing_at(t) {

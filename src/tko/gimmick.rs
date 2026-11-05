@@ -9,6 +9,7 @@ pub const MAX_GROUPS: usize = 256;
 /// Notes across all groups: a file can't make the player hold an unbounded list.
 pub const MAX_GROUPED_NOTES: usize = 200_000;
 pub const MAX_NAME: usize = 64;
+pub const MAX_MARKS: usize = 256;
 
 /// A property of the whole playfield.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,6 +262,20 @@ impl NoteProp {
         }
     }
 
+    /// One line on what it does, for tooltips.
+    pub fn about(self) -> &'static str {
+        match self {
+            NoteProp::Dx => "Slides the notes of the group sideways on screen.",
+            NoteProp::Dy => "Slides the notes of the group up or down on screen.",
+            NoteProp::Scale => "Makes the notes bigger (above 1) or smaller.",
+            NoteProp::Opacity => "How see-through the notes are. 0 is invisible, 1 solid.",
+            NoteProp::Hidden => "1 hides the notes completely. They are still there to hit.",
+            NoteProp::Swirl => {
+                "Turns each note about the drum, in degrees: the further out, the wider the swing."
+            }
+        }
+    }
+
     pub fn default_value(self) -> f64 {
         match self {
             NoteProp::Dx | NoteProp::Dy | NoteProp::Hidden | NoteProp::Swirl => 0.0,
@@ -300,12 +315,25 @@ impl Group {
     }
 }
 
+/// A moment in the map the author named: where a section starts, a drop, a break. Graph nodes
+/// refer to marks instead of typed times, and the editor shows them on the timeline.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Mark {
+    #[serde(default)]
+    pub name: String,
+    /// Chart time, ms.
+    pub time: f64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Gimmick {
     #[serde(default)]
     pub field: BTreeMap<String, Track>,
     #[serde(default)]
     pub groups: Vec<Group>,
+    /// Named moments, ascending by time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<Mark>,
     /// Events, logic and actions that move the same things as the keyframes (see `graph`).
     #[serde(default, skip_serializing_if = "Graph::is_empty")]
     pub graph: Graph,
@@ -319,6 +347,7 @@ impl Gimmick {
                 .iter()
                 .all(|g| g.tracks.values().all(Track::is_empty))
             && self.graph.is_empty()
+            && self.marks.is_empty()
     }
 
     pub fn field_track(&self, p: FieldProp) -> Option<&Track> {
@@ -388,6 +417,17 @@ impl Gimmick {
             }
         }
         self.field.retain(|_, t| !t.is_empty());
+        self.marks.retain(|m| m.time.is_finite());
+        self.marks.sort_by(|a, b| a.time.total_cmp(&b.time));
+        self.marks.truncate(MAX_MARKS);
+        for m in &mut self.marks {
+            m.name.truncate(
+                m.name
+                    .char_indices()
+                    .nth(MAX_NAME)
+                    .map_or(m.name.len(), |(i, _)| i),
+            );
+        }
         let groups = self.groups.len();
         self.graph.sanitize(groups);
     }

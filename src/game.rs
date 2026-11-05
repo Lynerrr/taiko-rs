@@ -1853,7 +1853,15 @@ impl Game {
                 .collect();
             crate::tko::runtime::Runtime::with_beats(
                 g,
-                map.notes.iter().map(|n| n.time),
+                map.notes.iter().map(|n| crate::tko::runtime::NoteInfo {
+                    time: n.time,
+                    class: match n.kind {
+                        Kind::Don => crate::tko::runtime::NoteClass::Don,
+                        Kind::Kat => crate::tko::runtime::NoteClass::Kat,
+                        _ => crate::tko::runtime::NoteClass::Long,
+                    },
+                    big: n.big,
+                }),
                 beatmap::OSU_TIMING_MS,
                 &beats,
             )

@@ -89,6 +89,9 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::Unbookmark),
             Do(Cmd::PrevBookmark),
             Do(Cmd::NextBookmark),
+            Sep,
+            Do(Cmd::EffectMark),
+            Do(Cmd::EffectUnmark),
         ],
     },
     Menu {

@@ -4,7 +4,16 @@
 
 use super::{Btn, Drag, Mode, View, inside};
 use crate::render::{Canvas, rgba};
-use crate::tko::graph::{Category, Kind, Node, Port};
+use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
+use crate::tko::graph::{Category, Kind, Node, Port, Target};
+use crate::tko::recipes::Recipe;
+
+/// A dropdown over the node canvas.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Pick {
+    Target,
+    Recipe,
+}
 
 /// What the Nodes page can be told to do.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -12,7 +21,14 @@ pub enum NAct {
     Cat(usize),
     Add(Kind),
     Param(usize, i32),
-    Target(i32),
+    /// Type a number into parameter `i`.
+    Edit(usize),
+    /// Make a group of the notes selected on the timeline and point the node at it.
+    FromSelection,
+    Open(Pick),
+    SetTarget(Target),
+    PickGroup(i32),
+    AddRecipe(Recipe),
     NoTarget,
     Ease,
     Clip,
@@ -197,6 +213,61 @@ impl View {
         }
     }
 
+    /// What parameter `i` of `n` reads as: a name where the number is a choice (a group, a type,
+    /// a mark), the number otherwise. `short` is for the cramped box on the canvas.
+    pub(super) fn node_param_text(&self, n: &Node, i: usize, short: bool) -> String {
+        let Some(d) = n.kind.params().get(i) else {
+            return String::new();
+        };
+        let v = n.param(i);
+        let k = v as usize;
+        let marked = matches!(n.kind, Kind::OnMark | Kind::Between | Kind::Span);
+        match d.name {
+            "group" => {
+                let g = self
+                    .ed
+                    .gimmick()
+                    .and_then(|g| g.groups.get(k.wrapping_sub(1)));
+                match (k, g) {
+                    (0, _) => "any".into(),
+                    (_, Some(g)) if !short && !g.name.is_empty() => g.name.clone(),
+                    _ => format!("G{k}"),
+                }
+            }
+            "type" => ["any", "don", "kat", "finisher", "roll"]
+                .get(k)
+                .copied()
+                .unwrap_or("any")
+                .into(),
+            "judge" => ["any", "great", "ok"]
+                .get(k)
+                .copied()
+                .unwrap_or("any")
+                .into(),
+            "shape" => ["sine", "triangle", "saw", "square"]
+                .get(k)
+                .copied()
+                .unwrap_or("sine")
+                .into(),
+            "mark" | "from" | "to" if marked => {
+                let at = self
+                    .ed
+                    .gimmick()
+                    .and_then(|g| g.marks.get(k.wrapping_sub(1)))
+                    .map(|m| m.time);
+                match (k, at) {
+                    (0, _) if d.name == "mark" => "every".into(),
+                    (0, _) if d.name == "from" => "start".into(),
+                    (0, _) => "end".into(),
+                    (_, Some(t)) if !short => format!("#{k} {}", super::fmt_time(t)),
+                    (_, Some(_)) => format!("#{k}"),
+                    (_, None) => format!("#{k} (none)"),
+                }
+            }
+            _ => num(v),
+        }
+    }
+
     pub(super) fn draw_node_canvas(&mut self, c: &mut Canvas) {
         let [x, y, w, h] = self.layout.nodes;
         c.round_rect(
@@ -336,7 +407,7 @@ impl View {
             }
             // Parameters sit on the right of the input rows.
             for (i, d) in n.kind.params().iter().enumerate() {
-                let line = format!("{} {}", d.name, num(n.param(i)));
+                let line = format!("{} {}", d.name, self.node_param_text(n, i, true));
                 let ty = ny + (HEAD + ROW * (i as f32 + 0.5)) * z - 2.5 * z;
                 let tw = Canvas::text_width(5.0 * z, &line);
                 c.text(
@@ -396,9 +467,152 @@ impl View {
                 c.rect(ox - 1.0, y + h / 2.0 - 3.0, 2.0, 6.0, rgba(0x9a9ab0, 0.8));
             }
         }
+        if let Some(g) = self.ed.gimmick() {
+            let marks: Vec<f64> = g.marks.iter().map(|m| m.time).collect();
+            for (i, m) in marks.iter().enumerate() {
+                let mx = self.x_of(*m);
+                if (x..x + w).contains(&mx) {
+                    c.rect(mx - 0.5, y + 1.0, 1.0, h - 2.0, rgba(super::MARK_COL, 0.9));
+                    c.text(
+                        mx + 2.0,
+                        y + 1.5,
+                        5.5,
+                        rgba(super::MARK_COL, 1.0),
+                        &format!("{}", i + 1),
+                    );
+                }
+            }
+        }
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 0.9));
         c.clip_since(start, x, y, w, h);
+    }
+
+    // ---- dropdowns ----
+
+    /// The target or recipe list over the canvas.
+    pub(super) fn draw_node_pick(&mut self, c: &mut Canvas) {
+        let Some(pick) = self.n_pick else { return };
+        let [cx, cy, cw, _] = self.layout.nodes;
+        let w = cw.min(540.0) - 16.0;
+        let (x, y) = (cx + 8.0, cy + 8.0);
+        let h = match pick {
+            Pick::Target => 190.0,
+            Pick::Recipe => 14.0 + Recipe::ALL.len() as f32 * 26.0,
+        };
+        c.round_rect(
+            [x, y],
+            [w, h],
+            4.0,
+            rgba(0x1b1b26, 0.99),
+            rgba(0x6a6a88, 1.0),
+            1.0,
+        );
+        match pick {
+            Pick::Recipe => {
+                let mut ry = y + 8.0;
+                for r in Recipe::ALL {
+                    let rect = [x + 8.0, ry, 130.0, 18.0];
+                    self.button(c, rect, r.label(), Btn::N(NAct::AddRecipe(r)), false);
+                    self.tips
+                        .push((rect, format!("{}\n{}", r.label(), r.about())));
+                    c.text(
+                        x + 146.0,
+                        ry + 6.0,
+                        6.0,
+                        rgba(0x9a9ab0, 1.0),
+                        &Canvas::fit(6.0, w - 156.0, r.about()),
+                    );
+                    ry += 26.0;
+                }
+            }
+            Pick::Target => {
+                let current = self
+                    .n_sel
+                    .and_then(|id| self.ed.node(id))
+                    .and_then(|n| n.target);
+                let col_w = (w - 16.0) / 4.0;
+                let groups: Vec<FieldProp> = Vec::new();
+                drop(groups);
+                for (k, grp) in PropGroup::ALL.iter().enumerate() {
+                    let gx = x + 8.0 + k as f32 * col_w;
+                    c.text(gx, y + 8.0, 6.5, rgba(0xF0B64A, 1.0), grp.label());
+                    let mut ry = y + 20.0;
+                    for p in FieldProp::ALL.iter().filter(|p| p.group() == *grp) {
+                        let rect = [gx, ry, col_w - 6.0, 15.0];
+                        let t = Target::Field(*p);
+                        self.button(
+                            c,
+                            rect,
+                            p.name(),
+                            Btn::N(NAct::SetTarget(t)),
+                            current == Some(t),
+                        );
+                        self.tips
+                            .push((rect, format!("{}\n{}", p.name(), p.about())));
+                        ry += 17.0;
+                    }
+                }
+                let gx = x + 8.0 + 3.0 * col_w;
+                let count = self.ed.gimmick().map_or(0, |g| g.groups.len());
+                if count == 0 {
+                    c.text(gx, y + 8.0, 6.5, rgba(0xF0B64A, 1.0), "Notes");
+                    self.paragraph(
+                        c,
+                        gx,
+                        y + 20.0,
+                        col_w - 6.0,
+                        6.0,
+                        0x9a9ab0,
+                        "Make a group of notes first (Keyframes page, or Group from selection).",
+                    );
+                } else {
+                    let g = self.n_pick_group.min(count - 1);
+                    let name = self
+                        .ed
+                        .gimmick()
+                        .map(|gm| gm.groups[g].name.clone())
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| format!("Group {}", g + 1));
+                    c.text(
+                        gx,
+                        y + 8.0,
+                        6.5,
+                        rgba(0xF0B64A, 1.0),
+                        &Canvas::fit(6.5, col_w - 40.0, &name),
+                    );
+                    self.button(
+                        c,
+                        [gx + col_w - 36.0, y + 5.0, 14.0, 13.0],
+                        "<",
+                        Btn::N(NAct::PickGroup(-1)),
+                        false,
+                    );
+                    self.button(
+                        c,
+                        [gx + col_w - 20.0, y + 5.0, 14.0, 13.0],
+                        ">",
+                        Btn::N(NAct::PickGroup(1)),
+                        false,
+                    );
+                    let mut ry = y + 20.0;
+                    for p in NoteProp::ALL {
+                        let rect = [gx, ry, col_w - 6.0, 15.0];
+                        let t = Target::Group(g, p);
+                        self.button(
+                            c,
+                            rect,
+                            p.name(),
+                            Btn::N(NAct::SetTarget(t)),
+                            current == Some(t),
+                        );
+                        self.tips
+                            .push((rect, format!("{}\n{}", p.name(), p.about())));
+                        ry += 17.0;
+                    }
+                }
+            }
+        }
     }
 
     // ---- the page ----
@@ -444,6 +658,12 @@ impl View {
                 )
             })
             .collect();
+        let mut cats = cats;
+        cats.push((
+            "+ Recipe v".into(),
+            Btn::N(NAct::Open(Pick::Recipe)),
+            self.n_pick == Some(Pick::Recipe),
+        ));
         y = self.wrapped(c, x, y, inner, &cats);
         let cat = Category::ALL[self.n_cat.min(Category::ALL.len() - 1)];
         let kinds: Vec<(String, Btn, bool)> = Kind::ALL
@@ -490,17 +710,32 @@ impl View {
         );
         y += 10.0;
         y = self.paragraph(c, x, y, inner, 6.0, 0x9a9ab0, n.kind.about());
+        let wide = inner.min(300.0);
         for (i, d) in n.kind.params().iter().enumerate() {
-            c.text(
-                x,
-                y + 4.0,
-                6.5,
-                white,
-                &format!("{}: {}", d.name, num(n.param(i))),
+            let typing = self.n_typing.as_ref().filter(|(k, _)| *k == i);
+            let label = match typing {
+                Some((_, text)) => format!("{}: {text}_", d.name),
+                None => format!("{}: {}", d.name, self.node_param_text(&n, i, false)),
+            };
+            self.button(
+                c,
+                [x, y, wide - 44.0, 15.0],
+                &label,
+                Btn::N(NAct::Edit(i)),
+                typing.is_some(),
             );
+            self.tips.push((
+                [x, y, wide - 44.0, 15.0],
+                format!(
+                    "{}\nClick to type a number, or use - and +. Range {} to {}.",
+                    d.name,
+                    num(d.min),
+                    num(d.max)
+                ),
+            ));
             self.row(
                 c,
-                x + 150.0,
+                x + wide - 40.0,
                 y,
                 &[
                     ("-".into(), Btn::N(NAct::Param(i, -1)), false),
@@ -510,9 +745,20 @@ impl View {
             y += 17.0;
         }
         let mut row: Vec<(String, Btn, bool)> = Vec::new();
+        if n.kind.params().first().is_some_and(|d| d.name == "group") {
+            row.push((
+                "Group from selection".into(),
+                Btn::N(NAct::FromSelection),
+                false,
+            ));
+        }
         if n.kind.needs_target() {
-            row.push(("< target".into(), Btn::N(NAct::Target(-1)), false));
-            row.push(("target >".into(), Btn::N(NAct::Target(1)), false));
+            let label = n.target.map_or("none".to_string(), |t| t.label());
+            row.push((
+                format!("Target: {label} v"),
+                Btn::N(NAct::Open(Pick::Target)),
+                self.n_pick == Some(Pick::Target),
+            ));
             row.push(("No target".into(), Btn::N(NAct::NoTarget), false));
         }
         if n.kind.uses_ease() {
@@ -532,7 +778,10 @@ impl View {
     pub(super) fn press_node_action(&mut self, a: NAct, shift: bool) {
         let k = if shift { 10 } else { 1 };
         match a {
-            NAct::Cat(i) => self.n_cat = i,
+            NAct::Cat(i) => {
+                self.n_cat = i;
+                self.n_pick = None;
+            }
             NAct::Add(kind) => {
                 let [_, _, w, h] = self.layout.nodes;
                 let (cx, cy) = self.to_world(
@@ -560,11 +809,54 @@ impl View {
                     self.mark_stale();
                 }
             }
-            NAct::Target(dir) => {
+            NAct::Edit(i) => {
+                if self.n_sel.is_some() {
+                    self.n_typing = Some((i, String::new()));
+                }
+            }
+            NAct::FromSelection => {
+                let Some(id) = self.n_sel else { return };
+                match self.ed.add_group_from_selection() {
+                    Ok(g) => {
+                        self.ed.set_node_param(id, 0, (g + 1) as f64);
+                        self.status =
+                            format!("the node now follows Group {} (the selected notes)", g + 1);
+                        self.mark_stale();
+                    }
+                    Err(e) => self.status = e,
+                }
+            }
+            NAct::Open(p) => {
+                self.n_pick = if self.n_pick == Some(p) {
+                    None
+                } else {
+                    Some(p)
+                };
+            }
+            NAct::SetTarget(t) => {
+                self.n_pick = None;
                 if let Some(id) = self.n_sel
-                    && self.ed.cycle_node_target(id, dir)
+                    && self.ed.set_node_target(id, Some(t))
                 {
                     self.mark_stale();
+                }
+            }
+            NAct::PickGroup(d) => {
+                let groups = self.ed.gimmick().map_or(0, |g| g.groups.len()).max(1);
+                self.n_pick_group =
+                    (self.n_pick_group as i32 + d).rem_euclid(groups as i32) as usize;
+            }
+            NAct::AddRecipe(r) => {
+                self.n_pick = None;
+                let [lx, ly, w, h] = self.layout.nodes;
+                let (cx, cy) = self.to_world(lx + 30.0, ly + h / 2.0 - 40.0 + 0.0 * w);
+                match self.ed.add_recipe(r, cx.round(), cy.round()) {
+                    Ok(ids) => {
+                        self.n_sel = ids.first().copied();
+                        self.status = format!("added {}: {}", r.label(), r.about());
+                        self.mark_stale();
+                    }
+                    Err(e) => self.status = e,
                 }
             }
             NAct::NoTarget => {

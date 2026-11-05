@@ -209,6 +209,9 @@ impl View {
     /// Everything that goes over the screen, in the order it stacks.
     pub(super) fn draw_overlays(&mut self, c: &mut Canvas) {
         self.draw_menu_drop(c);
+        if self.node_mode() {
+            self.draw_node_pick(c);
+        }
         if self.list {
             self.modal_from = self.buttons.len();
             self.draw_list(c);

@@ -95,6 +95,9 @@ pub enum Cmd {
     Unbookmark,
     PrevBookmark,
     NextBookmark,
+    // Effect marks (.tko).
+    EffectMark,
+    EffectUnmark,
     // Timing.
     AddRed,
     AddGreen,
@@ -157,6 +160,8 @@ impl Cmd {
             Cmd::Unbookmark => "Remove bookmark",
             Cmd::PrevBookmark => "Previous bookmark",
             Cmd::NextBookmark => "Next bookmark",
+            Cmd::EffectMark => "Add effect mark",
+            Cmd::EffectUnmark => "Remove effect mark",
             Cmd::AddRed => "Add red line (BPM)",
             Cmd::AddGreen => "Add green line (SV)",
             Cmd::DeleteLine => "Delete timing line",
@@ -213,6 +218,10 @@ impl Cmd {
             Cmd::Bookmark => "Marks the playhead so you can jump back to it.",
             Cmd::Unbookmark => "Removes the bookmark nearest the playhead.",
             Cmd::PrevBookmark | Cmd::NextBookmark => "Jumps to the neighbouring bookmark.",
+            Cmd::EffectMark => {
+                "Names this moment for the effects: a node can fire at it, or sweep from one mark to the next. .tko maps only."
+            }
+            Cmd::EffectUnmark => "Removes the effect mark nearest the playhead.",
             Cmd::AddRed => "A BPM change at the playhead; it also resets the beat grid.",
             Cmd::AddGreen => "A slider velocity change at the playhead.",
             Cmd::DeleteLine => "Removes the timing line at the playhead.",
@@ -300,6 +309,7 @@ pub const TOOLS: &str = "Tools and sounds";
 pub const MOVE: &str = "Playback and seeking";
 pub const VIEW: &str = "View and snap";
 pub const MARKS: &str = "Bookmarks";
+pub const FX_MARKS: &str = "Effect marks";
 pub const LINES: &str = "Timing";
 pub const MODES: &str = "Modes";
 
@@ -458,6 +468,15 @@ pub const BINDS: &[Bind] = &[
         Cmd::NextBookmark,
         "Ctrl+Right",
         MARKS,
+    ),
+    b(KeyCode::KeyM, "", false, Cmd::EffectMark, "M", FX_MARKS),
+    b(
+        KeyCode::KeyM,
+        "s",
+        false,
+        Cmd::EffectUnmark,
+        "Shift+M",
+        FX_MARKS,
     ),
     b(KeyCode::KeyP, "c", false, Cmd::AddRed, "Ctrl+P", LINES),
     b(

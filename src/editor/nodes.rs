@@ -2,7 +2,9 @@
 //! is one undo step; moving a node folds a whole drag into one.
 
 use super::state::Editor;
+use crate::tko::gimmick::{MAX_MARKS, Mark};
 use crate::tko::graph::{Kind, Node, Target, clip_preset};
+use crate::tko::recipes::Recipe;
 
 impl Editor {
     pub fn node(&self, id: u32) -> Option<&Node> {
@@ -78,6 +80,56 @@ impl Editor {
         })
     }
 
+    /// Sets parameter `i` of a node to `v`, held in its range.
+    pub fn set_node_param(&mut self, id: u32, i: usize, v: f64) -> bool {
+        self.edit_gimmick(false, |g| {
+            if let Some(n) = g.graph.node_mut(id)
+                && let Some(d) = n.kind.params().get(i)
+                && v.is_finite()
+            {
+                n.p.resize(n.kind.params().len(), 0.0);
+                n.p[i] = ((v * 1e6).round() / 1e6).clamp(d.min, d.max);
+            }
+        })
+    }
+
+    /// Adds a recipe's nodes with the first at (`x`, `y`) as one undo step. Returns their ids.
+    pub fn add_recipe(&mut self, r: Recipe, x: f32, y: f32) -> Result<Vec<u32>, String> {
+        let mut result = Err("this map has no gimmick to add to".to_string());
+        self.edit_gimmick(false, |g| result = r.add(&mut g.graph, x, y));
+        result
+    }
+
+    /// Puts a mark at chart time `t` (nodes refer to marks by their order). False if one is
+    /// already there.
+    pub fn add_mark(&mut self, t: f64) -> bool {
+        let t = t.round();
+        self.edit_gimmick(false, |g| {
+            if g.marks.len() < MAX_MARKS && !g.marks.iter().any(|m| (m.time - t).abs() < 1.0) {
+                g.marks.push(Mark {
+                    name: String::new(),
+                    time: t,
+                });
+            }
+        })
+    }
+
+    /// Takes away the mark nearest `t`, if one is within `reach` ms.
+    pub fn remove_mark(&mut self, t: f64, reach: f64) -> bool {
+        self.edit_gimmick(false, |g| {
+            let near = g
+                .marks
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| (m.time - t).abs() <= reach)
+                .min_by(|a, b| (a.1.time - t).abs().total_cmp(&(b.1.time - t).abs()))
+                .map(|(i, _)| i);
+            if let Some(i) = near {
+                g.marks.remove(i);
+            }
+        })
+    }
+
     pub fn set_node_target(&mut self, id: u32, target: Option<Target>) -> bool {
         self.edit_gimmick(false, |g| {
             if let Some(n) = g.graph.node_mut(id) {
@@ -111,39 +163,13 @@ impl Editor {
             g.graph.seed = (g.graph.seed as i64).saturating_add(by).max(0) as u64;
         })
     }
-
-    /// Every target a node can drive: the playfield's properties, then each group's.
-    pub fn targets(&self) -> Vec<Target> {
-        use crate::tko::gimmick::{FieldProp, NoteProp};
-        let groups = self.gimmick().map_or(0, |g| g.groups.len());
-        let mut out: Vec<Target> = FieldProp::ALL.iter().map(|p| Target::Field(*p)).collect();
-        for g in 0..groups {
-            out.extend(NoteProp::ALL.iter().map(|p| Target::Group(g, *p)));
-        }
-        out
-    }
-
-    /// Moves a node's target `dir` along `targets()`.
-    pub fn cycle_node_target(&mut self, id: u32, dir: i32) -> bool {
-        let all = self.targets();
-        let Some(node) = self.node(id) else {
-            return false;
-        };
-        let at = node
-            .target
-            .and_then(|t| all.iter().position(|q| *q == t))
-            // Without a target yet, forwards starts at the first and backwards at the last.
-            .map_or(if dir < 0 { 0 } else { -1 }, |i| i as i32);
-        let next = (at + dir).rem_euclid(all.len() as i32) as usize;
-        self.set_node_target(id, Some(all[next]))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::chart::{Chart, tests::MAP};
-    use crate::tko::gimmick::{FieldProp, Group, NoteProp};
+    use crate::tko::gimmick::FieldProp;
     use std::path::PathBuf;
 
     fn plain() -> Editor {
@@ -162,14 +188,14 @@ mod tests {
         let beat = ed.add_node(Kind::OnBeat, 10.0, 10.0).unwrap();
         let pulse = ed.add_node(Kind::Pulse, 200.0, 10.0).unwrap();
         ed.connect_nodes(beat, pulse, 0).unwrap();
-        assert_eq!(ed.node(pulse).unwrap().inputs, [Some(beat)]);
-        assert!(ed.cycle_node_target(pulse, 1));
+        assert_eq!(ed.node(pulse).unwrap().inputs, [Some(beat), None]);
+        assert!(ed.set_node_target(pulse, Some(Target::Field(FieldProp::X))));
         assert_eq!(
             ed.node(pulse).unwrap().target,
             Some(Target::Field(FieldProp::X))
         );
         assert!(ed.undo() && ed.node(pulse).unwrap().target.is_none());
-        assert!(ed.undo() && ed.node(pulse).unwrap().inputs == [None]);
+        assert!(ed.undo() && ed.node(pulse).unwrap().inputs == [None, None]);
         assert!(ed.undo() && ed.undo() && ed.node(beat).is_none());
         assert!(ed.redo());
         assert!(ed.node(beat).is_some());
@@ -227,23 +253,43 @@ mod tests {
     }
 
     #[test]
-    fn targets_list_the_field_and_each_group_and_cycle_both_ways() {
+    fn a_param_can_be_typed_in_and_is_held_in_its_range() {
         let mut ed = editor();
-        ed.edit_gimmick(false, |g| g.groups.push(Group::default()));
-        assert_eq!(
-            ed.targets().len(),
-            FieldProp::ALL.len() + NoteProp::ALL.len()
-        );
-        let n = ed.add_node(Kind::Drive, 0.0, 0.0).unwrap();
-        assert!(ed.cycle_node_target(n, -1));
-        assert!(matches!(
-            ed.node(n).unwrap().target,
-            Some(Target::Group(0, _))
-        ));
-        assert!(ed.cycle_node_target(n, 1));
-        assert_eq!(
-            ed.node(n).unwrap().target,
-            Some(Target::Field(FieldProp::X))
-        );
+        let w = ed.add_node(Kind::Wave, 0.0, 0.0).unwrap();
+        assert!(ed.set_node_param(w, 1, 3.25));
+        assert_eq!(ed.node(w).unwrap().param(1), 3.25);
+        assert!(ed.set_node_param(w, 1, 1e9));
+        assert_eq!(ed.node(w).unwrap().param(1), 1000.0);
+        assert!(!ed.set_node_param(w, 1, f64::NAN));
+        assert!(!ed.set_node_param(w, 9, 1.0), "no such parameter");
+        assert!(ed.undo() && ed.undo());
+        assert_eq!(ed.node(w).unwrap().param(1), 1.0);
+    }
+
+    #[test]
+    fn a_recipe_is_one_undo_step_and_refused_on_a_plain_osu() {
+        let mut ed = editor();
+        let ids = ed.add_recipe(Recipe::KiaiDrop, 0.0, 0.0).unwrap();
+        assert_eq!(ids.len(), 4);
+        assert!(ed.node(ids[1]).unwrap().target.is_some());
+        assert!(ed.undo());
+        assert!(ed.gimmick().unwrap().graph.is_empty());
+        assert!(plain().add_recipe(Recipe::BeatPulse, 0.0, 0.0).is_err());
+    }
+
+    #[test]
+    fn marks_are_placed_listed_in_order_removed_and_undone() {
+        let mut ed = editor();
+        assert!(ed.add_mark(3000.4));
+        assert!(ed.add_mark(1000.0));
+        assert!(!ed.add_mark(1000.0), "one place, one mark");
+        let times: Vec<f64> = ed.gimmick().unwrap().marks.iter().map(|m| m.time).collect();
+        assert_eq!(times, [1000.0, 3000.0], "kept in time order");
+        assert!(!ed.remove_mark(2000.0, 500.0), "nothing near");
+        assert!(ed.remove_mark(3100.0, 500.0));
+        assert_eq!(ed.gimmick().unwrap().marks.len(), 1);
+        assert!(ed.undo());
+        assert_eq!(ed.gimmick().unwrap().marks.len(), 2);
+        assert!(!plain().add_mark(1.0));
     }
 }

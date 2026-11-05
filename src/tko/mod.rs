@@ -11,6 +11,7 @@
 pub mod format;
 pub mod gimmick;
 pub mod graph;
+pub mod recipes;
 pub mod runtime;
 pub mod screen;
 pub mod track;

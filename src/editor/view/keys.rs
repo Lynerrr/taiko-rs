@@ -5,7 +5,7 @@
 use super::{Btn, Drag, Mode, View, fmt_time, inside};
 use crate::editor::keyframes::Subject;
 use crate::render::{Canvas, rgba};
-use crate::tko::gimmick::{FieldProp, NoteProp};
+use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
 use crate::tko::track::Key;
 
 const KEY: u32 = 0xFCB806;
@@ -21,6 +21,8 @@ pub enum KAct {
     DeleteGroup,
     SelectGroup,
     Prop(usize),
+    /// A group of playfield properties (Move, Look, Clones).
+    Tab(usize),
     KeyHere,
     Ease,
     Value(i32),
@@ -101,17 +103,41 @@ impl View {
             );
             return;
         }
-        let names: Vec<&str> = if self.k_field {
-            FieldProp::ALL.iter().map(|p| p.name()).collect()
+        if self.k_field {
+            let tabs: Vec<(String, Btn, bool)> = PropGroup::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, g)| (g.label().to_string(), Btn::K(KAct::Tab(i)), self.k_tab == i))
+                .collect();
+            self.row(c, x, y, &tabs);
+            y += 19.0;
+        }
+        // (name, index into the property list, what it does)
+        let names: Vec<(&str, usize, &str)> = if self.k_field {
+            let tab = PropGroup::ALL[self.k_tab.min(PropGroup::ALL.len() - 1)];
+            FieldProp::ALL
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.group() == tab)
+                .map(|(i, p)| (p.name(), i, p.about()))
+                .collect()
         } else {
-            NoteProp::ALL.iter().map(|p| p.name()).collect()
+            NoteProp::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (p.name(), i, p.about()))
+                .collect()
         };
         let props: Vec<(String, Btn, bool)> = names
             .iter()
-            .enumerate()
-            .map(|(i, n)| (n.to_string(), Btn::K(KAct::Prop(i)), self.k_prop == i))
+            .map(|(n, i, _)| (n.to_string(), Btn::K(KAct::Prop(*i)), self.k_prop == *i))
             .collect();
+        let first = self.buttons.len();
         self.row(c, x, y, &props);
+        for (k, (name, _, about)) in names.iter().enumerate() {
+            let r = self.buttons[first + k].0;
+            self.tips.push((r, format!("{name}\n{about}")));
+        }
         y += 20.0;
         let s = self.subject();
         let now = self.ed.value_of(s, self.ed.time);
@@ -173,6 +199,7 @@ impl View {
             KAct::Target(field) => {
                 self.k_field = field;
                 self.k_prop = 0;
+                self.k_tab = 0;
                 self.k_sel = None;
             }
             KAct::Group(d) => {
@@ -187,6 +214,7 @@ impl View {
                     self.k_field = false;
                     self.k_group = i;
                     self.k_prop = 0;
+                    self.k_tab = 0;
                     self.k_sel = None;
                     self.status = format!("group {} made", i + 1);
                 }
@@ -202,6 +230,17 @@ impl View {
             KAct::SelectGroup => self.ed.select_group(self.k_group),
             KAct::Prop(i) => {
                 self.k_prop = i;
+                self.k_sel = None;
+            }
+            KAct::Tab(i) => {
+                self.k_tab = i.min(PropGroup::ALL.len() - 1);
+                // The first property of the group, so the graph below is one of its own.
+                if let Some(at) = FieldProp::ALL
+                    .iter()
+                    .position(|p| p.group() == PropGroup::ALL[self.k_tab])
+                {
+                    self.k_prop = at;
+                }
                 self.k_sel = None;
             }
             KAct::KeyHere => {
