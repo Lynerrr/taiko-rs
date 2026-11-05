@@ -16674,7 +16674,7 @@ const STATUS_ROUND_SECS: u64 = 45;
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
 /// How long the quick retry key is held for the map to restart (ms).
-const RETRY_HOLD_MS: f64 = 250.0;
+const RETRY_HOLD_MS: f64 = 150.0;
 /// A replay's music made at another speed, and that speed.
 type ReplayMusic = Result<(Arc<Track>, f64), String>;
 /// The speeds a replay can be watched at, against how it was played.
