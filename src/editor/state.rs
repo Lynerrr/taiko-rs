@@ -174,16 +174,6 @@ impl Editor {
         )
     }
 
-    /// The object whose body holds `t` (the nearest start for a note), within `slack` ms.
-    pub fn object_at(&self, t: f64, slack: f64) -> Option<u64> {
-        self.chart
-            .objects
-            .iter()
-            .filter(|o| t >= o.time - slack && t <= self.end_of(o).max(o.time) + slack)
-            .min_by(|a, b| (a.time - t).abs().total_cmp(&(b.time - t).abs()))
-            .map(|o| o.id)
-    }
-
     // ---- placing ----
 
     /// Puts a don or kat at `t` (made whole by the caller's snap). Nothing is put where a note
@@ -1055,15 +1045,6 @@ mod tests {
         assert_eq!(t, [0.0, 100.0]);
         e.undo();
         assert_eq!(e.chart.timing[1].time, 4000.0);
-    }
-
-    #[test]
-    fn objects_are_found_by_their_body_not_just_their_start() {
-        let mut e = editor();
-        let roll = e.place_roll(5000.0, 6000.0).unwrap();
-        assert_eq!(e.object_at(5500.0, 0.0), Some(roll));
-        assert_eq!(e.object_at(1003.0, 5.0), Some(e.chart.objects[0].id));
-        assert_eq!(e.object_at(1200.0, 5.0), None);
     }
 
     #[test]

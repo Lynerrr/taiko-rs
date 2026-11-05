@@ -104,10 +104,15 @@ pub enum Btn {
 enum Drag {
     None,
     Scrub,
+    /// A box over the notes, in map ms (so it stays right while the view scrolls under it).
     Box {
         from: f64,
-        from_x: f32,
-        to_x: f32,
+        to: f64,
+        down_x: f32,
+        /// The pointer has left the press by more than a click's worth.
+        moved: bool,
+        /// Shift: keep what was selected.
+        add: bool,
     },
     Move {
         anchor: u64,
@@ -332,6 +337,10 @@ pub struct View {
     /// The Timing panel's tools: the velocity to set and the factor to multiply by.
     t_value: f64,
     t_factor: f64,
+    /// The modifier keys as of the last pointer event, for the scrolling that carries on without one.
+    held: Keys,
+    /// The last `update`, for how long the view scrolls at an edge.
+    last_tick: Option<Instant>,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -419,6 +428,8 @@ impl View {
             g_frozen: None,
             t_value: 1.0,
             t_factor: 1.1,
+            held: Keys::default(),
+            last_tick: None,
         };
         v.follow(true);
         Ok(v)
@@ -507,6 +518,7 @@ impl View {
     // ---- loading and playing ----
 
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) {
+        self.edge_scroll(now);
         if let Some(rx) = &self.track_rx
             && let Ok(result) = rx.try_recv()
         {
@@ -988,9 +1000,20 @@ impl View {
             && self.mouse.1 > lane_top - 16.0
             && matches!(self.drag, Drag::None)
         {
-            self.object_at_x(self.mouse.0)
+            self.object_at_point(self.mouse.0, self.mouse.1)
         } else {
             None
+        };
+        // While a box is being dragged, what it covers shows as selected already.
+        let boxed = match self.drag {
+            Drag::Box {
+                from,
+                to,
+                moved: true,
+                add,
+                ..
+            } => Some((from.min(to), from.max(to), add)),
+            _ => None,
         };
         for o in &objs[first..] {
             if o.time > to + 40.0 * self.ms_per_px {
@@ -1001,7 +1024,12 @@ impl View {
                 continue;
             }
             let (ox, ex) = (self.x_of(o.time), self.x_of(end));
-            let selected = self.ed.selection.contains(&o.id);
+            let selected = match boxed {
+                Some((a, b, add)) => {
+                    (o.time >= a && o.time <= b) || (add && self.ed.selection.contains(&o.id))
+                }
+                None => self.ed.selection.contains(&o.id),
+            };
             let r = if o.big() { BIG_R } else { NOTE_R };
             let outline = if selected {
                 rgba(0xffffff, 1.0)
@@ -1087,8 +1115,15 @@ impl View {
                 Tool::Select => {}
             }
         }
-        if let Drag::Box { from_x, to_x, .. } = self.drag {
-            let (a, b) = (from_x.min(to_x), from_x.max(to_x));
+        if let Drag::Box {
+            from,
+            to,
+            moved: true,
+            ..
+        } = self.drag
+        {
+            let (xa, xb) = (self.x_of(from), self.x_of(to));
+            let (a, b) = (xa.min(xb).max(x), xa.max(xb).min(x + w));
             c.rect(
                 a,
                 lane_top,
@@ -1287,9 +1322,87 @@ impl View {
     // ---- the pointer ----
 
     /// The object under `x` on the timeline: a note by its head, a roll or swell along its body.
-    fn object_at_x(&self, x: f32) -> Option<u64> {
-        let t = self.t_at(x);
-        self.ed.object_at(t, 13.0 * self.ms_per_px)
+    /// The middle of the notes' lane.
+    fn lane_cy(&self) -> f32 {
+        let [_, y, _, h] = self.layout.timeline;
+        let top = y + RULER + 16.0;
+        top + (y + h - top) / 2.0
+    }
+
+    /// The note under the pointer: its head by the circle drawn, a roll or swell also along its
+    /// body. Anywhere else in the lane is empty, which is what lets a box start between notes.
+    fn object_at_point(&self, x: f32, y: f32) -> Option<u64> {
+        let cy = self.lane_cy();
+        let (t0, t1) = (self.t_at(x - 20.0), self.t_at(x + 20.0));
+        let first = self
+            .ed
+            .chart
+            .objects
+            .partition_point(|o| o.time < t0 - 60_000.0);
+        let mut best: Option<(u8, f32, u64)> = None;
+        for o in &self.ed.chart.objects[first..] {
+            if o.time > t1 {
+                break;
+            }
+            let end = self.ed.end_of(o);
+            let r = if o.big() { BIG_R } else { NOTE_R } + 2.0;
+            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let (dx, dy) = (x - ox, y - cy);
+            let key = if dx * dx + dy * dy <= r * r {
+                Some((0, dx * dx + dy * dy))
+            } else if ex > ox && x >= ox && x <= ex && dy.abs() <= r * 0.8 {
+                Some((1, dy * dy))
+            } else {
+                None
+            };
+            if let Some((kind, d)) = key
+                && best.is_none_or(|(k, bd, _)| (kind, d) < (k, bd))
+            {
+                best = Some((kind, d, o.id));
+            }
+        }
+        best.map(|b| b.2)
+    }
+
+    /// Keeps the view moving while a drag is held at the edge of the timeline (or past it), faster
+    /// the further out the pointer is, and carries the drag along with it.
+    fn edge_scroll(&mut self, now: Instant) {
+        let dt = self
+            .last_tick
+            .replace(now)
+            .map_or(0.0, |p| now.duration_since(p).as_secs_f64().min(0.1));
+        let graph = matches!(self.drag, Drag::GBox { .. } | Drag::Lines { .. });
+        if dt == 0.0
+            || !(graph
+                || matches!(
+                    self.drag,
+                    Drag::Box { .. } | Drag::Move { .. } | Drag::Resize { .. } | Drag::Place { .. }
+                ))
+        {
+            return;
+        }
+        let [l, _, w, _] = if graph {
+            self.layout.graph
+        } else {
+            self.layout.timeline
+        };
+        let (mx, my) = self.mouse;
+        let zone = 28.0;
+        let push = if mx < l + zone {
+            -((l + zone - mx) / zone).min(2.0)
+        } else if mx > l + w - zone {
+            ((mx - (l + w - zone)) / zone).min(2.0)
+        } else {
+            return;
+        };
+        let span = self.timeline_w() as f64 * self.ms_per_px;
+        let moved = (self.view_start + push as f64 * span * 0.75 * dt)
+            .clamp(-1000.0, self.end_ms().max(1000.0));
+        if moved == self.view_start {
+            return;
+        }
+        self.view_start = moved;
+        self.mouse_move(mx, my, self.held);
     }
 
     fn line_near(&self, x: f32) -> Option<u64> {
@@ -1309,6 +1422,7 @@ impl View {
             self.moved_at = Instant::now();
         }
         self.mouse = (x, y);
+        self.held = keys;
         match self.drag {
             Drag::Scrub => {
                 let t = self.t_at(x);
@@ -1321,11 +1435,21 @@ impl View {
             Drag::Slide { from_x, start } => {
                 self.view_start = start - (x - from_x) as f64 * self.ms_per_px;
             }
-            Drag::Box { from, .. } => {
+            Drag::Box {
+                from,
+                down_x,
+                moved,
+                ..
+            } => {
+                let to = self.t_at(x);
                 self.drag = Drag::Box {
                     from,
-                    from_x: self.x_of(from),
-                    to_x: x,
+                    to,
+                    down_x,
+                    moved: moved
+                        || (x - down_x).abs() >= 3.0
+                        || (to - from).abs() >= 3.0 * self.ms_per_px,
+                    add: keys.shift,
                 };
             }
             Drag::Move { anchor, grab } => {
@@ -1403,7 +1527,7 @@ impl View {
             if y < tl[1] + RULER + 16.0 {
                 return I::EwResize;
             }
-            if let Some(id) = self.object_at_x(x) {
+            if let Some(id) = self.object_at_point(x, y) {
                 let end_grab = self.ed.chart.object(id).is_some_and(|o| {
                     let end = self.ed.end_of(o);
                     end > o.time
@@ -1450,6 +1574,7 @@ impl View {
             self.moved_at = Instant::now();
         }
         self.mouse = (x, y);
+        self.held = keys;
         self.typing = None;
         self.n_typing = None;
         self.revert_armed = false;
@@ -1568,16 +1693,30 @@ impl View {
             }
             return;
         }
+        // Ctrl drags a box whatever the tool is, and even starting on a note.
+        if keys.ctrl {
+            self.select_line(None);
+            self.drag = Drag::Box {
+                from: t,
+                to: t,
+                down_x: x,
+                moved: false,
+                add: keys.shift,
+            };
+            return;
+        }
         match self.ed.tool {
             Tool::Select | Tool::Note => {
-                if let Some(id) = self.object_at_x(x) {
+                if let Some(id) = self.object_at_point(x, y) {
                     self.grab_object(id, x, t, keys);
                 } else if self.ed.tool == Tool::Select {
                     self.select_line(None);
                     self.drag = Drag::Box {
                         from: t,
-                        from_x: x,
-                        to_x: x,
+                        to: t,
+                        down_x: x,
+                        moved: false,
+                        add: keys.shift,
                     };
                 } else {
                     let at = self.grid_or_free(t, keys);
@@ -1640,8 +1779,8 @@ impl View {
         self.mouse = (x, y);
         let drag = std::mem::replace(&mut self.drag, Drag::None);
         match drag {
-            Drag::Box { from, from_x, .. } => {
-                if (x - from_x).abs() < 3.0 {
+            Drag::Box { from, moved, .. } => {
+                if !moved {
                     self.ed.select_none();
                     let t = self.ed.snapped(from);
                     self.set_time(t);
@@ -1697,7 +1836,7 @@ impl View {
             return;
         }
         if inside(self.layout.timeline, x, y) {
-            if let Some(id) = self.object_at_x(x) {
+            if let Some(id) = self.object_at_point(x, y) {
                 self.ed.selection = [id].into();
                 self.ed.delete_selected();
                 self.mark_stale();
@@ -2099,7 +2238,7 @@ mod tests {
 
     /// A y inside the notes' lane.
     fn lane_y(v: &View) -> f32 {
-        v.layout.timeline[1] + RULER + 16.0 + 30.0
+        v.lane_cy()
     }
 
     /// A click at map time `t` and height `y`.
@@ -2190,6 +2329,88 @@ mod tests {
         click(&mut v, x, y);
         assert!(v.ed.selection.is_empty());
         assert_eq!(v.ed.time, 3000.0);
+    }
+
+    /// Notes every 40 ms from `a` to `b`: closer together than they are wide.
+    fn crowd(v: &mut View, a: f64, b: f64) {
+        let mut t = a;
+        while t <= b {
+            v.ed.place_hit(t, false);
+            t += 40.0;
+        }
+    }
+
+    #[test]
+    fn a_box_can_start_between_crowded_notes_and_a_press_on_a_circle_grabs_it() {
+        let mut v = view();
+        crowd(&mut v, 6000.0, 7000.0);
+        draw(&mut v);
+        v.ed.tool = Tool::Select;
+        let before = v.ed.chart.objects.len();
+        // Above the circles of the crowd, the lane is empty: a drag there boxes the notes.
+        let above = v.lane_cy() - NOTE_R - 8.0;
+        let (a, b) = (v.x_of(6190.0), v.x_of(6410.0));
+        v.mouse_down(a, above, Keys::default(), None);
+        v.mouse_move(b, above, Keys::default());
+        draw(&mut v);
+        v.mouse_up(b, above, Keys::default());
+        assert_eq!(v.ed.chart.objects.len(), before);
+        assert_eq!(v.ed.selection.len(), 6, "190..=410 holds 200, 240 ... 400");
+        // On a circle the same drag moves the note instead.
+        v.ed.select_none();
+        let y = v.lane_cy();
+        let x = v.x_of(6000.0);
+        assert!(v.object_at_point(x, y).is_some());
+        assert!(v.object_at_point(x, above).is_none());
+        v.mouse_down(x, y, Keys::default(), None);
+        assert!(matches!(v.drag, Drag::Move { .. }));
+        v.mouse_up(x, y, Keys::default());
+    }
+
+    #[test]
+    fn a_box_dragged_past_the_edge_scrolls_and_keeps_growing() {
+        let mut v = view();
+        crowd(&mut v, 9000.0, 14_000.0);
+        draw(&mut v);
+        v.ed.tool = Tool::Select;
+        let above = v.lane_cy() - NOTE_R - 8.0;
+        let start = v.x_of(7000.0);
+        v.mouse_down(start, above, Keys::default(), None);
+        // The pointer goes to the right end of the timeline and stays there.
+        let edge = v.layout.timeline[0] + v.layout.timeline[2] - 2.0;
+        v.mouse_move(edge, above, Keys::default());
+        let t0 = Instant::now();
+        let seen = v.view_start;
+        for i in 0..40 {
+            v.update(t0 + std::time::Duration::from_millis(50 * i), None);
+        }
+        assert!(v.view_end() > 14_000.0, "scrolled to {}", v.view_start);
+        assert!(v.view_start > seen);
+        v.mouse_up(edge, above, Keys::default());
+        assert!(v.ed.selection.len() > 100, "got {}", v.ed.selection.len());
+        // Letting go ends the scrolling.
+        let at = v.view_start;
+        v.update(t0 + std::time::Duration::from_secs(5), None);
+        assert_eq!(v.view_start, at);
+    }
+
+    #[test]
+    fn ctrl_drag_boxes_with_any_tool_instead_of_placing_a_note() {
+        let mut v = view();
+        draw(&mut v);
+        v.ed.tool = Tool::Note;
+        let before = v.ed.chart.objects.len();
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        let y = v.lane_cy();
+        let (a, b) = (v.x_of(800.0), v.x_of(2100.0));
+        v.mouse_down(a, y, ctrl, None);
+        v.mouse_move(b, y, ctrl);
+        v.mouse_up(b, y, ctrl);
+        assert_eq!(v.ed.chart.objects.len(), before);
+        assert_eq!(v.ed.selection.len(), 3);
     }
 
     #[test]
