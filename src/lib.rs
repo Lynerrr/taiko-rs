@@ -78,7 +78,8 @@ mod splash;
 mod stars;
 mod style;
 mod tact;
-mod tko;
+#[doc(hidden)]
+pub mod tko;
 mod tls;
 mod ui;
 mod update;
@@ -2232,6 +2233,13 @@ impl State {
                 self.preview.show_background_for(&self.library[entry]);
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
                 view.set_track_loader(rx, rate);
+                // `TAIKO_EDIT_AT=<ms>`: starts with the playhead there (headless screenshots).
+                if let Some(at) = std::env::var("TAIKO_EDIT_AT")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                {
+                    view.set_time(at);
+                }
                 // The first time, a short tour of what is where.
                 if !self.cfg.editor_tour_done {
                     view.start_tour();

@@ -28,6 +28,7 @@ Help > Take the tour shows it again, and `?` lists every key.
 | Ctrl+Z / Y / X / C / V / A, Delete | undo, redo, cut, copy, paste, select all, delete |
 | Ctrl+B / Ctrl+Shift+B, Ctrl+Left / Right | add / remove bookmark, previous / next bookmark |
 | Ctrl+P / Ctrl+Shift+P, Ctrl+I | red line, green line, delete line at the playhead |
+| M / Shift+M | effect mark at the playhead / remove the nearest (`.tko`) |
 | F6 | timing lines list |
 | Ctrl+S, Ctrl+L, Esc | save, revert (press twice), leave (asks if unsaved) |
 
@@ -41,3 +42,13 @@ Bookmarks are saved in the `.osu` (`[Editor]` `Bookmarks:`), like stable.
 Timing mode (F3) edits green lines in the graph: click to add, drag a dot to change it, drag a
 box to select several and move or scale them together, right click to delete. With several
 selected there are set, multiply, linear and geometric ramp, copy, paste and delete tools.
+
+## Effects (`.tko`)
+
+F4 opens the Effects page: *Keyframes* animates the playfield (move, look and clone properties,
+in tabs) and groups of notes over time, and *Nodes* wires events to actions on a canvas. Click a
+node's number to type it, pick its target from the grouped list, and use "Group from selection" on
+a Note arrives node to follow the notes selected in Compose. The Recipe menu drops a ready-made
+node group (beat pulse, kiai drop, finisher build-up, combo zoom, miss glitch, echo trail, section
+sweep). `M` drops a named mark on the timeline for "At mark", "Between marks" and "Span progress".
+Everything stays visual: judging, score and pp never change.

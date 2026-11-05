@@ -14,10 +14,10 @@ osu file format v14
 
 [Metadata]
 ...
-TkoVersion: 1        <- the format version (Version: is the difficulty name)
+TkoVersion: 2        <- the format version (Version: is the difficulty name)
 
 [Gimmick]
-{"field":{...},"groups":[...]}   <- one line of JSON, the last section
+{"field":{...},"groups":[...],"marks":[...],"graph":{...}}   <- one line of JSON, the last section
 ```
 
 Everything but `TkoVersion` and `[Gimmick]` is the `.osu` format, so stars, pp, the song select
@@ -29,11 +29,12 @@ and the editor's stable-compatible rounding all work on a `.tko` the way they do
   (never guessed at).
 - An older one is brought up to date by the chain in `tko::format::MIGRATIONS` when it is read.
   Raising `tko::TKO_VERSION` needs a migration there and a fixture of the old format in the tests
-  (`a_v1_fixture_keeps_reading` pins version 1).
+  (`a_v1_fixture_keeps_reading` pins version 1). Version 2 only adds optional keys, so its migration
+  from 1 changes nothing.
 - A `.tko` file without `TkoVersion` is an error.
 - The editor writes the current version, and never rewrites a file it cannot read.
 
-## Gimmick, version 1: visual only
+## Gimmick: visual only
 
 A gimmick never changes when a note is hit or how it is judged, so scores, pp and replays of a
 `.tko` map are as fair as those of its `.osu` (the tests judge a map with and without a gimmick
@@ -51,15 +52,30 @@ and compare).
   to the next; before the first key a track holds its first value, after the last its last.
 - Easings: `linear`, `step`, `quad_in/out/in_out`, `cubic_in/out/in_out`, `sine_in/out/in_out`,
   `back_in/out`, `elastic_out`, `bounce_out`.
-- Playfield properties: `x`, `y` (virtual units), `rotation` (degrees, about the hit target),
-  `zoom`, `scroll` (a multiple of the map's own scroll speed; what is drawn, not when a note is
-  hit).
+- Playfield properties, in three groups. *Move*: `x`, `y` (virtual units), `rotation` (degrees,
+  about the hit target), `zoom`, `scroll` (a multiple of the map's own scroll speed; what is
+  drawn, not when a note is hit), `stretch_x`, `stretch_y`. *Look*: `flash` (0..1 white wash),
+  `vignette` (0..1 dark corners), `wash` (0..1 colour overlay) with `wash_hue` (degrees), `glitch`
+  (0..1: the picture torn into shifted slices), `chroma` (px of colour split). *Clones*: `echo`
+  (0..8 fading copies of the playfield) with `echo_x`, `echo_y`, `echo_rot`, `echo_zoom` and
+  `echo_fade` (each copy is offset, turned and shrunk once more than the one before), `kaleido`
+  (2..8 copies turned about the screen centre).
+- The effects are made from the shapes the playfield drew that frame (copied, tinted and moved), so
+  they cost nothing at their defaults, copies are capped (8 echoes, 8 kaleidoscope arms, 12 glitch
+  slices, 20,000 extra shapes a frame) and there is no true blur or colour grading.
 - Group properties: `dx`, `dy`, `scale`, `opacity`, `hidden` (1 hides the note; it can still be
-  hit). A group's notes are found by their start time. Don and kat notes are animated; rolls and
+  hit), `swirl` (degrees a note is turned about the drum). A group's notes are found by their start time. Don and kat notes are animated; rolls and
   swells are not yet.
 - Limits (a file can't make the player hold an unbounded amount): 10,000 keys per track, 256
   groups, 200,000 grouped notes in all, 4 MiB of JSON. Values are held inside each property's range
   and unknown properties are dropped when a file is read.
+
+## Marks
+
+`marks` in the same JSON names moments of the map (a section start, a drop, a break):
+`[{"name": "drop", "time": 104265}]`, ascending by time. Nodes refer to a mark by its 1-based
+place in the list instead of a typed time. The editor places them with `M` (and `Shift+M` takes
+the nearest one away) and shows them as flags on the timeline.
 
 ## Node graph
 
@@ -83,21 +99,34 @@ moves what is drawn.
 - Two kinds of wire. A *trigger* carries moments in time; a *number* carries a value that can be
   read at any time. A wire that joins the wrong kinds, comes from a missing node, or would close a
   loop is dropped when a file is read.
-- Events (trigger sources): `on_start`, `on_time`, `on_beat` (every N beats from an offset, on the
-  map's beat grid; a green line doesn't restart it), `on_kiai_start`, `on_kiai_end`,
-  `on_note_reach` (a group's notes), and the play events `on_hit` (group, judge), `on_miss`
-  (group), `on_combo` (every N). Play events are told to the graph by the game as notes are
+- Events (trigger sources): `on_start`, `on_time` (typed ms; prefer a mark), `on_beat` (every N
+  beats from an offset, on the map's beat grid; a green line doesn't restart it), `on_kiai_start`,
+  `on_kiai_end`, `on_mark`, `on_note_reach` (a group's notes, or every note: filter by `type`,
+  0 any, 1 don, 2 kat, 3 finisher, 4 roll or swell, and by `nth` to take only the Nth of them),
+  and the play events `on_hit` (group, judge, type), `on_miss` (group, type), `on_combo` (every
+  N). Play events are told to the graph by the game as notes are
   judged, so a replay draws the same.
 - Triggers: `delay`, `counter` (every Nth), `once`, `gate` (passes moments while a number is at
   least 0.5), `merge`.
-- Values: `const`, `time`, `beat_phase`, `combo`, `accuracy`, `random` (steady within a beat, from
-  the graph `seed`), `wave`, `toggle` (flips at each moment), `envelope` (1 falling to 0 after
-  each moment). Math: `add`, `mul`, `compare`, `not`, `clamp`, `map` (times, plus). An unwired
-  number input reads 0 (1 for `mul`).
+- Values: `const`, `time`, `beat_phase`, `beats` (beats so far), `kiai` (1 inside kiai), `combo`,
+  `accuracy`, `random` (steady within a beat, from the graph `seed`), `noise` (smooth, seeded),
+  `wave` (sine, triangle, saw or square over N beats), `toggle` (flips at each moment), `envelope`
+  (1 falling to 0 after each moment), `count` (moments so far), `progress` (how far through the
+  trigger's moments we are, 0..1: "the 3rd of 4 finishers" is 0.75), `between` and `span`
+  (1 between two marks / 0..1 across them). Math: `add`, `sub`, `mul`, `compare`, `not`, `abs`,
+  `min`, `max`, `mix` (blend by a third number), `pow`, `steps`, `clamp`, `map` (times, plus). An
+  unwired number input reads 0 (1 for `mul`).
 - Actions end a chain and move a `target` (`field.<property>` or `group.<index>.<property>`): `drive`
   (a number, times a gain), `pulse` (a kick that settles over a time), `tween` (flips between
   nothing and a value at each moment), `shake` (random offset of the playfield, fading), `clip`
-  (a short run of keys played from each moment). What actions give is added to the property's own
+  (a short run of keys played from each moment). `pulse`, `tween`, `shake` and `clip` have a
+  second, optional `scale` number input, read when each moment happens: its amount is multiplied
+  by it (1 if unwired), so `progress` into `scale` makes each kick harder than the last. What
+  actions give is added to the property's own
   keyframes and the sum is held inside the property's range.
 - Limits: 2,000 nodes, 20,000 moments per node, 10,000 node reads per frame (and a read chain at
   most 512 deep). Randomness only comes from `seed` and the beat, never from the clock.
+- Recipes (`tko::recipes`) are ready-made, wired groups of nodes the editor's Nodes page can drop
+  in one click: beat pulse, kiai drop, finisher build-up, combo zoom, miss glitch, kiai echo trail
+  and section sweep. `examples/tko_showcase.rs` builds a whole demo gimmick from a map's structure
+  with the same API.
