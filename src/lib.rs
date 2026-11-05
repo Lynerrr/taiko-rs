@@ -2232,6 +2232,10 @@ impl State {
                 self.preview.show_background_for(&self.library[entry]);
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
                 view.set_track_loader(rx, rate);
+                // The first time, a short tour of what is where.
+                if !self.cfg.editor_tour_done {
+                    view.start_tour();
+                }
                 self.main_menu = None;
                 self.scene = Scene::Editor(Box::new(view));
             }
@@ -7451,6 +7455,7 @@ impl State {
             let keys = self.editor_keys();
             if let Scene::Editor(view) = &mut self.scene {
                 view.mouse_move(vx, vy, keys);
+                return view.cursor();
             }
             return CursorIcon::Default;
         }
@@ -7596,6 +7601,16 @@ impl State {
     /// Right button on song select: hold it and move up and down to fly through the list, like
     /// osu!'s right-click scrolling. The selection stays.
     /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
+    /// The middle button: pans the map editor's timeline.
+    fn middle_button(&mut self, pressed: bool) {
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            let (vx, vy) = self.mouse_virtual();
+            if let Scene::Editor(view) = &mut self.scene {
+                view.middle(pressed, vx, vy);
+            }
+        }
+    }
+
     fn right_button(&mut self, pressed: bool) {
         // A click that wakes the idle screen does nothing else, its release neither.
         if pressed {
@@ -14456,6 +14471,13 @@ impl State {
                     editor_reload = Some((view.entry, speed));
                 }
                 view.draw(canvas, self.cfg.scroll_speed, self.cfg.autoplay);
+                if view.take_tour_ended() && !self.cfg.editor_tour_done {
+                    self.cfg.editor_tour_done = true;
+                    self.cfg.save();
+                }
+                if view.take_exit() {
+                    next = Some(Scene::Select);
+                }
             }
             Scene::VideoEdit(ed) => {
                 match ed.poll() {
@@ -17000,6 +17022,13 @@ impl App {
                 ..
             } => {
                 lock(&self.state).right_button(button_state == ElementState::Pressed);
+            }
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: winit::event::MouseButton::Middle,
+                ..
+            } => {
+                lock(&self.state).middle_button(button_state == ElementState::Pressed);
             }
             WindowEvent::Touch(t) => {
                 let at = Instant::now();

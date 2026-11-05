@@ -238,6 +238,8 @@ pub struct Config {
     pub idle_minutes: u32,
     /// A crash's report goes to the server on the next start (`online::Request::CrashReport`).
     pub send_crash_reports: bool,
+    /// The map editor's first-run tour was finished or skipped.
+    pub editor_tour_done: bool,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
@@ -415,6 +417,7 @@ impl Default for Config {
             discord_presence: true,
             idle_minutes: 2,
             send_crash_reports: true,
+            editor_tour_done: false,
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
@@ -982,6 +985,7 @@ impl Config {
                 "discord_presence" => cfg.discord_presence = v != "false",
                 "idle_minutes" => cfg.idle_minutes = v.parse().unwrap_or(cfg.idle_minutes),
                 "send_crash_reports" => cfg.send_crash_reports = v != "false",
+                "editor_tour_done" => cfg.editor_tour_done = v == "true",
                 "chat_filter" => cfg.chat_filter = v != "false",
                 "message_sound" => cfg.message_sound = v != "false",
                 "notify_playing" => cfg.notify_playing = v == "true",
@@ -1255,6 +1259,7 @@ impl Config {
             self.discord_presence, self.discord_app_id, self.idle_minutes
         ));
         out.push_str(&format!("# after a crash, the next start sends its report to the developers\nsend_crash_reports = {}\n", self.send_crash_reports));
+        out.push_str(&format!("# the map editor's first-run tour was seen (Help > Take the tour shows it again)\neditor_tour_done = {}\n", self.editor_tour_done));
         out.push_str(&format!(
             "# chats: star out swear words; a chime when a friend messages you\nchat_filter = {}\nmessage_sound = {}\n",
             self.chat_filter, self.message_sound

@@ -2,7 +2,8 @@
 //! notes, preview it on the playfield (it is really applied; Cancel undoes it) and keep it. A
 //! second page generates SV curves.
 
-use super::{Btn, View};
+use super::keys::KAct;
+use super::{Btn, Mode, View};
 use crate::editor::gimmicks::GimmickConfig;
 use crate::editor::sv_curves::Curve;
 use crate::editor::timing::SNAP_DIVISORS;
@@ -71,7 +72,52 @@ impl GParam {
     }
 }
 
+impl GParam {
+    /// One line on what the number does ("" where the name says it).
+    fn about(self) -> &'static str {
+        match self {
+            GParam::GimmickBpm => "The BPM of the gimmick lines this tool writes.",
+            GParam::Spacing => "A don's mirrored restore pair sits at plus and minus this many ms.",
+            GParam::KatSpacing => {
+                "The gap in ms between a kat's lines; the later ones follow at +2 and +4."
+            }
+            GParam::Offset => "How many ms from the note the fake slider is put.",
+            GParam::ShinyOffset => "How many ms from the note the glow lines are put.",
+            GParam::ShinyCount => "How many glow lines are written.",
+            GParam::FakeSv => "The slider velocity the fake slider is written with.",
+            GParam::RedBpm => "The BPM of the red line. \"base\" keeps the map's own.",
+            GParam::RedOffset => "Moves the red line this many ms from where it is applied.",
+            GParam::Meter => "Beats per bar of the red line.",
+            GParam::Lines => "How many barlines per beat the wall is made of.",
+            GParam::DonTicks => "How many slits in the wall a don gets.",
+            GParam::KatTicks => "How many slits in the wall a kat gets.",
+            GParam::Window => "The hidden window is 1/this of a beat.",
+            GParam::SvFrom => "The velocity the curve starts at.",
+            GParam::SvTo => "The velocity the curve ends at.",
+            GParam::SvDivisor => "One line per 1/this of a beat.",
+        }
+    }
+}
+
 impl GFlag {
+    /// One line on what the switch does ("" where the name says it).
+    fn about(self) -> &'static str {
+        match self {
+            GFlag::Hide => "Squash the real note out of sight: the structure takes its place.",
+            GFlag::Omit => "Write the lines without a barline.",
+            GFlag::RestoreAfter => "Put the speed back after the structure.",
+            GFlag::ShinyRed => "Write a red line for the glow.",
+            GFlag::SvCurves => {
+                "Read the chart's SV as the curves it was drawn with (ramps between notes) instead of steps."
+            }
+            GFlag::Oscillate => {
+                "Fan out from the first velocity by the difference, alternating sides, instead of sweeping."
+            }
+            GFlag::Relative => "Multiply the speed already there instead of replacing it.",
+            GFlag::PlaceNote | GFlag::Mirror | GFlag::PerPair => "",
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             GFlag::Hide => "Hide the note",
@@ -283,6 +329,10 @@ impl View {
                 Btn::GStep(*p, 1),
                 false,
             );
+            if !p.about().is_empty() {
+                self.tips
+                    .push(([cx + 16.0, y, cell - 38.0, 14.0], p.about().to_string()));
+            }
         }
         y + 18.0
     }
@@ -296,31 +346,71 @@ impl View {
             return y;
         }
         self.row(c, x, y, &items);
+        let first = self.buttons.len() - items.len();
+        for (i, f) in flags.iter().enumerate() {
+            if !f.about().is_empty() {
+                let r = self.buttons[first + i].0;
+                self.tips.push((r, format!("{}\n{}", f.label(), f.about())));
+            }
+        }
         y + 20.0
     }
 
-    pub(super) fn draw_gimmicks(&mut self, c: &mut Canvas) {
-        let [x, y, w, h] = self.layout.inspector;
-        c.round_rect(
-            [x, y],
-            [w, h],
-            3.0,
-            rgba(0x15151d, 0.92),
-            rgba(0x2a2a38, 1.0),
-            1.0,
+    /// What a plain .osu sees on the Effects pages: what a .tko is, and the button that makes one.
+    pub(super) fn draw_tko_explainer(&mut self, c: &mut Canvas, x: f32, y: f32, w: f32) {
+        c.text(x, y, 8.0, rgba(0xffffff, 1.0), "This map is a plain .osu");
+        let y = self.paragraph(
+            c,
+            x,
+            y + 14.0,
+            w,
+            6.5,
+            0x9a9ab0,
+            "Effects animate the playfield and the notes: keyframes move things over time, nodes react to the beat and to how the player plays.",
         );
-        let (x, mut y) = (x + 8.0, y + 6.0);
+        let y = self.paragraph(
+            c,
+            x,
+            y + 3.0,
+            w,
+            6.5,
+            0x9a9ab0,
+            "They only exist in this client. Making a .tko saves a copy next to your .osu and leaves the .osu exactly as it is, so it still plays the same in osu!stable.",
+        );
+        self.button(
+            c,
+            [x, y + 6.0, 120.0, 18.0],
+            "Make a .tko copy",
+            Btn::K(KAct::MakeTko),
+            true,
+        );
+    }
+
+    pub(super) fn draw_gimmicks(&mut self, c: &mut Canvas) {
+        let effects = self.mode == Mode::Effects;
+        let title = if effects {
+            "EFFECTS (.tko)"
+        } else {
+            "GIMMICKS"
+        };
+        let (x, mut y) = self.panel_frame(c, self.layout.inspector, title);
+        let w = self.layout.inspector[2];
         let inner = w - 16.0;
         let dim = rgba(0x9a9ab0, 1.0);
-        let tabs = [
-            ("Structures".to_string(), Btn::GPage(0), self.g_page == 0),
-            ("Generate SV".to_string(), Btn::GPage(1), self.g_page == 1),
-            ("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2),
-            ("Nodes".to_string(), Btn::GPage(3), self.g_page == 3),
-            ("Inspector (Tab)".to_string(), Btn::Gimmicks, false),
-        ];
-        self.row(c, x, y, &tabs);
-        y += 20.0;
+        let tabs: Vec<(String, Btn, bool)> = if effects {
+            vec![
+                ("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2),
+                ("Nodes".to_string(), Btn::GPage(3), self.g_page == 3),
+            ]
+        } else {
+            vec![
+                ("Structures".to_string(), Btn::GPage(0), self.g_page == 0),
+                ("Generate SV".to_string(), Btn::GPage(1), self.g_page == 1),
+            ]
+        };
+        // The pages sit in the title row, so the content gets the whole panel.
+        let ty = self.layout.inspector[1] + 0.5;
+        self.row(c, x + 100.0, ty, &tabs);
         if self.g_page == 3 {
             self.draw_nodes_page(c, x, y, inner);
         } else if self.g_page == 2 {
@@ -331,8 +421,13 @@ impl View {
                 .map(|t| (t.label().to_string(), Btn::GTool(*t), self.g_tool == *t))
                 .collect();
             let (a, b) = tools.split_at(4);
+            let first = self.buttons.len();
             self.row(c, x, y, a);
             self.row(c, x, y + 19.0, b);
+            for (i, t) in GimmickTool::ALL.iter().enumerate() {
+                let r = self.buttons[first + i].0;
+                self.tips.push((r, format!("{}\n{}", t.label(), t.help())));
+            }
             y += 40.0;
             c.text(x, y, 6.0, dim, &Canvas::fit(6.0, inner, self.g_tool.help()));
             y += 10.0;

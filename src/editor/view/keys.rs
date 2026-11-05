@@ -2,7 +2,7 @@
 //! playfield or a group of notes, pick a property, and add, drag, ease and delete keys on its
 //! track the way an animation track is edited in a video editor.
 
-use super::{Btn, Drag, View, fmt_time, inside};
+use super::{Btn, Drag, Mode, View, fmt_time, inside};
 use crate::editor::keyframes::Subject;
 use crate::render::{Canvas, rgba};
 use crate::tko::gimmick::{FieldProp, NoteProp};
@@ -43,7 +43,7 @@ impl View {
 
     /// Whether the graph under the timeline is the keyframe graph.
     pub(super) fn keyframe_mode(&self) -> bool {
-        self.gimmicks && self.g_page == 2 && self.ed.is_tko()
+        self.mode == Mode::Effects && self.g_page == 2 && self.ed.is_tko()
     }
 
     fn group_count(&self) -> usize {
@@ -54,42 +54,7 @@ impl View {
         let dim = rgba(0x9a9ab0, 1.0);
         let white = rgba(0xffffff, 1.0);
         if !self.ed.is_tko() {
-            c.text(
-                x,
-                y,
-                7.0,
-                white,
-                &Canvas::fit(7.0, inner, "A plain .osu chart has no keyframes."),
-            );
-            c.text(
-                x,
-                y + 12.0,
-                6.0,
-                dim,
-                &Canvas::fit(
-                    6.0,
-                    inner,
-                    "Make a .tko: a copy next to it that can animate the playfield and notes.",
-                ),
-            );
-            c.text(
-                x,
-                y + 22.0,
-                6.0,
-                dim,
-                &Canvas::fit(
-                    6.0,
-                    inner,
-                    "The .osu stays as it is, and plays the same in osu!stable.",
-                ),
-            );
-            self.button(
-                c,
-                [x, y + 38.0, 110.0, 16.0],
-                "Make .tko",
-                Btn::K(KAct::MakeTko),
-                false,
-            );
+            self.draw_tko_explainer(c, x, y, inner);
             return;
         }
         let groups = self.group_count();

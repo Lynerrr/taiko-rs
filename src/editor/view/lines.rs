@@ -1,0 +1,295 @@
+//! Working with timing lines as a group: selecting several in the velocity graph, dragging them
+//! together, and the tools that act on a selection (set, multiply, ramp, copy, delete).
+
+use super::chrome::DIM;
+use super::{Btn, Drag, Keys, View};
+use crate::render::{Canvas, accent, rgba};
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TAct {
+    Value(i32),
+    SetValue,
+    Factor(i32),
+    ApplyFactor,
+    RampLinear,
+    RampEven,
+    Copy,
+    Paste,
+    Delete,
+}
+
+impl View {
+    /// Every selected timing line, the focused one first.
+    pub(super) fn selected_lines(&self) -> Vec<u64> {
+        let Some(main) = self.sel_line else {
+            return Vec::new();
+        };
+        let mut out = vec![main];
+        out.extend(self.sel_extra.iter().copied().filter(|id| *id != main));
+        out.retain(|id| self.ed.chart.timing_point(*id).is_some());
+        out
+    }
+
+    /// Makes `id` the only selected line (or none).
+    pub(super) fn select_line(&mut self, id: Option<u64>) {
+        self.sel_line = id;
+        self.sel_extra.clear();
+    }
+
+    fn toggle_line(&mut self, id: u64) {
+        let mut all = self.selected_lines();
+        if let Some(i) = all.iter().position(|x| *x == id) {
+            all.remove(i);
+        } else {
+            all.push(id);
+        }
+        self.sel_line = all.last().copied();
+        self.sel_extra = all.into_iter().collect();
+    }
+
+    /// Selects the lines a box over the graph covers.
+    fn select_lines_in(&mut self, a: (f32, f32), b: (f32, f32), add: bool) {
+        let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
+        let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
+        let range = self.graph_range();
+        let mut got: Vec<u64> = if add {
+            self.selected_lines()
+        } else {
+            Vec::new()
+        };
+        for p in &self.ed.chart.timing {
+            let px = self.x_of(p.time);
+            let hit = if p.is_red() {
+                px >= x0 && px <= x1
+            } else {
+                let py = self.sv_y(p.sv(), range);
+                px >= x0 && px <= x1 && py >= y0 && py <= y1
+            };
+            if hit && !got.contains(&p.id) {
+                got.push(p.id);
+            }
+        }
+        self.sel_line = got.last().copied();
+        self.sel_extra = got.into_iter().collect();
+    }
+
+    /// A press in the velocity graph (Timing mode): on a dot it selects and starts a drag of the
+    /// selection, on empty space it starts a box (a plain click there adds a line).
+    pub(super) fn line_graph_down(&mut self, x: f32, y: f32, keys: Keys) {
+        if let Some(id) = self.graph_dot_near(x, y) {
+            if keys.shift {
+                self.toggle_line(id);
+            } else if !self.selected_lines().contains(&id) {
+                self.select_line(Some(id));
+            } else {
+                self.sel_line = Some(id);
+            }
+            if !self.selected_lines().contains(&id) {
+                return;
+            }
+            self.line_origin = self
+                .selected_lines()
+                .iter()
+                .filter_map(|l| self.ed.chart.timing_point(*l))
+                .map(|p| (p.id, p.time, p.sv()))
+                .collect();
+            self.g_frozen = Some(self.graph_range());
+            self.drag = Drag::Lines { anchor: id };
+            return;
+        }
+        self.drag = Drag::GBox {
+            from: (x, y),
+            to: (x, y),
+        };
+    }
+
+    pub(super) fn line_drag(&mut self, anchor: u64, x: f32, y: f32, keys: Keys) {
+        let Some(&(_, t0, sv0)) = self.line_origin.iter().find(|o| o.0 == anchor) else {
+            return;
+        };
+        let want_t = self.ed.snapped(self.t_at(x));
+        let range = self.graph_range();
+        let want_sv = ((self.y_sv(y, range) * 100.0).round() / 100.0).max(0.01);
+        let dt = if keys.shift { 0.0 } else { want_t - t0 };
+        let k = want_sv / sv0.max(1e-9);
+        let origin = self.line_origin.clone();
+        let ids: Vec<u64> = origin.iter().map(|o| o.0).collect();
+        let moved = self.ed.edit_timings(
+            &ids,
+            |p| {
+                if let Some(&(_, ot, osv)) = origin.iter().find(|o| o.0 == p.id) {
+                    p.time = (ot + dt).max(0.0).round();
+                    if !p.is_red() {
+                        let _ = p.set_sv((((osv * k) * 100.0).round() / 100.0).max(0.01));
+                    }
+                }
+            },
+            true,
+        );
+        match moved {
+            Ok(()) => self.mark_stale(),
+            Err(e) => self.status = e,
+        }
+    }
+
+    /// The end of a press in the graph that was a box or a click.
+    pub(super) fn line_box_up(&mut self, from: (f32, f32), x: f32, y: f32, keys: Keys) {
+        if (x - from.0).abs() < 4.0 && (y - from.1).abs() < 4.0 {
+            // A click on empty space: a new green line right there.
+            let time = self.ed.snapped(self.t_at(x));
+            let range = self.graph_range();
+            let sv = ((self.y_sv(y, range) * 100.0).round() / 100.0).max(0.01);
+            match self.ed.add_green(time, sv) {
+                Ok(id) => {
+                    self.select_line(Some(id));
+                    self.mark_stale();
+                }
+                Err(e) => self.status = e,
+            }
+        } else {
+            self.select_lines_in(from, (x, y), keys.shift);
+        }
+    }
+
+    pub(super) fn draw_line_selection(&mut self, c: &mut Canvas) {
+        if let Drag::GBox { from, to } = self.drag {
+            let (x0, y0) = (from.0.min(to.0), from.1.min(to.1));
+            let (w, h) = ((from.0 - to.0).abs(), (from.1 - to.1).abs());
+            c.rect(x0, y0, w, h, rgba(accent(), 0.16));
+            c.round_rect(
+                [x0, y0],
+                [w, h],
+                0.0,
+                rgba(0, 0.0),
+                rgba(accent(), 0.85),
+                1.0,
+            );
+        }
+    }
+
+    // ---- the tools ----
+
+    pub(super) fn press_line_action(&mut self, a: TAct) {
+        let ids = self.selected_lines();
+        let result: Result<String, String> = match a {
+            TAct::Value(d) => {
+                self.t_value = (self.t_value + d as f64 * 0.05).clamp(0.05, 10.0);
+                return;
+            }
+            TAct::Factor(d) => {
+                self.t_factor = ((self.t_factor + d as f64 * 0.05) * 100.0).round() / 100.0;
+                self.t_factor = self.t_factor.clamp(0.05, 4.0);
+                return;
+            }
+            TAct::SetValue => self
+                .ed
+                .set_sv(&ids, self.t_value)
+                .map(|n| format!("set {n} lines to x{:.2}", self.t_value)),
+            TAct::ApplyFactor => self
+                .ed
+                .scale_sv(&ids, self.t_factor)
+                .map(|n| format!("multiplied {n} lines by {:.2}", self.t_factor)),
+            TAct::RampLinear => self
+                .ed
+                .ramp_sv(&ids, false)
+                .map(|n| format!("ramped {n} lines")),
+            TAct::RampEven => self
+                .ed
+                .ramp_sv(&ids, true)
+                .map(|n| format!("ramped {n} lines evenly")),
+            TAct::Copy => Ok(format!("copied {} lines", self.ed.copy_lines(&ids))),
+            TAct::Paste => {
+                let at = self.ed.time;
+                self.ed.paste_lines(at).map(|n| format!("pasted {n} lines"))
+            }
+            TAct::Delete => self.ed.delete_timings(&ids).map(|n| {
+                self.select_line(None);
+                format!("deleted {n} lines")
+            }),
+        };
+        match result {
+            Ok(said) => {
+                self.status = said;
+                self.mark_stale();
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    /// The panel's content when several lines are selected.
+    pub(super) fn draw_line_tools(&mut self, c: &mut Canvas, x: f32, mut y: f32, w: f32) {
+        let ids = self.selected_lines();
+        let (reds, greens) = ids
+            .iter()
+            .filter_map(|id| self.ed.chart.timing_point(*id))
+            .fold(
+                (0, 0),
+                |(r, g), p| if p.is_red() { (r + 1, g) } else { (r, g + 1) },
+            );
+        c.text(
+            x,
+            y,
+            7.5,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(
+                7.5,
+                w,
+                &format!("{} lines selected  ({greens} green, {reds} red)", ids.len()),
+            ),
+        );
+        y += 14.0;
+        let row = |this: &mut View,
+                   c: &mut Canvas,
+                   y: f32,
+                   name: &str,
+                   value: String,
+                   dec: TAct,
+                   inc: TAct,
+                   go: (&str, TAct)| {
+            c.text(x, y + 4.0, 6.0, rgba(DIM, 1.0), name);
+            let vx = x + 52.0;
+            this.button(c, [vx, y, 14.0, 14.0], "-", Btn::T(dec), false);
+            c.text_centered(vx + 36.0, y + 3.5, 7.5, rgba(0xffffff, 1.0), &value);
+            this.button(c, [vx + 58.0, y, 14.0, 14.0], "+", Btn::T(inc), false);
+            let gw = Canvas::text_width(7.0, go.0) + 14.0;
+            this.button(c, [vx + 78.0, y, gw, 14.0], go.0, Btn::T(go.1), false);
+        };
+        row(
+            self,
+            c,
+            y,
+            "Set to",
+            format!("x{:.2}", self.t_value),
+            TAct::Value(-1),
+            TAct::Value(1),
+            ("Set", TAct::SetValue),
+        );
+        row(
+            self,
+            c,
+            y + 17.0,
+            "Multiply",
+            format!("x{:.2}", self.t_factor),
+            TAct::Factor(-1),
+            TAct::Factor(1),
+            ("Multiply", TAct::ApplyFactor),
+        );
+        y += 36.0;
+        self.row(
+            c,
+            x,
+            y,
+            &[
+                ("Linear ramp".to_string(), Btn::T(TAct::RampLinear), false),
+                ("Even ramp".to_string(), Btn::T(TAct::RampEven), false),
+                ("Copy".to_string(), Btn::T(TAct::Copy), false),
+                ("Paste at playhead".to_string(), Btn::T(TAct::Paste), false),
+                ("Delete".to_string(), Btn::T(TAct::Delete), false),
+            ],
+        );
+        self.tips.push((
+            [x, y, w, 16.0],
+            "Ramps spread the velocity from the first selected green line to the last: linear changes it by the same amount each step, even by the same factor.".to_string(),
+        ));
+    }
+}

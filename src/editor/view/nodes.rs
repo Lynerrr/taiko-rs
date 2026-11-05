@@ -2,7 +2,7 @@
 //! open: boxes for events, logic, values and actions, wires between their ports, dragged the way
 //! a node editor is. Everything here edits `Graph` through the editor, one undo step each.
 
-use super::{Btn, Drag, View, inside};
+use super::{Btn, Drag, Mode, View, inside};
 use crate::render::{Canvas, rgba};
 use crate::tko::graph::{Category, Kind, Node, Port};
 
@@ -49,6 +49,18 @@ fn wire_colour(p: Port) -> u32 {
     }
 }
 
+/// What a wire of this kind carries.
+fn port_about(p: Port, input: bool) -> &'static str {
+    match (p, input) {
+        (Port::Trigger, true) => {
+            "Takes moments in time (orange wires): something happens at each one."
+        }
+        (Port::Trigger, false) => "Gives moments in time (orange wires).",
+        (Port::Number, true) => "Takes a number that can be read at any time (cyan wires).",
+        (Port::Number, false) => "Gives a number that can be read at any time (cyan wires).",
+    }
+}
+
 fn num(v: f64) -> String {
     if v.fract() == 0.0 && v.abs() < 1e9 {
         format!("{}", v as i64)
@@ -78,7 +90,7 @@ pub enum Hit {
 impl View {
     /// Whether the node canvas is showing in place of the timeline.
     pub(super) fn node_mode(&self) -> bool {
-        self.gimmicks && self.g_page == 3 && self.ed.is_tko()
+        self.mode == Mode::Effects && self.g_page == 3 && self.ed.is_tko()
     }
 
     // ---- canvas geometry ----
@@ -267,6 +279,10 @@ impl View {
                 HEAD * z - 1.0,
                 rgba(col, 0.85),
             );
+            self.tips.push((
+                [nx, ny, nw, HEAD * z],
+                format!("{}\n{}", n.kind.label(), n.kind.about()),
+            ));
             let size = 6.5 * z;
             c.text(
                 nx + 4.0 * z,
@@ -293,6 +309,11 @@ impl View {
                     rgba(0x9a9ab0, 1.0),
                     name,
                 );
+                let r = PORT_R * z + 3.0;
+                self.tips.push((
+                    [px - r, py - r, r * 2.0, r * 2.0],
+                    format!("Input: {name}\n{}", port_about(*kind, true)),
+                ));
             }
             if let Some(p) = n.kind.output() {
                 let (px, py) = self.out_pos(n);
@@ -304,6 +325,14 @@ impl View {
                     rgba(0x000000, 0.8),
                     1.0,
                 );
+                let r = PORT_R * z + 3.0;
+                self.tips.push((
+                    [px - r, py - r, r * 2.0, r * 2.0],
+                    format!(
+                        "Output\n{}\nDrag from here to an input of the same colour.",
+                        port_about(p, false)
+                    ),
+                ));
             }
             // Parameters sit on the right of the input rows.
             for (i, d) in n.kind.params().iter().enumerate() {
@@ -401,20 +430,7 @@ impl View {
         let dim = rgba(0x9a9ab0, 1.0);
         let white = rgba(0xffffff, 1.0);
         if !self.ed.is_tko() {
-            c.text(
-                x,
-                y,
-                7.0,
-                white,
-                &Canvas::fit(7.0, inner, "Nodes need a .tko map."),
-            );
-            c.text(
-                x,
-                y + 12.0,
-                6.0,
-                dim,
-                &Canvas::fit(6.0, inner, "Open the Keyframes page and press Make .tko."),
-            );
+            self.draw_tko_explainer(c, x, y, inner);
             return;
         }
         let cats: Vec<(String, Btn, bool)> = Category::ALL
@@ -435,7 +451,14 @@ impl View {
             .filter(|k| k.category() == cat)
             .map(|k| (format!("+ {}", k.label()), Btn::N(NAct::Add(*k)), false))
             .collect();
+        let before = self.buttons.len();
         y = self.wrapped(c, x, y, inner, &kinds) + 2.0;
+        // Each kind says what it does when the pointer rests on it.
+        for i in before..self.buttons.len() {
+            if let (r, Btn::N(NAct::Add(k))) = self.buttons[i] {
+                self.tips.push((r, format!("{}\n{}", k.label(), k.about())));
+            }
+        }
         let Some(n) = self.n_sel.and_then(|id| self.ed.node(id)).cloned() else {
             c.text(
                 x,
@@ -466,6 +489,7 @@ impl View {
             &Canvas::fit(7.0, inner, &format!("#{}  {}", n.id, n.kind.label())),
         );
         y += 10.0;
+        y = self.paragraph(c, x, y, inner, 6.0, 0x9a9ab0, n.kind.about());
         for (i, d) in n.kind.params().iter().enumerate() {
             c.text(
                 x,

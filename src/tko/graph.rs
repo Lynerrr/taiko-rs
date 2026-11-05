@@ -212,6 +212,60 @@ kinds! {
 }
 
 impl Kind {
+    /// What the node does, in a sentence or two, for the editor's palette.
+    pub fn about(self) -> &'static str {
+        match self {
+            Kind::OnStart => "Fires once, when the map starts.",
+            Kind::OnTime => "Fires once, at this many milliseconds into the map.",
+            Kind::OnBeat => {
+                "Fires on the beat grid: every N beats, starting this many beats in. The grid follows the red lines."
+            }
+            Kind::OnKiaiStart => "Fires each time kiai time begins.",
+            Kind::OnKiaiEnd => "Fires each time kiai time ends.",
+            Kind::OnNoteReach => "Fires when a note of this group arrives at the hit circle.",
+            Kind::OnHit => {
+                "Fires when a note is hit. Group 0 is any note; judge 0 is any hit, 1 only great, 2 only ok."
+            }
+            Kind::OnMiss => "Fires when a note is missed. Group 0 is any note.",
+            Kind::OnCombo => "Fires each time the combo reaches a multiple of this number.",
+            Kind::Delay => "Passes each moment on after a pause.",
+            Kind::Counter => "Passes on every Nth moment and swallows the rest.",
+            Kind::Once => "Passes on only the first moment.",
+            Kind::Gate => "Passes moments on only while the number wired in is at least 0.5.",
+            Kind::Merge => "Fires when either input fires.",
+            Kind::Const => "A fixed number.",
+            Kind::Time => "Seconds since the map started.",
+            Kind::BeatPhase => "Climbs from 0 to 1 through each beat, then starts again.",
+            Kind::Combo => "The player's current combo.",
+            Kind::Accuracy => "The player's accuracy so far, from 0 to 1.",
+            Kind::Random => {
+                "A number that changes every few beats. It comes from the map's seed, so replays match."
+            }
+            Kind::Wave => {
+                "Swings smoothly between minus and plus the amount, once per this many beats."
+            }
+            Kind::Toggle => "Flips between 0 and 1 at each moment.",
+            Kind::Envelope => "Jumps to 1 at each moment and falls to 0 over this time.",
+            Kind::Add => "a plus b.",
+            Kind::Mul => "a times b.",
+            Kind::Compare => "1 while a is greater than b, else 0.",
+            Kind::Not => "1 when a is 0, else 0.",
+            Kind::Clamp => "Keeps a between min and max.",
+            Kind::Map => "a times this, plus that.",
+            Kind::Drive => {
+                "Holds the target at this number times the gain, all the time. Added to its keyframes."
+            }
+            Kind::Pulse => {
+                "Kicks the target by an amount at each moment, then lets it settle back."
+            }
+            Kind::Tween => "Moves the target to a value and back, one way at each moment.",
+            Kind::Shake => {
+                "Jolts the whole playfield in random directions at each moment, fading out."
+            }
+            Kind::Clip => "Plays a short ready-made run of keyframes at each moment.",
+        }
+    }
+
     /// Whether the node drives a property.
     pub fn is_action(self) -> bool {
         self.category() == Category::Action

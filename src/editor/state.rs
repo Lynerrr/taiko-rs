@@ -13,9 +13,10 @@ use super::timing;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Select,
-    Don,
-    Kat,
+    /// A don or a kat (see `Editor::kat`).
+    Note,
     Roll,
+    /// A swell, which stable calls a spinner or denden.
     Swell,
 }
 
@@ -33,7 +34,14 @@ pub struct Editor {
     pub tool: Tool,
     /// Place the finisher version of a note.
     pub big: bool,
+    /// The next note placed is a kat (a don otherwise).
+    pub kat: bool,
+    /// Bookmarked moments (map ms, sorted), kept in the file's `[Editor]` section like stable's.
+    pub bookmarks: Vec<f64>,
+    bookmarks_changed: bool,
     clipboard: Vec<HitObject>,
+    /// Timing lines copied, with their times relative to the first.
+    line_clipboard: Vec<TimingPoint>,
     /// The gimmick tools' settings.
     pub gimmick: GimmickConfig,
     /// The timing the gimmick tools read BPM and SV from: the chart as it was before any gimmick
@@ -50,6 +58,17 @@ impl Editor {
             .objects
             .first()
             .map_or(0.0, |o| (o.time - 2000.0).max(0.0));
+        let mut bookmarks: Vec<f64> = chart
+            .get_key("Editor", "Bookmarks")
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|n| n.trim().parse::<f64>().ok())
+                    .filter(|t| t.is_finite() && *t >= 0.0)
+                    .collect()
+            })
+            .unwrap_or_default();
+        bookmarks.sort_by(f64::total_cmp);
+        bookmarks.dedup();
         Editor {
             chart,
             history: History::new(),
@@ -57,9 +76,13 @@ impl Editor {
             selection: BTreeSet::new(),
             time,
             snap: 4,
-            tool: Tool::Select,
+            tool: Tool::Note,
             big: false,
+            kat: false,
+            bookmarks,
+            bookmarks_changed: false,
             clipboard: Vec::new(),
+            line_clipboard: Vec::new(),
             gimmick: GimmickConfig::default(),
             base: None,
             sv_curves: false,
@@ -71,13 +94,59 @@ impl Editor {
     }
 
     pub fn modified(&self) -> bool {
-        self.history.modified()
+        self.history.modified() || self.bookmarks_changed
     }
 
     pub fn save(&mut self) -> Result<(), String> {
+        if self.bookmarks_changed {
+            let list: Vec<String> = self
+                .bookmarks
+                .iter()
+                .map(|t| (*t as i64).to_string())
+                .collect();
+            self.chart.set_key("Editor", "Bookmarks", &list.join(","));
+        }
         self.chart.save(&self.path, true)?;
         self.history.mark_saved();
+        self.bookmarks_changed = false;
         Ok(())
+    }
+
+    // ---- bookmarks ----
+
+    /// Bookmarks the moment `t`; false when it already is.
+    pub fn add_bookmark(&mut self, t: f64) -> bool {
+        let t = t.round();
+        if self.bookmarks.contains(&t) {
+            return false;
+        }
+        self.bookmarks.push(t);
+        self.bookmarks.sort_by(f64::total_cmp);
+        self.bookmarks_changed = true;
+        true
+    }
+
+    /// Removes the bookmark nearest `t` within `reach` ms.
+    pub fn remove_bookmark(&mut self, t: f64, reach: f64) -> bool {
+        let near = self
+            .bookmarks
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| (**b - t).abs() <= reach)
+            .min_by(|a, b| (a.1 - t).abs().total_cmp(&(b.1 - t).abs()))
+            .map(|(i, _)| i);
+        let Some(i) = near else { return false };
+        self.bookmarks.remove(i);
+        self.bookmarks_changed = true;
+        true
+    }
+
+    pub fn bookmark_before(&self, t: f64) -> Option<f64> {
+        self.bookmarks.iter().rev().find(|b| **b < t - 1.0).copied()
+    }
+
+    pub fn bookmark_after(&self, t: f64) -> Option<f64> {
+        self.bookmarks.iter().find(|b| **b > t + 1.0).copied()
     }
 
     // ---- the grid ----
@@ -154,6 +223,42 @@ impl Editor {
         let id = self.chart.objects.iter().map(|o| o.id).max().unwrap_or(0);
         self.selection = BTreeSet::from([id]);
         id
+    }
+
+    // ---- sounds ----
+
+    /// Toggles a hitsound bit (whistle, finish, clap) on the selected notes: all of them get it
+    /// unless they all have it already. With nothing selected it flips what the next note placed
+    /// gets instead. Returns whether the bit ended up on.
+    pub fn toggle_sound(&mut self, bit: i32) -> bool {
+        let before: Vec<HitObject> = self
+            .selected()
+            .into_iter()
+            .filter(|o| o.taiko() != Taiko::Swell)
+            .collect();
+        if before.is_empty() {
+            if bit == super::chart::SOUND_FINISH {
+                self.big = !self.big;
+                return self.big;
+            }
+            self.kat = !self.kat;
+            return self.kat;
+        }
+        let on = !before.iter().all(|o| o.sound & bit != 0);
+        let after: Vec<HitObject> = before
+            .iter()
+            .map(|o| {
+                let mut o = o.clone();
+                if on {
+                    o.sound |= bit;
+                } else {
+                    o.sound &= !bit;
+                }
+                o
+            })
+            .collect();
+        self.edit(before, after, false);
+        on
     }
 
     // ---- selecting ----
@@ -258,6 +363,7 @@ impl Editor {
     }
 
     /// Makes the selected notes kat (`Some(true)`) or don, and big or small.
+    #[cfg(test)]
     pub fn retype_selected(&mut self, kat: Option<bool>, big: Option<bool>) {
         let before: Vec<HitObject> = self
             .selected()
@@ -349,6 +455,70 @@ impl Editor {
 
     pub fn end_drag(&mut self) {
         self.history.end_drag();
+    }
+
+    /// Moves the selection one snap division along the grid (`J`/`K` in stable).
+    pub fn nudge_selected(&mut self, forward: bool) -> bool {
+        let Some(first) = self.selected().first().map(|o| o.time) else {
+            return false;
+        };
+        let to = timing::step(&self.chart.timing, first, forward, self.snap);
+        self.move_selected(to - first, false)
+    }
+
+    /// Copies the selection to start one measure after its last object (`Ctrl+D`). The copies
+    /// become the selection. Returns how many were made.
+    pub fn clone_selected(&mut self) -> usize {
+        let list = self.selected();
+        let (Some(first), Some(last)) = (list.first(), list.last()) else {
+            return 0;
+        };
+        let end = list
+            .iter()
+            .map(|o| self.end_of(o))
+            .fold(last.time, f64::max);
+        let measure = timing::beat_length_at(&self.chart.timing, last.time)
+            * timing::active_red(&self.chart.timing, last.time).map_or(4, |p| p.meter.max(1))
+                as f64;
+        let at = self.snapped(end + measure);
+        let keep = std::mem::take(&mut self.clipboard);
+        let first_time = first.time;
+        self.copy();
+        let n = self.paste(at.max(first_time + 1.0));
+        self.clipboard = keep;
+        n
+    }
+
+    /// Mirrors the selection in time inside the span it covers (`Ctrl+G`).
+    pub fn reverse_selected(&mut self) -> Result<usize, String> {
+        let before = self.selected();
+        if before.len() < 2 {
+            return Err("select at least two notes to reverse".into());
+        }
+        let first = before.iter().map(|o| o.time).fold(f64::INFINITY, f64::min);
+        let last = before
+            .iter()
+            .map(|o| self.end_of(o))
+            .fold(f64::NEG_INFINITY, f64::max);
+        let after: Vec<HitObject> = before
+            .iter()
+            .map(|o| {
+                let to = (first + last - self.end_of(o)).round();
+                o.shifted(to - o.time)
+            })
+            .collect();
+        let taken = |t: f64| {
+            self.chart
+                .objects
+                .iter()
+                .any(|q| q.time == t && !self.selection.contains(&q.id))
+        };
+        if after.iter().any(|o| taken(o.time)) {
+            return Err("reversed, a note would land on another".into());
+        }
+        let n = after.len();
+        self.edit(before, after, false);
+        Ok(n)
     }
 
     // ---- clipboard ----
@@ -475,6 +645,187 @@ impl Editor {
         self.history
             .run(&mut self.chart, Command::RemoveTiming(vec![p]));
         Ok(())
+    }
+
+    /// Edits several timing lines as one undo step (`drag`: a step of a drag still going on).
+    /// `change` is told each line before it is changed. A line it makes invalid refuses the lot.
+    pub fn edit_timings(
+        &mut self,
+        ids: &[u64],
+        mut change: impl FnMut(&mut TimingPoint),
+        drag: bool,
+    ) -> Result<(), String> {
+        let (mut before, mut after) = (Vec::new(), Vec::new());
+        for id in ids {
+            let Some(b) = self.chart.timing_point(*id).cloned() else {
+                continue;
+            };
+            let mut a = b.clone();
+            change(&mut a);
+            if let Some(why) = a.problem() {
+                return Err(why);
+            }
+            if a.time != b.time || a.beat_length != b.beat_length {
+                before.push(b);
+                after.push(a);
+            }
+        }
+        if before.is_empty() {
+            return Ok(());
+        }
+        let cmd = Command::EditTiming { before, after };
+        if drag {
+            self.history.run_drag(&mut self.chart, cmd);
+        } else {
+            self.history.run(&mut self.chart, cmd);
+        }
+        Ok(())
+    }
+
+    /// Gives every selected green line the velocity `to`.
+    pub fn set_sv(&mut self, ids: &[u64], to: f64) -> Result<usize, String> {
+        let n = self.greens(ids).len();
+        let ids = self.greens(ids);
+        self.edit_timings(&ids, |p| drop(p.set_sv(to)), false)?;
+        Ok(n)
+    }
+
+    /// Multiplies the velocity of every selected green line by `k`.
+    pub fn scale_sv(&mut self, ids: &[u64], k: f64) -> Result<usize, String> {
+        let ids = self.greens(ids);
+        self.edit_timings(
+            &ids,
+            |p| drop(p.set_sv((p.sv() * k).clamp(0.01, 10.0))),
+            false,
+        )?;
+        Ok(ids.len())
+    }
+
+    /// Spreads the velocity from the first selected green line to the last evenly over time
+    /// (`geometric`: by the same factor each step, which is what the eye reads as even).
+    pub fn ramp_sv(&mut self, ids: &[u64], geometric: bool) -> Result<usize, String> {
+        let mut greens: Vec<TimingPoint> = self
+            .greens(ids)
+            .iter()
+            .filter_map(|id| self.chart.timing_point(*id).cloned())
+            .collect();
+        greens.sort_by(|a, b| a.time.total_cmp(&b.time));
+        if greens.len() < 3 {
+            return Err("a ramp needs at least three green lines selected".into());
+        }
+        let (first, last) = (greens[0].clone(), greens[greens.len() - 1].clone());
+        let span = (last.time - first.time).max(1.0);
+        let (a, b) = (first.sv(), last.sv());
+        let n = greens.len();
+        let ids: Vec<u64> = greens.iter().map(|p| p.id).collect();
+        self.edit_timings(
+            &ids,
+            |p| {
+                let f = ((p.time - first.time) / span).clamp(0.0, 1.0);
+                let v = if geometric {
+                    a * (b / a).powf(f)
+                } else {
+                    a + (b - a) * f
+                };
+                let _ = p.set_sv(((v * 100.0).round() / 100.0).max(0.01));
+            },
+            false,
+        )?;
+        Ok(n)
+    }
+
+    /// The green lines among `ids`, in the chart's order.
+    fn greens(&self, ids: &[u64]) -> Vec<u64> {
+        self.chart
+            .timing
+            .iter()
+            .filter(|p| !p.is_red() && ids.contains(&p.id))
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Removes timing lines as one step, never the last red one.
+    pub fn delete_timings(&mut self, ids: &[u64]) -> Result<usize, String> {
+        let gone: Vec<TimingPoint> = self
+            .chart
+            .timing
+            .iter()
+            .filter(|p| ids.contains(&p.id))
+            .cloned()
+            .collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+        let reds = self.chart.timing.iter().filter(|p| p.is_red()).count();
+        if gone.iter().filter(|p| p.is_red()).count() >= reds {
+            return Err("a chart needs at least one red line".into());
+        }
+        let n = gone.len();
+        self.history
+            .run(&mut self.chart, Command::RemoveTiming(gone));
+        Ok(n)
+    }
+
+    pub fn copy_lines(&mut self, ids: &[u64]) -> usize {
+        let mut list: Vec<TimingPoint> = self
+            .chart
+            .timing
+            .iter()
+            .filter(|p| ids.contains(&p.id))
+            .cloned()
+            .collect();
+        let Some(first) = list.first().map(|p| p.time) else {
+            return 0;
+        };
+        for p in &mut list {
+            p.time -= first;
+        }
+        self.line_clipboard = list;
+        self.line_clipboard.len()
+    }
+
+    /// Puts the copied lines down with the first at `t`; a line that would share a time with one
+    /// already there is skipped. Returns how many went in.
+    pub fn paste_lines(&mut self, t: f64) -> Result<usize, String> {
+        let t = t.round();
+        let mut made: Vec<TimingPoint> = Vec::new();
+        for p in &self.line_clipboard {
+            let mut n = p.clone();
+            n.time = (t + p.time).round();
+            n.id = 0;
+            if !self
+                .chart
+                .timing
+                .iter()
+                .any(|q| q.time == n.time && q.is_red() == n.is_red())
+            {
+                made.push(n);
+            }
+        }
+        if made.is_empty() {
+            return Ok(0);
+        }
+        let n = made.len();
+        self.history
+            .run(&mut self.chart, Command::InsertTiming(made));
+        if let Err(why) = self.chart.validate() {
+            self.history.undo(&mut self.chart);
+            return Err(why);
+        }
+        Ok(n)
+    }
+
+    /// Removes the line starting at `t` (within a millisecond); the last one there when two share it.
+    pub fn delete_timing_at(&mut self, t: f64) -> Result<(), String> {
+        let id = self
+            .chart
+            .timing
+            .iter()
+            .rev()
+            .find(|p| (p.time - t).abs() < 1.0)
+            .map(|p| p.id)
+            .ok_or("no timing line at the playhead")?;
+        self.delete_timing(id)
     }
 
     pub fn undo(&mut self) -> bool {
@@ -729,5 +1080,152 @@ mod tests {
         assert_eq!(e.chart.objects[0].time, 1251.0);
         assert_eq!(e.resnap_selected(), 1, "the selection is still there");
         assert_eq!(e.resnap_selected(), 0, "and now it is on the grid");
+    }
+
+    #[test]
+    fn a_sound_toggles_on_the_selection_or_on_the_next_note() {
+        use super::super::chart::{SOUND_FINISH, SOUND_WHISTLE};
+        let mut e = editor();
+        // Nothing selected: the next note.
+        assert!(e.toggle_sound(SOUND_WHISTLE) && e.kat);
+        assert!(e.toggle_sound(SOUND_FINISH) && e.big);
+        assert!(!e.toggle_sound(SOUND_WHISTLE) && !e.kat);
+        // A selection where only some have it: all get it, then none.
+        e.selection = e.chart.objects.iter().take(2).map(|o| o.id).collect();
+        let had = e.chart.objects[1].sound & SOUND_WHISTLE != 0;
+        assert!(e.toggle_sound(SOUND_WHISTLE));
+        assert!(
+            e.chart.objects[..2]
+                .iter()
+                .all(|o| o.sound & SOUND_WHISTLE != 0)
+        );
+        assert!(!e.toggle_sound(SOUND_WHISTLE));
+        assert!(
+            e.chart.objects[..2]
+                .iter()
+                .all(|o| o.sound & SOUND_WHISTLE == 0)
+        );
+        let _ = had;
+        assert!(e.undo() && e.undo());
+    }
+
+    #[test]
+    fn bookmarks_are_kept_sorted_and_found_by_neighbour() {
+        let mut e = editor();
+        assert!(e.add_bookmark(3000.0) && e.add_bookmark(1000.0));
+        assert!(!e.add_bookmark(1000.0), "no second one at the same time");
+        assert_eq!(e.bookmarks, [1000.0, 3000.0]);
+        assert_eq!(e.bookmark_after(1000.0), Some(3000.0));
+        assert_eq!(e.bookmark_before(3000.0), Some(1000.0));
+        assert_eq!(e.bookmark_before(1000.0), None);
+        assert!(e.remove_bookmark(3200.0, 500.0));
+        assert!(!e.remove_bookmark(9000.0, 500.0));
+        assert!(e.modified());
+    }
+
+    #[test]
+    fn reverse_mirrors_the_selection_in_its_span_and_undoes() {
+        let mut e = editor();
+        e.select_all();
+        let before = times(&e);
+        let kinds: Vec<_> = e.chart.objects.iter().map(|o| o.taiko()).collect();
+        assert_eq!(e.reverse_selected().unwrap(), before.len());
+        let after = times(&e);
+        assert_eq!(after.len(), before.len());
+        // The first note is now where the last one ended, and the kinds are in the opposite order.
+        let rev: Vec<_> = e.chart.objects.iter().map(|o| o.taiko()).collect();
+        assert_eq!(rev, kinds.iter().rev().copied().collect::<Vec<_>>());
+        assert!(e.undo());
+        assert_eq!(times(&e), before);
+        e.selection = e.chart.objects.iter().take(1).map(|o| o.id).collect();
+        assert!(
+            e.reverse_selected().is_err(),
+            "one note has nothing to reverse"
+        );
+    }
+
+    #[test]
+    fn clone_lands_a_measure_after_the_last_note_and_leaves_the_clipboard() {
+        let mut e = editor();
+        e.selection = e.chart.objects.iter().take(2).map(|o| o.id).collect();
+        e.copy();
+        let n = e.chart.objects.len();
+        e.selection = e.chart.objects.iter().take(2).map(|o| o.id).collect();
+        assert_eq!(e.clone_selected(), 2);
+        assert_eq!(e.chart.objects.len(), n + 2);
+        // 1500 + a 4/4 measure of 500 ms beats = 3500, a first at 1000 + that gap.
+        let t = times(&e);
+        assert!(t.contains(&3500.0), "{t:?}");
+        assert_eq!(e.selection.len(), 2, "the copies are selected");
+        assert_eq!(e.paste(20000.0), 2, "the clipboard was kept");
+        assert_eq!(e.clone_selected(), 2);
+    }
+
+    #[test]
+    fn nudging_moves_one_snap_step_and_a_line_is_removed_at_the_playhead() {
+        let mut e = editor();
+        e.snap = 4;
+        e.selection = e.chart.objects.iter().take(1).map(|o| o.id).collect();
+        assert!(e.nudge_selected(true));
+        assert_eq!(e.chart.objects[0].time, 1125.0);
+        assert!(e.nudge_selected(false));
+        assert_eq!(e.chart.objects[0].time, 1000.0);
+        // The green line at 4000.
+        assert!(e.delete_timing_at(4000.0).is_ok());
+        assert!(e.delete_timing_at(4000.0).is_err());
+        assert_eq!(e.chart.timing.len(), 1);
+        assert!(e.delete_timing_at(0.0).is_err(), "the only red line stays");
+    }
+
+    #[test]
+    fn velocity_tools_act_on_green_lines_in_one_step_and_a_ramp_needs_three() {
+        let mut e = editor();
+        let ids: Vec<u64> = [(1000.0, 1.0), (2000.0, 1.0), (3000.0, 2.0)]
+            .iter()
+            .map(|(t, sv)| e.add_green(*t, *sv).unwrap())
+            .collect();
+        let sv = |e: &Editor, i: usize| e.chart.timing_point(ids[i]).unwrap().sv();
+        assert_eq!(e.set_sv(&ids, 1.5).unwrap(), 3);
+        assert!((0..3).all(|i| sv(&e, i) == 1.5));
+        assert!(e.undo());
+        assert_eq!(sv(&e, 0), 1.0);
+        assert_eq!(e.scale_sv(&ids, 2.0).unwrap(), 3);
+        assert_eq!((sv(&e, 0), sv(&e, 2)), (2.0, 4.0));
+        e.ramp_sv(&ids, false).unwrap();
+        assert_eq!((sv(&e, 0), sv(&e, 1), sv(&e, 2)), (2.0, 3.0, 4.0));
+        e.set_sv(&ids[..2], 1.0).unwrap();
+        e.ramp_sv(&ids, true).unwrap();
+        assert!(
+            (sv(&e, 1) - 2.0).abs() < 0.01,
+            "even steps from 1 to 4 meet at 2: {}",
+            sv(&e, 1)
+        );
+        assert!(e.ramp_sv(&ids[..2], false).is_err());
+        // The red line isn't a velocity: it is left alone.
+        let red = e.chart.timing[0].id;
+        let mut all = ids.clone();
+        all.push(red);
+        let beat = e.chart.timing[0].beat_length;
+        e.scale_sv(&all, 0.5).unwrap();
+        assert_eq!(e.chart.timing_point(red).unwrap().beat_length, beat);
+    }
+
+    #[test]
+    fn lines_are_deleted_copied_and_pasted_with_their_spacing() {
+        let mut e = editor();
+        let a = e.add_green(1000.0, 1.2).unwrap();
+        let b = e.add_green(1600.0, 0.8).unwrap();
+        assert_eq!(e.copy_lines(&[a, b]), 2);
+        assert_eq!(e.paste_lines(9000.0).unwrap(), 2);
+        let times: Vec<f64> = e.chart.timing.iter().map(|p| p.time).collect();
+        assert!(
+            times.contains(&9000.0) && times.contains(&9600.0),
+            "{times:?}"
+        );
+        assert_eq!(e.paste_lines(9000.0).unwrap(), 0, "nothing doubles up");
+        assert!(e.undo());
+        assert_eq!(e.delete_timings(&[a, b]).unwrap(), 2);
+        let red = e.chart.timing[0].id;
+        assert!(e.delete_timings(&[red]).is_err(), "the only red line stays");
     }
 }
