@@ -119,6 +119,8 @@ pub struct Select {
     pub show_converts: bool,
     /// Maps hidden from the list (right-click → Hide); the files stay where they are.
     pub hidden: Hidden,
+    /// The folders of the maps whose own skin is turned off (right-click → Turn off skin).
+    pub map_skins_off: std::collections::HashSet<String>,
     /// The right-click menu of a song list row.
     pub menu: Option<SongMenu>,
     /// The songs liked (the music player's favourites).
@@ -347,6 +349,7 @@ impl Select {
             mods_label: String::new(),
             show_converts: !has_taiko,
             hidden: Hidden::load(),
+            map_skins_off: crate::config::load_map_skins_off(),
             menu: None,
             updates: std::collections::HashMap::new(),
             edited: std::collections::HashSet::new(),
@@ -1338,6 +1341,30 @@ impl Select {
         liked
     }
 
+    /// The map (library index) on list row `row`.
+    pub fn row_map(&self, row: usize) -> Option<usize> {
+        self.visible.get(row).copied()
+    }
+
+    /// Whether the map in folder `dir` has its own skin turned off.
+    pub fn map_skin_off(&self, dir: &std::path::Path) -> bool {
+        !self.map_skins_off.is_empty()
+            && folder_name(dir).is_some_and(|n| self.map_skins_off.contains(&n))
+    }
+
+    /// Turns the map's own skin off or back on, for all its difficulties. Returns whether it's off.
+    pub fn toggle_map_skin(&mut self, entry: &Entry) -> bool {
+        let Some(name) = entry.path.parent().and_then(folder_name) else {
+            return false;
+        };
+        let off = self.map_skins_off.insert(name.clone());
+        if !off {
+            self.map_skins_off.remove(&name);
+        }
+        crate::config::save_map_skins_off(&self.map_skins_off);
+        off
+    }
+
     pub fn menu_items(&self, library: &[Entry]) -> Vec<(String, MenuAction)> {
         let Some(m) = &self.menu else {
             return Vec::new();
@@ -1393,6 +1420,29 @@ impl Select {
             };
             items.push((fit(label), MenuAction::UpdateSong));
         }
+        if m.skin {
+            let off = library[i]
+                .path
+                .parent()
+                .is_some_and(|d| self.map_skin_off(d));
+            items.push((
+                if off {
+                    tr!(
+                        "Use this map's skin",
+                        "この譜面のスキンを使う",
+                        "Включить скин карты"
+                    )
+                } else {
+                    tr!(
+                        "Turn off this map's skin",
+                        "この譜面のスキンをオフ",
+                        "Выключить скин карты"
+                    )
+                }
+                .to_string(),
+                MenuAction::MapSkin,
+            ));
+        }
         items
     }
 
@@ -1419,7 +1469,7 @@ impl Select {
                     t.clone()
                 }
             }
-            MenuAction::Love(..) | MenuAction::Like => return None,
+            MenuAction::Love(..) | MenuAction::Like | MenuAction::MapSkin => return None,
         };
         self.hidden.save();
         // The selection stays unless it was hidden: then another difficulty of that song, else
@@ -2708,6 +2758,8 @@ pub struct SongMenu {
     pub row: usize,
     /// Opened on the song's own row (not one of its difficulties).
     pub header: bool,
+    /// The map has a skin of its own to turn off or on.
+    pub skin: bool,
     pub x: f32,
     pub y: f32,
 }
@@ -2722,6 +2774,13 @@ pub enum MenuAction {
     UpdateSong,
     /// Like the song, or not any more.
     Like,
+    /// Turn the map's own skin off, or back on.
+    MapSkin,
+}
+
+/// The name a map's folder goes by in `map_skins_off`: the same wherever the Songs folder is.
+fn folder_name(dir: &std::path::Path) -> Option<String> {
+    Some(dir.file_name()?.to_string_lossy().into_owned())
 }
 
 /// Whether osu! has a newer version of a set than the one here.
