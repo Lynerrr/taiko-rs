@@ -446,7 +446,14 @@ fn cache_dir() -> PathBuf {
     crate::config::cache_dir().unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
 }
 
-/// Extracts an `.osz` once into the cache and returns the folder.
+/// Whether `path` is a beatmap archive: osu!'s `.osz`, or the `.olz` osu!lazer exports (the same
+/// zip, with the `.osu` files as lazer keeps them).
+pub fn is_map_archive(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("osz") || e.eq_ignore_ascii_case("olz"))
+}
+
+/// Extracts an `.osz` or `.olz` once into the cache and returns the folder.
 fn extract_osz(path: &Path) -> Result<PathBuf, String> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("map");
     let dest = cache_dir().join("osz").join(stem);
@@ -664,7 +671,7 @@ fn scan_cached(
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
             Some("osu" | "tko") if input.is_file() => files.push((None, input.clone())),
-            Some("osz") if input.is_file() => match extract_osz(input) {
+            Some("osz" | "olz") if input.is_file() => match extract_osz(input) {
                 Ok(dir) => loose(&mut files, &dir),
                 Err(e) => eprintln!("{}: {e}", input.display()),
             },
@@ -701,8 +708,8 @@ fn scan_cached(
                         }
                     } else if is_map_file(&p) {
                         files.push((None, p));
-                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osz")) {
-                        // A Songs folder: also pick up .osz files dropped into it.
+                    } else if is_map_archive(&p) {
+                        // A Songs folder: also pick up .osz and .olz files dropped into it.
                         if let Ok(dir) = extract_osz(&p) {
                             loose(&mut files, &dir);
                         }
@@ -710,7 +717,7 @@ fn scan_cached(
                 }
             }
             _ => eprintln!(
-                "skipping {}: not a .osu, .tko, .osz or folder",
+                "skipping {}: not a .osu, .tko, .osz, .olz or folder",
                 input.display()
             ),
         }
@@ -909,6 +916,71 @@ mod tests {
             ),
             (1, None)
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A map as osu!lazer keeps it: format v128, decimal times and positions.
+    const LAZER_MAP: &str = "osu file format v128\n\n[General]\nAudioFilename: audio.mp3\nMode: 1\n\n[Metadata]\nTitle:Lazer Song\nArtist:A\nCreator:C\nVersion:Oni\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:6\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n100.5,300.25,4,1,0,100,1,0\n\n[HitObjects]\n256.5,192.25,1000.75,1,0,0:0:0:0:\n256.5,192.25,1300.25,1,2,0:0:0:0:\n100.5,50.25,1600.5,2,0,L|300.5:50.25,1,140.5\n";
+
+    /// `archive` holding `LAZER_MAP`, as an export would.
+    fn write_export(archive: &Path) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(archive).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("A - Lazer Song (C) [Oni].osu", options)
+            .unwrap();
+        zip.write_all(LAZER_MAP.as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn a_map_archive_is_an_osz_or_an_olz_however_its_written() {
+        for name in ["a.osz", "a.olz", "a.OLZ", "A b.Osz"] {
+            assert!(is_map_archive(Path::new(name)), "{name}");
+        }
+        for name in ["a.osu", "a.zip", "a.osk", "olz", "a.olz.part"] {
+            assert!(!is_map_archive(Path::new(name)), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_olz_is_found_named_on_its_own_and_in_a_songs_folder() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-olz-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let songs = root.join("Songs");
+        std::fs::create_dir_all(&songs).unwrap();
+        let archive = songs.join("olz-test-export.olz");
+        write_export(&archive);
+        let cache = root.join("library.json");
+        for input in [&archive, &songs] {
+            let found = AtomicUsize::new(0);
+            let maps = scan_cached(std::slice::from_ref(input), &found, &cache, &mut |_| {});
+            assert_eq!(maps.len(), 1, "{}", input.display());
+            assert_eq!(maps[0].meta.title, "Lazer Song");
+            let _ = std::fs::remove_file(&cache);
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_lazer_map_plays_its_decimal_notes_and_gets_stars_and_pp() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-v128-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("map.osu");
+        std::fs::write(&path, LAZER_MAP).unwrap();
+        let map = crate::beatmap::load(&path).unwrap();
+        assert!(map.notes.len() >= 2, "{}", map.notes.len());
+        // Decimals kept, and moved like any map's.
+        let first = 1000.75 + crate::beatmap::OSU_TIMING_MS;
+        assert!(
+            (map.notes[0].time - first).abs() < 1e-6,
+            "{}",
+            map.notes[0].time
+        );
+        let mods = crate::mods::Mods::NONE;
+        let stars = crate::stars::star_rating_played(&path, 1.0, mods, 1.0, 0, Default::default());
+        assert!(stars.is_some_and(|s| s > 0.0), "{stars:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

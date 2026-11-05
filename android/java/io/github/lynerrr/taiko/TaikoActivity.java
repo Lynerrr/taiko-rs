@@ -297,7 +297,7 @@ public class TaikoActivity extends NativeActivity {
         }
         name = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
         String lower = name.toLowerCase();
-        if (lower.endsWith(".osz") || lower.endsWith(".zip")) {
+        if (lower.endsWith(".osz") || lower.endsWith(".olz") || lower.endsWith(".zip")) {
             name = name.substring(0, name.length() - 4);
         }
         return name.trim().isEmpty() ? "import " + System.currentTimeMillis() : name.trim();

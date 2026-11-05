@@ -5990,17 +5990,14 @@ impl State {
                         .file_stem()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    if path
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("osz"))
-                    {
+                    if library::is_map_archive(&path) {
                         self.import_osz(path, &name, false);
                     } else {
                         let file = path
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        self.toast(tr!("{file} isn't a map: drop .osz files", "{file}は譜面ではありません: .oszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz";));
+                        self.toast(tr!("{file} isn't a map: drop .osz or .olz files", "{file}は譜面ではありません: .oszか.olzファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz или .olz";));
                     }
                 }
             }
@@ -6076,9 +6073,9 @@ impl State {
             2.5,
         );
         let drop = tr!(
-            "Drop .osz maps to add them",
-            ".oszの譜面をドロップで追加",
-            "Бросьте карты .osz, чтобы добавить"
+            "Drop .osz or .olz maps to add them",
+            ".oszか.olzの譜面をドロップで追加",
+            "Бросьте карты .osz или .olz, чтобы добавить"
         );
         canvas.text_centered(
             w / 2.0,
@@ -18695,7 +18692,7 @@ pub fn desktop_main() {
     }
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]..."
+            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.olz | file.osu | taiko-rs://score/<id>]..."
         );
         println!("       taiko-rs --info file.osu...   print converted map stats");
         println!(

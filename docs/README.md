@@ -35,7 +35,7 @@ found on their own); without osu!, drop `.osz` files into `~/.local/share/taiko-
 ```sh
 cargo build --release
 ./target/release/taiko-rs                       # scans your osu! stable Songs folder (osu-winello / Wine)
-./target/release/taiko-rs ~/Downloads/*.osz     # or any Songs folder, map folder, .osz, or .osu
+./target/release/taiko-rs ~/Downloads/*.osz     # or any Songs folder, map folder, .osz, .olz, or .osu
 ./target/release/taiko-rs map.osu               # a single .osu starts immediately
 ./target/release/taiko-rs --auto map.osu        # autoplay
 ./target/release/taiko-rs --info map.osu        # print converted map stats (headless)
