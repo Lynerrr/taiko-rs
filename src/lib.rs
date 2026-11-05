@@ -3862,8 +3862,7 @@ impl State {
     fn menu_hit(&mut self) {
         let Some(m) = &mut self.main_menu else { return };
         let sound = match m.hit() {
-            menu::Item::Editor => audio::Sfx::ComboBreak,
-            menu::Item::Play => audio::Sfx::BigDon,
+            menu::Item::Play | menu::Item::Editor => audio::Sfx::BigDon,
             _ => audio::Sfx::Don,
         };
         self.sfx(sound);
