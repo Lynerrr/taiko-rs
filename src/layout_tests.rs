@@ -448,13 +448,24 @@ fn assert_every_screen_fits() {
         .collect();
     s.cfg.online_user = "player2".into();
     s.online_boards
-        .insert(hash, (Instant::now(), Ok(online_rows)));
+        .insert((hash, false), (Instant::now(), Ok(online_rows)));
     check(&mut s, "select online scores", &mut out);
+    // With Relax on: its board, marked as such, and its total by the name.
+    let usual_mods = s.cfg.mods;
+    s.cfg.mods = mods::Mods::parse("RX");
+    let rows = s.online_boards[&(hash, false)].1.clone();
+    s.online_boards.insert((hash, true), (Instant::now(), rows));
+    s.me_relax = Some((6_789.1, Some(12_345)));
+    check(&mut s, "select online scores, Relax", &mut out);
+    s.board_online = false;
+    check(&mut s, "select local scores, Relax", &mut out);
+    s.board_online = true;
+    s.cfg.mods = usual_mods;
     s.board_scroll = 3;
     check(&mut s, "select online scores scrolled", &mut out);
     s.board_scroll = 0;
     s.online_boards.insert(
-        hash,
+        (hash, false),
         (
             Instant::now(),
             Err("the server is offline (connection refused)".into()),
@@ -566,6 +577,12 @@ fn assert_every_screen_fits() {
         joined: 1_700_000_000,
         plays: 12_345,
         pp: 12_345.6,
+        relax: online::RelaxStanding {
+            plays: 12_345,
+            pp: 6_789.1,
+            rank: Some(12_345),
+            top: Vec::new(),
+        },
         rank: Some(1234),
         top: (0..20).map(play).collect(),
         recent: (0..20).map(play).collect(),
@@ -575,16 +592,23 @@ fn assert_every_screen_fits() {
     s.profile = Some(profile::View {
         name: LONG_NAME.into(),
         state: profile::State::Loading(rx),
+        relax: false,
     });
     check(&mut s, "profile loading", &mut out);
     s.profile = Some(profile::View {
         name: LONG_NAME.into(),
         state: profile::State::Loaded(Box::new(loaded)),
+        relax: false,
     });
     check(&mut s, "profile", &mut out);
+    if let Some(view) = &mut s.profile {
+        view.relax = true;
+    }
+    check(&mut s, "profile with Relax on", &mut out);
     s.profile = Some(profile::View {
         name: "x".into(),
         state: profile::State::Failed("the server doesn't have profiles yet".into()),
+        relax: false,
     });
     check(&mut s, "profile failed", &mut out);
     s.profile = None;
