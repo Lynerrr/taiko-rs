@@ -162,6 +162,11 @@ impl Editor {
 
     /// Where an object ends, by the timing in force at its start.
     pub fn end_of(&self, o: &HitObject) -> f64 {
+        // Only rolls and swells have a length; skipping the timing lookups for the rest keeps this
+        // cheap enough to call for every note on every frame.
+        if !matches!(o.taiko(), Taiko::Roll | Taiko::Swell) {
+            return o.time;
+        }
         o.end_time(
             self.sm(),
             timing::beat_length_at(&self.chart.timing, o.time),

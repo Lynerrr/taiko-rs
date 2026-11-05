@@ -476,16 +476,18 @@ impl View {
 
     /// The track's length in map ms, or a little past the last object.
     pub fn end_ms(&self) -> f64 {
-        let last = self
-            .ed
-            .chart
-            .objects
-            .iter()
-            .map(|o| self.ed.end_of(o))
-            .fold(0.0, f64::max);
         match &self.track {
             Some(t) if t.frames() > 0 => t.frames() as f64 / self.audio_rate * 1000.0 * t.rate,
-            _ => last + 10_000.0,
+            _ => {
+                let last = self
+                    .ed
+                    .chart
+                    .objects
+                    .iter()
+                    .map(|o| self.ed.end_of(o))
+                    .fold(0.0, f64::max);
+                last + 10_000.0
+            }
         }
     }
 
