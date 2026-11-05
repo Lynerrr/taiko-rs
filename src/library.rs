@@ -215,6 +215,12 @@ pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
         });
     }
     let _ = start;
+    run_dialogs(tries)
+}
+
+/// Runs the first of the system's dialogs that exists: Ok(None) when cancelled, Err when there
+/// is none to show.
+fn run_dialogs(tries: Vec<std::process::Command>) -> Result<Option<PathBuf>, String> {
     for mut cmd in tries {
         let Ok(out) = cmd.stderr(std::process::Stdio::null()).output() else {
             continue;
@@ -224,7 +230,113 @@ pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
             .to_string();
         return Ok((out.status.success() && !path.is_empty()).then(|| PathBuf::from(path)));
     }
-    Err("no folder dialog to show".into())
+    Err("no file dialog to show".into())
+}
+
+/// What a file dialog should offer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FileKind {
+    Audio,
+    Image,
+}
+
+impl FileKind {
+    pub const fn extensions(self) -> &'static [&'static str] {
+        match self {
+            FileKind::Audio => &["mp3", "ogg", "wav", "flac", "m4a", "opus"],
+            FileKind::Image => &["png", "jpg", "jpeg"],
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            FileKind::Audio => "Songs",
+            FileKind::Image => "Pictures",
+        }
+    }
+
+    /// Whether `path` has one of the extensions.
+    pub fn matches(self, path: &Path) -> bool {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| self.extensions().iter().any(|x| x.eq_ignore_ascii_case(e)))
+    }
+}
+
+/// Asks for a file with the system's file dialog, starting in `start`. Blocks until it closes:
+/// Ok(None) when cancelled, Err when there is no dialog to show.
+pub fn pick_file(kind: FileKind, title: &str, start: &Path) -> Result<Option<PathBuf>, String> {
+    use std::process::Command;
+    #[cfg_attr(target_os = "android", allow(unused_mut))]
+    let mut tries: Vec<Command> = Vec::new();
+    let globs: Vec<String> = kind.extensions().iter().map(|e| format!("*.{e}")).collect();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let start = start.display().to_string().replace('\'', "''");
+        let title = title.replace('\'', "''");
+        let filter = format!(
+            "{} ({})|{}|All files|*.*",
+            kind.label(),
+            globs.join(", "),
+            globs.join(";")
+        );
+        let script = format!(
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Title = '{title}'; $d.Filter = '{filter}'; $d.InitialDirectory = '{start}'; \
+             $top = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
+             if ($d.ShowDialog($top) -eq 'OK') {{ [Console]::Out.Write($d.FileName) }}"
+        );
+        let mut ps = Command::new("powershell");
+        ps.args(["-NoProfile", "-STA", "-Command", &script])
+            .creation_flags(0x0800_0000);
+        tries.push(ps);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let types: Vec<String> = kind
+            .extensions()
+            .iter()
+            .map(|e| format!("\"{e}\""))
+            .collect();
+        let mut osa = Command::new("osascript");
+        osa.args([
+            "-e",
+            &format!(
+                "POSIX path of (choose file with prompt \"{}\" of type {{{}}})",
+                title.replace('"', ""),
+                types.join(", ")
+            ),
+        ]);
+        tries.push(osa);
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+    {
+        let mut zenity = Command::new("zenity");
+        zenity
+            .args(["--file-selection", &format!("--title={title}")])
+            .arg(format!(
+                "--file-filter={} | {}",
+                kind.label(),
+                globs.join(" ")
+            ))
+            .arg(format!("--filename={}/", start.display()));
+        let mut kdialog = Command::new("kdialog");
+        kdialog
+            .arg("--getopenfilename")
+            .arg(start)
+            .arg(format!("{} ({})", globs.join(" "), kind.label()))
+            .args(["--title", title]);
+        let kde = std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|d| d.to_ascii_uppercase().contains("KDE"));
+        tries.extend(if kde {
+            [kdialog, zenity]
+        } else {
+            [zenity, kdialog]
+        });
+    }
+    let _ = (start, title, &globs);
+    run_dialogs(tries)
 }
 
 /// Default osu! stable install locations that have a Songs folder.

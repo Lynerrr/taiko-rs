@@ -19,19 +19,26 @@ pub enum Item {
 
 pub const ITEMS: [Item; 7] = [
     Item::Play,
+    Item::Editor,
     Item::Multiplayer,
     Item::Download,
     Item::Medals,
     Item::Settings,
-    Item::Editor,
     Item::Exit,
 ];
+
+/// The editor's "NEW!" sticker and glow stay until this Unix time (2026-12-31 00:00 UTC).
+pub const NEW_UNTIL: u64 = 1_798_675_200;
+
+/// Whether the editor is still new at `now` (Unix seconds).
+pub fn editor_is_new(now: u64) -> bool {
+    now < NEW_UNTIL
+}
 
 /// How long a hit note shows before its screen opens (ms): the menu fades out meanwhile.
 const LEAVE_MS: f32 = 220.0;
 /// How long the menu takes to fade in, opened or come back to (ms).
 pub const FADE_MS: f32 = 220.0;
-const SHAKE_MS: f32 = 300.0;
 const FLASH_MS: f32 = 200.0;
 const BURST_MS: f32 = 520.0;
 
@@ -74,8 +81,6 @@ const SPARKS: usize = 64;
 const SPARKS_A_BEAT: usize = 5;
 const SPARKS_OPENING: usize = 18;
 const GOLD: u32 = 0xFFD34D;
-
-const COMING_SOON: &str = "Coming soon";
 
 /// Our Discord server.
 pub const DISCORD_INVITE: &str = "https://discord.gg/6JUm46p9Zz";
@@ -277,9 +282,9 @@ impl Item {
             )
             .into(),
             Item::Editor => tr!(
-                "Your own maps, right in the game",
-                "自分の譜面をゲーム内で",
-                "Свои карты прямо в игре"
+                "Make your own maps and share them",
+                "自分の譜面を作って公開しよう",
+                "Делай свои карты и делись ими"
             )
             .into(),
             Item::Settings => tr!(
@@ -297,7 +302,7 @@ impl Item {
             Item::Play | Item::Download => DON,
             Item::Multiplayer | Item::Settings => KAT,
             Item::Medals => 0xE8B020,
-            Item::Editor => 0x23232f,
+            Item::Editor => 0x9b6cff,
             Item::Exit => 0x6f6f86,
         }
     }
@@ -315,10 +320,9 @@ impl Item {
     }
 
     /// Its note: a white rim with a dark outline, a lit and a shaded edge, the logo's glitch
-    /// down the sides. The editor isn't a real note yet: only a dashed outline, in grey.
+    /// down the sides.
     fn art(self) -> Art {
         let mut art = [[0; ART]; ART];
-        let ghost = self == Item::Editor;
         let fill = self.colour();
         for (y, row) in art.iter_mut().enumerate() {
             for (x, px) in row.iter_mut().enumerate() {
@@ -328,14 +332,7 @@ impl Item {
                     continue;
                 }
                 let slant = dx + dy;
-                *px = if ghost {
-                    let dash = ((dy.atan2(dx) / std::f32::consts::TAU + 0.5) * 20.0) as i32;
-                    if d > 13.0 && dash % 2 == 0 {
-                        0x8a8aa0
-                    } else {
-                        fill
-                    }
-                } else if d > 14.4 {
+                *px = if d > 14.4 {
                     OUTLINE
                 } else if d > 11.6 {
                     if slant > 11.0 { 0xc8c8d8 } else { 0xffffff }
@@ -348,25 +345,18 @@ impl Item {
                 };
             }
         }
-        if !ghost {
-            for (y, by) in GLITCH {
-                let row = &mut art[y];
-                // Over the outline, so it starts at the white rim.
-                let rim = |p: &u32| *p != 0 && *p != OUTLINE;
-                let (Some(left), Some(right)) =
-                    (row.iter().position(rim), row.iter().rposition(rim))
-                else {
-                    continue;
-                };
-                row[left.saturating_sub(by + 1)..left].fill(GLITCH_RED);
-                row[right + 1..(right + 2 + by).min(ART)].fill(GLITCH_CYAN);
-            }
+        for (y, by) in GLITCH {
+            let row = &mut art[y];
+            // Over the outline, so it starts at the white rim.
+            let rim = |p: &u32| *p != 0 && *p != OUTLINE;
+            let (Some(left), Some(right)) = (row.iter().position(rim), row.iter().rposition(rim))
+            else {
+                continue;
+            };
+            row[left.saturating_sub(by + 1)..left].fill(GLITCH_RED);
+            row[right + 1..(right + 2 + by).min(ART)].fill(GLITCH_CYAN);
         }
-        let (ink, shadow) = if ghost {
-            (0x8a8aa0, 0x15151d)
-        } else {
-            (0xffffff, tint(fill, 0x000000, 0.45))
-        };
+        let (ink, shadow) = (0xffffff, tint(fill, 0x000000, 0.45));
         let at = (ART - 16) / 2;
         let pixels = || {
             self.icon().iter().enumerate().flat_map(|(y, line)| {
@@ -384,6 +374,22 @@ impl Item {
         }
         art
     }
+}
+
+/// A fully saturated colour going round the hues once as `t` goes from 0 to 1 (and on).
+fn rainbow(t: f32) -> u32 {
+    let h = t.rem_euclid(1.0) * 6.0;
+    let x = 1.0 - (h % 2.0 - 1.0).abs();
+    let (r, g, b) = match h as u32 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    };
+    let byte = |v: f32| (v * 255.0) as u32;
+    byte(r) << 16 | byte(g) << 8 | byte(b)
 }
 
 /// `col` moved `t` of the way to `to`.
@@ -436,7 +442,8 @@ pub struct Menu {
     beats: Option<f64>,
     /// A hit: when, and on what.
     burst: Option<(f32, Item)>,
-    shake: f32,
+    /// The editor is still new: its sticker and glow show.
+    fresh: bool,
     leaving: Option<(Item, f32)>,
     /// Kiai: how far into it (0 to 1, easing both ways), whether it's on, when it opened, the
     /// beat it's on and when that came, and what's flying.
@@ -476,7 +483,7 @@ impl Menu {
             face: (f32::MIN, 1),
             beats: None,
             burst: None,
-            shake: f32::MIN,
+            fresh: editor_is_new(crate::setstatus::now()),
             leaving: None,
             kiai: 0.0,
             in_kiai: false,
@@ -528,15 +535,11 @@ impl Menu {
         }
     }
 
-    /// A don on the selected note. The editor isn't there yet: it just shakes it off.
+    /// A don on the selected note: its screen opens once the hit has had its moment.
     pub fn hit(&mut self) -> Item {
         let item = self.current();
         self.burst = Some((self.clock, item));
-        if item == Item::Editor {
-            self.shake = self.clock;
-        } else {
-            self.leaving = Some((item, self.clock + LEAVE_MS));
-        }
+        self.leaving = Some((item, self.clock + LEAVE_MS));
         item
     }
 
@@ -952,16 +955,8 @@ impl Menu {
             let x = snap_to_grid(left + k as f32 * slot - px);
             c.rect(x, NOTE_Y - px, px * 2.0, px * 2.0, rgba(0x6a6a88, 0.8));
         }
-        let mut hint = None;
         for (i, item) in ITEMS.iter().enumerate() {
             let x = left + (i as f32 + 0.5) * slot;
-            let shaking =
-                *item == Item::Editor && self.is_selected(i) && self.clock - self.shake < SHAKE_MS;
-            let dx = if shaking {
-                (self.clock / 18.0).sin() * 5.0 * (1.0 - (self.clock - self.shake) / SHAKE_MS)
-            } else {
-                0.0
-            };
             // In a kiai they hop on the beat, every other one higher.
             // On every beat they bounce, every other one higher; in a kiai, higher still.
             let high = i as i64 % 2 == self.beat_no.rem_euclid(2);
@@ -974,10 +969,13 @@ impl Menu {
             // The selected one grows as the selector gets to it, and shrinks back as it goes.
             let near = (1.0 - (self.shown - i as f32).abs()).clamp(0.0, 1.0);
             let grown = r * (1.0 + GROW * near);
+            if *item == Item::Editor && self.fresh {
+                self.new_aura(c, x, grown, hop, near);
+            }
             // It stands out: a glow of its colour behind it, the others dimmed.
             if near > 0.01 {
                 c.glow(
-                    x + dx,
+                    x,
                     NOTE_Y - hop,
                     grown * 1.18,
                     grown * 0.35,
@@ -985,7 +983,7 @@ impl Menu {
                 );
             }
             let start = c.shapes.len();
-            draw_note(c, &self.arts[i], x + dx, NOTE_Y - hop, grown, 1.0);
+            draw_note(c, &self.arts[i], x, NOTE_Y - hop, grown, 1.0);
             if near < 0.99 {
                 c.fade_since(start, 1.0, 0.55 + 0.45 * near);
             }
@@ -1003,11 +1001,7 @@ impl Menu {
                     1.0,
                 );
             }
-            let col = match (on || hovered, *item == Item::Editor) {
-                (true, _) => 0xffffff,
-                (false, true) => 0x6f6f86,
-                (false, false) => 0xc8c8d8,
-            };
+            let col = if on || hovered { 0xffffff } else { 0xc8c8d8 };
             c.text_centered(x, label_y, size, rgba(col, 1.0), names[i]);
             if hovered && !on {
                 self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 0.35);
@@ -1019,8 +1013,11 @@ impl Menu {
                 LANE_H,
                 Hit::MenuItem(i),
             );
-            if *item == Item::Editor && hovered {
-                hint = Some(x);
+            if *item == Item::Editor && self.fresh {
+                let bounce = (self.clock / 260.0).sin() * 2.0 + self.kick() * 5.0;
+                let wiggle = (self.clock / 410.0).sin() * 2.5;
+                let grown = r * (1.0 + GROW * near);
+                self.new_chip(c, x + wiggle, NOTE_Y - hop - grown - 18.0 - bounce, 11.0);
             }
         }
         // The selector, on its way to the selected note: brighter on the beat, gold in a kiai.
@@ -1028,9 +1025,6 @@ impl Menu {
         self.spot = [left + (self.index() as f32 + 0.5) * slot, NOTE_Y];
         let w = Canvas::text_width(size, names[self.index()]);
         self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 1.0);
-        if let Some(x) = hint {
-            tooltip(c, x, LANE_TOP - 26.0);
-        }
     }
 
     /// Corner brackets around a note (`r`) and its name (`w` wide, ending at `bottom`).
@@ -1081,6 +1075,59 @@ impl Menu {
         c.rect(x - 0.5, LANE_MID - 28.0, 1.0, 56.0, rgba(0xffffff, 0.2));
     }
 
+    /// The editor is new: a colour-cycling glow behind it and sparkles circling it. `r` is the
+    /// note's radius as drawn, `hop` how high it is, `near` how selected (0 to 1).
+    fn new_aura(&self, c: &mut Canvas, x: f32, r: f32, hop: f32, near: f32) {
+        let t = self.clock;
+        let y = NOTE_Y - hop;
+        let glow = rainbow(t / 2400.0);
+        let breathe = 0.5 + 0.5 * (t / 380.0).sin();
+        c.glow(
+            x,
+            y,
+            r * 1.7,
+            r * 0.8,
+            rgba(glow, 0.3 + 0.2 * breathe + 0.2 * near),
+        );
+        // Sparkles on an orbit, each twinkling in its own time.
+        let px = pixel_size(2.0);
+        for k in 0..8 {
+            let a = t / 900.0 + k as f32 * std::f32::consts::TAU / 8.0;
+            let (sx, sy) = (x + a.cos() * r * 1.55, y + a.sin() * r * 1.2);
+            let twinkle = 0.5 + 0.5 * (t / 170.0 + k as f32 * 1.7).sin();
+            let col = rgba(
+                if k % 2 == 0 { 0xFFD34D } else { 0xffffff },
+                0.35 + 0.6 * twinkle,
+            );
+            let (cx, cy) = (snap_to_grid(sx), snap_to_grid(sy));
+            c.rect(cx - px, cy - px * 0.5, px * 3.0, px, col);
+            c.rect(cx, cy - px * 1.5, px, px * 3.0, col);
+        }
+    }
+
+    /// A red "NEW!" sticker with a gold edge, its middle at (`x`, `y`).
+    fn new_chip(&self, c: &mut Canvas, x: f32, y: f32, size: f32) {
+        let w = Canvas::text_width(size, "NEW!") + 14.0;
+        let h = size + 9.0;
+        let flash = ((self.clock / 220.0).sin() * 0.5 + 0.5) * 0.35;
+        c.round_rect(
+            [x - w / 2.0, y - h / 2.0],
+            [w, h],
+            3.0,
+            rgba(tint(0xe8334a, 0xffffff, flash), 1.0),
+            rgba(rainbow(self.clock / 1200.0), 1.0),
+            2.0,
+        );
+        c.text_centered(
+            x + 1.0,
+            y - size / 2.0 + 1.0,
+            size,
+            rgba(0x5a0f1c, 1.0),
+            "NEW!",
+        );
+        c.text_centered(x, y - size / 2.0, size, rgba(0xffffff, 1.0), "NEW!");
+    }
+
     fn draw_burst(&self, c: &mut Canvas) {
         let Some((at, item)) = self.burst else { return };
         let k = (self.clock - at) / BURST_MS;
@@ -1088,7 +1135,6 @@ impl Menu {
             return;
         }
         let a = 1.0 - k;
-        let miss = item == Item::Editor;
         let px = pixel_size(LANE_PIXEL);
         pixel_ring(
             c,
@@ -1097,19 +1143,14 @@ impl Menu {
             px * 2.0,
             0,
             px,
-            rgba(if miss { 0x8a8aa0 } else { item.colour() }, a * 0.9),
+            rgba(item.colour(), a * 0.9),
         );
-        let word = if miss {
-            tr!("SOON", "もうすぐ", "СКОРО")
-        } else {
-            "GREAT"
-        };
         c.text_centered(
             self.spot[0],
             LANE_TOP - 22.0 - k * 18.0,
             12.0,
             rgba(0xFFD34D, a),
-            word,
+            "GREAT",
         );
     }
 
@@ -1142,12 +1183,9 @@ impl Menu {
             rgba(0xc8c8d8, 1.0),
             &item.about(maps),
         );
-        if item == Item::Editor {
-            tooltip(
-                c,
-                mid + Canvas::text_width(34.0, item.name()) / 2.0 + 62.0,
-                TITLE_Y + 7.0,
-            );
+        if item == Item::Editor && self.fresh {
+            let x = mid + Canvas::text_width(34.0, item.name()) / 2.0 + 30.0;
+            self.new_chip(c, x, TITLE_Y + 4.0, 12.0);
         }
     }
 }
@@ -1231,20 +1269,6 @@ pub fn pixel_ring(
 /// An item's note on its own (the guide's pictures).
 pub fn note(c: &mut Canvas, item: Item, x: f32, y: f32, r: f32) {
     draw_note(c, &item.art(), x, y, r, 1.0);
-}
-
-fn tooltip(c: &mut Canvas, x: f32, y: f32) {
-    let w = Canvas::text_width(8.0, COMING_SOON) + 16.0;
-    let left = (x - w / 2.0).clamp(8.0, (c.width - w - 8.0).max(8.0));
-    c.round_rect(
-        [left, y],
-        [w, 19.0],
-        5.0,
-        rgba(0x1d1d27, 1.0),
-        rgba(0xFFD34D, 1.0),
-        1.0,
-    );
-    c.text(left + 8.0, y + 5.5, 8.0, rgba(0xFFD34D, 1.0), COMING_SOON);
 }
 
 /// The way to our Discord server, in pixels like the notes.
@@ -1349,23 +1373,44 @@ mod tests {
         assert_eq!(m.selected, -1, "Exit is one step back from Play");
         assert_eq!(m.current(), Item::Exit);
         m.step(2);
-        assert_eq!(m.current(), Item::Multiplayer);
+        assert_eq!(m.current(), Item::Editor);
         m.pick(1);
         assert_eq!(m.selected, 1, "already there");
     }
 
     #[test]
-    fn the_editor_is_only_shaken_the_rest_open_after_the_hit() {
+    fn the_editor_opens_after_the_hit_like_the_rest() {
         let mut m = Menu::new();
-        m.pick(5);
+        m.pick(1);
         assert_eq!(m.hit(), Item::Editor);
-        assert!(!m.is_leaving());
+        assert!(m.is_leaving());
+        assert_eq!(m.ready(), None);
+        m.clock += LEAVE_MS;
+        assert_eq!(m.ready(), Some(Item::Editor));
         m.pick(0);
         assert_eq!(m.hit(), Item::Play);
         assert_eq!(m.ready(), None);
         m.clock += LEAVE_MS;
         assert_eq!(m.ready(), Some(Item::Play));
         assert_eq!(m.ready(), None);
+    }
+
+    #[test]
+    fn the_editor_is_new_until_the_new_year_and_sits_after_play() {
+        assert_eq!(ITEMS[1], Item::Editor);
+        // 2026-12-31 00:00 UTC.
+        assert_eq!(NEW_UNTIL, 1_798_675_200);
+        assert!(editor_is_new(NEW_UNTIL - 1));
+        assert!(!editor_is_new(NEW_UNTIL));
+    }
+
+    #[test]
+    fn the_rainbow_goes_round_and_stays_in_range() {
+        assert_eq!(rainbow(0.0), 0xff0000);
+        assert_eq!(rainbow(1.0 / 3.0), 0x00ff00);
+        assert_eq!(rainbow(2.0 / 3.0), 0x0000ff);
+        assert_eq!(rainbow(1.25), rainbow(0.25));
+        assert_eq!(rainbow(-0.75), rainbow(0.25));
     }
 
     #[test]
@@ -1565,7 +1610,7 @@ mod tests {
         m.clock = FADE_MS;
         assert_eq!(m.opacity(), 1.0);
         // Opening something fades it out until it goes.
-        m.pick(2);
+        m.pick(3);
         m.hit();
         assert_eq!(m.opacity(), 1.0);
         m.clock += LEAVE_MS / 2.0;

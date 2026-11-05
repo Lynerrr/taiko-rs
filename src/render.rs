@@ -2576,6 +2576,8 @@ pub enum Hit {
     ToMenu,
     /// A button of the first steps guide.
     Guide(crate::guide::Action),
+    /// A button or field of the editor's front door.
+    EditorHome(crate::editor::home::Act),
     /// The main menu's button to our Discord server.
     DiscordServer,
     /// A music button of the main menu or the player, and the player's timeline.

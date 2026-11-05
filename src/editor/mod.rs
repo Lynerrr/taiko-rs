@@ -7,11 +7,14 @@
 pub mod chart;
 pub mod gimmicks;
 pub mod history;
+pub mod home;
 pub mod keyframes;
+pub mod new_map;
 pub mod nodes;
 pub mod state;
 pub mod sv_curves;
 pub mod svt;
+pub mod tempo;
 pub mod timing;
 pub mod tools;
 pub mod view;

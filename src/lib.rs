@@ -187,6 +187,8 @@ enum Scene {
     VideoEdit(Box<video::Editor>),
     /// The map editor, editing one difficulty.
     Editor(Box<editor::view::View>),
+    /// The editor's front door: a new map from a song, or one to go on with.
+    EditorHome(Box<editor::home::Home>),
     MpResults,
 }
 
@@ -660,6 +662,8 @@ struct State {
     /// Song select is being used by the host to pick the lobby map (in mapguessr, by anyone to
     /// pick their guess).
     picking_lobby_map: bool,
+    /// Song select is picking a map to open in the editor (from the editor's front door).
+    pick_to_edit: bool,
     /// Our side of a mapguessr room, while in one.
     guessr: Option<mapguessr::Guessr>,
     /// Discord status: the connection thread (while enabled), the activity last set, and when
@@ -2220,6 +2224,94 @@ impl State {
         self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx, self.cfg.video)));
     }
 
+    /// The editor's front door: make a map from a song, or go on with one.
+    fn open_editor_home(&mut self) {
+        self.stop_audio();
+        let creator = self.mp_menu.account.clone().unwrap_or_default();
+        self.scene = Scene::EditorHome(Box::new(editor::home::Home::new(
+            &self.cfg.editor_recent,
+            &creator,
+        )));
+    }
+
+    /// What the front door asked for.
+    fn home_out(&mut self, out: editor::home::Out) {
+        use editor::home::Out;
+        match out {
+            Out::None => {}
+            Out::Toast(text) => self.toast(text),
+            Out::Leave => self.show_select(),
+            Out::PickInLibrary => {
+                self.pick_to_edit = true;
+                self.main_menu = None;
+                self.scene = Scene::Select;
+            }
+            Out::Open(path) => match self.entry_for(&path) {
+                Some(entry) => self.open_editor_at(path, entry),
+                None => self.toast(format!("can't open {}", path.display())),
+            },
+            Out::Tour => {
+                let recent = self.cfg.editor_recent.first().map(PathBuf::from);
+                match recent
+                    .filter(|p| p.is_file())
+                    .and_then(|p| Some((self.entry_for(&p)?, p)))
+                {
+                    Some((entry, path)) => {
+                        self.open_editor_at(path, entry);
+                        if let Scene::Editor(view) = &mut self.scene {
+                            view.start_tour();
+                        }
+                    }
+                    None => self.toast(
+                        "make a map first (drop a song on this screen), then take the tour".into(),
+                    ),
+                }
+            }
+            Out::Create(plan) => {
+                let _ = std::fs::create_dir_all(&self.songs_dir);
+                match editor::new_map::create(&plan, &self.songs_dir) {
+                    Ok(file) => match self.entry_for(&file) {
+                        Some(entry) => {
+                            self.toast(format!("made {}", plan.title));
+                            self.open_editor_at(file, entry);
+                        }
+                        None => self.toast("the map was made but can't be opened".into()),
+                    },
+                    Err(e) => self.toast(format!("can't make the map: {e}")),
+                }
+            }
+        }
+    }
+
+    /// The library entry of a map file; one that isn't in the library (a map made just now, a file
+    /// dropped from elsewhere) is added to it.
+    fn entry_for(&mut self, path: &Path) -> Option<usize> {
+        if let Some(i) = self.library.iter().position(|e| e.path == path) {
+            return Some(i);
+        }
+        let meta = beatmap::read_meta_file(path)?;
+        let start = self.library.len();
+        self.append_maps(vec![library::Entry::new(path.to_path_buf(), meta)]);
+        (self.library.len() > start).then_some(start)
+    }
+
+    fn home_key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant) {
+        let typing = matches!(&self.scene, Scene::EditorHome(h) if h.needs_text());
+        let movement = matches!(
+            code,
+            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End
+        );
+        if repeat && !typing && !movement {
+            return;
+        }
+        let (ctrl, shift) = (self.modifiers_ctrl, self.modifiers_shift);
+        let out = match &mut self.scene {
+            Scene::EditorHome(h) => h.key(code, text, ctrl, shift, at, self.audio.as_ref()),
+            _ => return,
+        };
+        self.home_out(out);
+    }
+
     /// Opens the map editor on library entry `entry`.
     fn open_editor(&mut self, entry: usize) {
         let path = self.library[entry].path.clone();
@@ -2227,8 +2319,10 @@ impl State {
     }
 
     fn open_editor_at(&mut self, path: PathBuf, entry: usize) {
-        match editor::view::View::open(path, entry) {
+        match editor::view::View::open(path.clone(), entry) {
             Ok(mut view) => {
+                self.cfg.editor_opened(&path);
+                self.cfg.save();
                 self.stop_audio();
                 self.preview.show_background_for(&self.library[entry]);
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
@@ -3602,7 +3696,7 @@ impl State {
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
-        if !matches!(item, menu::Item::Editor | menu::Item::Exit) {
+        if !matches!(item, menu::Item::Exit) {
             self.screen_fade = Some(0.0);
         }
         match item {
@@ -3610,7 +3704,7 @@ impl State {
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
             menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
-            menu::Item::Editor => {}
+            menu::Item::Editor => self.open_editor_home(),
             menu::Item::Settings => self.open_settings(),
             menu::Item::Exit => self.ask_quit(),
         }
@@ -5583,6 +5677,28 @@ impl State {
             FileDrag::Drop(paths) => {
                 self.drag_hover = None;
                 for path in paths {
+                    if matches!(self.scene, Scene::EditorHome(_)) {
+                        let rate = self.audio.as_ref().map(|a| a.rate);
+                        let out = match &mut self.scene {
+                            Scene::EditorHome(home) => home.dropped(path, rate),
+                            _ => editor::home::Out::None,
+                        };
+                        self.home_out(out);
+                        continue;
+                    }
+                    // A song dropped on song select or the menu starts a map from it.
+                    if editor::home::is_audio(&path)
+                        && matches!(self.scene, Scene::Select)
+                        && !self.picking_lobby_map
+                        && self.mp.is_none()
+                    {
+                        self.open_editor_home();
+                        let rate = self.audio.as_ref().map(|a| a.rate);
+                        if let Scene::EditorHome(home) = &mut self.scene {
+                            home.dropped(path, rate);
+                        }
+                        continue;
+                    }
                     let name = path
                         .file_stem()
                         .map(|n| n.to_string_lossy().into_owned())
@@ -5857,6 +5973,10 @@ impl State {
             Scene::Editor(view) => (
                 tr!("Mapping", "マッピング中", "Делает карту").into(),
                 view.label(),
+            ),
+            Scene::EditorHome(_) => (
+                tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),
+                String::new(),
             ),
             Scene::VideoEdit(ed) => (
                 tr!(
@@ -7167,6 +7287,13 @@ impl State {
             let keys = self.editor_keys();
             if let Scene::Editor(view) = &mut self.scene {
                 view.wheel(notches, keys);
+            }
+            return;
+        }
+        if matches!(self.scene, Scene::EditorHome(_)) && !self.social.open {
+            let x = self.mouse_virtual().0;
+            if let Scene::EditorHome(home) = &mut self.scene {
+                home.wheel(notches, x);
             }
             return;
         }
@@ -9157,6 +9284,7 @@ impl State {
             Scene::Watch(_) => "watching a friend",
             Scene::VideoEdit(_) => "video editor",
             Scene::Editor(_) => "map editor",
+            Scene::EditorHome(_) => "map editor menu",
         };
         let map = self
             .offset_entry()
@@ -9994,6 +10122,7 @@ impl State {
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
         self.social.open
+            || matches!(&self.scene, Scene::EditorHome(h) if h.needs_text())
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
@@ -12310,6 +12439,7 @@ impl State {
     /// a search.
     fn hotkey_place(&self, code: KeyCode) -> Option<keys::Place> {
         let busy = self.splash.is_some()
+            || matches!(self.scene, Scene::EditorHome(_))
             || self.profile.is_some()
             || self.medals.is_some()
             || self.unlock.showing()
@@ -12641,7 +12771,7 @@ impl State {
         if !repeat
             && !matches!(
                 self.scene,
-                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_)
+                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_) | Scene::EditorHome(_)
             )
             && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
@@ -12705,6 +12835,10 @@ impl State {
         }
         if matches!(self.scene, Scene::Editor(_)) {
             self.editor_key(code, repeat, window);
+            return;
+        }
+        if matches!(self.scene, Scene::EditorHome(_)) {
+            self.home_key(code, repeat, text, at);
             return;
         }
         if matches!(self.scene, Scene::VideoEdit(_)) {
@@ -12926,6 +13060,10 @@ impl State {
             }
             Scene::Select => match self.select.key(code, &self.library) {
                 SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
+                SelectAction::Play(i) if self.pick_to_edit => {
+                    self.pick_to_edit = false;
+                    self.open_editor(i);
+                }
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
                 SelectAction::Mods => self.open_mod_select(),
@@ -12963,7 +13101,8 @@ impl State {
             | Scene::Spectate(_)
             | Scene::Watch(_)
             | Scene::VideoEdit(_)
-            | Scene::Editor(_) => {}
+            | Scene::Editor(_)
+            | Scene::EditorHome(_) => {}
             Scene::Play { game, entry, from } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -13231,6 +13370,7 @@ impl State {
         let size_label = format!("Playfield {}", self.playfield_label());
         let mut finish_calibration = false;
         let mut editor_reload: Option<(usize, f64)> = None;
+        let mut home_out: Option<editor::home::Out> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
         // headless screenshots and tests, like `TAIKO_INPUT`).
@@ -13247,6 +13387,26 @@ impl State {
                     .position(|e| e.path == path)
                     .unwrap_or(0);
                 self.open_editor_at(path, entry);
+            }
+        }
+        // `TAIKO_HOME=<song>[|details|timing]`: opens the editor's front door, on a song if one is
+        // given (for headless screenshots, like `TAIKO_EDIT`).
+        if let Some(spec) = std::env::var_os("TAIKO_HOME")
+            && matches!(self.scene, Scene::Select)
+            && self.splash.is_none()
+        {
+            static ONCE: AtomicBool = AtomicBool::new(false);
+            if !ONCE.swap(true, Ordering::Relaxed) {
+                let spec = spec.to_string_lossy().into_owned();
+                let (song, page) = spec.split_once('|').unwrap_or((&spec, ""));
+                self.open_editor_home();
+                let rate = self.audio.as_ref().map(|a| a.rate);
+                if let Scene::EditorHome(home) = &mut self.scene {
+                    if !song.is_empty() {
+                        home.dropped(PathBuf::from(song), rate);
+                    }
+                    home.debug_page(page);
+                }
             }
         }
         if let Some(mut script) = self.input_script.take() {
@@ -13342,6 +13502,9 @@ impl State {
         }
         if !matches!(self.scene, Scene::Select | Scene::Lobby) {
             self.mod_select = None;
+        }
+        if self.pick_to_edit && (self.main_menu.is_some() || !matches!(self.scene, Scene::Select)) {
+            self.pick_to_edit = false;
         }
         // A song or a replay opened by any road leaves the menu behind.
         if matches!(
@@ -13633,6 +13796,27 @@ impl State {
                     .filter(|_| self.picking_lobby_map && guessing)
                 {
                     mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
+                } else if self.pick_to_edit {
+                    let w = canvas.width;
+                    canvas.round_rect(
+                        [24.0, 438.0],
+                        [w - 48.0, 34.0],
+                        8.0,
+                        rgba(0x1d1630, 1.0),
+                        rgba(0x9b6cff, 1.0),
+                        1.5,
+                    );
+                    canvas.text_centered(
+                        w / 2.0,
+                        450.0,
+                        10.0,
+                        rgba(0xffffff, 1.0),
+                        &Canvas::fit(
+                            10.0,
+                            w - 64.0,
+                            "Choose a map to edit: Enter opens it in the editor, Esc cancels",
+                        ),
+                    );
                 } else if self.picking_lobby_map {
                     let w = canvas.width;
                     canvas.round_rect(
@@ -14490,6 +14674,13 @@ impl State {
                     next = Some(Scene::Select);
                 }
             }
+            Scene::EditorHome(home) => {
+                let out = home.update(now, self.audio.as_ref());
+                home.draw(canvas);
+                if !matches!(out, editor::home::Out::None) {
+                    home_out = Some(out);
+                }
+            }
             Scene::VideoEdit(ed) => {
                 match ed.poll() {
                     Err(e) => {
@@ -14819,6 +15010,9 @@ impl State {
             if let Scene::Editor(view) = &mut self.scene {
                 view.set_track_loader(rx, rate);
             }
+        }
+        if let Some(out) = home_out {
+            self.home_out(out);
         }
         if finish_calibration {
             self.finish_calibration();
@@ -15933,6 +16127,14 @@ impl State {
                 }
             }
             Hit::Guide(action) => self.guide_action(action),
+            Hit::EditorHome(act) => {
+                let x = self.mouse_virtual().0;
+                let out = match &mut self.scene {
+                    Scene::EditorHome(home) => home.click(act, x, self.audio.as_ref()),
+                    _ => editor::home::Out::None,
+                };
+                self.home_out(out);
+            }
             Hit::DiscordServer => {
                 if !open_url(menu::DISCORD_INVITE) {
                     self.toast(menu::DISCORD_INVITE.into());
@@ -17626,6 +17828,7 @@ impl State {
             mp_menu: multiplayer::Menu::default(),
             mp_status: String::new(),
             picking_lobby_map: false,
+            pick_to_edit: false,
             guessr: None,
             discord: None,
             map_offsets: config::load_map_offsets(),
