@@ -232,12 +232,7 @@ impl Editor {
             .filter(|o| o.taiko() != Taiko::Swell)
             .collect();
         if before.is_empty() {
-            if bit == super::chart::SOUND_FINISH {
-                self.big = !self.big;
-                return self.big;
-            }
-            self.kat = !self.kat;
-            return self.kat;
+            return self.toggle_next_sound(bit);
         }
         let on = !before.iter().all(|o| o.sound & bit != 0);
         let after: Vec<HitObject> = before
@@ -254,6 +249,48 @@ impl Editor {
             .collect();
         self.edit(before, after, false);
         on
+    }
+
+    /// Flips what the next note placed gets: big for the finish bit, kat for the others. Returns
+    /// whether it ended up on.
+    pub fn toggle_next_sound(&mut self, bit: i32) -> bool {
+        if bit == super::chart::SOUND_FINISH {
+            self.big = !self.big;
+            self.big
+        } else {
+            self.kat = !self.kat;
+            self.kat
+        }
+    }
+
+    /// Gives the note `id` the look of what the next note placed gets (kat or don, big or not).
+    /// Returns whether it changed: drumrolls and dendens are left alone, and so is a note that
+    /// already looks like that (a clap kat stays a clap kat).
+    pub fn recolour(&mut self, id: u64) -> bool {
+        use super::chart::{SOUND_CLAP, SOUND_FINISH, SOUND_WHISTLE};
+        let Some(o) = self.chart.object(id).cloned() else {
+            return false;
+        };
+        let is_kat = match o.taiko() {
+            Taiko::Don => false,
+            Taiko::Kat => true,
+            Taiko::Roll | Taiko::Swell => return false,
+        };
+        if is_kat == self.kat && o.big() == self.big {
+            return false;
+        }
+        let mut after = o.clone();
+        if is_kat != self.kat {
+            after.sound &= !(SOUND_WHISTLE | SOUND_CLAP);
+            if self.kat {
+                after.sound |= SOUND_WHISTLE;
+            }
+        }
+        if o.big() != self.big {
+            after.sound ^= SOUND_FINISH;
+        }
+        self.edit(vec![o], vec![after], false);
+        true
     }
 
     // ---- selecting ----

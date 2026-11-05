@@ -1866,6 +1866,14 @@ impl View {
         match self.ed.tool {
             Tool::Select | Tool::Note => {
                 if let Some(id) = self.object_at_point(x, y) {
+                    // The Note tool paints a placed note with the colour of the one in hand.
+                    if self.ed.tool == Tool::Note && !keys.shift && self.ed.recolour(id) {
+                        self.ed.selection = [id].into();
+                        self.select_line(None);
+                        self.mark_stale();
+                        self.status = "note recoloured".into();
+                        return;
+                    }
                     self.grab_object(id, x, t, keys);
                 } else if self.ed.tool == Tool::Select {
                     self.select_line(None);
@@ -3686,7 +3694,16 @@ mod tests {
                 .unwrap()
                 .clone();
         assert!(made.taiko() == Taiko::Kat && made.big());
-        // With a note selected they change that note, and toggle back.
+        // The note just placed is selected, but with the Note tool the keys are still for the
+        // next one: the placed note keeps its colour.
+        assert_eq!(v.ed.selection.len(), 1);
+        key(&mut v, KeyCode::KeyW);
+        assert!(!v.ed.kat, "the note in hand changed");
+        assert!(v.ed.chart.object(made.id).unwrap().taiko() == Taiko::Kat);
+        key(&mut v, KeyCode::KeyW);
+        assert!(v.ed.chart.object(made.id).unwrap().big());
+        // With the Select tool and a note selected they change that note, and toggle back.
+        v.ed.tool = Tool::Select;
         v.ed.selection = [made.id].into();
         key(&mut v, KeyCode::KeyW);
         assert_eq!(v.ed.chart.object(made.id).unwrap().taiko(), Taiko::Don);
@@ -3695,6 +3712,62 @@ mod tests {
         key(&mut v, KeyCode::KeyE);
         assert!(!v.ed.chart.object(made.id).unwrap().big());
         assert!(v.ed.undo(), "each is an undo step");
+    }
+
+    #[test]
+    fn a_click_with_the_note_tool_paints_a_placed_note_with_the_note_in_hand() {
+        let mut v = view();
+        draw(&mut v);
+        let y = lane_y(&v);
+        // Place a don, then pick a kat: the don stays.
+        v.ed.kat = false;
+        v.ed.big = false;
+        click_t(&mut v, 6000.0, y);
+        let placed =
+            v.ed.chart
+                .objects
+                .iter()
+                .find(|o| o.time == 6000.0)
+                .unwrap()
+                .id;
+        key(&mut v, KeyCode::KeyW);
+        assert_eq!(v.ed.chart.object(placed).unwrap().taiko(), Taiko::Don);
+        // Click on it with the kat in hand: it is a kat now, and no note was added.
+        let count = v.ed.chart.objects.len();
+        let x = v.x_of(6000.0);
+        click(&mut v, x, y);
+        assert_eq!(v.ed.chart.object(placed).unwrap().taiko(), Taiko::Kat);
+        assert_eq!(v.ed.chart.objects.len(), count);
+        // The same colour again just selects it; big goes on the same way.
+        click(&mut v, x, y);
+        assert_eq!(v.ed.chart.object(placed).unwrap().taiko(), Taiko::Kat);
+        key(&mut v, KeyCode::KeyE);
+        click(&mut v, x, y);
+        assert!(v.ed.chart.object(placed).unwrap().big());
+        // One undo step each.
+        assert!(v.ed.undo());
+        assert!(!v.ed.chart.object(placed).unwrap().big());
+    }
+
+    #[test]
+    fn recolouring_keeps_a_clap_and_leaves_rolls_alone() {
+        let mut v = view();
+        let id = v.ed.place_hit(7000.0, true).unwrap();
+        v.ed.chart
+            .objects
+            .iter_mut()
+            .find(|o| o.id == id)
+            .unwrap()
+            .sound = crate::editor::chart::SOUND_CLAP;
+        v.ed.kat = true;
+        v.ed.big = false;
+        assert!(!v.ed.recolour(id), "already a kat: the clap stays");
+        v.ed.kat = false;
+        assert!(v.ed.recolour(id));
+        assert_eq!(v.ed.chart.object(id).unwrap().sound, 0);
+        let roll = v.ed.place_roll(8000.0, 8400.0).unwrap();
+        v.ed.kat = true;
+        assert!(!v.ed.recolour(roll));
     }
 
     #[test]

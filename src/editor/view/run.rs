@@ -6,7 +6,7 @@ use super::lines::TAct;
 use super::{Btn, Drag, Keys, Modal, RATES, View};
 use crate::audio::Engine;
 use crate::editor::chart::{SOUND_CLAP, SOUND_FINISH, SOUND_WHISTLE};
-use crate::editor::state::Editor;
+use crate::editor::state::{Editor, Tool};
 use crate::editor::timing;
 
 impl View {
@@ -105,8 +105,14 @@ impl View {
     }
 
     fn sound(&mut self, bit: i32) {
-        let had = !self.ed.selection.is_empty();
-        let on = self.ed.toggle_sound(bit);
+        // With the Note tool the keys are for the note about to be placed, even with a note
+        // selected (the one just placed is): recolouring a placed note is a click on it.
+        let had = !self.ed.selection.is_empty() && self.ed.tool != Tool::Note;
+        let on = if had {
+            self.ed.toggle_sound(bit)
+        } else {
+            self.ed.toggle_next_sound(bit)
+        };
         let what = match bit {
             SOUND_FINISH => "big",
             SOUND_WHISTLE | SOUND_CLAP => "kat",

@@ -55,7 +55,7 @@ removed, with no restart. A file that is still being copied in is picked up once
 | Shift+1..9 | beat snap |
 | Ctrl+Up / Down (with Shift: 5%) | playback speed |
 | 1 2 3 4 | Select, Note, Drumroll, Denden tools |
-| W / R / E | kat (whistle / clap), big (finish) on the selection or the next notes |
+| W / R / E | kat (whistle / clap), big (finish): the note in hand with the Note tool (click a placed note to paint it that colour), else the selection |
 | J / K, Ctrl+D, Ctrl+G, Q | nudge, clone, reverse, flip don/kat |
 | Ctrl+Z / Y / X / C / V / A, Delete | undo, redo, cut, copy, paste, select all, delete |
 | Ctrl+B / Ctrl+Shift+B, Ctrl+Left / Right | add / remove bookmark, previous / next bookmark |

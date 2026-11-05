@@ -279,7 +279,7 @@ impl View {
                 "Click a note to select it; drag empty space to select a box. Drag a note to move it, drag the end of a roll to stretch it."
             }
             Tool::Note => {
-                "Click the lane to place a note on the grid. Right click deletes one. Press W or R to place kats, E for big notes."
+                "Click the lane to place a note on the grid. W or R makes the note in hand a kat, E a big one. Click a placed note to give it that colour. Right click deletes."
             }
             Tool::Roll => {
                 "Press where the drumroll starts and drag to where it ends, or click the start and then the end."
@@ -324,8 +324,10 @@ impl View {
         c.text(x, y, 7.5, white, &Canvas::fit(7.5, w, &head));
         y += 14.0;
         // Hitsounds: they act on the selection, or on what is placed next.
-        let has = |bit: i32| !sel.is_empty() && sel.iter().all(|o| o.sound & bit != 0);
-        let (kat, clap, big) = if sel.is_empty() {
+        // The Note tool's keys are for the note in hand, not the one just placed.
+        let on_sel = !sel.is_empty() && self.ed.tool != Tool::Note;
+        let has = |bit: i32| on_sel && sel.iter().all(|o| o.sound & bit != 0);
+        let (kat, clap, big) = if !on_sel {
             (self.ed.kat, false, self.ed.big)
         } else {
             (
@@ -334,11 +336,7 @@ impl View {
                 has(crate::editor::chart::SOUND_FINISH),
             )
         };
-        let who = if sel.is_empty() {
-            "New notes:"
-        } else {
-            "Selected:"
-        };
+        let who = if !on_sel { "New notes:" } else { "Selected:" };
         c.text(x, y + 4.0, 6.0, rgba(FAINT, 1.0), who);
         let bx = x + Canvas::text_width(6.0, "New notes:") + 8.0;
         self.row(

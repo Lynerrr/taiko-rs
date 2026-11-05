@@ -203,15 +203,15 @@ impl Cmd {
             Cmd::Nudge(_) => "Moves the selection one snap step.",
             Cmd::Tool(Tool::Select) => "Click or drag a box to select, drag notes to move them.",
             Cmd::Tool(Tool::Note) => {
-                "Click to place a don (or a kat, see W / R). Right click deletes."
+                "Click to place a don (or a kat, see W / R); click a placed note to recolour it. Right click deletes."
             }
             Cmd::Tool(Tool::Roll) => "Drag, or click the start and the end, to make a drumroll.",
             Cmd::Tool(Tool::Swell) => "Drag, or click the start and the end, to make a denden.",
             Cmd::Whistle | Cmd::Clap => {
-                "Selected notes become kats; with nothing selected, the next notes you place are kats."
+                "Selected notes become kats; with nothing selected, or the Note tool on, the next notes you place are kats."
             }
             Cmd::Finish => {
-                "Selected notes become big; with nothing selected, the next notes you place are big."
+                "Selected notes become big; with nothing selected, or the Note tool on, the next notes you place are big."
             }
             Cmd::Play => "Plays the song from the playhead.",
             Cmd::PlayFromStart => "Plays the song from the beginning.",
