@@ -346,6 +346,8 @@ pub struct Renderer {
     /// The music player's disc this frame: centre and radius in virtual units, its angle, and
     /// how wide the virtual screen is.
     pub disc: Option<([f32; 4], f32)>,
+    /// The frame glitches (`Canvas::glitch`).
+    pub glitch: Option<[f32; 2]>,
     bg_layout: wgpu::BindGroupLayout,
     bg_sampler: wgpu::Sampler,
     /// Bind group and image aspect (w / h) of the current background.
@@ -373,6 +375,8 @@ pub struct Renderer {
     low: Option<LowRes>,
     upscale_layout: wgpu::BindGroupLayout,
     upscale_pipeline: wgpu::RenderPipeline,
+    /// The same for a screenshot's image.
+    upscale_capture: wgpu::RenderPipeline,
     /// TAIKO_PROFILE: how long the GPU spends on each frame (None if it can't tell).
     gpu_timer: Option<GpuTimer>,
 }
@@ -496,16 +500,28 @@ struct LowRes {
 }
 
 /// Integer upscale: each screen pixel copies the texel under it, so every texel becomes a sharp
-/// block `scale` pixels across (no filtering). Puts the image at `origin` on the screen.
+/// block `scale` pixels across (no filtering). Puts the image at `origin` on the screen. With
+/// `glitch` (its strength 0 to 1, and a number picking its look) the picture comes apart on the
+/// way: bands of it torn sideways, red and blue split off the green.
 const UPSCALE_SHADER: &str = r#"
 struct Place {
     origin: vec2<f32>,
     scale: f32,
     pad: f32,
+    glitch: vec2<f32>,
+    pad2: vec2<f32>,
 }
 
 @group(0) @binding(0) var image: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> place: Place;
+
+// 0 to 1, the same for the same two numbers and random-looking between them.
+fn noise(a: u32, b: u32) -> f32 {
+    var h = (a * 0x9E3779B1u) ^ (b * 0x85EBCA6Bu);
+    h = (h ^ (h >> 15u)) * 0x2C1B3C6Du;
+    h = h ^ (h >> 13u);
+    return f32(h >> 8u) / 16777216.0;
+}
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -517,7 +533,31 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 @fragment
 fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let texel = min(vec2<u32>((pos.xy - place.origin) / place.scale), textureDimensions(image) - 1u);
-    return textureLoad(image, texel, 0);
+    let strength = place.glitch.x;
+    if strength <= 0.0 {
+        return textureLoad(image, texel, 0);
+    }
+    let size = textureDimensions(image);
+    let look = u32(place.glitch.y);
+    let width = f32(size.x);
+    // Thin bands tear on their own, thick ones of three together tear further.
+    let band = texel.y / max(size.y / 30u, 1u);
+    let thick = band / 3u;
+    var shift = 0.0;
+    if noise(look, band) < 0.35 {
+        shift += (noise(look, band + 1000u) - 0.5) * width * 0.11;
+    }
+    if noise(look, thick + 2000u) < 0.22 {
+        shift += (noise(look, thick + 3000u) - 0.5) * width * 0.2;
+    }
+    let split = i32(width * 0.008 * strength * (0.5 + noise(look, 4000u)));
+    // What's torn off one side comes in at the other.
+    let wide = i32(size.x);
+    let x = i32(texel.x) + i32(shift * strength) + wide;
+    let red = textureLoad(image, vec2<u32>(u32((x + split + wide) % wide), texel.y), 0);
+    let green = textureLoad(image, vec2<u32>(u32(x % wide), texel.y), 0);
+    let blue = textureLoad(image, vec2<u32>(u32((x - split + wide) % wide), texel.y), 0);
+    return vec4<f32>(red.r, green.g, blue.b, 1.0);
 }
 "#;
 
@@ -1308,37 +1348,41 @@ impl Renderer {
             label: Some("upscale"),
             source: wgpu::ShaderSource::Wgsl(UPSCALE_SHADER.into()),
         });
-        let upscale_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("upscale"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: None,
-                    bind_group_layouts: &[Some(&upscale_layout)],
-                    immediate_size: 0,
+        let make_upscale = |format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("upscale"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: None,
+                        bind_group_layouts: &[Some(&upscale_layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                vertex: wgpu::VertexState {
+                    module: &upscale_shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &upscale_shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &upscale_shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &upscale_shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let upscale_pipeline = make_upscale(format);
+        let upscale_capture = make_upscale(wgpu::TextureFormat::Rgba8Unorm);
 
         let gpu_timer = time_gpu.then(|| GpuTimer::new(&device, &queue));
         let mut r = Renderer {
@@ -1362,6 +1406,7 @@ impl Renderer {
             bg_pipelines,
             disc_pipelines,
             disc: None,
+            glitch: None,
             bg_layout,
             bg_sampler,
             bg: None,
@@ -1378,6 +1423,7 @@ impl Renderer {
             low: None,
             upscale_layout,
             upscale_pipeline,
+            upscale_capture,
             gpu_timer,
         };
         r.set_present(present);
@@ -1872,8 +1918,14 @@ impl Renderer {
             (gw / self.pixel_scale).max(1),
             (gh / self.pixel_scale).max(1),
         );
-        if scaled {
+        // A glitching frame takes the same way, for the upscale to take it apart; once it's over
+        // nothing else wants that image.
+        let glitch = self.glitch;
+        let through_image = scaled || glitch.is_some();
+        if through_image {
             self.ensure_low(w, h);
+        } else {
+            self.low = None;
         }
         // Clipped shape ranges (rects as fractions of the screen) -> pixel scissors, in order,
         // without overlaps.
@@ -1968,7 +2020,7 @@ impl Renderer {
             clips: &clip,
             hole,
         };
-        match self.low.as_ref().filter(|_| scaled) {
+        match self.low.as_ref().filter(|_| through_image) {
             Some(low) => {
                 self.encode_pass(
                     &mut encoder,
@@ -1981,10 +2033,15 @@ impl Renderer {
                 );
                 let origin = place.map_or([0, 0], |[x, y, ..]| [x, y]);
                 let round = if place.is_some() { [0.0; 3] } else { clear };
+                let [strength, look] = glitch.unwrap_or_default();
                 let uniform = [
                     origin[0] as f32,
                     origin[1] as f32,
                     self.pixel_scale as f32,
+                    0.0,
+                    strength,
+                    look,
+                    0.0,
                     0.0,
                 ];
                 self.queue
@@ -1996,6 +2053,7 @@ impl Renderer {
                     origin,
                     self.pixel_scale,
                     round,
+                    false,
                     timer.and_then(|t| t.writes(false, true)),
                 );
             }
@@ -2030,15 +2088,28 @@ impl Renderer {
                 view_formats: &[],
             });
             let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            self.encode_pass(
-                &mut encoder,
-                &target_view,
-                true,
-                shapes.len(),
-                clear,
-                &into,
-                None,
-            );
+            // A glitching frame is saved as it's shown, when the image is the screen's size.
+            match self.low.as_ref().filter(|_| glitch.is_some() && !scaled) {
+                Some(low) => self.encode_upscale(
+                    &mut encoder,
+                    &target_view,
+                    low,
+                    [0, 0],
+                    1,
+                    clear,
+                    true,
+                    None,
+                ),
+                None => self.encode_pass(
+                    &mut encoder,
+                    &target_view,
+                    true,
+                    shapes.len(),
+                    clear,
+                    &into,
+                    None,
+                ),
+            }
             let bpr = (w * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("capture"),
@@ -2248,7 +2319,7 @@ impl Renderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let place = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("upscale place"),
-            size: 16,
+            size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -2286,6 +2357,7 @@ impl Renderer {
         origin: [u32; 2],
         scale: u32,
         clear: [f64; 3],
+        capture: bool,
         timestamp_writes: Option<wgpu::RenderPassTimestampWrites>,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2315,7 +2387,11 @@ impl Renderer {
             0.0,
             1.0,
         );
-        pass.set_pipeline(&self.upscale_pipeline);
+        pass.set_pipeline(if capture {
+            &self.upscale_capture
+        } else {
+            &self.upscale_pipeline
+        });
         pass.set_bind_group(0, &low.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
@@ -2717,6 +2793,8 @@ pub struct Canvas {
     pub shapes: Vec<Shape>,
     /// The music player's disc: centre, radius, angle (drawn under every shape, see `DISC_SHADER`).
     pub disc: Option<[f32; 4]>,
+    /// The whole picture glitches this frame: how much (0 to 1) and a number picking how.
+    pub glitch: Option<[f32; 2]>,
     pub width: f32,
     /// Clickable areas, in drawing order (later ones are on top).
     pub hits: Vec<HitBox>,
@@ -2900,6 +2978,7 @@ impl Canvas {
         self.shapes.clear();
         self.avatars_wanted.clear();
         self.disc = None;
+        self.glitch = None;
         self.hits.clear();
         self.clips.clear();
         self.texts.clear();

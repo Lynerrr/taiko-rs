@@ -40,6 +40,7 @@ fn words(item: Item) -> &'static str {
             "background dark brightness фон темнее яркость"
         }
         Item::KiaiEffects | Item::HitFlash | Item::HideGreat => "effects flash эффекты вспышки",
+        Item::MenuGlitch => "animation spin transition effects анимация эффекты переход",
         Item::BlackLane => "dark playfield background contrast тёмный фон поле контраст",
         Item::Animations => "effects motion эффекты движение",
         Item::PresentMode | Item::MenuVsync => {
