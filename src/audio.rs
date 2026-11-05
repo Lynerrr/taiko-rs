@@ -2095,6 +2095,9 @@ impl Grains {
                 fine
             }
         };
+        // The search reaches further than the check above allows for (it leans, and goes by the
+        // hop, not the window): near the end of the song a grain must still fit.
+        let chosen = chosen.min(frames - win);
         let (input, base) = (heard.input, heard.base);
         for i in 0..win {
             let wgt = self.window[i];
@@ -2205,4 +2208,32 @@ pub(crate) fn cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
     p1 + 0.5
         * t
         * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0)))
+}
+
+#[cfg(test)]
+mod stretch_end_tests {
+    use super::*;
+
+    /// Random music that never settles, so grains are free to land anywhere the search lets them.
+    fn noise(frames: usize, mut seed: u32) -> Vec<f32> {
+        (0..frames * 2)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / 8_388_608.0 - 1.0
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_grain_never_reads_past_the_end_of_the_song() {
+        let rate = 48_000;
+        for speed in [0.75, 0.9, 1.1, 1.25, 1.5, 2.0] {
+            for seed in 0..40u32 {
+                let frames = 30_000 + seed as usize * 997;
+                let samples = noise(frames, seed);
+                let out_frames = (frames as f64 / speed) as usize;
+                let _ = time_stretch(&samples, rate, |t| t * speed, out_frames);
+            }
+        }
+    }
 }
