@@ -56,7 +56,7 @@ and compare).
   about the hit target), `zoom`, `scroll` (a multiple of the map's own scroll speed; what is
   drawn, not when a note is hit), `stretch_x`, `stretch_y`. *Look*: `flash` (0..1 white wash),
   `vignette` (0..1 dark corners), `wash` (0..1 colour overlay) with `wash_hue` (degrees), `glitch`
-  (0..1: the picture torn into shifted slices), `chroma` (px of colour split). *Clones*: `echo`
+  (0..1: the notes and the drum torn into shifted slices; the lane stays whole so no note is covered), `chroma` (px of colour split). *Clones*: `echo`
   (0..8 fading copies of the playfield) with `echo_x`, `echo_y`, `echo_rot`, `echo_zoom` and
   `echo_fade` (each copy is offset, turned and shrunk once more than the one before), `kaleido`
   (2..8 copies turned about the screen centre).

@@ -222,7 +222,7 @@ pub fn screen(c: &mut Canvas, start: usize, fx: &FieldFx, t: f64) {
                 .iter()
                 .filter(|s| {
                     let r = s.half[0].hypot(s.half[1]);
-                    s.center[1] + r > y0 && s.center[1] - r < y1
+                    !is_panel(s, w) && s.center[1] + r > y0 && s.center[1] - r < y1
                 })
                 .map(|s| Shape {
                     center: [s.center[0] + shift, s.center[1]],
@@ -450,6 +450,39 @@ mod tests {
                 .map(|s| s.center[0].to_bits())
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// A tear copies the notes and the drum, never the lane they run on: a copy of that wide dark
+    /// panel, laid over the original in its slice, hides every note in it.
+    #[test]
+    fn a_glitch_never_lays_a_copy_of_the_lane_over_the_notes() {
+        let fx = FieldFx {
+            glitch: 1.0,
+            seed: 3,
+            ..FieldFx::default()
+        };
+        for step in 0..40 {
+            let mut c = field(8);
+            let before = c.shapes.clone();
+            screen(&mut c, 0, &fx, 5000.0 + step as f64 * GLITCH_STEP_MS);
+            assert_eq!(
+                c.shapes[..before.len()]
+                    .iter()
+                    .map(|s| (s.center, s.half))
+                    .collect::<Vec<_>>(),
+                before
+                    .iter()
+                    .map(|s| (s.center, s.half))
+                    .collect::<Vec<_>>(),
+                "the playfield itself is left as it was"
+            );
+            assert!(
+                c.shapes[before.len()..]
+                    .iter()
+                    .all(|s| !is_panel(s, c.width)),
+                "step {step}: a panel-sized copy lies over the notes"
+            );
+        }
     }
 
     #[test]
