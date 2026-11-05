@@ -101,7 +101,13 @@ impl View {
                 .map(|p| (p.id, p.time, self.graph_val(p)))
                 .collect();
             self.g_frozen = Some(self.graph_range());
+            self.g_down = (x, y);
             self.drag = Drag::Lines { anchor: id };
+            return;
+        }
+        // A curve under the pointer is picked: its ends get handles and the SV tool shows it.
+        if let Some(i) = self.curve_near(x, y) {
+            self.press_svt(SAct::Pick(i));
             return;
         }
         self.drag = Drag::GBox {
@@ -151,7 +157,19 @@ impl View {
     /// The end of a press in the graph that was a box or a click.
     pub(super) fn line_box_up(&mut self, from: (f32, f32), x: f32, y: f32, keys: Keys) {
         if (x - from.0).abs() < 4.0 && (y - from.1).abs() < 4.0 {
-            // A click on empty space: a new green line right there.
+            // A single click on empty space lets go of the selection; a second one close by and
+            // soon after puts a new green line right there.
+            let now = std::time::Instant::now();
+            let second = self.g_click.take().is_some_and(|(at, (px, py))| {
+                now.duration_since(at).as_millis() < 450
+                    && (px - x).abs() < 6.0
+                    && (py - y).abs() < 6.0
+            });
+            if !second {
+                self.g_click = Some((now, (x, y)));
+                self.select_lines_in(from, (x, y), keys.shift);
+                return;
+            }
             let time = self.ed.snapped(self.t_at(x));
             let range = self.graph_range();
             let value = self.y_val(y, range);

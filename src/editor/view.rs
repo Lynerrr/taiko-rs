@@ -367,6 +367,10 @@ pub struct View {
     roll_start: Option<f64>,
     /// The last click on a note, for double clicks.
     last_click: Option<(Instant, u64)>,
+    /// The last click on empty graph, for the double click that adds a line.
+    g_click: Option<(Instant, (f32, f32))>,
+    /// Where the press that started dragging graph dots was, to tell a click from a drag.
+    g_down: (f32, f32),
     revert_armed: bool,
     /// The last status message drawn and when it appeared (it gives way to the hint after a while).
     status_seen: String,
@@ -466,6 +470,8 @@ impl View {
             modal_from: 0,
             roll_start: None,
             last_click: None,
+            g_click: None,
+            g_down: (0.0, 0.0),
             revert_armed: false,
             status_seen: String::new(),
             status_at: Instant::now(),
@@ -1407,9 +1413,9 @@ impl View {
         let hint = if self.mode == Mode::Timing && self.svt.brush {
             "Brush: drag from where the curve starts to where it ends   Shift: free time"
         } else if self.mode == Mode::Timing && volume {
-            "Volume   click: add a line   drag a dot: change it   drag a box: select several   right click: delete"
+            "Volume   double click: add a line   drag a dot: change it   drag a box: select several   right click: delete"
         } else if self.mode == Mode::Timing {
-            "Slider velocity   click: add a line   drag a dot: change it (Alt: add)   drag a box: select   click a curve label: edit it"
+            "Slider velocity   double click: add a line   drag a dot: change it (Alt: add)   drag a box: select   click a curve: edit it"
         } else {
             "Slider velocity (read only here: edit it in Timing mode, F3)"
         };
@@ -1694,12 +1700,19 @@ impl View {
         self.typing = None;
         self.n_typing = None;
         self.revert_armed = false;
+        // A dropdown closes on any press; one that lists switches stays open for the next.
+        let was = self.svt.drop.take();
         if let Some(b) = self.button_at(x, y) {
             self.press(b, keys, audio);
+            match b {
+                Btn::S(SAct::Hits | SAct::Snaps | SAct::Lines) => self.svt.drop = was,
+                Btn::S(SAct::Drop(k)) if was.is_some_and(|d| d.0 == k) => self.svt.drop = None,
+                _ => {}
+            }
             return;
         }
-        // A click that hits nothing closes what's open (a menu, the sheet or the list) and goes no further.
-        if self.menu.take().is_some() || self.n_pick.take().is_some() {
+        // A click that hits nothing closes what's open (a menu, a dropdown) and goes no further.
+        if self.menu.take().is_some() || self.n_pick.take().is_some() || was.is_some() {
             return;
         }
         if self.modal_from > 0 {
@@ -1922,6 +1935,15 @@ impl View {
                 self.line_origin.clear();
                 self.ed.end_drag();
                 self.mark_stale();
+                // A click on a dot of a curve (not a drag, no Shift) picks the whole curve.
+                let (dx, dy) = (x - self.g_down.0, y - self.g_down.1);
+                if dx.abs() < 3.0
+                    && dy.abs() < 3.0
+                    && !keys.shift
+                    && let Some(i) = self.curve_near(x, y)
+                {
+                    self.press_svt(SAct::Pick(i));
+                }
             }
             Drag::GBox { from, .. } => self.line_box_up(from, x, y, keys),
             Drag::Brush { t0, v0, t1, v1 } => self.brush_up(t0, v0, t1, v1),
@@ -2310,6 +2332,7 @@ impl View {
             }
             if self.menu.take().is_some()
                 || self.n_pick.take().is_some()
+                || self.svt.drop.take().is_some()
                 || self.roll_start.take().is_some()
             {
                 return KeyResult::Handled;
@@ -2414,6 +2437,17 @@ mod tests {
     fn click_t(v: &mut View, t: f64, y: f32) {
         let x = v.x_of(t);
         click(v, x, y);
+    }
+
+    /// Clicks the middle of the button `b` as drawn last.
+    fn click_btn(v: &mut View, b: Btn) {
+        let (r, _) = *v
+            .buttons
+            .iter()
+            .rev()
+            .find(|(_, x)| *x == b)
+            .unwrap_or_else(|| panic!("no button {b:?} on screen"));
+        click(v, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
     }
 
     fn click(v: &mut View, x: f32, y: f32) {
@@ -2583,16 +2617,25 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_graph_adds_a_green_line_and_dragging_it_changes_its_velocity() {
+    fn double_clicking_the_graph_adds_a_green_line_and_dragging_it_changes_its_velocity() {
         let mut v = view();
         v.run(Cmd::Mode(Mode::Timing), None);
         draw(&mut v);
         let g = v.layout.graph;
         let (x, y) = (v.x_of(2000.0), g[1] + g[3] / 2.0);
         click(&mut v, x, y);
-        let greens: Vec<_> = v.ed.chart.timing.iter().filter(|p| !p.is_red()).collect();
-        assert_eq!(greens.len(), 2, "a click on empty space adds a line");
+        let count = |v: &View| v.ed.chart.timing.iter().filter(|p| !p.is_red()).count();
+        assert_eq!(count(&v), 1, "one click only lets go of the selection");
+        click(&mut v, x, y);
+        assert_eq!(count(&v), 2, "a second click right after adds a line");
         let id = v.sel_line.unwrap();
+        // Two clicks far apart in time are not a double click.
+        v.g_click = None;
+        let (far, _) = (v.x_of(3000.0), 0);
+        click(&mut v, far, y);
+        click(&mut v, x + 40.0, y);
+        assert_eq!(count(&v), 2);
+        v.g_click = None;
         // Drag the new dot up: its velocity changes, as one undo step.
         draw(&mut v);
         let before = v.ed.chart.timing_point(id).unwrap().sv();
@@ -2700,6 +2743,97 @@ mod tests {
         assert!(v.svt.picked.is_some(), "still the same curve");
         assert!(v.ed.undo());
         assert!((at(&v) - linear).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clicking_a_curve_picks_it_and_opens_its_editor() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        crowd(&mut v, 5000.0, 7000.0);
+        press(&mut v, Btn::S(SAct::Brush));
+        draw(&mut v);
+        stroke(&mut v, (5000.0, 1.0), (7000.0, 2.0));
+        press(&mut v, Btn::S(SAct::Brush));
+        // Let go of it, back on the Line tab.
+        press(&mut v, Btn::S(SAct::Done));
+        press(&mut v, Btn::S(SAct::Tab(0)));
+        draw(&mut v);
+        assert!(v.svt.picked.is_none());
+        // A click on the curve (its dots are a few units apart here) picks it and shows the SV tool.
+        let range = v.graph_range();
+        // Halfway between two of its dots, so the press is on the line and not on a dot.
+        let t = 5519.0;
+        let run_v = 1.0 + (t - 5000.0) / 2000.0;
+        let (x, y) = (v.x_of(t), v.sv_y(run_v, range));
+        click(&mut v, x, y);
+        assert!(v.svt.picked.is_some(), "the curve is picked");
+        assert_eq!(v.svt.tab, 1, "its editor opens");
+        draw(&mut v);
+        assert_eq!(v.svt.handles.len(), 2);
+        // The editor's end fields rewrite the curve, as one undo step.
+        let svs = |v: &View| {
+            greens(v)
+                .iter()
+                .map(|p| (p.time, p.sv()))
+                .collect::<Vec<_>>()
+        };
+        let before = svs(&v);
+        press(&mut v, Btn::Inc(Field::S(SF::ToSv)));
+        assert_ne!(before, svs(&v));
+        assert!(v.ed.undo());
+        assert_eq!(svs(&v), before);
+        // Clicking empty graph lets go of it.
+        draw(&mut v);
+        let g = v.layout.graph;
+        let x = v.x_of(1500.0);
+        click(&mut v, x, g[1] + g[3] - 6.0);
+        draw(&mut v);
+        assert!(v.svt.picked.is_none());
+    }
+
+    #[test]
+    fn the_sv_tools_exclusive_settings_are_dropdowns() {
+        let (mut v, ids) = lines_view();
+        v.sel_line = Some(ids[0]);
+        v.sel_extra = [ids[2]].into();
+        press(&mut v, Btn::S(SAct::Tab(1)));
+        draw(&mut v);
+        // Open the shape list: it offers the shapes, picking one sets it and closes the list.
+        click_btn(&mut v, Btn::S(SAct::Drop(0)));
+        assert!(v.svt.drop.is_some());
+        draw(&mut v);
+        click_btn(&mut v, Btn::S(SAct::Shape(3)));
+        assert!(v.svt.drop.is_none());
+        assert!(matches!(v.svt.params.shape, Shape::Between(Curve::Sin)));
+        // Writing volume only: the speed fields go and the volume ones come.
+        draw(&mut v);
+        click_btn(&mut v, Btn::S(SAct::Drop(1)));
+        draw(&mut v);
+        click_btn(&mut v, Btn::S(SAct::Write(1)));
+        assert!(!v.svt.params.write_sv && v.svt.params.write_volume);
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Edit(Field::S(SF::FromVol)))
+        );
+        assert!(
+            !v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Edit(Field::S(SF::FromSv)))
+        );
+        // The places list takes several; it stays open while they are toggled, Esc closes it.
+        click_btn(&mut v, Btn::S(SAct::Drop(2)));
+        draw(&mut v);
+        click_btn(&mut v, Btn::S(SAct::Snaps));
+        assert!(v.svt.drop.is_some() && v.svt.params.snaps);
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.svt.drop.is_none());
+        // A click elsewhere closes a list without doing anything else.
+        click_btn(&mut v, Btn::S(SAct::Drop(1)));
+        draw(&mut v);
+        click(&mut v, 300.0, 470.0);
+        assert!(v.svt.drop.is_none());
     }
 
     #[test]
@@ -2884,9 +3018,8 @@ mod tests {
             shift: true,
             ..Keys::default()
         };
-        let (x, y) = at(&v, ids[0]);
-        click(&mut v, x, y);
-        for id in &ids[1..] {
+        // (A plain click on a dot of a curve would pick the whole curve; Shift takes single lines.)
+        for id in &ids {
             let (x, y) = at(&v, *id);
             v.mouse_down(x, y, shift, None);
             v.mouse_up(x, y, shift);

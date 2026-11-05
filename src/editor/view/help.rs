@@ -111,7 +111,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "Timing mode",
-        text: "The graph is slider velocity. Click empty space to add a green line, drag a dot to change it, drag the box to select several, right click a dot to delete it. Red lines (BPM) are added with Ctrl+P at the playhead. Click a curve chip to reshape a curve with its handles; F6 opens the window with every line and the SV tool.",
+        text: "The graph is slider velocity. Double click empty space to add a green line, drag a dot to change it, drag the box to select several, right click a dot to delete it. Red lines (BPM) are added with Ctrl+P at the playhead. Click a curve (or its dots) to pick it: its round ends can be dragged and the SV tool edits it. F6 opens the window with every line.",
         at: At::Graph,
         mode: Mode::Timing,
     },
@@ -167,6 +167,7 @@ impl View {
             || self.modal.is_some()
             || self.tour.is_some()
             || self.sheet
+            || self.svt.drop.is_some()
             || self.moved_at.elapsed() < Duration::from_millis(400)
             || !matches!(self.drag, super::Drag::None)
         {
@@ -208,6 +209,7 @@ impl View {
     /// Everything that goes over the screen, in the order it stacks.
     pub(super) fn draw_overlays(&mut self, c: &mut Canvas) {
         self.draw_menu_drop(c);
+        self.draw_svt_drop(c);
         if self.node_mode() {
             self.draw_node_pick(c);
         }

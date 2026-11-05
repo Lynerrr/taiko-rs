@@ -705,7 +705,7 @@ impl View {
                 "Gimmicks: build stable-compatible structures at the playhead or on the selection."
             }
             Mode::Timing => {
-                "Timing: click the graph to add a green line, drag a dot to change its velocity."
+                "Timing: double click the graph to add a green line, drag a dot to change its velocity."
             }
             Mode::Effects => {
                 "Effects: animate the playfield. Only .tko maps play these; the .osu is untouched."

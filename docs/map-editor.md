@@ -52,17 +52,19 @@ set and index, kiai and omit apply to all of them; time, BPM, meter and SV to th
 
 ## Slider velocity
 
-Timing mode (F3) edits green lines in the graph: click to add, drag a dot to change it, drag a
+Timing mode (F3) edits green lines in the graph: double click to add, drag a dot to change it, drag a
 box to select several and move or scale them together (Alt adds instead of scaling), right click
 to delete. With several selected there are set, multiply, copy, paste and delete tools.
 
 The graph also draws the curves the green lines already follow (linear, geometric, poly, sine) as
-a thin line with a chip such as `sin x1.20 > x2.00`. Click a chip to select its lines and drag
-the diamond handles at its ends: the whole run is rewritten along the same curve in one undo
-step. The *Brush* toggle in the graph's corner draws a curve: drag from one point to another and the
+a thin line with a chip such as `sin x1.20 > x2.00`. Click the curve, a dot on it or its chip
+(Shift+click takes a single line) to pick it: the SV tool opens as that curve's editor (shape,
+start and end speed), and the round handles at its ends can be dragged. The whole run is
+rewritten along the same curve in one undo step; Done lets go of it. The *Brush* toggle in the graph's corner draws a curve: drag from one point to another and the
 lines are written between them, on the notes, on a snap grid or on existing green lines. The *SV |
 Volume* switch turns every gesture into a volume edit. The *SV tool* panel (Timing page or F6)
-sets the curve, the start and end values, what is written (SV, volume or both), where, the
+sets the shape, the start and end values, what is written (SV, volume or both) and where (notes,
+beat grid, existing lines), with those choices in dropdowns, and under *Advanced* the
 offset, buffer, minimum spacing and "ignore BPM" (SV is compared as scroll speed, SV x BPM, unless
 that is on). With two or more green lines selected Apply fills each consecutive pair. Nothing is
 saved or reloaded: the chart and the preview update at once and undo takes it back.

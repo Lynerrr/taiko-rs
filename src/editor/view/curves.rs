@@ -7,7 +7,7 @@
 //! curve again). Nothing touches the chart until a drag ends or Apply is pressed, and each is one
 //! undo step.
 
-use super::chrome::{DIM, FAINT};
+use super::chrome::DIM;
 use super::{Btn, Drag, Field, GREEN_LINE, Keys, View, fmt_time};
 use crate::editor::chart::TimingPoint;
 use crate::editor::sv_curves::{self, Anchor, Curve, MAX_EXPONENT, MIN_EXPONENT, Run, RunKind};
@@ -47,8 +47,14 @@ pub enum SAct {
     Hits,
     Snaps,
     Lines,
-    WriteSv,
-    WriteVolume,
+    /// What is written: 0 speed, 1 volume, 2 both.
+    Write(u8),
+    /// Opens (or closes) the dropdown of a setting: 0 shape, 1 write, 2 place on, 3 presets.
+    Drop(u8),
+    /// Shows or hides the offset, buffer and spacing rows.
+    Advanced,
+    /// Lets go of the picked curve.
+    Done,
     IgnoreBpm,
     Relative,
     PerPair,
@@ -84,6 +90,17 @@ fn shape_kind(s: &Shape) -> u8 {
         Shape::Add(_) => 6,
         Shape::Scale(_) => 7,
         Shape::Fan { .. } => 8,
+    }
+}
+
+fn curve_kind(c: &Curve) -> u8 {
+    match c {
+        Curve::Linear => 0,
+        Curve::TrueExp => 1,
+        Curve::Exp(_) => 2,
+        Curve::Sin => 3,
+        Curve::SinIn => 4,
+        Curve::SinOut => 5,
     }
 }
 
@@ -133,6 +150,9 @@ pub(super) struct SvtUi {
     pub brush: bool,
     pub volume_view: bool,
     pub tab: u8,
+    /// The open dropdown (see `SAct::Drop`) and the button it hangs from.
+    pub drop: Option<(u8, [f32; 4])>,
+    pub advanced: bool,
     /// The curve picked on the graph, by the source times of its first and last line.
     pub picked: Option<(f64, f64)>,
     pub handles: Vec<([f32; 4], bool)>,
@@ -156,6 +176,8 @@ impl SvtUi {
             brush: false,
             volume_view: false,
             tab: 0,
+            drop: None,
+            advanced: false,
             picked: None,
             handles: Vec::new(),
             handle: None,
@@ -308,6 +330,32 @@ impl View {
         self.sel_extra = ids.into_iter().collect();
         self.svt.picked = Some((a, b));
         self.ed.select_none();
+        // Picking a curve opens its editor, so the click always has a visible result.
+        if self.mode == super::Mode::Timing && !self.windowed() {
+            self.svt.tab = 1;
+        }
+        if let RunKind::Curve(Curve::Exp(n)) = &run.kind {
+            self.svt.exponent = *n;
+        }
+        self.status =
+            "curve picked: drag its round ends on the graph, or change it in the SV tool".into();
+    }
+
+    /// The curve whose line passes within a few units of (`x`, `y`).
+    pub(super) fn curve_near(&mut self, x: f32, y: f32) -> Option<usize> {
+        if self.svt.volume_view || self.mode != super::Mode::Timing {
+            return None;
+        }
+        self.refresh_runs();
+        let range = self.graph_range();
+        let t = self.t_at(x);
+        let cache = self.svt.runs.as_ref()?;
+        cache.runs.iter().position(|run| {
+            matches!(run.kind, RunKind::Curve(_))
+                && t >= run.start.time
+                && t <= run.end.time
+                && (self.sv_y(run.curve_at(t), range) - y).abs() <= 5.0
+        })
     }
 
     /// Writes `run`'s curve onto its lines.
@@ -344,6 +392,18 @@ impl View {
         let [gx, gy, gw, gh] = self.layout.graph;
         let editing = self.mode == super::Mode::Timing;
         let idle = matches!(self.drag, Drag::None);
+        let (mx, my) = self.mouse;
+        let near = if idle && editing && super::inside(self.layout.graph, mx, my) {
+            let (t, range) = (self.t_at(mx), range);
+            cache.runs.iter().position(|run| {
+                matches!(run.kind, RunKind::Curve(_))
+                    && t >= run.start.time
+                    && t <= run.end.time
+                    && (self.sv_y(run.curve_at(t), range) - my).abs() <= 5.0
+            })
+        } else {
+            None
+        };
         for (i, run) in cache.runs.iter().enumerate() {
             let RunKind::Curve(kind) = &run.kind else {
                 continue;
@@ -354,11 +414,13 @@ impl View {
                 continue;
             }
             let col = if picked { accent() } else { CURVE_COL };
+            let near = idle && editing && near == Some(i);
+            let th = if picked || near { 2.5 } else { 1.5 };
             let mut px = x0.max(gx);
             while px <= x1.min(gx + gw) {
                 let t = self.t_at(px).clamp(run.start.time, run.end.time);
                 let y = self.sv_y(run.curve_at(t), range);
-                c.rect(px - 0.75, y - 0.75, 1.5, 1.5, rgba(col, 0.95));
+                c.rect(px - th / 2.0, y - th / 2.0, th, th, rgba(col, 0.95));
                 px += 2.0;
             }
             if !editing {
@@ -367,10 +429,17 @@ impl View {
             if picked {
                 for (end, a) in [(false, &run.start), (true, &run.end)] {
                     let (hx, hy) = (self.x_of(a.time), self.sv_y(a.value, range));
-                    c.circle(hx, hy, 5.0, rgba(WHITE, 1.0), rgba(accent(), 1.0), 1.5);
+                    c.circle(hx, hy, 6.0, rgba(WHITE, 1.0), rgba(accent(), 1.0), 2.0);
+                    let tag = format!("x{:.2}", a.value);
+                    let tx = if end {
+                        hx + 9.0
+                    } else {
+                        hx - 9.0 - Canvas::text_width(6.0, &tag)
+                    };
+                    c.text(tx, hy - 3.0, 6.0, rgba(WHITE, 1.0), &tag);
                     self.svt
                         .handles
-                        .push(([hx - 7.0, hy - 7.0, 14.0, 14.0], end));
+                        .push(([hx - 8.0, hy - 8.0, 16.0, 16.0], end));
                 }
             }
             if idle {
@@ -387,7 +456,7 @@ impl View {
                     .clamp(gx + w / 2.0 + 2.0, gx + gw - w / 2.0 - 2.0);
                 let cy =
                     (self.sv_y(run.curve_at(mid), range) - 15.0).clamp(gy + 2.0, gy + gh - 12.0);
-                let hover = c.hovered(cx - w / 2.0, cy, w, 10.0);
+                let hover = near || c.hovered(cx - w / 2.0, cy, w, 10.0);
                 c.round_rect(
                     [cx - w / 2.0, cy],
                     [w, 10.0],
@@ -717,7 +786,25 @@ impl View {
 
     // ---- the panel ----
 
+    /// The picked curve as the last frame cached it.
+    fn picked_peek(&self) -> Option<&Run> {
+        let (a, b) = self.svt.picked?;
+        self.svt
+            .runs
+            .as_ref()?
+            .runs
+            .iter()
+            .find(|r| r.start.source_time == a && r.end.source_time == b)
+    }
+
     fn svt_value(&self, f: SF) -> f64 {
+        if let Some(run) = self.picked_peek() {
+            match f {
+                SF::FromSv => return run.start.value,
+                SF::ToSv => return run.end.value,
+                _ => {}
+            }
+        }
         let edge = self.svt_segments().0.first().copied();
         match f {
             SF::FromSv => edge.map_or(1.0, |s| s.start.sv),
@@ -762,6 +849,26 @@ impl View {
     pub(super) fn svt_set(&mut self, f: SF, v: f64) {
         if !v.is_finite() {
             return;
+        }
+        // With a curve picked, its end fields edit the curve itself.
+        if matches!(f, SF::FromSv | SF::ToSv | SF::Exponent)
+            && let Some((mut run, lines)) = self.picked_run()
+        {
+            let v = v.clamp(0.01, 10.0);
+            match f {
+                SF::FromSv => run.start.value = v,
+                SF::ToSv => run.end.value = v,
+                _ => {
+                    let n = v.clamp(MIN_EXPONENT, MAX_EXPONENT);
+                    self.svt.exponent = n;
+                    if matches!(run.kind, RunKind::Curve(Curve::Exp(_))) {
+                        run.kind = RunKind::Curve(Curve::Exp(n));
+                    } else {
+                        return;
+                    }
+                }
+            }
+            return self.rewrite_run(&run, &lines, false);
         }
         match f {
             SF::FromSv => self.svt.from_sv = Some(v.clamp(0.01, 10.0)),
@@ -836,155 +943,303 @@ impl View {
         );
     }
 
-    /// SVT's settings, the segment they work on and Apply.
+    /// A button that opens the dropdown of a setting.
+    fn drop_button(&mut self, c: &mut Canvas, x: f32, y: f32, w: f32, kind: u8, label: &str) {
+        let open = self.svt.drop.is_some_and(|d| d.0 == kind);
+        self.button(c, [x, y, w, 14.0], "", Btn::S(SAct::Drop(kind)), open);
+        c.text(
+            x + 6.0,
+            y + 3.5,
+            7.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(7.0, w - 22.0, label),
+        );
+        c.text_right(x + w - 6.0, y + 3.5, 7.0, rgba(DIM, 1.0), "v");
+    }
+
+    /// The options of the open dropdown, under (or over) the button it hangs from.
+    pub(super) fn draw_svt_drop(&mut self, c: &mut Canvas) {
+        let Some((kind, at)) = self.svt.drop else {
+            return;
+        };
+        if !self.svt.live && !self.windowed() {
+            self.svt.drop = None;
+            return;
+        }
+        let p = self.svt.params.clone();
+        let flat = p.shape.is_flat();
+        let items: Vec<(String, Btn, bool)> = match kind {
+            0 => SHAPES
+                .iter()
+                .enumerate()
+                .map(|(i, n)| {
+                    let cur = match self.picked_peek() {
+                        Some(Run {
+                            kind: RunKind::Curve(k),
+                            ..
+                        }) => curve_kind(k),
+                        _ => shape_kind(&p.shape),
+                    };
+                    (n.to_string(), Btn::S(SAct::Shape(i as u8)), i as u8 == cur)
+                })
+                .collect(),
+            1 => ["Speed (SV)", "Volume", "Speed + volume"]
+                .iter()
+                .enumerate()
+                .map(|(i, n)| {
+                    let cur = match (p.write_sv, p.write_volume) {
+                        (true, false) => 0,
+                        (false, true) => 1,
+                        _ => 2,
+                    };
+                    (n.to_string(), Btn::S(SAct::Write(i as u8)), i == cur)
+                })
+                .collect(),
+            2 => vec![
+                ("Notes".into(), Btn::S(SAct::Hits), p.hits && !flat),
+                (
+                    format!("Beat grid {}/{}", p.snap_numer as i64, p.snap_denom as i64),
+                    Btn::S(SAct::Snaps),
+                    p.snaps && !flat,
+                ),
+                (
+                    "Green lines already there".into(),
+                    Btn::S(SAct::Lines),
+                    p.lines || flat,
+                ),
+            ],
+            _ => [
+                "Ramp the selected lines",
+                "Geometric ramp of the lines",
+                "Multiply the selected lines",
+                "A line on every note",
+            ]
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.to_string(), Btn::S(SAct::Preset(i as u8)), false))
+            .collect(),
+        };
+        let w = items
+            .iter()
+            .map(|(l, _, _)| Canvas::text_width(7.0, l) + 26.0)
+            .fold(at[2], f32::max);
+        let h = items.len() as f32 * 15.0 + 4.0;
+        let x = at[0].min(c.width - w - 4.0);
+        let y = if at[1] + at[3] + h < 476.0 {
+            at[1] + at[3] + 1.0
+        } else {
+            at[1] - h - 1.0
+        };
+        c.round_rect(
+            [x, y],
+            [w, h],
+            3.0,
+            rgba(0x15151d, 1.0),
+            rgba(0x5a5a78, 1.0),
+            1.0,
+        );
+        for (i, (label, b, on)) in items.into_iter().enumerate() {
+            let r = [x + 2.0, y + 2.0 + i as f32 * 15.0, w - 4.0, 14.0];
+            let hover = c.hovered(r[0], r[1], r[2], r[3]);
+            if on || hover {
+                c.rect(
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    rgba(if on { 0x4a221b } else { 0x2c2c3c }, 1.0),
+                );
+            }
+            c.text(
+                r[0] + 6.0,
+                r[1] + 3.5,
+                7.0,
+                rgba(if on { 0xffffff } else { 0xd8d8e8 }, 1.0),
+                &label,
+            );
+            if on {
+                c.text_right(r[0] + r[2] - 6.0, r[1] + 3.5, 7.0, rgba(accent(), 1.0), "*");
+            }
+            self.buttons.push((r, b));
+        }
+    }
+
+    /// The SV tool: edits the picked curve, or draws a new one (Apply).
     pub(super) fn draw_svt_panel(&mut self, c: &mut Canvas, x: f32, mut y: f32, w: f32) {
         self.svt.live = true;
         self.check_picked();
         self.refresh_ghost();
         let (segments, said) = self.svt_segments();
         let p = self.svt.params.clone();
-        let kind = shape_kind(&p.shape);
         let flat = p.shape.is_flat();
         let picked = self.picked_run();
-        let head = match &picked {
-            Some((run, lines)) => match &run.kind {
-                RunKind::Curve(k) => format!(
-                    "Curve picked: {} x{:.2} > x{:.2}, {} lines. Drag its ends on the graph, or pick another shape below.",
-                    curve_name(k),
-                    run.start.value,
-                    run.end.value,
-                    lines.len()
-                ),
-                RunKind::Step => said.clone(),
-            },
-            None => said.clone(),
+        let fw = ((w - 12.0) / 4.0).clamp(100.0, 150.0).min(w);
+        let per_row = (((w + 4.0) / (fw + 4.0)) as usize).max(1);
+        let grid = |i: usize| {
+            (
+                x + (i % per_row) as f32 * (fw + 4.0),
+                (i / per_row) as f32 * 18.0,
+            )
         };
-        c.text(x, y, 6.5, rgba(DIM, 1.0), &Canvas::fit(6.5, w, &head));
-        y += 11.0;
-        let items: Vec<(String, Btn, bool)> = SHAPES
-            .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                (
-                    name.to_string(),
-                    Btn::S(SAct::Shape(i as u8)),
-                    i as u8 == kind,
-                )
-            })
-            .collect();
-        let shapes_y = y;
-        y = self.wrap_row(c, x, y, w, &items);
+
+        // ---- a curve picked on the graph: its editor ----
+        if let Some((run, lines)) = &picked {
+            let RunKind::Curve(k) = &run.kind else {
+                self.svt.picked = None;
+                return;
+            };
+            c.text(
+                x,
+                y,
+                7.5,
+                rgba(accent(), 1.0),
+                &Canvas::fit(
+                    7.5,
+                    w - 60.0,
+                    &format!("Editing a {} curve, {} lines", curve_name(k), lines.len()),
+                ),
+            );
+            self.button(
+                c,
+                [x + w - 54.0, y - 3.0, 54.0, 14.0],
+                "Done",
+                Btn::S(SAct::Done),
+                false,
+            );
+            y += 15.0;
+            self.drop_button(
+                c,
+                x,
+                y,
+                fw + 24.0,
+                0,
+                &format!("Shape: {}", SHAPES[curve_kind(k) as usize]),
+            );
+            if curve_kind(k) == 2 {
+                self.svt_field(c, x + fw + 28.0, y, fw, SF::Exponent);
+            }
+            y += 19.0;
+            self.svt_field(c, x, y, fw, SF::FromSv);
+            self.svt_field(c, x + fw + 4.0, y, fw, SF::ToSv);
+            y += 22.0;
+            self.paragraph(
+                c,
+                x,
+                y,
+                w,
+                6.5,
+                DIM,
+                "Drag the round ends on the graph, or type the speeds here. Changing the shape redraws the curve over the same lines. Ctrl+Z takes it back.",
+            );
+            return;
+        }
+
+        // ---- a new curve ----
+        c.text(x, y, 6.5, rgba(DIM, 1.0), &Canvas::fit(6.5, w, &said));
+        y += 12.0;
+        let shape_label = format!("Shape: {}", SHAPES[shape_kind(&p.shape) as usize]);
+        self.drop_button(c, x, y, fw + 24.0, 0, &shape_label);
+        let kind = shape_kind(&p.shape);
+        let ex = x + fw + 28.0;
+        if kind == 2 {
+            self.svt_field(c, ex, y, fw, SF::Exponent);
+        } else if flat {
+            self.svt_field(c, ex, y, fw, SF::Value);
+        } else if kind == 8 {
+            let per_pair = matches!(p.shape, Shape::Fan { per_pair: true, .. });
+            self.button(
+                c,
+                [ex, y, 70.0, 14.0],
+                "Per pair",
+                Btn::S(SAct::PerPair),
+                per_pair,
+            );
+        }
         self.tips.push((
-            [x, shapes_y, w, y - shapes_y],
+            [x, y, w, 14.0],
             "How the speed changes from the start to the end.\nLinear: evenly. Geometric: by the same factor each step (reads as an even acceleration). Poly: t^n, below 1 starts fast and settles. Sine: eases in and out.\nFlat + / x: add to or multiply the green lines already in range.\nFan: alternates around the start."
                 .to_string(),
         ));
-        let fw = ((w - 12.0) / 4.0).clamp(100.0, 150.0).min(w);
-        let per_row = (((w + 4.0) / (fw + 4.0)) as usize).max(1);
-        let mut cells: Vec<SF> = Vec::new();
-        if flat {
-            cells.push(SF::Value);
-        } else {
+        y += 19.0;
+        if !flat {
+            let mut cells: Vec<SF> = Vec::new();
             if p.write_sv {
                 cells.extend([SF::FromSv, SF::ToSv]);
             }
             if p.write_volume {
                 cells.extend([SF::FromVol, SF::ToVol]);
             }
-            if kind == 2 {
-                cells.push(SF::Exponent);
+            for (i, f) in cells.iter().enumerate() {
+                let (cx, cy) = grid(i);
+                self.svt_field(c, cx, y + cy, fw, *f);
             }
+            y += 18.0 * cells.len().div_ceil(per_row) as f32;
         }
-        for (i, f) in cells.iter().enumerate() {
-            let (col, row) = (i % per_row, i / per_row);
-            self.svt_field(
-                c,
-                x + col as f32 * (fw + 4.0),
-                y + row as f32 * 18.0,
-                fw,
-                *f,
-            );
+        // What is written and where.
+        let write = match (p.write_sv, p.write_volume) {
+            (true, false) => "Write: speed",
+            (false, true) => "Write: volume",
+            _ => "Write: speed + volume",
+        };
+        self.drop_button(c, x, y, 128.0, 1, write);
+        let mut on: Vec<String> = Vec::new();
+        if flat || p.lines {
+            on.push("green lines".into());
         }
-        y += 18.0 * cells.len().div_ceil(per_row) as f32;
-        let snap = format!("Snaps {}/{}", p.snap_numer as i64, p.snap_denom as i64);
-        let mut ax = self.row(
-            c,
-            x,
-            y,
-            &[
-                ("SV".into(), Btn::S(SAct::WriteSv), p.write_sv),
-                ("Volume".into(), Btn::S(SAct::WriteVolume), p.write_volume),
-            ],
-        ) + 8.0;
-        c.text(ax, y + 4.0, 6.0, rgba(FAINT, 1.0), "on");
-        ax += 12.0;
-        let end = self.row(
-            c,
-            ax,
-            y,
-            &[
-                ("Notes".into(), Btn::S(SAct::Hits), p.hits && !flat),
-                (snap, Btn::S(SAct::Snaps), p.snaps && !flat),
-                ("Green lines".into(), Btn::S(SAct::Lines), p.lines || flat),
-            ],
-        );
+        if !flat && p.hits {
+            on.push("notes".into());
+        }
+        if !flat && p.snaps {
+            on.push(format!(
+                "grid {}/{}",
+                p.snap_numer as i64, p.snap_denom as i64
+            ));
+        }
+        let place = format!("On: {}", on.join(" + "));
+        self.drop_button(c, x + 132.0, y, 170.0, 2, &place);
         if p.snaps && !flat {
-            self.svt_field(c, end + 4.0, y + 1.0, 70.0, SF::SnapNumer);
-            self.svt_field(c, end + 78.0, y + 1.0, 70.0, SF::SnapDenom);
+            self.svt_field(c, x + 306.0, y, 70.0, SF::SnapNumer);
+            self.svt_field(c, x + 380.0, y, 70.0, SF::SnapDenom);
         }
         self.tips.push((
-            [x, y, w, 16.0],
-            "Where the new lines go: on each note, on the beat grid (n/d of a beat), or on the green lines already there. Flat changes always use the lines already there.".to_string(),
+            [x, y, w, 14.0],
+            "Write: what the new lines carry. On: where they go: on each note, on the beat grid (n/d of a beat), or on the green lines already there (flat changes always use those).".to_string(),
         ));
         y += 19.0;
-        let advanced = [SF::Offset, SF::Buffer, SF::Spacing];
-        for (i, f) in advanced.iter().enumerate() {
-            let (col, row) = (i % per_row, i / per_row);
-            self.svt_field(
-                c,
-                x + col as f32 * (fw + 4.0),
-                y + row as f32 * 18.0,
-                fw,
-                *f,
-            );
+        // Rarely touched settings.
+        let open = self.svt.advanced;
+        self.button(
+            c,
+            [x, y, 80.0, 14.0],
+            if open { "Advanced -" } else { "Advanced +" },
+            Btn::S(SAct::Advanced),
+            open,
+        );
+        if open {
+            let mut tx = x + 84.0;
+            for (label, a, on) in [
+                ("Ignore BPM", SAct::IgnoreBpm, p.ignore_bpm),
+                ("Relative", SAct::Relative, p.relative),
+            ] {
+                let bw = Canvas::text_width(7.0, label) + 12.0;
+                self.button(c, [tx, y, bw, 14.0], label, Btn::S(a), on);
+                tx += bw + 4.0;
+            }
+            y += 19.0;
+            for (i, f) in [SF::Offset, SF::Buffer, SF::Spacing].iter().enumerate() {
+                let (cx, cy) = grid(i);
+                self.svt_field(c, cx, y + cy, fw, *f);
+            }
+            self.tips.push((
+                [x, y, w, 18.0 * 3usize.div_ceil(per_row) as f32],
+                "Offset: ms from the object a line goes (negative: before it).\nBuffer: ms around the segment that count as in it, for notes that aren't perfectly snapped.\nMin spacing: lines closer than this collapse, and old green lines this close to a new one are replaced."
+                    .to_string(),
+            ));
+            y += 18.0 * 3usize.div_ceil(per_row) as f32;
+        } else {
+            y += 19.0;
         }
-        let adv_h = 18.0 * advanced.len().div_ceil(per_row) as f32;
-        self.tips.push((
-            [x, y, w, adv_h],
-            "Offset: ms from the object a line goes (negative: before it).\nBuffer: ms around the segment that count as in it, for notes that aren't perfectly snapped.\nMin spacing: lines closer than this collapse, and old green lines this close to a new one are replaced."
-                .to_string(),
-        ));
-        let mut toggles = vec![
-            (
-                "Ignore BPM".to_string(),
-                Btn::S(SAct::IgnoreBpm),
-                p.ignore_bpm,
-            ),
-            ("Relative".to_string(), Btn::S(SAct::Relative), p.relative),
-        ];
-        if kind == 8 {
-            let per_pair = matches!(p.shape, Shape::Fan { per_pair: true, .. });
-            toggles.push(("Per pair".to_string(), Btn::S(SAct::PerPair), per_pair));
-        }
-        y += adv_h;
-        y = self.wrap_row(c, x, y, w, &toggles);
-        let presets: Vec<(String, Btn, bool)> = [
-            "Ramp selected lines",
-            "Geometric ramp lines",
-            "Multiply selected",
-            "Every note",
-        ]
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.to_string(), Btn::S(SAct::Preset(i as u8)), false))
-        .collect();
-        let top = y;
-        y = self.wrap_row(c, x, y, w, &presets);
-        self.tips.push((
-            [x, top, w, y - top],
-            "Setups for the usual jobs. They only change the settings above; Apply writes."
-                .to_string(),
-        ));
+        // The result and Apply.
         let (note, ok) = match self.svt.ghost.as_ref().map(|g| &g.result) {
             Some(Ok(plan)) => (
                 format!(
@@ -1002,24 +1257,25 @@ impl View {
             Some(Err(e)) => (e.clone(), false),
             None => (String::new(), false),
         };
+        self.drop_button(c, x, y, 110.0, 3, "Presets");
         let bx = x + w - 112.0;
         c.text(
-            x,
+            x + 116.0,
             y + 4.0,
             6.5,
             rgba(if ok { GREEN_LINE } else { 0xfcb806 }, 1.0),
-            &Canvas::fit(6.5, bx - x - 6.0, &note),
+            &Canvas::fit(6.5, bx - x - 200.0, &note),
         );
         self.button(
             c,
-            [bx - 74.0, y, 70.0, 16.0],
+            [bx - 74.0, y, 70.0, 14.0],
             "From chart",
             Btn::S(SAct::TakeChart),
             false,
         );
         self.button(
             c,
-            [bx, y, 112.0, 16.0],
+            [bx, y, 112.0, 14.0],
             "Apply",
             Btn::S(SAct::Apply),
             ok && !segments.is_empty(),
@@ -1074,13 +1330,23 @@ impl View {
             SAct::Hits => self.svt.params.hits = !self.svt.params.hits,
             SAct::Snaps => self.svt.params.snaps = !self.svt.params.snaps,
             SAct::Lines => self.svt.params.lines = !self.svt.params.lines,
-            SAct::WriteSv => {
+            SAct::Write(m) => {
                 let p = &mut self.svt.params;
-                p.write_sv = !p.write_sv || !p.write_volume;
+                (p.write_sv, p.write_volume) = (m != 1, m != 0);
             }
-            SAct::WriteVolume => {
-                let p = &mut self.svt.params;
-                p.write_volume = !p.write_volume || !p.write_sv;
+            SAct::Drop(k) => {
+                let at = self
+                    .buttons
+                    .iter()
+                    .rev()
+                    .find(|(_, b)| *b == Btn::S(SAct::Drop(k)))
+                    .map(|(r, _)| *r);
+                self.svt.drop = at.map(|r| (k, r));
+            }
+            SAct::Advanced => self.svt.advanced = !self.svt.advanced,
+            SAct::Done => {
+                self.svt.picked = None;
+                self.select_line(None);
             }
             SAct::IgnoreBpm => self.svt.params.ignore_bpm = !self.svt.params.ignore_bpm,
             SAct::Relative => self.svt.params.relative = !self.svt.params.relative,
