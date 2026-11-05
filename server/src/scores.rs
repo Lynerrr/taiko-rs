@@ -45,6 +45,13 @@ struct Stored {
     hidden: bool,
 }
 
+impl Stored {
+    /// A Relax play: it's on boards of its own, and counts for nothing on the usual ones.
+    fn relax(&self) -> bool {
+        self.score.mods.iter().any(|m| m == "RX")
+    }
+}
+
 #[derive(Serialize)]
 struct StoredReplay<'a> {
     version: u32,
@@ -156,6 +163,8 @@ pub struct Scores {
     by_map: HashMap<u64, Vec<usize>>,
     /// Each player's ranking row, redone whenever their plays or their pp change.
     standings: HashMap<String, Standing>,
+    /// The same for Relax plays, for the players who have some.
+    relax_standings: HashMap<String, Standing>,
     /// Each map's row, and who has played it.
     map_rows: HashMap<u64, (MapRow, HashSet<String>)>,
 }
@@ -182,8 +191,8 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
     if !fine {
         return Err("that play doesn't add up");
     }
-    if play.map.mods.iter().any(|m| m == "AT" || m == "RX") {
-        return Err("Autoplay and Relax plays don't go on the leaderboards");
+    if play.map.mods.iter().any(|m| m == "AT") {
+        return Err("Autoplay plays don't go on the leaderboards");
     }
     Ok(())
 }
@@ -299,6 +308,7 @@ impl Scores {
             by_player: HashMap::new(),
             by_map: HashMap::new(),
             standings: HashMap::new(),
+            relax_standings: HashMap::new(),
             map_rows: HashMap::new(),
         };
         scores.reindex();
@@ -320,7 +330,7 @@ impl Scores {
         let mut plays: Vec<&Stored> = self
             .stored_of(player)
             .into_iter()
-            .filter(|s| !s.hidden)
+            .filter(|s| !s.hidden && !s.relax())
             .collect();
         plays.sort_by_key(|s| (s.score.date, s.id));
         plays
@@ -333,7 +343,7 @@ impl Scores {
         Rivals::of(
             self.all
                 .iter()
-                .filter(|s| !s.hidden)
+                .filter(|s| !s.hidden && !s.relax())
                 .map(|s| (s.player.as_str(), Play::of(&s.score, self.gives(s)))),
         )
     }
@@ -382,6 +392,7 @@ impl Scores {
         self.by_map.clear();
         self.map_rows.clear();
         self.standings.clear();
+        self.relax_standings.clear();
         for i in 0..self.all.len() {
             self.index(i);
         }
@@ -423,8 +434,8 @@ impl Scores {
         row.plays += 1;
         row.last = row.last.max(sc.date);
         row.set_id = sc.set_id.or(row.set_id);
-        // Stars at 1.0x, if anyone played it so.
-        if (sc.rate - 1.0).abs() < 1e-6 {
+        // Stars at 1.0x, if anyone played it so. Relax rates a map lower: not the map's own.
+        if (sc.rate - 1.0).abs() < 1e-6 && !s.relax() {
             row.stars = sc.stars.or(row.stars);
         }
         if players.insert(s.player.clone()) {
@@ -432,30 +443,22 @@ impl Scores {
         }
     }
 
-    /// Redoes `player`'s ranking row from their plays.
+    /// Redoes `player`'s ranking rows from their plays.
     fn restand(&mut self, player: &str) {
-        let plays: Vec<&Stored> = self
+        let (relax, usual): (Vec<&Stored>, Vec<&Stored>) = self
             .stored_of(player)
             .into_iter()
             .filter(|s| !self.off_boards(s))
-            .collect();
-        let (stats, pp) = stats_of(&plays);
-        let row = Ranked {
-            rank: 0,
-            name: plays
-                .last()
-                .map(|s| s.score.player.clone())
-                .unwrap_or_default(),
-            pp,
-            accuracy: stats.accuracy,
-            plays: plays.len() as u32,
-            ss: stats.ss,
-            s: stats.s,
-            a: stats.a,
+            .partition(|s| s.relax());
+        let (usual, relax) = (
+            standing_of(&usual),
+            (!relax.is_empty()).then(|| standing_of(&relax)),
+        );
+        self.standings.insert(player.to_string(), usual);
+        match relax {
+            Some(row) => self.relax_standings.insert(player.to_string(), row),
+            None => self.relax_standings.remove(player),
         };
-        let has_pp = plays.iter().any(|s| s.score.pp.is_some());
-        self.standings
-            .insert(player.to_string(), Standing { row, has_pp });
     }
 
     /// `player`'s plays, oldest first.
@@ -827,9 +830,15 @@ impl Scores {
         }
         self.index(self.all.len() - 1);
         self.restand(player);
-        let board = self.best_on(map);
+        // What's sent back is about the board the play went on.
+        let relax = self.all.last().is_some_and(Stored::relax);
+        let board = self.board_on(map, relax);
         let map_rank = board.iter().position(|s| s.id == id).map(|p| p as u32 + 1);
-        let (pp, rank) = self.standing(player);
+        let (pp, rank) = if relax {
+            Self::standing_in(&self.relax_standings, player)
+        } else {
+            self.standing(player)
+        };
         Ok((map_rank, pp, rank))
     }
 
@@ -911,10 +920,15 @@ impl Scores {
         Ok(id)
     }
 
-    /// Each player's best score (by score) on `map`, highest first.
+    /// Each player's best score (by score) on `map`, highest first, Relax plays left out.
     fn best_on(&self, map: u64) -> Vec<&Stored> {
+        self.board_on(map, false)
+    }
+
+    /// `best_on` for the usual board, or `relax`'s.
+    fn board_on(&self, map: u64, relax: bool) -> Vec<&Stored> {
         let mut best: HashMap<&str, &Stored> = HashMap::new();
-        for s in self.plays_on(map) {
+        for s in self.plays_on(map).filter(|s| s.relax() == relax) {
             let b = best.entry(&s.player).or_insert(s);
             if s.score.score > b.score.score {
                 *b = s;
@@ -928,6 +942,7 @@ impl Scores {
     /// The best score on `map` (the earliest of equal ones): the top of `best_on`.
     fn leader(&self, map: u64) -> Option<&Stored> {
         self.plays_on(map)
+            .filter(|s| !s.relax())
             .fold(None, |b: Option<&Stored>, s| match b {
                 Some(b) if b.score.score >= s.score.score => Some(b),
                 _ => Some(s),
@@ -961,7 +976,7 @@ impl Scores {
         for s in self
             .stored_of(player)
             .into_iter()
-            .filter(|s| s.score.pp.is_some())
+            .filter(|s| s.score.pp.is_some() && !s.relax())
         {
             let b = best.entry(s.score.map_hash).or_insert(s);
             if s.score.pp > b.score.pp {
@@ -975,7 +990,8 @@ impl Scores {
 
     /// Where play `id` stands on its map's leaderboard (1-based), if it's its player's best there.
     pub fn place_of(&self, map: u64, id: u64) -> Option<u32> {
-        self.best_on(map)
+        let relax = self.stored(id).is_some_and(Stored::relax);
+        self.board_on(map, relax)
             .iter()
             .position(|s| s.id == id)
             .map(|p| p as u32 + 1)
@@ -989,10 +1005,29 @@ impl Scores {
             .collect()
     }
 
+    /// `map_scores` for the map's Relax board.
+    pub fn relax_map_scores(&self, map: u64) -> Vec<OnlineScore> {
+        self.board_on(map, true)
+            .into_iter()
+            .take(online::MAP_SCORES)
+            .map(|s| s.score.clone())
+            .collect()
+    }
+
     /// Everyone with pp, highest first, with osu!'s ranking columns.
     pub fn rankings(&self, limit: usize) -> Vec<Ranked> {
-        let mut out: Vec<(&str, &Ranked)> = self
-            .standings
+        self.ranked(&self.standings, limit, true)
+    }
+
+    /// `rankings` by Relax pp.
+    pub fn relax_rankings(&self, limit: usize) -> Vec<Ranked> {
+        self.ranked(&self.relax_standings, limit, false)
+    }
+
+    /// `table`'s players with pp, highest first. `tally`: plays off the leaderboards count too
+    /// (they aren't told apart by mods).
+    fn ranked(&self, table: &HashMap<String, Standing>, limit: usize, tally: bool) -> Vec<Ranked> {
+        let mut out: Vec<(&str, &Ranked)> = table
             .iter()
             .map(|(k, s)| (k.as_str(), &s.row))
             .filter(|(_, r)| r.pp > 0.0)
@@ -1007,7 +1042,7 @@ impl Scores {
             .enumerate()
             .map(|(i, (k, r))| Ranked {
                 rank: i as u32 + 1,
-                plays: r.plays + self.tally(k).other_plays,
+                plays: r.plays + if tally { self.tally(k).other_plays } else { 0 },
                 ..r.clone()
             })
             .collect()
@@ -1032,16 +1067,15 @@ impl Scores {
 
     /// A player's pp total and rank among everyone with pp.
     fn standing(&self, player: &str) -> (f64, Option<u32>) {
-        let Some(mine) = self
-            .standings
-            .get(player)
-            .filter(|s| s.has_pp)
-            .map(|s| s.row.pp)
-        else {
+        Self::standing_in(&self.standings, player)
+    }
+
+    /// `standing` in `table`.
+    fn standing_in(table: &HashMap<String, Standing>, player: &str) -> (f64, Option<u32>) {
+        let Some(mine) = table.get(player).filter(|s| s.has_pp).map(|s| s.row.pp) else {
             return (0.0, None);
         };
-        let above = self
-            .standings
+        let above = table
             .values()
             .filter(|s| s.has_pp && s.row.pp > mine)
             .count();
@@ -1065,7 +1099,7 @@ impl Scores {
         mine.sort_by_key(|s| (s.score.date, s.id));
         let mut best: HashMap<u64, f64> = HashMap::new();
         let mut history: Vec<(u64, f64)> = Vec::new();
-        for s in &mine {
+        for s in mine.iter().filter(|s| !s.relax()) {
             let Some(pp) = s.score.pp else { continue };
             let b = best.entry(s.score.map_hash).or_insert(0.0);
             if pp > *b {
@@ -1123,17 +1157,9 @@ impl Scores {
     /// `player`'s profile (`name` as written, `joined` when the account was made).
     pub fn profile(&self, player: &str, name: &str, joined: u64) -> Profile {
         let mine = self.stored_of(player);
-        // Best pp per map.
-        let mut best: HashMap<u64, &Stored> = HashMap::new();
-        for s in mine.iter().filter(|s| s.score.pp.is_some()) {
-            let b = best.entry(s.score.map_hash).or_insert(s);
-            if s.score.pp > b.score.pp {
-                *b = s;
-            }
-        }
-        let mut top: Vec<OnlineScore> = best.into_values().map(|s| s.score.clone()).collect();
-        top.sort_by(|a, b| b.pp.unwrap_or(0.0).total_cmp(&a.pp.unwrap_or(0.0)));
-        top.truncate(PROFILE_PLAYS);
+        let (relax, usual): (Vec<&Stored>, Vec<&Stored>) =
+            mine.iter().copied().partition(|s| s.relax());
+        let top = top_plays(&usual);
         let recent = mine
             .iter()
             .rev()
@@ -1141,9 +1167,9 @@ impl Scores {
             .map(|s| s.score.clone())
             .collect();
         let (_, rank) = self.standing(player);
-        let (stats, pp) = stats_of(&mine);
+        let (stats, pp) = stats_of(&usual);
         // First places: maps where theirs is the best score.
-        let mut maps: Vec<u64> = mine.iter().map(|s| s.score.map_hash).collect();
+        let mut maps: Vec<u64> = usual.iter().map(|s| s.score.map_hash).collect();
         maps.sort_unstable();
         maps.dedup();
         let mut firsts: Vec<OnlineScore> = maps
@@ -1170,8 +1196,52 @@ impl Scores {
             online: false,
             play_ms: tally.ms,
             medals: self.medals.summary(player),
+            relax: {
+                let (relax_pp, relax_rank) = Self::standing_in(&self.relax_standings, player);
+                online::RelaxStanding {
+                    plays: relax.len() as u32,
+                    pp: relax_pp,
+                    rank: relax_rank,
+                    top: top_plays(&relax),
+                }
+            },
         }
     }
+}
+
+/// `plays`' best play on each map by pp, the highest `PROFILE_PLAYS` of them.
+fn top_plays(plays: &[&Stored]) -> Vec<OnlineScore> {
+    let mut best: HashMap<u64, &Stored> = HashMap::new();
+    for s in plays.iter().filter(|s| s.score.pp.is_some()) {
+        let b = best.entry(s.score.map_hash).or_insert(s);
+        if s.score.pp > b.score.pp {
+            *b = s;
+        }
+    }
+    let mut top: Vec<OnlineScore> = best.into_values().map(|s| s.score.clone()).collect();
+    top.sort_by(|a, b| b.pp.unwrap_or(0.0).total_cmp(&a.pp.unwrap_or(0.0)));
+    top.truncate(PROFILE_PLAYS);
+    top
+}
+
+/// A ranking row for `plays`, one player's.
+fn standing_of(plays: &[&Stored]) -> Standing {
+    let (stats, pp) = stats_of(plays);
+    let row = Ranked {
+        rank: 0,
+        name: plays
+            .last()
+            .map(|s| s.score.player.clone())
+            .unwrap_or_default(),
+        pp,
+        accuracy: stats.accuracy,
+        plays: plays.len() as u32,
+        ss: stats.ss,
+        s: stats.s,
+        a: stats.a,
+    };
+    let has_pp = plays.iter().any(|s| s.score.pp.is_some());
+    Standing { row, has_pp }
 }
 
 /// What a profile page shows beyond `Profile`: how their pp grew, the maps they keep coming
@@ -1458,6 +1528,101 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             ["B", "A"]
         );
+    }
+
+    /// `play` with Relax on.
+    fn relax_play(map: u64, score: u64, pp: f64) -> ScoreSubmit {
+        let mut p = play(map, score, pp);
+        p.map.mods = vec!["RX".into()];
+        p
+    }
+
+    #[test]
+    fn relax_plays_count_apart_from_the_usual_ones() {
+        let mut s = Scores::load(None);
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        let (place, pp, rank) = s.submit("a", "A", relax_play(7, 900, 40.0), 2).unwrap();
+        assert_eq!(place, Some(1), "first on the Relax board");
+        assert_eq!(
+            (pp, rank),
+            (40.0, Some(1)),
+            "the total sent back is Relax's"
+        );
+        s.submit("b", "B", relax_play(7, 950, 60.0), 3).unwrap();
+
+        // The usual board, total and rankings know nothing of them.
+        assert_eq!(s.map_scores(7).len(), 1);
+        assert_eq!(s.map_scores(7)[0].score, 500);
+        assert_eq!(s.rankings(10).len(), 1);
+        assert_eq!(s.rankings(10)[0].pp, 100.0);
+        assert_eq!(s.standing("b"), (0.0, None));
+        assert!(s.best_of("b").is_empty());
+
+        // And the Relax ones nothing of the usual play.
+        let board = s.relax_map_scores(7);
+        assert_eq!(
+            board.iter().map(|r| r.score).collect::<Vec<_>>(),
+            [950, 900]
+        );
+        let ranks = s.relax_rankings(10);
+        assert_eq!(ranks.iter().map(|r| r.pp).collect::<Vec<_>>(), [60.0, 40.0]);
+        assert_eq!((ranks[0].rank, ranks[1].rank), (1, 2));
+    }
+
+    #[test]
+    fn a_profile_keeps_relax_apart_but_lists_it_in_recent_plays() {
+        let mut s = Scores::load(None);
+        s.submit("a", "A", play(7, 500, 100.0), 1).unwrap();
+        s.submit("a", "A", relax_play(7, 900, 40.0), 2).unwrap();
+        let p = s.profile("a", "A", 0);
+        assert_eq!(p.pp, 100.0);
+        assert_eq!(p.top.len(), 1);
+        assert_eq!(p.top[0].score, 500);
+        assert_eq!(p.stats.ranked_score, 500);
+        assert_eq!(p.firsts.len(), 1);
+        assert_eq!(p.firsts[0].score, 500);
+        assert_eq!(p.recent.len(), 2);
+        assert_eq!(p.plays, 2);
+        assert_eq!(p.relax.pp, 40.0);
+        assert_eq!(p.relax.rank, Some(1));
+        assert_eq!(p.relax.plays, 1);
+        assert_eq!(p.relax.top[0].score, 900);
+        assert_eq!(s.extras("a").history.last().map(|h| h.1), Some(100.0));
+    }
+
+    #[test]
+    fn a_players_place_is_on_the_board_their_play_is_on() {
+        let mut s = Scores::load(None);
+        s.submit("a", "A", play(7, 900, 100.0), 1).unwrap();
+        s.submit("b", "B", relax_play(7, 500, 40.0), 2).unwrap();
+        let id = s.relax_map_scores(7)[0].id;
+        assert_eq!(s.place_of(7, id), Some(1));
+    }
+
+    #[test]
+    fn relax_plays_come_back_apart_after_a_restart() {
+        let dir = std::env::temp_dir().join(format!("taiko-relax-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let mut s = Scores::load(Some(dir.clone()));
+            s.submit("a", "A", relax_play(7, 900, 40.0), 1).unwrap();
+        }
+        let again = Scores::load(Some(dir.clone()));
+        assert!(again.map_scores(7).is_empty());
+        assert_eq!(again.relax_map_scores(7).len(), 1);
+        assert_eq!(again.relax_rankings(10).len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn relax_plays_earn_no_medals_and_autoplay_still_cant_be_sent() {
+        let mut s = Scores::load(None);
+        s.submit("a", "A", relax_play(7, 900, 40.0), 1).unwrap();
+        assert!(s.medal_plays("a").is_empty());
+        let mut auto = play(7, 900, 40.0);
+        auto.map.mods = vec!["AT".into()];
+        assert!(s.submit("a", "A", auto, 2).is_err());
     }
 
     #[test]

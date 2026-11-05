@@ -16,11 +16,13 @@ pub enum State {
 pub struct View {
     pub name: String,
     pub state: State,
+    /// Opened with Relax on: its best plays show instead of the usual ones.
+    pub relax: bool,
 }
 
 impl View {
     /// Asks the server for `name`'s profile (on a background thread).
-    pub fn open(server: String, name: String) -> View {
+    pub fn open(server: String, name: String, relax: bool) -> View {
         let (tx, rx) = mpsc::channel();
         let who = name.clone();
         std::thread::spawn(move || {
@@ -44,6 +46,7 @@ impl View {
         View {
             name,
             state: State::Loading(rx),
+            relax,
         }
     }
 
@@ -210,18 +213,42 @@ impl View {
         for (i, m) in p.medals.rarest.iter().enumerate() {
             crate::medals::small_badge(c, px + pw - 22.0 - i as f32 * 24.0, py + 35.0, m);
         }
+        // Relax counts apart: its own line, by the medals.
+        if p.relax.plays > 0 {
+            let (rx_pp, rx_plays) = (p.relax.pp + 0.0, p.relax.plays);
+            let place = p.relax.rank.map(|r| format!("#{r}   ")).unwrap_or_default();
+            c.text_right(
+                px + pw - 96.0,
+                py + 31.0,
+                7.0,
+                rgba(0xFFD34D, 1.0),
+                &Canvas::fit(
+                    7.0,
+                    pw * 0.4,
+                    &tr!(
+                        "RELAX  {place}{rx_pp:.0} pp   {rx_plays} plays",
+                        "RELAX  {place}{rx_pp:.0} pp   {rx_plays}プレイ",
+                        "RELAX  {place}{rx_pp:.0} pp   игр: {rx_plays}";
+                    ),
+                ),
+            );
+        }
         // Two lists side by side.
         let col_w = (pw - 48.0) / 2.0;
         let top = py + 54.0;
         let bottom = by - 6.0;
         let lists = [
             (
-                tr!(
-                    "BEST PERFORMANCE",
-                    "ベストパフォーマンス",
-                    "ЛУЧШИЕ РЕЗУЛЬТАТЫ"
-                ),
-                &p.top,
+                if self.relax {
+                    tr!("BEST RELAX", "ベストRELAX", "ЛУЧШИЕ RELAX")
+                } else {
+                    tr!(
+                        "BEST PERFORMANCE",
+                        "ベストパフォーマンス",
+                        "ЛУЧШИЕ РЕЗУЛЬТАТЫ"
+                    )
+                },
+                if self.relax { &p.relax.top } else { &p.top },
                 tr!(
                     "no pp plays yet",
                     "ppのプレイはまだありません",

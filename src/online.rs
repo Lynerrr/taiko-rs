@@ -96,6 +96,9 @@ pub enum Request {
     /// The best score of each player on a map, by its hash (`Reply::Scores`).
     MapScores {
         map: u64,
+        /// The map's Relax board instead (servers from before it send the usual one).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        relax: bool,
     },
     /// A player's profile (`Reply::Profile`).
     Profile {
@@ -381,6 +384,20 @@ pub struct Profile {
     pub play_ms: u64,
     #[serde(default)]
     pub medals: MedalSummary,
+    /// How they stand with Relax, which counts apart: none of the above but `recent` and `plays`
+    /// has their Relax plays in it.
+    #[serde(default)]
+    pub relax: RelaxStanding,
+}
+
+/// A player's Relax plays: a total, a place and best plays of their own.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct RelaxStanding {
+    pub plays: u32,
+    pub pp: f64,
+    /// Place among everyone by Relax pp (1-based; None without any yet).
+    pub rank: Option<u32>,
+    pub top: Vec<OnlineScore>,
 }
 
 /// A player's totals, like osu!'s profile.
@@ -941,6 +958,9 @@ pub enum Reply {
     /// The play is on the leaderboards: its place on the map (if it's the player's best there),
     /// and the player's pp total and rank now.
     Submitted {
+        /// The play went on the Relax boards: `map_rank`, `pp` and `rank` are about those.
+        #[serde(default)]
+        relax: bool,
         map_rank: Option<u32>,
         pp: f64,
         rank: Option<u32>,
@@ -1430,5 +1450,61 @@ mod tests {
         assert!(
             matches!(serde_json::from_str::<Up>(&serde_json::to_string(&Up::GlobalChat("hi".into())).unwrap()).unwrap(), Up::GlobalChat(t) if t == "hi")
         );
+    }
+}
+
+#[cfg(test)]
+mod relax_wire_tests {
+    use super::*;
+
+    #[test]
+    fn a_game_without_relax_boards_and_a_server_with_them_understand_each_other() {
+        // The usual board is asked for as it always was, so a server from before still answers.
+        let usual = serde_json::to_string(&Request::MapScores {
+            map: 7,
+            relax: false,
+        })
+        .unwrap();
+        assert!(!usual.contains("relax"), "{usual}");
+        // And an old game's request, with no such field, is for the usual board.
+        match serde_json::from_str(&usual).unwrap() {
+            Request::MapScores { map: 7, relax } => assert!(!relax),
+            other => panic!("{other:?}"),
+        }
+        let relax = serde_json::to_string(&Request::MapScores {
+            map: 7,
+            relax: true,
+        })
+        .unwrap();
+        match serde_json::from_str(&relax).unwrap() {
+            Request::MapScores { map: 7, relax } => assert!(relax),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_profile_from_a_server_before_relax_boards_reads_as_none() {
+        let mut p = serde_json::to_value(Profile {
+            name: "a".into(),
+            joined: 0,
+            plays: 0,
+            pp: 1.0,
+            rank: None,
+            top: Vec::new(),
+            recent: Vec::new(),
+            stats: Stats::default(),
+            firsts: Vec::new(),
+            online: false,
+            play_ms: 0,
+            medals: Default::default(),
+            relax: RelaxStanding {
+                plays: 3,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        p.as_object_mut().unwrap().remove("relax");
+        let p: Profile = serde_json::from_value(p).unwrap();
+        assert_eq!(p.relax, RelaxStanding::default());
     }
 }

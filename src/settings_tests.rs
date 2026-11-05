@@ -512,6 +512,8 @@ fn the_screen_glitches_between_menus_only_and_only_with_the_setting_on() {
 fn the_menu_glitch_setting_stays_off_after_a_restart() {
     let mut cfg = config::Config::default();
     assert!(cfg.menu_glitch);
+    // A config from before the setting has it on too.
+    assert!(config::Config::parse_text("animations = true\n").menu_glitch);
     cfg.menu_glitch = false;
     assert!(!config::Config::parse_text(&cfg.to_text()).menu_glitch);
 }
