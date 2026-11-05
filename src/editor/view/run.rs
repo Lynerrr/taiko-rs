@@ -335,15 +335,17 @@ impl View {
                 },
             },
             Cmd::TimingList => {
-                self.list = !self.list;
-                self.list_scroll = 0;
+                self.tw = !self.tw;
+                self.tw_seen = None;
                 self.sheet = false;
+                if self.tw && self.node_mode() {
+                    self.set_mode(Mode::Timing);
+                }
             }
             Cmd::Mode(m) => self.set_mode(m),
             Cmd::Tour => self.start_tour(),
             Cmd::Shortcuts => {
                 self.sheet = !self.sheet;
-                self.list = false;
             }
         }
     }

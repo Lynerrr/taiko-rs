@@ -176,6 +176,11 @@ impl TimingPoint {
         }
     }
 
+    /// Whether any field differs from `other`'s.
+    pub fn differs_from(&self, other: &TimingPoint) -> bool {
+        self.key() != other.key()
+    }
+
     fn key(&self) -> TimingKey {
         (
             self.time.to_bits(),

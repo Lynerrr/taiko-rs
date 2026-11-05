@@ -10,6 +10,10 @@ use crate::render::{Canvas, accent, rgba};
 pub enum TAct {
     Value(i32),
     SetValue,
+    /// Move the selected line to the playhead.
+    Here,
+    /// Copy the selected lines to the playhead.
+    CloneHere,
     Copy,
     Paste,
     Delete,
@@ -33,7 +37,7 @@ impl View {
         self.sel_extra.clear();
     }
 
-    fn toggle_line(&mut self, id: u64) {
+    pub(super) fn toggle_line(&mut self, id: u64) {
         let mut all = self.selected_lines();
         if let Some(i) = all.iter().position(|x| *x == id) {
             all.remove(i);
@@ -201,6 +205,22 @@ impl View {
                 .ed
                 .set_sv(&ids, self.t_value)
                 .map(|n| format!("set {n} lines to x{:.2}", self.t_value)),
+            TAct::Here => match self.sel_line {
+                Some(id) => {
+                    let at = self.ed.time;
+                    self.ed
+                        .edit_timing(id, |p| p.time = at, false)
+                        .map(|()| format!("moved to {}", super::fmt_time(at)))
+                }
+                None => Err("no line selected".into()),
+            },
+            TAct::CloneHere => {
+                let n = self.ed.copy_lines(&ids);
+                let at = self.ed.time;
+                self.ed
+                    .paste_lines(at)
+                    .map(|m| format!("cloned {m} of {n} lines"))
+            }
             TAct::Copy => Ok(format!("copied {} lines", self.ed.copy_lines(&ids))),
             TAct::Paste => {
                 let at = self.ed.time;

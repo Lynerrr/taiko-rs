@@ -165,7 +165,7 @@ impl Cmd {
             Cmd::AddRed => "Add red line (BPM)",
             Cmd::AddGreen => "Add green line (SV)",
             Cmd::DeleteLine => "Delete timing line",
-            Cmd::TimingList => "Timing lines list",
+            Cmd::TimingList => "Timing window (all lines, their fields, the SV tool)",
             Cmd::Mode(m) => m.name(),
             Cmd::Tour => "Take the tour",
             Cmd::Shortcuts => "Keyboard shortcuts",

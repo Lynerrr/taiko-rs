@@ -31,6 +31,7 @@ mod menu;
 mod nodes;
 mod panel;
 mod run;
+mod timing_win;
 
 use cmd::Cmd;
 pub use cmd::Mode;
@@ -65,6 +66,9 @@ pub enum Field {
     Volume,
     Meter,
     Time,
+    /// The sample set (cycles Auto, Normal, Soft, Drum) and the custom sample index.
+    Sample,
+    Index,
     /// A number of the SV tool.
     S(SF),
 }
@@ -100,8 +104,12 @@ pub enum Btn {
     TourNext,
     TourBack,
     TourSkip,
-    /// A row of the timing lines list.
+    /// A row of the timing window.
     Line(u64),
+    /// The window's filter chip.
+    TwFilter(u8),
+    /// The window's scroll bar track (a press starts the drag).
+    TwBar,
 }
 
 #[derive(Clone, Copy)]
@@ -137,6 +145,8 @@ enum Drag {
     },
     /// Dragging along the whole-song bar.
     Overview,
+    /// The timing window's scroll bar.
+    TwScroll,
     Lines {
         anchor: u64,
     },
@@ -209,6 +219,8 @@ pub struct Layout {
     /// The whole song, small, under everything: where you are and where the notes are.
     pub overview: [f32; 4],
     pub status: [f32; 4],
+    /// The F6 timing window (empty while it is closed).
+    pub window: [f32; 4],
 }
 
 /// The colour of effect marks (.tko).
@@ -217,7 +229,7 @@ pub(super) const MARK_COL: u32 = 0xB36BFF;
 const RULER: f32 = 14.0;
 
 impl Layout {
-    pub fn new(w: f32, mode: Mode) -> Layout {
+    pub fn new(w: f32, mode: Mode, windowed: bool) -> Layout {
         let ph = 158.0;
         let pw = ph * 16.0 / 9.0;
         let top = 44.0;
@@ -230,6 +242,20 @@ impl Layout {
         };
         let graph_y = low + tl_h + gap;
         let graph_h = 430.0 - graph_y;
+        if windowed {
+            // The window takes the preview, the panel and the graph; the timeline stays under it.
+            let low = 322.0;
+            return Layout {
+                menu: [0.0, 0.0, w, 14.0],
+                modes: [8.0, 17.0, w - 16.0, 22.0],
+                window: [8.0, top, w - 16.0, low - top - 6.0],
+                palette: [8.0, low, 30.0, 108.0],
+                timeline: [42.0, low, w - 50.0, 108.0],
+                overview: [8.0, 434.0, w - 16.0, 9.0],
+                status: [8.0, 447.0, w - 16.0, 30.0],
+                ..Layout::default()
+            };
+        }
         Layout {
             menu: [0.0, 0.0, w, 14.0],
             modes: [8.0, 17.0, w - 16.0, 22.0],
@@ -242,6 +268,7 @@ impl Layout {
             nodes: [8.0, low + 24.0, w - 16.0, 430.0 - low - 24.0],
             overview: [8.0, 434.0, w - 16.0, 9.0],
             status: [8.0, 447.0, w - 16.0, 30.0],
+            window: [0.0; 4],
         }
     }
 }
@@ -319,9 +346,13 @@ pub struct View {
     exit: bool,
     /// The shortcut sheet is open.
     sheet: bool,
-    /// The timing lines list is open, and how far down it is scrolled.
-    list: bool,
-    list_scroll: usize,
+    /// The F6 timing window is open: which lines it lists (0 all, 1 red, 2 green), how far down it
+    /// is scrolled, the selection it last scrolled to and its scroll bar's track.
+    tw: bool,
+    tw_filter: u8,
+    tw_scroll: usize,
+    tw_seen: Option<u64>,
+    tw_bar: [f32; 4],
     /// The step of the tour being shown.
     tour: Option<usize>,
     /// The tour was finished or skipped for good (the screen saves that once).
@@ -394,7 +425,7 @@ impl View {
             ms_per_px: 4.0,
             drag: Drag::None,
             buttons: Vec::new(),
-            layout: Layout::new(853.0, Mode::Compose),
+            layout: Layout::new(853.0, Mode::Compose, false),
             status: String::new(),
             sel_line: None,
             typing: None,
@@ -423,8 +454,11 @@ impl View {
             modal: None,
             exit: false,
             sheet: false,
-            list: false,
-            list_scroll: 0,
+            tw: false,
+            tw_filter: 0,
+            tw_scroll: 0,
+            tw_seen: None,
+            tw_bar: [0.0; 4],
             tour: None,
             tour_ended: false,
             tips: Vec::new(),
@@ -666,23 +700,29 @@ impl View {
 
     pub fn draw(&mut self, c: &mut Canvas, scroll_speed: f64, autoplay: crate::autoplay::Settings) {
         self.width = c.width;
-        self.layout = Layout::new(c.width, self.mode);
+        self.layout = Layout::new(c.width, self.mode, self.windowed());
         self.buttons.clear();
         self.tips.clear();
         self.svt.live = false;
         self.modal_from = 0;
         self.refresh_game();
         self.sync_game(autoplay);
-        self.draw_preview(c, scroll_speed);
-        match self.mode {
-            Mode::Compose => self.draw_compose_panel(c),
-            Mode::Timing => self.draw_timing_panel(c),
-            Mode::Gimmicks | Mode::Effects => self.draw_gimmicks(c),
-        }
-        if self.node_mode() {
+        if self.windowed() {
+            self.draw_palette(c);
+            self.draw_timeline(c);
+            self.draw_timing_window(c);
+        } else if self.node_mode() {
+            self.draw_preview(c, scroll_speed);
+            self.draw_gimmicks(c);
             self.draw_node_strip(c);
             self.draw_node_canvas(c);
         } else {
+            self.draw_preview(c, scroll_speed);
+            match self.mode {
+                Mode::Compose => self.draw_compose_panel(c),
+                Mode::Timing => self.draw_timing_panel(c),
+                Mode::Gimmicks | Mode::Effects => self.draw_gimmicks(c),
+            }
             self.draw_palette(c);
             self.draw_timeline(c);
             self.draw_graph(c);
@@ -724,6 +764,28 @@ impl View {
             x += w + 4.0;
         }
         x
+    }
+
+    /// Like `row`, but a button that would pass `x + w` starts a new line. Returns the next y.
+    fn wrap_row(
+        &mut self,
+        c: &mut Canvas,
+        x0: f32,
+        mut y: f32,
+        w: f32,
+        items: &[(String, Btn, bool)],
+    ) -> f32 {
+        let mut x = x0;
+        for (label, b, on) in items {
+            let bw = Canvas::text_width(7.0, label) + 12.0;
+            if x > x0 && x + bw > x0 + w {
+                x = x0;
+                y += 19.0;
+            }
+            self.button(c, [x, y, bw, 16.0], label, *b, *on);
+            x += bw + 4.0;
+        }
+        y + 19.0
     }
 
     fn draw_preview(&mut self, c: &mut Canvas, scroll_speed: f64) {
@@ -1482,6 +1544,7 @@ impl View {
                 let t = self.overview_time(x);
                 self.set_time(t);
             }
+            Drag::TwScroll => self.tw_drag(y),
             Drag::Slide { from_x, start } => {
                 self.view_start = start - (x - from_x) as f64 * self.ms_per_px;
             }
@@ -1556,7 +1619,7 @@ impl View {
             Drag::Handle { .. } => return I::NsResize,
             _ => {}
         }
-        if self.modal.is_some() || self.tour.is_some() || self.sheet || self.list {
+        if self.modal.is_some() || self.tour.is_some() || self.sheet {
             return if self.buttons[self.modal_from.min(self.buttons.len())..]
                 .iter()
                 .any(|(r, _)| inside(*r, x, y))
@@ -1641,13 +1704,12 @@ impl View {
         }
         if self.modal_from > 0 {
             let [ox, oy, ow, oh] = self.overlay_rect;
-            if (self.sheet || self.list)
+            if self.sheet
                 && self.modal.is_none()
                 && self.tour.is_none()
                 && !inside([ox, oy, ow, oh], x, y)
             {
                 self.sheet = false;
-                self.list = false;
             }
             return;
         }
@@ -1871,7 +1933,12 @@ impl View {
             }
             Drag::Node { .. } => self.ed.end_drag(),
             Drag::Wire { from } => self.wire_dropped(from, x, y),
-            Drag::Scrub | Drag::Overview | Drag::Slide { .. } | Drag::Pan { .. } | Drag::None => {}
+            Drag::Scrub
+            | Drag::Overview
+            | Drag::TwScroll
+            | Drag::Slide { .. }
+            | Drag::Pan { .. }
+            | Drag::None => {}
         }
     }
 
@@ -1908,16 +1975,16 @@ impl View {
 
     pub fn wheel(&mut self, notches: i32, keys: Keys) {
         let (mx, my) = self.mouse;
-        if self.list {
-            let n = notches.unsigned_abs() as usize * 3;
-            self.list_scroll = if notches > 0 {
-                self.list_scroll.saturating_sub(n)
-            } else {
-                self.list_scroll + n
-            };
+        if self.sheet || self.modal.is_some() || self.tour.is_some() {
             return;
         }
-        if self.sheet || self.modal.is_some() || self.tour.is_some() {
+        if self.windowed() && inside(self.layout.window, mx, my) {
+            let n = notches.unsigned_abs() as usize * 3;
+            self.tw_scroll = if notches > 0 {
+                self.tw_scroll.saturating_sub(n)
+            } else {
+                self.tw_scroll + n
+            };
             return;
         }
         if self.node_mode() && inside(self.layout.nodes, mx, my) {
@@ -1976,11 +2043,20 @@ impl View {
         };
     }
 
+    /// The lines an edit of `f` reaches: the volume and hitsounds of all the selected lines, the
+    /// rest (time, BPM, meter, velocity) of the main one.
+    fn edit_targets(&self, f: Field) -> Vec<u64> {
+        match f {
+            Field::Volume | Field::Sample | Field::Index => self.selected_lines(),
+            _ => self.sel_line.into_iter().collect(),
+        }
+    }
+
     fn change(&mut self, f: Field, dir: f64, keys: Keys) {
         if let Field::S(s) = f {
             return self.svt_step(s, dir, keys);
         }
-        let Some(id) = self.sel_line else { return };
+        let ids = self.edit_targets(f);
         let k = if keys.shift {
             10.0
         } else if keys.alt {
@@ -1988,8 +2064,8 @@ impl View {
         } else {
             1.0
         };
-        let r = self.ed.edit_timing(
-            id,
+        let r = self.ed.edit_timings(
+            &ids,
             |p| match f {
                 Field::Bpm => {
                     if let Some(bpm) = p.bpm() {
@@ -1997,11 +2073,15 @@ impl View {
                     }
                 }
                 Field::Sv => {
-                    let _ = p.set_sv((p.sv() + dir * 0.1 * k).max(0.01));
+                    if !p.is_red() {
+                        let _ = p.set_sv((p.sv() + dir * 0.1 * k).max(0.01));
+                    }
                 }
                 Field::Volume => p.volume = (p.volume + (dir * 5.0 * k) as i32).clamp(0, 100),
                 Field::Meter => p.meter = (p.meter + (dir * k.max(1.0)) as i32).max(1),
                 Field::Time => p.time = (p.time + dir * k).max(0.0),
+                Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
+                Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
                 Field::S(_) => {}
             },
             false,
@@ -2020,16 +2100,16 @@ impl View {
             }
             return;
         }
-        let Some(id) = self.sel_line else { return };
         let Ok(v) = text.trim().parse::<f64>() else {
             self.status = "not a number".into();
             return;
         };
-        let r = self.ed.edit_timing(
-            id,
+        let ids = self.edit_targets(f);
+        let r = self.ed.edit_timings(
+            &ids,
             |p| match f {
                 Field::Bpm => {
-                    if v > 0.0 {
+                    if v > 0.0 && p.is_red() {
                         p.beat_length = 60_000.0 / v;
                     }
                 }
@@ -2039,6 +2119,8 @@ impl View {
                 Field::Volume => p.volume = v as i32,
                 Field::Meter => p.meter = v as i32,
                 Field::Time => p.time = v,
+                Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
+                Field::Index => p.sample_index = (v as i32).max(0),
                 Field::S(_) => {}
             },
             false,
@@ -2066,12 +2148,14 @@ impl View {
                 }
             }
             Btn::TourSkip => self.tour_end(),
-            Btn::Line(id) => {
-                self.select_line(Some(id));
-                if let Some(t) = self.ed.chart.timing_point(id).map(|p| p.time) {
-                    self.stop(audio);
-                    self.set_time(t);
-                }
+            Btn::Line(id) => self.pick_row(id, keys, audio),
+            Btn::TwBar => {
+                self.drag = Drag::TwScroll;
+                self.tw_drag(self.mouse.1);
+            }
+            Btn::TwFilter(f) => {
+                self.tw_filter = f;
+                self.tw_scroll = 0;
             }
             Btn::Resnap => {
                 let n = self.ed.resnap_selected();
@@ -2103,14 +2187,25 @@ impl View {
                 }
             }
             Btn::Kiai | Btn::Omit => {
-                if let Some(id) = self.sel_line {
-                    let r = self.ed.edit_timing(
-                        id,
+                let ids = self.selected_lines();
+                let on = self
+                    .sel_line
+                    .and_then(|id| self.ed.chart.timing_point(id))
+                    .map(|p| {
+                        if b == Btn::Kiai {
+                            !p.kiai()
+                        } else {
+                            !p.omits_barline()
+                        }
+                    });
+                if let Some(on) = on {
+                    let r = self.ed.edit_timings(
+                        &ids,
                         |p| {
                             if b == Btn::Kiai {
-                                p.set_kiai(!p.kiai());
-                            } else {
-                                p.set_omit_barline(!p.omits_barline());
+                                p.set_kiai(on);
+                            } else if p.is_red() {
+                                p.set_omit_barline(on);
                             }
                         },
                         false,
@@ -2222,9 +2317,12 @@ impl View {
             if self.modal.take().is_some() {
                 return KeyResult::Handled;
             }
-            if self.sheet || self.list {
+            if self.sheet {
                 self.sheet = false;
-                self.list = false;
+                return KeyResult::Handled;
+            }
+            if self.tw {
+                self.tw = false;
                 return KeyResult::Handled;
             }
         }
@@ -2242,6 +2340,9 @@ impl View {
             return KeyResult::Handled;
         }
         if self.modal.is_some() {
+            return KeyResult::Handled;
+        }
+        if self.typing.is_none() && self.tw_key(code, keys, audio) {
             return KeyResult::Handled;
         }
         let Some(cmd) = cmd::find(code, keys, repeat) else {
@@ -2291,7 +2392,7 @@ mod tests {
         let path = dir.join("map.osu");
         std::fs::write(&path, MAP).unwrap();
         let mut v = View::open(path, 0).unwrap();
-        v.layout = Layout::new(853.0, Mode::Compose);
+        v.layout = Layout::new(853.0, Mode::Compose, false);
         v.view_start = 0.0;
         v.ms_per_px = 10.0;
         v
@@ -3521,8 +3622,8 @@ mod tests {
             assert!(!c.shapes.is_empty());
         }
         // Timing gives the velocity graph the room; Compose has less of it.
-        let compose = Layout::new(853.0, Mode::Compose).graph[3];
-        let timing = Layout::new(853.0, Mode::Timing).graph[3];
+        let compose = Layout::new(853.0, Mode::Compose, false).graph[3];
+        let timing = Layout::new(853.0, Mode::Timing, false).graph[3];
         assert!(timing > compose);
         // In Compose the graph is read only: a click there adds no line.
         let g = v.layout.graph;
@@ -3584,9 +3685,9 @@ mod tests {
             v.sheet = true;
             draw(&mut v);
             v.sheet = false;
-            v.list = true;
+            v.tw = true;
             draw(&mut v);
-            v.list = false;
+            v.tw = false;
             v.modal = Some(Modal::Leave);
             draw(&mut v);
             v.modal = None;
@@ -3610,11 +3711,17 @@ mod tests {
     }
 
     #[test]
-    fn the_timing_list_selects_and_seeks() {
+    fn the_timing_window_selects_seeks_and_leaves_the_timeline_alive() {
         let mut v = view();
         press(&mut v, Btn::C(Cmd::TimingList));
-        assert!(v.list);
+        assert!(v.tw);
         draw(&mut v);
+        assert!(v.windowed());
+        let [_, wy, _, wh] = v.layout.window;
+        assert!(
+            v.layout.timeline[1] > wy + wh,
+            "the timeline sits under the window"
+        );
         let green =
             v.ed.chart
                 .timing
@@ -3622,20 +3729,115 @@ mod tests {
                 .find(|p| !p.is_red())
                 .unwrap()
                 .clone();
-        let (r, _) = *v
-            .buttons
-            .iter()
-            .find(|(_, b)| *b == Btn::Line(green.id))
-            .unwrap();
+        let row = |v: &View, id: u64| {
+            v.buttons
+                .iter()
+                .find(|(_, b)| *b == Btn::Line(id))
+                .map(|(r, _)| *r)
+                .unwrap()
+        };
+        let r = row(&v, green.id);
         click(&mut v, r[0] + 5.0, r[1] + 5.0);
         assert_eq!(v.sel_line, Some(green.id));
         assert_eq!(v.ed.time, green.time);
-        // A click outside the list closes it; Esc does too.
-        click(&mut v, 2.0, 470.0);
-        assert!(!v.list);
-        press(&mut v, Btn::C(Cmd::TimingList));
+        // Ctrl adds the red row, Shift takes the range between.
+        draw(&mut v);
+        let red = v.ed.chart.timing.iter().find(|p| p.is_red()).unwrap().id;
+        let r = row(&v, red);
+        v.mouse_down(
+            r[0] + 5.0,
+            r[1] + 5.0,
+            Keys {
+                ctrl: true,
+                ..Keys::default()
+            },
+            None,
+        );
+        v.mouse_up(r[0] + 5.0, r[1] + 5.0, Keys::default());
+        assert_eq!(v.selected_lines().len(), 2);
+        // The filter chips narrow the table.
+        press(&mut v, Btn::TwFilter(1));
+        assert!(
+            v.tw_ids()
+                .iter()
+                .all(|id| v.ed.chart.timing_point(*id).unwrap().is_red())
+        );
+        press(&mut v, Btn::TwFilter(0));
+        // The timeline still takes presses while the window is open: a note is selected.
+        draw(&mut v);
+        let o = v.ed.chart.objects[0].clone();
+        let (x, y) = (v.x_of(o.time), lane_y(&v));
+        click(&mut v, x, y);
+        assert!(v.ed.selection.contains(&o.id));
+        // Esc closes the window; so does the Close button.
         v.key(KeyCode::Escape, false, Keys::default(), None);
-        assert!(!v.list);
+        assert!(!v.tw);
+        press(&mut v, Btn::C(Cmd::TimingList));
+        press(&mut v, Btn::C(Cmd::TimingList));
+        assert!(!v.tw);
+    }
+
+    #[test]
+    fn the_timing_window_edits_every_selected_line() {
+        let mut v = view();
+        press(&mut v, Btn::C(Cmd::TimingList));
+        draw(&mut v);
+        let all: Vec<u64> = v.ed.chart.timing.iter().map(|p| p.id).collect();
+        v.sel_line = all.last().copied();
+        v.sel_extra = all.iter().copied().collect();
+        press(&mut v, Btn::Inc(Field::Volume));
+        let vols: Vec<i32> = v.ed.chart.timing.iter().map(|p| p.volume).collect();
+        assert!(vols.windows(2).all(|w| w[0] == w[1]), "{vols:?}");
+        let set = v.ed.chart.timing[0].sample_set;
+        press(&mut v, Btn::Inc(Field::Sample));
+        let want = (set + 1).rem_euclid(4);
+        assert!(v.ed.chart.timing.iter().all(|p| p.sample_set == want));
+        // The index belongs to the same group; one undo takes back one edit.
+        let idx = v.ed.chart.timing[0].sample_index;
+        press(&mut v, Btn::Inc(Field::Index));
+        assert!(v.ed.chart.timing.iter().all(|p| p.sample_index == idx + 1));
+        v.ed.undo();
+        assert!(v.ed.chart.timing.iter().all(|p| p.sample_index == idx));
+    }
+
+    #[test]
+    fn the_timing_window_scrolls_and_follows_the_selection() {
+        let mut v = view();
+        for i in 0..40 {
+            let _ =
+                v.ed.chart
+                    .insert_timing(crate::editor::chart::TimingPoint::green(
+                        5000.0 + i as f64 * 100.0,
+                        1.0,
+                    ));
+        }
+        press(&mut v, Btn::C(Cmd::TimingList));
+        draw(&mut v);
+        let rows = v.tw_rows();
+        let n = v.tw_ids().len();
+        assert!(n > rows);
+        v.mouse_move(100.0, 100.0, Keys::default());
+        v.wheel(-2, Keys::default());
+        assert_eq!(v.tw_scroll, 6);
+        // Walking down past the last visible row scrolls the table along.
+        let first = v.tw_ids()[0];
+        v.pick_row(first, Keys::default(), None);
+        for _ in 0..rows + 3 {
+            assert!(v.tw_key(KeyCode::ArrowDown, Keys::default(), None));
+            draw(&mut v);
+        }
+        let at = v
+            .tw_ids()
+            .iter()
+            .position(|i| Some(*i) == v.sel_line)
+            .unwrap();
+        assert!(at >= v.tw_scroll && at < v.tw_scroll + rows);
+        // The scroll bar drags.
+        let [bx, by, bw, bh] = v.tw_bar;
+        assert!(bh > 0.0);
+        v.mouse_down(bx + bw / 2.0, by + bh, Keys::default(), None);
+        assert_eq!(v.tw_scroll, n - rows);
+        v.mouse_up(bx, by, Keys::default());
     }
 
     #[test]

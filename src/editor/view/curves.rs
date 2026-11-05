@@ -872,13 +872,13 @@ impl View {
                 )
             })
             .collect();
-        self.row(c, x, y, &items);
+        let shapes_y = y;
+        y = self.wrap_row(c, x, y, w, &items);
         self.tips.push((
-            [x, y, w, 16.0],
+            [x, shapes_y, w, y - shapes_y],
             "How the speed changes from the start to the end.\nLinear: evenly. Geometric: by the same factor each step (reads as an even acceleration). Poly: t^n, below 1 starts fast and settles. Sine: eases in and out.\nFlat + / x: add to or multiply the green lines already in range.\nFan: alternates around the start."
                 .to_string(),
         ));
-        y += 19.0;
         let fw = ((w - 12.0) / 4.0).min(150.0);
         let mut cells: Vec<SF> = Vec::new();
         if flat {

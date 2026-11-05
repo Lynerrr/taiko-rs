@@ -1,11 +1,11 @@
 //! What is drawn over the editor: tooltips, the "unsaved changes" question, the shortcut sheet, the
-//! timing lines list and the first-run tour.
+//! first-run tour.
 
 use std::time::Duration;
 
-use super::chrome::{DIM, FAINT, WARN, wrap};
+use super::chrome::{DIM, WARN, wrap};
 use super::cmd::{BINDS, Cmd, MOUSE, Mode};
-use super::{Btn, Layout, RED_LINE, View, fmt_time, inside};
+use super::{Btn, Layout, View, inside};
 use crate::render::{Canvas, accent, rgba};
 
 // ---- the tour ----
@@ -111,7 +111,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "Timing mode",
-        text: "The graph is slider velocity. Click empty space to add a green line, drag a dot to change it, drag the box to select several, right click a dot to delete it. Red lines (BPM) are added with Ctrl+P at the playhead; F6 lists every line.",
+        text: "The graph is slider velocity. Click empty space to add a green line, drag a dot to change it, drag the box to select several, right click a dot to delete it. Red lines (BPM) are added with Ctrl+P at the playhead. Click a curve chip to reshape a curve with its handles; F6 opens the window with every line and the SV tool.",
         at: At::Graph,
         mode: Mode::Timing,
     },
@@ -138,7 +138,7 @@ impl View {
     pub fn start_tour(&mut self) {
         self.menu = None;
         self.sheet = false;
-        self.list = false;
+        self.tw = false;
         self.tour_goto(0);
     }
 
@@ -167,7 +167,6 @@ impl View {
             || self.modal.is_some()
             || self.tour.is_some()
             || self.sheet
-            || self.list
             || self.moved_at.elapsed() < Duration::from_millis(400)
             || !matches!(self.drag, super::Drag::None)
         {
@@ -211,10 +210,6 @@ impl View {
         self.draw_menu_drop(c);
         if self.node_mode() {
             self.draw_node_pick(c);
-        }
-        if self.list {
-            self.modal_from = self.buttons.len();
-            self.draw_list(c);
         }
         if self.sheet {
             self.modal_from = self.buttons.len();
@@ -370,123 +365,6 @@ impl View {
                 at += 1;
                 n += 1;
             }
-        }
-    }
-
-    // ---- the timing lines list ----
-
-    /// Rows of the list that fit.
-    pub(super) fn list_rows() -> usize {
-        26
-    }
-
-    fn draw_list(&mut self, c: &mut Canvas) {
-        self.scrim(c);
-        let w = (c.width - 80.0).min(620.0);
-        let (x, y, h) = ((c.width - w) / 2.0, 30.0, 420.0);
-        self.overlay_rect = [x, y, w, h];
-        c.round_rect(
-            [x, y],
-            [w, h],
-            4.0,
-            rgba(0x15151d, 1.0),
-            rgba(0x5a5a78, 1.0),
-            1.0,
-        );
-        c.text(
-            x + 14.0,
-            y + 10.0,
-            10.0,
-            rgba(0xffffff, 1.0),
-            "Timing lines",
-        );
-        c.text(
-            x + 14.0,
-            y + 26.0,
-            6.5,
-            rgba(DIM, 1.0),
-            "Click a line to select it and jump there. Wheel scrolls. Red lines set BPM, green lines slider velocity.",
-        );
-        let mut bx = x + w - 12.0;
-        for (label, cmd) in [
-            ("Close", Cmd::TimingList),
-            ("Delete", Cmd::DeleteLine),
-            ("+ Green", Cmd::AddGreen),
-            ("+ Red", Cmd::AddRed),
-        ] {
-            let bw = Canvas::text_width(7.0, label) + 14.0;
-            bx -= bw;
-            self.button(c, [bx, y + 8.0, bw, 16.0], label, Btn::C(cmd), false);
-            bx -= 4.0;
-        }
-        let cols = [0.0, 110.0, 170.0, 280.0, 350.0];
-        let heads = ["Time", "Type", "BPM / SV", "Volume", "Kiai"];
-        let ty = y + 42.0;
-        for (cx, name) in cols.iter().zip(heads) {
-            c.text(x + 14.0 + cx, ty, 6.5, rgba(FAINT, 1.0), name);
-        }
-        c.rect(x + 12.0, ty + 10.0, w - 24.0, 1.0, rgba(0x2c2c3c, 1.0));
-        let rows = Self::list_rows();
-        let n = self.ed.chart.timing.len();
-        self.list_scroll = self.list_scroll.min(n.saturating_sub(rows));
-        let now = self.ed.time;
-        let mut ry = ty + 14.0;
-        let first = self.list_scroll;
-        let lines: Vec<_> = self.ed.chart.timing[first..(first + rows).min(n)].to_vec();
-        for p in lines {
-            let r = [x + 10.0, ry - 1.0, w - 20.0, 14.0];
-            let picked = self.sel_line == Some(p.id);
-            if picked || c.hovered(r[0], r[1], r[2], r[3]) {
-                c.rect(
-                    r[0],
-                    r[1],
-                    r[2],
-                    r[3],
-                    rgba(if picked { 0x4a221b } else { 0x23232f }, 1.0),
-                );
-            }
-            let here = (p.time - now).abs() < 1.0;
-            let tx = x + 14.0;
-            c.text(
-                tx + cols[0],
-                ry + 2.0,
-                7.0,
-                rgba(if here { 0xffffff } else { 0xd8d8e8 }, 1.0),
-                &fmt_time(p.time),
-            );
-            c.text(
-                tx + cols[1],
-                ry + 2.0,
-                7.0,
-                rgba(if p.is_red() { RED_LINE } else { 0x4fd16b }, 1.0),
-                if p.is_red() { "Red" } else { "Green" },
-            );
-            let val = match p.bpm() {
-                Some(b) => format!("{b:.2} BPM   {}/4", p.meter),
-                None => format!("x{:.2}", p.sv()),
-            };
-            c.text(tx + cols[2], ry + 2.0, 7.0, rgba(0xffffff, 1.0), &val);
-            c.text(
-                tx + cols[3],
-                ry + 2.0,
-                7.0,
-                rgba(DIM, 1.0),
-                &p.volume.to_string(),
-            );
-            if p.kiai() {
-                c.text(tx + cols[4], ry + 2.0, 7.0, rgba(0xFFAA00, 1.0), "kiai");
-            }
-            self.buttons.push((r, Btn::Line(p.id)));
-            ry += 14.0;
-        }
-        if n > rows {
-            c.text_right(
-                x + w - 14.0,
-                y + h - 12.0,
-                6.0,
-                rgba(FAINT, 1.0),
-                &format!("{}-{} of {n}", first + 1, (first + rows).min(n)),
-            );
         }
     }
 

@@ -2,6 +2,7 @@
 //! and Timing modes put beside the preview, the whole-song overview and the status line.
 
 use super::cmd::{Cmd, Mode};
+use super::lines::TAct;
 use super::menu;
 use super::{Btn, Field, RED_LINE, SAct, View, fmt_time};
 use crate::editor::chart::{HitObject, Taiko};
@@ -440,26 +441,34 @@ impl View {
 
     pub(super) fn draw_timing_panel(&mut self, c: &mut Canvas) {
         let r = self.layout.inspector;
-        let (x, mut y) = self.panel_frame(c, r, "TIMING LINES");
-        let w = r[2] - 16.0;
-        let white = rgba(0xffffff, 1.0);
-        let mut tx = r[0] + r[2] - 8.0;
+        let (x, y) = self.panel_frame(c, r, "TIMING LINES");
+        self.line_tabs(c, r[0] + r[2] - 8.0, r[1] + 2.0);
+        if self.svt.tab == 1 {
+            self.draw_svt_panel(c, x, y, r[2] - 16.0);
+        } else {
+            self.draw_line_editor(c, x, y, r[2] - 16.0);
+        }
+    }
+
+    /// The Line / SV tool switch, ending at `right`.
+    pub(super) fn line_tabs(&mut self, c: &mut Canvas, mut right: f32, y: f32) {
         for (label, tab) in [("SV tool", 1u8), ("Line", 0u8)] {
             let bw = Canvas::text_width(6.5, label) + 12.0;
-            tx -= bw;
+            right -= bw;
             self.button(
                 c,
-                [tx, r[1] + 2.0, bw, 12.0],
+                [right, y, bw, 12.0],
                 label,
                 Btn::S(SAct::Tab(tab)),
                 self.svt.tab == tab,
             );
-            tx -= 3.0;
+            right -= 3.0;
         }
-        if self.svt.tab == 1 {
-            self.draw_svt_panel(c, x, y, w);
-            return;
-        }
+    }
+
+    /// What can be done to the selected timing line(s): its numbers, kiai, copies.
+    pub(super) fn draw_line_editor(&mut self, c: &mut Canvas, x: f32, mut y: f32, w: f32) {
+        let white = rgba(0xffffff, 1.0);
         if self.selected_lines().len() > 1 {
             self.draw_line_tools(c, x, y, w);
             return;
@@ -503,6 +512,11 @@ impl View {
                 fields.push((Field::Sv, format!("SV x{:.2}", p.sv())));
             }
             fields.push((Field::Volume, format!("Volume {}", p.volume)));
+            fields.push((
+                Field::Sample,
+                format!("Sample {}", sample_name(p.sample_set)),
+            ));
+            fields.push((Field::Index, format!("Index {}", p.sample_index)));
             fields.push((Field::Time, format!("Time {}", fmt_time(p.time))));
             let col = (w / 2.0 - 4.0).max(100.0);
             let mut fy = y;
@@ -527,16 +541,14 @@ impl View {
                 self.button(c, [cx + lw + 21.0, fy, 16.0, 14.0], "+", Btn::Inc(f), false);
             }
             fy += 20.0;
-            self.row(
-                c,
-                x,
-                fy,
-                &[
-                    ("Kiai".to_string(), Btn::Kiai, p.kiai()),
-                    ("Omit bar".to_string(), Btn::Omit, p.omits_barline()),
-                    ("Delete line".to_string(), Btn::C(Cmd::DeleteLine), false),
-                ],
-            );
+            let mut items = vec![("Kiai".to_string(), Btn::Kiai, p.kiai())];
+            if p.is_red() {
+                items.push(("Omit bar".to_string(), Btn::Omit, p.omits_barline()));
+            }
+            items.push(("At playhead".to_string(), Btn::T(TAct::Here), false));
+            items.push(("Clone here".to_string(), Btn::T(TAct::CloneHere), false));
+            items.push(("Delete".to_string(), Btn::C(Cmd::DeleteLine), false));
+            self.wrap_row(c, x, fy, w, &items);
         } else {
             self.row(
                 c,
@@ -558,7 +570,7 @@ impl View {
                 w,
                 6.5,
                 DIM,
-                "A red line sets the BPM and the beat grid; a green line sets the slider velocity (how fast notes scroll). Lines are added at the playhead. Click a line on the timeline or in the graph to edit it, F6 lists them all.",
+                "A red line sets the BPM and the beat grid; a green line sets the slider velocity (how fast notes scroll). Lines are added at the playhead. Click a line on the timeline or in the graph to edit it, F6 opens the window with them all.",
             );
         }
     }
@@ -700,4 +712,9 @@ impl View {
             }
         }
     }
+}
+
+/// A sample set as stable's timing panel names it.
+pub(super) fn sample_name(set: i32) -> &'static str {
+    ["Auto", "Normal", "Soft", "Drum"][set.clamp(0, 3) as usize]
 }
