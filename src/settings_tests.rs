@@ -2373,3 +2373,80 @@ fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
 fn the_website_button_goes_to_the_site_whatever_the_map() {
     assert_eq!(map_url(0x1f3a), "https://rstaiko.auneu.space/m/1f3a");
 }
+
+fn watching_a_replay() -> State {
+    let mut s = in_a_song(false);
+    if let Scene::Play { game, .. } = &mut s.scene {
+        game.replay = Some((Vec::new(), 0));
+    }
+    s
+}
+
+fn held(s: &State) -> bool {
+    matches!(&s.scene, Scene::Play { game, .. } if game.held)
+}
+
+#[test]
+fn space_pauses_a_replay_without_a_menu_and_skips_in_a_play_as_ever() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    assert!(held(&s));
+    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused.is_none()));
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    assert!(!held(&s));
+
+    let mut s = in_a_song(false);
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    assert!(!held(&s));
+}
+
+#[test]
+fn a_held_replay_stays_where_it_is() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    let Scene::Play { game, .. } = &mut s.scene else {
+        panic!()
+    };
+    let now = Instant::now();
+    game.update(now, None, 0.0);
+    let at = game.time;
+    game.update(now + Duration::from_secs(5), None, 0.0);
+    assert_eq!(game.time, at);
+}
+
+#[test]
+fn the_pause_menu_takes_over_from_a_held_replay() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::Space, false, None, Instant::now(), None);
+    let Scene::Play { game, .. } = &mut s.scene else {
+        panic!()
+    };
+    game.pause(None);
+    assert!(!game.held, "or Continue would leave it stopped");
+}
+
+#[test]
+fn a_replays_speed_goes_in_steps_and_stops_at_the_ends() {
+    let mut s = watching_a_replay();
+    let up = |s: &mut State| s.key(KeyCode::ArrowUp, false, None, Instant::now(), None);
+    let down = |s: &mut State| s.key(KeyCode::ArrowDown, false, None, Instant::now(), None);
+    up(&mut s);
+    assert_eq!(s.replay_speed_wanted, 1.25);
+    for _ in 0..9 {
+        up(&mut s);
+    }
+    assert_eq!(s.replay_speed_wanted, 2.0);
+    for _ in 0..9 {
+        down(&mut s);
+    }
+    assert_eq!(s.replay_speed_wanted, 0.25);
+}
+
+#[test]
+fn leaving_a_replay_forgets_its_speed() {
+    let mut s = watching_a_replay();
+    s.key(KeyCode::ArrowUp, false, None, Instant::now(), None);
+    s.scene = Scene::Select;
+    s.poll_replay_speed();
+    assert_eq!((s.replay_speed, s.replay_speed_wanted), (1.0, 1.0));
+}
