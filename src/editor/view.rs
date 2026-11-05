@@ -14,7 +14,7 @@ use winit::keyboard::KeyCode;
 use super::chart::{HitObject, Taiko};
 use super::state::{Editor, Tool};
 use super::timing::{self, SNAP_DIVISORS};
-use super::tools::{GimmickTool, SvParams, Target};
+use super::tools::{GimmickTool, Target};
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, OSU_TIMING_MS};
 use crate::game::Game;
@@ -83,9 +83,7 @@ pub enum Btn {
     GTool(GimmickTool),
     GStep(GParam, i32),
     GFlag(GFlag),
-    GCurve(i32),
     GApply(Target),
-    GGenerate,
     GPreview,
     GKeep,
     GCancel,
@@ -289,7 +287,6 @@ pub struct View {
     /// Gimmicks mode: 0 structures, 1 generate SV. Effects mode: 2 keyframes, 3 nodes.
     g_page: u8,
     g_tool: GimmickTool,
-    g_sv: SvParams,
     /// A gimmick was applied as a preview and can still be cancelled.
     g_pending: bool,
     /// Keyframe page: editing the playfield's tracks (else a group's), which property, which key.
@@ -353,7 +350,6 @@ pub struct View {
     g_frozen: Option<(f64, f64)>,
     /// The Timing panel's tools: the velocity to set and the factor to multiply by.
     t_value: f64,
-    t_factor: f64,
     /// The modifier keys as of the last pointer event, for the scrolling that carries on without one.
     held: Keys,
     svt: curves::SvtUi,
@@ -407,7 +403,6 @@ impl View {
             mode: Mode::Compose,
             g_page: 0,
             g_tool: GimmickTool::BarlineNote,
-            g_sv: SvParams::default(),
             g_pending: false,
             k_field: true,
             k_group: 0,
@@ -445,7 +440,6 @@ impl View {
             line_origin: Vec::new(),
             g_frozen: None,
             t_value: 1.0,
-            t_factor: 1.1,
             held: Keys::default(),
             svt: curves::SvtUi::new(),
             last_tick: None,
@@ -2140,9 +2134,7 @@ impl View {
             Btn::GTool(t) => self.g_tool = t,
             Btn::GStep(p, dir) => self.step_param(p, dir as f64, keys.shift),
             Btn::GFlag(f) => self.toggle_flag(f),
-            Btn::GCurve(d) => self.cycle_curve(d),
             Btn::GApply(t) => self.gimmick_apply(t, false),
-            Btn::GGenerate => self.gimmick_generate(false),
             Btn::GPreview => self.gimmick_preview(),
             Btn::GKeep => self.settle_preview(),
             Btn::GCancel => self.gimmick_cancel(),
@@ -2804,13 +2796,9 @@ mod tests {
         let sv = |v: &View, i: usize| v.ed.chart.timing_point(ids[i]).unwrap().sv();
         press(&mut v, Btn::T(TAct::SetValue));
         assert!((0..3).all(|i| (sv(&v, i) - 1.0).abs() < 1e-9));
-        press(&mut v, Btn::T(TAct::ApplyFactor));
-        assert!((sv(&v, 0) - 1.1).abs() < 1e-9);
-        // A ramp needs different ends: set the last one apart first.
-        v.ed.edit_timing(ids[2], |p| drop(p.set_sv(2.0)), false)
-            .unwrap();
-        press(&mut v, Btn::T(TAct::RampLinear));
-        assert!((sv(&v, 1) - 1.55).abs() < 1e-9, "{}", sv(&v, 1));
+        // The ramps and multiplying live in the SV tool, one press away.
+        press(&mut v, Btn::S(SAct::Tab(1)));
+        assert_eq!(v.svt.tab, 1);
         press(&mut v, Btn::T(TAct::Copy));
         v.ed.time = 20000.0;
         press(&mut v, Btn::T(TAct::Paste));
@@ -2910,9 +2898,6 @@ mod tests {
         press(&mut v, Btn::GPreview);
         press(&mut v, Btn::GKeep);
         assert!(!v.g_pending && v.ed.chart.timing.len() > lines);
-        // The panel draws, on both pages.
-        draw(&mut v);
-        press(&mut v, Btn::GPage(1));
         draw(&mut v);
     }
 
@@ -2928,14 +2913,6 @@ mod tests {
         );
         press(&mut v, Btn::GFlag(GFlag::Hide));
         assert!(!v.ed.gimmick.hide_note);
-        press(&mut v, Btn::GCurve(1));
-        assert_eq!(v.g_sv.curve, Curve::Exp(1.3));
-        press(&mut v, Btn::GStep(GParam::SvTo, 1));
-        assert!((v.g_sv.to - 2.1).abs() < 1e-9);
-        v.ed.time = 2000.0;
-        press(&mut v, Btn::GPage(1));
-        press(&mut v, Btn::GGenerate);
-        assert!(v.status.starts_with("SV:"), "{}", v.status);
     }
 
     #[test]

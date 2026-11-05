@@ -38,6 +38,7 @@ impl Curve {
         Curve::TrueExp,
     ];
 
+    #[cfg(test)]
     pub fn name(&self) -> String {
         match self {
             Curve::Linear => "linear".into(),
@@ -109,6 +110,7 @@ pub fn oscillating_series(
 }
 
 /// SV values from `from` to `to` over `count` points (both ends included) along `curve`.
+#[cfg(test)]
 pub fn sweep(from: f64, to: f64, count: usize, curve: &Curve) -> Vec<f64> {
     match count {
         0 => Vec::new(),

@@ -1,5 +1,5 @@
 //! The gimmick tools as the editor runs them: pick a structure, aim it at the playhead or at the
-//! selected notes, and it lands as one undo step. Also Generate SV.
+//! selected notes, and it lands as one undo step.
 //!
 //! The builders in `gimmicks` and `sv_curves` do the arithmetic; this is where they meet the chart:
 //! the base timing snapshot they read, the kiai and volume carried onto what they write, the SV
@@ -9,8 +9,7 @@ use super::chart::{HitObject, Taiko, TimingPoint};
 use super::gimmicks::{self, FakeKind, GimmickConfig, NoteKind};
 use super::history::Command;
 use super::state::Editor;
-use super::sv_curves::{self, Curve, StepSv, SvModel, SvSource};
-use super::timing;
+use super::sv_curves::{SvModel, SvSource};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GimmickTool {
@@ -100,37 +99,6 @@ impl Plan {
         format!("{r} lines, {n} objects{gone}")
     }
 }
-
-/// How Generate SV fills the range.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SvParams {
-    pub from: f64,
-    pub to: f64,
-    pub curve: Curve,
-    /// One line per 1/`divisor` of a beat.
-    pub divisor: u32,
-    /// Fan out from `from` by `to - from` alternating side instead of sweeping.
-    pub oscillate: bool,
-    pub per_pair: bool,
-    /// Multiply the speed already there instead of replacing it.
-    pub relative: bool,
-}
-
-impl Default for SvParams {
-    fn default() -> Self {
-        SvParams {
-            from: 1.0,
-            to: 2.0,
-            curve: Curve::Linear,
-            divisor: 4,
-            oscillate: false,
-            per_pair: false,
-            relative: false,
-        }
-    }
-}
-
-const MAX_SV_LINES: usize = 4000;
 
 impl Editor {
     /// The timing the tools read: the snapshot, taken from the chart at first use.
@@ -333,90 +301,14 @@ impl Editor {
         }
         Ok(said)
     }
-
-    /// The range Generate SV fills: the selection's, else the playhead to the end of its bar.
-    pub fn sv_range(&self) -> (f64, f64) {
-        let sel = self.selected();
-        if sel.len() >= 2 {
-            let a = sel.iter().map(|o| o.time).fold(f64::INFINITY, f64::min);
-            let b = sel.iter().map(|o| o.time).fold(f64::NEG_INFINITY, f64::max);
-            return (a, b);
-        }
-        let beat = timing::beat_length_at(&self.chart.timing, self.time);
-        let start = self.snapped(self.time);
-        (start, (start + 4.0 * beat).floor())
-    }
-
-    /// The green lines Generate SV would write for `p` over the range.
-    pub fn plan_sv(&self, p: &SvParams) -> Result<Plan, String> {
-        let (start, end) = self.sv_range();
-        if end <= start {
-            return Err("the range is empty".into());
-        }
-        let beat = timing::beat_length_at(&self.chart.timing, start);
-        let step = beat / p.divisor.max(1) as f64;
-        if !(step.is_finite() && step >= 1.0) {
-            return Err("the snap is too fine for this section".into());
-        }
-        let count = (((end - start) / step).floor() as usize + 1).min(MAX_SV_LINES);
-        if count < 2 {
-            return Err("the range holds fewer than two lines".into());
-        }
-        let values = if p.oscillate {
-            sv_curves::oscillating_series(p.from, p.to - p.from, count, &p.curve, p.per_pair)
-        } else {
-            sv_curves::sweep(p.from, p.to, count, &p.curve)
-        };
-        let existing = StepSv(&self.chart.timing);
-        let mut plan = Plan::default();
-        let mut last = None;
-        for (i, v) in values.into_iter().enumerate() {
-            let at = timing::osu_snap_ms(start + i as f64 * step) as f64;
-            if last == Some(at) {
-                continue;
-            }
-            last = Some(at);
-            let v = if p.relative {
-                v * existing.value_at(at)
-            } else {
-                v
-            };
-            let template = timing::active_at(&self.chart.timing, at);
-            let sv = (v * 100.0).round() / 100.0;
-            let sv = sv.clamp(0.01, 10.0);
-            plan.timing.push(match template {
-                Some(t) => TimingPoint::green_like(at, sv, t),
-                None => TimingPoint::green(at, sv),
-            });
-        }
-        // Greens on the same ms as a red must follow it: they are inserted after any line there,
-        // which `Chart::insert_timing` guarantees. The ones this replaces:
-        plan.remove = self
-            .chart
-            .timing
-            .iter()
-            .filter(|q| !q.is_red() && q.time >= start && q.time <= end)
-            .cloned()
-            .collect();
-        Ok(plan)
-    }
-
-    pub fn generate_sv(&mut self, p: &SvParams) -> Result<String, String> {
-        let plan = self.plan_sv(p)?;
-        let said = plan.summary();
-        self.commit_plan(plan);
-        if let Err(why) = self.chart.validate() {
-            self.history.undo(&mut self.chart);
-            return Err(why);
-        }
-        Ok(said)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::editor::chart::{Chart, tests::MAP};
+    use crate::editor::svt;
+    use crate::editor::timing;
     use std::path::PathBuf;
 
     fn editor() -> Editor {
@@ -512,77 +404,6 @@ mod tests {
         assert_eq!(e.chart.timing.len(), lines);
     }
 
-    #[test]
-    fn generate_sv_writes_a_ramp_on_the_grid_and_replaces_what_it_covers() {
-        let mut e = editor();
-        e.time = 2000.0;
-        let before = e.chart.timing.len();
-        let p = SvParams {
-            from: 1.0,
-            to: 2.0,
-            divisor: 2,
-            ..SvParams::default()
-        };
-        let said = e.generate_sv(&p).unwrap();
-        assert!(said.contains("lines"));
-        let greens: Vec<(f64, f64)> = e
-            .chart
-            .timing
-            .iter()
-            .filter(|q| !q.is_red() && q.time >= 2000.0)
-            .map(|q| (q.time, q.sv()))
-            .collect();
-        assert!(greens.len() >= 4, "{greens:?}");
-        assert!((greens[0].1 - 1.0).abs() < 1e-9);
-        assert!((greens.last().unwrap().1 - 2.0).abs() < 1e-9);
-        assert!(
-            greens
-                .windows(2)
-                .all(|w| w[1].1 >= w[0].1 && w[1].0 > w[0].0)
-        );
-        assert!(e.undo());
-        assert_eq!(e.chart.timing.len(), before);
-    }
-
-    #[test]
-    fn relative_sv_multiplies_what_is_there() {
-        let mut e = editor();
-        e.add_green(1900.0, 2.0).unwrap();
-        e.time = 2000.0;
-        let p = SvParams {
-            from: 1.0,
-            to: 1.0,
-            relative: true,
-            divisor: 1,
-            ..SvParams::default()
-        };
-        e.generate_sv(&p).unwrap();
-        let g = e
-            .chart
-            .timing
-            .iter()
-            .find(|q| q.time == 2000.0 && !q.is_red())
-            .unwrap();
-        assert!((g.sv() - 2.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn the_oscillating_mode_fans_out_around_the_base() {
-        let mut e = editor();
-        e.time = 2000.0;
-        let p = SvParams {
-            from: 1.0,
-            to: 1.4,
-            oscillate: true,
-            divisor: 2,
-            ..SvParams::default()
-        };
-        let plan = e.plan_sv(&p).unwrap();
-        let v: Vec<f64> = plan.timing.iter().map(|q| q.sv()).collect();
-        assert!((v[0] - 1.0).abs() < 1e-9);
-        assert!(v[1] > 1.0 && v[2] < 1.0);
-    }
-
     /// Every tool, on a real map, in the middle of it: the chart still validates and the game
     /// still reads what was written, and one undo takes it all back. Run with `--ignored`.
     #[test]
@@ -641,7 +462,23 @@ mod tests {
             let mut e = Editor::new(chart.clone(), path.clone());
             e.time = mid;
             let before = e.chart.to_text();
-            if e.generate_sv(&SvParams::default()).is_ok() {
+            let notes: Vec<f64> = e.chart.objects.iter().map(|o| o.time).collect();
+            let beat = timing::beat_length_at(&e.chart.timing, mid);
+            let segment = svt::segment_between(&e.chart.timing, mid, mid + 4.0 * beat);
+            let plan = svt::plan(
+                &e.chart.timing,
+                &notes,
+                &[segment],
+                &svt::SvtParams {
+                    hits: false,
+                    snaps: true,
+                    ..svt::SvtParams::default()
+                },
+            );
+            if let Ok(plan) = plan
+                && !plan.timing.is_empty()
+            {
+                e.commit_plan(plan);
                 ran += 1;
                 assert!(crate::beatmap::from_text(&e.chart.to_text()).is_ok());
                 assert!(e.undo());

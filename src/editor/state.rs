@@ -685,50 +685,6 @@ impl Editor {
         Ok(n)
     }
 
-    /// Multiplies the velocity of every selected green line by `k`.
-    pub fn scale_sv(&mut self, ids: &[u64], k: f64) -> Result<usize, String> {
-        let ids = self.greens(ids);
-        self.edit_timings(
-            &ids,
-            |p| drop(p.set_sv((p.sv() * k).clamp(0.01, 10.0))),
-            false,
-        )?;
-        Ok(ids.len())
-    }
-
-    /// Spreads the velocity from the first selected green line to the last evenly over time
-    /// (`geometric`: by the same factor each step, which is what the eye reads as even).
-    pub fn ramp_sv(&mut self, ids: &[u64], geometric: bool) -> Result<usize, String> {
-        let mut greens: Vec<TimingPoint> = self
-            .greens(ids)
-            .iter()
-            .filter_map(|id| self.chart.timing_point(*id).cloned())
-            .collect();
-        greens.sort_by(|a, b| a.time.total_cmp(&b.time));
-        if greens.len() < 3 {
-            return Err("a ramp needs at least three green lines selected".into());
-        }
-        let (first, last) = (greens[0].clone(), greens[greens.len() - 1].clone());
-        let span = (last.time - first.time).max(1.0);
-        let (a, b) = (first.sv(), last.sv());
-        let n = greens.len();
-        let ids: Vec<u64> = greens.iter().map(|p| p.id).collect();
-        self.edit_timings(
-            &ids,
-            |p| {
-                let f = ((p.time - first.time) / span).clamp(0.0, 1.0);
-                let v = if geometric {
-                    a * (b / a).powf(f)
-                } else {
-                    a + (b - a) * f
-                };
-                let _ = p.set_sv(((v * 100.0).round() / 100.0).max(0.01));
-            },
-            false,
-        )?;
-        Ok(n)
-    }
-
     /// The green lines among `ids`, in the chart's order.
     fn greens(&self, ids: &[u64]) -> Vec<u64> {
         self.chart
@@ -1164,7 +1120,7 @@ mod tests {
     }
 
     #[test]
-    fn velocity_tools_act_on_green_lines_in_one_step_and_a_ramp_needs_three() {
+    fn the_set_tool_acts_on_green_lines_in_one_step_and_leaves_red_ones() {
         let mut e = editor();
         let ids: Vec<u64> = [(1000.0, 1.0), (2000.0, 1.0), (3000.0, 2.0)]
             .iter()
@@ -1175,24 +1131,12 @@ mod tests {
         assert!((0..3).all(|i| sv(&e, i) == 1.5));
         assert!(e.undo());
         assert_eq!(sv(&e, 0), 1.0);
-        assert_eq!(e.scale_sv(&ids, 2.0).unwrap(), 3);
-        assert_eq!((sv(&e, 0), sv(&e, 2)), (2.0, 4.0));
-        e.ramp_sv(&ids, false).unwrap();
-        assert_eq!((sv(&e, 0), sv(&e, 1), sv(&e, 2)), (2.0, 3.0, 4.0));
-        e.set_sv(&ids[..2], 1.0).unwrap();
-        e.ramp_sv(&ids, true).unwrap();
-        assert!(
-            (sv(&e, 1) - 2.0).abs() < 0.01,
-            "even steps from 1 to 4 meet at 2: {}",
-            sv(&e, 1)
-        );
-        assert!(e.ramp_sv(&ids[..2], false).is_err());
         // The red line isn't a velocity: it is left alone.
         let red = e.chart.timing[0].id;
         let mut all = ids.clone();
         all.push(red);
         let beat = e.chart.timing[0].beat_length;
-        e.scale_sv(&all, 0.5).unwrap();
+        assert_eq!(e.set_sv(&all, 0.5).unwrap(), 3);
         assert_eq!(e.chart.timing_point(red).unwrap().beat_length, beat);
     }
 

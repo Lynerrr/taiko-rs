@@ -2,7 +2,7 @@
 //! together, and the tools that act on a selection (set, multiply, ramp, copy, delete).
 
 use super::chrome::DIM;
-use super::{Btn, Drag, Keys, View};
+use super::{Btn, Drag, Keys, SAct, View};
 use crate::editor::timing;
 use crate::render::{Canvas, accent, rgba};
 
@@ -10,10 +10,6 @@ use crate::render::{Canvas, accent, rgba};
 pub enum TAct {
     Value(i32),
     SetValue,
-    Factor(i32),
-    ApplyFactor,
-    RampLinear,
-    RampEven,
     Copy,
     Paste,
     Delete,
@@ -201,27 +197,10 @@ impl View {
                 self.t_value = (self.t_value + d as f64 * 0.05).clamp(0.05, 10.0);
                 return;
             }
-            TAct::Factor(d) => {
-                self.t_factor = ((self.t_factor + d as f64 * 0.05) * 100.0).round() / 100.0;
-                self.t_factor = self.t_factor.clamp(0.05, 4.0);
-                return;
-            }
             TAct::SetValue => self
                 .ed
                 .set_sv(&ids, self.t_value)
                 .map(|n| format!("set {n} lines to x{:.2}", self.t_value)),
-            TAct::ApplyFactor => self
-                .ed
-                .scale_sv(&ids, self.t_factor)
-                .map(|n| format!("multiplied {n} lines by {:.2}", self.t_factor)),
-            TAct::RampLinear => self
-                .ed
-                .ramp_sv(&ids, false)
-                .map(|n| format!("ramped {n} lines")),
-            TAct::RampEven => self
-                .ed
-                .ramp_sv(&ids, true)
-                .map(|n| format!("ramped {n} lines evenly")),
             TAct::Copy => Ok(format!("copied {} lines", self.ed.copy_lines(&ids))),
             TAct::Paste => {
                 let at = self.ed.time;
@@ -289,32 +268,25 @@ impl View {
             TAct::Value(1),
             ("Set", TAct::SetValue),
         );
-        row(
-            self,
-            c,
-            y + 17.0,
-            "Multiply",
-            format!("x{:.2}", self.t_factor),
-            TAct::Factor(-1),
-            TAct::Factor(1),
-            ("Multiply", TAct::ApplyFactor),
-        );
-        y += 36.0;
+        y += 20.0;
         self.row(
             c,
             x,
             y,
             &[
-                ("Linear ramp".to_string(), Btn::T(TAct::RampLinear), false),
-                ("Even ramp".to_string(), Btn::T(TAct::RampEven), false),
                 ("Copy".to_string(), Btn::T(TAct::Copy), false),
                 ("Paste at playhead".to_string(), Btn::T(TAct::Paste), false),
                 ("Delete".to_string(), Btn::T(TAct::Delete), false),
+                (
+                    "Ramp, multiply, curves...".to_string(),
+                    Btn::S(SAct::Tab(1)),
+                    false,
+                ),
             ],
         );
         self.tips.push((
             [x, y, w, 16.0],
-            "Ramps spread the velocity from the first selected green line to the last: linear changes it by the same amount each step, even by the same factor.".to_string(),
+            "Ramps between the selected lines, multiplying them and curves of every shape are the SV tool: pick a preset there, or drag a curve out with the brush.".to_string(),
         ));
     }
 }

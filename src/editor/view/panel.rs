@@ -1,12 +1,10 @@
 //! The Gimmicks panel: pick a structure, set its numbers, aim it at the playhead or the selected
-//! notes, preview it on the playfield (it is really applied; Cancel undoes it) and keep it. A
-//! second page generates SV curves.
+//! notes, preview it on the playfield (it is really applied; Cancel undoes it) and keep it.
+//! Slider velocity curves are the Timing mode's SV tool.
 
 use super::keys::KAct;
 use super::{Btn, Mode, View};
 use crate::editor::gimmicks::GimmickConfig;
-use crate::editor::sv_curves::Curve;
-use crate::editor::timing::SNAP_DIVISORS;
 use crate::editor::tools::{GimmickTool, Target};
 use crate::render::{Canvas, rgba};
 
@@ -27,10 +25,6 @@ pub enum GParam {
     DonTicks,
     KatTicks,
     Window,
-    // Generate SV
-    SvFrom,
-    SvTo,
-    SvDivisor,
 }
 
 /// A switch a gimmick tool has.
@@ -43,9 +37,6 @@ pub enum GFlag {
     RestoreAfter,
     ShinyRed,
     SvCurves,
-    Oscillate,
-    PerPair,
-    Relative,
 }
 
 impl GParam {
@@ -65,9 +56,6 @@ impl GParam {
             GParam::DonTicks => "Don slit",
             GParam::KatTicks => "Kat slit",
             GParam::Window => "Slit window 1/",
-            GParam::SvFrom => "From x",
-            GParam::SvTo => "To x",
-            GParam::SvDivisor => "Every 1/",
         }
     }
 }
@@ -92,9 +80,6 @@ impl GParam {
             GParam::DonTicks => "How many slits in the wall a don gets.",
             GParam::KatTicks => "How many slits in the wall a kat gets.",
             GParam::Window => "The hidden window is 1/this of a beat.",
-            GParam::SvFrom => "The velocity the curve starts at.",
-            GParam::SvTo => "The velocity the curve ends at.",
-            GParam::SvDivisor => "One line per 1/this of a beat.",
         }
     }
 }
@@ -110,11 +95,7 @@ impl GFlag {
             GFlag::SvCurves => {
                 "Read the chart's SV as the curves it was drawn with (ramps between notes) instead of steps."
             }
-            GFlag::Oscillate => {
-                "Fan out from the first velocity by the difference, alternating sides, instead of sweeping."
-            }
-            GFlag::Relative => "Multiply the speed already there instead of replacing it.",
-            GFlag::PlaceNote | GFlag::Mirror | GFlag::PerPair => "",
+            GFlag::PlaceNote | GFlag::Mirror => "",
         }
     }
 
@@ -127,9 +108,6 @@ impl GFlag {
             GFlag::RestoreAfter => "Restore after",
             GFlag::ShinyRed => "Glow line",
             GFlag::SvCurves => "SV curves",
-            GFlag::Oscillate => "Oscillate",
-            GFlag::PerPair => "Per pair",
-            GFlag::Relative => "Relative",
         }
     }
 }
@@ -173,7 +151,6 @@ fn tool_offset_is_shiny(tool: GimmickTool) -> bool {
 impl View {
     fn param_text(&self, p: GParam) -> String {
         let c = &self.ed.gimmick;
-        let s = &self.g_sv;
         let v = match p {
             GParam::GimmickBpm => format!("{}", c.gimmick_bpm),
             GParam::Spacing => c.spacing_ms.to_string(),
@@ -191,9 +168,6 @@ impl View {
             GParam::DonTicks => c.anti_don_ticks.to_string(),
             GParam::KatTicks => c.anti_kat_ticks.to_string(),
             GParam::Window => c.hidden_window_divisor.to_string(),
-            GParam::SvFrom => format!("{:.2}", s.from),
-            GParam::SvTo => format!("{:.2}", s.to),
-            GParam::SvDivisor => s.divisor.to_string(),
         };
         format!("{}: {v}", p.label())
     }
@@ -208,9 +182,6 @@ impl View {
             GFlag::RestoreAfter => c.fake_slider_restore_after,
             GFlag::ShinyRed => c.shiny_red_line,
             GFlag::SvCurves => self.ed.sv_curves,
-            GFlag::Oscillate => self.g_sv.oscillate,
-            GFlag::PerPair => self.g_sv.per_pair,
-            GFlag::Relative => self.g_sv.relative,
         }
     }
 
@@ -225,9 +196,6 @@ impl View {
             GFlag::RestoreAfter => c.fake_slider_restore_after = on,
             GFlag::ShinyRed => c.shiny_red_line = on,
             GFlag::SvCurves => self.ed.sv_curves = on,
-            GFlag::Oscillate => self.g_sv.oscillate = on,
-            GFlag::PerPair => self.g_sv.per_pair = on,
-            GFlag::Relative => self.g_sv.relative = on,
         }
     }
 
@@ -284,24 +252,7 @@ impl View {
             GParam::Window => {
                 c.hidden_window_divisor = whole(c.hidden_window_divisor as i64, 1.0, 1, 64) as i32;
             }
-            GParam::SvFrom => self.g_sv.from = (self.g_sv.from + dir * 0.1 * k).clamp(0.01, 10.0),
-            GParam::SvTo => self.g_sv.to = (self.g_sv.to + dir * 0.1 * k).clamp(0.01, 10.0),
-            GParam::SvDivisor => {
-                let at = SNAP_DIVISORS
-                    .iter()
-                    .position(|&d| d >= self.g_sv.divisor)
-                    .unwrap_or(0) as i32;
-                let next = (at + dir as i32).clamp(0, SNAP_DIVISORS.len() as i32 - 1);
-                self.g_sv.divisor = SNAP_DIVISORS[next as usize];
-            }
         }
-    }
-
-    pub(super) fn cycle_curve(&mut self, dir: i32) {
-        let all = Curve::ALL;
-        let at = all.iter().position(|c| *c == self.g_sv.curve).unwrap_or(0) as i32;
-        let n = all.len() as i32;
-        self.g_sv.curve = all[((at + dir).rem_euclid(n)) as usize].clone();
     }
 
     /// One row of "-  Label: value  +" controls. Returns the next y.
@@ -397,25 +348,20 @@ impl View {
         let w = self.layout.inspector[2];
         let inner = w - 16.0;
         let dim = rgba(0x9a9ab0, 1.0);
-        let tabs: Vec<(String, Btn, bool)> = if effects {
-            vec![
+        if effects {
+            // The pages sit in the title row, so the content gets the whole panel.
+            let tabs = [
                 ("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2),
                 ("Nodes".to_string(), Btn::GPage(3), self.g_page == 3),
-            ]
-        } else {
-            vec![
-                ("Structures".to_string(), Btn::GPage(0), self.g_page == 0),
-                ("Generate SV".to_string(), Btn::GPage(1), self.g_page == 1),
-            ]
-        };
-        // The pages sit in the title row, so the content gets the whole panel.
-        let ty = self.layout.inspector[1] + 0.5;
-        self.row(c, x + 100.0, ty, &tabs);
+            ];
+            let ty = self.layout.inspector[1] + 0.5;
+            self.row(c, x + 100.0, ty, &tabs);
+        }
         if self.g_page == 3 {
             self.draw_nodes_page(c, x, y, inner);
         } else if self.g_page == 2 {
             self.draw_keys_page(c, x, y, inner);
-        } else if self.g_page == 0 {
+        } else {
             let tools: Vec<(String, Btn, bool)> = GimmickTool::ALL
                 .iter()
                 .map(|t| (t.label().to_string(), Btn::GTool(*t), self.g_tool == *t))
@@ -506,112 +452,7 @@ impl View {
                 Btn::GBase,
                 false,
             );
-        } else {
-            let s = self.g_sv.clone();
-            let (a, b) = self.ed.sv_range();
-            c.text(
-                x,
-                y,
-                6.5,
-                rgba(0xffffff, 1.0),
-                &Canvas::fit(
-                    6.5,
-                    inner,
-                    &format!("{} - {}", super::fmt_time(a), super::fmt_time(b)),
-                ),
-            );
-            y += 11.0;
-            y = self.param_row(
-                c,
-                x,
-                y,
-                inner,
-                &[GParam::SvFrom, GParam::SvTo, GParam::SvDivisor],
-            );
-            let name = s.curve.name();
-            self.button(c, [x, y, 14.0, 14.0], "<", Btn::GCurve(-1), false);
-            c.text(
-                x + 18.0,
-                y + 4.0,
-                6.5,
-                rgba(0xffffff, 1.0),
-                &format!("Curve: {name}"),
-            );
-            self.button(c, [x + 120.0, y, 14.0, 14.0], ">", Btn::GCurve(1), false);
-            y += 18.0;
-            y = self.flag_row(
-                c,
-                x,
-                y,
-                &[GFlag::Oscillate, GFlag::PerPair, GFlag::Relative],
-            );
-            let mut items = vec![("Generate".to_string(), Btn::GGenerate, false)];
-            if self.g_pending {
-                items.push(("Keep".to_string(), Btn::GKeep, true));
-                items.push(("Cancel".to_string(), Btn::GCancel, false));
-            } else {
-                items.push(("Preview".to_string(), Btn::GPreview, false));
-            }
-            self.row(c, x, y, &items);
-            // The curve, drawn: what Generate writes.
-            self.draw_curve(
-                c,
-                [
-                    x + inner - 130.0,
-                    self.layout.inspector[1] + 66.0,
-                    130.0,
-                    66.0,
-                ],
-            );
         }
-    }
-
-    /// The SV curve Generate would write, as a small plot.
-    fn draw_curve(&mut self, c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
-        c.rect(x, y, w, h, rgba(0x0c0c12, 0.9));
-        let s = &self.g_sv;
-        let n = 24;
-        let values = if s.oscillate {
-            crate::editor::sv_curves::oscillating_series(
-                s.from,
-                s.to - s.from,
-                n,
-                &s.curve,
-                s.per_pair,
-            )
-        } else {
-            crate::editor::sv_curves::sweep(s.from, s.to, n, &s.curve)
-        };
-        let (lo, hi) = values
-            .iter()
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| {
-                (l.min(v), h.max(v))
-            });
-        let span = (hi - lo).max(0.05);
-        let pt = |i: usize, v: f64| {
-            [
-                x + 4.0 + (w - 8.0) * i as f32 / (n - 1) as f32,
-                y + h - 4.0 - (h - 8.0) * ((v - lo) / span) as f32,
-            ]
-        };
-        for (i, v) in values.iter().enumerate() {
-            let a = pt(i, *v);
-            c.circle(a[0], a[1], 1.6, rgba(0x4fd16b, 1.0), rgba(0, 0.0), 0.0);
-        }
-        c.text(
-            x + 3.0,
-            y + 2.0,
-            5.5,
-            rgba(0x9a9ab0, 1.0),
-            &format!("{hi:.2}"),
-        );
-        c.text(
-            x + 3.0,
-            y + h - 8.0,
-            5.5,
-            rgba(0x9a9ab0, 1.0),
-            &format!("{lo:.2}"),
-        );
     }
 
     // ---- actions ----
@@ -628,34 +469,18 @@ impl View {
         }
     }
 
-    pub(super) fn gimmick_generate(&mut self, preview: bool) {
-        self.settle_preview();
-        match self.ed.generate_sv(&self.g_sv.clone()) {
-            Ok(said) => {
-                self.status = format!("SV: {said}");
-                self.g_pending = preview;
-                self.mark_stale();
-            }
-            Err(e) => self.status = e,
-        }
-    }
-
     /// An earlier preview that wasn't cancelled is kept.
     pub(super) fn settle_preview(&mut self) {
         self.g_pending = false;
     }
 
     pub(super) fn gimmick_preview(&mut self) {
-        if self.g_page == 0 {
-            let target = if self.g_tool.is_wall() {
-                Target::Selection
-            } else {
-                Target::Playhead(false)
-            };
-            self.gimmick_apply(target, true);
+        let target = if self.g_tool.is_wall() {
+            Target::Selection
         } else {
-            self.gimmick_generate(true);
-        }
+            Target::Playhead(false)
+        };
+        self.gimmick_apply(target, true);
     }
 
     pub(super) fn gimmick_cancel(&mut self) {
