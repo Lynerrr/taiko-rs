@@ -109,6 +109,7 @@ pub enum Item {
     CrashReports,
     Skin,
     SkinFolder,
+    MapSkins,
     NoteColours,
     DonColour,
     KatColour,
@@ -116,7 +117,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 128] = [
+pub const ITEMS: [(&str, Item); 129] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -218,6 +219,7 @@ pub const ITEMS: [(&str, Item); 128] = [
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
+    ("SKIN", Item::MapSkins),
     ("SKIN", Item::HitFlash),
     ("SKIN", Item::NoteColours),
     ("SKIN", Item::DonColour),
@@ -525,6 +527,7 @@ impl Item {
                 "GREATの表示を隠す",
                 "Скрыть вспышку GREAT"
             ),
+            Item::MapSkins => tr!("Beatmap skins", "譜面のスキン", "Скины карт"),
             Item::HitFlash => tr!("Hit flash", "ヒット時の光", "Вспышка при попадании"),
             Item::ChatFilter => tr!("Chat filter", "チャットフィルター", "Фильтр чата"),
             Item::MessageSound => tr!("Message sound", "メッセージの音", "Звук сообщений"),
@@ -720,6 +723,7 @@ impl Item {
             | Item::KiaiEffects
             | Item::BlackLane
             | Item::DrumMenus
+            | Item::MapSkins
             | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::HitFlash
@@ -927,6 +931,11 @@ impl Item {
                 "Song select, its mods and the pause menu follow the drum: the rims go up and down, either face picks. In song select Tab moves between the song list and the rows of buttons above and below it, and your drum keys don't type unless the search box is picked.",
                 "選曲、Mod選択、ポーズメニューを太鼓で操作します。フチで上下、面で決定。選曲ではTabで曲リストと上下のボタン列を移動します。検索欄を選んでいない間、太鼓のキーは文字を入力しません。",
                 "Выбор песни, его моды и меню паузы слушаются барабана: края двигают вверх и вниз, центр выбирает. В выборе песни Tab переключает между списком и рядами кнопок сверху и снизу, а клавиши барабана не печатают, пока не выбрано поле поиска."
+            ),
+            Item::MapSkins => tr!(
+                "Maps draw with the skin images in their own folder. Off: your skin everywhere. Right-click a song to turn one map's off.",
+                "譜面のフォルダにあるスキン画像で描きます。オフ: 常に自分のスキン。曲を右クリックでその譜面だけオフ。",
+                "Карты рисуются картинками скина из своей папки. Выкл.: всегда ваш скин. Правый клик по песне выключает скин одной карты."
             ),
             Item::BlackLane => tr!(
                 "The lane the notes scroll on, and the drum's panel, are pure black: no kiai tint, no skin's lane picture.",

@@ -61,6 +61,7 @@ fn words(item: Item) -> &'static str {
         | Item::ShowPlayfieldSize
         | Item::WheelResize => "size position resolution tablet размер позиция разрешение",
         Item::Skin | Item::SkinParts | Item::SkinFolder => "theme notes look тема внешний вид ноты",
+        Item::MapSkins => "beatmap map skin gimmick disable карта скин отключить",
         Item::Accent | Item::AccentHue => "theme color hue тема цвет оттенок",
         Item::NoteColours | Item::DonColour | Item::KatColour => {
             "color palette red blue цвет палитра красный синий"

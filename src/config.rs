@@ -314,6 +314,8 @@ pub struct Config {
     pub skin: String,
     /// Where each part of the skin comes from: that skin, the built-in look or another skin.
     pub skin_parts: crate::skin::Sources,
+    /// Maps may draw with the skin images in their own folder (beatmap skins).
+    pub map_skins: bool,
     /// The Songs folder picked in settings, scanned instead of looking for osu! installs.
     pub songs_folder: Option<PathBuf>,
     /// Multiverse's universes: each playfield's colours, note shape, speed and mods.
@@ -441,6 +443,7 @@ impl Default for Config {
             preset_spots: Vec::new(),
             skin: String::new(),
             skin_parts: Default::default(),
+            map_skins: true,
             songs_folder: None,
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
@@ -568,6 +571,7 @@ fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
         "map_offsets.tsv",
         "plays.tsv",
         "hidden.tsv",
+        "map_skins_off.txt",
     ]
     .iter()
     .map(|n| base.as_ref().map(|b| b.join(n)))
@@ -717,6 +721,28 @@ pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
         .collect();
     lines.sort();
     let _ = std::fs::write(dir.join("map_offsets.tsv"), lines.join("\n") + "\n");
+}
+
+/// The folders of the maps whose own skin is turned off: `map_skins_off.txt` in the config folder,
+/// one folder name per line. A map's skin is its folder's, so all its difficulties share this.
+pub fn load_map_skins_off() -> std::collections::HashSet<String> {
+    let Some(text) =
+        data_dir().and_then(|d| std::fs::read_to_string(d.join("map_skins_off.txt")).ok())
+    else {
+        return Default::default();
+    };
+    text.lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+pub fn save_map_skins_off(folders: &std::collections::HashSet<String>) {
+    let Some(dir) = data_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let mut lines: Vec<&str> = folders.iter().map(String::as_str).collect();
+    lines.sort_unstable();
+    let _ = std::fs::write(dir.join("map_skins_off.txt"), lines.join("\n") + "\n");
 }
 
 /// Clears every map's own offset, keeping them in `map_offsets.backup.tsv` to go back to by hand.
@@ -1080,6 +1106,7 @@ impl Config {
                 "preset_spots" => cfg.preset_spots = v.split(',').filter_map(parse_spot).collect(),
                 "skin" => cfg.skin = v.to_string(),
                 "skin_part" => cfg.skin_parts.parse(v),
+                "map_skins" => cfg.map_skins = v != "false",
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "multiverse" => cfg.universes = crate::multiverse::parse(v),
                 "multiverse_preset" => cfg
@@ -1263,6 +1290,10 @@ impl Config {
         for line in self.skin_parts.to_config() {
             out.push_str(&format!("skin_part = {line}\n"));
         }
+        out.push_str(&format!(
+            "# draw maps with the skin images in their own folder\nmap_skins = {}\n",
+            self.map_skins
+        ));
         out.push_str(&format!(
             "# interface colour: red (the default), pink, purple, blue, teal, green, yellow, orange or #rrggbb\naccent = {}\n",
             crate::render::accent_name(self.accent)

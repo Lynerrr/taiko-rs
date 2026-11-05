@@ -369,6 +369,113 @@ fn a_song_liked_on_song_select_is_a_favourite_for_the_player_too() {
     assert!(!s.select.is_liked(&s.library[i]));
 }
 
+/// A state on song select whose selected map's folder carries a skin image, with the song menu
+/// open on it as a right click would. Returns the folder.
+fn on_a_map_with_a_skin(s: &mut State) -> std::path::PathBuf {
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let i = s.select.selected().unwrap();
+    let dir = std::env::temp_dir().join(format!("taiko-rs-skin-toggle-{}", std::process::id()));
+    let dir = dir.join(format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+    std::fs::create_dir_all(&dir).unwrap();
+    image::RgbaImage::new(2, 2)
+        .save(dir.join("Taiko-Roll-End.png"))
+        .unwrap();
+    s.library[i].path = dir.join("map.osu");
+    s.select.menu = Some(ui::SongMenu {
+        row: s.select.cursor(),
+        header: true,
+        skin: s.menu_has_skin(s.select.cursor()),
+        x: 100.0,
+        y: 100.0,
+    });
+    dir
+}
+
+fn map_skin_item(s: &State) -> Option<(usize, String)> {
+    s.select
+        .menu_items(&s.library)
+        .into_iter()
+        .enumerate()
+        .find(|(_, (_, a))| *a == ui::MenuAction::MapSkin)
+        .map(|(k, (label, _))| (k, label))
+}
+
+#[test]
+fn a_maps_skin_is_turned_off_and_back_on_from_its_menu() {
+    let mut s = layout_tests::state();
+    let dir = on_a_map_with_a_skin(&mut s);
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+
+    let (k, label) = map_skin_item(&s).unwrap();
+    assert!(label.starts_with("Turn off"), "{label}");
+    s.click(render::Hit::SongMenu(k), None);
+    assert!(s.select.menu.is_none());
+    s.follow_map_skin();
+    assert_eq!(s.skin_map, None);
+
+    s.select.menu = Some(ui::SongMenu {
+        row: s.select.cursor(),
+        header: false,
+        skin: s.menu_has_skin(s.select.cursor()),
+        x: 100.0,
+        y: 100.0,
+    });
+    let (k, label) = map_skin_item(&s).unwrap();
+    assert!(label.starts_with("Use"), "{label}");
+    s.click(render::Hit::SongMenu(k), None);
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn beatmap_skins_off_in_settings_covers_every_map_and_its_menu() {
+    let mut s = layout_tests::state();
+    let dir = on_a_map_with_a_skin(&mut s);
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+
+    s.cfg.map_skins = false;
+    s.follow_map_skin();
+    assert_eq!(s.skin_map, None);
+    // Nothing for one map's switch to do while they're all off.
+    assert!(!s.menu_has_skin(s.select.cursor()));
+
+    s.cfg.map_skins = true;
+    s.follow_map_skin();
+    assert_eq!(s.skin_map.as_ref(), Some(&dir));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_map_without_a_skin_offers_no_switch() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    let row = s.select.cursor();
+    assert!(!s.menu_has_skin(row));
+    s.select.menu = Some(ui::SongMenu {
+        row,
+        header: true,
+        skin: s.menu_has_skin(row),
+        x: 100.0,
+        y: 100.0,
+    });
+    assert!(map_skin_item(&s).is_none());
+}
+
+#[test]
+fn beatmap_skins_stay_off_after_a_restart() {
+    let mut cfg = config::Config::default();
+    assert!(cfg.map_skins);
+    cfg.map_skins = false;
+    assert!(!config::Config::parse_text(&cfg.to_text()).map_skins);
+}
+
 #[test]
 fn a_songs_menu_likes_it() {
     let mut s = layout_tests::state();
@@ -378,6 +485,7 @@ fn a_songs_menu_likes_it() {
     s.select.menu = Some(ui::SongMenu {
         row: s.select.cursor(),
         header: true,
+        skin: false,
         x: 100.0,
         y: 100.0,
     });
@@ -1316,6 +1424,7 @@ fn sets_loved_on_the_server_count_as_loved() {
     s.select.menu = Some(ui::SongMenu {
         row: 0,
         header: false,
+        skin: false,
         x: 0.0,
         y: 0.0,
     });

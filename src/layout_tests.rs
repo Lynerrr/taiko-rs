@@ -482,6 +482,7 @@ fn assert_every_screen_fits() {
     s.select.menu = Some(ui::SongMenu {
         row: s.select.cursor(),
         header: true,
+        skin: false,
         x: 2000.0,
         y: 300.0,
     });

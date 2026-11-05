@@ -3848,6 +3848,7 @@ impl State {
             Item::KiaiEffects => on(c.kiai_effects),
             Item::BlackLane => on(c.black_lane),
             Item::DrumMenus => on(c.drum_menus),
+            Item::MapSkins => on(c.map_skins),
             Item::HideGreat => on(c.hide_great),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
@@ -4192,6 +4193,7 @@ impl State {
                 self.cfg.drum_menus = !self.cfg.drum_menus;
                 self.select_zone = drum_nav::Zone::List;
             }
+            Item::MapSkins => self.cfg.map_skins = !self.cfg.map_skins,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
@@ -5540,7 +5542,8 @@ impl State {
     }
 
     /// Swaps the playing map's own skin images in, and out again after: only when it has some,
-    /// so ordinary maps never reload the skin.
+    /// so ordinary maps never reload the skin. Beatmap skins turned off, for all maps or this
+    /// one, count as none, so switching either takes effect from here on the next frame.
     // ponytail: Play and song select's preview only (and their settings); multiplayer /
     // spectating keep your skin.
     fn follow_map_skin(&mut self) {
@@ -5557,6 +5560,7 @@ impl State {
         let dir = entry
             .and_then(|e| self.library.get(e))
             .and_then(|e| e.path.parent())
+            .filter(|dir| self.cfg.map_skins && !self.select.map_skin_off(dir))
             .map(Path::to_path_buf);
         if dir == self.skin_map_seen {
             return;
@@ -7785,17 +7789,21 @@ impl State {
         }
         match press {
             Some((x, y, Some(render::Hit::SongRow(row)))) => {
+                let skin = self.menu_has_skin(row);
                 self.select.menu = Some(ui::SongMenu {
                     row,
                     header: false,
+                    skin,
                     x,
                     y,
                 })
             }
             Some((x, y, Some(render::Hit::SongHeader(row)))) => {
+                let skin = self.menu_has_skin(row);
                 self.select.menu = Some(ui::SongMenu {
                     row,
                     header: true,
+                    skin,
                     x,
                     y,
                 })
@@ -7805,6 +7813,18 @@ impl State {
             }
             _ => {}
         }
+    }
+
+    /// Whether the song menu opened on `row` offers turning the map's own skin off: it has one,
+    /// and beatmap skins aren't all off anyway. Read once here, not in the menu's every frame.
+    fn menu_has_skin(&self, row: usize) -> bool {
+        self.cfg.map_skins
+            && self
+                .select
+                .row_map(row)
+                .and_then(|i| self.library.get(i))
+                .and_then(|e| e.path.parent())
+                .is_some_and(skin::map_has_images)
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
@@ -16443,6 +16463,17 @@ impl State {
                             tr!("liked {title}", "{title}をお気に入りに追加", "в любимых: {title}";)
                         } else {
                             tr!("unliked {title}", "{title}をお気に入りから削除", "убрано из любимых: {title}";)
+                        });
+                    }
+                    self.select.menu = None;
+                } else if action == Some(ui::MenuAction::MapSkin) {
+                    if let Some(e) = self.select.menu_map().and_then(|i| self.library.get(i)) {
+                        let title = e.meta.title.clone();
+                        let off = self.select.toggle_map_skin(e);
+                        self.toast(if off {
+                            tr!("{title}: your skin", "{title}: 自分のスキン", "{title}: ваш скин";)
+                        } else {
+                            tr!("{title}: its own skin", "{title}: 譜面のスキン", "{title}: скин карты";)
                         });
                     }
                     self.select.menu = None;
