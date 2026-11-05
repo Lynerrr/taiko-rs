@@ -2301,11 +2301,11 @@ fn quick_retry_needs_the_key_held_and_works_while_paused() {
         let at = Instant::now();
         s.key(KeyCode::Backquote, false, None, at, None);
         assert!(!restarted(&s), "a press alone doesn't restart");
-        s.poll_retry(at + Duration::from_millis(249));
+        s.poll_retry(at + Duration::from_millis(149));
         assert!(!restarted(&s), "not before it's been held");
-        let halfway = s.retry_progress(at + Duration::from_millis(125)).unwrap();
+        let halfway = s.retry_progress(at + Duration::from_millis(75)).unwrap();
         assert!((halfway - 0.5).abs() < 0.01, "{halfway}");
-        s.poll_retry(at + Duration::from_millis(250));
+        s.poll_retry(at + Duration::from_millis(150));
         assert!(restarted(&s), "paused: {paused}");
     }
 }
@@ -2333,10 +2333,10 @@ fn a_held_key_repeating_doesnt_start_the_hold_over() {
         KeyCode::Backquote,
         true,
         None,
-        at + Duration::from_millis(200),
+        at + Duration::from_millis(100),
         None,
     );
-    s.poll_retry(at + Duration::from_millis(250));
+    s.poll_retry(at + Duration::from_millis(150));
     assert!(restarted(&s));
 }
 
