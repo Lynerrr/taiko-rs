@@ -13319,6 +13319,8 @@ impl State {
             Scene::Play { game, .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
+                // After the last note there's nothing left to pause: straight to the results.
+                KeyCode::Escape if game.skip_outro() => {}
                 KeyCode::Escape => game.pause(self.audio.as_ref()),
                 KeyCode::Space if game.replay.is_some() => game.toggle_held(self.audio.as_ref()),
                 KeyCode::Space => {
