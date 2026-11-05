@@ -330,7 +330,10 @@ mod tests {
         let game_reads = crate::beatmap::load(&path);
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(osu_now, MAP, "the .osu is untouched");
-        assert!(tko.contains("TkoVersion: 1") && tko.contains("[Gimmick]"));
+        assert!(
+            tko.contains(&format!("TkoVersion: {}", crate::tko::TKO_VERSION))
+                && tko.contains("[Gimmick]")
+        );
         assert!(tko.contains("[Oni (tko)]") || tko.contains("Version:Oni (tko)"));
         assert_eq!(
             reopened.value_of(Subject::Field(FieldProp::Rotation), 1000.0),
@@ -338,7 +341,7 @@ mod tests {
         );
         assert!(!reopened.modified());
         let map = game_reads.unwrap();
-        assert_eq!(map.meta.tko_version, 1);
+        assert_eq!(map.meta.tko_version, crate::tko::TKO_VERSION);
         assert!(map.gimmick.is_some());
     }
 }

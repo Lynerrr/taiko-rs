@@ -43,7 +43,12 @@ impl std::fmt::Display for Error {
 pub type Migration = fn(&mut Value);
 
 /// Every version bump adds one entry here and a fixture of the old format to the tests below.
-pub const MIGRATIONS: &[Migration] = &[];
+pub const MIGRATIONS: &[Migration] = &[v1_to_v2];
+
+/// Version 2 added playfield effects (flash, vignette, glitch, echo ...), note swirl, marks and
+/// more node kinds, all optional keys: a version 1 file is a valid version 2 file as it is. The
+/// bump is so an older game refuses a map that uses them instead of dropping them silently.
+fn v1_to_v2(_: &mut Value) {}
 
 const _: () = assert!(MIGRATIONS.len() as u32 == TKO_VERSION - 1);
 
@@ -289,7 +294,7 @@ mod tests {
     fn a_newer_file_is_refused_and_says_to_update() {
         let text = write(chart(), &gimmick())
             .unwrap()
-            .replace("TkoVersion: 1", "TkoVersion: 99");
+            .replace(&format!("TkoVersion: {TKO_VERSION}"), "TkoVersion: 99");
         let e = read(&text).err().unwrap();
         assert_eq!(e, Error::Newer { found: 99 });
         assert!(e.to_string().contains("Update the game"));
@@ -300,7 +305,7 @@ mod tests {
         assert_eq!(read(chart()).err(), Some(Error::MissingVersion));
         let bad = write(chart(), &gimmick())
             .unwrap()
-            .replace("TkoVersion: 1", "TkoVersion: x");
+            .replace(&format!("TkoVersion: {TKO_VERSION}"), "TkoVersion: x");
         assert!(matches!(read(&bad), Err(Error::Invalid(_))));
     }
 
@@ -362,7 +367,9 @@ mod tests {
                 .next()
                 .unwrap()
                 .trim_end()
+                .replace(&format!("TkoVersion: {TKO_VERSION}"), "TkoVersion: 1")
         );
+        assert_eq!(version_of(&text), Some(1));
         let g = read(&text).unwrap().gimmick;
         assert_eq!(
             g.field_track(FieldProp::Rotation).unwrap().keys[1].ease,

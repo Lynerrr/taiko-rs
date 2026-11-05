@@ -20,6 +20,26 @@ pub struct FieldFx {
     pub rotation: f32,
     pub zoom: f32,
     pub scroll: f64,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    pub flash: f32,
+    pub vignette: f32,
+    pub wash: f32,
+    /// Degrees.
+    pub wash_hue: f32,
+    pub glitch: f32,
+    pub chroma: f32,
+    /// Trail copies: how many (the fraction is the last one's strength), and what each step back
+    /// does.
+    pub echo: f32,
+    pub echo_x: f32,
+    pub echo_y: f32,
+    pub echo_rot: f32,
+    pub echo_zoom: f32,
+    pub echo_fade: f32,
+    pub kaleido: f32,
+    /// The graph's seed, for the glitch's randomness.
+    pub seed: u64,
 }
 
 impl Default for FieldFx {
@@ -30,6 +50,22 @@ impl Default for FieldFx {
             rotation: 0.0,
             zoom: 1.0,
             scroll: 1.0,
+            stretch_x: 1.0,
+            stretch_y: 1.0,
+            flash: 0.0,
+            vignette: 0.0,
+            wash: 0.0,
+            wash_hue: 0.0,
+            glitch: 0.0,
+            chroma: 0.0,
+            echo: 0.0,
+            echo_x: FieldProp::EchoX.default_value() as f32,
+            echo_y: 0.0,
+            echo_rot: 0.0,
+            echo_zoom: 1.0,
+            echo_fade: FieldProp::EchoFade.default_value() as f32,
+            kaleido: 0.0,
+            seed: 0,
         }
     }
 }
@@ -42,6 +78,8 @@ pub struct NoteFx {
     pub scale: f32,
     pub opacity: f32,
     pub hidden: bool,
+    /// Degrees about the drum.
+    pub swirl: f32,
 }
 
 impl Default for NoteFx {
@@ -52,6 +90,7 @@ impl Default for NoteFx {
             scale: 1.0,
             opacity: 1.0,
             hidden: false,
+            swirl: 0.0,
         }
     }
 }
@@ -103,7 +142,7 @@ fn mix(mut z: u64) -> u64 {
 }
 
 /// A number in 0..1 from a seed and two keys: the graph's only source of randomness.
-fn hash01(seed: u64, a: u64, b: u64) -> f64 {
+pub fn hash01(seed: u64, a: u64, b: u64) -> f64 {
     let h = mix(seed ^ mix(a ^ mix(b.wrapping_add(0x51))));
     (h >> 11) as f64 / (1u64 << 53) as f64
 }
@@ -673,6 +712,22 @@ impl Runtime {
             rotation: v(FieldProp::Rotation) as f32,
             zoom: v(FieldProp::Zoom) as f32,
             scroll: v(FieldProp::Scroll),
+            stretch_x: v(FieldProp::StretchX) as f32,
+            stretch_y: v(FieldProp::StretchY) as f32,
+            flash: v(FieldProp::Flash) as f32,
+            vignette: v(FieldProp::Vignette) as f32,
+            wash: v(FieldProp::Wash) as f32,
+            wash_hue: v(FieldProp::WashHue) as f32,
+            glitch: v(FieldProp::Glitch) as f32,
+            chroma: v(FieldProp::Chroma) as f32,
+            echo: v(FieldProp::Echo) as f32,
+            echo_x: v(FieldProp::EchoX) as f32,
+            echo_y: v(FieldProp::EchoY) as f32,
+            echo_rot: v(FieldProp::EchoRot) as f32,
+            echo_zoom: v(FieldProp::EchoZoom) as f32,
+            echo_fade: v(FieldProp::EchoFade) as f32,
+            kaleido: v(FieldProp::Kaleido) as f32,
+            seed: self.gimmick.graph.seed,
         }
     }
 
@@ -710,6 +765,7 @@ impl Runtime {
             scale: v(NoteProp::Scale) as f32,
             opacity: v(NoteProp::Opacity) as f32,
             hidden: v(NoteProp::Hidden) >= 0.5,
+            swirl: v(NoteProp::Swirl) as f32,
         })
     }
 }
@@ -775,6 +831,41 @@ mod tests {
             1.0,
             "other properties keep their default"
         );
+    }
+
+    #[test]
+    fn the_new_properties_follow_their_keys_and_default_to_nothing() {
+        let plain = FieldFx::default();
+        assert_eq!(
+            (
+                plain.flash,
+                plain.vignette,
+                plain.glitch,
+                plain.chroma,
+                plain.echo,
+                plain.kaleido
+            ),
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        );
+        assert_eq!((plain.stretch_x, plain.stretch_y), (1.0, 1.0));
+        let mut g = Gimmick::default();
+        g.key_field(FieldProp::Flash, key(0.0, 0.0));
+        g.key_field(FieldProp::Flash, key(1000.0, 1.0));
+        g.key_field(FieldProp::Echo, key(0.0, 99.0));
+        g.key_field(FieldProp::EchoFade, key(0.0, 0.25));
+        g.key_field(FieldProp::StretchX, key(0.0, 2.0));
+        g.groups.push(Group {
+            notes: vec![1000.0],
+            ..Group::default()
+        });
+        g.key_note(0, NoteProp::Swirl, key(0.0, 30.0));
+        g.sanitize();
+        let rt = Runtime::new(Arc::new(g), [1000.0].into_iter(), 0.0);
+        let f = rt.field(500.0);
+        assert_eq!(f.flash, 0.5);
+        assert_eq!(f.echo, 8.0, "held inside what the property allows");
+        assert_eq!((f.echo_fade, f.stretch_x, f.echo_x), (0.25, 2.0, -30.0));
+        assert_eq!(rt.note(0, 0.0).unwrap().swirl, 30.0);
     }
 
     #[test]
@@ -1299,7 +1390,11 @@ mod tests {
             },
             &GRID,
         );
-        assert_eq!(rt.field(10.0), FieldFx::default());
+        let untouched = FieldFx {
+            seed: 0,
+            ..rt.field(10.0)
+        };
+        assert_eq!(untouched, FieldFx::default());
         let mut empty = Runtime::new(Arc::new(Gimmick::default()), [1.0].into_iter(), 0.0);
         empty.event(1.0, 0, Verdict::Great, 1, 1.0);
         assert!(empty.events.is_empty(), "nothing listens, nothing is kept");

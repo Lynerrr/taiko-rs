@@ -692,11 +692,17 @@ impl View {
         c.rect(fx, fy, fw, fh, rgba(0x0c0c12, 0.7));
         if let Some(g) = &mut self.game {
             let start = c.shapes.len();
+            let clips = c.clips.len();
             let full = c.width;
             c.width = FRAME_VW;
             g.draw_playfield(c, scroll_speed);
             c.width = full;
             c.transform_since(start, [0.0, 0.0], fw / FRAME_VW, fx, fy);
+            // Clips the playfield made for itself (a glitch's slices) move with its shapes.
+            let k = fw / FRAME_VW;
+            for (_, [x, y, w, h]) in &mut c.clips[clips..] {
+                (*x, *y, *w, *h) = (*x * k + fx, *y * k + fy, *w * k, *h * k);
+            }
             c.clip_since(start, fx, fy, fw, fh);
         } else {
             let why = match &self.game_err {

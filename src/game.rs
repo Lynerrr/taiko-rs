@@ -4127,7 +4127,13 @@ impl Game {
             }
             let (x, y, _, mut size) = place(side_of(n.kind, s), side);
             // A .tko group's motion for this note.
-            let (x, y, a) = (x + fx.dx, y + fx.dy, a * fx.opacity);
+            let (mut x, mut y, a) = (x + fx.dx, y + fx.dy, a * fx.opacity);
+            if fx.swirl != 0.0 {
+                // Turned about the drum, the further out the wider the swing.
+                let (s, co) = fx.swirl.to_radians().sin_cos();
+                let (ox, oy) = (x - HIT_X, y - LANE_Y);
+                (x, y) = (HIT_X + ox * co - oy * s, LANE_Y + ox * s + oy * co);
+            }
             size *= fx.scale;
             let mut squish = 1.0;
             if party {
@@ -5257,9 +5263,13 @@ impl Game {
         self.lane_path = if plain { Vec::new() } else { path };
         self.lane_half = half;
         let dest = [dest[0] + dx, dest[1] + dy];
+        // A .tko map's trails, stretches and fringes turn and zoom with the playfield.
+        crate::tko::screen::local(c, start_shape, &tko_fx, pivot);
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
         }
+        // Its tears, washes and flashes lie over the screen as it ends up.
+        crate::tko::screen::screen(c, start_shape, &tko_fx, vt);
         let [x0, y0, x1, y1] = local_zone;
         let (x0, x1) = (flip_x(x0).min(flip_x(x1)), flip_x(x0).max(flip_x(x1)));
         self.zone = Some(turned_box(
@@ -10184,6 +10194,86 @@ mod tests {
         let plain = run(None);
         assert!(plain.0 > 30, "autoplay hits the notes: {plain:?}");
         assert_eq!(run(Some(some_gimmick())), plain);
+    }
+
+    /// Every screen effect at once, steady.
+    fn effects_gimmick() -> crate::tko::gimmick::Gimmick {
+        use crate::tko::gimmick::{FieldProp, Group, NoteProp};
+        use crate::tko::track::{Ease, Key};
+        let key = |v| Key {
+            t: 0.0,
+            v,
+            ease: Ease::Linear,
+        };
+        let mut g = crate::tko::gimmick::Gimmick::default();
+        for (p, v) in [
+            (FieldProp::Flash, 0.3),
+            (FieldProp::Vignette, 0.5),
+            (FieldProp::Wash, 0.4),
+            (FieldProp::WashHue, 200.0),
+            (FieldProp::Glitch, 0.6),
+            (FieldProp::Chroma, 8.0),
+            (FieldProp::Echo, 3.0),
+            (FieldProp::Kaleido, 3.0),
+            (FieldProp::StretchX, 1.3),
+            (FieldProp::StretchY, 0.8),
+        ] {
+            g.key_field(p, key(v));
+        }
+        g.groups.push(Group {
+            notes: (0..64)
+                .step_by(2)
+                .map(|b| b as f64 * 500.0 - beatmap::OSU_TIMING_MS)
+                .collect(),
+            ..Group::default()
+        });
+        g.key_note(0, NoteProp::Swirl, key(40.0));
+        g
+    }
+
+    #[test]
+    fn screen_effects_add_to_the_picture_and_never_change_judging() {
+        pin_drawing_globals();
+        let count = |g: &mut Game, t: f64| {
+            g.time = t;
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            g.draw_playfield(&mut c, 1.0);
+            c.shapes.len()
+        };
+        let mut plain = tko_game(None, Mods::NONE);
+        let mut wild = tko_game(Some(effects_gimmick()), Mods::NONE);
+        let (a, b) = (count(&mut plain, 9000.0), count(&mut wild, 9000.0));
+        assert!(
+            b > a + 20,
+            "copies, slices and overlays were drawn: {a} vs {b}"
+        );
+        assert!(frame_bytes(&mut plain, 9000.0) != frame_bytes(&mut wild, 9000.0));
+        // The same frame twice is the same (a replay looks like the play).
+        assert!(frame_bytes(&mut wild, 9000.0) == frame_bytes(&mut wild, 9000.0));
+        let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
+            let mut g = tko_game(gimmick, Mods::NONE);
+            let mut t = -2000.0;
+            while t < 20_000.0 {
+                g.time = t;
+                g.autoplay(None);
+                g.expire(t);
+                if (t as i64) % 2000 == 0 {
+                    count(&mut g, t);
+                }
+                t += 5.0;
+            }
+            (
+                g.stats.great,
+                g.stats.ok,
+                g.stats.miss,
+                g.stats.combo,
+                g.stats.score,
+            )
+        };
+        let base = run(None);
+        assert!(base.0 > 20, "autoplay hits the notes: {base:?}");
+        assert_eq!(run(Some(effects_gimmick())), base);
     }
 
     /// Beats, hits and combos wired to motion.

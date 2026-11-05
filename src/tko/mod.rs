@@ -12,11 +12,12 @@ pub mod format;
 pub mod gimmick;
 pub mod graph;
 pub mod runtime;
+pub mod screen;
 pub mod track;
 
 /// The newest format this build reads and writes. Raising it needs a migration in
 /// `format::MIGRATIONS` and a fixture of the old format in its tests.
-pub const TKO_VERSION: u32 = 1;
+pub const TKO_VERSION: u32 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -58,7 +59,7 @@ mod tests {
             crate::beatmap::read_meta_file(&osu).unwrap(),
             crate::beatmap::read_meta_file(&tko).unwrap(),
         );
-        assert_eq!((m_osu.tko_version, m_tko.tko_version), (0, 1));
+        assert_eq!((m_osu.tko_version, m_tko.tko_version), (0, TKO_VERSION));
         assert_eq!(
             (&m_osu.title, &m_osu.version, m_osu.od),
             (&m_tko.title, &m_tko.version, m_tko.od)
@@ -95,7 +96,7 @@ mod tests {
             &future,
             format::write(MAP, &gimmick())
                 .unwrap()
-                .replace("TkoVersion: 1", "TkoVersion: 7"),
+                .replace(&format!("TkoVersion: {TKO_VERSION}"), "TkoVersion: 7"),
         )
         .unwrap();
         let (a, b) = (crate::beatmap::load(&bare), crate::beatmap::load(&future));

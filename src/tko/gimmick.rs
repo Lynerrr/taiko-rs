@@ -24,15 +24,74 @@ pub enum FieldProp {
     /// How fast notes scroll, as a multiple of the map's own (what is drawn, never when a note is
     /// hit).
     Scroll,
+    /// Width and height multipliers: circles become ovals.
+    StretchX,
+    StretchY,
+    /// A white wash over everything, added to the picture (0 none, 1 white).
+    Flash,
+    /// The screen's edges darkened (0 none, 1 nearly black).
+    Vignette,
+    /// A colour laid over the playfield, and its hue in degrees.
+    Wash,
+    WashHue,
+    /// The playfield torn into shifted slices (0 none, 1 wrecked).
+    Glitch,
+    /// Red and blue copies pushed apart, in virtual units.
+    Chroma,
+    /// Fading copies of the playfield trailing behind it: how many, and what each step further
+    /// back does to them (move, turn, size, how much of their opacity is left).
+    Echo,
+    EchoX,
+    EchoY,
+    EchoRot,
+    EchoZoom,
+    EchoFade,
+    /// Rotated copies about the middle of the screen, like a kaleidoscope: how many in all.
+    Kaleido,
+}
+
+/// Where a property sits in the editor's lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PropGroup {
+    Move,
+    Look,
+    Clones,
+}
+
+impl PropGroup {
+    pub const ALL: [PropGroup; 3] = [PropGroup::Move, PropGroup::Look, PropGroup::Clones];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PropGroup::Move => "Move",
+            PropGroup::Look => "Look",
+            PropGroup::Clones => "Clones",
+        }
+    }
 }
 
 impl FieldProp {
-    pub const ALL: [FieldProp; 5] = [
+    pub const ALL: [FieldProp; 20] = [
         FieldProp::X,
         FieldProp::Y,
         FieldProp::Rotation,
         FieldProp::Zoom,
         FieldProp::Scroll,
+        FieldProp::StretchX,
+        FieldProp::StretchY,
+        FieldProp::Flash,
+        FieldProp::Vignette,
+        FieldProp::Wash,
+        FieldProp::WashHue,
+        FieldProp::Glitch,
+        FieldProp::Chroma,
+        FieldProp::Echo,
+        FieldProp::EchoX,
+        FieldProp::EchoY,
+        FieldProp::EchoRot,
+        FieldProp::EchoZoom,
+        FieldProp::EchoFade,
+        FieldProp::Kaleido,
     ];
 
     pub fn name(self) -> &'static str {
@@ -42,13 +101,107 @@ impl FieldProp {
             FieldProp::Rotation => "rotation",
             FieldProp::Zoom => "zoom",
             FieldProp::Scroll => "scroll",
+            FieldProp::StretchX => "stretch_x",
+            FieldProp::StretchY => "stretch_y",
+            FieldProp::Flash => "flash",
+            FieldProp::Vignette => "vignette",
+            FieldProp::Wash => "wash",
+            FieldProp::WashHue => "wash_hue",
+            FieldProp::Glitch => "glitch",
+            FieldProp::Chroma => "chroma",
+            FieldProp::Echo => "echo",
+            FieldProp::EchoX => "echo_x",
+            FieldProp::EchoY => "echo_y",
+            FieldProp::EchoRot => "echo_rot",
+            FieldProp::EchoZoom => "echo_zoom",
+            FieldProp::EchoFade => "echo_fade",
+            FieldProp::Kaleido => "kaleido",
+        }
+    }
+
+    pub fn group(self) -> PropGroup {
+        match self {
+            FieldProp::X
+            | FieldProp::Y
+            | FieldProp::Rotation
+            | FieldProp::Zoom
+            | FieldProp::Scroll
+            | FieldProp::StretchX
+            | FieldProp::StretchY => PropGroup::Move,
+            FieldProp::Flash
+            | FieldProp::Vignette
+            | FieldProp::Wash
+            | FieldProp::WashHue
+            | FieldProp::Glitch
+            | FieldProp::Chroma => PropGroup::Look,
+            _ => PropGroup::Clones,
+        }
+    }
+
+    /// One line on what it does, for tooltips.
+    pub fn about(self) -> &'static str {
+        match self {
+            FieldProp::X => "Slides the whole playfield right (left below 0), in virtual units.",
+            FieldProp::Y => "Slides the whole playfield down (up below 0), in virtual units.",
+            FieldProp::Rotation => {
+                "Turns the playfield clockwise about the hit target, in degrees."
+            }
+            FieldProp::Zoom => "Scales the playfield about the hit target. 1 is normal.",
+            FieldProp::Scroll => {
+                "How fast notes scroll, as a multiple of the map's. Draws only: hit times never move."
+            }
+            FieldProp::StretchX => "Makes the playfield wider (above 1) or thinner (below 1).",
+            FieldProp::StretchY => "Makes the playfield taller (above 1) or flatter (below 1).",
+            FieldProp::Flash => "A white flash added over everything. 0 none, 1 white-out.",
+            FieldProp::Vignette => "Darkens the edges of the screen. 0 none, 1 nearly black.",
+            FieldProp::Wash => "How strongly a colour is laid over the playfield.",
+            FieldProp::WashHue => {
+                "The wash's colour as a hue in degrees (0 red, 120 green, 240 blue)."
+            }
+            FieldProp::Glitch => {
+                "Tears the playfield into shifted slices that flicker. 0 none, 1 wrecked."
+            }
+            FieldProp::Chroma => {
+                "Pushes a red and a blue copy apart from the picture, in virtual units."
+            }
+            FieldProp::Echo => "How many fading copies trail behind the playfield (up to 8).",
+            FieldProp::EchoX => "How far each step back in the trail moves sideways.",
+            FieldProp::EchoY => "How far each step back in the trail moves down.",
+            FieldProp::EchoRot => "How many degrees each step back in the trail turns.",
+            FieldProp::EchoZoom => {
+                "How much each step back in the trail scales (1 keeps the size)."
+            }
+            FieldProp::EchoFade => {
+                "How much of its opacity each step back keeps (0.6: each is 60% of the last)."
+            }
+            FieldProp::Kaleido => {
+                "Rotated copies about the middle of the screen: how many in all (2 to 8)."
+            }
         }
     }
 
     pub fn default_value(self) -> f64 {
         match self {
-            FieldProp::X | FieldProp::Y | FieldProp::Rotation => 0.0,
-            FieldProp::Zoom | FieldProp::Scroll => 1.0,
+            FieldProp::X
+            | FieldProp::Y
+            | FieldProp::Rotation
+            | FieldProp::Flash
+            | FieldProp::Vignette
+            | FieldProp::Wash
+            | FieldProp::WashHue
+            | FieldProp::Glitch
+            | FieldProp::Chroma
+            | FieldProp::Echo
+            | FieldProp::EchoY
+            | FieldProp::EchoRot
+            | FieldProp::Kaleido => 0.0,
+            FieldProp::Zoom
+            | FieldProp::Scroll
+            | FieldProp::StretchX
+            | FieldProp::StretchY
+            | FieldProp::EchoZoom => 1.0,
+            FieldProp::EchoX => -30.0,
+            FieldProp::EchoFade => 0.6,
         }
     }
 
@@ -56,9 +209,20 @@ impl FieldProp {
     pub fn range(self) -> (f64, f64) {
         match self {
             FieldProp::X | FieldProp::Y => (-2000.0, 2000.0),
-            FieldProp::Rotation => (-3600.0, 3600.0),
+            FieldProp::Rotation | FieldProp::WashHue => (-3600.0, 3600.0),
             FieldProp::Zoom => (0.05, 8.0),
             FieldProp::Scroll => (0.1, 8.0),
+            FieldProp::StretchX | FieldProp::StretchY => (0.1, 4.0),
+            FieldProp::Flash
+            | FieldProp::Vignette
+            | FieldProp::Wash
+            | FieldProp::Glitch
+            | FieldProp::EchoFade => (0.0, 1.0),
+            FieldProp::Chroma => (0.0, 80.0),
+            FieldProp::Echo | FieldProp::Kaleido => (0.0, 8.0),
+            FieldProp::EchoX | FieldProp::EchoY => (-400.0, 400.0),
+            FieldProp::EchoRot => (-90.0, 90.0),
+            FieldProp::EchoZoom => (0.5, 1.5),
         }
     }
 }
@@ -72,15 +236,18 @@ pub enum NoteProp {
     Opacity,
     /// 1 hides the note (it is still there to hit).
     Hidden,
+    /// Degrees the note is turned about the drum.
+    Swirl,
 }
 
 impl NoteProp {
-    pub const ALL: [NoteProp; 5] = [
+    pub const ALL: [NoteProp; 6] = [
         NoteProp::Dx,
         NoteProp::Dy,
         NoteProp::Scale,
         NoteProp::Opacity,
         NoteProp::Hidden,
+        NoteProp::Swirl,
     ];
 
     pub fn name(self) -> &'static str {
@@ -90,12 +257,13 @@ impl NoteProp {
             NoteProp::Scale => "scale",
             NoteProp::Opacity => "opacity",
             NoteProp::Hidden => "hidden",
+            NoteProp::Swirl => "swirl",
         }
     }
 
     pub fn default_value(self) -> f64 {
         match self {
-            NoteProp::Dx | NoteProp::Dy | NoteProp::Hidden => 0.0,
+            NoteProp::Dx | NoteProp::Dy | NoteProp::Hidden | NoteProp::Swirl => 0.0,
             NoteProp::Scale | NoteProp::Opacity => 1.0,
         }
     }
@@ -105,6 +273,7 @@ impl NoteProp {
             NoteProp::Dx | NoteProp::Dy => (-1000.0, 1000.0),
             NoteProp::Scale => (0.05, 6.0),
             NoteProp::Opacity | NoteProp::Hidden => (0.0, 1.0),
+            NoteProp::Swirl => (-720.0, 720.0),
         }
     }
 }

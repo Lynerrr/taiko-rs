@@ -143,7 +143,7 @@ impl Editor {
 mod tests {
     use super::*;
     use crate::editor::chart::{Chart, tests::MAP};
-    use crate::tko::gimmick::{FieldProp, Group};
+    use crate::tko::gimmick::{FieldProp, Group, NoteProp};
     use std::path::PathBuf;
 
     fn plain() -> Editor {
@@ -230,7 +230,10 @@ mod tests {
     fn targets_list_the_field_and_each_group_and_cycle_both_ways() {
         let mut ed = editor();
         ed.edit_gimmick(false, |g| g.groups.push(Group::default()));
-        assert_eq!(ed.targets().len(), 10);
+        assert_eq!(
+            ed.targets().len(),
+            FieldProp::ALL.len() + NoteProp::ALL.len()
+        );
         let n = ed.add_node(Kind::Drive, 0.0, 0.0).unwrap();
         assert!(ed.cycle_node_target(n, -1));
         assert!(matches!(
