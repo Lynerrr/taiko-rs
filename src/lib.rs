@@ -5987,6 +5987,15 @@ impl State {
             FileDrag::Drop(paths) => {
                 self.drag_hover = None;
                 for path in paths {
+                    // A picture dropped on the editor goes into the map's folder.
+                    if let Scene::Editor(view) = &mut self.scene
+                        && path
+                            .file_name()
+                            .is_some_and(|n| pictures::is_picture(&n.to_string_lossy()))
+                    {
+                        view.drop_picture(&path);
+                        continue;
+                    }
                     if matches!(self.scene, Scene::EditorHome(_)) {
                         let rate = self.audio.as_ref().map(|a| a.rate);
                         let out = match &mut self.scene {

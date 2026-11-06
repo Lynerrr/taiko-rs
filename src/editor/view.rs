@@ -378,6 +378,8 @@ pub struct View {
     pub status: String,
     pub sel_line: Option<u64>,
     typing: Option<(Field, String)>,
+    /// A text block's words just opened for typing: the first key replaces them all.
+    typing_fresh: bool,
     mouse: (f32, f32),
     pub width: f32,
     /// What the middle of the screen is for.
@@ -545,6 +547,7 @@ impl View {
             status: String::new(),
             sel_line: None,
             typing: None,
+            typing_fresh: false,
             mouse: (0.0, 0.0),
             width: 853.0,
             mode: Mode::Compose,
@@ -2614,6 +2617,7 @@ impl View {
                         Field::FxText => self.layer_text().unwrap_or_default(),
                         _ => String::new(),
                     };
+                    self.typing_fresh = f == Field::FxText && !now.is_empty();
                     self.typing = Some((f, now));
                 }
             }
@@ -2650,6 +2654,9 @@ impl View {
     /// Text typed while `wants_text`.
     pub fn type_text(&mut self, s: &str) {
         if let Some((Field::FxText, text)) = &mut self.typing {
+            if std::mem::take(&mut self.typing_fresh) && s.chars().any(|c| !c.is_control()) {
+                text.clear();
+            }
             for ch in s.chars().filter(|c| !c.is_control()) {
                 if text.chars().count() < crate::tko::clips::MAX_TEXT {
                     text.push(ch);
@@ -2691,6 +2698,7 @@ impl View {
             return KeyResult::Handled;
         }
         if let Some((f, text)) = &mut self.typing {
+            let fresh = std::mem::take(&mut self.typing_fresh);
             match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
                     let (f, text) = (*f, std::mem::take(text));
@@ -2698,8 +2706,28 @@ impl View {
                     self.apply_typed(f, &text);
                 }
                 KeyCode::Escape => self.typing = None,
+                // Words opened for typing go in one press, like selected text.
+                KeyCode::Backspace if fresh => text.clear(),
+                // Ctrl+Backspace takes the last word.
+                KeyCode::Backspace if keys.ctrl => {
+                    let kept = text.trim_end().len();
+                    text.truncate(kept);
+                    let cut = text.rfind(char::is_whitespace).map_or(0, |i| i + 1);
+                    text.truncate(cut);
+                }
                 KeyCode::Backspace => {
                     text.pop();
+                }
+                // Shift and the like before a letter keep the words selected.
+                KeyCode::ShiftLeft
+                | KeyCode::ShiftRight
+                | KeyCode::ControlLeft
+                | KeyCode::ControlRight
+                | KeyCode::AltLeft
+                | KeyCode::AltRight
+                    if fresh =>
+                {
+                    self.typing_fresh = true;
                 }
                 // Free text comes as text (`type_text`), not as keys.
                 _ if *f == Field::FxText => {}
@@ -4648,6 +4676,99 @@ mod tests {
 
     fn picked_layer(v: &View) -> crate::tko::clips::Layer {
         (*v.ed.clip(v.fx_sel.unwrap()).unwrap().layer.clone().unwrap()).clone()
+    }
+
+    #[test]
+    fn a_text_blocks_words_go_on_the_first_key_and_ctrl_backspace_takes_a_word() {
+        use crate::tko::clips::Show;
+        let words = |v: &View| match &v.typing {
+            Some((Field::FxText, t)) => t.clone(),
+            _ => panic!("not typing"),
+        };
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        put_fx(&mut v, preset("Text"));
+        draw(&mut v);
+        press(&mut v, Btn::Edit(Field::FxText));
+        // Shift for a capital keeps them selected; the letter replaces them.
+        v.key(KeyCode::ShiftLeft, false, Keys::default(), None);
+        v.type_text("S");
+        v.type_text("pin the egg");
+        assert_eq!(words(&v), "Spin the egg");
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        v.key(KeyCode::Backspace, false, ctrl, None);
+        assert_eq!(words(&v), "Spin the ");
+        v.key(KeyCode::Backspace, false, ctrl, None);
+        assert_eq!(words(&v), "Spin ");
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert_eq!(
+            picked_layer(&v).show,
+            Show::Text {
+                text: "Spin ".into()
+            }
+        );
+        // Opened again, Backspace takes them all at once.
+        press(&mut v, Btn::Edit(Field::FxText));
+        v.key(KeyCode::Backspace, false, Keys::default(), None);
+        assert_eq!(words(&v), "");
+    }
+
+    #[test]
+    fn a_picture_dropped_on_the_editor_goes_in_the_map_folder_and_on_the_picked_block() {
+        use crate::tko::clips::Show;
+        let mut v = clips_view();
+        let dir = v.ed.path.parent().unwrap().to_path_buf();
+        let outside = dir.join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("first.png"), b"x").unwrap();
+        std::fs::write(outside.join("egg.png"), b"x").unwrap();
+        // No picture block picked: it is only copied.
+        v.drop_picture(&outside.join("first.png"));
+        assert!(dir.join("first.png").is_file());
+        // A picture block takes the first picture in the folder, then the dropped one.
+        v.set_time(3000.0);
+        put_fx(&mut v, preset("Picture"));
+        assert_eq!(
+            picked_layer(&v).show,
+            Show::Picture {
+                file: "first.png".into()
+            }
+        );
+        v.drop_picture(&outside.join("egg.png"));
+        assert!(dir.join("egg.png").is_file());
+        assert_eq!(
+            picked_layer(&v).show,
+            Show::Picture {
+                file: "egg.png".into()
+            }
+        );
+        // Dropped from the map's own folder, it is used where it is.
+        v.drop_picture(&dir.join("first.png"));
+        assert_eq!(
+            picked_layer(&v).show,
+            Show::Picture {
+                file: "first.png".into()
+            }
+        );
+    }
+
+    #[test]
+    fn spin_is_set_in_a_layers_settings() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        put_fx(&mut v, preset("Picture"));
+        // No picture in the folder: nothing is placed.
+        assert!(v.fx_sel.is_none(), "{}", v.status);
+        put_fx(&mut v, preset("Text"));
+        draw(&mut v);
+        press(&mut v, Btn::Inc(Field::Fx(CF::Spin)));
+        assert_eq!(picked_layer(&v).spin, 15.0);
+        v.clip_set(CF::Spin, 360.0);
+        assert_eq!(picked_layer(&v).spin, 360.0);
+        assert_eq!(picked_layer(&v).from.turn, 0.0, "the pose's turn stays");
     }
 
     #[test]

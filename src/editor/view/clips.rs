@@ -15,7 +15,7 @@ use crate::editor::clips::{
     target_columns, target_label, targets, trim,
 };
 use crate::render::{Canvas, accent, rgba};
-use crate::tko::clips::{Clip, LANES, Layer, Motion, Notes, Pose, Show, Target, When};
+use crate::tko::clips::{Clip, LANES, Layer, MAX_SPIN, Motion, Notes, Pose, Show, Target, When};
 use crate::tko::track::Ease;
 
 /// Rows of clips shown at once (more scroll).
@@ -97,6 +97,8 @@ pub enum CF {
     Y,
     Size,
     Turn,
+    /// A layer's spin, degrees a beat (not part of a pose).
+    Spin,
     Seen,
 }
 
@@ -112,6 +114,7 @@ impl CF {
             CF::Y => "y",
             CF::Size => "size",
             CF::Turn => "turn",
+            CF::Spin => "spin /beat",
             CF::Seen => "opacity",
         }
     }
@@ -535,6 +538,9 @@ impl View {
         match &layer.show {
             Show::Text { text } => {
                 let shown = match &self.typing {
+                    Some((Field::FxText, t)) if self.typing_fresh => {
+                        format!("{t}  (type to replace)")
+                    }
                     Some((Field::FxText, t)) => format!("{t}_"),
                     _ => format!("{text}  (click to type)"),
                 };
@@ -542,7 +548,12 @@ impl View {
             }
             Show::Picture { file } => {
                 row.push(("<".to_string(), Btn::Fx(FxAct::Picture(-1)), false));
-                row.push((file.clone(), Btn::Fx(FxAct::Picture(1)), true));
+                let label = if file.is_empty() {
+                    "no picture: put one in the map folder or drop it here".to_string()
+                } else {
+                    file.clone()
+                };
+                row.push((label, Btn::Fx(FxAct::Picture(1)), true));
                 row.push((">".to_string(), Btn::Fx(FxAct::Picture(1)), false));
             }
         }
@@ -602,12 +613,14 @@ impl View {
         self.clip_number(c, cx, y, col, CF::Size, p.size);
         y += 19.0;
         cx = self.clip_number(c, x, y, col, CF::Turn, p.turn);
-        cx = self.clip_number(c, cx, y, col, CF::Seen, p.alpha);
+        cx = self.clip_number(c, cx, y, col, CF::Spin, layer.spin);
+        self.clip_number(c, cx, y, col, CF::Seen, p.alpha);
+        y += 19.0;
         // Repeating, it pulses.
         if clip.when != When::Span {
-            self.clip_number(c, cx, y, col, CF::Amount, clip.amount);
+            self.clip_number(c, x, y, col, CF::Amount, clip.amount);
+            y += 19.0;
         }
-        y += 19.0;
         let whens = [
             "stays",
             "pulses every few beats",
@@ -697,7 +710,7 @@ impl View {
                     Some(f) => *file = f.clone(),
                     None => {
                         self.status =
-                            "put a .png or .jpg in the map's folder first, then pick Picture again"
+                            "drop a .png or .jpg on the editor (or put it in the map's folder) first, then pick Picture again"
                                 .into();
                         return;
                     }
@@ -839,6 +852,50 @@ impl View {
     }
 
     /// The pictures in the edited map's folder.
+    /// A picture dropped on the editor: copied into the map's folder (pictures travel with the
+    /// map from there), and shown by the picked picture block, if one is picked.
+    pub fn drop_picture(&mut self, from: &std::path::Path) {
+        let Some(dir) = self.ed.path.parent().map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        let Some(name) = from.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return;
+        };
+        let to = dir.join(&name);
+        let same = to
+            .canonicalize()
+            .ok()
+            .is_some_and(|t| from.canonicalize().ok() == Some(t));
+        if !same && let Err(e) = std::fs::copy(from, &to) {
+            self.status = format!("couldn't copy {name} into the map's folder: {e}");
+            return;
+        }
+        let picked = self.fx_sel.filter(|&id| {
+            self.ed.clips().iter().any(|c| {
+                c.id == id
+                    && c.layer
+                        .as_deref()
+                        .is_some_and(|l| matches!(l.show, Show::Picture { .. }))
+            })
+        });
+        match picked {
+            Some(id) => {
+                self.ed.set_clip(id, false, |c| {
+                    if let Some(l) = c.layer.as_deref_mut() {
+                        l.show = Show::Picture { file: name.clone() };
+                    }
+                });
+                self.status = format!("{name} is in the map's folder and on the picked block");
+                self.mark_stale();
+            }
+            None => {
+                self.status = format!(
+                    "{name} is in the map's folder: put a Picture from the Text & pictures tab to show it"
+                )
+            }
+        }
+    }
+
     pub(super) fn map_pictures(&self) -> Vec<String> {
         self.ed
             .path
@@ -1141,6 +1198,7 @@ impl View {
             CF::Every | CF::Length | CF::FadeIn | CF::FadeOut => 0.25,
             CF::X | CF::Y | CF::Size => 2.0,
             CF::Turn => 5.0,
+            CF::Spin => 15.0,
             CF::Seen => 0.05,
         } * k;
         let now = self.clip_field(&clip, f);
@@ -1158,6 +1216,7 @@ impl View {
             CF::Length => c.length,
             CF::FadeIn => c.fade_in,
             CF::FadeOut => c.fade_out,
+            CF::Spin => c.layer.as_deref().map_or(0.0, |l| l.spin),
             CF::X | CF::Y | CF::Size | CF::Turn | CF::Seen => {
                 let Some(l) = c.layer.as_deref() else {
                     return 0.0;
@@ -1194,6 +1253,11 @@ impl View {
             CF::Length => c.length = v.max(1.0 / 64.0),
             CF::FadeIn => c.fade_in = v.max(0.0),
             CF::FadeOut => c.fade_out = v.max(0.0),
+            CF::Spin => {
+                if let Some(l) = c.layer.as_deref_mut() {
+                    l.spin = v.clamp(-MAX_SPIN, MAX_SPIN);
+                }
+            }
             CF::X | CF::Y | CF::Size | CF::Turn | CF::Seen => {
                 if let Some(l) = c.layer.as_deref_mut() {
                     let p = pose_mut(l, end);
