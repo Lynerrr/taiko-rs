@@ -1,13 +1,15 @@
-//! The Motion page (F4 Effects, .tko maps): the notes picked on the timeline get an approach
-//! path, picked from ready-made ones and shaped by hand in the preview, a pace along it, and
-//! moments it takes them on and off the lane.
+//! The Motion page (F4 Effects, .tko maps): the notes picked on the timeline get a group of
+//! their own, and that group an approach path (picked from ready-made ones and shaped by hand in
+//! the preview, with a pace along it and moments it takes them on and off the lane) and what each
+//! note does as its own hit nears (ready-made moves, or keys on a small graph).
 
-use super::{Btn, Drag, Mode, View, inside};
-use crate::editor::motion::{PACES, PATHS, pace_track};
+use super::{Btn, Drag, Keys, Mode, View, inside};
+use crate::editor::motion::{BEFORES, PACES, PATHS, before_tracks, pace_track};
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
-use crate::tko::gimmick::FieldProp;
+use crate::tko::gimmick::{FieldProp, NoteProp};
 use crate::tko::path::PathTable;
+use crate::tko::track::{Ease, Key};
 use crate::video::FRAME_VW;
 use std::time::Instant;
 
@@ -19,11 +21,29 @@ const GRAB: f32 = 6.0;
 const DOUBLE_MS: u128 = 350;
 /// Height of a line of the page's buttons.
 const CHIP_ROW: f32 = 15.0;
+/// What the before-the-hit graph can show: its name on the page, and the range it shows.
+pub(super) const GRAPH_PROPS: [(NoteProp, &str, f64, f64); 9] = [
+    (NoteProp::Opacity, "Fade", 0.0, 1.0),
+    (NoteProp::Scale, "Size", 0.0, 2.0),
+    (NoteProp::Dy, "Up/down", -250.0, 250.0),
+    (NoteProp::Dx, "Sideways", -250.0, 250.0),
+    (NoteProp::Swirl, "Turn", -180.0, 180.0),
+    (NoteProp::Hidden, "Hide", 0.0, 1.0),
+    (NoteProp::StretchX, "Wide", 0.0, 2.0),
+    (NoteProp::StretchY, "Tall", 0.0, 2.0),
+    (NoteProp::Tint, "Tint", 0.0, 1.0),
+];
+/// The graph's beats: this many before the hit on the left, and after it on the right.
+const GRAPH_FAR: f64 = 4.0;
+const GRAPH_AFTER: f64 = 0.5;
 
 /// A button on the Motion page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MAct {
-    /// The notes picked get (or keep) their own group, with a path if it has none.
+    /// The page's tab: 0 the path, 1 before the hit.
+    Tab(u8),
+    /// The notes picked get (or keep) their own group, with a path if it has none (on the path
+    /// tab).
     UseSelection,
     Pick(usize),
     Path(usize),
@@ -37,6 +57,10 @@ pub enum MAct {
     Copy,
     Paste,
     Clear,
+    /// A ready-made before-the-hit move.
+    Before(usize),
+    /// The property the graph shows (in `GRAPH_PROPS`).
+    Prop(usize),
 }
 
 impl View {
@@ -54,14 +78,29 @@ impl View {
         let t = self.ed.snapped(self.ed.time);
         let g = self.motion_group();
         let done = match (a, g) {
+            (MAct::Tab(i), _) => {
+                self.m_tab = i;
+                false
+            }
+            (MAct::Prop(i), _) => {
+                self.m_prop = i.min(GRAPH_PROPS.len() - 1);
+                false
+            }
             (MAct::UseSelection, _) => match self.ed.motion_group() {
                 Ok(g) => {
                     self.m_group = Some(g);
-                    if self.ed.path_of(g).is_none() {
-                        self.ed.set_path_preset(g, 0);
+                    if self.m_tab == 0 {
+                        if self.ed.path_of(g).is_none() {
+                            self.ed.set_path_preset(g, 0);
+                        }
+                        self.status =
+                            "the picked notes fly in along this path: shape it in the preview"
+                                .into();
+                    } else {
+                        self.status =
+                            "pick a ready-made move or add keys on the graph: each note does it as its own hit nears"
+                                .into();
                     }
-                    self.status =
-                        "the picked notes fly in along this path: shape it in the preview".into();
                     true
                 }
                 Err(e) => {
@@ -102,8 +141,18 @@ impl View {
                 }
             },
             (MAct::Clear, Some(g)) => self.ed.clear_path(g),
+            (MAct::Before(i), Some(g)) => {
+                // Show what the move keys first.
+                if let Some((prop, _)) = BEFORES.get(i).and_then(|b| b.1.first()) {
+                    self.m_prop = GRAPH_PROPS
+                        .iter()
+                        .position(|gp| gp.0 == *prop)
+                        .unwrap_or(self.m_prop);
+                }
+                self.ed.set_before_preset(g, i)
+            }
             (_, None) => {
-                self.status = "pick notes and give them a path first".into();
+                self.status = "pick notes on the timeline first".into();
                 false
             }
         };
@@ -137,31 +186,34 @@ impl View {
 
     pub(super) fn draw_motion_page(&mut self, c: &mut Canvas, x: f32, mut y: f32, inner: f32) {
         let dim = rgba(0x9a9ab0, 1.0);
-        let head = rgba(accent(), 1.0);
         let small = 6.0;
-        c.text(
-            x,
-            y,
-            small,
-            dim,
-            &Canvas::fit(
-                small,
-                inner,
-                "Pick notes on the timeline and give them a path: they fly in along it and land on the drum on time.",
-            ),
-        );
+        let about = if self.m_tab == 0 {
+            "Pick notes on the timeline and give them a path: they fly in along it and land on the drum on time."
+        } else {
+            "Pick notes on the timeline and give them a move: each note does it as its own hit nears."
+        };
+        c.text(x, y, small, dim, &Canvas::fit(small, inner, about));
         y += 10.0;
-        // What to shape: the picked notes, or a group that already has a path.
+        // The tab, what to shape (the picked notes, or a group already moving), and the groups.
         let picked = self.ed.selection.len();
-        let mut items = vec![(
-            if picked == 0 {
-                "Give the picked notes a path".to_string()
-            } else {
-                format!("Give the {picked} picked notes a path")
-            },
-            Btn::M(MAct::UseSelection),
-            false,
-        )];
+        let what = if self.m_tab == 0 { "a path" } else { "a move" };
+        let mut items = vec![
+            ("Path".to_string(), Btn::M(MAct::Tab(0)), self.m_tab == 0),
+            (
+                "Before the hit".to_string(),
+                Btn::M(MAct::Tab(1)),
+                self.m_tab == 1,
+            ),
+            (
+                if picked == 0 {
+                    format!("Give the picked notes {what}")
+                } else {
+                    format!("Give the {picked} picked notes {what}")
+                },
+                Btn::M(MAct::UseSelection),
+                false,
+            ),
+        ];
         if self.m_copied.is_some() {
             items.push(("Paste motion".to_string(), Btn::M(MAct::Paste), false));
         }
@@ -171,7 +223,7 @@ impl View {
                 g.groups
                     .iter()
                     .enumerate()
-                    .filter(|(_, gr)| gr.path.is_some())
+                    .filter(|(_, gr)| gr.path.is_some() || !gr.before.is_empty())
                     .map(|(i, gr)| {
                         (
                             format!("{} ({})", gr.name, gr.notes.len()),
@@ -182,11 +234,21 @@ impl View {
             );
         }
         y = self.chips(c, x, y, inner, &items) + 2.0;
-        let Some(g) = current else { return };
-        let Some(path) = self.ed.path_of(g).cloned() else {
-            c.text(x, y, small, dim, "This group has no path yet.");
+        let Some(g) = current else {
+            self.m_graph = [0.0; 4];
             return;
         };
+        if self.m_tab == 0 {
+            self.m_graph = [0.0; 4];
+            self.draw_path_tab(c, g, x, y, inner);
+        } else {
+            self.draw_before_tab(c, g, x, y, inner);
+        }
+    }
+
+    fn draw_path_tab(&mut self, c: &mut Canvas, g: usize, x: f32, mut y: f32, inner: f32) {
+        let head = rgba(accent(), 1.0);
+        let path = self.ed.path_of(g).cloned();
         // Two columns: the path's shape on the left, when and what else on the right.
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
@@ -199,11 +261,21 @@ impl View {
                 (
                     name.to_string(),
                     Btn::M(MAct::Path(i)),
-                    path.points == pts.to_vec(),
+                    path.as_ref().is_some_and(|p| p.points == pts.to_vec()),
                 )
             })
             .collect();
         y = self.chips(c, x, y + 9.0, col, &items);
+        let Some(path) = path else {
+            c.text(
+                right,
+                top,
+                6.0,
+                rgba(0x9a9ab0, 1.0),
+                "These notes have no path yet: pick one.",
+            );
+            return;
+        };
         c.text(x, y, 6.5, head, "Pace along it");
         let items: Vec<(String, Btn, bool)> = PACES
             .iter()
@@ -250,6 +322,264 @@ impl View {
             ("Remove path".to_string(), Btn::M(MAct::Clear), false),
         ];
         self.chips(c, right, y + 9.0, col, &items);
+    }
+
+    fn draw_before_tab(&mut self, c: &mut Canvas, g: usize, x: f32, y: f32, inner: f32) {
+        let head = rgba(accent(), 1.0);
+        let dim = rgba(0x9a9ab0, 1.0);
+        let before = self.ed.before_of(g).cloned().unwrap_or_default();
+        let col = (inner - 10.0) * 0.42;
+        let right = x + col + 10.0;
+        let rw = inner - col - 10.0;
+        c.text(x, y, 6.5, head, "Ready-made");
+        let items: Vec<(String, Btn, bool)> = BEFORES
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| {
+                let on = if i == 0 {
+                    before.is_empty()
+                } else {
+                    before == before_tracks(i)
+                };
+                (name.to_string(), Btn::M(MAct::Before(i)), on)
+            })
+            .collect();
+        let ly = self.chips(c, x, y + 9.0, col, &items);
+        let items = vec![
+            ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
+            ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
+        ];
+        self.chips(c, x, ly + 2.0, col, &items);
+        // The graph: one property's keys, beats before the hit left to right.
+        c.text(right, y, 6.5, head, "Keys by beats before each note's hit");
+        let items: Vec<(String, Btn, bool)> = GRAPH_PROPS
+            .iter()
+            .enumerate()
+            .map(|(i, (p, name, _, _))| {
+                let keyed = before.contains_key(p.name());
+                (
+                    if keyed {
+                        format!("{name}*")
+                    } else {
+                        name.to_string()
+                    },
+                    Btn::M(MAct::Prop(i)),
+                    self.m_prop == i,
+                )
+            })
+            .collect();
+        let gy = self.chips(c, right, y + 9.0, rw, &items) + 1.0;
+        let bottom = self.layout.inspector[1] + self.layout.inspector[3] - 6.0;
+        let gh = (bottom - gy - 8.0).max(24.0);
+        let rect = [right, gy, rw, gh];
+        self.m_graph = rect;
+        self.draw_before_graph(c, rect, &before);
+        c.text(
+            right,
+            gy + gh + 1.0,
+            5.5,
+            dim,
+            &Canvas::fit(
+                5.5,
+                rw,
+                "click: add a key   drag: move it   right click: remove it   Shift: off the 1/8 beat grid",
+            ),
+        );
+    }
+
+    fn graph_prop(&self) -> (NoteProp, f64, f64) {
+        let (p, _, lo, hi) = GRAPH_PROPS[self.m_prop.min(GRAPH_PROPS.len() - 1)];
+        (p, lo, hi)
+    }
+
+    /// Graph point of beats `b` before the hit and value `v`.
+    fn graph_at(&self, b: f64, v: f64) -> (f32, f32) {
+        let [gx, gy, gw, gh] = self.m_graph;
+        let (_, lo, hi) = self.graph_prop();
+        let fx = (GRAPH_FAR - b) / (GRAPH_FAR + GRAPH_AFTER);
+        let fy = (v - lo) / (hi - lo);
+        (
+            gx + fx as f32 * gw,
+            gy + gh - fy.clamp(0.0, 1.0) as f32 * gh,
+        )
+    }
+
+    /// Beats before the hit and value at a graph point.
+    fn graph_value(&self, x: f32, y: f32, free: bool) -> (f64, f64) {
+        let [gx, gy, gw, gh] = self.m_graph;
+        let (p, lo, hi) = self.graph_prop();
+        let fx = ((x - gx) / gw.max(1.0)).clamp(0.0, 1.0) as f64;
+        let mut b = GRAPH_FAR - fx * (GRAPH_FAR + GRAPH_AFTER);
+        if !free {
+            b = (b * 8.0).round() / 8.0;
+        }
+        let fy = ((gy + gh - y) / gh.max(1.0)).clamp(0.0, 1.0) as f64;
+        let mut v = lo + fy * (hi - lo);
+        v = if p == NoteProp::Hidden {
+            v.round()
+        } else {
+            (v * 100.0).round() / 100.0
+        };
+        (b, v)
+    }
+
+    fn draw_before_graph(
+        &mut self,
+        c: &mut Canvas,
+        [gx, gy, gw, gh]: [f32; 4],
+        before: &std::collections::BTreeMap<String, crate::tko::track::Track>,
+    ) {
+        c.round_rect(
+            [gx, gy],
+            [gw, gh],
+            2.0,
+            rgba(0x101018, 1.0),
+            rgba(0x3a3a4e, 1.0),
+            1.0,
+        );
+        let dim = rgba(0x9a9ab0, 0.8);
+        // Beat lines, the hit brighter.
+        let mut b = GRAPH_FAR;
+        while b >= -GRAPH_AFTER {
+            let (lx, _) = self.graph_at(b, 0.0);
+            let hit = b == 0.0;
+            c.rect(
+                lx - 0.5,
+                gy + 1.0,
+                1.0,
+                gh - 2.0,
+                rgba(if hit { accent() } else { 0x2a2a3a }, 1.0),
+            );
+            let label = if hit {
+                "hit".to_string()
+            } else {
+                format!("{b}")
+            };
+            if b > -GRAPH_AFTER {
+                c.text(lx + 2.0, gy + 2.0, 5.0, dim, &label);
+            }
+            b -= 1.0;
+        }
+        let (p, lo, hi) = self.graph_prop();
+        // The value notes have without keys.
+        let (_, ny) = self.graph_at(0.0, p.default_value());
+        c.rect(gx + 1.0, ny - 0.5, gw - 2.0, 1.0, rgba(0x3a3a4e, 1.0));
+        c.text(gx + 2.0, gy + gh - 7.0, 5.0, dim, &format!("{lo}"));
+        c.text_right(gx + gw - 2.0, gy + 9.0, 5.0, dim, &format!("{hi}"));
+        let Some(tr) = before.get(p.name()) else {
+            return;
+        };
+        let steps = (gw / 1.5).max(8.0) as usize;
+        for s in 0..=steps {
+            let b = GRAPH_FAR - (GRAPH_FAR + GRAPH_AFTER) * s as f64 / steps as f64;
+            let (px, py) = self.graph_at(b, tr.value(b, p.default_value()));
+            c.rect(px - 0.7, py - 0.7, 1.4, 1.4, rgba(accent(), 0.95));
+        }
+        let live = match self.drag {
+            Drag::BeforeKey { index, .. } => Some(index),
+            _ => None,
+        };
+        let hover = self.graph_key_near(self.mouse.0, self.mouse.1);
+        for (i, k) in tr.keys.iter().enumerate() {
+            let (kx, ky) = self.graph_at(k.t, k.v);
+            if !(gx - 1.0..=gx + gw + 1.0).contains(&kx) {
+                continue;
+            }
+            let lit = live == Some(i) || hover == Some(i);
+            c.round_rect(
+                [kx - 2.5, ky - 2.5],
+                [5.0, 5.0],
+                1.0,
+                rgba(0xffffff, if lit { 1.0 } else { 0.8 }),
+                rgba(0x000000, 0.8),
+                1.0,
+            );
+        }
+    }
+
+    /// The key of the graph's track near a point.
+    fn graph_key_near(&self, x: f32, y: f32) -> Option<usize> {
+        let g = self.motion_group()?;
+        if self.m_tab != 1 || !inside(self.m_graph, x, y) {
+            return None;
+        }
+        let (p, _, _) = self.graph_prop();
+        let tr = self.ed.before_of(g)?.get(p.name())?;
+        tr.keys
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let (kx, ky) = self.graph_at(k.t, k.v);
+                (i, (kx - x).powi(2) + (ky - y).powi(2))
+            })
+            .filter(|(_, d)| *d <= GRAB * GRAB)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+
+    /// A press on the graph: takes the key there, or adds one and takes it.
+    pub(super) fn before_down(&mut self, x: f32, y: f32, keys: Keys) -> bool {
+        if !self.motion_mode() || self.m_tab != 1 || !inside(self.m_graph, x, y) {
+            return false;
+        }
+        let Some(g) = self.motion_group() else {
+            return false;
+        };
+        let index = match self.graph_key_near(x, y) {
+            Some(i) => i,
+            None => {
+                let (p, _, _) = self.graph_prop();
+                let (b, v) = self.graph_value(x, y, keys.shift);
+                let ease = if p == NoteProp::Hidden {
+                    Ease::Step
+                } else {
+                    Ease::SineInOut
+                };
+                let mut at = 0;
+                self.ed.edit_before(g, p, true, |t| {
+                    at = t.set(Key { t: b, v, ease });
+                });
+                self.mark_stale();
+                at
+            }
+        };
+        self.drag = Drag::BeforeKey { group: g, index };
+        true
+    }
+
+    pub(super) fn before_drag(&mut self, x: f32, y: f32) {
+        let Drag::BeforeKey { group, index } = self.drag else {
+            return;
+        };
+        let (p, _, _) = self.graph_prop();
+        let (b, v) = self.graph_value(x, y, self.held.shift);
+        let mut at = index;
+        self.ed.edit_before(group, p, true, |t| {
+            if let Some(k) = t.remove(index) {
+                at = t.set(Key {
+                    t: b,
+                    v,
+                    ease: k.ease,
+                });
+            }
+        });
+        self.drag = Drag::BeforeKey { group, index: at };
+        self.mark_stale();
+    }
+
+    /// A right click on the graph: takes the key there away.
+    pub(super) fn before_right(&mut self, x: f32, y: f32) -> bool {
+        if !self.motion_mode() || self.m_tab != 1 || !inside(self.m_graph, x, y) {
+            return false;
+        }
+        if let (Some(g), Some(i)) = (self.motion_group(), self.graph_key_near(x, y)) {
+            let (p, _, _) = self.graph_prop();
+            self.ed.edit_before(g, p, false, |t| {
+                t.remove(i);
+            });
+            self.mark_stale();
+        }
+        true
     }
 
     // ---- the path in the preview ----

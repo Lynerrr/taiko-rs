@@ -1220,7 +1220,12 @@ impl Runtime {
         }
         let g = gi.map(|gi| &self.gimmick.groups[gi]);
         let t = t - self.shift;
-        let v = |p: NoteProp| {
+        // Beats until this note's own hit, for its before-the-hit keys.
+        let near = g.filter(|g| !g.before.is_empty()).and_then(|_| {
+            let hit = self.notes.get(i)?.time;
+            Some((hit - t) / self.beat_len(hit))
+        });
+        let song_value = |p: NoteProp| {
             let base = g
                 .and_then(|g| g.track(p))
                 .map_or(p.default_value(), |tr| tr.value(t, p.default_value()));
@@ -1233,6 +1238,13 @@ impl Runtime {
             } else {
                 let (lo, hi) = p.range();
                 (base + add).clamp(lo, hi)
+            }
+        };
+        let v = |p: NoteProp| {
+            let song = song_value(p);
+            match (near, g.and_then(|g| g.before_track(p))) {
+                (Some(b), Some(tr)) => p.before(song, tr.value(b, p.default_value())),
+                _ => song,
             }
         };
         Some(NoteFx {
@@ -2482,5 +2494,42 @@ mod tests {
         assert_eq!(rt.note_path(0, 500.0, 400.0, 800.0).unwrap()[2], 0.5);
         assert_eq!(rt.shown_paths(500.0).count(), 1);
         assert_eq!(rt.shown_paths(0.0).count(), 0);
+    }
+
+    #[test]
+    fn before_the_hit_keys_follow_each_notes_own_hit() {
+        let mut gm = Gimmick::default();
+        let mut g = Group {
+            notes: vec![1000.0, 3000.0],
+            ..Group::default()
+        };
+        // Faded out until 2 beats before the hit, solid from 1 beat before.
+        let fade = g.before.entry("opacity".into()).or_default();
+        fade.set(key(2.0, 0.0));
+        fade.set(key(1.0, 1.0));
+        // Jumps 60 up half a beat before the hit and is back on it.
+        let jump = g.before.entry("dy".into()).or_default();
+        jump.set(key(0.5, -60.0));
+        jump.set(key(0.0, 0.0));
+        g.track_mut(NoteProp::Opacity).set(key(0.0, 0.5));
+        gm.groups.push(g);
+        gm.sanitize();
+        let notes = [1000.0, 3000.0].map(|time| NoteInfo {
+            time,
+            class: NoteClass::Don,
+            big: false,
+        });
+        let rt = Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, &GRID);
+        // 500 ms beats: at 0 the first note is 2 beats off (faded), the second 6.
+        let a = rt.note(0, 0.0).unwrap();
+        assert_eq!(a.opacity, 0.0);
+        // Half way between its keys, and on top of the group's own opacity (0.5).
+        let a = rt.note(0, 250.0).unwrap();
+        assert!((a.opacity - 0.25).abs() < 1e-6, "{}", a.opacity);
+        // Each note by its own hit: the second is still faded when the first is solid.
+        assert_eq!(rt.note(0, 600.0).unwrap().opacity, 0.5);
+        assert_eq!(rt.note(1, 600.0).unwrap().opacity, 0.0);
+        assert_eq!(rt.note(1, 2750.0).unwrap().dy, -60.0);
+        assert_eq!(rt.note(1, 3000.0).unwrap().dy, 0.0);
     }
 }

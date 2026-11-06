@@ -5,7 +5,7 @@
 //! notes a path takes them out of any other group they were in.
 
 use super::state::Editor;
-use crate::tko::gimmick::{Group, MAX_GROUPS};
+use crate::tko::gimmick::{BEFORE_BEATS, Group, MAX_GROUPS, NoteProp};
 use crate::tko::path::NotePath;
 use crate::tko::track::{Ease, Key, Track};
 use std::collections::BTreeMap;
@@ -18,6 +18,7 @@ const SAME: f64 = 0.5;
 pub struct Motion {
     pub path: Option<NotePath>,
     pub tracks: BTreeMap<String, Track>,
+    pub before: BTreeMap<String, Track>,
 }
 
 /// Ready-made paths: a name and the points notes come in by (playfield units from the drum, x
@@ -75,6 +76,127 @@ pub const PACES: [(&str, &[[f64; 2]]); 5] = [
     ("Soft landing", &[[0.0, 0.0], [0.6, 0.2], [1.0, 1.0]]),
     ("Back up", &[[0.0, 0.0], [0.4, 0.6], [0.6, 0.4], [1.0, 1.0]]),
 ];
+
+/// A key before the hit: beats before it, value, and the ease to the next key out (further from
+/// the hit). The keys run backwards in time, so an ease "in" here plays out as "out" on screen.
+type BeforeKey = (f64, f64, Ease);
+/// A ready-made move: its name and the keys each property gets.
+type BeforeMove = (&'static str, &'static [(NoteProp, &'static [BeforeKey])]);
+
+/// Ready-made before-the-hit moves: a name and the keys each property gets. The first clears.
+pub const BEFORES: [BeforeMove; 11] = [
+    ("None", &[]),
+    (
+        "Fade in late",
+        &[(
+            NoteProp::Opacity,
+            &[(1.0, 1.0, Ease::Linear), (2.5, 0.0, Ease::Linear)],
+        )],
+    ),
+    (
+        "Vanish early",
+        &[(
+            NoteProp::Opacity,
+            &[(0.5, 0.0, Ease::Linear), (1.5, 1.0, Ease::Linear)],
+        )],
+    ),
+    (
+        "Pop in",
+        &[(
+            NoteProp::Scale,
+            &[(1.0, 1.0, Ease::BackIn), (2.0, 0.05, Ease::Linear)],
+        )],
+    ),
+    (
+        "Drop in",
+        &[(
+            NoteProp::Dy,
+            &[(1.0, 0.0, Ease::QuadOut), (2.5, -200.0, Ease::Linear)],
+        )],
+    ),
+    (
+        "Rise from below",
+        &[
+            (
+                NoteProp::Dy,
+                &[(1.0, 0.0, Ease::CubicIn), (3.0, 160.0, Ease::Linear)],
+            ),
+            (
+                NoteProp::Opacity,
+                &[(1.5, 1.0, Ease::Linear), (3.0, 0.0, Ease::Linear)],
+            ),
+        ],
+    ),
+    (
+        "Jump up",
+        &[(
+            NoteProp::Dy,
+            &[
+                (0.0, 0.0, Ease::QuadOut),
+                (0.5, -50.0, Ease::QuadIn),
+                (1.0, 0.0, Ease::Linear),
+            ],
+        )],
+    ),
+    (
+        "Spin in",
+        &[(
+            NoteProp::Swirl,
+            &[(1.0, 0.0, Ease::CubicIn), (3.0, 120.0, Ease::Linear)],
+        )],
+    ),
+    (
+        "Flicker in",
+        &[(
+            NoteProp::Hidden,
+            &[
+                (1.0, 0.0, Ease::Step),
+                (1.5, 1.0, Ease::Step),
+                (2.0, 0.0, Ease::Step),
+                (2.5, 1.0, Ease::Step),
+            ],
+        )],
+    ),
+    (
+        "Shake",
+        &[(
+            NoteProp::Dx,
+            &[
+                (0.0, 0.0, Ease::SineInOut),
+                (0.25, 8.0, Ease::SineInOut),
+                (0.5, -8.0, Ease::SineInOut),
+                (0.75, 8.0, Ease::SineInOut),
+                (1.0, -8.0, Ease::SineInOut),
+                (1.25, 0.0, Ease::Linear),
+            ],
+        )],
+    ),
+    (
+        "Squash on the hit",
+        &[
+            (
+                NoteProp::StretchX,
+                &[(0.0, 1.5, Ease::QuadIn), (0.5, 1.0, Ease::Linear)],
+            ),
+            (
+                NoteProp::StretchY,
+                &[(0.0, 0.6, Ease::QuadIn), (0.5, 1.0, Ease::Linear)],
+            ),
+        ],
+    ),
+];
+
+/// A before-the-hit preset as tracks.
+pub fn before_tracks(i: usize) -> BTreeMap<String, Track> {
+    let mut out = BTreeMap::new();
+    for (prop, keys) in BEFORES.get(i).map_or(&[][..], |b| b.1) {
+        let tr: &mut Track = out.entry(prop.name().to_string()).or_default();
+        for &(t, v, ease) in keys.iter() {
+            tr.set(Key { t, v, ease });
+        }
+    }
+    out
+}
 
 fn holds(notes: &[f64], t: f64) -> bool {
     let at = notes.partition_point(|&n| n < t - SAME);
@@ -186,6 +308,51 @@ impl Editor {
         Some(Motion {
             path: g.path.clone(),
             tracks: g.tracks.clone(),
+            before: g.before.clone(),
+        })
+    }
+
+    pub fn before_of(&self, group: usize) -> Option<&BTreeMap<String, Track>> {
+        Some(&self.gimmick()?.groups.get(group)?.before)
+    }
+
+    /// Gives group `group` ready-made before-the-hit move `i` in place of its own.
+    pub fn set_before_preset(&mut self, group: usize, i: usize) -> bool {
+        if i >= BEFORES.len() {
+            return false;
+        }
+        self.edit_gimmick(false, |g| {
+            if let Some(gr) = g.groups.get_mut(group) {
+                gr.before = before_tracks(i);
+            }
+        })
+    }
+
+    /// Changes group `group`'s before-the-hit track for `prop`; one emptied goes. `drag`: part of
+    /// a drag still going on.
+    pub fn edit_before(
+        &mut self,
+        group: usize,
+        prop: NoteProp,
+        drag: bool,
+        f: impl FnOnce(&mut Track),
+    ) -> bool {
+        self.edit_gimmick(drag, |g| {
+            if let Some(gr) = g.groups.get_mut(group) {
+                let tr = gr.before.entry(prop.name().to_string()).or_default();
+                f(tr);
+                let (far, after) = BEFORE_BEATS;
+                let (lo, hi) = prop.range();
+                tr.keys.retain(|k| k.t.is_finite() && k.v.is_finite());
+                for k in &mut tr.keys {
+                    k.t = k.t.clamp(-after, far);
+                    k.v = k.v.clamp(lo, hi);
+                }
+                tr.sanitize();
+                if tr.is_empty() {
+                    gr.before.remove(prop.name());
+                }
+            }
         })
     }
 
@@ -195,6 +362,7 @@ impl Editor {
             if let Some(gr) = g.groups.get_mut(group) {
                 gr.path = m.path.clone();
                 gr.tracks = m.tracks.clone();
+                gr.before = m.before.clone();
             }
         })
     }
@@ -288,5 +456,40 @@ mod tests {
         assert!(!e.gimmick().unwrap().groups[g].notes.contains(&one));
         assert!(e.clear_path(h));
         assert!(e.path_of(h).is_none());
+    }
+
+    #[test]
+    fn before_the_hit_presets_replace_and_keys_stay_in_range() {
+        let mut e = tko();
+        pick(&mut e, 2);
+        let g = e.motion_group().unwrap();
+        for (i, (name, _)) in BEFORES.iter().enumerate().skip(1) {
+            assert!(e.set_before_preset(g, i), "{name}");
+            let b = e.before_of(g).unwrap();
+            assert!(!b.is_empty(), "{name}");
+            // Every preset leaves notes as they are on the hit, but those that are about it.
+            for (prop, tr) in b {
+                let p = NoteProp::ALL.iter().find(|p| p.name() == prop).unwrap();
+                if !matches!(*name, "Vanish early" | "Squash on the hit") {
+                    assert_eq!(tr.value(0.0, 0.0), p.default_value(), "{name}");
+                }
+            }
+        }
+        assert!(e.set_before_preset(g, 0));
+        assert!(e.before_of(g).unwrap().is_empty());
+        // A key far out of range is held to it, and a track emptied goes.
+        e.edit_before(g, NoteProp::Opacity, false, |t| {
+            t.set(Key {
+                t: 99.0,
+                v: 5.0,
+                ease: Ease::Linear,
+            });
+        });
+        let k = e.before_of(g).unwrap()["opacity"].keys[0];
+        assert_eq!((k.t, k.v), (BEFORE_BEATS.0, 1.0));
+        e.edit_before(g, NoteProp::Opacity, false, |t| t.keys.clear());
+        assert!(e.before_of(g).unwrap().is_empty());
+        assert!(e.undo());
+        assert!(e.motion_of(g).unwrap().before.contains_key("opacity"));
     }
 }

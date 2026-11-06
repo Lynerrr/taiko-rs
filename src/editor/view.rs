@@ -253,6 +253,11 @@ enum Drag {
         group: usize,
         point: usize,
     },
+    /// A before-the-hit key of a group, moved on the Motion page's graph.
+    BeforeKey {
+        group: usize,
+        index: usize,
+    },
 }
 
 /// The tools, in the order of their keys.
@@ -456,6 +461,12 @@ pub struct View {
     /// The last press in the preview while shaping a path, for the double click that adds a
     /// point.
     m_click: Option<(Instant, (f32, f32))>,
+    /// The Motion page's tab: 0 the path, 1 before the hit.
+    m_tab: u8,
+    /// The property the before-the-hit graph shows (in `motion::GRAPH_PROPS`).
+    m_prop: usize,
+    /// Where that graph was drawn last.
+    m_graph: [f32; 4],
     /// Effects being recorded live (keys 1..9): the shelf effect and where it started.
     fx_live: Vec<(usize, f64)>,
     k_ease: crate::tko::track::Ease,
@@ -612,6 +623,9 @@ impl View {
             m_group: None,
             m_copied: None,
             m_click: None,
+            m_tab: 0,
+            m_prop: 0,
+            m_graph: [0.0; 4],
             fx_live: Vec::new(),
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
@@ -1888,6 +1902,7 @@ impl View {
             Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
             Drag::Gizmo { .. } => self.gizmo_drag(x, y),
             Drag::PathPoint { .. } => self.path_drag(x, y),
+            Drag::BeforeKey { .. } => self.before_drag(x, y),
             Drag::Wire { .. } | Drag::None => {}
         }
     }
@@ -1918,7 +1933,10 @@ impl View {
             Drag::Resize { .. } | Drag::Scrub | Drag::Overview | Drag::FxEdge { .. } => {
                 return I::EwResize;
             }
-            Drag::FxMove { .. } | Drag::Gizmo { .. } | Drag::PathPoint { .. } => {
+            Drag::FxMove { .. }
+            | Drag::Gizmo { .. }
+            | Drag::PathPoint { .. }
+            | Drag::BeforeKey { .. } => {
                 return I::Grabbing;
             }
             Drag::FxNew { .. } | Drag::FxBox { .. } => return I::Crosshair,
@@ -2052,7 +2070,7 @@ impl View {
             }
             return;
         }
-        if self.path_down(x, y) || self.gizmo_down(x, y, keys) {
+        if self.path_down(x, y) || self.before_down(x, y, keys) || self.gizmo_down(x, y, keys) {
             return;
         }
         let tl = self.layout.timeline;
@@ -2278,7 +2296,7 @@ impl View {
                 self.mark_stale();
             }
             Drag::Node { .. } => self.ed.end_drag(),
-            Drag::Gizmo { .. } | Drag::PathPoint { .. } => {
+            Drag::Gizmo { .. } | Drag::PathPoint { .. } | Drag::BeforeKey { .. } => {
                 self.ed.end_drag();
                 self.mark_stale();
             }
@@ -2306,7 +2324,7 @@ impl View {
             }
             return;
         }
-        if self.path_right(x, y) {
+        if self.path_right(x, y) || self.before_right(x, y) {
             return;
         }
         if self.roll_start.take().is_some() || matches!(self.drag, Drag::Place { .. }) {
@@ -4216,6 +4234,52 @@ mod tests {
     }
 
     const PATHS0: [f64; 2] = crate::editor::motion::PATHS[0].1[0];
+
+    #[test]
+    fn picked_notes_get_a_move_before_their_hit_keyed_on_the_graph() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        press(&mut v, Btn::M(MAct::Tab(1)));
+        let ids: Vec<u64> = v.ed.chart.objects.iter().take(3).map(|o| o.id).collect();
+        v.ed.selection = ids.into_iter().collect();
+        press(&mut v, Btn::M(MAct::UseSelection));
+        let g = v.m_group.unwrap();
+        assert!(v.ed.path_of(g).is_none(), "a move alone gives no path");
+        let before = |v: &View| v.ed.before_of(g).unwrap().clone();
+        // A ready-made move, and the graph turns to what it keys.
+        press(&mut v, Btn::M(MAct::Before(3)));
+        assert!(before(&v).contains_key("scale"));
+        assert_eq!(
+            motion::GRAPH_PROPS[v.m_prop].0,
+            crate::tko::gimmick::NoteProp::Scale
+        );
+        draw(&mut v);
+        // On the graph: a click adds a key on the beat grid, a drag moves it, one undo step.
+        press(&mut v, Btn::M(MAct::Prop(2)));
+        draw(&mut v);
+        let [gx, gy, gw, gh] = v.m_graph;
+        assert!(gw > 0.0 && gh > 0.0);
+        // 3 beats before the hit, near the top.
+        let at = |b: f32| gx + (4.0 - b) / 4.5 * gw;
+        v.mouse_down(at(3.0) + 0.4, gy + 2.0, Keys::default(), None);
+        v.mouse_move(at(2.0) + 0.4, gy + gh / 2.0, Keys::default());
+        v.mouse_up(at(2.0) + 0.4, gy + gh / 2.0, Keys::default());
+        let keys = before(&v)["dy"].keys.clone();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].t, 2.0);
+        assert!(keys[0].v.abs() < 10.0, "{}", keys[0].v);
+        assert!(v.ed.undo());
+        assert!(!before(&v).contains_key("dy"));
+        assert!(v.ed.redo());
+        // A right click on it takes it away.
+        draw(&mut v);
+        v.right_click(at(2.0), gy + gh / 2.0);
+        assert!(!before(&v).contains_key("dy"));
+        assert!(before(&v).contains_key("scale"), "other keys stay");
+        press(&mut v, Btn::M(MAct::Before(0)));
+        assert!(before(&v).is_empty());
+    }
 
     #[test]
     fn effects_open_on_clips_and_keep_the_advanced_pages_out_of_the_way() {
