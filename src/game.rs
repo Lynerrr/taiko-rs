@@ -4272,14 +4272,9 @@ impl Game {
                     32.0 * amp * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt + flip).sin();
             }
             let (x, y, _, mut size) = place(side_of(n.kind, s), side);
-            // A .tko group's motion for this note.
-            let (mut x, mut y, a) = (x + fx.dx, y + fx.dy, a * fx.opacity);
-            if fx.swirl != 0.0 {
-                // Turned about the drum, the further out the wider the swing.
-                let (s, co) = fx.swirl.to_radians().sin_cos();
-                let (ox, oy) = (x - HIT_X, y - LANE_Y);
-                (x, y) = (HIT_X + ox * co - oy * s, LANE_Y + ox * s + oy * co);
-            }
+            let (hx, hy, _, _) = place(0.0, 0.0);
+            let (x, y) = tko_moved(&fx, x, y, (hx, hy));
+            let a = a * fx.opacity;
             size *= fx.scale;
             // A .tko tint: the note's colour towards a hue.
             let col = if fx.tint >= 0.01 {
@@ -4718,6 +4713,19 @@ impl Game {
                 beatmap::control_point_at(&self.map.control_points, n.time).sv,
             )
         };
+        // .tko approach paths the map shows the player: faint dots from where notes come in to
+        // the drum.
+        if let Some(rt) = &self.tko {
+            let (hx, hy, _, _) = place(0.0, 0.0);
+            for (table, w) in rt.shown_paths(vt) {
+                let mut d = 0.0;
+                while d < table.len() {
+                    let [px, py] = table.at(d);
+                    c.circle(hx + px, hy + py, 1.6, rgba(WHITE, 0.22 * w), [0.0; 4], 0.0);
+                    d += 9.0;
+                }
+            }
+        }
         let mut order = self.visible.clone();
         order.sort_by(|&a, &b| {
             let (na, nb) = (&self.map.notes[a], &self.map.notes[b]);
@@ -4813,11 +4821,15 @@ impl Game {
                                 } else {
                                     note_alpha(s) * radar_lit(s, n.time, n.velocity)
                                 };
-                                let nfx = self
+                                let mut nfx = self
                                     .tko
                                     .as_ref()
                                     .and_then(|r| r.note(i, vt))
                                     .unwrap_or_default();
+                                nfx.path = self
+                                    .tko
+                                    .as_ref()
+                                    .and_then(|r| r.note_path(i, vt, s, lane_len));
                                 if a > 0.01 && !nfx.hidden {
                                     draw_hit(
                                         c,
@@ -5146,13 +5158,22 @@ impl Game {
                 } else {
                     Sprite::HitCircle
                 };
+                // A .tko note's motion moves (or hides) its flash with it.
+                let mut fx = NoteFx::default();
                 let (s, col, a) = match n.kind {
                     Kind::Don | Kind::Kat if self.state[i].judged.is_none() => {
                         let s = note_s(i);
+                        if let Some(rt) = &self.tko {
+                            fx = rt.note(i, vt).unwrap_or_default();
+                            fx.path = rt.note_path(i, vt, s, lane_len);
+                        }
+                        if fx.hidden {
+                            continue;
+                        }
                         (
                             s,
                             if n.kind == Kind::Kat { KAT } else { DON },
-                            note_alpha(s) * radar_lit(s, n.time, n.velocity),
+                            note_alpha(s) * radar_lit(s, n.time, n.velocity) * fx.opacity,
                         )
                     }
                     Kind::Roll if popup(n).is_some() => {
@@ -5170,7 +5191,9 @@ impl Game {
                 let col = kiai_brighten(col);
                 if flash > 0.0 && a > 0.01 && on_lane(s, r) {
                     let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
-                    c.light(sprite, x, y, r * size, rgba(col, flash * a));
+                    let (hx, hy, _, _) = place(0.0, 0.0);
+                    let (x, y) = tko_moved(&fx, x, y, (hx, hy));
+                    c.light(sprite, x, y, r * size * fx.scale, rgba(col, flash * a));
                 }
             }
         }
@@ -7338,6 +7361,23 @@ pub fn draw_preview(c: &mut Canvas) {
             "тяните — двигать, края — размер"
         ),
     );
+}
+
+/// Where a note drawn at `x`, `y` on the lane goes under its .tko motion: onto its group's
+/// approach path (from the drum at `drum`, as far as the path's weight says), shifted by the
+/// group's dx and dy, then turned about the drum by its swirl, the further out the wider.
+fn tko_moved(fx: &NoteFx, x: f32, y: f32, (hx, hy): (f32, f32)) -> (f32, f32) {
+    let (x, y) = match fx.path {
+        Some([px, py, w]) => (x + (hx + px - x) * w, y + (hy + py - y) * w),
+        None => (x, y),
+    };
+    let (mut x, mut y) = (x + fx.dx, y + fx.dy);
+    if fx.swirl != 0.0 {
+        let (s, co) = fx.swirl.to_radians().sin_cos();
+        let (ox, oy) = (x - HIT_X, y - LANE_Y);
+        (x, y) = (HIT_X + ox * co - oy * s, LANE_Y + ox * s + oy * co);
+    }
+    (x, y)
 }
 
 #[cfg(test)]
@@ -10514,6 +10554,84 @@ mod tests {
         let plain = run(None);
         assert!(plain.0 > 30, "autoplay hits the notes: {plain:?}");
         assert_eq!(run(Some(some_gimmick())), plain);
+    }
+
+    #[test]
+    fn notes_on_an_approach_path_look_different_and_are_judged_the_same() {
+        use crate::tko::gimmick::Group;
+        use crate::tko::path::NotePath;
+        pin_drawing_globals();
+        let mut gm = crate::tko::gimmick::Gimmick::default();
+        gm.groups.push(Group {
+            notes: (0..64)
+                .map(|b| b as f64 * 500.0 - beatmap::OSU_TIMING_MS)
+                .collect(),
+            path: Some(NotePath {
+                points: vec![[300.0, -300.0], [60.0, -200.0]],
+                show: true,
+                ..NotePath::default()
+            }),
+            ..Group::default()
+        });
+        let mut plain = tko_game(None, Mods::NONE);
+        let mut flown = tko_game(Some(gm.clone()), Mods::NONE);
+        assert!(frame_bytes(&mut plain, 9000.0) != frame_bytes(&mut flown, 9000.0));
+        let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
+            let mut g = tko_game(gimmick, Mods::NONE);
+            let mut t = -2000.0;
+            while t < 20_000.0 {
+                g.time = t;
+                g.autoplay(None);
+                g.expire(t);
+                if (t as i64) % 1000 == 0 {
+                    let mut c = Canvas::default();
+                    c.clear(853.3);
+                    g.draw_playfield(&mut c, 1.0);
+                }
+                t += 5.0;
+            }
+            (g.stats.great, g.stats.ok, g.stats.miss, g.stats.score)
+        };
+        let base = run(None);
+        assert!(base.0 > 30);
+        assert_eq!(run(Some(gm)), base);
+    }
+
+    #[test]
+    fn a_notes_tko_motion_moves_everything_drawn_for_it_alike() {
+        let drum = (HIT_X, LANE_Y);
+        let lane = (HIT_X + 300.0, LANE_Y);
+        let near =
+            |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+        let plain = NoteFx::default();
+        assert!(near(tko_moved(&plain, lane.0, lane.1, drum), lane));
+        // On a path: from the drum, or half way there at half weight.
+        let on = NoteFx {
+            path: Some([0.0, -100.0, 1.0]),
+            ..NoteFx::default()
+        };
+        assert!(near(
+            tko_moved(&on, lane.0, lane.1, drum),
+            (HIT_X, LANE_Y - 100.0)
+        ));
+        let half = NoteFx {
+            path: Some([0.0, -100.0, 0.5]),
+            ..NoteFx::default()
+        };
+        assert!(near(
+            tko_moved(&half, lane.0, lane.1, drum),
+            (HIT_X + 150.0, LANE_Y - 50.0)
+        ));
+        // Shifted, then turned a quarter about the drum.
+        let turned = NoteFx {
+            dx: -200.0,
+            swirl: 90.0,
+            ..NoteFx::default()
+        };
+        assert!(near(
+            tko_moved(&turned, lane.0, lane.1, drum),
+            (HIT_X, LANE_Y + 100.0)
+        ));
     }
 
     /// Every screen effect at once, steady.

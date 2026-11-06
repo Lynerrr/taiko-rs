@@ -18,6 +18,8 @@ pub enum TryIt {
     Tour,
     /// A set of clips laid over the map's first kiai, to see and pick apart.
     Showcase,
+    /// The Motion page, where notes get approach paths.
+    Motion,
 }
 
 fn ru() -> bool {
@@ -29,7 +31,7 @@ pub fn chapters() -> &'static [Chapter] {
     if ru() { &RU } else { &EN }
 }
 
-pub const COUNT: usize = 11;
+pub const COUNT: usize = 12;
 
 static EN: [Chapter; COUNT] = [
     Chapter {
@@ -198,6 +200,33 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes are under Advanced... for what clips can't do yet.
 
 > Everything here is visual only: judging, score and pp never change.
+",
+    },
+    Chapter {
+        title: "Note paths",
+        try_it: Some(("Open the Motion page", TryIt::Motion)),
+        body: "\
+F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw instead of scrolling along the lane, and land on the drum exactly when they are hit.
+
+# Giving notes a path
+- Select notes on the timeline (one is fine), then press Give the picked notes a path. They get a group of their own and come in From above to start with.
+- Pick another start under Where they come from: from below, from behind the drum, the corner, an arc, a drop, a zigzag, a spiral, a loop.
+- Shape it in the preview: drag a point to move it, double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
+
+# How they move on it
+- A note is as far along the path as it would be along the lane: it comes in at the start when it would come in at the lane's end. Slider velocity still works, so slow notes are slow on the path too.
+- Pace along it bends that: Stop half way holds them still in the middle, Rush the end makes them dart in, Soft landing slows them at the drum, Back up makes them step back once.
+
+# When
+- Always: on the path the whole song.
+- Onto the path here and Back to the lane here glide them over one beat from the playhead; use both to fly only through a chorus.
+- Show the path draws it faintly for players, so they can read where notes will come from.
+
+# More notes, the same motion
+- Copy motion, pick other notes, Paste motion: they get the same path, pace and keyframes.
+- Select its notes picks a group's notes on the timeline again. A note flies with one group: giving it a new path takes it out of its old group.
+
+> Paths are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
 ",
     },
     Chapter {
@@ -491,6 +520,33 @@ F4 Effects открывается на Clips: самый простой спос
 Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes спрятаны под Advanced... — для того, чего блоки пока не умеют.
 
 > Всё здесь только визуальное: судейство, очки и pp не меняются.
+",
+    },
+    Chapter {
+        title: "Траектории нот",
+        try_it: Some(("Открыть страницу Motion", TryIt::Motion)),
+        body: "\
+F4 Effects, страница Motion (.tko-карты): выбранные ноты летят по нарисованному пути, а не по лайну, и приходят на барабан ровно в момент удара.
+
+# Как дать нотам путь
+- Выделите ноты на таймлайне (можно одну) и нажмите Give the picked notes a path. Они получат свою группу и для начала прилетят сверху (From above).
+- В Where they come from можно выбрать другой старт: снизу, из-за барабана, из угла, дугой, падением, зигзагом, спиралью, петлёй.
+- Путь правится прямо на превью: тащите точку, двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
+
+# Как они по нему летят
+- Нота проходит такую же долю пути, какую прошла бы по лайну: появляется в начале пути, когда появилась бы в конце лайна. SV продолжает работать: медленные ноты медленные и на пути.
+- Pace along it меняет это: Stop half way останавливает их на середине, Rush the end бросает к барабану рывком, Soft landing тормозит у барабана, Back up один раз откатывает назад.
+
+# Когда
+- Always: на пути всю песню.
+- Onto the path here и Back to the lane here плавно переводят ноты за одну долю от плейхеда; вместе ими можно пустить ноты по пути только в припеве.
+- Show the path рисует путь тускло для игрока, чтобы было видно, откуда прилетят ноты.
+
+# Больше нот с тем же движением
+- Copy motion, выделите другие ноты, Paste motion: у них будет тот же путь, темп и ключевые кадры.
+- Select its notes снова выделяет ноты группы. Нота летит с одной группой: новый путь забирает её из старой группы.
+
+> Траектории только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
 ",
     },
     Chapter {

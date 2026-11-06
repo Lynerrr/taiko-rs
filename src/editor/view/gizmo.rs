@@ -36,7 +36,10 @@ const NEAR: f32 = 4.0;
 impl View {
     /// Whether the preview can be moved by hand.
     pub(super) fn gizmo_on(&self) -> bool {
-        self.mode == Mode::Effects && self.ed.is_tko() && !self.windowed()
+        self.mode == Mode::Effects
+            && self.ed.is_tko()
+            && !self.windowed()
+            && self.g_page != super::motion::PAGE
     }
 
     /// Preview units per playfield unit.

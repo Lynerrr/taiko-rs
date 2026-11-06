@@ -12,6 +12,7 @@ pub mod clips;
 pub mod format;
 pub mod gimmick;
 pub mod graph;
+pub mod path;
 pub mod recipes;
 pub mod runtime;
 pub mod screen;
@@ -19,7 +20,7 @@ pub mod track;
 
 /// The newest format this build reads and writes. Raising it needs a migration in
 /// `format::MIGRATIONS` and a fixture of the old format in its tests.
-pub const TKO_VERSION: u32 = 3;
+pub const TKO_VERSION: u32 = 4;
 
 #[cfg(test)]
 mod tests {

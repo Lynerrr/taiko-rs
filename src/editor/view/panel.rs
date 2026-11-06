@@ -351,7 +351,14 @@ impl View {
         if effects {
             // The pages sit in the title row, so the content gets the whole panel. Keyframes and
             // nodes are the advanced ways: shown on asking.
-            let mut tabs = vec![("Clips".to_string(), Btn::GPage(4), self.g_page == 4)];
+            let mut tabs = vec![
+                ("Clips".to_string(), Btn::GPage(4), self.g_page == 4),
+                (
+                    "Motion".to_string(),
+                    Btn::GPage(super::motion::PAGE),
+                    self.g_page == super::motion::PAGE,
+                ),
+            ];
             if self.fx_advanced || self.g_page < 4 {
                 tabs.push(("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2));
                 tabs.push(("Nodes".to_string(), Btn::GPage(3), self.g_page == 3));
@@ -365,7 +372,9 @@ impl View {
             let ty = self.layout.inspector[1] + 0.5;
             self.row(c, x + 100.0, ty, &tabs);
         }
-        if self.g_page == 4 {
+        if self.g_page == super::motion::PAGE {
+            self.draw_motion_page(c, x, y, inner);
+        } else if self.g_page == 4 {
             self.draw_clips_scrolled(c, x, y, inner);
         } else if self.g_page == 3 {
             self.draw_nodes_page(c, x, y, inner);

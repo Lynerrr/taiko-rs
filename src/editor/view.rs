@@ -32,6 +32,7 @@ mod lines;
 mod manual;
 mod manual_text;
 mod menu;
+mod motion;
 mod nodes;
 mod panel;
 mod run;
@@ -118,6 +119,7 @@ pub enum Btn {
     GBase,
     K(KAct),
     Fx(FxAct),
+    M(motion::MAct),
     N(NAct),
     T(TAct),
     /// The SV tool and the velocity graph.
@@ -245,6 +247,11 @@ enum Drag {
         at: (f64, f64, f64, f64),
         t: f64,
         layer: Option<u32>,
+    },
+    /// A point of a group's approach path, moved in the preview.
+    PathPoint {
+        group: usize,
+        point: usize,
     },
 }
 
@@ -442,6 +449,13 @@ pub struct View {
     fx_advanced: bool,
     /// The settings of a text or picture block edit its pose at its end.
     fx_end: bool,
+    /// The group whose approach path the Motion page shapes.
+    m_group: Option<usize>,
+    /// A group's path and keyframes, copied to give other notes.
+    m_copied: Option<crate::editor::motion::Motion>,
+    /// The last press in the preview while shaping a path, for the double click that adds a
+    /// point.
+    m_click: Option<(Instant, (f32, f32))>,
     /// Effects being recorded live (keys 1..9): the shelf effect and where it started.
     fx_live: Vec<(usize, f64)>,
     k_ease: crate::tko::track::Ease,
@@ -595,6 +609,9 @@ impl View {
             fx_click: None,
             fx_advanced: false,
             fx_end: false,
+            m_group: None,
+            m_copied: None,
+            m_click: None,
             fx_live: Vec::new(),
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
@@ -973,6 +990,7 @@ impl View {
         } else {
             self.draw_preview(c, scroll_speed);
             self.draw_gizmo(c);
+            self.draw_path_gizmo(c);
             match self.mode {
                 Mode::Compose => self.draw_compose_panel(c),
                 Mode::Timing => self.draw_timing_panel(c),
@@ -1869,6 +1887,7 @@ impl View {
             }
             Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
             Drag::Gizmo { .. } => self.gizmo_drag(x, y),
+            Drag::PathPoint { .. } => self.path_drag(x, y),
             Drag::Wire { .. } | Drag::None => {}
         }
     }
@@ -1899,7 +1918,9 @@ impl View {
             Drag::Resize { .. } | Drag::Scrub | Drag::Overview | Drag::FxEdge { .. } => {
                 return I::EwResize;
             }
-            Drag::FxMove { .. } | Drag::Gizmo { .. } => return I::Grabbing,
+            Drag::FxMove { .. } | Drag::Gizmo { .. } | Drag::PathPoint { .. } => {
+                return I::Grabbing;
+            }
             Drag::FxNew { .. } | Drag::FxBox { .. } => return I::Crosshair,
             Drag::Box { .. } | Drag::Place { .. } | Drag::Brush { .. } => return I::Crosshair,
             Drag::Handle { .. } => return I::NsResize,
@@ -2031,7 +2052,7 @@ impl View {
             }
             return;
         }
-        if self.gizmo_down(x, y, keys) {
+        if self.path_down(x, y) || self.gizmo_down(x, y, keys) {
             return;
         }
         let tl = self.layout.timeline;
@@ -2257,7 +2278,7 @@ impl View {
                 self.mark_stale();
             }
             Drag::Node { .. } => self.ed.end_drag(),
-            Drag::Gizmo { .. } => {
+            Drag::Gizmo { .. } | Drag::PathPoint { .. } => {
                 self.ed.end_drag();
                 self.mark_stale();
             }
@@ -2283,6 +2304,9 @@ impl View {
             if inside(self.layout.nodes, x, y) {
                 self.node_right(x, y);
             }
+            return;
+        }
+        if self.path_right(x, y) {
             return;
         }
         if self.roll_start.take().is_some() || matches!(self.drag, Drag::Place { .. }) {
@@ -2677,6 +2701,7 @@ impl View {
             Btn::GCancel => self.gimmick_cancel(),
             Btn::K(a) => self.press_key_action(a, keys.shift, keys.alt),
             Btn::Fx(a) => self.press_fx(a),
+            Btn::M(a) => self.press_motion(a),
             Btn::N(a) => self.press_node_action(a, keys.shift),
             Btn::T(a) => self.press_line_action(a),
             Btn::S(a) => self.press_svt(a),
@@ -4122,6 +4147,77 @@ mod tests {
     }
 
     #[test]
+    fn picked_notes_get_a_path_shaped_by_hand_in_the_preview() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        assert!(v.motion_mode());
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::M(MAct::UseSelection))
+        );
+        let ids: Vec<u64> = v.ed.chart.objects.iter().take(4).map(|o| o.id).collect();
+        v.ed.selection = ids.into_iter().collect();
+        press(&mut v, Btn::M(MAct::UseSelection));
+        let g = v.m_group.unwrap();
+        let points = |v: &View| v.ed.path_of(g).unwrap().points.clone();
+        assert_eq!(points(&v), crate::editor::motion::PATHS[0].1.to_vec());
+        draw(&mut v);
+        assert!(v.buttons.iter().any(|(_, b)| *b == Btn::M(MAct::Path(4))));
+        // Dragging the point moves it, one undo step for the whole drag.
+        let (hx, hy) = v.path_handles()[0];
+        v.mouse_down(hx, hy, Keys::default(), None);
+        v.mouse_move(hx + 5.0, hy + 2.0, Keys::default());
+        v.mouse_move(hx + 10.0, hy + 4.0, Keys::default());
+        v.mouse_up(hx + 10.0, hy + 4.0, Keys::default());
+        let k = v.path_scale();
+        let moved = points(&v)[0];
+        let want = [
+            (PATHS0[0] as f32 + 10.0 / k).round() as f64,
+            (PATHS0[1] as f32 + 4.0 / k).round() as f64,
+        ];
+        assert!((moved[0] - want[0]).abs() <= 1.0 && (moved[1] - want[1]).abs() <= 1.0);
+        assert!(v.ed.undo());
+        assert_eq!(points(&v)[0], PATHS0);
+        // A double click on the preview adds a point between the start and the drum.
+        let (dx, dy) = v.drum_in_preview();
+        let (mx, my) = ((hx + dx) / 2.0 + 20.0, (hy + dy) / 2.0);
+        click(&mut v, mx, my);
+        click(&mut v, mx, my);
+        assert_eq!(points(&v).len(), 2);
+        assert_eq!(points(&v)[0], PATHS0, "the start stays first");
+        // A right click on it takes it away; the last point stays.
+        let (ax, ay) = v.path_handles()[1];
+        v.right_click(ax, ay);
+        assert_eq!(points(&v).len(), 1);
+        v.right_click(hx, hy);
+        assert_eq!(points(&v).len(), 1);
+        // The pace, the switch and the show button.
+        press(&mut v, Btn::M(MAct::Pace(1)));
+        assert!(!v.ed.path_of(g).unwrap().pace.is_empty());
+        v.ed.time = 2000.0;
+        press(&mut v, Btn::M(MAct::Switch(false)));
+        assert_eq!(v.ed.path_of(g).unwrap().weight.keys.len(), 2);
+        press(&mut v, Btn::M(MAct::Always));
+        assert!(v.ed.path_of(g).unwrap().weight.is_empty());
+        press(&mut v, Btn::M(MAct::Show));
+        assert!(v.ed.path_of(g).unwrap().show);
+        // Its motion copies onto other notes.
+        press(&mut v, Btn::M(MAct::Copy));
+        let other = v.ed.chart.objects[4].id;
+        v.ed.selection = [other].into();
+        press(&mut v, Btn::M(MAct::Paste));
+        let h = v.m_group.unwrap();
+        assert_ne!(h, g);
+        assert_eq!(v.ed.path_of(h), v.ed.path_of(g));
+        draw(&mut v);
+    }
+
+    const PATHS0: [f64; 2] = crate::editor::motion::PATHS[0].1[0];
+
+    #[test]
     fn effects_open_on_clips_and_keep_the_advanced_pages_out_of_the_way() {
         let mut v = clips_view();
         assert!(v.clip_mode(), "Effects starts on the clips");
@@ -4316,7 +4412,7 @@ mod tests {
         v.set_time(5000.0);
         put_fx(&mut v, 7);
         let text = v.ed.chart.to_text();
-        assert!(text.contains("TkoVersion: 3"));
+        assert!(text.contains(&format!("TkoVersion: {}", crate::tko::TKO_VERSION)));
         let back = crate::tko::format::read(&text).unwrap().gimmick;
         assert_eq!(back.clips, v.ed.clips());
         // The preview draws with them.

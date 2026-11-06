@@ -2,6 +2,7 @@
 
 use super::clips::Clip;
 use super::graph::Graph;
+use super::path::NotePath;
 use super::track::{Key, Track};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -413,6 +414,9 @@ pub struct Group {
     pub notes: Vec<f64>,
     #[serde(default)]
     pub tracks: BTreeMap<String, Track>,
+    /// The way its notes fly in instead of along the lane (see `path`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<NotePath>,
 }
 
 impl Group {
@@ -458,7 +462,7 @@ impl Gimmick {
             && self
                 .groups
                 .iter()
-                .all(|g| g.tracks.values().all(Track::is_empty))
+                .all(|g| g.tracks.values().all(Track::is_empty) && g.path.is_none())
             && self.graph.is_empty()
             && self.marks.is_empty()
             && self.clips.is_empty()
@@ -520,6 +524,9 @@ impl Gimmick {
                 }
             }
             g.tracks.retain(|_, t| !t.is_empty());
+            if let Some(p) = &mut g.path {
+                p.sanitize();
+            }
         }
         self.field
             .retain(|k, _| FieldProp::ALL.iter().any(|p| p.name() == k));
@@ -596,6 +603,7 @@ mod tests {
                 ),
                 ("dy".to_string(), Track::default()),
             ]),
+            ..Group::default()
         });
         g.field.insert(
             "unknown".into(),
