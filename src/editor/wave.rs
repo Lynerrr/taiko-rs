@@ -187,36 +187,60 @@ impl Wave {
         out
     }
 
+    /// The columns drawn for `from..to` in `n` across: on a grid fixed to the song's time (the
+    /// column width), not to `from`, so a view that scrolls by a fraction of a column shows the
+    /// same columns moved over instead of new ones (which flickered). Each comes with its start
+    /// (ms); one before and after the view are added, so the edges smooth like the rest.
+    pub fn grid_columns(&self, from: f64, to: f64, n: usize) -> Vec<(f64, Column)> {
+        let n = n.max(1);
+        let dt = (to - from) / n as f64;
+        if dt <= 0.0 || !dt.is_finite() || !from.is_finite() {
+            return Vec::new();
+        }
+        let start = ((from / dt).floor() - 1.0) * dt;
+        let count = n + 3;
+        let cols = smooth(&self.columns(start, start + count as f64 * dt, count));
+        cols.into_iter()
+            .enumerate()
+            .map(|(k, c)| (start + k as f64 * dt, c))
+            .collect()
+    }
+
     /// Draws `from..to` (ms of the song) across `rect`, mirrored about its middle, at `alpha`.
     pub fn draw(&self, c: &mut Canvas, [x, y, w, h]: [f32; 4], from: f64, to: f64, alpha: f32) {
         if w <= 0.0 || h <= 0.0 || to <= from {
             return;
         }
         let n = ((w * COLUMNS_PER_UNIT) as usize).clamp(1, 4000);
-        let cols = smooth(&self.columns(from, to, n));
         let cw = w / n as f32;
+        let x_of = |t: f64| x + ((t - from) / (to - from)) as f32 * w;
         let (mid, half) = (y + h / 2.0, h / 2.0 - 1.0);
-        for (k, col) in cols.iter().enumerate() {
+        for (t, col) in self.grid_columns(from, to, n) {
+            // Cut to the rect: the grid's first and last columns stick out of it.
+            let left = x_of(t).max(x);
+            // A hair wider than the column, so neighbours meet without seams.
+            let right = (x_of(t) + cw + 0.15).min(x + w);
+            if right <= left {
+                continue;
+            }
             let outer = shape(col.peak) * half;
             if outer < 0.15 {
                 continue;
             }
             let inner = shape((col.rms * BODY).min(col.peak)) * half;
             let [r, g, b] = col.colour;
-            let px = x + k as f32 * cw;
-            // A hair wider than the column, so neighbours meet without seams.
             c.rect(
-                px,
+                left,
                 mid - outer,
-                cw + 0.15,
+                right - left,
                 outer * 2.0,
                 [r, g, b, 0.42 * alpha],
             );
             if inner > 0.15 {
                 c.rect(
-                    px,
+                    left,
                     mid - inner,
-                    cw + 0.15,
+                    right - left,
                     inner * 2.0,
                     [r, g, b, 0.95 * alpha],
                 );
@@ -361,5 +385,36 @@ mod tests {
         assert!(quiet.columns(0.0, 100.0, 5).iter().all(|c| c.peak == 0.0));
         let mut canvas = Canvas::default();
         quiet.draw(&mut canvas, [0.0, 0.0, 100.0, 40.0], 0.0, 100.0, 1.0);
+    }
+
+    #[test]
+    fn a_view_scrolled_a_little_shows_the_same_columns_moved_over() {
+        // Loud and quiet in turn, so a column cut differently would read differently.
+        let mut samples = Vec::new();
+        for k in 0..48_000 * 2 {
+            let loud = if (k / 700) % 3 == 0 { 0.9 } else { 0.15 };
+            let v = loud * ((k as f64) * 0.05).sin() as f32;
+            samples.extend([v, v]);
+        }
+        let w = Wave::build(&samples, 48_000.0, 1.0);
+        for (span, n) in [(1500.0, 400), (300.0, 900)] {
+            let a = w.grid_columns(200.0, 200.0 + span, n);
+            for shift in [0.37, 1.9, 2.6] {
+                let b = w.grid_columns(200.0 + shift, 200.0 + shift + span, n);
+                for (t, col) in &b[2..b.len() - 2] {
+                    let same = a.iter().find(|(u, _)| (u - t).abs() < 1e-6);
+                    if let Some((_, was)) = same {
+                        assert_eq!(
+                            was, col,
+                            "column at {t} ms changed when the view moved {shift} ms"
+                        );
+                    }
+                }
+                let shared = b
+                    .iter()
+                    .filter(|(t, _)| a.iter().any(|(u, _)| (u - t).abs() < 1e-6));
+                assert!(shared.count() > n / 2);
+            }
+        }
     }
 }
