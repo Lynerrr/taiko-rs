@@ -5,7 +5,11 @@
 //! loudest stretch turns into a deep-fried rage (speed lines, red vignette, colour split), the hiss
 //! glitches the picture, the title stamps in, a loading bar jumps to READY and the screen powers off
 //! into song select. Effects follow the clip's loudness. Any key or click skips to the power-off.
-//! Settings -> Video -> *Startup splash* turns it off.
+//! Settings -> System -> *Startup splash* turns it off.
+//!
+//! Before all that, a warning about flashing lights (the splash itself flashes, and so do mods
+//! and map effects) holds the screen for a few seconds; any key or click closes it. *Epilepsy
+//! warning* in the same place turns it off. Either one can show without the other.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -72,6 +76,12 @@ const LOADING: [(f32, f32); 10] = [
 const POWER_OFF: f32 = 2150.0;
 const POWER_OFF_LEN: f32 = 380.0;
 
+/// The warning: how long it holds (unless closed), and its fades in and out (ms).
+const WARNING_HOLD: std::time::Duration = std::time::Duration::from_millis(4000);
+const WARNING_FADE_IN: f32 = 250.0;
+const WARNING_FADE_OUT: f32 = 300.0;
+const WARNING: u32 = 0xF5C542;
+
 const DON: u32 = 0xEB452C;
 const KAT: u32 = 0x438EAD;
 const BG: u32 = 0x0b0b10;
@@ -93,6 +103,18 @@ pub struct Splash {
     envelope: Vec<f32>,
     /// Splash time the power-off starts from when skipped.
     skipped_at: Option<f32>,
+    /// The flashing-lights warning, while it's up (before the animation).
+    warning: Option<Warning>,
+    /// The animation follows the warning (off: the warning alone).
+    animated: bool,
+}
+
+#[derive(Default)]
+struct Warning {
+    /// When it first showed (once the window is ready).
+    shown: Option<Instant>,
+    /// When a key or click closed it early.
+    closed: Option<Instant>,
 }
 
 /// Cheap deterministic randomness in 0..1.
@@ -166,8 +188,35 @@ fn kicks(t: f32) -> (f32, f32) {
 }
 
 impl Splash {
-    /// `rate`: the audio device's sample rate, or None to run silent.
-    pub fn new(rate: Option<u32>) -> Option<Splash> {
+    /// `rate`: the audio device's sample rate, or None to run silent. `animated`: the animation;
+    /// `warning`: the flashing-lights warning before it. None when neither is wanted.
+    pub fn new(rate: Option<u32>, animated: bool, warning: bool) -> Option<Splash> {
+        let splash = if animated {
+            Self::animation(rate)
+        } else {
+            None
+        };
+        if splash.is_none() && !warning {
+            return None;
+        }
+        let mut splash = splash.unwrap_or_else(|| Splash {
+            created: Instant::now(),
+            started: None,
+            ready_since: None,
+            audio_clock: false,
+            pixels: Vec::new(),
+            size: (0, 0),
+            voice: None,
+            envelope: Vec::new(),
+            skipped_at: None,
+            warning: None,
+            animated: false,
+        });
+        splash.warning = warning.then(Warning::default);
+        Some(splash)
+    }
+
+    fn animation(rate: Option<u32>) -> Option<Splash> {
         // TAIKO_SPLASH=<n> picks portrait n (1-based) instead.
         let pick = std::env::var("TAIKO_SPLASH")
             .ok()
@@ -212,6 +261,8 @@ impl Splash {
             voice: voice.map(|(_, t)| Arc::new(t)),
             envelope,
             skipped_at: None,
+            warning: None,
+            animated: true,
         })
     }
 
@@ -250,6 +301,20 @@ impl Splash {
     /// the window is still coming up (none of it the player's), which skipped it unseen.
     pub fn skip(&mut self, now: Instant, engine: Option<&Engine>, why: &str) {
         let launch = now.saturating_duration_since(self.created).as_millis();
+        if let Some(w) = &mut self.warning {
+            match w.shown {
+                Some(shown) if now.saturating_duration_since(shown) >= SKIP_AFTER => {
+                    if w.closed.is_none() && now < shown + WARNING_HOLD {
+                        eprintln!("splash: warning closed by {why} ({launch} ms after launch)");
+                        w.closed = Some(now);
+                    }
+                }
+                _ => eprintln!(
+                    "splash: ignored {why} at {launch} ms after launch (too early to close the warning)"
+                ),
+            }
+            return;
+        }
         if self
             .started
             .is_none_or(|s| now.saturating_duration_since(s) < SKIP_AFTER)
@@ -281,6 +346,45 @@ impl Splash {
         boot: &[String],
         ready: bool,
     ) -> bool {
+        if let Some(w) = &mut self.warning {
+            let shown = match w.shown {
+                Some(shown) => shown,
+                None => {
+                    let since = if ready {
+                        *self.ready_since.get_or_insert(now)
+                    } else {
+                        now
+                    };
+                    if now.saturating_duration_since(since).as_millis() < 150 {
+                        c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(BG, 1.0));
+                        return true;
+                    }
+                    eprintln!(
+                        "splash: warning shown {} ms after launch (window ready: {ready})",
+                        now.saturating_duration_since(self.created).as_millis()
+                    );
+                    *w.shown.insert(now)
+                }
+            };
+            let close = w.closed.unwrap_or(shown + WARNING_HOLD);
+            let ms = |d: std::time::Duration| d.as_secs_f32() * 1000.0;
+            let since = ms(now.saturating_duration_since(shown));
+            let fade_in = (since / WARNING_FADE_IN).min(1.0);
+            let out = (ms(now.saturating_duration_since(close)) / WARNING_FADE_OUT).min(1.0);
+            if out < 1.0 {
+                // Without the animation after it, the game shows through as it fades.
+                let bg = if self.animated { 1.0 } else { 1.0 - out };
+                let left = (1.0 - since / ms(WARNING_HOLD)).clamp(0.0, 1.0);
+                draw_warning(c, bg, fade_in.min(1.0 - out), left);
+                return true;
+            }
+            self.warning = None;
+            if !self.animated {
+                return false;
+            }
+            // The window was ready for the warning: the animation starts right away.
+            self.ready_since = now.checked_sub(std::time::Duration::from_millis(150));
+        }
         if self.started.is_none() && self.skipped_at.is_none() {
             let since = if ready {
                 *self.ready_since.get_or_insert(now)
@@ -702,6 +806,54 @@ impl Splash {
     }
 }
 
+/// The flashing-lights warning: the screen covered by `bg`, the text at `alpha`, `left` (1..0)
+/// of its time to go.
+fn draw_warning(c: &mut Canvas, bg: f32, alpha: f32, left: f32) {
+    let w = c.width;
+    c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(BG, bg));
+    let cx = w / 2.0;
+    let title = tr!(
+        "WARNING: PHOTOSENSITIVITY",
+        "注意: 光過敏性発作",
+        "ВНИМАНИЕ: ЭПИЛЕПСИЯ"
+    );
+    let body = tr!(
+        "This game has flashing lights and fast-changing patterns (in the intro, in mods and in map effects) that may trigger seizures in people with photosensitive epilepsy. If you or anyone in your family has had seizures or epilepsy, talk to a doctor before playing. Stop playing at once if you feel dizzy or sick, or notice blurred vision, eye or muscle twitches, or any movement you don't control.",
+        "このゲームには、光の点滅や急速に変化する模様 (起動画面、Mod、譜面のエフェクト) が含まれており、光過敏性てんかんの方に発作を引き起こす可能性があります。ご本人やご家族に発作やてんかんの経験がある場合は、プレイ前に医師にご相談ください。めまいや気分の悪さ、視覚の異常、目や筋肉のけいれん、意識しない体の動きを感じたら、すぐにプレイを中止してください。",
+        "В игре есть вспышки света и быстро меняющиеся узоры (в заставке, модах и эффектах карт), которые могут вызвать приступ у людей со светочувствительной эпилепсией. Если у вас или у кого-то из родных были приступы или эпилепсия, перед игрой посоветуйтесь с врачом. Сразу прекратите играть, если почувствуете головокружение или тошноту, заметите размытое зрение, подёргивание глаз или мышц или непроизвольные движения."
+    );
+    let hint = tr!(
+        "Any key or click to continue",
+        "キーかクリックで続ける",
+        "Любая клавиша или клик, чтобы продолжить"
+    );
+    let off = tr!(
+        "Settings -> System -> Epilepsy warning turns this off",
+        "設定 -> システム -> 光過敏性発作の注意 でオフにできます",
+        "Отключается в Настройки -> Система -> Предупреждение об эпилепсии"
+    );
+    let (title_size, body_size, small) = (21.0, 14.0, 7.0);
+    let line = Canvas::text_height(body_size) + 6.0;
+    let chars = ((w.min(760.0) - 80.0) / Canvas::char_width(body_size)).max(20.0) as usize;
+    let lines = crate::social::wrap(body, chars);
+    let height = Canvas::text_height(title_size) + 24.0 + lines.len() as f32 * line;
+    let mut y = ((VIRTUAL_HEIGHT - height) / 2.0 - 20.0).max(20.0);
+    c.text_centered(cx, y, title_size, rgba(WARNING, alpha), title);
+    y += Canvas::text_height(title_size) + 24.0;
+    for l in &lines {
+        c.text_centered(cx, y, body_size, rgba(0xe8e8f0, alpha), l);
+        y += line;
+    }
+    y += 18.0;
+    c.text_centered(cx, y, small, rgba(0x9a9ab0, alpha), hint);
+    let below = y + Canvas::text_height(small) + 8.0;
+    c.text_centered(cx, below, small, rgba(0x6a6a80, alpha), off);
+    // How long until it goes on by itself.
+    let (bar, by) = (160.0, VIRTUAL_HEIGHT - 30.0);
+    c.rect(cx - bar / 2.0, by, bar, 2.0, rgba(0x2a2a36, alpha));
+    c.rect(cx - bar / 2.0, by, bar * left, 2.0, rgba(WARNING, alpha));
+}
+
 /// Peak-normalised loudness per 10 ms of a stereo track at `rate`.
 fn envelope(track: &Track, rate: u32) -> Vec<f32> {
     let window = (rate as usize / 100).max(1) * 2;
@@ -721,7 +873,7 @@ mod tests {
 
     #[test]
     fn early_input_does_not_skip() {
-        let mut s = Splash::new(None).unwrap();
+        let mut s = Splash::new(None, true, false).unwrap();
         let now = Instant::now();
         // Still waiting for the window.
         s.skip(now, None, "test");
@@ -733,5 +885,28 @@ mod tests {
         // Well into it: skips.
         s.skip(now + std::time::Duration::from_millis(900), None, "test");
         assert!(s.skipped_at.is_some_and(|t| (t - 900.0).abs() < 1.0));
+    }
+
+    #[test]
+    fn nothing_wanted_is_no_splash() {
+        assert!(Splash::new(None, false, false).is_none());
+        let s = Splash::new(None, false, true).unwrap();
+        assert!(s.warning.is_some() && !s.animated);
+    }
+
+    #[test]
+    fn a_key_closes_the_warning_and_not_the_animation() {
+        let mut s = Splash::new(None, true, true).unwrap();
+        let now = Instant::now();
+        // Not up yet, then only just up: ignored.
+        s.skip(now, None, "test");
+        s.warning.as_mut().unwrap().shown = Some(now);
+        s.skip(now + std::time::Duration::from_millis(100), None, "test");
+        assert!(s.warning.as_ref().unwrap().closed.is_none());
+        let at = now + std::time::Duration::from_millis(900);
+        s.skip(at, None, "test");
+        assert_eq!(s.warning.as_ref().unwrap().closed, Some(at));
+        // The animation wasn't touched.
+        assert!(s.started.is_none() && s.skipped_at.is_none());
     }
 }

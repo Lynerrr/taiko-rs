@@ -275,6 +275,8 @@ pub struct Config {
     pub animations: bool,
     /// The animated splash screen at startup.
     pub splash: bool,
+    /// The flashing-lights warning shown first at startup.
+    pub epilepsy_warning: bool,
     /// Start on the main menu (off: straight to song select).
     pub main_menu: bool,
     /// The song's notes drift behind the main menu.
@@ -417,6 +419,7 @@ impl Default for Config {
             data_folder: None,
             animations: true,
             splash: true,
+            epilepsy_warning: true,
             main_menu: true,
             menu_notes: true,
             menu_notes_dim: 0.0,
@@ -1016,6 +1019,7 @@ impl Config {
                 "data_folder" => cfg.data_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "animations" => cfg.animations = v != "false",
                 "splash" => cfg.splash = v != "false",
+                "epilepsy_warning" => cfg.epilepsy_warning = v != "false",
                 "main_menu" => cfg.main_menu = v != "false",
                 "menu_notes" => cfg.menu_notes = v != "false",
                 "menu_notes_dim" => {
@@ -1221,6 +1225,7 @@ impl Config {
              fullscreen = {}\n\
              animations = {}\n\
              splash = {}\n\
+             epilepsy_warning = {}\n\
              main_menu = {}\n\
              menu_notes = {}\n\
              # dims the song's notes on the main menu's lane, 0 (none) to 1 (hidden)\n\
@@ -1288,6 +1293,7 @@ impl Config {
             self.fullscreen,
             self.animations,
             self.splash,
+            self.epilepsy_warning,
             self.main_menu,
             self.menu_notes,
             self.menu_notes_dim,

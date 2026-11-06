@@ -89,6 +89,9 @@ fn words(item: Item) -> &'static str {
             "version release dev latest версия релиз новое"
         }
         Item::Splash | Item::Guide => "intro startup tutorial заставка запуск обучение",
+        Item::EpilepsyWarning => {
+            "epilepsy photosensitive seizure flashing lights startup warning эпилепсия вспышки мигание предупреждение запуск"
+        }
         Item::LegacyMenu => "old classic tabs main menu старый классика вкладки главное меню",
         Item::MenuNotesDim => "lane notes faint dark menu дорожка ноты бледнее меню",
         Item::MenuNotes => "background multiverse route фон мультиверс маршрут",

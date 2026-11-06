@@ -80,6 +80,8 @@ pub enum Item {
     ShowFps,
     Animations,
     Splash,
+    /// The flashing-lights warning at startup (`Config::epilepsy_warning`).
+    EpilepsyWarning,
     /// The old layout: tabs on top and no main menu (`Config::main_menu` off).
     LegacyMenu,
     /// The song's notes behind the main menu.
@@ -118,7 +120,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 130] = [
+pub const ITEMS: [(&str, Item); 131] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -240,6 +242,7 @@ pub const ITEMS: [(&str, Item); 130] = [
     ("ONLINE", Item::KrokodilKoban),
     ("SYSTEM", Item::Language),
     ("SYSTEM", Item::Splash),
+    ("SYSTEM", Item::EpilepsyWarning),
     ("SYSTEM", Item::IdleScreen),
     ("SYSTEM", Item::LegacyMenu),
     ("SYSTEM", Item::MenuNotes),
@@ -596,6 +599,11 @@ impl Item {
             Item::ShowFps => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
             Item::Animations => tr!("UI animations", "UIのアニメーション", "Анимации интерфейса"),
             Item::Splash => tr!("Startup splash", "起動画面", "Заставка при запуске"),
+            Item::EpilepsyWarning => tr!(
+                "Epilepsy warning",
+                "光過敏性発作の注意",
+                "Предупреждение об эпилепсии"
+            ),
             Item::LegacyMenu => tr!("Legacy menu", "旧メニュー", "Старое меню"),
             Item::Letterbox => tr!("Letterbox", "レターボックス", "Чёрные поля (letterbox)"),
             Item::LetterboxSize => tr!(
@@ -745,6 +753,7 @@ impl Item {
             | Item::ShowFps
             | Item::Animations
             | Item::Splash
+            | Item::EpilepsyWarning
             | Item::LegacyMenu
             | Item::Letterbox
             | Item::MenuNotes
@@ -1070,6 +1079,11 @@ impl Item {
                 "The animated intro when taiko.rs starts (any key or click skips it).",
                 "taiko.rs起動時のアニメーション (キーかクリックで飛ばせます)。",
                 "Анимация при запуске taiko.rs (любая клавиша или клик пропускает)."
+            ),
+            Item::EpilepsyWarning => tr!(
+                "A warning about flashing lights before anything else when taiko.rs starts (any key or click closes it).",
+                "taiko.rs起動時に最初に出る、点滅する光についての注意 (キーかクリックで閉じます)。",
+                "Предупреждение о мигающем свете в самом начале при запуске taiko.rs (любая клавиша или клик закрывает)."
             ),
             Item::ResetMapOffsets => tr!(
                 "Clears the offset each map has of its own, back to just the audio offset. Press twice. They're kept in map_offsets.backup.tsv.",
