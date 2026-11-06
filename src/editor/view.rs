@@ -3235,6 +3235,71 @@ mod tests {
     }
 
     #[test]
+    fn brush_ends_cling_to_the_lines_close_by_and_go_free_away_from_them() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        crowd(&mut v, 5000.0, 7000.0);
+        let a = v.ed.add_green(4800.0, 0.8).unwrap();
+        let b = v.ed.add_green(7200.0, 1.6).unwrap();
+        press(&mut v, Btn::S(SAct::Brush));
+        draw(&mut v);
+        let range = v.graph_range();
+        let dot = |v: &View, t: f64, sv: f64| (v.x_of(t), v.val_y(sv, range));
+        let (ax, ay) = dot(&v, 4800.0, 0.8);
+        let (bx, by) = dot(&v, 7200.0, 1.6);
+        // A few pixels off each dot: the ends are taken for meaning those lines.
+        v.mouse_down(ax + 4.0, ay - 5.0, Keys::default(), None);
+        v.mouse_move((ax + bx) / 2.0, (ay + by) / 2.0, Keys::default());
+        v.mouse_move(bx - 3.0, by + 6.0, Keys::default());
+        assert!(
+            matches!(
+                v.drag,
+                Drag::Brush {
+                    t0: 4800.0,
+                    v0: 0.8,
+                    t1: 7200.0,
+                    v1: 1.6
+                }
+            ),
+            "the ends missed the lines"
+        );
+        let c = draw(&mut v);
+        // Both caught ends are ringed.
+        let rings = c
+            .shapes
+            .iter()
+            .filter(|s| s.fill[3] == 0.0 && (s.half[0] - 9.5).abs() < 1.5)
+            .count();
+        assert!(rings >= 2, "{rings}");
+        // Off to the side, the end goes free again; Alt keeps it free even on the dot.
+        v.mouse_move(bx - 40.0, by - 30.0, Keys::default());
+        let Drag::Brush { t1, .. } = v.drag else {
+            panic!()
+        };
+        assert_ne!(t1, 7200.0);
+        let alt = Keys {
+            alt: true,
+            ..Keys::default()
+        };
+        v.mouse_move(bx - 3.0, by + 6.0, alt);
+        let Drag::Brush { v1, .. } = v.drag else {
+            panic!()
+        };
+        assert_ne!(v1, 1.6);
+        v.mouse_move(bx - 3.0, by + 6.0, Keys::default());
+        draw(&mut v);
+        v.mouse_up(bx - 3.0, by + 6.0, Keys::default());
+        // The joined lines keep their speeds, and the curve runs between them.
+        assert_eq!(v.ed.chart.timing_point(a).map(|p| p.sv()), Some(0.8));
+        assert_eq!(v.ed.chart.timing_point(b).map(|p| p.sv()), Some(1.6));
+        let g = greens(&v);
+        assert_eq!(g.iter().filter(|p| p.time == 4800.0).count(), 1);
+        assert_eq!(g.iter().filter(|p| p.time == 7200.0).count(), 1);
+        let mid = g.iter().find(|p| p.time == 5999.0).unwrap().sv();
+        assert!((mid - 1.2).abs() < 0.05, "{mid}");
+    }
+
+    #[test]
     fn a_picked_curve_takes_another_shape_in_one_undo_step() {
         let mut v = view();
         v.run(Cmd::Mode(Mode::Timing), None);

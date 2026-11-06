@@ -593,8 +593,7 @@ impl View {
     pub(super) fn brush_down(&mut self, x: f32, y: f32, keys: Keys) {
         let range = self.graph_range();
         self.g_frozen = Some(range);
-        let t = self.grid_or_free(self.t_at(x), keys);
-        let v = self.y_val(y, range);
+        let (t, v) = self.brush_end(x, y, keys);
         self.drag = Drag::Brush {
             t0: t,
             v0: v,
@@ -607,13 +606,51 @@ impl View {
         let Drag::Brush { t0, v0, .. } = self.drag else {
             return;
         };
+        let (t1, v1) = self.brush_end(x, y, keys);
+        self.drag = Drag::Brush { t0, v0, t1, v1 };
+    }
+
+    /// Where a brush end at (`x`, `y`) lands: on a line drawn close by, so strokes join the
+    /// lines already there (Alt: never), else on the grid at the pointer's height.
+    fn brush_end(&self, x: f32, y: f32, keys: Keys) -> (f64, f64) {
+        if let Some(p) = self.brush_magnet(x, y, keys) {
+            return p;
+        }
         let range = self.graph_range();
-        self.drag = Drag::Brush {
-            t0,
-            v0,
-            t1: self.grid_or_free(self.t_at(x), keys),
-            v1: self.y_val(y, range),
-        };
+        (self.grid_or_free(self.t_at(x), keys), self.y_val(y, range))
+    }
+
+    /// The nearest line in the graph (its time and value) within reach of (`x`, `y`). Only a
+    /// pointer right by its dot is taken for wanting it: moving off lets the end go free again.
+    fn brush_magnet(&self, x: f32, y: f32, keys: Keys) -> Option<(f64, f64)> {
+        const REACH: f32 = 10.0;
+        if keys.alt {
+            return None;
+        }
+        let range = self.graph_range();
+        self.ed
+            .chart
+            .timing
+            .iter()
+            .filter(|p| !p.is_red() || self.svt.volume_view)
+            .map(|p| {
+                let v = self.graph_val(p);
+                let d = (self.x_of(p.time) - x).hypot(self.val_y(v, range) - y);
+                (d, p.time, v)
+            })
+            .filter(|(d, ..)| *d <= REACH)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, t, v)| (t, v))
+    }
+
+    /// Whether a brush end sits on a line (the magnet caught it).
+    fn brush_on_line(&self, t: f64, v: f64) -> bool {
+        self.ed
+            .chart
+            .timing
+            .iter()
+            .filter(|p| !p.is_red() || self.svt.volume_view)
+            .any(|p| p.time == t && self.graph_val(p) == v)
     }
 
     /// What a brush stroke from `(t0, v0)` to `(t1, v1)` would write.
@@ -799,6 +836,10 @@ impl View {
             for (t, v) in [(t0, v0), (t1, v1)] {
                 let (px, py) = (self.x_of(t), self.val_y(v, range));
                 c.circle(px, py, 4.5, rgba(WHITE, 1.0), rgba(accent(), 1.0), 1.5);
+                // Joined to a line already there.
+                if self.brush_on_line(t, v) {
+                    c.ring(px, py, 8.0, rgba(accent(), 0.9), 1.5);
+                }
             }
             let unit = if self.svt.volume_view { "" } else { "x" };
             c.text(
@@ -849,7 +890,7 @@ impl View {
         }
         self.tips.push((
             [x + 3.0, gy + 3.0, gx + gw - x, 12.0],
-            "Brush: drag across the graph to draw a curve from one speed to another over the notes, grid or lines under it (set what it places on in the SV tool). Volume shows and edits each line's volume instead of its speed.".to_string(),
+            "Brush: drag across the graph to draw a curve from one speed to another over the notes, grid or lines under it (set what it places on in the SV tool). An end dropped by a line clings to it, so strokes join up; Alt keeps it free. Volume shows and edits each line's volume instead of its speed.".to_string(),
         ));
     }
 

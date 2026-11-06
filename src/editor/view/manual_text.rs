@@ -115,7 +115,7 @@ A green line sets the slider velocity: how fast notes scroll and how long slider
 - Double click empty space to add a green line, drag a dot to change it, right click to delete.
 - Drag a box to select several: move them together, or scale them (Alt adds instead of scaling).
 - A curve the lines already follow is drawn thin with a chip like sin x1.20 > x2.00. Click it to edit it as a curve: the round handles at its ends can be dragged.
-- The SV | Volume switch turns every gesture into a volume edit. Brush draws a curve by dragging from one point to another.
+- The SV | Volume switch turns every gesture into a volume edit. Brush draws a curve by dragging from one point to another; an end dropped right by a line clings to it, so strokes join the lines already there (Alt keeps it free).
 
 # The SV tool
 It writes many green lines for you along a curve. Open it in the Timing panel or in F6 > SV tool.
@@ -398,7 +398,7 @@ File > Open song folder открывает папку карты. Бросьте
 - Двойной клик по пустому месту добавляет зелёную линию, перетащите точку, чтобы изменить, правый клик удаляет.
 - Рамкой выделите несколько: двигайте вместе или масштабируйте (Alt добавляет вместо масштаба).
 - Кривая, по которой уже идут линии, рисуется тонкой с меткой вроде sin x1.20 > x2.00. Кликните по ней, чтобы править как кривую: круглые ручки на концах можно тянуть.
-- Переключатель SV | Volume превращает все жесты в правку громкости. Brush рисует кривую перетаскиванием от точки к точке.
+- Переключатель SV | Volume превращает все жесты в правку громкости. Brush рисует кривую перетаскиванием от точки к точке; конец, отпущенный рядом с линией, прилипает к ней, так штрихи соединяют уже поставленные линии (Alt оставляет его свободным).
 
 # SV tool
 Он сам пишет много зелёных линий вдоль кривой. Открывается в панели Timing или в F6 > SV tool.
