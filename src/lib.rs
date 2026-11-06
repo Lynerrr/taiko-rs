@@ -50,6 +50,7 @@ mod mods;
 mod multiplayer;
 mod multiverse;
 mod net;
+mod od_override;
 mod online;
 mod osudb;
 #[cfg(test)]
@@ -519,6 +520,7 @@ struct State {
     shapeshift_setup: Option<shapeshift::Setup>,
     random_setup: Option<String>,
     tact_setup: Option<tact::Setup>,
+    od_setup: Option<od_override::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
     /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
@@ -10084,7 +10086,8 @@ impl State {
             KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
                 Some(&m) => self.open_customization(m),
                 None => self.toast(
-                    "switch on Random, Multiverse or Shapeshift to customize it".to_string(),
+                    "switch on Random, Multiverse, Shapeshift, Tact or OD Override to customize it"
+                        .to_string(),
                 ),
             },
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
@@ -10111,6 +10114,7 @@ impl State {
             (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
         self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
         self.tact_setup = (m == mods::Mod::Tact).then(|| tact::Setup::new(self.cfg.tact));
+        self.od_setup = (m == mods::Mod::OdOverride).then_some(od_override::Setup);
     }
 
     /// The mod customization's open tab.
@@ -10121,8 +10125,10 @@ impl State {
             Some(mods::Mod::Multiverse)
         } else if self.shapeshift_setup.is_some() {
             Some(mods::Mod::Shapeshift)
+        } else if self.tact_setup.is_some() {
+            Some(mods::Mod::Tact)
         } else {
-            self.tact_setup.is_some().then_some(mods::Mod::Tact)
+            self.od_setup.is_some().then_some(mods::Mod::OdOverride)
         }
     }
 
@@ -10206,6 +10212,17 @@ impl State {
                 self.tact_setup = None;
             } else if let Some(step) = setup.key(code) {
                 self.tact_changed(step);
+            }
+        } else if let Some(setup) = &self.od_setup {
+            if matches!(
+                code,
+                KeyCode::Escape | KeyCode::F1 | KeyCode::Backspace | KeyCode::Tab
+            ) {
+                self.od_setup = None;
+            } else if let Some(od) = setup.key(code, self.modifiers_shift, self.cfg.od_override) {
+                self.cfg.od_override = od;
+                od_override::set(od);
+                self.cfg.save();
             }
         }
     }
@@ -11783,7 +11800,10 @@ impl State {
             .social
             .conn
             .as_ref()
-            .filter(|_| connected && game.replay.is_none())
+            // OD Override's value doesn't travel: a watcher would judge by their own.
+            .filter(|_| {
+                connected && game.replay.is_none() && !game.mods.has(mods::Mod::OdOverride)
+            })
         else {
             self.stream = None;
             return;
@@ -13493,6 +13513,13 @@ impl State {
             self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
+            // As they'd play: a lobby leaves OD Override out.
+            let shown = self.shown_mods();
+            self.preview.mods = if self.mp.is_some() {
+                shown.shared().plus(shown.free())
+            } else {
+                shown
+            };
             self.preview.update(
                 now,
                 entries,
@@ -13869,7 +13896,6 @@ impl State {
                 // Always at full size (no longer dragged smaller).
                 self.preview.size = preview::PREVIEW_SIZE.1;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
-                self.preview.mods = self.cfg.mods;
                 self.preview.potential = match self.select.selected() {
                     Some(i) => self.potentials.get(
                         &self.library[i].path,
@@ -14205,7 +14231,9 @@ impl State {
                         seed: game.seed,
                         half: game.half,
                     };
-                    results.no_pp = if game.mods.unranked() {
+                    results.no_pp = if game.mods.has(mods::Mod::OdOverride) {
+                        Some("OD Override gets no pp")
+                    } else if game.mods.unranked() {
                         Some("Autoplay gets no pp")
                     } else if failed {
                         Some("failed plays get no pp")
@@ -15158,6 +15186,9 @@ impl State {
             }
             if let Some(setup) = &self.tact_setup {
                 setup.draw_panel(canvas, self.cfg.tact);
+            }
+            if let Some(setup) = &self.od_setup {
+                setup.draw_panel(canvas, self.cfg.od_override);
             }
             if let Some(tab) = self.customization_tab() {
                 ui::draw_customization_tabs(canvas, &mods::customizable(self.cfg.mods), tab);
@@ -17945,6 +17976,7 @@ impl State {
             shapeshift_setup: None,
             random_setup: None,
             tact_setup: None,
+            od_setup: None,
             leaderboard: Vec::new(),
             board_scroll: 0,
             board_for: (0, false, false),
@@ -18568,6 +18600,7 @@ fn run(
     multiverse::set(cfg.universes);
     shapeshift::set(cfg.shapeshift);
     tact::set(cfg.tact);
+    od_override::set(cfg.od_override);
     multiverse::set_note_colours(cfg.note_colours);
     let inputs = if args.is_empty() {
         song_inputs(&cfg)

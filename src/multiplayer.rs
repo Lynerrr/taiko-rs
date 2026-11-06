@@ -1517,7 +1517,10 @@ pub fn draw_lobby(
                 if st.bpm > 0.0 {
                     line.push(format!("BPM {:.0}", st.bpm * rate));
                 }
-                line.push(format!("OD {:.1}", st.od));
+                line.push(format!(
+                    "OD {:.1}",
+                    crate::beatmap::od_at_rate(st.od as f64, m.rate)
+                ));
                 line.push(format!("HP {:.1}", st.hp));
             }
             if (m.rate - 1.0).abs() > 1e-6 {

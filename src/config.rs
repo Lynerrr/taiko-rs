@@ -331,6 +331,8 @@ pub struct Config {
     pub random_seed: u64,
     /// Tact: how often notes move (index into `tact::STEPS`).
     pub tact: usize,
+    /// OD Override: the OD played at.
+    pub od_override: f64,
     /// Mods marked as favourites in the mod select (shown in a row of their own).
     pub favourite_mods: crate::mods::Mods,
     /// Note colours without Multiverse.
@@ -454,6 +456,7 @@ impl Default for Config {
             shapeshift: Default::default(),
             random_seed: crate::fresh_seed(),
             tact: crate::tact::DEFAULT,
+            od_override: crate::od_override::DEFAULT,
             favourite_mods: crate::mods::Mods::NONE,
             note_colours: crate::multiverse::Colours::CLASSIC,
             video: Default::default(),
@@ -1121,6 +1124,7 @@ impl Config {
                 "random_seed" => cfg.random_seed = v.parse().unwrap_or(cfg.random_seed),
                 "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
                 "tact" => cfg.tact = crate::tact::parse(v),
+                "od_override" => cfg.od_override = crate::od_override::parse(v),
                 "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
                 k if k.starts_with("video_") => {
                     cfg.video.parse(k, v);
@@ -1408,6 +1412,10 @@ impl Config {
         out.push_str(&format!(
             "# Tact: how often notes move (2bars, 1bar, 1/2bar, 1beat, 1/2beat, 1/4beat)\ntact = {}\n",
             crate::tact::format(self.tact)
+        ));
+        out.push_str(&format!(
+            "# OD Override: the OD played at (0 to 20)\nod_override = {:.1}\n",
+            self.od_override
         ));
         out.push_str(&format!(
             "# favourite mods (right-click or F in the mod select), e.g. HD,HR\nfavourite_mods = {}\n",
