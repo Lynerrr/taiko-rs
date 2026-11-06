@@ -297,6 +297,7 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
         body: "\
 # Playing and moving
 - Space or C: play or pause. X: play from the start (as in stable).
+- F5: test play. The map as it is now (saved or not) plays in the real game from the playhead, Shift+F5 from the start, with No Fail and nothing saved; Quit or the end of the map comes back here.
 - Z / V: first / last note. Left / Right: by snap. Up / Down: previous / next timing line.
 - Wheel: seek. Ctrl+wheel: snap. Alt+wheel: zoom. Middle drag: pan.
 - Ctrl+Up / Down: playback speed (with Shift 5%).
@@ -581,6 +582,7 @@ File > Upload отправляет сохранённую карту на taiko.
         body: "\
 # Воспроизведение и перемещение
 - Space или C: играть / пауза. X: играть с начала (как в stable).
+- F5: тест-плей. Карта как она есть сейчас (сохранённая или нет) играется в настоящей игре с плейхеда, Shift+F5 — с начала, с No Fail и без сохранения результата; выход или конец карты возвращают сюда.
 - Z / V: первая / последняя нота. Влево / вправо: по шагу сетки. Вверх / вниз: предыдущая / следующая линия таймингов.
 - Колесо: перемотка. Ctrl+колесо: snap. Alt+колесо: масштаб. Средняя кнопка: сдвиг.
 - Ctrl+вверх / вниз: скорость воспроизведения (с Shift по 5%).

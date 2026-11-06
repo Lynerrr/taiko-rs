@@ -380,6 +380,8 @@ pub struct View {
     typing: Option<(Field, String)>,
     /// A text block's words just opened for typing: the first key replaces them all.
     typing_fresh: bool,
+    /// A test play asked for: from this map time, or (None) from the start.
+    want_test: Option<Option<f64>>,
     mouse: (f32, f32),
     pub width: f32,
     /// What the middle of the screen is for.
@@ -548,6 +550,7 @@ impl View {
             sel_line: None,
             typing: None,
             typing_fresh: false,
+            want_test: None,
             mouse: (0.0, 0.0),
             width: 853.0,
             mode: Mode::Compose,
@@ -637,6 +640,11 @@ impl View {
     /// The map file to show in its folder, once asked for.
     pub fn take_folder_request(&mut self) -> Option<std::path::PathBuf> {
         self.show.take()
+    }
+
+    /// A test play asked for (F5): where to start (None: the start).
+    pub fn take_test_play(&mut self) -> Option<Option<f64>> {
+        self.want_test.take()
     }
 
     pub fn take_rate_request(&mut self) -> Option<f64> {

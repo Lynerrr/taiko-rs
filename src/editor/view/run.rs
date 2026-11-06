@@ -253,6 +253,10 @@ impl View {
                 self.set_time(0.0);
                 self.start(audio);
             }
+            Cmd::TestPlay(from_start) => {
+                self.stop(audio);
+                self.want_test = Some((!from_start).then_some(self.ed.time));
+            }
             Cmd::FirstNote => {
                 let to = self.ed.chart.objects.first().map_or(0.0, |o| o.time);
                 self.stop(audio);

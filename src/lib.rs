@@ -27,6 +27,8 @@ mod discord;
 mod download;
 mod drum_nav;
 mod editor;
+#[cfg(test)]
+mod editor_test_play_tests;
 mod folder_watch;
 mod font;
 mod game;
@@ -615,6 +617,9 @@ struct State {
     custom_asked: bool,
     /// The folder of the map in the editor, looked at for maps dropped into it.
     folder_watch: Option<folder_watch::Watch>,
+    /// The editor a test play (F5) came from: the play goes back to it, saves nothing and sends
+    /// nothing, and a retry plays the map as the editor has it.
+    editor_back: Option<Box<editor::view::View>>,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`), with
     /// the map it was on.
@@ -2265,15 +2270,31 @@ impl State {
 
     /// Loads `entry` for a play at `rate` with `mods` (`keep_pitch` unless NC/DC say otherwise).
     fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
-        self.load(entry, rate, mods, true)
+        self.load(entry, rate, mods, true, None)
+    }
+
+    /// The map `text` (as the editor has it now, saved or not), with `entry`'s music: a test
+    /// play, at full speed and with no mods.
+    fn load_text(&mut self, entry: usize, text: String) -> Receiver<Loaded> {
+        // Played through to the end like osu!'s editor test, however it goes.
+        let mut mods = Mods::default();
+        mods.toggle(mods::Mod::NoFail);
+        self.load(entry, 1.0, mods, true, Some(text))
     }
 
     /// `load_with` for what reads the whole song itself (a video): never a stream.
     fn load_whole(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
-        self.load(entry, rate, mods, false)
+        self.load(entry, rate, mods, false, None)
     }
 
-    fn load(&mut self, entry: usize, rate: f64, mods: Mods, may_stream: bool) -> Receiver<Loaded> {
+    fn load(
+        &mut self,
+        entry: usize,
+        rate: f64,
+        mods: Mods,
+        may_stream: bool,
+        text: Option<String>,
+    ) -> Receiver<Loaded> {
         let (rate, keep_pitch) = mods.speed(rate, self.cfg.rate_keep_pitch);
         let cached = self
             .cached_track(entry, rate, keep_pitch)
@@ -2285,7 +2306,7 @@ impl State {
         {
             a.stop();
         }
-        self.spawn_loader(entry, rate, keep_pitch, mods, cached, may_stream)
+        self.spawn_loader(entry, (rate, keep_pitch), mods, cached, may_stream, text)
     }
 
     /// Speed the preview plays at: the match rate for the lobby map, else the selected rate.
@@ -3233,7 +3254,11 @@ impl State {
 
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
         self.pending_replay = None;
-        self.record_play(entry);
+        // A test play from the editor plays the editor's map and isn't counted.
+        let test = self.editor_back.as_ref().map(|v| v.ed.chart.to_text());
+        if test.is_none() {
+            self.record_play(entry);
+        }
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let mut label = self.library[entry].label();
@@ -3250,13 +3275,47 @@ impl State {
             let at = fmt_time(t);
             label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})";));
         }
-        let rx = self.load_with(entry, self.cfg.rate, self.cfg.mods);
+        let rx = match test {
+            Some(text) => {
+                label = format!("TEST  {label}");
+                self.load_text(entry, text)
+            }
+            None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
+        };
         self.scene = Scene::Loading {
             rx,
             label,
             entry,
             from,
         };
+    }
+
+    /// Leaves the editor for a test play of `text` (its map as it is now) from `from`.
+    fn start_test_play(&mut self, entry: usize, from: Option<f64>) {
+        if entry >= self.library.len() {
+            if let Scene::Editor(view) = &mut self.scene {
+                view.status = "this map isn't in your songs yet: save it first".into();
+            }
+            return;
+        }
+        let Scene::Editor(view) = std::mem::replace(&mut self.scene, Scene::Select) else {
+            return;
+        };
+        self.editor_back = Some(view);
+        self.start_loading_from(entry, from);
+    }
+
+    /// Back to the editor a test play came from, as it was left.
+    fn back_to_editor(&mut self) -> bool {
+        let Some(view) = self.editor_back.take() else {
+            return false;
+        };
+        if let Some(a) = &self.audio {
+            a.stop();
+        }
+        self.preview.invalidate_audio();
+        self.scene = Scene::Editor(view);
+        true
     }
 
     /// The map the preview shows: the lobby map in the lobby (and its preview), else the song
@@ -3413,18 +3472,21 @@ impl State {
     fn spawn_loader(
         &self,
         entry: usize,
-        speed: f64,
-        keep_pitch: bool,
+        (speed, keep_pitch): (f64, bool),
         mods: Mods,
         cached: Option<Arc<Track>>,
         may_stream: bool,
+        text: Option<String>,
     ) -> Receiver<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = (|| {
-                let map = beatmap::load(&path)?;
+                let map = match &text {
+                    Some(text) => beatmap::from_text(text)?,
+                    None => beatmap::load(&path)?,
+                };
                 let audio_path = path.parent().unwrap_or(&path).join(&map.meta.audio_file);
                 let speed = game::speed_for(&map, mods, speed);
                 // A track prepared at one constant speed can't serve a changing one.
@@ -3468,6 +3530,10 @@ impl State {
     }
 
     fn show_select(&mut self) {
+        // Leaving a test play goes back to the editor it came from.
+        if self.back_to_editor() {
+            return;
+        }
         self.stop_audio();
         self.report_smoothness();
         self.scene = Scene::Select;
@@ -14112,7 +14178,19 @@ impl State {
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let size_label = format!("Playfield {}", self.playfield_label());
         let mut finish_calibration = false;
+        // A test play that couldn't load (or ended up in song select) goes back to its editor.
+        if self.editor_back.is_some() && matches!(self.scene, Scene::Select) {
+            let why = std::mem::take(&mut self.status);
+            self.back_to_editor();
+            if let Scene::Editor(view) = &mut self.scene
+                && !why.is_empty()
+            {
+                view.status = why;
+            }
+        }
         let mut editor_reload: Option<(usize, f64)> = None;
+        let mut editor_test: Option<(usize, Option<f64>)> = None;
+        let mut test_over = false;
         let mut editor_folder: Option<PathBuf> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
         let mut home_out: Option<editor::home::Out> = None;
@@ -14654,6 +14732,12 @@ impl State {
                                 game.banner = Some(format!("REPLAY  -  {}", r.player));
                                 game.replay = Some((r.inputs, 0));
                             }
+                            // A test play from the editor keeps nothing.
+                            None if self.editor_back.is_some() => {
+                                game.record = false;
+                                game.test_play = true;
+                                game.banner = Some("TEST PLAY".into());
+                            }
                             // Full plays (not autoplay, not from a start point) are kept.
                             None => {
                                 game.record = (!self.auto
@@ -14756,7 +14840,10 @@ impl State {
                     let t = plan.times.pop().unwrap();
                     capture = Some(format!("play-{t:.0}.png"));
                 }
-                if done {
+                if done && self.editor_back.is_some() {
+                    // A test play has no results: back to the editor.
+                    test_over = true;
+                } else if done {
                     let title = results_title(&game.map.meta, *from);
                     let failed = game.failed();
                     if game.failed_early() {
@@ -15452,6 +15539,9 @@ impl State {
                 if let Some(speed) = view.take_rate_request() {
                     editor_reload = Some((view.entry, speed));
                 }
+                if let Some(from) = view.take_test_play() {
+                    editor_test = Some((view.entry, from));
+                }
                 editor_folder = view.take_folder_request();
                 // Maps dropped into its folder (or taken out) join the list as they come.
                 if let Some(dir) = view.ed.path.parent() {
@@ -15810,6 +15900,12 @@ impl State {
         }
         if let Some(news) = folder_news {
             self.folder_changed(news);
+        }
+        if let Some((entry, from)) = editor_test {
+            self.start_test_play(entry, from);
+        }
+        if test_over {
+            self.back_to_editor();
         }
         if let Some((entry, speed)) = editor_reload {
             let (rx, rate) = self.spawn_track_loader(entry, speed);
@@ -18690,6 +18786,7 @@ impl State {
             custom_call: None,
             custom_asked: false,
             folder_watch: None,
+            editor_back: None,
             playing: None,
             status_wait: None,
             scene_kind: None,
