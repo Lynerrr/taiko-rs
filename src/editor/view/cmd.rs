@@ -92,6 +92,8 @@ pub enum Cmd {
     ZoomOut,
     ZoomFit,
     Waveform,
+    /// A left drag on empty timeline pans it instead of drawing a box.
+    LeftPan,
     SnapStep(i32),
     SnapTo(u32),
     RateStep(i32),
@@ -162,6 +164,7 @@ impl Cmd {
             Cmd::ZoomOut => "Zoom out",
             Cmd::ZoomFit => "Zoom to the whole song",
             Cmd::Waveform => "Waveform on / off",
+            Cmd::LeftPan => "Left drag pans on / off",
             Cmd::SnapStep(n) if n < 0 => "Coarser snap",
             Cmd::SnapStep(_) => "Finer snap",
             Cmd::SnapTo(_) => "Beat snap",
@@ -230,13 +233,16 @@ impl Cmd {
             Cmd::Play => "Plays the song from the playhead.",
             Cmd::PlayFromStart => "Plays the song from the beginning.",
             Cmd::TestPlay(_) => {
-                "Plays the map as it is now in the real game (from the playhead, or from the start), with nothing saved or sent. Quit or the end of the map comes back here."
+                "Plays the map as it is now in the real game (from the playhead, or from the start), with nothing saved or sent; Tab in it lets autoplay play on, or hands it back. Quit or the end of the map comes back here."
             }
             Cmd::FirstNote | Cmd::LastNote => "Moves the playhead there.",
             Cmd::Step(_) => "Moves the playhead one beat-snap step.",
             Cmd::PrevLine | Cmd::NextLine => "Moves the playhead to the neighbouring timing line.",
             Cmd::ZoomIn | Cmd::ZoomOut | Cmd::ZoomFit => {
                 "Changes how much time the timeline shows."
+            }
+            Cmd::LeftPan => {
+                "With it on, dragging empty timeline with the left button (Select tool) pans it, like the middle button; Ctrl+drag still selects a box, Shift+drag adds one."
             }
             Cmd::Waveform => {
                 "Shows the music under the notes: red is bass (often a don), blue is treble (often a kat)."
@@ -564,7 +570,10 @@ pub const MOUSE: &[(&str, &str)] = &[
         "Click",
         "Place a note with the Note tool; select with the Select tool",
     ),
-    ("Right click", "Delete the note under the pointer"),
+    (
+        "Right click",
+        "Delete the note under the pointer (on a selected one: all selected)",
+    ),
     (
         "Drag a note",
         "Move it (the grid snaps it; hold Shift to ignore the grid)",
@@ -581,9 +590,12 @@ pub const MOUSE: &[(&str, &str)] = &[
         "Move the playhead along the beat snap (Shift: 4 steps)",
     ),
     ("Ctrl+wheel", "Change the beat snap"),
-    ("Alt+wheel", "Zoom the timeline"),
+    ("Alt+wheel", "Zoom the timeline (elsewhere: the volume)"),
     ("Ctrl+Alt+wheel", "Change tool"),
-    ("Middle drag", "Pan the timeline"),
+    (
+        "Middle drag",
+        "Pan the timeline (also a left drag: View > Left drag pans)",
+    ),
 ];
 
 /// The command a key means, if any.

@@ -169,10 +169,12 @@ enum Drag {
         swell: bool,
         from_x: f32,
     },
-    /// Middle button: the timeline follows the pointer.
+    /// Middle button (or the left one, with `left_pan`): the timeline follows the pointer.
     Slide {
         from_x: f32,
         start: f64,
+        /// The left button: let go where it went down, a click (the playhead goes there).
+        left: bool,
     },
     /// Dragging along the whole-song bar.
     Overview,
@@ -375,6 +377,8 @@ pub struct View {
     wave: Option<Arc<super::wave::Wave>>,
     wave_rx: Option<Receiver<super::wave::Wave>>,
     pub wave_on: bool,
+    /// A left drag over empty timeline pans it (View > Left drag pans); a box is Ctrl+drag.
+    pub left_pan: bool,
     /// Sample rate the engine plays at, to know how long the track is.
     audio_rate: f64,
     pub rate: u32,
@@ -543,6 +547,11 @@ pub struct View {
     svt: curves::SvtUi,
     /// The last `update`, for how long the view scrolls at an edge.
     last_tick: Option<Instant>,
+    /// Where a wheel seek is gliding the playhead to, and the view with it (as in osu!, the
+    /// wheel doesn't jump). Anything else done first lands it there (`land_seek`).
+    seek_to: Option<f64>,
+    view_to: Option<f64>,
+    glide_tick: Option<Instant>,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -572,6 +581,7 @@ impl View {
             wave: None,
             wave_rx: None,
             wave_on: true,
+            left_pan: false,
             audio_rate: 48000.0,
             rate: 100,
             want_rate: None,
@@ -669,6 +679,9 @@ impl View {
             held: Keys::default(),
             svt: curves::SvtUi::new(),
             last_tick: None,
+            seek_to: None,
+            view_to: None,
+            glide_tick: None,
         };
         v.follow(true);
         Ok(v)
@@ -710,6 +723,8 @@ impl View {
     // ---- time ----
 
     pub fn set_time(&mut self, t: f64) {
+        self.seek_to = None;
+        self.view_to = None;
         self.ed.time = t.max(0.0).round();
         if self.playing.is_some() {
             // Playing on from there: the clock at once, the music in `update`.
@@ -760,6 +775,63 @@ impl View {
         }
     }
 
+    /// A wheel seek to `t`: the playhead (and the view, if `t` is off it) glide there. Playing
+    /// or in a drag it jumps, as before: the music and what is being dragged go by the playhead.
+    fn seek_smoothly(&mut self, t: f64) {
+        let t = t.max(0.0).round();
+        if self.playing.is_some() || !matches!(self.drag, Drag::None) {
+            self.set_time(t);
+            return;
+        }
+        let w = self.timeline_w() as f64 * self.ms_per_px;
+        let view = self.view_to.unwrap_or(self.view_start);
+        if t < view || t > view + w * 0.96 {
+            self.view_to = Some(t - w * 0.3);
+        }
+        self.seek_to = Some(t);
+    }
+
+    /// Lands a glide where it was going, at once.
+    pub fn land_seek(&mut self) {
+        if let Some(t) = self.seek_to.take() {
+            self.ed.time = t;
+        }
+        if let Some(v) = self.view_to.take() {
+            self.view_start = v;
+        }
+        self.glide_tick = None;
+    }
+
+    /// One frame of a wheel seek: most of the way in about a tenth of a second.
+    fn glide(&mut self, now: Instant) {
+        if self.seek_to.is_none() && self.view_to.is_none() {
+            self.glide_tick = None;
+            return;
+        }
+        let dt = self.glide_tick.replace(now).map_or(1.0 / 120.0, |p| {
+            now.duration_since(p).as_secs_f64().min(0.05)
+        });
+        let k = 1.0 - (-dt / 0.03).exp();
+        if let Some(to) = self.seek_to {
+            let t = self.ed.time + (to - self.ed.time) * k;
+            if (to - t).abs() < 0.5 {
+                self.ed.time = to;
+                self.seek_to = None;
+            } else {
+                self.ed.time = t;
+            }
+        }
+        if let Some(to) = self.view_to {
+            let v = self.view_start + (to - self.view_start) * k;
+            if (to - v).abs() < 0.5 * self.ms_per_px {
+                self.view_start = to;
+                self.view_to = None;
+            } else {
+                self.view_start = v;
+            }
+        }
+    }
+
     fn x_of(&self, t: f64) -> f32 {
         self.layout.timeline[0] + ((t - self.view_start) / self.ms_per_px) as f32
     }
@@ -798,6 +870,7 @@ impl View {
     // ---- loading and playing ----
 
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) {
+        self.glide(now);
         self.edge_scroll(now);
         self.follow_seek(audio);
         self.poll_upload();
@@ -1863,7 +1936,7 @@ impl View {
                 self.set_time(t);
             }
             Drag::TwScroll => self.tw_drag(y),
-            Drag::Slide { from_x, start } => {
+            Drag::Slide { from_x, start, .. } => {
                 self.view_start = start - (x - from_x) as f64 * self.ms_per_px;
             }
             Drag::Box {
@@ -2022,6 +2095,7 @@ impl View {
     }
 
     pub fn mouse_down(&mut self, x: f32, y: f32, keys: Keys, audio: Option<&Engine>) {
+        self.land_seek();
         if (x - self.mouse.0).abs() + (y - self.mouse.1).abs() > 0.5 {
             self.moved_at = Instant::now();
         }
@@ -2091,12 +2165,14 @@ impl View {
 
     /// The middle button pans the timeline.
     pub fn middle(&mut self, pressed: bool, x: f32, y: f32) {
+        self.land_seek();
         self.mouse = (x, y);
         if pressed {
             if inside(self.layout.timeline, x, y) || inside(self.layout.graph, x, y) {
                 self.drag = Drag::Slide {
                     from_x: x,
                     start: self.view_start,
+                    left: false,
                 };
             }
         } else if matches!(self.drag, Drag::Slide { .. }) {
@@ -2184,6 +2260,13 @@ impl View {
                         return;
                     }
                     self.grab_object(id, x, t, keys);
+                } else if self.ed.tool == Tool::Select && self.left_pan && !keys.shift {
+                    self.select_line(None);
+                    self.drag = Drag::Slide {
+                        from_x: x,
+                        start: self.view_start,
+                        left: true,
+                    };
                 } else if self.ed.tool == Tool::Select {
                     self.select_line(None);
                     self.drag = Drag::Box {
@@ -2312,6 +2395,17 @@ impl View {
                 self.clip_rows_up(drag, x, keys)
             }
             Drag::Wire { from } => self.wire_dropped(from, x, y),
+            // A left click that didn't pan: as a click on empty space, the playhead goes there.
+            Drag::Slide {
+                from_x,
+                start,
+                left: true,
+            } if (x - from_x).abs() < 4.0 => {
+                self.view_start = start;
+                self.ed.select_none();
+                let t = self.ed.snapped(self.t_at(from_x));
+                self.set_time(t);
+            }
             Drag::Scrub
             | Drag::Overview
             | Drag::TwScroll
@@ -2321,8 +2415,10 @@ impl View {
         }
     }
 
-    /// Right click: cancels a roll being drawn, else deletes what's under the pointer.
+    /// Right click: cancels a roll being drawn, else deletes what's under the pointer: on a
+    /// selected note, the whole selection, as Backspace does.
     pub fn right_click(&mut self, x: f32, y: f32) {
+        self.land_seek();
         if self.menu.take().is_some() || self.modal_from > 0 {
             return;
         }
@@ -2341,8 +2437,13 @@ impl View {
         }
         if inside(self.layout.timeline, x, y) {
             if let Some(id) = self.object_at_point(x, y) {
-                self.ed.selection = [id].into();
-                self.ed.delete_selected();
+                if !self.ed.selection.contains(&id) {
+                    self.ed.selection = [id].into();
+                }
+                let n = self.ed.delete_selected();
+                if n > 1 {
+                    self.status = format!("deleted {n}");
+                }
                 self.mark_stale();
             }
         } else if self.keyframe_mode() {
@@ -2357,14 +2458,16 @@ impl View {
         }
     }
 
-    pub fn wheel(&mut self, notches: i32, keys: Keys) {
+    /// The wheel. False when it isn't the editor's: Alt+wheel away from the timeline and the
+    /// graph is the game's volume, as in osu!, where Alt+wheel only zooms over the timeline.
+    pub fn wheel(&mut self, notches: i32, keys: Keys) -> bool {
         let (mx, my) = self.mouse;
         if self.modal == Some(Modal::Manual) {
             self.manual_scroll(-notches * 3);
-            return;
+            return true;
         }
         if self.sheet || self.modal.is_some() || self.tour.is_some() {
-            return;
+            return !keys.alt;
         }
         if self.windowed() && inside(self.layout.window, mx, my) {
             let n = notches.unsigned_abs() as usize * 3;
@@ -2373,14 +2476,21 @@ impl View {
             } else {
                 self.tw_scroll + n
             };
-            return;
+            return true;
         }
         if self.node_mode() && inside(self.layout.nodes, mx, my) {
             self.node_zoom(notches);
-            return;
+            return true;
         }
         if self.wheel_clip_rows(notches, keys) || self.wheel_clips_page(notches) {
-            return;
+            return true;
+        }
+        let over_time = inside(self.layout.timeline, mx, my) || inside(self.layout.graph, mx, my);
+        if keys.alt && !keys.ctrl && !over_time {
+            return false;
+        }
+        if keys.alt || keys.ctrl {
+            self.land_seek();
         }
         if keys.ctrl && keys.alt {
             let at = TOOLS
@@ -2396,19 +2506,22 @@ impl View {
             self.step_snap(notches.signum());
         } else {
             let per = if keys.shift { 4 } else { 1 };
-            let mut t = self.ed.time;
+            // Notches in quick succession go on from where the last one is gliding to.
+            let mut t = self.seek_to.unwrap_or(self.ed.time);
+            let view = self.view_to.unwrap_or(self.view_start);
             let w = self.timeline_w() as f64 * self.ms_per_px;
-            if t < self.view_start || t > self.view_start + w * 0.96 {
+            if t < view || t > view + w * 0.96 {
                 // The view was panned away from the playhead: go on from what's on screen.
                 // Stepping from the playhead would throw the view back to it, and a block
                 // being drawn would stretch all the way there.
-                t = self.ed.snapped(self.view_start + w * 0.3);
+                t = self.ed.snapped(view + w * 0.3);
             }
             for _ in 0..(notches.unsigned_abs().min(20) * per) {
                 t = timing::step(&self.ed.chart.timing, t, notches < 0, self.ed.snap);
             }
-            self.set_time(t);
+            self.seek_smoothly(t);
         }
+        true
     }
 
     fn step_snap(&mut self, dir: i32) {
@@ -2613,6 +2726,7 @@ impl View {
     }
 
     pub fn press(&mut self, b: Btn, keys: Keys, audio: Option<&Engine>) {
+        self.land_seek();
         if !matches!(b, Btn::Menu(_)) {
             self.menu = None;
         }
@@ -2772,6 +2886,7 @@ impl View {
         keys: Keys,
         audio: Option<&Engine>,
     ) -> KeyResult {
+        self.land_seek();
         if let Some((i, text)) = &mut self.n_typing {
             match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -4110,15 +4225,20 @@ mod tests {
         let mut v = view();
         v.ed.time = 1000.0;
         v.wheel(-1, Keys::default());
+        v.land_seek();
         assert_eq!(v.ed.time, 1125.0);
         let before = v.ms_per_px;
-        v.wheel(
-            1,
-            Keys {
-                alt: true,
-                ..Keys::default()
-            },
-        );
+        let alt = Keys {
+            alt: true,
+            ..Keys::default()
+        };
+        // Away from the timeline Alt+wheel is the game's volume, as in osu!.
+        v.mouse = (v.layout.preview[0] + 4.0, v.layout.preview[1] + 4.0);
+        assert!(!v.wheel(1, alt), "the game's");
+        assert_eq!(v.ms_per_px, before);
+        let [tx, ty, tw, th] = v.layout.timeline;
+        v.mouse = (tx + tw / 2.0, ty + th / 2.0);
+        assert!(v.wheel(1, alt));
         assert!(v.ms_per_px < before, "Alt+wheel zooms");
         v.wheel(
             1,
@@ -4137,6 +4257,7 @@ mod tests {
                 ..Keys::default()
             },
         );
+        v.land_seek();
         assert_eq!(v.ed.time, 1500.0, "Shift+wheel takes four steps");
         // Ctrl+Alt+wheel changes the tool.
         v.ed.tool = Tool::Note;
@@ -4149,6 +4270,116 @@ mod tests {
             },
         );
         assert_eq!(v.ed.tool, Tool::Roll);
+    }
+
+    #[test]
+    fn the_wheel_glides_the_playhead_and_quick_notches_add_up() {
+        let mut v = view();
+        v.ed.snap = 4;
+        v.ed.time = 1000.0;
+        let t0 = Instant::now();
+        v.wheel(-1, Keys::default());
+        v.wheel(-1, Keys::default());
+        assert_eq!(v.ed.time, 1000.0, "not a jump");
+        let mut last = 1000.0;
+        for i in 1..=40 {
+            v.update(t0 + std::time::Duration::from_millis(8 * i), None);
+            assert!(v.ed.time >= last && v.ed.time <= 1250.0, "{}", v.ed.time);
+            last = v.ed.time;
+            if i == 6 {
+                assert!(
+                    v.ed.time > 1100.0 && v.ed.time < 1250.0,
+                    "on its way: {}",
+                    v.ed.time
+                );
+            }
+        }
+        assert_eq!(v.ed.time, 1250.0, "two steps, landed on the grid");
+        // Off screen, the view glides along to bring it back a third in.
+        let w = v.timeline_w() as f64 * v.ms_per_px;
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        v.wheel(-20, shift);
+        v.wheel(-20, shift);
+        let to = v.seek_to.unwrap();
+        assert!(to > v.view_start + w, "{to}");
+        for i in 41..=120 {
+            v.update(t0 + std::time::Duration::from_millis(8 * i), None);
+        }
+        assert_eq!(v.ed.time, to);
+        assert!((v.view_start - (to - w * 0.3)).abs() < 1.0);
+        // Anything done mid-glide happens where it was going.
+        v.wheel(1, Keys::default());
+        let back = v.seek_to.unwrap();
+        v.key(KeyCode::KeyZ, false, Keys::default(), None);
+        assert!(v.seek_to.is_none());
+        assert_ne!(v.ed.time, back, "Z went on from the landed playhead");
+        v.ed.time = 1000.0;
+        v.wheel(-1, Keys::default());
+        v.right_click(0.0, 0.0);
+        assert_eq!(v.ed.time, 1125.0);
+    }
+
+    #[test]
+    fn a_right_click_on_a_selected_note_deletes_the_whole_selection() {
+        let mut v = view();
+        let ids: Vec<u64> = v.ed.chart.objects.iter().map(|o| o.id).collect();
+        let n = ids.len();
+        assert!(n >= 4);
+        v.ed.selection = [ids[0], ids[1], ids[2]].into();
+        // On a note that isn't selected: only that one goes.
+        let other = v.ed.chart.object(ids[3]).unwrap().time;
+        v.view_start = other - 500.0;
+        v.right_click(v.x_of(other), lane_y(&v));
+        assert_eq!(v.ed.chart.objects.len(), n - 1);
+        assert!(v.ed.chart.object(ids[0]).is_some());
+        // On a selected one: all of them, in one undo step.
+        v.ed.selection = [ids[0], ids[1], ids[2]].into();
+        let at = v.ed.chart.object(ids[1]).unwrap().time;
+        v.view_start = at - 500.0;
+        v.right_click(v.x_of(at), lane_y(&v));
+        assert_eq!(v.ed.chart.objects.len(), n - 4);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.chart.objects.len(), n - 1);
+    }
+
+    #[test]
+    fn with_left_pan_on_a_left_drag_on_empty_timeline_pans_and_a_click_seeks() {
+        let mut v = view();
+        v.ed.tool = Tool::Select;
+        v.view_start = 30000.0;
+        let y = lane_y(&v);
+        let x = v.x_of(30500.0);
+        // Off, a drag draws a box: the view stays.
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_move(x - 50.0, y, Keys::default());
+        v.mouse_up(x - 50.0, y, Keys::default());
+        assert_eq!(v.view_start, 30000.0);
+        // On, the timeline follows the pointer.
+        press(&mut v, Btn::C(Cmd::LeftPan));
+        assert!(v.left_pan);
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_move(x - 50.0, y, Keys::default());
+        v.mouse_up(x - 50.0, y, Keys::default());
+        assert_eq!(v.view_start, 30000.0 + 50.0 * v.ms_per_px);
+        // A click without a drag still puts the playhead there.
+        let x = v.x_of(31000.0);
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_up(x, y, Keys::default());
+        assert!((v.ed.time - 31000.0).abs() < 200.0, "{}", v.ed.time);
+        // Ctrl+drag still selects a box.
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        let start = v.view_start;
+        v.mouse_down(x, y, ctrl, None);
+        v.mouse_move(x - 50.0, y, ctrl);
+        assert!(matches!(v.drag, Drag::Box { .. }));
+        v.mouse_up(x - 50.0, y, ctrl);
+        assert_eq!(v.view_start, start);
     }
 
     use crate::tko::graph::Kind;
