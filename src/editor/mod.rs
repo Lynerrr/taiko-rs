@@ -6,6 +6,7 @@
 
 pub mod chart;
 pub mod clips;
+pub mod fakes;
 pub mod gimmicks;
 pub mod history;
 pub mod home;

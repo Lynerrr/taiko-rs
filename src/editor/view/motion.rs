@@ -72,7 +72,20 @@ pub enum MAct {
     /// The hit target slides along the lane to a place in `DRUM_SPOTS` over a beat.
     DrumTo(usize),
     ClearScroll,
+    /// The picked dons and kats become fakes, or real again.
+    ToggleFake,
+    /// Fake copies of the picked notes, `FAKE_SHIFTS[i]` beats away.
+    FakeCopy(usize),
 }
+
+/// How far from the picked notes fake copies go, in beats.
+const FAKE_SHIFTS: [(&str, f64); 5] = [
+    ("Half a beat before", -0.5),
+    ("A 1/4 before", -0.25),
+    ("A 1/4 after", 0.25),
+    ("Half a beat after", 0.5),
+    ("A beat after", 1.0),
+];
 
 /// Where the drum can be slid to from the Scroll tab: virtual units along the lane.
 const DRUM_SPOTS: [(&str, f64); 4] = [
@@ -127,6 +140,33 @@ impl View {
                 .get(i)
                 .is_some_and(|&(_, to)| self.ed.drum_to(t, to)),
             (MAct::ClearScroll, _) => self.ed.clear_scroll(),
+            (MAct::ToggleFake, _) => match self.ed.toggle_fake() {
+                Ok((n, on)) => {
+                    self.status = if on {
+                        format!("{n} notes are fakes now: drawn in the game, never hit")
+                    } else {
+                        format!("{n} fakes are real notes again")
+                    };
+                    true
+                }
+                Err(e) => {
+                    self.status = e;
+                    false
+                }
+            },
+            (MAct::FakeCopy(i), _) => {
+                match FAKE_SHIFTS.get(i).map(|&(_, b)| self.ed.add_fake_copies(b)) {
+                    Some(Ok(n)) => {
+                        self.status = format!("{n} fake copies added and selected");
+                        true
+                    }
+                    Some(Err(e)) => {
+                        self.status = e;
+                        false
+                    }
+                    None => false,
+                }
+            }
             (MAct::UseSelection, _) => match self.ed.motion_group() {
                 Ok(g) => {
                     self.m_group = Some(g);
@@ -235,17 +275,24 @@ impl View {
             1 => {
                 "Pick notes on the timeline and give them a move: each note does it as its own hit nears."
             }
-            _ => {
+            2 => {
                 "One speed for the whole lane, like mania SV: 0 freezes every note, below 0 runs them back. Green lines stay as they are."
+            }
+            _ => {
+                "Fake notes look like notes and move like them, but are never hit: no score, no combo, no sound. They vanish at the drum."
             }
         };
         c.text(x, y, small, dim, &Canvas::fit(small, inner, about));
         y += 10.0;
-        if self.m_tab == 2 {
+        if self.m_tab >= 2 {
             let tabs = self.motion_tabs();
             let y = self.chips(c, x, y, inner, &tabs) + 2.0;
             self.m_graph = [0.0; 4];
-            return self.draw_scroll_tab(c, x, y, inner);
+            return if self.m_tab == 2 {
+                self.draw_scroll_tab(c, x, y, inner)
+            } else {
+                self.draw_fakes_tab(c, x, y, inner)
+            };
         }
         // The tab, what to shape (the picked notes, or a group already moving), and the groups.
         let picked = self.ed.selection.len();
@@ -293,7 +340,7 @@ impl View {
     }
 
     fn motion_tabs(&self) -> Vec<(String, Btn, bool)> {
-        ["Path", "Before the hit", "Scroll"]
+        ["Path", "Before the hit", "Scroll", "Fakes"]
             .iter()
             .enumerate()
             .map(|(i, name)| {
@@ -304,6 +351,46 @@ impl View {
                 )
             })
             .collect()
+    }
+
+    fn draw_fakes_tab(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
+        let head = rgba(accent(), 1.0);
+        let dim = rgba(0x9a9ab0, 1.0);
+        let picked = self.ed.selected();
+        let hits = picked.iter().filter(|o| !o.fake).count();
+        let fakes = picked.len() - hits;
+        let col = (inner - 10.0) / 2.0;
+        let right = x + col + 10.0;
+        c.text(x, y, 6.5, head, "The picked notes");
+        let label = if fakes > 0 && hits == 0 {
+            format!("Make the {fakes} fakes real")
+        } else {
+            format!("Make the {} picked notes fakes", picked.len())
+        };
+        let ly = self.chips(
+            c,
+            x,
+            y + 9.0,
+            col,
+            &[(label, Btn::M(MAct::ToggleFake), false)],
+        );
+        for (i, line) in [
+            "On the timeline fakes are hollow with an F. Select, move,",
+            "copy and delete them like notes; groups, paths and",
+            "moves take them by their time like real ones.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            c.text(x, ly + 1.0 + i as f32 * 8.0, 5.5, dim, line);
+        }
+        c.text(right, y, 6.5, head, "Add fake copies of the picked notes");
+        let items: Vec<(String, Btn, bool)> = FAKE_SHIFTS
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (name.to_string(), Btn::M(MAct::FakeCopy(i)), false))
+            .collect();
+        self.chips(c, right, y + 9.0, col, &items);
     }
 
     fn draw_scroll_tab(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
