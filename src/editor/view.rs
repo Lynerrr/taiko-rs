@@ -677,6 +677,11 @@ impl View {
     /// Keeps the playhead on screen: while playing it sits a third in, off screen it is brought
     /// back to there.
     fn follow(&mut self, force: bool) {
+        // Scrubbing picks the time under the pointer: a view that moved under it would pick a
+        // further time on the next move, and the next, and run away.
+        if !force && matches!(self.drag, Drag::Scrub) {
+            return;
+        }
         let w = self.timeline_w() as f64 * self.ms_per_px;
         let t = self.ed.time;
         if force || self.playing.is_some() || t < self.view_start || t > self.view_start + w * 0.96
@@ -2889,6 +2894,37 @@ mod tests {
         assert!(!v.track_loading());
         assert!(!v.play_when_loaded, "it tried to play once the track came");
         assert_eq!(v.track.as_ref().map(|t| t.rate), Some(0.5));
+    }
+
+    #[test]
+    fn scrubbing_the_ruler_keeps_the_view_still() {
+        let mut v = view();
+        draw(&mut v);
+        let [x, y, w, _] = v.layout.timeline;
+        let ruler = y + 3.0;
+        let k = Keys::default();
+        let start = v.view_start;
+        // Pressed near the right end and nudged along: the view stays, the time follows the
+        // pointer.
+        let at = x + w * 0.98;
+        v.mouse_down(at, ruler, k, None);
+        for i in 0..20 {
+            v.mouse_move(at + i as f32 * 0.2, ruler, k);
+        }
+        assert_eq!(v.view_start, start);
+        assert!((v.ed.time - v.t_at(at + 19.0 * 0.2)).abs() <= 1.0);
+        // Playing, anywhere right of where the playhead sits, it used to run off too.
+        v.mouse_up(at, ruler, k);
+        v.playing = Some((Instant::now(), v.ed.time));
+        let at = x + w * 0.7;
+        v.mouse_down(at, ruler, k, None);
+        let start = v.view_start;
+        for i in 0..20 {
+            v.update(Instant::now(), None);
+            v.mouse_move(at + i as f32 * 0.2, ruler, k);
+        }
+        assert_eq!(v.view_start, start);
+        assert!(v.ed.time <= v.view_end());
     }
 
     #[test]
