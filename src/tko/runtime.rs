@@ -5,6 +5,7 @@
 //! the runtime what happened.
 
 use super::path::PathTable;
+use super::scroll::ScrollTable;
 use std::sync::Arc;
 
 use std::collections::HashMap;
@@ -344,6 +345,8 @@ pub struct Runtime {
     /// The lane shape clips bend the lane into at the last `prepare` (shape plus one, how far).
     lane: (u8, f64),
     /// Per group: its approach path laid out, if it has one.
+    /// The shared scroll, summed up; None when the map has none.
+    scroll: Option<Arc<ScrollTable>>,
     paths: Vec<Option<PathTable>>,
 }
 
@@ -436,6 +439,7 @@ impl Runtime {
                     .any(|id| index.get(id).is_some_and(|&j| dynamic[j]));
         }
         let groups = gimmick.groups.len();
+        let scroll = ScrollTable::new(&gimmick.scroll).map(Arc::new);
         let paths = gimmick
             .groups
             .iter()
@@ -461,6 +465,7 @@ impl Runtime {
             all_notes_delta: Default::default(),
             lane: (0, 0.0),
             paths,
+            scroll,
         };
         rt.rebuild(false);
         rt
@@ -1194,6 +1199,18 @@ impl Runtime {
         }
         let [x, y] = table.place(path, s, lane);
         Some([x, y, w])
+    }
+
+    /// How far the shared scroll has carried the song by game time `t` (ms at speed 1); None
+    /// when the map has no shared scroll, and notes scroll by time.
+    pub fn scroll_x(&self, t: f64) -> Option<f64> {
+        Some(self.scroll.as_ref()?.x(t - self.shift))
+    }
+
+    /// The shared scroll and how far the game's clock is ahead of the chart's, to place notes
+    /// with while the runtime is busy elsewhere.
+    pub fn shared_scroll(&self) -> Option<(Arc<ScrollTable>, f64)> {
+        Some((self.scroll.clone()?, self.shift))
     }
 
     /// The paths drawn for the player at game time `t`, with how far notes are on each.

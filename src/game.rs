@@ -636,6 +636,9 @@ fn lane_stretch(rail: bool, len: f32, w: f32) -> f64 {
     }
 }
 
+/// How far ahead (ms) notes are looked for under a shared scroll, which may hold far notes near.
+const SHARED_LOOKAHEAD_MS: f64 = 30_000.0;
+
 /// What bends note positions this frame: drawing only, judging always uses real time.
 struct Scroll {
     t: f64,
@@ -649,6 +652,10 @@ struct Scroll {
     warp: f64,
     /// Speed factor of every note right now (Panic, Mercy).
     live: f64,
+    /// A .tko map's shared scroll (mania-style SV), how far the game's clock is ahead of the
+    /// chart's, and how far it has scrolled by now: notes go by how far the song scrolls before
+    /// their hit instead of how long.
+    shared: Option<(std::sync::Arc<crate::tko::scroll::ScrollTable>, f64, f64)>,
 }
 
 impl Scroll {
@@ -679,10 +686,14 @@ impl Scroll {
     /// Screen x of something at map time `time` scrolling at `velocity`.
     fn x(&self, time: f64, velocity: f64) -> f32 {
         let v = velocity * self.speed * self.factor(time);
+        let ahead = match &self.shared {
+            Some((table, shift, now)) => table.x(time - shift) - now,
+            None => time - self.t,
+        };
         // Pulse / Stutter shift the time of far notes; near the drum the shift fades out, so
         // a note always reaches it exactly on time.
-        let near = ((time - self.t) * v / self.lane).clamp(0.0, 1.0);
-        let u = (time - self.t - self.warp * near) * v / self.lane;
+        let near = (ahead * v / self.lane).clamp(0.0, 1.0);
+        let u = (ahead - self.warp * near) * v / self.lane;
         let u = if !(0.0..=1.0).contains(&u) {
             u
         } else if self.mods.has(Mod::Accel) {
@@ -4104,27 +4115,39 @@ impl Game {
             ],
         };
         let portal = self.portal_at(vt, lane_len);
-        let scroll = Scroll {
-            t: vt,
-            speed: osu_speed_scale(w)
-                * scroll_speed
-                * uni.speed()
-                * mods.scroll()
-                * lane_stretch(rail.is_some(), lane_len, w),
-            lane: lane_len as f64,
-            mods,
-            warp,
-            live: self.miss_factor(t) * self.slow_factor(t) * tko_fx.scroll,
-        };
+        let scroll =
+            Scroll {
+                t: vt,
+                speed: osu_speed_scale(w)
+                    * scroll_speed
+                    * uni.speed()
+                    * mods.scroll()
+                    * lane_stretch(rail.is_some(), lane_len, w),
+                lane: lane_len as f64,
+                mods,
+                warp,
+                live: self.miss_factor(t) * self.slow_factor(t) * tko_fx.scroll,
+                shared: self.tko.as_ref().and_then(|rt| rt.shared_scroll()).map(
+                    |(table, shift)| {
+                        let now = table.x(vt - shift);
+                        (table, shift, now)
+                    },
+                ),
+            };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
         // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
         // its last object included (owner, 2026-10-28).
         // Keep the global bound for special objects and barlines; ordinary-note blocks also
         // have conservative local bounds so one distant slow note does not widen every scan.
-        let lookahead = (lane_len + BIG_R) as f64
-            / (self.min_velocity * scroll.speed * scroll.min_factor())
-            + warp.abs();
+        let lookahead = if scroll.shared.is_some() {
+            // Frozen or running backwards, notes far off in time may be near: look well ahead
+            // and let the lane's ends hide the rest.
+            SHARED_LOOKAHEAD_MS
+        } else {
+            (lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor())
+                + warp.abs()
+        };
 
         // Notes on screen, nearest first.
         let start = self
@@ -4137,7 +4160,7 @@ impl Game {
             if self.map.notes[block.range.start].time - vt > lookahead {
                 break;
             }
-            if block.regular && !mods.has(Mod::Liar) {
+            if block.regular && !mods.has(Mod::Liar) && scroll.shared.is_none() {
                 let reach = (lane_len + BIG_R) as f64
                     / (block.min_velocity * scroll.speed * scroll.min_factor())
                     + warp.abs();
@@ -7932,6 +7955,7 @@ mod tests {
                     mods,
                     warp,
                     live: 1.0,
+                    shared: None,
                 };
                 let x = s.x(note, 0.5);
                 assert!(x <= last + 1e-3, "note {note} at {t}: {last} -> {x}");
@@ -7943,6 +7967,50 @@ mod tests {
                 "note {note} is at {last}, not the drum, on time"
             );
         }
+    }
+
+    #[test]
+    fn a_shared_scroll_freezes_and_reverses_notes_and_they_still_land_on_time() {
+        use crate::tko::scroll::ScrollTable;
+        use crate::tko::track::{Ease, Key, Track};
+        let mut speed = Track::default();
+        for (t, v) in [(0.0, 1.0), (1000.0, 0.0), (2000.0, -1.0), (2500.0, 2.0)] {
+            speed.set(Key {
+                t,
+                v,
+                ease: Ease::Step,
+            });
+        }
+        let table = std::sync::Arc::new(ScrollTable::new(&speed).unwrap());
+        let at = |t: f64| {
+            let s = Scroll {
+                t,
+                speed: osu_speed_scale(640.0 + HIT_X),
+                lane: 640.0,
+                mods: Mods::default(),
+                warp: 0.0,
+                live: 1.0,
+                shared: Some((table.clone(), 0.0, table.x(t))),
+            };
+            s.x(4000.0, 0.5)
+        };
+        // Frozen: the note holds still; backwards: it moves away from the drum.
+        assert_eq!(at(1200.0), at(1800.0));
+        assert!(at(2400.0) > at(2100.0));
+        // At its hit it is on the drum, whatever the scroll did on the way.
+        assert!((at(4000.0) - HIT_X).abs() < 1e-3);
+        // The map's own slider velocity still counts: a note twice as fast is twice as far.
+        let s = Scroll {
+            t: 3000.0,
+            speed: osu_speed_scale(640.0 + HIT_X),
+            lane: 640.0,
+            mods: Mods::default(),
+            warp: 0.0,
+            live: 1.0,
+            shared: Some((table.clone(), 0.0, table.x(3000.0))),
+        };
+        let (slow, fast) = (s.x(3100.0, 0.25) - HIT_X, s.x(3100.0, 0.5) - HIT_X);
+        assert!((fast - 2.0 * slow).abs() < 1e-3);
     }
 
     #[test]
@@ -7975,6 +8043,7 @@ mod tests {
                     mods,
                     warp,
                     live: 1.0,
+                    shared: None,
                 };
                 let x = s.x(10_000.0, 0.5);
                 assert!(x <= last + 1e-3, "{mods:?} at {t}: {last} -> {x}");

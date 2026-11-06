@@ -480,6 +480,10 @@ pub struct Gimmick {
     /// Effect blocks on the timeline (see `clips`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clips: Vec<Clip>,
+    /// The shared scroll (mania-style SV): the whole lane's speed over the song, on top of the
+    /// map's own slider velocity (see `scroll`). No keys: the song's own.
+    #[serde(default, skip_serializing_if = "Track::is_empty")]
+    pub scroll: Track,
 }
 
 impl Gimmick {
@@ -493,6 +497,7 @@ impl Gimmick {
             && self.graph.is_empty()
             && self.marks.is_empty()
             && self.clips.is_empty()
+            && self.scroll.is_empty()
     }
 
     pub fn field_track(&self, p: FieldProp) -> Option<&Track> {
@@ -591,6 +596,7 @@ impl Gimmick {
         let groups = self.groups.len();
         self.graph.sanitize(groups);
         super::clips::sanitize(&mut self.clips);
+        super::scroll::sanitize(&mut self.scroll);
         // A clip on a group of notes that isn't there moves nothing (a copy's clip holds which
         // copy in the same place).
         self.clips
