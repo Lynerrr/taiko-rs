@@ -43,6 +43,50 @@ pub fn has_screen(fx: &FieldFx) -> bool {
         || fx.fade >= 0.01
         || fx.lane_fade >= 0.01
         || fx.blackout >= 0.01
+        || cut_into(fx) >= 2
+}
+
+/// How many pieces the picture is cut into (below 2: none).
+fn cut_into(fx: &FieldFx) -> usize {
+    if !fx.slices.is_finite() || (fx.slice_x == 0.0 && fx.slice_y == 0.0) {
+        return 0;
+    }
+    (fx.slices.round().max(0.0) as usize).min(super::gimmick::MAX_SLICES)
+}
+
+/// Cuts what was drawn since `start` into upright pieces across the screen, each pushed up or
+/// down and apart: the whole is hidden and each piece is a copy of it shown through its strip.
+fn slice(c: &mut Canvas, start: usize, fx: &FieldFx) {
+    let n = cut_into(fx);
+    let end = c.shapes.len();
+    if n < 2 || start >= end || (end - start) * n > MAX_EXTRA_SHAPES {
+        return;
+    }
+    let w = c.width;
+    let strip = w / n as f32;
+    let whole: Vec<Shape> = c.shapes[start..end].to_vec();
+    fade(&mut c.shapes[start..end], 0.0);
+    for k in 0..n {
+        let x0 = k as f32 * strip;
+        let dy = if k % 2 == 0 { fx.slice_y } else { -fx.slice_y };
+        // From -1 at the left edge to 1 at the right.
+        let side = ((k as f32 + 0.5) / n as f32) * 2.0 - 1.0;
+        let dx = fx.slice_x * side;
+        let part: Vec<Shape> = whole
+            .iter()
+            .filter(|s| {
+                let r = s.half[0].hypot(s.half[1]);
+                s.center[0] + r > x0 && s.center[0] - r < x0 + strip
+            })
+            .map(|s| Shape {
+                center: [s.center[0] + dx, s.center[1] + dy],
+                ..*s
+            })
+            .collect();
+        let first = c.shapes.len();
+        c.shapes.extend(part);
+        c.clip_since(first, x0 + dx, -2000.0, strip, VIRTUAL_HEIGHT + 4000.0);
+    }
 }
 
 /// Copies of the playfield (`fx.copies`) behind it, each moved on its own, made from the shapes
@@ -276,6 +320,7 @@ pub fn screen(c: &mut Canvas, start: usize, fx: &FieldFx, t: f64) {
             s.border[3] *= a;
         }
     }
+    slice(c, start, fx);
     let glitch = fx.glitch.clamp(0.0, 1.0);
     if glitch >= 0.01 && start < c.shapes.len() {
         let bands = 4 + (glitch * 8.0).round() as usize;
@@ -649,6 +694,44 @@ mod tests {
         let mut c = field(1);
         copies(&mut c, 0, &FieldFx::default(), [320.0, 240.0]);
         assert_eq!(c.shapes.len(), 2, "no copies, nothing added");
+    }
+
+    #[test]
+    fn the_picture_is_cut_into_pieces_pushed_every_other_way() {
+        let mut c = field(1);
+        let fx = FieldFx {
+            slices: 2.0,
+            slice_y: 10.0,
+            slice_x: 40.0,
+            ..FieldFx::default()
+        };
+        assert!(has_screen(&fx));
+        screen(&mut c, 0, &fx, 0.0);
+        // The whole hidden, then the lane and the note (left of the middle) in the left strip,
+        // and the lane in the right.
+        assert!(c.shapes[..2].iter().all(|s| s.fill[3] == 0.0));
+        assert_eq!(c.shapes.len(), 2 + 2 + 1);
+        assert_eq!(
+            c.shapes[3].center,
+            [150.0 - 20.0, 240.0 + 10.0],
+            "left: up is down"
+        );
+        assert_eq!(
+            c.shapes[4].center,
+            [320.0 + 20.0, 240.0 - 10.0],
+            "right: the other way"
+        );
+        let strips: Vec<[f32; 4]> = c.clips.iter().map(|(_, r)| *r).collect();
+        assert_eq!(strips[0][0], -20.0);
+        assert_eq!(strips[1][0], 340.0);
+        // Not pushed anywhere, nothing is cut.
+        let mut c = field(1);
+        let fx = FieldFx {
+            slices: 4.0,
+            ..FieldFx::default()
+        };
+        screen(&mut c, 0, &fx, 0.0);
+        assert_eq!(c.shapes.len(), 2);
     }
 
     #[test]

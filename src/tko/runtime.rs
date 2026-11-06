@@ -76,6 +76,11 @@ pub struct FieldFx {
     pub echo_zoom: f32,
     pub echo_fade: f32,
     pub kaleido: f32,
+    /// The picture cut into upright pieces (below 2: whole), pushed up and down (every other one
+    /// the other way) and apart.
+    pub slices: f32,
+    pub slice_y: f32,
+    pub slice_x: f32,
     /// Copies of the playfield behind it.
     pub copies: [CopyFx; MAX_COPIES],
     /// The graph's seed, for the glitch's randomness.
@@ -112,6 +117,9 @@ impl Default for FieldFx {
             echo_zoom: 1.0,
             echo_fade: FieldProp::EchoFade.default_value() as f32,
             kaleido: 0.0,
+            slices: 0.0,
+            slice_y: 0.0,
+            slice_x: 0.0,
             copies: Default::default(),
             seed: 0,
         }
@@ -1124,6 +1132,9 @@ impl Runtime {
             echo_zoom: v(FieldProp::EchoZoom) as f32,
             echo_fade: v(FieldProp::EchoFade) as f32,
             kaleido: v(FieldProp::Kaleido) as f32,
+            slices: v(FieldProp::Slices) as f32,
+            slice_y: v(FieldProp::SliceY) as f32,
+            slice_x: v(FieldProp::SliceX) as f32,
             copies: std::array::from_fn(|k| {
                 let c = |p: CopyProp| {
                     let (lo, hi) = p.range();

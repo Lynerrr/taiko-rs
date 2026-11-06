@@ -47,7 +47,7 @@ pub fn target_columns() -> Vec<(&'static str, u32, Vec<Target>)> {
             field(PropGroup::Look),
         ),
         (
-            "Echoes",
+            "Echoes & cuts",
             target_colour(Target::Field(FieldProp::Echo)),
             field(PropGroup::Clones),
         ),
@@ -126,6 +126,9 @@ pub fn target_label(t: Target) -> String {
             FieldProp::EchoZoom => "Echo size",
             FieldProp::EchoFade => "Echo fade",
             FieldProp::Kaleido => "Kaleidoscope",
+            FieldProp::Slices => "Cut in pieces",
+            FieldProp::SliceY => "Pieces up / down",
+            FieldProp::SliceX => "Pieces apart",
         }
         .into(),
         Target::Notes(g, p) => {
@@ -288,6 +291,9 @@ const FADE: Target = Target::Field(FieldProp::Fade);
 const LANE_FADE: Target = Target::Field(FieldProp::LaneFade);
 const BLACKOUT: Target = Target::Field(FieldProp::Blackout);
 const BACKDROP: Target = Target::Field(FieldProp::Backdrop);
+const SLICES: Target = Target::Field(FieldProp::Slices);
+const SLICE_Y: Target = Target::Field(FieldProp::SliceY);
+const SLICE_X: Target = Target::Field(FieldProp::SliceX);
 
 /// The tabs of the shelf, by what the effects in them do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -300,7 +306,7 @@ pub enum Shelf {
     Notes,
     /// Flashes, colours, echoes and glitches.
     Look,
-    /// Copies of the playfield moved on their own.
+    /// Copies of the playfield moved on their own, and the picture cut in pieces.
     Copies,
     /// Words and pictures on screen.
     Text,
@@ -322,7 +328,7 @@ impl Shelf {
             Shelf::Lane => "Lane",
             Shelf::Notes => "Notes",
             Shelf::Look => "Look",
-            Shelf::Copies => "Copies",
+            Shelf::Copies => "Copies & cuts",
             Shelf::Text => "Text & pictures",
         }
     }
@@ -738,6 +744,40 @@ pub const PRESETS: &[Preset] = &[
                 cp(0, CopyProp::LaneFade, s, e, 1.0),
                 cp(0, CopyProp::Zoom, s, e, -0.3),
                 faded(cp(0, CopyProp::Turn, s, e, 360.0), b, 0.0, Ease::Linear),
+            ]
+        },
+    },
+    Preset {
+        name: "Broken lane",
+        shelf: Shelf::Copies,
+        about: "The picture cut into four pieces that sway up and down against each other.",
+        make: |s, e, _| {
+            vec![
+                c(SLICES, s, e, 4.0),
+                every(c(SLICE_Y, s, e, 14.0), 2.0, 2.0, Motion::Swing),
+            ]
+        },
+    },
+    Preset {
+        name: "Shatter on the beat",
+        shelf: Shelf::Copies,
+        about: "Six pieces jump apart on every beat and snap back together.",
+        make: |s, e, _| {
+            vec![
+                c(SLICES, s, e, 6.0),
+                every(c(SLICE_Y, s, e, 28.0), 1.0, 0.75, Motion::Kick),
+                every(c(SLICE_X, s, e, 30.0), 1.0, 0.75, Motion::Kick),
+            ]
+        },
+    },
+    Preset {
+        name: "Split open",
+        shelf: Shelf::Copies,
+        about: "The playfield splits down the middle and the halves slide apart, then close again.",
+        make: |s, e, _| {
+            vec![
+                c(SLICES, s, e, 2.0),
+                faded(c(SLICE_X, s, e, 140.0), 2.0, 2.0, Ease::SineInOut),
             ]
         },
     },
