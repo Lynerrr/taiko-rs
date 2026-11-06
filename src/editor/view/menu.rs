@@ -82,6 +82,9 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::PlayFromStart),
             Do(Cmd::FirstNote),
             Do(Cmd::LastNote),
+            Sep,
+            Do(Cmd::TestPlay(false)),
+            Do(Cmd::TestPlay(true)),
         ],
     },
     Menu {

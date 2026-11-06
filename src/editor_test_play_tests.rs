@@ -1,0 +1,137 @@
+//! Test play from the editor (F5): the map as the editor has it plays in the real game, keeps
+//! nothing, and leaving it (quit, the end) goes back to the editor as it was.
+
+use super::*;
+use editor::view::{Keys, View};
+
+/// A state with the editor open on a small map in a folder of its own.
+fn editing() -> State {
+    let mut s = crate::layout_tests::state();
+    // The library comes in on the first frame.
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.0);
+    // A folder for each test: they run side by side.
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "taiko-rs-test-play-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("map.osu");
+    std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
+    let view = View::open(path, 0).unwrap();
+    s.scene = Scene::Editor(Box::new(view));
+    s
+}
+
+fn frame(s: &mut State) {
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.0);
+}
+
+/// Frames until the test play is on (its map loads on a thread).
+fn until_playing(s: &mut State) {
+    for _ in 0..500 {
+        frame(s);
+        if matches!(s.scene, Scene::Play { .. }) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    panic!("the test play never started");
+}
+
+fn press(s: &mut State, code: KeyCode, keys: Keys) {
+    let Scene::Editor(view) = &mut s.scene else {
+        panic!("not in the editor");
+    };
+    view.key(code, false, keys, None);
+}
+
+#[test]
+fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
+    let mut s = editing();
+    let Scene::Editor(view) = &mut s.scene else {
+        unreachable!()
+    };
+    // An edit not saved yet: the test plays it anyway.
+    view.ed.select_range(2000.0, 20000.0, false);
+    assert_eq!(view.ed.delete_selected(), 3);
+    view.set_time(1500.0);
+    press(&mut s, KeyCode::F5, Keys::default());
+    frame(&mut s);
+    assert!(s.editor_back.is_some(), "the editor waits");
+    until_playing(&mut s);
+    {
+        let Scene::Play { game, from, .. } = &s.scene else {
+            unreachable!()
+        };
+        assert_eq!(*from, Some(1500.0), "from the playhead");
+        assert_eq!(game.map.notes.len(), 2, "the map as the editor has it");
+        assert!(!game.record, "nothing is kept");
+        assert!(game.mods.has(mods::Mod::NoFail));
+        assert!(game.banner.as_deref().is_some_and(|b| b.contains("TEST")));
+        assert!(game.test_play);
+    }
+    // A retry plays the editor's map again.
+    s.restart_map();
+    until_playing(&mut s);
+    assert!(s.editor_back.is_some());
+    // Quit (from the pause menu) goes back to the editor, as it was left.
+    s.show_select();
+    let Scene::Editor(view) = &s.scene else {
+        panic!("quitting a test play went somewhere else");
+    };
+    assert_eq!(
+        view.ed.chart.objects.len(),
+        2,
+        "the unsaved edit is still there"
+    );
+    assert_eq!(view.ed.time, 1500.0);
+    assert!(s.editor_back.is_none());
+    // Shift+F5: from the start.
+    let shift = Keys {
+        shift: true,
+        ..Keys::default()
+    };
+    press(&mut s, KeyCode::F5, shift);
+    frame(&mut s);
+    until_playing(&mut s);
+    let Scene::Play { from, .. } = &s.scene else {
+        unreachable!()
+    };
+    assert_eq!(*from, None);
+    // Played to the end: no results, back to the editor.
+    if let Scene::Play { game, .. } = &mut s.scene {
+        game.run_out_of_notes();
+        assert!(game.skip_outro());
+    }
+    for _ in 0..200 {
+        frame(&mut s);
+        if matches!(s.scene, Scene::Editor(_)) {
+            break;
+        }
+    }
+    assert!(
+        matches!(s.scene, Scene::Editor(_)),
+        "the end of a test play has no results"
+    );
+    assert!(s.editor_back.is_none());
+}
+
+#[test]
+fn a_map_not_in_the_song_list_is_not_test_played_and_says_why() {
+    let mut s = editing();
+    let Scene::Editor(view) = &mut s.scene else {
+        unreachable!()
+    };
+    view.entry = 9999;
+    press(&mut s, KeyCode::F5, Keys::default());
+    frame(&mut s);
+    let Scene::Editor(view) = &s.scene else {
+        panic!("it left the editor");
+    };
+    assert!(s.editor_back.is_none());
+    assert!(view.status.contains("save it first"), "{}", view.status);
+}
