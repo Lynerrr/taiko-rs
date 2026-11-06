@@ -134,6 +134,13 @@ swirl), when it acts (the whole time, every few beats, on notes
 motion of each repeat (kick, swing, step) and how many beats it takes, the easing, *keep after*, and
 *Fit to kiai* / *Fit to selection*. Blocks add up with each other and with keyframes and nodes.
 
+While the song plays, keys `1` to `9` record the shelf's first nine effects live: press a key where
+the effect should start and again where it should end (each on the grid), and it is dropped over
+that stretch as one undo step; a red block grows with the playhead meanwhile, and Esc drops it. The
+manual's *Effect clips* chapter has *Put an example on this map*: it makes the map a `.tko` if
+needed and lays a title, a beat kick, a lane shape, big-note slams and kat flashes over the first
+kiai, one block a row, so each can be clicked to see how it is made (Ctrl+Z takes it all away).
+
 Text and pictures are blocks too (*Text*, *Fly-in text*, *Pulsing text*, *Picture*, *Logo on the
 beat* on the shelf). A text block's words are typed in its settings (click them), in the game's own
 font. A picture block shows an image from the map's folder (put a `.png` or `.jpg` there first;

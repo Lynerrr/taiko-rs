@@ -16,6 +16,8 @@ pub enum TryIt {
     TimingWindow,
     Nodes,
     Tour,
+    /// A set of clips laid over the map's first kiai, to see and pick apart.
+    Showcase,
 }
 
 fn ru() -> bool {
@@ -141,7 +143,7 @@ These work in plain .osu maps and play the same in stable. Nothing here needs th
     },
     Chapter {
         title: "Effect clips",
-        try_it: None,
+        try_it: Some(("Put an example on this map", TryIt::Showcase)),
         body: "\
 F4 Effects opens on Clips: the simple way to make a .tko map do anything to the playfield. An effect is a block on the rows under the timeline. Its start and end are where it acts, and it keeps time with the music.
 
@@ -164,6 +166,9 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - With one picked, drag the preview to place it: Shift turns it, Ctrl sizes it. x, y, size, turn and seen can be typed too.
 - moves: it glides to a pose of its own at its end. At its start and at its end choose which one you change.
 - behind the notes puts it under the lane; the fades bring it in and out; pulses kicks it bigger on beats, notes or hits (the amount is percent).
+
+# Live
+- While the song plays, keys 1 to 9 record the first nine effects of the shelf: press a key where it should start and again where it should end. Esc drops one being recorded.
 
 # Moving it by hand
 - Drag the preview: the playfield moves. Shift+drag turns it, Ctrl+drag zooms it (up grows, down shrinks).
@@ -416,7 +421,7 @@ F2 Gimmicks собирает конструкции, которые маппер
     },
     Chapter {
         title: "Эффекты-блоки",
-        try_it: None,
+        try_it: Some(("Положить пример на эту карту", TryIt::Showcase)),
         body: "\
 F4 Effects открывается на Clips: самый простой способ заставить .tko карту делать с игровым полем что угодно. Эффект — это блок на дорожках под таймлайном. Где он начинается и кончается, там и действует, и идёт в такт музыке.
 
@@ -439,6 +444,9 @@ F4 Effects открывается на Clips: самый простой спос
 - Когда блок выбран, тащите превью, чтобы поставить его: Shift поворачивает, Ctrl меняет размер. x, y, size, turn и seen можно и набрать.
 - moves: блок плавно едет к своей позе в конце. At its start и at its end выбирают, какую из двух вы меняете.
 - behind the notes кладёт его под линию нот; затухания вводят и убирают его; pulses толкает его крупнее на долях, нотах или попаданиях (amount в процентах).
+
+# Вживую
+- Пока играет песня, клавиши 1-9 записывают первые девять эффектов полки: нажмите клавишу там, где он начинается, и ещё раз там, где кончается. Esc отменяет запись.
 
 # Двигать руками
 - Тащите превью: поле едет. Shift+тащить поворачивает его, Ctrl+тащить меняет масштаб (вверх больше, вниз меньше).
