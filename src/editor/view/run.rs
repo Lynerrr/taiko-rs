@@ -275,6 +275,14 @@ impl View {
                 };
                 self.zoom(if cmd == Cmd::ZoomIn { 0.8 } else { 1.25 }, at);
             }
+            Cmd::Waveform => {
+                self.wave_on = !self.wave_on;
+                self.status = if self.wave_on {
+                    "waveform on".into()
+                } else {
+                    "waveform off".into()
+                };
+            }
             Cmd::ZoomFit => {
                 let w = self.timeline_w() as f64;
                 self.ms_per_px = (self.end_ms() / w.max(1.0)).clamp(0.25, 80.0);

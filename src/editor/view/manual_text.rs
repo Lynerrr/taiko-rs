@@ -70,6 +70,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 - Put notes on 4 bars of beats, set Speed to 50% and Play. If the notes are early or late by the same amount everywhere, move the offset. If they drift further the longer the song goes, the BPM is a little off.
 - The BPM and the offset have small +/- buttons for fine steps (down to 0.01 BPM and 1 ms).
 - Compare the grid lines with the waveform spikes: a spike should sit on a line.
+- The waveform's colour is the kind of sound: red is bass (a kick, often a don), blue is treble (a snare or a hat, often a kat). It is under the notes in the editor too (View > Waveform on / off).
 
 # Inside the editor
 - F3 Timing: select the red line to edit its BPM, offset and meter. F6 lists every line.
@@ -302,6 +303,7 @@ File > Open song folder открывает папку карты. Бросьте
 - Поставьте ноты на 4 такта по битам, поставьте Speed 50% и жмите Play. Если ноты везде раньше или позже на одно и то же — двигайте смещение. Если расходятся всё сильнее к концу — BPM чуть неточный.
 - У BPM и смещения есть маленькие кнопки +/- для тонкой подстройки (до 0.01 BPM и 1 мс).
 - Сравните линии сетки с пиками волны: пик должен лежать на линии.
+- Цвет волны — какой это звук: красный — бас (бочка, чаще дон), синий — верха (малый, хэт, чаще кат). В эдиторе волна видна и под нотами (View > Waveform on / off).
 
 # Внутри редактора
 - F3 Timing: выберите красную линию, чтобы править BPM, смещение и размер. F6 показывает все линии.

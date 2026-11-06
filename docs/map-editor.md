@@ -42,7 +42,9 @@ removed, with no restart. A file that is still being copied in is picked up once
 
 - Menu bar: File, Edit, View, Timing, Help. Every command is in a menu with its key beside it.
 - Mode bar: F1 Compose, F2 Gimmicks, F3 Timing, F4 Effects (`.tko`), plus play, snap, speed, undo, save.
-- Timeline: notes, timing lines, bookmarks. The song overview below it is clickable.
+- Timeline: notes, timing lines, bookmarks, and the music's waveform under the notes (View >
+  Waveform on / off). Its colour is the kind of sound: red is bass (often a don), blue is treble
+  (often a kat). The song overview below it is clickable.
 - Right panel: changes with the mode. Hover any control for a tip.
 
 ## Keys (as in osu!stable)

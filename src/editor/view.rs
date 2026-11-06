@@ -297,6 +297,10 @@ pub struct View {
     pub entry: usize,
     pub track: Option<Arc<Track>>,
     track_rx: Option<Receiver<TrackResult>>,
+    /// The music's waveform under the notes, and one being made for a newly loaded track.
+    wave: Option<Arc<super::wave::Wave>>,
+    wave_rx: Option<Receiver<super::wave::Wave>>,
+    pub wave_on: bool,
     /// Sample rate the engine plays at, to know how long the track is.
     audio_rate: f64,
     pub rate: u32,
@@ -439,6 +443,9 @@ impl View {
             entry,
             track: None,
             track_rx: None,
+            wave: None,
+            wave_rx: None,
+            wave_on: true,
             audio_rate: 48000.0,
             rate: 100,
             want_rate: None,
@@ -634,12 +641,25 @@ impl View {
         self.edge_scroll(now);
         self.follow_seek(audio);
         self.poll_upload();
+        if let Some(Ok(wave)) = self.wave_rx.as_ref().map(|rx| rx.try_recv()) {
+            self.wave = Some(Arc::new(wave));
+            self.wave_rx = None;
+        }
         if let Some(rx) = &self.track_rx
             && let Ok(result) = rx.try_recv()
         {
             self.track_rx = None;
             match result {
                 Ok(t) => {
+                    if !t.samples.is_empty() {
+                        let (track, rate) = (t.clone(), self.audio_rate);
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            let _ =
+                                tx.send(super::wave::Wave::build(&track.samples, rate, track.rate));
+                        });
+                        self.wave_rx = Some(rx);
+                    }
                     self.track = Some(t);
                     self.stale = Some(now);
                 }
@@ -1011,6 +1031,16 @@ impl View {
         let (from, to) = (self.view_start, self.view_end());
         let lane_top = y + RULER + 16.0;
         let cy = lane_top + (y + h - lane_top) / 2.0;
+        // The music under the notes (song time is chart time plus osu!'s offset).
+        if let (Some(wave), true) = (&self.wave, self.wave_on) {
+            wave.draw(
+                c,
+                [x + 1.0, lane_top + 2.0, w - 2.0, y + h - lane_top - 4.0],
+                from + OSU_TIMING_MS,
+                to + OSU_TIMING_MS,
+                0.55,
+            );
+        }
         // The ruler.
         c.rect(x + 1.0, y + 1.0, w - 2.0, RULER - 1.0, rgba(0x1a1a26, 1.0));
         // Kiai.
@@ -3707,6 +3737,26 @@ mod tests {
             ctrl: true,
             ..Keys::default()
         }
+    }
+
+    #[test]
+    fn the_music_is_drawn_under_the_notes_unless_switched_off() {
+        let mut v = view();
+        let shapes = |v: &mut View| draw(v).shapes.len();
+        let without = shapes(&mut v);
+        // A loud song a minute long.
+        let song: Vec<f32> = (0..48_000 * 60 * 2)
+            .map(|i| ((i / 2) as f32 * 0.05).sin() * 0.8)
+            .collect();
+        v.wave = Some(Arc::new(super::super::wave::Wave::build(
+            &song, 48_000.0, 1.0,
+        )));
+        let with = shapes(&mut v);
+        assert!(with > without + 100, "{without} -> {with}");
+        press(&mut v, Btn::C(Cmd::Waveform));
+        assert!(!v.wave_on);
+        // (The status line says so, which is a few shapes of text.)
+        assert!(shapes(&mut v) < without + 60);
     }
 
     #[test]

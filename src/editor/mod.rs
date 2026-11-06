@@ -18,6 +18,7 @@ pub mod tempo;
 pub mod timing;
 pub mod tools;
 pub mod view;
+pub mod wave;
 
 use std::path::{Path, PathBuf};
 

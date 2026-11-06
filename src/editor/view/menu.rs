@@ -70,6 +70,7 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::ZoomIn),
             Do(Cmd::ZoomOut),
             Do(Cmd::ZoomFit),
+            Do(Cmd::Waveform),
             Sep,
             Do(Cmd::SnapStep(1)),
             Do(Cmd::SnapStep(-1)),
