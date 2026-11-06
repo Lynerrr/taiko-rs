@@ -16,6 +16,7 @@ pub mod path;
 pub mod recipes;
 pub mod runtime;
 pub mod screen;
+pub mod scroll;
 pub mod track;
 
 /// The newest format this build reads and writes. Raising it needs a migration in

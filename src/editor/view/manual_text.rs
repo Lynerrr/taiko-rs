@@ -231,7 +231,14 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - Or key it yourself on the graph: pick what to change (fade, size, up/down, sideways, turn, hide, wide, tall, tint), click to add a key, drag it, right click to remove it. Left is 4 beats before the hit, the bright line is the hit itself. Keys sit on 1/8 beats; hold Shift to place them freely.
 - It works with a path and with the Keyframes page: moves and turns add up, size and fade multiply.
 
-> Paths and moves are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
+# Scroll (mania SV)
+- The Scroll tab sets one speed for the whole lane over the song, like SV in osu!mania: 1x plays as mapped, 2x twice as fast, 0x freezes every note where it is, -1x runs them back. Your green lines stay as they are; this goes on top, so a 2x green line under a 0.5x scroll plays at 1x.
+- Pick a speed and it holds from the playhead until the next key. Slower and Faster nudge it, Glide to the next key eases into the next speed instead of jumping.
+- Moves from the playhead: Freeze a beat, Back up a beat, Lurch on each beat (a bar), Jump a beat ahead. Each comes back to the speed it started from.
+- The graph under the timeline shows the speed: click adds a key, drag moves it, right click deletes it.
+- However the scroll runs, every note still reaches the drum exactly when it is hit.
+
+> Paths, moves and the scroll are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
 ",
     },
     Chapter {
@@ -556,7 +563,14 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - Или задайте его сами на графике: выберите, что меняется (прозрачность, размер, вверх/вниз, вбок, поворот, скрытие, ширина, высота, оттенок), клик добавляет ключ, его можно тащить, правый клик убирает. Слева 4 доли до удара, яркая линия это сам удар. Ключи встают на 1/8 доли; с Shift ставятся свободно.
 - Работает вместе с путём и со страницей Keyframes: сдвиги и повороты складываются, размер и прозрачность перемножаются.
 
-> Траектории и движения только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
+# Скролл (SV как в mania)
+- Вкладка Scroll задаёт одну скорость для всего лайна по ходу песни, как SV в osu!mania: 1x как в карте, 2x вдвое быстрее, 0x замораживает все ноты на месте, -1x гонит их назад. Зелёные линии остаются как есть; скролл ложится сверху, так что зелёная линия 2x под скроллом 0.5x играется как 1x.
+- Выбранная скорость держится от плейхеда до следующего ключа. Slower и Faster подкручивают её, Glide to the next key плавно переводит к следующей скорости вместо скачка.
+- Движения от плейхеда: Freeze a beat, Back up a beat, Lurch on each beat (a bar), Jump a beat ahead. Каждое возвращается к скорости, с которой началось.
+- График под таймлайном показывает скорость: клик добавляет ключ, перетаскивание двигает, правый клик удаляет.
+- Как бы ни шёл скролл, каждая нота приходит на барабан ровно в момент удара.
+
+> Траектории, движения и скролл только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
 ",
     },
     Chapter {

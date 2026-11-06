@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::history::Command;
 use super::state::Editor;
 use crate::tko::gimmick::{FieldProp, Gimmick, Group, MAX_GROUPS, NoteProp};
+use crate::tko::scroll::MAX_SPEED;
 use crate::tko::track::{Ease, Key};
 
 /// What a keyframe track belongs to.
@@ -13,6 +14,8 @@ use crate::tko::track::{Ease, Key};
 pub enum Subject {
     Field(FieldProp),
     Group(usize, NoteProp),
+    /// The shared scroll's speed (mania-style SV, see `tko::scroll`).
+    Scroll,
 }
 
 impl Subject {
@@ -20,6 +23,7 @@ impl Subject {
         match self {
             Subject::Field(p) => p.default_value(),
             Subject::Group(_, p) => p.default_value(),
+            Subject::Scroll => 1.0,
         }
     }
 
@@ -27,6 +31,7 @@ impl Subject {
         match self {
             Subject::Field(p) => p.range(),
             Subject::Group(_, p) => p.range(),
+            Subject::Scroll => (-MAX_SPEED, MAX_SPEED),
         }
     }
 
@@ -34,6 +39,7 @@ impl Subject {
         match self {
             Subject::Field(p) => p.name(),
             Subject::Group(_, p) => p.name(),
+            Subject::Scroll => "scroll",
         }
     }
 
@@ -43,6 +49,7 @@ impl Subject {
             Subject::Field(FieldProp::X | FieldProp::Y)
             | Subject::Group(_, NoteProp::Dx | NoteProp::Dy) => 100.0,
             Subject::Field(FieldProp::Rotation) => 90.0,
+            Subject::Scroll => 2.0,
             _ => 1.0,
         }
     }
@@ -87,6 +94,7 @@ impl Editor {
         match s {
             Subject::Field(p) => g.field_track(p),
             Subject::Group(i, p) => g.groups.get(i)?.track(p),
+            Subject::Scroll => (!g.scroll.is_empty()).then_some(&g.scroll),
         }
     }
 
@@ -101,6 +109,12 @@ impl Editor {
         self.edit_gimmick(drag, |g| match s {
             Subject::Field(p) => g.key_field(p, key),
             Subject::Group(i, p) => g.key_note(i, p, key),
+            Subject::Scroll => {
+                g.scroll.set(Key {
+                    v: key.v.clamp(-MAX_SPEED, MAX_SPEED),
+                    ..key
+                });
+            }
         })
     }
 
@@ -113,6 +127,7 @@ impl Editor {
                     Some(group) => group.track_mut(p),
                     None => return,
                 },
+                Subject::Scroll => &mut g.scroll,
             };
             track.remove(index);
             let (lo, hi) = s.range();
@@ -131,6 +146,7 @@ impl Editor {
                     .groups
                     .get_mut(i)
                     .and_then(|gr| gr.track_mut(p).remove(index)),
+                Subject::Scroll => g.scroll.remove(index),
             };
         })
     }
