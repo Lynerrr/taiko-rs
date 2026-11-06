@@ -119,22 +119,28 @@ Recipes:
 ## Effects (`.tko`)
 
 F4 opens the Effects page on **Clips**: effects as blocks on rows under the timeline, each acting
-from its start to its end and keeping time with the music. Click one of the ready-made effects on
-the shelf (Beat pulse, Every 2nd beat, Sway, Tilt, Spin, Quarter turns, Spiral lane, Zigzag lane, Loop lane,
-Turn over, Earthquake, Big note slam,
-Kat flash, Drop, Build-up, Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up, Echo
-trail, Kaleidoscope, Colour wash, Miss glitch) and it lands at the playhead: over the whole kiai
-the playhead is in, else over the notes selected, else over the next four bars. A drag on an empty
-row draws the effect used last. Drag a block to move it (to another row too), its ends to resize
-it; right click deletes it, Delete and Ctrl+D act on the one picked. Clicking a block shows its
-settings instead of the shelf: what it moves (`<` `>`: any playfield property, a shake, the lane's
-shape (zigzag, U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden,
-swirl), when it acts (the whole time, every few beats, on notes
-(all, dons, kats, big ones), on hits, on misses), the amount (click to type), the fades or the
+from its start to its end and keeping time with the music. The shelf of ready-made effects has tabs:
+*Playfield* (Beat pulse, Every 2nd beat, Sway, Tilt, Spin, Quarter turns, Zoom in, Zoom out, Spin +
+zoom, Turn over, Earthquake, Big note slam), *Lane* (Spiral lane, Zigzag lane, Loop lane), *Notes*
+(Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up), *Look* (Kat flash, Drop, Build-up,
+Echo trail, Kaleidoscope, Colour wash, Miss glitch) and *Text & pictures*. A click on an effect picks
+it; a drag on a row then draws it from where it was pressed to where it was let go, and a click on a
+row lays one bar (*Over the kiai here* and *Over the notes selected* lay it over those). It is placed
+once (Shift keeps it picked); Esc puts it back. Drag a block to move it (to another row too), its
+ends to resize it (a short block's ends reach a little past it); right click deletes it. A drag over
+empty rows picks every block in the box, and Shift or Ctrl+click adds or removes one: the blocks
+picked move together, Ctrl+D copies them right after the stretch they cover, and Delete removes
+them. There is always a free row under the last one used (up to 64); when they don't fit, the wheel
+over them scrolls. Clicking a block shows its
+settings instead of the shelf: what it moves (a menu in columns, *Playfield*, *Look*, *Echoes*,
+*Lane* and *Notes*, with `<` `>` to step: any playfield property, a shake, the lane's shape (zigzag,
+U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden, swirl; the
+amount keeps its size when this changes), when it acts (the whole time, every few beats, on notes
+(all, dons, kats, big ones), on hits, on misses), the amount (click to type; Enter or a click elsewhere keeps it), the fades or the
 motion of each repeat (kick, swing, step) and how many beats it takes, the easing, *keep after*, and
 *Fit to kiai* / *Fit to selection*. Blocks add up with each other and with keyframes and nodes.
 
-While the song plays, keys `1` to `9` record the shelf's first nine effects live: press a key where
+While the song plays, keys `1` to `9` record the effects of the shelf's open tab live: press a key where
 the effect should start and again where it should end (each on the grid), and it is dropped over
 that stretch as one undo step; a red block grows with the playhead meanwhile, and Esc drops it. The
 manual's *Effect clips* chapter has *Put an example on this map*: it makes the map a `.tko` if

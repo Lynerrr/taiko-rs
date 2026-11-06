@@ -148,14 +148,16 @@ These work in plain .osu maps and play the same in stable. Nothing here needs th
 F4 Effects opens on Clips: the simple way to make a .tko map do anything to the playfield. An effect is a block on the rows under the timeline. Its start and end are where it acts, and it keeps time with the music.
 
 # Making one
-- Click an effect on the shelf (Beat pulse, Sway, Spin, Hide the notes, Drop...). It lands at the playhead: over the whole kiai if the playhead is in one, over the notes selected if there are any, else over the next four bars.
-- Or drag on an empty row: that draws the effect you used last, from where you pressed to where you let go.
-- Drag a block to move it (also to another row), drag its ends to make it longer or shorter, right click deletes it. Delete and Ctrl+D work on the block picked.
+- The shelf has tabs: Playfield (pulses, turns, zooms, shakes), Lane (its shape), Notes, Look (flashes, colours, echoes) and Text & pictures.
+- Click an effect to pick it, then drag on a row from where it should start to where it should end. A click on a row lays one bar. Over the kiai here and Over the notes selected lay it over those. Shift keeps it picked for more; Esc puts it back.
+- Drag a block to move it (also to another row), drag its ends to make it longer or shorter (a short block's ends stick out a little), right click deletes it.
+- Drag over empty rows to pick every block in the box; Shift or Ctrl+click adds or takes one away. Blocks picked move together, Ctrl+D copies them after themselves, Delete removes them.
+- There is always a free row at the bottom; when the rows don't fit, the wheel over them scrolls.
 
 # Changing one
-- Click a block: its settings replace the shelf. < and > change what it moves: zoom, turn, flash, shake, the lane's shape (spiral, zigzag, loop...), the notes themselves (move, size, hide, swirl)...
+- Click a block: its settings replace the shelf. Click what it moves for a menu of everything, in columns: Playfield (zoom, turn, shake...), Look, Echoes, Lane (spiral, zigzag, loop...) and Notes (move, size, hide, swirl). < and > step through them. The amount keeps its size when you switch.
 - When it acts: the whole time, every few beats, on notes (all, dons, kats, big ones), on hits, on misses.
-- Amount is how much: click it to type a number, or use - and + (Shift x10, Alt x0.1).
+- Amount is how much: click it to type a number (Enter or a click elsewhere keeps it), or use - and + (Shift x10, Alt x0.1).
 - A block that acts the whole time fades in and out over the beats you set. One that repeats does a kick (jumps and settles), a swing (one side, then the other) or a step (a bit more each time), taking the beats you set.
 - Keep after: what it reached stays when it ends (a turn that stops half way round stays there).
 - Fit to kiai and Fit to selection stretch it over those.
@@ -168,7 +170,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - behind the notes puts it under the lane; the fades bring it in and out; pulses kicks it bigger on beats, notes or hits (the amount is percent).
 
 # Live
-- While the song plays, keys 1 to 9 record the first nine effects of the shelf: press a key where it should start and again where it should end. Esc drops one being recorded.
+- While the song plays, keys 1 to 9 record the effects of the shelf's open tab: press a key where it should start and again where it should end. Esc drops one being recorded.
 
 # Moving it by hand
 - Drag the preview: the playfield moves. Shift+drag turns it, Ctrl+drag zooms it (up grows, down shrinks).
@@ -426,14 +428,16 @@ F2 Gimmicks собирает конструкции, которые маппер
 F4 Effects открывается на Clips: самый простой способ заставить .tko карту делать с игровым полем что угодно. Эффект — это блок на дорожках под таймлайном. Где он начинается и кончается, там и действует, и идёт в такт музыке.
 
 # Как сделать
-- Нажмите эффект на полке (Beat pulse, Sway, Spin, Hide the notes, Drop...). Он встанет на плейхед: на весь кийай, если плейхед в нём; на выделенные ноты, если они есть; иначе на четыре такта вперёд.
-- Или протяните мышью по пустой дорожке: так рисуется эффект, который вы брали последним, от места нажатия до места, где отпустили.
-- Блок тащится мышью (и на другую дорожку), за края — длиннее или короче, правый клик удаляет. Delete и Ctrl+D работают с выбранным блоком.
+- На полке вкладки: Playfield (пульс, повороты, зум, тряска), Lane (форма лайна), Notes, Look (вспышки, цвета, эхо) и Text & pictures.
+- Нажмите эффект, чтобы взять его, и протяните по дорожке от места, где он начинается, до места, где кончается. Клик по дорожке кладёт один такт. Over the kiai here и Over the notes selected кладут его на кийай или на выделенные ноты. С Shift он остаётся в руке; Esc кладёт обратно.
+- Блок тащится мышью (и на другую дорожку), за края — длиннее или короче (у короткого блока края чуть выступают), правый клик удаляет.
+- Протяните рамку по пустым дорожкам, чтобы выбрать все блоки в ней; Shift или Ctrl+клик добавляет или убирает один. Выбранные двигаются вместе, Ctrl+D копирует их следом, Delete удаляет.
+- Внизу всегда есть свободная дорожка; когда дорожки не влезают, колесо над ними прокручивает.
 
 # Как изменить
-- Нажмите на блок: вместо полки появятся его настройки. < и > меняют, что он двигает: зум, поворот, вспышку, тряску, форму лайна (спираль, зигзаг, петля...), сами ноты (сдвиг, размер, скрыть, закрутить)...
+- Нажмите на блок: вместо полки появятся его настройки. Нажмите на то, что он двигает, — откроется меню со всем по колонкам: Playfield (зум, поворот, тряска...), Look, Echoes, Lane (спираль, зигзаг, петля...) и Notes (сдвиг, размер, скрыть, закрутить). < и > листают по одному. Amount при смене сохраняет свою величину.
 - Когда он действует: всё время, каждые несколько долей, на нотах (все, доны, каты, большие), на попаданиях, на промахах.
-- Amount — сколько: нажмите, чтобы ввести число, или - и + (Shift x10, Alt x0.1).
+- Amount — сколько: нажмите, чтобы ввести число (Enter или клик в другое место его сохраняют), или - и + (Shift x10, Alt x0.1).
 - Блок «всё время» плавно входит и выходит за заданные доли. Повторяющийся делает толчок (прыгает и успокаивается), качели (в одну сторону, потом в другую) или шаг (каждый раз чуть больше) за заданные доли.
 - Keep after: то, к чему он пришёл, остаётся после конца (поворот, остановившийся на полпути, так и остаётся).
 - Fit to kiai и Fit to selection растягивают его на кийай или на выделение.
@@ -446,7 +450,7 @@ F4 Effects открывается на Clips: самый простой спос
 - behind the notes кладёт его под линию нот; затухания вводят и убирают его; pulses толкает его крупнее на долях, нотах или попаданиях (amount в процентах).
 
 # Вживую
-- Пока играет песня, клавиши 1-9 записывают первые девять эффектов полки: нажмите клавишу там, где он начинается, и ещё раз там, где кончается. Esc отменяет запись.
+- Пока играет песня, клавиши 1-9 записывают эффекты открытой вкладки полки: нажмите клавишу там, где он начинается, и ещё раз там, где кончается. Esc отменяет запись.
 
 # Двигать руками
 - Тащите превью: поле едет. Shift+тащить поворачивает его, Ctrl+тащить меняет масштаб (вверх больше, вниз меньше).

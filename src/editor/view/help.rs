@@ -180,6 +180,7 @@ impl View {
             || self.tour.is_some()
             || self.sheet
             || self.svt.drop.is_some()
+            || self.fx_drop.is_some()
             || self.moved_at.elapsed() < Duration::from_millis(400)
             || !matches!(self.drag, super::Drag::None)
         {
@@ -222,6 +223,7 @@ impl View {
     pub(super) fn draw_overlays(&mut self, c: &mut Canvas) {
         self.draw_menu_drop(c);
         self.draw_svt_drop(c);
+        self.draw_fx_drop(c);
         if self.node_mode() {
             self.draw_node_pick(c);
         }

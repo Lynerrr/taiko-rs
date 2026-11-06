@@ -16,6 +16,57 @@ pub fn targets() -> Vec<Target> {
     out
 }
 
+/// What a clip can move, in the columns of the editor's menu: a heading, its colour, and the
+/// targets under it (all of `targets`, each once).
+pub fn target_columns() -> Vec<(&'static str, u32, Vec<Target>)> {
+    let field = |g: PropGroup| -> Vec<Target> {
+        FieldProp::ALL
+            .iter()
+            .filter(|p| p.group() == g)
+            .map(|p| Target::Field(*p))
+            .collect()
+    };
+    let mut moves = field(PropGroup::Move);
+    moves.push(Target::Shake);
+    vec![
+        ("Playfield", target_colour(Target::Shake), moves),
+        (
+            "Look",
+            target_colour(Target::Field(FieldProp::Flash)),
+            field(PropGroup::Look),
+        ),
+        (
+            "Echoes",
+            target_colour(Target::Field(FieldProp::Echo)),
+            field(PropGroup::Clones),
+        ),
+        (
+            "Lane",
+            target_colour(Target::Lane(0)),
+            (0..LANE_SHAPES.len()).map(Target::Lane).collect(),
+        ),
+        (
+            "Notes",
+            target_colour(Target::Notes(None, NoteProp::Dx)),
+            NoteProp::ALL
+                .iter()
+                .map(|p| Target::Notes(None, *p))
+                .collect(),
+        ),
+    ]
+}
+
+/// The amount a clip keeps when what it moves changes from `from` to `to`: the same number of
+/// steps, so a big zoom becomes a big turn rather than a default.
+pub fn rescale_amount(amount: f64, from: Option<Target>, to: Target) -> f64 {
+    let Some(from) = from else {
+        return amount_step(to) * 10.0;
+    };
+    let v = amount / amount_step(from) * amount_step(to);
+    let cap = amount_step(to) * 100.0;
+    (v.clamp(-cap, cap) * 1000.0).round() / 1000.0
+}
+
 /// A clip's target for people.
 pub fn target_label(t: Target) -> String {
     match t {
@@ -158,6 +209,8 @@ pub fn beat_in(reds: &[(f64, f64)], t: f64) -> f64 {
 /// A ready-made effect on the shelf.
 pub struct Preset {
     pub name: &'static str,
+    /// The shelf's tab it is on.
+    pub shelf: Shelf,
     pub about: &'static str,
     /// The clips it is, for a stretch `start..end` that is `beats` beats long.
     pub make: fn(f64, f64, f64) -> Vec<Clip>,
@@ -193,19 +246,75 @@ fn faded(mut c: Clip, fade_in: f64, fade_out: f64, ease: Ease) -> Clip {
 const ZOOM: Target = Target::Field(FieldProp::Zoom);
 const TURN: Target = Target::Field(FieldProp::Rotation);
 
+/// The tabs of the shelf, by what the effects in them do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shelf {
+    /// The whole playfield moves: pulses, turns, zooms, shakes.
+    Move,
+    /// The lane bends into a shape.
+    Lane,
+    /// The notes themselves.
+    Notes,
+    /// Flashes, colours, echoes and glitches.
+    Look,
+    /// Words and pictures on screen.
+    Text,
+}
+
+impl Shelf {
+    pub const ALL: [Shelf; 5] = [
+        Shelf::Move,
+        Shelf::Lane,
+        Shelf::Notes,
+        Shelf::Look,
+        Shelf::Text,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Shelf::Move => "Playfield",
+            Shelf::Lane => "Lane",
+            Shelf::Notes => "Notes",
+            Shelf::Look => "Look",
+            Shelf::Text => "Text & pictures",
+        }
+    }
+
+    /// The colour its tab wears: that of what its effects move.
+    pub fn colour(self) -> u32 {
+        match self {
+            Shelf::Move => 0x5BA8FF,
+            Shelf::Lane => 0xFFD34D,
+            Shelf::Notes => 0x5FD49A,
+            Shelf::Look => 0xFF6FB0,
+            Shelf::Text => 0xE8E8F0,
+        }
+    }
+
+    /// The shelf's effects in this tab, by their index in `PRESETS`.
+    pub fn presets(self) -> Vec<usize> {
+        (0..PRESETS.len())
+            .filter(|&i| PRESETS[i].shelf == self)
+            .collect()
+    }
+}
+
 pub const PRESETS: &[Preset] = &[
     Preset {
         name: "Beat pulse",
+        shelf: Shelf::Move,
         about: "The playfield breathes: a small zoom kick on every beat.",
         make: |s, e, _| vec![every(c(ZOOM, s, e, 0.06), 1.0, 0.75, Motion::Kick)],
     },
     Preset {
         name: "Every 2nd beat",
+        shelf: Shelf::Move,
         about: "A bigger zoom kick on every second beat.",
         make: |s, e, _| vec![every(c(ZOOM, s, e, 0.12), 2.0, 1.0, Motion::Kick)],
     },
     Preset {
         name: "Sway",
+        shelf: Shelf::Move,
         about: "The playfield sways left and right, a beat each way.",
         make: |s, e, _| {
             let mut c = every(
@@ -220,6 +329,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Tilt",
+        shelf: Shelf::Move,
         about: "The playfield rocks, tilting one way then the other every 2 beats.",
         make: |s, e, _| {
             let mut c = every(c(TURN, s, e, 6.0), 2.0, 2.0, Motion::Swing);
@@ -229,11 +339,13 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Spin",
+        shelf: Shelf::Move,
         about: "One full turn of the playfield across the whole clip.",
         make: |s, e, b| vec![faded(c(TURN, s, e, 360.0), b, 0.0, Ease::SineInOut)],
     },
     Preset {
         name: "Quarter turns",
+        shelf: Shelf::Move,
         about: "A quarter turn more every bar; where it ends up stays.",
         make: |s, e, _| {
             let mut c = every(c(TURN, s, e, 90.0), 4.0, 1.0, Motion::Step);
@@ -243,43 +355,31 @@ pub const PRESETS: &[Preset] = &[
         },
     },
     Preset {
-        name: "Spiral lane",
-        about: "The lane curls into a spiral and back out: the notes ride round it.",
-        make: |s, e, _| {
-            vec![faded(
-                c(Target::Lane(2), s, e, 1.0),
-                4.0,
-                4.0,
-                Ease::SineInOut,
-            )]
-        },
+        name: "Zoom in",
+        shelf: Shelf::Move,
+        about: "The playfield grows to half as big again over the whole clip.",
+        make: |s, e, b| vec![faded(c(ZOOM, s, e, 0.5), b, 0.0, Ease::SineInOut)],
     },
     Preset {
-        name: "Zigzag lane",
-        about: "The lane bends into a zigzag, and straightens out at the end.",
-        make: |s, e, _| {
-            vec![faded(
-                c(Target::Lane(0), s, e, 1.0),
-                2.0,
-                2.0,
-                Ease::SineInOut,
-            )]
-        },
+        name: "Zoom out",
+        shelf: Shelf::Move,
+        about: "The playfield shrinks to two thirds over the whole clip.",
+        make: |s, e, b| vec![faded(c(ZOOM, s, e, -0.33), b, 0.0, Ease::SineInOut)],
     },
     Preset {
-        name: "Loop lane",
-        about: "The notes come round a loop before they reach the drum.",
-        make: |s, e, _| {
-            vec![faded(
-                c(Target::Lane(3), s, e, 1.0),
-                4.0,
-                4.0,
-                Ease::SineInOut,
-            )]
+        name: "Spin + zoom",
+        shelf: Shelf::Move,
+        about: "One full turn while the playfield grows, over the whole clip: two clips, one row each.",
+        make: |s, e, b| {
+            vec![
+                faded(c(TURN, s, e, 360.0), b, 0.0, Ease::SineInOut),
+                faded(c(ZOOM, s, e, 0.5), b, 0.0, Ease::SineInOut),
+            ]
         },
     },
     Preset {
         name: "Turn over",
+        shelf: Shelf::Move,
         about: "The playfield turns over like a page: the drum ends up on the right.",
         make: |s, e, _| {
             vec![faded(
@@ -292,11 +392,13 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Earthquake",
+        shelf: Shelf::Move,
         about: "The playfield shakes the whole time.",
         make: |s, e, _| vec![faded(c(Target::Shake, s, e, 9.0), 0.5, 0.5, Ease::Linear)],
     },
     Preset {
         name: "Big note slam",
+        shelf: Shelf::Move,
         about: "Every big note shakes the playfield and kicks the zoom.",
         make: |s, e, _| {
             let big = When::Notes { notes: Notes::Big };
@@ -307,50 +409,53 @@ pub const PRESETS: &[Preset] = &[
         },
     },
     Preset {
-        name: "Kat flash",
-        about: "A white flash on every kat.",
+        name: "Spiral lane",
+        shelf: Shelf::Lane,
+        about: "The lane curls into a spiral and back out: the notes ride round it.",
         make: |s, e, _| {
-            vec![on(
-                c(Target::Field(FieldProp::Flash), s, e, 0.3),
-                When::Notes { notes: Notes::Kats },
-                0.5,
+            vec![faded(
+                c(Target::Lane(2), s, e, 1.0),
+                4.0,
+                4.0,
+                Ease::SineInOut,
             )]
         },
     },
     Preset {
-        name: "Drop",
-        about: "One big hit at the start: a flash, a zoom kick and a hard shake.",
+        name: "Zigzag lane",
+        shelf: Shelf::Lane,
+        about: "The lane bends into a zigzag, and straightens out at the end.",
         make: |s, e, _| {
-            let once = |t, a, len| on(c(t, s, e, a), When::Beats { every: 256.0 }, len);
-            vec![
-                once(Target::Field(FieldProp::Flash), 0.8, 2.0),
-                once(ZOOM, 0.3, 2.0),
-                once(Target::Shake, 26.0, 2.0),
-            ]
+            vec![faded(
+                c(Target::Lane(0), s, e, 1.0),
+                2.0,
+                2.0,
+                Ease::SineInOut,
+            )]
         },
     },
     Preset {
-        name: "Build-up",
-        about: "The zoom and the dark edges grow slowly at first, then fast, to the end.",
-        make: |s, e, b| {
-            vec![
-                faded(c(ZOOM, s, e, 0.25), b, 0.0, Ease::QuadIn),
-                faded(
-                    c(Target::Field(FieldProp::Vignette), s, e, 0.7),
-                    b,
-                    0.0,
-                    Ease::QuadIn,
-                ),
-            ]
+        name: "Loop lane",
+        shelf: Shelf::Lane,
+        about: "The notes come round a loop before they reach the drum.",
+        make: |s, e, _| {
+            vec![faded(
+                c(Target::Lane(3), s, e, 1.0),
+                4.0,
+                4.0,
+                Ease::SineInOut,
+            )]
         },
     },
     Preset {
         name: "Hide the notes",
+        shelf: Shelf::Notes,
         about: "The notes are hidden: play it by memory and by ear. They are still there to hit.",
         make: |s, e, _| vec![c(Target::Notes(None, NoteProp::Hidden), s, e, 1.0)],
     },
     Preset {
         name: "Faint notes",
+        shelf: Shelf::Notes,
         about: "The notes fade until they are barely there.",
         make: |s, e, _| {
             vec![faded(
@@ -363,6 +468,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Bouncing notes",
+        shelf: Shelf::Notes,
         about: "The notes bob up and down, a beat each way.",
         make: |s, e, _| {
             let mut c = every(
@@ -377,6 +483,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Swirl in",
+        shelf: Shelf::Notes,
         about: "The notes come in curving round the drum.",
         make: |s, e, _| {
             vec![faded(
@@ -389,6 +496,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Speed up",
+        shelf: Shelf::Notes,
         about: "The notes scroll half again as fast (only what is drawn: the timing is the same).",
         make: |s, e, _| {
             vec![faded(
@@ -400,7 +508,49 @@ pub const PRESETS: &[Preset] = &[
         },
     },
     Preset {
+        name: "Kat flash",
+        shelf: Shelf::Look,
+        about: "A white flash on every kat.",
+        make: |s, e, _| {
+            vec![on(
+                c(Target::Field(FieldProp::Flash), s, e, 0.3),
+                When::Notes { notes: Notes::Kats },
+                0.5,
+            )]
+        },
+    },
+    Preset {
+        name: "Drop",
+        shelf: Shelf::Look,
+        about: "One big hit at the start: a flash, a zoom kick and a hard shake.",
+        make: |s, e, _| {
+            let once = |t, a, len| on(c(t, s, e, a), When::Beats { every: 256.0 }, len);
+            vec![
+                once(Target::Field(FieldProp::Flash), 0.8, 2.0),
+                once(ZOOM, 0.3, 2.0),
+                once(Target::Shake, 26.0, 2.0),
+            ]
+        },
+    },
+    Preset {
+        name: "Build-up",
+        shelf: Shelf::Look,
+        about: "The zoom and the dark edges grow slowly at first, then fast, to the end.",
+        make: |s, e, b| {
+            vec![
+                faded(c(ZOOM, s, e, 0.25), b, 0.0, Ease::QuadIn),
+                faded(
+                    c(Target::Field(FieldProp::Vignette), s, e, 0.7),
+                    b,
+                    0.0,
+                    Ease::QuadIn,
+                ),
+            ]
+        },
+    },
+    Preset {
         name: "Echo trail",
+        shelf: Shelf::Look,
         about: "The playfield leaves four fading copies behind it.",
         make: |s, e, _| {
             vec![faded(
@@ -413,6 +563,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Kaleidoscope",
+        shelf: Shelf::Look,
         about: "Six copies of the playfield turned about the middle of the screen.",
         make: |s, e, _| {
             vec![faded(
@@ -425,6 +576,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Colour wash",
+        shelf: Shelf::Look,
         about: "A colour laid over the playfield, its hue drifting all the way round.",
         make: |s, e, b| {
             vec![
@@ -445,6 +597,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Miss glitch",
+        shelf: Shelf::Look,
         about: "A miss tears the picture into slices for a moment.",
         make: |s, e, _| {
             vec![on(
@@ -456,11 +609,13 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Text",
+        shelf: Shelf::Text,
         about: "Words on screen in the game's font, fading in and out. Click it to type them.",
         make: |s, e, _| vec![faded(layer(text("Text"), s, e), 1.0, 1.0, Ease::QuadOut)],
     },
     Preset {
         name: "Fly-in text",
+        shelf: Shelf::Text,
         about: "Words that slide in from the left and settle in the middle.",
         make: |s, e, _| {
             let mut c = faded(layer(text("Here we go"), s, e), 0.5, 1.0, Ease::CubicOut);
@@ -473,6 +628,7 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Pulsing text",
+        shelf: Shelf::Text,
         about: "Words that jump a little bigger on every beat.",
         make: |s, e, _| {
             vec![every(
@@ -488,11 +644,13 @@ pub const PRESETS: &[Preset] = &[
     },
     Preset {
         name: "Picture",
+        shelf: Shelf::Text,
         about: "A picture from the map's folder (put a .png or .jpg there), fading in and out.",
         make: |s, e, _| vec![faded(layer(picture(), s, e), 1.0, 1.0, Ease::QuadOut)],
     },
     Preset {
         name: "Logo on the beat",
+        shelf: Shelf::Text,
         about: "A picture from the map's folder, behind the notes, kicking bigger on every beat.",
         make: |s, e, _| {
             let mut c = every(
@@ -586,13 +744,63 @@ impl Editor {
         self.edit_gimmick(false, |g| g.clips.retain(|c| c.id != id))
     }
 
-    /// A copy of clip `id` right after it; returns the copy's id.
-    pub fn duplicate_clip(&mut self, id: u32) -> Option<u32> {
-        let mut copy = self.clip(id)?.clone();
-        let len = copy.end - copy.start;
-        copy.start = copy.end;
-        copy.end = copy.start + len;
-        self.add_clips(vec![copy]).first().copied()
+    /// Deletes clips `ids` in one undo step.
+    pub fn delete_clips(&mut self, ids: &[u32]) -> bool {
+        self.edit_gimmick(false, |g| g.clips.retain(|c| !ids.contains(&c.id)))
+    }
+
+    /// Copies of clips `ids` right after the stretch they cover together, on the same rows, in one
+    /// undo step; returns the copies' ids.
+    pub fn duplicate_clips(&mut self, ids: &[u32]) -> Vec<u32> {
+        let picked: Vec<Clip> = self
+            .clips()
+            .iter()
+            .filter(|c| ids.contains(&c.id))
+            .cloned()
+            .collect();
+        let (a, b) = picked
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), c| {
+                (a.min(c.start), b.max(c.end))
+            });
+        if picked.is_empty() {
+            return Vec::new();
+        }
+        let shift = b - a;
+        let copies = picked
+            .into_iter()
+            .map(|mut c| {
+                c.start += shift;
+                c.end += shift;
+                c
+            })
+            .collect();
+        self.add_clips(copies)
+    }
+
+    /// Moves clips by `dt` ms and `drows` rows from where `from` (id, start, end, row) had them,
+    /// kept on the timeline and the rows (`drag`: folded into the drag going on).
+    pub fn move_clips(
+        &mut self,
+        from: &[(u32, f64, f64, u8)],
+        dt: f64,
+        drows: i32,
+        drag: bool,
+    ) -> bool {
+        let earliest = from.iter().map(|f| f.1).fold(f64::INFINITY, f64::min);
+        let dt = dt.max(-earliest.max(0.0));
+        let low = from.iter().map(|f| f.3 as i32).min().unwrap_or(0);
+        let high = from.iter().map(|f| f.3 as i32).max().unwrap_or(0);
+        let drows = drows.clamp(-low, clips::LANES as i32 - 1 - high);
+        self.edit_gimmick(drag, |g| {
+            for &(id, start, end, row) in from {
+                if let Some(c) = g.clips.iter_mut().find(|c| c.id == id) {
+                    c.start = start + dt;
+                    c.end = end + dt;
+                    c.lane = (row as i32 + drows) as u8;
+                }
+            }
+        })
     }
 
     /// The moments clip `c` acts at that the chart alone decides (beats and notes; hits and
@@ -699,7 +907,7 @@ mod tests {
         let id = made[0];
         assert!(e.set_clip(id, false, |c| c.amount = 0.2));
         assert_eq!(e.clip(id).unwrap().amount, 0.2);
-        let copy = e.duplicate_clip(id).unwrap();
+        let copy = e.duplicate_clips(&[id])[0];
         assert_eq!(
             (e.clip(copy).unwrap().start, e.clip(copy).unwrap().end),
             (3000.0, 5000.0)
