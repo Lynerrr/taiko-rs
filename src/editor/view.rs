@@ -349,6 +349,9 @@ pub struct View {
     audio_rate: f64,
     pub rate: u32,
     pub want_rate: Option<f64>,
+    /// Play was pressed while the music was still loading (at a new speed): it starts once the
+    /// track is there.
+    play_when_loaded: bool,
     /// The player asked to see the map's folder (File > Open song folder).
     /// A file for the game to show in the file manager (the map, or what was exported).
     show: Option<std::path::PathBuf>,
@@ -518,6 +521,7 @@ impl View {
             audio_rate: 48000.0,
             rate: 100,
             want_rate: None,
+            play_when_loaded: false,
             show: None,
             export_rx: None,
             game: None,
@@ -733,6 +737,7 @@ impl View {
             self.track_rx = None;
             match result {
                 Ok(t) => {
+                    let play = std::mem::take(&mut self.play_when_loaded);
                     if !t.samples.is_empty() {
                         let (track, rate) = (t.clone(), self.audio_rate);
                         let (tx, rx) = std::sync::mpsc::channel();
@@ -744,8 +749,14 @@ impl View {
                     }
                     self.track = Some(t);
                     self.stale = Some(now);
+                    if play {
+                        self.start(audio);
+                    }
                 }
-                Err(e) => self.status = format!("no music: {e}"),
+                Err(e) => {
+                    self.play_when_loaded = false;
+                    self.status = format!("no music: {e}");
+                }
             }
         }
         if let Some((started, from)) = self.playing {
@@ -777,8 +788,22 @@ impl View {
         }
     }
 
+    /// The music is being (re)loaded, after a change of speed: the track there now plays at the
+    /// old speed, so playing it would start in the wrong place and drift off the map.
+    fn track_loading(&self) -> bool {
+        self.want_rate.is_some() || self.track_rx.is_some()
+    }
+
     fn start(&mut self, audio: Option<&Engine>) {
         self.reseek = false;
+        if self.track_loading() {
+            self.play_when_loaded = true;
+            self.status = format!(
+                "getting the music ready at {}%: it plays once it's ready",
+                self.rate
+            );
+            return;
+        }
         let (Some(track), Some(a)) = (&self.track, audio) else {
             self.status = "the music isn't loaded".into();
             return;
@@ -792,6 +817,7 @@ impl View {
     }
 
     fn stop(&mut self, audio: Option<&Engine>) {
+        self.play_when_loaded = false;
         if self.playing.take().is_some()
             && let Some(a) = audio
         {
@@ -800,7 +826,7 @@ impl View {
     }
 
     fn toggle_play(&mut self, audio: Option<&Engine>) {
-        if self.playing.is_some() {
+        if self.playing.is_some() || self.play_when_loaded {
             self.stop(audio);
         } else {
             self.start(audio);
@@ -2829,6 +2855,40 @@ mod tests {
     fn click(v: &mut View, x: f32, y: f32) {
         v.mouse_down(x, y, Keys::default(), None);
         v.mouse_up(x, y, Keys::default());
+    }
+
+    #[test]
+    fn play_waits_for_the_music_at_a_new_speed() {
+        let mut v = view();
+        let old = Arc::new(Track {
+            samples: vec![0.0; 96_000],
+            rate: 1.0,
+            stream: None,
+        });
+        v.track = Some(old);
+        v.set_rate(50, None);
+        // The old track would play twice as far in, at full speed.
+        v.toggle_play(None);
+        assert!(v.playing.is_none());
+        assert!(v.play_when_loaded, "{}", v.status);
+        // Pressed again while it loads: called off.
+        v.toggle_play(None);
+        assert!(!v.play_when_loaded);
+        v.toggle_play(None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert_eq!(v.take_rate_request(), Some(0.5));
+        v.set_track_loader(rx, 48000.0);
+        assert!(v.track_loading());
+        tx.send(Ok(Arc::new(Track {
+            samples: vec![0.0; 192_000],
+            rate: 0.5,
+            stream: None,
+        })))
+        .unwrap();
+        v.update(Instant::now(), None);
+        assert!(!v.track_loading());
+        assert!(!v.play_when_loaded, "it tried to play once the track came");
+        assert_eq!(v.track.as_ref().map(|t| t.rate), Some(0.5));
     }
 
     #[test]
