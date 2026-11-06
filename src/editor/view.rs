@@ -4756,6 +4756,45 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_is_picked_from_a_list_of_the_folder_in_columns_on_screen() {
+        use crate::tko::clips::Show;
+        let mut v = clips_view();
+        let dir = v.ed.path.parent().unwrap().to_path_buf();
+        let names: Vec<String> = (0..70).map(|i| format!("egg{i:02}.png")).collect();
+        for n in &names {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        v.set_time(3000.0);
+        put_fx(&mut v, preset("Picture"));
+        draw(&mut v);
+        press(&mut v, Btn::Fx(FxAct::Menu(2)));
+        let c = draw(&mut v);
+        let items: Vec<[f32; 4]> = v
+            .buttons
+            .iter()
+            .filter(|(_, b)| matches!(b, Btn::Fx(FxAct::SetPicture(_))))
+            .map(|(r, _)| *r)
+            .collect();
+        assert_eq!(items.len(), 70, "every picture is listed");
+        let lefts: std::collections::BTreeSet<i32> = items.iter().map(|r| r[0] as i32).collect();
+        assert!(lefts.len() > 1, "too many for one column");
+        assert!(
+            items.iter().all(|r| r[0] >= 0.0
+                && r[0] + r[2] <= c.width
+                && r[1] >= 0.0
+                && r[1] + r[3] <= 480.0),
+            "all on screen"
+        );
+        press(&mut v, Btn::Fx(FxAct::SetPicture(42)));
+        assert_eq!(
+            picked_layer(&v).show,
+            Show::Picture {
+                file: "egg42.png".into()
+            }
+        );
+    }
+
+    #[test]
     fn spin_is_set_in_a_layers_settings() {
         let mut v = clips_view();
         v.set_time(3000.0);

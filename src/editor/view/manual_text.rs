@@ -167,7 +167,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 
 # Text and pictures
 - Text, Fly-in text and Pulsing text on the shelf put words on screen in the game's font. Click the words in the block's settings and type: the first key replaces them, Ctrl+Backspace takes a word.
-- Picture and Logo on the beat show an image from the map's folder: drop a .png or .jpg on the editor window (it is copied there and put on the picked picture block) or put it in the folder yourself. < and > go through them. It goes with the map in an .rsz.
+- Picture and Logo on the beat show an image from the map's folder: drop a .png or .jpg on the editor window (it is copied there and put on the picked picture block) or put it in the folder yourself. < and > go through them; click its name for a list of them all, with a look at each. It goes with the map in an .rsz.
 - With one picked, drag the preview to place it: Shift turns it, Ctrl sizes it. x, y, size, turn and opacity (0 invisible, 1 solid) can be typed too; with moves, a different opacity at its end fades it.
 - moves: it glides from its start pose to a pose of its own at its end. Edit start pose and edit end pose choose which one the numbers and a drag change; the preview frames both, with a dotted path between them.
 - spin keeps it turning by that many degrees each beat (360 is a full turn a beat, minus turns the other way).
@@ -451,7 +451,7 @@ F4 Effects открывается на Clips: самый простой спос
 
 # Текст и картинки
 - Text, Fly-in text и Pulsing text на полке выводят слова шрифтом игры. Кликните по словам в настройках блока и печатайте: первая клавиша заменяет их целиком, Ctrl+Backspace стирает слово.
-- Picture и Logo on the beat показывают картинку из папки карты: бросьте .png или .jpg на окно редактора (она скопируется туда и встанет в выбранный блок с картинкой) или положите её в папку сами. < и > листают их. В .rsz картинка уезжает вместе с картой.
+- Picture и Logo on the beat показывают картинку из папки карты: бросьте .png или .jpg на окно редактора (она скопируется туда и встанет в выбранный блок с картинкой) или положите её в папку сами. < и > листают их; клик по имени открывает список всех, с превью каждой. В .rsz картинка уезжает вместе с картой.
 - Когда блок выбран, тащите превью, чтобы поставить его: Shift поворачивает, Ctrl меняет размер. x, y, size, turn и opacity (0 невидимо, 1 полностью) можно и набрать; с moves другая opacity в конце плавно его проявляет или гасит.
 - moves: блок плавно едет от начальной позы к своей позе в конце. Edit start pose и edit end pose выбирают, какую из двух меняют числа и перетаскивание; превью обводит обе рамками с пунктиром между ними.
 - spin крутит его на столько градусов за долю (360 — полный оборот за долю, минус — в другую сторону).

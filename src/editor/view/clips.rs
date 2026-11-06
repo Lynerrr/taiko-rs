@@ -43,8 +43,10 @@ pub enum FxAct {
     Disarm,
     /// Back to the shelf.
     Back,
-    /// Opens a dropdown of the clip picked: what it moves (0), its ease (1).
+    /// Opens a dropdown of the clip picked: what it moves (0), its ease (1), its picture (2).
     Menu(u8),
+    /// Its picture, by its index in the map folder's (`View::map_pictures`).
+    SetPicture(u16),
     /// What it moves, by its index in `targets`.
     SetWhat(u16),
     /// Its ease, by its index in `Ease::ALL`.
@@ -551,9 +553,10 @@ impl View {
                 let label = if file.is_empty() {
                     "no picture: put one in the map folder or drop it here".to_string()
                 } else {
-                    file.clone()
+                    format!("{file}  v")
                 };
-                row.push((label, Btn::Fx(FxAct::Picture(1)), true));
+                let open = self.fx_drop.is_some_and(|d| d.0 == 2);
+                row.push((label, Btn::Fx(FxAct::Menu(2)), open || !file.is_empty()));
                 row.push((">".to_string(), Btn::Fx(FxAct::Picture(1)), false));
             }
         }
@@ -1121,6 +1124,16 @@ impl View {
                     })
                 }
             }
+            FxAct::SetPicture(i) => match self.map_pictures().get(i as usize).cloned() {
+                Some(name) => self.ed.set_clip(id, false, |c| {
+                    if let Some(l) = c.layer.as_deref_mut()
+                        && let Show::Picture { file } = &mut l.show
+                    {
+                        *file = name.clone();
+                    }
+                }),
+                None => false,
+            },
             FxAct::Picture(d) => {
                 let all = self.map_pictures();
                 if all.is_empty() {
@@ -1821,6 +1834,13 @@ impl View {
         if kind == 1 {
             return self.draw_ease_drop(c, at, clip.ease);
         }
+        if kind == 2 {
+            let now = match clip.layer.as_deref().map(|l| &l.show) {
+                Some(Show::Picture { file }) => file.clone(),
+                _ => String::new(),
+            };
+            return self.draw_picture_drop(c, at, &now);
+        }
         let now = clip.target().map(listed);
         let all = targets();
         let cols = target_columns();
@@ -1911,6 +1931,109 @@ impl View {
                     rgba(DIM, 1.0),
                     line,
                 );
+            }
+        }
+    }
+
+    /// Every picture in the map's folder, in columns when there are many, the one under the
+    /// pointer shown large beside the list.
+    fn draw_picture_drop(&mut self, c: &mut Canvas, at: [f32; 4], now: &str) {
+        const ROW: f32 = 14.0;
+        let all = self.map_pictures();
+        if all.is_empty() {
+            self.status =
+                "no pictures in the map's folder: drop a .png or .jpg on the editor".into();
+            self.fx_drop = None;
+            return;
+        }
+        let below = 476.0 - (at[1] + at[3] + 1.0);
+        let above = at[1] - 5.0;
+        let room = below.max(above).max(ROW * 4.0);
+        let per_col = ((room - 4.0) / ROW).floor().max(1.0) as usize;
+        let cols = all.len().div_ceil(per_col);
+        let rows = all.len().min(per_col);
+        let col_w = all
+            .iter()
+            .map(|f| Canvas::text_width(7.0, f) + 20.0)
+            .fold(90.0, f32::max)
+            .min(220.0);
+        let (w, h) = (cols as f32 * col_w + 4.0, rows as f32 * ROW + 4.0);
+        let x = at[0].min(c.width - w - 4.0).max(4.0);
+        let y = if h <= below {
+            at[1] + at[3] + 1.0
+        } else {
+            (at[1] - h - 1.0).max(4.0)
+        };
+        c.round_rect(
+            [x, y],
+            [w, h],
+            3.0,
+            rgba(0x15151d, 1.0),
+            rgba(0x5a5a78, 1.0),
+            1.0,
+        );
+        let mut hovered = None;
+        for (i, f) in all.iter().enumerate() {
+            let (col, row) = (i / per_col, i % per_col);
+            let r = [
+                x + 2.0 + col as f32 * col_w,
+                y + 2.0 + row as f32 * ROW,
+                col_w - 2.0,
+                ROW - 1.0,
+            ];
+            let on = f == now;
+            let hover = c.hovered(r[0], r[1], r[2], r[3]);
+            if hover {
+                hovered = Some((f.clone(), r));
+            }
+            if on || hover {
+                c.rect(
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    rgba(if on { 0x4a221b } else { 0x2c2c3c }, 1.0),
+                );
+            }
+            c.text(
+                r[0] + 6.0,
+                r[1] + 3.0,
+                7.0,
+                rgba(if on { 0xffffff } else { 0xd8d8e8 }, 1.0),
+                &Canvas::fit(7.0, col_w - 12.0, f),
+            );
+            self.buttons.push((
+                r,
+                Btn::Fx(FxAct::SetPicture(i.min(u16::MAX as usize) as u16)),
+            ));
+        }
+        // A look at the one under the pointer.
+        if let Some((f, r)) = hovered {
+            let side = 96.0;
+            let px = if x + w + side + 8.0 < c.width {
+                x + w + 4.0
+            } else {
+                (x - side - 4.0).max(4.0)
+            };
+            let py = (r[1] - side / 2.0).clamp(4.0, 476.0 - side);
+            c.round_rect(
+                [px, py],
+                [side, side],
+                3.0,
+                rgba(0x0b0b10, 1.0),
+                rgba(0x5a5a78, 1.0),
+                1.0,
+            );
+            let (cx, cy) = (px + side / 2.0, py + side / 2.0);
+            // Kept inside the box whatever its shape.
+            let aspect = c
+                .picture_slots
+                .get(&f.to_ascii_lowercase())
+                .map_or(1.0, |s| s.1)
+                .max(0.01);
+            let h = (side - 12.0) / aspect.max(1.0);
+            if !c.picture(&f, cx, cy, h, 0.0, rgba(0xffffff, 1.0)) {
+                c.text_centered(cx, cy - 3.0, 6.0, rgba(0x8a8aa0, 1.0), "loading...");
             }
         }
     }
