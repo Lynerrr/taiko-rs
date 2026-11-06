@@ -572,7 +572,10 @@ pub const MOUSE: &[(&str, &str)] = &[
     ("Drag a roll's end", "Stretch it"),
     ("Drag, empty space", "Select a box of notes (Select tool)"),
     ("Double click a note", "Put the playhead on it"),
-    ("Click the ruler", "Move the playhead; drag to scrub"),
+    (
+        "Click the ruler",
+        "Move the playhead; drag to scrub, past an edge to scroll",
+    ),
     (
         "Wheel",
         "Move the playhead along the beat snap (Shift: 4 steps)",
