@@ -1985,9 +1985,12 @@ impl Renderer {
         }
         // Clipped shape ranges (rects as fractions of the screen) -> pixel scissors, in order,
         // without overlaps.
-        let mut clip: Vec<(std::ops::Range<usize>, [u32; 4])> = clips
+        let clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clips
             .into_iter()
             .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
+            .collect();
+        let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = flatten_clips(clips)
+            .into_iter()
             .map(|(range, r)| {
                 let (sw, sh) = (w as f32, h as f32);
                 let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
@@ -2001,15 +2004,6 @@ impl Renderer {
                 (range, [x as u32, y as u32, w as u32, h as u32])
             })
             .collect();
-        clip.sort_by_key(|(range, _)| range.start);
-        let mut end = 0;
-        clip.retain(|(range, _)| {
-            let ok = range.start >= end;
-            if ok {
-                end = range.end;
-            }
-            ok
-        });
         if shapes.len() > self.capacity {
             self.capacity = shapes.len().next_power_of_two().min(self.shape_limit());
             self.instances = Self::make_instance_buffer(&self.device, self.capacity);
@@ -2230,9 +2224,13 @@ impl Renderer {
         clear: [f64; 3],
     ) -> Option<Vec<u8>> {
         let shapes = &shapes[..shapes.len().min(self.shape_limit())];
-        let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = clips
+        let clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clips
             .iter()
             .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
+            .cloned()
+            .collect();
+        let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = flatten_clips(clips)
+            .into_iter()
             .map(|(range, r)| {
                 let (sw, sh) = (w as f32, h as f32);
                 let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
@@ -2560,6 +2558,36 @@ impl Renderer {
             pass.draw(0..4, at..count as u32);
         }
     }
+}
+
+/// Clipped shape ranges (rects as fractions of the screen) as one list in order with no
+/// overlaps, as the draw takes them: where ranges nest (a glitch's slices inside the playfield's
+/// frame), shapes are clipped to every rect over them, and the rest of the outer range keeps the
+/// outer rect alone. Overlapping ranges after the first used to be dropped, so in a framed
+/// playfield (a play area smaller than the screen) each slice drew its whole copy of the lane
+/// unclipped, and the last one covered the notes.
+fn flatten_clips(
+    clips: Vec<(std::ops::Range<usize>, [f32; 4])>,
+) -> Vec<(std::ops::Range<usize>, [f32; 4])> {
+    let clips: Vec<_> = clips.into_iter().filter(|(r, _)| r.start < r.end).collect();
+    let mut cuts: Vec<usize> = clips.iter().flat_map(|(r, _)| [r.start, r.end]).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out: Vec<(std::ops::Range<usize>, [f32; 4])> = Vec::new();
+    for pair in cuts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let rect = clips
+            .iter()
+            .filter(|(r, _)| r.start <= a && r.end >= b)
+            .map(|(_, c)| *c)
+            .reduce(intersect);
+        let Some(rect) = rect else { continue };
+        match out.last_mut() {
+            Some((r, c)) if r.end == a && *c == rect => r.end = b,
+            _ => out.push((a..b, rect)),
+        }
+    }
+    out
 }
 
 /// The part of clip rect `a` (x, y, w, h) inside `b`; empty (zero size) when they don't meet.
@@ -3794,6 +3822,38 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nested_clips_flatten_to_the_part_both_allow() {
+        let frame = [0.0, 0.0, 0.5, 1.0];
+        let slice = [0.25, 0.0, 0.5, 0.25];
+        let other = [0.0, 0.5, 1.0, 0.5];
+        // The frame over everything, a slice inside it: before the fix the slice was dropped.
+        let got = super::flatten_clips(vec![(0..10, frame), (3..5, slice), (12..14, other)]);
+        assert_eq!(
+            got,
+            vec![
+                (0..3, frame),
+                (3..5, [0.25, 0.0, 0.25, 0.25]),
+                (5..10, frame),
+                (12..14, other),
+            ]
+        );
+        // Two strips side by side inside one frame, and empty ranges left out.
+        let got = super::flatten_clips(vec![
+            (0..4, frame),
+            (0..2, slice),
+            (2..4, other),
+            (6..6, other),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                (0..2, [0.25, 0.0, 0.25, 0.25]),
+                (2..4, [0.0, 0.5, 0.5, 0.5])
+            ]
+        );
+    }
+
     #[test]
     fn an_outer_clip_keeps_the_inner_ones_cut_down_to_it() {
         let mut c = super::Canvas::default();
