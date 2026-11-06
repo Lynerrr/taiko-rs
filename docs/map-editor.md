@@ -134,7 +134,11 @@ once (Shift keeps it picked); Esc puts it back. Drag a block to move it (to anot
 ends to resize it (a short block's ends reach a little past it); right click deletes it. A drag over
 empty rows picks every block in the box, and Shift or Ctrl+click adds or removes one: the blocks
 picked move together, Ctrl+D copies them right after the stretch they cover, and Delete removes
-them. There is always a free row under the last one used (up to 64); when they don't fit, the wheel
+them. Blocks never overlap on a row: one dropped or moved over another goes to the nearest free row
+there, and a resized end stops at the next block. As in Ableton, Ctrl+drag (or Ctrl+Shift+drag) on
+a block drags a copy of it (of every block picked, when it is one of them); Ctrl+C or Ctrl+X keeps
+the blocks picked and Ctrl+V lays them from the playhead, moving the playhead to their end so the
+next paste follows them (also into another map); Ctrl+A picks every block. There is always a free row under the last one used (up to 64); when they don't fit, the wheel
 over them scrolls. The *Look* targets include
 *See-through* (the whole playfield, still there to hit), *Lane see-through* (the lane alone, notes
 kept), *Blackout* (black over the screen; text over the lane and flashes still show) and *Dark

@@ -167,6 +167,10 @@ impl View {
                 }
             }
             Cmd::Cut if self.mode == Mode::Timing => self.run(Cmd::CopyNotes, audio),
+            Cmd::Cut if self.clip_mode() && self.fx_sel.is_some() => self.copy_clips(true),
+            Cmd::CopyNotes if self.clip_mode() && self.fx_sel.is_some() => self.copy_clips(false),
+            Cmd::Paste if self.clip_mode() && View::has_copied_clips() => self.paste_copied_clips(),
+            Cmd::SelectAll if self.clip_mode() => self.pick_all_clips(),
             Cmd::Cut => {
                 let n = self.ed.cut();
                 self.status = format!("cut {n}");

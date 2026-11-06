@@ -1262,14 +1262,20 @@ impl Editor {
     }
 
     /// Adds `new` as one undo step; returns their ids.
-    pub fn add_clips(&mut self, mut new: Vec<Clip>) -> Vec<u32> {
+    pub fn add_clips(&mut self, new: Vec<Clip>) -> Vec<u32> {
+        self.add_clips_as(new, false)
+    }
+
+    /// Adds `new` (`drag`: as the first step of a drag still going on, so moving them after
+    /// is the same undo step); returns their ids.
+    pub fn add_clips_as(&mut self, mut new: Vec<Clip>, drag: bool) -> Vec<u32> {
         let mut next = self.clips().iter().map(|c| c.id).max().unwrap_or(0);
         for c in &mut new {
             next += 1;
             c.id = next;
         }
         let ids: Vec<u32> = new.iter().map(|c| c.id).collect();
-        if self.edit_gimmick(false, |g| g.clips.extend(new)) {
+        if self.edit_gimmick(drag, |g| g.clips.extend(new)) {
             ids
         } else {
             Vec::new()
@@ -1294,8 +1300,84 @@ impl Editor {
         self.edit_gimmick(false, |g| g.clips.retain(|c| !ids.contains(&c.id)))
     }
 
-    /// Copies of clips `ids` right after the stretch they cover together, on the same rows, in one
-    /// undo step; returns the copies' ids.
+    /// Whether blocks at `places` (start, end, row), moved by `drow` rows, stay on the rows and
+    /// meet no other block on theirs (blocks `skip` aside; touching ends are fine).
+    fn rows_free(&self, places: &[(f64, f64, u8)], drow: i32, skip: &[u32]) -> bool {
+        places.iter().all(|&(start, end, row)| {
+            let r = row as i32 + drow;
+            (0..clips::LANES as i32).contains(&r)
+                && self.clips().iter().all(|c| {
+                    skip.contains(&c.id)
+                        || c.lane as i32 != r
+                        || c.start >= end - 0.5
+                        || c.end <= start + 0.5
+                })
+        })
+    }
+
+    /// The row shift nearest `drow` that leaves blocks at `places` on rows of their own: `drow`
+    /// itself when nothing is in the way, else the closest free one (below first). None when
+    /// no shift fits.
+    pub fn free_rows(&self, places: &[(f64, f64, u8)], drow: i32, skip: &[u32]) -> Option<i32> {
+        (0..clips::LANES as i32 * 2)
+            .flat_map(|d| [drow + d, drow - d])
+            .find(|&d| self.rows_free(places, d, skip))
+    }
+
+    /// Adds `new` where each one has its row to itself, moving them all up or down together as
+    /// little as it takes (`drag`: the first step of a drag still going on).
+    pub fn add_clips_free(&mut self, mut new: Vec<Clip>, drag: bool) -> Vec<u32> {
+        let places: Vec<(f64, f64, u8)> = new.iter().map(|c| (c.start, c.end, c.lane)).collect();
+        if let Some(d) = self.free_rows(&places, 0, &[]) {
+            for c in &mut new {
+                c.lane = (c.lane as i32 + d) as u8;
+            }
+        }
+        self.add_clips_as(new, drag)
+    }
+
+    /// The stretch block `id` can grow into on its row, up to the blocks either side.
+    pub fn clip_room(&self, id: u32) -> (f64, f64) {
+        let Some(me) = self.clip(id) else {
+            return (0.0, f64::INFINITY);
+        };
+        let row = self
+            .clips()
+            .iter()
+            .filter(|c| c.id != id && c.lane == me.lane);
+        row.fold((0.0, f64::INFINITY), |(lo, hi), c| {
+            if c.end <= me.start + 0.5 {
+                (lo.max(c.end), hi)
+            } else if c.start >= me.end - 0.5 {
+                (lo, hi.min(c.start))
+            } else {
+                (lo, hi)
+            }
+        })
+    }
+
+    /// Blocks copied before (`copied`), laid down from `at` on with their spacing and rows kept,
+    /// moved to free rows if those are taken; one undo step. Returns the new ids in order.
+    pub fn paste_clips(&mut self, copied: &[Clip], at: f64) -> Vec<u32> {
+        let first = copied.iter().map(|c| c.start).fold(f64::INFINITY, f64::min);
+        if !first.is_finite() {
+            return Vec::new();
+        }
+        let shift = at.max(0.0) - first;
+        let new = copied
+            .iter()
+            .cloned()
+            .map(|mut c| {
+                c.start += shift;
+                c.end += shift;
+                c
+            })
+            .collect();
+        self.add_clips_free(new, false)
+    }
+
+    /// Copies of clips `ids` right after the stretch they cover together, on the same rows (or
+    /// the nearest free ones), in one undo step; returns the copies' ids.
     pub fn duplicate_clips(&mut self, ids: &[u32]) -> Vec<u32> {
         let picked: Vec<Clip> = self
             .clips()
@@ -1320,7 +1402,7 @@ impl Editor {
                 c
             })
             .collect();
-        self.add_clips(copies)
+        self.add_clips_free(copies, false)
     }
 
     /// Moves clips by `dt` ms and `drows` rows from where `from` (id, start, end, row) had them,
@@ -1337,6 +1419,13 @@ impl Editor {
         let low = from.iter().map(|f| f.3 as i32).min().unwrap_or(0);
         let high = from.iter().map(|f| f.3 as i32).max().unwrap_or(0);
         let drows = drows.clamp(-low, clips::LANES as i32 - 1 - high);
+        // Over another block, they go to the nearest rows that are free there.
+        let ids: Vec<u32> = from.iter().map(|f| f.0).collect();
+        let places: Vec<(f64, f64, u8)> = from
+            .iter()
+            .map(|&(_, start, end, row)| (start + dt, end + dt, row))
+            .collect();
+        let drows = self.free_rows(&places, drows, &ids).unwrap_or(drows);
         self.edit_gimmick(drag, |g| {
             for &(id, start, end, row) in from {
                 if let Some(c) = g.clips.iter_mut().find(|c| c.id == id) {
@@ -1488,6 +1577,51 @@ mod tests {
                 .add_clips((PRESETS[0].make)(0.0, 1000.0, 2.0))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn blocks_never_share_a_row_when_added_pasted_or_moved() {
+        let mut e = tko();
+        let block = |row: u8, start: f64, end: f64| {
+            let mut c = c(ZOOM, start, end, 0.1);
+            c.lane = row;
+            c
+        };
+        let rows = |e: &Editor, ids: &[u32]| -> Vec<u8> {
+            ids.iter().map(|&k| e.clip(k).unwrap().lane).collect()
+        };
+        let a = e.add_clips(vec![block(0, 1000.0, 3000.0)])[0];
+        // Over block a: the next row down.
+        let b = e.add_clips_free(vec![block(0, 2000.0, 4000.0)], false)[0];
+        assert_eq!(rows(&e, &[b]), [1]);
+        // After it, end to end: the same row.
+        let after = e.add_clips_free(vec![block(0, 3000.0, 3500.0)], false)[0];
+        assert_eq!(rows(&e, &[after]), [0]);
+        assert!(e.undo());
+
+        // Pasted at 2500 with their spacing; rows 0 and 2 are taken there, so they go down as
+        // one until both are free.
+        let copied = vec![block(0, 0.0, 1000.0), block(2, 500.0, 1500.0)];
+        let pasted = e.paste_clips(&copied, 2500.0);
+        let at: Vec<(f64, f64)> = pasted
+            .iter()
+            .map(|&k| (e.clip(k).unwrap().start, e.clip(k).unwrap().end))
+            .collect();
+        assert_eq!(at, [(2500.0, 3500.0), (3000.0, 4000.0)]);
+        assert_eq!(rows(&e, &pasted), [2, 4]);
+        assert!(e.undo(), "a paste is one undo step");
+        assert!(pasted.iter().all(|&k| e.clip(k).is_none()));
+        assert!(e.paste_clips(&[], 0.0).is_empty());
+
+        // Moved onto block a: the nearest free row there instead.
+        let from = [(b, 2000.0, 4000.0, 1)];
+        assert!(e.move_clips(&from, -1000.0, -1, false));
+        let moved = e.clip(b).unwrap();
+        assert_eq!((moved.start, moved.lane), (1000.0, 1));
+        // An end grows only up to the next block on its row.
+        let c = e.add_clips(vec![block(0, 5000.0, 6000.0)])[0];
+        assert_eq!(e.clip_room(c), (3000.0, f64::INFINITY));
+        assert_eq!(e.clip_room(a), (0.0, 5000.0));
     }
 
     #[test]
