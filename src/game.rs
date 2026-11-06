@@ -3757,6 +3757,7 @@ impl Game {
     /// caller maps it into the playfield area). The scroll and visual mods apply here; Multiverse
     /// draws it three times over.
     pub fn draw_playfield(&mut self, c: &mut Canvas, scroll_speed: f64) {
+        self.draw_layers(c, true);
         if self.mods.has(Mod::Multiverse) {
             self.draw_multiverse(c, scroll_speed);
         } else {
@@ -3765,6 +3766,36 @@ impl Game {
                 ..Universe::CLASSIC
             };
             self.draw_field(c, scroll_speed, Focus::FULL, &uni);
+        }
+        self.draw_layers(c, false);
+    }
+
+    /// A `.tko` map's text and pictures: those under the lane (`behind`) or those over it.
+    fn draw_layers(&self, c: &mut Canvas, behind: bool) {
+        use crate::tko::clips::Show;
+        let Some(r) = self.tko.as_ref() else { return };
+        for (l, at) in r.layers(self.visual_time()) {
+            let p = at.pose;
+            if l.behind != behind || p.alpha < 0.002 {
+                continue;
+            }
+            let (x, y) = (c.width / 2.0 + p.x as f32, p.y as f32);
+            let h = (p.size * at.scale) as f32;
+            let angle = (p.turn as f32).to_radians();
+            let tint = rgba(l.colour, p.alpha as f32);
+            match &l.show {
+                Show::Picture { file } => {
+                    c.picture(file, x, y, h, angle, tint);
+                }
+                Show::Text { text } => {
+                    let start = c.shapes.len();
+                    let w = Canvas::text_width(h, text);
+                    c.text(x - w / 2.0, y - Canvas::text_height(h) / 2.0, h, tint, text);
+                    if angle != 0.0 {
+                        c.rotate_since(start, [x, y], angle, 1.0, [x, y]);
+                    }
+                }
+            }
         }
     }
 
@@ -10318,6 +10349,56 @@ mod tests {
         let a = frame_bytes(&mut plain, 0.0).len();
         let b = frame_bytes(&mut moved, 0.0).len();
         assert!(a > 0 && b > 0);
+    }
+
+    #[test]
+    fn a_maps_text_and_pictures_are_drawn_while_their_clips_last() {
+        use crate::tko::clips::{Clip, Show, Target};
+        pin_drawing_globals();
+        let mut g = crate::tko::gimmick::Gimmick::default();
+        let mut text = Clip::new(Target::Layer, 2000.0, 6000.0);
+        text.layer.as_deref_mut().unwrap().show = Show::Text {
+            text: "HELLO".into(),
+        };
+        let mut pic = Clip::new(Target::Layer, 2000.0, 6000.0);
+        {
+            let l = pic.layer.as_deref_mut().unwrap();
+            l.show = Show::Picture {
+                file: "Logo.png".into(),
+            };
+            l.behind = true;
+        }
+        g.clips = vec![text, pic];
+        let mut with = tko_game(Some(g), Mods::NONE);
+        let mut plain = tko_game(None, Mods::NONE);
+        let draw = |game: &mut Game, t: f64, loaded: bool| {
+            game.time = t;
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            if loaded {
+                c.picture_slots = std::sync::Arc::new([("logo.png".to_string(), (3, 2.0))].into());
+            }
+            game.draw_playfield(&mut c, 1.0);
+            c
+        };
+        let before = draw(&mut with, 1000.0, false);
+        assert!(
+            before.pictures_wanted.is_empty(),
+            "nothing asked before its start"
+        );
+        let c = draw(&mut with, 4000.0, false);
+        assert_eq!(
+            c.pictures_wanted,
+            vec!["logo.png".to_string()],
+            "the picture is asked for"
+        );
+        let base = draw(&mut plain, 4000.0, false).shapes.len();
+        assert_eq!(c.shapes.len(), base + 5, "a quad per letter of HELLO");
+        let c = draw(&mut with, 4000.0, true);
+        assert_eq!(c.shapes.len(), base + 6, "and once loaded, the picture");
+        // Behind the notes: drawn first.
+        assert_eq!(c.shapes[0].params[3], -1003.0);
+        assert_eq!(c.shapes[0].half, [36.0, 18.0], "as wide as its shape says");
     }
 
     /// The whole point of version 1: the gimmick is only ever drawn. The same hits give the same

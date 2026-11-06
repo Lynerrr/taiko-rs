@@ -134,6 +134,16 @@ swirl), when it acts (the whole time, every few beats, on notes
 motion of each repeat (kick, swing, step) and how many beats it takes, the easing, *keep after*, and
 *Fit to kiai* / *Fit to selection*. Blocks add up with each other and with keyframes and nodes.
 
+Text and pictures are blocks too (*Text*, *Fly-in text*, *Pulsing text*, *Picture*, *Logo on the
+beat* on the shelf). A text block's words are typed in its settings (click them), in the game's own
+font. A picture block shows an image from the map's folder (put a `.png` or `.jpg` there first;
+`<` `>` go through them), and it travels with the map in an `.rsz`. With a text or picture block
+picked, a drag in the preview places it (Shift turns it, Ctrl sizes it), and x, y, size, turn and
+*seen* can be typed. *moves* gives it a pose of its own at its end (*at its start* / *at its end*
+choose which one the drag and the numbers change), and it glides between the two by the block's
+easing. *behind the notes* puts it under the lane, *colour* tints it, the fades bring it in and out,
+and *pulses every few beats* / *on notes* / *on hits* kick it bigger by the amount (percent).
+
 The preview can be moved by hand on this page: drag it to move the playfield, Shift+drag to turn
 it around the hit target, Ctrl+drag to zoom it (up grows it, down shrinks it). Each drag sets keys
 at the playhead (snapped to the grid) and undoes in one step. The keys show as diamonds on the

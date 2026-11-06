@@ -713,9 +713,25 @@ impl Runtime {
                         row[note_slot(p)] += v;
                     }
                 }
-                None => {}
+                // Drawn by `layers`.
+                Some(ClipTarget::Layer) | None => {}
             }
         }
+    }
+
+    /// The layer clips on screen at `t`, in the order they're drawn (by start), with how each is.
+    pub fn layers(&self, t: f64) -> Vec<(&crate::tko::clips::Layer, crate::tko::clips::LayerAt)> {
+        self.gimmick
+            .clips
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.layer.is_some() && t >= c.start)
+            .filter_map(|(i, c)| {
+                let list = self.clip_lists.get(i).map_or(&[][..], |l| &l[..]);
+                let at = c.layer_at(t, list, |m| self.beat_len(m))?;
+                Some((c.layer.as_deref()?, at))
+            })
+            .collect()
     }
 
     // ---- play events ----

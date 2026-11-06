@@ -801,7 +801,20 @@ fn shape_shader() -> String {
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
         .replace("AVATAR_GRID", &crate::avatars::GRID.to_string())
         .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
+        .replace("MEDIA_SIDE", &MEDIA_SIDE.to_string())
+        .replace("PICTURE_CELL", &PICTURE_CELL.to_string())
 }
+
+/// The side of the texture that holds the profile pictures (its top left `PICTURE_CELL` square)
+/// and a map's own pictures (the other squares, `Renderer::set_picture`).
+const MEDIA_SIDE: u32 = 2048;
+/// The side of one map picture's square in that texture.
+pub const PICTURE_CELL: u32 = 512;
+/// How many map pictures fit at once.
+pub const PICTURE_SLOTS: u32 = (MEDIA_SIDE / PICTURE_CELL) * (MEDIA_SIDE / PICTURE_CELL) - 1;
+const _: () = assert!(crate::avatars::GRID * crate::avatars::CELL <= PICTURE_CELL);
+/// `Shape::params` w for map picture `slot` is -`PICTURE_BASE` - slot.
+const PICTURE_BASE: f32 = 1000.0;
 
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
@@ -872,13 +885,23 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 
 fn shade(in: VOut) -> vec4<f32> {
+    if (in.params.w < -999.5) {
+        // A map's picture (premultiplied), its square stretched over the quad, tinted by fill.
+        let slot = u32(-in.params.w - 999.5) + 1u;
+        let per = MEDIA_SIDEu / PICTURE_CELLu;
+        let cell = vec2<f32>(f32(slot % per), f32(slot / per));
+        let edge = 0.5 / f32(PICTURE_CELL);
+        let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
+        let t = textureSampleLevel(avatars, samp, (cell + uv) * f32(PICTURE_CELL) / f32(MEDIA_SIDE), 0.0);
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a;
+    }
     if (in.params.w < -0.5) {
         // A profile picture (premultiplied) from its cell of the avatar texture, rounded.
         let slot = u32(-in.params.w - 0.5);
         let cell = vec2<f32>(f32(slot % AVATAR_GRIDu), f32(slot / AVATAR_GRIDu));
         let edge = 0.5 / f32(AVATAR_CELL);
         let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
-        let t = textureSampleLevel(avatars, samp, (cell + uv) / f32(AVATAR_GRID), 0.0);
+        let t = textureSampleLevel(avatars, samp, (cell + uv) * f32(AVATAR_CELL) / f32(MEDIA_SIDE), 0.0);
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
         return t * in.fill.a * cover;
@@ -1098,9 +1121,9 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let avatar_side = crate::avatars::GRID * crate::avatars::CELL;
+        let avatar_side = MEDIA_SIDE;
         let avatar_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("avatars"),
+            label: Some("avatars and map pictures"),
             size: wgpu::Extent3d {
                 width: avatar_side,
                 height: avatar_side,
@@ -1477,6 +1500,39 @@ impl Renderer {
             return;
         }
         let (gx, gy) = (slot % crate::avatars::GRID, slot / crate::avatars::GRID);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.avatar_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: gx * cell,
+                    y: gy * cell,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * cell),
+                rows_per_image: Some(cell),
+            },
+            wgpu::Extent3d {
+                width: cell,
+                height: cell,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Puts a map's picture (`PICTURE_CELL` square, premultiplied RGBA) in `slot`.
+    pub fn set_picture(&mut self, slot: u32, rgba: &[u8]) {
+        let cell = PICTURE_CELL;
+        if slot >= PICTURE_SLOTS || rgba.len() != (cell * cell * 4) as usize {
+            return;
+        }
+        let per = MEDIA_SIDE / cell;
+        let (gx, gy) = ((slot + 1) % per, (slot + 1) / per);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.avatar_texture,
@@ -2822,6 +2878,10 @@ pub struct Canvas {
     pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
     /// Pictures asked for this frame (lowercased names), so they get fetched.
     pub avatars_wanted: Vec<String>,
+    /// The map pictures in the texture, by file name (lowercase): slot and width / height.
+    pub picture_slots: std::sync::Arc<std::collections::HashMap<String, (u32, f32)>>,
+    /// Map pictures drawn this frame (file names, lowercase), for the app to load.
+    pub pictures_wanted: Vec<String>,
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -3003,6 +3063,7 @@ impl Canvas {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
         self.avatars_wanted.clear();
+        self.pictures_wanted.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -3312,6 +3373,37 @@ impl Canvas {
 
     /// `name`'s profile picture, round, centred on (`x`, `y`) with radius `r`; until it's here
     /// (and without one) their initial on a disc of `colour`.
+    /// A map's picture `file`, `h` tall (as wide as its own shape makes it) centred on (`x`, `y`),
+    /// turned by `angle` (radians, clockwise) and tinted by `tint`. Asks for it to be loaded and
+    /// draws nothing until it is; false then.
+    pub fn picture(
+        &mut self,
+        file: &str,
+        x: f32,
+        y: f32,
+        h: f32,
+        angle: f32,
+        tint: [f32; 4],
+    ) -> bool {
+        let key = file.to_ascii_lowercase();
+        let slot = self.picture_slots.get(&key).copied();
+        if !self.pictures_wanted.contains(&key) {
+            self.pictures_wanted.push(key);
+        }
+        let Some((slot, aspect)) = slot else {
+            return false;
+        };
+        self.shapes.push(Shape {
+            center: [x, y],
+            half: [h * aspect / 2.0, h / 2.0],
+            fill: tint,
+            border: CLEAR,
+            params: [0.0, 0.0, 0.0, -PICTURE_BASE - slot as f32],
+            angle,
+        });
+        true
+    }
+
     pub fn avatar(&mut self, name: &str, x: f32, y: f32, r: f32, colour: u32, a: f32) {
         let key = name.to_ascii_lowercase();
         let slot = self.avatar_slots.get(&key).copied();

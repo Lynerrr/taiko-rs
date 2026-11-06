@@ -19,6 +19,7 @@ pub fn targets() -> Vec<Target> {
 /// A clip's target for people.
 pub fn target_label(t: Target) -> String {
     match t {
+        Target::Layer => "Text / picture".into(),
         Target::Shake => "Shake".into(),
         Target::Lane(k) => format!(
             "Lane: {}",
@@ -76,6 +77,9 @@ pub fn target_label(t: Target) -> String {
 /// What a target is about, for its tooltip.
 pub fn target_about(t: Target) -> &'static str {
     match t {
+        Target::Layer => {
+            "Shows text or a picture from the map's folder for the block's length. Repeating, it pulses: the amount is how much bigger, in percent."
+        }
         Target::Lane(_) => {
             "Bends the lane into this shape: the notes travel along it. The amount is how far, 0 straight to 1 the whole shape; fade it in and out to morph."
         }
@@ -92,6 +96,7 @@ pub fn target_about(t: Target) -> &'static str {
 /// green.
 pub fn target_colour(t: Target) -> u32 {
     match t {
+        Target::Layer => 0xE8E8F0,
         Target::Shake => 0xFFA040,
         Target::Lane(_) => 0xFFD34D,
         Target::Notes(..) => 0x5FD49A,
@@ -108,7 +113,7 @@ pub fn amount_step(t: Target) -> f64 {
     let span = match t {
         Target::Field(p) => p.range().1 - p.range().0,
         Target::Notes(_, p) => p.range().1 - p.range().0,
-        Target::Shake => 400.0,
+        Target::Shake | Target::Layer => 400.0,
         Target::Lane(_) => 1.0,
     };
     10f64.powf((span / 100.0).log10().floor()).clamp(0.01, 10.0)
@@ -116,7 +121,11 @@ pub fn amount_step(t: Target) -> f64 {
 
 /// A clip in words: what, and how often ("Zoom, every 2 beats").
 pub fn describe(c: &Clip) -> String {
-    let what = c.target().map_or_else(|| c.what.clone(), target_label);
+    let what = match c.layer.as_deref().map(|l| &l.show) {
+        Some(clips::Show::Text { text }) => format!("\u{201c}{text}\u{201d}"),
+        Some(clips::Show::Picture { file }) => file.clone(),
+        None => c.target().map_or_else(|| c.what.clone(), target_label),
+    };
     let beats = |b: f64| {
         if b == 1.0 {
             "beat".to_string()
@@ -445,7 +454,85 @@ pub const PRESETS: &[Preset] = &[
             )]
         },
     },
+    Preset {
+        name: "Text",
+        about: "Words on screen in the game's font, fading in and out. Click it to type them.",
+        make: |s, e, _| vec![faded(layer(text("Text"), s, e), 1.0, 1.0, Ease::QuadOut)],
+    },
+    Preset {
+        name: "Fly-in text",
+        about: "Words that slide in from the left and settle in the middle.",
+        make: |s, e, _| {
+            let mut c = faded(layer(text("Here we go"), s, e), 0.5, 1.0, Ease::CubicOut);
+            if let Some(l) = c.layer.as_deref_mut() {
+                l.to = Some(l.from);
+                l.from.x -= 300.0;
+            }
+            vec![c]
+        },
+    },
+    Preset {
+        name: "Pulsing text",
+        about: "Words that jump a little bigger on every beat.",
+        make: |s, e, _| {
+            vec![every(
+                Clip {
+                    amount: 15.0,
+                    ..faded(layer(text("Text"), s, e), 0.5, 0.5, Ease::QuadOut)
+                },
+                1.0,
+                0.75,
+                Motion::Kick,
+            )]
+        },
+    },
+    Preset {
+        name: "Picture",
+        about: "A picture from the map's folder (put a .png or .jpg there), fading in and out.",
+        make: |s, e, _| vec![faded(layer(picture(), s, e), 1.0, 1.0, Ease::QuadOut)],
+    },
+    Preset {
+        name: "Logo on the beat",
+        about: "A picture from the map's folder, behind the notes, kicking bigger on every beat.",
+        make: |s, e, _| {
+            let mut c = every(
+                Clip {
+                    amount: 8.0,
+                    ..faded(layer(picture(), s, e), 1.0, 1.0, Ease::QuadOut)
+                },
+                1.0,
+                0.75,
+                Motion::Kick,
+            );
+            if let Some(l) = c.layer.as_deref_mut() {
+                l.behind = true;
+                l.from.size = 160.0;
+                l.from.y = 240.0;
+                l.from.alpha = 0.5;
+            }
+            vec![c]
+        },
+    },
 ];
+
+fn layer(show: clips::Show, s: f64, e: f64) -> Clip {
+    let mut c = Clip::new(Target::Layer, s, e);
+    if let Some(l) = c.layer.as_deref_mut() {
+        l.show = show;
+    }
+    c
+}
+
+fn text(t: &str) -> clips::Show {
+    clips::Show::Text { text: t.into() }
+}
+
+/// A picture to be filled in with one from the map's folder when it is dropped.
+fn picture() -> clips::Show {
+    clips::Show::Picture {
+        file: String::new(),
+    }
+}
 
 impl Editor {
     pub fn clips(&self) -> &[Clip] {
@@ -572,8 +659,17 @@ mod tests {
     #[test]
     fn every_preset_makes_clips_the_runtime_keeps() {
         for p in PRESETS {
-            let clips = (p.make)(1000.0, 9000.0, 16.0);
+            let mut clips = (p.make)(1000.0, 9000.0, 16.0);
             assert!(!clips.is_empty(), "{}", p.name);
+            // A picture is picked from the map's folder when it is dropped.
+            for c in &mut clips {
+                if let Some(l) = c.layer.as_deref_mut()
+                    && let clips::Show::Picture { file } = &mut l.show
+                {
+                    assert!(file.is_empty(), "{}", p.name);
+                    *file = "bg.png".into();
+                }
+            }
             let mut kept = clips.clone();
             crate::tko::clips::sanitize(&mut kept);
             assert_eq!(
@@ -583,7 +679,12 @@ mod tests {
                 p.name
             );
             for c in &clips {
-                assert!(c.amount != 0.0, "{} does nothing", p.name);
+                // Text and pictures show something even without an amount.
+                assert!(
+                    c.amount != 0.0 || c.layer.is_some(),
+                    "{} does nothing",
+                    p.name
+                );
                 let t = c.target().unwrap();
                 assert!(!target_label(t).is_empty() && !target_about(t).is_empty());
             }

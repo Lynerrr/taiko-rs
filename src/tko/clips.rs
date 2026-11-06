@@ -111,6 +111,144 @@ pub enum Target {
     /// The lane bent into shape `LANE_SHAPES[k]`: the amount is how far, 0 straight to 1 the
     /// whole shape.
     Lane(usize),
+    /// Text or a picture on screen for the clip's length (`Clip::layer`). Repeating, it pulses:
+    /// the amount is how much bigger it gets, in percent.
+    Layer,
+}
+
+/// The longest text a layer shows.
+pub const MAX_TEXT: usize = 120;
+
+/// What a layer shows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Show {
+    /// In the game's own font.
+    Text { text: String },
+    /// An image file in the map's folder.
+    Picture { file: String },
+}
+
+/// Where and how a layer is, in units of the 480 tall screen.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Pose {
+    /// From the middle of the screen, right.
+    pub x: f64,
+    /// From the top of the screen, down.
+    pub y: f64,
+    /// How tall: a line of text, or the picture.
+    pub size: f64,
+    /// Degrees, clockwise.
+    pub turn: f64,
+    /// 0 unseen to 1.
+    pub alpha: f64,
+}
+
+impl Default for Pose {
+    fn default() -> Self {
+        Pose {
+            x: 0.0,
+            y: 110.0,
+            size: 36.0,
+            turn: 0.0,
+            alpha: 1.0,
+        }
+    }
+}
+
+impl Pose {
+    fn sanitize(&mut self) {
+        let num =
+            |v: f64, lo: f64, hi: f64, or: f64| if v.is_finite() { v.clamp(lo, hi) } else { or };
+        self.x = num(self.x, -4000.0, 4000.0, 0.0);
+        self.y = num(self.y, -4000.0, 4000.0, 110.0);
+        self.size = num(self.size, 1.0, 4000.0, 36.0);
+        self.turn = num(self.turn, -36000.0, 36000.0, 0.0);
+        self.alpha = num(self.alpha, 0.0, 1.0, 1.0);
+    }
+
+    /// Between `self` (0) and `b` (1).
+    pub fn lerp(&self, b: &Pose, k: f64) -> Pose {
+        let m = |a: f64, b: f64| a + (b - a) * k;
+        Pose {
+            x: m(self.x, b.x),
+            y: m(self.y, b.y),
+            size: m(self.size, b.size),
+            turn: m(self.turn, b.turn),
+            alpha: m(self.alpha, b.alpha),
+        }
+    }
+}
+
+/// Text or a picture a clip puts on screen.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Layer {
+    pub show: Show,
+    /// At the clip's start.
+    #[serde(default)]
+    pub from: Pose,
+    /// At its end, reached by its easing; none: it stays as it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<Pose>,
+    /// RGB the text or picture is tinted.
+    #[serde(default = "white")]
+    pub colour: u32,
+    /// Under the lane and notes instead of over them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub behind: bool,
+}
+
+fn white() -> u32 {
+    0xffffff
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Layer {
+            show: Show::Text {
+                text: "Text".into(),
+            },
+            from: Pose::default(),
+            to: None,
+            colour: white(),
+            behind: false,
+        }
+    }
+}
+
+impl Layer {
+    fn sanitize(&mut self) -> bool {
+        match &mut self.show {
+            Show::Text { text } => {
+                let clean: String = text
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(MAX_TEXT)
+                    .collect();
+                *text = clean;
+            }
+            Show::Picture { file } => {
+                if !crate::pictures::safe_name(file) {
+                    return false;
+                }
+            }
+        }
+        self.from.sanitize();
+        if let Some(to) = &mut self.to {
+            to.sanitize();
+        }
+        self.colour &= 0xffffff;
+        true
+    }
+}
+
+/// A layer as it is at a moment: where, and how strongly seen (fades in).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerAt {
+    pub pose: Pose,
+    /// Pulses: how many times its size it is.
+    pub scale: f64,
 }
 
 /// The shapes a lane can be bent into, by name: the Shapeshift mod's, in its order.
@@ -151,6 +289,9 @@ pub struct Clip {
     /// What it reached stays after its end (a turn that ends half way round stays there).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub keep: bool,
+    /// For a `layer` clip: what it shows, and where.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<Box<Layer>>,
 }
 
 fn is_zero(v: &u16) -> bool {
@@ -168,7 +309,9 @@ impl Clip {
                 0,
             ),
             Target::Notes(g, p) => (format!("notes.{}", p.name()), g.map_or(0, |g| g as u16 + 1)),
+            Target::Layer => ("layer".to_string(), 0),
         };
+        let layer = (what == "layer").then(Box::default);
         Clip {
             id: 0,
             lane: 0,
@@ -184,10 +327,14 @@ impl Clip {
             fade_out: 0.0,
             ease: Ease::QuadOut,
             keep: false,
+            layer,
         }
     }
 
     pub fn target(&self) -> Option<Target> {
+        if self.what == "layer" {
+            return self.layer.is_some().then_some(Target::Layer);
+        }
         if self.what == "shake" {
             return Some(Target::Shake);
         }
@@ -215,6 +362,40 @@ impl Clip {
 
     /// What it adds at `t` (chart ms), given its `moments` (ascending, from `moments`) and the
     /// length of a beat at a time.
+    /// A layer clip's layer at `t`: none before its start, after its end (unless it keeps), or
+    /// for a clip that isn't a layer. It fades in and out over its fades, moves from its start
+    /// pose to its end pose by its easing, and, repeating, pulses by its amount (percent).
+    pub fn layer_at(&self, t: f64, moments: &[f64], beat: impl Fn(f64) -> f64) -> Option<LayerAt> {
+        let l = self.layer.as_deref()?;
+        if t < self.start || (t > self.end && !self.keep) {
+            return None;
+        }
+        let t = t.min(self.end);
+        let b = beat(self.start).max(1.0);
+        let (fin, fout) = (self.fade_in * b, self.fade_out * b);
+        let mut seen = 1.0f64;
+        if fin > 0.0 {
+            seen = seen.min((t - self.start) / fin);
+        }
+        if fout > 0.0 && !self.keep {
+            seen = seen.min((self.end - t) / fout);
+        }
+        let k = self
+            .ease
+            .apply((t - self.start) / (self.end - self.start).max(1.0));
+        let mut pose = match &l.to {
+            Some(to) => l.from.lerp(to, k),
+            None => l.from,
+        };
+        pose.alpha *= seen.clamp(0.0, 1.0);
+        let scale = if self.when == When::Span {
+            1.0
+        } else {
+            (1.0 + self.value(t, moments, beat) / 100.0).max(0.0)
+        };
+        Some(LayerAt { pose, scale })
+    }
+
     pub fn value(&self, t: f64, moments: &[f64], beat: impl Fn(f64) -> f64) -> f64 {
         if t < self.start {
             return 0.0;
@@ -299,6 +480,11 @@ impl Clip {
             return false;
         }
         self.lane = self.lane.min(LANES - 1);
+        if let Some(l) = &mut self.layer
+            && !l.sanitize()
+        {
+            return false;
+        }
         let num =
             |v: f64, lo: f64, hi: f64, or: f64| if v.is_finite() { v.clamp(lo, hi) } else { or };
         self.length = num(self.length, 1.0 / 64.0, MAX_BEATS, 1.0);
@@ -384,6 +570,95 @@ mod tests {
             ease: Ease::Linear,
             ..Clip::new(Target::Field(FieldProp::Zoom), 1000.0, 5000.0)
         }
+    }
+
+    fn text_layer(start: f64, end: f64) -> Clip {
+        let mut c = Clip {
+            ease: Ease::Linear,
+            fade_in: 2.0,
+            fade_out: 2.0,
+            ..Clip::new(Target::Layer, start, end)
+        };
+        let l = c.layer.as_deref_mut().unwrap();
+        l.to = Some(Pose { x: 100.0, ..l.from });
+        c
+    }
+
+    #[test]
+    fn a_layer_fades_in_moves_to_its_end_pose_and_goes() {
+        let c = text_layer(1000.0, 5000.0);
+        assert_eq!(c.target(), Some(Target::Layer));
+        let at = |t| c.layer_at(t, &[], beat);
+        assert!(at(999.0).is_none());
+        assert!(at(5001.0).is_none(), "gone after its end");
+        let a = at(1500.0).unwrap();
+        assert!((a.pose.alpha - 0.5).abs() < 1e-9, "half way in");
+        let mid = at(3000.0).unwrap();
+        assert_eq!(mid.pose.alpha, 1.0);
+        assert!((mid.pose.x - 50.0).abs() < 1e-9, "half way to its end pose");
+        assert_eq!(mid.scale, 1.0, "a layer that stays doesn't pulse");
+        let kept = Clip {
+            keep: true,
+            ..c.clone()
+        };
+        let after = kept.layer_at(9000.0, &[], beat).unwrap();
+        assert_eq!((after.pose.x, after.pose.alpha), (100.0, 1.0));
+        // Repeating, it pulses by its amount in percent.
+        let pulse = Clip {
+            amount: 20.0,
+            when: When::Beats { every: 1.0 },
+            motion: Motion::Kick,
+            fade_in: 0.0,
+            ..c
+        };
+        let moments = [1000.0, 1500.0];
+        let p = pulse.layer_at(1000.0, &moments, beat).unwrap();
+        assert!((p.scale - 1.2).abs() < 1e-9);
+        // Not a layer: nothing.
+        assert!(
+            clip(When::Span, Motion::Kick)
+                .layer_at(3000.0, &[], beat)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn layers_are_saved_and_what_a_file_says_is_made_safe() {
+        let mut c = text_layer(0.0, 2000.0);
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"what\":\"layer\""));
+        assert!(json.contains("\"kind\":\"text\""));
+        let back: Clip = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, c);
+        // Words without control characters, numbers in range.
+        let l = c.layer.as_deref_mut().unwrap();
+        l.show = Show::Text {
+            text: format!("a\nb{}", "x".repeat(500)),
+        };
+        l.from.alpha = 7.0;
+        l.from.size = f64::NAN;
+        l.colour = 0xff123456;
+        let mut list = vec![c.clone()];
+        sanitize(&mut list);
+        let l = list[0].layer.as_deref().unwrap();
+        match &l.show {
+            Show::Text { text } => {
+                assert!(text.starts_with("ab"));
+                assert_eq!(text.chars().count(), MAX_TEXT);
+            }
+            Show::Picture { .. } => panic!(),
+        }
+        assert_eq!((l.from.alpha, l.from.size, l.colour), (1.0, 36.0, 0x123456));
+        // A picture outside the map's folder, or a layer clip without its layer, goes.
+        let mut bad = c.clone();
+        bad.layer.as_deref_mut().unwrap().show = Show::Picture {
+            file: "../../secret.png".into(),
+        };
+        let mut bare = c;
+        bare.layer = None;
+        let mut list = vec![bad, bare];
+        sanitize(&mut list);
+        assert!(list.is_empty());
     }
 
     #[test]

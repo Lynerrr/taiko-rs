@@ -158,6 +158,13 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - Keep after: what it reached stays when it ends (a turn that stops half way round stays there).
 - Fit to kiai and Fit to selection stretch it over those.
 
+# Text and pictures
+- Text, Fly-in text and Pulsing text on the shelf put words on screen in the game's font. Click the words in the block's settings to type them.
+- Picture and Logo on the beat show an image from the map's folder: put a .png or .jpg there first. < and > go through them. It goes with the map in an .rsz.
+- With one picked, drag the preview to place it: Shift turns it, Ctrl sizes it. x, y, size, turn and seen can be typed too.
+- moves: it glides to a pose of its own at its end. At its start and at its end choose which one you change.
+- behind the notes puts it under the lane; the fades bring it in and out; pulses kicks it bigger on beats, notes or hits (the amount is percent).
+
 # Moving it by hand
 - Drag the preview: the playfield moves. Shift+drag turns it, Ctrl+drag zooms it (up grows, down shrinks).
 - Each drag leaves keys at the playhead, so move the playhead, drag, move it again, drag again: the playfield glides between them. Ctrl+Z undoes a whole drag.
@@ -425,6 +432,13 @@ F4 Effects открывается на Clips: самый простой спос
 - Блок «всё время» плавно входит и выходит за заданные доли. Повторяющийся делает толчок (прыгает и успокаивается), качели (в одну сторону, потом в другую) или шаг (каждый раз чуть больше) за заданные доли.
 - Keep after: то, к чему он пришёл, остаётся после конца (поворот, остановившийся на полпути, так и остаётся).
 - Fit to kiai и Fit to selection растягивают его на кийай или на выделение.
+
+# Текст и картинки
+- Text, Fly-in text и Pulsing text на полке выводят слова шрифтом игры. Кликните по словам в настройках блока, чтобы их набрать.
+- Picture и Logo on the beat показывают картинку из папки карты: сначала положите туда .png или .jpg. < и > листают их. В .rsz картинка уезжает вместе с картой.
+- Когда блок выбран, тащите превью, чтобы поставить его: Shift поворачивает, Ctrl меняет размер. x, y, size, turn и seen можно и набрать.
+- moves: блок плавно едет к своей позе в конце. At its start и at its end выбирают, какую из двух вы меняете.
+- behind the notes кладёт его под линию нот; затухания вводят и убирают его; pulses толкает его крупнее на долях, нотах или попаданиях (amount в процентах).
 
 # Двигать руками
 - Тащите превью: поле едет. Shift+тащить поворачивает его, Ctrl+тащить меняет масштаб (вверх больше, вниз меньше).
