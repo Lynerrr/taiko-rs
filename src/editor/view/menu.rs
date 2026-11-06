@@ -87,8 +87,6 @@ pub const MENUS: &[Menu] = &[
             Sep,
             Do(Cmd::TestPlay(false)),
             Do(Cmd::TestPlay(true)),
-            Do(Cmd::AutoTest(false)),
-            Do(Cmd::AutoTest(true)),
         ],
     },
     Menu {

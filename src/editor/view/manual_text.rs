@@ -361,7 +361,7 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
 # Playing and moving
 - Space or C: play or pause. X: play from the start (as in stable).
 - F5: test play. The map as it is now (saved or not) plays in the real game from the playhead, Shift+F5 from the start, with No Fail and nothing saved; Quit or the end of the map comes back here.
-- Tab: the same test, played by autoplay (Shift+Tab: from the start), to watch the map.
+- Tab in a test play, as in osu!: autoplay plays on from there; Tab again hands it back.
 - Z / V: first / last note. Left / Right: by snap. Up / Down: previous / next timing line.
 - Wheel: seek. Ctrl+wheel: snap. Alt+wheel: zoom over the timeline, the volume elsewhere. Middle drag: pan (View > Left drag pans lets the left button pan empty timeline too; then Ctrl+drag selects a box).
 - Ctrl+Up / Down: playback speed (with Shift 5%).
@@ -708,7 +708,7 @@ File > Upload отправляет сохранённую карту на taiko.
 # Воспроизведение и перемещение
 - Space или C: играть / пауза. X: играть с начала (как в stable).
 - F5: тест-плей. Карта как она есть сейчас (сохранённая или нет) играется в настоящей игре с плейхеда, Shift+F5 — с начала, с No Fail и без сохранения результата; выход или конец карты возвращают сюда.
-- Tab: тот же тест, но играет автоплей (Shift+Tab — с начала), чтобы посмотреть карту.
+- Tab в тест-плее, как в osu!: дальше играет автоплей; ещё раз Tab — снова вы.
 - Z / V: первая / последняя нота. Влево / вправо: по шагу сетки. Вверх / вниз: предыдущая / следующая линия таймингов.
 - Колесо: перемотка. Ctrl+колесо: snap. Alt+колесо: масштаб над таймлайном, в остальных местах громкость. Средняя кнопка: сдвиг (View > Left drag pans даёт сдвигать пустой таймлайн и левой кнопкой; рамка тогда через Ctrl+перетаскивание).
 - Ctrl+вверх / вниз: скорость воспроизведения (с Shift по 5%).

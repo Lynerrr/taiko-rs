@@ -620,7 +620,7 @@ struct State {
     /// The editor a test play (F5) came from: the play goes back to it, saves nothing and sends
     /// nothing, and a retry plays the map as the editor has it.
     editor_back: Option<Box<editor::view::View>>,
-    /// The editor's test play is an autoplay (Tab), retries included.
+    /// The editor's test play is played by autoplay (Tab in it), retries included.
     test_auto: bool,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`), with
@@ -2279,12 +2279,7 @@ impl State {
     /// play, at full speed and with no mods.
     fn load_text(&mut self, entry: usize, text: String) -> Receiver<Loaded> {
         // Played through to the end like osu!'s editor test, however it goes; or watched (Tab).
-        let mut mods = Mods::default();
-        mods.toggle(if self.test_auto {
-            mods::Mod::Autoplay
-        } else {
-            mods::Mod::NoFail
-        });
+        let mods = Self::test_mods(self.test_auto);
         self.load(entry, 1.0, mods, true, Some(text))
     }
 
@@ -3298,7 +3293,7 @@ impl State {
     }
 
     /// Leaves the editor for a test play of `text` (its map as it is now) from `from`.
-    fn start_test_play(&mut self, entry: usize, from: Option<f64>, auto: bool) {
+    fn start_test_play(&mut self, entry: usize, from: Option<f64>) {
         if entry >= self.library.len() {
             if let Scene::Editor(view) = &mut self.scene {
                 view.status = "this map isn't in your songs yet: save it first".into();
@@ -3309,8 +3304,38 @@ impl State {
             return;
         };
         self.editor_back = Some(view);
-        self.test_auto = auto;
+        self.test_auto = false;
         self.start_loading_from(entry, from);
+    }
+
+    /// The editor's test play's mods: No Fail, or Autoplay (Tab).
+    fn test_mods(auto: bool) -> Mods {
+        let mut mods = Mods::default();
+        mods.toggle(if auto {
+            mods::Mod::Autoplay
+        } else {
+            mods::Mod::NoFail
+        });
+        mods
+    }
+
+    fn test_banner(auto: bool) -> String {
+        if auto {
+            "TEST PLAY  -  AUTO".into()
+        } else {
+            "TEST PLAY".into()
+        }
+    }
+
+    /// Tab in the editor's test play, as in osu!'s: autoplay plays on from here, or hands the
+    /// drum back.
+    fn toggle_test_auto(&mut self) {
+        let Scene::Play { game, .. } = &mut self.scene else {
+            return;
+        };
+        self.test_auto = !self.test_auto;
+        game.mods = Self::test_mods(self.test_auto);
+        game.banner = Some(Self::test_banner(self.test_auto));
     }
 
     /// Back to the editor a test play came from, as it was left.
@@ -13129,6 +13154,16 @@ impl State {
             }
             return;
         }
+        // Tab in the editor's test play is autoplay, as in osu!'s, whatever the map info key is.
+        if code == KeyCode::Tab
+            && !(self.modifiers_shift || self.modifiers_ctrl || self.modifiers_alt)
+            && matches!(&self.scene, Scene::Play { game, .. } if game.test_play && game.paused.is_none())
+        {
+            if !repeat {
+                self.toggle_test_auto();
+            }
+            return;
+        }
         let pressed = keys::Chord {
             key: code,
             ctrl: self.modifiers_ctrl,
@@ -14212,7 +14247,7 @@ impl State {
             }
         }
         let mut editor_reload: Option<(usize, f64)> = None;
-        let mut editor_test: Option<(usize, Option<f64>, bool)> = None;
+        let mut editor_test: Option<(usize, Option<f64>)> = None;
         let mut test_over = false;
         let mut editor_folder: Option<PathBuf> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
@@ -14759,11 +14794,7 @@ impl State {
                             None if self.editor_back.is_some() => {
                                 game.record = false;
                                 game.test_play = true;
-                                game.banner = Some(if self.test_auto {
-                                    "TEST PLAY  -  AUTO".into()
-                                } else {
-                                    "TEST PLAY".into()
-                                });
+                                game.banner = Some(Self::test_banner(self.test_auto));
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
                             None => {
@@ -15570,8 +15601,8 @@ impl State {
                     self.cfg.editor_left_pan = view.left_pan;
                     self.cfg.save();
                 }
-                if let Some((from, auto)) = view.take_test_play() {
-                    editor_test = Some((view.entry, from, auto));
+                if let Some(from) = view.take_test_play() {
+                    editor_test = Some((view.entry, from));
                 }
                 editor_folder = view.take_folder_request();
                 // Maps dropped into its folder (or taken out) join the list as they come.
@@ -15932,8 +15963,8 @@ impl State {
         if let Some(news) = folder_news {
             self.folder_changed(news);
         }
-        if let Some((entry, from, auto)) = editor_test {
-            self.start_test_play(entry, from, auto);
+        if let Some((entry, from)) = editor_test {
+            self.start_test_play(entry, from);
         }
         if test_over {
             self.back_to_editor();

@@ -417,7 +417,7 @@ pub struct View {
     /// Song setup's star rating, as of a history revision.
     setup_stars: Option<(u64, Option<f64>)>,
     /// A test play asked for: from this map time, or (None) from the start.
-    want_test: Option<(Option<f64>, bool)>,
+    want_test: Option<Option<f64>>,
     mouse: (f32, f32),
     pub width: f32,
     /// What the middle of the screen is for.
@@ -699,9 +699,8 @@ impl View {
         self.show.take()
     }
 
-    /// A test play asked for (F5, or Tab to watch it autoplayed): where to start (None: the
-    /// start) and whether it plays itself.
-    pub fn take_test_play(&mut self) -> Option<(Option<f64>, bool)> {
+    /// A test play asked for (F5): where to start (None: the start).
+    pub fn take_test_play(&mut self) -> Option<Option<f64>> {
         self.want_test.take()
     }
 
@@ -4251,22 +4250,6 @@ mod tests {
         assert!(matches!(v.drag, Drag::Box { .. }));
         v.mouse_up(x - 50.0, y, ctrl);
         assert_eq!(v.view_start, start);
-    }
-
-    #[test]
-    fn tab_asks_for_an_autoplayed_test_and_shift_tab_from_the_start() {
-        let mut v = view();
-        v.set_time(1500.0);
-        v.key(KeyCode::Tab, false, Keys::default(), None);
-        assert_eq!(v.take_test_play(), Some((Some(1500.0), true)));
-        let shift = Keys {
-            shift: true,
-            ..Keys::default()
-        };
-        v.key(KeyCode::Tab, false, shift, None);
-        assert_eq!(v.take_test_play(), Some((None, true)));
-        v.key(KeyCode::F5, false, Keys::default(), None);
-        assert_eq!(v.take_test_play(), Some((Some(1500.0), false)));
     }
 
     use crate::tko::graph::Kind;

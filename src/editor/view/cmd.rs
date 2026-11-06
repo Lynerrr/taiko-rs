@@ -82,8 +82,6 @@ pub enum Cmd {
     PlayFromStart,
     /// Plays the map in the game from the playhead (true: from the start), then back here.
     TestPlay(bool),
-    /// The same, played by autoplay.
-    AutoTest(bool),
     FirstNote,
     LastNote,
     Step(i32),
@@ -156,8 +154,6 @@ impl Cmd {
             Cmd::PlayFromStart => "Play from the start",
             Cmd::TestPlay(false) => "Test play",
             Cmd::TestPlay(true) => "Test play from the start",
-            Cmd::AutoTest(false) => "Autoplay test",
-            Cmd::AutoTest(true) => "Autoplay test from the start",
             Cmd::FirstNote => "Go to the first note",
             Cmd::LastNote => "Go to the last note",
             Cmd::Step(n) if n < 0 => "Step back",
@@ -237,10 +233,7 @@ impl Cmd {
             Cmd::Play => "Plays the song from the playhead.",
             Cmd::PlayFromStart => "Plays the song from the beginning.",
             Cmd::TestPlay(_) => {
-                "Plays the map as it is now in the real game (from the playhead, or from the start), with nothing saved or sent. Quit or the end of the map comes back here."
-            }
-            Cmd::AutoTest(_) => {
-                "The same test play, played by autoplay, to watch the map (and its effects) from the playhead or from the start."
+                "Plays the map as it is now in the real game (from the playhead, or from the start), with nothing saved or sent; Tab in it lets autoplay play on, or hands it back. Quit or the end of the map comes back here."
             }
             Cmd::FirstNote | Cmd::LastNote => "Moves the playhead there.",
             Cmd::Step(_) => "Moves the playhead one beat-snap step.",
@@ -422,15 +415,6 @@ pub const BINDS: &[Bind] = &[
         false,
         Cmd::TestPlay(true),
         "Shift+F5",
-        MOVE,
-    ),
-    b(KeyCode::Tab, "", false, Cmd::AutoTest(false), "Tab", MOVE),
-    b(
-        KeyCode::Tab,
-        "s",
-        false,
-        Cmd::AutoTest(true),
-        "Shift+Tab",
         MOVE,
     ),
     b(KeyCode::KeyZ, "", false, Cmd::FirstNote, "Z", MOVE),
