@@ -577,7 +577,8 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
 }
 
 /// Whether a mod has a tile in the collection: the server's list (`medal_list::GROUPS`), which
-/// leaves out the ones that play for you, Maze and Tact (newer than its medals).
+/// leaves out the ones that play for you, Maze, Tact (newer than its medals) and OD Override
+/// (its plays aren't saved).
 fn in_collection(m: &crate::mods::Mod) -> bool {
     !matches!(
         m,
@@ -585,6 +586,7 @@ fn in_collection(m: &crate::mods::Mod) -> bool {
             | crate::mods::Mod::Relax
             | crate::mods::Mod::Maze
             | crate::mods::Mod::Tact
+            | crate::mods::Mod::OdOverride
     )
 }
 
