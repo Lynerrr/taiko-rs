@@ -148,7 +148,8 @@ These work in plain .osu maps and play the same in stable. Nothing here needs th
 F4 Effects opens on Clips: the simple way to make a .tko map do anything to the playfield. An effect is a block on the rows under the timeline. Its start and end are where it acts, and it keeps time with the music.
 
 # Making one
-- The shelf has tabs: Playfield (pulses, turns, zooms, shakes), Lane (its shape), Notes, Look (flashes, colours, echoes) and Text & pictures.
+- The shelf has tabs: Playfield (pulses, turns, zooms, shakes), Lane (its shape), Notes, Look (flashes, colours, echoes, see-through, blackout) and Text & pictures.
+- Blackout and Fade to black turn the screen black (text over the lane still shows); Ghost playfield makes it faint; Only the notes leaves notes and drum alone on black. Notes that can't be seen are still there to hit.
 - Click an effect to pick it, then drag on a row from where it should start to where it should end. A click on a row lays one bar. Over the kiai here and Over the notes selected lay it over those. Shift keeps it picked for more; Esc puts it back.
 - Drag a block to move it (also to another row), drag its ends to make it longer or shorter (a short block's ends stick out a little), right click deletes it.
 - Drag over empty rows to pick every block in the box; Shift or Ctrl+click adds or takes one away. Blocks picked move together, Ctrl+D copies them after themselves, Delete removes them.
@@ -428,7 +429,8 @@ F2 Gimmicks собирает конструкции, которые маппер
 F4 Effects открывается на Clips: самый простой способ заставить .tko карту делать с игровым полем что угодно. Эффект — это блок на дорожках под таймлайном. Где он начинается и кончается, там и действует, и идёт в такт музыке.
 
 # Как сделать
-- На полке вкладки: Playfield (пульс, повороты, зум, тряска), Lane (форма лайна), Notes, Look (вспышки, цвета, эхо) и Text & pictures.
+- На полке вкладки: Playfield (пульс, повороты, зум, тряска), Lane (форма лайна), Notes, Look (вспышки, цвета, эхо, прозрачность, затемнение) и Text & pictures.
+- Blackout и Fade to black делают экран чёрным (текст над лайном всё равно виден); Ghost playfield делает поле полупрозрачным; Only the notes оставляет на чёрном только ноты и барабан. Невидимые ноты всё равно нужно бить.
 - Нажмите эффект, чтобы взять его, и протяните по дорожке от места, где он начинается, до места, где кончается. Клик по дорожке кладёт один такт. Over the kiai here и Over the notes selected кладут его на кийай или на выделенные ноты. С Shift он остаётся в руке; Esc кладёт обратно.
 - Блок тащится мышью (и на другую дорожку), за края — длиннее или короче (у короткого блока края чуть выступают), правый клик удаляет.
 - Протяните рамку по пустым дорожкам, чтобы выбрать все блоки в ней; Shift или Ctrl+клик добавляет или убирает один. Выбранные двигаются вместе, Ctrl+D копирует их следом, Delete удаляет.

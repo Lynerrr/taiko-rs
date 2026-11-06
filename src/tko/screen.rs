@@ -36,7 +36,28 @@ pub fn has_local(fx: &FieldFx) -> bool {
 
 /// Whether an effect has anything to do once it has.
 pub fn has_screen(fx: &FieldFx) -> bool {
-    fx.glitch >= 0.01 || fx.wash >= 0.01 || fx.vignette >= 0.01 || fx.flash >= 0.01
+    fx.glitch >= 0.01
+        || fx.wash >= 0.01
+        || fx.vignette >= 0.01
+        || fx.flash >= 0.01
+        || fx.fade >= 0.01
+        || fx.lane_fade >= 0.01
+        || fx.blackout >= 0.01
+}
+
+/// Black behind the playfield, over what was drawn before it (the background): call before the
+/// playfield draws.
+pub fn backdrop(c: &mut Canvas, fx: &FieldFx) {
+    let a = fx.backdrop.clamp(0.0, 1.0);
+    if a >= 0.01 {
+        c.rect(
+            -200.0,
+            -200.0,
+            c.width + 400.0,
+            VIRTUAL_HEIGHT + 400.0,
+            [0.0, 0.0, 0.0, a],
+        );
+    }
 }
 
 /// The lane and its like: shapes as wide or tall as the screen. Copies leave them out, or each one
@@ -201,6 +222,20 @@ pub fn screen(c: &mut Canvas, start: usize, fx: &FieldFx, t: f64) {
     }
     let w = c.width;
     let h = VIRTUAL_HEIGHT;
+    // See-through: the whole playfield, else only the lane.
+    let fade_all = 1.0 - fx.fade.clamp(0.0, 1.0);
+    let fade_lane = 1.0 - fx.lane_fade.clamp(0.0, 1.0);
+    if (fade_all < 0.99 || fade_lane < 0.99) && start < c.shapes.len() {
+        for s in &mut c.shapes[start..] {
+            let a = if is_panel(s, w) {
+                fade_all * fade_lane
+            } else {
+                fade_all
+            };
+            s.fill[3] *= a;
+            s.border[3] *= a;
+        }
+    }
     let glitch = fx.glitch.clamp(0.0, 1.0);
     if glitch >= 0.01 && start < c.shapes.len() {
         let bands = 4 + (glitch * 8.0).round() as usize;
@@ -266,6 +301,16 @@ pub fn screen(c: &mut Canvas, start: usize, fx: &FieldFx, t: f64) {
                 width,
             );
         }
+    }
+    let blackout = fx.blackout.clamp(0.0, 1.0);
+    if blackout >= 0.01 {
+        c.rect(
+            -200.0,
+            -200.0,
+            w + 400.0,
+            h + 400.0,
+            [0.0, 0.0, 0.0, blackout],
+        );
     }
     let flash = fx.flash.clamp(0.0, 1.0);
     if flash >= 0.01 {
@@ -505,6 +550,64 @@ mod tests {
         let flash = c.shapes.last().unwrap();
         assert_eq!(flash.fill, [1.0, 1.0, 1.0, 0.9]);
         assert!(flash.params[2] < -0.5, "added as light");
+    }
+
+    #[test]
+    fn the_playfield_or_its_lane_alone_turns_see_through() {
+        let mut c = field(2);
+        let fx = FieldFx {
+            lane_fade: 1.0,
+            ..FieldFx::default()
+        };
+        screen(&mut c, 0, &fx, 0.0);
+        assert_eq!(c.shapes[0].fill[3], 0.0, "the lane is gone");
+        assert_eq!(c.shapes[1].fill[3], 1.0, "the notes are kept");
+        let mut c = field(2);
+        let fx = FieldFx {
+            fade: 0.75,
+            ..FieldFx::default()
+        };
+        screen(&mut c, 1, &fx, 0.0);
+        assert_eq!(
+            c.shapes[0].fill[3], 1.0,
+            "what was drawn before is left alone"
+        );
+        assert!(c.shapes[1..].iter().all(|s| s.fill[3] == 0.25));
+        assert_eq!(c.shapes.len(), 3, "nothing added");
+    }
+
+    #[test]
+    fn a_blackout_covers_the_screen_and_a_backdrop_goes_under_the_playfield() {
+        let mut c = field(1);
+        let fx = FieldFx {
+            blackout: 1.0,
+            flash: 0.5,
+            ..FieldFx::default()
+        };
+        screen(&mut c, 0, &fx, 0.0);
+        let n = c.shapes.len();
+        assert_eq!(
+            c.shapes[n - 2].fill,
+            [0.0, 0.0, 0.0, 1.0],
+            "black over it all"
+        );
+        assert!(
+            c.shapes[n - 1].params[2] < -0.5,
+            "a flash still shows on black"
+        );
+        let mut c = Canvas {
+            width: 640.0,
+            ..Canvas::default()
+        };
+        let fx = FieldFx {
+            backdrop: 0.5,
+            ..FieldFx::default()
+        };
+        backdrop(&mut c, &fx);
+        assert_eq!(c.shapes.len(), 1);
+        assert_eq!(c.shapes[0].fill, [0.0, 0.0, 0.0, 0.5]);
+        backdrop(&mut c, &FieldFx::default());
+        assert_eq!(c.shapes.len(), 1, "none without one");
     }
 
     #[test]
