@@ -5,7 +5,7 @@ use super::keys::KAct;
 use super::lines::TAct;
 use super::{Btn, Drag, Keys, Modal, RATES, View};
 use crate::audio::Engine;
-use crate::editor::chart::{SOUND_CLAP, SOUND_FINISH, SOUND_WHISTLE};
+use crate::editor::chart::SOUND_FINISH;
 use crate::editor::state::{Editor, Tool};
 use crate::editor::timing;
 
@@ -104,20 +104,19 @@ impl View {
         }
     }
 
-    fn sound(&mut self, bit: i32) {
+    /// Kat (`None`) or big (the finish bit), on the selection or on the note in hand.
+    fn sound(&mut self, bit: Option<i32>) {
         // With the Note tool the keys are for the note about to be placed, even with a note
         // selected (the one just placed is): recolouring a placed note is a click on it.
         let had = !self.ed.selection.is_empty() && self.ed.tool != Tool::Note;
-        let on = if had {
-            self.ed.toggle_sound(bit)
-        } else {
-            self.ed.toggle_next_sound(bit)
+        let on = match (bit, had) {
+            (Some(bit), true) => self.ed.toggle_sound(bit),
+            (None, true) => self.ed.toggle_kat(),
+            (bit, false) => self
+                .ed
+                .toggle_next_sound(bit.unwrap_or(crate::editor::chart::SOUND_WHISTLE)),
         };
-        let what = match bit {
-            SOUND_FINISH => "big",
-            SOUND_WHISTLE | SOUND_CLAP => "kat",
-            _ => "",
-        };
+        let what = if bit.is_some() { "big" } else { "kat" };
         self.status = match (had, on) {
             (true, true) => format!("selected notes: {what}"),
             (true, false) => format!("selected notes: not {what}"),
@@ -239,9 +238,8 @@ impl View {
                     self.set_mode(Mode::Compose);
                 }
             }
-            Cmd::Whistle => self.sound(SOUND_WHISTLE),
-            Cmd::Clap => self.sound(SOUND_CLAP),
-            Cmd::Finish => self.sound(SOUND_FINISH),
+            Cmd::Kat => self.sound(None),
+            Cmd::Finish => self.sound(Some(SOUND_FINISH)),
             Cmd::Play => self.toggle_play(audio),
             Cmd::PlayFromStart => {
                 self.stop(audio);

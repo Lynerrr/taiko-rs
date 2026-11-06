@@ -73,9 +73,8 @@ pub enum Cmd {
     Nudge(bool),
     // Tools and sounds.
     Tool(Tool),
-    Whistle,
+    Kat,
     Finish,
-    Clap,
     // Moving about.
     Play,
     PlayFromStart,
@@ -140,9 +139,8 @@ impl Cmd {
             Cmd::Tool(Tool::Note) => "Note tool",
             Cmd::Tool(Tool::Roll) => "Drumroll tool",
             Cmd::Tool(Tool::Swell) => "Denden tool",
-            Cmd::Whistle => "Kat (whistle)",
+            Cmd::Kat => "Kat",
             Cmd::Finish => "Big (finish)",
-            Cmd::Clap => "Kat (clap)",
             Cmd::Play => "Play / pause",
             Cmd::PlayFromStart => "Play from the start",
             Cmd::FirstNote => "Go to the first note",
@@ -203,12 +201,12 @@ impl Cmd {
             Cmd::Nudge(_) => "Moves the selection one snap step.",
             Cmd::Tool(Tool::Select) => "Click or drag a box to select, drag notes to move them.",
             Cmd::Tool(Tool::Note) => {
-                "Click to place a don (or a kat, see W / R); click a placed note to recolour it. Right click deletes."
+                "Click to place a don (or a kat, see W); click a placed note to recolour it. Right click deletes."
             }
             Cmd::Tool(Tool::Roll) => "Drag, or click the start and the end, to make a drumroll.",
             Cmd::Tool(Tool::Swell) => "Drag, or click the start and the end, to make a denden.",
-            Cmd::Whistle | Cmd::Clap => {
-                "Selected notes become kats; with nothing selected, or the Note tool on, the next notes you place are kats."
+            Cmd::Kat => {
+                "Selected notes become kats (or dons, if they all are kats); with nothing selected, or the Note tool on, the next notes you place are kats. R does the same, as in osu!."
             }
             Cmd::Finish => {
                 "Selected notes become big; with nothing selected, or the Note tool on, the next notes you place are big."
@@ -375,9 +373,10 @@ pub const BINDS: &[Bind] = &[
         "4",
         TOOLS,
     ),
-    b(KeyCode::KeyW, "", false, Cmd::Whistle, "W", TOOLS),
+    b(KeyCode::KeyW, "", false, Cmd::Kat, "W", TOOLS),
     b(KeyCode::KeyE, "", false, Cmd::Finish, "E", TOOLS),
-    b(KeyCode::KeyR, "", false, Cmd::Clap, "R", TOOLS),
+    // As in osu!, where R is the clap: a kat too.
+    b(KeyCode::KeyR, "", false, Cmd::Kat, "", TOOLS),
     b(KeyCode::Space, "", false, Cmd::Play, "Space", MOVE),
     b(KeyCode::KeyC, "", false, Cmd::Play, "C", MOVE),
     b(KeyCode::KeyX, "", false, Cmd::PlayFromStart, "X", MOVE),

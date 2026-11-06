@@ -263,6 +263,40 @@ impl Editor {
         }
     }
 
+    /// Makes the selected notes kats, or dons when they all are kats already. In the file a kat
+    /// is a whistle or a clap (they look and play the same): a kat keeps the one it has, a new
+    /// one gets a whistle, and a don loses both. Drumrolls and dendens are left alone. With no
+    /// note selected it flips what the next note placed is. Returns whether they ended up kats.
+    pub fn toggle_kat(&mut self) -> bool {
+        use super::chart::{SOUND_CLAP, SOUND_WHISTLE};
+        let notes: Vec<HitObject> = self
+            .selected()
+            .into_iter()
+            .filter(|o| matches!(o.taiko(), Taiko::Don | Taiko::Kat))
+            .collect();
+        if notes.is_empty() {
+            return self.toggle_next_sound(SOUND_WHISTLE);
+        }
+        let on = !notes.iter().all(|o| o.taiko() == Taiko::Kat);
+        let before: Vec<HitObject> = notes
+            .into_iter()
+            .filter(|o| (o.taiko() == Taiko::Kat) != on)
+            .collect();
+        let after: Vec<HitObject> = before
+            .iter()
+            .map(|o| {
+                let mut o = o.clone();
+                o.sound &= !(SOUND_WHISTLE | SOUND_CLAP);
+                if on {
+                    o.sound |= SOUND_WHISTLE;
+                }
+                o
+            })
+            .collect();
+        self.edit(before, after, false);
+        on
+    }
+
     /// Gives the note `id` the look of what the next note placed gets (kat or don, big or not).
     /// Returns whether it changed: drumrolls and dendens are left alone, and so is a note that
     /// already looks like that (a clap kat stays a clap kat).
@@ -1086,6 +1120,44 @@ mod tests {
         );
         let _ = had;
         assert!(e.undo() && e.undo());
+    }
+
+    #[test]
+    fn one_kat_key_turns_whistles_and_claps_alike() {
+        use super::super::chart::{SOUND_CLAP, SOUND_WHISTLE};
+        let mut e = editor();
+        let circles: Vec<u64> = e
+            .chart
+            .objects
+            .iter()
+            .filter(|o| matches!(o.taiko(), Taiko::Don | Taiko::Kat))
+            .take(3)
+            .map(|o| o.id)
+            .collect();
+        assert_eq!(circles.len(), 3);
+        // A clap kat, a whistle kat and a don.
+        for (id, sound) in circles.iter().zip([SOUND_CLAP, SOUND_WHISTLE, 0]) {
+            let o = e.chart.objects.iter_mut().find(|o| o.id == *id).unwrap();
+            o.sound = sound;
+        }
+        let look = |e: &Editor| -> Vec<i32> {
+            circles
+                .iter()
+                .map(|id| e.chart.object(*id).unwrap().sound)
+                .collect()
+        };
+        e.selection = circles.iter().copied().collect();
+        // Not all are kats: the don becomes one, and the kats keep the sound they had.
+        assert!(e.toggle_kat());
+        assert_eq!(look(&e), [SOUND_CLAP, SOUND_WHISTLE, SOUND_WHISTLE]);
+        // All are kats: all become dons, the clap one too.
+        assert!(!e.toggle_kat());
+        assert_eq!(look(&e), [0, 0, 0]);
+        assert!(e.undo());
+        assert_eq!(look(&e), [SOUND_CLAP, SOUND_WHISTLE, SOUND_WHISTLE]);
+        // With nothing selected it is the note in hand.
+        e.selection.clear();
+        assert!(e.toggle_kat() && e.kat);
     }
 
     #[test]

@@ -248,6 +248,8 @@ impl FileKind {
         }
     }
 
+    /// The dialogs' name for the files (macOS's dialog has no filter to name).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn label(self) -> &'static str {
         match self {
             FileKind::Audio => "Songs",

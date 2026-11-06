@@ -311,6 +311,10 @@ pub struct View {
     shown: f64,
     playing: Option<(Instant, f64)>,
     last_played: f64,
+    /// The playhead was moved while the song plays: the music is to follow it there.
+    reseek: bool,
+    /// When the music last jumped (a drag on the ruler doesn't restart it every frame).
+    sought: Instant,
     /// Left edge of the timeline (ms) and how many ms one unit of width holds.
     pub view_start: f64,
     pub ms_per_px: f64,
@@ -445,6 +449,8 @@ impl View {
             shown: f64::NAN,
             playing: None,
             last_played: 0.0,
+            reseek: false,
+            sought: Instant::now(),
             view_start: 0.0,
             ms_per_px: 4.0,
             drag: Drag::None,
@@ -543,7 +549,33 @@ impl View {
 
     pub fn set_time(&mut self, t: f64) {
         self.ed.time = t.max(0.0).round();
+        if self.playing.is_some() {
+            // Playing on from there: the clock at once, the music in `update`.
+            self.playing = Some((Instant::now(), self.ed.time));
+            self.last_played = self.ed.time;
+            self.reseek = true;
+        }
         self.follow(false);
+    }
+
+    /// Starts the music again where the playhead was moved to while playing: at once, or during
+    /// a drag at most every so often, so that it doesn't stutter.
+    fn follow_seek(&mut self, audio: Option<&Engine>) {
+        if !self.reseek || self.playing.is_none() {
+            return;
+        }
+        let dragging = !matches!(self.drag, Drag::None);
+        if dragging && self.sought.elapsed().as_millis() < 90 {
+            return;
+        }
+        self.reseek = false;
+        self.sought = Instant::now();
+        if let (Some(track), Some(a)) = (&self.track, audio) {
+            a.play(
+                track.clone(),
+                (self.ed.time + OSU_TIMING_MS) / self.speed().max(0.01),
+            );
+        }
     }
 
     fn timeline_w(&self) -> f32 {
@@ -600,6 +632,7 @@ impl View {
 
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) {
         self.edge_scroll(now);
+        self.follow_seek(audio);
         self.poll_upload();
         if let Some(rx) = &self.track_rx
             && let Ok(result) = rx.try_recv()
@@ -643,6 +676,7 @@ impl View {
     }
 
     fn start(&mut self, audio: Option<&Engine>) {
+        self.reseek = false;
         let (Some(track), Some(a)) = (&self.track, audio) else {
             self.status = "the music isn't loaded".into();
             return;
@@ -3673,6 +3707,30 @@ mod tests {
             ctrl: true,
             ..Keys::default()
         }
+    }
+
+    #[test]
+    fn moving_the_playhead_while_playing_plays_on_from_there() {
+        let mut v = view();
+        draw(&mut v);
+        // Playing for a second from the start.
+        v.playing = Some((Instant::now() - std::time::Duration::from_secs(1), 0.0));
+        v.update(Instant::now(), None);
+        assert!(v.ed.time >= 900.0);
+        // A click on the song overview, as a drag on the ruler would.
+        let [ox, oy, ow, oh] = v.layout.overview;
+        let x = ox + ow * 0.5;
+        v.mouse_down(x, oy + oh / 2.0, Keys::default(), None);
+        v.mouse_up(x, oy + oh / 2.0, Keys::default());
+        let to = v.ed.time;
+        assert!(to > 2000.0, "the playhead jumped ({to})");
+        v.update(Instant::now(), None);
+        assert!(v.playing.is_some(), "still playing");
+        assert!(
+            (v.ed.time - to).abs() < 200.0,
+            "and it plays on from there, not from where it was ({} vs {to})",
+            v.ed.time
+        );
     }
 
     #[test]
