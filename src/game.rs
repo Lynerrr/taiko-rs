@@ -1633,7 +1633,7 @@ fn bake_speeds(map: &mut Beatmap, mods: Mods) {
     for b in &mut map.barlines {
         b.velocity = at(b.velocity, b.time);
     }
-    for n in &mut map.notes {
+    for n in map.notes.iter_mut().chain(&mut map.fakes) {
         n.velocity = at(n.velocity, n.time);
     }
     // Per note: dons and kats only.
@@ -4757,6 +4757,36 @@ impl Game {
                 }
             }
         }
+        // A .tko map's fake notes, under the real ones: drawn like them, never judged, gone when
+        // they reach the drum.
+        let fakes_on: Vec<usize> = {
+            let f = &self.map.fakes;
+            let from = f.partition_point(|n| n.time <= vt);
+            let to = f.partition_point(|n| n.time <= vt + lookahead);
+            (from..to).collect()
+        };
+        for &k in fakes_on.iter().rev() {
+            let n = &self.map.fakes[k];
+            let r = if n.big { BIG_R } else { NOTE_R };
+            let s = s_of(n.time, n.velocity);
+            if !on_lane(s, r) {
+                continue;
+            }
+            let a = note_alpha(s) * radar_lit(s, n.time, n.velocity);
+            let mut nfx = self
+                .tko
+                .as_ref()
+                .and_then(|rt| rt.fake(k, vt))
+                .unwrap_or_default();
+            nfx.path = self
+                .tko
+                .as_ref()
+                .and_then(|rt| rt.fake_path(k, vt, s, lane_len));
+            if a > 0.01 && !nfx.hidden {
+                let col = if n.kind == Kind::Kat { kat } else { don };
+                draw_hit(c, s, n, k, 1, col, a, nfx);
+            }
+        }
         let mut order = self.visible.clone();
         order.sort_by(|&a, &b| {
             let (na, nb) = (&self.map.notes[a], &self.map.notes[b]);
@@ -5221,6 +5251,34 @@ impl Game {
                 let flash = self.kiai_flash(vt, n.time, n.end_time) * KIAI_FLASH_ALPHA;
                 let col = kiai_brighten(col);
                 if flash > 0.0 && a > 0.01 && on_lane(s, r) {
+                    let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
+                    let (hx, hy, _, _) = place(0.0, 0.0);
+                    let (x, y) = tko_moved(&fx, x, y, (hx, hy));
+                    c.light(sprite, x, y, r * size * fx.scale, rgba(col, flash * a));
+                }
+            }
+            // Fakes flash like the notes they pass for.
+            for &k in &fakes_on {
+                let n = &self.map.fakes[k];
+                let r = if n.big { BIG_R } else { NOTE_R };
+                let s = s_of(n.time, n.velocity);
+                let mut fx = NoteFx::default();
+                if let Some(rt) = &self.tko {
+                    fx = rt.fake(k, vt).unwrap_or_default();
+                    fx.path = rt.fake_path(k, vt, s, lane_len);
+                }
+                if fx.hidden {
+                    continue;
+                }
+                let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * fx.opacity;
+                let flash = self.kiai_flash(vt, n.time, n.end_time) * KIAI_FLASH_ALPHA;
+                let col = kiai_brighten(if n.kind == Kind::Kat { KAT } else { DON });
+                if flash > 0.0 && a > 0.01 && on_lane(s, r) {
+                    let sprite = if n.big {
+                        Sprite::BigCircle
+                    } else {
+                        Sprite::HitCircle
+                    };
                     let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
                     let (hx, hy, _, _) = place(0.0, 0.0);
                     let (x, y) = tko_moved(&fx, x, y, (hx, hy));

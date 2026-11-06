@@ -208,6 +208,11 @@ pub fn write(osu: &str, gimmick: &Gimmick) -> Result<String, Error> {
     if !out.ends_with('\n') {
         out.push_str(eol);
     }
+    // One blank line before the gimmick, however many the chart ended with: a chart read back
+    // keeps the one written last time.
+    while out.ends_with(&format!("{eol}{eol}")) {
+        out.truncate(out.len() - eol.len());
+    }
     out.push_str(eol);
     out.push_str("[Gimmick]");
     out.push_str(eol);

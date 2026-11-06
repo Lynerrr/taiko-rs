@@ -495,6 +495,23 @@ pub struct Gimmick {
     /// map's own slider velocity (see `scroll`). No keys: the song's own.
     #[serde(default, skip_serializing_if = "Track::is_empty")]
     pub scroll: Track,
+    /// Notes that are only drawn: never hit, never judged, silent, gone when they reach the drum.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fakes: Vec<FakeNote>,
+}
+
+/// How many fake notes a map may have.
+pub const MAX_FAKES: usize = 20_000;
+
+/// A note that is only drawn (see `Gimmick::fakes`). Groups take it by its time like a real one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FakeNote {
+    /// Chart ms.
+    pub t: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kat: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub big: bool,
 }
 
 impl Gimmick {
@@ -509,6 +526,7 @@ impl Gimmick {
             && self.marks.is_empty()
             && self.clips.is_empty()
             && self.scroll.is_empty()
+            && self.fakes.is_empty()
     }
 
     pub fn field_track(&self, p: FieldProp) -> Option<&Track> {
@@ -608,6 +626,11 @@ impl Gimmick {
         self.graph.sanitize(groups);
         super::clips::sanitize(&mut self.clips);
         super::scroll::sanitize(&mut self.scroll);
+        self.fakes.retain(|f| f.t.is_finite());
+        self.fakes
+            .sort_by(|a, b| a.t.total_cmp(&b.t).then(a.kat.cmp(&b.kat)));
+        self.fakes.dedup_by(|b, a| a.t == b.t && a.kat == b.kat);
+        self.fakes.truncate(MAX_FAKES);
         // A clip on a group of notes that isn't there moves nothing (a copy's clip holds which
         // copy in the same place).
         self.clips
