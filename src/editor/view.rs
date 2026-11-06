@@ -4248,7 +4248,7 @@ mod tests {
         use motion::MAct;
         let mut v = clips_view();
         press(&mut v, Btn::GPage(motion::PAGE));
-        press(&mut v, Btn::M(MAct::Tab(2)));
+        press(&mut v, Btn::M(MAct::Tab(motion::SCROLL_TAB)));
         assert!(v.scroll_mode() && v.keyframe_mode());
         draw(&mut v);
         let scroll = |v: &View| v.ed.gimmick().unwrap().scroll.clone();

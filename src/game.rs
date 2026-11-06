@@ -8,6 +8,7 @@ use std::time::Instant;
 static HIDE_GREAT: AtomicBool = AtomicBool::new(true);
 static HIT_FLASH: AtomicBool = AtomicBool::new(true);
 static BLACK_LANE: AtomicBool = AtomicBool::new(false);
+static TRUE_NOTES: AtomicBool = AtomicBool::new(false);
 
 /// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
 /// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
@@ -25,6 +26,12 @@ pub fn set_hit_flash(on: bool) {
 /// View): no kiai or Party tint, no skin's lane picture.
 pub fn set_black_lane(on: bool) {
     BLACK_LANE.store(on, Ordering::Relaxed);
+}
+
+/// .tko notes drawn as what they are, whatever colour or size their map makes them show as
+/// (Settings -> Gameplay).
+pub fn set_true_notes(on: bool) {
+    TRUE_NOTES.store(on, Ordering::Relaxed);
 }
 
 fn black_lane() -> bool {
@@ -4276,6 +4283,15 @@ impl Game {
         };
         // A don or kat `s` along the lane (`k`th drawn, in a 1/`flow` stream): Snake swings it
         // sideways, Party pumps and squishes it. Nothing changes at the drum.
+        let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) {
+            (GREY, GREY)
+        } else {
+            (
+                mix(uni.idle(), uni.don(), look.colour),
+                mix(uni.idle(), uni.kat(), look.colour),
+            )
+        };
+        let true_notes = TRUE_NOTES.load(Ordering::Relaxed);
         let draw_hit = |c: &mut Canvas,
                         s: f32,
                         n: &beatmap::Note,
@@ -4306,6 +4322,25 @@ impl Game {
             let (x, y) = tko_moved(&fx, x, y, (hx, hy));
             let a = a * fx.opacity;
             size *= fx.scale;
+            // A .tko lie: drawn as another colour or size until its truth shows (unless the
+            // player asked for the truth).
+            let lie = !true_notes && fx.lies();
+            let truth = if lie { fx.truth } else { 1.0 };
+            let col = match fx.lie_kat.filter(|_| lie) {
+                Some(k) => mix(if k { kat } else { don }, col, truth),
+                None => col,
+            };
+            let real_r = if n.big { BIG_R } else { NOTE_R };
+            let (big, base_r) = match fx.lie_big.filter(|_| lie) {
+                Some(b) => {
+                    let shown = if b { BIG_R } else { NOTE_R };
+                    (
+                        if truth < 0.5 { b } else { n.big },
+                        shown + (real_r - shown) * truth,
+                    )
+                }
+                None => (n.big, real_r),
+            };
             // A .tko tint: the note's colour towards a hue.
             let col = if fx.tint >= 0.01 {
                 let [r, g, b] = crate::tko::screen::hue_rgb(fx.tint_hue);
@@ -4322,23 +4357,15 @@ impl Game {
                 size *= 1.0 + 0.22 * own;
                 squish = 1.0 + 0.3 * own * if k.is_multiple_of(2) { 1.0 } else { -1.0 };
             }
-            let r = if n.big { BIG_R } else { NOTE_R } * size;
+            let r = base_r * size;
             let first = c.shapes.len();
-            if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, n.big, col, a) {
+            if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, big, col, a) {
                 multiverse::note(c, uni.shape, x, y, r, col, a);
             }
             let (sx, sy) = (squish * fx.stretch_x, fx.stretch_y / squish);
             if sx != 1.0 || sy != 1.0 {
                 c.stretch_since(first, [x, y], sx, sy);
             }
-        };
-        let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) {
-            (GREY, GREY)
-        } else {
-            (
-                mix(uni.idle(), uni.don(), look.colour),
-                mix(uni.idle(), uni.kat(), look.colour),
-            )
         };
         // Text is drawn last, after Mirror flips the rest (letters must stay readable), and so
         // are the skin's numbers and judgements (centre x, top, height).

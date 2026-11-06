@@ -235,6 +235,8 @@ pub struct Config {
     pub hide_great: bool,
     /// The lane and the drum's panel drawn pure black.
     pub black_lane: bool,
+    /// .tko notes drawn as what they are, whatever their map makes them show as.
+    pub true_notes: bool,
     /// The drum keys move through song select and the pause menu (`drum_nav`).
     pub drum_menus: bool,
     /// The coloured flash on the hit target as notes are hit.
@@ -432,6 +434,7 @@ impl Default for Config {
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
             black_lane: false,
+            true_notes: false,
             drum_menus: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
@@ -1043,6 +1046,7 @@ impl Config {
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
                 "black_lane" => cfg.black_lane = v == "true",
+                "true_notes" => cfg.true_notes = v == "true",
                 "drum_menus" => cfg.drum_menus = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
@@ -1241,6 +1245,8 @@ impl Config {
              hide_great = {}\n\
              # the lane and the drum's panel pure black\n\
              black_lane = {}\n\
+             # .tko notes drawn as what they are, whatever colour or size their map shows them as\n\
+             true_notes = {}\n\
              # the drum keys move through song select and the pause menu\n\
              drum_menus = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
@@ -1304,6 +1310,7 @@ impl Config {
             self.kiai_effects,
             self.hide_great,
             self.black_lane,
+            self.true_notes,
             self.drum_menus,
             self.hit_flash,
             self.show_offset_hint,

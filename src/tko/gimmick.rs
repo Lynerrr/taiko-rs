@@ -447,6 +447,108 @@ pub struct Group {
     /// hit, negative after it), on top of `tracks` (see [`NoteProp::before`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub before: BTreeMap<String, Track>,
+    /// What its dons and kats look like until each one's truth shows (see [`ShowAs`]).
+    #[serde(default, skip_serializing_if = "ShowAs::is_true")]
+    pub show: ShowAs,
+}
+
+/// A lie a group's notes tell: drawn in another colour or size until `reveal` beats before
+/// each one's hit, then turning into what they are over [`REVEAL_BEATS`]. Only the look: what
+/// hits them, the score and the sound stay the note's own. Rolls and swells don't lie.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShowAs {
+    #[serde(default, skip_serializing_if = "ShowColour::is_same")]
+    pub colour: ShowColour,
+    #[serde(default, skip_serializing_if = "ShowSize::is_same")]
+    pub size: ShowSize,
+    /// Beats before each note's hit its truth shows (0: at the hit).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reveal: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// How long a lying note takes to turn into what it is, in beats.
+pub const REVEAL_BEATS: f64 = 0.25;
+
+impl ShowAs {
+    /// Tells no lie.
+    pub fn is_true(&self) -> bool {
+        self.colour.is_same() && self.size.is_same()
+    }
+
+    /// What a note (`kat`, `big`) is drawn as, as a lie: the colour (kat) and the size (big),
+    /// each only if it lies about it.
+    pub fn lie(&self, kat: bool, big: bool) -> (Option<bool>, Option<bool>) {
+        let colour = match self.colour {
+            ShowColour::Same | ShowColour::Unknown => None,
+            ShowColour::Don => Some(false),
+            ShowColour::Kat => Some(true),
+            ShowColour::Swap => Some(!kat),
+        };
+        let size = match self.size {
+            ShowSize::Same | ShowSize::Unknown => None,
+            ShowSize::Small => Some(false),
+            ShowSize::Big => Some(true),
+            ShowSize::Swap => Some(!big),
+        };
+        (colour.filter(|&c| c != kat), size.filter(|&b| b != big))
+    }
+
+    /// How far the truth shows `near` beats before the hit: 0 the lie, 1 the truth.
+    pub fn truth(&self, near: f64) -> f32 {
+        ((self.reveal + REVEAL_BEATS - near) / REVEAL_BEATS).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// The colour a group's notes show as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowColour {
+    /// Their own.
+    #[default]
+    Same,
+    Don,
+    Kat,
+    /// Dons as kats, kats as dons.
+    Swap,
+    /// What a newer map says that this game doesn't know: their own (`sanitize` makes it `Same`).
+    #[serde(other)]
+    Unknown,
+}
+
+impl ShowColour {
+    pub const ALL: [ShowColour; 4] = [Self::Same, Self::Don, Self::Kat, Self::Swap];
+
+    fn is_same(&self) -> bool {
+        matches!(self, Self::Same | Self::Unknown)
+    }
+}
+
+/// The size a group's notes show as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowSize {
+    #[default]
+    Same,
+    Small,
+    /// As finishers.
+    Big,
+    /// Finishers small, small ones as finishers.
+    Swap,
+    /// Unknown to this game: their own (`sanitize` makes it `Same`).
+    #[serde(other)]
+    Unknown,
+}
+
+impl ShowSize {
+    pub const ALL: [ShowSize; 4] = [Self::Same, Self::Small, Self::Big, Self::Swap];
+
+    fn is_same(&self) -> bool {
+        matches!(self, Self::Same | Self::Unknown)
+    }
 }
 
 impl Group {
@@ -521,6 +623,7 @@ impl Gimmick {
                 g.tracks.values().all(Track::is_empty)
                     && g.before.values().all(Track::is_empty)
                     && g.path.is_none()
+                    && g.show.is_true()
             })
             && self.graph.is_empty()
             && self.marks.is_empty()
@@ -600,6 +703,17 @@ impl Gimmick {
             if let Some(p) = &mut g.path {
                 p.sanitize();
             }
+            if g.show.colour == ShowColour::Unknown {
+                g.show.colour = ShowColour::Same;
+            }
+            if g.show.size == ShowSize::Unknown {
+                g.show.size = ShowSize::Same;
+            }
+            g.show.reveal = if g.show.reveal.is_finite() {
+                g.show.reveal.clamp(0.0, BEFORE_BEATS.0)
+            } else {
+                0.0
+            };
         }
         self.field
             .retain(|k, _| FieldProp::ALL.iter().any(|p| p.name() == k));
@@ -641,6 +755,53 @@ impl Gimmick {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lie_is_only_told_where_it_changes_something() {
+        let swap = ShowAs {
+            colour: ShowColour::Swap,
+            size: ShowSize::Big,
+            reveal: 1.0,
+        };
+        assert_eq!(swap.lie(false, false), (Some(true), Some(true)));
+        // A finisher shown big tells no lie about its size.
+        assert_eq!(swap.lie(true, true), (Some(false), None));
+        let dons = ShowAs {
+            colour: ShowColour::Don,
+            ..ShowAs::default()
+        };
+        assert_eq!(dons.lie(false, true), (None, None));
+        assert!(ShowAs::default().is_true());
+        // The truth shows over a 1/4 beat, ending `reveal` beats before the hit.
+        assert_eq!(swap.truth(2.0), 0.0);
+        assert_eq!(swap.truth(1.25), 0.0);
+        assert!((swap.truth(1.125) - 0.5).abs() < 1e-6);
+        assert_eq!(swap.truth(1.0), 1.0);
+        assert_eq!(swap.truth(-1.0), 1.0);
+    }
+
+    #[test]
+    fn an_unknown_lie_reads_as_none_and_a_wild_reveal_is_held() {
+        let json =
+            r#"{"groups":[{"notes":[1],"show":{"colour":"rainbow","size":"small","reveal":1e9}}]}"#;
+        let mut g: Gimmick = serde_json::from_str(json).unwrap();
+        g.sanitize();
+        let show = g.groups[0].show;
+        assert_eq!(show.colour, ShowColour::Same);
+        assert_eq!(show.size, ShowSize::Small);
+        assert_eq!(show.reveal, BEFORE_BEATS.0);
+        let back = serde_json::to_string(&g.groups[0]).unwrap();
+        assert!(
+            back.contains(r#""show":{"size":"small","reveal":32.0}"#),
+            "{back}"
+        );
+        g.groups[0].show = ShowAs::default();
+        assert!(
+            !serde_json::to_string(&g.groups[0])
+                .unwrap()
+                .contains("show")
+        );
+    }
     use crate::tko::track::Ease;
 
     fn key(t: f64, v: f64) -> Key {

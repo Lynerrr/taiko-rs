@@ -56,7 +56,7 @@ impl View {
     /// Whether the graph under the timeline is the shared scroll's (the Motion page's Scroll
     /// tab).
     pub(super) fn scroll_mode(&self) -> bool {
-        self.motion_mode() && self.m_tab == 2
+        self.motion_mode() && self.m_tab == super::motion::SCROLL_TAB
     }
 
     fn group_count(&self) -> usize {
