@@ -27,7 +27,14 @@ impl View {
         };
         let mut out = vec![main];
         out.extend(self.sel_extra.iter().copied().filter(|id| *id != main));
-        out.retain(|id| self.ed.chart.timing_point(*id).is_some());
+        if out.len() > 1 {
+            // A set: one chart lookup per selected line is slow with thousands of them.
+            let have: std::collections::HashSet<u64> =
+                self.ed.chart.timing.iter().map(|p| p.id).collect();
+            out.retain(|id| have.contains(id));
+        } else {
+            out.retain(|id| self.ed.chart.timing_point(*id).is_some());
+        }
         out
     }
 

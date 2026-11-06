@@ -719,11 +719,10 @@ impl View {
     /// span, else the playhead to the end of its bar. And a few words for it.
     pub(super) fn svt_segments(&self) -> (Vec<Segment>, String) {
         let pts = &self.ed.chart.timing;
-        let greens: Vec<&TimingPoint> = self
-            .selected_lines()
+        let picked: std::collections::HashSet<u64> = self.selected_lines().into_iter().collect();
+        let greens: Vec<&TimingPoint> = pts
             .iter()
-            .filter_map(|id| self.ed.chart.timing_point(*id))
-            .filter(|p| !p.is_red())
+            .filter(|p| !p.is_red() && picked.contains(&p.id))
             .collect();
         if greens.len() >= 2 {
             let segs = svt::segments_from_lines(&greens);

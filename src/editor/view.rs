@@ -1192,9 +1192,11 @@ impl View {
         // Timing lines, in a strip of their own under the ruler.
         c.rect(x + 1.0, y + RULER, w - 2.0, 16.0, rgba(0x14141c, 0.9));
         let first = pts.partition_point(|p| p.time < from - 2000.0);
+        // Once, not per line: each call looks every selected line up in the whole chart.
+        let picked: std::collections::HashSet<u64> = self.selected_lines().into_iter().collect();
         for p in pts[first..].iter().take_while(|p| p.time <= to + 2000.0) {
             let lx = self.x_of(p.time);
-            let selected = self.selected_lines().contains(&p.id);
+            let selected = picked.contains(&p.id);
             let col = if p.is_red() { RED_LINE } else { GREEN_LINE };
             c.rect(
                 lx - if selected { 1.0 } else { 0.5 },
@@ -1563,6 +1565,7 @@ impl View {
             rgba(line_col, 0.9),
         );
         // The lines themselves.
+        let picked: std::collections::HashSet<u64> = self.selected_lines().into_iter().collect();
         for p in pts[first..].iter().take_while(|p| p.time <= to) {
             if p.time < from {
                 continue;
@@ -1572,7 +1575,7 @@ impl View {
                 c.rect(px - 0.5, y + 1.0, 1.0, h - 2.0, rgba(RED_LINE, 0.55));
             }
             if !p.is_red() || volume {
-                let on = self.selected_lines().contains(&p.id);
+                let on = picked.contains(&p.id);
                 let base = if p.is_red() { RED_LINE } else { line_col };
                 c.circle(
                     px,
