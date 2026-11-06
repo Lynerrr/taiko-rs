@@ -31,7 +31,7 @@ impl View {
         }
     }
 
-    fn set_rate(&mut self, r: u32, audio: Option<&Engine>) {
+    pub(super) fn set_rate(&mut self, r: u32, audio: Option<&Engine>) {
         self.stop(audio);
         self.rate = r;
         self.want_rate = Some(r as f64 / 100.0);
