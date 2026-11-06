@@ -4248,6 +4248,49 @@ mod tests {
     }
 
     #[test]
+    fn a_moving_blocks_start_and_end_are_framed_in_the_preview_the_edited_one_lit() {
+        let mut v = clips_view();
+        let i = crate::editor::clips::PRESETS
+            .iter()
+            .position(|p| p.name == "Fly-in text")
+            .unwrap();
+        press(&mut v, Btn::Fx(FxAct::Preset(i)));
+        v.place_armed(Some((1000.0, 9000.0)), "", false);
+        let l = *v.picked().unwrap().layer.clone().unwrap();
+        let to = l.to.unwrap();
+        assert!(l.from.x < to.x, "it flies in from the left");
+        // The lit frame: an outline only, drawn thicker.
+        let lit = |c: &Canvas| -> Vec<[f32; 2]> {
+            c.shapes
+                .iter()
+                .filter(|s| s.fill[3] == 0.0 && s.params[1] == 1.5 && s.border[3] > 0.9)
+                .map(|s| s.center)
+                .collect()
+        };
+        let [fx, fy, fw, _] = v.layout.preview;
+        let k = fw / crate::video::FRAME_VW;
+        let spot = |p: &crate::tko::clips::Pose| {
+            [
+                fx + (crate::video::FRAME_VW / 2.0 + p.x as f32) * k,
+                fy + p.y as f32 * k,
+            ]
+        };
+        let near =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 0.5 && (a[1] - b[1]).abs() < 0.5;
+        // The playhead is before the block: the frames show where it goes anyway.
+        let c = draw(&mut v);
+        assert!(lit(&c).iter().any(|&p| near(p, spot(&l.from))), "start lit");
+        press(&mut v, Btn::Fx(FxAct::EndPose(true)));
+        let c = draw(&mut v);
+        let now = lit(&c);
+        assert!(now.iter().any(|&p| near(p, spot(&to))), "end lit");
+        assert!(!now.iter().any(|&p| near(p, spot(&l.from))));
+        // A block that stays put has no frames.
+        press(&mut v, Btn::Fx(FxAct::Moves));
+        assert!(lit(&draw(&mut v)).is_empty());
+    }
+
+    #[test]
     fn a_long_clip_page_scrolls_and_hides_what_is_out_of_the_panel() {
         let mut v = clips_view();
         let i = crate::editor::clips::PRESETS
