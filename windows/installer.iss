@@ -61,6 +61,12 @@ Root: HKCU; Subkey: "Software\Classes\taiko-rs"; ValueType: string; ValueName: "
 Root: HKCU; Subkey: "Software\Classes\taiko-rs"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\Classes\taiko-rs\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\taiko-rs.exe"",0"
 Root: HKCU; Subkey: "Software\Classes\taiko-rs\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\taiko-rs.exe"" ""%1"""
+; .rsz map archives (taiko.rs's .osz, for sets with .tko maps) open in the game, as it also
+; registers them when it starts.
+Root: HKCU; Subkey: "Software\Classes\.rsz"; ValueType: string; ValueName: ""; ValueData: "taiko-rs.map"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\taiko-rs.map"; ValueType: string; ValueName: ""; ValueData: "taiko.rs map"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\taiko-rs.map\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\taiko-rs.exe"",0"
+Root: HKCU; Subkey: "Software\Classes\taiko-rs.map\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\taiko-rs.exe"" ""%1"""
 
 [Run]
 Filename: "{app}\taiko-rs.exe"; Description: "{cm:LaunchProgram,taiko.rs}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent

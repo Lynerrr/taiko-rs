@@ -27,6 +27,7 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::Revert),
             Sep,
             Do(Cmd::Upload),
+            Do(Cmd::Export),
             Do(Cmd::OpenFolder),
             Sep,
             Do(Cmd::Leave),

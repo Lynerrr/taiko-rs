@@ -297,7 +297,8 @@ public class TaikoActivity extends NativeActivity {
         }
         name = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
         String lower = name.toLowerCase();
-        if (lower.endsWith(".osz") || lower.endsWith(".zip")) {
+        // taiko.rs's own .rsz is the same zip as an .osz.
+        if (lower.endsWith(".osz") || lower.endsWith(".rsz") || lower.endsWith(".zip")) {
             name = name.substring(0, name.length() - 4);
         }
         return name.trim().isEmpty() ? "import " + System.currentTimeMillis() : name.trim();

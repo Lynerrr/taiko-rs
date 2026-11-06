@@ -28,7 +28,8 @@ update; `sh -s -- --no-launch` installs without starting it and `sh -s -- --unin
 (settings and maps are kept). The build needs glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora
 40+, Arch...; older systems can build from source) and uses the system's PipeWire and ALSA libraries; the installer names the package to
 install if one is missing. Maps come from your osu! Songs folder (osu-winello / Wine installs are
-found on their own); without osu!, drop `.osz` files into `~/.local/share/taiko-rs/Songs`.
+found on their own); without osu!, drop `.osz` files into `~/.local/share/taiko-rs/Songs`. taiko.rs's
+own map files (`.rsz`, sets with `.tko` effects) open in the game with a double click.
 
 ## Build & run
 
@@ -36,6 +37,7 @@ found on their own); without osu!, drop `.osz` files into `~/.local/share/taiko-
 cargo build --release
 ./target/release/taiko-rs                       # scans your osu! stable Songs folder (osu-winello / Wine)
 ./target/release/taiko-rs ~/Downloads/*.osz     # or any Songs folder, map folder, .osz, or .osu
+./target/release/taiko-rs ~/Downloads/map.rsz   # imports a taiko.rs map file into the Songs folder
 ./target/release/taiko-rs map.osu               # a single .osu starts immediately
 ./target/release/taiko-rs --auto map.osu        # autoplay
 ./target/release/taiko-rs --info map.osu        # print converted map stats (headless)
@@ -64,7 +66,7 @@ Install `taiko-rs-android.apk` from the [releases](https://github.com/Lynerrr/ta
 (Android 8.0+, 64-bit ARM; allow installing from your browser or file manager when asked). To
 update, install the new APK over the old one.
 
-- **Maps**: open an `.osz` with taiko.rs (from a file manager, your browser's downloads, Telegram...)
+- **Maps**: open an `.osz` or a `.rsz` with taiko.rs (from a file manager, your browser's downloads, Telegram...)
   or share it to taiko.rs, and it is imported; or get maps in **DOWNLOAD**. They live in
   `Android/data/io.github.lynerrr.taiko/files/taiko-rs/Songs` (reachable over USB), with the
   settings, scores and skins next to them. Uninstalling the app deletes that folder.
@@ -576,7 +578,7 @@ spins so frames stay evenly spaced.
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
 | `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
-| `src/library.rs` | Songs folder / `.osz` scanning |
+| `src/library.rs` | Songs folder / `.osz` and `.rsz` scanning |
 | `src/logo.rs` | the logo: window icon, top bar |
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, skin parts and where each comes from, the image atlas, fonts, hitsounds |
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
