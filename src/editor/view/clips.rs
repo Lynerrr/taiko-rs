@@ -552,11 +552,15 @@ impl View {
         let mut items = vec![("moves".to_string(), Btn::Fx(FxAct::Moves), moves)];
         if moves {
             items.push((
-                "at its start".to_string(),
+                "edit start pose".to_string(),
                 Btn::Fx(FxAct::EndPose(false)),
                 !end,
             ));
-            items.push(("at its end".to_string(), Btn::Fx(FxAct::EndPose(true)), end));
+            items.push((
+                "edit end pose".to_string(),
+                Btn::Fx(FxAct::EndPose(true)),
+                end,
+            ));
         }
         items.push((
             "behind the notes".to_string(),
@@ -566,6 +570,17 @@ impl View {
         let first = self.buttons.len();
         items.push(("colour".to_string(), Btn::Fx(FxAct::Colour), false));
         y = self.wrap_row(c, x, y, inner, &items);
+        let pose_tips: Vec<[f32; 4]> = self.buttons[first..]
+            .iter()
+            .filter(|(_, b)| matches!(b, Btn::Fx(FxAct::EndPose(_)) | Btn::Fx(FxAct::Moves)))
+            .map(|(r, _)| *r)
+            .collect();
+        for r in pose_tips {
+            self.tips.push((
+                r,
+                "A moving block glides from its start pose to its end pose over its length. These pick which of the two the numbers below and a drag in the preview change; the preview frames both.".to_string(),
+            ));
+        }
         if let Some((r, _)) = self.buttons.get(first + items.len() - 1).copied() {
             c.round_rect(
                 [r[0] + r[2] - 9.0, r[1] + 4.0],

@@ -9,7 +9,7 @@ use super::{Drag, Keys, Mode, View, inside};
 use crate::editor::keyframes::Subject;
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
-use crate::tko::clips::Pose;
+use crate::tko::clips::{Pose, Show};
 use crate::tko::gimmick::FieldProp;
 use crate::tko::track::Key;
 use crate::video::FRAME_VW;
@@ -81,6 +81,7 @@ impl View {
             return;
         }
         let [fx, fy, fw, fh] = self.layout.preview;
+        self.draw_pose_frames(c);
         let (px, py) = self.pivot_in_preview();
         let live = matches!(self.drag, Drag::Gizmo { .. });
         let hover = c.hovered(fx, fy, fw, fh);
@@ -101,6 +102,51 @@ impl View {
                 rgba(0xffffff, 0.8),
                 &Canvas::fit(5.5, fw - 8.0, hint),
             );
+        }
+    }
+
+    /// A moving text or picture block picked: frames where it is at its start and at its end,
+    /// with a dotted path from one to the other, the pose being edited lit. The preview itself
+    /// shows the block where it is at the playhead, which is neither while it travels.
+    fn draw_pose_frames(&mut self, c: &mut Canvas) {
+        let Some(clip) = self.picked() else { return };
+        let Some(l) = clip.layer.as_deref() else {
+            return;
+        };
+        let Some(to) = l.to else { return };
+        let (from, end, show) = (l.from, self.fx_end, l.show.clone());
+        let [fx, fy, _, _] = self.layout.preview;
+        let k = self.preview_scale();
+        let at = |p: &Pose| (fx + (FRAME_VW / 2.0 + p.x as f32) * k, fy + p.y as f32 * k);
+        let size = |p: &Pose| -> (f32, f32) {
+            let h = p.size as f32;
+            let w = match &show {
+                Show::Text { text } => Canvas::text_width(h, text),
+                Show::Picture { .. } => h,
+            };
+            ((w * k).max(6.0), (h * k).max(6.0))
+        };
+        let (a, b) = (at(&from), at(&to));
+        let steps = ((b.0 - a.0).hypot(b.1 - a.1) / 5.0) as usize;
+        for i in 1..steps {
+            let f = i as f32 / steps as f32;
+            let (x, y) = (a.0 + (b.0 - a.0) * f, a.1 + (b.1 - a.1) * f);
+            c.rect(x - 0.6, y - 0.6, 1.2, 1.2, rgba(0xffffff, 0.45));
+        }
+        for (p, label, lit) in [(&from, "start", !end), (&to, "end", end)] {
+            let (x, y) = at(p);
+            let (w, h) = size(p);
+            let colour = if lit { accent() } else { 0xffffff };
+            let alpha = if lit { 0.95 } else { 0.4 };
+            c.round_rect(
+                [x - w / 2.0 - 2.0, y - h / 2.0 - 2.0],
+                [w + 4.0, h + 4.0],
+                2.0,
+                rgba(0, 0.0),
+                rgba(colour, alpha),
+                if lit { 1.5 } else { 1.0 },
+            );
+            c.text_centered(x, y - h / 2.0 - 9.0, 5.5, rgba(colour, alpha), label);
         }
     }
 

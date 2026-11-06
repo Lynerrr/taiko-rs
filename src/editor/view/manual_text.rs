@@ -169,7 +169,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - Text, Fly-in text and Pulsing text on the shelf put words on screen in the game's font. Click the words in the block's settings to type them.
 - Picture and Logo on the beat show an image from the map's folder: put a .png or .jpg there first. < and > go through them. It goes with the map in an .rsz.
 - With one picked, drag the preview to place it: Shift turns it, Ctrl sizes it. x, y, size, turn and opacity (0 invisible, 1 solid) can be typed too; with moves, a different opacity at its end fades it.
-- moves: it glides to a pose of its own at its end. At its start and at its end choose which one you change.
+- moves: it glides from its start pose to a pose of its own at its end. Edit start pose and edit end pose choose which one the numbers and a drag change; the preview frames both, with a dotted path between them.
 - behind the notes puts it under the lane; the fades bring it in and out; pulses kicks it bigger on beats, notes or hits (the amount is percent).
 
 # Live
@@ -452,7 +452,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Text, Fly-in text и Pulsing text на полке выводят слова шрифтом игры. Кликните по словам в настройках блока, чтобы их набрать.
 - Picture и Logo on the beat показывают картинку из папки карты: сначала положите туда .png или .jpg. < и > листают их. В .rsz картинка уезжает вместе с картой.
 - Когда блок выбран, тащите превью, чтобы поставить его: Shift поворачивает, Ctrl меняет размер. x, y, size, turn и opacity (0 невидимо, 1 полностью) можно и набрать; с moves другая opacity в конце плавно его проявляет или гасит.
-- moves: блок плавно едет к своей позе в конце. At its start и at its end выбирают, какую из двух вы меняете.
+- moves: блок плавно едет от начальной позы к своей позе в конце. Edit start pose и edit end pose выбирают, какую из двух меняют числа и перетаскивание; превью обводит обе рамками с пунктиром между ними.
 - behind the notes кладёт его под линию нот; затухания вводят и убирают его; pulses толкает его крупнее на долях, нотах или попаданиях (amount в процентах).
 
 # Вживую
