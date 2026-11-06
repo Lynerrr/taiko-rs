@@ -124,7 +124,8 @@ from its start to its end and keeping time with the music. The shelf of ready-ma
 zoom, Turn over, Earthquake, Big note slam), *Lane* (Spiral lane, Zigzag lane, Loop lane), *Notes*
 (Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up), *Look* (Kat flash, Drop, Build-up,
 Echo trail, Kaleidoscope, Colour wash, Miss glitch, Fade to black, Blackout, Dark pulse, Ghost
-playfield, Only the notes) and *Text & pictures*. A click on an effect picks
+playfield, Only the notes), *Copies* (Mirror twin, Triple lane, Shadow clones, Spinning ghost) and
+*Text & pictures*. A click on an effect picks
 it; a drag on a row then draws it from where it was pressed to where it was let go, and a click on a
 row lays one bar (*Over the kiai here* and *Over the notes selected* lay it over those). It is placed
 once (Shift keeps it picked); Esc puts it back. Drag a block to move it (to another row too), its
@@ -135,7 +136,11 @@ them. There is always a free row under the last one used (up to 64); when they d
 over them scrolls. The *Look* targets include
 *See-through* (the whole playfield, still there to hit), *Lane see-through* (the lane alone, notes
 kept), *Blackout* (black over the screen; text over the lane and flashes still show) and *Dark
-backdrop* (black behind the playfield, over the background). Clicking a block shows its
+backdrop* (black behind the playfield, over the background). The *Copies* targets show up to four
+copies of the playfield behind it, each moved by its own clips: *shows* (how solid, 0 none), x, y,
+turn (about the middle of the screen), size and lane see-through (1 leaves only its notes); a copy
+clip's settings pick which copy (1 to 4). Copies only show the notes: the real playfield is the one
+played. Clicking a block shows its
 settings instead of the shelf: what it moves (a menu in columns, *Playfield*, *Look*, *Echoes*,
 *Lane* and *Notes*, with `<` `>` to step: any playfield property, a shake, the lane's shape (zigzag,
 U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden, swirl; the
@@ -156,7 +161,7 @@ beat* on the shelf). A text block's words are typed in its settings (click them)
 font. A picture block shows an image from the map's folder (put a `.png` or `.jpg` there first;
 `<` `>` go through them), and it travels with the map in an `.rsz`. With a text or picture block
 picked, a drag in the preview places it (Shift turns it, Ctrl sizes it), and x, y, size, turn and
-*seen* can be typed. *moves* gives it a pose of its own at its end (*at its start* / *at its end*
+*opacity* (0 invisible, 1 solid) can be typed. *moves* gives it a pose of its own at its end (*at its start* / *at its end*
 choose which one the drag and the numbers change), and it glides between the two by the block's
 easing. *behind the notes* puts it under the lane, *colour* tints it, the fades bring it in and out,
 and *pulses every few beats* / *on notes* / *on hits* kick it bigger by the amount (percent).

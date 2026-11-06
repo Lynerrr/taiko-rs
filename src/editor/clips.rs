@@ -3,7 +3,7 @@
 
 use super::chart::Taiko;
 use super::state::Editor;
-use crate::tko::clips::{self, Clip, LANE_SHAPES, Motion, Notes, Target, When};
+use crate::tko::clips::{self, Clip, CopyProp, LANE_SHAPES, Motion, Notes, Target, When};
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
 use crate::tko::track::Ease;
 
@@ -13,7 +13,18 @@ pub fn targets() -> Vec<Target> {
     out.insert(4, Target::Shake);
     out.extend((0..LANE_SHAPES.len()).map(Target::Lane));
     out.extend(NoteProp::ALL.iter().map(|p| Target::Notes(None, *p)));
+    out.extend(CopyProp::ALL.iter().map(|p| Target::Copy(0, *p)));
     out
+}
+
+/// A target as the editor's lists hold it: of all the notes, of the first copy (the group of
+/// notes or the copy is picked apart).
+pub fn listed(t: Target) -> Target {
+    match t {
+        Target::Notes(_, p) => Target::Notes(None, p),
+        Target::Copy(_, p) => Target::Copy(0, p),
+        t => t,
+    }
 }
 
 /// What a clip can move, in the columns of the editor's menu: a heading, its colour, and the
@@ -52,6 +63,11 @@ pub fn target_columns() -> Vec<(&'static str, u32, Vec<Target>)> {
                 .iter()
                 .map(|p| Target::Notes(None, *p))
                 .collect(),
+        ),
+        (
+            "Copies",
+            target_colour(Target::Copy(0, CopyProp::Show)),
+            CopyProp::ALL.iter().map(|p| Target::Copy(0, *p)).collect(),
         ),
     ]
 }
@@ -126,6 +142,17 @@ pub fn target_label(t: Target) -> String {
                 Some(g) => format!("Group {}: {what}", g + 1),
             }
         }
+        Target::Copy(k, p) => {
+            let what = match p {
+                CopyProp::Show => "shows",
+                CopyProp::X => "move sideways",
+                CopyProp::Y => "move up / down",
+                CopyProp::Turn => "turn",
+                CopyProp::Zoom => "size",
+                CopyProp::LaneFade => "lane see-through",
+            };
+            format!("Copy {}: {what}", k + 1)
+        }
     }
 }
 
@@ -144,6 +171,7 @@ pub fn target_about(t: Target) -> &'static str {
             "Takes this much away from how solid the notes are: -0.7 leaves them faint."
         }
         Target::Notes(_, p) => p.about(),
+        Target::Copy(_, p) => p.about(),
     }
 }
 
@@ -155,6 +183,7 @@ pub fn target_colour(t: Target) -> u32 {
         Target::Shake => 0xFFA040,
         Target::Lane(_) => 0xFFD34D,
         Target::Notes(..) => 0x5FD49A,
+        Target::Copy(..) => 0x4DE0E0,
         Target::Field(p) => match p.group() {
             PropGroup::Move => 0x5BA8FF,
             PropGroup::Look => 0xFF6FB0,
@@ -168,6 +197,7 @@ pub fn amount_step(t: Target) -> f64 {
     let span = match t {
         Target::Field(p) => p.range().1 - p.range().0,
         Target::Notes(_, p) => p.range().1 - p.range().0,
+        Target::Copy(_, p) => p.range().1 - p.range().0,
         Target::Shake | Target::Layer => 400.0,
         Target::Lane(_) => 1.0,
     };
@@ -227,6 +257,11 @@ fn c(t: Target, start: f64, end: f64, amount: f64) -> Clip {
     }
 }
 
+/// A clip on copy `k` of the playfield.
+fn cp(k: usize, p: CopyProp, start: f64, end: f64, amount: f64) -> Clip {
+    c(Target::Copy(k, p), start, end, amount)
+}
+
 fn every(mut c: Clip, beats: f64, length: f64, motion: Motion) -> Clip {
     c.when = When::Beats { every: beats };
     c.length = length;
@@ -265,16 +300,19 @@ pub enum Shelf {
     Notes,
     /// Flashes, colours, echoes and glitches.
     Look,
+    /// Copies of the playfield moved on their own.
+    Copies,
     /// Words and pictures on screen.
     Text,
 }
 
 impl Shelf {
-    pub const ALL: [Shelf; 5] = [
+    pub const ALL: [Shelf; 6] = [
         Shelf::Move,
         Shelf::Lane,
         Shelf::Notes,
         Shelf::Look,
+        Shelf::Copies,
         Shelf::Text,
     ];
 
@@ -284,6 +322,7 @@ impl Shelf {
             Shelf::Lane => "Lane",
             Shelf::Notes => "Notes",
             Shelf::Look => "Look",
+            Shelf::Copies => "Copies",
             Shelf::Text => "Text & pictures",
         }
     }
@@ -295,6 +334,7 @@ impl Shelf {
             Shelf::Lane => 0xFFD34D,
             Shelf::Notes => 0x5FD49A,
             Shelf::Look => 0xFF6FB0,
+            Shelf::Copies => 0x4DE0E0,
             Shelf::Text => 0xE8E8F0,
         }
     }
@@ -651,6 +691,57 @@ pub const PRESETS: &[Preset] = &[
         },
     },
     Preset {
+        name: "Mirror twin",
+        shelf: Shelf::Copies,
+        about: "An upside-down copy of the playfield above it, the drum on the right, its notes coming the other way.",
+        make: |s, e, _| {
+            vec![
+                faded(cp(0, CopyProp::Show, s, e, 1.0), 1.0, 1.0, Ease::SineInOut),
+                cp(0, CopyProp::Turn, s, e, 180.0),
+                cp(0, CopyProp::Y, s, e, -130.0),
+            ]
+        },
+    },
+    Preset {
+        name: "Triple lane",
+        shelf: Shelf::Copies,
+        about: "Two copies slide out above and below the playfield.",
+        make: |s, e, _| {
+            vec![
+                faded(cp(0, CopyProp::Show, s, e, 1.0), 1.0, 1.0, Ease::SineInOut),
+                faded(cp(0, CopyProp::Y, s, e, -110.0), 1.0, 1.0, Ease::BackOut),
+                faded(cp(1, CopyProp::Show, s, e, 1.0), 1.0, 1.0, Ease::SineInOut),
+                faded(cp(1, CopyProp::Y, s, e, 110.0), 1.0, 1.0, Ease::BackOut),
+            ]
+        },
+    },
+    Preset {
+        name: "Shadow clones",
+        shelf: Shelf::Copies,
+        about: "Two faint copies sway out to either side and back, every two beats.",
+        make: |s, e, _| {
+            vec![
+                faded(cp(0, CopyProp::Show, s, e, 0.45), 1.0, 1.0, Ease::SineInOut),
+                every(cp(0, CopyProp::X, s, e, 60.0), 2.0, 2.0, Motion::Swing),
+                faded(cp(1, CopyProp::Show, s, e, 0.45), 1.0, 1.0, Ease::SineInOut),
+                every(cp(1, CopyProp::X, s, e, -60.0), 2.0, 2.0, Motion::Swing),
+            ]
+        },
+    },
+    Preset {
+        name: "Spinning ghost",
+        shelf: Shelf::Copies,
+        about: "A faint, smaller copy of the notes alone turns round behind the playfield.",
+        make: |s, e, b| {
+            vec![
+                faded(cp(0, CopyProp::Show, s, e, 0.5), 1.0, 1.0, Ease::SineInOut),
+                cp(0, CopyProp::LaneFade, s, e, 1.0),
+                cp(0, CopyProp::Zoom, s, e, -0.3),
+                faded(cp(0, CopyProp::Turn, s, e, 360.0), b, 0.0, Ease::Linear),
+            ]
+        },
+    },
+    Preset {
         name: "Text",
         shelf: Shelf::Text,
         about: "Words on screen in the game's font, fading in and out. Click it to type them.",
@@ -940,6 +1031,21 @@ mod tests {
                 assert!(!target_label(t).is_empty() && !target_about(t).is_empty());
             }
         }
+    }
+
+    #[test]
+    fn copy_targets_keep_which_copy_they_move() {
+        use crate::tko::clips::CopyProp;
+        let c = Clip::new(Target::Copy(2, CopyProp::Turn), 0.0, 1.0);
+        assert_eq!((c.what.as_str(), c.group), ("copy.turn", 3));
+        assert_eq!(c.target(), Some(Target::Copy(2, CopyProp::Turn)));
+        assert_eq!(listed(c.target().unwrap()), Target::Copy(0, CopyProp::Turn));
+        assert_eq!(
+            target_label(Target::Copy(2, CopyProp::Turn)),
+            "Copy 3: turn"
+        );
+        let all: usize = target_columns().iter().map(|(_, _, t)| t.len()).sum();
+        assert_eq!(all, targets().len(), "every target in one column");
     }
 
     #[test]

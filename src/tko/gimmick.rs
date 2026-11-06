@@ -486,8 +486,10 @@ impl Gimmick {
         let groups = self.groups.len();
         self.graph.sanitize(groups);
         super::clips::sanitize(&mut self.clips);
-        // A clip on a group that isn't there moves nothing.
-        self.clips.retain(|c| (c.group as usize) <= groups);
+        // A clip on a group of notes that isn't there moves nothing (a copy's clip holds which
+        // copy in the same place).
+        self.clips
+            .retain(|c| c.what.starts_with("copy.") || (c.group as usize) <= groups);
     }
 }
 

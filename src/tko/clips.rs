@@ -114,6 +114,87 @@ pub enum Target {
     /// Text or a picture on screen for the clip's length (`Clip::layer`). Repeating, it pulses:
     /// the amount is how much bigger it gets, in percent.
     Layer,
+    /// Copy `k` (of `MAX_COPIES`) of the playfield: drawn behind it, moved on its own.
+    Copy(usize, CopyProp),
+}
+
+/// Copies of the playfield a map can show at once.
+pub const MAX_COPIES: usize = 4;
+
+/// What a copy of the playfield does, on top of where the playfield is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CopyProp {
+    /// How much of it shows: 0 none (there is no copy), 1 as solid as the playfield.
+    Show,
+    /// Virtual units right and down from the playfield.
+    X,
+    Y,
+    /// Degrees clockwise about the middle of the screen.
+    Turn,
+    /// Size, 1 as the playfield.
+    Zoom,
+    /// How see-through its lane is (0 solid, 1 gone: only its notes).
+    LaneFade,
+}
+
+impl CopyProp {
+    pub const ALL: [CopyProp; 6] = [
+        CopyProp::Show,
+        CopyProp::X,
+        CopyProp::Y,
+        CopyProp::Turn,
+        CopyProp::Zoom,
+        CopyProp::LaneFade,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CopyProp::Show => "show",
+            CopyProp::X => "x",
+            CopyProp::Y => "y",
+            CopyProp::Turn => "turn",
+            CopyProp::Zoom => "zoom",
+            CopyProp::LaneFade => "lane_fade",
+        }
+    }
+
+    /// What it is with no clip on it.
+    pub fn default_value(self) -> f64 {
+        match self {
+            CopyProp::Zoom => 1.0,
+            _ => 0.0,
+        }
+    }
+
+    pub fn range(self) -> (f64, f64) {
+        match self {
+            CopyProp::Show | CopyProp::LaneFade => (0.0, 1.0),
+            CopyProp::X | CopyProp::Y => (-2000.0, 2000.0),
+            CopyProp::Turn => (-3600.0, 3600.0),
+            CopyProp::Zoom => (0.05, 8.0),
+        }
+    }
+
+    pub fn about(self) -> &'static str {
+        match self {
+            CopyProp::Show => {
+                "Shows a copy of the playfield behind it: 0 none, 1 solid. Only the real one is played; the copy just shows the same notes."
+            }
+            CopyProp::X => {
+                "Slides the copy right of the playfield (left below 0), in virtual units."
+            }
+            CopyProp::Y => {
+                "Slides the copy below the playfield (above it below 0), in virtual units."
+            }
+            CopyProp::Turn => {
+                "Turns the copy about the middle of the screen, in degrees: 180 is upside down with the drum on the right."
+            }
+            CopyProp::Zoom => {
+                "How big the copy is: the amount adds to 1, so -0.5 is half the size."
+            }
+            CopyProp::LaneFade => "How see-through the copy's lane is: 1 leaves only its notes.",
+        }
+    }
 }
 
 /// The longest text a layer shows.
@@ -310,6 +391,10 @@ impl Clip {
             ),
             Target::Notes(g, p) => (format!("notes.{}", p.name()), g.map_or(0, |g| g as u16 + 1)),
             Target::Layer => ("layer".to_string(), 0),
+            Target::Copy(k, p) => (
+                format!("copy.{}", p.name()),
+                k.min(MAX_COPIES - 1) as u16 + 1,
+            ),
         };
         let layer = (what == "layer").then(Box::default);
         Clip {
@@ -343,6 +428,11 @@ impl Clip {
                 .iter()
                 .position(|s| *s == shape)
                 .map(Target::Lane);
+        }
+        if let Some(p) = self.what.strip_prefix("copy.") {
+            let p = CopyProp::ALL.into_iter().find(|q| q.name() == p)?;
+            let k = (self.group as usize).saturating_sub(1).min(MAX_COPIES - 1);
+            return Some(Target::Copy(k, p));
         }
         if let Some(p) = self.what.strip_prefix("notes.") {
             let p = NoteProp::ALL.into_iter().find(|q| q.name() == p)?;

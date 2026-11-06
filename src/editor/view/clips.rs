@@ -11,7 +11,7 @@
 use super::chrome::wrap;
 use super::{Btn, Drag, Field, Keys, Mode, View, fmt_time, inside};
 use crate::editor::clips::{
-    PRESETS, Shelf, amount_step, describe, rescale_amount, target_about, target_colour,
+    PRESETS, Shelf, amount_step, describe, listed, rescale_amount, target_about, target_colour,
     target_columns, target_label, targets, trim,
 };
 use crate::render::{Canvas, accent, rgba};
@@ -53,6 +53,8 @@ pub enum FxAct {
     What(i32),
     /// The previous or next group of notes (0 is all of them).
     Group(i32),
+    /// Which copy of the playfield it moves (0 the first).
+    CopyNo(u8),
     /// For its whole length, every few beats, on notes, on hits, on misses.
     When(u8),
     Notes(Notes),
@@ -110,7 +112,7 @@ impl CF {
             CF::Y => "y",
             CF::Size => "size",
             CF::Turn => "turn",
-            CF::Seen => "seen",
+            CF::Seen => "opacity",
         }
     }
 }
@@ -324,6 +326,15 @@ impl View {
                     },
                     Btn::Fx(FxAct::Group(1)),
                     false,
+                ));
+            }
+        }
+        if let Some(Target::Copy(k, _)) = target {
+            for n in 0..crate::tko::clips::MAX_COPIES {
+                row.push((
+                    format!("copy {}", n + 1),
+                    Btn::Fx(FxAct::CopyNo(n as u8)),
+                    k == n,
                 ));
             }
         }
@@ -773,10 +784,11 @@ impl View {
                 return;
             }
             c.what = Clip::new(next, c.start, c.end).what;
-            c.group = if matches!(next, Target::Notes(..)) {
-                group
-            } else {
-                0
+            c.group = match next {
+                Target::Notes(..) if matches!(before, Some(Target::Notes(..))) => group,
+                Target::Copy(..) if matches!(before, Some(Target::Copy(..))) => group,
+                Target::Copy(..) => 1,
+                _ => 0,
             };
             c.amount = rescale_amount(c.amount, before, next);
         })
@@ -854,10 +866,7 @@ impl View {
                 let all = targets();
                 let now = self.picked().and_then(|c| c.target());
                 let at = now
-                    .map(|t| match t {
-                        Target::Notes(_, p) => Target::Notes(None, p),
-                        t => t,
-                    })
+                    .map(listed)
                     .and_then(|t| all.iter().position(|x| *x == t))
                     .unwrap_or(0);
                 let next = all[(at as i32 + d).rem_euclid(all.len() as i32) as usize];
@@ -871,6 +880,11 @@ impl View {
                 Some(e) if e != Ease::Step => self.ed.set_clip(id, false, |c| c.ease = e),
                 _ => false,
             },
+            FxAct::CopyNo(k) => self.ed.set_clip(id, false, |c| {
+                if matches!(c.target(), Some(Target::Copy(..))) {
+                    c.group = k.min(crate::tko::clips::MAX_COPIES as u8 - 1) as u16 + 1;
+                }
+            }),
             FxAct::Group(d) => {
                 let groups = self.ed.gimmick().map_or(0, |g| g.groups.len()) as i32;
                 self.ed.set_clip(id, false, |c| {
@@ -1653,10 +1667,7 @@ impl View {
         if kind == 1 {
             return self.draw_ease_drop(c, at, clip.ease);
         }
-        let now = clip.target().map(|t| match t {
-            Target::Notes(_, p) => Target::Notes(None, p),
-            t => t,
-        });
+        let now = clip.target().map(listed);
         let all = targets();
         let cols = target_columns();
         let short = |t: Target| -> String {
