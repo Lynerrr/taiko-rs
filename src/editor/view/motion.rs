@@ -69,8 +69,18 @@ pub enum MAct {
     Move(usize),
     /// The speed key at the playhead glides to the next one, or stops gliding.
     Glide,
+    /// The hit target slides along the lane to a place in `DRUM_SPOTS` over a beat.
+    DrumTo(usize),
     ClearScroll,
 }
+
+/// Where the drum can be slid to from the Scroll tab: virtual units along the lane.
+const DRUM_SPOTS: [(&str, f64); 4] = [
+    ("Home", 0.0),
+    ("A quarter in", 160.0),
+    ("Half way", 320.0),
+    ("Far", 480.0),
+];
 
 /// A speed as mania mappers write it: 1x, 0.5x, -1x.
 fn speed_label(v: f64) -> String {
@@ -113,6 +123,9 @@ impl View {
                 .get(i)
                 .is_some_and(|&m| self.ed.scroll_move(m, t)),
             (MAct::Glide, _) => self.ed.scroll_glide(t),
+            (MAct::DrumTo(i), _) => DRUM_SPOTS
+                .get(i)
+                .is_some_and(|&(_, to)| self.ed.drum_to(t, to)),
             (MAct::ClearScroll, _) => self.ed.clear_scroll(),
             (MAct::UseSelection, _) => match self.ed.motion_group() {
                 Ok(g) => {
@@ -345,7 +358,20 @@ impl View {
             Btn::M(MAct::ClearScroll),
             false,
         ));
-        self.chips(c, right, y + 9.0, col, &items);
+        let ry = self.chips(c, right, y + 9.0, col, &items);
+        c.text(
+            right,
+            ry,
+            6.5,
+            head,
+            "Slide the drum along the lane (over a beat)",
+        );
+        let items: Vec<(String, Btn, bool)> = DRUM_SPOTS
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (name.to_string(), Btn::M(MAct::DrumTo(i)), false))
+            .collect();
+        self.chips(c, right, ry + 9.0, col, &items);
     }
 
     fn draw_path_tab(&mut self, c: &mut Canvas, g: usize, x: f32, mut y: f32, inner: f32) {

@@ -4092,6 +4092,13 @@ impl Game {
         let lane = (tko_fx.lane_shape > 0 && tko_fx.lane_bend > 0.001)
             .then(|| (tko_fx.lane_shape as usize - 1, tko_fx.lane_bend));
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w, lane);
+        // A .tko map's moving drum: the hit target slides along a straight lane and everything
+        // on the lane goes with it, so notes still meet it on time.
+        let drum = if rail.is_none() {
+            tko_fx.drum.clamp(0.0, (lane_len - 2.0 * BIG_R).max(0.0))
+        } else {
+            0.0
+        };
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
         // left edge (the drum) along the lane, with room for the judgements.
         let (band_top, band_h) = lane_band();
@@ -4482,6 +4489,7 @@ impl Game {
             }
         }
 
+        let lane_shapes = c.shapes.len();
         // Barlines.
         // As far back as ahead: a slow bar can still be on screen long after it passed.
         let first_bar = self
@@ -5221,6 +5229,10 @@ impl Game {
             }
         }
 
+        if drum > 0.0 {
+            c.transform_since(lane_shapes, [0.0, 0.0], 1.0, drum, 0.0);
+        }
+
         // Flashlight / Spotlight / Blackout: dark everywhere but a circle around the drum.
         let fl_combo = match self.stats.combo {
             0..100 => 1.0,
@@ -5318,7 +5330,7 @@ impl Game {
                         * JUDGE_SCALE
                         * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
                     upright.push((
-                        HIT_X,
+                        HIT_X + drum,
                         LANE_Y - h / 2.0 - age * 0.02,
                         h,
                         rgba(self.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
@@ -5326,7 +5338,7 @@ impl Game {
                     ));
                 } else {
                     texts.push((
-                        HIT_X,
+                        HIT_X + drum,
                         lane_top - 30.0 - age * 0.02,
                         15.0,
                         rgba(self.hud.colour(Part::Judgements).unwrap_or(j.color()), a),

@@ -83,6 +83,8 @@ pub struct FieldFx {
     pub slices: f32,
     pub slice_y: f32,
     pub slice_x: f32,
+    /// How far along the lane the hit target sits.
+    pub drum: f32,
     /// Copies of the playfield behind it.
     pub copies: [CopyFx; MAX_COPIES],
     /// The graph's seed, for the glitch's randomness.
@@ -97,6 +99,7 @@ impl Default for FieldFx {
             rotation: 0.0,
             zoom: 1.0,
             scroll: 1.0,
+            drum: 0.0,
             stretch_x: 1.0,
             stretch_y: 1.0,
             flip: 0.0,
@@ -1136,6 +1139,7 @@ impl Runtime {
             rotation: v(FieldProp::Rotation) as f32,
             zoom: v(FieldProp::Zoom) as f32,
             scroll: v(FieldProp::Scroll),
+            drum: v(FieldProp::Drum) as f32,
             stretch_x: v(FieldProp::StretchX) as f32,
             stretch_y: v(FieldProp::StretchY) as f32,
             flip: v(FieldProp::Flip) as f32,
