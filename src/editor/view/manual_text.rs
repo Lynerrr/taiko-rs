@@ -158,6 +158,11 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - Keep after: what it reached stays when it ends (a turn that stops half way round stays there).
 - Fit to kiai and Fit to selection stretch it over those.
 
+# Moving it by hand
+- Drag the preview: the playfield moves. Shift+drag turns it, Ctrl+drag zooms it (up grows, down shrinks).
+- Each drag leaves keys at the playhead, so move the playhead, drag, move it again, drag again: the playfield glides between them. Ctrl+Z undoes a whole drag.
+- The keys are the diamonds on the Motion strip above the rows. Click one to go there, right click it to take it away.
+
 # Recipes
 - Every second beat of the kiai: Every 2nd beat, dropped with the playhead in the kiai.
 - A shake on every big note: Big note slam.
@@ -420,6 +425,11 @@ F4 Effects открывается на Clips: самый простой спос
 - Блок «всё время» плавно входит и выходит за заданные доли. Повторяющийся делает толчок (прыгает и успокаивается), качели (в одну сторону, потом в другую) или шаг (каждый раз чуть больше) за заданные доли.
 - Keep after: то, к чему он пришёл, остаётся после конца (поворот, остановившийся на полпути, так и остаётся).
 - Fit to kiai и Fit to selection растягивают его на кийай или на выделение.
+
+# Двигать руками
+- Тащите превью: поле едет. Shift+тащить поворачивает его, Ctrl+тащить меняет масштаб (вверх больше, вниз меньше).
+- Каждое перетаскивание ставит ключи на плейхеде: передвиньте плейхед, потащите, передвиньте ещё, потащите снова, и поле плавно едет между ними. Ctrl+Z отменяет всё перетаскивание целиком.
+- Ключи это ромбики на полоске Motion над рядами. Клик по ромбику ведёт к нему, правый клик убирает его.
 
 # Рецепты
 - Каждая вторая доля в кийае: Every 2nd beat, брошенный с плейхедом в кийае.

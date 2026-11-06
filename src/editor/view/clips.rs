@@ -16,6 +16,11 @@ use crate::tko::track::Ease;
 
 /// Rows of clips shown.
 pub(super) const ROWS: u8 = 6;
+/// Where (from the top of the panel) the strip of motion keys sits, and how tall it is.
+const STRIP_Y: f32 = 11.0;
+const STRIP_H: f32 = 10.0;
+/// Where the rows start, under the title and the motion strip.
+const ROWS_TOP: f32 = STRIP_Y + STRIP_H + 1.0;
 /// How close (units) to a block's end a press resizes it.
 const EDGE: f32 = 4.0;
 const DIM: u32 = 0x9a9ab0;
@@ -491,17 +496,23 @@ impl View {
 
     // ---- the rows ----
 
+    /// Whether `y` is on the strip of motion keys above the rows.
+    fn in_motion_strip(&self, y: f32) -> bool {
+        let top = self.layout.graph[1] + STRIP_Y;
+        y >= top && y < top + STRIP_H
+    }
+
     pub(super) fn row_h(&self) -> f32 {
         let [_, _, _, h] = self.layout.graph;
-        (h - 14.0) / ROWS as f32
+        (h - ROWS_TOP - 2.0) / ROWS as f32
     }
 
     pub(super) fn row_y(&self, row: u8) -> f32 {
-        self.layout.graph[1] + 12.0 + row.min(ROWS - 1) as f32 * self.row_h()
+        self.layout.graph[1] + ROWS_TOP + row.min(ROWS - 1) as f32 * self.row_h()
     }
 
     fn row_at(&self, y: f32) -> u8 {
-        (((y - self.layout.graph[1] - 12.0) / self.row_h())
+        (((y - self.layout.graph[1] - ROWS_TOP) / self.row_h())
             .floor()
             .max(0.0) as u8)
             .min(ROWS - 1)
@@ -547,12 +558,24 @@ impl View {
         if let Some(span) = self.ed.kiai_around(self.ed.time) {
             let (a, b) = (self.x_of(span.0).max(x), self.x_of(span.1).min(x + w));
             if b > a {
-                c.rect(a, y + 12.0, b - a, h - 13.0, rgba(0xFFAA00, 0.05));
+                c.rect(
+                    a,
+                    y + ROWS_TOP,
+                    b - a,
+                    h - ROWS_TOP - 1.0,
+                    rgba(0xFFAA00, 0.05),
+                );
             }
         }
         for (t, kind) in self.grid() {
             if kind == 2 {
-                c.rect(self.x_of(t), y + 12.0, 1.0, h - 13.0, rgba(0xffffff, 0.08));
+                c.rect(
+                    self.x_of(t),
+                    y + ROWS_TOP,
+                    1.0,
+                    h - ROWS_TOP - 1.0,
+                    rgba(0xffffff, 0.08),
+                );
             }
         }
         for r in 0..ROWS {
@@ -609,6 +632,7 @@ impl View {
                 c.text(a.max(x) + 3.0, ry + 2.0, 5.5, rgba(0xffffff, 0.95), &label);
             }
         }
+        self.draw_motion_strip(c, y + STRIP_Y, STRIP_H);
         // A clip being drawn.
         if let Drag::FxNew {
             row,
@@ -640,6 +664,14 @@ impl View {
     }
 
     pub(super) fn clip_rows_down(&mut self, x: f32, y: f32) {
+        if self.in_motion_strip(y) {
+            if !self.motion_strip_down(x) {
+                self.drag = Drag::Scrub;
+                let t = self.t_at(x);
+                self.set_time(t);
+            }
+            return;
+        }
         match self.clip_at(x, y) {
             Some((id, part)) => {
                 self.fx_sel = Some(id);
@@ -722,6 +754,10 @@ impl View {
     pub(super) fn clip_rows_right(&mut self, x: f32, y: f32) -> bool {
         if !inside(self.layout.graph, x, y) {
             return false;
+        }
+        if self.in_motion_strip(y) {
+            self.motion_strip_right(x);
+            return true;
         }
         if let Some((id, _)) = self.clip_at(x, y)
             && self.ed.delete_clip(id)

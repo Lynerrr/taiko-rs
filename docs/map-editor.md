@@ -133,6 +133,12 @@ swirl), when it acts (the whole time, every few beats, on notes
 (all, dons, kats, big ones), on hits, on misses), the amount (click to type), the fades or the
 motion of each repeat (kick, swing, step) and how many beats it takes, the easing, *keep after*, and
 *Fit to kiai* / *Fit to selection*. Blocks add up with each other and with keyframes and nodes.
+
+The preview can be moved by hand on this page: drag it to move the playfield, Shift+drag to turn
+it around the hit target, Ctrl+drag to zoom it (up grows it, down shrinks it). Each drag sets keys
+at the playhead (snapped to the grid) and undoes in one step. The keys show as diamonds on the
+*Motion* strip above the rows: click one to go there, right click it to take that moment's keys
+away. They are the playfield's keyframes, so the Keyframes page edits them too.
 The format is in [tko-format.md](tko-format.md#clips).
 
 *Advanced...* shows the two older pages. *Keyframes* animates the playfield (move, look and clone properties,
