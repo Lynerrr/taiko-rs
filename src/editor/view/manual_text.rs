@@ -236,6 +236,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - Pick a speed and it holds from the playhead until the next key. Slower and Faster nudge it, Glide to the next key eases into the next speed instead of jumping.
 - Moves from the playhead: Freeze a beat, Back up a beat, Lurch on each beat (a bar), Jump a beat ahead. Each comes back to the speed it started from.
 - The graph under the timeline shows the speed: click adds a key, drag moves it, right click deletes it.
+- Slide the drum along the lane moves the hit target to Home, A quarter in, Half way or Far over one beat from the playhead; notes meet it wherever it is. It is the Move the drum effect, so the Keyframes page and clips can move it too.
 - However the scroll runs, every note still reaches the drum exactly when it is hit.
 
 > Paths, moves and the scroll are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
@@ -568,6 +569,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - Выбранная скорость держится от плейхеда до следующего ключа. Slower и Faster подкручивают её, Glide to the next key плавно переводит к следующей скорости вместо скачка.
 - Движения от плейхеда: Freeze a beat, Back up a beat, Lurch on each beat (a bar), Jump a beat ahead. Каждое возвращается к скорости, с которой началось.
 - График под таймлайном показывает скорость: клик добавляет ключ, перетаскивание двигает, правый клик удаляет.
+- Slide the drum along the lane за одну долю от плейхеда сдвигает мишень: Home (на место), A quarter in (на четверть), Half way (на середину), Far (далеко). Ноты встречают её там, где она стоит. Это эффект Move the drum, так что его можно двигать и на странице Keyframes, и клипами.
 - Как бы ни шёл скролл, каждая нота приходит на барабан ровно в момент удара.
 
 > Траектории, движения и скролл только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.

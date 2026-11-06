@@ -6,7 +6,7 @@
 
 use super::keyframes::Subject;
 use super::state::Editor;
-use crate::tko::gimmick::{BEFORE_BEATS, Group, MAX_GROUPS, NoteProp};
+use crate::tko::gimmick::{BEFORE_BEATS, FieldProp, Group, MAX_GROUPS, NoteProp};
 use crate::tko::path::NotePath;
 use crate::tko::track::{Ease, Key, Track};
 use std::collections::BTreeMap;
@@ -475,6 +475,28 @@ impl Editor {
         })
     }
 
+    /// Slides the hit target along the lane to `to` (virtual units from home) over a beat from
+    /// `t`, from where it is then.
+    pub fn drum_to(&mut self, t: f64, to: f64) -> bool {
+        let beat = self.beat_at(t);
+        let s = Subject::Field(FieldProp::Drum);
+        let from = self.value_of(s, t);
+        self.edit_gimmick(false, |g| {
+            let tr = g.field_track_mut(FieldProp::Drum);
+            tr.keys.retain(|k| k.t < t || k.t > t + beat);
+            tr.set(Key {
+                t,
+                v: from,
+                ease: Ease::SineInOut,
+            });
+            tr.set(Key {
+                t: t + beat,
+                v: to,
+                ease: Ease::SineInOut,
+            });
+        })
+    }
+
     pub fn clear_scroll(&mut self) -> bool {
         self.edit_gimmick(false, |g| g.scroll.keys.clear())
     }
@@ -631,6 +653,12 @@ mod tests {
             }
             assert!(e.undo());
         }
+        assert!(e.drum_to(t, 300.0));
+        let drum = Subject::Field(FieldProp::Drum);
+        assert_eq!(e.value_of(drum, t), 0.0);
+        assert_eq!(e.value_of(drum, t + beat), 300.0);
+        assert!(e.drum_to(t + 4.0 * beat, 0.0));
+        assert_eq!(e.value_of(drum, t + 5.0 * beat), 0.0);
         assert!(e.scroll_glide(t));
         assert_eq!(e.gimmick().unwrap().scroll.keys[0].ease, Ease::SineInOut);
         assert!(e.clear_scroll());
