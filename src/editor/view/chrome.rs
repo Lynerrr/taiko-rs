@@ -279,7 +279,7 @@ impl View {
                 "Click a note to select it; drag empty space to select a box. Drag a note to move it, drag the end of a roll to stretch it."
             }
             Tool::Note => {
-                "Click the lane to place a note on the grid. W or R makes the note in hand a kat, E a big one. Click a placed note to give it that colour. Right click deletes."
+                "Click the lane to place a note on the grid. W makes the note in hand a kat (or a don again), E a big one. Click a placed note to give it that colour. Right click deletes."
             }
             Tool::Roll => {
                 "Press where the drumroll starts and drag to where it ends, or click the start and then the end."
@@ -326,14 +326,17 @@ impl View {
         // Hitsounds: they act on the selection, or on what is placed next.
         // The Note tool's keys are for the note in hand, not the one just placed.
         let on_sel = !sel.is_empty() && self.ed.tool != Tool::Note;
-        let has = |bit: i32| on_sel && sel.iter().all(|o| o.sound & bit != 0);
-        let (kat, clap, big) = if !on_sel {
-            (self.ed.kat, false, self.ed.big)
+        let (kat, big) = if !on_sel {
+            (self.ed.kat, self.ed.big)
         } else {
+            // Lit when every note of the selection is one (drumrolls and dendens aside).
+            let notes = || {
+                sel.iter()
+                    .filter(|o| matches!(o.taiko(), Taiko::Don | Taiko::Kat))
+            };
             (
-                has(crate::editor::chart::SOUND_WHISTLE),
-                has(crate::editor::chart::SOUND_CLAP),
-                has(crate::editor::chart::SOUND_FINISH),
+                notes().next().is_some() && notes().all(|o| o.taiko() == Taiko::Kat),
+                sel.iter().all(|o| o.big()),
             )
         };
         let who = if !on_sel { "New notes:" } else { "Selected:" };
@@ -344,8 +347,7 @@ impl View {
             bx,
             y,
             &[
-                ("Kat  W".to_string(), Btn::C(Cmd::Whistle), kat),
-                ("Clap  R".to_string(), Btn::C(Cmd::Clap), clap),
+                ("Kat  W".to_string(), Btn::C(Cmd::Kat), kat),
                 ("Big  E".to_string(), Btn::C(Cmd::Finish), big),
             ],
         );

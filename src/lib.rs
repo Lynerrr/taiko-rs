@@ -7699,8 +7699,9 @@ impl State {
         }
         if matches!(self.scene, Scene::EditorHome(_)) && !self.social.open {
             let x = self.mouse_virtual().0;
+            let keys = self.editor_keys();
             if let Scene::EditorHome(home) = &mut self.scene {
-                home.wheel(notches, x);
+                home.wheel(notches, x, keys.ctrl || keys.alt);
             }
             return;
         }
@@ -8001,6 +8002,12 @@ impl State {
             }
             return CursorIcon::Default;
         }
+        if let Scene::EditorHome(home) = &mut self.scene
+            && home.dragging()
+        {
+            home.mouse_move(vx);
+            return CursorIcon::Grabbing;
+        }
         if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
             if ed.scrubbing {
                 let t = ed.time_at(vx);
@@ -8264,6 +8271,16 @@ impl State {
                 .as_mut()
                 .is_some_and(Dropdown::release_bar)
         {
+            return;
+        }
+        if !pressed
+            && let Scene::EditorHome(home) = &mut self.scene
+            && home.dragging()
+        {
+            let vx = self.mouse_virtual().0;
+            if let Scene::EditorHome(home) = &mut self.scene {
+                home.release(vx, self.audio.as_ref());
+            }
             return;
         }
         if matches!(self.scene, Scene::Editor(_)) && !self.social.open && self.splash.is_none() {

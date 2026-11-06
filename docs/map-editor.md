@@ -18,7 +18,8 @@ going on with a map you already have.
 2. **Timing**: the game finds the BPM and the moment of the first beat from the whole song and says
    when it thinks the tempo changes. Tap the tempo with `T`, switch the metronome with `M`, loop 8
    bars with `L`, say "the beat is here" with `B`, go back to what was found with `D`. The
-   waveform shows the beat grid; the wheel zooms.
+   waveform shows the beat grid: the wheel or a drag moves along it, Ctrl+wheel zooms, and the strip
+   under it is the whole song (press or drag there to jump, also while it plays).
 3. **Create** makes `Songs/<Artist> - <Title>` with the music, the background and a `.osu` (or
    `.tko`), adds it to your list and opens it in the editor.
 
@@ -55,7 +56,7 @@ removed, with no restart. A file that is still being copied in is picked up once
 | Shift+1..9 | beat snap |
 | Ctrl+Up / Down (with Shift: 5%) | playback speed |
 | 1 2 3 4 | Select, Note, Drumroll, Denden tools |
-| W / R / E | kat (whistle / clap), big (finish): the note in hand with the Note tool (click a placed note to paint it that colour), else the selection |
+| W / E | kat (R too, as in osu!), big: the note in hand with the Note tool (click a placed note to paint it that colour), else the selection |
 | J / K, Ctrl+D, Ctrl+G, Q | nudge, clone, reverse, flip don/kat |
 | Ctrl+Z / Y / X / C / V / A, Delete | undo, redo, cut, copy, paste, select all, delete |
 | Ctrl+B / Ctrl+Shift+B, Ctrl+Left / Right | add / remove bookmark, previous / next bookmark |

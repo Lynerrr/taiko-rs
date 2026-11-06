@@ -89,7 +89,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 - Speed (Ctrl+Up / Down) slows the music so you can place by ear.
 
 # Colour and size
-- W or R makes kats, E makes big notes. They apply to the selection, or to the notes you place next.
+- W makes kats (press it again for dons), E makes big notes. They apply to the selection, or to the notes you place next.
 - Q flips don and kat. J / K nudge, Ctrl+D clones, Ctrl+G reverses.
 
 # Selecting and copying
@@ -248,7 +248,7 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
 - Ctrl+Up / Down: playback speed (with Shift 5%).
 
 # Notes
-- 1 2 3 4: tools. W R E: kat, clap, big. Q: flip. J K: nudge. Ctrl+D: clone. Ctrl+G: reverse.
+- 1 2 3 4: tools. W E: kat, big. Q: flip. J K: nudge. Ctrl+D: clone. Ctrl+G: reverse.
 - Ctrl+Z / Y: undo, redo. Ctrl+X / C / V: cut, copy, paste. Ctrl+A: select all. Delete.
 
 # Timing and the rest
@@ -321,7 +321,7 @@ File > Open song folder открывает папку карты. Бросьте
 - Speed (Ctrl+вверх / вниз) замедляет музыку, чтобы ставить на слух.
 
 # Цвет и размер
-- W или R — кат, E — большая нота. Применяется к выделению или к следующим нотам.
+- W — кат (ещё раз — снова дон), E — большая нота. Применяется к выделению или к следующим нотам.
 - Q меняет дон на кат. J / K сдвигают, Ctrl+D клонирует, Ctrl+G разворачивает.
 
 # Выделение и копирование
@@ -480,7 +480,7 @@ File > Upload отправляет сохранённую карту на taiko.
 - Ctrl+вверх / вниз: скорость воспроизведения (с Shift по 5%).
 
 # Ноты
-- 1 2 3 4: инструменты. W R E: кат, клап, большая. Q: сменить цвет. J K: сдвиг. Ctrl+D: клон. Ctrl+G: разворот.
+- 1 2 3 4: инструменты. W E: кат, большая. Q: сменить цвет. J K: сдвиг. Ctrl+D: клон. Ctrl+G: разворот.
 - Ctrl+Z / Y: отмена, повтор. Ctrl+X / C / V: вырезать, копировать, вставить. Ctrl+A: выделить всё. Delete.
 
 # Тайминг и прочее

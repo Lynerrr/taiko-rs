@@ -87,7 +87,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "Placing notes",
-        text: "Click to place. Right click deletes. W or R makes kats, E makes big notes: they apply to the selection, or to the notes you place next. Drag a note to move it; hold Shift to ignore the grid.",
+        text: "Click to place. Right click deletes. W makes kats (and dons again), E makes big notes: they apply to the selection, or to the notes you place next. Drag a note to move it; hold Shift to ignore the grid.",
         at: At::Timeline,
         mode: Mode::Compose,
     },

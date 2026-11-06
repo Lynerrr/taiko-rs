@@ -100,8 +100,10 @@ pub enum Act {
     PickBackground,
     ClearBackground,
     Format(bool),
-    /// The waveform: the playhead goes where it was clicked.
+    /// The waveform: a click puts the playhead there, a drag moves the view.
     Wave,
+    /// The whole song under the waveform: the playhead goes where it is pressed and dragged.
+    Overview,
     Play,
     Metronome,
     Loop,
@@ -139,6 +141,8 @@ struct Decoded {
     track: Arc<Track>,
     /// Lowest and highest sample of each block of `BLOCK` frames (mono).
     peaks: Vec<(f32, f32)>,
+    /// The loudest of each of `OUTLINE` even stretches of the song, for the overview.
+    outline: Vec<f32>,
     analysis: Option<tempo::Analysis>,
     rate: f64,
 }
@@ -154,6 +158,20 @@ enum Loading {
 struct Dialog {
     kind: FileKind,
     rx: Receiver<Result<Option<PathBuf>, String>>,
+}
+
+/// A drag that started on the timing page.
+#[derive(Clone, Copy, Debug)]
+enum Drag {
+    /// On the waveform: from where (x), and the view's start then. A press that didn't move is
+    /// a click.
+    Wave {
+        from_x: f32,
+        start: f64,
+        moved: bool,
+    },
+    /// On the overview: the music, if it plays, carries on from where it is let go.
+    Overview,
 }
 
 struct Playing {
@@ -192,6 +210,10 @@ pub struct Home {
     view_start: f64,
     view_len: f64,
     wave: [f32; 4],
+    overview: [f32; 4],
+    /// The view keeps the playhead in sight while playing, until it is moved by hand.
+    follow: bool,
+    drag: Option<Drag>,
     clock: Instant,
     /// Whether the timing was touched: the detected one isn't overwritten by a late result.
     touched: bool,
@@ -237,6 +259,9 @@ impl Home {
             view_start: 0.0,
             view_len: 8000.0,
             wave: [0.0; 4],
+            overview: [0.0; 4],
+            follow: true,
+            drag: None,
             clock: Instant::now(),
             touched: false,
         };
@@ -335,10 +360,12 @@ impl Home {
         std::thread::spawn(move || {
             let result = crate::audio::decode_shared(&path, rate).map(|track| {
                 let peaks = peaks_of(&track.samples);
+                let outline = outline_of(&peaks);
                 let analysis = tempo::analyse(&track.samples, rate as f64);
                 Decoded {
                     track,
                     peaks,
+                    outline,
                     analysis,
                     rate: rate as f64,
                 }
@@ -439,6 +466,10 @@ impl Home {
 
     fn follow_playback(&mut self, now: Instant, audio: Option<&Engine>) {
         let Some(p) = &self.playing else { return };
+        // The playhead is in the hand: the music catches up when it is let go.
+        if matches!(self.drag, Some(Drag::Overview)) {
+            return;
+        }
         let (from, started, baked_to) = (p.from, p.at, p.baked_to);
         let estimate = from + started.elapsed().as_secs_f64() * 1000.0;
         let pos = audio
@@ -460,8 +491,8 @@ impl Home {
             self.start_playing(audio, pos);
             return;
         }
-        // The view keeps up with the playhead.
-        if pos < self.view_start || pos > self.view_start + self.view_len * 0.9 {
+        // The view keeps up with the playhead, unless it was moved away by hand.
+        if self.follow && (pos < self.view_start || pos > self.view_start + self.view_len * 0.9) {
             self.view_start = (pos - self.view_len * 0.1).max(0.0);
         }
     }
@@ -563,7 +594,17 @@ impl Home {
             Act::PickBackground => self.ask_for_file(FileKind::Image, "Choose the background"),
             Act::ClearBackground => self.background = None,
             Act::Format(tko) => self.tko = tko,
-            Act::Wave => self.seek_to_x(mouse_x, audio),
+            Act::Wave => {
+                self.drag = Some(Drag::Wave {
+                    from_x: mouse_x,
+                    start: self.view_start,
+                    moved: false,
+                })
+            }
+            Act::Overview => {
+                self.drag = Some(Drag::Overview);
+                self.overview_to(mouse_x);
+            }
             Act::Play => self.toggle_play(audio),
             Act::Metronome => {
                 self.metronome = !self.metronome;
@@ -688,6 +729,7 @@ impl Home {
             } else {
                 self.playhead
             };
+            self.follow = true;
             self.start_playing(audio, from);
         }
     }
@@ -726,14 +768,81 @@ impl Home {
         }
         let t = self.view_start + ((x - wx) / ww).clamp(0.0, 1.0) as f64 * self.view_len;
         self.playhead = t.clamp(0.0, self.duration());
+        self.follow = true;
         if self.playing.is_some() {
             let at = self.playhead;
             self.start_playing(audio, at);
         }
     }
 
-    pub fn wheel(&mut self, notches: i32, mouse_x: f32) {
+    /// Whether a drag started here is going on (the game sends the moves and the release).
+    pub fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    pub fn mouse_move(&mut self, x: f32) {
+        match self.drag {
+            Some(Drag::Wave {
+                from_x,
+                start,
+                moved,
+            }) => {
+                let [_, _, ww, _] = self.wave;
+                if !moved && (x - from_x).abs() < 3.0 || ww <= 0.0 {
+                    return;
+                }
+                self.drag = Some(Drag::Wave {
+                    from_x,
+                    start,
+                    moved: true,
+                });
+                let ms = (from_x - x) as f64 / ww as f64 * self.view_len;
+                self.pan_to(start + ms);
+            }
+            Some(Drag::Overview) => self.overview_to(x),
+            None => {}
+        }
+    }
+
+    pub fn release(&mut self, x: f32, audio: Option<&Engine>) {
+        match self.drag.take() {
+            Some(Drag::Wave { moved: false, .. }) => self.seek_to_x(x, audio),
+            Some(Drag::Overview) if self.playing.is_some() => {
+                let at = self.playhead;
+                self.start_playing(audio, at);
+            }
+            _ => {}
+        }
+    }
+
+    /// The view starts at `start` (held inside the song) and stops following the playhead.
+    fn pan_to(&mut self, start: f64) {
+        let max = (self.duration() - self.view_len).max(0.0);
+        self.view_start = start.clamp(0.0, max);
+        self.follow = false;
+    }
+
+    /// The playhead to the point of the song under `x` on the overview, with the view around it.
+    fn overview_to(&mut self, x: f32) {
+        let [ox, _, ow, _] = self.overview;
+        if ow <= 0.0 {
+            return;
+        }
+        let t = ((x - ox) / ow).clamp(0.0, 1.0) as f64 * self.duration();
+        self.playhead = t;
+        self.pan_to(t - self.view_len * 0.3);
+        self.follow = true;
+    }
+
+    /// The wheel moves along the song; with `zoom` (Ctrl or Alt held) it zooms around the
+    /// pointer instead.
+    pub fn wheel(&mut self, notches: i32, mouse_x: f32, zoom: bool) {
         if self.page != Page::Timing || notches == 0 {
+            return;
+        }
+        if !zoom {
+            // Up goes back in the song, as a page scrolls up.
+            self.pan_to(self.view_start - notches as f64 * self.view_len * 0.15);
             return;
         }
         let [wx, _, ww, _] = self.wave;
@@ -821,14 +930,13 @@ impl Home {
                 } else {
                     1.0
                 };
-                let max = (self.duration() - self.view_len).max(0.0);
-                self.view_start = (self.view_start + sign * by).clamp(0.0, max);
+                self.pan_to(self.view_start + sign * by);
             }
             (Page::Timing, KeyCode::Equal | KeyCode::NumpadAdd) => {
-                self.wheel(1, self.wave[0] + self.wave[2] / 2.0)
+                self.wheel(1, self.wave[0] + self.wave[2] / 2.0, true)
             }
             (Page::Timing, KeyCode::Minus | KeyCode::NumpadSubtract) => {
-                self.wheel(-1, self.wave[0] + self.wave[2] / 2.0)
+                self.wheel(-1, self.wave[0] + self.wave[2] / 2.0, true)
             }
             _ => {}
         }
@@ -1299,8 +1407,8 @@ impl Home {
         let w = c.width;
         let col = (w - 40.0).min(780.0);
         let x = (w - col) / 2.0;
-        // The waveform.
-        let wave = [x, 58.0, col, 118.0];
+        // The waveform, and the whole song under it.
+        let wave = [x, 58.0, col, 100.0];
         self.wave = wave;
         self.panel(c, wave[0], wave[1], wave[2], wave[3]);
         self.draw_wave(c, wave);
@@ -1311,8 +1419,18 @@ impl Home {
             wave[3],
             Hit::EditorHome(Act::Wave),
         );
+        let overview = [x, wave[1] + wave[3] + 3.0, col, 15.0];
+        self.overview = overview;
+        self.draw_overview(c, overview);
+        c.hit(
+            overview[0],
+            overview[1],
+            overview[2],
+            overview[3],
+            Hit::EditorHome(Act::Overview),
+        );
         // What was found.
-        let mut y = wave[1] + wave[3] + 6.0;
+        let mut y = overview[1] + overview[3] + 6.0;
         let line = match (&self.loading, &self.analysis) {
             (Loading::Working(_), _) => ("Reading the song...".to_string(), DIM),
             (Loading::Failed(e), _) => (format!("Can't read the song: {e}"), BAD),
@@ -1593,7 +1711,7 @@ impl Home {
             &Canvas::fit(
                 6.5,
                 (col - 436.0).max(40.0),
-                "Wheel zooms, arrows pan, click moves the playhead.",
+                "Wheel or drag: move along. Ctrl+wheel: zoom. Click: playhead.",
             ),
         );
         let by = VIRTUAL_HEIGHT - 36.0;
@@ -1624,6 +1742,41 @@ impl Home {
             rgba(DIM, 1.0),
             "Not sure? Create it anyway: the editor has the same tools (F3, F6).",
         );
+    }
+
+    /// The whole song, small: where the view is on it, and the playhead.
+    fn draw_overview(&self, c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
+        self.panel(c, x, y, w, h);
+        let Some(d) = self.decoded() else { return };
+        let total = self.duration().max(1.0);
+        let n = d.outline.len().max(1);
+        let cw = w / n as f32;
+        let mid = y + h / 2.0;
+        for (i, v) in d.outline.iter().enumerate() {
+            let half = v.min(1.0) * (h / 2.0 - 1.5);
+            if half > 0.1 {
+                c.rect(
+                    x + i as f32 * cw,
+                    mid - half,
+                    cw + 0.2,
+                    half * 2.0,
+                    rgba(0x5b7fc7, 0.7),
+                );
+            }
+        }
+        // The stretch the waveform shows.
+        let a = x + (self.view_start / total).clamp(0.0, 1.0) as f32 * w;
+        let b = x + ((self.view_start + self.view_len) / total).clamp(0.0, 1.0) as f32 * w;
+        c.round_rect(
+            [a, y],
+            [(b - a).max(2.0), h],
+            2.0,
+            rgba(0xffffff, 0.10),
+            rgba(0xffffff, 0.55),
+            1.0,
+        );
+        let px = x + (self.playhead / total).clamp(0.0, 1.0) as f32 * w;
+        c.rect(px - 0.5, y, 1.5, h, rgba(accent(), 1.0));
     }
 
     fn draw_wave(&self, c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
@@ -1714,6 +1867,28 @@ impl Home {
     }
 }
 
+/// Stretches the overview splits the song into.
+const OUTLINE: usize = 1024;
+
+/// The loudest of each of `OUTLINE` even stretches of `peaks` (fewer for a very short song).
+fn outline_of(peaks: &[(f32, f32)]) -> Vec<f32> {
+    if peaks.is_empty() {
+        return Vec::new();
+    }
+    let n = OUTLINE.min(peaks.len());
+    (0..n)
+        .map(|i| {
+            let (a, b) = (
+                i * peaks.len() / n,
+                ((i + 1) * peaks.len() / n).max(i * peaks.len() / n + 1),
+            );
+            peaks[a..b.min(peaks.len())]
+                .iter()
+                .fold(0.0f32, |m, p| m.max(-p.0).max(p.1))
+        })
+        .collect()
+}
+
 /// Lowest and highest mono sample of each block of `BLOCK` frames.
 fn peaks_of(samples: &[f32]) -> Vec<(f32, f32)> {
     samples
@@ -1754,6 +1929,7 @@ mod tests {
                 stream: None,
             }),
             peaks: peaks_of(&vec![0.2; frames * 2]),
+            outline: outline_of(&peaks_of(&vec![0.2; frames * 2])),
             analysis: None,
             rate,
         }));
@@ -1887,7 +2063,7 @@ mod tests {
         h.view_start = 10_000.0;
         h.view_len = 8000.0;
         let at = h.view_start + 0.5 * h.view_len;
-        h.wheel(1, 500.0);
+        h.wheel(1, 500.0, true);
         assert!(h.view_len < 8000.0);
         let after = h.view_start + 0.5 * h.view_len;
         assert!(
@@ -1895,13 +2071,72 @@ mod tests {
             "the point under the pointer stays put"
         );
         for _ in 0..60 {
-            h.wheel(-1, 100.0);
+            h.wheel(-1, 100.0, true);
         }
         assert!(h.view_len <= 60_000.0 && h.view_start >= 0.0);
         for _ in 0..80 {
-            h.wheel(1, 900.0);
+            h.wheel(1, 900.0, true);
         }
         assert_eq!(h.view_len, 1500.0, "no closer than that");
+    }
+
+    #[test]
+    fn the_wheel_and_a_drag_move_along_the_song_and_a_click_moves_the_playhead() {
+        let mut h = home();
+        loaded(&mut h, 48_000 * 60, 48_000.0);
+        h.page = Page::Timing;
+        h.wave = [100.0, 50.0, 800.0, 100.0];
+        h.view_start = 10_000.0;
+        h.view_len = 8000.0;
+        // Down the wheel: later in the song, same zoom.
+        h.wheel(-1, 500.0, false);
+        assert_eq!(h.view_len, 8000.0);
+        assert!(h.view_start > 10_000.0);
+        // Up, many times: back to the start and no further.
+        for _ in 0..40 {
+            h.wheel(1, 500.0, false);
+        }
+        assert_eq!(h.view_start, 0.0);
+        // Dragging the waveform left moves the view later by as much.
+        h.click(Act::Wave, 500.0, None);
+        h.mouse_move(400.0);
+        h.release(400.0, None);
+        assert!((h.view_start - 1000.0).abs() < 1.0, "{}", h.view_start);
+        assert_eq!(h.playhead, 0.0, "a drag doesn't move the playhead");
+        // A click without moving does.
+        h.click(Act::Wave, 500.0, None);
+        h.release(500.0, None);
+        assert!((h.playhead - 5000.0).abs() < 1.0, "{}", h.playhead);
+        // The overview is the whole song: the middle of it is half a minute in.
+        h.overview = [100.0, 160.0, 800.0, 15.0];
+        h.click(Act::Overview, 500.0, None);
+        h.mouse_move(500.0);
+        assert!(h.dragging());
+        h.release(500.0, None);
+        assert!((h.playhead - 30_000.0).abs() < 50.0, "{}", h.playhead);
+        assert!(h.view_start <= 30_000.0 && h.view_start + h.view_len >= 30_000.0);
+        assert!(!h.dragging());
+    }
+
+    #[test]
+    fn a_view_moved_by_hand_stays_while_the_song_plays() {
+        let mut h = home();
+        loaded(&mut h, 48_000 * 60, 48_000.0);
+        h.page = Page::Timing;
+        h.wave = [100.0, 50.0, 800.0, 100.0];
+        h.playing = Some(Playing {
+            from: 1000.0,
+            at: Instant::now(),
+            baked_to: f64::MAX,
+        });
+        h.view_start = 40_000.0;
+        h.follow = true;
+        h.follow_playback(Instant::now(), None);
+        assert!(h.view_start < 2000.0, "it follows the playhead");
+        h.wheel(-3, 500.0, false);
+        let moved = h.view_start;
+        h.follow_playback(Instant::now(), None);
+        assert_eq!(h.view_start, moved, "until moved by hand");
     }
 
     #[test]
