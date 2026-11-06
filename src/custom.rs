@@ -107,6 +107,21 @@ fn collect(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 /// the set needs (music, pictures, storyboard, hitsounds). Other modes' maps, backups
 /// (`.bak`, `.osu.old`) and the sidecar stay behind.
 pub fn pack(folder: &Path) -> Result<Packed, String> {
+    pack_with(folder, MIN_NOTES, MAX_OSZ, "the server takes")
+}
+
+/// The most a set exported to a file (`.rsz` or `.osz`) holds.
+pub const MAX_EXPORT: usize = 300 << 20;
+
+/// Packs the folder for a file to give to people (`export`): every taiko difficulty with a
+/// note, and what they need.
+pub fn pack_export(folder: &Path) -> Result<Packed, String> {
+    pack_with(folder, 1, MAX_EXPORT, "a file holds")
+}
+
+/// `pack`, keeping the difficulties with at least `min_notes` notes, and at most `max` bytes
+/// in all (`who` says who takes no more: "the server takes").
+fn pack_with(folder: &Path, min_notes: usize, max: usize, who: &str) -> Result<Packed, String> {
     let mut paths = Vec::new();
     collect(folder, 0, &mut paths);
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -124,8 +139,8 @@ pub fn pack(folder: &Path) -> Result<Packed, String> {
             if mode != Some(1) {
                 continue;
             }
-            if notes < MIN_NOTES {
-                left_out.push(format!("{name} (fewer than {MIN_NOTES} notes)"));
+            if notes < min_notes {
+                left_out.push(format!("{name} (fewer than {min_notes} notes)"));
                 continue;
             }
             sent.push(name.clone());
@@ -149,16 +164,18 @@ pub fn pack(folder: &Path) -> Result<Packed, String> {
         }
     }
     if sent.is_empty() {
-        return Err(format!(
-            "no taiko difficulty with at least {MIN_NOTES} notes in the map's folder"
-        ));
+        return Err(if min_notes > 1 {
+            format!("no taiko difficulty with at least {min_notes} notes in the map's folder")
+        } else {
+            "no taiko difficulty with notes in the map's folder".into()
+        });
     }
     let bytes = zip.finish().map_err(|e| e.to_string())?.into_inner();
-    if bytes.len() > MAX_OSZ {
+    if bytes.len() > max {
         return Err(format!(
-            "the set is {} MB, the server takes {} MB at most",
+            "the set is {} MB, {who} {} MB at most",
             bytes.len() >> 20,
-            MAX_OSZ >> 20
+            max >> 20
         ));
     }
     Ok(Packed {
@@ -237,6 +254,45 @@ fn answer(text: &str) -> Result<Sent, String> {
         id: field("id").ok_or("the server's answer made no sense")?,
         version: field("version").unwrap_or(1),
     })
+}
+
+/// Packs the map's folder into a file in `dir` named after the folder: `.rsz` when a
+/// difficulty of it is a `.tko` (for taiko.rs only), `.osz` otherwise (osu! opens it too). An
+/// older export of the same name is replaced. Returns the file.
+pub fn export(folder: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let packed = pack_export(folder)?;
+    let tko = packed
+        .sent
+        .iter()
+        .any(|n| n.to_ascii_lowercase().ends_with(".tko"));
+    let stem: String = folder
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "map".into())
+        .chars()
+        .map(|c| {
+            if "<>:\"/\\|?*".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let file = dir.join(format!(
+        "{}.{}",
+        stem.trim(),
+        if tko { "rsz" } else { "osz" }
+    ));
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    // Written whole first, so a half-written file is never mistaken for the set.
+    let part = file.with_extension("part");
+    std::fs::write(&part, &packed.bytes)
+        .and_then(|_| std::fs::rename(&part, &file))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&part);
+            format!("{}: {e}", file.display())
+        })?;
+    Ok(file)
 }
 
 #[cfg(test)]
@@ -359,5 +415,35 @@ mod tests {
     #[test]
     fn a_sets_page_is_on_our_site() {
         assert_eq!(page_url(9), format!("{WEBSITE}/c/9"));
+    }
+
+    #[test]
+    fn an_export_is_an_rsz_with_a_tko_and_an_osz_without() {
+        let dir = folder("export");
+        let out = dir.join("Exports");
+        std::fs::write(dir.join("a [Oni].osu"), map(1, 3)).unwrap();
+        std::fs::write(dir.join("audio.mp3"), [1u8; 64]).unwrap();
+        write_sidecar(&dir, 7);
+        // Only an .osu, with fewer notes than an upload needs: still a file to give to people.
+        let osz = export(&dir, &out).unwrap();
+        assert_eq!(osz.extension().unwrap(), "osz");
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&osz).unwrap()).unwrap();
+        assert!(zip.by_name("a [Oni].osu").is_ok() && zip.by_name("audio.mp3").is_ok());
+        assert!(zip.by_name(SIDECAR).is_err(), "the set number stays home");
+        // With a .tko it is taiko.rs's own archive, and an export again replaces it.
+        std::fs::write(dir.join("a [Fx].tko"), map(1, 3)).unwrap();
+        let rsz = export(&dir, &out).unwrap();
+        assert_eq!(rsz.extension().unwrap(), "rsz");
+        assert_eq!(rsz.file_stem(), osz.file_stem());
+        let again = export(&dir, &out).unwrap();
+        assert_eq!(again, rsz);
+        let maps = crate::download::archive_maps(&rsz).unwrap();
+        assert_eq!(maps.len(), 2, "both difficulties count as maps");
+        // Nothing to play: nothing written.
+        let empty = folder("export-empty");
+        assert!(export(&empty, &empty.join("Exports")).is_err());
+        assert!(!empty.join("Exports").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }

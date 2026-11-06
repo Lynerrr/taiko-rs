@@ -448,7 +448,20 @@ fn cache_dir() -> PathBuf {
     crate::config::cache_dir().unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
 }
 
-/// Extracts an `.osz` once into the cache and returns the folder.
+/// A set of maps in one file: osu!'s `.osz`, or taiko.rs's own `.rsz` (the same zip, made for a
+/// set with `.tko` maps in it, and opened with taiko.rs rather than osu!).
+pub fn is_map_archive(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("osz") || x.eq_ignore_ascii_case("rsz"))
+}
+
+/// taiko.rs's own map archive (`is_map_archive`).
+pub fn is_rsz(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("rsz"))
+}
+
+/// Extracts an `.osz` (or `.rsz`) once into the cache and returns the folder.
 fn extract_osz(path: &Path) -> Result<PathBuf, String> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("map");
     let dest = cache_dir().join("osz").join(stem);
@@ -666,7 +679,7 @@ fn scan_cached(
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
             Some("osu" | "tko") if input.is_file() => files.push((None, input.clone())),
-            Some("osz") if input.is_file() => match extract_osz(input) {
+            Some("osz" | "rsz") if input.is_file() => match extract_osz(input) {
                 Ok(dir) => loose(&mut files, &dir),
                 Err(e) => eprintln!("{}: {e}", input.display()),
             },
@@ -703,8 +716,8 @@ fn scan_cached(
                         }
                     } else if is_map_file(&p) {
                         files.push((None, p));
-                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osz")) {
-                        // A Songs folder: also pick up .osz files dropped into it.
+                    } else if is_map_archive(&p) {
+                        // A Songs folder: also pick up .osz and .rsz files dropped into it.
                         if let Ok(dir) = extract_osz(&p) {
                             loose(&mut files, &dir);
                         }
@@ -712,7 +725,7 @@ fn scan_cached(
                 }
             }
             _ => eprintln!(
-                "skipping {}: not a .osu, .tko, .osz or folder",
+                "skipping {}: not a .osu, .tko, .osz, .rsz or folder",
                 input.display()
             ),
         }

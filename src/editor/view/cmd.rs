@@ -57,6 +57,7 @@ pub enum Cmd {
     Save,
     Revert,
     Upload,
+    Export,
     OpenFolder,
     Leave,
     // Edit.
@@ -122,6 +123,7 @@ impl Cmd {
             Cmd::Save => "Save",
             Cmd::Revert => "Revert to last save",
             Cmd::Upload => "Upload to taiko.rs",
+            Cmd::Export => "Export map file",
             Cmd::OpenFolder => "Open song folder",
             Cmd::Leave => "Exit editor",
             Cmd::Undo => "Undo",
@@ -187,6 +189,9 @@ impl Cmd {
             Cmd::Save => "Writes the map. The first save keeps a .bak of the original.",
             Cmd::Revert => "Throws away every change since the last save.",
             Cmd::Upload => "Sends the saved map to taiko.rs: public as CUSTOM, pp once approved.",
+            Cmd::Export => {
+                "Saves the map and packs its set into one file to give to people: .rsz with a .tko in it (taiko.rs opens it with a double click), else .osz (osu! too)."
+            }
             Cmd::OpenFolder => {
                 "Shows the map's folder. Drop .osu or .tko files into it and they join the list at once."
             }

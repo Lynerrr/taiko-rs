@@ -328,7 +328,10 @@ pub struct View {
     pub rate: u32,
     pub want_rate: Option<f64>,
     /// The player asked to see the map's folder (File > Open song folder).
-    want_folder: bool,
+    /// A file for the game to show in the file manager (the map, or what was exported).
+    show: Option<std::path::PathBuf>,
+    /// An export on its way: the file it wrote.
+    export_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
     game: Option<Box<Game>>,
     game_err: Option<String>,
     /// The chart changed at this moment and the preview hasn't caught up.
@@ -476,7 +479,8 @@ impl View {
             audio_rate: 48000.0,
             rate: 100,
             want_rate: None,
-            want_folder: false,
+            show: None,
+            export_rx: None,
             game: None,
             game_err: None,
             stale: Some(Instant::now()),
@@ -571,7 +575,7 @@ impl View {
 
     /// The map file to show in its folder, once asked for.
     pub fn take_folder_request(&mut self) -> Option<std::path::PathBuf> {
-        std::mem::take(&mut self.want_folder).then(|| self.ed.path.clone())
+        self.show.take()
     }
 
     pub fn take_rate_request(&mut self) -> Option<f64> {
@@ -675,6 +679,7 @@ impl View {
             self.wave = Some(Arc::new(wave));
             self.wave_rx = None;
         }
+        self.poll_export();
         if let Some(rx) = &self.track_rx
             && let Ok(result) = rx.try_recv()
         {
@@ -2213,6 +2218,52 @@ impl View {
             }
             Err(e) => self.status = e,
         }
+    }
+
+    /// Saves, and packs the set into a file in the Exports folder (`custom::export`), on a
+    /// thread: the game shows the file when it is written.
+    fn export(&mut self) {
+        if self.export_rx.is_some() {
+            return;
+        }
+        if self.ed.chart.dirty {
+            self.save();
+            if self.ed.chart.dirty {
+                return;
+            }
+        }
+        let Some(folder) = self.ed.path.parent().map(|p| p.to_path_buf()) else {
+            return;
+        };
+        let dir = crate::config::own_dir("Exports")
+            .unwrap_or_else(|| folder.parent().unwrap_or(&folder).join("Exports"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::custom::export(&folder, &dir));
+        });
+        self.export_rx = Some(rx);
+        self.status = "packing the map...".into();
+    }
+
+    fn poll_export(&mut self) {
+        let Some(rx) = &self.export_rx else { return };
+        let got = match rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(_) => Err("the packing stopped unexpectedly".to_string()),
+            Ok(got) => got,
+        };
+        self.export_rx = None;
+        self.status = match got {
+            Ok(file) => {
+                let name = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.show = Some(file);
+                format!("exported {name}")
+            }
+            Err(e) => format!("can't export: {e}"),
+        };
     }
 
     fn save(&mut self) {

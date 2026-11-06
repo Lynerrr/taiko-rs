@@ -5990,24 +5990,31 @@ impl State {
                         .file_stem()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    if path
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("osz"))
-                    {
+                    if library::is_map_archive(&path) {
                         self.import_osz(path, &name, false);
                     } else {
                         let file = path
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        self.toast(tr!("{file} isn't a map: drop .osz files", "{file}は譜面ではありません: .oszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz";));
+                        self.toast(tr!("{file} isn't a map: drop .osz or .rsz files", "{file}は譜面ではありません: .oszか.rszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz или .rsz";));
                     }
                 }
             }
         }
     }
 
-    /// Unpacks an `.osz` into the Songs folder, unless everything in it is already in the list or
+    /// A map archive opened from the file manager (or the command line): imported like one
+    /// dropped on the window.
+    fn open_archive(&mut self, path: PathBuf) {
+        let name = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.import_osz(path, &name, false);
+    }
+
+    /// Unpacks an `.osz` (or `.rsz`) into the Songs folder, unless everything in it is already in the list or
     /// on its way (the same file dropped twice). A set that's partly here (a new difficulty) is
     /// unpacked into its own folder when that's in the Songs folder. `temporary`: delete the
     /// archive whatever happens (a copy, not the player's own file).
@@ -6076,9 +6083,9 @@ impl State {
             2.5,
         );
         let drop = tr!(
-            "Drop .osz maps to add them",
-            ".oszの譜面をドロップで追加",
-            "Бросьте карты .osz, чтобы добавить"
+            "Drop .osz or .rsz maps to add them",
+            ".oszか.rszの譜面をドロップで追加",
+            "Бросьте карты .osz или .rsz, чтобы добавить"
         );
         canvas.text_centered(
             w / 2.0,
@@ -17498,6 +17505,9 @@ enum UserEvent {
     /// A `taiko-rs://` link opened while the game runs (`link::listen`).
     #[cfg_attr(target_os = "android", allow(dead_code))]
     Link(link::Link),
+    /// A map archive opened from the file manager while the game runs (`link::listen`).
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    Open(PathBuf),
 }
 
 /// Files dragged over the window, or dropped on it.
@@ -18353,6 +18363,13 @@ impl ApplicationHandler<UserEvent> for App {
                     w.focus_window();
                 }
             }
+            UserEvent::Open(path) => {
+                lock(&self.state).open_archive(path);
+                if let Some(w) = &self.window {
+                    w.set_minimized(false);
+                    w.focus_window();
+                }
+            }
             #[cfg(target_os = "android")]
             UserEvent::Typed(typed) => {
                 lock(&self.state).soft_keyboard(typed, self.window.as_deref())
@@ -18710,9 +18727,27 @@ pub fn desktop_main() {
     if link.is_some_and(link::forward) {
         return;
     }
+    // A `.rsz` opened from the file manager (some pass it as a file:// URL): imported, by the
+    // running game if there is one.
+    for a in &mut args {
+        if let Some(path) = link::file_url(&a.to_string_lossy()) {
+            *a = path;
+        }
+    }
+    let mut opens: Vec<PathBuf> = args
+        .iter()
+        .filter(|a| library::is_rsz(a) && a.is_file())
+        .cloned()
+        .collect();
+    args.retain(|a| !opens.contains(a));
+    let had_opens = !opens.is_empty();
+    opens.retain(|p| !link::forward_open(p));
+    if had_opens && opens.is_empty() && args.is_empty() && link.is_none() {
+        return;
+    }
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]..."
+            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]...\n       taiko-rs file.rsz...           import taiko.rs map archives into the Songs folder"
         );
         println!("       taiko-rs --info file.osu...   print converted map stats");
         println!(
@@ -18732,12 +18767,15 @@ pub fn desktop_main() {
     // Scripted runs (tests) neither take links nor become their handler.
     if std::env::var_os("TAIKO_SHOTS").is_none() && std::env::var_os("TAIKO_INPUT").is_none() {
         let proxy = event_loop.create_proxy();
-        link::listen(move |l| {
-            let _ = proxy.send_event(UserEvent::Link(l));
+        link::listen(move |arrival| {
+            let _ = proxy.send_event(match arrival {
+                link::Arrival::Link(l) => UserEvent::Link(l),
+                link::Arrival::Open(path) => UserEvent::Open(path),
+            });
         });
         link::register();
     }
-    run(cfg, args, auto, link, event_loop);
+    run(cfg, args, auto, link, opens, event_loop);
 }
 
 /// The latest crash's report, kept until the next start has offered to copy it.
@@ -19146,7 +19184,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         .build()
         .expect("event loop");
     android::set_proxy(event_loop.create_proxy());
-    run(cfg, Vec::new(), false, None, event_loop);
+    run(cfg, Vec::new(), false, None, Vec::new(), event_loop);
 }
 
 /// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
@@ -19156,6 +19194,7 @@ fn run(
     args: Vec<PathBuf>,
     auto: bool,
     link: Option<link::Link>,
+    opens: Vec<PathBuf>,
     event_loop: EventLoop<UserEvent>,
 ) {
     config::set_data_folder(cfg.data_folder.clone());
@@ -19220,6 +19259,9 @@ fn run(
     state.load_skin();
     if let Some(l) = link {
         state.open_link(l);
+    }
+    for path in opens {
+        state.open_archive(path);
     }
     let mut app = App {
         state: Arc::new(Mutex::new(state)),

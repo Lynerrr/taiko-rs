@@ -147,6 +147,21 @@ canvas shows the first steps of a first effect. See the [nodes guide](nodes-guid
 nodes work, worked examples and every node. `M` drops a named mark on the timeline for "At mark", "Between marks" and "Span progress".
 Everything stays visual: judging, score and pp never change.
 
+## Exporting a file
+
+File > Export map file saves the map and packs its whole set (every taiko difficulty with notes,
+the music, pictures, storyboard and hitsounds) into one file in taiko.rs's `Exports` folder, then
+shows it in the file manager. A set with a `.tko` in it becomes a **`.rsz`**: taiko.rs's own map
+archive, the same zip as an `.osz`, which only taiko.rs plays. A set of plain `.osu` maps becomes
+an `.osz`, which osu! opens too. Send it to anyone: opening a `.rsz` (double click, or "open with")
+or dropping it on the game imports it, as an `.osz` does. A `.rsz` dropped into the Songs folder is
+picked up as well.
+
+The game makes itself the program for `.rsz` files when it starts (Windows: the user's registry;
+Linux: a MIME type and a desktop entry), and the Windows installer does too. Opening one while the
+game runs hands it to that game. macOS doesn't open `.rsz` files with a double click yet: drop them
+on the window.
+
 ## Uploading to taiko.rs
 
 File > Upload sends the saved map to the server. A checklist comes first: logged in, saved, a taiko

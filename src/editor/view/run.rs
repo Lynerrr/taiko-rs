@@ -136,7 +136,8 @@ impl View {
             Cmd::Save => self.save(),
             Cmd::Revert => self.revert(),
             Cmd::Upload => self.open_upload(),
-            Cmd::OpenFolder => self.want_folder = true,
+            Cmd::Export => self.export(),
+            Cmd::OpenFolder => self.show = Some(self.ed.path.clone()),
             Cmd::Leave => self.leave(audio),
             Cmd::LeaveSave => {
                 self.modal = None;
