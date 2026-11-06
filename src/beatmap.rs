@@ -154,6 +154,45 @@ pub fn difficulty_range(d: f64, min: f64, mid: f64, max: f64) -> f64 {
     }
 }
 
+/// The OD a map plays like at `rate` (1.5 for DT): the great window shrinks with the speed, as
+/// it is timed in the song, and this is the OD whose window is that wide in real time. Above 10
+/// when faster, below the map's when slower, as osu! shows it.
+pub fn od_at_rate(od: f64, rate: f64) -> f64 {
+    od_of_great(great_ms(od) / rate.max(0.01))
+}
+
+/// Where the hit windows leave osu!'s straight lines, the OD of a 10 ms great. Those lines reach
+/// 0 ms at OD 16.67 (great) and 18.33 (ok), and would then run below it.
+const WINDOW_BEND_OD: f64 = 40.0 / 3.0;
+
+/// A hit window in ms, from its widths at OD 0, 5 and 10. Past `WINDOW_BEND_OD` it keeps shrinking
+/// at the rate it had there, as a share of what's left: it joins the line without a corner and,
+/// however high the OD, never gets to zero.
+pub fn window_ms(od: f64, min: f64, mid: f64, max: f64) -> f64 {
+    if od <= WINDOW_BEND_OD {
+        return difficulty_range(od, min, mid, max);
+    }
+    let at_bend = difficulty_range(WINDOW_BEND_OD, min, mid, max);
+    let per_od = (mid - max) / 5.0;
+    at_bend * (-(od - WINDOW_BEND_OD) * per_od / at_bend).exp()
+}
+
+/// The great window at `od`, in ms.
+pub fn great_ms(od: f64) -> f64 {
+    window_ms(od, 50.0, 35.0, 20.0)
+}
+
+/// The OD of a great window of `great` ms: `great_ms` the other way round.
+fn od_of_great(great: f64) -> f64 {
+    let at_bend = great_ms(WINDOW_BEND_OD);
+    if great >= at_bend {
+        // 50 - 3 * OD over the whole range.
+        (50.0 - great) / 3.0
+    } else {
+        WINDOW_BEND_OD + (at_bend / great).ln() * at_bend / 3.0
+    }
+}
+
 fn kv(line: &str) -> Option<(&str, &str)> {
     let (k, v) = line.split_once(':')?;
     Some((k.trim(), v.trim()))
@@ -1001,6 +1040,89 @@ SliderTickRate:1
         assert_eq!(difficulty_range(5.0, 50.0, 35.0, 20.0), 35.0);
         assert_eq!(difficulty_range(10.0, 50.0, 35.0, 20.0), 20.0);
         assert_eq!(difficulty_range(0.0, 120.0, 80.0, 50.0), 120.0);
+    }
+
+    #[test]
+    fn hit_windows_stay_as_they_were_up_to_the_bend() {
+        for tenth in 0..=133 {
+            let od = tenth as f64 / 10.0;
+            assert_eq!(
+                window_ms(od, 50.0, 35.0, 20.0),
+                difficulty_range(od, 50.0, 35.0, 20.0)
+            );
+            assert_eq!(
+                window_ms(od, 120.0, 80.0, 50.0),
+                difficulty_range(od, 120.0, 80.0, 50.0)
+            );
+            assert_eq!(
+                window_ms(od, 135.0, 95.0, 70.0),
+                difficulty_range(od, 135.0, 95.0, 70.0)
+            );
+        }
+    }
+
+    #[test]
+    fn hit_windows_keep_their_order_and_shrink_all_the_way_to_od_20() {
+        let at = |od: f64| {
+            [
+                great_ms(od),
+                window_ms(od, 120.0, 80.0, 50.0),
+                window_ms(od, 135.0, 95.0, 70.0),
+            ]
+        };
+        let mut last = at(0.0);
+        for hundredth in 1..=2000 {
+            let now = at(hundredth as f64 / 100.0);
+            assert!(
+                now[0] > 0.0 && now[0] < now[1] && now[1] < now[2],
+                "{hundredth}: {now:?}"
+            );
+            for k in 0..3 {
+                assert!(now[k] < last[k], "{hundredth}: {now:?} after {last:?}");
+                // No jump at the bend: a hundredth of an OD moves a window well under 0.1 ms.
+                assert!(
+                    last[k] - now[k] < 0.1,
+                    "{hundredth}: {now:?} after {last:?}"
+                );
+            }
+            last = now;
+        }
+        // OD 20: the numbers the mod's setup shows.
+        assert!((last[0] - 10.0 * (-2.0f64).exp()).abs() < 1e-9);
+        assert!((last[0] - 1.35).abs() < 0.01, "{last:?}");
+        assert!((last[1] - 7.91).abs() < 0.01, "{last:?}");
+        assert!((last[2] - 28.6).abs() < 0.1, "{last:?}");
+    }
+
+    #[test]
+    fn od_of_great_undoes_great_ms() {
+        for tenth in 0..=250 {
+            let od = tenth as f64 / 10.0;
+            assert!((od_of_great(great_ms(od)) - od).abs() < 1e-9, "{od}");
+        }
+        // Past the bend the rate goes on shifting it, up and down.
+        assert!(od_at_rate(20.0, 1.5) > 20.0);
+        assert!(od_at_rate(20.0, 0.75) < 20.0);
+        assert!((od_at_rate(od_at_rate(20.0, 1.5), 1.0 / 1.5) - 20.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn od_follows_the_rate_through_the_great_window() {
+        assert!((od_at_rate(5.0, 1.0) - 5.0).abs() < 1e-9);
+        assert!((od_at_rate(0.0, 1.0)).abs() < 1e-9);
+        assert!((od_at_rate(10.0, 1.0) - 10.0).abs() < 1e-9);
+        // DT at OD 5: 35 ms becomes 23.3 ms, OD 8.89.
+        assert!((od_at_rate(5.0, 1.5) - 80.0 / 9.0).abs() < 1e-9);
+        // HT at OD 8: 26 ms becomes 34.7 ms, OD 5.11.
+        assert!((od_at_rate(8.0, 0.75) - 46.0 / 9.0).abs() < 1e-9);
+        assert!(
+            od_at_rate(10.0, 1.5) > 10.0,
+            "faster than OD 10 shows above it"
+        );
+        assert!(od_at_rate(7.0, 1.1) > od_at_rate(7.0, 1.05));
+        // With the mods first: HR makes OD 5 into 7, which at DT plays like OD 10.22.
+        let hr = crate::mods::Mods::parse("HR").od(5.0);
+        assert!((od_at_rate(hr, 1.5) - 92.0 / 9.0).abs() < 1e-9);
     }
 
     #[test]

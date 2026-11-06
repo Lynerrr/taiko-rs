@@ -171,6 +171,8 @@ pub struct Preview {
     /// The pp a full combo of the selected map gives with the mods picked, at `pp::POTENTIAL`'s
     /// accuracies (SS, 99%, 98%), shown with its details once worked out.
     pub potential: Option<[f64; 3]>,
+    /// The mods picked, for the OD shown (EZ, HR and Precise change it).
+    pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
@@ -245,6 +247,37 @@ fn load_image(path: &Path) -> Option<Image> {
     };
     let rgba = img.to_rgba8();
     Some(Image::from_rgba(rgba.width(), rgba.height(), &rgba))
+}
+
+/// The hit windows as they are in real time, in a box at `(x, y)`.
+fn draw_hit_windows(c: &mut Canvas, (x, y): (f32, f32), windows: crate::game::Windows) {
+    let rows = [
+        ("300", windows.great, 0xffd34d),
+        ("100", windows.ok, 0x86e05a),
+        ("miss", windows.miss, 0xff4b4b),
+    ];
+    let text = rows.map(|(_, ms, _)| format!("±{ms:.1} ms"));
+    let label_w = Canvas::text_width(7.0, "miss") + 8.0;
+    let value_w = text
+        .iter()
+        .map(|t| Canvas::text_width(7.0, t))
+        .fold(0.0, f32::max);
+    let (w, h, row_h) = (label_w + value_w + 16.0, 12.0 * 3.0 + 10.0, 12.0);
+    // Inside the screen, however far right the stat is.
+    let x = x.min(c.width - w - 4.0).max(4.0);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        5.0,
+        rgba(0x0c0c12, 0.97),
+        rgba(0x2a2a38, 1.0),
+        1.0,
+    );
+    for (i, ((label, _, colour), value)) in rows.iter().zip(&text).enumerate() {
+        let ry = y + 6.0 + i as f32 * row_h;
+        c.text(x + 8.0, ry, 7.0, rgba(*colour, 1.0), label);
+        c.text(x + 8.0 + label_w, ry, 7.0, rgba(0xe8e8f4, 1.0), value);
+    }
 }
 
 impl Preview {
@@ -974,7 +1007,15 @@ impl Preview {
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
         let mut stats: [Vec<StatCell>; 3] = [
-            vec![("OD", format!("{:.1}", e.meta.od), 1.0)],
+            // As it plays: EZ / HR / Precise, and the speed, which shrinks or grows the windows.
+            vec![(
+                "OD",
+                format!(
+                    "{:.1}",
+                    crate::beatmap::od_at_rate(self.mods.od(e.meta.od), self.requested_rate.0)
+                ),
+                1.0,
+            )],
             Vec::new(),
             Vec::new(),
         ];
@@ -1123,10 +1164,15 @@ impl Preview {
         }
         cy += (15.0 - version.len() as f32 * body_step).max(0.0) + 6.0;
         // Muted labels, bright values.
+        // The OD under the pointer: where its hit windows go, once all else is drawn.
+        let mut od_hovered = None;
         for group in &rows {
             for row in group {
                 let mut sx = lx;
-                for (label, value, alpha) in row.iter().copied() {
+                for cell @ (label, value, alpha) in row.iter().copied() {
+                    if *label == "OD" && c.hovered(sx, cy - 2.0, cell_w(cell), row_h) {
+                        od_hovered = Some((sx, cy + row_h));
+                    }
                     sx += c.text(sx, cy, 8.0, rgba(0x8a8aa0, *alpha), &format!("{label} "));
                     sx += c.text(sx, cy, 8.0, rgba(0xe8e8f4, *alpha), value) + STAT_GAP;
                 }
@@ -1171,7 +1217,20 @@ impl Preview {
             self.graph_rect = None;
             self.play_rect = None;
         }
-        let game = self.game.as_mut().filter(|_| loaded && playing)?;
+        // What's over the panel goes last, on the way out with a lane or without.
+        let tip = od_hovered.map(|at| {
+            let od = self.mods.od(e.meta.od);
+            (
+                at,
+                crate::game::Windows::new(od).at_rate(self.requested_rate.0),
+            )
+        });
+        let Some(game) = self.game.as_mut().filter(|_| loaded && playing) else {
+            if let Some((at, windows)) = tip {
+                draw_hit_windows(c, at, windows);
+            }
+            return None;
+        };
         let full_w = c.width;
         let start = c.shapes.len();
         c.width = lane_w;
@@ -1206,7 +1265,12 @@ impl Preview {
             w: bw / full_w,
             h: bh / VIRTUAL_HEIGHT,
         };
-        Some((start..c.shapes.len(), clip))
+        // Only the lane is clipped to the box.
+        let end = c.shapes.len();
+        if let Some((at, windows)) = tip {
+            draw_hit_windows(c, at, windows);
+        }
+        Some((start..end, clip))
     }
 }
 
