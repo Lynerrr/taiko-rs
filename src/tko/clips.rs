@@ -199,6 +199,8 @@ impl CopyProp {
 
 /// The longest text a layer shows.
 pub const MAX_TEXT: usize = 120;
+/// The fastest a layer may spin, in degrees a beat.
+pub const MAX_SPIN: f64 = 3600.0;
 
 /// What a layer shows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -278,6 +280,13 @@ pub struct Layer {
     /// Under the lane and notes instead of over them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub behind: bool,
+    /// Degrees it keeps turning by each beat, on top of its pose (0: it doesn't spin).
+    #[serde(default, skip_serializing_if = "no_spin")]
+    pub spin: f64,
+}
+
+fn no_spin(v: &f64) -> bool {
+    *v == 0.0
 }
 
 fn white() -> u32 {
@@ -294,6 +303,7 @@ impl Default for Layer {
             to: None,
             colour: white(),
             behind: false,
+            spin: 0.0,
         }
     }
 }
@@ -320,6 +330,11 @@ impl Layer {
             to.sanitize();
         }
         self.colour &= 0xffffff;
+        self.spin = if self.spin.is_finite() {
+            self.spin.clamp(-MAX_SPIN, MAX_SPIN)
+        } else {
+            0.0
+        };
         true
     }
 }
@@ -477,6 +492,9 @@ impl Clip {
             Some(to) => l.from.lerp(to, k),
             None => l.from,
         };
+        if l.spin != 0.0 {
+            pose.turn += l.spin * (t - self.start) / b;
+        }
         pose.alpha *= seen.clamp(0.0, 1.0);
         let scale = if self.when == When::Span {
             1.0
@@ -710,6 +728,32 @@ mod tests {
                 .layer_at(3000.0, &[], beat)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_spinning_layer_keeps_turning_by_its_spin_each_beat() {
+        let mut c = text_layer(1000.0, 9000.0);
+        let l = c.layer.as_deref_mut().unwrap();
+        l.to = None;
+        l.from.turn = 10.0;
+        l.spin = 90.0;
+        let turn = |t| c.layer_at(t, &[], beat).unwrap().pose.turn;
+        assert_eq!(turn(1000.0), 10.0);
+        assert!((turn(1000.0 + BEAT) - 100.0).abs() < 1e-9);
+        assert!(
+            (turn(1000.0 + 4.0 * BEAT) - 370.0).abs() < 1e-9,
+            "past a whole turn"
+        );
+        // Saved only when it spins; maps from before read as still.
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"spin\":90"));
+        c.layer.as_deref_mut().unwrap().spin = 0.0;
+        assert!(!serde_json::to_string(&c).unwrap().contains("spin"));
+        // Made safe like the rest.
+        c.layer.as_deref_mut().unwrap().spin = f64::INFINITY;
+        let mut list = vec![c];
+        sanitize(&mut list);
+        assert_eq!(list[0].layer.as_deref().unwrap().spin, 0.0);
     }
 
     #[test]

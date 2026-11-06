@@ -15,7 +15,7 @@ use crate::editor::clips::{
     target_columns, target_label, targets, trim,
 };
 use crate::render::{Canvas, accent, rgba};
-use crate::tko::clips::{Clip, LANES, Layer, Motion, Notes, Pose, Show, Target, When};
+use crate::tko::clips::{Clip, LANES, Layer, MAX_SPIN, Motion, Notes, Pose, Show, Target, When};
 use crate::tko::track::Ease;
 
 /// Rows of clips shown at once (more scroll).
@@ -43,8 +43,10 @@ pub enum FxAct {
     Disarm,
     /// Back to the shelf.
     Back,
-    /// Opens a dropdown of the clip picked: what it moves (0), its ease (1).
+    /// Opens a dropdown of the clip picked: what it moves (0), its ease (1), its picture (2).
     Menu(u8),
+    /// Its picture, by its index in the map folder's (`View::map_pictures`).
+    SetPicture(u16),
     /// What it moves, by its index in `targets`.
     SetWhat(u16),
     /// Its ease, by its index in `Ease::ALL`.
@@ -97,6 +99,8 @@ pub enum CF {
     Y,
     Size,
     Turn,
+    /// A layer's spin, degrees a beat (not part of a pose).
+    Spin,
     Seen,
 }
 
@@ -112,6 +116,7 @@ impl CF {
             CF::Y => "y",
             CF::Size => "size",
             CF::Turn => "turn",
+            CF::Spin => "spin /beat",
             CF::Seen => "opacity",
         }
     }
@@ -535,6 +540,9 @@ impl View {
         match &layer.show {
             Show::Text { text } => {
                 let shown = match &self.typing {
+                    Some((Field::FxText, t)) if self.typing_fresh => {
+                        format!("{t}  (type to replace)")
+                    }
                     Some((Field::FxText, t)) => format!("{t}_"),
                     _ => format!("{text}  (click to type)"),
                 };
@@ -542,7 +550,13 @@ impl View {
             }
             Show::Picture { file } => {
                 row.push(("<".to_string(), Btn::Fx(FxAct::Picture(-1)), false));
-                row.push((file.clone(), Btn::Fx(FxAct::Picture(1)), true));
+                let label = if file.is_empty() {
+                    "no picture: put one in the map folder or drop it here".to_string()
+                } else {
+                    format!("{file}  v")
+                };
+                let open = self.fx_drop.is_some_and(|d| d.0 == 2);
+                row.push((label, Btn::Fx(FxAct::Menu(2)), open || !file.is_empty()));
                 row.push((">".to_string(), Btn::Fx(FxAct::Picture(1)), false));
             }
         }
@@ -602,12 +616,14 @@ impl View {
         self.clip_number(c, cx, y, col, CF::Size, p.size);
         y += 19.0;
         cx = self.clip_number(c, x, y, col, CF::Turn, p.turn);
-        cx = self.clip_number(c, cx, y, col, CF::Seen, p.alpha);
+        cx = self.clip_number(c, cx, y, col, CF::Spin, layer.spin);
+        self.clip_number(c, cx, y, col, CF::Seen, p.alpha);
+        y += 19.0;
         // Repeating, it pulses.
         if clip.when != When::Span {
-            self.clip_number(c, cx, y, col, CF::Amount, clip.amount);
+            self.clip_number(c, x, y, col, CF::Amount, clip.amount);
+            y += 19.0;
         }
-        y += 19.0;
         let whens = [
             "stays",
             "pulses every few beats",
@@ -697,7 +713,7 @@ impl View {
                     Some(f) => *file = f.clone(),
                     None => {
                         self.status =
-                            "put a .png or .jpg in the map's folder first, then pick Picture again"
+                            "drop a .png or .jpg on the editor (or put it in the map's folder) first, then pick Picture again"
                                 .into();
                         return;
                     }
@@ -839,6 +855,50 @@ impl View {
     }
 
     /// The pictures in the edited map's folder.
+    /// A picture dropped on the editor: copied into the map's folder (pictures travel with the
+    /// map from there), and shown by the picked picture block, if one is picked.
+    pub fn drop_picture(&mut self, from: &std::path::Path) {
+        let Some(dir) = self.ed.path.parent().map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        let Some(name) = from.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            return;
+        };
+        let to = dir.join(&name);
+        let same = to
+            .canonicalize()
+            .ok()
+            .is_some_and(|t| from.canonicalize().ok() == Some(t));
+        if !same && let Err(e) = std::fs::copy(from, &to) {
+            self.status = format!("couldn't copy {name} into the map's folder: {e}");
+            return;
+        }
+        let picked = self.fx_sel.filter(|&id| {
+            self.ed.clips().iter().any(|c| {
+                c.id == id
+                    && c.layer
+                        .as_deref()
+                        .is_some_and(|l| matches!(l.show, Show::Picture { .. }))
+            })
+        });
+        match picked {
+            Some(id) => {
+                self.ed.set_clip(id, false, |c| {
+                    if let Some(l) = c.layer.as_deref_mut() {
+                        l.show = Show::Picture { file: name.clone() };
+                    }
+                });
+                self.status = format!("{name} is in the map's folder and on the picked block");
+                self.mark_stale();
+            }
+            None => {
+                self.status = format!(
+                    "{name} is in the map's folder: put a Picture from the Text & pictures tab to show it"
+                )
+            }
+        }
+    }
+
     pub(super) fn map_pictures(&self) -> Vec<String> {
         self.ed
             .path
@@ -1064,6 +1124,16 @@ impl View {
                     })
                 }
             }
+            FxAct::SetPicture(i) => match self.map_pictures().get(i as usize).cloned() {
+                Some(name) => self.ed.set_clip(id, false, |c| {
+                    if let Some(l) = c.layer.as_deref_mut()
+                        && let Show::Picture { file } = &mut l.show
+                    {
+                        *file = name.clone();
+                    }
+                }),
+                None => false,
+            },
             FxAct::Picture(d) => {
                 let all = self.map_pictures();
                 if all.is_empty() {
@@ -1141,6 +1211,7 @@ impl View {
             CF::Every | CF::Length | CF::FadeIn | CF::FadeOut => 0.25,
             CF::X | CF::Y | CF::Size => 2.0,
             CF::Turn => 5.0,
+            CF::Spin => 15.0,
             CF::Seen => 0.05,
         } * k;
         let now = self.clip_field(&clip, f);
@@ -1158,6 +1229,7 @@ impl View {
             CF::Length => c.length,
             CF::FadeIn => c.fade_in,
             CF::FadeOut => c.fade_out,
+            CF::Spin => c.layer.as_deref().map_or(0.0, |l| l.spin),
             CF::X | CF::Y | CF::Size | CF::Turn | CF::Seen => {
                 let Some(l) = c.layer.as_deref() else {
                     return 0.0;
@@ -1194,6 +1266,11 @@ impl View {
             CF::Length => c.length = v.max(1.0 / 64.0),
             CF::FadeIn => c.fade_in = v.max(0.0),
             CF::FadeOut => c.fade_out = v.max(0.0),
+            CF::Spin => {
+                if let Some(l) = c.layer.as_deref_mut() {
+                    l.spin = v.clamp(-MAX_SPIN, MAX_SPIN);
+                }
+            }
             CF::X | CF::Y | CF::Size | CF::Turn | CF::Seen => {
                 if let Some(l) = c.layer.as_deref_mut() {
                     let p = pose_mut(l, end);
@@ -1757,6 +1834,13 @@ impl View {
         if kind == 1 {
             return self.draw_ease_drop(c, at, clip.ease);
         }
+        if kind == 2 {
+            let now = match clip.layer.as_deref().map(|l| &l.show) {
+                Some(Show::Picture { file }) => file.clone(),
+                _ => String::new(),
+            };
+            return self.draw_picture_drop(c, at, &now);
+        }
         let now = clip.target().map(listed);
         let all = targets();
         let cols = target_columns();
@@ -1847,6 +1931,109 @@ impl View {
                     rgba(DIM, 1.0),
                     line,
                 );
+            }
+        }
+    }
+
+    /// Every picture in the map's folder, in columns when there are many, the one under the
+    /// pointer shown large beside the list.
+    fn draw_picture_drop(&mut self, c: &mut Canvas, at: [f32; 4], now: &str) {
+        const ROW: f32 = 14.0;
+        let all = self.map_pictures();
+        if all.is_empty() {
+            self.status =
+                "no pictures in the map's folder: drop a .png or .jpg on the editor".into();
+            self.fx_drop = None;
+            return;
+        }
+        let below = 476.0 - (at[1] + at[3] + 1.0);
+        let above = at[1] - 5.0;
+        let room = below.max(above).max(ROW * 4.0);
+        let per_col = ((room - 4.0) / ROW).floor().max(1.0) as usize;
+        let cols = all.len().div_ceil(per_col);
+        let rows = all.len().min(per_col);
+        let col_w = all
+            .iter()
+            .map(|f| Canvas::text_width(7.0, f) + 20.0)
+            .fold(90.0, f32::max)
+            .min(220.0);
+        let (w, h) = (cols as f32 * col_w + 4.0, rows as f32 * ROW + 4.0);
+        let x = at[0].min(c.width - w - 4.0).max(4.0);
+        let y = if h <= below {
+            at[1] + at[3] + 1.0
+        } else {
+            (at[1] - h - 1.0).max(4.0)
+        };
+        c.round_rect(
+            [x, y],
+            [w, h],
+            3.0,
+            rgba(0x15151d, 1.0),
+            rgba(0x5a5a78, 1.0),
+            1.0,
+        );
+        let mut hovered = None;
+        for (i, f) in all.iter().enumerate() {
+            let (col, row) = (i / per_col, i % per_col);
+            let r = [
+                x + 2.0 + col as f32 * col_w,
+                y + 2.0 + row as f32 * ROW,
+                col_w - 2.0,
+                ROW - 1.0,
+            ];
+            let on = f == now;
+            let hover = c.hovered(r[0], r[1], r[2], r[3]);
+            if hover {
+                hovered = Some((f.clone(), r));
+            }
+            if on || hover {
+                c.rect(
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    rgba(if on { 0x4a221b } else { 0x2c2c3c }, 1.0),
+                );
+            }
+            c.text(
+                r[0] + 6.0,
+                r[1] + 3.0,
+                7.0,
+                rgba(if on { 0xffffff } else { 0xd8d8e8 }, 1.0),
+                &Canvas::fit(7.0, col_w - 12.0, f),
+            );
+            self.buttons.push((
+                r,
+                Btn::Fx(FxAct::SetPicture(i.min(u16::MAX as usize) as u16)),
+            ));
+        }
+        // A look at the one under the pointer.
+        if let Some((f, r)) = hovered {
+            let side = 96.0;
+            let px = if x + w + side + 8.0 < c.width {
+                x + w + 4.0
+            } else {
+                (x - side - 4.0).max(4.0)
+            };
+            let py = (r[1] - side / 2.0).clamp(4.0, 476.0 - side);
+            c.round_rect(
+                [px, py],
+                [side, side],
+                3.0,
+                rgba(0x0b0b10, 1.0),
+                rgba(0x5a5a78, 1.0),
+                1.0,
+            );
+            let (cx, cy) = (px + side / 2.0, py + side / 2.0);
+            // Kept inside the box whatever its shape.
+            let aspect = c
+                .picture_slots
+                .get(&f.to_ascii_lowercase())
+                .map_or(1.0, |s| s.1)
+                .max(0.01);
+            let h = (side - 12.0) / aspect.max(1.0);
+            if !c.picture(&f, cx, cy, h, 0.0, rgba(0xffffff, 1.0)) {
+                c.text_centered(cx, cy - 3.0, 6.0, rgba(0x8a8aa0, 1.0), "loading...");
             }
         }
     }
