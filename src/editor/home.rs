@@ -26,6 +26,34 @@ const WARN: u32 = 0xFFD34D;
 const BAD: u32 = 0xff7a7a;
 /// The longest stretch the metronome is baked for at a time (ms).
 const BAKE_MS: f64 = 45_000.0;
+
+/// The tag on a recent map: what kind of file it is, and its colour.
+fn file_badge(path: &Path) -> (&'static str, u32) {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(e) if e.eq_ignore_ascii_case("tko") => ("TKO", VIOLET),
+        Some(e) if e.eq_ignore_ascii_case("osu") => ("OSU", 0xff8fb8),
+        _ => ("MAP", DIM),
+    }
+}
+
+/// A map's name cut to `w`, keeping its difficulty (the `[...]` at the end) whole, since that
+/// tells the maps of one song apart; the artist and title are cut instead.
+fn fit_keeping_diff(size: f32, w: f32, name: &str) -> String {
+    if Canvas::text_width(size, name) <= w {
+        return name.to_string();
+    }
+    match name.rfind(" [") {
+        Some(at) if name.ends_with(']') => {
+            let diff = &name[at..];
+            let room = w - Canvas::text_width(size, diff);
+            if room < Canvas::text_width(size, "abcd...") {
+                return Canvas::fit(size, w, name);
+            }
+            format!("{}{diff}", Canvas::fit(size, room, &name[..at]))
+        }
+        _ => Canvas::fit(size, w, name),
+    }
+}
 /// Bars the loop repeats.
 const LOOP_BARS: u32 = 8;
 /// A pause (ms) after which the taps start over.
@@ -1107,12 +1135,25 @@ impl Home {
                 rgba(DIM, 1.0),
                 &format!("{}", i + 1),
             );
+            // Which file it is: the .tko and the .osu of one map otherwise read the same.
+            let (kind, tint) = file_badge(path);
+            let bw = Canvas::text_width(6.0, kind) + 8.0;
+            let right = x + col * 0.62 - 10.0;
+            c.round_rect(
+                [right - bw, y + 4.0],
+                [bw, 12.0],
+                3.0,
+                rgba(tint, 0.18),
+                rgba(tint, 0.8),
+                1.0,
+            );
+            c.text_centered(right - bw / 2.0, y + 7.0, 6.0, rgba(tint, 1.0), kind);
             c.text(
                 x + 26.0,
                 y + 5.0,
                 8.0,
                 rgba(TEXT, 1.0),
-                &Canvas::fit(8.0, col * 0.62 - 44.0, &name),
+                &fit_keeping_diff(8.0, right - bw - 6.0 - (x + 26.0), &name),
             );
             c.hit(
                 x + 4.0,
@@ -1837,6 +1878,24 @@ fn dirs_music() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_maps_say_which_file_they_are_and_keep_their_difficulty() {
+        assert_eq!(file_badge(Path::new("a/x.tko")).0, "TKO");
+        assert_eq!(file_badge(Path::new("a/x.OSU")).0, "OSU");
+        let name = "Lynerrr - diss den4ik speedrun (krokodil_koban) [Oni]";
+        let w = Canvas::text_width(8.0, name) * 0.6;
+        let cut = fit_keeping_diff(8.0, w, name);
+        assert!(
+            cut.ends_with("...[Oni]") || cut.ends_with("... [Oni]"),
+            "{cut}"
+        );
+        assert!(cut.starts_with("Lynerrr"));
+        assert!(Canvas::text_width(8.0, &cut) <= w);
+        assert_eq!(fit_keeping_diff(8.0, 1000.0, name), name);
+        // No room for the title beside a long difficulty: cut as usual.
+        assert!(Canvas::text_width(8.0, &fit_keeping_diff(8.0, 60.0, name)) <= 60.0);
+    }
 
     fn home() -> Home {
         Home::new(&[], "me")
