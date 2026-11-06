@@ -2,7 +2,6 @@
 //! path, picked from ready-made ones and shaped by hand in the preview, a pace along it, and
 //! moments it takes them on and off the lane.
 
-use super::chrome::wrap;
 use super::{Btn, Drag, Mode, View, inside};
 use crate::editor::motion::{PACES, PATHS, pace_track};
 use crate::game::{HIT_X, LANE_Y};
@@ -18,6 +17,8 @@ pub(super) const PAGE: u8 = 5;
 const GRAB: f32 = 6.0;
 /// Two presses this close in time and place are a double click.
 const DOUBLE_MS: u128 = 350;
+/// Height of a line of the page's buttons.
+const CHIP_ROW: f32 = 15.0;
 
 /// A button on the Motion page.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -111,79 +112,86 @@ impl View {
         }
     }
 
+    /// Buttons as wide as their text, wrapping within `w`, smaller than the shelf's so the page
+    /// fits the panel. Returns where the next line starts.
+    fn chips(
+        &mut self,
+        c: &mut Canvas,
+        x0: f32,
+        mut y: f32,
+        w: f32,
+        items: &[(String, Btn, bool)],
+    ) -> f32 {
+        let mut x = x0;
+        for (label, b, on) in items {
+            let bw = (Canvas::text_width(7.0, label) + 10.0).min(w);
+            if x > x0 && x + bw > x0 + w {
+                x = x0;
+                y += CHIP_ROW;
+            }
+            self.button(c, [x, y, bw, CHIP_ROW - 2.0], label, *b, *on);
+            x += bw + 3.0;
+        }
+        y + CHIP_ROW
+    }
+
     pub(super) fn draw_motion_page(&mut self, c: &mut Canvas, x: f32, mut y: f32, inner: f32) {
         let dim = rgba(0x9a9ab0, 1.0);
+        let head = rgba(accent(), 1.0);
         let small = 6.0;
-        for l in wrap(
+        c.text(
+            x,
+            y,
             small,
-            inner,
-            "Pick notes on the timeline, then give them a path: they fly in along it and land on the drum on time. Shape it in the preview.",
-        ) {
-            c.text(x, y, small, dim, &l);
-            y += 9.0;
-        }
-        y += 3.0;
-        let picked = self.ed.selection.len();
-        let label = if picked == 0 {
-            "Give the picked notes a path".to_string()
-        } else {
-            format!("Give the {picked} picked notes a path")
-        };
-        let bw = Canvas::text_width(7.0, &label) + 12.0;
-        self.button(
-            c,
-            [x, y, bw, 16.0],
-            &label,
-            Btn::M(MAct::UseSelection),
-            picked > 0,
+            dim,
+            &Canvas::fit(
+                small,
+                inner,
+                "Pick notes on the timeline and give them a path: they fly in along it and land on the drum on time.",
+            ),
         );
+        y += 10.0;
+        // What to shape: the picked notes, or a group that already has a path.
+        let picked = self.ed.selection.len();
+        let mut items = vec![(
+            if picked == 0 {
+                "Give the picked notes a path".to_string()
+            } else {
+                format!("Give the {picked} picked notes a path")
+            },
+            Btn::M(MAct::UseSelection),
+            false,
+        )];
         if self.m_copied.is_some() {
-            self.button(
-                c,
-                [x + bw + 4.0, y, 92.0, 16.0],
-                "Paste motion",
-                Btn::M(MAct::Paste),
-                false,
-            );
+            items.push(("Paste motion".to_string(), Btn::M(MAct::Paste), false));
         }
-        y += 22.0;
-        // The groups with a path, to go back to one.
-        let groups: Vec<(usize, String, usize)> = self
-            .ed
-            .gimmick()
-            .map(|g| {
+        let current = self.motion_group();
+        if let Some(g) = self.ed.gimmick() {
+            items.extend(
                 g.groups
                     .iter()
                     .enumerate()
                     .filter(|(_, gr)| gr.path.is_some())
-                    .map(|(i, gr)| (i, gr.name.clone(), gr.notes.len()))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let current = self.motion_group();
-        if !groups.is_empty() {
-            c.text(x, y, 6.5, rgba(accent(), 1.0), "Paths");
-            y += 10.0;
-            let items: Vec<(String, Btn, bool)> = groups
-                .iter()
-                .map(|(i, name, n)| {
-                    (
-                        format!("{name} ({n})"),
-                        Btn::M(MAct::Pick(*i)),
-                        current == Some(*i),
-                    )
-                })
-                .collect();
-            y = self.wrap_row(c, x, y, inner, &items);
+                    .map(|(i, gr)| {
+                        (
+                            format!("{} ({})", gr.name, gr.notes.len()),
+                            Btn::M(MAct::Pick(i)),
+                            current == Some(i),
+                        )
+                    }),
+            );
         }
+        y = self.chips(c, x, y, inner, &items) + 2.0;
         let Some(g) = current else { return };
         let Some(path) = self.ed.path_of(g).cloned() else {
-            c.text(x, y + 2.0, small, dim, "This group has no path yet.");
+            c.text(x, y, small, dim, "This group has no path yet.");
             return;
         };
-        y += 3.0;
-        c.text(x, y, 6.5, rgba(accent(), 1.0), "Where they come from");
-        y += 10.0;
+        // Two columns: the path's shape on the left, when and what else on the right.
+        let col = (inner - 10.0) / 2.0;
+        let right = x + col + 10.0;
+        let top = y;
+        c.text(x, y, 6.5, head, "Where they come from");
         let items: Vec<(String, Btn, bool)> = PATHS
             .iter()
             .enumerate()
@@ -195,9 +203,8 @@ impl View {
                 )
             })
             .collect();
-        y = self.wrap_row(c, x, y, inner, &items);
-        c.text(x, y, 6.5, rgba(accent(), 1.0), "Pace along it");
-        y += 10.0;
+        y = self.chips(c, x, y + 9.0, col, &items);
+        c.text(x, y, 6.5, head, "Pace along it");
         let items: Vec<(String, Btn, bool)> = PACES
             .iter()
             .enumerate()
@@ -209,9 +216,14 @@ impl View {
                 )
             })
             .collect();
-        y = self.wrap_row(c, x, y, inner, &items);
-        c.text(x, y, 6.5, rgba(accent(), 1.0), "When");
-        y += 10.0;
+        self.chips(c, x, y + 9.0, col, &items);
+        c.text(
+            right,
+            top,
+            6.5,
+            head,
+            "When (\"here\": over a beat from the playhead)",
+        );
         let items = vec![
             (
                 "Always".to_string(),
@@ -230,25 +242,14 @@ impl View {
             ),
             ("Show the path".to_string(), Btn::M(MAct::Show), path.show),
         ];
-        y = self.wrap_row(c, x, y, inner, &items);
+        let y = self.chips(c, right, top + 9.0, col, &items);
+        c.text(right, y, 6.5, head, "These notes");
         let items = vec![
-            (
-                "Select its notes".to_string(),
-                Btn::M(MAct::SelectNotes),
-                false,
-            ),
+            ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
             ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
             ("Remove path".to_string(), Btn::M(MAct::Clear), false),
         ];
-        y = self.wrap_row(c, x, y, inner, &items) + 2.0;
-        for l in wrap(
-            small,
-            inner,
-            "In the preview: drag a point to move it, double click to add one, right click to take one away. \"Here\" switches over one beat from the playhead.",
-        ) {
-            c.text(x, y, small, dim, &l);
-            y += 9.0;
-        }
+        self.chips(c, right, y + 9.0, col, &items);
     }
 
     // ---- the path in the preview ----
