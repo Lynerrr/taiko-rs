@@ -5835,6 +5835,44 @@ mod tests {
     }
 
     #[test]
+    fn the_timing_window_takes_copy_paste_and_delete_keys_on_any_page() {
+        let mut v = view();
+        assert_eq!(v.mode, Mode::Compose);
+        press(&mut v, Btn::C(Cmd::TimingList));
+        draw(&mut v);
+        let greens = |v: &View| v.ed.chart.timing.iter().filter(|p| !p.is_red()).count();
+        let ids: Vec<u64> =
+            v.ed.chart
+                .timing
+                .iter()
+                .filter(|p| !p.is_red())
+                .map(|p| p.id)
+                .collect();
+        let n = ids.len();
+        v.sel_line = Some(ids[0]);
+        v.sel_extra = ids.iter().copied().collect();
+        // Lines selected in F6 on the Compose page: Ctrl+C copies them, not the notes.
+        v.key(KeyCode::KeyC, false, ctrl(), None);
+        assert_eq!(v.status, format!("copied {n} lines"));
+        v.ed.time = 20000.0;
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        assert_eq!(v.status, format!("pasted {n} lines"));
+        assert_eq!(greens(&v), 2 * n);
+        // Ctrl+A selects every line, Delete removes the selected ones.
+        v.key(KeyCode::KeyA, false, ctrl(), None);
+        assert_eq!(v.selected_lines().len(), v.ed.chart.timing.len());
+        v.select_line(None);
+        v.sel_line = Some(ids[0]);
+        key(&mut v, KeyCode::Delete);
+        assert_eq!(greens(&v), 2 * n - 1);
+        // With F6 closed the keys go back to the notes.
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        v.ed.select_all();
+        v.key(KeyCode::KeyC, false, ctrl(), None);
+        assert_eq!(v.status, format!("copied {}", v.ed.chart.objects.len()));
+    }
+
+    #[test]
     fn the_timing_window_edits_every_selected_line() {
         let mut v = view();
         press(&mut v, Btn::C(Cmd::TimingList));

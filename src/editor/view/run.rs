@@ -166,37 +166,39 @@ impl View {
                     self.status = "nothing to redo".into();
                 }
             }
-            Cmd::Cut if self.mode == Mode::Timing => self.run(Cmd::CopyNotes, audio),
+            Cmd::Cut if self.line_keys(false) => self.run(Cmd::CopyNotes, audio),
             Cmd::Cut if self.clip_mode() && self.fx_sel.is_some() => self.copy_clips(true),
-            Cmd::CopyNotes if self.clip_mode() && self.fx_sel.is_some() => self.copy_clips(false),
-            Cmd::Paste if self.clip_mode() && View::has_copied_clips() => self.paste_copied_clips(),
-            Cmd::SelectAll if self.clip_mode() => self.pick_all_clips(),
             Cmd::Cut => {
                 let n = self.ed.cut();
                 self.status = format!("cut {n}");
                 self.mark_stale();
             }
-            Cmd::CopyNotes if self.mode == Mode::Timing => {
+            Cmd::CopyNotes if self.line_keys(false) => {
                 self.press_line_action(TAct::Copy);
             }
+            Cmd::CopyNotes if self.clip_mode() && self.fx_sel.is_some() => self.copy_clips(false),
             Cmd::CopyNotes => {
                 let n = self.ed.copy();
                 self.status = format!("copied {n}");
             }
-            Cmd::Paste if self.mode == Mode::Timing => self.press_line_action(TAct::Paste),
+            Cmd::Paste if self.line_keys(true) => self.press_line_action(TAct::Paste),
+            Cmd::Paste if self.clip_mode() && View::has_copied_clips() => self.paste_copied_clips(),
             Cmd::Paste => {
                 let at = self.ed.snapped(t);
                 let n = self.ed.paste(at);
                 self.status = format!("pasted {n}");
                 self.mark_stale();
             }
-            Cmd::SelectAll if self.mode == Mode::Timing => {
+            Cmd::SelectAll if self.mode == Mode::Timing || self.tw => {
                 let all: Vec<u64> = self.ed.chart.timing.iter().map(|p| p.id).collect();
                 self.sel_line = all.last().copied();
                 self.sel_extra = all.into_iter().collect();
             }
+            Cmd::SelectAll if self.clip_mode() => self.pick_all_clips(),
             Cmd::SelectAll => self.ed.select_all(),
-            Cmd::Delete if self.mode == Mode::Timing && !self.selected_lines().is_empty() => {
+            Cmd::Delete
+                if (self.mode == Mode::Timing || self.tw) && !self.selected_lines().is_empty() =>
+            {
                 self.press_line_action(TAct::Delete);
             }
             Cmd::Delete if self.clip_mode() && self.fx_sel.is_some() => {
