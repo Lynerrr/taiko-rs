@@ -620,6 +620,8 @@ struct State {
     /// The editor a test play (F5) came from: the play goes back to it, saves nothing and sends
     /// nothing, and a retry plays the map as the editor has it.
     editor_back: Option<Box<editor::view::View>>,
+    /// The editor's test play is an autoplay (Tab), retries included.
+    test_auto: bool,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`), with
     /// the map it was on.
@@ -2276,9 +2278,13 @@ impl State {
     /// The map `text` (as the editor has it now, saved or not), with `entry`'s music: a test
     /// play, at full speed and with no mods.
     fn load_text(&mut self, entry: usize, text: String) -> Receiver<Loaded> {
-        // Played through to the end like osu!'s editor test, however it goes.
+        // Played through to the end like osu!'s editor test, however it goes; or watched (Tab).
         let mut mods = Mods::default();
-        mods.toggle(mods::Mod::NoFail);
+        mods.toggle(if self.test_auto {
+            mods::Mod::Autoplay
+        } else {
+            mods::Mod::NoFail
+        });
         self.load(entry, 1.0, mods, true, Some(text))
     }
 
@@ -2560,6 +2566,7 @@ impl State {
                 self.preview.show_background_for(&self.library[entry]);
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
                 view.set_track_loader(rx, rate);
+                view.left_pan = self.cfg.editor_left_pan;
                 // `TAIKO_EDIT_AT=<ms>`: starts with the playhead there (headless screenshots).
                 if let Some(at) = std::env::var("TAIKO_EDIT_AT")
                     .ok()
@@ -3291,7 +3298,7 @@ impl State {
     }
 
     /// Leaves the editor for a test play of `text` (its map as it is now) from `from`.
-    fn start_test_play(&mut self, entry: usize, from: Option<f64>) {
+    fn start_test_play(&mut self, entry: usize, from: Option<f64>, auto: bool) {
         if entry >= self.library.len() {
             if let Scene::Editor(view) = &mut self.scene {
                 view.status = "this map isn't in your songs yet: save it first".into();
@@ -3302,6 +3309,7 @@ impl State {
             return;
         };
         self.editor_back = Some(view);
+        self.test_auto = auto;
         self.start_loading_from(entry, from);
     }
 
@@ -3310,6 +3318,7 @@ impl State {
         let Some(view) = self.editor_back.take() else {
             return false;
         };
+        self.test_auto = false;
         if let Some(a) = &self.audio {
             a.stop();
         }
@@ -7803,8 +7812,14 @@ impl State {
         }
         if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
             let keys = self.editor_keys();
-            if let Scene::Editor(view) = &mut self.scene {
-                view.wheel(notches, keys);
+            // The volume's own notes, once it is up, take the wheel there as they do elsewhere.
+            let mine = !self.volume.hovering(Instant::now())
+                && match &mut self.scene {
+                    Scene::Editor(view) => view.wheel(notches, keys),
+                    _ => true,
+                };
+            if !mine {
+                self.turn_volume(notches);
             }
             return;
         }
@@ -14197,7 +14212,7 @@ impl State {
             }
         }
         let mut editor_reload: Option<(usize, f64)> = None;
-        let mut editor_test: Option<(usize, Option<f64>)> = None;
+        let mut editor_test: Option<(usize, Option<f64>, bool)> = None;
         let mut test_over = false;
         let mut editor_folder: Option<PathBuf> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
@@ -14744,7 +14759,11 @@ impl State {
                             None if self.editor_back.is_some() => {
                                 game.record = false;
                                 game.test_play = true;
-                                game.banner = Some("TEST PLAY".into());
+                                game.banner = Some(if self.test_auto {
+                                    "TEST PLAY  -  AUTO".into()
+                                } else {
+                                    "TEST PLAY".into()
+                                });
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
                             None => {
@@ -15547,8 +15566,12 @@ impl State {
                 if let Some(speed) = view.take_rate_request() {
                     editor_reload = Some((view.entry, speed));
                 }
-                if let Some(from) = view.take_test_play() {
-                    editor_test = Some((view.entry, from));
+                if view.left_pan != self.cfg.editor_left_pan {
+                    self.cfg.editor_left_pan = view.left_pan;
+                    self.cfg.save();
+                }
+                if let Some((from, auto)) = view.take_test_play() {
+                    editor_test = Some((view.entry, from, auto));
                 }
                 editor_folder = view.take_folder_request();
                 // Maps dropped into its folder (or taken out) join the list as they come.
@@ -15909,8 +15932,8 @@ impl State {
         if let Some(news) = folder_news {
             self.folder_changed(news);
         }
-        if let Some((entry, from)) = editor_test {
-            self.start_test_play(entry, from);
+        if let Some((entry, from, auto)) = editor_test {
+            self.start_test_play(entry, from, auto);
         }
         if test_over {
             self.back_to_editor();
@@ -18799,6 +18822,7 @@ impl State {
             custom_asked: false,
             folder_watch: None,
             editor_back: None,
+            test_auto: false,
             playing: None,
             status_wait: None,
             scene_kind: None,

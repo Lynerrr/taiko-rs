@@ -96,7 +96,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
         try_it: None,
         body: "\
 # Placing
-- Tools: 1 Select, 2 Note, 3 Drumroll, 4 Denden. With Note a click on the lane places on the grid; right click deletes; drag moves (Shift ignores the grid).
+- Tools: 1 Select, 2 Note, 3 Drumroll, 4 Denden. With Note a click on the lane places on the grid; right click deletes (on a selected note: the whole selection); drag moves (Shift ignores the grid).
 - Snap sets how finely a beat divides: Ctrl+wheel or Shift+1 to 9. Left / Right step by one snap.
 - Speed (Ctrl+Up / Down) slows the music so you can place by ear.
 
@@ -361,8 +361,9 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
 # Playing and moving
 - Space or C: play or pause. X: play from the start (as in stable).
 - F5: test play. The map as it is now (saved or not) plays in the real game from the playhead, Shift+F5 from the start, with No Fail and nothing saved; Quit or the end of the map comes back here.
+- Tab: the same test, played by autoplay (Shift+Tab: from the start), to watch the map.
 - Z / V: first / last note. Left / Right: by snap. Up / Down: previous / next timing line.
-- Wheel: seek. Ctrl+wheel: snap. Alt+wheel: zoom. Middle drag: pan.
+- Wheel: seek. Ctrl+wheel: snap. Alt+wheel: zoom over the timeline, the volume elsewhere. Middle drag: pan (View > Left drag pans lets the left button pan empty timeline too; then Ctrl+drag selects a box).
 - Ctrl+Up / Down: playback speed (with Shift 5%).
 
 # Notes
@@ -442,7 +443,7 @@ File > Open song folder открывает папку карты. Бросьте
         try_it: None,
         body: "\
 # Расстановка
-- Инструменты: 1 Select, 2 Note, 3 Drumroll, 4 Denden. С Note клик по дорожке ставит ноту на сетку; правый клик удаляет; перетаскивание двигает (Shift — без сетки).
+- Инструменты: 1 Select, 2 Note, 3 Drumroll, 4 Denden. С Note клик по дорожке ставит ноту на сетку; правый клик удаляет (по выделенной ноте — всё выделение); перетаскивание двигает (Shift — без сетки).
 - Snap — на сколько делится бит: Ctrl+колесо или Shift+1..9. Влево / вправо — на один шаг.
 - Speed (Ctrl+вверх / вниз) замедляет музыку, чтобы ставить на слух.
 
@@ -707,8 +708,9 @@ File > Upload отправляет сохранённую карту на taiko.
 # Воспроизведение и перемещение
 - Space или C: играть / пауза. X: играть с начала (как в stable).
 - F5: тест-плей. Карта как она есть сейчас (сохранённая или нет) играется в настоящей игре с плейхеда, Shift+F5 — с начала, с No Fail и без сохранения результата; выход или конец карты возвращают сюда.
+- Tab: тот же тест, но играет автоплей (Shift+Tab — с начала), чтобы посмотреть карту.
 - Z / V: первая / последняя нота. Влево / вправо: по шагу сетки. Вверх / вниз: предыдущая / следующая линия таймингов.
-- Колесо: перемотка. Ctrl+колесо: snap. Alt+колесо: масштаб. Средняя кнопка: сдвиг.
+- Колесо: перемотка. Ctrl+колесо: snap. Alt+колесо: масштаб над таймлайном, в остальных местах громкость. Средняя кнопка: сдвиг (View > Left drag pans даёт сдвигать пустой таймлайн и левой кнопкой; рамка тогда через Ctrl+перетаскивание).
 - Ctrl+вверх / вниз: скорость воспроизведения (с Shift по 5%).
 
 # Ноты

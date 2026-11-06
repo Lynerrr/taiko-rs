@@ -135,3 +135,34 @@ fn a_map_not_in_the_song_list_is_not_test_played_and_says_why() {
     assert!(s.editor_back.is_none());
     assert!(view.status.contains("save it first"), "{}", view.status);
 }
+
+#[test]
+fn tab_test_plays_by_autoplay_retries_too_and_f5_after_it_is_played_by_hand() {
+    let mut s = editing();
+    press(&mut s, KeyCode::Tab, Keys::default());
+    frame(&mut s);
+    until_playing(&mut s);
+    let autoplayed = |s: &State| {
+        let Scene::Play { game, .. } = &s.scene else {
+            unreachable!()
+        };
+        assert!(!game.record, "nothing is kept");
+        assert!(game.test_play);
+        game.mods.has(mods::Mod::Autoplay)
+            && game.banner.as_deref().is_some_and(|b| b.contains("AUTO"))
+    };
+    assert!(autoplayed(&s), "Tab: autoplay");
+    s.restart_map();
+    until_playing(&mut s);
+    assert!(autoplayed(&s), "a retry is autoplayed again");
+    s.show_select();
+    assert!(matches!(s.scene, Scene::Editor(_)));
+    press(&mut s, KeyCode::F5, Keys::default());
+    frame(&mut s);
+    until_playing(&mut s);
+    let Scene::Play { game, .. } = &s.scene else {
+        unreachable!()
+    };
+    assert!(!game.mods.has(mods::Mod::Autoplay), "F5: by hand");
+    assert!(game.mods.has(mods::Mod::NoFail));
+}

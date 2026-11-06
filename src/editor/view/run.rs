@@ -262,7 +262,11 @@ impl View {
             }
             Cmd::TestPlay(from_start) => {
                 self.stop(audio);
-                self.want_test = Some((!from_start).then_some(self.ed.time));
+                self.want_test = Some(((!from_start).then_some(self.ed.time), false));
+            }
+            Cmd::AutoTest(from_start) => {
+                self.stop(audio);
+                self.want_test = Some(((!from_start).then_some(self.ed.time), true));
             }
             Cmd::FirstNote => {
                 let to = self.ed.chart.objects.first().map_or(0.0, |o| o.time);
@@ -299,6 +303,14 @@ impl View {
                     "waveform on".into()
                 } else {
                     "waveform off".into()
+                };
+            }
+            Cmd::LeftPan => {
+                self.left_pan = !self.left_pan;
+                self.status = if self.left_pan {
+                    "a left drag on empty space pans the timeline (Ctrl+drag selects a box)".into()
+                } else {
+                    "a left drag on empty space selects a box".into()
                 };
             }
             Cmd::ZoomFit => {

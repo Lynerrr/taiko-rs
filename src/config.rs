@@ -255,6 +255,8 @@ pub struct Config {
     pub editor_tour_done: bool,
     /// Maps opened in the editor lately (full paths), the latest first.
     pub editor_recent: Vec<String>,
+    /// In the editor a left drag on empty timeline pans it (View > Left drag pans).
+    pub editor_left_pan: bool,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
@@ -446,6 +448,7 @@ impl Default for Config {
             send_crash_reports: true,
             editor_tour_done: false,
             editor_recent: Vec::new(),
+            editor_left_pan: false,
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
@@ -1058,6 +1061,7 @@ impl Config {
                 "idle_minutes" => cfg.idle_minutes = v.parse().unwrap_or(cfg.idle_minutes),
                 "send_crash_reports" => cfg.send_crash_reports = v != "false",
                 "editor_tour_done" => cfg.editor_tour_done = v == "true",
+                "editor_left_pan" => cfg.editor_left_pan = v == "true",
                 "editor_recent" if !v.is_empty() => {
                     if cfg.editor_recent.len() < MAX_RECENT_MAPS
                         && !cfg.editor_recent.iter().any(|r| r == v)
@@ -1362,6 +1366,7 @@ impl Config {
         ));
         out.push_str(&format!("# after a crash, the next start sends its report to the developers\nsend_crash_reports = {}\n", self.send_crash_reports));
         out.push_str(&format!("# the map editor's first-run tour was seen (Help > Take the tour shows it again)\neditor_tour_done = {}\n", self.editor_tour_done));
+        out.push_str(&format!("# in the map editor a left drag on empty timeline pans it (View > Left drag pans)\neditor_left_pan = {}\n", self.editor_left_pan));
         if !self.editor_recent.is_empty() {
             out.push_str("# maps lately opened in the editor, the latest first (one line each)\n");
             for path in self.editor_recent.iter().take(MAX_RECENT_MAPS) {

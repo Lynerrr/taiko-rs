@@ -82,6 +82,8 @@ pub enum Cmd {
     PlayFromStart,
     /// Plays the map in the game from the playhead (true: from the start), then back here.
     TestPlay(bool),
+    /// The same, played by autoplay.
+    AutoTest(bool),
     FirstNote,
     LastNote,
     Step(i32),
@@ -92,6 +94,8 @@ pub enum Cmd {
     ZoomOut,
     ZoomFit,
     Waveform,
+    /// A left drag on empty timeline pans it instead of drawing a box.
+    LeftPan,
     SnapStep(i32),
     SnapTo(u32),
     RateStep(i32),
@@ -152,6 +156,8 @@ impl Cmd {
             Cmd::PlayFromStart => "Play from the start",
             Cmd::TestPlay(false) => "Test play",
             Cmd::TestPlay(true) => "Test play from the start",
+            Cmd::AutoTest(false) => "Autoplay test",
+            Cmd::AutoTest(true) => "Autoplay test from the start",
             Cmd::FirstNote => "Go to the first note",
             Cmd::LastNote => "Go to the last note",
             Cmd::Step(n) if n < 0 => "Step back",
@@ -162,6 +168,7 @@ impl Cmd {
             Cmd::ZoomOut => "Zoom out",
             Cmd::ZoomFit => "Zoom to the whole song",
             Cmd::Waveform => "Waveform on / off",
+            Cmd::LeftPan => "Left drag pans on / off",
             Cmd::SnapStep(n) if n < 0 => "Coarser snap",
             Cmd::SnapStep(_) => "Finer snap",
             Cmd::SnapTo(_) => "Beat snap",
@@ -232,11 +239,17 @@ impl Cmd {
             Cmd::TestPlay(_) => {
                 "Plays the map as it is now in the real game (from the playhead, or from the start), with nothing saved or sent. Quit or the end of the map comes back here."
             }
+            Cmd::AutoTest(_) => {
+                "The same test play, played by autoplay, to watch the map (and its effects) from the playhead or from the start."
+            }
             Cmd::FirstNote | Cmd::LastNote => "Moves the playhead there.",
             Cmd::Step(_) => "Moves the playhead one beat-snap step.",
             Cmd::PrevLine | Cmd::NextLine => "Moves the playhead to the neighbouring timing line.",
             Cmd::ZoomIn | Cmd::ZoomOut | Cmd::ZoomFit => {
                 "Changes how much time the timeline shows."
+            }
+            Cmd::LeftPan => {
+                "With it on, dragging empty timeline with the left button (Select tool) pans it, like the middle button; Ctrl+drag still selects a box, Shift+drag adds one."
             }
             Cmd::Waveform => {
                 "Shows the music under the notes: red is bass (often a don), blue is treble (often a kat)."
@@ -411,6 +424,15 @@ pub const BINDS: &[Bind] = &[
         "Shift+F5",
         MOVE,
     ),
+    b(KeyCode::Tab, "", false, Cmd::AutoTest(false), "Tab", MOVE),
+    b(
+        KeyCode::Tab,
+        "s",
+        false,
+        Cmd::AutoTest(true),
+        "Shift+Tab",
+        MOVE,
+    ),
     b(KeyCode::KeyZ, "", false, Cmd::FirstNote, "Z", MOVE),
     b(KeyCode::KeyV, "", false, Cmd::LastNote, "V", MOVE),
     b(KeyCode::ArrowLeft, "", true, Cmd::Step(-1), "Left", MOVE),
@@ -564,7 +586,10 @@ pub const MOUSE: &[(&str, &str)] = &[
         "Click",
         "Place a note with the Note tool; select with the Select tool",
     ),
-    ("Right click", "Delete the note under the pointer"),
+    (
+        "Right click",
+        "Delete the note under the pointer (on a selected one: all selected)",
+    ),
     (
         "Drag a note",
         "Move it (the grid snaps it; hold Shift to ignore the grid)",
@@ -581,9 +606,12 @@ pub const MOUSE: &[(&str, &str)] = &[
         "Move the playhead along the beat snap (Shift: 4 steps)",
     ),
     ("Ctrl+wheel", "Change the beat snap"),
-    ("Alt+wheel", "Zoom the timeline"),
+    ("Alt+wheel", "Zoom the timeline (elsewhere: the volume)"),
     ("Ctrl+Alt+wheel", "Change tool"),
-    ("Middle drag", "Pan the timeline"),
+    (
+        "Middle drag",
+        "Pan the timeline (also a left drag: View > Left drag pans)",
+    ),
 ];
 
 /// The command a key means, if any.
