@@ -10,6 +10,8 @@ use crate::layout::Area;
 use crate::mods::Mods;
 use crate::render::PresentChoice;
 
+/// How many maps the editor remembers as recent.
+pub const MAX_RECENT_MAPS: usize = 8;
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
 /// What scroll speed 1.0 was before it matched osu!, in today's terms (at 16:9: 0.7 virtual
@@ -245,6 +247,10 @@ pub struct Config {
     pub idle_minutes: u32,
     /// A crash's report goes to the server on the next start (`online::Request::CrashReport`).
     pub send_crash_reports: bool,
+    /// The map editor's first-run tour was finished or skipped.
+    pub editor_tour_done: bool,
+    /// Maps opened in the editor lately (full paths), the latest first.
+    pub editor_recent: Vec<String>,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
@@ -429,6 +435,8 @@ impl Default for Config {
             discord_presence: true,
             idle_minutes: 2,
             send_crash_reports: true,
+            editor_tour_done: false,
+            editor_recent: Vec::new(),
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
@@ -901,6 +909,14 @@ pub fn parse_key(s: &str) -> Option<KeyCode> {
 }
 
 impl Config {
+    /// Notes that the editor opened `path`: it goes first in the recent maps.
+    pub fn editor_opened(&mut self, path: &std::path::Path) {
+        let path = path.to_string_lossy().into_owned();
+        self.editor_recent.retain(|p| *p != path);
+        self.editor_recent.insert(0, path);
+        self.editor_recent.truncate(MAX_RECENT_MAPS);
+    }
+
     /// Music and hitsound volume after the master volume.
     pub fn volumes(&self) -> (f32, f32) {
         (
@@ -1029,6 +1045,14 @@ impl Config {
                 "discord_presence" => cfg.discord_presence = v != "false",
                 "idle_minutes" => cfg.idle_minutes = v.parse().unwrap_or(cfg.idle_minutes),
                 "send_crash_reports" => cfg.send_crash_reports = v != "false",
+                "editor_tour_done" => cfg.editor_tour_done = v == "true",
+                "editor_recent" if !v.is_empty() => {
+                    if cfg.editor_recent.len() < MAX_RECENT_MAPS
+                        && !cfg.editor_recent.iter().any(|r| r == v)
+                    {
+                        cfg.editor_recent.push(v.to_string());
+                    }
+                }
                 "chat_filter" => cfg.chat_filter = v != "false",
                 "message_sound" => cfg.message_sound = v != "false",
                 "notify_playing" => cfg.notify_playing = v == "true",
@@ -1317,6 +1341,13 @@ impl Config {
             self.discord_presence, self.discord_app_id, self.idle_minutes
         ));
         out.push_str(&format!("# after a crash, the next start sends its report to the developers\nsend_crash_reports = {}\n", self.send_crash_reports));
+        out.push_str(&format!("# the map editor's first-run tour was seen (Help > Take the tour shows it again)\neditor_tour_done = {}\n", self.editor_tour_done));
+        if !self.editor_recent.is_empty() {
+            out.push_str("# maps lately opened in the editor, the latest first (one line each)\n");
+            for path in self.editor_recent.iter().take(MAX_RECENT_MAPS) {
+                out.push_str(&format!("editor_recent = {path}\n"));
+            }
+        }
         out.push_str(&format!(
             "# chats: star out swear words; a chime when a friend messages you\nchat_filter = {}\nmessage_sound = {}\n",
             self.chat_filter, self.message_sound

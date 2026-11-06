@@ -3,6 +3,10 @@
 //! handler when it starts (Windows: the user's registry; Linux: a desktop entry), and a link
 //! opened while it's running goes to the running game over a local socket instead of starting
 //! a second one.
+//!
+//! The same goes for a map archive (`.rsz`) opened from the file manager: a later launch hands
+//! its path to the running game over the socket, which imports it. Paths only ever come that
+//! way, from a program on this computer, never in a link a web page could open.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -40,25 +44,44 @@ pub fn parse(text: &str) -> Option<Link> {
 
 /// What a later launch says to the running game, before the link; it answers "ok".
 const HELLO: &str = "taiko-rs link";
+/// The same, before the path of a file to open.
+const OPEN: &str = "taiko-rs open";
+
+/// What a later launch handed over.
+#[derive(Debug, PartialEq)]
+pub enum Arrival {
+    Link(Link),
+    /// A map archive to import (an absolute path).
+    Open(PathBuf),
+}
 
 /// Where the running game says which port it listens on.
 fn port_file() -> Option<PathBuf> {
     Some(crate::config::user_dir(true)?.join("link-port"))
 }
 
-/// Hands `link` to a running game; false if none took it (then this launch opens it).
-pub fn forward(link: Link) -> bool {
-    let Some(port) = port_file()
+fn running_port() -> Option<u16> {
+    port_file()
         .and_then(|f| std::fs::read_to_string(f).ok())
         .and_then(|t| t.trim().parse::<u16>().ok())
-    else {
-        return false;
-    };
-    send(port, link)
 }
 
-/// Says `link` to whatever listens on `port`; true if it was a game and took it.
-fn send(port: u16, link: Link) -> bool {
+/// Hands `link` to a running game; false if none took it (then this launch opens it).
+pub fn forward(link: Link) -> bool {
+    running_port().is_some_and(|port| send(port, &format!("{HELLO} {}", link.url())))
+}
+
+/// Hands the file at `path` to a running game to open; false if none took it.
+pub fn forward_open(path: &Path) -> bool {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Some(text) = path.to_str().filter(|t| !t.contains('\n')) else {
+        return false;
+    };
+    running_port().is_some_and(|port| send(port, &format!("{OPEN} {text}")))
+}
+
+/// Says `line` to whatever listens on `port`; true if it was a game and took it.
+fn send(port: u16, line: &str) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(
         &(Ipv4Addr::LOCALHOST, port).into(),
         Duration::from_millis(500),
@@ -66,15 +89,16 @@ fn send(port: u16, link: Link) -> bool {
         return false;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    if writeln!(stream, "{HELLO} {}", link.url()).is_err() {
+    if writeln!(stream, "{line}").is_err() {
         return false;
     }
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply).is_ok() && reply.trim() == "ok"
 }
 
-/// Takes links from later launches (`forward`) for as long as the game runs.
-pub fn listen(on_link: impl Fn(Link) + Send + 'static) {
+/// Takes links and files from later launches (`forward`, `forward_open`) for as long as the
+/// game runs.
+pub fn listen(on_link: impl Fn(Arrival) + Send + 'static) {
     let Some(file) = port_file() else { return };
     let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) else {
         return;
@@ -93,7 +117,62 @@ pub fn listen(on_link: impl Fn(Link) + Send + 'static) {
     serve(listener, on_link);
 }
 
-fn serve(listener: TcpListener, on_link: impl Fn(Link) + Send + 'static) {
+/// The local path in a `file://` URL (what some file managers hand a program to open), with
+/// its `%xx` escapes undone. Anything else, or a file on another host, is `None`.
+pub fn file_url(text: &str) -> Option<PathBuf> {
+    let rest = text
+        .get(..7)
+        .filter(|s| s.eq_ignore_ascii_case("file://"))
+        .map(|_| &text[7..])?;
+    // `file:///path` or `file://localhost/path`.
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !path.starts_with('/') {
+        return None;
+    }
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (b, _, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    let path = String::from_utf8(out).ok()?;
+    // Windows: `file:///C:/maps/a.rsz`.
+    let path = match path.as_bytes() {
+        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => path[1..].to_string(),
+        _ => path,
+    };
+    Some(PathBuf::from(path))
+}
+
+/// What a later launch's line asks for.
+fn arrival(line: &str) -> Option<Arrival> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    if let Some(path) = line.strip_prefix(OPEN).and_then(|p| p.strip_prefix(' ')) {
+        let path = PathBuf::from(path);
+        return (path.is_absolute() && crate::library::is_map_archive(&path))
+            .then_some(Arrival::Open(path));
+    }
+    line.trim()
+        .strip_prefix(HELLO)
+        .and_then(parse)
+        .map(Arrival::Link)
+}
+
+fn serve(listener: TcpListener, on_link: impl Fn(Arrival) + Send + 'static) {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
@@ -101,11 +180,11 @@ fn serve(listener: TcpListener, on_link: impl Fn(Link) + Send + 'static) {
             if BufReader::new(&stream).read_line(&mut line).is_err() {
                 continue;
             }
-            let Some(link) = line.trim().strip_prefix(HELLO).and_then(parse) else {
+            let Some(arrival) = arrival(&line) else {
                 continue;
             };
             let _ = (&stream).write_all(b"ok\n");
-            on_link(link);
+            on_link(arrival);
         }
     });
 }
@@ -117,8 +196,8 @@ fn dev_build(exe: &Path) -> bool {
     exe.components().any(|c| c.as_os_str() == "target")
 }
 
-/// Makes this game the handler of `taiko-rs://` links (on a thread: it runs `reg` or
-/// `xdg-mime`), unless it already is.
+/// Makes this game the handler of `taiko-rs://` links and of `.rsz` map archives (on a thread:
+/// it runs `reg` or `xdg-mime`), unless it already is.
 pub fn register() {
     let Ok(exe) = std::env::current_exe() else {
         return;
@@ -132,20 +211,30 @@ fn register_exe(exe: &Path) {
     use std::process::Command;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const KEY: &str = r"HKCU\Software\Classes\taiko-rs";
+    // `.rsz` files are of the type `taiko-rs.map`, which this game opens.
+    const EXT: &str = r"HKCU\Software\Classes\.rsz";
+    const MAP: &str = r"HKCU\Software\Classes\taiko-rs.map";
     let command = format!("\"{}\" \"%1\"", exe.display());
     let open = format!(r"{KEY}\shell\open\command");
+    let map_open = format!(r"{MAP}\shell\open\command");
     // `reg query` prints "    (Default)    REG_SZ    <value>".
-    let current = Command::new("reg")
-        .args(["query", &open, "/ve"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .find_map(|l| l.split_once("REG_SZ").map(|(_, v)| v.trim().to_string()))
-        });
-    if current.as_deref() == Some(command.as_str()) {
+    let query = |key: &str| {
+        Command::new("reg")
+            .args(["query", key, "/ve"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .find_map(|l| l.split_once("REG_SZ").map(|(_, v)| v.trim().to_string()))
+            })
+    };
+    let current = query(&open);
+    if current.as_deref() == Some(command.as_str())
+        && query(&map_open).as_deref() == Some(command.as_str())
+        && query(EXT).as_deref() == Some("taiko-rs.map")
+    {
         return;
     }
     let current_exe = current
@@ -156,11 +245,15 @@ fn register_exe(exe: &Path) {
         return;
     }
     let icon = format!("\"{}\",0", exe.display());
-    let values: [(&str, Option<&str>, &str); 4] = [
+    let values: [(&str, Option<&str>, &str); 8] = [
         (KEY, None, "URL:taiko.rs"),
         (KEY, Some("URL Protocol"), ""),
         (&format!(r"{KEY}\DefaultIcon"), None, &icon),
         (&open, None, &command),
+        (MAP, None, "taiko.rs map"),
+        (&format!(r"{MAP}\DefaultIcon"), None, &icon),
+        (&map_open, None, &command),
+        (EXT, None, "taiko-rs.map"),
     ];
     for (key, name, data) in values {
         let mut reg = Command::new("reg");
@@ -179,7 +272,7 @@ fn register_exe(exe: &Path) {
             return;
         }
     }
-    eprintln!("links: taiko-rs:// opens {}", exe.display());
+    eprintln!("links: taiko-rs:// and .rsz open {}", exe.display());
 }
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
@@ -213,13 +306,44 @@ fn register_exe(exe: &Path) {
             .status()
             .is_ok_and(|s| s.success())
     };
+    // The `.rsz` file type, for file managers to know (shared-mime-info).
+    if let Some(mime) = dir.parent().map(|d| d.join("mime")) {
+        let packages = mime.join("packages");
+        let wrote = std::fs::create_dir_all(&packages)
+            .and_then(|_| std::fs::write(packages.join("taiko-rs.xml"), MIME_PACKAGE));
+        match wrote {
+            Ok(()) => {
+                let _ = quiet(Command::new("update-mime-database").arg(&mime));
+            }
+            Err(e) => eprintln!("links: {}: {e}", packages.display()),
+        }
+    }
     let _ = quiet(Command::new("update-desktop-database").arg("-q").arg(&dir));
-    if quiet(Command::new("xdg-mime").args(["default", NAME, "x-scheme-handler/taiko-rs"])) {
-        eprintln!("links: taiko-rs:// opens {}", exe.display());
+    let links =
+        quiet(Command::new("xdg-mime").args(["default", NAME, "x-scheme-handler/taiko-rs"]));
+    let maps = quiet(Command::new("xdg-mime").args(["default", NAME, RSZ_MIME]));
+    if links && maps {
+        eprintln!("links: taiko-rs:// and .rsz open {}", exe.display());
     } else {
-        eprintln!("links: no xdg-mime to register taiko-rs:// with");
+        eprintln!("links: no xdg-mime to register taiko-rs:// and .rsz with");
     }
 }
+
+/// The MIME type of `.rsz` files on Linux.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const RSZ_MIME: &str = "application/x-taiko-rs-archive";
+
+/// What tells file managers that `*.rsz` is that type.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const MIME_PACKAGE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-taiko-rs-archive">
+    <comment>taiko.rs map</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.rsz"/>
+  </mime-type>
+</mime-info>
+"#;
 
 #[cfg(not(any(
     windows,
@@ -243,7 +367,7 @@ fn desktop_entry(exe: &Path) -> String {
         })
         .collect();
     format!(
-        "[Desktop Entry]\nType=Application\nName=taiko.rs\nComment=Opens taiko.rs links (scores to watch)\nExec=\"{quoted}\" %u\nIcon=taiko-rs\nTerminal=false\nNoDisplay=true\nMimeType=x-scheme-handler/taiko-rs;\n"
+        "[Desktop Entry]\nType=Application\nName=taiko.rs\nComment=Opens taiko.rs links (scores to watch) and maps (.rsz)\nExec=\"{quoted}\" %u\nIcon=taiko-rs\nTerminal=false\nNoDisplay=true\nMimeType=x-scheme-handler/taiko-rs;{RSZ_MIME};\n"
     )
 }
 
@@ -286,7 +410,8 @@ mod tests {
         let entry = desktop_entry(exe);
         assert!(
             entry.contains("Exec=\"/opt/my \\\"games\\\"/taiko-rs\" %u")
-                && entry.contains("MimeType=x-scheme-handler/taiko-rs;"),
+                && entry
+                    .contains("MimeType=x-scheme-handler/taiko-rs;application/x-taiko-rs-archive;"),
             "{entry}"
         );
         assert_eq!(entry_exe(&entry).as_deref(), Some(exe));
@@ -301,8 +426,19 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = std::sync::mpsc::channel();
         serve(listener, move |l| tx.send(l).unwrap());
-        assert!(send(port, Link::Score(5)));
-        assert_eq!(rx.recv_timeout(Duration::from_secs(2)), Ok(Link::Score(5)));
+        let score = format!("{HELLO} {}", Link::Score(5).url());
+        assert!(send(port, &score));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)),
+            Ok(Arrival::Link(Link::Score(5)))
+        );
+        // A map archive opened from the file manager.
+        let rsz = std::env::temp_dir().join("my map.rsz");
+        assert!(send(port, &format!("{OPEN} {}", rsz.display())));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)),
+            Ok(Arrival::Open(rsz))
+        );
         // Something else on the port the file names (the game long gone): this launch opens it.
         let other = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = other.local_addr().unwrap().port();
@@ -310,6 +446,39 @@ mod tests {
             let (s, _) = other.accept().unwrap();
             let _ = BufReader::new(&s).read_line(&mut String::new());
         });
-        assert!(!send(port, Link::Score(5)));
+        assert!(!send(port, &score));
+    }
+
+    #[test]
+    fn file_urls_become_paths() {
+        assert_eq!(
+            file_url("file:///home/me/My%20Map%20%5B1%5D.rsz"),
+            Some(PathBuf::from("/home/me/My Map [1].rsz"))
+        );
+        assert_eq!(
+            file_url("file://localhost/tmp/%D0%BA%D0%B0%D1%80%D1%82%D0%B0.rsz"),
+            Some(PathBuf::from("/tmp/карта.rsz"))
+        );
+        assert_eq!(
+            file_url("FILE:///C:/maps/a.rsz"),
+            Some(PathBuf::from("C:/maps/a.rsz"))
+        );
+        assert_eq!(file_url("file://server/share/a.rsz"), None);
+        assert_eq!(file_url("/home/me/a.rsz"), None);
+        assert_eq!(file_url("taiko-rs://score/1"), None);
+    }
+
+    #[test]
+    fn only_a_map_archive_at_a_full_path_is_opened() {
+        let dir = std::env::temp_dir();
+        let open = |p: &Path| arrival(&format!("{OPEN} {}\n", p.display()));
+        assert_eq!(
+            open(&dir.join("a.rsz")),
+            Some(Arrival::Open(dir.join("a.rsz")))
+        );
+        assert!(open(&dir.join("set.OSZ")).is_some());
+        assert_eq!(open(Path::new("a.rsz")), None, "relative");
+        assert_eq!(open(&dir.join("notes.txt")), None);
+        assert_eq!(arrival("taiko-rs opener /x.rsz"), None);
     }
 }

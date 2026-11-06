@@ -244,6 +244,7 @@ mod tests {
             barlines: Vec::new(),
             control_points,
             first_velocity: 0.0,
+            gimmick: None,
         }
     }
 

@@ -85,6 +85,104 @@ struct Section {
     groups: std::ops::Range<usize>,
 }
 
+#[cfg(test)]
+mod list_layout_tests;
+
+/// Where the song list's rows go, worked out from the headings alone: a song's place is
+/// arithmetic (every song row is the same height), so a library of any size costs the same per
+/// frame as a small one. `extras` are the few songs that are taller than a row (the open one's
+/// difficulties, and the one closing), as (index into `groups`, extra height), in order.
+struct ListLayout<'a> {
+    sections: &'a [Section],
+    headings: bool,
+    song_h: f32,
+    heading_h: f32,
+    extras: Vec<(usize, f32)>,
+    /// Where each section starts (its heading, if it has one).
+    tops: Vec<f32>,
+    /// The list's whole height.
+    total: f32,
+}
+
+impl<'a> ListLayout<'a> {
+    fn new(
+        sections: &'a [Section],
+        open: &[bool],
+        headings: bool,
+        (song_h, heading_h): (f32, f32),
+        extras: Vec<(usize, f32)>,
+    ) -> Self {
+        let mut tops = Vec::with_capacity(sections.len());
+        let mut y = 0.0;
+        for (si, sec) in sections.iter().enumerate() {
+            tops.push(y);
+            if headings {
+                y += heading_h;
+            }
+            if open[si] {
+                y += sec.groups.len() as f32 * song_h;
+                y += extras
+                    .iter()
+                    .filter(|(g, _)| sec.groups.contains(g))
+                    .map(|(_, e)| e)
+                    .sum::<f32>();
+            }
+        }
+        ListLayout {
+            sections,
+            headings,
+            song_h,
+            heading_h,
+            extras,
+            tops,
+            total: y,
+        }
+    }
+
+    /// The top of song `g`'s row, in open section `si`.
+    fn song_y(&self, si: usize, g: usize) -> f32 {
+        let sec = &self.sections[si];
+        let head = if self.headings { self.heading_h } else { 0.0 };
+        let before: f32 = self
+            .extras
+            .iter()
+            .filter(|(e, _)| sec.groups.contains(e) && *e < g)
+            .map(|(_, e)| e)
+            .sum();
+        self.tops[si] + head + (g - sec.groups.start) as f32 * self.song_h + before
+    }
+
+    /// The height a song takes besides its own row.
+    fn extra(&self, g: usize) -> f32 {
+        self.extras
+            .iter()
+            .find(|(e, _)| *e == g)
+            .map_or(0.0, |(_, e)| *e)
+    }
+
+    /// The songs of open section `si` that reach into `from..to`.
+    fn visible_songs(&self, si: usize, from: f32, to: f32) -> std::ops::Range<usize> {
+        let groups = &self.sections[si].groups;
+        let ends = |g: usize| self.song_y(si, g) + self.song_h + self.extra(g);
+        // The first song that ends at or below `from` is found by halving (rows only get lower).
+        let (mut lo, mut hi) = (groups.start, groups.end);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if ends(mid) < from {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        let first = lo;
+        let last = first
+            + (first..groups.end)
+                .take_while(|&g| self.song_y(si, g) <= to)
+                .count();
+        first..last
+    }
+}
+
 pub struct Select {
     pub filter: String,
     /// The search box has the keys (clicked, or Ctrl+F): everything typed goes into it.
@@ -99,6 +197,10 @@ pub struct Select {
     pub status: std::collections::HashMap<std::path::PathBuf, u8>,
     /// Map sets loved on the online server (they give pp there, whatever osu! says).
     pub server_loved: std::collections::HashSet<u32>,
+    /// Map folders sent to (or downloaded from) taiko.rs custom maps: their set number there.
+    pub custom_folder: std::collections::HashMap<std::path::PathBuf, u32>,
+    /// Custom sets the server has approved.
+    pub custom_approved: std::collections::HashSet<u32>,
     /// The account logged in is a loved nominator: the right-click menu can love sets.
     pub nominator: bool,
     /// osu! collections: (name, library indices).
@@ -299,6 +401,8 @@ fn status_heading(code: u8) -> (&'static str, u32) {
         LOVED => ("Loved", 0xff66aa),
         PENDING | GRAVEYARD => ("Pending / Graveyard", 0xb0a06a),
         NOT_SUBMITTED => ("Not submitted", 0x8a8aa0),
+        CUSTOM => ("taiko.rs custom", 0x9b6cff),
+        CUSTOM_APPROVED => ("Custom, approved", 0x4fd1b0),
         _ => ("Status not known yet", 0x8a8aa0),
     }
 }
@@ -337,6 +441,8 @@ impl Select {
             played: std::collections::HashMap::new(),
             status: std::collections::HashMap::new(),
             server_loved: std::collections::HashSet::new(),
+            custom_folder: std::collections::HashMap::new(),
+            custom_approved: std::collections::HashSet::new(),
             nominator: false,
             collections: Vec::new(),
             collection: None,
@@ -519,6 +625,13 @@ impl Select {
     fn status_of(&self, e: &Entry) -> u8 {
         if self.edited.contains(&e.path) {
             return crate::search::NOT_SUBMITTED;
+        }
+        if let Some(id) = e.path.parent().and_then(|d| self.custom_folder.get(d)) {
+            return if self.custom_approved.contains(id) {
+                crate::search::CUSTOM_APPROVED
+            } else {
+                crate::search::CUSTOM
+            };
         }
         match e.set_id() {
             Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
@@ -1392,6 +1505,16 @@ impl Select {
         ));
         if !m.header {
             items.push((
+                fit(format!("Edit [{}]", library[i].meta.version)),
+                MenuAction::Edit,
+            ));
+            items.push((
+                fit(format!("New difficulty from [{}]", library[i].meta.version)),
+                MenuAction::NewDifficulty,
+            ));
+        }
+        if !m.header {
+            items.push((
                 fit(format!("Hide [{}]", library[i].meta.version)),
                 MenuAction::HideDifficulty,
             ));
@@ -1469,7 +1592,11 @@ impl Select {
                     t.clone()
                 }
             }
-            MenuAction::Love(..) | MenuAction::Like | MenuAction::MapSkin => return None,
+            MenuAction::Love(..)
+            | MenuAction::Like
+            | MenuAction::MapSkin
+            | MenuAction::Edit
+            | MenuAction::NewDifficulty => return None,
         };
         self.hidden.save();
         // The selection stays unless it was hidden: then another difficulty of that song, else
@@ -1830,28 +1957,31 @@ impl Select {
         let section_open: Vec<bool> = (0..self.sections.len())
             .map(|s| self.section_open(s))
             .collect();
-        let (mut final_y, mut final_cursor) = (0.0f32, 0.0f32);
         let cursor_section = self.cursor_section();
         let cursor_hidden = cursor_section.is_some_and(|si| !section_open[si]);
-        for (si, sec) in self.sections.iter().enumerate() {
+        let cursor_group = self.group_of.get(self.cursor).copied();
+        let final_layout = ListLayout::new(
+            &self.sections,
+            &section_open,
+            self.headings,
+            (SONG_H, SECTION_H),
+            cursor_group
+                .filter(|_| !cursor_hidden)
+                .map(|g| (g, groups[g].len() as f32 * DIFF_H))
+                .into_iter()
+                .collect(),
+        );
+        let final_y = final_layout.total;
+        let final_cursor = match (cursor_section, cursor_group) {
             // A closed heading holding the selection is the one to keep in view.
-            if !section_open[si] && cursor_section == Some(si) {
-                final_cursor = final_y;
+            (Some(si), _) if !section_open[si] => final_layout.tops[si],
+            (Some(si), Some(g)) => {
+                final_layout.song_y(si, g)
+                    + SONG_H
+                    + (self.cursor - groups[g].start) as f32 * DIFF_H
             }
-            if self.headings {
-                final_y += SECTION_H;
-            }
-            if !section_open[si] {
-                continue;
-            }
-            for g in &groups[sec.groups.clone()] {
-                final_y += SONG_H;
-                if g.contains(&self.cursor) {
-                    final_cursor = final_y + (self.cursor - g.start) as f32 * DIFF_H;
-                    final_y += g.len() as f32 * DIFF_H;
-                }
-            }
-        }
+            _ => 0.0,
+        };
 
         let max_scroll = (final_y - view).max(0.0);
         self.scroll_max = max_scroll;
@@ -1928,22 +2058,67 @@ impl Select {
         self.scroll = scroll;
 
         // (row, y, height, alpha): rows of opening / closing songs are squeezed and faded.
+        // Only the rows in view are made: a big library has thousands of songs to scroll past.
+        let group_at = |start: Option<usize>| {
+            start
+                .and_then(|s| self.group_of.get(s).copied())
+                .filter(|&g| Some(groups[g].start) == start)
+        };
+        let anim_extra = |g: Option<usize>, f: f32| {
+            g.map(|g| {
+                (
+                    g,
+                    if f > 0.001 {
+                        groups[g].len() as f32 * DIFF_H * f
+                    } else {
+                        0.0
+                    },
+                )
+            })
+        };
+        let open_gi = group_at(open_g);
+        let closing_gi = group_at(closing_g).filter(|g| Some(*g) != open_gi);
+        let mut extras: Vec<(usize, f32)> = [
+            anim_extra(open_gi, open_f),
+            anim_extra(closing_gi, closing_f),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        extras.sort_by_key(|(g, _)| *g);
+        let layout = ListLayout::new(
+            &self.sections,
+            &section_open,
+            self.headings,
+            (SONG_H, SECTION_H),
+            extras,
+        );
         let mut rows: Vec<(Row, f32, f32, f32)> = Vec::new();
-        let mut y = 0.0;
+        let (from, to) = (scroll - 2.0, scroll + view + 2.0);
         for (si, sec) in self.sections.iter().enumerate() {
-            if self.headings {
-                rows.push((Row::Section(si), y, SECTION_H, 1.0));
-                y += SECTION_H;
+            let end = layout.tops.get(si + 1).copied().unwrap_or(layout.total);
+            if end < from || layout.tops[si] > to {
+                continue;
             }
-            for g in &groups[sec.groups.clone()] {
-                if !section_open[si] {
-                    continue;
-                }
+            if self.headings {
+                rows.push((Row::Section(si), layout.tops[si], SECTION_H, 1.0));
+            }
+            if !section_open[si] {
+                continue;
+            }
+            let shown = layout.visible_songs(si, from, to);
+            let mut y = if shown.is_empty() {
+                0.0
+            } else {
+                layout.song_y(si, shown.start)
+            };
+            for gi in shown {
+                let g = &groups[gi];
                 rows.push((Row::Song(g.clone()), y, SONG_H, 1.0));
                 y += SONG_H;
-                let f = if Some(g.start) == open_g {
+                let f = if Some(gi) == open_gi {
                     open_f
-                } else if Some(g.start) == closing_g {
+                } else if Some(gi) == closing_gi {
                     closing_f
                 } else {
                     0.0
@@ -1955,6 +2130,7 @@ impl Select {
                     }
                 }
             }
+            let _ = sec;
         }
         // The main menu's look: one dark panel the list runs down, rows as lines on it.
         crate::style::panel(c, 20.0, top - 4.0, lw + 8.0, bottom - top + 8.0);
@@ -2251,11 +2427,11 @@ impl Select {
         // Flying through the list: which heading it's passing.
         if let Some(py) = self.scrubbing {
             let line = scroll + view / 2.0;
-            let mut heading = rows.iter().filter_map(|(row, ry, ..)| match row {
-                Row::Section(si) if *ry <= line => Some(*si),
-                _ => None,
-            });
-            if let Some(si) = heading.next_back() {
+            let heading = self
+                .headings
+                .then(|| layout.tops.partition_point(|t| *t <= line).checked_sub(1))
+                .flatten();
+            if let Some(si) = heading {
                 let label = Canvas::fit(10.0, lw - 40.0, &self.sections[si].label);
                 let bw = Canvas::text_width(10.0, &label) + 24.0;
                 let by = (py - 13.0).clamp(top, bottom - 26.0);
@@ -2776,6 +2952,10 @@ pub enum MenuAction {
     Like,
     /// Turn the map's own skin off, or back on.
     MapSkin,
+    /// Open the difficulty in the map editor.
+    Edit,
+    /// Start a new, empty difficulty from this one's timing and music.
+    NewDifficulty,
 }
 
 /// The name a map's folder goes by in `map_skins_off`: the same wherever the Songs folder is.

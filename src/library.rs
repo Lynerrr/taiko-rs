@@ -215,6 +215,12 @@ pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
         });
     }
     let _ = start;
+    run_dialogs(tries)
+}
+
+/// Runs the first of the system's dialogs that exists: Ok(None) when cancelled, Err when there
+/// is none to show.
+fn run_dialogs(tries: Vec<std::process::Command>) -> Result<Option<PathBuf>, String> {
     for mut cmd in tries {
         let Ok(out) = cmd.stderr(std::process::Stdio::null()).output() else {
             continue;
@@ -224,7 +230,115 @@ pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
             .to_string();
         return Ok((out.status.success() && !path.is_empty()).then(|| PathBuf::from(path)));
     }
-    Err("no folder dialog to show".into())
+    Err("no file dialog to show".into())
+}
+
+/// What a file dialog should offer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FileKind {
+    Audio,
+    Image,
+}
+
+impl FileKind {
+    pub const fn extensions(self) -> &'static [&'static str] {
+        match self {
+            FileKind::Audio => &["mp3", "ogg", "wav", "flac", "m4a", "opus"],
+            FileKind::Image => &["png", "jpg", "jpeg"],
+        }
+    }
+
+    /// The dialogs' name for the files (macOS's dialog has no filter to name).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    fn label(self) -> &'static str {
+        match self {
+            FileKind::Audio => "Songs",
+            FileKind::Image => "Pictures",
+        }
+    }
+
+    /// Whether `path` has one of the extensions.
+    pub fn matches(self, path: &Path) -> bool {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| self.extensions().iter().any(|x| x.eq_ignore_ascii_case(e)))
+    }
+}
+
+/// Asks for a file with the system's file dialog, starting in `start`. Blocks until it closes:
+/// Ok(None) when cancelled, Err when there is no dialog to show.
+pub fn pick_file(kind: FileKind, title: &str, start: &Path) -> Result<Option<PathBuf>, String> {
+    use std::process::Command;
+    #[cfg_attr(target_os = "android", allow(unused_mut))]
+    let mut tries: Vec<Command> = Vec::new();
+    let globs: Vec<String> = kind.extensions().iter().map(|e| format!("*.{e}")).collect();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let start = start.display().to_string().replace('\'', "''");
+        let title = title.replace('\'', "''");
+        let filter = format!(
+            "{} ({})|{}|All files|*.*",
+            kind.label(),
+            globs.join(", "),
+            globs.join(";")
+        );
+        let script = format!(
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; \
+             $d = New-Object System.Windows.Forms.OpenFileDialog; $d.Title = '{title}'; $d.Filter = '{filter}'; $d.InitialDirectory = '{start}'; \
+             $top = New-Object System.Windows.Forms.Form -Property @{{TopMost = $true}}; \
+             if ($d.ShowDialog($top) -eq 'OK') {{ [Console]::Out.Write($d.FileName) }}"
+        );
+        let mut ps = Command::new("powershell");
+        ps.args(["-NoProfile", "-STA", "-Command", &script])
+            .creation_flags(0x0800_0000);
+        tries.push(ps);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let types: Vec<String> = kind
+            .extensions()
+            .iter()
+            .map(|e| format!("\"{e}\""))
+            .collect();
+        let mut osa = Command::new("osascript");
+        osa.args([
+            "-e",
+            &format!(
+                "POSIX path of (choose file with prompt \"{}\" of type {{{}}})",
+                title.replace('"', ""),
+                types.join(", ")
+            ),
+        ]);
+        tries.push(osa);
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+    {
+        let mut zenity = Command::new("zenity");
+        zenity
+            .args(["--file-selection", &format!("--title={title}")])
+            .arg(format!(
+                "--file-filter={} | {}",
+                kind.label(),
+                globs.join(" ")
+            ))
+            .arg(format!("--filename={}/", start.display()));
+        let mut kdialog = Command::new("kdialog");
+        kdialog
+            .arg("--getopenfilename")
+            .arg(start)
+            .arg(format!("{} ({})", globs.join(" "), kind.label()))
+            .args(["--title", title]);
+        let kde = std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|d| d.to_ascii_uppercase().contains("KDE"));
+        tries.extend(if kde {
+            [kdialog, zenity]
+        } else {
+            [zenity, kdialog]
+        });
+    }
+    let _ = (start, title, &globs);
+    run_dialogs(tries)
 }
 
 /// Default osu! stable install locations that have a Songs folder.
@@ -334,7 +448,20 @@ fn cache_dir() -> PathBuf {
     crate::config::cache_dir().unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
 }
 
-/// Extracts an `.osz` once into the cache and returns the folder.
+/// A set of maps in one file: osu!'s `.osz`, or taiko.rs's own `.rsz` (the same zip, made for a
+/// set with `.tko` maps in it, and opened with taiko.rs rather than osu!).
+pub fn is_map_archive(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("osz") || x.eq_ignore_ascii_case("rsz"))
+}
+
+/// taiko.rs's own map archive (`is_map_archive`).
+pub fn is_rsz(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("rsz"))
+}
+
+/// Extracts an `.osz` (or `.rsz`) once into the cache and returns the folder.
 fn extract_osz(path: &Path) -> Result<PathBuf, String> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("map");
     let dest = cache_dir().join("osz").join(stem);
@@ -354,7 +481,13 @@ fn is_dir(e: &std::fs::DirEntry) -> bool {
         .is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()))
 }
 
-fn collect_osu(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+/// A chart file: `.osu`, or `.tko` (an `.osu` with the client's own gimmicks added).
+pub(crate) fn is_map_file(p: &Path) -> bool {
+    p.extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("osu") || x.eq_ignore_ascii_case("tko"))
+}
+
+pub(crate) fn collect_map_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -362,9 +495,9 @@ fn collect_osu(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if is_dir(&e) {
             if depth > 0 {
-                collect_osu(&p, depth - 1, out);
+                collect_map_files(&p, depth - 1, out);
             }
-        } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osu")) {
+        } else if is_map_file(&p) {
             out.push(p);
         }
     }
@@ -536,7 +669,7 @@ fn scan_cached(
     let mut walked: Vec<(PathBuf, u128)> = Vec::new();
     let loose = |files: &mut Vec<(Option<usize>, PathBuf)>, dir: &Path| {
         let mut found = Vec::new();
-        collect_osu(dir, 1, &mut found);
+        collect_map_files(dir, 1, &mut found);
         files.extend(found.into_iter().map(|p| (None, p)));
     };
     for input in inputs {
@@ -545,8 +678,8 @@ fn scan_cached(
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
-            Some("osu") if input.is_file() => files.push((None, input.clone())),
-            Some("osz") if input.is_file() => match extract_osz(input) {
+            Some("osu" | "tko") if input.is_file() => files.push((None, input.clone())),
+            Some("osz" | "rsz") if input.is_file() => match extract_osz(input) {
                 Ok(dir) => loose(&mut files, &dir),
                 Err(e) => eprintln!("{}: {e}", input.display()),
             },
@@ -576,22 +709,25 @@ fn scan_cached(
                                     unseen += 1;
                                 }
                                 let mut found = Vec::new();
-                                collect_osu(&p, 1, &mut found);
+                                collect_map_files(&p, 1, &mut found);
                                 files.extend(found.into_iter().map(|f| (Some(walked.len()), f)));
                                 walked.push((p, modified));
                             }
                         }
-                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osu")) {
+                    } else if is_map_file(&p) {
                         files.push((None, p));
-                    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("osz")) {
-                        // A Songs folder: also pick up .osz files dropped into it.
+                    } else if is_map_archive(&p) {
+                        // A Songs folder: also pick up .osz and .rsz files dropped into it.
                         if let Ok(dir) = extract_osz(&p) {
                             loose(&mut files, &dir);
                         }
                     }
                 }
             }
-            _ => eprintln!("skipping {}: not a .osu, .osz or folder", input.display()),
+            _ => eprintln!(
+                "skipping {}: not a .osu, .tko, .osz, .rsz or folder",
+                input.display()
+            ),
         }
     }
     files.sort_by(|a, b| a.1.cmp(&b.1));

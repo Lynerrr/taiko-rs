@@ -342,6 +342,8 @@ pub struct Love {
     /// The viewer is a loved nominator.
     pub can_love: bool,
     pub notice: Option<String>,
+    /// The map is a custom one: its set.
+    pub custom: Option<crate::custom::Set>,
 }
 
 /// A set loved here, for the list of them.
@@ -1604,22 +1606,31 @@ pub fn score_page(
 pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love, relax: bool) -> String {
     let (song, version) = split_map(&m.name);
     let (artist, title) = split_song(song);
+    // A custom map has no osu! page: its own page and its status stand there.
     let mut osu = m
         .set_id
+        .filter(|_| love.custom.is_none())
         .map(|s| {
             format!(
                 "<a class=\"btn small\" href=\"https://osu.ppy.sh/beatmapsets/{s}\">osu! page</a>"
             )
         })
         .unwrap_or_default();
-    if let Some(l) = &love.loved {
+    if let Some(c) = &love.custom {
+        osu += &format!(
+            "{}<a class=\"btn small\" href=\"/c/{}\">map page</a>",
+            custom_tag(c, m.hash),
+            c.id
+        );
+    }
+    if let Some(l) = love.loved.as_ref().filter(|_| love.custom.is_none()) {
         osu += &format!(
             "<span class=\"tag loved\" title=\"loved by {0} {1}\">LOVED HERE</span>",
             esc(&l.by),
             ago(l.at)
         );
     }
-    if let (true, Some(set)) = (love.can_love, m.set_id) {
+    if let (true, Some(set), None) = (love.can_love, m.set_id, &love.custom) {
         let (on, label) = if love.loved.is_some() {
             ("0", "unlove")
         } else {
@@ -1638,7 +1649,7 @@ pub fn map_page(m: &MapRow, rows: &[OnlineScore], love: &Love, relax: bool) -> S
     let head = format!(
         "<div class=\"cover map\"{}><div class=inner><div class=artist>{}</div><h1>{}</h1>\
          <div class=sub>{}<span class=version>[{}]</span><span class=dim>{} plays &middot; {} players</span>{osu}</div></div></div>",
-        cover_style(m.set_id, m.hash, "cover@2x"),
+        custom_cover(love.custom.as_ref(), m.set_id, m.hash, "cover@2x"),
         esc(artist),
         esc(title),
         stars(m.stars),
@@ -1717,21 +1728,175 @@ fn map_cards(maps: &[MapRow]) -> String {
         .map(|m| {
             let (song, version) = split_map(&m.name);
             let (artist, title) = split_song(song);
+            let custom = crate::custom::by_hash(m.hash);
             format!(
                 "<a class=card href=\"/m/{:x}\"{}><span class=art></span><span class=info><b class=title>{}</b><span class=artist>{}</span>\
-                 <span class=meta>{}<span class=version>{}</span></span><span class=foot>{} plays &middot; {}</span></span></a>",
+                 <span class=meta>{}<span class=version>{}</span>{}</span><span class=foot>{} plays &middot; {}</span></span></a>",
                 m.hash,
-                cover_style(m.set_id, m.hash, "card@2x"),
+                custom_cover(custom.as_ref(), m.set_id, m.hash, "card@2x"),
                 esc(title),
                 esc(artist),
                 stars(m.stars),
                 esc(version),
+                custom.as_ref().map(|c| custom_tag(c, m.hash)).unwrap_or_default(),
                 thousands(m.plays as u64),
                 ago(m.last)
             )
         })
         .collect();
     format!("<div class=cards>{cards}</div>")
+}
+
+/// A custom map's tag: CUSTOM (public, no pp) or APPROVED CUSTOM (gives pp).
+fn custom_tag(set: &crate::custom::Set, hash: u64) -> String {
+    let approved = set
+        .approved
+        .as_ref()
+        .is_some_and(|a| a.hashes.contains(&hash));
+    if approved {
+        "<span class=\"tag approved\" title=\"a custom map approved here: plays on it give pp\">APPROVED CUSTOM</span>".into()
+    } else {
+        "<span class=\"tag custom\" title=\"a custom map made in the editor: plays on it give no pp until it is approved\">CUSTOM</span>".into()
+    }
+}
+
+/// A block's cover style: a custom map's own background, else osu!'s cover of its set.
+fn custom_cover(
+    custom: Option<&crate::custom::Set>,
+    set: Option<u32>,
+    hash: u64,
+    size: &str,
+) -> String {
+    match custom {
+        Some(c) if c.background.is_some() => {
+            format!(
+                " style=\"--h:{};--cover:url('/c/{}/bg')\"",
+                hash % 360,
+                c.id
+            )
+        }
+        Some(_) => format!(" style=\"--h:{}\"", hash % 360),
+        None => cover_style(set, hash, size),
+    }
+}
+
+fn size_text(bytes: u64) -> String {
+    if bytes >= 1 << 20 {
+        format!("{:.1} MB", bytes as f64 / (1 << 20) as f64)
+    } else {
+        format!("{} KB", bytes.div_ceil(1024))
+    }
+}
+
+/// The list of custom maps.
+pub fn custom_list(sets: &[crate::custom::Set], query: &str) -> String {
+    let rows: String = if sets.is_empty() {
+        "<p class=dim>Nothing here yet. Make a map in the editor (EDITOR in the game's main menu) and send it with File &gt; Upload.</p>".into()
+    } else {
+        sets.iter()
+            .map(|s| {
+                let hash = s.diffs.first().map_or(s.id as u64, |d| d.hash);
+                let (tag, kind) = if s.is_approved() {
+                    ("APPROVED CUSTOM", "approved")
+                } else {
+                    ("CUSTOM", "custom")
+                };
+                format!(
+                    "<a class=mini href=\"/c/{0}\"{1}><span class=art></span><span class=mini-info><b>{2}</b><span class=dim>{3} &middot; mapped by {4}</span></span><span class=\"tag {kind}\">{tag}</span><span class=dim>{5} &middot; {6} downloads &middot; {7}</span></a>",
+                    s.id,
+                    custom_cover(Some(s), None, hash, ""),
+                    esc(&s.title),
+                    esc(&s.artist),
+                    esc(&s.creator),
+                    if s.diffs.len() == 1 { "1 difficulty".to_string() } else { format!("{} difficulties", s.diffs.len()) },
+                    s.downloads,
+                    ago(s.updated),
+                )
+            })
+            .collect()
+    };
+    format!(
+        "<div class=band><div class=inner><h1 class=glitch data-text=\"CUSTOM\">CUSTOM</h1>\
+         <p class=dim>Maps made in the game's editor and sent here by their mappers. They are public at once and give no pp; an approved one (by an admin or a loved nominator) gives pp, like loved maps do.</p></div></div>\
+         <div class=page><form action=\"/custom\" role=search class=inline><input name=q value=\"{}\" placeholder=\"search by song, mapper or uploader\" maxlength=60 aria-label=\"Search custom maps\"> <button class=\"btn small\">search</button></form>\
+         <section class=panel>{rows}</section></div>",
+        esc(query)
+    )
+}
+
+/// What the one looking at a custom set may do with it.
+pub struct CustomView {
+    pub can_approve: bool,
+    pub can_delete: bool,
+    pub notice: Option<String>,
+}
+
+/// One custom set's page.
+pub fn custom_page(set: &crate::custom::Set, view: &CustomView) -> String {
+    let notice = view
+        .notice
+        .as_ref()
+        .map(|n| format!("<div class=notice>{}</div>", esc(n)))
+        .unwrap_or_default();
+    let first = set.diffs.first().map_or(0, |d| d.hash);
+    let diffs: String = set
+        .diffs
+        .iter()
+        .map(|d| {
+            format!(
+                "<tr><td><a href=\"/m/{:x}\">{}</a></td><td class=dim>{}</td><td>{}</td></tr>",
+                d.hash,
+                esc(&d.version),
+                if d.tko { ".tko (with effects)" } else { ".osu" },
+                custom_tag(set, d.hash)
+            )
+        })
+        .collect();
+    let mut actions = format!(
+        "<a class=\"btn hot\" href=\"/c/{}/download\">Download .osz</a>",
+        set.id
+    );
+    if view.can_approve {
+        let (on, label) = if set.is_approved() {
+            ("0", "take the approval back")
+        } else {
+            ("1", "approve: give pp")
+        };
+        actions += &format!(
+            " <form method=post action=\"/c/{}/approve\" class=inline><input type=hidden name=on value={on}><button class=\"btn small hot\">{label}</button></form>",
+            set.id
+        );
+    }
+    if view.can_delete {
+        actions += &format!(
+            " <form method=post action=\"/c/{}/delete\" class=inline><button class=\"btn small\">delete</button></form>",
+            set.id
+        );
+    }
+    let state = match &set.approved {
+        Some(a) if set.is_approved() => format!(
+            "Approved by {} {}: plays on it give pp.",
+            esc(&a.by),
+            ago(a.at)
+        ),
+        Some(_) => "It changed after it was approved: what was approved still gives pp, the new difficulties wait for another approval.".into(),
+        None => "Not approved: public, plays on it give no pp.".into(),
+    };
+    format!(
+        "<div class=\"cover map\"{}><div class=inner><div class=artist>{}</div><h1>{}</h1>\
+         <div class=sub><span class=dim>mapped by {} &middot; sent by {} &middot; version {} &middot; {}</span></div></div></div>\
+         <div class=page>{notice}<section class=panel><p>{state}</p><table><tr><th>Difficulty</th><th>Format</th><th>Status</th></tr>{diffs}</table>\
+         <p class=dim>{} &middot; {} downloads. Put the .osz into the game's Songs folder, or open it in the game.</p><p>{actions}</p></section></div>",
+        custom_cover(Some(set), None, first, ""),
+        esc(&set.artist),
+        esc(&set.title),
+        esc(&set.creator),
+        esc(&set.owner_name),
+        set.version,
+        ago(set.updated),
+        size_text(set.bytes),
+        set.downloads,
+    )
 }
 
 pub fn beatmaps(maps: &[MapRow]) -> String {
@@ -2188,6 +2353,7 @@ pub fn page(title: &str, nav: &str, viewer: Option<&str>, meta: &Meta, body: &st
         ("medals", "/medals"),
         ("beatmaps", "/beatmaps"),
         ("loved", "/loved"),
+        ("custom", "/custom"),
         ("mods", "/mods"),
         ("download", "/download"),
     ]
@@ -2417,7 +2583,7 @@ li.medal .text{color:var(--gold)}
 .navbtn:hover,.navbtn.on{border-color:var(--acc);color:var(--white)}.navbtn.hot{background:var(--acc);border-color:var(--acc);color:var(--white)}
 button.btn{font:inherit;cursor:pointer}.actions{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}.actions form{margin:0}.actions .btn{min-height:36px;padding:0 14px}
 .btn.hot.small-hot{font-size:16px;min-height:36px;padding:0 14px;box-shadow:3px 3px 0 #6b1d12}
-img.avatar{object-fit:cover;background:var(--panel2)}.tag.loved{color:#ff66aa;border-color:#ff66aa}form.inline{display:inline;margin:0}
+img.avatar{object-fit:cover;background:var(--panel2)}.tag.loved{color:#ff66aa;border-color:#ff66aa}.tag.custom{color:#9b6cff;border-color:#9b6cff}.tag.approved{color:var(--green);border-color:var(--green)}form.inline{display:inline;margin:0}
 .tools{display:flex;flex-direction:column;gap:14px}.tool{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tool b{min-width:170px;letter-spacing:1px}.tool form{margin:0;display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tool input[name=pp]{font:inherit;background:var(--panel2);color:var(--white);border:2px solid var(--line2);padding:6px 10px;width:220px}.tool input[type=file]{font:inherit;color:var(--dim);max-width:100%}.tool code{color:var(--gold)}
 .notice{border:2px solid var(--gold);color:var(--gold);padding:8px 12px;margin:0 0 20px;background:rgba(255,211,77,.06)}.notice.bad{border-color:var(--acc);color:#ff8a78;background:rgba(235,69,44,.08)}
 .login{max-width:520px;margin:24px auto}.login h1{font-size:48px;line-height:56px;margin-bottom:8px}.login form{display:flex;flex-direction:column;gap:14px;margin:18px 0}

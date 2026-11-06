@@ -20,11 +20,14 @@ mod clipboard;
 mod clock;
 mod config;
 mod cursor;
+mod custom;
 mod debug;
 mod difficulty;
 mod discord;
 mod download;
 mod drum_nav;
+mod editor;
+mod folder_watch;
 mod font;
 mod game;
 mod genres;
@@ -55,6 +58,7 @@ mod online;
 mod osudb;
 #[cfg(test)]
 mod perf_audit;
+mod pictures;
 mod player;
 mod playlist;
 mod pp;
@@ -80,6 +84,8 @@ mod stars;
 mod stream;
 mod style;
 mod tact;
+#[doc(hidden)]
+pub mod tko;
 mod tls;
 mod ui;
 mod update;
@@ -185,6 +191,10 @@ enum Scene {
     Watch(Box<WatchView>),
     /// Turning a replay into a video: cut, crop, size, export.
     VideoEdit(Box<video::Editor>),
+    /// The map editor, editing one difficulty.
+    Editor(Box<editor::view::View>),
+    /// The editor's front door: a new map from a song, or one to go on with.
+    EditorHome(Box<editor::home::Home>),
     MpResults,
 }
 
@@ -390,6 +400,8 @@ type SetCheck = (u32, Receiver<Result<(bool, Vec<PathBuf>), String>>);
 type Board = Result<Vec<online::OnlineScore>, String>;
 type BoardFetch = ((u64, bool), Receiver<Board>);
 type LovedCall = (Receiver<Result<online::Reply, String>>, Option<(u32, bool)>);
+/// Custom sets known: map folder -> set number, and the numbers the server has approved.
+type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
 
 /// Everything the input and render threads share. The render thread holds the lock only while
 /// building a frame (well under a millisecond) and never across a GPU wait, so key presses are
@@ -545,6 +557,8 @@ struct State {
     sprites_upload: Option<Arc<render::Atlas>>,
     /// Profile pictures: fetched as they're drawn, uploaded by the render thread.
     avatars: avatars::Avatars,
+    /// The playing or edited `.tko` map's own pictures.
+    pictures: pictures::Pictures,
     /// The account logged in is an admin (the server says so; it checks every admin action).
     admin: bool,
     skin_loader: Option<skin::Loader>,
@@ -595,6 +609,12 @@ struct State {
     /// way, for the message), and whether it's been asked since starting.
     loved_call: Option<LovedCall>,
     loved_asked: bool,
+    /// Asking the website which custom sets in the library are approved, and whether it's been
+    /// asked for this library.
+    custom_call: Option<Receiver<CustomKnown>>,
+    custom_asked: bool,
+    /// The folder of the map in the editor, looked at for maps dropped into it.
+    folder_watch: Option<folder_watch::Watch>,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`), with
     /// the map it was on.
@@ -685,6 +705,8 @@ struct State {
     /// Song select is being used by the host to pick the lobby map (in mapguessr, by anyone to
     /// pick their guess).
     picking_lobby_map: bool,
+    /// Song select is picking a map to open in the editor (from the editor's front door).
+    pick_to_edit: bool,
     /// Our side of a mapguessr room, while in one.
     guessr: Option<mapguessr::Guessr>,
     /// Discord status: the connection thread (while enabled), the activity last set, and when
@@ -2351,6 +2373,258 @@ impl State {
         self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx, self.cfg.video)));
     }
 
+    /// The editor's front door: make a map from a song, or go on with one.
+    fn open_editor_home(&mut self) {
+        self.stop_audio();
+        let creator = self.mp_menu.account.clone().unwrap_or_default();
+        self.scene = Scene::EditorHome(Box::new(editor::home::Home::new(
+            &self.cfg.editor_recent,
+            &creator,
+        )));
+    }
+
+    /// What the front door asked for.
+    fn home_out(&mut self, out: editor::home::Out) {
+        use editor::home::Out;
+        match out {
+            Out::None => {}
+            Out::Toast(text) => self.toast(text),
+            Out::Leave => self.show_select(),
+            Out::PickInLibrary => {
+                self.pick_to_edit = true;
+                self.main_menu = None;
+                self.scene = Scene::Select;
+            }
+            Out::Open(path) => match self.entry_for(&path) {
+                Some(entry) => self.open_editor_at(path, entry),
+                None => self.toast(format!("can't open {}", path.display())),
+            },
+            Out::Tour => {
+                let recent = self.cfg.editor_recent.first().map(PathBuf::from);
+                match recent
+                    .filter(|p| p.is_file())
+                    .and_then(|p| Some((self.entry_for(&p)?, p)))
+                {
+                    Some((entry, path)) => {
+                        self.open_editor_at(path, entry);
+                        if let Scene::Editor(view) = &mut self.scene {
+                            view.start_tour();
+                        }
+                    }
+                    None => self.toast(
+                        "make a map first (drop a song on this screen), then take the tour".into(),
+                    ),
+                }
+            }
+            Out::Create(plan) => {
+                let _ = std::fs::create_dir_all(&self.songs_dir);
+                match editor::new_map::create(&plan, &self.songs_dir) {
+                    Ok(file) => match self.entry_for(&file) {
+                        Some(entry) => {
+                            self.toast(format!("made {}", plan.title));
+                            self.open_editor_at(file, entry);
+                        }
+                        None => self.toast("the map was made but can't be opened".into()),
+                    },
+                    Err(e) => self.toast(format!("can't make the map: {e}")),
+                }
+            }
+        }
+    }
+
+    /// Maps dropped into (or taken out of) the folder of the map being edited: new ones join the
+    /// library, rewritten ones are read again in place (indices stay valid), removed ones leave
+    /// the list.
+    fn folder_changed(&mut self, news: folder_watch::Changes) {
+        let mut added = Vec::new();
+        let mut changed = Vec::new();
+        let mut unreadable = Vec::new();
+        for path in news.changed {
+            let Some(meta) = beatmap::read_meta_file(&path) else {
+                unreadable.push(path);
+                continue;
+            };
+            let entry = Entry::new(path.clone(), meta);
+            match self.library.iter().position(|e| e.path == path) {
+                Some(i) => {
+                    let old = &self.library[i];
+                    if (old.size, old.modified) != (entry.size, entry.modified) {
+                        changed.push((i, path.clone(), entry.modified, entry.size));
+                        self.library[i] = entry;
+                    }
+                    self.select.gone.remove(&path);
+                    self.select.edited.remove(&path);
+                }
+                None => added.push(entry),
+            }
+        }
+        for path in news.gone {
+            if self.library.iter().any(|e| e.path == path) {
+                self.select.gone.insert(path);
+            }
+        }
+        if let Some(info) = &self.mapinfo {
+            info.extend(changed);
+            self.mapinfo_sorted = false;
+        }
+        added.sort_by(|a, b| a.path.cmp(&b.path));
+        let paths: Vec<PathBuf> = added.iter().map(|e| e.path.clone()).collect();
+        let n = paths.len();
+        self.append_maps(added);
+        if n > 0 {
+            // Listed in song select, which stays where the player left it.
+            self.select.pin(&self.library, paths);
+            self.toast(if n == 1 {
+                tr!(
+                    "picked up 1 new map from the song folder",
+                    "曲フォルダから譜面を1つ追加しました",
+                    "из папки песни подхвачена 1 новая карта"
+                )
+                .to_string()
+            } else {
+                tr!("picked up {n} new maps from the song folder", "曲フォルダから譜面を{n}個追加しました", "из папки песни подхвачено новых карт: {n}";)
+            });
+        }
+        for path in unreadable {
+            let file = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            self.toast(tr!("{file} isn't a taiko map the game can read", "{file}は読み込めない譜面です", "{file} — не читается как карта";));
+        }
+        self.select.refilter(&self.library);
+    }
+
+    /// The library entry of a map file; one that isn't in the library (a map made just now, a file
+    /// dropped from elsewhere) is added to it.
+    fn entry_for(&mut self, path: &Path) -> Option<usize> {
+        if let Some(i) = self.library.iter().position(|e| e.path == path) {
+            return Some(i);
+        }
+        let meta = beatmap::read_meta_file(path)?;
+        let start = self.library.len();
+        self.append_maps(vec![library::Entry::new(path.to_path_buf(), meta)]);
+        (self.library.len() > start).then_some(start)
+    }
+
+    fn home_key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant) {
+        let typing = matches!(&self.scene, Scene::EditorHome(h) if h.needs_text());
+        let movement = matches!(
+            code,
+            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End
+        );
+        if repeat && !typing && !movement {
+            return;
+        }
+        let (ctrl, shift) = (self.modifiers_ctrl, self.modifiers_shift);
+        let out = match &mut self.scene {
+            Scene::EditorHome(h) => h.key(code, text, ctrl, shift, at, self.audio.as_ref()),
+            _ => return,
+        };
+        self.home_out(out);
+    }
+
+    /// Opens the map editor on library entry `entry`.
+    fn open_editor(&mut self, entry: usize) {
+        let path = self.library[entry].path.clone();
+        self.open_editor_at(path, entry);
+    }
+
+    fn open_editor_at(&mut self, path: PathBuf, entry: usize) {
+        match editor::view::View::open(path.clone(), entry) {
+            Ok(mut view) => {
+                self.cfg.editor_opened(&path);
+                self.cfg.save();
+                self.stop_audio();
+                self.preview.show_background_for(&self.library[entry]);
+                let (rx, rate) = self.spawn_track_loader(entry, 1.0);
+                view.set_track_loader(rx, rate);
+                // `TAIKO_EDIT_AT=<ms>`: starts with the playhead there (headless screenshots).
+                if let Some(at) = std::env::var("TAIKO_EDIT_AT")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                {
+                    view.set_time(at);
+                }
+                // The first time, a short tour of what is where.
+                if !self.cfg.editor_tour_done {
+                    view.start_tour();
+                }
+                self.main_menu = None;
+                self.scene = Scene::Editor(Box::new(view));
+            }
+            Err(e) => self.toast(format!("can't open the map: {e}")),
+        }
+    }
+
+    /// A new, empty difficulty beside `entry`'s map (same timing, music and storyboard), opened.
+    fn new_difficulty(&mut self, entry: usize) {
+        let path = self.library[entry].path.clone();
+        match editor::new_difficulty(&path) {
+            Ok(new) => {
+                self.toast(format!(
+                    "made {}",
+                    new.file_name().and_then(|n| n.to_str()).unwrap_or("it")
+                ));
+                self.open_editor_at(new, entry);
+            }
+            Err(e) => self.toast(format!("can't make a difficulty: {e}")),
+        }
+    }
+
+    /// Decodes the music of `entry`'s map for the editor at `speed` (1.0 = normal), without
+    /// needing the map to have any notes. Returns the loader and the engine's sample rate.
+    fn spawn_track_loader(
+        &self,
+        entry: usize,
+        speed: f64,
+    ) -> (Receiver<editor::view::TrackResult>, f64) {
+        let path = self.library[entry].path.clone();
+        let rate = self.audio.as_ref().map(|a| a.rate);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let meta = beatmap::read_meta_file(&path).ok_or("can't read the map")?;
+                let audio_path = path.parent().unwrap_or(&path).join(&meta.audio_file);
+                match rate {
+                    Some(sr) => {
+                        let track = audio::decode_shared(&audio_path, sr)?;
+                        Ok(audio::with_rate(track, sr, speed, true))
+                    }
+                    None => Ok(Arc::new(Track {
+                        samples: Vec::new(),
+                        rate: 1.0,
+                        stream: None,
+                    })),
+                }
+            })();
+            let _ = tx.send(result);
+        });
+        (rx, rate.map_or(48000.0, |r| r as f64))
+    }
+
+    fn editor_keys(&self) -> editor::view::Keys {
+        editor::view::Keys {
+            shift: self.modifiers_shift,
+            ctrl: self.modifiers_ctrl,
+            alt: self.modifiers_alt,
+        }
+    }
+
+    fn editor_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
+        let keys = self.editor_keys();
+        let Scene::Editor(view) = &mut self.scene else {
+            return;
+        };
+        match view.key(code, repeat, keys, self.audio.as_ref()) {
+            editor::view::KeyResult::Handled => {}
+            editor::view::KeyResult::Exit => self.show_select(),
+            editor::view::KeyResult::Pass => {
+                self.handle_global_key(code, window);
+            }
+        }
+    }
+
     fn video_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
         if self.export.is_some() {
             if code == KeyCode::Escape && !repeat {
@@ -3659,8 +3933,7 @@ impl State {
     fn menu_hit(&mut self) {
         let Some(m) = &mut self.main_menu else { return };
         let sound = match m.hit() {
-            menu::Item::Editor => audio::Sfx::ComboBreak,
-            menu::Item::Play => audio::Sfx::BigDon,
+            menu::Item::Play | menu::Item::Editor => audio::Sfx::BigDon,
             _ => audio::Sfx::Don,
         };
         self.sfx(sound);
@@ -3690,7 +3963,7 @@ impl State {
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
-        if !matches!(item, menu::Item::Editor | menu::Item::Exit) {
+        if !matches!(item, menu::Item::Exit) {
             self.screen_fade = Some(0.0);
         }
         match item {
@@ -3698,7 +3971,7 @@ impl State {
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
             menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
-            menu::Item::Editor => {}
+            menu::Item::Editor => self.open_editor_home(),
             menu::Item::Settings => self.open_settings(),
             menu::Item::Exit => self.ask_quit(),
         }
@@ -5645,6 +5918,24 @@ impl State {
         self.request_skin(false);
     }
 
+    /// The folder a `.tko` map's pictures come from: the map played or edited.
+    // ponytail: multiplayer and spectating draw a map's text but not its pictures.
+    fn picture_dir(&self) -> Option<PathBuf> {
+        let entry = match &self.scene {
+            Scene::Editor(view) => return view.ed.path.parent().map(Path::to_path_buf),
+            Scene::Play { entry, .. } => *entry,
+            Scene::Settings { prev } => match **prev {
+                Scene::Play { entry, .. } => entry,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.library
+            .get(entry)
+            .and_then(|e| e.path.parent())
+            .map(Path::to_path_buf)
+    }
+
     fn open_skins_folder(&mut self) {
         let Some(dir) = skin::own_dir() else { return };
         let _ = std::fs::create_dir_all(&dir);
@@ -5696,28 +5987,66 @@ impl State {
             FileDrag::Drop(paths) => {
                 self.drag_hover = None;
                 for path in paths {
+                    // A picture dropped on the editor goes into the map's folder.
+                    if let Scene::Editor(view) = &mut self.scene
+                        && path
+                            .file_name()
+                            .is_some_and(|n| pictures::is_picture(&n.to_string_lossy()))
+                    {
+                        view.drop_picture(&path);
+                        continue;
+                    }
+                    if matches!(self.scene, Scene::EditorHome(_)) {
+                        let rate = self.audio.as_ref().map(|a| a.rate);
+                        let out = match &mut self.scene {
+                            Scene::EditorHome(home) => home.dropped(path, rate),
+                            _ => editor::home::Out::None,
+                        };
+                        self.home_out(out);
+                        continue;
+                    }
+                    // A song dropped on song select or the menu starts a map from it.
+                    if editor::home::is_audio(&path)
+                        && matches!(self.scene, Scene::Select)
+                        && !self.picking_lobby_map
+                        && self.mp.is_none()
+                    {
+                        self.open_editor_home();
+                        let rate = self.audio.as_ref().map(|a| a.rate);
+                        if let Scene::EditorHome(home) = &mut self.scene {
+                            home.dropped(path, rate);
+                        }
+                        continue;
+                    }
                     let name = path
                         .file_stem()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    if path
-                        .extension()
-                        .is_some_and(|e| e.eq_ignore_ascii_case("osz"))
-                    {
+                    if library::is_map_archive(&path) {
                         self.import_osz(path, &name, false);
                     } else {
                         let file = path
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        self.toast(tr!("{file} isn't a map: drop .osz files", "{file}は譜面ではありません: .oszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz";));
+                        self.toast(tr!("{file} isn't a map: drop .osz or .rsz files", "{file}は譜面ではありません: .oszか.rszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz или .rsz";));
                     }
                 }
             }
         }
     }
 
-    /// Unpacks an `.osz` into the Songs folder, unless everything in it is already in the list or
+    /// A map archive opened from the file manager (or the command line): imported like one
+    /// dropped on the window.
+    fn open_archive(&mut self, path: PathBuf) {
+        let name = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.import_osz(path, &name, false);
+    }
+
+    /// Unpacks an `.osz` (or `.rsz`) into the Songs folder, unless everything in it is already in the list or
     /// on its way (the same file dropped twice). A set that's partly here (a new difficulty) is
     /// unpacked into its own folder when that's in the Songs folder. `temporary`: delete the
     /// archive whatever happens (a copy, not the player's own file).
@@ -5786,9 +6115,9 @@ impl State {
             2.5,
         );
         let drop = tr!(
-            "Drop .osz maps to add them",
-            ".oszの譜面をドロップで追加",
-            "Бросьте карты .osz, чтобы добавить"
+            "Drop .osz or .rsz maps to add them",
+            ".oszか.rszの譜面をドロップで追加",
+            "Бросьте карты .osz или .rsz, чтобы добавить"
         );
         canvas.text_centered(
             w / 2.0,
@@ -5966,6 +6295,14 @@ impl State {
                     "Итоги мультиплеера"
                 )
                 .into(),
+            ),
+            Scene::Editor(view) => (
+                tr!("Mapping", "マッピング中", "Делает карту").into(),
+                view.label(),
+            ),
+            Scene::EditorHome(_) => (
+                tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),
+                String::new(),
             ),
             Scene::VideoEdit(ed) => (
                 tr!(
@@ -7392,6 +7729,21 @@ impl State {
         if notches == 0 {
             return;
         }
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            let keys = self.editor_keys();
+            if let Scene::Editor(view) = &mut self.scene {
+                view.wheel(notches, keys);
+            }
+            return;
+        }
+        if matches!(self.scene, Scene::EditorHome(_)) && !self.social.open {
+            let x = self.mouse_virtual().0;
+            let keys = self.editor_keys();
+            if let Scene::EditorHome(home) = &mut self.scene {
+                home.wheel(notches, x, keys.ctrl || keys.alt);
+            }
+            return;
+        }
         // Alt anywhere; with the pointer moved onto one of the volume's notes, also without Alt.
         if self.volume.hovering(Instant::now()) || self.modifiers_alt {
             self.turn_volume(notches);
@@ -7681,6 +8033,20 @@ impl State {
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
         let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            let keys = self.editor_keys();
+            if let Scene::Editor(view) = &mut self.scene {
+                view.mouse_move(vx, vy, keys);
+                return view.cursor();
+            }
+            return CursorIcon::Default;
+        }
+        if let Scene::EditorHome(home) = &mut self.scene
+            && home.dragging()
+        {
+            home.mouse_move(vx);
+            return CursorIcon::Grabbing;
+        }
         if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
             if ed.scrubbing {
                 let t = ed.time_at(vx);
@@ -7823,6 +8189,16 @@ impl State {
     /// Right button on song select: hold it and move up and down to fly through the list, like
     /// osu!'s right-click scrolling. The selection stays.
     /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
+    /// The middle button: pans the map editor's timeline.
+    fn middle_button(&mut self, pressed: bool) {
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            let (vx, vy) = self.mouse_virtual();
+            if let Scene::Editor(view) = &mut self.scene {
+                view.middle(pressed, vx, vy);
+            }
+        }
+    }
+
     fn right_button(&mut self, pressed: bool) {
         // A click that wakes the idle screen does nothing else, its release neither.
         if pressed {
@@ -7831,6 +8207,15 @@ impl State {
                 return;
             }
         } else if std::mem::take(&mut self.idle.swallow_right) {
+            return;
+        }
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+            if pressed {
+                let (vx, vy) = self.mouse_virtual();
+                if let Scene::Editor(view) = &mut self.scene {
+                    view.right_click(vx, vy);
+                }
+            }
             return;
         }
         if self.mod_select.is_some() {
@@ -7925,6 +8310,28 @@ impl State {
                 .as_mut()
                 .is_some_and(Dropdown::release_bar)
         {
+            return;
+        }
+        if !pressed
+            && let Scene::EditorHome(home) = &mut self.scene
+            && home.dragging()
+        {
+            let vx = self.mouse_virtual().0;
+            if let Scene::EditorHome(home) = &mut self.scene {
+                home.release(vx, self.audio.as_ref());
+            }
+            return;
+        }
+        if matches!(self.scene, Scene::Editor(_)) && !self.social.open && self.splash.is_none() {
+            let (vx, vy) = self.mouse_virtual();
+            let keys = self.editor_keys();
+            if let Scene::Editor(view) = &mut self.scene {
+                if pressed {
+                    view.mouse_down(vx, vy, keys, self.audio.as_ref());
+                } else {
+                    view.mouse_up(vx, vy, keys);
+                }
+            }
             return;
         }
         if pressed && self.splash.is_none() {
@@ -9364,6 +9771,8 @@ impl State {
             Scene::Spectate(_) => "spectating",
             Scene::Watch(_) => "watching a friend",
             Scene::VideoEdit(_) => "video editor",
+            Scene::Editor(_) => "map editor",
+            Scene::EditorHome(_) => "map editor menu",
         };
         let map = self
             .offset_entry()
@@ -9509,6 +9918,56 @@ impl State {
         self.loved_call = Some((rx, change));
     }
 
+    /// Which map folders of the library were sent to (or came from) the custom maps, and which
+    /// of those sets are approved: one question per library, on a thread.
+    fn poll_custom(&mut self) {
+        if !self.custom_asked
+            && self.custom_call.is_none()
+            && !self.library.is_empty()
+            && self.cfg.online_server == online::DEFAULT_SERVER
+        {
+            self.custom_asked = true;
+            let mut folders: Vec<PathBuf> = self
+                .library
+                .iter()
+                .filter_map(|e| e.path.parent().map(Path::to_path_buf))
+                .collect();
+            folders.sort();
+            folders.dedup();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let known: std::collections::HashMap<PathBuf, u32> = folders
+                    .into_iter()
+                    .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
+                    .collect();
+                if known.is_empty() {
+                    let _ = tx.send((known, Vec::new()));
+                    return;
+                }
+                let mut ids: Vec<u32> = known.values().copied().collect();
+                ids.sort_unstable();
+                ids.dedup();
+                // A failed answer keeps them listed as custom, not approved.
+                let approved = custom::approved_of(&ids).unwrap_or_default();
+                let _ = tx.send((known, approved));
+            });
+            self.custom_call = Some(rx);
+        }
+        let Some(rx) = &self.custom_call else { return };
+        match rx.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => self.custom_call = None,
+            Ok((folders, approved)) => {
+                self.custom_call = None;
+                self.select.custom_folder = folders;
+                self.select.custom_approved = approved.into_iter().collect();
+                if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
+                    self.select.refilter(&self.library);
+                }
+            }
+        }
+    }
+
     /// The loved sets as the server has them, once it answers.
     fn poll_loved(&mut self) {
         if !self.loved_asked && self.loved_call.is_none() {
@@ -9544,6 +10003,7 @@ impl State {
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
         self.poll_loved();
+        self.poll_custom();
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
             menu.session_loaded = true;
@@ -9765,6 +10225,9 @@ impl State {
         let played = std::mem::take(&mut self.select.played);
         let status = std::mem::take(&mut self.select.status);
         let server_loved = std::mem::take(&mut self.select.server_loved);
+        let custom_folder = std::mem::take(&mut self.select.custom_folder);
+        let custom_approved = std::mem::take(&mut self.select.custom_approved);
+        self.custom_asked = false;
         let nominator = self.select.nominator;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
@@ -9774,6 +10237,8 @@ impl State {
         self.select.played = played;
         self.select.status = status;
         self.select.server_loved = server_loved;
+        self.select.custom_folder = custom_folder;
+        self.select.custom_approved = custom_approved;
         self.select.nominator = nominator;
         self.select.sort = sort;
         self.select.headings = self.cfg.song_headings;
@@ -10257,6 +10722,7 @@ impl State {
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
         self.social.open
+            || matches!(&self.scene, Scene::EditorHome(h) if h.needs_text())
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
@@ -10770,6 +11236,7 @@ impl State {
                 | Scene::Spectate(_)
                 | Scene::Watch(_)
                 | Scene::VideoEdit(_)
+                | Scene::Editor(_)
         )
     }
 
@@ -12686,6 +13153,7 @@ impl State {
     /// a search.
     fn hotkey_place(&self, code: KeyCode) -> Option<keys::Place> {
         let busy = self.splash.is_some()
+            || matches!(self.scene, Scene::EditorHome(_))
             || self.profile.is_some()
             || self.medals.is_some()
             || self.unlock.showing()
@@ -13015,7 +13483,10 @@ impl State {
             return;
         }
         if !repeat
-            && !matches!(self.scene, Scene::MpMenu | Scene::Settings { .. })
+            && !matches!(
+                self.scene,
+                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_) | Scene::EditorHome(_)
+            )
             && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
         {
@@ -13074,6 +13545,21 @@ impl State {
                 KeyCode::Escape | KeyCode::Backspace => self.select.picker = None,
                 _ => {}
             }
+            return;
+        }
+        if let Scene::Editor(view) = &mut self.scene {
+            // A text block's words come as text; Enter, Esc and Backspace still as keys.
+            if view.wants_text()
+                && let Some(t) = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+            {
+                view.type_text(t);
+                return;
+            }
+            self.editor_key(code, repeat, window);
+            return;
+        }
+        if matches!(self.scene, Scene::EditorHome(_)) {
+            self.home_key(code, repeat, text, at);
             return;
         }
         if matches!(self.scene, Scene::VideoEdit(_)) {
@@ -13299,6 +13785,10 @@ impl State {
             }
             Scene::Select => match self.select.key(code, &self.library) {
                 SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
+                SelectAction::Play(i) if self.pick_to_edit => {
+                    self.pick_to_edit = false;
+                    self.open_editor(i);
+                }
                 SelectAction::Play(i) => self.start_loading(i),
                 SelectAction::Settings => self.open_settings(),
                 SelectAction::Mods => self.open_mod_select(),
@@ -13335,7 +13825,9 @@ impl State {
             | Scene::MpResults
             | Scene::Spectate(_)
             | Scene::Watch(_)
-            | Scene::VideoEdit(_) => {}
+            | Scene::VideoEdit(_)
+            | Scene::Editor(_)
+            | Scene::EditorHome(_) => {}
             Scene::Play { game, .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -13458,8 +13950,12 @@ impl State {
 
         // The pictures the last frame drew, then the ones the renderer has for this one.
         self.avatars.update(&canvas.avatars_wanted);
+        let picture_dir = self.picture_dir();
+        self.pictures
+            .update(picture_dir.as_deref(), &canvas.pictures_wanted);
         canvas.clear(width);
         canvas.avatar_slots = self.avatars.slots();
+        canvas.picture_slots = self.pictures.slots();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         self.glitch_between_menus(canvas, now);
@@ -13616,7 +14112,48 @@ impl State {
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let size_label = format!("Playfield {}", self.playfield_label());
         let mut finish_calibration = false;
+        let mut editor_reload: Option<(usize, f64)> = None;
+        let mut editor_folder: Option<PathBuf> = None;
+        let mut folder_news: Option<folder_watch::Changes> = None;
+        let mut home_out: Option<editor::home::Out> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
+        // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
+        // headless screenshots and tests, like `TAIKO_INPUT`).
+        if let Some(path) = std::env::var_os("TAIKO_EDIT")
+            && matches!(self.scene, Scene::Select)
+            && !self.library.is_empty()
+        {
+            static ONCE: AtomicBool = AtomicBool::new(false);
+            if !ONCE.swap(true, Ordering::Relaxed) {
+                let path = PathBuf::from(path);
+                let entry = self
+                    .library
+                    .iter()
+                    .position(|e| e.path == path)
+                    .unwrap_or(0);
+                self.open_editor_at(path, entry);
+            }
+        }
+        // `TAIKO_HOME=<song>[|details|timing]`: opens the editor's front door, on a song if one is
+        // given (for headless screenshots, like `TAIKO_EDIT`).
+        if let Some(spec) = std::env::var_os("TAIKO_HOME")
+            && matches!(self.scene, Scene::Select)
+            && self.splash.is_none()
+        {
+            static ONCE: AtomicBool = AtomicBool::new(false);
+            if !ONCE.swap(true, Ordering::Relaxed) {
+                let spec = spec.to_string_lossy().into_owned();
+                let (song, page) = spec.split_once('|').unwrap_or((&spec, ""));
+                self.open_editor_home();
+                let rate = self.audio.as_ref().map(|a| a.rate);
+                if let Scene::EditorHome(home) = &mut self.scene {
+                    if !song.is_empty() {
+                        home.dropped(PathBuf::from(song), rate);
+                    }
+                    home.debug_page(page);
+                }
+            }
+        }
         if let Some(mut script) = self.input_script.take() {
             for action in script.due(elapsed) {
                 match action {
@@ -13711,6 +14248,9 @@ impl State {
         if !matches!(self.scene, Scene::Select | Scene::Lobby) {
             self.mod_select = None;
         }
+        if self.pick_to_edit && (self.main_menu.is_some() || !matches!(self.scene, Scene::Select)) {
+            self.pick_to_edit = false;
+        }
         // A song or a replay opened by any road leaves the menu behind.
         if matches!(
             self.scene,
@@ -13720,6 +14260,7 @@ impl State {
                 | Scene::Preview { .. }
                 | Scene::Watch(_)
                 | Scene::VideoEdit(_)
+                | Scene::Editor(_)
         ) {
             self.main_menu = None;
         }
@@ -14008,6 +14549,27 @@ impl State {
                     .filter(|_| self.picking_lobby_map && guessing)
                 {
                     mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
+                } else if self.pick_to_edit {
+                    let w = canvas.width;
+                    canvas.round_rect(
+                        [24.0, 438.0],
+                        [w - 48.0, 34.0],
+                        8.0,
+                        rgba(0x1d1630, 1.0),
+                        rgba(0x9b6cff, 1.0),
+                        1.5,
+                    );
+                    canvas.text_centered(
+                        w / 2.0,
+                        450.0,
+                        10.0,
+                        rgba(0xffffff, 1.0),
+                        &Canvas::fit(
+                            10.0,
+                            w - 64.0,
+                            "Choose a map to edit: Enter opens it in the editor, Esc cancels",
+                        ),
+                    );
                 } else if self.picking_lobby_map {
                     let w = canvas.width;
                     canvas.round_rect(
@@ -14878,6 +15440,44 @@ impl State {
                     "Esc: stop watching   F9: friends",
                 );
             }
+            Scene::Editor(view) => {
+                // Uploading needs the game's account on our own server.
+                let token = (self.cfg.online_server == online::DEFAULT_SERVER
+                    && !self.cfg.online_token.is_empty())
+                .then_some(&self.cfg.online_token);
+                if view.account.as_ref() != token {
+                    view.account = token.cloned();
+                }
+                view.update(now, self.audio.as_ref());
+                if let Some(speed) = view.take_rate_request() {
+                    editor_reload = Some((view.entry, speed));
+                }
+                editor_folder = view.take_folder_request();
+                // Maps dropped into its folder (or taken out) join the list as they come.
+                if let Some(dir) = view.ed.path.parent() {
+                    if self.folder_watch.as_ref().map(|w| w.folder()) != Some(dir) {
+                        self.folder_watch = Some(folder_watch::Watch::new(dir, now));
+                    }
+                    folder_news = self.folder_watch.as_mut().and_then(|w| w.poll(now));
+                }
+                view.draw(canvas, self.cfg.scroll_speed, self.cfg.autoplay);
+                if view.take_tour_ended() && !self.cfg.editor_tour_done {
+                    self.cfg.editor_tour_done = true;
+                    self.cfg.save();
+                }
+                if view.take_exit() {
+                    // It may have been sent just now: ask which sets are custom again.
+                    self.custom_asked = false;
+                    next = Some(Scene::Select);
+                }
+            }
+            Scene::EditorHome(home) => {
+                let out = home.update(now, self.audio.as_ref());
+                home.draw(canvas);
+                if !matches!(out, editor::home::Out::None) {
+                    home_out = Some(out);
+                }
+            }
             Scene::VideoEdit(ed) => {
                 match ed.poll() {
                     Err(e) => {
@@ -15204,6 +15804,21 @@ impl State {
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 dd.draw(canvas, &groups, saved, current, screen, playfield);
             }
+        }
+        if let Some(file) = editor_folder {
+            self.show_in_folder(&file);
+        }
+        if let Some(news) = folder_news {
+            self.folder_changed(news);
+        }
+        if let Some((entry, speed)) = editor_reload {
+            let (rx, rate) = self.spawn_track_loader(entry, speed);
+            if let Scene::Editor(view) = &mut self.scene {
+                view.set_track_loader(rx, rate);
+            }
+        }
+        if let Some(out) = home_out {
+            self.home_out(out);
         }
         if finish_calibration {
             self.finish_calibration();
@@ -16339,6 +16954,14 @@ impl State {
                 }
             }
             Hit::Guide(action) => self.guide_action(action),
+            Hit::EditorHome(act) => {
+                let x = self.mouse_virtual().0;
+                let out = match &mut self.scene {
+                    Scene::EditorHome(home) => home.click(act, x, self.audio.as_ref()),
+                    _ => editor::home::Out::None,
+                };
+                self.home_out(out);
+            }
             Hit::DiscordServer => {
                 if !open_url(menu::DISCORD_INVITE) {
                     self.toast(menu::DISCORD_INVITE.into());
@@ -16618,6 +17241,18 @@ impl State {
                         self.update_set(i);
                     }
                     self.select.menu = None;
+                } else if action == Some(ui::MenuAction::Edit) {
+                    let entry = self.select.menu_map();
+                    self.select.menu = None;
+                    if let Some(i) = entry {
+                        self.open_editor(i);
+                    }
+                } else if action == Some(ui::MenuAction::NewDifficulty) {
+                    let entry = self.select.menu_map();
+                    self.select.menu = None;
+                    if let Some(i) = entry {
+                        self.new_difficulty(i);
+                    }
                 } else if action == Some(ui::MenuAction::Like) {
                     if let Some(e) = self.select.menu_map().and_then(|i| self.library.get(i)) {
                         let title = e.meta.title.clone();
@@ -16945,6 +17580,9 @@ enum UserEvent {
     /// A `taiko-rs://` link opened while the game runs (`link::listen`).
     #[cfg_attr(target_os = "android", allow(dead_code))]
     Link(link::Link),
+    /// A map archive opened from the file manager while the game runs (`link::listen`).
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    Open(PathBuf),
 }
 
 /// Files dragged over the window, or dropped on it.
@@ -16983,7 +17621,18 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         if frames == gpu_start::FRAMES {
             gpu_start::going();
         }
-        let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale, avatar_uploads) = {
+        let (
+            wanted,
+            cap,
+            refresh_hz,
+            surface,
+            size,
+            atlas,
+            letterbox,
+            pixel_scale,
+            avatar_uploads,
+            picture_uploads,
+        ) = {
             let mut s = lock(&state);
             if s.quit {
                 // In game.log: the game was closed on purpose, not lost.
@@ -17016,6 +17665,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 letterbox,
                 if s.cfg.half_resolution { 2 } else { 1 },
                 s.avatars.take_uploads(),
+                s.pictures.take_uploads(),
             )
         };
         // GPU waits and uploads never hold the input/state mutex.
@@ -17035,6 +17685,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         renderer.pixel_scale = pixel_scale;
         for (slot, rgba) in avatar_uploads {
             renderer.set_avatar(slot, &rgba);
+        }
+        for (slot, rgba) in picture_uploads {
+            renderer.set_picture(slot, &rgba);
         }
         if let Some(atlas) = atlas {
             renderer.set_sprites(&atlas);
@@ -17456,6 +18109,13 @@ impl App {
             } => {
                 lock(&self.state).right_button(button_state == ElementState::Pressed);
             }
+            WindowEvent::MouseInput {
+                state: button_state,
+                button: winit::event::MouseButton::Middle,
+                ..
+            } => {
+                lock(&self.state).middle_button(button_state == ElementState::Pressed);
+            }
             WindowEvent::Touch(t) => {
                 let at = Instant::now();
                 let mut s = lock(&self.state);
@@ -17793,6 +18453,13 @@ impl ApplicationHandler<UserEvent> for App {
                     w.focus_window();
                 }
             }
+            UserEvent::Open(path) => {
+                lock(&self.state).open_archive(path);
+                if let Some(w) = &self.window {
+                    w.set_minimized(false);
+                    w.focus_window();
+                }
+            }
             #[cfg(target_os = "android")]
             UserEvent::Typed(typed) => {
                 lock(&self.state).soft_keyboard(typed, self.window.as_deref())
@@ -17873,6 +18540,7 @@ impl State {
         );
         State {
             avatars,
+            pictures: pictures::Pictures::default(),
             admin: false,
             crash,
             crash_sent,
@@ -18019,6 +18687,9 @@ impl State {
             set_status_rx,
             loved_call: None,
             loved_asked: false,
+            custom_call: None,
+            custom_asked: false,
+            folder_watch: None,
             playing: None,
             status_wait: None,
             scene_kind: None,
@@ -18057,6 +18728,7 @@ impl State {
             mp_menu: multiplayer::Menu::default(),
             mp_status: String::new(),
             picking_lobby_map: false,
+            pick_to_edit: false,
             guessr: None,
             discord: None,
             map_offsets: config::load_map_offsets(),
@@ -18147,9 +18819,27 @@ pub fn desktop_main() {
     if link.is_some_and(link::forward) {
         return;
     }
+    // A `.rsz` opened from the file manager (some pass it as a file:// URL): imported, by the
+    // running game if there is one.
+    for a in &mut args {
+        if let Some(path) = link::file_url(&a.to_string_lossy()) {
+            *a = path;
+        }
+    }
+    let mut opens: Vec<PathBuf> = args
+        .iter()
+        .filter(|a| library::is_rsz(a) && a.is_file())
+        .cloned()
+        .collect();
+    args.retain(|a| !opens.contains(a));
+    let had_opens = !opens.is_empty();
+    opens.retain(|p| !link::forward_open(p));
+    if had_opens && opens.is_empty() && args.is_empty() && link.is_none() {
+        return;
+    }
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]..."
+            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]...\n       taiko-rs file.rsz...           import taiko.rs map archives into the Songs folder"
         );
         println!("       taiko-rs --info file.osu...   print converted map stats");
         println!(
@@ -18169,12 +18859,15 @@ pub fn desktop_main() {
     // Scripted runs (tests) neither take links nor become their handler.
     if std::env::var_os("TAIKO_SHOTS").is_none() && std::env::var_os("TAIKO_INPUT").is_none() {
         let proxy = event_loop.create_proxy();
-        link::listen(move |l| {
-            let _ = proxy.send_event(UserEvent::Link(l));
+        link::listen(move |arrival| {
+            let _ = proxy.send_event(match arrival {
+                link::Arrival::Link(l) => UserEvent::Link(l),
+                link::Arrival::Open(path) => UserEvent::Open(path),
+            });
         });
         link::register();
     }
-    run(cfg, args, auto, link, event_loop);
+    run(cfg, args, auto, link, opens, event_loop);
 }
 
 /// The latest crash's report, kept until the next start has offered to copy it.
@@ -18583,7 +19276,7 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         .build()
         .expect("event loop");
     android::set_proxy(event_loop.create_proxy());
-    run(cfg, Vec::new(), false, None, event_loop);
+    run(cfg, Vec::new(), false, None, Vec::new(), event_loop);
 }
 
 /// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
@@ -18593,6 +19286,7 @@ fn run(
     args: Vec<PathBuf>,
     auto: bool,
     link: Option<link::Link>,
+    opens: Vec<PathBuf>,
     event_loop: EventLoop<UserEvent>,
 ) {
     config::set_data_folder(cfg.data_folder.clone());
@@ -18626,7 +19320,10 @@ fn run(
     cfg.save();
 
     // A single .osu on the command line goes straight into gameplay.
-    let play_when_scanned = args.len() == 1 && args[0].extension().is_some_and(|e| e == "osu");
+    let play_when_scanned = args.len() == 1
+        && args[0]
+            .extension()
+            .is_some_and(|e| e == "osu" || e == "tko");
     // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
     let scripted =
         std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
@@ -18655,6 +19352,9 @@ fn run(
     state.load_skin();
     if let Some(l) = link {
         state.open_link(l);
+    }
+    for path in opens {
+        state.open_archive(path);
     }
     let mut app = App {
         state: Arc::new(Mutex::new(state)),

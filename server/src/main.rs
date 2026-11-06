@@ -21,6 +21,7 @@ mod card;
 mod changelog_entry;
 mod covers;
 mod crashes;
+mod custom;
 mod discord;
 #[allow(dead_code)]
 #[path = "../../src/font.rs"]
@@ -2667,6 +2668,7 @@ fn main() {
     shots::init(data.clone());
     mail::init(data.clone());
     crashes::init(data.clone());
+    custom::init(Some(data.clone()));
     let (state, wake) = State::load(data.join("accounts.json"));
     let state = Arc::new(state);
     state.sync_medal_counts();

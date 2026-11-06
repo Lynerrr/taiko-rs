@@ -38,7 +38,7 @@ fn osu_files(dirs: &[PathBuf]) -> Vec<PathBuf> {
                 stack.push(path);
             } else if path
                 .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("osu"))
+                .is_some_and(|e| e.eq_ignore_ascii_case("osu") || e.eq_ignore_ascii_case("tko"))
             {
                 out.push(path);
             }

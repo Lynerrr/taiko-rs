@@ -1135,9 +1135,11 @@ pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, 
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         if !entry.is_file()
-            || !entry
-                .name()
-                .is_ok_and(|n| n.to_ascii_lowercase().ends_with(".osu"))
+            || !entry.name().is_ok_and(|n| {
+                let n = n.to_ascii_lowercase();
+                // `.tko` is a map with the client's effects (custom maps made in the editor).
+                n.ends_with(".osu") || n.ends_with(".tko")
+            })
         {
             continue;
         }
@@ -1593,6 +1595,16 @@ mod tests {
             maps.iter().map(|m| m.1).collect::<Vec<_>>(),
             [crate::net::map_hash(b"new")]
         );
+        // A custom map's `.tko` counts as a map too.
+        let tko = root.join("custom.osz");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&tko).unwrap());
+            zip.start_file("a [Oni].tko", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut zip, b"tko map").unwrap();
+            zip.finish().unwrap();
+        }
+        assert_eq!(archive_maps(&tko).unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 

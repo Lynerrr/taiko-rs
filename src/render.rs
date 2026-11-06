@@ -801,7 +801,20 @@ fn shape_shader() -> String {
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
         .replace("AVATAR_GRID", &crate::avatars::GRID.to_string())
         .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
+        .replace("MEDIA_SIDE", &MEDIA_SIDE.to_string())
+        .replace("PICTURE_CELL", &PICTURE_CELL.to_string())
 }
+
+/// The side of the texture that holds the profile pictures (its top left `PICTURE_CELL` square)
+/// and a map's own pictures (the other squares, `Renderer::set_picture`).
+const MEDIA_SIDE: u32 = 2048;
+/// The side of one map picture's square in that texture.
+pub const PICTURE_CELL: u32 = 512;
+/// How many map pictures fit at once.
+pub const PICTURE_SLOTS: u32 = (MEDIA_SIDE / PICTURE_CELL) * (MEDIA_SIDE / PICTURE_CELL) - 1;
+const _: () = assert!(crate::avatars::GRID * crate::avatars::CELL <= PICTURE_CELL);
+/// `Shape::params` w for map picture `slot` is -`PICTURE_BASE` - slot.
+const PICTURE_BASE: f32 = 1000.0;
 
 const SHADER: &str = r#"
 struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
@@ -872,13 +885,23 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
 }
 
 fn shade(in: VOut) -> vec4<f32> {
+    if (in.params.w < -999.5) {
+        // A map's picture (premultiplied), its square stretched over the quad, tinted by fill.
+        let slot = u32(-in.params.w - 999.5) + 1u;
+        let per = MEDIA_SIDEu / PICTURE_CELLu;
+        let cell = vec2<f32>(f32(slot % per), f32(slot / per));
+        let edge = 0.5 / f32(PICTURE_CELL);
+        let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
+        let t = textureSampleLevel(avatars, samp, (cell + uv) * f32(PICTURE_CELL) / f32(MEDIA_SIDE), 0.0);
+        return t * vec4<f32>(in.fill.rgb, 1.0) * in.fill.a;
+    }
     if (in.params.w < -0.5) {
         // A profile picture (premultiplied) from its cell of the avatar texture, rounded.
         let slot = u32(-in.params.w - 0.5);
         let cell = vec2<f32>(f32(slot % AVATAR_GRIDu), f32(slot / AVATAR_GRIDu));
         let edge = 0.5 / f32(AVATAR_CELL);
         let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(edge), vec2<f32>(1.0 - edge));
-        let t = textureSampleLevel(avatars, samp, (cell + uv) / f32(AVATAR_GRID), 0.0);
+        let t = textureSampleLevel(avatars, samp, (cell + uv) * f32(AVATAR_CELL) / f32(MEDIA_SIDE), 0.0);
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
         return t * in.fill.a * cover;
@@ -1098,9 +1121,9 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let avatar_side = crate::avatars::GRID * crate::avatars::CELL;
+        let avatar_side = MEDIA_SIDE;
         let avatar_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("avatars"),
+            label: Some("avatars and map pictures"),
             size: wgpu::Extent3d {
                 width: avatar_side,
                 height: avatar_side,
@@ -1477,6 +1500,39 @@ impl Renderer {
             return;
         }
         let (gx, gy) = (slot % crate::avatars::GRID, slot / crate::avatars::GRID);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.avatar_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: gx * cell,
+                    y: gy * cell,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * cell),
+                rows_per_image: Some(cell),
+            },
+            wgpu::Extent3d {
+                width: cell,
+                height: cell,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Puts a map's picture (`PICTURE_CELL` square, premultiplied RGBA) in `slot`.
+    pub fn set_picture(&mut self, slot: u32, rgba: &[u8]) {
+        let cell = PICTURE_CELL;
+        if slot >= PICTURE_SLOTS || rgba.len() != (cell * cell * 4) as usize {
+            return;
+        }
+        let per = MEDIA_SIDE / cell;
+        let (gx, gy) = ((slot + 1) % per, (slot + 1) / per);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.avatar_texture,
@@ -1938,6 +1994,10 @@ impl Renderer {
                 let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
                 let w = (r[2] * sw).ceil().clamp(1.0, sw - x);
                 let h = (r[3] * sh).ceil().clamp(1.0, sh - y);
+                // Nothing of it shows (an inner clip outside its outer one): no size, not drawn.
+                if r[2] <= 0.0 || r[3] <= 0.0 {
+                    return (range, [0; 4]);
+                }
                 (range, [x as u32, y as u32, w as u32, h as u32])
             })
             .collect();
@@ -2179,6 +2239,9 @@ impl Renderer {
                 let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
                 let cw = (r[2] * sw).ceil().clamp(1.0, sw - x);
                 let ch = (r[3] * sh).ceil().clamp(1.0, sh - y);
+                if r[2] <= 0.0 || r[3] <= 0.0 {
+                    return (range.clone(), [0; 4]);
+                }
                 (range.clone(), [x as u32, y as u32, cw as u32, ch as u32])
             })
             .collect();
@@ -2485,15 +2548,28 @@ impl Renderer {
             if (range.start as u32) > at {
                 pass.draw(0..4, at..range.start as u32);
             }
+            at = range.end as u32;
+            if *w == 0 || *h == 0 {
+                continue;
+            }
             pass.set_scissor_rect(*x, *y, *w, *h);
             pass.draw(0..4, range.start as u32..range.end as u32);
             pass.set_scissor_rect(0, 0, size.0, size.1);
-            at = range.end as u32;
         }
         if (count as u32) > at {
             pass.draw(0..4, at..count as u32);
         }
     }
+}
+
+/// The part of clip rect `a` (x, y, w, h) inside `b`; empty (zero size) when they don't meet.
+fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let (x0, y0) = (a[0].max(b[0]), a[1].max(b[1]));
+    let (x1, y1) = (
+        (a[0] + a[2]).min(b[0] + b[2]),
+        (a[1] + a[3]).min(b[1] + b[3]),
+    );
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
 }
 
 /// How many shapes fit in a buffer of `bytes`.
@@ -2652,6 +2728,8 @@ pub enum Hit {
     ToMenu,
     /// A button of the first steps guide.
     Guide(crate::guide::Action),
+    /// A button or field of the editor's front door.
+    EditorHome(crate::editor::home::Act),
     /// The main menu's button to our Discord server.
     DiscordServer,
     /// A music button of the main menu or the player, and the player's timeline.
@@ -2820,6 +2898,10 @@ pub struct Canvas {
     pub avatar_slots: std::sync::Arc<std::collections::HashMap<String, u32>>,
     /// Pictures asked for this frame (lowercased names), so they get fetched.
     pub avatars_wanted: Vec<String>,
+    /// The map pictures in the texture, by file name (lowercase): slot and width / height.
+    pub picture_slots: std::sync::Arc<std::collections::HashMap<String, (u32, f32)>>,
+    /// Map pictures drawn this frame (file names, lowercase), for the app to load.
+    pub pictures_wanted: Vec<String>,
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -2973,10 +3055,35 @@ pub fn parse_accent(s: &str) -> Option<u32> {
 
 const CLEAR: [f32; 4] = [0.0; 4];
 
+/// What `Canvas::rotate_since` does, on shapes that aren't on the canvas yet (copies of the
+/// playfield).
+pub fn rotate_shapes(
+    shapes: &mut [Shape],
+    pivot: [f32; 2],
+    angle: f32,
+    scale: f32,
+    dest: [f32; 2],
+) {
+    let (sin, cos) = angle.sin_cos();
+    for sh in shapes {
+        let (x, y) = (
+            (sh.center[0] - pivot[0]) * scale,
+            (sh.center[1] - pivot[1]) * scale,
+        );
+        sh.center = [dest[0] + x * cos - y * sin, dest[1] + x * sin + y * cos];
+        sh.half = [sh.half[0] * scale, sh.half[1] * scale];
+        sh.params[0] *= scale;
+        sh.params[1] *= scale;
+        sh.params[2] *= scale;
+        sh.angle += angle;
+    }
+}
+
 impl Canvas {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
         self.avatars_wanted.clear();
+        self.pictures_wanted.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -3013,11 +3120,38 @@ impl Canvas {
         (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
     }
 
-    /// Clips everything drawn since shape `start` to a rect (virtual units).
+    /// Clips everything drawn since shape `start` to a rect (virtual units). Shapes in there that
+    /// already have a clip of their own keep it, cut down to this rect: the renderer takes one
+    /// clip per shape, so an outer clip laid over inner ones (the editor's preview over a sliced
+    /// playfield) must not hide them.
     pub fn clip_since(&mut self, start: usize, x: f32, y: f32, w: f32, h: f32) {
         let end = self.shapes.len();
-        if end > start {
-            self.clips.push((start..end, [x, y, w, h]));
+        if end <= start {
+            return;
+        }
+        let outer = [x, y, w, h];
+        let mut inner: Vec<std::ops::Range<usize>> = Vec::new();
+        for (range, rect) in &mut self.clips {
+            if range.start >= start && range.end <= end && range.start < range.end {
+                *rect = intersect(*rect, outer);
+                inner.push(range.clone());
+            }
+        }
+        if inner.is_empty() {
+            self.clips.push((start..end, outer));
+            return;
+        }
+        // The runs between the inner clips take the outer one.
+        inner.sort_by_key(|r| r.start);
+        let mut at = start;
+        for r in inner {
+            if r.start > at {
+                self.clips.push((at..r.start, outer));
+            }
+            at = at.max(r.end);
+        }
+        if end > at {
+            self.clips.push((at..end, outer));
         }
     }
 
@@ -3286,6 +3420,37 @@ impl Canvas {
 
     /// `name`'s profile picture, round, centred on (`x`, `y`) with radius `r`; until it's here
     /// (and without one) their initial on a disc of `colour`.
+    /// A map's picture `file`, `h` tall (as wide as its own shape makes it) centred on (`x`, `y`),
+    /// turned by `angle` (radians, clockwise) and tinted by `tint`. Asks for it to be loaded and
+    /// draws nothing until it is; false then.
+    pub fn picture(
+        &mut self,
+        file: &str,
+        x: f32,
+        y: f32,
+        h: f32,
+        angle: f32,
+        tint: [f32; 4],
+    ) -> bool {
+        let key = file.to_ascii_lowercase();
+        let slot = self.picture_slots.get(&key).copied();
+        if !self.pictures_wanted.contains(&key) {
+            self.pictures_wanted.push(key);
+        }
+        let Some((slot, aspect)) = slot else {
+            return false;
+        };
+        self.shapes.push(Shape {
+            center: [x, y],
+            half: [h * aspect / 2.0, h / 2.0],
+            fill: tint,
+            border: CLEAR,
+            params: [0.0, 0.0, 0.0, -PICTURE_BASE - slot as f32],
+            angle,
+        });
+        true
+    }
+
     pub fn avatar(&mut self, name: &str, x: f32, y: f32, r: f32, colour: u32, a: f32) {
         let key = name.to_ascii_lowercase();
         let slot = self.avatar_slots.get(&key).copied();
@@ -3373,19 +3538,7 @@ impl Canvas {
         scale: f32,
         dest: [f32; 2],
     ) {
-        let (sin, cos) = angle.sin_cos();
-        for sh in &mut self.shapes[start..] {
-            let (x, y) = (
-                (sh.center[0] - pivot[0]) * scale,
-                (sh.center[1] - pivot[1]) * scale,
-            );
-            sh.center = [dest[0] + x * cos - y * sin, dest[1] + x * sin + y * cos];
-            sh.half = [sh.half[0] * scale, sh.half[1] * scale];
-            sh.params[0] *= scale;
-            sh.params[1] *= scale;
-            sh.params[2] *= scale;
-            sh.angle += angle;
-        }
+        rotate_shapes(&mut self.shapes[start..], pivot, angle, scale, dest);
     }
 
     /// Squeezes every shape drawn since `start` horizontally towards x = `cx` by `fx`; a negative
@@ -3641,6 +3794,36 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_outer_clip_keeps_the_inner_ones_cut_down_to_it() {
+        let mut c = super::Canvas::default();
+        for i in 0..10 {
+            c.rect(i as f32, 0.0, 1.0, 1.0, [1.0; 4]);
+            if i == 3 {
+                // Shapes 4 and 5: a strip of their own, partly outside the frame.
+                c.rect(0.0, 0.0, 1.0, 1.0, [1.0; 4]);
+            }
+        }
+        // 11 shapes; the strip is 5..7.
+        c.clips.push((5..7, [50.0, 0.0, 100.0, 480.0]));
+        c.clip_since(2, 0.0, 10.0, 120.0, 100.0);
+        let mut got = c.clips.clone();
+        got.sort_by_key(|(r, _)| r.start);
+        assert_eq!(
+            got,
+            vec![
+                (2..5, [0.0, 10.0, 120.0, 100.0]),
+                (5..7, [50.0, 10.0, 70.0, 100.0]),
+                (7..11, [0.0, 10.0, 120.0, 100.0]),
+            ]
+        );
+        // Without inner clips it's one range, as before.
+        let mut c = super::Canvas::default();
+        c.rect(0.0, 0.0, 1.0, 1.0, [1.0; 4]);
+        c.clip_since(0, 1.0, 2.0, 3.0, 4.0);
+        assert_eq!(c.clips, vec![(0..1, [1.0, 2.0, 3.0, 4.0])]);
+    }
+
     #[test]
     fn a_pinned_accent_holds_while_another_thread_sets_it() {
         super::pin_accent_for_this_thread(Some(0x123456));
