@@ -4,10 +4,12 @@
 //! note does as its own hit nears (ready-made moves, or keys on a small graph).
 
 use super::{Btn, Drag, Keys, Mode, View, inside};
-use crate::editor::motion::{BEFORES, PACES, PATHS, SPEEDS, ScrollMove, before_tracks, pace_track};
+use crate::editor::motion::{
+    BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, pace_track,
+};
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
-use crate::tko::gimmick::{FieldProp, NoteProp};
+use crate::tko::gimmick::{FieldProp, NoteProp, ShowColour, ShowSize};
 use crate::tko::path::PathTable;
 use crate::tko::track::{Ease, Key};
 use crate::video::FRAME_VW;
@@ -40,7 +42,7 @@ const GRAPH_AFTER: f64 = 0.5;
 /// A button on the Motion page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MAct {
-    /// The page's tab: 0 the path, 1 before the hit.
+    /// The page's tab: 0 the path, 1 before the hit, 2 show as, 3 the scroll, 4 fakes.
     Tab(u8),
     /// The notes picked get (or keep) their own group, with a path if it has none (on the path
     /// tab).
@@ -76,7 +78,32 @@ pub enum MAct {
     ToggleFake,
     /// Fake copies of the picked notes, `FAKE_SHIFTS[i]` beats away.
     FakeCopy(usize),
+    /// The colour the group's notes show as (`SHOW_COLOURS`).
+    ShowColour(usize),
+    /// The size they show as (`SHOW_SIZES`).
+    ShowSize(usize),
+    /// When their truth shows (`REVEALS`).
+    Reveal(usize),
 }
+
+/// The Show as tab's tab number.
+const SHOW_TAB: u8 = 2;
+/// The Scroll tab's.
+pub(super) const SCROLL_TAB: u8 = 3;
+
+const SHOW_COLOURS: [(&str, ShowColour); 4] = [
+    ("Their own", ShowColour::Same),
+    ("All as dons", ShowColour::Don),
+    ("All as kats", ShowColour::Kat),
+    ("Swapped", ShowColour::Swap),
+];
+
+const SHOW_SIZES: [(&str, ShowSize); 4] = [
+    ("Their own", ShowSize::Same),
+    ("All small", ShowSize::Small),
+    ("All big", ShowSize::Big),
+    ("Swapped", ShowSize::Swap),
+];
 
 /// How far from the picked notes fake copies go, in beats.
 const FAKE_SHIFTS: [(&str, f64); 5] = [
@@ -177,6 +204,9 @@ impl View {
                         self.status =
                             "the picked notes fly in along this path: shape it in the preview"
                                 .into();
+                    } else if self.m_tab == SHOW_TAB {
+                        self.status =
+                            "pick what the notes show as, and when their truth shows".into();
                     } else {
                         self.status =
                             "pick a ready-made move or add keys on the graph: each note does it as its own hit nears"
@@ -222,6 +252,15 @@ impl View {
                 }
             },
             (MAct::Clear, Some(g)) => self.ed.clear_path(g),
+            (MAct::ShowColour(i), Some(g)) => SHOW_COLOURS
+                .get(i)
+                .is_some_and(|&(_, c)| self.ed.edit_show(g, |s| s.colour = c)),
+            (MAct::ShowSize(i), Some(g)) => SHOW_SIZES
+                .get(i)
+                .is_some_and(|&(_, z)| self.ed.edit_show(g, |s| s.size = z)),
+            (MAct::Reveal(i), Some(g)) => REVEALS
+                .get(i)
+                .is_some_and(|&(_, b)| self.ed.edit_show(g, |s| s.reveal = b)),
             (MAct::Before(i), Some(g)) => {
                 // Show what the move keys first.
                 if let Some((prop, _)) = BEFORES.get(i).and_then(|b| b.1.first()) {
@@ -275,7 +314,10 @@ impl View {
             1 => {
                 "Pick notes on the timeline and give them a move: each note does it as its own hit nears."
             }
-            2 => {
+            SHOW_TAB => {
+                "Pick notes and make them show as another colour or size until just before the hit. Only the look lies."
+            }
+            SCROLL_TAB => {
                 "One speed for the whole lane, like mania SV: 0 freezes every note, below 0 runs them back. Green lines stay as they are."
             }
             _ => {
@@ -284,11 +326,11 @@ impl View {
         };
         c.text(x, y, small, dim, &Canvas::fit(small, inner, about));
         y += 10.0;
-        if self.m_tab >= 2 {
+        if self.m_tab >= SCROLL_TAB {
             let tabs = self.motion_tabs();
             let y = self.chips(c, x, y, inner, &tabs) + 2.0;
             self.m_graph = [0.0; 4];
-            return if self.m_tab == 2 {
+            return if self.m_tab == SCROLL_TAB {
                 self.draw_scroll_tab(c, x, y, inner)
             } else {
                 self.draw_fakes_tab(c, x, y, inner)
@@ -296,7 +338,11 @@ impl View {
         }
         // The tab, what to shape (the picked notes, or a group already moving), and the groups.
         let picked = self.ed.selection.len();
-        let what = if self.m_tab == 0 { "a path" } else { "a move" };
+        let what = match self.m_tab {
+            0 => "a path",
+            SHOW_TAB => "a disguise",
+            _ => "a move",
+        };
         let mut items = self.motion_tabs();
         items.extend([(
             if picked == 0 {
@@ -316,7 +362,9 @@ impl View {
                 g.groups
                     .iter()
                     .enumerate()
-                    .filter(|(_, gr)| gr.path.is_some() || !gr.before.is_empty())
+                    .filter(|(_, gr)| {
+                        gr.path.is_some() || !gr.before.is_empty() || !gr.show.is_true()
+                    })
                     .map(|(i, gr)| {
                         (
                             format!("{} ({})", gr.name, gr.notes.len()),
@@ -334,13 +382,16 @@ impl View {
         if self.m_tab == 0 {
             self.m_graph = [0.0; 4];
             self.draw_path_tab(c, g, x, y, inner);
+        } else if self.m_tab == SHOW_TAB {
+            self.m_graph = [0.0; 4];
+            self.draw_show_tab(c, g, x, y, inner);
         } else {
             self.draw_before_tab(c, g, x, y, inner);
         }
     }
 
     fn motion_tabs(&self) -> Vec<(String, Btn, bool)> {
-        ["Path", "Before the hit", "Scroll", "Fakes"]
+        ["Path", "Before the hit", "Show as", "Scroll", "Fakes"]
             .iter()
             .enumerate()
             .map(|(i, name)| {
@@ -351,6 +402,56 @@ impl View {
                 )
             })
             .collect()
+    }
+
+    fn draw_show_tab(&mut self, c: &mut Canvas, g: usize, x: f32, y: f32, inner: f32) {
+        let head = rgba(accent(), 1.0);
+        let dim = rgba(0x9a9ab0, 1.0);
+        let show = self.ed.show_of(g);
+        let col = (inner - 10.0) / 2.0;
+        let right = x + col + 10.0;
+        c.text(x, y, 6.5, head, "Colour");
+        let items: Vec<(String, Btn, bool)> = SHOW_COLOURS
+            .iter()
+            .enumerate()
+            .map(|(i, &(name, v))| {
+                (
+                    name.to_string(),
+                    Btn::M(MAct::ShowColour(i)),
+                    show.colour == v,
+                )
+            })
+            .collect();
+        let ly = self.chips(c, x, y + 9.0, col, &items) + 2.0;
+        c.text(x, ly, 6.5, head, "Size");
+        let items: Vec<(String, Btn, bool)> = SHOW_SIZES
+            .iter()
+            .enumerate()
+            .map(|(i, &(name, v))| (name.to_string(), Btn::M(MAct::ShowSize(i)), show.size == v))
+            .collect();
+        let ly = self.chips(c, x, ly + 9.0, col, &items) + 2.0;
+        let items = vec![
+            ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
+            ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
+        ];
+        self.chips(c, x, ly, col, &items);
+        c.text(right, y, 6.5, head, "The truth shows");
+        let items: Vec<(String, Btn, bool)> = REVEALS
+            .iter()
+            .enumerate()
+            .map(|(i, &(name, b))| (name.to_string(), Btn::M(MAct::Reveal(i)), show.reveal == b))
+            .collect();
+        let ly = self.chips(c, right, y + 9.0, col, &items);
+        for (i, line) in [
+            "What hits them, the score and the sound stay",
+            "their own. Rolls and swells never lie. Players",
+            "can turn lies off: Settings, Show true notes.",
+        ]
+        .iter()
+        .enumerate()
+        {
+            c.text(right, ly + 1.0 + i as f32 * 8.0, 5.5, dim, line);
+        }
     }
 
     fn draw_fakes_tab(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {

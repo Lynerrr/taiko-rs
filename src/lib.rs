@@ -4256,6 +4256,7 @@ impl State {
             Item::KiaiEffects => on(c.kiai_effects),
             Item::MenuGlitch => on(c.menu_glitch),
             Item::BlackLane => on(c.black_lane),
+            Item::TrueNotes => on(c.true_notes),
             Item::DrumMenus => on(c.drum_menus),
             Item::MapSkins => on(c.map_skins),
             Item::HideGreat => on(c.hide_great),
@@ -4600,6 +4601,7 @@ impl State {
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::MenuGlitch => self.cfg.menu_glitch = !self.cfg.menu_glitch,
             Item::BlackLane => self.cfg.black_lane = !self.cfg.black_lane,
+            Item::TrueNotes => self.cfg.true_notes = !self.cfg.true_notes,
             Item::DrumMenus => {
                 self.cfg.drum_menus = !self.cfg.drum_menus;
                 self.select_zone = drum_nav::Zone::List;
@@ -14035,6 +14037,7 @@ impl State {
         game::set_hide_great(self.cfg.hide_great);
         game::set_hit_flash(self.cfg.hit_flash);
         game::set_black_lane(self.cfg.black_lane);
+        game::set_true_notes(self.cfg.true_notes);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
         if self.scene_kind != Some(kind) {

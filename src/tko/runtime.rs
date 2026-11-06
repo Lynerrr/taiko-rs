@@ -148,6 +148,12 @@ pub struct NoteFx {
     pub tint_hue: f32,
     /// On its group's approach path: where (from the drum) and how far off the lane onto it.
     pub path: Option<[f32; 3]>,
+    /// A lie its group tells (see `ShowAs`): drawn as a kat (true) or a don, and as a finisher
+    /// or not, where it lies about that.
+    pub lie_kat: Option<bool>,
+    pub lie_big: Option<bool>,
+    /// How far the truth shows through the lie: 0 all lie, 1 all truth.
+    pub truth: f32,
 }
 
 impl Default for NoteFx {
@@ -164,7 +170,17 @@ impl Default for NoteFx {
             tint: 0.0,
             tint_hue: 0.0,
             path: None,
+            lie_kat: None,
+            lie_big: None,
+            truth: 1.0,
         }
+    }
+}
+
+impl NoteFx {
+    /// Tells a lie about its colour or size that still shows.
+    pub fn lies(&self) -> bool {
+        (self.lie_kat.is_some() || self.lie_big.is_some()) && self.truth < 1.0
     }
 }
 
@@ -1239,8 +1255,13 @@ impl Runtime {
     /// What note `i` is doing at game time `t`; nothing for a note in no group while no clip
     /// moves all the notes.
     pub fn note(&self, i: usize, t: f64) -> Option<NoteFx> {
-        let hit = self.notes.get(i)?.time;
-        self.fx_of(self.group_of(i), hit, t)
+        let n = self.notes.get(i)?;
+        let gi = self.group_of(i);
+        let fx = self.fx_of(gi, n.time, t);
+        if n.class == NoteClass::Long {
+            return fx;
+        }
+        self.with_lie(fx, gi, n.class == NoteClass::Kat, n.big, n.time, t)
     }
 
     /// The group fake note `i` (the gimmick's order) is in.
@@ -1253,8 +1274,39 @@ impl Runtime {
 
     /// What fake note `i` is doing at game time `t`, like `note`.
     pub fn fake(&self, i: usize, t: f64) -> Option<NoteFx> {
-        let hit = self.gimmick.fakes.get(i)?.t;
-        self.fx_of(self.fake_group_of(i), hit, t)
+        let f = self.gimmick.fakes.get(i)?;
+        let gi = self.fake_group_of(i);
+        let fx = self.fx_of(gi, f.t, t);
+        self.with_lie(fx, gi, f.kat, f.big, f.t, t)
+    }
+
+    /// `fx` with the lie group `gi` tells about a note (`kat`, `big`) hit at chart time `hit`, at
+    /// game time `t`.
+    fn with_lie(
+        &self,
+        fx: Option<NoteFx>,
+        gi: Option<usize>,
+        kat: bool,
+        big: bool,
+        hit: f64,
+        t: f64,
+    ) -> Option<NoteFx> {
+        let Some(show) = gi
+            .map(|gi| self.gimmick.groups[gi].show)
+            .filter(|s| !s.is_true())
+        else {
+            return fx;
+        };
+        let (lie_kat, lie_big) = show.lie(kat, big);
+        if lie_kat.is_none() && lie_big.is_none() {
+            return fx;
+        }
+        let near = (hit - (t - self.shift)) / self.beat_len(hit);
+        let mut fx = fx.unwrap_or_default();
+        fx.lie_kat = lie_kat;
+        fx.lie_big = lie_big;
+        fx.truth = show.truth(near);
+        Some(fx)
     }
 
     /// Where fake note `i` sits on its group's path, like `note_path`.
@@ -1307,7 +1359,7 @@ impl Runtime {
             stretch_y: v(NoteProp::StretchY) as f32,
             tint: v(NoteProp::Tint) as f32,
             tint_hue: v(NoteProp::TintHue) as f32,
-            path: None,
+            ..NoteFx::default()
         })
     }
 }
@@ -1503,6 +1555,50 @@ mod tests {
         ]
         .map(|(time, class, big)| NoteInfo { time, class, big });
         Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, beats)
+    }
+
+    #[test]
+    fn a_lying_group_shows_its_notes_as_the_lie_until_the_truth() {
+        use crate::tko::gimmick::{FakeNote, ShowAs, ShowColour, ShowSize};
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![1000.0, 2000.0, 3000.0, 4000.0],
+            show: ShowAs {
+                colour: ShowColour::Swap,
+                size: ShowSize::Big,
+                reveal: 1.0,
+            },
+            ..Group::default()
+        });
+        gm.fakes.push(FakeNote {
+            t: 4000.0,
+            kat: true,
+            big: false,
+        });
+        gm.sanitize();
+        let notes = [
+            (1000.0, NoteClass::Don, false),
+            (2000.0, NoteClass::Kat, true),
+            (3000.0, NoteClass::Long, false),
+            (5000.0, NoteClass::Don, false),
+        ]
+        .map(|(time, class, big)| NoteInfo { time, class, big });
+        // A 500 ms beat.
+        let rt = Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, &GRID);
+        let don = rt.note(0, 0.0).unwrap();
+        assert_eq!((don.lie_kat, don.lie_big), (Some(true), Some(true)));
+        assert!(don.lies() && don.truth == 0.0);
+        // A beat before its hit the truth is all there.
+        assert_eq!(rt.note(0, 500.0).unwrap().truth, 1.0);
+        assert!(!rt.note(0, 500.0).unwrap().lies());
+        let kat = rt.note(1, 0.0).unwrap();
+        assert_eq!((kat.lie_kat, kat.lie_big), (Some(false), None));
+        // A roll tells no lie, and a note outside the group none either.
+        assert!(rt.note(2, 0.0).is_none_or(|f| !f.lies()));
+        assert!(rt.note(3, 0.0).is_none_or(|f| !f.lies()));
+        // Fakes lie with their group too.
+        let fake = rt.fake(0, 0.0).unwrap();
+        assert_eq!((fake.lie_kat, fake.lie_big), (Some(false), Some(true)));
     }
 
     fn xs() -> Option<Target> {

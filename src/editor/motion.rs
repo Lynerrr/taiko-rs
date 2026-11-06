@@ -6,7 +6,7 @@
 
 use super::keyframes::Subject;
 use super::state::Editor;
-use crate::tko::gimmick::{BEFORE_BEATS, FieldProp, Group, MAX_GROUPS, NoteProp};
+use crate::tko::gimmick::{BEFORE_BEATS, FieldProp, Group, MAX_GROUPS, NoteProp, ShowAs};
 use crate::tko::path::NotePath;
 use crate::tko::track::{Ease, Key, Track};
 use std::collections::BTreeMap;
@@ -20,7 +20,17 @@ pub struct Motion {
     pub path: Option<NotePath>,
     pub tracks: BTreeMap<String, Track>,
     pub before: BTreeMap<String, Track>,
+    pub show: ShowAs,
 }
+
+/// When a lying note's truth shows: a name, and beats before its hit.
+pub const REVEALS: [(&str, f64); 5] = [
+    ("At the hit", 0.0),
+    ("A 1/4 before", 0.25),
+    ("Half a beat before", 0.5),
+    ("A beat before", 1.0),
+    ("Two beats before", 2.0),
+];
 
 /// Ready-made paths: a name and the points notes come in by (playfield units from the drum, x
 /// right, y down; the drum ends each one).
@@ -310,6 +320,7 @@ impl Editor {
             path: g.path.clone(),
             tracks: g.tracks.clone(),
             before: g.before.clone(),
+            show: g.show,
         })
     }
 
@@ -364,6 +375,23 @@ impl Editor {
                 gr.path = m.path.clone();
                 gr.tracks = m.tracks.clone();
                 gr.before = m.before.clone();
+                gr.show = m.show;
+            }
+        })
+    }
+
+    pub fn show_of(&self, group: usize) -> ShowAs {
+        self.gimmick()
+            .and_then(|g| g.groups.get(group))
+            .map_or_else(ShowAs::default, |g| g.show)
+    }
+
+    /// Changes the lie group `group`'s notes tell (see `ShowAs`).
+    pub fn edit_show(&mut self, group: usize, f: impl FnOnce(&mut ShowAs)) -> bool {
+        self.edit_gimmick(false, |g| {
+            if let Some(gr) = g.groups.get_mut(group) {
+                f(&mut gr.show);
+                gr.show.reveal = gr.show.reveal.clamp(0.0, BEFORE_BEATS.0);
             }
         })
     }

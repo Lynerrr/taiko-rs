@@ -42,6 +42,9 @@ fn words(item: Item) -> &'static str {
         Item::KiaiEffects | Item::HitFlash | Item::HideGreat => "effects flash эффекты вспышки",
         Item::MenuGlitch => "animation spin transition effects анимация эффекты переход",
         Item::BlackLane => "dark playfield background contrast тёмный фон поле контраст",
+        Item::TrueNotes => {
+            "tko lie fake colour color size honest truth gimmick настоящие цвет размер обман гиммик"
+        }
         Item::Animations => "effects motion эффекты движение",
         Item::PresentMode | Item::MenuVsync => {
             "vsync mailbox immediate fifo tearing фреймрейт разрывы"

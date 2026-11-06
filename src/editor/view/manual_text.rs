@@ -244,7 +244,13 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - Add fake copies of the picked notes puts fakes half a beat or a 1/4 before or after them, or a beat after, where no note is yet.
 - On the timeline fakes are hollow with an F. Select, move, copy and delete them like any note; groups, paths, moves and the scroll take them by their time.
 
-> Paths, moves, the scroll and fakes are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
+# Show as
+- The Show as tab makes the picked notes lie about their look: all as dons, all as kats or swapped, and all small, all big or swapped.
+- The truth shows takes them back to what they are, over a 1/4 beat ending at the hit or up to two beats before it. A colour that only shows at the hit can't be read, only learned: Upload warns about it.
+- What hits a note, its score and its sound stay its own. Fakes lie with their group too; drumrolls and swells never lie.
+- Players can turn every lie off in Settings, Gameplay, Show true notes. With it on, your own preview shows the truth too.
+
+> Paths, moves, the scroll, fakes and lies are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
 ",
     },
     Chapter {
@@ -582,7 +588,13 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - Add fake copies of the picked notes ставит фейки на полдоли или 1/4 до или после выбранных нот, или на долю после, где ноты ещё нет.
 - На таймлайне фейки полые с буквой F. Их выделяют, двигают, копируют и удаляют как обычные ноты; группы, траектории, движения и скролл берут их по времени.
 
-> Траектории, движения, скролл и фейки только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
+# Show as
+- Вкладка Show as заставляет выбранные ноты врать о своём виде: все как доны, все как каты или наоборот, и все маленькие, все большие или наоборот.
+- The truth shows возвращает им настоящий вид за 1/4 доли, к самому удару или за две доли до него. Цвет, который виден только в момент удара, не прочитать, только выучить: Upload об этом предупредит.
+- Чем бить ноту, её счёт и звук остаются её собственными. Фейки врут вместе со своей группой; дроби и свели не врут никогда.
+- Игроки могут выключить любой обман в настройках: Игра, «Показывать настоящие ноты». Если это включено у вас самих, превью тоже покажет правду.
+
+> Траектории, движения, скролл, фейки и обман только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
 ",
     },
     Chapter {
