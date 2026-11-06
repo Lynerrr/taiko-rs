@@ -468,6 +468,8 @@ pub struct Menu {
     leaving: Option<Item>,
     /// The editor is still new: its sticker and glow show.
     fresh: bool,
+    /// Where the editor's "NEW!" sticker goes this frame: drawn last, over the kiai's frame.
+    chip: Option<(f32, f32)>,
     /// Kiai: how far into it (0 to 1, easing both ways), whether it's on, when it opened, the
     /// beat it's on and when that came, and what's flying.
     kiai: f32,
@@ -509,6 +511,7 @@ impl Menu {
             spin: None,
             glitch: true,
             fresh: editor_is_new(crate::setstatus::now()),
+            chip: None,
             leaving: None,
             kiai: 0.0,
             in_kiai: false,
@@ -635,6 +638,10 @@ impl Menu {
         self.draw_drum(c);
         self.draw_burst(c);
         self.draw_kiai(c);
+        // Over the panel's edge and the kiai's frame, which would cut through it.
+        if let Some((x, y)) = self.chip.take() {
+            self.new_chip(c, x, y, 11.0);
+        }
         self.draw_title(c, f.maps);
         draw_footer(c, f);
         // The whole screen glitches with a hit note, over as its turn is.
@@ -1062,7 +1069,7 @@ impl Menu {
                 let bounce = (self.clock / 260.0).sin() * 2.0 + self.kick() * 5.0;
                 let wiggle = (self.clock / 410.0).sin() * 2.5;
                 let grown = r * (1.0 + GROW * near);
-                self.new_chip(c, x + wiggle, NOTE_Y - hop - grown - 18.0 - bounce, 11.0);
+                self.chip = Some((x + wiggle, NOTE_Y - hop - grown - 18.0 - bounce));
             }
         }
         // The selector, on its way to the selected note: brighter on the beat, gold in a kiai.
@@ -1675,6 +1682,26 @@ mod tests {
         assert_eq!(NEW_UNTIL, 1_798_675_200);
         assert!(editor_is_new(NEW_UNTIL - 1));
         assert!(!editor_is_new(NEW_UNTIL));
+    }
+
+    #[test]
+    fn the_new_sticker_is_drawn_over_the_kiai_frame() {
+        let mut m = Menu::new();
+        m.fresh = true;
+        m.kiai = 1.0;
+        let c = frame(&mut m, 16.0);
+        let chip_half = [(Canvas::text_width(11.0, "NEW!") + 14.0) / 2.0, 10.0];
+        let chip = c.shapes.iter().rposition(|s| s.half == chip_half).unwrap();
+        let kiai = c
+            .shapes
+            .iter()
+            .rposition(|s| (s.half[1] - LANE_H / 2.0).abs() < 1e-3 && s.half[0] > 300.0)
+            .unwrap();
+        assert!(chip > kiai, "the sticker comes after the kiai's frame");
+        assert!(m.chip.is_none(), "drawn once a frame");
+        m.fresh = false;
+        let c = frame(&mut m, 16.0);
+        assert!(!c.shapes.iter().any(|s| s.half == chip_half));
     }
 
     #[test]
