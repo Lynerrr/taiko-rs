@@ -8,9 +8,34 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
-use super::clips::{self, Notes, Target as ClipTarget, When};
+use super::clips::{self, CopyProp, MAX_COPIES, Notes, Target as ClipTarget, When};
 use super::gimmick::{FieldProp, Gimmick, NoteProp};
 use super::graph::{Kind, MAX_STEPS, MAX_TRIGGERS_PER_NODE, Node, Port, Target};
+
+/// What a copy of the playfield is doing (see `clips::CopyProp`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CopyFx {
+    pub show: f32,
+    pub x: f32,
+    pub y: f32,
+    /// Degrees clockwise.
+    pub turn: f32,
+    pub zoom: f32,
+    pub lane_fade: f32,
+}
+
+impl Default for CopyFx {
+    fn default() -> Self {
+        CopyFx {
+            show: 0.0,
+            x: 0.0,
+            y: 0.0,
+            turn: 0.0,
+            zoom: 1.0,
+            lane_fade: 0.0,
+        }
+    }
+}
 
 /// What the whole playfield is doing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +76,8 @@ pub struct FieldFx {
     pub echo_zoom: f32,
     pub echo_fade: f32,
     pub kaleido: f32,
+    /// Copies of the playfield behind it.
+    pub copies: [CopyFx; MAX_COPIES],
     /// The graph's seed, for the glitch's randomness.
     pub seed: u64,
 }
@@ -85,6 +112,7 @@ impl Default for FieldFx {
             echo_zoom: 1.0,
             echo_fade: FieldProp::EchoFade.default_value() as f32,
             kaleido: 0.0,
+            copies: Default::default(),
             seed: 0,
         }
     }
@@ -285,6 +313,8 @@ pub struct Runtime {
     /// What the graph adds to each playfield property, and to each group's, at the last
     /// `prepare`.
     field_delta: [f64; FieldProp::ALL.len()],
+    /// What the clips give each copy of the playfield.
+    copy_delta: [[f64; CopyProp::ALL.len()]; MAX_COPIES],
     group_delta: Vec<[f64; NoteProp::ALL.len()]>,
     /// Per clip: its moments (empty for a span), ascending, chart time.
     clip_lists: Vec<Vec<f64>>,
@@ -299,6 +329,10 @@ const SAME_NOTE_MS: f64 = 0.5;
 
 fn field_slot(p: FieldProp) -> usize {
     FieldProp::ALL.iter().position(|q| *q == p).unwrap_or(0)
+}
+
+fn copy_slot(p: CopyProp) -> usize {
+    CopyProp::ALL.iter().position(|q| *q == p).unwrap_or(0)
 }
 
 fn note_slot(p: NoteProp) -> usize {
@@ -393,6 +427,7 @@ impl Runtime {
             events: Vec::new(),
             dirty: false,
             field_delta: Default::default(),
+            copy_delta: Default::default(),
             group_delta: vec![Default::default(); groups],
             clip_lists: Vec::new(),
             all_notes_delta: Default::default(),
@@ -687,6 +722,7 @@ impl Runtime {
         groups: &mut [[f64; NoteProp::ALL.len()]],
         all: &mut [f64; NoteProp::ALL.len()],
         lane: &mut (u8, f64),
+        copies: &mut [[f64; CopyProp::ALL.len()]; MAX_COPIES],
     ) {
         let seed = self.gimmick.graph.seed;
         for (i, c) in self.gimmick.clips.iter().enumerate() {
@@ -721,6 +757,11 @@ impl Runtime {
                 Some(ClipTarget::Notes(Some(g), p)) => {
                     if let Some(row) = groups.get_mut(g) {
                         row[note_slot(p)] += v;
+                    }
+                }
+                Some(ClipTarget::Copy(k, p)) => {
+                    if let Some(row) = copies.get_mut(k) {
+                        row[copy_slot(p)] += v;
                     }
                 }
                 // Drawn by `layers`.
@@ -1013,9 +1054,18 @@ impl Runtime {
         }
         let mut all = [0.0; NoteProp::ALL.len()];
         let mut lane = (0, 0.0);
+        let mut copies = [[0.0; CopyProp::ALL.len()]; MAX_COPIES];
         if !self.gimmick.clips.is_empty() {
-            self.add_clips(t - self.shift, &mut field, &mut groups, &mut all, &mut lane);
+            self.add_clips(
+                t - self.shift,
+                &mut field,
+                &mut groups,
+                &mut all,
+                &mut lane,
+                &mut copies,
+            );
         }
+        self.copy_delta = copies;
         self.field_delta = field;
         self.group_delta = groups;
         self.all_notes_delta = all;
@@ -1074,6 +1124,20 @@ impl Runtime {
             echo_zoom: v(FieldProp::EchoZoom) as f32,
             echo_fade: v(FieldProp::EchoFade) as f32,
             kaleido: v(FieldProp::Kaleido) as f32,
+            copies: std::array::from_fn(|k| {
+                let c = |p: CopyProp| {
+                    let (lo, hi) = p.range();
+                    (p.default_value() + self.copy_delta[k][copy_slot(p)]).clamp(lo, hi) as f32
+                };
+                CopyFx {
+                    show: c(CopyProp::Show),
+                    x: c(CopyProp::X),
+                    y: c(CopyProp::Y),
+                    turn: c(CopyProp::Turn),
+                    zoom: c(CopyProp::Zoom),
+                    lane_fade: c(CopyProp::LaneFade),
+                }
+            }),
             seed: self.gimmick.graph.seed,
         }
     }
@@ -1424,6 +1488,36 @@ mod tests {
             "and the group's own move as well"
         );
         let _ = When::Span;
+    }
+
+    #[test]
+    fn copy_clips_move_each_copy_of_the_playfield_on_its_own() {
+        use crate::tko::clips::{Clip, CopyProp, Target as T};
+        let on = |k: usize, p: CopyProp, amount: f64| Clip {
+            amount,
+            ..Clip::new(T::Copy(k, p), 1000.0, 3000.0)
+        };
+        let mut rt = with_clips(vec![
+            on(1, CopyProp::Show, 0.5),
+            on(1, CopyProp::Turn, 180.0),
+            on(1, CopyProp::Zoom, -0.5),
+            on(3, CopyProp::Show, 5.0),
+        ]);
+        rt.prepare(500.0);
+        assert!(
+            rt.field(500.0).copies.iter().all(|k| k.show == 0.0),
+            "none before"
+        );
+        rt.prepare(2000.0);
+        let fx = rt.field(2000.0);
+        assert_eq!(
+            fx.copies[0],
+            super::CopyFx::default(),
+            "the first is untouched"
+        );
+        let k = fx.copies[1];
+        assert_eq!((k.show, k.turn, k.zoom), (0.5, 180.0, 0.5));
+        assert_eq!(fx.copies[3].show, 1.0, "held to its range");
     }
 
     #[test]

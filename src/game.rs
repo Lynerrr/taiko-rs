@@ -5385,6 +5385,8 @@ impl Game {
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
         }
+        // Its copies go behind it, each where its clips take it.
+        crate::tko::screen::copies(c, start_shape, &tko_fx, [w / 2.0, dest[1]]);
         // Its tears, washes and flashes lie over the screen as it ends up.
         crate::tko::screen::screen(c, start_shape, &tko_fx, vt);
         let [x0, y0, x1, y1] = local_zone;

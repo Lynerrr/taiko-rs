@@ -4213,6 +4213,43 @@ mod tests {
         assert!(v.fx_drop.is_none());
     }
 
+    #[test]
+    fn a_copy_clip_picks_which_copy_it_moves() {
+        use crate::tko::clips::{CopyProp, Target};
+        let mut v = clips_view();
+        put_fx(&mut v, preset("Mirror twin"));
+        assert_eq!(v.ed.clips().len(), 3);
+        let id = v.fx_sel.unwrap();
+        assert_eq!(
+            v.ed.clip(id).unwrap().target(),
+            Some(Target::Copy(0, CopyProp::Show))
+        );
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Fx(FxAct::CopyNo(3)))
+        );
+        press(&mut v, Btn::Fx(FxAct::CopyNo(2)));
+        assert_eq!(
+            v.ed.clip(id).unwrap().target(),
+            Some(Target::Copy(2, CopyProp::Show))
+        );
+        // Another copy target keeps the copy; something else lets it go.
+        press(&mut v, Btn::Fx(FxAct::What(1)));
+        assert_eq!(
+            v.ed.clip(id).unwrap().target(),
+            Some(Target::Copy(2, CopyProp::X))
+        );
+        press(&mut v, Btn::Fx(FxAct::What(1)));
+        press(&mut v, Btn::Fx(FxAct::What(-5)));
+        assert_eq!(
+            v.ed.clip(id).unwrap().group,
+            0,
+            "Notes: see-through, on all notes"
+        );
+    }
+
     fn preset(name: &str) -> usize {
         crate::editor::clips::PRESETS
             .iter()

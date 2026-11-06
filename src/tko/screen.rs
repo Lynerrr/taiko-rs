@@ -45,6 +45,46 @@ pub fn has_screen(fx: &FieldFx) -> bool {
         || fx.blackout >= 0.01
 }
 
+/// Copies of the playfield (`fx.copies`) behind it, each moved on its own, made from the shapes
+/// drawn since `start`: call once the playfield is where it ends up. They turn and size about
+/// `centre`.
+pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2]) {
+    let end = c.shapes.len();
+    if start >= end || fx.copies.iter().all(|k| k.show < 0.01) {
+        return;
+    }
+    let w = c.width;
+    let mut budget = MAX_EXTRA_SHAPES;
+    let mut out = Vec::new();
+    for k in fx.copies.iter().filter(|k| k.show >= 0.01) {
+        let show = k.show.clamp(0.0, 1.0);
+        let lane = show * (1.0 - k.lane_fade.clamp(0.0, 1.0));
+        let mut part: Vec<Shape> = c.shapes[start..end]
+            .iter()
+            .filter(|s| lane >= 0.01 || !is_panel(s, w))
+            .copied()
+            .collect();
+        if part.len() > budget {
+            break;
+        }
+        budget -= part.len();
+        for s in &mut part {
+            let a = if is_panel(s, w) { lane } else { show };
+            s.fill[3] *= a;
+            s.border[3] *= a;
+        }
+        rotate_shapes(
+            &mut part,
+            centre,
+            k.turn.to_radians(),
+            k.zoom,
+            [centre[0] + k.x, centre[1] + k.y],
+        );
+        out.extend(part);
+    }
+    insert_at(c, start, out);
+}
+
 /// Black behind the playfield, over what was drawn before it (the background): call before the
 /// playfield draws.
 pub fn backdrop(c: &mut Canvas, fx: &FieldFx) {
@@ -574,6 +614,41 @@ mod tests {
         );
         assert!(c.shapes[1..].iter().all(|s| s.fill[3] == 0.25));
         assert_eq!(c.shapes.len(), 3, "nothing added");
+    }
+
+    #[test]
+    fn copies_go_behind_the_playfield_each_moved_and_faded_on_its_own() {
+        use super::super::runtime::CopyFx;
+        let mut c = field(2);
+        let mut fx = FieldFx::default();
+        fx.copies[0] = CopyFx {
+            show: 0.5,
+            y: -100.0,
+            ..CopyFx::default()
+        };
+        fx.copies[2] = CopyFx {
+            show: 1.0,
+            lane_fade: 1.0,
+            turn: 180.0,
+            ..CopyFx::default()
+        };
+        copies(&mut c, 0, &fx, [320.0, 240.0]);
+        // 3 shapes of the field, then 3 of the first copy and the 2 notes of the third, all in
+        // front of the field's own.
+        assert_eq!(c.shapes.len(), 3 + 3 + 2);
+        let first = &c.shapes[..3];
+        assert!(first.iter().all(|s| s.fill[3] == 0.5));
+        assert_eq!(first[1].center, [150.0, 140.0], "a hundred up");
+        let turned = &c.shapes[3..5];
+        let at = turned[0].center;
+        assert!(
+            (at[0] - 490.0).abs() < 1e-3 && (at[1] - 240.0).abs() < 1e-3,
+            "turned about the middle: {at:?}"
+        );
+        assert_eq!(c.shapes[5].fill[3], 1.0, "the field's own lane, in front");
+        let mut c = field(1);
+        copies(&mut c, 0, &FieldFx::default(), [320.0, 240.0]);
+        assert_eq!(c.shapes.len(), 2, "no copies, nothing added");
     }
 
     #[test]

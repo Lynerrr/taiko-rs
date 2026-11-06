@@ -149,6 +149,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 
 # Making one
 - The shelf has tabs: Playfield (pulses, turns, zooms, shakes), Lane (its shape), Notes, Look (flashes, colours, echoes, see-through, blackout) and Text & pictures.
+- Copies: up to four copies of the playfield behind it, each moved by its own blocks (shows, x, y, turn, size, lane see-through). copy 1-4 in a block's settings picks which. Try Mirror twin, Triple lane, Shadow clones, Spinning ghost. Only the real playfield is played.
 - Blackout and Fade to black turn the screen black (text over the lane still shows); Ghost playfield makes it faint; Only the notes leaves notes and drum alone on black. Notes that can't be seen are still there to hit.
 - Click an effect to pick it, then drag on a row from where it should start to where it should end. A click on a row lays one bar. Over the kiai here and Over the notes selected lay it over those. Shift keeps it picked for more; Esc puts it back.
 - Drag a block to move it (also to another row), drag its ends to make it longer or shorter (a short block's ends stick out a little), right click deletes it.
@@ -166,7 +167,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 # Text and pictures
 - Text, Fly-in text and Pulsing text on the shelf put words on screen in the game's font. Click the words in the block's settings to type them.
 - Picture and Logo on the beat show an image from the map's folder: put a .png or .jpg there first. < and > go through them. It goes with the map in an .rsz.
-- With one picked, drag the preview to place it: Shift turns it, Ctrl sizes it. x, y, size, turn and seen can be typed too.
+- With one picked, drag the preview to place it: Shift turns it, Ctrl sizes it. x, y, size, turn and opacity (0 invisible, 1 solid) can be typed too; with moves, a different opacity at its end fades it.
 - moves: it glides to a pose of its own at its end. At its start and at its end choose which one you change.
 - behind the notes puts it under the lane; the fades bring it in and out; pulses kicks it bigger on beats, notes or hits (the amount is percent).
 
@@ -430,6 +431,7 @@ F4 Effects открывается на Clips: самый простой спос
 
 # Как сделать
 - На полке вкладки: Playfield (пульс, повороты, зум, тряска), Lane (форма лайна), Notes, Look (вспышки, цвета, эхо, прозрачность, затемнение) и Text & pictures.
+- Copies: до четырёх копий плейфилда позади него, каждую двигают свои блоки (shows, x, y, turn, size, прозрачность лайна). copy 1-4 в настройках блока выбирает, какую. Попробуйте Mirror twin, Triple lane, Shadow clones, Spinning ghost. Играется только настоящий плейфилд.
 - Blackout и Fade to black делают экран чёрным (текст над лайном всё равно виден); Ghost playfield делает поле полупрозрачным; Only the notes оставляет на чёрном только ноты и барабан. Невидимые ноты всё равно нужно бить.
 - Нажмите эффект, чтобы взять его, и протяните по дорожке от места, где он начинается, до места, где кончается. Клик по дорожке кладёт один такт. Over the kiai here и Over the notes selected кладут его на кийай или на выделенные ноты. С Shift он остаётся в руке; Esc кладёт обратно.
 - Блок тащится мышью (и на другую дорожку), за края — длиннее или короче (у короткого блока края чуть выступают), правый клик удаляет.
@@ -447,7 +449,7 @@ F4 Effects открывается на Clips: самый простой спос
 # Текст и картинки
 - Text, Fly-in text и Pulsing text на полке выводят слова шрифтом игры. Кликните по словам в настройках блока, чтобы их набрать.
 - Picture и Logo on the beat показывают картинку из папки карты: сначала положите туда .png или .jpg. < и > листают их. В .rsz картинка уезжает вместе с картой.
-- Когда блок выбран, тащите превью, чтобы поставить его: Shift поворачивает, Ctrl меняет размер. x, y, size, turn и seen можно и набрать.
+- Когда блок выбран, тащите превью, чтобы поставить его: Shift поворачивает, Ctrl меняет размер. x, y, size, turn и opacity (0 невидимо, 1 полностью) можно и набрать; с moves другая opacity в конце плавно его проявляет или гасит.
 - moves: блок плавно едет к своей позе в конце. At its start и at its end выбирают, какую из двух вы меняете.
 - behind the notes кладёт его под линию нот; затухания вводят и убирают его; pulses толкает его крупнее на долях, нотах или попаданиях (amount в процентах).
 
