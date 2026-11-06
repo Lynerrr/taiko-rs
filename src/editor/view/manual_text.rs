@@ -44,6 +44,13 @@ The editor makes taiko maps. What you save as .osu plays the same in osu!stable;
 - Timing page: the game finds the BPM and the first beat for you. Check it by ear (Timing a song).
 - Create makes the folder in your Songs and opens it here.
 
+# Song setup
+File > Song setup changes the names and settings any time later: artist and title (each with its romanised version), mapper, difficulty name, source and tags, and HP drain, accuracy (OD) and base SV.
+- Click a box and type; Enter or Tab keeps it, Tab goes on to the next box. Numbers also step with - and + (Shift for bigger steps, Alt for fine ones).
+- The window shows the hit windows of the OD and the star rating as you change them.
+- Base SV is how fast notes scroll at 1.0x SV. Changing it keeps every drumroll as long as it was.
+- Each change is one undo step; Ctrl+S saves them with the map.
+
 # The screen
 - Modes: F1 Compose (notes), F2 Gimmicks (stable tricks), F3 Timing (BPM and slider velocity), F4 Effects (effect clips, keyframes and nodes, .tko only).
 - The timeline runs left to right; the white line is the playhead. Alt+wheel zooms, the middle button pans.
@@ -297,6 +304,7 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
         body: "\
 # Playing and moving
 - Space or C: play or pause. X: play from the start (as in stable).
+- F5: test play. The map as it is now (saved or not) plays in the real game from the playhead, Shift+F5 from the start, with No Fail and nothing saved; Quit or the end of the map comes back here.
 - Z / V: first / last note. Left / Right: by snap. Up / Down: previous / next timing line.
 - Wheel: seek. Ctrl+wheel: snap. Alt+wheel: zoom. Middle drag: pan.
 - Ctrl+Up / Down: playback speed (with Shift 5%).
@@ -327,6 +335,13 @@ static RU: [Chapter; COUNT] = [
 - Страница Details: исполнитель, название, имя маппера, название сложности, фон. Для неанглийских названий нужна ещё латинская версия (правила osu!).
 - Страница Timing: игра сама находит BPM и первый бит. Проверьте на слух (глава «Тайминг песни»).
 - Create создаёт папку в Songs и открывает карту здесь.
+
+# Song setup
+File > Song setup меняет названия и настройки в любой момент: исполнителя и название (каждое с латинской версией), маппера, название сложности, источник и теги, а также HP drain, точность (OD) и базовую скорость (base SV).
+- Кликните по полю и печатайте; Enter или Tab сохраняют, Tab переходит к следующему полю. Числа меняются и кнопками - и + (Shift — шаг больше, Alt — мелкий шаг).
+- В окне видны окна попадания для OD и звёзды, они пересчитываются сразу.
+- Base SV — скорость прокрутки нот при 1.0x SV. При её изменении длина каждого драмролла остаётся прежней.
+- Каждое изменение — один шаг отмены; Ctrl+S сохраняет их вместе с картой.
 
 # Экран
 - Режимы: F1 Compose (ноты), F2 Gimmicks (трюки для stable), F3 Timing (BPM и скорость слайдеров), F4 Effects (эффекты-блоки, ключевые кадры и ноды, только .tko).
@@ -581,6 +596,7 @@ File > Upload отправляет сохранённую карту на taiko.
         body: "\
 # Воспроизведение и перемещение
 - Space или C: играть / пауза. X: играть с начала (как в stable).
+- F5: тест-плей. Карта как она есть сейчас (сохранённая или нет) играется в настоящей игре с плейхеда, Shift+F5 — с начала, с No Fail и без сохранения результата; выход или конец карты возвращают сюда.
 - Z / V: первая / последняя нота. Влево / вправо: по шагу сетки. Вверх / вниз: предыдущая / следующая линия таймингов.
 - Колесо: перемотка. Ctrl+колесо: snap. Alt+колесо: масштаб. Средняя кнопка: сдвиг.
 - Ctrl+вверх / вниз: скорость воспроизведения (с Shift по 5%).

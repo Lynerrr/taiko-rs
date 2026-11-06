@@ -26,6 +26,7 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::Save),
             Do(Cmd::Revert),
             Sep,
+            Do(Cmd::SongSetup),
             Do(Cmd::Upload),
             Do(Cmd::Export),
             Do(Cmd::OpenFolder),
@@ -82,6 +83,9 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::PlayFromStart),
             Do(Cmd::FirstNote),
             Do(Cmd::LastNote),
+            Sep,
+            Do(Cmd::TestPlay(false)),
+            Do(Cmd::TestPlay(true)),
         ],
     },
     Menu {

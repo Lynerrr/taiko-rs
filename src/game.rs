@@ -453,6 +453,8 @@ pub struct Game {
     live_pp_value: Option<f64>,
     /// Text shown at the top ("REPLAY - x", "SPECTATING - x").
     pub banner: Option<String>,
+    /// A test play from the map editor: leaving goes back to it.
+    pub test_play: bool,
     /// When set, every hitsound played is logged (map time, sound, volume), e.g. for video audio.
     pub sfx_log: Option<Vec<(f64, Sfx, f32)>>,
     /// A miss broke a combo of 20 or more at this map time: the combo break sound is due.
@@ -2135,6 +2137,7 @@ impl Game {
             live_pp: None,
             live_pp_value: None,
             banner: None,
+            test_play: false,
             sfx_log: None,
             combo_break: None,
             ur_scaled_hint: true,
@@ -6019,7 +6022,12 @@ impl Game {
             c.fade_since(start, t, 1.0);
             let colours = crate::multiverse::note_colours();
             let (rx, rw) = (px + 12.0, pw - 24.0);
-            for (i, item) in (0..PAUSE_ITEMS).map(pause_item).enumerate() {
+            let test = self.test_play;
+            let items = (0..PAUSE_ITEMS).map(|i| match i {
+                4 if test => tr!("Back to the editor", "エディターに戻る", "Назад в редактор"),
+                _ => pause_item(i),
+            });
+            for (i, item) in items.enumerate() {
                 // Options slide up one after another.
                 let ti = progress(
                     self.paused_at + std::time::Duration::from_millis(25 * i as u64),

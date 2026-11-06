@@ -56,6 +56,7 @@ pub enum Cmd {
     // File.
     Save,
     Revert,
+    SongSetup,
     Upload,
     Export,
     OpenFolder,
@@ -79,6 +80,8 @@ pub enum Cmd {
     // Moving about.
     Play,
     PlayFromStart,
+    /// Plays the map in the game from the playhead (true: from the start), then back here.
+    TestPlay(bool),
     FirstNote,
     LastNote,
     Step(i32),
@@ -122,6 +125,7 @@ impl Cmd {
         match self {
             Cmd::Save => "Save",
             Cmd::Revert => "Revert to last save",
+            Cmd::SongSetup => "Song setup",
             Cmd::Upload => "Upload to taiko.rs",
             Cmd::Export => "Export map file",
             Cmd::OpenFolder => "Open song folder",
@@ -146,6 +150,8 @@ impl Cmd {
             Cmd::Finish => "Big (finish)",
             Cmd::Play => "Play / pause",
             Cmd::PlayFromStart => "Play from the start",
+            Cmd::TestPlay(false) => "Test play",
+            Cmd::TestPlay(true) => "Test play from the start",
             Cmd::FirstNote => "Go to the first note",
             Cmd::LastNote => "Go to the last note",
             Cmd::Step(n) if n < 0 => "Step back",
@@ -188,6 +194,9 @@ impl Cmd {
         match self {
             Cmd::Save => "Writes the map. The first save keeps a .bak of the original.",
             Cmd::Revert => "Throws away every change since the last save.",
+            Cmd::SongSetup => {
+                "Artist, title, mapper, difficulty name, source and tags, and HP drain, accuracy (OD) and base SV."
+            }
             Cmd::Upload => "Sends the saved map to taiko.rs: public as CUSTOM, pp once approved.",
             Cmd::Export => {
                 "Saves the map and packs its set into one file to give to people: .rsz with a .tko in it (taiko.rs opens it with a double click), else .osz (osu! too)."
@@ -220,6 +229,9 @@ impl Cmd {
             }
             Cmd::Play => "Plays the song from the playhead.",
             Cmd::PlayFromStart => "Plays the song from the beginning.",
+            Cmd::TestPlay(_) => {
+                "Plays the map as it is now in the real game (from the playhead, or from the start), with nothing saved or sent. Quit or the end of the map comes back here."
+            }
             Cmd::FirstNote | Cmd::LastNote => "Moves the playhead there.",
             Cmd::Step(_) => "Moves the playhead one beat-snap step.",
             Cmd::PrevLine | Cmd::NextLine => "Moves the playhead to the neighbouring timing line.",
@@ -390,6 +402,15 @@ pub const BINDS: &[Bind] = &[
     b(KeyCode::Space, "", false, Cmd::Play, "Space", MOVE),
     b(KeyCode::KeyC, "", false, Cmd::Play, "C", MOVE),
     b(KeyCode::KeyX, "", false, Cmd::PlayFromStart, "X", MOVE),
+    b(KeyCode::F5, "", false, Cmd::TestPlay(false), "F5", MOVE),
+    b(
+        KeyCode::F5,
+        "s",
+        false,
+        Cmd::TestPlay(true),
+        "Shift+F5",
+        MOVE,
+    ),
     b(KeyCode::KeyZ, "", false, Cmd::FirstNote, "Z", MOVE),
     b(KeyCode::KeyV, "", false, Cmd::LastNote, "V", MOVE),
     b(KeyCode::ArrowLeft, "", true, Cmd::Step(-1), "Left", MOVE),
