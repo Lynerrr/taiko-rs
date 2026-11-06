@@ -239,10 +239,23 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # Recreate the release so its tag always points at this commit.
-          gh release delete latest --yes --cleanup-tag || true
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
           notes=$(printf 'Build of %s.\n\nOn Windows: run `taiko-rs-windows-x64-setup.exe`, or install or update from PowerShell:\n```powershell\nirm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | sh\n```\n\nOn macOS (11+, Apple silicon or Intel), the same command in Terminal: `taiko-rs-macos.tar.gz` is not signed by Apple, so macOS stops it when it comes through a browser.\n\nOn Android (8.0+, 64-bit ARM): install `taiko-rs-android.apk`.' "$GITHUB_SHA" "$raw" "$raw")
-          gh release create latest taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (latest build)" --notes "$notes" --target "$GITHUB_SHA"
+          # Everything goes up as a draft first: an upload that fails leaves the old release in
+          # place for players, where deleting it first once took downloads down.
+          staging="staging-$GITHUB_SHA"
+          for try in 1 2 3; do
+            gh release delete "$staging" --yes || true
+            gh release create "$staging" taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (latest build)" --notes "$notes" --target "$GITHUB_SHA" --draft && break
+            [ "$try" = 3 ] && exit 1
+            sleep 30
+          done
+          gh release delete latest --yes --cleanup-tag || true
+          for try in 1 2 3 4 5; do
+            gh release edit "$staging" --tag latest --target "$GITHUB_SHA" --draft=false --latest && break
+            [ "$try" = 5 ] && exit 1
+            sleep 15
+          done
 
       - name: Publish "dev" pre-release
         if: github.ref == 'refs/heads/dev'
@@ -250,10 +263,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release delete dev --yes --cleanup-tag || true
           raw="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/worktree-taiko-client"
           notes=$(printf 'Test build of %s (the `dev` branch); it may be broken.\n\nIn the game: Settings -> Updates -> Build channel: dev, then Update. Or install it directly on Windows (PowerShell):\n```powershell\n$env:TAIKO_RS_CHANNEL="dev"; irm %s/install.ps1 | iex\n```\n\nOn Linux:\n```sh\ncurl -fsSL %s/install.sh | TAIKO_RS_CHANNEL=dev sh\n```\n\nOn macOS, the same command in Terminal.' "$GITHUB_SHA" "$raw" "$raw")
-          gh release create dev taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --prerelease --latest=false
+          staging="staging-$GITHUB_SHA"
+          for try in 1 2 3; do
+            gh release delete "$staging" --yes || true
+            gh release create "$staging" taiko-rs-windows-x64.zip taiko-rs-windows-x64-setup.exe taiko-rs-linux-x64.tar.gz taiko-rs-macos.tar.gz taiko-rs-android.apk --title "taiko.rs (dev build)" --notes "$notes" --target "$GITHUB_SHA" --draft && break
+            [ "$try" = 3 ] && exit 1
+            sleep 30
+          done
+          gh release delete dev --yes --cleanup-tag || true
+          for try in 1 2 3 4 5; do
+            gh release edit "$staging" --tag dev --target "$GITHUB_SHA" --draft=false --prerelease --latest=false && break
+            [ "$try" = 5 ] && exit 1
+            sleep 15
+          done
 
   # Runs the same one-line install command users run, on a fresh machine, against the release
   # that was just published.
