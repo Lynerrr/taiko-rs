@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
+use super::clips::{self, Notes, Target as ClipTarget, When};
 use super::gimmick::{FieldProp, Gimmick, NoteProp};
 use super::graph::{Kind, MAX_STEPS, MAX_TRIGGERS_PER_NODE, Node, Port, Target};
 
@@ -266,6 +267,10 @@ pub struct Runtime {
     /// `prepare`.
     field_delta: [f64; FieldProp::ALL.len()],
     group_delta: Vec<[f64; NoteProp::ALL.len()]>,
+    /// Per clip: its moments (empty for a span), ascending, chart time.
+    clip_lists: Vec<Vec<f64>>,
+    /// What clips on all notes add to every note, at the last `prepare`.
+    all_notes_delta: [f64; NoteProp::ALL.len()],
 }
 
 /// How far a note's time may be from the one a group holds (the chart's whole milliseconds).
@@ -368,6 +373,8 @@ impl Runtime {
             dirty: false,
             field_delta: Default::default(),
             group_delta: vec![Default::default(); groups],
+            clip_lists: Vec::new(),
+            all_notes_delta: Default::default(),
         };
         rt.rebuild(false);
         rt
@@ -398,6 +405,13 @@ impl Runtime {
     /// Works the moments of every trigger node out again: all of them, or only those that depend
     /// on what the player did.
     fn rebuild(&mut self, only_dynamic: bool) {
+        let n = self.gimmick.clips.len();
+        self.clip_lists.resize(n, Vec::new());
+        for i in 0..n {
+            if !only_dynamic || self.gimmick.clips[i].is_dynamic() {
+                self.clip_lists[i] = self.clip_moments(i);
+            }
+        }
         for k in 0..self.order.len() {
             let i = self.order[k];
             if self.gimmick.graph.nodes[i].kind.output() != Some(Port::Trigger)
@@ -585,12 +599,114 @@ impl Runtime {
         out
     }
 
+    /// The length of a beat at chart time `t`.
+    fn beat_len(&self, t: f64) -> f64 {
+        self.section_at(t).map_or(FALLBACK_BEAT_MS, |s| s.length)
+    }
+
+    fn note_is(n: &NoteInfo, which: Notes) -> bool {
+        match which {
+            Notes::All => true,
+            Notes::Dons => n.class == NoteClass::Don,
+            Notes::Kats => n.class == NoteClass::Kat,
+            Notes::Big => n.big,
+        }
+    }
+
+    /// The moments clip `i` acts at, inside it.
+    fn clip_moments(&self, i: usize) -> Vec<f64> {
+        let c = &self.gimmick.clips[i];
+        let inside = |t: &f64| *t >= c.start && *t < c.end;
+        let mut out: Vec<f64> = match c.when {
+            When::Span => Vec::new(),
+            When::Beats { every } => clips::beat_moments(
+                c.start,
+                c.end,
+                every,
+                |t| self.beat_len(t),
+                MAX_TRIGGERS_PER_NODE,
+            ),
+            When::Notes { notes } => self
+                .notes
+                .iter()
+                .filter(|n| inside(&n.time) && Self::note_is(n, notes))
+                .map(|n| n.time)
+                .collect(),
+            When::Hits { notes } => self
+                .events
+                .iter()
+                .filter(|e| {
+                    e.verdict != Verdict::Miss
+                        && inside(&e.time)
+                        && self
+                            .notes
+                            .get(e.note)
+                            .is_some_and(|n| Self::note_is(n, notes))
+                })
+                .map(|e| e.time)
+                .collect(),
+            When::Misses => self
+                .events
+                .iter()
+                .filter(|e| e.verdict == Verdict::Miss && inside(&e.time))
+                .map(|e| e.time)
+                .collect(),
+        };
+        out.dedup();
+        out.truncate(MAX_TRIGGERS_PER_NODE);
+        out
+    }
+
+    /// Adds what the clips give at chart time `t`.
+    fn add_clips(
+        &self,
+        t: f64,
+        field: &mut [f64; FieldProp::ALL.len()],
+        groups: &mut [[f64; NoteProp::ALL.len()]],
+        all: &mut [f64; NoteProp::ALL.len()],
+    ) {
+        let seed = self.gimmick.graph.seed;
+        for (i, c) in self.gimmick.clips.iter().enumerate() {
+            // Long past its end nothing is left of it (a kick settles, a swing comes back).
+            if t < c.start
+                || (!c.keep && t > c.end + 8.0 * c.length.max(1.0) * self.beat_len(c.end))
+            {
+                continue;
+            }
+            let list = self.clip_lists.get(i).map_or(&[][..], |l| &l[..]);
+            let v = c.value(t, list, |m| self.beat_len(m));
+            if v == 0.0 {
+                continue;
+            }
+            match c.target() {
+                Some(ClipTarget::Field(p)) => field[field_slot(p)] += v,
+                Some(ClipTarget::Shake) => {
+                    let slot = ((t / SHAKE_STEP_MS).floor() as i64) as u64;
+                    let id = 1_000_000 + u64::from(c.id);
+                    field[field_slot(FieldProp::X)] += v * (hash01(seed, id * 2, slot) * 2.0 - 1.0);
+                    field[field_slot(FieldProp::Y)] +=
+                        v * (hash01(seed, id * 2 + 1, slot) * 2.0 - 1.0);
+                }
+                Some(ClipTarget::Notes(None, p)) => all[note_slot(p)] += v,
+                Some(ClipTarget::Notes(Some(g), p)) => {
+                    if let Some(row) = groups.get_mut(g) {
+                        row[note_slot(p)] += v;
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
     // ---- play events ----
 
     /// The player judged note `note` at game time `time`; `combo` and `accuracy` are as they
     /// stand after it.
     pub fn event(&mut self, time: f64, note: usize, verdict: Verdict, combo: u32, accuracy: f64) {
-        if self.events.len() >= MAX_EVENTS || !self.dynamic.iter().any(|&d| d) {
+        if self.events.len() >= MAX_EVENTS
+            || !(self.dynamic.iter().any(|&d| d)
+                || self.gimmick.clips.iter().any(|c| c.is_dynamic()))
+        {
             return;
         }
         let e = PlayEvent {
@@ -849,8 +965,13 @@ impl Runtime {
                 }
             }
         }
+        let mut all = [0.0; NoteProp::ALL.len()];
+        if !self.gimmick.clips.is_empty() {
+            self.add_clips(t - self.shift, &mut field, &mut groups, &mut all);
+        }
         self.field_delta = field;
         self.group_delta = groups;
+        self.all_notes_delta = all;
     }
 
     /// How long ago (ms) the trigger node `id` last fired, at game time `t`; for showing which
@@ -910,19 +1031,24 @@ impl Runtime {
         }
     }
 
-    /// What note `i` is doing at game time `t`; nothing for a note in no group.
+    /// What note `i` is doing at game time `t`; nothing for a note in no group while no clip
+    /// moves all the notes.
     pub fn note(&self, i: usize, t: f64) -> Option<NoteFx> {
-        let gi = self.group_of(i)?;
-        let g = &self.gimmick.groups[gi];
+        let all = self.all_notes_delta.iter().any(|&d| d != 0.0);
+        let gi = self.group_of(i);
+        if gi.is_none() && !all {
+            return None;
+        }
+        let g = gi.map(|gi| &self.gimmick.groups[gi]);
         let t = t - self.shift;
         let v = |p: NoteProp| {
             let base = g
-                .track(p)
+                .and_then(|g| g.track(p))
                 .map_or(p.default_value(), |tr| tr.value(t, p.default_value()));
-            let add = self
-                .group_delta
-                .get(gi)
-                .map_or(0.0, |row| row[note_slot(p)]);
+            let add = gi
+                .and_then(|gi| self.group_delta.get(gi))
+                .map_or(0.0, |row| row[note_slot(p)])
+                + self.all_notes_delta[note_slot(p)];
             if add == 0.0 {
                 base
             } else {
@@ -1127,6 +1253,142 @@ mod tests {
 
     fn xs() -> Option<Target> {
         Some(Target::Field(FieldProp::X))
+    }
+
+    /// `with`, the gimmick holding `clips` instead of a graph.
+    fn with_clips(clips: Vec<crate::tko::clips::Clip>) -> Runtime {
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![1000.0, 3000.0],
+            ..Group::default()
+        });
+        gm.clips = clips;
+        gm.graph.seed = 7;
+        gm.sanitize();
+        let notes = [
+            (1000.0, NoteClass::Don, false),
+            (2000.0, NoteClass::Kat, true),
+            (3000.0, NoteClass::Long, false),
+        ]
+        .map(|(time, class, big)| NoteInfo { time, class, big });
+        Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, &GRID)
+    }
+
+    fn zoom_clip(start: f64, end: f64, when: crate::tko::clips::When) -> crate::tko::clips::Clip {
+        use crate::tko::clips::{Clip, Target as T};
+        Clip {
+            amount: 0.5,
+            when,
+            length: 1.0,
+            ease: Ease::Linear,
+            ..Clip::new(T::Field(FieldProp::Zoom), start, end)
+        }
+    }
+
+    #[test]
+    fn a_clip_kicks_on_every_other_beat_only_inside_it() {
+        use crate::tko::clips::When;
+        // The tester's effect: in a stretch (say, the kiai), a kick on every second beat.
+        let mut rt = with_clips(vec![zoom_clip(1000.0, 3000.0, When::Beats { every: 2.0 })]);
+        assert_eq!(zoom_at(&mut rt, 900.0), 1.0);
+        assert_eq!(zoom_at(&mut rt, 1000.0), 1.5);
+        assert_eq!(zoom_at(&mut rt, 1250.0), 1.25);
+        assert_eq!(
+            zoom_at(&mut rt, 1500.0),
+            1.0,
+            "settled, and no kick on beat 3"
+        );
+        assert_eq!(zoom_at(&mut rt, 2000.0), 1.5, "beat 4");
+        assert_eq!(
+            zoom_at(&mut rt, 3000.0),
+            1.0,
+            "none at the end, which isn't in it"
+        );
+        // On top of a keyframe, like the graph.
+        let mut c = zoom_clip(0.0, 500.0, When::Span);
+        c.amount = 100.0;
+        let mut rt = with_clips(vec![c]);
+        let (_, hi) = FieldProp::Zoom.range();
+        assert_eq!(zoom_at(&mut rt, 100.0), hi as f32, "held in range");
+    }
+
+    #[test]
+    fn note_and_hit_clips_follow_the_chart_and_the_play() {
+        use crate::tko::clips::{Notes, When};
+        let mut rt = with_clips(vec![
+            zoom_clip(0.0, 9000.0, When::Notes { notes: Notes::Kats }),
+            crate::tko::clips::Clip {
+                what: "x".into(),
+                amount: 10.0,
+                ..zoom_clip(0.0, 9000.0, When::Hits { notes: Notes::All })
+            },
+            crate::tko::clips::Clip {
+                what: "y".into(),
+                amount: 20.0,
+                ..zoom_clip(0.0, 9000.0, When::Misses)
+            },
+        ]);
+        assert_eq!(zoom_at(&mut rt, 1000.0), 1.0, "the don isn't a kat");
+        assert_eq!(zoom_at(&mut rt, 2000.0), 1.5, "the kat");
+        assert_eq!(x_at(&mut rt, 1000.0), 0.0, "nothing hit yet");
+        rt.event(1010.0, 0, Verdict::Great, 1, 1.0);
+        rt.event(2020.0, 1, Verdict::Miss, 0, 0.5);
+        assert_eq!(x_at(&mut rt, 1010.0), 10.0);
+        rt.prepare(2020.0);
+        assert_eq!(rt.field(2020.0).y, 20.0);
+        assert_eq!(rt.field(2020.0).x, 0.0, "a miss isn't a hit");
+    }
+
+    #[test]
+    fn a_clip_on_all_notes_moves_every_note_and_a_group_clip_only_its_own() {
+        use crate::tko::clips::{Clip, Target as T, When};
+        let all = Clip {
+            amount: 1.0,
+            ..Clip::new(T::Notes(None, NoteProp::Hidden), 500.0, 2500.0)
+        };
+        let group = Clip {
+            amount: 30.0,
+            ..Clip::new(T::Notes(Some(0), NoteProp::Dy), 0.0, 9000.0)
+        };
+        let mut rt = with_clips(vec![all, group]);
+        rt.prepare(100.0);
+        assert_eq!(
+            rt.note(1, 100.0),
+            None,
+            "a note in no group, nothing on all notes yet"
+        );
+        assert_eq!(rt.note(0, 100.0).unwrap().dy, 30.0);
+        rt.prepare(1000.0);
+        assert!(
+            rt.note(1, 1000.0).unwrap().hidden,
+            "hidden with all the notes"
+        );
+        let first = rt.note(0, 1000.0).unwrap();
+        assert!(
+            first.hidden && first.dy == 30.0,
+            "and the group's own move as well"
+        );
+        let _ = When::Span;
+    }
+
+    #[test]
+    fn a_shake_clip_jolts_within_its_amount() {
+        use crate::tko::clips::{Clip, Target as T};
+        let mut rt = with_clips(vec![Clip {
+            amount: 12.0,
+            ..Clip::new(T::Shake, 1000.0, 2000.0)
+        }]);
+        let mut moved = false;
+        for k in 0..30 {
+            let t = 1000.0 + k as f64 * 33.0;
+            rt.prepare(t);
+            let f = rt.field(t);
+            assert!(f.x.abs() <= 12.0 && f.y.abs() <= 12.0);
+            moved |= f.x != 0.0;
+        }
+        assert!(moved);
+        rt.prepare(2500.0);
+        assert_eq!((rt.field(2500.0).x, rt.field(2500.0).y), (0.0, 0.0));
     }
 
     fn x_at(rt: &mut Runtime, t: f64) -> f32 {

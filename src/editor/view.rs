@@ -22,6 +22,7 @@ use crate::render::{Canvas, accent, rgba};
 use crate::video::FRAME_VW;
 
 mod chrome;
+mod clips;
 mod cmd;
 mod curves;
 mod help;
@@ -36,6 +37,7 @@ mod run;
 mod timing_win;
 mod upload;
 
+use clips::{CF, FxAct};
 use cmd::Cmd;
 pub use cmd::Mode;
 use curves::{SAct, SF};
@@ -74,6 +76,8 @@ pub enum Field {
     Index,
     /// A number of the SV tool.
     S(SF),
+    /// A number of the effect clip picked.
+    Fx(CF),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -96,6 +100,7 @@ pub enum Btn {
     GCancel,
     GBase,
     K(KAct),
+    Fx(FxAct),
     N(NAct),
     T(TAct),
     /// The SV tool and the velocity graph.
@@ -187,6 +192,22 @@ enum Drag {
     Handle {
         end: bool,
     },
+    /// An effect clip being drawn on a row, from and to (ms).
+    FxNew {
+        row: u8,
+        from: f64,
+        to: f64,
+    },
+    /// An effect clip moved by its body: how far into it it was grabbed (ms).
+    FxMove {
+        id: u32,
+        grab: f64,
+    },
+    /// An effect clip resized by one end.
+    FxEdge {
+        id: u32,
+        end: bool,
+    },
 }
 
 /// The tools, in the order of their keys.
@@ -241,8 +262,9 @@ impl Layout {
         let pw = ph * 16.0 / 9.0;
         let top = 44.0;
         let low = top + ph + 6.0;
-        // The velocity graph is the thing Timing mode is about, so it gets the room.
-        let (tl_h, gap) = if mode == Mode::Timing {
+        // The velocity graph is the thing Timing mode is about, so it gets the room; in Effects
+        // the rows of clips (or the keyframe graph) do.
+        let (tl_h, gap) = if mode == Mode::Timing || mode == Mode::Effects {
             (96.0, 4.0)
         } else {
             (146.0, 4.0)
@@ -342,6 +364,11 @@ pub struct View {
     k_group: usize,
     k_prop: usize,
     k_sel: Option<usize>,
+    /// The effect clip picked, the shelf effect a drag on a row draws, and whether the keyframe
+    /// and node pages are shown.
+    fx_sel: Option<u32>,
+    fx_armed: usize,
+    fx_advanced: bool,
     k_ease: crate::tko::track::Ease,
     /// The graph's value range while a key is being dragged, so it doesn't rescale under the pointer.
     k_frozen: Option<(f64, f64)>,
@@ -476,6 +503,9 @@ impl View {
             k_group: 0,
             k_prop: 0,
             k_sel: None,
+            fx_sel: None,
+            fx_armed: 0,
+            fx_advanced: false,
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
             n_sel: None,
@@ -1395,6 +1425,9 @@ impl View {
         if self.keyframe_mode() {
             return self.draw_key_graph(c);
         }
+        if self.clip_mode() {
+            return self.draw_clip_rows(c);
+        }
         let [x, y, w, h] = self.layout.graph;
         c.round_rect(
             [x, y],
@@ -1686,6 +1719,9 @@ impl View {
             Drag::Brush { .. } => self.brush_move(x, y, keys),
             Drag::Handle { end } => self.handle_drag(end, y),
             Drag::Key { index } => self.key_graph_drag(index, x, y),
+            Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } => {
+                self.clip_rows_drag(x, y)
+            }
             Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
             Drag::Wire { .. } | Drag::None => {}
         }
@@ -1714,7 +1750,11 @@ impl View {
             Drag::Move { .. } | Drag::Slide { .. } | Drag::Node { .. } | Drag::Pan { .. } => {
                 return I::Grabbing;
             }
-            Drag::Resize { .. } | Drag::Scrub | Drag::Overview => return I::EwResize,
+            Drag::Resize { .. } | Drag::Scrub | Drag::Overview | Drag::FxEdge { .. } => {
+                return I::EwResize;
+            }
+            Drag::FxMove { .. } => return I::Grabbing,
+            Drag::FxNew { .. } => return I::Crosshair,
             Drag::Box { .. } | Drag::Place { .. } | Drag::Brush { .. } => return I::Crosshair,
             Drag::Handle { .. } => return I::NsResize,
             _ => {}
@@ -1734,6 +1774,9 @@ impl View {
         }
         if self.node_mode() {
             return I::Default;
+        }
+        if let Some(icon) = self.clip_cursor(x, y) {
+            return icon;
         }
         if inside(self.layout.overview, x, y) {
             return I::EwResize;
@@ -1998,6 +2041,9 @@ impl View {
         if self.keyframe_mode() {
             return self.key_graph_down(x, y);
         }
+        if self.clip_mode() {
+            return self.clip_rows_down(x, y);
+        }
         if self.mode != Mode::Timing {
             self.status = "slider velocity is edited in Timing mode (F3)".into();
             return;
@@ -2056,6 +2102,9 @@ impl View {
                 self.mark_stale();
             }
             Drag::Node { .. } => self.ed.end_drag(),
+            Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } => {
+                self.clip_rows_up(drag, x)
+            }
             Drag::Wire { from } => self.wire_dropped(from, x, y),
             Drag::Scrub
             | Drag::Overview
@@ -2089,6 +2138,8 @@ impl View {
             }
         } else if self.keyframe_mode() {
             self.key_graph_right(x, y);
+        } else if self.clip_mode() {
+            self.clip_rows_right(x, y);
         } else if self.mode == Mode::Timing
             && inside(self.layout.graph, x, y)
             && let Some(id) = self.graph_dot_near(x, y)
@@ -2184,6 +2235,9 @@ impl View {
         if let Field::S(s) = f {
             return self.svt_step(s, dir, keys);
         }
+        if let Field::Fx(cf) = f {
+            return self.clip_change(cf, dir, keys);
+        }
         let ids = self.edit_targets(f);
         let k = if keys.shift {
             10.0
@@ -2210,7 +2264,7 @@ impl View {
                 Field::Time => p.time = (p.time + dir * k).max(0.0),
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
-                Field::S(_) => {}
+                Field::S(_) | Field::Fx(_) => {}
             },
             false,
         );
@@ -2221,6 +2275,13 @@ impl View {
     }
 
     fn apply_typed(&mut self, f: Field, text: &str) {
+        if let Field::Fx(cf) = f {
+            match text.trim().parse::<f64>() {
+                Ok(v) => self.clip_set(cf, v),
+                Err(_) => self.status = "not a number".into(),
+            }
+            return;
+        }
         if let Field::S(s) = f {
             match text.trim().parse::<f64>() {
                 Ok(v) => self.svt_set(s, v),
@@ -2249,7 +2310,7 @@ impl View {
                 Field::Time => p.time = v,
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
-                Field::S(_) => {}
+                Field::S(_) | Field::Fx(_) => {}
             },
             false,
         );
@@ -2348,7 +2409,10 @@ impl View {
             Btn::Dec(f) => self.change(f, -1.0, keys),
             Btn::Inc(f) => self.change(f, 1.0, keys),
             Btn::Edit(f) => {
-                if self.sel_line.is_some() || matches!(f, Field::S(_)) {
+                if self.sel_line.is_some()
+                    || matches!(f, Field::S(_))
+                    || (matches!(f, Field::Fx(_)) && self.fx_sel.is_some())
+                {
                     self.typing = Some((f, String::new()));
                 }
             }
@@ -2364,6 +2428,7 @@ impl View {
             Btn::GKeep => self.settle_preview(),
             Btn::GCancel => self.gimmick_cancel(),
             Btn::K(a) => self.press_key_action(a, keys.shift, keys.alt),
+            Btn::Fx(a) => self.press_fx(a),
             Btn::N(a) => self.press_node_action(a, keys.shift),
             Btn::T(a) => self.press_line_action(a),
             Btn::S(a) => self.press_svt(a),
@@ -2979,7 +3044,11 @@ mod tests {
         }
         lang::set(Lang::En);
         // The long chapter scrolls, and not past its end or above its start.
-        press(&mut v, Btn::Man(manual::ManAct::Chapter(6)));
+        let nodes = manual_text::chapters()
+            .iter()
+            .position(|c| c.title == "Nodes")
+            .unwrap();
+        press(&mut v, Btn::Man(manual::ManAct::Chapter(nodes as u8)));
         draw(&mut v);
         v.wheel(-2, Keys::default());
         assert!(v.manual.scroll > 0);
@@ -3474,6 +3543,152 @@ mod tests {
         press(&mut v, Btn::GPage(3));
         draw(&mut v);
         v
+    }
+
+    fn clips_view() -> View {
+        let mut v = view();
+        press(&mut v, Btn::C(Cmd::Mode(Mode::Effects)));
+        assert_eq!(v.g_page, 4, "Effects opens on the clips");
+        press(&mut v, Btn::K(KAct::MakeTko));
+        draw(&mut v);
+        v
+    }
+
+    #[test]
+    fn effects_open_on_clips_and_keep_the_advanced_pages_out_of_the_way() {
+        let mut v = clips_view();
+        assert!(v.clip_mode(), "Effects starts on the clips");
+        let tabs = |v: &View| {
+            (
+                v.buttons.iter().any(|(_, b)| *b == Btn::GPage(3)),
+                v.buttons
+                    .iter()
+                    .any(|(_, b)| *b == Btn::Fx(FxAct::Advanced)),
+            )
+        };
+        assert_eq!(tabs(&v), (false, true), "nodes hidden, Advanced offered");
+        press(&mut v, Btn::Fx(FxAct::Advanced));
+        draw(&mut v);
+        assert!(tabs(&v).0);
+        // Every shelf effect has a button with its tip.
+        press(&mut v, Btn::GPage(4));
+        draw(&mut v);
+        for i in 0..crate::editor::clips::PRESETS.len() {
+            assert!(
+                v.buttons
+                    .iter()
+                    .any(|(_, b)| *b == Btn::Fx(FxAct::Preset(i)))
+            );
+        }
+    }
+
+    #[test]
+    fn a_shelf_effect_drops_over_the_kiai_and_its_settings_change_it() {
+        use crate::tko::clips::When;
+        let mut v = clips_view();
+        // The map's kiai starts at 4000 and lasts to its end.
+        v.set_time(5000.0);
+        press(&mut v, Btn::Fx(FxAct::Preset(1)));
+        let c = v.ed.clips()[0].clone();
+        assert_eq!(c.start, 4000.0);
+        assert!(c.end > 10_000.0);
+        assert_eq!(c.when, When::Beats { every: 2.0 });
+        assert_eq!(v.fx_sel, Some(c.id), "picked, so its settings show");
+        draw(&mut v);
+        assert!(v.buttons.iter().any(|(_, b)| *b == Btn::Fx(FxAct::When(4))));
+        press(&mut v, Btn::Fx(FxAct::When(4)));
+        assert_eq!(v.ed.clips()[0].when, When::Misses);
+        press(&mut v, Btn::Inc(Field::Fx(CF::Amount)));
+        assert!((v.ed.clips()[0].amount - 0.13).abs() < 1e-9);
+        v.apply_typed(Field::Fx(CF::Amount), "0.5");
+        assert_eq!(v.ed.clips()[0].amount, 0.5);
+        press(&mut v, Btn::Fx(FxAct::What(1)));
+        assert_ne!(v.ed.clips()[0].what, "zoom");
+        // Outside a kiai, with notes selected: over them.
+        press(&mut v, Btn::Fx(FxAct::Back));
+        v.set_time(500.0);
+        v.ed.selection = v.ed.chart.objects[..2].iter().map(|o| o.id).collect();
+        press(&mut v, Btn::Fx(FxAct::Preset(0)));
+        let made = v.ed.clip(v.fx_sel.unwrap()).unwrap().clone();
+        assert_eq!(made.start, 1000.0);
+        assert!(made.end > 1500.0 && made.end < 1600.0);
+        assert_eq!(
+            made.lane, 0,
+            "it doesn't overlap the first one, so the first row"
+        );
+        // One over the same stretch as the first goes on a row of its own.
+        press(&mut v, Btn::Fx(FxAct::Back));
+        v.ed.selection.clear();
+        v.set_time(5000.0);
+        press(&mut v, Btn::Fx(FxAct::Preset(2)));
+        let over = v.ed.clip(v.fx_sel.unwrap()).unwrap().clone();
+        assert_eq!((over.start, over.lane), (4000.0, 1));
+        v.fx_sel = Some(made.id);
+        // Delete takes the picked one away, and undo brings it back.
+        key(&mut v, KeyCode::Delete);
+        assert!(v.ed.clip(made.id).is_none());
+        assert_eq!(v.ed.clips().len(), 2);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.clips().len(), 3);
+    }
+
+    #[test]
+    fn a_drag_on_a_row_draws_a_clip_a_drag_moves_it_and_a_right_click_deletes_it() {
+        let mut v = clips_view();
+        let row = |v: &View, r: u8| v.row_y(r) + v.row_h() / 2.0;
+        let (y2, y3) = (row(&v, 2), row(&v, 3));
+        let k = Keys::default();
+        v.mouse_down(v.x_of(1000.0), y2, k, None);
+        v.mouse_move(v.x_of(3000.0), y2, k);
+        draw(&mut v);
+        v.mouse_up(v.x_of(3000.0), y2, k);
+        assert_eq!(
+            v.ed.clips().len(),
+            1,
+            "the shelf's first effect, drawn there"
+        );
+        let c = v.ed.clips()[0].clone();
+        assert_eq!((c.start, c.end, c.lane), (1000.0, 3000.0, 2));
+        // Its body moved half a second on and a row down: one undo step.
+        v.mouse_down(v.x_of(2000.0), y2, k, None);
+        v.mouse_move(v.x_of(2300.0), y3, k);
+        v.mouse_move(v.x_of(2500.0), y3, k);
+        v.mouse_up(v.x_of(2500.0), y3, k);
+        let moved = v.ed.clip(c.id).unwrap().clone();
+        assert_eq!((moved.start, moved.end, moved.lane), (1500.0, 3500.0, 3));
+        // Its end dragged further.
+        v.mouse_down(v.x_of(3500.0) - 1.0, y3, k, None);
+        v.mouse_move(v.x_of(4500.0), y3, k);
+        v.mouse_up(v.x_of(4500.0), y3, k);
+        assert_eq!(v.ed.clip(c.id).unwrap().end, 4500.0);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.clip(c.id).unwrap().end, 3500.0);
+        assert!(v.ed.undo());
+        assert_eq!(
+            v.ed.clip(c.id).unwrap().start,
+            1000.0,
+            "the move was one step"
+        );
+        v.right_click(v.x_of(2000.0), y2);
+        assert!(v.ed.clips().is_empty());
+        // A click on an empty row just moves the playhead.
+        let at = v.x_of(6000.0);
+        click(&mut v, at, y2);
+        assert!(v.ed.clips().is_empty());
+        assert_eq!(v.ed.time, 6000.0);
+    }
+
+    #[test]
+    fn clips_are_saved_in_the_tko_and_read_back() {
+        let mut v = clips_view();
+        v.set_time(5000.0);
+        press(&mut v, Btn::Fx(FxAct::Preset(7)));
+        let text = v.ed.chart.to_text();
+        assert!(text.contains("TkoVersion: 3"));
+        let back = crate::tko::format::read(&text).unwrap().gimmick;
+        assert_eq!(back.clips, v.ed.clips());
+        // The preview draws with them.
+        draw(&mut v);
     }
 
     fn put(v: &mut View, kind: Kind, x: f32, y: f32) -> u32 {

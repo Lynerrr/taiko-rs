@@ -43,12 +43,16 @@ impl std::fmt::Display for Error {
 pub type Migration = fn(&mut Value);
 
 /// Every version bump adds one entry here and a fixture of the old format to the tests below.
-pub const MIGRATIONS: &[Migration] = &[v1_to_v2];
+pub const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3];
 
 /// Version 2 added playfield effects (flash, vignette, glitch, echo ...), note swirl, marks and
 /// more node kinds, all optional keys: a version 1 file is a valid version 2 file as it is. The
 /// bump is so an older game refuses a map that uses them instead of dropping them silently.
 fn v1_to_v2(_: &mut Value) {}
+
+/// Version 3 added effect clips (`clips`), an optional key: a version 2 file is a valid version
+/// 3 file. Bumped for the same reason.
+fn v2_to_v3(_: &mut Value) {}
 
 const _: () = assert!(MIGRATIONS.len() as u32 == TKO_VERSION - 1);
 
@@ -377,5 +381,28 @@ mod tests {
         );
         assert_eq!(g.groups[0].notes, [1000.0]);
         assert_eq!(g.groups[0].track(NoteProp::Opacity).unwrap().keys[0].v, 0.5);
+    }
+
+    #[test]
+    fn a_v2_fixture_keeps_reading() {
+        // Version 2 as released: marks, playfield effects and a node graph.
+        let fixture = r#"{"field":{"flash":{"keys":[{"t":500.0,"v":0.4}]}},"groups":[],"marks":[{"name":"drop","time":1500.0}],"graph":{"seed":3,"nodes":[{"id":1,"kind":"on_beat","x":0,"y":0,"p":[2,0]},{"id":2,"kind":"pulse","x":200,"y":0,"p":[0.2,250],"ease":"quad_out","target":"field.zoom","inputs":[1]}]}}"#;
+        let text = format!(
+            "{}\n[Gimmick]\n{fixture}\n",
+            write(chart(), &Gimmick::default())
+                .unwrap()
+                .split("[Gimmick]")
+                .next()
+                .unwrap()
+                .trim_end()
+                .replace(&format!("TkoVersion: {TKO_VERSION}"), "TkoVersion: 2")
+        );
+        assert_eq!(version_of(&text), Some(2));
+        let g = read(&text).unwrap().gimmick;
+        assert_eq!(g.field_track(FieldProp::Flash).unwrap().keys[0].v, 0.4);
+        assert_eq!(g.marks[0].time, 1500.0);
+        assert_eq!(g.graph.nodes.len(), 2);
+        assert_eq!(g.graph.seed, 3);
+        assert!(g.clips.is_empty());
     }
 }

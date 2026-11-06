@@ -27,7 +27,7 @@ pub fn chapters() -> &'static [Chapter] {
     if ru() { &RU } else { &EN }
 }
 
-pub const COUNT: usize = 10;
+pub const COUNT: usize = 11;
 
 static EN: [Chapter; COUNT] = [
     Chapter {
@@ -43,7 +43,7 @@ The editor makes taiko maps. What you save as .osu plays the same in osu!stable;
 - Create makes the folder in your Songs and opens it here.
 
 # The screen
-- Modes: F1 Compose (notes), F2 Gimmicks (stable tricks), F3 Timing (BPM and slider velocity), F4 Effects (animations, .tko only).
+- Modes: F1 Compose (notes), F2 Gimmicks (stable tricks), F3 Timing (BPM and slider velocity), F4 Effects (effect clips, keyframes and nodes, .tko only).
 - The timeline runs left to right; the white line is the playhead. Alt+wheel zooms, the middle button pans.
 - The preview is the real game drawn at the playhead.
 - Hover anything for a tip. Every command is in the menus with its key beside it.
@@ -137,6 +137,36 @@ It writes many green lines for you along a curve. Open it in the Timing panel or
 F2 Gimmicks builds the structures mappers use in osu!stable: fake sliders, anti-barline walls, generated SV. Choose a tool, set its numbers in the panel, then apply it at the playhead or to the selection. Preview shows what it would do first; Keep writes it, Cancel throws it away. Each result is one undo step.
 
 These work in plain .osu maps and play the same in stable. Nothing here needs the client's own animations.
+",
+    },
+    Chapter {
+        title: "Effect clips",
+        try_it: None,
+        body: "\
+F4 Effects opens on Clips: the simple way to make a .tko map do anything to the playfield. An effect is a block on the rows under the timeline. Its start and end are where it acts, and it keeps time with the music.
+
+# Making one
+- Click an effect on the shelf (Beat pulse, Sway, Spin, Hide the notes, Drop...). It lands at the playhead: over the whole kiai if the playhead is in one, over the notes selected if there are any, else over the next four bars.
+- Or drag on an empty row: that draws the effect you used last, from where you pressed to where you let go.
+- Drag a block to move it (also to another row), drag its ends to make it longer or shorter, right click deletes it. Delete and Ctrl+D work on the block picked.
+
+# Changing one
+- Click a block: its settings replace the shelf. < and > change what it moves: zoom, turn, flash, shake, the notes themselves (move, size, hide, swirl)...
+- When it acts: the whole time, every few beats, on notes (all, dons, kats, big ones), on hits, on misses.
+- Amount is how much: click it to type a number, or use - and + (Shift x10, Alt x0.1).
+- A block that acts the whole time fades in and out over the beats you set. One that repeats does a kick (jumps and settles), a swing (one side, then the other) or a step (a bit more each time), taking the beats you set.
+- Keep after: what it reached stays when it ends (a turn that stops half way round stays there).
+- Fit to kiai and Fit to selection stretch it over those.
+
+# Recipes
+- Every second beat of the kiai: Every 2nd beat, dropped with the playhead in the kiai.
+- A shake on every big note: Big note slam.
+- The notes disappear in the last chorus: select its notes, click Hide the notes.
+- A quarter turn each bar that stays: Quarter turns.
+
+Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes are under Advanced... for what clips can't do yet.
+
+> Everything here is visual only: judging, score and pp never change.
 ",
     },
     Chapter {
@@ -276,7 +306,7 @@ static RU: [Chapter; COUNT] = [
 - Create создаёт папку в Songs и открывает карту здесь.
 
 # Экран
-- Режимы: F1 Compose (ноты), F2 Gimmicks (трюки для stable), F3 Timing (BPM и скорость слайдеров), F4 Effects (анимации, только .tko).
+- Режимы: F1 Compose (ноты), F2 Gimmicks (трюки для stable), F3 Timing (BPM и скорость слайдеров), F4 Effects (эффекты-блоки, ключевые кадры и ноды, только .tko).
 - Таймлайн идёт слева направо; белая линия — курсор воспроизведения. Alt+колесо — масштаб, средняя кнопка — сдвиг.
 - Превью — настоящая игра, нарисованная в точке курсора.
 - Наведите на что угодно — появится подсказка. Все команды есть в меню с клавишами рядом.
@@ -370,6 +400,36 @@ File > Open song folder открывает папку карты. Бросьте
 F2 Gimmicks собирает конструкции, которые мапперы делают в osu!stable: фейк-слайдеры, анти-барлайн стены, генерируемый SV. Выберите инструмент, задайте числа в панели и примените в курсоре или к выделению. Preview сначала показывает, что получится; Keep записывает, Cancel выбрасывает. Каждый результат — один шаг отмены.
 
 Это работает в обычных .osu картах и играется так же в stable. Ничего из анимаций клиента здесь не нужно.
+",
+    },
+    Chapter {
+        title: "Эффекты-блоки",
+        try_it: None,
+        body: "\
+F4 Effects открывается на Clips: самый простой способ заставить .tko карту делать с игровым полем что угодно. Эффект — это блок на дорожках под таймлайном. Где он начинается и кончается, там и действует, и идёт в такт музыке.
+
+# Как сделать
+- Нажмите эффект на полке (Beat pulse, Sway, Spin, Hide the notes, Drop...). Он встанет на плейхед: на весь кийай, если плейхед в нём; на выделенные ноты, если они есть; иначе на четыре такта вперёд.
+- Или протяните мышью по пустой дорожке: так рисуется эффект, который вы брали последним, от места нажатия до места, где отпустили.
+- Блок тащится мышью (и на другую дорожку), за края — длиннее или короче, правый клик удаляет. Delete и Ctrl+D работают с выбранным блоком.
+
+# Как изменить
+- Нажмите на блок: вместо полки появятся его настройки. < и > меняют, что он двигает: зум, поворот, вспышку, тряску, сами ноты (сдвиг, размер, скрыть, закрутить)...
+- Когда он действует: всё время, каждые несколько долей, на нотах (все, доны, каты, большие), на попаданиях, на промахах.
+- Amount — сколько: нажмите, чтобы ввести число, или - и + (Shift x10, Alt x0.1).
+- Блок «всё время» плавно входит и выходит за заданные доли. Повторяющийся делает толчок (прыгает и успокаивается), качели (в одну сторону, потом в другую) или шаг (каждый раз чуть больше) за заданные доли.
+- Keep after: то, к чему он пришёл, остаётся после конца (поворот, остановившийся на полпути, так и остаётся).
+- Fit to kiai и Fit to selection растягивают его на кийай или на выделение.
+
+# Рецепты
+- Каждая вторая доля в кийае: Every 2nd beat, брошенный с плейхедом в кийае.
+- Тряска на каждой большой ноте: Big note slam.
+- Ноты пропадают в последнем припеве: выделите его ноты, нажмите Hide the notes.
+- Четверть оборота каждый такт, и так и остаётся: Quarter turns.
+
+Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes спрятаны под Advanced... — для того, чего блоки пока не умеют.
+
+> Всё здесь только визуальное: судейство, очки и pp не меняются.
 ",
     },
     Chapter {

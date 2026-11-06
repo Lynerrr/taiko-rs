@@ -298,7 +298,10 @@ impl View {
             KAct::MakeTko => match self.ed.make_tko() {
                 Ok(p) => {
                     self.status = format!("made {}", p.display());
-                    self.g_page = 2;
+                    // The page it was made from (clips or keyframes) goes on.
+                    if self.g_page != 4 {
+                        self.g_page = 2;
+                    }
                     self.mark_stale();
                 }
                 Err(e) => self.status = e,

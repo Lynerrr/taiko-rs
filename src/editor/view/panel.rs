@@ -349,15 +349,25 @@ impl View {
         let inner = w - 16.0;
         let dim = rgba(0x9a9ab0, 1.0);
         if effects {
-            // The pages sit in the title row, so the content gets the whole panel.
-            let tabs = [
-                ("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2),
-                ("Nodes".to_string(), Btn::GPage(3), self.g_page == 3),
-            ];
+            // The pages sit in the title row, so the content gets the whole panel. Keyframes and
+            // nodes are the advanced ways: shown on asking.
+            let mut tabs = vec![("Clips".to_string(), Btn::GPage(4), self.g_page == 4)];
+            if self.fx_advanced || self.g_page < 4 {
+                tabs.push(("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2));
+                tabs.push(("Nodes".to_string(), Btn::GPage(3), self.g_page == 3));
+            } else {
+                tabs.push((
+                    "Advanced...".to_string(),
+                    Btn::Fx(super::clips::FxAct::Advanced),
+                    false,
+                ));
+            }
             let ty = self.layout.inspector[1] + 0.5;
             self.row(c, x + 100.0, ty, &tabs);
         }
-        if self.g_page == 3 {
+        if self.g_page == 4 {
+            self.draw_clips_page(c, x, y, inner);
+        } else if self.g_page == 3 {
             self.draw_nodes_page(c, x, y, inner);
         } else if self.g_page == 2 {
             self.draw_keys_page(c, x, y, inner);
