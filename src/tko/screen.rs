@@ -89,9 +89,11 @@ fn slice(c: &mut Canvas, start: usize, fx: &FieldFx) {
     }
 }
 
-/// Copies of the playfield (`fx.copies`) behind it, each moved on its own, made from the shapes
-/// drawn since `start`: call once the playfield is where it ends up. They turn and size about
-/// `centre`.
+/// Copies of the playfield (`fx.copies`), each moved on its own, made from the shapes drawn since
+/// `start`: call once the playfield is where it ends up. They turn and size about `centre`.
+/// Their lanes go behind everything of the playfield; the rest of them (notes, drum, hit target)
+/// over its lane but under its own notes, so a copy that overlaps the lane (one swaying to the
+/// side) still shows on it instead of hiding under it.
 pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2]) {
     let end = c.shapes.len();
     if start >= end || fx.copies.iter().all(|k| k.show < 0.01) {
@@ -99,7 +101,7 @@ pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2]) {
     }
     let w = c.width;
     let mut budget = MAX_EXTRA_SHAPES;
-    let mut out = Vec::new();
+    let (mut lanes, mut bodies) = (Vec::new(), Vec::new());
     for k in fx.copies.iter().filter(|k| k.show >= 0.01) {
         let show = k.show.clamp(0.0, 1.0);
         let lane = show * (1.0 - k.lane_fade.clamp(0.0, 1.0));
@@ -124,9 +126,22 @@ pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2]) {
             k.zoom,
             [centre[0] + k.x, centre[1] + k.y],
         );
-        out.extend(part);
+        for s in part {
+            if is_panel(&s, w) {
+                lanes.push(s);
+            } else {
+                bodies.push(s);
+            }
+        }
     }
-    insert_at(c, start, out);
+    // Over the shapes the lane is made of.
+    let at = start
+        + c.shapes[start..end]
+            .iter()
+            .take_while(|s| is_panel(s, w))
+            .count();
+    insert_at(c, at, bodies);
+    insert_at(c, start, lanes);
 }
 
 /// Black behind the playfield, over what was drawn before it (the background): call before the
@@ -662,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn copies_go_behind_the_playfield_each_moved_and_faded_on_its_own() {
+    fn copies_lanes_go_behind_the_playfield_and_their_notes_over_its_lane() {
         use super::super::runtime::CopyFx;
         let mut c = field(2);
         let mut fx = FieldFx::default();
@@ -678,19 +693,24 @@ mod tests {
             ..CopyFx::default()
         };
         copies(&mut c, 0, &fx, [320.0, 240.0]);
-        // 3 shapes of the field, then 3 of the first copy and the 2 notes of the third, all in
-        // front of the field's own.
-        assert_eq!(c.shapes.len(), 3 + 3 + 2);
-        let first = &c.shapes[..3];
-        assert!(first.iter().all(|s| s.fill[3] == 0.5));
-        assert_eq!(first[1].center, [150.0, 140.0], "a hundred up");
-        let turned = &c.shapes[3..5];
-        let at = turned[0].center;
+        // The first copy's lane, the field's lane, the first copy's 2 notes and the third's,
+        // then the field's own notes on top.
+        assert_eq!(c.shapes.len(), 1 + 1 + 2 + 2 + 2);
+        assert_eq!(c.shapes[0].fill[3], 0.5, "the copy's lane, behind");
+        assert_eq!(c.shapes[0].center[1], 140.0, "a hundred up");
+        assert_eq!(c.shapes[1].fill[3], 1.0, "the field's own lane");
+        assert!(c.shapes[2..4].iter().all(|s| s.fill[3] == 0.5));
+        assert_eq!(c.shapes[2].center, [150.0, 140.0]);
+        let at = c.shapes[4].center;
         assert!(
             (at[0] - 490.0).abs() < 1e-3 && (at[1] - 240.0).abs() < 1e-3,
             "turned about the middle: {at:?}"
         );
-        assert_eq!(c.shapes[5].fill[3], 1.0, "the field's own lane, in front");
+        assert_eq!(
+            c.shapes[6].center,
+            [150.0, 240.0],
+            "the field's notes, on top"
+        );
         let mut c = field(1);
         copies(&mut c, 0, &FieldFx::default(), [320.0, 240.0]);
         assert_eq!(c.shapes.len(), 2, "no copies, nothing added");
