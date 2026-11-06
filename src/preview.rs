@@ -974,7 +974,15 @@ impl Preview {
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
         let mut stats: [Vec<StatCell>; 3] = [
-            vec![("OD", format!("{:.1}", e.meta.od), 1.0)],
+            // At the speed played: the windows shrink or grow with it.
+            vec![(
+                "OD",
+                format!(
+                    "{:.1}",
+                    crate::beatmap::od_at_rate(e.meta.od, self.requested_rate.0)
+                ),
+                1.0,
+            )],
             Vec::new(),
             Vec::new(),
         ];
