@@ -87,6 +87,7 @@ pub enum Cmd {
     ZoomIn,
     ZoomOut,
     ZoomFit,
+    Waveform,
     SnapStep(i32),
     SnapTo(u32),
     RateStep(i32),
@@ -152,6 +153,7 @@ impl Cmd {
             Cmd::ZoomIn => "Zoom in",
             Cmd::ZoomOut => "Zoom out",
             Cmd::ZoomFit => "Zoom to the whole song",
+            Cmd::Waveform => "Waveform on / off",
             Cmd::SnapStep(n) if n < 0 => "Coarser snap",
             Cmd::SnapStep(_) => "Finer snap",
             Cmd::SnapTo(_) => "Beat snap",
@@ -218,6 +220,9 @@ impl Cmd {
             Cmd::PrevLine | Cmd::NextLine => "Moves the playhead to the neighbouring timing line.",
             Cmd::ZoomIn | Cmd::ZoomOut | Cmd::ZoomFit => {
                 "Changes how much time the timeline shows."
+            }
+            Cmd::Waveform => {
+                "Shows the music under the notes: red is bass (often a don), blue is treble (often a kat)."
             }
             Cmd::SnapStep(_) | Cmd::SnapTo(_) => {
                 "How finely the grid divides a beat. Notes you place land on it."

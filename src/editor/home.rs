@@ -24,8 +24,6 @@ const DIM: u32 = 0x8a8aa0;
 const TEXT: u32 = 0xe8e8f0;
 const WARN: u32 = 0xFFD34D;
 const BAD: u32 = 0xff7a7a;
-/// Frames of audio per waveform block.
-const BLOCK: usize = 128;
 /// The longest stretch the metronome is baked for at a time (ms).
 const BAKE_MS: f64 = 45_000.0;
 /// Bars the loop repeats.
@@ -139,10 +137,7 @@ pub enum Out {
 /// A song, decoded and looked at.
 struct Decoded {
     track: Arc<Track>,
-    /// Lowest and highest sample of each block of `BLOCK` frames (mono).
-    peaks: Vec<(f32, f32)>,
-    /// The loudest of each of `OUTLINE` even stretches of the song, for the overview.
-    outline: Vec<f32>,
+    wave: super::wave::Wave,
     analysis: Option<tempo::Analysis>,
     rate: f64,
 }
@@ -359,13 +354,11 @@ impl Home {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = crate::audio::decode_shared(&path, rate).map(|track| {
-                let peaks = peaks_of(&track.samples);
-                let outline = outline_of(&peaks);
+                let wave = super::wave::Wave::build(&track.samples, rate as f64, 1.0);
                 let analysis = tempo::analyse(&track.samples, rate as f64);
                 Decoded {
                     track,
-                    peaks,
-                    outline,
+                    wave,
                     analysis,
                     rate: rate as f64,
                 }
@@ -1749,21 +1742,8 @@ impl Home {
         self.panel(c, x, y, w, h);
         let Some(d) = self.decoded() else { return };
         let total = self.duration().max(1.0);
-        let n = d.outline.len().max(1);
-        let cw = w / n as f32;
-        let mid = y + h / 2.0;
-        for (i, v) in d.outline.iter().enumerate() {
-            let half = v.min(1.0) * (h / 2.0 - 1.5);
-            if half > 0.1 {
-                c.rect(
-                    x + i as f32 * cw,
-                    mid - half,
-                    cw + 0.2,
-                    half * 2.0,
-                    rgba(0x5b7fc7, 0.7),
-                );
-            }
-        }
+        d.wave
+            .draw(c, [x + 1.0, y + 1.5, w - 2.0, h - 3.0], 0.0, total, 0.75);
         // The stretch the waveform shows.
         let a = x + (self.view_start / total).clamp(0.0, 1.0) as f32 * w;
         let b = x + ((self.view_start + self.view_len) / total).clamp(0.0, 1.0) as f32 * w;
@@ -1788,34 +1768,14 @@ impl Home {
             c.text_centered(x + w / 2.0, y + h / 2.0 - 4.0, 8.0, rgba(DIM, 1.0), text);
             return;
         };
-        let mid = y + h / 2.0;
-        let per_ms = d.rate / 1000.0 / BLOCK as f64;
         let (start, len) = (self.view_start, self.view_len);
-        let columns = (w as usize).clamp(1, 900);
-        let cw = w / columns as f32;
-        c.rect(x, mid, w, 0.5, rgba(0x33334a, 1.0));
-        for k in 0..columns {
-            let t0 = start + len * k as f64 / columns as f64;
-            let t1 = start + len * (k + 1) as f64 / columns as f64;
-            let b0 = ((t0 * per_ms) as usize).min(d.peaks.len());
-            let b1 = ((t1 * per_ms).ceil() as usize).clamp(b0 + 1, d.peaks.len().max(b0 + 1));
-            let (mut lo, mut hi) = (0.0f32, 0.0f32);
-            for p in d.peaks.get(b0..b1.min(d.peaks.len())).unwrap_or(&[]) {
-                lo = lo.min(p.0);
-                hi = hi.max(p.1);
-            }
-            let half = h / 2.0 - 4.0;
-            let (top, bottom) = (mid - hi.min(1.0) * half, mid - lo.max(-1.0) * half);
-            if bottom - top > 0.2 {
-                c.rect(
-                    x + k as f32 * cw,
-                    top,
-                    cw + 0.3,
-                    bottom - top,
-                    rgba(0x5b7fc7, 1.0),
-                );
-            }
-        }
+        d.wave.draw(
+            c,
+            [x + 1.0, y + 3.0, w - 2.0, h - 6.0],
+            start,
+            start + len,
+            1.0,
+        );
         // The grid: bars heavy and red, beats thin.
         let period = 60_000.0 / self.bpm.max(1.0);
         let spacing = period / len * w as f64;
@@ -1867,45 +1827,6 @@ impl Home {
     }
 }
 
-/// Stretches the overview splits the song into.
-const OUTLINE: usize = 1024;
-
-/// The loudest of each of `OUTLINE` even stretches of `peaks` (fewer for a very short song).
-fn outline_of(peaks: &[(f32, f32)]) -> Vec<f32> {
-    if peaks.is_empty() {
-        return Vec::new();
-    }
-    let n = OUTLINE.min(peaks.len());
-    (0..n)
-        .map(|i| {
-            let (a, b) = (
-                i * peaks.len() / n,
-                ((i + 1) * peaks.len() / n).max(i * peaks.len() / n + 1),
-            );
-            peaks[a..b.min(peaks.len())]
-                .iter()
-                .fold(0.0f32, |m, p| m.max(-p.0).max(p.1))
-        })
-        .collect()
-}
-
-/// Lowest and highest mono sample of each block of `BLOCK` frames.
-fn peaks_of(samples: &[f32]) -> Vec<(f32, f32)> {
-    samples
-        .chunks(BLOCK * 2)
-        .map(|block| {
-            block
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .fold((0.0f32, 0.0f32), |(lo, hi), f| {
-                    let m = (f[0] + f[1]) * 0.5;
-                    (lo.min(m), hi.max(m))
-                })
-        })
-        .collect()
-}
-
 /// Where music usually is, for the dialog to start in.
 fn dirs_music() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
@@ -1928,25 +1849,10 @@ mod tests {
                 rate: 1.0,
                 stream: None,
             }),
-            peaks: peaks_of(&vec![0.2; frames * 2]),
-            outline: outline_of(&peaks_of(&vec![0.2; frames * 2])),
+            wave: super::super::wave::Wave::build(&vec![0.2; frames * 2], rate, 1.0),
             analysis: None,
             rate,
         }));
-    }
-
-    #[test]
-    fn peaks_cover_blocks_of_the_song() {
-        let mut s = vec![0.0f32; BLOCK * 2 * 3];
-        s[BLOCK * 2 + 4] = 0.5;
-        s[BLOCK * 2 + 5] = 0.3;
-        s[BLOCK * 2 * 2] = -0.8;
-        s[BLOCK * 2 * 2 + 1] = -0.6;
-        let p = peaks_of(&s);
-        assert_eq!(p.len(), 3);
-        assert_eq!(p[0], (0.0, 0.0));
-        assert!((p[1].1 - 0.4).abs() < 1e-6);
-        assert!((p[2].0 + 0.7).abs() < 1e-6);
     }
 
     #[test]
