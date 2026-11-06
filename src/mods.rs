@@ -1374,6 +1374,9 @@ mod tests {
         m.toggle(HalfTime);
         assert!(m.has(HalfTime) && !m.has(DoubleTime));
         assert_eq!(m.speed(1.2, true), (0.75, true));
+        // DT plays at 1.5x whatever speed was picked: the two never multiply (nor their pp).
+        assert_eq!(Mods::parse("DT").speed(2.0, true), (1.5, true));
+        assert_eq!(Mods::parse("NC").speed(1.2, true), (1.5, false));
         m.toggle(WindUp);
         assert!(!m.has(HalfTime) && m.wind() == Some(1.5));
         assert!((Mods::parse("HD,HR").multiplier() - 1.06 * 1.06).abs() < 1e-9);

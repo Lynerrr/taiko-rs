@@ -14399,6 +14399,7 @@ impl State {
                 // Always at full size (no longer dragged smaller).
                 self.preview.size = preview::PREVIEW_SIZE.1;
                 let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
+                self.preview.mods = self.cfg.mods;
                 self.preview.potential = match self.select.selected() {
                     Some(i) => self.potentials.get(
                         &self.library[i].path,
