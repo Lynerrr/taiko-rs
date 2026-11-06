@@ -392,6 +392,21 @@ impl NoteProp {
         }
     }
 
+    /// A value at the song's time `song` with the before-the-hit value `near` on top: moves,
+    /// turns and tint add, sizes and opacity multiply, either one hides, and a hue replaces.
+    pub fn before(self, song: f64, near: f64) -> f64 {
+        let v = match self {
+            NoteProp::Dx | NoteProp::Dy | NoteProp::Swirl | NoteProp::Tint => song + near,
+            NoteProp::Scale | NoteProp::Opacity | NoteProp::StretchX | NoteProp::StretchY => {
+                song * near
+            }
+            NoteProp::Hidden => song.max(near),
+            NoteProp::TintHue => near,
+        };
+        let (lo, hi) = self.range();
+        v.clamp(lo, hi)
+    }
+
     pub fn range(self) -> (f64, f64) {
         match self {
             NoteProp::Dx | NoteProp::Dy => (-1000.0, 1000.0),
@@ -417,6 +432,10 @@ pub struct Group {
     /// The way its notes fly in instead of along the lane (see `path`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<NotePath>,
+    /// What each note does as its own hit nears: keyed by beats before that note's hit (0 the
+    /// hit, negative after it), on top of `tracks` (see [`NoteProp::before`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub before: BTreeMap<String, Track>,
 }
 
 impl Group {
@@ -427,7 +446,14 @@ impl Group {
     pub fn track_mut(&mut self, p: NoteProp) -> &mut Track {
         self.tracks.entry(p.name().to_string()).or_default()
     }
+
+    pub fn before_track(&self, p: NoteProp) -> Option<&Track> {
+        self.before.get(p.name())
+    }
 }
+
+/// How far from its hit a before-the-hit key may be, in beats (before, and after).
+pub const BEFORE_BEATS: (f64, f64) = (32.0, 4.0);
 
 /// A moment in the map the author named: where a section starts, a drop, a break. Graph nodes
 /// refer to marks instead of typed times, and the editor shows them on the timeline.
@@ -459,10 +485,11 @@ pub struct Gimmick {
 impl Gimmick {
     pub fn is_empty(&self) -> bool {
         self.field.values().all(Track::is_empty)
-            && self
-                .groups
-                .iter()
-                .all(|g| g.tracks.values().all(Track::is_empty) && g.path.is_none())
+            && self.groups.iter().all(|g| {
+                g.tracks.values().all(Track::is_empty)
+                    && g.before.values().all(Track::is_empty)
+                    && g.path.is_none()
+            })
             && self.graph.is_empty()
             && self.marks.is_empty()
             && self.clips.is_empty()
@@ -524,6 +551,18 @@ impl Gimmick {
                 }
             }
             g.tracks.retain(|_, t| !t.is_empty());
+            g.before
+                .retain(|k, _| NoteProp::ALL.iter().any(|p| p.name() == k));
+            for (name, t) in g.before.iter_mut() {
+                t.sanitize();
+                let (far, after) = BEFORE_BEATS;
+                t.keys.retain(|k| (-after..=far).contains(&k.t));
+                if let Some(p) = NoteProp::ALL.iter().find(|p| p.name() == name) {
+                    let (lo, hi) = p.range();
+                    t.keys.iter_mut().for_each(|k| k.v = k.v.clamp(lo, hi));
+                }
+            }
+            g.before.retain(|_, t| !t.is_empty());
             if let Some(p) = &mut g.path {
                 p.sanitize();
             }
