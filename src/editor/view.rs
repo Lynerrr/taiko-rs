@@ -547,6 +547,11 @@ pub struct View {
     svt: curves::SvtUi,
     /// The last `update`, for how long the view scrolls at an edge.
     last_tick: Option<Instant>,
+    /// Where a wheel seek is gliding the playhead to, and the view with it (as in osu!, the
+    /// wheel doesn't jump). Anything else done first lands it there (`land_seek`).
+    seek_to: Option<f64>,
+    view_to: Option<f64>,
+    glide_tick: Option<Instant>,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -674,6 +679,9 @@ impl View {
             held: Keys::default(),
             svt: curves::SvtUi::new(),
             last_tick: None,
+            seek_to: None,
+            view_to: None,
+            glide_tick: None,
         };
         v.follow(true);
         Ok(v)
@@ -715,6 +723,8 @@ impl View {
     // ---- time ----
 
     pub fn set_time(&mut self, t: f64) {
+        self.seek_to = None;
+        self.view_to = None;
         self.ed.time = t.max(0.0).round();
         if self.playing.is_some() {
             // Playing on from there: the clock at once, the music in `update`.
@@ -765,6 +775,63 @@ impl View {
         }
     }
 
+    /// A wheel seek to `t`: the playhead (and the view, if `t` is off it) glide there. Playing
+    /// or in a drag it jumps, as before: the music and what is being dragged go by the playhead.
+    fn seek_smoothly(&mut self, t: f64) {
+        let t = t.max(0.0).round();
+        if self.playing.is_some() || !matches!(self.drag, Drag::None) {
+            self.set_time(t);
+            return;
+        }
+        let w = self.timeline_w() as f64 * self.ms_per_px;
+        let view = self.view_to.unwrap_or(self.view_start);
+        if t < view || t > view + w * 0.96 {
+            self.view_to = Some(t - w * 0.3);
+        }
+        self.seek_to = Some(t);
+    }
+
+    /// Lands a glide where it was going, at once.
+    pub fn land_seek(&mut self) {
+        if let Some(t) = self.seek_to.take() {
+            self.ed.time = t;
+        }
+        if let Some(v) = self.view_to.take() {
+            self.view_start = v;
+        }
+        self.glide_tick = None;
+    }
+
+    /// One frame of a wheel seek: most of the way in about a tenth of a second.
+    fn glide(&mut self, now: Instant) {
+        if self.seek_to.is_none() && self.view_to.is_none() {
+            self.glide_tick = None;
+            return;
+        }
+        let dt = self.glide_tick.replace(now).map_or(1.0 / 120.0, |p| {
+            now.duration_since(p).as_secs_f64().min(0.05)
+        });
+        let k = 1.0 - (-dt / 0.03).exp();
+        if let Some(to) = self.seek_to {
+            let t = self.ed.time + (to - self.ed.time) * k;
+            if (to - t).abs() < 0.5 {
+                self.ed.time = to;
+                self.seek_to = None;
+            } else {
+                self.ed.time = t;
+            }
+        }
+        if let Some(to) = self.view_to {
+            let v = self.view_start + (to - self.view_start) * k;
+            if (to - v).abs() < 0.5 * self.ms_per_px {
+                self.view_start = to;
+                self.view_to = None;
+            } else {
+                self.view_start = v;
+            }
+        }
+    }
+
     fn x_of(&self, t: f64) -> f32 {
         self.layout.timeline[0] + ((t - self.view_start) / self.ms_per_px) as f32
     }
@@ -803,6 +870,7 @@ impl View {
     // ---- loading and playing ----
 
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) {
+        self.glide(now);
         self.edge_scroll(now);
         self.follow_seek(audio);
         self.poll_upload();
@@ -2027,6 +2095,7 @@ impl View {
     }
 
     pub fn mouse_down(&mut self, x: f32, y: f32, keys: Keys, audio: Option<&Engine>) {
+        self.land_seek();
         if (x - self.mouse.0).abs() + (y - self.mouse.1).abs() > 0.5 {
             self.moved_at = Instant::now();
         }
@@ -2096,6 +2165,7 @@ impl View {
 
     /// The middle button pans the timeline.
     pub fn middle(&mut self, pressed: bool, x: f32, y: f32) {
+        self.land_seek();
         self.mouse = (x, y);
         if pressed {
             if inside(self.layout.timeline, x, y) || inside(self.layout.graph, x, y) {
@@ -2348,6 +2418,7 @@ impl View {
     /// Right click: cancels a roll being drawn, else deletes what's under the pointer: on a
     /// selected note, the whole selection, as Backspace does.
     pub fn right_click(&mut self, x: f32, y: f32) {
+        self.land_seek();
         if self.menu.take().is_some() || self.modal_from > 0 {
             return;
         }
@@ -2418,6 +2489,9 @@ impl View {
         if keys.alt && !keys.ctrl && !over_time {
             return false;
         }
+        if keys.alt || keys.ctrl {
+            self.land_seek();
+        }
         if keys.ctrl && keys.alt {
             let at = TOOLS
                 .iter()
@@ -2432,18 +2506,20 @@ impl View {
             self.step_snap(notches.signum());
         } else {
             let per = if keys.shift { 4 } else { 1 };
-            let mut t = self.ed.time;
+            // Notches in quick succession go on from where the last one is gliding to.
+            let mut t = self.seek_to.unwrap_or(self.ed.time);
+            let view = self.view_to.unwrap_or(self.view_start);
             let w = self.timeline_w() as f64 * self.ms_per_px;
-            if t < self.view_start || t > self.view_start + w * 0.96 {
+            if t < view || t > view + w * 0.96 {
                 // The view was panned away from the playhead: go on from what's on screen.
                 // Stepping from the playhead would throw the view back to it, and a block
                 // being drawn would stretch all the way there.
-                t = self.ed.snapped(self.view_start + w * 0.3);
+                t = self.ed.snapped(view + w * 0.3);
             }
             for _ in 0..(notches.unsigned_abs().min(20) * per) {
                 t = timing::step(&self.ed.chart.timing, t, notches < 0, self.ed.snap);
             }
-            self.set_time(t);
+            self.seek_smoothly(t);
         }
         true
     }
@@ -2650,6 +2726,7 @@ impl View {
     }
 
     pub fn press(&mut self, b: Btn, keys: Keys, audio: Option<&Engine>) {
+        self.land_seek();
         if !matches!(b, Btn::Menu(_)) {
             self.menu = None;
         }
@@ -2809,6 +2886,7 @@ impl View {
         keys: Keys,
         audio: Option<&Engine>,
     ) -> KeyResult {
+        self.land_seek();
         if let Some((i, text)) = &mut self.n_typing {
             match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -4147,6 +4225,7 @@ mod tests {
         let mut v = view();
         v.ed.time = 1000.0;
         v.wheel(-1, Keys::default());
+        v.land_seek();
         assert_eq!(v.ed.time, 1125.0);
         let before = v.ms_per_px;
         let alt = Keys {
@@ -4178,6 +4257,7 @@ mod tests {
                 ..Keys::default()
             },
         );
+        v.land_seek();
         assert_eq!(v.ed.time, 1500.0, "Shift+wheel takes four steps");
         // Ctrl+Alt+wheel changes the tool.
         v.ed.tool = Tool::Note;
@@ -4190,6 +4270,56 @@ mod tests {
             },
         );
         assert_eq!(v.ed.tool, Tool::Roll);
+    }
+
+    #[test]
+    fn the_wheel_glides_the_playhead_and_quick_notches_add_up() {
+        let mut v = view();
+        v.ed.snap = 4;
+        v.ed.time = 1000.0;
+        let t0 = Instant::now();
+        v.wheel(-1, Keys::default());
+        v.wheel(-1, Keys::default());
+        assert_eq!(v.ed.time, 1000.0, "not a jump");
+        let mut last = 1000.0;
+        for i in 1..=40 {
+            v.update(t0 + std::time::Duration::from_millis(8 * i), None);
+            assert!(v.ed.time >= last && v.ed.time <= 1250.0, "{}", v.ed.time);
+            last = v.ed.time;
+            if i == 6 {
+                assert!(
+                    v.ed.time > 1100.0 && v.ed.time < 1250.0,
+                    "on its way: {}",
+                    v.ed.time
+                );
+            }
+        }
+        assert_eq!(v.ed.time, 1250.0, "two steps, landed on the grid");
+        // Off screen, the view glides along to bring it back a third in.
+        let w = v.timeline_w() as f64 * v.ms_per_px;
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        v.wheel(-20, shift);
+        v.wheel(-20, shift);
+        let to = v.seek_to.unwrap();
+        assert!(to > v.view_start + w, "{to}");
+        for i in 41..=120 {
+            v.update(t0 + std::time::Duration::from_millis(8 * i), None);
+        }
+        assert_eq!(v.ed.time, to);
+        assert!((v.view_start - (to - w * 0.3)).abs() < 1.0);
+        // Anything done mid-glide happens where it was going.
+        v.wheel(1, Keys::default());
+        let back = v.seek_to.unwrap();
+        v.key(KeyCode::KeyZ, false, Keys::default(), None);
+        assert!(v.seek_to.is_none());
+        assert_ne!(v.ed.time, back, "Z went on from the landed playhead");
+        v.ed.time = 1000.0;
+        v.wheel(-1, Keys::default());
+        v.right_click(0.0, 0.0);
+        assert_eq!(v.ed.time, 1125.0);
     }
 
     #[test]
