@@ -224,9 +224,14 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 
 # More notes, the same motion
 - Copy motion, pick other notes, Paste motion: they get the same path, pace and keyframes.
-- Select its notes picks a group's notes on the timeline again. A note flies with one group: giving it a new path takes it out of its old group.
+- Select them picks a group's notes on the timeline again. A note flies with one group: giving it a new path takes it out of its old group.
 
-> Paths are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
+# Before the hit
+- The Before the hit tab gives the picked notes a move that each one does as its own hit nears, wherever it is: fade in late, vanish early, pop in, drop in, rise from below, jump up, spin in, flicker in, shake, squash on the hit.
+- Or key it yourself on the graph: pick what to change (fade, size, up/down, sideways, turn, hide, wide, tall, tint), click to add a key, drag it, right click to remove it. Left is 4 beats before the hit, the bright line is the hit itself. Keys sit on 1/8 beats; hold Shift to place them freely.
+- It works with a path and with the Keyframes page: moves and turns add up, size and fade multiply.
+
+> Paths and moves are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
 ",
     },
     Chapter {
@@ -544,9 +549,14 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 
 # Больше нот с тем же движением
 - Copy motion, выделите другие ноты, Paste motion: у них будет тот же путь, темп и ключевые кадры.
-- Select its notes снова выделяет ноты группы. Нота летит с одной группой: новый путь забирает её из старой группы.
+- Select them снова выделяет ноты группы. Нота летит с одной группой: новый путь забирает её из старой группы.
 
-> Траектории только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
+# Перед ударом
+- Вкладка Before the hit даёт выбранным нотам движение, которое каждая делает перед своим ударом, где бы она ни была: проявиться поздно, исчезнуть заранее, выскочить, упасть сверху, подняться снизу, подпрыгнуть, закрутиться, мигнуть, задрожать, сплющиться в момент удара.
+- Или задайте его сами на графике: выберите, что меняется (прозрачность, размер, вверх/вниз, вбок, поворот, скрытие, ширина, высота, оттенок), клик добавляет ключ, его можно тащить, правый клик убирает. Слева 4 доли до удара, яркая линия это сам удар. Ключи встают на 1/8 доли; с Shift ставятся свободно.
+- Работает вместе с путём и со страницей Keyframes: сдвиги и повороты складываются, размер и прозрачность перемножаются.
+
+> Траектории и движения только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
 ",
     },
     Chapter {
