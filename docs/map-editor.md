@@ -120,14 +120,16 @@ Recipes:
 
 F4 opens the Effects page on **Clips**: effects as blocks on rows under the timeline, each acting
 from its start to its end and keeping time with the music. Click one of the ready-made effects on
-the shelf (Beat pulse, Every 2nd beat, Sway, Tilt, Spin, Quarter turns, Earthquake, Big note slam,
+the shelf (Beat pulse, Every 2nd beat, Sway, Tilt, Spin, Quarter turns, Spiral lane, Zigzag lane, Loop lane,
+Turn over, Earthquake, Big note slam,
 Kat flash, Drop, Build-up, Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up, Echo
 trail, Kaleidoscope, Colour wash, Miss glitch) and it lands at the playhead: over the whole kiai
 the playhead is in, else over the notes selected, else over the next four bars. A drag on an empty
 row draws the effect used last. Drag a block to move it (to another row too), its ends to resize
 it; right click deletes it, Delete and Ctrl+D act on the one picked. Clicking a block shows its
-settings instead of the shelf: what it moves (`<` `>`: any playfield property, a shake, or the notes:
-move, size, see-through, hidden, swirl), when it acts (the whole time, every few beats, on notes
+settings instead of the shelf: what it moves (`<` `>`: any playfield property, a shake, the lane's
+shape (zigzag, U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden,
+swirl), when it acts (the whole time, every few beats, on notes
 (all, dons, kats, big ones), on hits, on misses), the amount (click to type), the fades or the
 motion of each repeat (kick, swing, step) and how many beats it takes, the easing, *keep after*, and
 *Fit to kiai* / *Fit to selection*. Blocks add up with each other and with keyframes and nodes.

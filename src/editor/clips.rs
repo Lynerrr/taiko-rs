@@ -3,7 +3,7 @@
 
 use super::chart::Taiko;
 use super::state::Editor;
-use crate::tko::clips::{self, Clip, Motion, Notes, Target, When};
+use crate::tko::clips::{self, Clip, LANE_SHAPES, Motion, Notes, Target, When};
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
 use crate::tko::track::Ease;
 
@@ -11,6 +11,7 @@ use crate::tko::track::Ease;
 pub fn targets() -> Vec<Target> {
     let mut out: Vec<Target> = FieldProp::ALL.iter().map(|p| Target::Field(*p)).collect();
     out.insert(4, Target::Shake);
+    out.extend((0..LANE_SHAPES.len()).map(Target::Lane));
     out.extend(NoteProp::ALL.iter().map(|p| Target::Notes(None, *p)));
     out
 }
@@ -19,6 +20,18 @@ pub fn targets() -> Vec<Target> {
 pub fn target_label(t: Target) -> String {
     match t {
         Target::Shake => "Shake".into(),
+        Target::Lane(k) => format!(
+            "Lane: {}",
+            match LANE_SHAPES.get(k).copied().unwrap_or("") {
+                "zigzag" => "zigzag",
+                "uturn" => "U-turn",
+                "spiral" => "spiral",
+                "loop" => "loop",
+                "elbow" => "elbow",
+                "meadow" => "meadow",
+                other => other,
+            }
+        ),
         Target::Field(p) => match p {
             FieldProp::X => "Move sideways",
             FieldProp::Y => "Move up / down",
@@ -27,6 +40,7 @@ pub fn target_label(t: Target) -> String {
             FieldProp::Scroll => "Scroll speed",
             FieldProp::StretchX => "Stretch wide",
             FieldProp::StretchY => "Stretch tall",
+            FieldProp::Flip => "Turn over",
             FieldProp::Flash => "Flash",
             FieldProp::Vignette => "Dark edges",
             FieldProp::Wash => "Colour wash",
@@ -62,6 +76,9 @@ pub fn target_label(t: Target) -> String {
 /// What a target is about, for its tooltip.
 pub fn target_about(t: Target) -> &'static str {
     match t {
+        Target::Lane(_) => {
+            "Bends the lane into this shape: the notes travel along it. The amount is how far, 0 straight to 1 the whole shape; fade it in and out to morph."
+        }
         Target::Shake => "Jolts the whole playfield in random directions. The amount is how far.",
         Target::Field(p) => p.about(),
         Target::Notes(_, NoteProp::Opacity) => {
@@ -76,6 +93,7 @@ pub fn target_about(t: Target) -> &'static str {
 pub fn target_colour(t: Target) -> u32 {
     match t {
         Target::Shake => 0xFFA040,
+        Target::Lane(_) => 0xFFD34D,
         Target::Notes(..) => 0x5FD49A,
         Target::Field(p) => match p.group() {
             PropGroup::Move => 0x5BA8FF,
@@ -91,6 +109,7 @@ pub fn amount_step(t: Target) -> f64 {
         Target::Field(p) => p.range().1 - p.range().0,
         Target::Notes(_, p) => p.range().1 - p.range().0,
         Target::Shake => 400.0,
+        Target::Lane(_) => 1.0,
     };
     10f64.powf((span / 100.0).log10().floor()).clamp(0.01, 10.0)
 }
@@ -212,6 +231,54 @@ pub const PRESETS: &[Preset] = &[
             c.ease = Ease::BackOut;
             c.keep = true;
             vec![c]
+        },
+    },
+    Preset {
+        name: "Spiral lane",
+        about: "The lane curls into a spiral and back out: the notes ride round it.",
+        make: |s, e, _| {
+            vec![faded(
+                c(Target::Lane(2), s, e, 1.0),
+                4.0,
+                4.0,
+                Ease::SineInOut,
+            )]
+        },
+    },
+    Preset {
+        name: "Zigzag lane",
+        about: "The lane bends into a zigzag, and straightens out at the end.",
+        make: |s, e, _| {
+            vec![faded(
+                c(Target::Lane(0), s, e, 1.0),
+                2.0,
+                2.0,
+                Ease::SineInOut,
+            )]
+        },
+    },
+    Preset {
+        name: "Loop lane",
+        about: "The notes come round a loop before they reach the drum.",
+        make: |s, e, _| {
+            vec![faded(
+                c(Target::Lane(3), s, e, 1.0),
+                4.0,
+                4.0,
+                Ease::SineInOut,
+            )]
+        },
+    },
+    Preset {
+        name: "Turn over",
+        about: "The playfield turns over like a page: the drum ends up on the right.",
+        make: |s, e, _| {
+            vec![faded(
+                c(Target::Field(FieldProp::Flip), s, e, 1.0),
+                1.0,
+                1.0,
+                Ease::SineInOut,
+            )]
         },
     },
     Preset {
