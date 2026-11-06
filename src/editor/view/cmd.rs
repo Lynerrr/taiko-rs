@@ -56,6 +56,7 @@ pub enum Cmd {
     // File.
     Save,
     Revert,
+    SongSetup,
     Upload,
     Export,
     OpenFolder,
@@ -124,6 +125,7 @@ impl Cmd {
         match self {
             Cmd::Save => "Save",
             Cmd::Revert => "Revert to last save",
+            Cmd::SongSetup => "Song setup",
             Cmd::Upload => "Upload to taiko.rs",
             Cmd::Export => "Export map file",
             Cmd::OpenFolder => "Open song folder",
@@ -192,6 +194,9 @@ impl Cmd {
         match self {
             Cmd::Save => "Writes the map. The first save keeps a .bak of the original.",
             Cmd::Revert => "Throws away every change since the last save.",
+            Cmd::SongSetup => {
+                "Artist, title, mapper, difficulty name, source and tags, and HP drain, accuracy (OD) and base SV."
+            }
             Cmd::Upload => "Sends the saved map to taiko.rs: public as CUSTOM, pp once approved.",
             Cmd::Export => {
                 "Saves the map and packs its set into one file to give to people: .rsz with a .tko in it (taiko.rs opens it with a double click), else .osz (osu! too)."

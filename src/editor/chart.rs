@@ -735,6 +735,22 @@ impl Chart {
         self.dirty = true;
     }
 
+    /// Takes a `Key:Value` line out (undoing a key `set_key` added).
+    pub fn remove_key(&mut self, section: &str, key: &str) {
+        let Some(s) = self.sections().into_iter().find(|s| s.name == section) else {
+            return;
+        };
+        let found = (s.header + 1..s.end).find(|&i| {
+            self.lines[i]
+                .split_once(':')
+                .is_some_and(|(k, _)| k.trim() == key)
+        });
+        if let Some(i) = found {
+            self.lines.remove(i);
+            self.dirty = true;
+        }
+    }
+
     pub fn slider_multiplier(&self) -> f64 {
         self.number("Difficulty", "SliderMultiplier", 1.4)
     }

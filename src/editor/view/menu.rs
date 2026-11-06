@@ -26,6 +26,7 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::Save),
             Do(Cmd::Revert),
             Sep,
+            Do(Cmd::SongSetup),
             Do(Cmd::Upload),
             Do(Cmd::Export),
             Do(Cmd::OpenFolder),

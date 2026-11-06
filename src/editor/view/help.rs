@@ -244,6 +244,10 @@ impl View {
                 self.modal_from = self.buttons.len();
                 self.draw_manual(c);
             }
+            Some(Modal::Setup) => {
+                self.modal_from = self.buttons.len();
+                self.draw_setup(c);
+            }
             None => {}
         }
         if self.tour.is_some() {

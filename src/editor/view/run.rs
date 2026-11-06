@@ -135,6 +135,7 @@ impl View {
         match cmd {
             Cmd::Save => self.save(),
             Cmd::Revert => self.revert(),
+            Cmd::SongSetup => self.open_setup(),
             Cmd::Upload => self.open_upload(),
             Cmd::Export => self.export(),
             Cmd::OpenFolder => self.show = Some(self.ed.path.clone()),

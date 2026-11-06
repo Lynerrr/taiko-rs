@@ -26,8 +26,23 @@ pub enum Command {
         before: Box<crate::tko::gimmick::Gimmick>,
         after: Box<crate::tko::gimmick::Gimmick>,
     },
+    /// A `Key:Value` line of the file's other sections (Song setup's metadata and difficulty):
+    /// `None` is no such line.
+    SetKey {
+        section: &'static str,
+        key: &'static str,
+        before: Option<String>,
+        after: Option<String>,
+    },
     /// One step made of several (a gimmick tool writes many lines and notes at once).
     Composite(Vec<Command>),
+}
+
+fn set_key(c: &mut Chart, section: &str, key: &str, value: Option<&str>) {
+    match value {
+        Some(v) => c.set_key(section, key, v),
+        None => c.remove_key(section, key),
+    }
 }
 
 fn insert_objects(c: &mut Chart, list: &[HitObject]) {
@@ -87,6 +102,12 @@ impl Command {
                 c.gimmick = Some((**after).clone());
                 c.dirty = true;
             }
+            Command::SetKey {
+                section,
+                key,
+                after,
+                ..
+            } => set_key(c, section, key, after.as_deref()),
             Command::Composite(l) => l.iter().for_each(|x| x.apply(c)),
         }
     }
@@ -103,6 +124,12 @@ impl Command {
                 c.gimmick = Some((**before).clone());
                 c.dirty = true;
             }
+            Command::SetKey {
+                section,
+                key,
+                before,
+                ..
+            } => set_key(c, section, key, before.as_deref()),
             Command::Composite(l) => l.iter().rev().for_each(|x| x.revert(c)),
         }
     }
