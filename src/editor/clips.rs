@@ -129,6 +129,7 @@ pub fn target_label(t: Target) -> String {
             FieldProp::Slices => "Cut in pieces",
             FieldProp::SliceY => "Pieces up / down",
             FieldProp::SliceX => "Pieces apart",
+            FieldProp::Drum => "Move the drum",
         }
         .into(),
         Target::Notes(g, p) => {

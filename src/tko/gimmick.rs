@@ -2,6 +2,7 @@
 
 use super::clips::Clip;
 use super::graph::Graph;
+use super::path::NotePath;
 use super::track::{Key, Track};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -68,6 +69,9 @@ pub enum FieldProp {
     Slices,
     SliceY,
     SliceX,
+    /// How far along the lane the hit target sits, in virtual units: notes still meet it on
+    /// time.
+    Drum,
 }
 
 /// Where a property sits in the editor's lists.
@@ -91,7 +95,27 @@ impl PropGroup {
 }
 
 impl FieldProp {
-    pub const ALL: [FieldProp; 28] = [
+    /// How much of its change from the default a calmer playfield keeps (Settings, Reduce map
+    /// effects): flashes and glitches the least, camera moves half. What decides when notes are
+    /// hit or where they meet the drum is never touched.
+    pub fn calm(self) -> f64 {
+        match self {
+            FieldProp::Flash | FieldProp::Glitch | FieldProp::Chroma => 0.25,
+            FieldProp::X
+            | FieldProp::Y
+            | FieldProp::Rotation
+            | FieldProp::Zoom
+            | FieldProp::StretchX
+            | FieldProp::StretchY
+            | FieldProp::Blackout
+            | FieldProp::EchoRot
+            | FieldProp::SliceY
+            | FieldProp::SliceX => 0.5,
+            _ => 1.0,
+        }
+    }
+
+    pub const ALL: [FieldProp; 29] = [
         FieldProp::X,
         FieldProp::Y,
         FieldProp::Rotation,
@@ -120,6 +144,7 @@ impl FieldProp {
         FieldProp::Slices,
         FieldProp::SliceY,
         FieldProp::SliceX,
+        FieldProp::Drum,
     ];
 
     pub fn name(self) -> &'static str {
@@ -152,6 +177,7 @@ impl FieldProp {
             FieldProp::Slices => "slices",
             FieldProp::SliceY => "slice_y",
             FieldProp::SliceX => "slice_x",
+            FieldProp::Drum => "drum",
         }
     }
 
@@ -164,7 +190,8 @@ impl FieldProp {
             | FieldProp::Scroll
             | FieldProp::StretchX
             | FieldProp::StretchY
-            | FieldProp::Flip => PropGroup::Move,
+            | FieldProp::Flip
+            | FieldProp::Drum => PropGroup::Move,
             FieldProp::Flash
             | FieldProp::Vignette
             | FieldProp::Wash
@@ -242,6 +269,9 @@ impl FieldProp {
             FieldProp::SliceX => {
                 "How far the pieces spread out from the middle (together below 0), in virtual units."
             }
+            FieldProp::Drum => {
+                "Slides the hit target along the lane, in virtual units. Notes still meet it on time."
+            }
         }
     }
 
@@ -267,7 +297,8 @@ impl FieldProp {
             | FieldProp::Kaleido
             | FieldProp::Slices
             | FieldProp::SliceY
-            | FieldProp::SliceX => 0.0,
+            | FieldProp::SliceX
+            | FieldProp::Drum => 0.0,
             FieldProp::Zoom
             | FieldProp::Scroll
             | FieldProp::StretchX
@@ -304,6 +335,7 @@ impl FieldProp {
             FieldProp::Slices => (0.0, MAX_SLICES as f64),
             FieldProp::EchoRot => (-90.0, 90.0),
             FieldProp::EchoZoom => (0.5, 1.5),
+            FieldProp::Drum => (0.0, 600.0),
         }
     }
 }
@@ -391,6 +423,21 @@ impl NoteProp {
         }
     }
 
+    /// A value at the song's time `song` with the before-the-hit value `near` on top: moves,
+    /// turns and tint add, sizes and opacity multiply, either one hides, and a hue replaces.
+    pub fn before(self, song: f64, near: f64) -> f64 {
+        let v = match self {
+            NoteProp::Dx | NoteProp::Dy | NoteProp::Swirl | NoteProp::Tint => song + near,
+            NoteProp::Scale | NoteProp::Opacity | NoteProp::StretchX | NoteProp::StretchY => {
+                song * near
+            }
+            NoteProp::Hidden => song.max(near),
+            NoteProp::TintHue => near,
+        };
+        let (lo, hi) = self.range();
+        v.clamp(lo, hi)
+    }
+
     pub fn range(self) -> (f64, f64) {
         match self {
             NoteProp::Dx | NoteProp::Dy => (-1000.0, 1000.0),
@@ -413,6 +460,115 @@ pub struct Group {
     pub notes: Vec<f64>,
     #[serde(default)]
     pub tracks: BTreeMap<String, Track>,
+    /// The way its notes fly in instead of along the lane (see `path`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<NotePath>,
+    /// What each note does as its own hit nears: keyed by beats before that note's hit (0 the
+    /// hit, negative after it), on top of `tracks` (see [`NoteProp::before`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub before: BTreeMap<String, Track>,
+    /// What its dons and kats look like until each one's truth shows (see [`ShowAs`]).
+    #[serde(default, skip_serializing_if = "ShowAs::is_true")]
+    pub show: ShowAs,
+}
+
+/// A lie a group's notes tell: drawn in another colour or size until `reveal` beats before
+/// each one's hit, then turning into what they are over [`REVEAL_BEATS`]. Only the look: what
+/// hits them, the score and the sound stay the note's own. Rolls and swells don't lie.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ShowAs {
+    #[serde(default, skip_serializing_if = "ShowColour::is_same")]
+    pub colour: ShowColour,
+    #[serde(default, skip_serializing_if = "ShowSize::is_same")]
+    pub size: ShowSize,
+    /// Beats before each note's hit its truth shows (0: at the hit).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reveal: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// How long a lying note takes to turn into what it is, in beats.
+pub const REVEAL_BEATS: f64 = 0.25;
+
+impl ShowAs {
+    /// Tells no lie.
+    pub fn is_true(&self) -> bool {
+        self.colour.is_same() && self.size.is_same()
+    }
+
+    /// What a note (`kat`, `big`) is drawn as, as a lie: the colour (kat) and the size (big),
+    /// each only if it lies about it.
+    pub fn lie(&self, kat: bool, big: bool) -> (Option<bool>, Option<bool>) {
+        let colour = match self.colour {
+            ShowColour::Same | ShowColour::Unknown => None,
+            ShowColour::Don => Some(false),
+            ShowColour::Kat => Some(true),
+            ShowColour::Swap => Some(!kat),
+        };
+        let size = match self.size {
+            ShowSize::Same | ShowSize::Unknown => None,
+            ShowSize::Small => Some(false),
+            ShowSize::Big => Some(true),
+            ShowSize::Swap => Some(!big),
+        };
+        (colour.filter(|&c| c != kat), size.filter(|&b| b != big))
+    }
+
+    /// How far the truth shows `near` beats before the hit: 0 the lie, 1 the truth.
+    pub fn truth(&self, near: f64) -> f32 {
+        ((self.reveal + REVEAL_BEATS - near) / REVEAL_BEATS).clamp(0.0, 1.0) as f32
+    }
+}
+
+/// The colour a group's notes show as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowColour {
+    /// Their own.
+    #[default]
+    Same,
+    Don,
+    Kat,
+    /// Dons as kats, kats as dons.
+    Swap,
+    /// What a newer map says that this game doesn't know: their own (`sanitize` makes it `Same`).
+    #[serde(other)]
+    Unknown,
+}
+
+impl ShowColour {
+    pub const ALL: [ShowColour; 4] = [Self::Same, Self::Don, Self::Kat, Self::Swap];
+
+    fn is_same(&self) -> bool {
+        matches!(self, Self::Same | Self::Unknown)
+    }
+}
+
+/// The size a group's notes show as.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShowSize {
+    #[default]
+    Same,
+    Small,
+    /// As finishers.
+    Big,
+    /// Finishers small, small ones as finishers.
+    Swap,
+    /// Unknown to this game: their own (`sanitize` makes it `Same`).
+    #[serde(other)]
+    Unknown,
+}
+
+impl ShowSize {
+    pub const ALL: [ShowSize; 4] = [Self::Same, Self::Small, Self::Big, Self::Swap];
+
+    fn is_same(&self) -> bool {
+        matches!(self, Self::Same | Self::Unknown)
+    }
 }
 
 impl Group {
@@ -423,7 +579,14 @@ impl Group {
     pub fn track_mut(&mut self, p: NoteProp) -> &mut Track {
         self.tracks.entry(p.name().to_string()).or_default()
     }
+
+    pub fn before_track(&self, p: NoteProp) -> Option<&Track> {
+        self.before.get(p.name())
+    }
 }
+
+/// How far from its hit a before-the-hit key may be, in beats (before, and after).
+pub const BEFORE_BEATS: (f64, f64) = (32.0, 4.0);
 
 /// A moment in the map the author named: where a section starts, a drop, a break. Graph nodes
 /// refer to marks instead of typed times, and the editor shows them on the timeline.
@@ -450,18 +613,43 @@ pub struct Gimmick {
     /// Effect blocks on the timeline (see `clips`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clips: Vec<Clip>,
+    /// The shared scroll (mania-style SV): the whole lane's speed over the song, on top of the
+    /// map's own slider velocity (see `scroll`). No keys: the song's own.
+    #[serde(default, skip_serializing_if = "Track::is_empty")]
+    pub scroll: Track,
+    /// Notes that are only drawn: never hit, never judged, silent, gone when they reach the drum.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fakes: Vec<FakeNote>,
+}
+
+/// How many fake notes a map may have.
+pub const MAX_FAKES: usize = 20_000;
+
+/// A note that is only drawn (see `Gimmick::fakes`). Groups take it by its time like a real one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FakeNote {
+    /// Chart ms.
+    pub t: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kat: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub big: bool,
 }
 
 impl Gimmick {
     pub fn is_empty(&self) -> bool {
         self.field.values().all(Track::is_empty)
-            && self
-                .groups
-                .iter()
-                .all(|g| g.tracks.values().all(Track::is_empty))
+            && self.groups.iter().all(|g| {
+                g.tracks.values().all(Track::is_empty)
+                    && g.before.values().all(Track::is_empty)
+                    && g.path.is_none()
+                    && g.show.is_true()
+            })
             && self.graph.is_empty()
             && self.marks.is_empty()
             && self.clips.is_empty()
+            && self.scroll.is_empty()
+            && self.fakes.is_empty()
     }
 
     pub fn field_track(&self, p: FieldProp) -> Option<&Track> {
@@ -520,6 +708,32 @@ impl Gimmick {
                 }
             }
             g.tracks.retain(|_, t| !t.is_empty());
+            g.before
+                .retain(|k, _| NoteProp::ALL.iter().any(|p| p.name() == k));
+            for (name, t) in g.before.iter_mut() {
+                t.sanitize();
+                let (far, after) = BEFORE_BEATS;
+                t.keys.retain(|k| (-after..=far).contains(&k.t));
+                if let Some(p) = NoteProp::ALL.iter().find(|p| p.name() == name) {
+                    let (lo, hi) = p.range();
+                    t.keys.iter_mut().for_each(|k| k.v = k.v.clamp(lo, hi));
+                }
+            }
+            g.before.retain(|_, t| !t.is_empty());
+            if let Some(p) = &mut g.path {
+                p.sanitize();
+            }
+            if g.show.colour == ShowColour::Unknown {
+                g.show.colour = ShowColour::Same;
+            }
+            if g.show.size == ShowSize::Unknown {
+                g.show.size = ShowSize::Same;
+            }
+            g.show.reveal = if g.show.reveal.is_finite() {
+                g.show.reveal.clamp(0.0, BEFORE_BEATS.0)
+            } else {
+                0.0
+            };
         }
         self.field
             .retain(|k, _| FieldProp::ALL.iter().any(|p| p.name() == k));
@@ -545,6 +759,12 @@ impl Gimmick {
         let groups = self.groups.len();
         self.graph.sanitize(groups);
         super::clips::sanitize(&mut self.clips);
+        super::scroll::sanitize(&mut self.scroll);
+        self.fakes.retain(|f| f.t.is_finite());
+        self.fakes
+            .sort_by(|a, b| a.t.total_cmp(&b.t).then(a.kat.cmp(&b.kat)));
+        self.fakes.dedup_by(|b, a| a.t == b.t && a.kat == b.kat);
+        self.fakes.truncate(MAX_FAKES);
         // A clip on a group of notes that isn't there moves nothing (a copy's clip holds which
         // copy in the same place).
         self.clips
@@ -555,6 +775,53 @@ impl Gimmick {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lie_is_only_told_where_it_changes_something() {
+        let swap = ShowAs {
+            colour: ShowColour::Swap,
+            size: ShowSize::Big,
+            reveal: 1.0,
+        };
+        assert_eq!(swap.lie(false, false), (Some(true), Some(true)));
+        // A finisher shown big tells no lie about its size.
+        assert_eq!(swap.lie(true, true), (Some(false), None));
+        let dons = ShowAs {
+            colour: ShowColour::Don,
+            ..ShowAs::default()
+        };
+        assert_eq!(dons.lie(false, true), (None, None));
+        assert!(ShowAs::default().is_true());
+        // The truth shows over a 1/4 beat, ending `reveal` beats before the hit.
+        assert_eq!(swap.truth(2.0), 0.0);
+        assert_eq!(swap.truth(1.25), 0.0);
+        assert!((swap.truth(1.125) - 0.5).abs() < 1e-6);
+        assert_eq!(swap.truth(1.0), 1.0);
+        assert_eq!(swap.truth(-1.0), 1.0);
+    }
+
+    #[test]
+    fn an_unknown_lie_reads_as_none_and_a_wild_reveal_is_held() {
+        let json =
+            r#"{"groups":[{"notes":[1],"show":{"colour":"rainbow","size":"small","reveal":1e9}}]}"#;
+        let mut g: Gimmick = serde_json::from_str(json).unwrap();
+        g.sanitize();
+        let show = g.groups[0].show;
+        assert_eq!(show.colour, ShowColour::Same);
+        assert_eq!(show.size, ShowSize::Small);
+        assert_eq!(show.reveal, BEFORE_BEATS.0);
+        let back = serde_json::to_string(&g.groups[0]).unwrap();
+        assert!(
+            back.contains(r#""show":{"size":"small","reveal":32.0}"#),
+            "{back}"
+        );
+        g.groups[0].show = ShowAs::default();
+        assert!(
+            !serde_json::to_string(&g.groups[0])
+                .unwrap()
+                .contains("show")
+        );
+    }
     use crate::tko::track::Ease;
 
     fn key(t: f64, v: f64) -> Key {
@@ -596,6 +863,7 @@ mod tests {
                 ),
                 ("dy".to_string(), Track::default()),
             ]),
+            ..Group::default()
         });
         g.field.insert(
             "unknown".into(),

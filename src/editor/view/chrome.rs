@@ -678,12 +678,18 @@ impl View {
         let bpm = timing::active_red(t, self.ed.time)
             .and_then(|p| p.bpm())
             .unwrap_or(0.0);
+        let fakes = self.ed.chart.objects.iter().filter(|o| o.fake).count();
         let info = format!(
-            "{}    1/{} snap    {bpm:.1} BPM    SV x{:.2}    {} notes{}",
+            "{}    1/{} snap    {bpm:.1} BPM    SV x{:.2}    {} notes{}{}",
             fmt_time(self.ed.time),
             self.ed.snap,
             timing::sv_at(t, self.ed.time),
-            self.ed.chart.objects.len(),
+            self.ed.chart.objects.len() - fakes,
+            if fakes > 0 {
+                format!(" + {fakes} fake")
+            } else {
+                String::new()
+            },
             if self.ed.chart.gimmick.is_some() {
                 "    .tko"
             } else {

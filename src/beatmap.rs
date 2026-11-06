@@ -141,6 +141,8 @@ pub struct Beatmap {
     /// The client gimmick of a `.tko` map (visual only; its times are the chart's, before the
     /// shift `from_text` applies).
     pub gimmick: Option<std::sync::Arc<crate::tko::gimmick::Gimmick>>,
+    /// A `.tko` map's fake notes: drawn like notes, never judged (see `Gimmick::fakes`).
+    pub fakes: Vec<Note>,
 }
 
 impl Meta {
@@ -327,6 +329,7 @@ pub fn from_text(text: &str) -> Result<Beatmap, String> {
         control_points: Vec::new(),
         first_velocity: 0.0,
         gimmick,
+        fakes: Vec::new(),
     };
     convert(&mut map, body);
     if map.notes.is_empty() {
@@ -351,7 +354,7 @@ impl Beatmap {
     /// Moves every map time (notes, barlines, timing) `ms` later. Audio positions (the preview
     /// point) and durations stay.
     pub fn shift(&mut self, ms: f64) {
-        for n in &mut self.notes {
+        for n in self.notes.iter_mut().chain(&mut self.fakes) {
             n.time += ms;
             n.end_time += ms;
         }
@@ -695,6 +698,21 @@ fn convert(map: &mut Beatmap, mut body: Body) {
     let end = notes.last().map(|n| n.end_time).unwrap_or(0.0);
     map.barlines = build_barlines(&body.timing, end, &velocity_at);
     map.notes = notes;
+    // A .tko map's fake notes, at the speed real ones at their time would have.
+    map.fakes = map
+        .gimmick
+        .as_ref()
+        .map(|g| {
+            g.fakes
+                .iter()
+                .map(|f| {
+                    let t = f.t + version_offset;
+                    let sound = if f.kat { 2 } else { 0 } | if f.big { 4 } else { 0 };
+                    hit(t, sound, velocity_at(t))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     map.control_points = cps;
     map.first_velocity = scroll[0].1;
 }
@@ -742,6 +760,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
         control_points,
         first_velocity: velocity,
         gimmick: None,
+        fakes: Vec::new(),
     }
 }
 
@@ -874,6 +893,7 @@ SliderTickRate:1
             control_points: Vec::new(),
             first_velocity: 0.0,
             gimmick: None,
+            fakes: Vec::new(),
         };
         convert(&mut map, body);
         map

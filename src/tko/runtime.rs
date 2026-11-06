@@ -4,7 +4,18 @@
 //! so a replay looks the same every time. Nothing here is read by judging: the game only tells
 //! the runtime what happened.
 
+use super::path::PathTable;
+use super::scroll::ScrollTable;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static CALM: AtomicBool = AtomicBool::new(false);
+
+/// Maps' playfield effects toned down (Settings -> Gameplay, Reduce map effects): see
+/// `FieldProp::calm`.
+pub fn set_calm(on: bool) {
+    CALM.store(on, Ordering::Relaxed);
+}
 
 use std::collections::HashMap;
 
@@ -81,6 +92,8 @@ pub struct FieldFx {
     pub slices: f32,
     pub slice_y: f32,
     pub slice_x: f32,
+    /// How far along the lane the hit target sits.
+    pub drum: f32,
     /// Copies of the playfield behind it.
     pub copies: [CopyFx; MAX_COPIES],
     /// The graph's seed, for the glitch's randomness.
@@ -95,6 +108,7 @@ impl Default for FieldFx {
             rotation: 0.0,
             zoom: 1.0,
             scroll: 1.0,
+            drum: 0.0,
             stretch_x: 1.0,
             stretch_y: 1.0,
             flip: 0.0,
@@ -141,6 +155,14 @@ pub struct NoteFx {
     /// How far towards `tint_hue` (degrees) the colour goes.
     pub tint: f32,
     pub tint_hue: f32,
+    /// On its group's approach path: where (from the drum) and how far off the lane onto it.
+    pub path: Option<[f32; 3]>,
+    /// A lie its group tells (see `ShowAs`): drawn as a kat (true) or a don, and as a finisher
+    /// or not, where it lies about that.
+    pub lie_kat: Option<bool>,
+    pub lie_big: Option<bool>,
+    /// How far the truth shows through the lie: 0 all lie, 1 all truth.
+    pub truth: f32,
 }
 
 impl Default for NoteFx {
@@ -156,7 +178,18 @@ impl Default for NoteFx {
             stretch_y: 1.0,
             tint: 0.0,
             tint_hue: 0.0,
+            path: None,
+            lie_kat: None,
+            lie_big: None,
+            truth: 1.0,
         }
+    }
+}
+
+impl NoteFx {
+    /// Tells a lie about its colour or size that still shows.
+    pub fn lies(&self) -> bool {
+        (self.lie_kat.is_some() || self.lie_big.is_some()) && self.truth < 1.0
     }
 }
 
@@ -309,6 +342,8 @@ pub struct Runtime {
     gimmick: Arc<Gimmick>,
     /// Per note (in the map's order): the group it is in, plus one; 0 for none.
     group_of: Vec<u16>,
+    /// The same for the fake notes, in the gimmick's order.
+    fake_group_of: Vec<u16>,
     /// How far the game's clock is ahead of the chart's (the game shifts every time of a loaded
     /// map; a gimmick's times are the chart's).
     shift: f64,
@@ -339,6 +374,10 @@ pub struct Runtime {
     all_notes_delta: [f64; NoteProp::ALL.len()],
     /// The lane shape clips bend the lane into at the last `prepare` (shape plus one, how far).
     lane: (u8, f64),
+    /// Per group: its approach path laid out, if it has one.
+    /// The shared scroll, summed up; None when the map has none.
+    scroll: Option<Arc<ScrollTable>>,
+    paths: Vec<Option<PathTable>>,
 }
 
 /// How far a note's time may be from the one a group holds (the chart's whole milliseconds).
@@ -392,21 +431,20 @@ impl Runtime {
             .collect();
         let times: Vec<f64> = notes.iter().map(|n| n.time).collect();
         let end = times.iter().copied().fold(0.0, f64::max) + 5000.0;
-        let group_of = times
-            .iter()
-            .map(|&t| {
-                gimmick
-                    .groups
-                    .iter()
-                    .position(|g| {
-                        let at = g.notes.partition_point(|&n| n < t - SAME_NOTE_MS);
-                        g.notes
-                            .get(at)
-                            .is_some_and(|&n| (n - t).abs() <= SAME_NOTE_MS)
-                    })
-                    .map_or(0, |i| i as u16 + 1)
-            })
-            .collect();
+        let group_at = |t: f64| {
+            gimmick
+                .groups
+                .iter()
+                .position(|g| {
+                    let at = g.notes.partition_point(|&n| n < t - SAME_NOTE_MS);
+                    g.notes
+                        .get(at)
+                        .is_some_and(|&n| (n - t).abs() <= SAME_NOTE_MS)
+                })
+                .map_or(0, |i| i as u16 + 1)
+        };
+        let group_of = times.iter().map(|&t| group_at(t)).collect();
+        let fake_group_of = gimmick.fakes.iter().map(|f| group_at(f.t)).collect();
         let sections: Vec<BeatSection> = beats
             .iter()
             .filter(|b| b.length.is_finite() && b.length > 0.0)
@@ -430,6 +468,12 @@ impl Runtime {
                     .any(|id| index.get(id).is_some_and(|&j| dynamic[j]));
         }
         let groups = gimmick.groups.len();
+        let scroll = ScrollTable::new(&gimmick.scroll).map(Arc::new);
+        let paths = gimmick
+            .groups
+            .iter()
+            .map(|g| g.path.as_ref().and_then(PathTable::new))
+            .collect();
         let mut rt = Runtime {
             lists: vec![Vec::new(); nodes.len()],
             notes,
@@ -449,6 +493,9 @@ impl Runtime {
             clip_lists: Vec::new(),
             all_notes_delta: Default::default(),
             lane: (0, 0.0),
+            paths,
+            scroll,
+            fake_group_of,
         };
         rt.rebuild(false);
         rt
@@ -1099,6 +1146,11 @@ impl Runtime {
     }
 
     pub fn field(&self, t: f64) -> FieldFx {
+        self.field_with(t, CALM.load(Ordering::Relaxed))
+    }
+
+    /// `field`, toned down if `calm` (see `FieldProp::calm`).
+    pub fn field_with(&self, t: f64, calm: bool) -> FieldFx {
         let t = t - self.shift;
         let v = |p: FieldProp| {
             let base = self
@@ -1106,11 +1158,17 @@ impl Runtime {
                 .field_track(p)
                 .map_or(p.default_value(), |tr| tr.value(t, p.default_value()));
             let add = self.field_delta[field_slot(p)];
-            if add == 0.0 {
+            let raw = if add == 0.0 {
                 base
             } else {
                 let (lo, hi) = p.range();
                 (base + add).clamp(lo, hi)
+            };
+            if calm {
+                let d = p.default_value();
+                d + (raw - d) * p.calm()
+            } else {
+                raw
             }
         };
         FieldFx {
@@ -1119,6 +1177,7 @@ impl Runtime {
             rotation: v(FieldProp::Rotation) as f32,
             zoom: v(FieldProp::Zoom) as f32,
             scroll: v(FieldProp::Scroll),
+            drum: v(FieldProp::Drum) as f32,
             stretch_x: v(FieldProp::StretchX) as f32,
             stretch_y: v(FieldProp::StretchY) as f32,
             flip: v(FieldProp::Flip) as f32,
@@ -1170,17 +1229,124 @@ impl Runtime {
         }
     }
 
+    /// Where note `i`, `s` along a lane `lane` long, sits on its group's path at game time `t`:
+    /// from the drum, and how far it is off the lane onto the path. None off any path.
+    pub fn note_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
+        self.path_of(self.group_of(i)?, t, s, lane)
+    }
+
+    fn path_of(&self, gi: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
+        let table = self.paths.get(gi)?.as_ref()?;
+        let path = self.gimmick.groups[gi].path.as_ref()?;
+        let w = path.weight_at(t - self.shift) as f32;
+        if w <= 0.0 {
+            return None;
+        }
+        let [x, y] = table.place(path, s, lane);
+        Some([x, y, w])
+    }
+
+    /// How far the shared scroll has carried the song by game time `t` (ms at speed 1); None
+    /// when the map has no shared scroll, and notes scroll by time.
+    pub fn scroll_x(&self, t: f64) -> Option<f64> {
+        Some(self.scroll.as_ref()?.x(t - self.shift))
+    }
+
+    /// The shared scroll and how far the game's clock is ahead of the chart's, to place notes
+    /// with while the runtime is busy elsewhere.
+    pub fn shared_scroll(&self) -> Option<(Arc<ScrollTable>, f64)> {
+        Some((self.scroll.clone()?, self.shift))
+    }
+
+    /// The paths drawn for the player at game time `t`, with how far notes are on each.
+    pub fn shown_paths(&self, t: f64) -> impl Iterator<Item = (&PathTable, f32)> {
+        let t = t - self.shift;
+        self.gimmick
+            .groups
+            .iter()
+            .zip(&self.paths)
+            .filter_map(move |(g, table)| {
+                let path = g.path.as_ref().filter(|p| p.show)?;
+                let w = path.weight_at(t) as f32;
+                (w > 0.0).then_some((table.as_ref()?, w))
+            })
+    }
+
     /// What note `i` is doing at game time `t`; nothing for a note in no group while no clip
     /// moves all the notes.
     pub fn note(&self, i: usize, t: f64) -> Option<NoteFx> {
-        let all = self.all_notes_delta.iter().any(|&d| d != 0.0);
+        let n = self.notes.get(i)?;
         let gi = self.group_of(i);
+        let fx = self.fx_of(gi, n.time, t);
+        if n.class == NoteClass::Long {
+            return fx;
+        }
+        self.with_lie(fx, gi, n.class == NoteClass::Kat, n.big, n.time, t)
+    }
+
+    /// The group fake note `i` (the gimmick's order) is in.
+    pub fn fake_group_of(&self, i: usize) -> Option<usize> {
+        match *self.fake_group_of.get(i)? {
+            0 => None,
+            g => Some(g as usize - 1),
+        }
+    }
+
+    /// What fake note `i` is doing at game time `t`, like `note`.
+    pub fn fake(&self, i: usize, t: f64) -> Option<NoteFx> {
+        let f = self.gimmick.fakes.get(i)?;
+        let gi = self.fake_group_of(i);
+        let fx = self.fx_of(gi, f.t, t);
+        self.with_lie(fx, gi, f.kat, f.big, f.t, t)
+    }
+
+    /// `fx` with the lie group `gi` tells about a note (`kat`, `big`) hit at chart time `hit`, at
+    /// game time `t`.
+    fn with_lie(
+        &self,
+        fx: Option<NoteFx>,
+        gi: Option<usize>,
+        kat: bool,
+        big: bool,
+        hit: f64,
+        t: f64,
+    ) -> Option<NoteFx> {
+        let Some(show) = gi
+            .map(|gi| self.gimmick.groups[gi].show)
+            .filter(|s| !s.is_true())
+        else {
+            return fx;
+        };
+        let (lie_kat, lie_big) = show.lie(kat, big);
+        if lie_kat.is_none() && lie_big.is_none() {
+            return fx;
+        }
+        let near = (hit - (t - self.shift)) / self.beat_len(hit);
+        let mut fx = fx.unwrap_or_default();
+        fx.lie_kat = lie_kat;
+        fx.lie_big = lie_big;
+        fx.truth = show.truth(near);
+        Some(fx)
+    }
+
+    /// Where fake note `i` sits on its group's path, like `note_path`.
+    pub fn fake_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
+        self.path_of(self.fake_group_of(i)?, t, s, lane)
+    }
+
+    /// What a note in group `gi` hit at chart time `hit` is doing at game time `t`.
+    fn fx_of(&self, gi: Option<usize>, hit: f64, t: f64) -> Option<NoteFx> {
+        let all = self.all_notes_delta.iter().any(|&d| d != 0.0);
         if gi.is_none() && !all {
             return None;
         }
         let g = gi.map(|gi| &self.gimmick.groups[gi]);
         let t = t - self.shift;
-        let v = |p: NoteProp| {
+        // Beats until this note's own hit, for its before-the-hit keys.
+        let near = g
+            .filter(|g| !g.before.is_empty())
+            .map(|_| (hit - t) / self.beat_len(hit));
+        let song_value = |p: NoteProp| {
             let base = g
                 .and_then(|g| g.track(p))
                 .map_or(p.default_value(), |tr| tr.value(t, p.default_value()));
@@ -1195,6 +1361,13 @@ impl Runtime {
                 (base + add).clamp(lo, hi)
             }
         };
+        let v = |p: NoteProp| {
+            let song = song_value(p);
+            match (near, g.and_then(|g| g.before_track(p))) {
+                (Some(b), Some(tr)) => p.before(song, tr.value(b, p.default_value())),
+                _ => song,
+            }
+        };
         Some(NoteFx {
             dx: v(NoteProp::Dx) as f32,
             dy: v(NoteProp::Dy) as f32,
@@ -1206,6 +1379,7 @@ impl Runtime {
             stretch_y: v(NoteProp::StretchY) as f32,
             tint: v(NoteProp::Tint) as f32,
             tint_hue: v(NoteProp::TintHue) as f32,
+            ..NoteFx::default()
         })
     }
 }
@@ -1401,6 +1575,66 @@ mod tests {
         ]
         .map(|(time, class, big)| NoteInfo { time, class, big });
         Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, beats)
+    }
+
+    #[test]
+    fn a_calm_field_keeps_part_of_each_change_and_all_of_the_drum() {
+        let mut g = Gimmick::default();
+        g.key_field(FieldProp::Rotation, key(0.0, 90.0));
+        g.key_field(FieldProp::Flash, key(0.0, 1.0));
+        g.key_field(FieldProp::Zoom, key(0.0, 2.0));
+        g.key_field(FieldProp::Drum, key(0.0, 300.0));
+        let rt = Runtime::new(Arc::new(g), [1000.0].into_iter(), 0.0);
+        let wild = rt.field_with(500.0, false);
+        let calm = rt.field_with(500.0, true);
+        assert_eq!((wild.rotation, calm.rotation), (90.0, 45.0));
+        assert_eq!((wild.flash, calm.flash), (1.0, 0.25));
+        assert_eq!(calm.zoom, 1.5);
+        assert_eq!(calm.drum, 300.0);
+    }
+
+    #[test]
+    fn a_lying_group_shows_its_notes_as_the_lie_until_the_truth() {
+        use crate::tko::gimmick::{FakeNote, ShowAs, ShowColour, ShowSize};
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![1000.0, 2000.0, 3000.0, 4000.0],
+            show: ShowAs {
+                colour: ShowColour::Swap,
+                size: ShowSize::Big,
+                reveal: 1.0,
+            },
+            ..Group::default()
+        });
+        gm.fakes.push(FakeNote {
+            t: 4000.0,
+            kat: true,
+            big: false,
+        });
+        gm.sanitize();
+        let notes = [
+            (1000.0, NoteClass::Don, false),
+            (2000.0, NoteClass::Kat, true),
+            (3000.0, NoteClass::Long, false),
+            (5000.0, NoteClass::Don, false),
+        ]
+        .map(|(time, class, big)| NoteInfo { time, class, big });
+        // A 500 ms beat.
+        let rt = Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, &GRID);
+        let don = rt.note(0, 0.0).unwrap();
+        assert_eq!((don.lie_kat, don.lie_big), (Some(true), Some(true)));
+        assert!(don.lies() && don.truth == 0.0);
+        // A beat before its hit the truth is all there.
+        assert_eq!(rt.note(0, 500.0).unwrap().truth, 1.0);
+        assert!(!rt.note(0, 500.0).unwrap().lies());
+        let kat = rt.note(1, 0.0).unwrap();
+        assert_eq!((kat.lie_kat, kat.lie_big), (Some(false), None));
+        // A roll tells no lie, and a note outside the group none either.
+        assert!(rt.note(2, 0.0).is_none_or(|f| !f.lies()));
+        assert!(rt.note(3, 0.0).is_none_or(|f| !f.lies()));
+        // Fakes lie with their group too.
+        let fake = rt.fake(0, 0.0).unwrap();
+        assert_eq!((fake.lie_kat, fake.lie_big), (Some(false), Some(true)));
     }
 
     fn xs() -> Option<Target> {
@@ -2409,5 +2643,74 @@ mod tests {
         let mut rt = Runtime::new(Arc::new(gm), [1.0].into_iter(), 0.0);
         rt.prepare(10.0);
         assert_eq!(rt.field(10.0), FieldFx::default());
+    }
+
+    #[test]
+    fn a_group_with_a_path_places_its_notes_on_it() {
+        use crate::tko::path::NotePath;
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![1000.0],
+            path: Some(NotePath {
+                points: vec![[0.0, -400.0]],
+                ..NotePath::default()
+            }),
+            ..Group::default()
+        });
+        let rt = Runtime::new(Arc::new(gm.clone()), [1000.0, 2000.0].into_iter(), 0.0);
+        // Where it comes in at the end of the lane, on the drum when hit.
+        let [x, y, w] = rt.note_path(0, 0.0, 800.0, 800.0).unwrap();
+        assert!(x.abs() < 0.5 && (y + 400.0).abs() < 0.5 && w == 1.0);
+        let [x, y, _] = rt.note_path(0, 0.0, 0.0, 800.0).unwrap();
+        assert!(x.abs() < 0.5 && y.abs() < 0.5);
+        // A note in no group keeps to the lane.
+        assert!(rt.note_path(1, 0.0, 400.0, 800.0).is_none());
+        // Weight 0 at that moment: on the lane.
+        let p = gm.groups[0].path.as_mut().unwrap();
+        p.weight.set(key(0.0, 0.0));
+        p.weight.set(key(1000.0, 1.0));
+        p.show = true;
+        let rt = Runtime::new(Arc::new(gm), [1000.0].into_iter(), 0.0);
+        assert!(rt.note_path(0, 0.0, 400.0, 800.0).is_none());
+        assert_eq!(rt.note_path(0, 500.0, 400.0, 800.0).unwrap()[2], 0.5);
+        assert_eq!(rt.shown_paths(500.0).count(), 1);
+        assert_eq!(rt.shown_paths(0.0).count(), 0);
+    }
+
+    #[test]
+    fn before_the_hit_keys_follow_each_notes_own_hit() {
+        let mut gm = Gimmick::default();
+        let mut g = Group {
+            notes: vec![1000.0, 3000.0],
+            ..Group::default()
+        };
+        // Faded out until 2 beats before the hit, solid from 1 beat before.
+        let fade = g.before.entry("opacity".into()).or_default();
+        fade.set(key(2.0, 0.0));
+        fade.set(key(1.0, 1.0));
+        // Jumps 60 up half a beat before the hit and is back on it.
+        let jump = g.before.entry("dy".into()).or_default();
+        jump.set(key(0.5, -60.0));
+        jump.set(key(0.0, 0.0));
+        g.track_mut(NoteProp::Opacity).set(key(0.0, 0.5));
+        gm.groups.push(g);
+        gm.sanitize();
+        let notes = [1000.0, 3000.0].map(|time| NoteInfo {
+            time,
+            class: NoteClass::Don,
+            big: false,
+        });
+        let rt = Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, &GRID);
+        // 500 ms beats: at 0 the first note is 2 beats off (faded), the second 6.
+        let a = rt.note(0, 0.0).unwrap();
+        assert_eq!(a.opacity, 0.0);
+        // Half way between its keys, and on top of the group's own opacity (0.5).
+        let a = rt.note(0, 250.0).unwrap();
+        assert!((a.opacity - 0.25).abs() < 1e-6, "{}", a.opacity);
+        // Each note by its own hit: the second is still faded when the first is solid.
+        assert_eq!(rt.note(0, 600.0).unwrap().opacity, 0.5);
+        assert_eq!(rt.note(1, 600.0).unwrap().opacity, 0.0);
+        assert_eq!(rt.note(1, 2750.0).unwrap().dy, -60.0);
+        assert_eq!(rt.note(1, 3000.0).unwrap().dy, 0.0);
     }
 }

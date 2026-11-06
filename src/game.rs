@@ -8,6 +8,7 @@ use std::time::Instant;
 static HIDE_GREAT: AtomicBool = AtomicBool::new(true);
 static HIT_FLASH: AtomicBool = AtomicBool::new(true);
 static BLACK_LANE: AtomicBool = AtomicBool::new(false);
+static TRUE_NOTES: AtomicBool = AtomicBool::new(false);
 
 /// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
 /// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
@@ -25,6 +26,12 @@ pub fn set_hit_flash(on: bool) {
 /// View): no kiai or Party tint, no skin's lane picture.
 pub fn set_black_lane(on: bool) {
     BLACK_LANE.store(on, Ordering::Relaxed);
+}
+
+/// .tko notes drawn as what they are, whatever colour or size their map makes them show as
+/// (Settings -> Gameplay).
+pub fn set_true_notes(on: bool) {
+    TRUE_NOTES.store(on, Ordering::Relaxed);
 }
 
 fn black_lane() -> bool {
@@ -636,6 +643,9 @@ fn lane_stretch(rail: bool, len: f32, w: f32) -> f64 {
     }
 }
 
+/// How far ahead (ms) notes are looked for under a shared scroll, which may hold far notes near.
+const SHARED_LOOKAHEAD_MS: f64 = 30_000.0;
+
 /// What bends note positions this frame: drawing only, judging always uses real time.
 struct Scroll {
     t: f64,
@@ -649,6 +659,10 @@ struct Scroll {
     warp: f64,
     /// Speed factor of every note right now (Panic, Mercy).
     live: f64,
+    /// A .tko map's shared scroll (mania-style SV), how far the game's clock is ahead of the
+    /// chart's, and how far it has scrolled by now: notes go by how far the song scrolls before
+    /// their hit instead of how long.
+    shared: Option<(std::sync::Arc<crate::tko::scroll::ScrollTable>, f64, f64)>,
 }
 
 impl Scroll {
@@ -679,10 +693,14 @@ impl Scroll {
     /// Screen x of something at map time `time` scrolling at `velocity`.
     fn x(&self, time: f64, velocity: f64) -> f32 {
         let v = velocity * self.speed * self.factor(time);
+        let ahead = match &self.shared {
+            Some((table, shift, now)) => table.x(time - shift) - now,
+            None => time - self.t,
+        };
         // Pulse / Stutter shift the time of far notes; near the drum the shift fades out, so
         // a note always reaches it exactly on time.
-        let near = ((time - self.t) * v / self.lane).clamp(0.0, 1.0);
-        let u = (time - self.t - self.warp * near) * v / self.lane;
+        let near = (ahead * v / self.lane).clamp(0.0, 1.0);
+        let u = (ahead - self.warp * near) * v / self.lane;
         let u = if !(0.0..=1.0).contains(&u) {
             u
         } else if self.mods.has(Mod::Accel) {
@@ -1622,7 +1640,7 @@ fn bake_speeds(map: &mut Beatmap, mods: Mods) {
     for b in &mut map.barlines {
         b.velocity = at(b.velocity, b.time);
     }
-    for n in &mut map.notes {
+    for n in map.notes.iter_mut().chain(&mut map.fakes) {
         n.velocity = at(n.velocity, n.time);
     }
     // Per note: dons and kats only.
@@ -4081,6 +4099,13 @@ impl Game {
         let lane = (tko_fx.lane_shape > 0 && tko_fx.lane_bend > 0.001)
             .then(|| (tko_fx.lane_shape as usize - 1, tko_fx.lane_bend));
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w, lane);
+        // A .tko map's moving drum: the hit target slides along a straight lane and everything
+        // on the lane goes with it, so notes still meet it on time.
+        let drum = if rail.is_none() {
+            tko_fx.drum.clamp(0.0, (lane_len - 2.0 * BIG_R).max(0.0))
+        } else {
+            0.0
+        };
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
         // left edge (the drum) along the lane, with room for the judgements.
         let (band_top, band_h) = lane_band();
@@ -4104,27 +4129,39 @@ impl Game {
             ],
         };
         let portal = self.portal_at(vt, lane_len);
-        let scroll = Scroll {
-            t: vt,
-            speed: osu_speed_scale(w)
-                * scroll_speed
-                * uni.speed()
-                * mods.scroll()
-                * lane_stretch(rail.is_some(), lane_len, w),
-            lane: lane_len as f64,
-            mods,
-            warp,
-            live: self.miss_factor(t) * self.slow_factor(t) * tko_fx.scroll,
-        };
+        let scroll =
+            Scroll {
+                t: vt,
+                speed: osu_speed_scale(w)
+                    * scroll_speed
+                    * uni.speed()
+                    * mods.scroll()
+                    * lane_stretch(rail.is_some(), lane_len, w),
+                lane: lane_len as f64,
+                mods,
+                warp,
+                live: self.miss_factor(t) * self.slow_factor(t) * tko_fx.scroll,
+                shared: self.tko.as_ref().and_then(|rt| rt.shared_scroll()).map(
+                    |(table, shift)| {
+                        let now = table.x(vt - shift);
+                        (table, shift, now)
+                    },
+                ),
+            };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
         // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
         // its last object included (owner, 2026-10-28).
         // Keep the global bound for special objects and barlines; ordinary-note blocks also
         // have conservative local bounds so one distant slow note does not widen every scan.
-        let lookahead = (lane_len + BIG_R) as f64
-            / (self.min_velocity * scroll.speed * scroll.min_factor())
-            + warp.abs();
+        let lookahead = if scroll.shared.is_some() {
+            // Frozen or running backwards, notes far off in time may be near: look well ahead
+            // and let the lane's ends hide the rest.
+            SHARED_LOOKAHEAD_MS
+        } else {
+            (lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor())
+                + warp.abs()
+        };
 
         // Notes on screen, nearest first.
         let start = self
@@ -4137,7 +4174,7 @@ impl Game {
             if self.map.notes[block.range.start].time - vt > lookahead {
                 break;
             }
-            if block.regular && !mods.has(Mod::Liar) {
+            if block.regular && !mods.has(Mod::Liar) && scroll.shared.is_none() {
                 let reach = (lane_len + BIG_R) as f64
                     / (block.min_velocity * scroll.speed * scroll.min_factor())
                     + warp.abs();
@@ -4246,6 +4283,15 @@ impl Game {
         };
         // A don or kat `s` along the lane (`k`th drawn, in a 1/`flow` stream): Snake swings it
         // sideways, Party pumps and squishes it. Nothing changes at the drum.
+        let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) {
+            (GREY, GREY)
+        } else {
+            (
+                mix(uni.idle(), uni.don(), look.colour),
+                mix(uni.idle(), uni.kat(), look.colour),
+            )
+        };
+        let true_notes = TRUE_NOTES.load(Ordering::Relaxed);
         let draw_hit = |c: &mut Canvas,
                         s: f32,
                         n: &beatmap::Note,
@@ -4272,15 +4318,29 @@ impl Game {
                     32.0 * amp * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt + flip).sin();
             }
             let (x, y, _, mut size) = place(side_of(n.kind, s), side);
-            // A .tko group's motion for this note.
-            let (mut x, mut y, a) = (x + fx.dx, y + fx.dy, a * fx.opacity);
-            if fx.swirl != 0.0 {
-                // Turned about the drum, the further out the wider the swing.
-                let (s, co) = fx.swirl.to_radians().sin_cos();
-                let (ox, oy) = (x - HIT_X, y - LANE_Y);
-                (x, y) = (HIT_X + ox * co - oy * s, LANE_Y + ox * s + oy * co);
-            }
+            let (hx, hy, _, _) = place(0.0, 0.0);
+            let (x, y) = tko_moved(&fx, x, y, (hx, hy));
+            let a = a * fx.opacity;
             size *= fx.scale;
+            // A .tko lie: drawn as another colour or size until its truth shows (unless the
+            // player asked for the truth).
+            let lie = !true_notes && fx.lies();
+            let truth = if lie { fx.truth } else { 1.0 };
+            let col = match fx.lie_kat.filter(|_| lie) {
+                Some(k) => mix(if k { kat } else { don }, col, truth),
+                None => col,
+            };
+            let real_r = if n.big { BIG_R } else { NOTE_R };
+            let (big, base_r) = match fx.lie_big.filter(|_| lie) {
+                Some(b) => {
+                    let shown = if b { BIG_R } else { NOTE_R };
+                    (
+                        if truth < 0.5 { b } else { n.big },
+                        shown + (real_r - shown) * truth,
+                    )
+                }
+                None => (n.big, real_r),
+            };
             // A .tko tint: the note's colour towards a hue.
             let col = if fx.tint >= 0.01 {
                 let [r, g, b] = crate::tko::screen::hue_rgb(fx.tint_hue);
@@ -4297,23 +4357,15 @@ impl Game {
                 size *= 1.0 + 0.22 * own;
                 squish = 1.0 + 0.3 * own * if k.is_multiple_of(2) { 1.0 } else { -1.0 };
             }
-            let r = if n.big { BIG_R } else { NOTE_R } * size;
+            let r = base_r * size;
             let first = c.shapes.len();
-            if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, n.big, col, a) {
+            if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, big, col, a) {
                 multiverse::note(c, uni.shape, x, y, r, col, a);
             }
             let (sx, sy) = (squish * fx.stretch_x, fx.stretch_y / squish);
             if sx != 1.0 || sy != 1.0 {
                 c.stretch_since(first, [x, y], sx, sy);
             }
-        };
-        let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) {
-            (GREY, GREY)
-        } else {
-            (
-                mix(uni.idle(), uni.don(), look.colour),
-                mix(uni.idle(), uni.kat(), look.colour),
-            )
         };
         // Text is drawn last, after Mirror flips the rest (letters must stay readable), and so
         // are the skin's numbers and judgements (centre x, top, height).
@@ -4464,6 +4516,7 @@ impl Game {
             }
         }
 
+        let lane_shapes = c.shapes.len();
         // Barlines.
         // As far back as ahead: a slow bar can still be on screen long after it passed.
         let first_bar = self
@@ -4718,6 +4771,49 @@ impl Game {
                 beatmap::control_point_at(&self.map.control_points, n.time).sv,
             )
         };
+        // .tko approach paths the map shows the player: faint dots from where notes come in to
+        // the drum.
+        if let Some(rt) = &self.tko {
+            let (hx, hy, _, _) = place(0.0, 0.0);
+            for (table, w) in rt.shown_paths(vt) {
+                let mut d = 0.0;
+                while d < table.len() {
+                    let [px, py] = table.at(d);
+                    c.circle(hx + px, hy + py, 1.6, rgba(WHITE, 0.22 * w), [0.0; 4], 0.0);
+                    d += 9.0;
+                }
+            }
+        }
+        // A .tko map's fake notes, under the real ones: drawn like them, never judged, gone when
+        // they reach the drum.
+        let fakes_on: Vec<usize> = {
+            let f = &self.map.fakes;
+            let from = f.partition_point(|n| n.time <= vt);
+            let to = f.partition_point(|n| n.time <= vt + lookahead);
+            (from..to).collect()
+        };
+        for &k in fakes_on.iter().rev() {
+            let n = &self.map.fakes[k];
+            let r = if n.big { BIG_R } else { NOTE_R };
+            let s = s_of(n.time, n.velocity);
+            if !on_lane(s, r) {
+                continue;
+            }
+            let a = note_alpha(s) * radar_lit(s, n.time, n.velocity);
+            let mut nfx = self
+                .tko
+                .as_ref()
+                .and_then(|rt| rt.fake(k, vt))
+                .unwrap_or_default();
+            nfx.path = self
+                .tko
+                .as_ref()
+                .and_then(|rt| rt.fake_path(k, vt, s, lane_len));
+            if a > 0.01 && !nfx.hidden {
+                let col = if n.kind == Kind::Kat { kat } else { don };
+                draw_hit(c, s, n, k, 1, col, a, nfx);
+            }
+        }
         let mut order = self.visible.clone();
         order.sort_by(|&a, &b| {
             let (na, nb) = (&self.map.notes[a], &self.map.notes[b]);
@@ -4813,11 +4909,15 @@ impl Game {
                                 } else {
                                     note_alpha(s) * radar_lit(s, n.time, n.velocity)
                                 };
-                                let nfx = self
+                                let mut nfx = self
                                     .tko
                                     .as_ref()
                                     .and_then(|r| r.note(i, vt))
                                     .unwrap_or_default();
+                                nfx.path = self
+                                    .tko
+                                    .as_ref()
+                                    .and_then(|r| r.note_path(i, vt, s, lane_len));
                                 if a > 0.01 && !nfx.hidden {
                                     draw_hit(
                                         c,
@@ -5146,13 +5246,22 @@ impl Game {
                 } else {
                     Sprite::HitCircle
                 };
+                // A .tko note's motion moves (or hides) its flash with it.
+                let mut fx = NoteFx::default();
                 let (s, col, a) = match n.kind {
                     Kind::Don | Kind::Kat if self.state[i].judged.is_none() => {
                         let s = note_s(i);
+                        if let Some(rt) = &self.tko {
+                            fx = rt.note(i, vt).unwrap_or_default();
+                            fx.path = rt.note_path(i, vt, s, lane_len);
+                        }
+                        if fx.hidden {
+                            continue;
+                        }
                         (
                             s,
                             if n.kind == Kind::Kat { KAT } else { DON },
-                            note_alpha(s) * radar_lit(s, n.time, n.velocity),
+                            note_alpha(s) * radar_lit(s, n.time, n.velocity) * fx.opacity,
                         )
                     }
                     Kind::Roll if popup(n).is_some() => {
@@ -5170,9 +5279,43 @@ impl Game {
                 let col = kiai_brighten(col);
                 if flash > 0.0 && a > 0.01 && on_lane(s, r) {
                     let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
-                    c.light(sprite, x, y, r * size, rgba(col, flash * a));
+                    let (hx, hy, _, _) = place(0.0, 0.0);
+                    let (x, y) = tko_moved(&fx, x, y, (hx, hy));
+                    c.light(sprite, x, y, r * size * fx.scale, rgba(col, flash * a));
                 }
             }
+            // Fakes flash like the notes they pass for.
+            for &k in &fakes_on {
+                let n = &self.map.fakes[k];
+                let r = if n.big { BIG_R } else { NOTE_R };
+                let s = s_of(n.time, n.velocity);
+                let mut fx = NoteFx::default();
+                if let Some(rt) = &self.tko {
+                    fx = rt.fake(k, vt).unwrap_or_default();
+                    fx.path = rt.fake_path(k, vt, s, lane_len);
+                }
+                if fx.hidden {
+                    continue;
+                }
+                let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * fx.opacity;
+                let flash = self.kiai_flash(vt, n.time, n.end_time) * KIAI_FLASH_ALPHA;
+                let col = kiai_brighten(if n.kind == Kind::Kat { KAT } else { DON });
+                if flash > 0.0 && a > 0.01 && on_lane(s, r) {
+                    let sprite = if n.big {
+                        Sprite::BigCircle
+                    } else {
+                        Sprite::HitCircle
+                    };
+                    let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
+                    let (hx, hy, _, _) = place(0.0, 0.0);
+                    let (x, y) = tko_moved(&fx, x, y, (hx, hy));
+                    c.light(sprite, x, y, r * size * fx.scale, rgba(col, flash * a));
+                }
+            }
+        }
+
+        if drum > 0.0 {
+            c.transform_since(lane_shapes, [0.0, 0.0], 1.0, drum, 0.0);
         }
 
         // Flashlight / Spotlight / Blackout: dark everywhere but a circle around the drum.
@@ -5272,7 +5415,7 @@ impl Game {
                         * JUDGE_SCALE
                         * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
                     upright.push((
-                        HIT_X,
+                        HIT_X + drum,
                         LANE_Y - h / 2.0 - age * 0.02,
                         h,
                         rgba(self.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
@@ -5280,7 +5423,7 @@ impl Game {
                     ));
                 } else {
                     texts.push((
-                        HIT_X,
+                        HIT_X + drum,
                         lane_top - 30.0 - age * 0.02,
                         15.0,
                         rgba(self.hud.colour(Part::Judgements).unwrap_or(j.color()), a),
@@ -7340,6 +7483,23 @@ pub fn draw_preview(c: &mut Canvas) {
     );
 }
 
+/// Where a note drawn at `x`, `y` on the lane goes under its .tko motion: onto its group's
+/// approach path (from the drum at `drum`, as far as the path's weight says), shifted by the
+/// group's dx and dy, then turned about the drum by its swirl, the further out the wider.
+fn tko_moved(fx: &NoteFx, x: f32, y: f32, (hx, hy): (f32, f32)) -> (f32, f32) {
+    let (x, y) = match fx.path {
+        Some([px, py, w]) => (x + (hx + px - x) * w, y + (hy + py - y) * w),
+        None => (x, y),
+    };
+    let (mut x, mut y) = (x + fx.dx, y + fx.dy);
+    if fx.swirl != 0.0 {
+        let (s, co) = fx.swirl.to_radians().sin_cos();
+        let (ox, oy) = (x - HIT_X, y - LANE_Y);
+        (x, y) = (HIT_X + ox * co - oy * s, LANE_Y + ox * s + oy * co);
+    }
+    (x, y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7892,6 +8052,7 @@ mod tests {
                     mods,
                     warp,
                     live: 1.0,
+                    shared: None,
                 };
                 let x = s.x(note, 0.5);
                 assert!(x <= last + 1e-3, "note {note} at {t}: {last} -> {x}");
@@ -7903,6 +8064,50 @@ mod tests {
                 "note {note} is at {last}, not the drum, on time"
             );
         }
+    }
+
+    #[test]
+    fn a_shared_scroll_freezes_and_reverses_notes_and_they_still_land_on_time() {
+        use crate::tko::scroll::ScrollTable;
+        use crate::tko::track::{Ease, Key, Track};
+        let mut speed = Track::default();
+        for (t, v) in [(0.0, 1.0), (1000.0, 0.0), (2000.0, -1.0), (2500.0, 2.0)] {
+            speed.set(Key {
+                t,
+                v,
+                ease: Ease::Step,
+            });
+        }
+        let table = std::sync::Arc::new(ScrollTable::new(&speed).unwrap());
+        let at = |t: f64| {
+            let s = Scroll {
+                t,
+                speed: osu_speed_scale(640.0 + HIT_X),
+                lane: 640.0,
+                mods: Mods::default(),
+                warp: 0.0,
+                live: 1.0,
+                shared: Some((table.clone(), 0.0, table.x(t))),
+            };
+            s.x(4000.0, 0.5)
+        };
+        // Frozen: the note holds still; backwards: it moves away from the drum.
+        assert_eq!(at(1200.0), at(1800.0));
+        assert!(at(2400.0) > at(2100.0));
+        // At its hit it is on the drum, whatever the scroll did on the way.
+        assert!((at(4000.0) - HIT_X).abs() < 1e-3);
+        // The map's own slider velocity still counts: a note twice as fast is twice as far.
+        let s = Scroll {
+            t: 3000.0,
+            speed: osu_speed_scale(640.0 + HIT_X),
+            lane: 640.0,
+            mods: Mods::default(),
+            warp: 0.0,
+            live: 1.0,
+            shared: Some((table.clone(), 0.0, table.x(3000.0))),
+        };
+        let (slow, fast) = (s.x(3100.0, 0.25) - HIT_X, s.x(3100.0, 0.5) - HIT_X);
+        assert!((fast - 2.0 * slow).abs() < 1e-3);
     }
 
     #[test]
@@ -7935,6 +8140,7 @@ mod tests {
                     mods,
                     warp,
                     live: 1.0,
+                    shared: None,
                 };
                 let x = s.x(10_000.0, 0.5);
                 assert!(x <= last + 1e-3, "{mods:?} at {t}: {last} -> {x}");
@@ -10514,6 +10720,84 @@ mod tests {
         let plain = run(None);
         assert!(plain.0 > 30, "autoplay hits the notes: {plain:?}");
         assert_eq!(run(Some(some_gimmick())), plain);
+    }
+
+    #[test]
+    fn notes_on_an_approach_path_look_different_and_are_judged_the_same() {
+        use crate::tko::gimmick::Group;
+        use crate::tko::path::NotePath;
+        pin_drawing_globals();
+        let mut gm = crate::tko::gimmick::Gimmick::default();
+        gm.groups.push(Group {
+            notes: (0..64)
+                .map(|b| b as f64 * 500.0 - beatmap::OSU_TIMING_MS)
+                .collect(),
+            path: Some(NotePath {
+                points: vec![[300.0, -300.0], [60.0, -200.0]],
+                show: true,
+                ..NotePath::default()
+            }),
+            ..Group::default()
+        });
+        let mut plain = tko_game(None, Mods::NONE);
+        let mut flown = tko_game(Some(gm.clone()), Mods::NONE);
+        assert!(frame_bytes(&mut plain, 9000.0) != frame_bytes(&mut flown, 9000.0));
+        let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
+            let mut g = tko_game(gimmick, Mods::NONE);
+            let mut t = -2000.0;
+            while t < 20_000.0 {
+                g.time = t;
+                g.autoplay(None);
+                g.expire(t);
+                if (t as i64) % 1000 == 0 {
+                    let mut c = Canvas::default();
+                    c.clear(853.3);
+                    g.draw_playfield(&mut c, 1.0);
+                }
+                t += 5.0;
+            }
+            (g.stats.great, g.stats.ok, g.stats.miss, g.stats.score)
+        };
+        let base = run(None);
+        assert!(base.0 > 30);
+        assert_eq!(run(Some(gm)), base);
+    }
+
+    #[test]
+    fn a_notes_tko_motion_moves_everything_drawn_for_it_alike() {
+        let drum = (HIT_X, LANE_Y);
+        let lane = (HIT_X + 300.0, LANE_Y);
+        let near =
+            |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+        let plain = NoteFx::default();
+        assert!(near(tko_moved(&plain, lane.0, lane.1, drum), lane));
+        // On a path: from the drum, or half way there at half weight.
+        let on = NoteFx {
+            path: Some([0.0, -100.0, 1.0]),
+            ..NoteFx::default()
+        };
+        assert!(near(
+            tko_moved(&on, lane.0, lane.1, drum),
+            (HIT_X, LANE_Y - 100.0)
+        ));
+        let half = NoteFx {
+            path: Some([0.0, -100.0, 0.5]),
+            ..NoteFx::default()
+        };
+        assert!(near(
+            tko_moved(&half, lane.0, lane.1, drum),
+            (HIT_X + 150.0, LANE_Y - 50.0)
+        ));
+        // Shifted, then turned a quarter about the drum.
+        let turned = NoteFx {
+            dx: -200.0,
+            swirl: 90.0,
+            ..NoteFx::default()
+        };
+        assert!(near(
+            tko_moved(&turned, lane.0, lane.1, drum),
+            (HIT_X, LANE_Y + 100.0)
+        ));
     }
 
     /// Every screen effect at once, steady.

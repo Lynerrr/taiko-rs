@@ -135,3 +135,41 @@ fn a_map_not_in_the_song_list_is_not_test_played_and_says_why() {
     assert!(s.editor_back.is_none());
     assert!(view.status.contains("save it first"), "{}", view.status);
 }
+
+#[test]
+fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
+    let mut s = editing();
+    press(&mut s, KeyCode::F5, Keys::default());
+    frame(&mut s);
+    until_playing(&mut s);
+    let autoplayed = |s: &State| {
+        let Scene::Play { game, .. } = &s.scene else {
+            unreachable!()
+        };
+        assert!(!game.record, "nothing is kept");
+        assert!(game.test_play);
+        let auto = game.mods.has(mods::Mod::Autoplay);
+        assert_eq!(game.mods.has(mods::Mod::NoFail), !auto);
+        assert_eq!(
+            game.banner.as_deref().is_some_and(|b| b.contains("AUTO")),
+            auto
+        );
+        auto
+    };
+    assert!(!autoplayed(&s), "F5: by hand");
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert!(autoplayed(&s), "Tab: autoplay");
+    s.restart_map();
+    until_playing(&mut s);
+    assert!(autoplayed(&s), "a retry is autoplayed again");
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    assert!(!autoplayed(&s), "Tab again: by hand");
+    s.key(KeyCode::Tab, false, None, Instant::now(), None);
+    // Back in the editor, the next test is by hand.
+    s.show_select();
+    assert!(matches!(s.scene, Scene::Editor(_)));
+    press(&mut s, KeyCode::F5, Keys::default());
+    frame(&mut s);
+    until_playing(&mut s);
+    assert!(!autoplayed(&s));
+}

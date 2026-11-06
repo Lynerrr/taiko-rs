@@ -620,6 +620,8 @@ struct State {
     /// The editor a test play (F5) came from: the play goes back to it, saves nothing and sends
     /// nothing, and a retry plays the map as the editor has it.
     editor_back: Option<Box<editor::view::View>>,
+    /// The editor's test play is played by autoplay (Tab in it), retries included.
+    test_auto: bool,
     /// The live play going on (its time played so far), until it's sent to the leaderboards or
     /// left some other way: then it's counted on the server as played (`Request::Played`), with
     /// the map it was on.
@@ -2276,9 +2278,8 @@ impl State {
     /// The map `text` (as the editor has it now, saved or not), with `entry`'s music: a test
     /// play, at full speed and with no mods.
     fn load_text(&mut self, entry: usize, text: String) -> Receiver<Loaded> {
-        // Played through to the end like osu!'s editor test, however it goes.
-        let mut mods = Mods::default();
-        mods.toggle(mods::Mod::NoFail);
+        // Played through to the end like osu!'s editor test, however it goes; or watched (Tab).
+        let mods = Self::test_mods(self.test_auto);
         self.load(entry, 1.0, mods, true, Some(text))
     }
 
@@ -2560,6 +2561,7 @@ impl State {
                 self.preview.show_background_for(&self.library[entry]);
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
                 view.set_track_loader(rx, rate);
+                view.left_pan = self.cfg.editor_left_pan;
                 // `TAIKO_EDIT_AT=<ms>`: starts with the playhead there (headless screenshots).
                 if let Some(at) = std::env::var("TAIKO_EDIT_AT")
                     .ok()
@@ -3302,7 +3304,38 @@ impl State {
             return;
         };
         self.editor_back = Some(view);
+        self.test_auto = false;
         self.start_loading_from(entry, from);
+    }
+
+    /// The editor's test play's mods: No Fail, or Autoplay (Tab).
+    fn test_mods(auto: bool) -> Mods {
+        let mut mods = Mods::default();
+        mods.toggle(if auto {
+            mods::Mod::Autoplay
+        } else {
+            mods::Mod::NoFail
+        });
+        mods
+    }
+
+    fn test_banner(auto: bool) -> String {
+        if auto {
+            "TEST PLAY  -  AUTO".into()
+        } else {
+            "TEST PLAY".into()
+        }
+    }
+
+    /// Tab in the editor's test play, as in osu!'s: autoplay plays on from here, or hands the
+    /// drum back.
+    fn toggle_test_auto(&mut self) {
+        let Scene::Play { game, .. } = &mut self.scene else {
+            return;
+        };
+        self.test_auto = !self.test_auto;
+        game.mods = Self::test_mods(self.test_auto);
+        game.banner = Some(Self::test_banner(self.test_auto));
     }
 
     /// Back to the editor a test play came from, as it was left.
@@ -3310,6 +3343,7 @@ impl State {
         let Some(view) = self.editor_back.take() else {
             return false;
         };
+        self.test_auto = false;
         if let Some(a) = &self.audio {
             a.stop();
         }
@@ -4256,6 +4290,8 @@ impl State {
             Item::KiaiEffects => on(c.kiai_effects),
             Item::MenuGlitch => on(c.menu_glitch),
             Item::BlackLane => on(c.black_lane),
+            Item::TrueNotes => on(c.true_notes),
+            Item::CalmMaps => on(c.calm_maps),
             Item::DrumMenus => on(c.drum_menus),
             Item::MapSkins => on(c.map_skins),
             Item::HideGreat => on(c.hide_great),
@@ -4600,6 +4636,8 @@ impl State {
             Item::KiaiEffects => self.cfg.kiai_effects = !self.cfg.kiai_effects,
             Item::MenuGlitch => self.cfg.menu_glitch = !self.cfg.menu_glitch,
             Item::BlackLane => self.cfg.black_lane = !self.cfg.black_lane,
+            Item::TrueNotes => self.cfg.true_notes = !self.cfg.true_notes,
+            Item::CalmMaps => self.cfg.calm_maps = !self.cfg.calm_maps,
             Item::DrumMenus => {
                 self.cfg.drum_menus = !self.cfg.drum_menus;
                 self.select_zone = drum_nav::Zone::List;
@@ -7799,8 +7837,14 @@ impl State {
         }
         if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
             let keys = self.editor_keys();
-            if let Scene::Editor(view) = &mut self.scene {
-                view.wheel(notches, keys);
+            // The volume's own notes, once it is up, take the wheel there as they do elsewhere.
+            let mine = !self.volume.hovering(Instant::now())
+                && match &mut self.scene {
+                    Scene::Editor(view) => view.wheel(notches, keys),
+                    _ => true,
+                };
+            if !mine {
+                self.turn_volume(notches);
             }
             return;
         }
@@ -13110,6 +13154,16 @@ impl State {
             }
             return;
         }
+        // Tab in the editor's test play is autoplay, as in osu!'s, whatever the map info key is.
+        if code == KeyCode::Tab
+            && !(self.modifiers_shift || self.modifiers_ctrl || self.modifiers_alt)
+            && matches!(&self.scene, Scene::Play { game, .. } if game.test_play && game.paused.is_none())
+        {
+            if !repeat {
+                self.toggle_test_auto();
+            }
+            return;
+        }
         let pressed = keys::Chord {
             key: code,
             ctrl: self.modifiers_ctrl,
@@ -14035,6 +14089,8 @@ impl State {
         game::set_hide_great(self.cfg.hide_great);
         game::set_hit_flash(self.cfg.hit_flash);
         game::set_black_lane(self.cfg.black_lane);
+        game::set_true_notes(self.cfg.true_notes);
+        tko::runtime::set_calm(self.cfg.calm_maps);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
         if self.scene_kind != Some(kind) {
@@ -14738,7 +14794,7 @@ impl State {
                             None if self.editor_back.is_some() => {
                                 game.record = false;
                                 game.test_play = true;
-                                game.banner = Some("TEST PLAY".into());
+                                game.banner = Some(Self::test_banner(self.test_auto));
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
                             None => {
@@ -15540,6 +15596,10 @@ impl State {
                 view.update(now, self.audio.as_ref());
                 if let Some(speed) = view.take_rate_request() {
                     editor_reload = Some((view.entry, speed));
+                }
+                if view.left_pan != self.cfg.editor_left_pan {
+                    self.cfg.editor_left_pan = view.left_pan;
+                    self.cfg.save();
                 }
                 if let Some(from) = view.take_test_play() {
                     editor_test = Some((view.entry, from));
@@ -18793,6 +18853,7 @@ impl State {
             custom_asked: false,
             folder_watch: None,
             editor_back: None,
+            test_auto: false,
             playing: None,
             status_wait: None,
             scene_kind: None,

@@ -155,6 +155,14 @@ pub fn checks(path: &Path, saved: bool, logged_in: bool) -> Vec<Check> {
             "The map names an osu! set (BeatmapSetID): only your own maps can be sent".to_string()
         },
     ));
+    if let Some(g) = std::fs::read_to_string(path)
+        .ok()
+        .filter(|t| crate::tko::format::version_of(t).is_some())
+        .and_then(|t| crate::tko::format::read(&t).ok())
+        .map(|p| p.gimmick)
+    {
+        out.extend(tko_checks(&g));
+    }
     let background = meta
         .background
         .as_ref()
@@ -168,6 +176,44 @@ pub fn checks(path: &Path, saved: bool, logged_in: bool) -> Vec<Check> {
             "No background picture: the page will show a plain colour (not required)"
         },
     ));
+    out
+}
+
+/// What a player should know about a `.tko` map's tricks before it goes out: nothing blocks.
+fn tko_checks(g: &crate::tko::gimmick::Gimmick) -> Vec<Check> {
+    use crate::tko::gimmick::ShowColour;
+    let mut out = Vec::new();
+    let lying = g.groups.iter().filter(|gr| !gr.show.is_true());
+    let lies: usize = lying.clone().map(|gr| gr.notes.len()).sum();
+    if lies > 0 {
+        out.push(check(
+            false,
+            false,
+            format!(
+                "{lies} notes show as another colour or size: players can turn this off (Settings, Gameplay, Show true notes)"
+            ),
+        ));
+    }
+    let blind = lying
+        .filter(|gr| gr.show.colour != ShowColour::Same && gr.show.reveal == 0.0)
+        .map(|gr| gr.notes.len())
+        .sum::<usize>();
+    if blind > 0 {
+        out.push(check(
+            false,
+            false,
+            format!(
+                "{blind} of them show their true colour only at the hit: they can't be read, only learned"
+            ),
+        ));
+    }
+    if !g.fakes.is_empty() {
+        out.push(check(
+            true,
+            false,
+            format!("{} fake notes (drawn, never hit)", g.fakes.len()),
+        ));
+    }
     out
 }
 
@@ -466,5 +512,31 @@ mod tests {
             .unwrap();
         assert!(!bg.ok && !bg.blocking);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_map_that_lies_says_so_without_blocking() {
+        use crate::tko::gimmick::{FakeNote, Gimmick, Group, ShowAs, ShowColour};
+        let mut g = Gimmick::default();
+        g.groups.push(Group {
+            notes: vec![1000.0, 1200.0],
+            show: ShowAs {
+                colour: ShowColour::Swap,
+                ..ShowAs::default()
+            },
+            ..Group::default()
+        });
+        g.fakes.push(FakeNote {
+            t: 1100.0,
+            ..FakeNote::default()
+        });
+        let list = tko_checks(&g);
+        assert!(list.iter().all(|c| !c.blocking));
+        assert!(list[0].text.starts_with("2 notes show as"), "{list:?}");
+        assert!(list[1].text.contains("only at the hit"));
+        assert!(list[2].ok && list[2].text.starts_with("1 fake"));
+        g.groups[0].show.reveal = 0.5;
+        assert_eq!(tko_checks(&g).len(), 2);
+        assert!(tko_checks(&Gimmick::default()).is_empty());
     }
 }

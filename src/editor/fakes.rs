@@ -1,0 +1,185 @@
+//! Fake notes in the editor (`.tko` maps): notes that are only drawn in the game, never judged.
+//! They are edited as notes with a flag (see `HitObject::fake`), so moving, copying and deleting
+//! them works as for any note, and they go into the gimmick when the map is saved.
+
+use super::chart::{HitObject, Taiko};
+use super::history::Command;
+use super::state::Editor;
+
+impl Editor {
+    /// The selected dons and kats.
+    fn picked_hits(&self) -> Vec<HitObject> {
+        self.selected()
+            .into_iter()
+            .filter(|o| matches!(o.taiko(), Taiko::Don | Taiko::Kat))
+            .collect()
+    }
+
+    /// Makes the selected dons and kats fakes, or real again when they all are. Returns how many
+    /// changed and whether they are fakes now.
+    pub fn toggle_fake(&mut self) -> Result<(usize, bool), String> {
+        if !self.is_tko() {
+            return Err("fake notes need a .tko map".into());
+        }
+        let notes = self.picked_hits();
+        if notes.is_empty() {
+            return Err("select dons or kats first".into());
+        }
+        let on = !notes.iter().all(|o| o.fake);
+        let before: Vec<HitObject> = notes.into_iter().filter(|o| o.fake != on).collect();
+        let after: Vec<HitObject> = before
+            .iter()
+            .map(|o| {
+                let mut o = o.clone();
+                o.fake = on;
+                o
+            })
+            .collect();
+        let n = after.len();
+        self.history
+            .run(&mut self.chart, Command::EditObjects { before, after });
+        Ok((n, on))
+    }
+
+    /// Adds a fake copy of each selected don and kat `beats` beats later (earlier below 0), where
+    /// no note is yet. The copies become the selection. Returns how many.
+    pub fn add_fake_copies(&mut self, beats: f64) -> Result<usize, String> {
+        if !self.is_tko() {
+            return Err("fake notes need a .tko map".into());
+        }
+        let notes = self.picked_hits();
+        if notes.is_empty() {
+            return Err("select dons or kats first".into());
+        }
+        let mut made: Vec<HitObject> = Vec::new();
+        for o in &notes {
+            let t = (o.time + beats * self.beat_at(o.time)).round();
+            let taken = |q: &HitObject| (q.time - t).abs() < 1.0;
+            if t < 0.0 || self.chart.objects.iter().any(taken) || made.iter().any(taken) {
+                continue;
+            }
+            let mut f = HitObject::hit(t, o.taiko() == Taiko::Kat, o.big());
+            f.fake = true;
+            made.push(f);
+        }
+        if made.is_empty() {
+            return Err("there are notes in all those places already".into());
+        }
+        let n = made.len();
+        self.history
+            .run(&mut self.chart, Command::InsertObjects(made));
+        let mut ids: Vec<u64> = self.chart.objects.iter().map(|o| o.id).collect();
+        ids.sort_unstable();
+        self.selection = ids[ids.len() - n..].iter().copied().collect();
+        Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::chart::Chart;
+    use crate::editor::chart::tests::MAP;
+
+    fn tko() -> Editor {
+        let mut e = Editor::new(Chart::parse(MAP), std::path::PathBuf::from("a.tko"));
+        e.chart.gimmick = Some(Default::default());
+        e
+    }
+
+    fn pick(e: &mut Editor, n: usize) {
+        let ids: Vec<u64> = e
+            .chart
+            .objects
+            .iter()
+            .filter(|o| matches!(o.taiko(), Taiko::Don | Taiko::Kat))
+            .take(n)
+            .map(|o| o.id)
+            .collect();
+        e.selection = ids.into_iter().collect();
+    }
+
+    #[test]
+    fn fakes_leave_the_chart_for_the_gimmick_and_come_back() {
+        let mut e = tko();
+        let hits = |text: &str| crate::beatmap::from_text(text).unwrap().notes.len();
+        let real = hits(&e.chart.to_text());
+        pick(&mut e, 2);
+        assert_eq!(e.toggle_fake().unwrap(), (2, true));
+        let text = e.chart.to_text();
+        // Out of the hit objects, into the gimmick, and drawn by the game as fakes.
+        let map = crate::beatmap::from_text(&text).unwrap();
+        assert_eq!(map.notes.len(), real - 2);
+        assert_eq!(map.fakes.len(), 2);
+        // At the speed a real note there has, on the game's clock like the notes.
+        assert_eq!(map.fakes[0].velocity, map.notes[0].velocity);
+        assert_eq!(map.fakes[0].time, 1000.0 + crate::beatmap::OSU_TIMING_MS);
+        // Read back, they are notes flagged fake again.
+        let back = Chart::parse_tko(&text).unwrap();
+        assert_eq!(back.objects.iter().filter(|o| o.fake).count(), 2);
+        assert!(back.gimmick.as_ref().unwrap().fakes.is_empty());
+        assert_eq!(back.to_text(), text, "read and written unchanged");
+        // Toggled again they are real, and undo brings the fakes back.
+        assert_eq!(e.toggle_fake().unwrap(), (2, false));
+        assert_eq!(hits(&e.chart.to_text()), real);
+        assert!(e.undo());
+        assert_eq!(hits(&e.chart.to_text()), real - 2);
+    }
+
+    #[test]
+    fn fake_copies_go_where_no_note_is() {
+        let mut e = tko();
+        pick(&mut e, 2);
+        let n = e.add_fake_copies(0.5).unwrap();
+        assert!(n >= 1);
+        assert!(e.selected().iter().all(|o| o.fake));
+        let map = crate::beatmap::from_text(&e.chart.to_text()).unwrap();
+        assert_eq!(map.fakes.len(), n);
+        // A plain .osu has nowhere to keep them.
+        let mut plain = Editor::new(Chart::parse(MAP), std::path::PathBuf::from("a.osu"));
+        pick(&mut plain, 1);
+        assert!(plain.toggle_fake().is_err());
+    }
+
+    #[test]
+    fn the_motion_example_lays_all_four_parts_on_a_busy_stretch() {
+        let mut text = crate::editor::chart::tests::MAP
+            .split("[HitObjects]")
+            .next()
+            .unwrap()
+            .to_string()
+            + "[HitObjects]\r\n";
+        // A note every half beat for 16 beats (a 500 ms beat), dons and kats in turn.
+        for k in 0..32 {
+            text += &format!(
+                "256,192,{},1,{},0:0:0:0:\r\n",
+                k * 250,
+                if k % 2 == 1 { 2 } else { 0 }
+            );
+        }
+        let mut e = Editor::new(Chart::parse(&text), std::path::PathBuf::from("a.tko"));
+        e.chart.gimmick = Some(Default::default());
+        assert_eq!(e.motion_example(0.0).map(|p| p.len()), Ok(4));
+        let g = e.gimmick().unwrap();
+        let names: Vec<&str> = g.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Example: path", "Example: pop in", "Example: swapped"]
+        );
+        assert!(g.groups[0].path.is_some());
+        assert!(!g.groups[1].before.is_empty());
+        assert!(!g.groups[2].show.is_true());
+        assert!(!g.scroll.is_empty());
+        assert!(
+            g.field_track(crate::tko::gimmick::FieldProp::Drum)
+                .is_some()
+        );
+        assert!(e.selection.is_empty());
+        // Half a beat after each note is another note here, so no fake fits.
+        let map = crate::beatmap::from_text(&e.chart.to_text()).unwrap();
+        assert_eq!(map.notes.len(), 32);
+        // Without notes there is nothing to show it on.
+        let mut empty = tko();
+        assert!(empty.motion_example(20_000.0).is_err());
+    }
+}

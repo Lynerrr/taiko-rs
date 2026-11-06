@@ -235,6 +235,10 @@ pub struct Config {
     pub hide_great: bool,
     /// The lane and the drum's panel drawn pure black.
     pub black_lane: bool,
+    /// .tko notes drawn as what they are, whatever their map makes them show as.
+    pub true_notes: bool,
+    /// .tko maps' flashes, glitches and camera moves toned down.
+    pub calm_maps: bool,
     /// The drum keys move through song select and the pause menu (`drum_nav`).
     pub drum_menus: bool,
     /// The coloured flash on the hit target as notes are hit.
@@ -251,6 +255,8 @@ pub struct Config {
     pub editor_tour_done: bool,
     /// Maps opened in the editor lately (full paths), the latest first.
     pub editor_recent: Vec<String>,
+    /// In the editor a left drag on empty timeline pans it (View > Left drag pans).
+    pub editor_left_pan: bool,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
@@ -432,6 +438,8 @@ impl Default for Config {
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
             black_lane: false,
+            true_notes: false,
+            calm_maps: false,
             drum_menus: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
@@ -440,6 +448,7 @@ impl Default for Config {
             send_crash_reports: true,
             editor_tour_done: false,
             editor_recent: Vec::new(),
+            editor_left_pan: false,
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
@@ -1043,6 +1052,8 @@ impl Config {
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
                 "black_lane" => cfg.black_lane = v == "true",
+                "true_notes" => cfg.true_notes = v == "true",
+                "calm_maps" => cfg.calm_maps = v == "true",
                 "drum_menus" => cfg.drum_menus = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
@@ -1050,6 +1061,7 @@ impl Config {
                 "idle_minutes" => cfg.idle_minutes = v.parse().unwrap_or(cfg.idle_minutes),
                 "send_crash_reports" => cfg.send_crash_reports = v != "false",
                 "editor_tour_done" => cfg.editor_tour_done = v == "true",
+                "editor_left_pan" => cfg.editor_left_pan = v == "true",
                 "editor_recent" if !v.is_empty() => {
                     if cfg.editor_recent.len() < MAX_RECENT_MAPS
                         && !cfg.editor_recent.iter().any(|r| r == v)
@@ -1241,6 +1253,10 @@ impl Config {
              hide_great = {}\n\
              # the lane and the drum's panel pure black\n\
              black_lane = {}\n\
+             # .tko notes drawn as what they are, whatever colour or size their map shows them as\n\
+             true_notes = {}\n\
+             # .tko maps' flashes, glitches and camera moves toned down\n\
+             calm_maps = {}\n\
              # the drum keys move through song select and the pause menu\n\
              drum_menus = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
@@ -1304,6 +1320,8 @@ impl Config {
             self.kiai_effects,
             self.hide_great,
             self.black_lane,
+            self.true_notes,
+            self.calm_maps,
             self.drum_menus,
             self.hit_flash,
             self.show_offset_hint,
@@ -1348,6 +1366,7 @@ impl Config {
         ));
         out.push_str(&format!("# after a crash, the next start sends its report to the developers\nsend_crash_reports = {}\n", self.send_crash_reports));
         out.push_str(&format!("# the map editor's first-run tour was seen (Help > Take the tour shows it again)\neditor_tour_done = {}\n", self.editor_tour_done));
+        out.push_str(&format!("# in the map editor a left drag on empty timeline pans it (View > Left drag pans)\neditor_left_pan = {}\n", self.editor_left_pan));
         if !self.editor_recent.is_empty() {
             out.push_str("# maps lately opened in the editor, the latest first (one line each)\n");
             for path in self.editor_recent.iter().take(MAX_RECENT_MAPS) {

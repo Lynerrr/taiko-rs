@@ -18,6 +18,8 @@ pub enum TryIt {
     Tour,
     /// A set of clips laid over the map's first kiai, to see and pick apart.
     Showcase,
+    /// Paths, a move, fakes, a freeze, the drum sliding and a lie laid over the map's first kiai.
+    MotionShowcase,
 }
 
 fn ru() -> bool {
@@ -29,7 +31,7 @@ pub fn chapters() -> &'static [Chapter] {
     if ru() { &RU } else { &EN }
 }
 
-pub const COUNT: usize = 11;
+pub const COUNT: usize = 12;
 
 static EN: [Chapter; COUNT] = [
     Chapter {
@@ -94,7 +96,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
         try_it: None,
         body: "\
 # Placing
-- Tools: 1 Select, 2 Note, 3 Drumroll, 4 Denden. With Note a click on the lane places on the grid; right click deletes; drag moves (Shift ignores the grid).
+- Tools: 1 Select, 2 Note, 3 Drumroll, 4 Denden. With Note a click on the lane places on the grid; right click deletes (on a selected note: the whole selection); drag moves (Shift ignores the grid).
 - Snap sets how finely a beat divides: Ctrl+wheel or Shift+1 to 9. Left / Right step by one snap.
 - Speed (Ctrl+Up / Down) slows the music so you can place by ear.
 
@@ -198,6 +200,59 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes are under Advanced... for what clips can't do yet.
 
 > Everything here is visual only: judging, score and pp never change.
+",
+    },
+    Chapter {
+        title: "Note paths",
+        try_it: Some(("Put an example on this map", TryIt::MotionShowcase)),
+        body: "\
+F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw instead of scrolling along the lane, and land on the drum exactly when they are hit.
+
+# Giving notes a path
+- Select notes on the timeline (one is fine), then press Give the picked notes a path. They get a group of their own and come in From above to start with.
+- Pick another start under Where they come from: from below, from behind the drum, the corner, an arc, a drop, a zigzag, a spiral, a loop.
+- Shape it in the preview: drag a point to move it, double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
+
+# How they move on it
+- A note is as far along the path as it would be along the lane: it comes in at the start when it would come in at the lane's end. Slider velocity still works, so slow notes are slow on the path too.
+- Pace along it bends that: Stop half way holds them still in the middle, Rush the end makes them dart in, Soft landing slows them at the drum, Back up makes them step back once.
+
+# When
+- Always: on the path the whole song.
+- Onto the path here and Back to the lane here glide them over one beat from the playhead; use both to fly only through a chorus.
+- Show the path draws it faintly for players, so they can read where notes will come from.
+
+# More notes, the same motion
+- Copy motion, pick other notes, Paste motion: they get the same path, pace and keyframes.
+- Select them picks a group's notes on the timeline again. A note flies with one group: giving it a new path takes it out of its old group.
+
+# Before the hit
+- The Before the hit tab gives the picked notes a move that each one does as its own hit nears, wherever it is: fade in late, vanish early, pop in, drop in, rise from below, jump up, spin in, flicker in, shake, squash on the hit.
+- Or key it yourself on the graph: pick what to change (fade, size, up/down, sideways, turn, hide, wide, tall, tint), click to add a key, drag it, right click to remove it. Left is 4 beats before the hit, the bright line is the hit itself. Keys sit on 1/8 beats; hold Shift to place them freely.
+- It works with a path and with the Keyframes page: moves and turns add up, size and fade multiply.
+
+# Scroll (mania SV)
+- The Scroll tab sets one speed for the whole lane over the song, like SV in osu!mania: 1x plays as mapped, 2x twice as fast, 0x freezes every note where it is, -1x runs them back. Your green lines stay as they are; this goes on top, so a 2x green line under a 0.5x scroll plays at 1x.
+- Pick a speed and it holds from the playhead until the next key. Slower and Faster nudge it, Glide to the next key eases into the next speed instead of jumping.
+- Moves from the playhead: Freeze a beat, Back up a beat, Lurch on each beat (a bar), Jump a beat ahead. Each comes back to the speed it started from.
+- The graph under the timeline shows the speed: click adds a key, drag moves it, right click deletes it.
+- Slide the drum along the lane moves the hit target to Home, A quarter in, Half way or Far over one beat from the playhead; notes meet it wherever it is. It is the Move the drum effect, so the Keyframes page and clips can move it too.
+- However the scroll runs, every note still reaches the drum exactly when it is hit.
+
+# Fake notes
+- The Fakes tab turns the picked dons and kats into fakes (and back): they look and move like notes, but are never hit, give no score or combo, make no sound, and vanish at the drum.
+- Add fake copies of the picked notes puts fakes half a beat or a 1/4 before or after them, or a beat after, where no note is yet.
+- On the timeline fakes are hollow with an F. Select, move, copy and delete them like any note; groups, paths, moves and the scroll take them by their time.
+
+# Show as
+- The Show as tab makes the picked notes lie about their look: all as dons, all as kats or swapped, and all small, all big or swapped.
+- The truth shows takes them back to what they are, over a 1/4 beat ending at the hit or up to two beats before it. A colour that only shows at the hit can't be read, only learned: Upload warns about it.
+- What hits a note, its score and its sound stay its own. Fakes lie with their group too; drumrolls and swells never lie.
+- Players can turn every lie off in Settings, Gameplay, Show true notes. With it on, your own preview shows the truth too.
+
+- Put an example on this map (the button below) lays all of this over the map's first kiai, four beats each: a path, a pop in with fakes, a freeze as the drum slides, swapped colours. Each part is its own Ctrl+Z.
+
+> Paths, moves, the scroll, fakes and lies are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane. Players can tone down flashes, glitches and camera moves with Settings, Gameplay, Reduce map effects.
 ",
     },
     Chapter {
@@ -306,8 +361,9 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
 # Playing and moving
 - Space or C: play or pause. X: play from the start (as in stable).
 - F5: test play. The map as it is now (saved or not) plays in the real game from the playhead, Shift+F5 from the start, with No Fail and nothing saved; Quit or the end of the map comes back here.
+- Tab in a test play, as in osu!: autoplay plays on from there; Tab again hands it back.
 - Z / V: first / last note. Left / Right: by snap. Up / Down: previous / next timing line.
-- Wheel: seek. Ctrl+wheel: snap. Alt+wheel: zoom. Middle drag: pan.
+- Wheel: seek. Ctrl+wheel: snap. Alt+wheel: zoom over the timeline, the volume elsewhere. Middle drag: pan (View > Left drag pans lets the left button pan empty timeline too; then Ctrl+drag selects a box).
 - Ctrl+Up / Down: playback speed (with Shift 5%).
 
 # Notes
@@ -387,7 +443,7 @@ File > Open song folder открывает папку карты. Бросьте
         try_it: None,
         body: "\
 # Расстановка
-- Инструменты: 1 Select, 2 Note, 3 Drumroll, 4 Denden. С Note клик по дорожке ставит ноту на сетку; правый клик удаляет; перетаскивание двигает (Shift — без сетки).
+- Инструменты: 1 Select, 2 Note, 3 Drumroll, 4 Denden. С Note клик по дорожке ставит ноту на сетку; правый клик удаляет (по выделенной ноте — всё выделение); перетаскивание двигает (Shift — без сетки).
 - Snap — на сколько делится бит: Ctrl+колесо или Shift+1..9. Влево / вправо — на один шаг.
 - Speed (Ctrl+вверх / вниз) замедляет музыку, чтобы ставить на слух.
 
@@ -491,6 +547,59 @@ F4 Effects открывается на Clips: самый простой спос
 Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes спрятаны под Advanced... — для того, чего блоки пока не умеют.
 
 > Всё здесь только визуальное: судейство, очки и pp не меняются.
+",
+    },
+    Chapter {
+        title: "Траектории нот",
+        try_it: Some(("Положить пример на эту карту", TryIt::MotionShowcase)),
+        body: "\
+F4 Effects, страница Motion (.tko-карты): выбранные ноты летят по нарисованному пути, а не по лайну, и приходят на барабан ровно в момент удара.
+
+# Как дать нотам путь
+- Выделите ноты на таймлайне (можно одну) и нажмите Give the picked notes a path. Они получат свою группу и для начала прилетят сверху (From above).
+- В Where they come from можно выбрать другой старт: снизу, из-за барабана, из угла, дугой, падением, зигзагом, спиралью, петлёй.
+- Путь правится прямо на превью: тащите точку, двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
+
+# Как они по нему летят
+- Нота проходит такую же долю пути, какую прошла бы по лайну: появляется в начале пути, когда появилась бы в конце лайна. SV продолжает работать: медленные ноты медленные и на пути.
+- Pace along it меняет это: Stop half way останавливает их на середине, Rush the end бросает к барабану рывком, Soft landing тормозит у барабана, Back up один раз откатывает назад.
+
+# Когда
+- Always: на пути всю песню.
+- Onto the path here и Back to the lane here плавно переводят ноты за одну долю от плейхеда; вместе ими можно пустить ноты по пути только в припеве.
+- Show the path рисует путь тускло для игрока, чтобы было видно, откуда прилетят ноты.
+
+# Больше нот с тем же движением
+- Copy motion, выделите другие ноты, Paste motion: у них будет тот же путь, темп и ключевые кадры.
+- Select them снова выделяет ноты группы. Нота летит с одной группой: новый путь забирает её из старой группы.
+
+# Перед ударом
+- Вкладка Before the hit даёт выбранным нотам движение, которое каждая делает перед своим ударом, где бы она ни была: проявиться поздно, исчезнуть заранее, выскочить, упасть сверху, подняться снизу, подпрыгнуть, закрутиться, мигнуть, задрожать, сплющиться в момент удара.
+- Или задайте его сами на графике: выберите, что меняется (прозрачность, размер, вверх/вниз, вбок, поворот, скрытие, ширина, высота, оттенок), клик добавляет ключ, его можно тащить, правый клик убирает. Слева 4 доли до удара, яркая линия это сам удар. Ключи встают на 1/8 доли; с Shift ставятся свободно.
+- Работает вместе с путём и со страницей Keyframes: сдвиги и повороты складываются, размер и прозрачность перемножаются.
+
+# Скролл (SV как в mania)
+- Вкладка Scroll задаёт одну скорость для всего лайна по ходу песни, как SV в osu!mania: 1x как в карте, 2x вдвое быстрее, 0x замораживает все ноты на месте, -1x гонит их назад. Зелёные линии остаются как есть; скролл ложится сверху, так что зелёная линия 2x под скроллом 0.5x играется как 1x.
+- Выбранная скорость держится от плейхеда до следующего ключа. Slower и Faster подкручивают её, Glide to the next key плавно переводит к следующей скорости вместо скачка.
+- Движения от плейхеда: Freeze a beat, Back up a beat, Lurch on each beat (a bar), Jump a beat ahead. Каждое возвращается к скорости, с которой началось.
+- График под таймлайном показывает скорость: клик добавляет ключ, перетаскивание двигает, правый клик удаляет.
+- Slide the drum along the lane за одну долю от плейхеда сдвигает мишень: Home (на место), A quarter in (на четверть), Half way (на середину), Far (далеко). Ноты встречают её там, где она стоит. Это эффект Move the drum, так что его можно двигать и на странице Keyframes, и клипами.
+- Как бы ни шёл скролл, каждая нота приходит на барабан ровно в момент удара.
+
+# Фейковые ноты
+- Вкладка Fakes делает выбранные доны и каты фейками (и обратно): они выглядят и двигаются как ноты, но по ним не бьют, они не дают счёта и комбо, не звучат и исчезают на барабане.
+- Add fake copies of the picked notes ставит фейки на полдоли или 1/4 до или после выбранных нот, или на долю после, где ноты ещё нет.
+- На таймлайне фейки полые с буквой F. Их выделяют, двигают, копируют и удаляют как обычные ноты; группы, траектории, движения и скролл берут их по времени.
+
+# Show as
+- Вкладка Show as заставляет выбранные ноты врать о своём виде: все как доны, все как каты или наоборот, и все маленькие, все большие или наоборот.
+- The truth shows возвращает им настоящий вид за 1/4 доли, к самому удару или за две доли до него. Цвет, который виден только в момент удара, не прочитать, только выучить: Upload об этом предупредит.
+- Чем бить ноту, её счёт и звук остаются её собственными. Фейки врут вместе со своей группой; дроби и свели не врут никогда.
+- Игроки могут выключить любой обман в настройках: Игра, «Показывать настоящие ноты». Если это включено у вас самих, превью тоже покажет правду.
+
+- Положить пример на эту карту (кнопка внизу) раскладывает всё это по первому киаю карты, по четыре доли: траектория, выскакивание с фейками, заморозка, пока едет барабан, перепутанные цвета. Каждая часть отменяется своим Ctrl+Z.
+
+> Траектории, движения, скролл, фейки и обман только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне. Игроки могут ослабить вспышки, глитчи и движения камеры в настройках: Игра, «Ослабить эффекты карт».
 ",
     },
     Chapter {
@@ -599,8 +708,9 @@ File > Upload отправляет сохранённую карту на taiko.
 # Воспроизведение и перемещение
 - Space или C: играть / пауза. X: играть с начала (как в stable).
 - F5: тест-плей. Карта как она есть сейчас (сохранённая или нет) играется в настоящей игре с плейхеда, Shift+F5 — с начала, с No Fail и без сохранения результата; выход или конец карты возвращают сюда.
+- Tab в тест-плее, как в osu!: дальше играет автоплей; ещё раз Tab — снова вы.
 - Z / V: первая / последняя нота. Влево / вправо: по шагу сетки. Вверх / вниз: предыдущая / следующая линия таймингов.
-- Колесо: перемотка. Ctrl+колесо: snap. Alt+колесо: масштаб. Средняя кнопка: сдвиг.
+- Колесо: перемотка. Ctrl+колесо: snap. Alt+колесо: масштаб над таймлайном, в остальных местах громкость. Средняя кнопка: сдвиг (View > Left drag pans даёт сдвигать пустой таймлайн и левой кнопкой; рамка тогда через Ctrl+перетаскивание).
 - Ctrl+вверх / вниз: скорость воспроизведения (с Shift по 5%).
 
 # Ноты

@@ -301,6 +301,14 @@ impl View {
                     "waveform off".into()
                 };
             }
+            Cmd::LeftPan => {
+                self.left_pan = !self.left_pan;
+                self.status = if self.left_pan {
+                    "a left drag on empty space pans the timeline (Ctrl+drag selects a box)".into()
+                } else {
+                    "a left drag on empty space selects a box".into()
+                };
+            }
             Cmd::ZoomFit => {
                 let w = self.timeline_w() as f64;
                 self.ms_per_px = (self.end_ms() / w.max(1.0)).clamp(0.25, 80.0);

@@ -6,10 +6,12 @@
 
 pub mod chart;
 pub mod clips;
+pub mod fakes;
 pub mod gimmicks;
 pub mod history;
 pub mod home;
 pub mod keyframes;
+pub mod motion;
 pub mod new_map;
 pub mod nodes;
 pub mod setup;

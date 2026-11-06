@@ -50,6 +50,8 @@ pub enum Item {
     KiaiEffects,
     MenuGlitch,
     BlackLane,
+    TrueNotes,
+    CalmMaps,
     DrumMenus,
     HideGreat,
     ChatFilter,
@@ -120,7 +122,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 131] = [
+pub const ITEMS: [(&str, Item); 133] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -133,6 +135,8 @@ pub const ITEMS: [(&str, Item); 131] = [
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
     ("GAMEPLAY", Item::HideGreat),
+    ("GAMEPLAY", Item::TrueNotes),
+    ("GAMEPLAY", Item::CalmMaps),
     ("GAMEPLAY", Item::Interface),
     ("GAMEPLAY", Item::InterfaceHides),
     ("GAMEPLAY", Item::InterfaceKey),
@@ -528,6 +532,16 @@ impl Item {
                 "メニューで太鼓のキーを使う",
                 "Клавиши барабана в меню"
             ),
+            Item::CalmMaps => tr!(
+                "Reduce map effects",
+                "譜面の演出を控えめに",
+                "Ослабить эффекты карт"
+            ),
+            Item::TrueNotes => tr!(
+                "Show true notes",
+                "本当のノーツを表示",
+                "Показывать настоящие ноты"
+            ),
             Item::HideGreat => tr!(
                 "Hide GREAT splash",
                 "GREATの表示を隠す",
@@ -738,6 +752,8 @@ impl Item {
             | Item::MapSkins
             | Item::AutoplayLeftHanded
             | Item::HideGreat
+            | Item::TrueNotes
+            | Item::CalmMaps
             | Item::HitFlash
             | Item::ChatFilter
             | Item::MessageSound
@@ -964,6 +980,16 @@ impl Item {
                 "During kiai time, tint the lane and pulse the hit target with the beat. The main menu joins in too.",
                 "キアイタイム中、レーンに色を付け、判定枠を拍に合わせて脈打たせます。メインメニューも盛り上がります。",
                 "В киай подкрашивать дорожку и пульсировать мишень в такт. Главное меню тоже оживает."
+            ),
+            Item::CalmMaps => tr!(
+                ".tko maps flash, glitch and tear the screen a quarter as hard, and turn, zoom and move the playfield half as far. Notes are hit at the same moments.",
+                ".tko譜面のフラッシュ、グリッチ、画面の乱れを4分の1に、プレイフィールドの回転、ズーム、移動を半分にします。ノーツを叩くタイミングは変わりません。",
+                ".tko-карты вспыхивают, глитчат и рвут экран вчетверо слабее, а поворачивают, приближают и двигают поле вдвое меньше. Ноты бьются в те же моменты."
+            ),
+            Item::TrueNotes => tr!(
+                "Some .tko maps draw notes as another colour or size until just before the hit. On: every note shows what it is.",
+                "一部の.tko譜面は叩く直前までノーツを別の色や大きさで描きます。オン: すべてのノーツが本当の姿で表示されます。",
+                "Некоторые .tko-карты рисуют ноты другим цветом или размером почти до самого удара. Вкл.: каждая нота видна такой, какая она есть."
             ),
             Item::HideGreat => tr!(
                 "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",

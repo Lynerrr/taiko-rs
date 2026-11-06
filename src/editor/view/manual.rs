@@ -109,6 +109,19 @@ impl View {
                         self.run(super::cmd::Cmd::Mode(super::cmd::Mode::Effects), audio);
                         self.press(Btn::GPage(3), super::Keys::default(), audio);
                     }
+                    TryIt::MotionShowcase => {
+                        self.run(super::cmd::Cmd::Mode(super::cmd::Mode::Effects), audio);
+                        if !self.ed.is_tko() {
+                            let make = Btn::K(super::keys::KAct::MakeTko);
+                            self.press(make, super::Keys::default(), audio);
+                        }
+                        self.press(
+                            Btn::GPage(super::motion::PAGE),
+                            super::Keys::default(),
+                            audio,
+                        );
+                        self.motion_showcase();
+                    }
                     TryIt::Showcase => {
                         self.run(super::cmd::Cmd::Mode(super::cmd::Mode::Effects), audio);
                         self.press(Btn::GPage(4), super::Keys::default(), audio);

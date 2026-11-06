@@ -43,7 +43,7 @@ impl std::fmt::Display for Error {
 pub type Migration = fn(&mut Value);
 
 /// Every version bump adds one entry here and a fixture of the old format to the tests below.
-pub const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3];
+pub const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3, v3_to_v4];
 
 /// Version 2 added playfield effects (flash, vignette, glitch, echo ...), note swirl, marks and
 /// more node kinds, all optional keys: a version 1 file is a valid version 2 file as it is. The
@@ -53,6 +53,10 @@ fn v1_to_v2(_: &mut Value) {}
 /// Version 3 added effect clips (`clips`, with their text and pictures), an optional key: a version 2 file is a valid version
 /// 3 file. Bumped for the same reason.
 fn v2_to_v3(_: &mut Value) {}
+
+/// Version 4 added approach paths (a group's optional `path`): a version 3 file is a valid version
+/// 4 file. Bumped for the same reason.
+fn v3_to_v4(_: &mut Value) {}
 
 const _: () = assert!(MIGRATIONS.len() as u32 == TKO_VERSION - 1);
 
@@ -203,6 +207,11 @@ pub fn write(osu: &str, gimmick: &Gimmick) -> Result<String, Error> {
     }
     if !out.ends_with('\n') {
         out.push_str(eol);
+    }
+    // One blank line before the gimmick, however many the chart ended with: a chart read back
+    // keeps the one written last time.
+    while out.ends_with(&format!("{eol}{eol}")) {
+        out.truncate(out.len() - eol.len());
     }
     out.push_str(eol);
     out.push_str("[Gimmick]");
@@ -404,5 +413,25 @@ mod tests {
         assert_eq!(g.graph.nodes.len(), 2);
         assert_eq!(g.graph.seed, 3);
         assert!(g.clips.is_empty());
+    }
+
+    #[test]
+    fn a_v3_fixture_keeps_reading() {
+        // Version 3 as released: effect clips, with a text layer; groups without paths.
+        let fixture = r#"{"groups":[{"name":"a","notes":[1000.0],"tracks":{}}],"clips":[{"id":1,"lane":0,"what":"zoom","start":500.0,"end":1500.0,"amount":0.1}]}"#;
+        let text = format!(
+            "{}\n[Gimmick]\n{fixture}\n",
+            write(chart(), &Gimmick::default())
+                .unwrap()
+                .split("[Gimmick]")
+                .next()
+                .unwrap()
+                .trim_end()
+                .replace(&format!("TkoVersion: {TKO_VERSION}"), "TkoVersion: 3")
+        );
+        assert_eq!(version_of(&text), Some(3));
+        let g = read(&text).unwrap().gimmick;
+        assert_eq!(g.clips.len(), 1);
+        assert!(g.groups[0].path.is_none());
     }
 }
