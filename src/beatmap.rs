@@ -154,6 +154,15 @@ pub fn difficulty_range(d: f64, min: f64, mid: f64, max: f64) -> f64 {
     }
 }
 
+/// The OD a map plays like at `rate` (1.5 for DT): the great window shrinks with the speed, as
+/// it is timed in the song, and this is the OD whose window is that wide in real time. Above 10
+/// when faster, below the map's when slower, as osu! shows it.
+pub fn od_at_rate(od: f64, rate: f64) -> f64 {
+    let great = difficulty_range(od, 50.0, 35.0, 20.0) / rate.max(0.01);
+    // The great window is 50 - 3 * OD over the whole range.
+    (50.0 - great) / 3.0
+}
+
 fn kv(line: &str) -> Option<(&str, &str)> {
     let (k, v) = line.split_once(':')?;
     Some((k.trim(), v.trim()))
@@ -1001,6 +1010,25 @@ SliderTickRate:1
         assert_eq!(difficulty_range(5.0, 50.0, 35.0, 20.0), 35.0);
         assert_eq!(difficulty_range(10.0, 50.0, 35.0, 20.0), 20.0);
         assert_eq!(difficulty_range(0.0, 120.0, 80.0, 50.0), 120.0);
+    }
+
+    #[test]
+    fn od_follows_the_rate_through_the_great_window() {
+        assert!((od_at_rate(5.0, 1.0) - 5.0).abs() < 1e-9);
+        assert!((od_at_rate(0.0, 1.0)).abs() < 1e-9);
+        assert!((od_at_rate(10.0, 1.0) - 10.0).abs() < 1e-9);
+        // DT at OD 5: 35 ms becomes 23.3 ms, OD 8.89.
+        assert!((od_at_rate(5.0, 1.5) - 80.0 / 9.0).abs() < 1e-9);
+        // HT at OD 8: 26 ms becomes 34.7 ms, OD 5.11.
+        assert!((od_at_rate(8.0, 0.75) - 46.0 / 9.0).abs() < 1e-9);
+        assert!(
+            od_at_rate(10.0, 1.5) > 10.0,
+            "faster than OD 10 shows above it"
+        );
+        assert!(od_at_rate(7.0, 1.1) > od_at_rate(7.0, 1.05));
+        // With the mods first: HR makes OD 5 into 7, which at DT plays like OD 10.22.
+        let hr = crate::mods::Mods::parse("HR").od(5.0);
+        assert!((od_at_rate(hr, 1.5) - 92.0 / 9.0).abs() < 1e-9);
     }
 
     #[test]

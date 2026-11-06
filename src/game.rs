@@ -5836,7 +5836,16 @@ impl Game {
                 py + 62.0,
                 8.0,
                 rgba(0x6f6f86, 1.0),
-                &Canvas::fit(8.0, fit, &format!("[{}]  OD {:.1}{rate}", m.version, m.od)),
+                &Canvas::fit(
+                    8.0,
+                    fit,
+                    &format!(
+                        "[{}]  OD {:.1}{rate}",
+                        m.version,
+                        // As it plays: with EZ / HR / PR and at this speed.
+                        crate::beatmap::od_at_rate(self.mods.od(m.od), self.rate)
+                    ),
+                ),
             );
             c.rect(px + 14.0, py + 78.0, pw - 28.0, 1.0, rgba(0x2a2a38, 1.0));
             c.fade_since(start, t, 1.0);
