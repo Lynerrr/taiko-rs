@@ -171,6 +171,8 @@ pub struct Preview {
     /// The pp a full combo of the selected map gives with the mods picked, at `pp::POTENTIAL`'s
     /// accuracies (SS, 99%, 98%), shown with its details once worked out.
     pub potential: Option<[f64; 3]>,
+    /// The mods picked, for the OD shown (EZ, HR and Precise change it).
+    pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
@@ -974,12 +976,12 @@ impl Preview {
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
         let mut stats: [Vec<StatCell>; 3] = [
-            // At the speed played: the windows shrink or grow with it.
+            // As it plays: EZ / HR / Precise, and the speed, which shrinks or grows the windows.
             vec![(
                 "OD",
                 format!(
                     "{:.1}",
-                    crate::beatmap::od_at_rate(e.meta.od, self.requested_rate.0)
+                    crate::beatmap::od_at_rate(self.mods.od(e.meta.od), self.requested_rate.0)
                 ),
                 1.0,
             )],

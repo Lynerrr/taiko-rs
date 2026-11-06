@@ -1059,6 +1059,9 @@ SliderTickRate:1
             "faster than OD 10 shows above it"
         );
         assert!(od_at_rate(7.0, 1.1) > od_at_rate(7.0, 1.05));
+        // With the mods first: HR makes OD 5 into 7, which at DT plays like OD 10.22.
+        let hr = crate::mods::Mods::parse("HR").od(5.0);
+        assert!((od_at_rate(hr, 1.5) - 92.0 / 9.0).abs() < 1e-9);
     }
 
     #[test]
