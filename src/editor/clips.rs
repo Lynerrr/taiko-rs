@@ -891,6 +891,331 @@ pub const PRESETS: &[Preset] = &[
             vec![c]
         },
     },
+    // ---- added later: kept at the end so the older ones keep their place ----
+    Preset {
+        name: "Heartbeat",
+        shelf: Shelf::Move,
+        about: "On every beat the playfield thumps bigger and the edges of the screen darken with it.",
+        make: |s, e, _| {
+            vec![
+                every(c(ZOOM, s, e, 0.12), 1.0, 0.5, Motion::Kick),
+                every(
+                    c(Target::Field(FieldProp::Vignette), s, e, 0.45),
+                    1.0,
+                    0.75,
+                    Motion::Kick,
+                ),
+            ]
+        },
+    },
+    Preset {
+        name: "Drunk",
+        shelf: Shelf::Move,
+        about: "The playfield sways, drifts and bobs out of step with itself, as if the floor moved.",
+        make: |s, e, _| {
+            let sway = |t, a, beats| {
+                let mut c = every(c(t, s, e, a), beats, beats, Motion::Swing);
+                c.ease = Ease::SineInOut;
+                c
+            };
+            vec![
+                sway(TURN, 6.0, 2.0),
+                sway(Target::Field(FieldProp::X), 28.0, 3.0),
+                sway(Target::Field(FieldProp::Y), 12.0, 1.5),
+            ]
+        },
+    },
+    Preset {
+        name: "Barrel roll",
+        shelf: Shelf::Move,
+        about: "A whole turn every bar, quick in the middle and easing out at the ends.",
+        make: |s, e, _| {
+            let mut c = every(c(TURN, s, e, 360.0), 4.0, 2.0, Motion::Step);
+            c.ease = Ease::QuadInOut;
+            vec![c]
+        },
+    },
+    Preset {
+        name: "Vertigo",
+        shelf: Shelf::Move,
+        about: "The playfield slowly comes closer and turns, leaving a trail that shrinks away behind it.",
+        make: |s, e, b| {
+            vec![
+                faded(c(ZOOM, s, e, 0.6), b, 0.0, Ease::QuadIn),
+                faded(c(TURN, s, e, 90.0), b, 0.0, Ease::SineInOut),
+                faded(
+                    c(Target::Field(FieldProp::Echo), s, e, 3.0),
+                    2.0,
+                    1.0,
+                    Ease::Linear,
+                ),
+                c(Target::Field(FieldProp::EchoZoom), s, e, -0.08),
+            ]
+        },
+    },
+    Preset {
+        name: "Mega drop",
+        shelf: Shelf::Move,
+        about: "The drop of drops: a flash, a zoom kick, a hard shake, colour fringes and a tear at the start, then a thump on every beat with a trail.",
+        make: |s, e, _| {
+            let once = |t, a, len| on(c(t, s, e, a), When::Beats { every: 256.0 }, len);
+            vec![
+                once(Target::Field(FieldProp::Flash), 1.0, 2.0),
+                once(ZOOM, 0.5, 2.0),
+                once(Target::Shake, 30.0, 2.0),
+                once(Target::Field(FieldProp::Chroma), 40.0, 2.0),
+                once(Target::Field(FieldProp::Glitch), 0.7, 0.5),
+                every(c(ZOOM, s, e, 0.08), 1.0, 0.5, Motion::Kick),
+                faded(
+                    c(Target::Field(FieldProp::Echo), s, e, 3.0),
+                    1.0,
+                    1.0,
+                    Ease::Linear,
+                ),
+            ]
+        },
+    },
+    Preset {
+        name: "Chaos",
+        shelf: Shelf::Move,
+        about: "Every note tips the playfield one way and the next, kicks the zoom and splits the colours; big notes shake it.",
+        make: |s, e, _| {
+            let all = When::Notes { notes: Notes::All };
+            let mut tip = on(c(TURN, s, e, 10.0), all, 1.0);
+            tip.motion = Motion::Swing;
+            vec![
+                tip,
+                on(c(ZOOM, s, e, 0.07), all, 0.5),
+                on(c(Target::Field(FieldProp::Chroma), s, e, 18.0), all, 0.5),
+                on(
+                    c(Target::Shake, s, e, 14.0),
+                    When::Notes { notes: Notes::Big },
+                    1.0,
+                ),
+            ]
+        },
+    },
+    Preset {
+        name: "Strobe",
+        shelf: Shelf::Look,
+        about: "Hard white flashes twice a beat. Use it short: it is a lot.",
+        make: |s, e, _| {
+            let mut c = every(
+                c(Target::Field(FieldProp::Flash), s, e, 0.55),
+                0.5,
+                0.25,
+                Motion::Kick,
+            );
+            c.ease = Ease::Linear;
+            vec![c]
+        },
+    },
+    Preset {
+        name: "Neon night",
+        shelf: Shelf::Look,
+        about: "The background goes dark, a colour lies over the playfield and jumps to a new hue on every beat, with a faint colour fringe.",
+        make: |s, e, _| {
+            vec![
+                faded(c(BACKDROP, s, e, 0.85), 1.0, 1.0, Ease::SineInOut),
+                faded(
+                    c(Target::Field(FieldProp::Wash), s, e, 0.3),
+                    1.0,
+                    1.0,
+                    Ease::SineInOut,
+                ),
+                every(
+                    c(Target::Field(FieldProp::WashHue), s, e, 60.0),
+                    1.0,
+                    0.25,
+                    Motion::Step,
+                ),
+                faded(
+                    c(Target::Field(FieldProp::Chroma), s, e, 6.0),
+                    1.0,
+                    1.0,
+                    Ease::Linear,
+                ),
+            ]
+        },
+    },
+    Preset {
+        name: "Hyperspace",
+        shelf: Shelf::Look,
+        about: "Six copies trail straight back behind the playfield, each smaller than the last, like a tunnel, with a push on every beat.",
+        make: |s, e, _| {
+            vec![
+                faded(
+                    c(Target::Field(FieldProp::Echo), s, e, 6.0),
+                    1.0,
+                    1.0,
+                    Ease::Linear,
+                ),
+                // The trail goes straight back (its default steps it to the side).
+                c(Target::Field(FieldProp::EchoX), s, e, 30.0),
+                c(Target::Field(FieldProp::EchoZoom), s, e, -0.1),
+                c(Target::Field(FieldProp::EchoFade), s, e, 0.25),
+                every(c(ZOOM, s, e, 0.05), 1.0, 0.5, Motion::Kick),
+            ]
+        },
+    },
+    Preset {
+        name: "VHS tape",
+        shelf: Shelf::Look,
+        about: "A worn tape: colour fringes that swim, a cold blue tint and a tear every bar.",
+        make: |s, e, _| {
+            let mut swim = every(
+                c(Target::Field(FieldProp::Chroma), s, e, 10.0),
+                2.0,
+                2.0,
+                Motion::Swing,
+            );
+            swim.ease = Ease::SineInOut;
+            vec![
+                swim,
+                every(
+                    c(Target::Field(FieldProp::Glitch), s, e, 0.35),
+                    4.0,
+                    0.25,
+                    Motion::Kick,
+                ),
+                faded(
+                    c(Target::Field(FieldProp::Wash), s, e, 0.12),
+                    1.0,
+                    1.0,
+                    Ease::Linear,
+                ),
+                c(Target::Field(FieldProp::WashHue), s, e, 210.0),
+            ]
+        },
+    },
+    Preset {
+        name: "Spin trail",
+        shelf: Shelf::Look,
+        about: "The playfield makes a whole turn, leaving a fan of copies, each turned a little further back.",
+        make: |s, e, b| {
+            vec![
+                faded(
+                    c(Target::Field(FieldProp::Echo), s, e, 5.0),
+                    1.0,
+                    1.0,
+                    Ease::Linear,
+                ),
+                c(Target::Field(FieldProp::EchoX), s, e, 30.0),
+                c(Target::Field(FieldProp::EchoRot), s, e, 12.0),
+                faded(c(TURN, s, e, 360.0), b, 0.0, Ease::SineInOut),
+            ]
+        },
+    },
+    Preset {
+        name: "Disco notes",
+        shelf: Shelf::Notes,
+        about: "The notes take a bright colour that jumps to the next one on every beat.",
+        make: |s, e, _| {
+            vec![
+                faded(
+                    c(Target::Notes(None, NoteProp::Tint), s, e, 0.9),
+                    0.5,
+                    0.5,
+                    Ease::Linear,
+                ),
+                every(
+                    c(Target::Notes(None, NoteProp::TintHue), s, e, 90.0),
+                    1.0,
+                    0.25,
+                    Motion::Step,
+                ),
+            ]
+        },
+    },
+    Preset {
+        name: "Jelly notes",
+        shelf: Shelf::Notes,
+        about: "The notes wobble like jelly: taller, then wider, back and forth on every beat.",
+        make: |s, e, _| {
+            let wobble = |p, a| {
+                let mut c = every(c(Target::Notes(None, p), s, e, a), 1.0, 1.0, Motion::Swing);
+                c.ease = Ease::SineInOut;
+                c
+            };
+            vec![
+                wobble(NoteProp::StretchY, 0.25),
+                wobble(NoteProp::StretchX, -0.2),
+            ]
+        },
+    },
+    Preset {
+        name: "Floating notes",
+        shelf: Shelf::Notes,
+        about: "The notes bob gently up and down over the lane as they come in.",
+        make: |s, e, _| {
+            let mut c = every(
+                c(Target::Notes(None, NoteProp::Dy), s, e, 30.0),
+                2.0,
+                2.0,
+                Motion::Swing,
+            );
+            c.ease = Ease::SineInOut;
+            vec![c]
+        },
+    },
+    Preset {
+        name: "Blinking notes",
+        shelf: Shelf::Notes,
+        about: "The notes all but vanish on every beat and fade back in: read the rhythm, not the lane.",
+        make: |s, e, _| {
+            vec![every(
+                c(Target::Notes(None, NoteProp::Opacity), s, e, -0.9),
+                1.0,
+                0.6,
+                Motion::Kick,
+            )]
+        },
+    },
+    Preset {
+        name: "Clone army",
+        shelf: Shelf::Copies,
+        about: "Four faint copies slide out, two above and two below the playfield.",
+        make: |s, e, _| {
+            [
+                (0, -100.0, 0.5),
+                (1, 100.0, 0.5),
+                (2, -200.0, 0.3),
+                (3, 200.0, 0.3),
+            ]
+            .into_iter()
+            .flat_map(|(k, y, show)| {
+                [
+                    faded(cp(k, CopyProp::Show, s, e, show), 1.0, 1.0, Ease::SineInOut),
+                    faded(cp(k, CopyProp::Y, s, e, y), 1.0, 1.0, Ease::BackOut),
+                    cp(k, CopyProp::LaneFade, s, e, 0.3),
+                ]
+            })
+            .collect()
+        },
+    },
+    Preset {
+        name: "Tunnel",
+        shelf: Shelf::Copies,
+        about: "Three ever bigger, ever fainter copies frame the playfield and rock against each other.",
+        make: |s, e, _| {
+            [
+                (0, 0.35, 0.4, 6.0),
+                (1, 0.8, 0.25, -9.0),
+                (2, 1.4, 0.15, 12.0),
+            ]
+            .into_iter()
+            .flat_map(|(k, zoom, show, rock)| {
+                let mut turn = every(cp(k, CopyProp::Turn, s, e, rock), 4.0, 4.0, Motion::Swing);
+                turn.ease = Ease::SineInOut;
+                [
+                    faded(cp(k, CopyProp::Show, s, e, show), 1.0, 1.0, Ease::SineInOut),
+                    faded(cp(k, CopyProp::Zoom, s, e, zoom), 2.0, 1.0, Ease::QuadOut),
+                    turn,
+                ]
+            })
+            .collect()
+        },
+    },
 ];
 
 fn layer(show: clips::Show, s: f64, e: f64) -> Clip {

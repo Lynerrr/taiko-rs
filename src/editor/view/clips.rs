@@ -180,6 +180,77 @@ impl View {
         self.draw_clip_settings(c, x, y, inner);
     }
 
+    /// The clips page, scrolled when it is taller than the panel (a picture's settings): cut to
+    /// the panel, with a bar on its right; what is scrolled out of sight can't be clicked.
+    pub(super) fn draw_clips_scrolled(&mut self, c: &mut Canvas, x: f32, top: f32, inner: f32) {
+        if self.fx_scroll_for != self.fx_sel {
+            self.fx_scroll_for = self.fx_sel;
+            self.fx_scroll = 0.0;
+        }
+        let [_, py, pw, ph] = self.layout.inspector;
+        let bottom = py + ph - 4.0;
+        let (shapes, buttons, tips) = (c.shapes.len(), self.buttons.len(), self.tips.len());
+        self.draw_clips_page(c, x, top - self.fx_scroll, inner);
+        let end = c.shapes[shapes..]
+            .iter()
+            .map(|s| s.center[1] + s.half[1])
+            .fold(top, f32::max)
+            + self.fx_scroll;
+        let most = (end - bottom + 4.0).max(0.0);
+        self.fx_page_most = most;
+        if most <= 0.0 {
+            self.fx_scroll = 0.0;
+            return;
+        }
+        if self.fx_scroll > most {
+            // Shorter than it was (another tab): drawn again at the most it can scroll.
+            self.fx_scroll = most;
+            c.shapes.truncate(shapes);
+            self.buttons.truncate(buttons);
+            self.tips.truncate(tips);
+            return self.draw_clips_scrolled(c, x, top, inner);
+        }
+        let view = [x - 8.0, top - 2.0, pw, bottom - top + 2.0];
+        c.clip_since(shapes, view[0], view[1], view[2], view[3]);
+        let seen = |r: &[f32; 4]| r[1] + r[3] * 0.5 >= view[1] && r[1] + r[3] * 0.5 <= bottom;
+        let kept: Vec<_> = self
+            .buttons
+            .drain(buttons..)
+            .filter(|(r, _)| seen(r))
+            .collect();
+        self.buttons.extend(kept);
+        let kept: Vec<_> = self.tips.drain(tips..).filter(|(r, _)| seen(r)).collect();
+        self.tips.extend(kept);
+        // The bar.
+        let track = [x + inner + 3.0, top, 3.0, bottom - top];
+        let thumb = (track[3] * track[3] / (track[3] + most)).max(12.0);
+        let ty = track[1] + (track[3] - thumb) * self.fx_scroll / most;
+        c.rect(track[0], track[1], track[2], track[3], rgba(0xffffff, 0.05));
+        c.round_rect(
+            [track[0], ty],
+            [track[2], thumb],
+            1.5,
+            rgba(0x7a7a98, 0.9),
+            rgba(0, 0.0),
+            0.0,
+        );
+    }
+
+    /// The wheel over the clips page scrolls it, when it is taller than the panel. False when it
+    /// isn't its.
+    pub(super) fn wheel_clips_page(&mut self, notches: i32) -> bool {
+        let (mx, my) = self.mouse;
+        if self.mode != super::Mode::Effects
+            || self.g_page != 4
+            || self.fx_page_most <= 0.0
+            || !inside(self.layout.inspector, mx, my)
+        {
+            return false;
+        }
+        self.fx_scroll = (self.fx_scroll - notches as f32 * 20.0).clamp(0.0, self.fx_page_most);
+        true
+    }
+
     fn draw_shelf(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
         // The tabs, each underlined in the colour of what its effects move.
         let tabs: Vec<(String, Btn, bool)> = Shelf::ALL
@@ -1288,10 +1359,12 @@ impl View {
             let col = cl.target().map_or(0x888899, target_colour);
             let on = group.contains(&cl.id);
             let main = self.fx_sel == Some(cl.id);
+            let bw = (b - a).max(2.0);
             c.round_rect(
                 [a, ry],
-                [(b - a).max(2.0), bh],
-                3.0,
+                [bw, bh],
+                // A short block (zoomed far out) is a sliver, not a pill wider than itself.
+                3.0f32.min(bw / 2.0),
                 rgba(col, if on { 0.42 } else { 0.24 }),
                 rgba(
                     if on { 0xffffff } else { col },
@@ -1313,14 +1386,16 @@ impl View {
             } else {
                 1.0
             };
-            let mut px = a.max(x);
-            let stop = b.min(x + w);
+            // Inside the block's border and clear of its rounded corners, every column whole.
+            let mut px = (a + 2.0).max(x);
+            let stop = (b - 2.0).min(x + w);
             while px < stop {
                 let t = self.t_at(px);
                 let v = cl.value(t, &moments, beat) / (peak * steps);
                 let hh = (v.abs() as f32).min(1.0) * (bh - 4.0) * 0.9;
+                let cw = (stop - px).min(1.5);
                 if hh > 0.3 {
-                    c.rect(px, ry + bh - 2.0 - hh, 1.5, hh, rgba(col, 0.55));
+                    c.rect(px, ry + bh - 2.0 - hh, cw, hh, rgba(col, 0.55));
                 }
                 px += 1.5;
             }
