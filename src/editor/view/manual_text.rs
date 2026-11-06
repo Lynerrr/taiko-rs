@@ -239,7 +239,12 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - Slide the drum along the lane moves the hit target to Home, A quarter in, Half way or Far over one beat from the playhead; notes meet it wherever it is. It is the Move the drum effect, so the Keyframes page and clips can move it too.
 - However the scroll runs, every note still reaches the drum exactly when it is hit.
 
-> Paths, moves and the scroll are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
+# Fake notes
+- The Fakes tab turns the picked dons and kats into fakes (and back): they look and move like notes, but are never hit, give no score or combo, make no sound, and vanish at the drum.
+- Add fake copies of the picked notes puts fakes half a beat or a 1/4 before or after them, or a beat after, where no note is yet.
+- On the timeline fakes are hollow with an F. Select, move, copy and delete them like any note; groups, paths, moves and the scroll take them by their time.
+
+> Paths, moves, the scroll and fakes are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
 ",
     },
     Chapter {
@@ -572,7 +577,12 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - Slide the drum along the lane за одну долю от плейхеда сдвигает мишень: Home (на место), A quarter in (на четверть), Half way (на середину), Far (далеко). Ноты встречают её там, где она стоит. Это эффект Move the drum, так что его можно двигать и на странице Keyframes, и клипами.
 - Как бы ни шёл скролл, каждая нота приходит на барабан ровно в момент удара.
 
-> Траектории, движения и скролл только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
+# Фейковые ноты
+- Вкладка Fakes делает выбранные доны и каты фейками (и обратно): они выглядят и двигаются как ноты, но по ним не бьют, они не дают счёта и комбо, не звучат и исчезают на барабане.
+- Add fake copies of the picked notes ставит фейки на полдоли или 1/4 до или после выбранных нот, или на долю после, где ноты ещё нет.
+- На таймлайне фейки полые с буквой F. Их выделяют, двигают, копируют и удаляют как обычные ноты; группы, траектории, движения и скролл берут их по времени.
+
+> Траектории, движения, скролл и фейки только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
 ",
     },
     Chapter {

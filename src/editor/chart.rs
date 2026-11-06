@@ -288,6 +288,9 @@ pub struct HitObject {
     /// Everything after the hitsound, as written: curve, slides, length, edge sounds and sample
     /// for a slider, the end time for a spinner, the sample for a circle.
     pub rest: String,
+    /// A `.tko` fake note: drawn in the game, never judged. Kept in the gimmick's `fakes` on
+    /// save, never in the chart's hit objects.
+    pub fake: bool,
     raw: Option<Raw<ObjectKey>>,
 }
 
@@ -310,6 +313,7 @@ impl HitObject {
             kind,
             sound,
             rest,
+            fake: false,
             raw: None,
         }
     }
@@ -480,6 +484,7 @@ impl HitObject {
             kind,
             sound,
             rest,
+            fake: false,
             raw: None,
         };
         o.raw = Some(Raw {
@@ -648,7 +653,16 @@ impl Chart {
         let parsed = crate::tko::format::read(text).map_err(|e| e.to_string())?;
         let (osu, _) = crate::tko::format::split(text);
         let mut chart = Chart::parse(&osu);
-        chart.gimmick = Some(parsed.gimmick);
+        let mut gimmick = parsed.gimmick;
+        // Fake notes are edited as notes: they come out of the gimmick and go back on save.
+        for f in std::mem::take(&mut gimmick.fakes) {
+            let mut o = HitObject::hit(f.t, f.kat, f.big);
+            o.fake = true;
+            o.id = chart.take_id();
+            let at = chart.objects.partition_point(|q| q.time <= o.time);
+            chart.objects.insert(at, o);
+        }
+        chart.gimmick = Some(gimmick);
         Ok(chart)
     }
 
@@ -820,8 +834,8 @@ impl Chart {
 
     /// Why the chart can't be written, if it can't: only points that were changed are checked.
     pub fn validate(&self) -> Result<(), String> {
-        if let Some(g) = &self.gimmick {
-            crate::tko::format::write(&self.osu_text(), g).map_err(|e| e.to_string())?;
+        if let Some(g) = self.gimmick_out() {
+            crate::tko::format::write(&self.osu_text(), &g).map_err(|e| e.to_string())?;
         }
         for p in self.timing.iter().filter(|p| !p.untouched()) {
             if let Some(why) = p.problem() {
@@ -854,7 +868,7 @@ impl Chart {
     }
 
     fn objects_body(&self) -> Vec<String> {
-        let mut objs: Vec<&HitObject> = self.objects.iter().collect();
+        let mut objs: Vec<&HitObject> = self.objects.iter().filter(|o| !o.fake).collect();
         objs.sort_by(|a, b| a.time.total_cmp(&b.time));
         objs.into_iter()
             .map(|o| match (&o.raw, o.untouched()) {
@@ -868,10 +882,27 @@ impl Chart {
     /// The file as it would be written: the chart, then (for a `.tko`) its gimmick.
     pub fn to_text(&self) -> String {
         let base = self.osu_text();
-        match &self.gimmick {
-            Some(g) => crate::tko::format::write(&base, g).unwrap_or(base),
+        match self.gimmick_out() {
+            Some(g) => crate::tko::format::write(&base, &g).unwrap_or(base),
             None => base,
         }
+    }
+
+    /// The gimmick as written: with the fake notes put back in.
+    fn gimmick_out(&self) -> Option<crate::tko::gimmick::Gimmick> {
+        let mut g = self.gimmick.clone()?;
+        g.fakes = self
+            .objects
+            .iter()
+            .filter(|o| o.fake)
+            .map(|o| crate::tko::gimmick::FakeNote {
+                t: o.time,
+                kat: o.taiko() == Taiko::Kat,
+                big: o.big(),
+            })
+            .collect();
+        g.sanitize();
+        Some(g)
     }
 
     fn osu_text(&self) -> String {

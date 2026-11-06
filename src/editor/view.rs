@@ -859,6 +859,7 @@ impl View {
         objects[first..]
             .iter()
             .take_while(|o| o.time <= to)
+            .filter(|o| !o.fake)
             .take(6)
             .map(|o| {
                 let sfx = match (o.taiko(), o.big()) {
@@ -1431,6 +1432,13 @@ impl View {
                         // The handle that stretches it.
                         c.rect(ex - 1.5, cy - r * 0.8, 3.0, r * 1.6, rgba(0xffffff, 0.9));
                     }
+                }
+                _ if o.fake => {
+                    // A fake: hollow, in its colour, with an F in it.
+                    let col = if o.taiko() == Taiko::Kat { KAT } else { DON };
+                    c.circle(ox, cy, r, rgba(col, 0.25), outline, lw);
+                    c.ring(ox, cy, r - 1.5, rgba(col, 1.0), 2.0);
+                    c.text_centered(ox, cy - 3.5, 7.0, rgba(0xffffff, 0.9), "F");
                 }
                 _ => {
                     let col = if o.taiko() == Taiko::Kat { KAT } else { DON };

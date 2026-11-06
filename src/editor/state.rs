@@ -614,6 +614,8 @@ impl Editor {
         for o in &self.clipboard {
             let mut n = o.shifted(t);
             n.id = 0;
+            // A plain .osu has nowhere to keep fakes: they come in as notes.
+            n.fake &= self.chart.gimmick.is_some();
             if n.time >= 0.0
                 && !self.chart.objects.iter().any(|q| q.time == n.time)
                 && !made.iter().any(|q| q.time == n.time)

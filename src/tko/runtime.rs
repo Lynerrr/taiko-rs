@@ -317,6 +317,8 @@ pub struct Runtime {
     gimmick: Arc<Gimmick>,
     /// Per note (in the map's order): the group it is in, plus one; 0 for none.
     group_of: Vec<u16>,
+    /// The same for the fake notes, in the gimmick's order.
+    fake_group_of: Vec<u16>,
     /// How far the game's clock is ahead of the chart's (the game shifts every time of a loaded
     /// map; a gimmick's times are the chart's).
     shift: f64,
@@ -404,21 +406,20 @@ impl Runtime {
             .collect();
         let times: Vec<f64> = notes.iter().map(|n| n.time).collect();
         let end = times.iter().copied().fold(0.0, f64::max) + 5000.0;
-        let group_of = times
-            .iter()
-            .map(|&t| {
-                gimmick
-                    .groups
-                    .iter()
-                    .position(|g| {
-                        let at = g.notes.partition_point(|&n| n < t - SAME_NOTE_MS);
-                        g.notes
-                            .get(at)
-                            .is_some_and(|&n| (n - t).abs() <= SAME_NOTE_MS)
-                    })
-                    .map_or(0, |i| i as u16 + 1)
-            })
-            .collect();
+        let group_at = |t: f64| {
+            gimmick
+                .groups
+                .iter()
+                .position(|g| {
+                    let at = g.notes.partition_point(|&n| n < t - SAME_NOTE_MS);
+                    g.notes
+                        .get(at)
+                        .is_some_and(|&n| (n - t).abs() <= SAME_NOTE_MS)
+                })
+                .map_or(0, |i| i as u16 + 1)
+        };
+        let group_of = times.iter().map(|&t| group_at(t)).collect();
+        let fake_group_of = gimmick.fakes.iter().map(|f| group_at(f.t)).collect();
         let sections: Vec<BeatSection> = beats
             .iter()
             .filter(|b| b.length.is_finite() && b.length > 0.0)
@@ -469,6 +470,7 @@ impl Runtime {
             lane: (0, 0.0),
             paths,
             scroll,
+            fake_group_of,
         };
         rt.rebuild(false);
         rt
@@ -1194,7 +1196,10 @@ impl Runtime {
     /// Where note `i`, `s` along a lane `lane` long, sits on its group's path at game time `t`:
     /// from the drum, and how far it is off the lane onto the path. None off any path.
     pub fn note_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
-        let gi = self.group_of(i)?;
+        self.path_of(self.group_of(i)?, t, s, lane)
+    }
+
+    fn path_of(&self, gi: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
         let table = self.paths.get(gi)?.as_ref()?;
         let path = self.gimmick.groups[gi].path.as_ref()?;
         let w = path.weight_at(t - self.shift) as f32;
@@ -1234,18 +1239,41 @@ impl Runtime {
     /// What note `i` is doing at game time `t`; nothing for a note in no group while no clip
     /// moves all the notes.
     pub fn note(&self, i: usize, t: f64) -> Option<NoteFx> {
+        let hit = self.notes.get(i)?.time;
+        self.fx_of(self.group_of(i), hit, t)
+    }
+
+    /// The group fake note `i` (the gimmick's order) is in.
+    pub fn fake_group_of(&self, i: usize) -> Option<usize> {
+        match *self.fake_group_of.get(i)? {
+            0 => None,
+            g => Some(g as usize - 1),
+        }
+    }
+
+    /// What fake note `i` is doing at game time `t`, like `note`.
+    pub fn fake(&self, i: usize, t: f64) -> Option<NoteFx> {
+        let hit = self.gimmick.fakes.get(i)?.t;
+        self.fx_of(self.fake_group_of(i), hit, t)
+    }
+
+    /// Where fake note `i` sits on its group's path, like `note_path`.
+    pub fn fake_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
+        self.path_of(self.fake_group_of(i)?, t, s, lane)
+    }
+
+    /// What a note in group `gi` hit at chart time `hit` is doing at game time `t`.
+    fn fx_of(&self, gi: Option<usize>, hit: f64, t: f64) -> Option<NoteFx> {
         let all = self.all_notes_delta.iter().any(|&d| d != 0.0);
-        let gi = self.group_of(i);
         if gi.is_none() && !all {
             return None;
         }
         let g = gi.map(|gi| &self.gimmick.groups[gi]);
         let t = t - self.shift;
         // Beats until this note's own hit, for its before-the-hit keys.
-        let near = g.filter(|g| !g.before.is_empty()).and_then(|_| {
-            let hit = self.notes.get(i)?.time;
-            Some((hit - t) / self.beat_len(hit))
-        });
+        let near = g
+            .filter(|g| !g.before.is_empty())
+            .map(|_| (hit - t) / self.beat_len(hit));
         let song_value = |p: NoteProp| {
             let base = g
                 .and_then(|g| g.track(p))
