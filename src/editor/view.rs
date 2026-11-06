@@ -25,6 +25,7 @@ mod chrome;
 mod clips;
 mod cmd;
 mod curves;
+mod gizmo;
 mod help;
 mod keys;
 mod lines;
@@ -207,6 +208,14 @@ enum Drag {
     FxEdge {
         id: u32,
         end: bool,
+    },
+    /// The playfield picked up in the preview: what the drag does, where it was pressed, its
+    /// X, Y, rotation and zoom then, and the moment the keys go at.
+    Gizmo {
+        grip: gizmo::Grip,
+        from: (f32, f32),
+        at: (f64, f64, f64, f64),
+        t: f64,
     },
 }
 
@@ -843,6 +852,7 @@ impl View {
             self.draw_node_canvas(c);
         } else {
             self.draw_preview(c, scroll_speed);
+            self.draw_gizmo(c);
             match self.mode {
                 Mode::Compose => self.draw_compose_panel(c),
                 Mode::Timing => self.draw_timing_panel(c),
@@ -1728,6 +1738,7 @@ impl View {
                 self.clip_rows_drag(x, y)
             }
             Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
+            Drag::Gizmo { .. } => self.gizmo_drag(x, y),
             Drag::Wire { .. } | Drag::None => {}
         }
     }
@@ -1758,7 +1769,7 @@ impl View {
             Drag::Resize { .. } | Drag::Scrub | Drag::Overview | Drag::FxEdge { .. } => {
                 return I::EwResize;
             }
-            Drag::FxMove { .. } => return I::Grabbing,
+            Drag::FxMove { .. } | Drag::Gizmo { .. } => return I::Grabbing,
             Drag::FxNew { .. } => return I::Crosshair,
             Drag::Box { .. } | Drag::Place { .. } | Drag::Brush { .. } => return I::Crosshair,
             Drag::Handle { .. } => return I::NsResize,
@@ -1882,6 +1893,9 @@ impl View {
             } else if inside(self.layout.nodes, x, y) {
                 self.node_down(x, y);
             }
+            return;
+        }
+        if self.gizmo_down(x, y, keys) {
             return;
         }
         let tl = self.layout.timeline;
@@ -2107,6 +2121,10 @@ impl View {
                 self.mark_stale();
             }
             Drag::Node { .. } => self.ed.end_drag(),
+            Drag::Gizmo { .. } => {
+                self.ed.end_drag();
+                self.mark_stale();
+            }
             Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } => {
                 self.clip_rows_up(drag, x)
             }
@@ -3740,6 +3758,109 @@ mod tests {
         assert_eq!(back.clips, v.ed.clips());
         // The preview draws with them.
         draw(&mut v);
+    }
+
+    /// Drags in the preview from its middle by (dx, dy) with `keys` held.
+    fn gizmo_drag_by(v: &mut View, dx: f32, dy: f32, keys: Keys) {
+        let [fx, fy, fw, fh] = v.layout.preview;
+        let (x, y) = (fx + fw / 2.0, fy + fh / 2.0);
+        v.mouse_down(x, y, keys, None);
+        v.mouse_move(x + dx / 2.0, y + dy / 2.0, keys);
+        v.mouse_move(x + dx, y + dy, keys);
+        v.mouse_up(x + dx, y + dy, keys);
+        draw(v);
+    }
+
+    use crate::tko::gimmick::FieldProp;
+
+    fn field(v: &View, p: FieldProp, t: f64) -> f64 {
+        v.ed.value_of(crate::editor::keyframes::Subject::Field(p), t)
+    }
+
+    #[test]
+    fn a_drag_in_the_preview_keys_the_playfield_at_the_playhead_in_one_step() {
+        let mut v = clips_view();
+        v.set_time(4000.0);
+        let t = v.ed.snapped(4000.0);
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        gizmo_drag_by(&mut v, 30.0 * k, -20.0 * k, Keys::default());
+        assert!((field(&v, FieldProp::X, t) - 30.0).abs() <= 1.0);
+        assert!((field(&v, FieldProp::Y, t) + 20.0).abs() <= 1.0);
+        assert_eq!(v.motion_keys(), vec![t], "one moment keyed");
+        assert!(matches!(v.drag, Drag::None));
+        assert!(v.ed.undo());
+        assert_eq!(
+            field(&v, FieldProp::X, t),
+            0.0,
+            "the whole drag is one undo step"
+        );
+        assert_eq!(field(&v, FieldProp::Y, t), 0.0);
+    }
+
+    #[test]
+    fn shift_turns_and_ctrl_zooms_the_preview() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        let t = v.ed.snapped(3000.0);
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        // Pressed right of the target and taken below it: a quarter turn.
+        let [fx, _, fw, fh] = v.layout.preview;
+        let (px, py) = v.pivot_in_preview();
+        let r = (fw.min(fh) / 4.0).min(fx + fw - px - 1.0);
+        v.mouse_down(px + r, py, shift, None);
+        v.mouse_move(px, py + r, shift);
+        v.mouse_up(px, py + r, shift);
+        assert!((field(&v, FieldProp::Rotation, t) - 90.0).abs() <= 1.0);
+        assert_eq!(field(&v, FieldProp::X, t), 0.0, "turning doesn't move it");
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        gizmo_drag_by(&mut v, 0.0, -60.0, ctrl);
+        assert!(
+            (field(&v, FieldProp::Zoom, t) - 2.0).abs() < 0.02,
+            "up 60 doubles it"
+        );
+    }
+
+    #[test]
+    fn the_motion_strip_goes_to_a_key_and_a_right_click_takes_it_away() {
+        let mut v = clips_view();
+        v.set_time(2000.0);
+        let t = v.ed.snapped(2000.0);
+        gizmo_drag_by(&mut v, 10.0, 10.0, Keys::default());
+        v.set_time(t + 1500.0);
+        draw(&mut v);
+        let kx = v.x_of(t);
+        assert!(inside(v.layout.graph, kx, v.layout.graph[1] + 16.0));
+        let sy = v.layout.graph[1] + 16.0;
+        v.mouse_down(kx, sy, Keys::default(), None);
+        v.mouse_up(kx, sy, Keys::default());
+        assert!(
+            (v.ed.time - t).abs() < 0.5,
+            "a click on the diamond goes to it"
+        );
+        v.right_click(kx, sy);
+        assert!(v.motion_keys().is_empty());
+        assert_eq!(field(&v, FieldProp::X, t), 0.0);
+        assert!(v.ed.undo(), "taking the keys away is one undo step");
+        assert_eq!(v.motion_keys(), vec![t]);
+    }
+
+    #[test]
+    fn the_preview_is_not_grabbed_outside_effects_or_without_a_tko() {
+        let mut v = view();
+        press(&mut v, Btn::C(Cmd::Mode(Mode::Effects)));
+        draw(&mut v);
+        assert!(!v.gizmo_on(), "no .tko yet");
+        let mut v = clips_view();
+        press(&mut v, Btn::C(Cmd::Mode(Mode::Compose)));
+        draw(&mut v);
+        gizmo_drag_by(&mut v, 20.0, 20.0, Keys::default());
+        assert!(v.motion_keys().is_empty());
     }
 
     fn put(v: &mut View, kind: Kind, x: f32, y: f32) -> u32 {
