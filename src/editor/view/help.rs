@@ -75,7 +75,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         title: "The timeline",
-        text: "Time runs left to right. Click or drag the ruler on top to move the playhead (the white line). Grid lines follow your red line and the snap; red and green ticks are timing lines, blue marks are bookmarks. Alt+wheel zooms and the middle button pans.",
+        text: "Time runs left to right. Click or drag the ruler on top to move the playhead (the white line); drag past an edge to scroll on. Grid lines follow your red line and the snap; red and green ticks are timing lines, blue marks are bookmarks. Alt+wheel zooms and the middle button pans.",
         at: At::Timeline,
         mode: Mode::Compose,
     },
