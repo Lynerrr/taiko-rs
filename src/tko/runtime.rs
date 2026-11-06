@@ -136,6 +136,11 @@ pub struct NoteFx {
     pub hidden: bool,
     /// Degrees about the drum.
     pub swirl: f32,
+    pub stretch_x: f32,
+    pub stretch_y: f32,
+    /// How far towards `tint_hue` (degrees) the colour goes.
+    pub tint: f32,
+    pub tint_hue: f32,
 }
 
 impl Default for NoteFx {
@@ -147,6 +152,10 @@ impl Default for NoteFx {
             opacity: 1.0,
             hidden: false,
             swirl: 0.0,
+            stretch_x: 1.0,
+            stretch_y: 1.0,
+            tint: 0.0,
+            tint_hue: 0.0,
         }
     }
 }
@@ -1193,6 +1202,10 @@ impl Runtime {
             opacity: v(NoteProp::Opacity) as f32,
             hidden: v(NoteProp::Hidden) >= 0.5,
             swirl: v(NoteProp::Swirl) as f32,
+            stretch_x: v(NoteProp::StretchX) as f32,
+            stretch_y: v(NoteProp::StretchY) as f32,
+            tint: v(NoteProp::Tint) as f32,
+            tint_hue: v(NoteProp::TintHue) as f32,
         })
     }
 }
@@ -1286,8 +1299,17 @@ mod tests {
             ..Group::default()
         });
         g.key_note(0, NoteProp::Swirl, key(0.0, 30.0));
+        g.key_note(0, NoteProp::StretchX, key(0.0, 9.0));
+        g.key_note(0, NoteProp::Tint, key(0.0, 0.5));
+        g.key_note(0, NoteProp::TintHue, key(0.0, 120.0));
         g.sanitize();
         let rt = Runtime::new(Arc::new(g), [1000.0].into_iter(), 0.0);
+        let n = rt.note(0, 0.0).unwrap();
+        assert_eq!(
+            (n.stretch_x, n.stretch_y, n.tint, n.tint_hue),
+            (4.0, 1.0, 0.5, 120.0),
+            "a note's stretch held to its range, its tint as keyed"
+        );
         let f = rt.field(500.0);
         assert_eq!(f.flash, 0.5);
         assert_eq!(f.echo, 8.0, "held inside what the property allows");

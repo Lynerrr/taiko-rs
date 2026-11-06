@@ -139,6 +139,10 @@ pub fn target_label(t: Target) -> String {
                 NoteProp::Opacity => "see-through",
                 NoteProp::Hidden => "hidden",
                 NoteProp::Swirl => "swirl",
+                NoteProp::StretchX => "stretch wide",
+                NoteProp::StretchY => "stretch tall",
+                NoteProp::Tint => "tint",
+                NoteProp::TintHue => "tint colour",
             };
             match g {
                 None => format!("Notes: {what}"),
@@ -533,6 +537,48 @@ pub const PRESETS: &[Preset] = &[
             );
             c.ease = Ease::SineInOut;
             vec![c]
+        },
+    },
+    Preset {
+        name: "Rainbow notes",
+        shelf: Shelf::Notes,
+        about: "The notes take on a colour that walks all the way round the rainbow.",
+        make: |s, e, b| {
+            vec![
+                faded(
+                    c(Target::Notes(None, NoteProp::Tint), s, e, 0.8),
+                    1.0,
+                    1.0,
+                    Ease::SineInOut,
+                ),
+                faded(
+                    c(Target::Notes(None, NoteProp::TintHue), s, e, 360.0),
+                    b,
+                    0.0,
+                    Ease::Linear,
+                ),
+            ]
+        },
+    },
+    Preset {
+        name: "Squash on the beat",
+        shelf: Shelf::Notes,
+        about: "On every beat the notes squash flat and wide, then spring back.",
+        make: |s, e, _| {
+            vec![
+                every(
+                    c(Target::Notes(None, NoteProp::StretchX), s, e, 0.5),
+                    1.0,
+                    0.5,
+                    Motion::Kick,
+                ),
+                every(
+                    c(Target::Notes(None, NoteProp::StretchY), s, e, -0.35),
+                    1.0,
+                    0.5,
+                    Motion::Kick,
+                ),
+            ]
         },
     },
     Preset {
