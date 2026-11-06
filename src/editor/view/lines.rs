@@ -218,6 +218,19 @@ impl View {
 
     // ---- the tools ----
 
+    /// Whether Ctrl+C, X (`paste`: V) go to the timing lines rather than the notes: always on
+    /// the Timing page; with the F6 window open on another page when lines are selected (or
+    /// copied, to paste), else the notes picked on the timeline keep them.
+    pub(super) fn line_keys(&self, paste: bool) -> bool {
+        self.mode == super::Mode::Timing
+            || (self.tw
+                && if paste {
+                    self.ed.has_copied_lines()
+                } else {
+                    !self.selected_lines().is_empty()
+                })
+    }
+
     pub(super) fn press_line_action(&mut self, a: TAct) {
         let ids = self.selected_lines();
         let result: Result<String, String> = match a {
