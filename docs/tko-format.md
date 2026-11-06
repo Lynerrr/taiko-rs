@@ -30,7 +30,7 @@ and the editor's stable-compatible rounding all work on a `.tko` the way they do
 - An older one is brought up to date by the chain in `tko::format::MIGRATIONS` when it is read.
   Raising `tko::TKO_VERSION` needs a migration there and a fixture of the old format in the tests
   (`a_v1_fixture_keeps_reading` pins version 1, `a_v2_fixture_keeps_reading` version 2). Versions 2
-  and 3 only add optional keys (3 adds `clips`), so their migrations change nothing: the bumps are
+  and 3 only add optional keys (3 adds `clips`, text and pictures among them), so their migrations change nothing: the bumps are
   there so an older game refuses a map that uses them instead of dropping them silently.
 - A `.tko` file without `TkoVersion` is an error.
 - The editor writes the current version, and never rewrites a file it cannot read.
@@ -107,6 +107,35 @@ often:
 - Limits: 4,096 clips; lengths and fades from 1/64 to 256 beats; an amount as far as the property
   goes (64 times that for steps); the graph's cap of moments for each clip. A clip with an unknown
   `what`, no length, or a group that isn't there is dropped when the file is read.
+
+### Text and pictures
+
+A clip with `"what": "layer"` puts text or a picture on screen for its length instead of moving
+anything:
+
+```
+{ "id": 3, "lane": 2, "what": "layer", "start": 104265, "end": 112000, "fade_in": 1,
+  "fade_out": 1, "ease": "cubic_out",
+  "layer": { "show": {"kind": "text", "text": "Here we go"},
+             "from": {"x": -300, "y": 110, "size": 36, "turn": 0, "alpha": 1},
+             "to":   {"x": 0, "y": 110, "size": 36, "turn": 0, "alpha": 1},
+             "colour": 16777215 } }
+```
+
+- `show`: `{"kind": "text", "text": ...}` in the game's own font (at most 120 characters, no
+  control characters), or `{"kind": "picture", "file": ...}`, an image in the map's folder (a
+  plain relative name: one that climbs out of the folder drops the clip). Pictures are loaded as
+  the map plays, squeezed into 512 by 512 and drawn back at their own shape; up to 15 at once.
+- `from`: its pose at the start, in units of the 480 tall screen: `x` from the middle (right is
+  positive), `y` from the top, `size` (its height), `turn` (degrees, clockwise), `alpha` (0..1).
+  `to`, when there, is the pose at the end, reached by `ease`; without it the layer stays as it
+  starts.
+- `fade_in`, `fade_out` (beats) fade it in and out. Repeating (`when` other than `span`), it pulses:
+  `amount` is how much bigger it gets, in percent, with the `motion` and `length` of any clip.
+- `colour`: RGB tint (white by default). `behind`: drawn under the lane and notes instead of over.
+- `keep`: it stays on screen after its end, at its end pose.
+- Text and pictures are drawn in single player and in the editor; multiplayer and spectating show
+  the text but not the pictures yet.
 
 ## Marks
 

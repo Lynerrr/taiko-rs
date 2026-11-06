@@ -50,7 +50,7 @@ pub const MIGRATIONS: &[Migration] = &[v1_to_v2, v2_to_v3];
 /// bump is so an older game refuses a map that uses them instead of dropping them silently.
 fn v1_to_v2(_: &mut Value) {}
 
-/// Version 3 added effect clips (`clips`), an optional key: a version 2 file is a valid version
+/// Version 3 added effect clips (`clips`, with their text and pictures), an optional key: a version 2 file is a valid version
 /// 3 file. Bumped for the same reason.
 fn v2_to_v3(_: &mut Value) {}
 

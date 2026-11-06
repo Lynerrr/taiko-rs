@@ -79,6 +79,8 @@ pub enum Field {
     S(SF),
     /// A number of the effect clip picked.
     Fx(CF),
+    /// The text of the text block picked.
+    FxText,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -211,11 +213,14 @@ enum Drag {
     },
     /// The playfield picked up in the preview: what the drag does, where it was pressed, its
     /// X, Y, rotation and zoom then, and the moment the keys go at.
+    /// With `layer`, the text or picture block picked is placed instead (`at` is then its x, y,
+    /// turn and size).
     Gizmo {
         grip: gizmo::Grip,
         from: (f32, f32),
         at: (f64, f64, f64, f64),
         t: f64,
+        layer: Option<u32>,
     },
 }
 
@@ -381,6 +386,8 @@ pub struct View {
     fx_sel: Option<u32>,
     fx_armed: usize,
     fx_advanced: bool,
+    /// The settings of a text or picture block edit its pose at its end.
+    fx_end: bool,
     k_ease: crate::tko::track::Ease,
     /// The graph's value range while a key is being dragged, so it doesn't rescale under the pointer.
     k_frozen: Option<(f64, f64)>,
@@ -519,6 +526,7 @@ impl View {
             fx_sel: None,
             fx_armed: 0,
             fx_advanced: false,
+            fx_end: false,
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
             n_sel: None,
@@ -2307,6 +2315,9 @@ impl View {
         if let Field::Fx(cf) = f {
             return self.clip_change(cf, dir, keys);
         }
+        if f == Field::FxText {
+            return;
+        }
         let ids = self.edit_targets(f);
         let k = if keys.shift {
             10.0
@@ -2333,7 +2344,7 @@ impl View {
                 Field::Time => p.time = (p.time + dir * k).max(0.0),
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
-                Field::S(_) | Field::Fx(_) => {}
+                Field::S(_) | Field::Fx(_) | Field::FxText => {}
             },
             false,
         );
@@ -2344,6 +2355,9 @@ impl View {
     }
 
     fn apply_typed(&mut self, f: Field, text: &str) {
+        if f == Field::FxText {
+            return self.layer_text_set(text);
+        }
         if let Field::Fx(cf) = f {
             match text.trim().parse::<f64>() {
                 Ok(v) => self.clip_set(cf, v),
@@ -2379,7 +2393,7 @@ impl View {
                 Field::Time => p.time = v,
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
-                Field::S(_) | Field::Fx(_) => {}
+                Field::S(_) | Field::Fx(_) | Field::FxText => {}
             },
             false,
         );
@@ -2480,9 +2494,13 @@ impl View {
             Btn::Edit(f) => {
                 if self.sel_line.is_some()
                     || matches!(f, Field::S(_))
-                    || (matches!(f, Field::Fx(_)) && self.fx_sel.is_some())
+                    || (matches!(f, Field::Fx(_) | Field::FxText) && self.fx_sel.is_some())
                 {
-                    self.typing = Some((f, String::new()));
+                    let now = match f {
+                        Field::FxText => self.layer_text().unwrap_or_default(),
+                        _ => String::new(),
+                    };
+                    self.typing = Some((f, now));
                 }
             }
             Btn::GPage(p) => {
@@ -2509,6 +2527,22 @@ impl View {
     }
 
     // ---- the keyboard ----
+
+    /// Whether typed text is wanted (a text block's words being typed).
+    pub fn wants_text(&self) -> bool {
+        matches!(self.typing, Some((Field::FxText, _)))
+    }
+
+    /// Text typed while `wants_text`.
+    pub fn type_text(&mut self, s: &str) {
+        if let Some((Field::FxText, text)) = &mut self.typing {
+            for ch in s.chars().filter(|c| !c.is_control()) {
+                if text.chars().count() < crate::tko::clips::MAX_TEXT {
+                    text.push(ch);
+                }
+            }
+        }
+    }
 
     pub fn key(
         &mut self,
@@ -2553,6 +2587,8 @@ impl View {
                 KeyCode::Backspace => {
                     text.pop();
                 }
+                // Free text comes as text (`type_text`), not as keys.
+                _ if *f == Field::FxText => {}
                 KeyCode::Period | KeyCode::NumpadDecimal => text.push('.'),
                 KeyCode::Minus | KeyCode::NumpadSubtract => text.push('-'),
                 c => {
@@ -3861,6 +3897,112 @@ mod tests {
         draw(&mut v);
         gizmo_drag_by(&mut v, 20.0, 20.0, Keys::default());
         assert!(v.motion_keys().is_empty());
+    }
+
+    fn preset(name: &str) -> usize {
+        crate::editor::clips::PRESETS
+            .iter()
+            .position(|p| p.name == name)
+            .unwrap()
+    }
+
+    fn picked_layer(v: &View) -> crate::tko::clips::Layer {
+        (*v.ed.clip(v.fx_sel.unwrap()).unwrap().layer.clone().unwrap()).clone()
+    }
+
+    #[test]
+    fn a_text_block_is_typed_and_placed_by_dragging_the_preview() {
+        use crate::tko::clips::Show;
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        press(&mut v, Btn::Fx(FxAct::Preset(preset("Text"))));
+        draw(&mut v);
+        assert_eq!(
+            picked_layer(&v).show,
+            Show::Text {
+                text: "Text".into()
+            }
+        );
+        // Typing starts from the words it has.
+        press(&mut v, Btn::Edit(Field::FxText));
+        assert!(v.wants_text());
+        for _ in 0..4 {
+            v.key(KeyCode::Backspace, false, Keys::default(), None);
+        }
+        v.type_text("Hi \u{0442}\u{0430}\u{043c}\n");
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert!(!v.wants_text());
+        let words = "Hi \u{0442}\u{0430}\u{043c}".to_string();
+        assert_eq!(picked_layer(&v).show, Show::Text { text: words });
+        draw(&mut v);
+        // A drag in the preview places the block, not the playfield.
+        let from = picked_layer(&v).from;
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        gizmo_drag_by(&mut v, 40.0 * k, 10.0 * k, Keys::default());
+        let l = picked_layer(&v);
+        assert!((l.from.x - from.x - 40.0).abs() <= 1.0);
+        assert!((l.from.y - from.y - 10.0).abs() <= 1.0);
+        assert!(v.motion_keys().is_empty(), "no playfield keys");
+        assert!(v.ed.undo(), "the drag is one undo step");
+        assert_eq!(picked_layer(&v).from, from);
+        // Its end pose: made its own and placed on its own.
+        press(&mut v, Btn::Fx(FxAct::EndPose(true)));
+        draw(&mut v);
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        gizmo_drag_by(&mut v, 0.0, -60.0, ctrl);
+        let l = picked_layer(&v);
+        assert_eq!(l.from, from, "the start pose stays");
+        assert!(
+            (l.to.unwrap().size - from.size * 2.0).abs() <= 1.0,
+            "up 60 doubles it"
+        );
+        press(&mut v, Btn::Fx(FxAct::Moves));
+        assert!(picked_layer(&v).to.is_none());
+        assert!(!v.fx_end);
+        press(&mut v, Btn::Inc(Field::Fx(CF::Seen)));
+        press(&mut v, Btn::Dec(Field::Fx(CF::Seen)));
+        assert_eq!(picked_layer(&v).from.alpha, 0.95);
+    }
+
+    #[test]
+    fn a_picture_block_takes_its_pictures_from_the_maps_folder() {
+        use crate::tko::clips::Show;
+        let mut v = clips_view();
+        let n = v.ed.clips().len();
+        press(&mut v, Btn::Fx(FxAct::Preset(preset("Picture"))));
+        assert_eq!(v.ed.clips().len(), n, "no picture in the folder, no block");
+        assert!(v.status.contains("folder"));
+        let dir = v.ed.path.parent().unwrap().to_path_buf();
+        for name in ["b.png", "a.jpg"] {
+            image::RgbImage::new(4, 2).save(dir.join(name)).unwrap();
+        }
+        press(&mut v, Btn::Fx(FxAct::Preset(preset("Logo on the beat"))));
+        draw(&mut v);
+        let l = picked_layer(&v);
+        assert_eq!(
+            l.show,
+            Show::Picture {
+                file: "a.jpg".into()
+            }
+        );
+        assert!(l.behind);
+        press(&mut v, Btn::Fx(FxAct::Picture(1)));
+        assert_eq!(
+            picked_layer(&v).show,
+            Show::Picture {
+                file: "b.png".into()
+            }
+        );
+        press(&mut v, Btn::Fx(FxAct::LayerText(true)));
+        assert!(matches!(picked_layer(&v).show, Show::Text { .. }));
+        // Its other settings draw, and the shelf's < > don't turn it into another effect.
+        press(&mut v, Btn::Fx(FxAct::What(1)));
+        assert!(v.ed.clip(v.fx_sel.unwrap()).unwrap().layer.is_some());
+        draw(&mut v);
+        assert!(v.buttons.iter().any(|(_, b)| *b == Btn::Fx(FxAct::Behind)));
     }
 
     fn put(v: &mut View, kind: Kind, x: f32, y: f32) -> u32 {

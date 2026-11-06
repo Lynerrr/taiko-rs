@@ -11,7 +11,7 @@ use crate::editor::clips::{
     PRESETS, amount_step, describe, target_about, target_colour, target_label, targets, trim,
 };
 use crate::render::{Canvas, rgba};
-use crate::tko::clips::{Clip, Motion, Notes, Target, When};
+use crate::tko::clips::{Clip, Layer, Motion, Notes, Pose, Show, Target, When};
 use crate::tko::track::Ease;
 
 /// Rows of clips shown.
@@ -49,7 +49,22 @@ pub enum FxAct {
     Delete,
     /// Shows the keyframe and node pages.
     Advanced,
+    /// A layer: text or a picture.
+    LayerText(bool),
+    /// The previous or next picture in the map's folder.
+    Picture(i32),
+    /// Edit the layer's pose at its end (else at its start).
+    EndPose(bool),
+    /// The layer moves to its own end pose (else it stays as it starts).
+    Moves,
+    Behind,
+    Colour,
 }
+
+/// The colours a layer cycles through.
+const LAYER_COLOURS: [u32; 8] = [
+    0xffffff, 0xFFD34D, 0xFF6FB0, 0x5BA8FF, 0x5FD49A, 0xFFA040, 0xB36BFF, 0x101016,
+];
 
 /// A number of the clip picked.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,6 +74,12 @@ pub enum CF {
     Length,
     FadeIn,
     FadeOut,
+    /// A layer's pose (start or end, `View::fx_end`).
+    X,
+    Y,
+    Size,
+    Turn,
+    Seen,
 }
 
 impl CF {
@@ -69,6 +90,11 @@ impl CF {
             CF::Length => "takes (beats)",
             CF::FadeIn => "in (beats)",
             CF::FadeOut => "out (beats)",
+            CF::X => "x",
+            CF::Y => "y",
+            CF::Size => "size",
+            CF::Turn => "turn",
+            CF::Seen => "seen",
         }
     }
 }
@@ -87,7 +113,7 @@ impl View {
         self.mode == Mode::Effects && self.g_page == 4 && self.ed.is_tko()
     }
 
-    fn picked(&self) -> Option<&Clip> {
+    pub(super) fn picked(&self) -> Option<&Clip> {
         self.ed.clip(self.fx_sel?)
     }
 
@@ -158,6 +184,9 @@ impl View {
         let Some(clip) = self.picked().cloned() else {
             return;
         };
+        if let Some(layer) = clip.layer.as_deref() {
+            return self.draw_layer_settings(c, x, y, inner, &clip, layer);
+        }
         let target = clip.target();
         // What it moves.
         let what = target.map_or_else(|| clip.what.clone(), target_label);
@@ -268,6 +297,136 @@ impl View {
         c.text(x, y, 6.0, rgba(DIM, 1.0), &Canvas::fit(6.0, inner, &info));
     }
 
+    /// The settings of a text or picture block: what it shows, where (at its start, and at its
+    /// end if it moves), how it comes and goes, and how it pulses.
+    fn draw_layer_settings(
+        &mut self,
+        c: &mut Canvas,
+        x: f32,
+        mut y: f32,
+        inner: f32,
+        clip: &Clip,
+        layer: &Layer,
+    ) {
+        let text = matches!(layer.show, Show::Text { .. });
+        let mut row = vec![
+            ("< Effects".to_string(), Btn::Fx(FxAct::Back), false),
+            ("Text".to_string(), Btn::Fx(FxAct::LayerText(true)), text),
+            (
+                "Picture".to_string(),
+                Btn::Fx(FxAct::LayerText(false)),
+                !text,
+            ),
+        ];
+        match &layer.show {
+            Show::Text { text } => {
+                let shown = match &self.typing {
+                    Some((Field::FxText, t)) => format!("{t}_"),
+                    _ => format!("{text}  (click to type)"),
+                };
+                row.push((shown, Btn::Edit(Field::FxText), self.typing.is_some()));
+            }
+            Show::Picture { file } => {
+                row.push(("<".to_string(), Btn::Fx(FxAct::Picture(-1)), false));
+                row.push((file.clone(), Btn::Fx(FxAct::Picture(1)), true));
+                row.push((">".to_string(), Btn::Fx(FxAct::Picture(1)), false));
+            }
+        }
+        y = self.wrap_row(c, x, y, inner, &row);
+        let moves = layer.to.is_some();
+        let end = self.fx_end && moves;
+        let mut items = vec![("moves".to_string(), Btn::Fx(FxAct::Moves), moves)];
+        if moves {
+            items.push((
+                "at its start".to_string(),
+                Btn::Fx(FxAct::EndPose(false)),
+                !end,
+            ));
+            items.push(("at its end".to_string(), Btn::Fx(FxAct::EndPose(true)), end));
+        }
+        items.push((
+            "behind the notes".to_string(),
+            Btn::Fx(FxAct::Behind),
+            layer.behind,
+        ));
+        let first = self.buttons.len();
+        items.push(("colour".to_string(), Btn::Fx(FxAct::Colour), false));
+        y = self.wrap_row(c, x, y, inner, &items);
+        if let Some((r, _)) = self.buttons.get(first + items.len() - 1).copied() {
+            c.round_rect(
+                [r[0] + r[2] - 9.0, r[1] + 4.0],
+                [6.0, r[3] - 8.0],
+                1.5,
+                rgba(layer.colour, 1.0),
+                rgba(0x000000, 0.8),
+                1.0,
+            );
+        }
+        let col = ((inner - 12.0) / 3.0).max(60.0);
+        let p = if end {
+            layer.to.unwrap_or(layer.from)
+        } else {
+            layer.from
+        };
+        let mut cx = self.clip_number(c, x, y, col, CF::X, p.x);
+        cx = self.clip_number(c, cx, y, col, CF::Y, p.y);
+        self.clip_number(c, cx, y, col, CF::Size, p.size);
+        y += 19.0;
+        cx = self.clip_number(c, x, y, col, CF::Turn, p.turn);
+        cx = self.clip_number(c, cx, y, col, CF::Seen, p.alpha);
+        // Repeating, it pulses.
+        if clip.when != When::Span {
+            self.clip_number(c, cx, y, col, CF::Amount, clip.amount);
+        }
+        y += 19.0;
+        let whens = [
+            "stays",
+            "pulses every few beats",
+            "pulses on notes",
+            "pulses on hits",
+        ];
+        let kind = match clip.when {
+            When::Span => 0,
+            When::Beats { .. } => 1,
+            When::Notes { .. } => 2,
+            _ => 3,
+        };
+        let items: Vec<(String, Btn, bool)> = whens
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (w.to_string(), Btn::Fx(FxAct::When(i as u8)), kind == i))
+            .collect();
+        y = self.wrap_row(c, x, y, inner, &items);
+        cx = self.clip_number(c, x, y, col, CF::FadeIn, clip.fade_in);
+        cx = self.clip_number(c, cx, y, col, CF::FadeOut, clip.fade_out);
+        if let When::Beats { every } = clip.when {
+            self.clip_number(c, cx, y, col, CF::Every, every);
+        }
+        y += 19.0;
+        let items = [
+            (
+                format!("ease: {}", clip.ease.label()),
+                Btn::Fx(FxAct::Ease),
+                false,
+            ),
+            ("keep after".to_string(), Btn::Fx(FxAct::Keep), clip.keep),
+            ("Fit to kiai".to_string(), Btn::Fx(FxAct::FitKiai), false),
+            (
+                "Copy after  Ctrl+D".to_string(),
+                Btn::Fx(FxAct::Duplicate),
+                false,
+            ),
+            ("Delete".to_string(), Btn::Fx(FxAct::Delete), false),
+        ];
+        y = self.wrap_row(c, x, y, inner, &items);
+        let hint = if end {
+            "Drag the preview to place it at its end: Shift turns, Ctrl sizes."
+        } else {
+            "Drag the preview to place it: Shift turns, Ctrl sizes."
+        };
+        c.text(x, y, 6.0, rgba(DIM, 1.0), &Canvas::fit(6.0, inner, hint));
+    }
+
     /// Where a new clip goes when dropped at the playhead: the kiai it is in, else the notes
     /// selected, else four bars from the beat the playhead is on.
     fn drop_span(&self) -> (f64, f64) {
@@ -312,6 +471,23 @@ impl View {
         let Some(p) = PRESETS.get(i) else { return };
         let beats = (end - start) / self.ed.beat_at(start);
         let mut clips = (p.make)(start, end, beats);
+        let first_picture = self.map_pictures().into_iter().next();
+        for c in &mut clips {
+            if let Some(l) = c.layer.as_deref_mut()
+                && let Show::Picture { file } = &mut l.show
+                && file.is_empty()
+            {
+                match &first_picture {
+                    Some(f) => *file = f.clone(),
+                    None => {
+                        self.status =
+                            "put a .png or .jpg in the map's folder first, then pick Picture again"
+                                .into();
+                        return;
+                    }
+                }
+            }
+        }
         let row = row.unwrap_or_else(|| self.free_row(start, end, clips.len()));
         for (k, c) in clips.iter_mut().enumerate() {
             c.lane = (row + k as u8).min(ROWS - 1);
@@ -323,6 +499,42 @@ impl View {
             self.status = format!("{} from {} to {}", p.name, fmt_time(start), fmt_time(end));
             self.mark_stale();
         }
+    }
+
+    /// The words of the text block picked.
+    pub(super) fn layer_text(&self) -> Option<String> {
+        match &self.picked()?.layer.as_deref()?.show {
+            Show::Text { text } => Some(text.clone()),
+            Show::Picture { .. } => None,
+        }
+    }
+
+    pub(super) fn layer_text_set(&mut self, typed: &str) {
+        let Some(id) = self.fx_sel else { return };
+        let typed: String = typed
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(crate::tko::clips::MAX_TEXT)
+            .collect();
+        let changed = self.ed.set_clip(id, false, |c| {
+            if let Some(l) = c.layer.as_deref_mut()
+                && let Show::Text { text } = &mut l.show
+            {
+                *text = typed;
+            }
+        });
+        if changed {
+            self.mark_stale();
+        }
+    }
+
+    /// The pictures in the edited map's folder.
+    pub(super) fn map_pictures(&self) -> Vec<String> {
+        self.ed
+            .path
+            .parent()
+            .map(crate::pictures::in_folder)
+            .unwrap_or_default()
     }
 
     pub(super) fn press_fx(&mut self, a: FxAct) {
@@ -352,6 +564,7 @@ impl View {
                 self.fx_advanced = !self.fx_advanced;
                 false
             }
+            FxAct::What(_) if self.picked().is_some_and(|c| c.layer.is_some()) => false,
             FxAct::What(d) => {
                 let all = targets();
                 let now = self.picked().and_then(|c| c.target());
@@ -434,6 +647,84 @@ impl View {
                 self.fx_sel = None;
                 self.ed.delete_clip(id)
             }
+            FxAct::LayerText(text) => {
+                let file = self.map_pictures().into_iter().next();
+                if !text && file.is_none() {
+                    self.status = "put a .png or .jpg in the map's folder first".into();
+                    false
+                } else {
+                    self.ed.set_clip(id, false, |c| {
+                        if let Some(l) = c.layer.as_deref_mut() {
+                            l.show = match (text, &l.show) {
+                                (true, Show::Text { .. }) | (false, Show::Picture { .. }) => {
+                                    return;
+                                }
+                                (true, _) => Show::Text {
+                                    text: "Text".into(),
+                                },
+                                (false, _) => Show::Picture {
+                                    file: file.unwrap_or_default(),
+                                },
+                            };
+                        }
+                    })
+                }
+            }
+            FxAct::Picture(d) => {
+                let all = self.map_pictures();
+                if all.is_empty() {
+                    self.status = "put a .png or .jpg in the map's folder first".into();
+                    false
+                } else {
+                    self.ed.set_clip(id, false, |c| {
+                        if let Some(l) = c.layer.as_deref_mut()
+                            && let Show::Picture { file } = &mut l.show
+                        {
+                            let at = all.iter().position(|f| f == file).map_or(-1, |i| i as i32);
+                            let next = (at + d).rem_euclid(all.len() as i32) as usize;
+                            *file = all[next].clone();
+                        }
+                    })
+                }
+            }
+            FxAct::EndPose(end) => {
+                self.fx_end = end;
+                // Editing the end pose makes it its own.
+                end && self.ed.set_clip(id, false, |c| {
+                    if let Some(l) = c.layer.as_deref_mut()
+                        && l.to.is_none()
+                    {
+                        l.to = Some(l.from);
+                    }
+                })
+            }
+            FxAct::Moves => {
+                let moves = self
+                    .picked()
+                    .is_some_and(|c| c.layer.as_ref().is_some_and(|l| l.to.is_some()));
+                if moves {
+                    self.fx_end = false;
+                }
+                self.ed.set_clip(id, false, |c| {
+                    if let Some(l) = c.layer.as_deref_mut() {
+                        l.to = if moves { None } else { Some(l.from) };
+                    }
+                })
+            }
+            FxAct::Behind => self.ed.set_clip(id, false, |c| {
+                if let Some(l) = c.layer.as_deref_mut() {
+                    l.behind = !l.behind;
+                }
+            }),
+            FxAct::Colour => self.ed.set_clip(id, false, |c| {
+                if let Some(l) = c.layer.as_deref_mut() {
+                    let at = LAYER_COLOURS
+                        .iter()
+                        .position(|&k| k == l.colour)
+                        .unwrap_or(0);
+                    l.colour = LAYER_COLOURS[(at + 1) % LAYER_COLOURS.len()];
+                }
+            }),
         };
         if changed {
             self.mark_stale();
@@ -454,6 +745,9 @@ impl View {
         let step = match f {
             CF::Amount => clip.target().map_or(1.0, amount_step),
             CF::Every | CF::Length | CF::FadeIn | CF::FadeOut => 0.25,
+            CF::X | CF::Y | CF::Size => 2.0,
+            CF::Turn => 5.0,
+            CF::Seen => 0.05,
         } * k;
         let now = self.clip_field(&clip, f);
         let v = ((now + dir * step) * 1000.0).round() / 1000.0;
@@ -470,6 +764,23 @@ impl View {
             CF::Length => c.length,
             CF::FadeIn => c.fade_in,
             CF::FadeOut => c.fade_out,
+            CF::X | CF::Y | CF::Size | CF::Turn | CF::Seen => {
+                let Some(l) = c.layer.as_deref() else {
+                    return 0.0;
+                };
+                let p = if self.fx_end {
+                    l.to.unwrap_or(l.from)
+                } else {
+                    l.from
+                };
+                match f {
+                    CF::X => p.x,
+                    CF::Y => p.y,
+                    CF::Size => p.size,
+                    CF::Turn => p.turn,
+                    _ => p.alpha,
+                }
+            }
         }
     }
 
@@ -478,6 +789,7 @@ impl View {
         if !v.is_finite() {
             return;
         }
+        let end = self.fx_end;
         let changed = self.ed.set_clip(id, false, |c| match f {
             CF::Amount => c.amount = v,
             CF::Every => {
@@ -488,6 +800,18 @@ impl View {
             CF::Length => c.length = v.max(1.0 / 64.0),
             CF::FadeIn => c.fade_in = v.max(0.0),
             CF::FadeOut => c.fade_out = v.max(0.0),
+            CF::X | CF::Y | CF::Size | CF::Turn | CF::Seen => {
+                if let Some(l) = c.layer.as_deref_mut() {
+                    let p = pose_mut(l, end);
+                    match f {
+                        CF::X => p.x = v,
+                        CF::Y => p.y = v,
+                        CF::Size => p.size = v.max(1.0),
+                        CF::Turn => p.turn = v,
+                        _ => p.alpha = v.clamp(0.0, 1.0),
+                    }
+                }
+            }
         });
         if changed {
             self.mark_stale();
@@ -781,5 +1105,14 @@ impl View {
             Some((_, Part::Body)) => I::Grab,
             None => I::Crosshair,
         })
+    }
+}
+
+/// The pose of `l` a change goes to: its end pose (`end`, made its own) or its start pose.
+pub(super) fn pose_mut(l: &mut Layer, end: bool) -> &mut Pose {
+    if end {
+        l.to.get_or_insert(l.from)
+    } else {
+        &mut l.from
     }
 }

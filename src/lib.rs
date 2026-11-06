@@ -57,6 +57,7 @@ mod online;
 mod osudb;
 #[cfg(test)]
 mod perf_audit;
+mod pictures;
 mod player;
 mod playlist;
 mod pp;
@@ -554,6 +555,8 @@ struct State {
     sprites_upload: Option<Arc<render::Atlas>>,
     /// Profile pictures: fetched as they're drawn, uploaded by the render thread.
     avatars: avatars::Avatars,
+    /// The playing or edited `.tko` map's own pictures.
+    pictures: pictures::Pictures,
     /// The account logged in is an admin (the server says so; it checks every admin action).
     admin: bool,
     skin_loader: Option<skin::Loader>,
@@ -5911,6 +5914,24 @@ impl State {
         self.skin_map_seen = dir.clone();
         self.skin_map = dir;
         self.request_skin(false);
+    }
+
+    /// The folder a `.tko` map's pictures come from: the map played or edited.
+    // ponytail: multiplayer and spectating draw a map's text but not its pictures.
+    fn picture_dir(&self) -> Option<PathBuf> {
+        let entry = match &self.scene {
+            Scene::Editor(view) => return view.ed.path.parent().map(Path::to_path_buf),
+            Scene::Play { entry, .. } => *entry,
+            Scene::Settings { prev } => match **prev {
+                Scene::Play { entry, .. } => entry,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        self.library
+            .get(entry)
+            .and_then(|e| e.path.parent())
+            .map(Path::to_path_buf)
     }
 
     fn open_skins_folder(&mut self) {
@@ -13497,7 +13518,14 @@ impl State {
             }
             return;
         }
-        if matches!(self.scene, Scene::Editor(_)) {
+        if let Scene::Editor(view) = &mut self.scene {
+            // A text block's words come as text; Enter, Esc and Backspace still as keys.
+            if view.wants_text()
+                && let Some(t) = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+            {
+                view.type_text(t);
+                return;
+            }
             self.editor_key(code, repeat, window);
             return;
         }
@@ -13891,8 +13919,12 @@ impl State {
 
         // The pictures the last frame drew, then the ones the renderer has for this one.
         self.avatars.update(&canvas.avatars_wanted);
+        let picture_dir = self.picture_dir();
+        self.pictures
+            .update(picture_dir.as_deref(), &canvas.pictures_wanted);
         canvas.clear(width);
         canvas.avatar_slots = self.avatars.slots();
+        canvas.picture_slots = self.pictures.slots();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
         self.glitch_between_menus(canvas, now);
@@ -17546,7 +17578,18 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         if frames == gpu_start::FRAMES {
             gpu_start::going();
         }
-        let (wanted, cap, refresh_hz, surface, size, atlas, letterbox, pixel_scale, avatar_uploads) = {
+        let (
+            wanted,
+            cap,
+            refresh_hz,
+            surface,
+            size,
+            atlas,
+            letterbox,
+            pixel_scale,
+            avatar_uploads,
+            picture_uploads,
+        ) = {
             let mut s = lock(&state);
             if s.quit {
                 // In game.log: the game was closed on purpose, not lost.
@@ -17579,6 +17622,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 letterbox,
                 if s.cfg.half_resolution { 2 } else { 1 },
                 s.avatars.take_uploads(),
+                s.pictures.take_uploads(),
             )
         };
         // GPU waits and uploads never hold the input/state mutex.
@@ -17598,6 +17642,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
         renderer.pixel_scale = pixel_scale;
         for (slot, rgba) in avatar_uploads {
             renderer.set_avatar(slot, &rgba);
+        }
+        for (slot, rgba) in picture_uploads {
+            renderer.set_picture(slot, &rgba);
         }
         if let Some(atlas) = atlas {
             renderer.set_sprites(&atlas);
@@ -18450,6 +18497,7 @@ impl State {
         );
         State {
             avatars,
+            pictures: pictures::Pictures::default(),
             admin: false,
             crash,
             crash_sent,

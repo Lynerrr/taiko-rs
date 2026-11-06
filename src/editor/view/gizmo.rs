@@ -4,10 +4,12 @@
 //! tracks (the Keyframes page edits them too) and show as diamonds over the clip rows, where a
 //! click on one goes there and a right click takes that moment's keys away.
 
+use super::clips::pose_mut;
 use super::{Drag, Keys, Mode, View, inside};
 use crate::editor::keyframes::Subject;
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
+use crate::tko::clips::Pose;
 use crate::tko::gimmick::FieldProp;
 use crate::tko::track::Key;
 use crate::video::FRAME_VW;
@@ -46,10 +48,26 @@ impl View {
         self.ed.value_of(Subject::Field(p), t)
     }
 
-    /// Where the hit target is drawn in the preview, by the playfield's keys at the playhead.
+    /// The text or picture block picked, with the pose a drag places (its end pose when that
+    /// is being edited).
+    fn picked_layer(&self) -> Option<(u32, Pose)> {
+        let c = self.picked()?;
+        let l = c.layer.as_deref()?;
+        let p = match l.to {
+            Some(to) if self.fx_end => to,
+            _ => l.from,
+        };
+        Some((c.id, p))
+    }
+
+    /// Where the hit target is drawn in the preview, by the playfield's keys at the playhead; or
+    /// the block picked, if it is text or a picture.
     pub(super) fn pivot_in_preview(&self) -> (f32, f32) {
         let [fx, fy, _, _] = self.layout.preview;
         let k = self.preview_scale();
+        if let Some((_, p)) = self.picked_layer() {
+            return (fx + (FRAME_VW / 2.0 + p.x as f32) * k, fy + p.y as f32 * k);
+        }
         let t = self.ed.time;
         (
             fx + (HIT_X + self.motion_at(FieldProp::X, t) as f32) * k,
@@ -71,7 +89,11 @@ impl View {
             c.ring(px, py, 9.0, rgba(accent(), a), 1.5);
             c.rect(px - 13.0, py - 0.5, 26.0, 1.0, rgba(accent(), a * 0.8));
             c.rect(px - 0.5, py - 13.0, 1.0, 26.0, rgba(accent(), a * 0.8));
-            let hint = "drag: move   Shift: turn   Ctrl: zoom   (keys at the playhead)";
+            let hint = if self.picked_layer().is_some() {
+                "drag: place it   Shift: turn   Ctrl: size"
+            } else {
+                "drag: move   Shift: turn   Ctrl: zoom   (keys at the playhead)"
+            };
             c.text(
                 fx + 4.0,
                 fy + fh - 9.0,
@@ -94,6 +116,16 @@ impl View {
         } else {
             Grip::Move
         };
+        if let Some((id, p)) = self.picked_layer() {
+            self.drag = Drag::Gizmo {
+                grip,
+                from: (x, y),
+                at: (p.x, p.y, p.turn, p.size),
+                t: self.ed.time,
+                layer: Some(id),
+            };
+            return true;
+        }
         let t = self.ed.snapped(self.ed.time);
         let at = MOTION.map(|p| self.motion_at(p, t));
         self.drag = Drag::Gizmo {
@@ -101,6 +133,7 @@ impl View {
             from: (x, y),
             at: (at[0], at[1], at[2], at[3]),
             t,
+            layer: None,
         };
         true
     }
@@ -111,6 +144,7 @@ impl View {
             from,
             at: (bx, by, rot, zoom),
             t,
+            layer,
         } = self.drag
         else {
             return;
@@ -135,6 +169,27 @@ impl View {
                 vec![(FieldProp::Zoom, round(zoom * f, 0.01))]
             }
         };
+        if let Some(id) = layer {
+            let end = self.fx_end;
+            let changed = self.ed.set_clip(id, true, |c| {
+                if let Some(l) = c.layer.as_deref_mut() {
+                    let pose = pose_mut(l, end);
+                    for (p, v) in &keys {
+                        match p {
+                            FieldProp::X => pose.x = *v,
+                            FieldProp::Y => pose.y = *v,
+                            FieldProp::Rotation => pose.turn = *v,
+                            // For a block, the zoom grip carries its size (units).
+                            _ => pose.size = v.round().max(1.0),
+                        }
+                    }
+                }
+            });
+            if changed {
+                self.mark_stale();
+            }
+            return;
+        }
         let ease = self.k_ease;
         let mut changed = false;
         for (p, v) in keys {
