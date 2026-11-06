@@ -777,20 +777,8 @@ impl View {
                 self.stop(audio);
             } else {
                 if let Some(a) = audio {
-                    // Each note the playhead passes rings once, as a hit would.
-                    let (from_t, to_t) = (self.last_played, t);
-                    let first = self.ed.chart.objects.partition_point(|o| o.time <= from_t);
-                    for o in self.ed.chart.objects[first..]
-                        .iter()
-                        .take_while(|o| o.time <= to_t)
-                        .take(6)
-                    {
-                        a.sfx(match (o.taiko(), o.big()) {
-                            (Taiko::Kat, false) => Sfx::Kat,
-                            (Taiko::Kat, true) => Sfx::BigKat,
-                            (_, true) => Sfx::BigDon,
-                            _ => Sfx::Don,
-                        });
+                    for (sfx, volume) in self.hits_between(self.last_played, t) {
+                        a.sfx_at(sfx, volume);
                     }
                 }
                 self.last_played = t;
@@ -798,6 +786,30 @@ impl View {
                 self.follow(false);
             }
         }
+    }
+
+    /// The sounds of the notes the playhead passes going from `from` to `to` (each rings once, as
+    /// a hit would), at the volume of the timing line in force there, as the game plays them.
+    fn hits_between(&self, from: f64, to: f64) -> Vec<(Sfx, f32)> {
+        let objects = &self.ed.chart.objects;
+        let first = objects.partition_point(|o| o.time <= from);
+        objects[first..]
+            .iter()
+            .take_while(|o| o.time <= to)
+            .take(6)
+            .map(|o| {
+                let sfx = match (o.taiko(), o.big()) {
+                    (Taiko::Kat, false) => Sfx::Kat,
+                    (Taiko::Kat, true) => Sfx::BigKat,
+                    (_, true) => Sfx::BigDon,
+                    _ => Sfx::Don,
+                };
+                // The game reads the volume the same way: 0..100, no lower than osu!'s 5%.
+                let volume = timing::active_at(&self.ed.chart.timing, o.time)
+                    .map_or(1.0, |p| (p.volume as f32 / 100.0).clamp(0.05, 1.0));
+                (sfx, volume)
+            })
+            .collect()
     }
 
     /// The music is being (re)loaded, after a change of speed: the track there now plays at the
@@ -2867,6 +2879,26 @@ mod tests {
     fn click(v: &mut View, x: f32, y: f32) {
         v.mouse_down(x, y, Keys::default(), None);
         v.mouse_up(x, y, Keys::default());
+    }
+
+    #[test]
+    fn notes_ring_at_their_lines_volume_as_soon_as_it_changes() {
+        let mut v = view();
+        let at = v.ed.chart.objects[0].time;
+        let line = timing::active_at(&v.ed.chart.timing, at).unwrap().id;
+        let volume_now = |v: &View| {
+            let hits = v.hits_between(at - 1.0, at);
+            assert!(!hits.is_empty());
+            hits[0].1
+        };
+        v.ed.edit_timing(line, |p| p.volume = 30, false).unwrap();
+        assert_eq!(volume_now(&v), 0.3);
+        // While playing, with no rebuild of the preview in between.
+        v.ed.edit_timing(line, |p| p.volume = 80, false).unwrap();
+        assert_eq!(volume_now(&v), 0.8);
+        // The game plays a silent line at osu!'s lowest, 5%.
+        v.ed.edit_timing(line, |p| p.volume = 0, false).unwrap();
+        assert_eq!(volume_now(&v), 0.05);
     }
 
     #[test]
