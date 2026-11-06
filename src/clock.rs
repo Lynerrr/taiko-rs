@@ -227,6 +227,50 @@ impl VsyncPacer {
     }
 }
 
+/// Frames a second from which a frame in the queue costs next to nothing.
+const FAST_FPS: f64 = 2000.0;
+/// Below this it's no longer fast. Apart from `FAST_FPS`, or a rate around it would keep
+/// rebuilding the swapchain.
+const NOT_FAST_FPS: f64 = 1000.0;
+/// How long a rate is counted over before it's believed.
+const RATE_WINDOW: Duration = Duration::from_millis(500);
+
+/// Whether frames are coming very fast, for the renderer's queue of them. Not with vsync: that has
+/// a queue of its own.
+#[derive(Default)]
+pub struct FrameRate {
+    /// Since when frames are counted, and how many so far.
+    window: Option<(Instant, u32)>,
+    fast: bool,
+}
+
+impl FrameRate {
+    /// Counts a frame; returns the new answer when it changes.
+    pub fn frame(&mut self, now: Instant, uncapped: bool) -> Option<bool> {
+        if !uncapped {
+            self.window = None;
+            return std::mem::take(&mut self.fast).then_some(false);
+        }
+        let (start, frames) = self.window.get_or_insert((now, 0));
+        *frames += 1;
+        let span = now.saturating_duration_since(*start);
+        if span < RATE_WINDOW {
+            return None;
+        }
+        let fps = *frames as f64 / span.as_secs_f64();
+        self.window = None;
+        let fast = if self.fast {
+            fps >= NOT_FAST_FPS
+        } else {
+            fps >= FAST_FPS
+        };
+        (fast != self.fast).then(|| {
+            self.fast = fast;
+            fast
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,5 +434,39 @@ mod tests {
         // Two that agree (a seek, or the audio carried on through a stall): snapped to.
         assert!((c.update(at(40), Some(5_040.0)) - 40.0).abs() < 1.0);
         assert_eq!(c.update(at(50), Some(5_050.0)), 5_050.0);
+    }
+
+    /// `fps` frames a second for `secs`, from `t`: every answer it gave.
+    fn run(r: &mut FrameRate, t: &mut Instant, fps: f64, secs: f64, uncapped: bool) -> Vec<bool> {
+        let step = Duration::from_secs_f64(1.0 / fps);
+        (0..(fps * secs) as u32)
+            .filter_map(|_| {
+                *t += step;
+                r.frame(*t, uncapped)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_very_fast_frames_are_fast() {
+        let (mut r, mut t) = (FrameRate::default(), Instant::now());
+        assert!(run(&mut r, &mut t, 500.0, 2.0, true).is_empty());
+        assert_eq!(run(&mut r, &mut t, 8000.0, 2.0, true), [true]);
+    }
+
+    #[test]
+    fn a_rate_between_the_two_limits_changes_nothing() {
+        let (mut r, mut t) = (FrameRate::default(), Instant::now());
+        assert!(run(&mut r, &mut t, 1500.0, 2.0, true).is_empty());
+        assert_eq!(run(&mut r, &mut t, 8000.0, 2.0, true), [true]);
+        assert!(run(&mut r, &mut t, 1500.0, 2.0, true).is_empty());
+        assert_eq!(run(&mut r, &mut t, 500.0, 2.0, true), [false]);
+    }
+
+    #[test]
+    fn vsync_ends_it_at_once() {
+        let (mut r, mut t) = (FrameRate::default(), Instant::now());
+        assert_eq!(run(&mut r, &mut t, 8000.0, 2.0, true), [true]);
+        assert_eq!(run(&mut r, &mut t, 165.0, 1.0, false), [false]);
     }
 }
