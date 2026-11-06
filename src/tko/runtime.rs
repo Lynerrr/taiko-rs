@@ -23,6 +23,12 @@ pub struct FieldFx {
     pub scroll: f64,
     pub stretch_x: f32,
     pub stretch_y: f32,
+    /// 0 as it is, 1 turned over (left to right).
+    pub flip: f32,
+    /// A lane shape the lane is bent into (`clips::LANE_SHAPES` index, plus one; 0 none), and how
+    /// far (0 straight, 1 the whole shape).
+    pub lane_shape: u8,
+    pub lane_bend: f32,
     pub flash: f32,
     pub vignette: f32,
     pub wash: f32,
@@ -53,6 +59,9 @@ impl Default for FieldFx {
             scroll: 1.0,
             stretch_x: 1.0,
             stretch_y: 1.0,
+            flip: 0.0,
+            lane_shape: 0,
+            lane_bend: 0.0,
             flash: 0.0,
             vignette: 0.0,
             wash: 0.0,
@@ -271,6 +280,8 @@ pub struct Runtime {
     clip_lists: Vec<Vec<f64>>,
     /// What clips on all notes add to every note, at the last `prepare`.
     all_notes_delta: [f64; NoteProp::ALL.len()],
+    /// The lane shape clips bend the lane into at the last `prepare` (shape plus one, how far).
+    lane: (u8, f64),
 }
 
 /// How far a note's time may be from the one a group holds (the chart's whole milliseconds).
@@ -375,6 +386,7 @@ impl Runtime {
             group_delta: vec![Default::default(); groups],
             clip_lists: Vec::new(),
             all_notes_delta: Default::default(),
+            lane: (0, 0.0),
         };
         rt.rebuild(false);
         rt
@@ -664,6 +676,7 @@ impl Runtime {
         field: &mut [f64; FieldProp::ALL.len()],
         groups: &mut [[f64; NoteProp::ALL.len()]],
         all: &mut [f64; NoteProp::ALL.len()],
+        lane: &mut (u8, f64),
     ) {
         let seed = self.gimmick.graph.seed;
         for (i, c) in self.gimmick.clips.iter().enumerate() {
@@ -688,6 +701,13 @@ impl Runtime {
                         v * (hash01(seed, id * 2 + 1, slot) * 2.0 - 1.0);
                 }
                 Some(ClipTarget::Notes(None, p)) => all[note_slot(p)] += v,
+                // The strongest lane shape at a time is the one drawn.
+                Some(ClipTarget::Lane(k)) => {
+                    let v = v.clamp(0.0, 1.0);
+                    if v > lane.1 {
+                        *lane = (k as u8 + 1, v);
+                    }
+                }
                 Some(ClipTarget::Notes(Some(g), p)) => {
                     if let Some(row) = groups.get_mut(g) {
                         row[note_slot(p)] += v;
@@ -966,12 +986,14 @@ impl Runtime {
             }
         }
         let mut all = [0.0; NoteProp::ALL.len()];
+        let mut lane = (0, 0.0);
         if !self.gimmick.clips.is_empty() {
-            self.add_clips(t - self.shift, &mut field, &mut groups, &mut all);
+            self.add_clips(t - self.shift, &mut field, &mut groups, &mut all, &mut lane);
         }
         self.field_delta = field;
         self.group_delta = groups;
         self.all_notes_delta = all;
+        self.lane = lane;
     }
 
     /// How long ago (ms) the trigger node `id` last fired, at game time `t`; for showing which
@@ -1006,6 +1028,9 @@ impl Runtime {
             scroll: v(FieldProp::Scroll),
             stretch_x: v(FieldProp::StretchX) as f32,
             stretch_y: v(FieldProp::StretchY) as f32,
+            flip: v(FieldProp::Flip) as f32,
+            lane_shape: self.lane.0,
+            lane_bend: self.lane.1 as f32,
             flash: v(FieldProp::Flash) as f32,
             vignette: v(FieldProp::Vignette) as f32,
             wash: v(FieldProp::Wash) as f32,
@@ -1369,6 +1394,33 @@ mod tests {
             "and the group's own move as well"
         );
         let _ = When::Span;
+    }
+
+    #[test]
+    fn lane_clips_bend_the_lane_the_strongest_one_winning_and_flip_turns_it_over() {
+        use crate::tko::clips::{Clip, Target as T};
+        let lane = |k: usize, amount: f64| Clip {
+            amount,
+            ..Clip::new(T::Lane(k), 1000.0, 3000.0)
+        };
+        let flip = Clip {
+            amount: 1.0,
+            fade_in: 2.0,
+            ease: Ease::Linear,
+            ..Clip::new(T::Field(FieldProp::Flip), 1000.0, 3000.0)
+        };
+        let mut rt = with_clips(vec![lane(0, 0.4), lane(2, 0.9), flip]);
+        rt.prepare(500.0);
+        let f = rt.field(500.0);
+        assert_eq!((f.lane_shape, f.lane_bend, f.flip), (0, 0.0, 0.0));
+        rt.prepare(1500.0);
+        let f = rt.field(1500.0);
+        assert_eq!(
+            f.lane_shape, 3,
+            "the spiral (index 2, plus one) is the stronger"
+        );
+        assert!((f.lane_bend - 0.9).abs() < 1e-6);
+        assert!((f.flip - 0.5).abs() < 1e-6, "half way over");
     }
 
     #[test]

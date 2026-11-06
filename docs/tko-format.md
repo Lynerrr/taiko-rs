@@ -55,7 +55,8 @@ and compare).
   `back_in/out`, `elastic_out`, `bounce_out`.
 - Playfield properties, in three groups. *Move*: `x`, `y` (virtual units), `rotation` (degrees,
   about the hit target), `zoom`, `scroll` (a multiple of the map's own scroll speed; what is
-  drawn, not when a note is hit), `stretch_x`, `stretch_y`. *Look*: `flash` (0..1 white wash),
+  drawn, not when a note is hit), `stretch_x`, `stretch_y`, `flip` (0..1: turned over left to right
+  like a page, 1 mirrored with the drum on the right; it multiplies the Flip Flop mod's turn). *Look*: `flash` (0..1 white wash),
   `vignette` (0..1 dark corners), `wash` (0..1 colour overlay) with `wash_hue` (degrees), `glitch`
   (0..1: the notes and the drum torn into shifted slices; the lane stays whole so no note is covered), `chroma` (px of colour split). *Clones*: `echo`
   (0..8 fading copies of the playfield) with `echo_x`, `echo_y`, `echo_rot`, `echo_zoom` and
@@ -86,8 +87,12 @@ often:
 ```
 
 - `what`: a playfield property (`zoom`, `rotation`, `flash`... as in `field`), `shake` (random
-  offsets of the playfield, `amount` virtual units at most), or `notes.<property>` (`dx`, `dy`,
-  `scale`, `opacity`, `hidden`, `swirl`) for all the notes, or a group's with `"group": k` (1-based).
+  offsets of the playfield, `amount` virtual units at most), `notes.<property>` (`dx`, `dy`,
+  `scale`, `opacity`, `hidden`, `swirl`) for all the notes, or a group's with `"group": k` (1-based),
+  or `lane.<shape>` (`zigzag`, `uturn`, `spiral`, `loop`, `elbow`, `meadow`: the Shapeshift mod's
+  shapes), which bends the lane `amount` (0 straight, 1 the whole shape) of the way into that shape,
+  so a fade in and out morphs it. The strongest lane clip at a time is the one drawn, and while one
+  is, it goes before a rail mod the player picked.
 - `start`, `end`: chart ms. `lane`: the editor's row (0..7). `id`: keeps the editor's selection.
 - `when`: `{"kind": "span"}` (the default: the whole clip, coming in over `fade_in` beats and going
   out over `fade_out`), `beats` (every `every` beats from the start), `notes` (each note reaching the

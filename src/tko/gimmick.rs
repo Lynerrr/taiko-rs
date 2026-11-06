@@ -29,6 +29,8 @@ pub enum FieldProp {
     /// Width and height multipliers: circles become ovals.
     StretchX,
     StretchY,
+    /// Turned over left to right like a page, 0 as it is, 1 mirrored (the drum on the right).
+    Flip,
     /// A white wash over everything, added to the picture (0 none, 1 white).
     Flash,
     /// The screen's edges darkened (0 none, 1 nearly black).
@@ -73,7 +75,7 @@ impl PropGroup {
 }
 
 impl FieldProp {
-    pub const ALL: [FieldProp; 20] = [
+    pub const ALL: [FieldProp; 21] = [
         FieldProp::X,
         FieldProp::Y,
         FieldProp::Rotation,
@@ -81,6 +83,7 @@ impl FieldProp {
         FieldProp::Scroll,
         FieldProp::StretchX,
         FieldProp::StretchY,
+        FieldProp::Flip,
         FieldProp::Flash,
         FieldProp::Vignette,
         FieldProp::Wash,
@@ -105,6 +108,7 @@ impl FieldProp {
             FieldProp::Scroll => "scroll",
             FieldProp::StretchX => "stretch_x",
             FieldProp::StretchY => "stretch_y",
+            FieldProp::Flip => "flip",
             FieldProp::Flash => "flash",
             FieldProp::Vignette => "vignette",
             FieldProp::Wash => "wash",
@@ -129,7 +133,8 @@ impl FieldProp {
             | FieldProp::Zoom
             | FieldProp::Scroll
             | FieldProp::StretchX
-            | FieldProp::StretchY => PropGroup::Move,
+            | FieldProp::StretchY
+            | FieldProp::Flip => PropGroup::Move,
             FieldProp::Flash
             | FieldProp::Vignette
             | FieldProp::Wash
@@ -154,6 +159,9 @@ impl FieldProp {
             }
             FieldProp::StretchX => "Makes the playfield wider (above 1) or thinner (below 1).",
             FieldProp::StretchY => "Makes the playfield taller (above 1) or flatter (below 1).",
+            FieldProp::Flip => {
+                "Turns the playfield over like a page: 0 as it is, 0.5 edge on, 1 mirrored with the drum on the right."
+            }
             FieldProp::Flash => "A white flash added over everything. 0 none, 1 white-out.",
             FieldProp::Vignette => "Darkens the edges of the screen. 0 none, 1 nearly black.",
             FieldProp::Wash => "How strongly a colour is laid over the playfield.",
@@ -196,6 +204,7 @@ impl FieldProp {
             | FieldProp::Echo
             | FieldProp::EchoY
             | FieldProp::EchoRot
+            | FieldProp::Flip
             | FieldProp::Kaleido => 0.0,
             FieldProp::Zoom
             | FieldProp::Scroll
@@ -219,6 +228,7 @@ impl FieldProp {
             | FieldProp::Vignette
             | FieldProp::Wash
             | FieldProp::Glitch
+            | FieldProp::Flip
             | FieldProp::EchoFade => (0.0, 1.0),
             FieldProp::Chroma => (0.0, 80.0),
             FieldProp::Echo | FieldProp::Kaleido => (0.0, 8.0),

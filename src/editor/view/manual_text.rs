@@ -151,7 +151,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - Drag a block to move it (also to another row), drag its ends to make it longer or shorter, right click deletes it. Delete and Ctrl+D work on the block picked.
 
 # Changing one
-- Click a block: its settings replace the shelf. < and > change what it moves: zoom, turn, flash, shake, the notes themselves (move, size, hide, swirl)...
+- Click a block: its settings replace the shelf. < and > change what it moves: zoom, turn, flash, shake, the lane's shape (spiral, zigzag, loop...), the notes themselves (move, size, hide, swirl)...
 - When it acts: the whole time, every few beats, on notes (all, dons, kats, big ones), on hits, on misses.
 - Amount is how much: click it to type a number, or use - and + (Shift x10, Alt x0.1).
 - A block that acts the whole time fades in and out over the beats you set. One that repeats does a kick (jumps and settles), a swing (one side, then the other) or a step (a bit more each time), taking the beats you set.
@@ -414,7 +414,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Блок тащится мышью (и на другую дорожку), за края — длиннее или короче, правый клик удаляет. Delete и Ctrl+D работают с выбранным блоком.
 
 # Как изменить
-- Нажмите на блок: вместо полки появятся его настройки. < и > меняют, что он двигает: зум, поворот, вспышку, тряску, сами ноты (сдвиг, размер, скрыть, закрутить)...
+- Нажмите на блок: вместо полки появятся его настройки. < и > меняют, что он двигает: зум, поворот, вспышку, тряску, форму лайна (спираль, зигзаг, петля...), сами ноты (сдвиг, размер, скрыть, закрутить)...
 - Когда он действует: всё время, каждые несколько долей, на нотах (все, доны, каты, большие), на попаданиях, на промахах.
 - Amount — сколько: нажмите, чтобы ввести число, или - и + (Shift x10, Alt x0.1).
 - Блок «всё время» плавно входит и выходит за заданные доли. Повторяющийся делает толчок (прыгает и успокаивается), качели (в одну сторону, потом в другую) или шаг (каждый раз чуть больше) за заданные доли.

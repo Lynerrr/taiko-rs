@@ -108,7 +108,13 @@ pub enum Target {
     Shake,
     /// The notes: all of them (`None`) or a group's.
     Notes(Option<usize>, NoteProp),
+    /// The lane bent into shape `LANE_SHAPES[k]`: the amount is how far, 0 straight to 1 the
+    /// whole shape.
+    Lane(usize),
 }
+
+/// The shapes a lane can be bent into, by name: the Shapeshift mod's, in its order.
+pub const LANE_SHAPES: [&str; 6] = ["zigzag", "uturn", "spiral", "loop", "elbow", "meadow"];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Clip {
@@ -157,6 +163,10 @@ impl Clip {
         let (what, group) = match what {
             Target::Field(p) => (p.name().to_string(), 0),
             Target::Shake => ("shake".to_string(), 0),
+            Target::Lane(k) => (
+                format!("lane.{}", LANE_SHAPES[k.min(LANE_SHAPES.len() - 1)]),
+                0,
+            ),
             Target::Notes(g, p) => (format!("notes.{}", p.name()), g.map_or(0, |g| g as u16 + 1)),
         };
         Clip {
@@ -180,6 +190,12 @@ impl Clip {
     pub fn target(&self) -> Option<Target> {
         if self.what == "shake" {
             return Some(Target::Shake);
+        }
+        if let Some(shape) = self.what.strip_prefix("lane.") {
+            return LANE_SHAPES
+                .iter()
+                .position(|s| *s == shape)
+                .map(Target::Lane);
         }
         if let Some(p) = self.what.strip_prefix("notes.") {
             let p = NoteProp::ALL.into_iter().find(|q| q.name() == p)?;
@@ -301,6 +317,7 @@ impl Clip {
                 let (lo, hi) = p.range();
                 hi - lo
             }
+            Some(Target::Lane(_)) => 1.0,
             _ => 400.0,
         };
         // A step can go round and round.

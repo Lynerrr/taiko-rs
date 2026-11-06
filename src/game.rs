@@ -1017,6 +1017,62 @@ pub fn rail_outline(k: usize) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// The lane shapes a .tko map's lane clips name (`tko::clips::LANE_SHAPES`), in that order.
+const LANE_SHAPES_OF_CLIPS: [RailShape; 6] = [
+    RailShape::Zigzag,
+    RailShape::UTurn,
+    RailShape::Spiral,
+    RailShape::Loop,
+    RailShape::Elbow,
+    RailShape::Meadow,
+];
+
+/// The lane `u` (0..1) of the way from shape `from` to `to` on a canvas `w` wide: rail, length,
+/// and how far the playfield moves down and shrinks for it.
+fn morph_rail(from: RailShape, to: RailShape, u: f32, w: f32) -> (Option<Rail>, f32, f32, f32) {
+    let ease = |x: f32| smooth(0.0, 1.0, x as f64) as f32;
+    // The Loop can't be bent into or out of: half way its lane would swing round across the
+    // drum and the HUD. So the other shape straightens out over the first half of the morph and
+    // the loop slides in whole from off the right of the screen over the second (the other way
+    // round on the way out). The lane's length doesn't jump in between.
+    let lp = RailShape::Loop;
+    if (from == lp) != (to == lp) {
+        let other = if to == lp { from } else { to };
+        // 0: the other shape, 1: straight with the loop off screen, 2: the loop in place.
+        let p = 2.0 * if to == lp { u } else { 1.0 - u };
+        let away = 1.5 * (w - HIT_X);
+        if p < 1.0 {
+            let k = ease(p);
+            let mix = |a: f32, b: f32| a + (b - a) * k;
+            let len = mix(other.length(w), lp.length(w) + away);
+            return (
+                Some(Rail::build(|s| other.bend(s) * (1.0 - k), len)),
+                len,
+                other.drop() * (1.0 - k),
+                mix(other.zoom(w), 1.0),
+            );
+        }
+        let k = ease(p - 1.0);
+        let shift = (1.0 - k) * away;
+        let len = lp.length(w) + shift;
+        return (
+            Some(Rail::build(|s| lp.bend(s - shift), len)),
+            len,
+            lp.drop() * k,
+            1.0 + (lp.zoom(w) - 1.0) * k,
+        );
+    }
+    let m = ease(u);
+    let mix = |a: f32, b: f32| a + (b - a) * m;
+    let len = mix(from.length(w), to.length(w));
+    (
+        Some(Rail::build(|s| mix(from.bend(s), to.bend(s)), len)),
+        len,
+        mix(from.drop(), to.drop()),
+        mix(from.zoom(w), to.zoom(w)),
+    )
+}
+
 impl RailShape {
     fn of(mods: Mods) -> Option<RailShape> {
         [
@@ -3492,9 +3548,14 @@ impl Game {
     }
 
     /// The lane's shape at map time `t` on a canvas `w` wide: rail (rails mods, Shapeshift
-    /// morphing from one to the next), length, and how far the playfield moves down and
-    /// shrinks for it.
-    fn rail_at(&self, t: f64, w: f32) -> (Option<Rail>, f32, f32, f32) {
+    /// morphing from one to the next, or a .tko map's lane clip, `lane`: a `SHAPESHIFT` shape and
+    /// how far into it, which goes before the player's mods), length, and how far the playfield
+    /// moves down and shrinks for it.
+    fn rail_at(&self, t: f64, w: f32, lane: Option<(usize, f32)>) -> (Option<Rail>, f32, f32, f32) {
+        if let Some((k, u)) = lane {
+            let shape = LANE_SHAPES_OF_CLIPS[k % LANE_SHAPES_OF_CLIPS.len()];
+            return morph_rail(RailShape::Straight, shape, u.clamp(0.0, 1.0), w);
+        }
         let mods = self.mods;
         if let Some(shape) = RailShape::of(mods) {
             let (mut drop, mut zoom) = (shape.drop(), shape.zoom(w));
@@ -3559,47 +3620,7 @@ impl Game {
                 )
             }
         };
-        let ease = |x: f32| smooth(0.0, 1.0, x as f64) as f32;
-        // The Loop can't be bent into or out of: half way its lane would swing round across the
-        // drum and the HUD. So the other shape straightens out over the first half of the morph and
-        // the loop slides in whole from off the right of the screen over the second (the other way
-        // round on the way out). The lane's length doesn't jump in between.
-        let lp = RailShape::Loop;
-        if (from == lp) != (to == lp) {
-            let other = if to == lp { from } else { to };
-            // 0: the other shape, 1: straight with the loop off screen, 2: the loop in place.
-            let p = 2.0 * if to == lp { u } else { 1.0 - u };
-            let away = 1.5 * (w - HIT_X);
-            if p < 1.0 {
-                let k = ease(p);
-                let mix = |a: f32, b: f32| a + (b - a) * k;
-                let len = mix(other.length(w), lp.length(w) + away);
-                return (
-                    Some(Rail::build(|s| other.bend(s) * (1.0 - k), len)),
-                    len,
-                    other.drop() * (1.0 - k),
-                    mix(other.zoom(w), 1.0),
-                );
-            }
-            let k = ease(p - 1.0);
-            let shift = (1.0 - k) * away;
-            let len = lp.length(w) + shift;
-            return (
-                Some(Rail::build(|s| lp.bend(s - shift), len)),
-                len,
-                lp.drop() * k,
-                1.0 + (lp.zoom(w) - 1.0) * k,
-            );
-        }
-        let m = ease(u);
-        let mix = |a: f32, b: f32| a + (b - a) * m;
-        let len = mix(from.length(w), to.length(w));
-        (
-            Some(Rail::build(|s| mix(from.bend(s), to.bend(s)), len)),
-            len,
-            mix(from.drop(), to.drop()),
-            mix(from.zoom(w), to.zoom(w)),
-        )
+        morph_rail(from, to, u, w)
     }
 
     /// Shatter's sideways shift of each quarter of the lane at map time `t`: apart on even bars
@@ -3971,8 +3992,19 @@ impl Game {
             0.0
         };
         let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp) + tact;
+        // A .tko map's playfield motion: what is drawn, never when a note is hit.
+        let tko_fx = self
+            .tko
+            .as_mut()
+            .map(|r| {
+                r.prepare(vt);
+                r.field(vt)
+            })
+            .unwrap_or_default();
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
-        let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w);
+        let lane = (tko_fx.lane_shape > 0 && tko_fx.lane_bend > 0.001)
+            .then(|| (tko_fx.lane_shape as usize - 1, tko_fx.lane_bend));
+        let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w, lane);
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
         // left edge (the drum) along the lane, with room for the judgements.
         let (band_top, band_h) = lane_band();
@@ -3996,15 +4028,6 @@ impl Game {
             ],
         };
         let portal = self.portal_at(vt, lane_len);
-        // A .tko map's playfield motion: what is drawn, never when a note is hit.
-        let tko_fx = self
-            .tko
-            .as_mut()
-            .map(|r| {
-                r.prepare(vt);
-                r.field(vt)
-            })
-            .unwrap_or_default();
         let scroll = Scroll {
             t: vt,
             speed: osu_speed_scale(w)
@@ -5232,7 +5255,7 @@ impl Game {
             flip_flop(&self.map.barlines, vt)
         } else {
             1.0
-        };
+        } * (std::f32::consts::PI * tko_fx.flip.clamp(0.0, 1.0)).cos();
         if fx != 1.0 {
             c.squash_x_since(start_shape, w / 2.0, fx);
         }
@@ -9921,7 +9944,7 @@ mod tests {
             for mods in ["ZZ", "UT", "SI", "LP", "EB", "SS"] {
                 let g = kiai_game(mods);
                 for t in [0.0, 20_000.0, 50_000.0] {
-                    let (rail, len, _, zoom) = g.rail_at(t, w);
+                    let (rail, len, _, zoom) = g.rail_at(t, w, None);
                     assert!(zoom <= 1.0);
                     assert_eq!(lane_stretch(rail.is_some(), len, w), 1.0, "{mods} at {w}");
                 }
@@ -9929,6 +9952,26 @@ mod tests {
             // Plain lanes are as they were.
             assert_eq!(lane_stretch(false, w - HIT_X, w), 1.0);
         }
+    }
+
+    #[test]
+    fn a_tko_lane_clip_bends_the_lane_over_the_players_own_and_keeps_note_speed() {
+        let w = 853.3;
+        let plain = game();
+        assert!(plain.rail_at(0.0, w, None).0.is_none());
+        for k in 0..LANE_SHAPES_OF_CLIPS.len() {
+            for u in [0.25, 0.5, 1.0] {
+                let (rail, len, _, zoom) = plain.rail_at(0.0, w, Some((k, u)));
+                assert!(rail.is_some() && zoom <= 1.0 + 1e-6);
+                assert_eq!(lane_stretch(true, len, w), 1.0, "shape {k} at {u}");
+            }
+        }
+        // The map's spiral goes before the player's zigzag.
+        let zz = kiai_game("ZZ");
+        let theirs = zz.rail_at(0.0, w, None).1;
+        let map = zz.rail_at(0.0, w, Some((2, 1.0))).1;
+        assert_ne!(theirs, map);
+        assert_eq!(map, plain.rail_at(0.0, w, Some((2, 1.0))).1);
     }
 
     #[test]
