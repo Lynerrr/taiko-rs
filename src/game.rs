@@ -358,6 +358,8 @@ pub struct Game {
     track_ms: f64,
     /// The song as it plays (the results screen plays it on).
     pub track: Arc<Track>,
+    /// The player asked for the results as soon as the last note was judged.
+    outro_skipped: bool,
     first_note: f64,
     /// Game time of the last press per key: left rim, left centre, right centre, right rim.
     presses: [f64; 4],
@@ -2081,6 +2083,7 @@ impl Game {
             end_time,
             track_ms,
             track,
+            outro_skipped: false,
             first_note,
             presses: [f64::NEG_INFINITY; 4],
             last_judge: None,
@@ -2591,7 +2594,30 @@ impl Game {
         self.expire(self.time);
         self.play_combo_break(audio);
         self.play_scares(audio);
-        self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
+        self.outro_skipped || self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
+    }
+
+    /// Whether every note has been judged, so all that's left is the wait for the results. Not in
+    /// a replay, which plays out, or a failed play, which has its own ending.
+    pub fn can_skip_outro(&self) -> bool {
+        self.cursor >= self.map.notes.len()
+            && !self.map.notes.is_empty()
+            && self.replay.is_none()
+            && self.failed.is_none()
+    }
+
+    /// Tests: every note goes by, as if nothing was hit.
+    #[cfg(test)]
+    pub(crate) fn run_out_of_notes(&mut self) {
+        self.expire(self.end_time + 1000.0);
+    }
+
+    /// Ends the play on the next update instead of waiting out the last moments of the song; true
+    /// when it did.
+    pub fn skip_outro(&mut self) -> bool {
+        let skipped = self.can_skip_outro();
+        self.outro_skipped |= skipped;
+        skipped
     }
 
     /// The keys autoplay hits each note with (`autoplay::note_keys`), worked out again only when
@@ -7649,6 +7675,16 @@ mod tests {
             let osu = (osu_aspect * 480.0 - 160.0) / v;
             assert!((ours - osu).abs() < 0.01, "{aspect}: {ours} vs {osu}");
         }
+    }
+
+    #[test]
+    fn the_outro_can_be_skipped_only_once_every_note_is_judged() {
+        let mut g = modded("");
+        assert!(!g.can_skip_outro());
+        assert!(!g.skip_outro(), "a note is still to come");
+        g.run_out_of_notes();
+        assert!(g.can_skip_outro());
+        assert!(g.skip_outro());
     }
 
     fn modded(mods: &str) -> Game {

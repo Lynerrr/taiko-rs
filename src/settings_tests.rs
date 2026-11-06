@@ -533,6 +533,40 @@ fn the_exit_question_slides_in_from_above_and_stops() {
 }
 
 #[test]
+fn escape_after_the_last_note_goes_straight_to_the_results() {
+    let mut s = in_a_song(false);
+    let mut at = Instant::now();
+    // With notes to come it's the pause menu, as ever.
+    s.key(KeyCode::Escape, false, None, at, None);
+    let Scene::Play { game, .. } = &mut s.scene else {
+        panic!("still playing");
+    };
+    assert!(game.paused.is_some());
+    game.paused = None;
+    game.run_out_of_notes();
+
+    s.key(KeyCode::Escape, false, None, at, None);
+    let Scene::Play { game, .. } = &s.scene else {
+        panic!("the results come with the next frame");
+    };
+    assert!(game.paused.is_none(), "not the pause menu");
+    at += Duration::from_millis(16);
+    s.build_frame(&mut Canvas::default(), at, 853.3);
+    assert!(matches!(s.scene, Scene::Results { .. }));
+}
+
+#[test]
+fn a_replay_still_pauses_after_its_last_note() {
+    let mut s = in_a_song(false);
+    let Scene::Play { game, .. } = &mut s.scene else {
+        panic!("playing");
+    };
+    game.replay = Some((Vec::new(), 0));
+    game.run_out_of_notes();
+    assert!(!game.can_skip_outro());
+}
+
+#[test]
 fn a_songs_menu_likes_it() {
     let mut s = layout_tests::state();
     s.play_when_scanned = false;
