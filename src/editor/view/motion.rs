@@ -281,6 +281,33 @@ impl View {
         }
     }
 
+    /// The Motion chapter's example over the map's first kiai (or its first notes).
+    pub(super) fn motion_showcase(&mut self) {
+        let first_kiai = self
+            .ed
+            .chart
+            .timing
+            .iter()
+            .find(|p| p.kiai())
+            .and_then(|p| self.ed.kiai_around(p.time));
+        let a = first_kiai.map_or_else(
+            || self.ed.chart.objects.first().map_or(0.0, |o| o.time),
+            |k| k.0,
+        );
+        match self.ed.motion_example(a) {
+            Ok(parts) => {
+                self.set_time(a);
+                self.mark_stale();
+                self.status = format!(
+                    "example from {}: {}. Space plays it; Ctrl+Z takes off one part",
+                    super::fmt_time(a),
+                    parts.join(", ")
+                );
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
     /// Buttons as wide as their text, wrapping within `w`, smaller than the shelf's so the page
     /// fits the panel. Returns where the next line starts.
     fn chips(

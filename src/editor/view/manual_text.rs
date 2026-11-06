@@ -18,8 +18,8 @@ pub enum TryIt {
     Tour,
     /// A set of clips laid over the map's first kiai, to see and pick apart.
     Showcase,
-    /// The Motion page, where notes get approach paths.
-    Motion,
+    /// Paths, a move, fakes, a freeze, the drum sliding and a lie laid over the map's first kiai.
+    MotionShowcase,
 }
 
 fn ru() -> bool {
@@ -204,7 +204,7 @@ Blocks add up with each other, with keyframes and with nodes. Keyframes and Node
     },
     Chapter {
         title: "Note paths",
-        try_it: Some(("Open the Motion page", TryIt::Motion)),
+        try_it: Some(("Put an example on this map", TryIt::MotionShowcase)),
         body: "\
 F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw instead of scrolling along the lane, and land on the drum exactly when they are hit.
 
@@ -250,7 +250,9 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - What hits a note, its score and its sound stay its own. Fakes lie with their group too; drumrolls and swells never lie.
 - Players can turn every lie off in Settings, Gameplay, Show true notes. With it on, your own preview shows the truth too.
 
-> Paths, moves, the scroll, fakes and lies are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane.
+- Put an example on this map (the button below) lays all of this over the map's first kiai, four beats each: a path, a pop in with fakes, a freeze as the drum slides, swapped colours. Each part is its own Ctrl+Z.
+
+> Paths, moves, the scroll, fakes and lies are visual only: notes are hit at the same moments, and score and pp stay the same. Drumrolls and swells stay on the lane. Players can tone down flashes, glitches and camera moves with Settings, Gameplay, Reduce map effects.
 ",
     },
     Chapter {
@@ -548,7 +550,7 @@ F4 Effects открывается на Clips: самый простой спос
     },
     Chapter {
         title: "Траектории нот",
-        try_it: Some(("Открыть страницу Motion", TryIt::Motion)),
+        try_it: Some(("Положить пример на эту карту", TryIt::MotionShowcase)),
         body: "\
 F4 Effects, страница Motion (.tko-карты): выбранные ноты летят по нарисованному пути, а не по лайну, и приходят на барабан ровно в момент удара.
 
@@ -594,7 +596,9 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - Чем бить ноту, её счёт и звук остаются её собственными. Фейки врут вместе со своей группой; дроби и свели не врут никогда.
 - Игроки могут выключить любой обман в настройках: Игра, «Показывать настоящие ноты». Если это включено у вас самих, превью тоже покажет правду.
 
-> Траектории, движения, скролл, фейки и обман только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне.
+- Положить пример на эту карту (кнопка внизу) раскладывает всё это по первому киаю карты, по четыре доли: траектория, выскакивание с фейками, заморозка, пока едет барабан, перепутанные цвета. Каждая часть отменяется своим Ctrl+Z.
+
+> Траектории, движения, скролл, фейки и обман только визуальные: удары в те же моменты, счёт и pp не меняются. Дроби и свели остаются на лайне. Игроки могут ослабить вспышки, глитчи и движения камеры в настройках: Игра, «Ослабить эффекты карт».
 ",
     },
     Chapter {

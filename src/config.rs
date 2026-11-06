@@ -237,6 +237,8 @@ pub struct Config {
     pub black_lane: bool,
     /// .tko notes drawn as what they are, whatever their map makes them show as.
     pub true_notes: bool,
+    /// .tko maps' flashes, glitches and camera moves toned down.
+    pub calm_maps: bool,
     /// The drum keys move through song select and the pause menu (`drum_nav`).
     pub drum_menus: bool,
     /// The coloured flash on the hit target as notes are hit.
@@ -435,6 +437,7 @@ impl Default for Config {
             hide_great: true,
             black_lane: false,
             true_notes: false,
+            calm_maps: false,
             drum_menus: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
@@ -1047,6 +1050,7 @@ impl Config {
                 "hide_great" => cfg.hide_great = v != "false",
                 "black_lane" => cfg.black_lane = v == "true",
                 "true_notes" => cfg.true_notes = v == "true",
+                "calm_maps" => cfg.calm_maps = v == "true",
                 "drum_menus" => cfg.drum_menus = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
@@ -1247,6 +1251,8 @@ impl Config {
              black_lane = {}\n\
              # .tko notes drawn as what they are, whatever colour or size their map shows them as\n\
              true_notes = {}\n\
+             # .tko maps' flashes, glitches and camera moves toned down\n\
+             calm_maps = {}\n\
              # the drum keys move through song select and the pause menu\n\
              drum_menus = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
@@ -1311,6 +1317,7 @@ impl Config {
             self.hide_great,
             self.black_lane,
             self.true_notes,
+            self.calm_maps,
             self.drum_menus,
             self.hit_flash,
             self.show_offset_hint,

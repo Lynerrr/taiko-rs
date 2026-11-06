@@ -7,6 +7,15 @@
 use super::path::PathTable;
 use super::scroll::ScrollTable;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static CALM: AtomicBool = AtomicBool::new(false);
+
+/// Maps' playfield effects toned down (Settings -> Gameplay, Reduce map effects): see
+/// `FieldProp::calm`.
+pub fn set_calm(on: bool) {
+    CALM.store(on, Ordering::Relaxed);
+}
 
 use std::collections::HashMap;
 
@@ -1137,6 +1146,11 @@ impl Runtime {
     }
 
     pub fn field(&self, t: f64) -> FieldFx {
+        self.field_with(t, CALM.load(Ordering::Relaxed))
+    }
+
+    /// `field`, toned down if `calm` (see `FieldProp::calm`).
+    pub fn field_with(&self, t: f64, calm: bool) -> FieldFx {
         let t = t - self.shift;
         let v = |p: FieldProp| {
             let base = self
@@ -1144,11 +1158,17 @@ impl Runtime {
                 .field_track(p)
                 .map_or(p.default_value(), |tr| tr.value(t, p.default_value()));
             let add = self.field_delta[field_slot(p)];
-            if add == 0.0 {
+            let raw = if add == 0.0 {
                 base
             } else {
                 let (lo, hi) = p.range();
                 (base + add).clamp(lo, hi)
+            };
+            if calm {
+                let d = p.default_value();
+                d + (raw - d) * p.calm()
+            } else {
+                raw
             }
         };
         FieldFx {
@@ -1555,6 +1575,22 @@ mod tests {
         ]
         .map(|(time, class, big)| NoteInfo { time, class, big });
         Runtime::with_beats(Arc::new(gm), notes.into_iter(), 0.0, beats)
+    }
+
+    #[test]
+    fn a_calm_field_keeps_part_of_each_change_and_all_of_the_drum() {
+        let mut g = Gimmick::default();
+        g.key_field(FieldProp::Rotation, key(0.0, 90.0));
+        g.key_field(FieldProp::Flash, key(0.0, 1.0));
+        g.key_field(FieldProp::Zoom, key(0.0, 2.0));
+        g.key_field(FieldProp::Drum, key(0.0, 300.0));
+        let rt = Runtime::new(Arc::new(g), [1000.0].into_iter(), 0.0);
+        let wild = rt.field_with(500.0, false);
+        let calm = rt.field_with(500.0, true);
+        assert_eq!((wild.rotation, calm.rotation), (90.0, 45.0));
+        assert_eq!((wild.flash, calm.flash), (1.0, 0.25));
+        assert_eq!(calm.zoom, 1.5);
+        assert_eq!(calm.drum, 300.0);
     }
 
     #[test]

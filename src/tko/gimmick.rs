@@ -95,6 +95,26 @@ impl PropGroup {
 }
 
 impl FieldProp {
+    /// How much of its change from the default a calmer playfield keeps (Settings, Reduce map
+    /// effects): flashes and glitches the least, camera moves half. What decides when notes are
+    /// hit or where they meet the drum is never touched.
+    pub fn calm(self) -> f64 {
+        match self {
+            FieldProp::Flash | FieldProp::Glitch | FieldProp::Chroma => 0.25,
+            FieldProp::X
+            | FieldProp::Y
+            | FieldProp::Rotation
+            | FieldProp::Zoom
+            | FieldProp::StretchX
+            | FieldProp::StretchY
+            | FieldProp::Blackout
+            | FieldProp::EchoRot
+            | FieldProp::SliceY
+            | FieldProp::SliceX => 0.5,
+            _ => 1.0,
+        }
+    }
+
     pub const ALL: [FieldProp; 29] = [
         FieldProp::X,
         FieldProp::Y,
