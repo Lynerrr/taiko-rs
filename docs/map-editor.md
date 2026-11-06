@@ -124,7 +124,8 @@ from its start to its end and keeping time with the music. The shelf of ready-ma
 zoom, Turn over, Earthquake, Big note slam), *Lane* (Spiral lane, Zigzag lane, Loop lane), *Notes*
 (Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up), *Look* (Kat flash, Drop, Build-up,
 Echo trail, Kaleidoscope, Colour wash, Miss glitch, Fade to black, Blackout, Dark pulse, Ghost
-playfield, Only the notes), *Copies* (Mirror twin, Triple lane, Shadow clones, Spinning ghost) and
+playfield, Only the notes), *Copies & cuts* (Mirror twin, Triple lane, Shadow clones, Spinning ghost, Broken lane, Shatter on
+the beat, Split open) and
 *Text & pictures*. A click on an effect picks
 it; a drag on a row then draws it from where it was pressed to where it was let go, and a click on a
 row lays one bar (*Over the kiai here* and *Over the notes selected* lay it over those). It is placed
@@ -140,7 +141,9 @@ backdrop* (black behind the playfield, over the background). The *Copies* target
 copies of the playfield behind it, each moved by its own clips: *shows* (how solid, 0 none), x, y,
 turn (about the middle of the screen), size and lane see-through (1 leaves only its notes); a copy
 clip's settings pick which copy (1 to 4). Copies only show the notes: the real playfield is the one
-played. Clicking a block shows its
+played. *Cut in pieces* (in *Echoes & cuts*) cuts the picture into 2 to 12 upright pieces across
+the screen; *Pieces up / down* pushes every other one the other way and *Pieces apart* spreads them
+from the middle (nothing is cut while both are 0). Clicking a block shows its
 settings instead of the shelf: what it moves (a menu in columns, *Playfield*, *Look*, *Echoes*,
 *Lane* and *Notes*, with `<` `>` to step: any playfield property, a shake, the lane's shape (zigzag,
 U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden, swirl; the

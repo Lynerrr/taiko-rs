@@ -150,6 +150,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 # Making one
 - The shelf has tabs: Playfield (pulses, turns, zooms, shakes), Lane (its shape), Notes, Look (flashes, colours, echoes, see-through, blackout) and Text & pictures.
 - Copies: up to four copies of the playfield behind it, each moved by its own blocks (shows, x, y, turn, size, lane see-through). copy 1-4 in a block's settings picks which. Try Mirror twin, Triple lane, Shadow clones, Spinning ghost. Only the real playfield is played.
+- Cut in pieces cuts the picture into 2-12 upright pieces; Pieces up / down pushes every other one the other way, Pieces apart spreads them from the middle. Try Broken lane, Shatter on the beat, Split open.
 - Blackout and Fade to black turn the screen black (text over the lane still shows); Ghost playfield makes it faint; Only the notes leaves notes and drum alone on black. Notes that can't be seen are still there to hit.
 - Click an effect to pick it, then drag on a row from where it should start to where it should end. A click on a row lays one bar. Over the kiai here and Over the notes selected lay it over those. Shift keeps it picked for more; Esc puts it back.
 - Drag a block to move it (also to another row), drag its ends to make it longer or shorter (a short block's ends stick out a little), right click deletes it.
@@ -432,6 +433,7 @@ F4 Effects открывается на Clips: самый простой спос
 # Как сделать
 - На полке вкладки: Playfield (пульс, повороты, зум, тряска), Lane (форма лайна), Notes, Look (вспышки, цвета, эхо, прозрачность, затемнение) и Text & pictures.
 - Copies: до четырёх копий плейфилда позади него, каждую двигают свои блоки (shows, x, y, turn, size, прозрачность лайна). copy 1-4 в настройках блока выбирает, какую. Попробуйте Mirror twin, Triple lane, Shadow clones, Spinning ghost. Играется только настоящий плейфилд.
+- Cut in pieces режет картинку на 2-12 вертикальных кусков; Pieces up / down двигает их через один вверх и вниз, Pieces apart раздвигает от середины. Попробуйте Broken lane, Shatter on the beat, Split open.
 - Blackout и Fade to black делают экран чёрным (текст над лайном всё равно виден); Ghost playfield делает поле полупрозрачным; Only the notes оставляет на чёрном только ноты и барабан. Невидимые ноты всё равно нужно бить.
 - Нажмите эффект, чтобы взять его, и протяните по дорожке от места, где он начинается, до места, где кончается. Клик по дорожке кладёт один такт. Over the kiai here и Over the notes selected кладут его на кийай или на выделенные ноты. С Shift он остаётся в руке; Esc кладёт обратно.
 - Блок тащится мышью (и на другую дорожку), за края — длиннее или короче (у короткого блока края чуть выступают), правый клик удаляет.

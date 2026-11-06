@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const MAX_GROUPS: usize = 256;
+/// Pieces the picture can be cut into.
+pub const MAX_SLICES: usize = 12;
 /// Notes across all groups: a file can't make the player hold an unbounded list.
 pub const MAX_GROUPED_NOTES: usize = 200_000;
 pub const MAX_NAME: usize = 64;
@@ -60,6 +62,12 @@ pub enum FieldProp {
     EchoFade,
     /// Rotated copies about the middle of the screen, like a kaleidoscope: how many in all.
     Kaleido,
+    /// The picture cut into this many upright pieces across the screen (below 2: whole), each
+    /// pushed up or down by `SliceY` (every other one the other way) and away from the middle by
+    /// `SliceX`.
+    Slices,
+    SliceY,
+    SliceX,
 }
 
 /// Where a property sits in the editor's lists.
@@ -83,7 +91,7 @@ impl PropGroup {
 }
 
 impl FieldProp {
-    pub const ALL: [FieldProp; 25] = [
+    pub const ALL: [FieldProp; 28] = [
         FieldProp::X,
         FieldProp::Y,
         FieldProp::Rotation,
@@ -109,6 +117,9 @@ impl FieldProp {
         FieldProp::EchoZoom,
         FieldProp::EchoFade,
         FieldProp::Kaleido,
+        FieldProp::Slices,
+        FieldProp::SliceY,
+        FieldProp::SliceX,
     ];
 
     pub fn name(self) -> &'static str {
@@ -138,6 +149,9 @@ impl FieldProp {
             FieldProp::EchoZoom => "echo_zoom",
             FieldProp::EchoFade => "echo_fade",
             FieldProp::Kaleido => "kaleido",
+            FieldProp::Slices => "slices",
+            FieldProp::SliceY => "slice_y",
+            FieldProp::SliceX => "slice_x",
         }
     }
 
@@ -219,6 +233,15 @@ impl FieldProp {
             FieldProp::Kaleido => {
                 "Rotated copies about the middle of the screen: how many in all (2 to 8)."
             }
+            FieldProp::Slices => {
+                "Cuts the picture into this many upright pieces across the screen (2 to 12; below 2 it stays whole)."
+            }
+            FieldProp::SliceY => {
+                "How far the pieces are pushed up and down, every other one the other way, in virtual units."
+            }
+            FieldProp::SliceX => {
+                "How far the pieces spread out from the middle (together below 0), in virtual units."
+            }
         }
     }
 
@@ -241,7 +264,10 @@ impl FieldProp {
             | FieldProp::EchoY
             | FieldProp::EchoRot
             | FieldProp::Flip
-            | FieldProp::Kaleido => 0.0,
+            | FieldProp::Kaleido
+            | FieldProp::Slices
+            | FieldProp::SliceY
+            | FieldProp::SliceX => 0.0,
             FieldProp::Zoom
             | FieldProp::Scroll
             | FieldProp::StretchX
@@ -272,7 +298,10 @@ impl FieldProp {
             | FieldProp::EchoFade => (0.0, 1.0),
             FieldProp::Chroma => (0.0, 80.0),
             FieldProp::Echo | FieldProp::Kaleido => (0.0, 8.0),
-            FieldProp::EchoX | FieldProp::EchoY => (-400.0, 400.0),
+            FieldProp::EchoX | FieldProp::EchoY | FieldProp::SliceY | FieldProp::SliceX => {
+                (-400.0, 400.0)
+            }
+            FieldProp::Slices => (0.0, MAX_SLICES as f64),
             FieldProp::EchoRot => (-90.0, 90.0),
             FieldProp::EchoZoom => (0.5, 1.5),
         }
