@@ -2258,6 +2258,13 @@ impl View {
         } else {
             let per = if keys.shift { 4 } else { 1 };
             let mut t = self.ed.time;
+            let w = self.timeline_w() as f64 * self.ms_per_px;
+            if t < self.view_start || t > self.view_start + w * 0.96 {
+                // The view was panned away from the playhead: go on from what's on screen.
+                // Stepping from the playhead would throw the view back to it, and a block
+                // being drawn would stretch all the way there.
+                t = self.ed.snapped(self.view_start + w * 0.3);
+            }
             for _ in 0..(notches.unsigned_abs().min(20) * per) {
                 t = timing::step(&self.ed.chart.timing, t, notches < 0, self.ed.snap);
             }
@@ -3771,6 +3778,33 @@ mod tests {
             .map(|t| t.presets().len())
             .sum();
         assert_eq!(shown, crate::editor::clips::PRESETS.len());
+    }
+
+    #[test]
+    fn the_wheel_mid_drag_does_not_throw_the_view_back_to_the_playhead() {
+        let mut v = clips_view();
+        let row = |v: &View, r: u8| v.row_y(r) + v.row_h() / 2.0;
+        let y = row(&v, 2);
+        let k = Keys::default();
+        v.set_time(0.0);
+        // The view panned on with the middle button: the playhead stays at the start.
+        let x0 = v.x_of(0.0) + 300.0;
+        v.middle(true, x0, y);
+        v.mouse_move(x0 - 600.0, y, k);
+        v.middle(false, x0 - 600.0, y);
+        let start = v.view_start;
+        assert!(start > 5000.0, "{start}");
+        press(&mut v, Btn::Fx(FxAct::Preset(0)));
+        let (xa, xb) = (v.x_of(start + 1000.0), v.x_of(start + 3000.0));
+        v.mouse_down(xa, y, k, None);
+        v.wheel(-1, k);
+        v.mouse_move(xb, y, k);
+        v.mouse_up(xb, y, k);
+        let c = v.ed.clips()[0].clone();
+        assert_eq!(
+            (c.start, c.end),
+            (v.ed.snapped(start + 1000.0), v.ed.snapped(start + 3000.0))
+        );
     }
 
     /// Picks shelf effect `i` and lays it over 16 beats from the playhead.
