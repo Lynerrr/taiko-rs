@@ -109,6 +109,14 @@ impl View {
                         self.run(super::cmd::Cmd::Mode(super::cmd::Mode::Effects), audio);
                         self.press(Btn::GPage(3), super::Keys::default(), audio);
                     }
+                    TryIt::Motion => {
+                        self.run(super::cmd::Cmd::Mode(super::cmd::Mode::Effects), audio);
+                        self.press(
+                            Btn::GPage(super::motion::PAGE),
+                            super::Keys::default(),
+                            audio,
+                        );
+                    }
                     TryIt::Showcase => {
                         self.run(super::cmd::Cmd::Mode(super::cmd::Mode::Effects), audio);
                         self.press(Btn::GPage(4), super::Keys::default(), audio);
