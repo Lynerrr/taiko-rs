@@ -921,7 +921,7 @@ fn the_guide_can_calibrate_straight_away_and_doesnt_wait_when_seen_before() {
 fn the_clock_of_the_guide_waits_for_the_splash() {
     let mut s = layout_tests::state();
     s.guide = Some(0);
-    s.splash = splash::Splash::new(Some(48000));
+    s.splash = splash::Splash::new(Some(48000), true, false);
     assert!(s.splash.is_some());
     s.tick_guide();
     assert_eq!(s.guide_shown, None);

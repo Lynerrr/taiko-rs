@@ -1388,6 +1388,17 @@ fn assert_every_screen_fits() {
     s.scene = Scene::Select;
     check(&mut s, "mapguessr picking", &mut out);
 
+    // The startup warning is translated: it fits in every language.
+    for lang in crate::lang::Lang::ALL {
+        crate::lang::set(lang);
+        check_draw(
+            &format!("epilepsy warning {}", lang.code()),
+            &mut out,
+            |c| splash::draw_warning(c, 1.0, 1.0, 0.5),
+        );
+    }
+    crate::lang::set(crate::lang::Lang::En);
+
     for p in &out {
         eprintln!("{p}");
     }

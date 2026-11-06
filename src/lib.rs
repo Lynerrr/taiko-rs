@@ -4354,6 +4354,7 @@ impl State {
             Item::ShowFps => on(c.show_fps),
             Item::Animations => on(c.animations),
             Item::Splash => on(c.splash),
+            Item::EpilepsyWarning => on(c.epilepsy_warning),
             Item::LegacyMenu => on(!c.main_menu),
             Item::Letterbox => on(c.letterbox),
             Item::LetterboxSize => format!("{}x{}", c.letterbox_size.0, c.letterbox_size.1),
@@ -4675,6 +4676,7 @@ impl State {
             Item::ShowFps => self.cfg.show_fps = !self.cfg.show_fps,
             Item::Animations => self.cfg.animations = !self.cfg.animations,
             Item::Splash => self.cfg.splash = !self.cfg.splash,
+            Item::EpilepsyWarning => self.cfg.epilepsy_warning = !self.cfg.epilepsy_warning,
             Item::LegacyMenu => {
                 self.cfg.main_menu = !self.cfg.main_menu;
                 // Gone at once, not just from the next start.
@@ -18630,9 +18632,13 @@ impl State {
             && crash
                 .as_ref()
                 .is_some_and(|r| send_crash_report(&cfg.online_server, r));
-        // Pictures are on the website of our own server only.
+        // Pictures are on the website of our own server only (and kept on disk between runs).
+        let own_server = cfg.online_server == online::DEFAULT_SERVER;
         let avatars = avatars::Avatars::new(
-            (cfg.online_server == online::DEFAULT_SERVER).then(|| online::WEBSITE.to_string()),
+            own_server.then(|| online::WEBSITE.to_string()),
+            config::cache_dir()
+                .filter(|_| own_server)
+                .map(|d| d.join(avatars::DIR)),
         );
         State {
             avatars,
@@ -19421,16 +19427,15 @@ fn run(
         && args[0]
             .extension()
             .is_some_and(|e| e == "osu" || e == "tko");
-    // No splash before a map given on the command line, or in scripted runs (TAIKO_SPLASH=1 forces it).
+    // No splash or warning before a map given on the command line, or in scripted runs
+    // (TAIKO_SPLASH=1 and TAIKO_WARNING=1 force them).
     let scripted =
         std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
     let want_splash = std::env::var_os("TAIKO_SPLASH").is_some()
         || (cfg.splash && !play_when_scanned && !scripted);
-    let splash = if want_splash {
-        splash::Splash::new(audio.as_ref().map(|a| a.rate))
-    } else {
-        None
-    };
+    let want_warning = std::env::var_os("TAIKO_WARNING").is_some()
+        || (cfg.epilepsy_warning && !play_when_scanned && !scripted);
+    let splash = splash::Splash::new(audio.as_ref().map(|a| a.rate), want_splash, want_warning);
     update::cleanup();
     let main_menu = cfg.main_menu && !play_when_scanned && !scripted;
     let guide = !cfg.guide_seen && !play_when_scanned && !scripted;
