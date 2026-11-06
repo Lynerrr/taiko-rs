@@ -123,7 +123,8 @@ from its start to its end and keeping time with the music. The shelf of ready-ma
 *Playfield* (Beat pulse, Every 2nd beat, Sway, Tilt, Spin, Quarter turns, Zoom in, Zoom out, Spin +
 zoom, Turn over, Earthquake, Big note slam), *Lane* (Spiral lane, Zigzag lane, Loop lane), *Notes*
 (Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up), *Look* (Kat flash, Drop, Build-up,
-Echo trail, Kaleidoscope, Colour wash, Miss glitch) and *Text & pictures*. A click on an effect picks
+Echo trail, Kaleidoscope, Colour wash, Miss glitch, Fade to black, Blackout, Dark pulse, Ghost
+playfield, Only the notes) and *Text & pictures*. A click on an effect picks
 it; a drag on a row then draws it from where it was pressed to where it was let go, and a click on a
 row lays one bar (*Over the kiai here* and *Over the notes selected* lay it over those). It is placed
 once (Shift keeps it picked); Esc puts it back. Drag a block to move it (to another row too), its
@@ -131,7 +132,10 @@ ends to resize it (a short block's ends reach a little past it); right click del
 empty rows picks every block in the box, and Shift or Ctrl+click adds or removes one: the blocks
 picked move together, Ctrl+D copies them right after the stretch they cover, and Delete removes
 them. There is always a free row under the last one used (up to 64); when they don't fit, the wheel
-over them scrolls. Clicking a block shows its
+over them scrolls. The *Look* targets include
+*See-through* (the whole playfield, still there to hit), *Lane see-through* (the lane alone, notes
+kept), *Blackout* (black over the screen; text over the lane and flashes still show) and *Dark
+backdrop* (black behind the playfield, over the background). Clicking a block shows its
 settings instead of the shelf: what it moves (a menu in columns, *Playfield*, *Look*, *Echoes*,
 *Lane* and *Notes*, with `<` `>` to step: any playfield property, a shake, the lane's shape (zigzag,
 U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden, swirl; the

@@ -36,6 +36,12 @@ pub struct FieldFx {
     pub wash_hue: f32,
     pub glitch: f32,
     pub chroma: f32,
+    /// How see-through the playfield is, and the lane alone (0 solid, 1 gone).
+    pub fade: f32,
+    pub lane_fade: f32,
+    /// Black over the screen, and behind the playfield (0 none, 1 black).
+    pub blackout: f32,
+    pub backdrop: f32,
     /// Trail copies: how many (the fraction is the last one's strength), and what each step back
     /// does.
     pub echo: f32,
@@ -68,6 +74,10 @@ impl Default for FieldFx {
             wash_hue: 0.0,
             glitch: 0.0,
             chroma: 0.0,
+            fade: 0.0,
+            lane_fade: 0.0,
+            blackout: 0.0,
+            backdrop: 0.0,
             echo: 0.0,
             echo_x: FieldProp::EchoX.default_value() as f32,
             echo_y: 0.0,
@@ -1053,6 +1063,10 @@ impl Runtime {
             wash_hue: v(FieldProp::WashHue) as f32,
             glitch: v(FieldProp::Glitch) as f32,
             chroma: v(FieldProp::Chroma) as f32,
+            fade: v(FieldProp::Fade) as f32,
+            lane_fade: v(FieldProp::LaneFade) as f32,
+            blackout: v(FieldProp::Blackout) as f32,
+            backdrop: v(FieldProp::Backdrop) as f32,
             echo: v(FieldProp::Echo) as f32,
             echo_x: v(FieldProp::EchoX) as f32,
             echo_y: v(FieldProp::EchoY) as f32,

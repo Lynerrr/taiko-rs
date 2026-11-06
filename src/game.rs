@@ -3767,6 +3767,12 @@ impl Game {
     /// caller maps it into the playfield area). The scroll and visual mods apply here; Multiverse
     /// draws it three times over.
     pub fn draw_playfield(&mut self, c: &mut Canvas, scroll_speed: f64) {
+        // A .tko map's dark backdrop goes under everything of the playfield, its pictures too.
+        let vt = self.visual_time();
+        if let Some(r) = self.tko.as_mut() {
+            r.prepare(vt);
+            crate::tko::screen::backdrop(c, &r.field(vt));
+        }
         self.draw_layers(c, true);
         if self.mods.has(Mod::Multiverse) {
             self.draw_multiverse(c, scroll_speed);

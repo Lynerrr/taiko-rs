@@ -99,6 +99,10 @@ pub fn target_label(t: Target) -> String {
             FieldProp::WashHue => "Wash colour",
             FieldProp::Glitch => "Glitch",
             FieldProp::Chroma => "Colour split",
+            FieldProp::Fade => "See-through",
+            FieldProp::LaneFade => "Lane see-through",
+            FieldProp::Blackout => "Blackout",
+            FieldProp::Backdrop => "Dark backdrop",
             FieldProp::Echo => "Echoes",
             FieldProp::EchoX => "Echo spread X",
             FieldProp::EchoY => "Echo spread Y",
@@ -245,6 +249,10 @@ fn faded(mut c: Clip, fade_in: f64, fade_out: f64, ease: Ease) -> Clip {
 
 const ZOOM: Target = Target::Field(FieldProp::Zoom);
 const TURN: Target = Target::Field(FieldProp::Rotation);
+const FADE: Target = Target::Field(FieldProp::Fade);
+const LANE_FADE: Target = Target::Field(FieldProp::LaneFade);
+const BLACKOUT: Target = Target::Field(FieldProp::Blackout);
+const BACKDROP: Target = Target::Field(FieldProp::Backdrop);
 
 /// The tabs of the shelf, by what the effects in them do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -605,6 +613,41 @@ pub const PRESETS: &[Preset] = &[
                 When::Misses,
                 0.75,
             )]
+        },
+    },
+    Preset {
+        name: "Fade to black",
+        shelf: Shelf::Look,
+        about: "The screen sinks into black over the block's length, notes and all.",
+        make: |s, e, b| vec![faded(c(BLACKOUT, s, e, 1.0), b, 0.0, Ease::SineIn)],
+    },
+    Preset {
+        name: "Blackout",
+        shelf: Shelf::Look,
+        about: "The screen goes black at once and comes back over half a beat at the end. Text over the lane still shows.",
+        make: |s, e, _| vec![faded(c(BLACKOUT, s, e, 1.0), 0.0, 0.5, Ease::Linear)],
+    },
+    Preset {
+        name: "Dark pulse",
+        shelf: Shelf::Look,
+        about: "The screen dips towards black on every beat and comes back.",
+        make: |s, e, _| vec![every(c(BLACKOUT, s, e, 0.85), 1.0, 0.5, Motion::Kick)],
+    },
+    Preset {
+        name: "Ghost playfield",
+        shelf: Shelf::Look,
+        about: "The whole playfield turns faint, notes too. They are still there to hit.",
+        make: |s, e, _| vec![faded(c(FADE, s, e, 0.75), 1.0, 1.0, Ease::SineInOut)],
+    },
+    Preset {
+        name: "Only the notes",
+        shelf: Shelf::Look,
+        about: "Black behind the playfield and the lane gone: notes and drum alone on black.",
+        make: |s, e, _| {
+            vec![
+                faded(c(BACKDROP, s, e, 1.0), 1.0, 1.0, Ease::SineInOut),
+                faded(c(LANE_FADE, s, e, 1.0), 1.0, 1.0, Ease::SineInOut),
+            ]
         },
     },
     Preset {

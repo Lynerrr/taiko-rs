@@ -42,6 +42,14 @@ pub enum FieldProp {
     Glitch,
     /// Red and blue copies pushed apart, in virtual units.
     Chroma,
+    /// How see-through the playfield is (0 solid, 1 gone; still there to hit).
+    Fade,
+    /// How see-through the lane alone is, the notes kept.
+    LaneFade,
+    /// Black over the whole screen, the playfield too (0 none, 1 black).
+    Blackout,
+    /// Black behind the playfield, over the background (0 none, 1 black).
+    Backdrop,
     /// Fading copies of the playfield trailing behind it: how many, and what each step further
     /// back does to them (move, turn, size, how much of their opacity is left).
     Echo,
@@ -75,7 +83,7 @@ impl PropGroup {
 }
 
 impl FieldProp {
-    pub const ALL: [FieldProp; 21] = [
+    pub const ALL: [FieldProp; 25] = [
         FieldProp::X,
         FieldProp::Y,
         FieldProp::Rotation,
@@ -90,6 +98,10 @@ impl FieldProp {
         FieldProp::WashHue,
         FieldProp::Glitch,
         FieldProp::Chroma,
+        FieldProp::Fade,
+        FieldProp::LaneFade,
+        FieldProp::Blackout,
+        FieldProp::Backdrop,
         FieldProp::Echo,
         FieldProp::EchoX,
         FieldProp::EchoY,
@@ -115,6 +127,10 @@ impl FieldProp {
             FieldProp::WashHue => "wash_hue",
             FieldProp::Glitch => "glitch",
             FieldProp::Chroma => "chroma",
+            FieldProp::Fade => "fade",
+            FieldProp::LaneFade => "lane_fade",
+            FieldProp::Blackout => "blackout",
+            FieldProp::Backdrop => "backdrop",
             FieldProp::Echo => "echo",
             FieldProp::EchoX => "echo_x",
             FieldProp::EchoY => "echo_y",
@@ -140,7 +156,11 @@ impl FieldProp {
             | FieldProp::Wash
             | FieldProp::WashHue
             | FieldProp::Glitch
-            | FieldProp::Chroma => PropGroup::Look,
+            | FieldProp::Chroma
+            | FieldProp::Fade
+            | FieldProp::LaneFade
+            | FieldProp::Blackout
+            | FieldProp::Backdrop => PropGroup::Look,
             _ => PropGroup::Clones,
         }
     }
@@ -174,6 +194,18 @@ impl FieldProp {
             FieldProp::Chroma => {
                 "Pushes a red and a blue copy apart from the picture, in virtual units."
             }
+            FieldProp::Fade => {
+                "How see-through the whole playfield is: 0 solid, 1 gone. The notes are still there to hit."
+            }
+            FieldProp::LaneFade => {
+                "How see-through the lane is, the notes and drum kept: 0 solid, 1 gone."
+            }
+            FieldProp::Blackout => {
+                "Black over the whole screen, the playfield too: 0 none, 1 black. Text over the lane and flashes still show."
+            }
+            FieldProp::Backdrop => {
+                "Black behind the playfield, over the background: 0 none, 1 only the playfield on black."
+            }
             FieldProp::Echo => "How many fading copies trail behind the playfield (up to 8).",
             FieldProp::EchoX => "How far each step back in the trail moves sideways.",
             FieldProp::EchoY => "How far each step back in the trail moves down.",
@@ -201,6 +233,10 @@ impl FieldProp {
             | FieldProp::WashHue
             | FieldProp::Glitch
             | FieldProp::Chroma
+            | FieldProp::Fade
+            | FieldProp::LaneFade
+            | FieldProp::Blackout
+            | FieldProp::Backdrop
             | FieldProp::Echo
             | FieldProp::EchoY
             | FieldProp::EchoRot
@@ -229,6 +265,10 @@ impl FieldProp {
             | FieldProp::Wash
             | FieldProp::Glitch
             | FieldProp::Flip
+            | FieldProp::Fade
+            | FieldProp::LaneFade
+            | FieldProp::Blackout
+            | FieldProp::Backdrop
             | FieldProp::EchoFade => (0.0, 1.0),
             FieldProp::Chroma => (0.0, 80.0),
             FieldProp::Echo | FieldProp::Kaleido => (0.0, 8.0),
