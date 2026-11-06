@@ -9,11 +9,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::{Duration, Instant};
 
 use crate::render::{PICTURE_CELL, PICTURE_SLOTS};
 
 /// Larger files are left alone (a picture this big is a mistake, and a slow one).
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
+
+/// How long a picture that couldn't be read waits before it is looked for again.
+const RETRY: Duration = Duration::from_secs(2);
 
 type Loaded = (PathBuf, String, Result<(Vec<u8>, f32), String>);
 
@@ -25,6 +29,8 @@ pub struct Pictures {
     /// Being read, or unreadable (and not asked again for this folder).
     pending: Vec<String>,
     failed: Vec<String>,
+    /// When the failed ones are tried again (a file put in the folder later, or fixed).
+    retry_at: Instant,
     uploads: Vec<(u32, Vec<u8>)>,
     tx: Sender<Loaded>,
     rx: Receiver<Loaded>,
@@ -39,6 +45,7 @@ impl Default for Pictures {
             held: vec![None; PICTURE_SLOTS as usize],
             pending: Vec::new(),
             failed: Vec::new(),
+            retry_at: Instant::now(),
             uploads: Vec::new(),
             tx,
             rx,
@@ -64,6 +71,9 @@ impl Pictures {
             self.pending.clear();
             self.failed.clear();
         }
+        if !self.failed.is_empty() && Instant::now() >= self.retry_at {
+            self.failed.clear();
+        }
         while let Ok((from, name, got)) = self.rx.try_recv() {
             if Some(&from) != self.dir.as_ref() {
                 continue;
@@ -74,6 +84,7 @@ impl Pictures {
                 Err(e) => {
                     eprintln!("map picture {name}: {e}");
                     self.failed.push(name);
+                    self.retry_at = Instant::now() + RETRY;
                 }
             }
         }
@@ -87,6 +98,7 @@ impl Pictures {
             }
             if !safe_name(name) {
                 self.failed.push(name.clone());
+                self.retry_at = Instant::now() + RETRY;
                 continue;
             }
             self.pending.push(name.clone());
@@ -184,6 +196,14 @@ pub fn cell(bytes: &[u8]) -> Result<(Vec<u8>, f32), String> {
     Ok((px, aspect))
 }
 
+/// Whether `name` is a kind of picture a map can show.
+pub fn is_picture(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"]
+        .iter()
+        .any(|x| l.ends_with(x))
+}
+
 /// The pictures in `dir` a map can use, by name, sorted.
 pub fn in_folder(dir: &Path) -> Vec<String> {
     let mut out: Vec<String> = std::fs::read_dir(dir)
@@ -193,12 +213,7 @@ pub fn in_folder(dir: &Path) -> Vec<String> {
         .flatten()
         .filter(|e| e.path().is_file())
         .filter_map(|e| e.file_name().to_str().map(str::to_string))
-        .filter(|n| {
-            let l = n.to_ascii_lowercase();
-            [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"]
-                .iter()
-                .any(|x| l.ends_with(x))
-        })
+        .filter(|n| is_picture(n))
         .collect();
     out.sort_by_key(|n| n.to_ascii_lowercase());
     out
@@ -254,6 +269,19 @@ mod tests {
         assert_eq!(p.slots().get("logo.png").map(|s| s.1), Some(2.0));
         assert_eq!(p.take_uploads().len(), 1);
         assert_eq!(p.failed, vec!["missing.png".to_string()]);
+        // Put in the folder afterwards, it is found on a later look (not straight away).
+        std::fs::write(dir.join("missing.png"), png(10, 10, [0, 0, 0, 255])).unwrap();
+        p.update(Some(&dir), &wanted);
+        assert!(!p.slots().contains_key("missing.png"));
+        p.retry_at = Instant::now();
+        for _ in 0..400 {
+            p.update(Some(&dir), &wanted);
+            if p.slots().contains_key("missing.png") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(p.slots().contains_key("missing.png"), "{:?}", p.failed);
         // Another folder: nothing of this one is kept.
         p.update(None, &wanted);
         assert!(p.slots().is_empty());
