@@ -4,9 +4,12 @@
 //! A note flies with one group at a time (the runtime takes the first that holds it), so giving
 //! notes a path takes them out of any other group they were in.
 
+use super::chart::Taiko;
 use super::keyframes::Subject;
 use super::state::Editor;
-use crate::tko::gimmick::{BEFORE_BEATS, FieldProp, Group, MAX_GROUPS, NoteProp, ShowAs};
+use crate::tko::gimmick::{
+    BEFORE_BEATS, FieldProp, Group, MAX_GROUPS, NoteProp, ShowAs, ShowColour,
+};
 use crate::tko::path::NotePath;
 use crate::tko::track::{Ease, Key, Track};
 use std::collections::BTreeMap;
@@ -394,6 +397,90 @@ impl Editor {
                 gr.show.reveal = gr.show.reveal.clamp(0.0, BEFORE_BEATS.0);
             }
         })
+    }
+}
+
+/// What the Motion chapter's example lays over 16 beats, four at a time (see
+/// `Editor::motion_example`).
+pub const EXAMPLE_PARTS: [&str; 4] = ["path", "pop in + fakes", "freeze + drum", "swapped colours"];
+
+impl Editor {
+    /// Selects the real dons and kats from `from` to before `to`. Returns how many.
+    fn select_hits(&mut self, from: f64, to: f64) -> usize {
+        self.selection = self
+            .chart
+            .objects
+            .iter()
+            .filter(|o| {
+                !o.fake
+                    && o.time >= from
+                    && o.time < to
+                    && matches!(o.taiko(), Taiko::Don | Taiko::Kat)
+            })
+            .map(|o| o.id)
+            .collect();
+        self.selection.len()
+    }
+
+    /// The notes picked get their own group, named `name`.
+    fn example_group(&mut self, name: &str) -> Option<usize> {
+        let g = self.motion_group().ok()?;
+        let name = name.to_string();
+        self.edit_gimmick(false, |gm| {
+            if let Some(gr) = gm.groups.get_mut(g) {
+                gr.name = name;
+            }
+        });
+        Some(g)
+    }
+
+    /// An example of what the Motion page makes, over the 16 beats from `a`, four at a time (see
+    /// `EXAMPLE_PARTS`): each part on the notes there, each its own undo step. Returns the parts
+    /// that went in.
+    pub fn motion_example(&mut self, a: f64) -> Result<Vec<&'static str>, String> {
+        if !self.is_tko() {
+            return Err("the example needs a .tko map".into());
+        }
+        let beat = self.beat_at(a);
+        let at = |b: f64| (a + b * beat).round();
+        let mut parts = Vec::new();
+        if self.select_hits(at(0.0), at(4.0)) > 0
+            && let Some(g) = self.example_group("Example: path")
+        {
+            self.set_path_preset(g, 0);
+            parts.push(EXAMPLE_PARTS[0]);
+        }
+        if self.select_hits(at(4.0), at(8.0)) > 0
+            && let Some(g) = self.example_group("Example: pop in")
+        {
+            let pop = BEFORES.iter().position(|b| b.0 == "Pop in").unwrap_or(0);
+            self.set_before_preset(g, pop);
+            let _ = self.add_fake_copies(0.5);
+            parts.push(EXAMPLE_PARTS[1]);
+        }
+        if self.select_hits(at(8.0), at(12.0)) > 0 {
+            self.scroll_move(ScrollMove::Freeze, at(8.0));
+            self.drum_to(at(8.0), 320.0);
+            self.drum_to(at(11.0), 0.0);
+            parts.push(EXAMPLE_PARTS[2]);
+        }
+        if self.select_hits(at(12.0), at(16.0)) > 0
+            && let Some(g) = self.example_group("Example: swapped")
+        {
+            self.edit_show(g, |s| {
+                *s = ShowAs {
+                    colour: ShowColour::Swap,
+                    reveal: 1.0,
+                    ..ShowAs::default()
+                }
+            });
+            parts.push(EXAMPLE_PARTS[3]);
+        }
+        self.selection.clear();
+        if parts.is_empty() {
+            return Err("no notes here to show the example on".into());
+        }
+        Ok(parts)
     }
 }
 

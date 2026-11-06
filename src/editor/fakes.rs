@@ -140,4 +140,46 @@ mod tests {
         pick(&mut plain, 1);
         assert!(plain.toggle_fake().is_err());
     }
+
+    #[test]
+    fn the_motion_example_lays_all_four_parts_on_a_busy_stretch() {
+        let mut text = crate::editor::chart::tests::MAP
+            .split("[HitObjects]")
+            .next()
+            .unwrap()
+            .to_string()
+            + "[HitObjects]\r\n";
+        // A note every half beat for 16 beats (a 500 ms beat), dons and kats in turn.
+        for k in 0..32 {
+            text += &format!(
+                "256,192,{},1,{},0:0:0:0:\r\n",
+                k * 250,
+                if k % 2 == 1 { 2 } else { 0 }
+            );
+        }
+        let mut e = Editor::new(Chart::parse(&text), std::path::PathBuf::from("a.tko"));
+        e.chart.gimmick = Some(Default::default());
+        assert_eq!(e.motion_example(0.0).map(|p| p.len()), Ok(4));
+        let g = e.gimmick().unwrap();
+        let names: Vec<&str> = g.groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Example: path", "Example: pop in", "Example: swapped"]
+        );
+        assert!(g.groups[0].path.is_some());
+        assert!(!g.groups[1].before.is_empty());
+        assert!(!g.groups[2].show.is_true());
+        assert!(!g.scroll.is_empty());
+        assert!(
+            g.field_track(crate::tko::gimmick::FieldProp::Drum)
+                .is_some()
+        );
+        assert!(e.selection.is_empty());
+        // Half a beat after each note is another note here, so no fake fits.
+        let map = crate::beatmap::from_text(&e.chart.to_text()).unwrap();
+        assert_eq!(map.notes.len(), 32);
+        // Without notes there is nothing to show it on.
+        let mut empty = tko();
+        assert!(empty.motion_example(20_000.0).is_err());
+    }
 }
