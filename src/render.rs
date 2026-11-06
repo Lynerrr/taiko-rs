@@ -1994,6 +1994,10 @@ impl Renderer {
                 let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
                 let w = (r[2] * sw).ceil().clamp(1.0, sw - x);
                 let h = (r[3] * sh).ceil().clamp(1.0, sh - y);
+                // Nothing of it shows (an inner clip outside its outer one): no size, not drawn.
+                if r[2] <= 0.0 || r[3] <= 0.0 {
+                    return (range, [0; 4]);
+                }
                 (range, [x as u32, y as u32, w as u32, h as u32])
             })
             .collect();
@@ -2235,6 +2239,9 @@ impl Renderer {
                 let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
                 let cw = (r[2] * sw).ceil().clamp(1.0, sw - x);
                 let ch = (r[3] * sh).ceil().clamp(1.0, sh - y);
+                if r[2] <= 0.0 || r[3] <= 0.0 {
+                    return (range.clone(), [0; 4]);
+                }
                 (range.clone(), [x as u32, y as u32, cw as u32, ch as u32])
             })
             .collect();
@@ -2541,15 +2548,28 @@ impl Renderer {
             if (range.start as u32) > at {
                 pass.draw(0..4, at..range.start as u32);
             }
+            at = range.end as u32;
+            if *w == 0 || *h == 0 {
+                continue;
+            }
             pass.set_scissor_rect(*x, *y, *w, *h);
             pass.draw(0..4, range.start as u32..range.end as u32);
             pass.set_scissor_rect(0, 0, size.0, size.1);
-            at = range.end as u32;
         }
         if (count as u32) > at {
             pass.draw(0..4, at..count as u32);
         }
     }
+}
+
+/// The part of clip rect `a` (x, y, w, h) inside `b`; empty (zero size) when they don't meet.
+fn intersect(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let (x0, y0) = (a[0].max(b[0]), a[1].max(b[1]));
+    let (x1, y1) = (
+        (a[0] + a[2]).min(b[0] + b[2]),
+        (a[1] + a[3]).min(b[1] + b[3]),
+    );
+    [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)]
 }
 
 /// How many shapes fit in a buffer of `bytes`.
@@ -3100,11 +3120,38 @@ impl Canvas {
         (x1 > x0 && y1 > y0).then_some([x0, y0, x1 - x0, y1 - y0])
     }
 
-    /// Clips everything drawn since shape `start` to a rect (virtual units).
+    /// Clips everything drawn since shape `start` to a rect (virtual units). Shapes in there that
+    /// already have a clip of their own keep it, cut down to this rect: the renderer takes one
+    /// clip per shape, so an outer clip laid over inner ones (the editor's preview over a sliced
+    /// playfield) must not hide them.
     pub fn clip_since(&mut self, start: usize, x: f32, y: f32, w: f32, h: f32) {
         let end = self.shapes.len();
-        if end > start {
-            self.clips.push((start..end, [x, y, w, h]));
+        if end <= start {
+            return;
+        }
+        let outer = [x, y, w, h];
+        let mut inner: Vec<std::ops::Range<usize>> = Vec::new();
+        for (range, rect) in &mut self.clips {
+            if range.start >= start && range.end <= end && range.start < range.end {
+                *rect = intersect(*rect, outer);
+                inner.push(range.clone());
+            }
+        }
+        if inner.is_empty() {
+            self.clips.push((start..end, outer));
+            return;
+        }
+        // The runs between the inner clips take the outer one.
+        inner.sort_by_key(|r| r.start);
+        let mut at = start;
+        for r in inner {
+            if r.start > at {
+                self.clips.push((at..r.start, outer));
+            }
+            at = at.max(r.end);
+        }
+        if end > at {
+            self.clips.push((at..end, outer));
         }
     }
 
@@ -3747,6 +3794,36 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_outer_clip_keeps_the_inner_ones_cut_down_to_it() {
+        let mut c = super::Canvas::default();
+        for i in 0..10 {
+            c.rect(i as f32, 0.0, 1.0, 1.0, [1.0; 4]);
+            if i == 3 {
+                // Shapes 4 and 5: a strip of their own, partly outside the frame.
+                c.rect(0.0, 0.0, 1.0, 1.0, [1.0; 4]);
+            }
+        }
+        // 11 shapes; the strip is 5..7.
+        c.clips.push((5..7, [50.0, 0.0, 100.0, 480.0]));
+        c.clip_since(2, 0.0, 10.0, 120.0, 100.0);
+        let mut got = c.clips.clone();
+        got.sort_by_key(|(r, _)| r.start);
+        assert_eq!(
+            got,
+            vec![
+                (2..5, [0.0, 10.0, 120.0, 100.0]),
+                (5..7, [50.0, 10.0, 70.0, 100.0]),
+                (7..11, [0.0, 10.0, 120.0, 100.0]),
+            ]
+        );
+        // Without inner clips it's one range, as before.
+        let mut c = super::Canvas::default();
+        c.rect(0.0, 0.0, 1.0, 1.0, [1.0; 4]);
+        c.clip_since(0, 1.0, 2.0, 3.0, 4.0);
+        assert_eq!(c.clips, vec![(0..1, [1.0, 2.0, 3.0, 4.0])]);
+    }
+
     #[test]
     fn a_pinned_accent_holds_while_another_thread_sets_it() {
         super::pin_accent_for_this_thread(Some(0x123456));
