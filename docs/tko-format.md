@@ -14,10 +14,10 @@ osu file format v14
 
 [Metadata]
 ...
-TkoVersion: 2        <- the format version (Version: is the difficulty name)
+TkoVersion: 3        <- the format version (Version: is the difficulty name)
 
 [Gimmick]
-{"field":{...},"groups":[...],"marks":[...],"graph":{...}}   <- one line of JSON, the last section
+{"field":{...},"groups":[...],"marks":[...],"graph":{...},"clips":[...]}   <- one line of JSON, the last section
 ```
 
 Everything but `TkoVersion` and `[Gimmick]` is the `.osu` format, so stars, pp, the song select
@@ -29,8 +29,9 @@ and the editor's stable-compatible rounding all work on a `.tko` the way they do
   (never guessed at).
 - An older one is brought up to date by the chain in `tko::format::MIGRATIONS` when it is read.
   Raising `tko::TKO_VERSION` needs a migration there and a fixture of the old format in the tests
-  (`a_v1_fixture_keeps_reading` pins version 1). Version 2 only adds optional keys, so its migration
-  from 1 changes nothing.
+  (`a_v1_fixture_keeps_reading` pins version 1, `a_v2_fixture_keeps_reading` version 2). Versions 2
+  and 3 only add optional keys (3 adds `clips`), so their migrations change nothing: the bumps are
+  there so an older game refuses a map that uses them instead of dropping them silently.
 - A `.tko` file without `TkoVersion` is an error.
 - The editor writes the current version, and never rewrites a file it cannot read.
 
@@ -69,6 +70,38 @@ and compare).
 - Limits (a file can't make the player hold an unbounded amount): 10,000 keys per track, 256
   groups, 200,000 grouped notes in all, 4 MiB of JSON. Values are held inside each property's range
   and unknown properties are dropped when a file is read.
+
+## Clips
+
+`clips` in the same JSON are effect blocks on the timeline, the editor's simple way to make
+effects (F4 Effects > Clips). Each one says what it moves, from when to when, how much and how
+often:
+
+```
+"clips": [
+  { "id": 1, "lane": 0, "what": "zoom", "start": 104265, "end": 126000, "amount": 0.12,
+    "when": {"kind": "beats", "every": 2}, "motion": "kick", "length": 1, "ease": "quad_out" },
+  { "id": 2, "lane": 1, "what": "notes.hidden", "start": 150000, "end": 170000, "amount": 1 }
+]
+```
+
+- `what`: a playfield property (`zoom`, `rotation`, `flash`... as in `field`), `shake` (random
+  offsets of the playfield, `amount` virtual units at most), or `notes.<property>` (`dx`, `dy`,
+  `scale`, `opacity`, `hidden`, `swirl`) for all the notes, or a group's with `"group": k` (1-based).
+- `start`, `end`: chart ms. `lane`: the editor's row (0..7). `id`: keeps the editor's selection.
+- `when`: `{"kind": "span"}` (the default: the whole clip, coming in over `fade_in` beats and going
+  out over `fade_out`), `beats` (every `every` beats from the start), `notes` (each note reaching the
+  drum inside it; `"notes"`: `all`, `dons`, `kats` or `big`), `hits` (each note hit, same filter) or
+  `misses`. Hits and misses are told to the runtime as the play goes, like the graph's play events.
+- A repeating clip's `motion` at each moment: `kick` (the amount, settling back over `length`
+  beats), `swing` (to the amount, then to minus it, `length` beats each way) or `step` (the amount
+  more each time). `ease` shapes the fades, the kick, the swing and the step.
+- `keep`: what it reached stays after its end (otherwise it lets go).
+- What clips give is added to the keyframes and the graph's actions, and the sum is held inside
+  the property's range (an opacity clip of `-0.7` leaves the notes at 0.3).
+- Limits: 4,096 clips; lengths and fades from 1/64 to 256 beats; an amount as far as the property
+  goes (64 times that for steps); the graph's cap of moments for each clip. A clip with an unknown
+  `what`, no length, or a group that isn't there is dropped when the file is read.
 
 ## Marks
 

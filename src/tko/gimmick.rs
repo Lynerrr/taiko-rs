@@ -1,5 +1,6 @@
 //! What a `.tko` map adds to its chart: keyframed motion of the playfield, and of groups of notes.
 
+use super::clips::Clip;
 use super::graph::Graph;
 use super::track::{Key, Track};
 use serde::{Deserialize, Serialize};
@@ -337,6 +338,9 @@ pub struct Gimmick {
     /// Events, logic and actions that move the same things as the keyframes (see `graph`).
     #[serde(default, skip_serializing_if = "Graph::is_empty")]
     pub graph: Graph,
+    /// Effect blocks on the timeline (see `clips`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clips: Vec<Clip>,
 }
 
 impl Gimmick {
@@ -348,6 +352,7 @@ impl Gimmick {
                 .all(|g| g.tracks.values().all(Track::is_empty))
             && self.graph.is_empty()
             && self.marks.is_empty()
+            && self.clips.is_empty()
     }
 
     pub fn field_track(&self, p: FieldProp) -> Option<&Track> {
@@ -430,6 +435,9 @@ impl Gimmick {
         }
         let groups = self.groups.len();
         self.graph.sanitize(groups);
+        super::clips::sanitize(&mut self.clips);
+        // A clip on a group that isn't there moves nothing.
+        self.clips.retain(|c| (c.group as usize) <= groups);
     }
 }
 

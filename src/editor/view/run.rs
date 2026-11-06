@@ -19,7 +19,7 @@ impl View {
         self.mode = m;
         match m {
             Mode::Gimmicks if self.g_page > 1 => self.g_page = 0,
-            Mode::Effects if self.g_page < 2 => self.g_page = 2,
+            Mode::Effects if self.g_page < 2 => self.g_page = 4,
             _ => {}
         }
         self.roll_start = None;
@@ -192,6 +192,12 @@ impl View {
             Cmd::SelectAll => self.ed.select_all(),
             Cmd::Delete if self.mode == Mode::Timing && !self.selected_lines().is_empty() => {
                 self.press_line_action(TAct::Delete);
+            }
+            Cmd::Delete if self.clip_mode() && self.fx_sel.is_some() => {
+                self.press_fx(super::clips::FxAct::Delete);
+            }
+            Cmd::Duplicate if self.clip_mode() && self.fx_sel.is_some() => {
+                self.press_fx(super::clips::FxAct::Duplicate);
             }
             Cmd::Delete => {
                 if self.node_mode() {

@@ -5,6 +5,7 @@
 //! `timing` is the snap grid and stable's millisecond rounding, `history` is undo and redo.
 
 pub mod chart;
+pub mod clips;
 pub mod gimmicks;
 pub mod history;
 pub mod home;

@@ -118,7 +118,22 @@ Recipes:
 
 ## Effects (`.tko`)
 
-F4 opens the Effects page: *Keyframes* animates the playfield (move, look and clone properties,
+F4 opens the Effects page on **Clips**: effects as blocks on rows under the timeline, each acting
+from its start to its end and keeping time with the music. Click one of the ready-made effects on
+the shelf (Beat pulse, Every 2nd beat, Sway, Tilt, Spin, Quarter turns, Earthquake, Big note slam,
+Kat flash, Drop, Build-up, Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up, Echo
+trail, Kaleidoscope, Colour wash, Miss glitch) and it lands at the playhead: over the whole kiai
+the playhead is in, else over the notes selected, else over the next four bars. A drag on an empty
+row draws the effect used last. Drag a block to move it (to another row too), its ends to resize
+it; right click deletes it, Delete and Ctrl+D act on the one picked. Clicking a block shows its
+settings instead of the shelf: what it moves (`<` `>`: any playfield property, a shake, or the notes:
+move, size, see-through, hidden, swirl), when it acts (the whole time, every few beats, on notes
+(all, dons, kats, big ones), on hits, on misses), the amount (click to type), the fades or the
+motion of each repeat (kick, swing, step) and how many beats it takes, the easing, *keep after*, and
+*Fit to kiai* / *Fit to selection*. Blocks add up with each other and with keyframes and nodes.
+The format is in [tko-format.md](tko-format.md#clips).
+
+*Advanced...* shows the two older pages. *Keyframes* animates the playfield (move, look and clone properties,
 in tabs) and groups of notes over time, and *Nodes* wires events to actions on a canvas. Wheel up zooms in (far out for big projects, Fit frames everything, 100% resets). Click a
 node's number to type it, pick its target from the grouped list, and use "Group from selection" on
 a Note arrives node to follow the notes selected in Compose. The Recipe menu drops a ready-made

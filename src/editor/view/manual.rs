@@ -261,7 +261,11 @@ mod tests {
     #[test]
     fn the_recipe_chapter_lists_every_recipe() {
         let chapters = lang::with(Lang::En, manual_text::chapters);
-        let text = body_of(&chapters[7]);
+        let at = chapters
+            .iter()
+            .position(|c| c.body.contains("{recipes}"))
+            .unwrap();
+        let text = body_of(&chapters[at]);
         assert!(!text.contains("{recipes}"));
         for r in Recipe::ALL {
             assert!(text.contains(r.label()), "{} is missing", r.label());
