@@ -122,7 +122,8 @@ F4 opens the Effects page on **Clips**: effects as blocks on rows under the time
 from its start to its end and keeping time with the music. The shelf of ready-made effects has tabs:
 *Playfield* (Beat pulse, Every 2nd beat, Sway, Tilt, Spin, Quarter turns, Zoom in, Zoom out, Spin +
 zoom, Turn over, Earthquake, Big note slam), *Lane* (Spiral lane, Zigzag lane, Loop lane), *Notes*
-(Hide the notes, Faint notes, Bouncing notes, Swirl in, Speed up), *Look* (Kat flash, Drop, Build-up,
+(Hide the notes, Faint notes, Bouncing notes, Rainbow notes, Squash on the beat, Swirl in, Speed
+up), *Look* (Kat flash, Drop, Build-up,
 Echo trail, Kaleidoscope, Colour wash, Miss glitch, Fade to black, Blackout, Dark pulse, Ghost
 playfield, Only the notes), *Copies & cuts* (Mirror twin, Triple lane, Shadow clones, Spinning ghost, Broken lane, Shatter on
 the beat, Split open) and
@@ -146,7 +147,7 @@ the screen; *Pieces up / down* pushes every other one the other way and *Pieces 
 from the middle (nothing is cut while both are 0). Clicking a block shows its
 settings instead of the shelf: what it moves (a menu in columns, *Playfield*, *Look*, *Echoes*,
 *Lane* and *Notes*, with `<` `>` to step: any playfield property, a shake, the lane's shape (zigzag,
-U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden, swirl; the
+U-turn, spiral, loop, elbow, meadow), or the notes: move, size, see-through, hidden, swirl, stretch wide / tall, tint and tint colour; the
 amount keeps its size when this changes), when it acts (the whole time, every few beats, on notes
 (all, dons, kats, big ones), on hits, on misses), the amount (click to type; Enter or a click elsewhere keeps it), the fades or the
 motion of each repeat (kick, swing, step) and how many beats it takes, the easing, *keep after*, and

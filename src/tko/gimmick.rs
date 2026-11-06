@@ -319,16 +319,27 @@ pub enum NoteProp {
     Hidden,
     /// Degrees the note is turned about the drum.
     Swirl,
+    /// Width and height multipliers of each note: circles become ovals.
+    StretchX,
+    StretchY,
+    /// How far the notes' colour goes to `TintHue` (0 their own, 1 all of it), and that colour as
+    /// a hue in degrees.
+    Tint,
+    TintHue,
 }
 
 impl NoteProp {
-    pub const ALL: [NoteProp; 6] = [
+    pub const ALL: [NoteProp; 10] = [
         NoteProp::Dx,
         NoteProp::Dy,
         NoteProp::Scale,
         NoteProp::Opacity,
         NoteProp::Hidden,
         NoteProp::Swirl,
+        NoteProp::StretchX,
+        NoteProp::StretchY,
+        NoteProp::Tint,
+        NoteProp::TintHue,
     ];
 
     pub fn name(self) -> &'static str {
@@ -339,6 +350,10 @@ impl NoteProp {
             NoteProp::Opacity => "opacity",
             NoteProp::Hidden => "hidden",
             NoteProp::Swirl => "swirl",
+            NoteProp::StretchX => "stretch_x",
+            NoteProp::StretchY => "stretch_y",
+            NoteProp::Tint => "tint",
+            NoteProp::TintHue => "tint_hue",
         }
     }
 
@@ -353,13 +368,26 @@ impl NoteProp {
             NoteProp::Swirl => {
                 "Turns each note about the drum, in degrees: the further out, the wider the swing."
             }
+            NoteProp::StretchX => "Makes each note wider (above 1) or thinner (below 1).",
+            NoteProp::StretchY => "Makes each note taller (above 1) or flatter (below 1).",
+            NoteProp::Tint => {
+                "How far the notes turn to the tint colour: 0 their own colour, 1 all of it."
+            }
+            NoteProp::TintHue => {
+                "The tint colour as a hue in degrees (0 red, 60 yellow, 120 green, 240 blue)."
+            }
         }
     }
 
     pub fn default_value(self) -> f64 {
         match self {
-            NoteProp::Dx | NoteProp::Dy | NoteProp::Hidden | NoteProp::Swirl => 0.0,
-            NoteProp::Scale | NoteProp::Opacity => 1.0,
+            NoteProp::Dx
+            | NoteProp::Dy
+            | NoteProp::Hidden
+            | NoteProp::Swirl
+            | NoteProp::Tint
+            | NoteProp::TintHue => 0.0,
+            NoteProp::Scale | NoteProp::Opacity | NoteProp::StretchX | NoteProp::StretchY => 1.0,
         }
     }
 
@@ -367,8 +395,10 @@ impl NoteProp {
         match self {
             NoteProp::Dx | NoteProp::Dy => (-1000.0, 1000.0),
             NoteProp::Scale => (0.05, 6.0),
-            NoteProp::Opacity | NoteProp::Hidden => (0.0, 1.0),
+            NoteProp::Opacity | NoteProp::Hidden | NoteProp::Tint => (0.0, 1.0),
             NoteProp::Swirl => (-720.0, 720.0),
+            NoteProp::StretchX | NoteProp::StretchY => (0.1, 4.0),
+            NoteProp::TintHue => (-3600.0, 3600.0),
         }
     }
 }

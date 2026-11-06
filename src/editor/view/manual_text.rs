@@ -158,7 +158,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - There is always a free row at the bottom; when the rows don't fit, the wheel over them scrolls.
 
 # Changing one
-- Click a block: its settings replace the shelf. Click what it moves for a menu of everything, in columns: Playfield (zoom, turn, shake...), Look, Echoes, Lane (spiral, zigzag, loop...) and Notes (move, size, hide, swirl). < and > step through them. The amount keeps its size when you switch.
+- Click a block: its settings replace the shelf. Click what it moves for a menu of everything, in columns: Playfield (zoom, turn, shake...), Look, Echoes & cuts, Lane (spiral, zigzag, loop...), Notes (move, size, hide, swirl, stretch, tint) and Copies. < and > step through them. The amount keeps its size when you switch.
 - When it acts: the whole time, every few beats, on notes (all, dons, kats, big ones), on hits, on misses.
 - Amount is how much: click it to type a number (Enter or a click elsewhere keeps it), or use - and + (Shift x10, Alt x0.1).
 - A block that acts the whole time fades in and out over the beats you set. One that repeats does a kick (jumps and settles), a swing (one side, then the other) or a step (a bit more each time), taking the beats you set.
@@ -441,7 +441,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Внизу всегда есть свободная дорожка; когда дорожки не влезают, колесо над ними прокручивает.
 
 # Как изменить
-- Нажмите на блок: вместо полки появятся его настройки. Нажмите на то, что он двигает, — откроется меню со всем по колонкам: Playfield (зум, поворот, тряска...), Look, Echoes, Lane (спираль, зигзаг, петля...) и Notes (сдвиг, размер, скрыть, закрутить). < и > листают по одному. Amount при смене сохраняет свою величину.
+- Нажмите на блок: вместо полки появятся его настройки. Нажмите на то, что он двигает, — откроется меню со всем по колонкам: Playfield (зум, поворот, тряска...), Look, Echoes & cuts, Lane (спираль, зигзаг, петля...), Notes (сдвиг, размер, скрыть, закрутить, растянуть, оттенок) и Copies. < и > листают по одному. Amount при смене сохраняет свою величину.
 - Когда он действует: всё время, каждые несколько долей, на нотах (все, доны, каты, большие), на попаданиях, на промахах.
 - Amount — сколько: нажмите, чтобы ввести число (Enter или клик в другое место его сохраняют), или - и + (Shift x10, Alt x0.1).
 - Блок «всё время» плавно входит и выходит за заданные доли. Повторяющийся делает толчок (прыгает и успокаивается), качели (в одну сторону, потом в другую) или шаг (каждый раз чуть больше) за заданные доли.

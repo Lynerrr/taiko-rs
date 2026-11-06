@@ -4252,6 +4252,15 @@ impl Game {
                 (x, y) = (HIT_X + ox * co - oy * s, LANE_Y + ox * s + oy * co);
             }
             size *= fx.scale;
+            // A .tko tint: the note's colour towards a hue.
+            let col = if fx.tint >= 0.01 {
+                let [r, g, b] = crate::tko::screen::hue_rgb(fx.tint_hue);
+                let hue =
+                    ((r * 255.0) as u32) << 16 | ((g * 255.0) as u32) << 8 | (b * 255.0) as u32;
+                mix(col, hue, fx.tint.min(1.0))
+            } else {
+                col
+            };
             let mut squish = 1.0;
             if party {
                 // Each note pulses on its own grid: a 1/4 four times a beat.
@@ -4264,8 +4273,9 @@ impl Game {
             if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, n.big, col, a) {
                 multiverse::note(c, uni.shape, x, y, r, col, a);
             }
-            if squish != 1.0 {
-                c.stretch_since(first, [x, y], squish, 1.0 / squish);
+            let (sx, sy) = (squish * fx.stretch_x, fx.stretch_y / squish);
+            if sx != 1.0 || sy != 1.0 {
+                c.stretch_since(first, [x, y], sx, sy);
             }
         };
         let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) {
