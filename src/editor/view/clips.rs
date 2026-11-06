@@ -132,7 +132,7 @@ impl View {
     }
 
     fn draw_shelf(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
-        let hint = "Click an effect to drop it at the playhead (over the kiai you're in, or the notes selected), or drag on a row below.";
+        let hint = "Click an effect to drop it at the playhead (over the kiai you're in, or the notes selected), or drag on a row below. Keys 1-9 record the first nine live while the song plays: press to start, again to end.";
         let y = self.paragraph(c, x, y, inner, 6.0, DIM, hint);
         let items: Vec<(String, Btn, bool)> = PRESETS
             .iter()
@@ -149,7 +149,12 @@ impl View {
         self.wrap_row(c, x, y + 2.0, inner, &items);
         for (k, p) in PRESETS.iter().enumerate() {
             if let Some((r, _)) = self.buttons.get(first + k).copied() {
-                self.tips.push((r, format!("{}\n{}", p.name, p.about)));
+                let key = if k < 9 {
+                    format!("\nKey {}: record it live (press again to end).", k + 1)
+                } else {
+                    String::new()
+                };
+                self.tips.push((r, format!("{}\n{}{key}", p.name, p.about)));
             }
         }
     }
@@ -498,6 +503,86 @@ impl View {
             self.fx_sel = Some(id);
             self.status = format!("{} from {} to {}", p.name, fmt_time(start), fmt_time(end));
             self.mark_stale();
+        }
+    }
+
+    /// Key `1 + i` on the clip rows: starts recording shelf effect `i` at the playhead, or ends
+    /// the one recording there and drops it over that stretch (one undo step).
+    pub(super) fn live_key(&mut self, i: usize) {
+        let Some(p) = PRESETS.get(i) else { return };
+        let now = self.ed.snapped(self.ed.time);
+        if let Some(k) = self.fx_live.iter().position(|(j, _)| *j == i) {
+            let (_, from) = self.fx_live.remove(k);
+            let (a, b) = (from.min(now), from.max(now));
+            let b = if b - a < 1.0 {
+                a + self.ed.beat_at(a)
+            } else {
+                b
+            };
+            self.place_preset(i, a, b, None);
+            self.status = format!(
+                "{} recorded from {} to {}",
+                p.name,
+                fmt_time(a),
+                fmt_time(b)
+            );
+        } else {
+            self.fx_live.push((i, now));
+            self.status = format!("recording {}: press {} again to end it", p.name, i + 1);
+        }
+    }
+
+    /// An example for the manual: a few shelf effects and a title laid over the map's first
+    /// kiai (or the first 16 beats of notes), one undo step, to play and pick apart.
+    pub(super) fn showcase(&mut self) {
+        if !self.ed.is_tko() {
+            return;
+        }
+        let first_kiai = self
+            .ed
+            .chart
+            .timing
+            .iter()
+            .find(|p| p.kiai())
+            .and_then(|p| self.ed.kiai_around(p.time));
+        let (a, b) = first_kiai.unwrap_or_else(|| {
+            let t = self.ed.chart.objects.first().map_or(0.0, |o| o.time);
+            (t, t + 16.0 * self.ed.beat_at(t))
+        });
+        let beat = self.ed.beat_at(a);
+        let parts: [(&str, f64, f64); 5] = [
+            ("Fly-in text", a, (a + 8.0 * beat).min(b)),
+            ("Every 2nd beat", a, b),
+            ("Zigzag lane", a, b),
+            ("Big note slam", a, b),
+            ("Kat flash", a, b),
+        ];
+        let mut clips = Vec::new();
+        for (name, s, e) in parts {
+            let Some(p) = PRESETS.iter().find(|p| p.name == name) else {
+                continue;
+            };
+            let beats = (e - s) / self.ed.beat_at(s);
+            for mut c in (p.make)(s, e, beats) {
+                c.lane = (clips.len() as u8).min(ROWS - 1);
+                if let Some(l) = c.layer.as_deref_mut() {
+                    l.show = Show::Text {
+                        text: "Showtime!".into(),
+                    };
+                }
+                clips.push(c);
+            }
+        }
+        let ids = self.ed.add_clips(clips);
+        self.fx_sel = None;
+        if !ids.is_empty() {
+            self.set_time(a);
+            self.mark_stale();
+            self.status = format!(
+                "an example from {} to {}: play it with Space, click a block to see how it's made, Ctrl+Z takes it all away",
+                fmt_time(a),
+                fmt_time(b)
+            );
         }
     }
 
@@ -973,6 +1058,29 @@ impl View {
                 rgba(0xffffff, 0.7),
                 1.0,
             );
+        }
+        // Effects being recorded live, growing with the playhead.
+        for (k, &(i, from)) in self.fx_live.iter().enumerate() {
+            let (a, b) = (
+                self.x_of(from.min(self.ed.time)),
+                self.x_of(from.max(self.ed.time)),
+            );
+            let ry = self.row_y((ROWS - 1).saturating_sub(k as u8)) + 1.0;
+            c.round_rect(
+                [a, ry],
+                [(b - a).max(2.0), rh - 2.0],
+                3.0,
+                rgba(0xFF4D5E, 0.25),
+                rgba(0xFF4D5E, 0.9),
+                1.0,
+            );
+            let name = PRESETS.get(i).map_or("", |p| p.name);
+            let label = Canvas::fit(
+                5.5,
+                (b - a - 6.0).max(40.0),
+                &format!("REC {}  {name}", i + 1),
+            );
+            c.text(a + 3.0, ry + 2.0, 5.5, rgba(0xffffff, 0.95), &label);
         }
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 0.8));

@@ -388,6 +388,8 @@ pub struct View {
     fx_advanced: bool,
     /// The settings of a text or picture block edit its pose at its end.
     fx_end: bool,
+    /// Effects being recorded live (keys 1..9): the shelf effect and where it started.
+    fx_live: Vec<(usize, f64)>,
     k_ease: crate::tko::track::Ease,
     /// The graph's value range while a key is being dragged, so it doesn't rescale under the pointer.
     k_frozen: Option<(f64, f64)>,
@@ -527,6 +529,7 @@ impl View {
             fx_armed: 0,
             fx_advanced: false,
             fx_end: false,
+            fx_live: Vec::new(),
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
             n_sel: None,
@@ -2618,6 +2621,11 @@ impl View {
             if self.modal.take().is_some() {
                 return KeyResult::Handled;
             }
+            if !self.fx_live.is_empty() {
+                self.fx_live.clear();
+                self.status = "live recording dropped".into();
+                return KeyResult::Handled;
+            }
             if self.sheet {
                 self.sheet = false;
                 return KeyResult::Handled;
@@ -2657,6 +2665,17 @@ impl View {
             return KeyResult::Handled;
         }
         if self.typing.is_none() && self.tw_key(code, keys, audio) {
+            return KeyResult::Handled;
+        }
+        // On the clip rows, 1..9 record the shelf's first nine effects live.
+        if self.clip_mode()
+            && !(keys.ctrl || keys.shift || keys.alt)
+            && let Some(d) = digit(code).and_then(|d| d.to_digit(10))
+            && d > 0
+        {
+            if !repeat {
+                self.live_key(d as usize - 1);
+            }
             return KeyResult::Handled;
         }
         let Some(cmd) = cmd::find(code, keys, repeat) else {
@@ -4003,6 +4022,73 @@ mod tests {
         assert!(v.ed.clip(v.fx_sel.unwrap()).unwrap().layer.is_some());
         draw(&mut v);
         assert!(v.buttons.iter().any(|(_, b)| *b == Btn::Fx(FxAct::Behind)));
+    }
+
+    #[test]
+    fn keys_1_to_9_record_shelf_effects_live_on_the_clip_rows() {
+        let mut v = clips_view();
+        let n = v.ed.clips().len();
+        let key = |v: &mut View, k: KeyCode| v.key(k, false, Keys::default(), None);
+        v.set_time(2000.0);
+        let a = v.ed.snapped(2000.0);
+        key(&mut v, KeyCode::Digit2);
+        assert_eq!(v.fx_live, vec![(1, a)]);
+        assert_eq!(v.ed.clips().len(), n, "nothing until it ends");
+        v.set_time(6000.0);
+        draw(&mut v);
+        let b = v.ed.snapped(6000.0);
+        key(&mut v, KeyCode::Digit2);
+        assert!(v.fx_live.is_empty());
+        let made = &v.ed.clips()[n..];
+        assert_eq!(made.len(), 1);
+        assert_eq!((made[0].start, made[0].end), (a, b));
+        let shelf = (crate::editor::clips::PRESETS[1].make)(a, b, 1.0);
+        assert_eq!(
+            made[0].what, shelf[0].what,
+            "the second effect of the shelf"
+        );
+        assert!(v.ed.undo(), "one undo step");
+        assert_eq!(v.ed.clips().len(), n);
+        // Esc drops one being recorded; ending where it started makes it a beat long.
+        key(&mut v, KeyCode::Digit1);
+        key(&mut v, KeyCode::Escape);
+        assert!(v.fx_live.is_empty());
+        key(&mut v, KeyCode::Digit1);
+        key(&mut v, KeyCode::Digit1);
+        let c = v.ed.clips().last().unwrap();
+        assert!((c.end - c.start - v.ed.beat_at(c.start)).abs() < 1e-6);
+        // Elsewhere the digits still pick tools.
+        press(&mut v, Btn::C(Cmd::Mode(Mode::Compose)));
+        key(&mut v, KeyCode::Digit2);
+        assert!(v.fx_live.is_empty());
+        assert_eq!(v.ed.tool, Tool::Note);
+    }
+
+    #[test]
+    fn the_manuals_example_lays_clips_over_a_plain_map_in_one_undo_step() {
+        crate::lang::set(crate::lang::Lang::En);
+        let mut v = view();
+        assert!(!v.ed.is_tko());
+        let ch = manual_text::chapters()
+            .iter()
+            .position(|c| c.title == "Effect clips")
+            .unwrap();
+        v.open_manual();
+        press(&mut v, Btn::Man(manual::ManAct::Chapter(ch as u8)));
+        press(&mut v, Btn::Man(manual::ManAct::Try));
+        assert!(v.modal.is_none());
+        assert!(
+            v.ed.is_tko() && v.clip_mode(),
+            "made a .tko and opened the clips"
+        );
+        let clips = v.ed.clips().to_vec();
+        assert!(clips.len() >= 5);
+        assert!(clips.iter().any(|c| c.layer.is_some()), "with a title");
+        let rows: std::collections::BTreeSet<u8> = clips.iter().map(|c| c.lane).collect();
+        assert_eq!(rows.len(), clips.len(), "each on its own row");
+        draw(&mut v);
+        assert!(v.ed.undo());
+        assert!(v.ed.clips().is_empty(), "one undo step takes it all away");
     }
 
     fn put(v: &mut View, kind: Kind, x: f32, y: f32) -> u32 {
