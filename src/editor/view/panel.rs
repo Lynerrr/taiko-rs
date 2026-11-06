@@ -366,7 +366,7 @@ impl View {
             self.row(c, x + 100.0, ty, &tabs);
         }
         if self.g_page == 4 {
-            self.draw_clips_page(c, x, y, inner);
+            self.draw_clips_scrolled(c, x, y, inner);
         } else if self.g_page == 3 {
             self.draw_nodes_page(c, x, y, inner);
         } else if self.g_page == 2 {

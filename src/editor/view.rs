@@ -403,6 +403,12 @@ pub struct View {
     fx_many: Vec<u32>,
     /// The first clip row shown (the rows scroll).
     fx_top: u8,
+    /// How far the clips page of the panel is scrolled (units), when it is taller than the panel,
+    /// and the clip it was scrolled for (another one starts at the top).
+    fx_scroll: f32,
+    fx_scroll_for: Option<u32>,
+    /// How far it can scroll, as last drawn (0: it fits).
+    fx_page_most: f32,
     /// The open "what it moves" menu and the button it hangs from.
     fx_drop: Option<(u8, [f32; 4])>,
     /// The clips being moved and where they were: id, start, end, row.
@@ -554,6 +560,9 @@ impl View {
             fx_tab: crate::editor::clips::Shelf::Move,
             fx_many: Vec::new(),
             fx_top: 0,
+            fx_scroll: 0.0,
+            fx_scroll_for: None,
+            fx_page_most: 0.0,
             fx_drop: None,
             fx_orig: Vec::new(),
             fx_click: None,
@@ -2269,7 +2278,7 @@ impl View {
             self.node_zoom(notches);
             return;
         }
-        if self.wheel_clip_rows(notches, keys) {
+        if self.wheel_clip_rows(notches, keys) || self.wheel_clips_page(notches) {
             return;
         }
         if keys.ctrl && keys.alt {
@@ -4172,6 +4181,84 @@ mod tests {
         draw(&mut v);
         gizmo_drag_by(&mut v, 20.0, 20.0, Keys::default());
         assert!(v.motion_keys().is_empty());
+    }
+
+    #[test]
+    fn a_blocks_graph_stays_inside_it_zoomed_far_out() {
+        let mut v = clips_view();
+        for (a, b) in [(1000.0, 1300.0), (2000.0, 2700.0), (4000.0, 8000.0)] {
+            let id = clip_on(&mut v, 0, a, b);
+            v.ed.set_clip(id, false, |c| c.amount = 0.5);
+        }
+        for zoom in [80.0, 30.0, 4.0] {
+            v.ms_per_px = zoom;
+            v.view_start = 0.0;
+            let c = draw(&mut v);
+            for cl in v.ed.clips() {
+                let (a, b) = (v.x_of(cl.start), v.x_of(cl.end));
+                let ry = v.row_y(cl.lane);
+                for s in c.shapes.iter().filter(|s| {
+                    // The graph's columns: in the block's row, drawn at 0.55.
+                    (s.fill[3] - 0.55).abs() < 1e-3
+                        && s.center[1] > ry
+                        && s.center[1] < ry + v.row_h()
+                        && s.center[0] >= a - 3.0
+                        && s.center[0] <= b + 3.0
+                }) {
+                    let (l, r) = (s.center[0] - s.half[0], s.center[0] + s.half[0]);
+                    assert!(
+                        l >= a && r <= b,
+                        "zoom {zoom}: a column at {l}..{r} outside the block {a}..{b}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_clip_page_scrolls_and_hides_what_is_out_of_the_panel() {
+        let mut v = clips_view();
+        let i = crate::editor::clips::PRESETS
+            .iter()
+            .position(|p| p.name == "Fly-in text")
+            .unwrap();
+        press(&mut v, Btn::Fx(FxAct::Preset(i)));
+        v.place_armed(Some((1000.0, 9000.0)), "", false);
+        assert!(v.fx_sel.is_some());
+        // A narrow window: the text's settings wrap taller than the panel.
+        let draw_short = |v: &mut View| {
+            let mut c = Canvas::default();
+            c.clear(640.0);
+            v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+            c
+        };
+        draw_short(&mut v);
+        let [_, py, _, ph] = v.layout.inspector;
+        let in_panel = |v: &View| {
+            v.buttons
+                .iter()
+                .filter(|(_, b)| matches!(b, Btn::Fx(_) | Btn::Edit(Field::Fx(_))))
+                .all(|(r, _)| r[1] + r[3] / 2.0 <= py + ph)
+        };
+        assert!(in_panel(&v), "no button below the panel can be clicked");
+        assert!(
+            v.fx_page_most > 0.0,
+            "the text's settings don't fit at this size"
+        );
+        let before: Vec<Btn> = v.buttons.iter().map(|(_, b)| *b).collect();
+        v.mouse = (v.layout.inspector[0] + 20.0, py + 40.0);
+        for _ in 0..30 {
+            v.wheel(-1, Keys::default());
+        }
+        assert_eq!(v.fx_scroll, v.fx_page_most);
+        draw_short(&mut v);
+        assert!(
+            v.buttons.iter().any(|(_, b)| !before.contains(b)),
+            "scrolled down, what was out of sight can be reached"
+        );
+        assert!(in_panel(&v));
+        // The wheel over the panel was the panel's: the playhead stayed.
+        assert_eq!(v.ed.time, 0.0);
     }
 
     /// A zoom clip on row `lane` from `a` to `b`, straight into the map.
