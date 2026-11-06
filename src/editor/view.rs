@@ -211,6 +211,14 @@ enum Drag {
         id: u32,
         end: bool,
     },
+    /// A box dragged over the clip rows to pick the clips in it: map ms and screen y.
+    FxBox {
+        t0: f64,
+        y0: f32,
+        t1: f64,
+        y1: f32,
+        add: bool,
+    },
     /// The playfield picked up in the preview: what the drag does, where it was pressed, its
     /// X, Y, rotation and zoom then, and the moment the keys go at.
     /// With `layer`, the text or picture block picked is placed instead (`at` is then its x, y,
@@ -384,7 +392,20 @@ pub struct View {
     /// The effect clip picked, the shelf effect a drag on a row draws, and whether the keyframe
     /// and node pages are shown.
     fx_sel: Option<u32>,
-    fx_armed: usize,
+    /// The shelf effect a drag on an empty row draws, picked on the shelf.
+    fx_armed: Option<usize>,
+    /// The shelf's open tab.
+    fx_tab: crate::editor::clips::Shelf,
+    /// Every clip picked (with `fx_sel`, the one whose settings show).
+    fx_many: Vec<u32>,
+    /// The first clip row shown (the rows scroll).
+    fx_top: u8,
+    /// The open "what it moves" menu and the button it hangs from.
+    fx_drop: Option<(u8, [f32; 4])>,
+    /// The clips being moved and where they were: id, start, end, row.
+    fx_orig: Vec<(u32, f64, f64, u8)>,
+    /// A press on a clip already picked with others: picks it alone if it isn't dragged.
+    fx_click: Option<u32>,
     fx_advanced: bool,
     /// The settings of a text or picture block edit its pose at its end.
     fx_end: bool,
@@ -526,7 +547,13 @@ impl View {
             k_prop: 0,
             k_sel: None,
             fx_sel: None,
-            fx_armed: 0,
+            fx_armed: None,
+            fx_tab: crate::editor::clips::Shelf::Move,
+            fx_many: Vec::new(),
+            fx_top: 0,
+            fx_drop: None,
+            fx_orig: Vec::new(),
+            fx_click: None,
             fx_advanced: false,
             fx_end: false,
             fx_live: Vec::new(),
@@ -1745,7 +1772,7 @@ impl View {
             Drag::Brush { .. } => self.brush_move(x, y, keys),
             Drag::Handle { end } => self.handle_drag(end, y),
             Drag::Key { index } => self.key_graph_drag(index, x, y),
-            Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } => {
+            Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } | Drag::FxBox { .. } => {
                 self.clip_rows_drag(x, y)
             }
             Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
@@ -1781,7 +1808,7 @@ impl View {
                 return I::EwResize;
             }
             Drag::FxMove { .. } | Drag::Gizmo { .. } => return I::Grabbing,
-            Drag::FxNew { .. } => return I::Crosshair,
+            Drag::FxNew { .. } | Drag::FxBox { .. } => return I::Crosshair,
             Drag::Box { .. } | Drag::Place { .. } | Drag::Brush { .. } => return I::Crosshair,
             Drag::Handle { .. } => return I::NsResize,
             _ => {}
@@ -1861,22 +1888,28 @@ impl View {
         }
         self.mouse = (x, y);
         self.held = keys;
-        self.typing = None;
-        self.n_typing = None;
+        // A number being typed counts once the click goes elsewhere, as if Enter was pressed.
+        self.commit_typing();
         self.revert_armed = false;
         // A dropdown closes on any press; one that lists switches stays open for the next.
         let was = self.svt.drop.take();
+        let fx_was = self.fx_drop.take();
         if let Some(b) = self.button_at(x, y) {
             self.press(b, keys, audio);
             match b {
                 Btn::S(SAct::Hits | SAct::Snaps | SAct::Lines) => self.svt.drop = was,
                 Btn::S(SAct::Drop(k)) if was.is_some_and(|d| d.0 == k) => self.svt.drop = None,
+                Btn::Fx(FxAct::Menu(k)) if fx_was.is_some_and(|d| d.0 == k) => self.fx_drop = None,
                 _ => {}
             }
             return;
         }
         // A click that hits nothing closes what's open (a menu, a dropdown) and goes no further.
-        if self.menu.take().is_some() || self.n_pick.take().is_some() || was.is_some() {
+        if self.menu.take().is_some()
+            || self.n_pick.take().is_some()
+            || was.is_some()
+            || fx_was.is_some()
+        {
             return;
         }
         if self.modal_from > 0 {
@@ -2072,7 +2105,7 @@ impl View {
             return self.key_graph_down(x, y);
         }
         if self.clip_mode() {
-            return self.clip_rows_down(x, y);
+            return self.clip_rows_down(x, y, keys);
         }
         if self.mode != Mode::Timing {
             self.status = "slider velocity is edited in Timing mode (F3)".into();
@@ -2136,8 +2169,8 @@ impl View {
                 self.ed.end_drag();
                 self.mark_stale();
             }
-            Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } => {
-                self.clip_rows_up(drag, x)
+            Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } | Drag::FxBox { .. } => {
+                self.clip_rows_up(drag, x, keys)
             }
             Drag::Wire { from } => self.wire_dropped(from, x, y),
             Drag::Scrub
@@ -2202,6 +2235,9 @@ impl View {
         }
         if self.node_mode() && inside(self.layout.nodes, mx, my) {
             self.node_zoom(notches);
+            return;
+        }
+        if self.wheel_clip_rows(notches, keys) {
             return;
         }
         if keys.ctrl && keys.alt {
@@ -2354,6 +2390,21 @@ impl View {
         match r {
             Ok(()) => self.mark_stale(),
             Err(e) => self.status = e,
+        }
+    }
+
+    /// Applies what is being typed into a field (if anything) and stops typing.
+    fn commit_typing(&mut self) {
+        if let Some((f, text)) = self.typing.take()
+            && (f == Field::FxText || !text.trim().is_empty())
+        {
+            self.apply_typed(f, &text);
+        }
+        if let Some((i, text)) = self.n_typing.take()
+            && let (Some(id), Ok(v)) = (self.n_sel, text.trim().parse::<f64>())
+            && self.ed.set_node_param(id, i, v)
+        {
+            self.mark_stale();
         }
     }
 
@@ -2614,6 +2665,7 @@ impl View {
             if self.menu.take().is_some()
                 || self.n_pick.take().is_some()
                 || self.svt.drop.take().is_some()
+                || self.fx_drop.take().is_some()
                 || self.roll_start.take().is_some()
             {
                 return KeyResult::Handled;
@@ -2624,6 +2676,10 @@ impl View {
             if !self.fx_live.is_empty() {
                 self.fx_live.clear();
                 self.status = "live recording dropped".into();
+                return KeyResult::Handled;
+            }
+            if self.clip_mode() && self.fx_armed.take().is_some() {
+                self.status = "nothing to place".into();
                 return KeyResult::Handled;
             }
             if self.sheet {
@@ -2667,7 +2723,7 @@ impl View {
         if self.typing.is_none() && self.tw_key(code, keys, audio) {
             return KeyResult::Handled;
         }
-        // On the clip rows, 1..9 record the shelf's first nine effects live.
+        // On the clip rows, 1..9 record the effects of the shelf's open tab live.
         if self.clip_mode()
             && !(keys.ctrl || keys.shift || keys.alt)
             && let Some(d) = digit(code).and_then(|d| d.to_digit(10))
@@ -3694,16 +3750,32 @@ mod tests {
         press(&mut v, Btn::Fx(FxAct::Advanced));
         draw(&mut v);
         assert!(tabs(&v).0);
-        // Every shelf effect has a button with its tip.
+        // Every shelf effect has a button in its tab.
         press(&mut v, Btn::GPage(4));
-        draw(&mut v);
-        for i in 0..crate::editor::clips::PRESETS.len() {
-            assert!(
-                v.buttons
-                    .iter()
-                    .any(|(_, b)| *b == Btn::Fx(FxAct::Preset(i)))
-            );
+        for (k, tab) in crate::editor::clips::Shelf::ALL.iter().enumerate() {
+            press(&mut v, Btn::Fx(FxAct::Tab(k as u8)));
+            draw(&mut v);
+            for i in tab.presets() {
+                assert!(
+                    v.buttons
+                        .iter()
+                        .any(|(_, b)| *b == Btn::Fx(FxAct::Preset(i)))
+                );
+            }
         }
+        let shown: usize = crate::editor::clips::Shelf::ALL
+            .iter()
+            .map(|t| t.presets().len())
+            .sum();
+        assert_eq!(shown, crate::editor::clips::PRESETS.len());
+    }
+
+    /// Picks shelf effect `i` and lays it over 16 beats from the playhead.
+    fn put_fx(v: &mut View, i: usize) {
+        press(v, Btn::Fx(FxAct::Preset(i)));
+        let t = v.ed.snapped(v.ed.time);
+        let b = t + 16.0 * v.ed.beat_at(t);
+        v.place_armed(Some((t, b)), "", false);
     }
 
     #[test]
@@ -3713,6 +3785,19 @@ mod tests {
         // The map's kiai starts at 4000 and lasts to its end.
         v.set_time(5000.0);
         press(&mut v, Btn::Fx(FxAct::Preset(1)));
+        assert!(
+            v.ed.clips().is_empty(),
+            "a click on the shelf only picks it"
+        );
+        assert_eq!(v.fx_armed, Some(1));
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Fx(FxAct::Place(0)))
+        );
+        press(&mut v, Btn::Fx(FxAct::Place(0)));
+        assert_eq!(v.fx_armed, None, "placed once");
         let c = v.ed.clips()[0].clone();
         assert_eq!(c.start, 4000.0);
         assert!(c.end > 10_000.0);
@@ -3728,11 +3813,18 @@ mod tests {
         assert_eq!(v.ed.clips()[0].amount, 0.5);
         press(&mut v, Btn::Fx(FxAct::What(1)));
         assert_ne!(v.ed.clips()[0].what, "zoom");
+        let now = v.ed.clips()[0].clone();
+        let step = crate::editor::clips::amount_step(now.target().unwrap());
+        assert!(
+            (now.amount / step - 0.5 / 0.01).abs() < 1e-6,
+            "as many steps as the zoom had, not a fresh default"
+        );
         // Outside a kiai, with notes selected: over them.
         press(&mut v, Btn::Fx(FxAct::Back));
         v.set_time(500.0);
         v.ed.selection = v.ed.chart.objects[..2].iter().map(|o| o.id).collect();
         press(&mut v, Btn::Fx(FxAct::Preset(0)));
+        press(&mut v, Btn::Fx(FxAct::Place(1)));
         let made = v.ed.clip(v.fx_sel.unwrap()).unwrap().clone();
         assert_eq!(made.start, 1000.0);
         assert!(made.end > 1500.0 && made.end < 1600.0);
@@ -3745,6 +3837,7 @@ mod tests {
         v.ed.selection.clear();
         v.set_time(5000.0);
         press(&mut v, Btn::Fx(FxAct::Preset(2)));
+        press(&mut v, Btn::Fx(FxAct::Place(0)));
         let over = v.ed.clip(v.fx_sel.unwrap()).unwrap().clone();
         assert_eq!((over.start, over.lane), (4000.0, 1));
         v.fx_sel = Some(made.id);
@@ -3762,6 +3855,7 @@ mod tests {
         let row = |v: &View, r: u8| v.row_y(r) + v.row_h() / 2.0;
         let (y2, y3) = (row(&v, 2), row(&v, 3));
         let k = Keys::default();
+        press(&mut v, Btn::Fx(FxAct::Preset(0)));
         v.mouse_down(v.x_of(1000.0), y2, k, None);
         v.mouse_move(v.x_of(3000.0), y2, k);
         draw(&mut v);
@@ -3806,7 +3900,7 @@ mod tests {
     fn clips_are_saved_in_the_tko_and_read_back() {
         let mut v = clips_view();
         v.set_time(5000.0);
-        press(&mut v, Btn::Fx(FxAct::Preset(7)));
+        put_fx(&mut v, 7);
         let text = v.ed.chart.to_text();
         assert!(text.contains("TkoVersion: 3"));
         let back = crate::tko::format::read(&text).unwrap().gimmick;
@@ -3918,6 +4012,207 @@ mod tests {
         assert!(v.motion_keys().is_empty());
     }
 
+    /// A zoom clip on row `lane` from `a` to `b`, straight into the map.
+    fn clip_on(v: &mut View, lane: u8, a: f64, b: f64) -> u32 {
+        use crate::tko::clips::{Clip, Target};
+        use crate::tko::gimmick::FieldProp;
+        let mut c = Clip::new(Target::Field(FieldProp::Zoom), a, b);
+        c.lane = lane;
+        v.ed.add_clips(vec![c])[0]
+    }
+
+    fn sorted(mut ids: Vec<u32>) -> Vec<u32> {
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn clips_are_picked_by_a_box_and_shift_and_move_copy_and_delete_together() {
+        let mut v = clips_view();
+        let row = |v: &View, r: u8| v.row_y(r) + v.row_h() / 2.0;
+        let a = clip_on(&mut v, 0, 1000.0, 2000.0);
+        let b = clip_on(&mut v, 1, 1000.0, 2000.0);
+        let c = clip_on(&mut v, 3, 4000.0, 5000.0);
+        draw(&mut v);
+        let k = Keys::default();
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        // A box over the first two rows picks the two blocks there.
+        v.mouse_down(v.x_of(500.0), row(&v, 0) - 3.0, k, None);
+        v.mouse_move(v.x_of(2500.0), row(&v, 1), k);
+        draw(&mut v);
+        v.mouse_up(v.x_of(2500.0), row(&v, 1), k);
+        assert_eq!(sorted(v.fx_group()), vec![a, b]);
+        // Shift adds one, and takes it away again.
+        v.mouse_down(v.x_of(4500.0), row(&v, 3), shift, None);
+        v.mouse_up(v.x_of(4500.0), row(&v, 3), shift);
+        assert_eq!(sorted(v.fx_group()), vec![a, b, c]);
+        v.mouse_down(v.x_of(4500.0), row(&v, 3), shift, None);
+        v.mouse_up(v.x_of(4500.0), row(&v, 3), shift);
+        assert_eq!(sorted(v.fx_group()), vec![a, b]);
+        draw(&mut v);
+        // Dragging one moves both, in one undo step.
+        v.mouse_down(v.x_of(1500.0), row(&v, 0), k, None);
+        v.mouse_move(v.x_of(2000.0), row(&v, 0), k);
+        v.mouse_move(v.x_of(2500.0), row(&v, 0), k);
+        v.mouse_up(v.x_of(2500.0), row(&v, 0), k);
+        let at = |v: &View, id: u32| {
+            let c = v.ed.clip(id).unwrap();
+            (c.start, c.lane)
+        };
+        assert_eq!((at(&v, a), at(&v, b)), ((2000.0, 0), (2000.0, 1)));
+        assert_eq!(sorted(v.fx_group()), vec![a, b], "still both picked");
+        assert!(v.ed.undo());
+        assert_eq!((at(&v, a), at(&v, b)), ((1000.0, 0), (1000.0, 1)));
+        // Ctrl+D copies both right after them, and the copies are picked.
+        v.key(KeyCode::KeyD, false, ctrl(), None);
+        assert_eq!(v.ed.clips().len(), 5);
+        let copies = v.fx_group();
+        assert_eq!(copies.len(), 2);
+        assert!(copies.iter().all(|&id| at(&v, id).0 == 2000.0));
+        // Delete takes both copies away.
+        key(&mut v, KeyCode::Delete);
+        assert_eq!(v.ed.clips().len(), 3);
+        assert!(v.fx_group().is_empty());
+        // A click on one of several picked, without dragging, picks it alone.
+        v.pick_clips(&[a, b]);
+        draw(&mut v);
+        let (x, y) = (v.x_of(1500.0), row(&v, 1));
+        click(&mut v, x, y);
+        assert_eq!(v.fx_group(), vec![b]);
+    }
+
+    #[test]
+    fn a_picked_effect_is_placed_by_a_drag_or_a_click_and_esc_puts_it_back() {
+        let mut v = clips_view();
+        let row = |v: &View, r: u8| v.row_y(r) + v.row_h() / 2.0;
+        press(&mut v, Btn::Fx(FxAct::Preset(0)));
+        draw(&mut v);
+        // A click on a row lays one bar there.
+        let (x, y) = (v.x_of(1000.0), row(&v, 2));
+        click(&mut v, x, y);
+        let c = v.ed.clips()[0].clone();
+        let bar = 4.0 * v.ed.beat_at(1000.0);
+        assert_eq!((c.start, c.end, c.lane), (1000.0, 1000.0 + bar, 2));
+        assert_eq!(v.fx_armed, None, "placed once");
+        // Esc puts a picked effect back.
+        press(&mut v, Btn::Fx(FxAct::Back));
+        press(&mut v, Btn::Fx(FxAct::Preset(0)));
+        key(&mut v, KeyCode::Escape);
+        assert_eq!(v.fx_armed, None);
+        // With nothing picked, a drag on empty rows draws no block.
+        draw(&mut v);
+        let y = row(&v, 4);
+        v.mouse_down(v.x_of(3000.0), y, Keys::default(), None);
+        v.mouse_move(v.x_of(5000.0), y, Keys::default());
+        v.mouse_up(v.x_of(5000.0), y, Keys::default());
+        assert_eq!(v.ed.clips().len(), 1);
+    }
+
+    #[test]
+    fn the_rows_grow_past_what_fits_and_scroll() {
+        use super::clips::ROWS;
+        let mut v = clips_view();
+        for lane in 0..ROWS {
+            clip_on(&mut v, lane, 1000.0, 3000.0);
+        }
+        draw(&mut v);
+        assert_eq!(v.clip_row_count(), ROWS + 1, "a free row waits under them");
+        // A new one over the same stretch goes on that row, scrolled into sight.
+        v.set_time(1000.0);
+        press(&mut v, Btn::Fx(FxAct::Preset(0)));
+        v.place_armed(Some((1000.0, 3000.0)), "", false);
+        let made = v.ed.clip(v.fx_sel.unwrap()).unwrap().clone();
+        assert!(made.lane >= ROWS);
+        assert!(v.fx_top > 0, "scrolled to show it");
+        draw(&mut v);
+        // The wheel over the rows scrolls them.
+        let [x, y, w, h] = v.layout.graph;
+        v.mouse = (x + w / 2.0, y + h - 5.0);
+        v.wheel(10, Keys::default());
+        assert_eq!(v.fx_top, 0);
+        v.wheel(-1, Keys::default());
+        assert_eq!(v.fx_top, 1);
+    }
+
+    #[test]
+    fn a_typed_amount_counts_when_the_click_goes_elsewhere() {
+        let mut v = clips_view();
+        put_fx(&mut v, 0);
+        draw(&mut v);
+        press(&mut v, Btn::Edit(Field::Fx(CF::Amount)));
+        for code in [KeyCode::Digit0, KeyCode::Period, KeyCode::Digit3] {
+            key(&mut v, code);
+        }
+        let id = v.fx_sel.unwrap();
+        // A click on nothing in particular.
+        click(&mut v, 400.0, 2.0);
+        assert!(v.typing.is_none());
+        assert_eq!(v.ed.clip(id).unwrap().amount, 0.3);
+    }
+
+    #[test]
+    fn a_short_block_can_still_be_stretched_by_its_end() {
+        let mut v = clips_view();
+        let id = clip_on(&mut v, 1, 1000.0, 1100.0);
+        draw(&mut v);
+        assert!(v.x_of(1100.0) - v.x_of(1000.0) < 12.0, "a short block");
+        let y = v.row_y(1) + v.row_h() / 2.0;
+        let k = Keys::default();
+        v.mouse_down(v.x_of(1100.0) + 2.0, y, k, None);
+        v.mouse_move(v.x_of(2000.0), y, k);
+        v.mouse_up(v.x_of(2000.0), y, k);
+        let c = v.ed.clip(id).unwrap();
+        assert_eq!((c.start, c.end), (1000.0, 2000.0));
+    }
+
+    #[test]
+    fn what_a_clip_moves_is_picked_from_a_menu_in_columns() {
+        use crate::tko::clips::Target;
+        let mut v = clips_view();
+        put_fx(&mut v, 0);
+        draw(&mut v);
+        press(&mut v, Btn::Fx(FxAct::Menu(0)));
+        assert!(v.fx_drop.is_some());
+        draw(&mut v);
+        let lane = crate::editor::clips::targets()
+            .iter()
+            .position(|t| *t == Target::Lane(0))
+            .unwrap() as u16;
+        let all = crate::editor::clips::targets().len();
+        let offered = (0..all as u16)
+            .filter(|&i| {
+                v.buttons
+                    .iter()
+                    .any(|(_, b)| *b == Btn::Fx(FxAct::SetWhat(i)))
+            })
+            .count();
+        assert_eq!(offered, all, "every target, once");
+        let r = v
+            .buttons
+            .iter()
+            .find(|(_, b)| *b == Btn::Fx(FxAct::SetWhat(lane)))
+            .unwrap()
+            .0;
+        click(&mut v, r[0] + 3.0, r[1] + 3.0);
+        assert!(v.fx_drop.is_none(), "it closes");
+        let c = v.ed.clip(v.fx_sel.unwrap()).unwrap();
+        assert_eq!(c.target(), Some(Target::Lane(0)));
+        // The ease menu, and Esc closes a menu.
+        draw(&mut v);
+        press(&mut v, Btn::Fx(FxAct::Menu(1)));
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| matches!(b, Btn::Fx(FxAct::SetEase(_))))
+        );
+        key(&mut v, KeyCode::Escape);
+        assert!(v.fx_drop.is_none());
+    }
+
     fn preset(name: &str) -> usize {
         crate::editor::clips::PRESETS
             .iter()
@@ -3934,7 +4229,7 @@ mod tests {
         use crate::tko::clips::Show;
         let mut v = clips_view();
         v.set_time(3000.0);
-        press(&mut v, Btn::Fx(FxAct::Preset(preset("Text"))));
+        put_fx(&mut v, preset("Text"));
         draw(&mut v);
         assert_eq!(
             picked_layer(&v).show,
@@ -3991,14 +4286,14 @@ mod tests {
         use crate::tko::clips::Show;
         let mut v = clips_view();
         let n = v.ed.clips().len();
-        press(&mut v, Btn::Fx(FxAct::Preset(preset("Picture"))));
+        put_fx(&mut v, preset("Picture"));
         assert_eq!(v.ed.clips().len(), n, "no picture in the folder, no block");
         assert!(v.status.contains("folder"));
         let dir = v.ed.path.parent().unwrap().to_path_buf();
         for name in ["b.png", "a.jpg"] {
             image::RgbImage::new(4, 2).save(dir.join(name)).unwrap();
         }
-        press(&mut v, Btn::Fx(FxAct::Preset(preset("Logo on the beat"))));
+        put_fx(&mut v, preset("Logo on the beat"));
         draw(&mut v);
         let l = picked_layer(&v);
         assert_eq!(

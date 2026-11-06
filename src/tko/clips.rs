@@ -16,7 +16,7 @@ use super::track::Ease;
 
 pub const MAX_CLIPS: usize = 4096;
 /// Rows of clips on the timeline.
-pub const LANES: u8 = 8;
+pub const LANES: u8 = 64;
 /// What a clip may say, at the most (beats).
 const MAX_BEATS: f64 = 256.0;
 

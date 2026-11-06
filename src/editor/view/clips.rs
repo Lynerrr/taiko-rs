@@ -1,20 +1,24 @@
 //! The Effects page: effect clips as blocks on rows under the timeline, the shelf of ready-made
 //! effects, and the settings of the clip picked.
 //!
-//! A click on an effect of the shelf drops it at the playhead (over the kiai the playhead is in,
-//! else over the notes selected, else over the next four bars). A drag on an empty row draws one
-//! of the effect last used. A block moves by dragging it, its ends resize it, a right click
-//! deletes it.
+//! The shelf is split in tabs by what its effects do. A click on an effect picks it, and a drag on
+//! a row then draws it there (a click on a row lays one bar; buttons lay it over the kiai or the
+//! notes selected). A drag on empty rows picks every block it touches; Shift or Ctrl clicks add
+//! or take one away. Blocks picked move together, Ctrl+D copies them and Delete removes them;
+//! their ends resize one, a right click deletes one. The rows scroll, with a free one always at
+//! the bottom.
 
+use super::chrome::wrap;
 use super::{Btn, Drag, Field, Keys, Mode, View, fmt_time, inside};
 use crate::editor::clips::{
-    PRESETS, amount_step, describe, target_about, target_colour, target_label, targets, trim,
+    PRESETS, Shelf, amount_step, describe, rescale_amount, target_about, target_colour,
+    target_columns, target_label, targets, trim,
 };
-use crate::render::{Canvas, rgba};
-use crate::tko::clips::{Clip, Layer, Motion, Notes, Pose, Show, Target, When};
+use crate::render::{Canvas, accent, rgba};
+use crate::tko::clips::{Clip, LANES, Layer, Motion, Notes, Pose, Show, Target, When};
 use crate::tko::track::Ease;
 
-/// Rows of clips shown.
+/// Rows of clips shown at once (more scroll).
 pub(super) const ROWS: u8 = 6;
 /// Where (from the top of the panel) the strip of motion keys sits, and how tall it is.
 const STRIP_Y: f32 = 11.0;
@@ -28,10 +32,23 @@ const DIM: u32 = 0x9a9ab0;
 /// What the Effects page can be told to do.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum FxAct {
-    /// Drop shelf effect `i` at the playhead.
+    /// Picks shelf effect `i` to draw on the rows (again: puts it back).
     Preset(usize),
+    /// Opens the shelf's tab `k` (of `Shelf::ALL`).
+    Tab(u8),
+    /// Lays the effect picked on the shelf over the kiai at the playhead (0) or the notes
+    /// selected (1).
+    Place(u8),
+    /// Puts the effect picked on the shelf back.
+    Disarm,
     /// Back to the shelf.
     Back,
+    /// Opens a dropdown of the clip picked: what it moves (0), its ease (1).
+    Menu(u8),
+    /// What it moves, by its index in `targets`.
+    SetWhat(u16),
+    /// Its ease, by its index in `Ease::ALL`.
+    SetEase(u8),
     /// The previous or next thing to move.
     What(i32),
     /// The previous or next group of notes (0 is all of them).
@@ -40,7 +57,6 @@ pub enum FxAct {
     When(u8),
     Notes(Notes),
     Motion(Motion),
-    Ease,
     Keep,
     /// Over the kiai it is in, or over the notes selected.
     FitKiai,
@@ -119,42 +135,138 @@ impl View {
 
     // ---- the panel ----
 
-    pub(super) fn draw_clips_page(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
+    /// The clips picked: every one picked with the one whose settings show, else just that one.
+    pub(super) fn fx_group(&self) -> Vec<u32> {
+        let Some(sel) = self.fx_sel.filter(|&id| self.ed.clip(id).is_some()) else {
+            return Vec::new();
+        };
+        if self.fx_many.contains(&sel) {
+            self.fx_many
+                .iter()
+                .copied()
+                .filter(|&id| self.ed.clip(id).is_some())
+                .collect()
+        } else {
+            vec![sel]
+        }
+    }
+
+    /// Picks clips `ids` (the first shows its settings); none goes back to the shelf.
+    pub(super) fn pick_clips(&mut self, ids: &[u32]) {
+        self.fx_many = ids.to_vec();
+        self.fx_sel = ids.first().copied();
+    }
+
+    // ---- the panel ----
+
+    pub(super) fn draw_clips_page(&mut self, c: &mut Canvas, x: f32, mut y: f32, inner: f32) {
         if !self.ed.is_tko() {
             self.draw_tko_explainer(c, x, y, inner);
             return;
         }
-        if self.picked().is_some() {
-            self.draw_clip_settings(c, x, y, inner);
-        } else {
+        if self.picked().is_none() {
             self.draw_shelf(c, x, y, inner);
+            return;
         }
+        let n = self.fx_group().len();
+        if n > 1 {
+            let text = format!(
+                "{n} blocks picked: drag one to move them all, Ctrl+D copies them, Delete removes them. The settings below are the brightest one's."
+            );
+            y = self.paragraph(c, x, y, inner, 6.0, 0xffffff, &text) + 2.0;
+        }
+        self.draw_clip_settings(c, x, y, inner);
     }
 
     fn draw_shelf(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
-        let hint = "Click an effect to drop it at the playhead (over the kiai you're in, or the notes selected), or drag on a row below. Keys 1-9 record the first nine live while the song plays: press to start, again to end.";
-        let y = self.paragraph(c, x, y, inner, 6.0, DIM, hint);
-        let items: Vec<(String, Btn, bool)> = PRESETS
+        // The tabs, each underlined in the colour of what its effects move.
+        let tabs: Vec<(String, Btn, bool)> = Shelf::ALL
             .iter()
             .enumerate()
-            .map(|(i, p)| {
+            .map(|(k, t)| {
                 (
-                    p.name.to_string(),
-                    Btn::Fx(FxAct::Preset(i)),
-                    self.fx_armed == i,
+                    t.label().to_string(),
+                    Btn::Fx(FxAct::Tab(k as u8)),
+                    self.fx_tab == *t,
                 )
             })
             .collect();
         let first = self.buttons.len();
-        self.wrap_row(c, x, y + 2.0, inner, &items);
-        for (k, p) in PRESETS.iter().enumerate() {
+        let mut y = self.wrap_row(c, x, y, inner, &tabs);
+        for (k, t) in Shelf::ALL.iter().enumerate() {
             if let Some((r, _)) = self.buttons.get(first + k).copied() {
+                let on = self.fx_tab == *t;
+                c.rect(
+                    r[0] + 3.0,
+                    r[1] + r[3] - 3.0,
+                    r[2] - 6.0,
+                    1.5,
+                    rgba(t.colour(), if on { 1.0 } else { 0.4 }),
+                );
+            }
+        }
+        c.rect(x, y - 1.0, inner, 1.0, rgba(0x2a2a38, 1.0));
+        y += 3.0;
+        // Its effects.
+        let list = self.fx_tab.presets();
+        let items: Vec<(String, Btn, bool)> = list
+            .iter()
+            .map(|&i| {
+                (
+                    PRESETS[i].name.to_string(),
+                    Btn::Fx(FxAct::Preset(i)),
+                    self.fx_armed == Some(i),
+                )
+            })
+            .collect();
+        let first = self.buttons.len();
+        y = self.wrap_row(c, x, y, inner, &items);
+        for (k, &i) in list.iter().enumerate() {
+            if let Some((r, _)) = self.buttons.get(first + k).copied() {
+                let p = &PRESETS[i];
                 let key = if k < 9 {
                     format!("\nKey {}: record it live (press again to end).", k + 1)
                 } else {
                     String::new()
                 };
-                self.tips.push((r, format!("{}\n{}{key}", p.name, p.about)));
+                self.tips.push((
+                    r,
+                    format!(
+                        "{}\n{}\nClick, then drag on a row to place it.{key}",
+                        p.name, p.about
+                    ),
+                ));
+            }
+        }
+        // What to do with the one picked.
+        match self.fx_armed.and_then(|i| PRESETS.get(i)) {
+            Some(p) => {
+                let text = format!(
+                    "{}: drag on a row below to place it, or click a row for one bar (Shift keeps it picked). Esc puts it back.",
+                    p.name
+                );
+                y = self.paragraph(c, x, y, inner, 6.0, 0xffffff, &text);
+                let mut row = Vec::new();
+                if self.ed.kiai_around(self.ed.time).is_some() {
+                    row.push((
+                        "Over the kiai here".to_string(),
+                        Btn::Fx(FxAct::Place(0)),
+                        false,
+                    ));
+                }
+                if self.selection_span().is_some() {
+                    row.push((
+                        "Over the notes selected".to_string(),
+                        Btn::Fx(FxAct::Place(1)),
+                        false,
+                    ));
+                }
+                row.push(("Cancel".to_string(), Btn::Fx(FxAct::Disarm), false));
+                self.wrap_row(c, x, y + 1.0, inner, &row);
+            }
+            None => {
+                let hint = "Pick an effect, then drag on a row below to place it. Drag over empty rows to pick several blocks (Shift adds), then Ctrl+D copies them. Keys 1-9 record this tab's effects live while the song plays.";
+                self.paragraph(c, x, y, inner, 6.0, DIM, hint);
             }
         }
     }
@@ -193,12 +305,13 @@ impl View {
             return self.draw_layer_settings(c, x, y, inner, &clip, layer);
         }
         let target = clip.target();
-        // What it moves.
+        // What it moves, from a menu.
         let what = target.map_or_else(|| clip.what.clone(), target_label);
+        let open = self.fx_drop.is_some_and(|d| d.0 == 0);
         let mut row = vec![
             ("< Effects".to_string(), Btn::Fx(FxAct::Back), false),
             ("<".to_string(), Btn::Fx(FxAct::What(-1)), false),
-            (what, Btn::Fx(FxAct::What(1)), true),
+            (format!("   {what}   v"), Btn::Fx(FxAct::Menu(0)), open),
             (">".to_string(), Btn::Fx(FxAct::What(1)), false),
         ];
         if matches!(target, Some(Target::Notes(..))) {
@@ -217,8 +330,22 @@ impl View {
         let first = self.buttons.len();
         self.row(c, x, y, &row);
         if let (Some(t), Some((r, _))) = (target, self.buttons.get(first + 2).copied()) {
-            self.tips
-                .push((r, format!("{}\n{}", target_label(t), target_about(t))));
+            c.circle(
+                r[0] + 8.0,
+                r[1] + r[3] / 2.0,
+                2.5,
+                rgba(target_colour(t), 1.0),
+                rgba(0x000000, 0.0),
+                0.0,
+            );
+            self.tips.push((
+                r,
+                format!(
+                    "{}\n{}\nClick for everything a clip can move.",
+                    target_label(t),
+                    target_about(t)
+                ),
+            ));
         }
         y += 19.0;
         // When.
@@ -271,9 +398,9 @@ impl View {
             }
         }
         items.push((
-            format!("ease: {}", clip.ease.label()),
-            Btn::Fx(FxAct::Ease),
-            false,
+            format!("ease: {}  v", clip.ease.label()),
+            Btn::Fx(FxAct::Menu(1)),
+            self.fx_drop.is_some_and(|d| d.0 == 1),
         ));
         items.push(("keep after".to_string(), Btn::Fx(FxAct::Keep), clip.keep));
         y = self.wrap_row(c, x, y, inner, &items);
@@ -410,9 +537,9 @@ impl View {
         y += 19.0;
         let items = [
             (
-                format!("ease: {}", clip.ease.label()),
-                Btn::Fx(FxAct::Ease),
-                false,
+                format!("ease: {}  v", clip.ease.label()),
+                Btn::Fx(FxAct::Menu(1)),
+                self.fx_drop.is_some_and(|d| d.0 == 1),
             ),
             ("keep after".to_string(), Btn::Fx(FxAct::Keep), clip.keep),
             ("Fit to kiai".to_string(), Btn::Fx(FxAct::FitKiai), false),
@@ -432,20 +559,6 @@ impl View {
         c.text(x, y, 6.0, rgba(DIM, 1.0), &Canvas::fit(6.0, inner, hint));
     }
 
-    /// Where a new clip goes when dropped at the playhead: the kiai it is in, else the notes
-    /// selected, else four bars from the beat the playhead is on.
-    fn drop_span(&self) -> (f64, f64) {
-        let t = self.ed.time;
-        if let Some(span) = self.ed.kiai_around(t) {
-            return span;
-        }
-        if let Some(span) = self.selection_span() {
-            return span;
-        }
-        let start = self.ed.snapped(t);
-        (start, start + 16.0 * self.ed.beat_at(start))
-    }
-
     /// From the first selected note to the end of the last.
     fn selection_span(&self) -> Option<(f64, f64)> {
         let sel = self.selected_objects();
@@ -457,15 +570,16 @@ impl View {
         (a.is_finite() && b > a).then_some((a, b + 1.0))
     }
 
-    /// The first row free over `start..end`.
+    /// The first row with `rows` free ones from it over `start..end`.
     fn free_row(&self, start: f64, end: f64, rows: usize) -> u8 {
-        (0..ROWS)
+        let rows = (rows as u8).clamp(1, LANES);
+        (0..=LANES - rows)
             .find(|&r| {
-                (0..rows as u8).all(|k| {
+                (0..rows).all(|k| {
                     self.ed
                         .clips()
                         .iter()
-                        .all(|c| c.lane.min(ROWS - 1) != r + k || c.end <= start || c.start >= end)
+                        .all(|c| c.lane != r + k || c.end <= start || c.start >= end)
                 })
             })
             .unwrap_or(0)
@@ -494,21 +608,35 @@ impl View {
             }
         }
         let row = row.unwrap_or_else(|| self.free_row(start, end, clips.len()));
+        let last = (row as usize + clips.len())
+            .saturating_sub(1)
+            .min(LANES as usize - 1) as u8;
         for (k, c) in clips.iter_mut().enumerate() {
-            c.lane = (row + k as u8).min(ROWS - 1);
+            c.lane = (row + k as u8).min(LANES - 1);
         }
         let ids = self.ed.add_clips(clips);
-        self.fx_armed = i;
         if let Some(&id) = ids.first() {
-            self.fx_sel = Some(id);
+            self.pick_clips(&[id]);
+            self.show_row(last);
+            self.show_row(row);
             self.status = format!("{} from {} to {}", p.name, fmt_time(start), fmt_time(end));
             self.mark_stale();
         }
     }
 
-    /// Key `1 + i` on the clip rows: starts recording shelf effect `i` at the playhead, or ends
-    /// the one recording there and drops it over that stretch (one undo step).
-    pub(super) fn live_key(&mut self, i: usize) {
+    /// The key (from 1) that records shelf effect `i` live: its place in its tab.
+    fn live_key_of(i: usize) -> Option<usize> {
+        let p = PRESETS.get(i)?;
+        let at = p.shelf.presets().iter().position(|&j| j == i)?;
+        (at < 9).then_some(at + 1)
+    }
+
+    /// Key `1 + key` on the clip rows: starts recording that effect of the open tab at the
+    /// playhead, or ends the one recording there and drops it over that stretch (one undo step).
+    pub(super) fn live_key(&mut self, key: usize) {
+        let Some(&i) = self.fx_tab.presets().get(key) else {
+            return;
+        };
         let Some(p) = PRESETS.get(i) else { return };
         let now = self.ed.snapped(self.ed.time);
         if let Some(k) = self.fx_live.iter().position(|(j, _)| *j == i) {
@@ -528,7 +656,7 @@ impl View {
             );
         } else {
             self.fx_live.push((i, now));
-            self.status = format!("recording {}: press {} again to end it", p.name, i + 1);
+            self.status = format!("recording {}: press {} again to end it", p.name, key + 1);
         }
     }
 
@@ -564,7 +692,7 @@ impl View {
             };
             let beats = (e - s) / self.ed.beat_at(s);
             for mut c in (p.make)(s, e, beats) {
-                c.lane = (clips.len() as u8).min(ROWS - 1);
+                c.lane = (clips.len() as u8).min(LANES - 1);
                 if let Some(l) = c.layer.as_deref_mut() {
                     l.show = Show::Text {
                         text: "Showtime!".into(),
@@ -574,7 +702,7 @@ impl View {
             }
         }
         let ids = self.ed.add_clips(clips);
-        self.fx_sel = None;
+        self.pick_clips(&[]);
         if !ids.is_empty() {
             self.set_time(a);
             self.mark_stale();
@@ -622,34 +750,106 @@ impl View {
             .unwrap_or_default()
     }
 
-    pub(super) fn press_fx(&mut self, a: FxAct) {
-        let Some(id) = self.fx_sel.filter(|&id| self.ed.clip(id).is_some()) else {
-            match a {
-                FxAct::Preset(i) => {
-                    let (s, e) = self.drop_span();
-                    self.place_preset(i, s, e, None);
+    /// Lays the effect picked on the shelf over `span`, keeping it picked with Shift.
+    pub(super) fn place_armed(&mut self, span: Option<(f64, f64)>, why: &str, keep: bool) {
+        let Some(i) = self.fx_armed else { return };
+        match span {
+            Some((a, b)) => {
+                self.place_preset(i, a, b, None);
+                if !keep {
+                    self.fx_armed = None;
                 }
-                FxAct::Advanced => self.fx_advanced = !self.fx_advanced,
-                _ => self.fx_sel = None,
             }
-            return;
-        };
-        let changed = match a {
+            None => self.status = why.into(),
+        }
+    }
+
+    /// Changes what clip `id` moves, keeping its group of notes and the size of its amount.
+    fn set_target(&mut self, id: u32, next: Target) -> bool {
+        let group = self.picked().map_or(0, |c| c.group);
+        self.ed.set_clip(id, false, |c| {
+            let before = c.target();
+            if before == Some(next) {
+                return;
+            }
+            c.what = Clip::new(next, c.start, c.end).what;
+            c.group = if matches!(next, Target::Notes(..)) {
+                group
+            } else {
+                0
+            };
+            c.amount = rescale_amount(c.amount, before, next);
+        })
+    }
+
+    pub(super) fn press_fx(&mut self, a: FxAct) {
+        // The shelf's own buttons, whatever is picked.
+        match a {
             FxAct::Preset(i) => {
-                self.fx_sel = None;
-                let (s, e) = self.drop_span();
-                self.place_preset(i, s, e, None);
-                false
+                self.pick_clips(&[]);
+                self.fx_armed = (self.fx_armed != Some(i)).then_some(i);
+                if let Some(p) = self.fx_armed.and_then(|i| PRESETS.get(i)) {
+                    self.status = format!("{}: drag on a row to place it", p.name);
+                }
+                return;
+            }
+            FxAct::Tab(k) => {
+                self.fx_tab = Shelf::ALL[(k as usize).min(Shelf::ALL.len() - 1)];
+                return;
+            }
+            FxAct::Place(k) => {
+                let (span, why) = if k == 0 {
+                    (
+                        self.ed.kiai_around(self.ed.time),
+                        "the playhead isn't in a kiai",
+                    )
+                } else {
+                    (self.selection_span(), "select notes on the timeline first")
+                };
+                self.place_armed(span, why, false);
+                return;
+            }
+            FxAct::Disarm => {
+                self.fx_armed = None;
+                return;
             }
             FxAct::Back => {
-                self.fx_sel = None;
-                false
+                self.pick_clips(&[]);
+                return;
             }
             FxAct::Advanced => {
                 self.fx_advanced = !self.fx_advanced;
+                return;
+            }
+            FxAct::Menu(k) => {
+                let at = self
+                    .buttons
+                    .iter()
+                    .rev()
+                    .find(|(_, b)| *b == Btn::Fx(FxAct::Menu(k)))
+                    .map(|(r, _)| *r);
+                self.fx_drop = at.map(|r| (k, r));
+                return;
+            }
+            _ => {}
+        }
+        let Some(id) = self.fx_sel.filter(|&id| self.ed.clip(id).is_some()) else {
+            self.pick_clips(&[]);
+            return;
+        };
+        let changed = match a {
+            FxAct::Preset(_)
+            | FxAct::Tab(_)
+            | FxAct::Place(_)
+            | FxAct::Disarm
+            | FxAct::Back
+            | FxAct::Advanced
+            | FxAct::Menu(_) => false,
+            FxAct::What(_) | FxAct::SetWhat(_)
+                if self.picked().is_some_and(|c| c.layer.is_some()) =>
+            {
                 false
             }
-            FxAct::What(_) if self.picked().is_some_and(|c| c.layer.is_some()) => false,
             FxAct::What(d) => {
                 let all = targets();
                 let now = self.picked().and_then(|c| c.target());
@@ -661,19 +861,16 @@ impl View {
                     .and_then(|t| all.iter().position(|x| *x == t))
                     .unwrap_or(0);
                 let next = all[(at as i32 + d).rem_euclid(all.len() as i32) as usize];
-                let group = self.picked().map_or(0, |c| c.group);
-                self.ed.set_clip(id, false, |c| {
-                    let fresh = Clip::new(next, c.start, c.end);
-                    c.what = fresh.what;
-                    c.group = if matches!(next, Target::Notes(..)) {
-                        group
-                    } else {
-                        0
-                    };
-                    // A sensible amount for what it moves now.
-                    c.amount = amount_step(next) * 10.0;
-                })
+                self.set_target(id, next)
             }
+            FxAct::SetWhat(k) => match targets().get(k as usize).copied() {
+                Some(next) => self.set_target(id, next),
+                None => false,
+            },
+            FxAct::SetEase(k) => match Ease::ALL.get(k as usize).copied() {
+                Some(e) if e != Ease::Step => self.ed.set_clip(id, false, |c| c.ease = e),
+                _ => false,
+            },
             FxAct::Group(d) => {
                 let groups = self.ed.gimmick().map_or(0, |g| g.groups.len()) as i32;
                 self.ed.set_clip(id, false, |c| {
@@ -698,15 +895,6 @@ impl View {
                 _ => {}
             }),
             FxAct::Motion(m) => self.ed.set_clip(id, false, |c| c.motion = m),
-            FxAct::Ease => self.ed.set_clip(id, false, |c| {
-                let at = Ease::ALL.iter().position(|e| *e == c.ease).unwrap_or(0);
-                // Step is for keyframes: a clip with it would do nothing.
-                let mut next = Ease::ALL[(at + 1) % Ease::ALL.len()];
-                if next == Ease::Step {
-                    next = Ease::ALL[(at + 2) % Ease::ALL.len()];
-                }
-                c.ease = next;
-            }),
             FxAct::Keep => self.ed.set_clip(id, false, |c| c.keep = !c.keep),
             FxAct::FitKiai => match self.picked().and_then(|c| self.ed.kiai_around(c.start)) {
                 Some((s, e)) => self.ed.set_clip(id, false, |c| (c.start, c.end) = (s, e)),
@@ -723,14 +911,35 @@ impl View {
                 }
             },
             FxAct::Duplicate => {
-                if let Some(copy) = self.ed.duplicate_clip(id) {
-                    self.fx_sel = Some(copy);
+                // Copies of every block picked, after the stretch they cover; the copies are
+                // picked, the copy of this one showing its settings.
+                let group = self.fx_group();
+                let order: Vec<u32> = self
+                    .ed
+                    .clips()
+                    .iter()
+                    .filter(|c| group.contains(&c.id))
+                    .map(|c| c.id)
+                    .collect();
+                let copies = self.ed.duplicate_clips(&order);
+                let main = order
+                    .iter()
+                    .position(|&k| k == id)
+                    .and_then(|k| copies.get(k).copied());
+                self.fx_many = copies.clone();
+                self.fx_sel = main.or(copies.first().copied());
+                if let Some(&last) = copies.last()
+                    && let Some(t) = self.ed.clip(last).map(|c| c.start)
+                    && t > self.view_end()
+                {
+                    self.status = format!("copied to {}", fmt_time(t));
                 }
-                true
+                !copies.is_empty()
             }
             FxAct::Delete => {
-                self.fx_sel = None;
-                self.ed.delete_clip(id)
+                let group = self.fx_group();
+                self.pick_clips(&[]);
+                self.ed.delete_clips(&group)
             }
             FxAct::LayerText(text) => {
                 let file = self.map_pictures().into_iter().next();
@@ -916,42 +1125,96 @@ impl View {
         (h - ROWS_TOP - 2.0) / ROWS as f32
     }
 
-    pub(super) fn row_y(&self, row: u8) -> f32 {
-        self.layout.graph[1] + ROWS_TOP + row.min(ROWS - 1) as f32 * self.row_h()
-    }
-
-    fn row_at(&self, y: f32) -> u8 {
-        (((y - self.layout.graph[1] - ROWS_TOP) / self.row_h())
-            .floor()
-            .max(0.0) as u8)
-            .min(ROWS - 1)
-    }
-
-    fn clip_at(&self, x: f32, y: f32) -> Option<(u32, Part)> {
-        let row = self.row_at(y);
-        self.ed
+    /// The rows there are: one past the last used, so a free one waits at the bottom, and at
+    /// least what fits.
+    pub(super) fn clip_row_count(&self) -> u8 {
+        let used = self
+            .ed
             .clips()
             .iter()
-            .rev()
-            .filter(|c| c.lane.min(ROWS - 1) == row)
-            .find_map(|c| {
+            .map(|c| c.lane + 1)
+            .max()
+            .unwrap_or(0);
+        (used.saturating_add(1)).clamp(ROWS, LANES)
+    }
+
+    /// Scrolls the rows so row `row` shows.
+    fn show_row(&mut self, row: u8) {
+        if row < self.fx_top {
+            self.fx_top = row;
+        } else if row >= self.fx_top + ROWS {
+            self.fx_top = row + 1 - ROWS;
+        }
+    }
+
+    /// The wheel over the clip rows scrolls them when there are more than fit. False when it
+    /// isn't theirs.
+    pub(super) fn wheel_clip_rows(&mut self, notches: i32, keys: Keys) -> bool {
+        let (mx, my) = self.mouse;
+        let max = self.clip_row_count().saturating_sub(ROWS);
+        if !self.clip_mode()
+            || keys.ctrl
+            || keys.alt
+            || max == 0
+            || !inside(self.layout.graph, mx, my)
+            || my < self.layout.graph[1] + ROWS_TOP
+        {
+            return false;
+        }
+        let per = if keys.shift { ROWS as i32 } else { 1 };
+        self.fx_top = (self.fx_top as i32 - notches * per).clamp(0, max as i32) as u8;
+        true
+    }
+
+    pub(super) fn row_y(&self, row: u8) -> f32 {
+        self.layout.graph[1] + ROWS_TOP + (row as f32 - self.fx_top as f32) * self.row_h()
+    }
+
+    /// The row at `y`; above or under the rows shown, the ones scrolled away there.
+    fn row_at(&self, y: f32) -> u8 {
+        let k = ((y - self.layout.graph[1] - ROWS_TOP) / self.row_h()).floor() as i32;
+        (self.fx_top as i32 + k).clamp(0, LANES as i32 - 1) as u8
+    }
+
+    /// The clip at `x, y` and the part of it there. A short block's ends are its outer quarters
+    /// and, where no other block is, a little way past it, so it can still be resized.
+    fn clip_at(&self, x: f32, y: f32) -> Option<(u32, Part)> {
+        let row = self.row_at(y);
+        let on_row = || self.ed.clips().iter().rev().filter(move |c| c.lane == row);
+        let on = on_row().find_map(|c| {
+            let (a, b) = (self.x_of(c.start), self.x_of(c.end));
+            if x < a - 1.0 || x > b + 1.0 {
+                return None;
+            }
+            let edge = EDGE.min((b - a) * 0.25);
+            let part = if x <= a + edge {
+                Part::Start
+            } else if x >= b - edge {
+                Part::End
+            } else {
+                Part::Body
+            };
+            Some((c.id, part))
+        });
+        on.or_else(|| {
+            on_row().find_map(|c| {
                 let (a, b) = (self.x_of(c.start), self.x_of(c.end));
-                if x < a - 1.0 || x > b + 1.0 {
-                    return None;
-                }
-                let part = if b - a > EDGE * 3.0 && x <= a + EDGE {
-                    Part::Start
-                } else if b - a > EDGE * 3.0 && x >= b - EDGE {
-                    Part::End
+                if x >= a - EDGE && x < a {
+                    Some((c.id, Part::Start))
+                } else if x > b && x <= b + EDGE {
+                    Some((c.id, Part::End))
                 } else {
-                    Part::Body
-                };
-                Some((c.id, part))
+                    None
+                }
             })
+        })
     }
 
     pub(super) fn draw_clip_rows(&mut self, c: &mut Canvas) {
         let [x, y, w, h] = self.layout.graph;
+        let count = self.clip_row_count();
+        self.fx_top = self.fx_top.min(count.saturating_sub(ROWS));
+        let shown = self.fx_top..self.fx_top + ROWS;
         c.round_rect(
             [x, y],
             [w, h],
@@ -987,7 +1250,7 @@ impl View {
                 );
             }
         }
-        for r in 0..ROWS {
+        for r in shown.clone() {
             let ry = self.row_y(r);
             if r % 2 == 1 {
                 c.rect(x + 1.0, ry, w - 2.0, rh, rgba(0xffffff, 0.02));
@@ -996,11 +1259,12 @@ impl View {
         // The clips.
         let reds = self.ed.reds();
         let beat = |t: f64| crate::editor::clips::beat_in(&reds, t);
+        let group = self.fx_group();
         let clips: Vec<Clip> = self
             .ed
             .clips()
             .iter()
-            .filter(|cl| cl.end >= from && cl.start <= to)
+            .filter(|cl| cl.end >= from && cl.start <= to && shown.contains(&cl.lane))
             .cloned()
             .collect();
         for cl in &clips {
@@ -1008,14 +1272,24 @@ impl View {
             let ry = self.row_y(cl.lane) + 1.0;
             let bh = rh - 2.0;
             let col = cl.target().map_or(0x888899, target_colour);
-            let on = self.fx_sel == Some(cl.id);
+            let on = group.contains(&cl.id);
+            let main = self.fx_sel == Some(cl.id);
             c.round_rect(
                 [a, ry],
                 [(b - a).max(2.0), bh],
                 3.0,
                 rgba(col, if on { 0.42 } else { 0.24 }),
-                rgba(if on { 0xffffff } else { col }, if on { 1.0 } else { 0.7 }),
-                1.0,
+                rgba(
+                    if on { 0xffffff } else { col },
+                    if main {
+                        1.0
+                    } else if on {
+                        0.6
+                    } else {
+                        0.7
+                    },
+                ),
+                if main { 1.5 } else { 1.0 },
             );
             // What it does over its length, as the game will.
             let moments = self.ed.clip_moments(cl, &reds);
@@ -1059,13 +1333,27 @@ impl View {
                 1.0,
             );
         }
+        // A box picking clips.
+        if let Drag::FxBox { t0, y0, t1, y1, .. } = self.drag {
+            let (a, b) = (self.x_of(t0.min(t1)), self.x_of(t0.max(t1)));
+            let (top, bottom) = (y0.min(y1), y0.max(y1));
+            c.rect(a, top, b - a, bottom - top, rgba(accent(), 0.12));
+            for (rx, ry, rw, rhh) in [
+                (a, top, b - a, 1.0),
+                (a, bottom - 1.0, b - a, 1.0),
+                (a, top, 1.0, bottom - top),
+                (b - 1.0, top, 1.0, bottom - top),
+            ] {
+                c.rect(rx, ry, rw, rhh, rgba(accent(), 0.8));
+            }
+        }
         // Effects being recorded live, growing with the playhead.
         for (k, &(i, from)) in self.fx_live.iter().enumerate() {
             let (a, b) = (
                 self.x_of(from.min(self.ed.time)),
                 self.x_of(from.max(self.ed.time)),
             );
-            let ry = self.row_y((ROWS - 1).saturating_sub(k as u8)) + 1.0;
+            let ry = self.row_y((self.fx_top + ROWS - 1).saturating_sub(k as u8)) + 1.0;
             c.round_rect(
                 [a, ry],
                 [(b - a).max(2.0), rh - 2.0],
@@ -1075,28 +1363,58 @@ impl View {
                 1.0,
             );
             let name = PRESETS.get(i).map_or("", |p| p.name);
-            let label = Canvas::fit(
-                5.5,
-                (b - a - 6.0).max(40.0),
-                &format!("REC {}  {name}", i + 1),
-            );
+            let key = Self::live_key_of(i).map_or(String::new(), |k| format!("{k}  "));
+            let label = Canvas::fit(5.5, (b - a - 6.0).max(40.0), &format!("REC {key}{name}"));
             c.text(a + 3.0, ry + 2.0, 5.5, rgba(0xffffff, 0.95), &label);
         }
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 0.8));
+        // The scrollbar, when the rows scroll.
+        if count > ROWS {
+            let (top, span) = (y + ROWS_TOP, h - ROWS_TOP - 2.0);
+            let thumb = span * ROWS as f32 / count as f32;
+            let at = top + span * self.fx_top as f32 / count as f32;
+            c.rect(x + w - 4.0, top, 3.0, span, rgba(0xffffff, 0.05));
+            c.round_rect(
+                [x + w - 4.0, at],
+                [3.0, thumb],
+                1.5,
+                rgba(0xffffff, 0.35),
+                rgba(0x000000, 0.0),
+                0.0,
+            );
+        }
         c.clip_since(start, x, y, w, h);
-        let name = PRESETS.get(self.fx_armed).map_or("", |p| p.name);
-        c.text(
-            x + 4.0,
-            y + 3.0,
-            5.5,
-            rgba(0x6a6a80, 1.0),
-            &format!("EFFECT CLIPS   drag on a row: {name}   drag a clip to move, its ends to resize, right click deletes"),
-        );
+        let what = match self.fx_armed.and_then(|i| PRESETS.get(i)) {
+            Some(p) => format!(
+                "placing {}: drag on a row, or click one for a bar  (Esc puts it back)",
+                p.name
+            ),
+            None => "pick an effect on the shelf to place it   drag on empty rows to pick blocks, Shift adds   drag a block to move, its ends to resize, right click deletes".into(),
+        };
+        let rows = if count > ROWS {
+            format!(
+                "   rows {}-{} of {count}, the wheel scrolls",
+                self.fx_top + 1,
+                self.fx_top + ROWS
+            )
+        } else {
+            String::new()
+        };
+        let label = Canvas::fit(5.5, w - 8.0, &format!("EFFECT CLIPS   {what}{rows}"));
+        c.text(x + 4.0, y + 3.0, 5.5, rgba(0x6a6a80, 1.0), &label);
     }
 
-    pub(super) fn clip_rows_down(&mut self, x: f32, y: f32) {
-        if self.in_motion_strip(y) {
+    /// Where clips `ids` are: id, start, end, row.
+    fn clip_places(&self, ids: &[u32]) -> Vec<(u32, f64, f64, u8)> {
+        ids.iter()
+            .filter_map(|&id| self.ed.clip(id).map(|c| (id, c.start, c.end, c.lane)))
+            .collect()
+    }
+
+    pub(super) fn clip_rows_down(&mut self, x: f32, y: f32, keys: Keys) {
+        self.fx_click = None;
+        if self.in_motion_strip(y) || y < self.layout.graph[1] + ROWS_TOP {
             if !self.motion_strip_down(x) {
                 self.drag = Drag::Scrub;
                 let t = self.t_at(x);
@@ -1104,25 +1422,55 @@ impl View {
             }
             return;
         }
+        let add = keys.shift || keys.ctrl;
         match self.clip_at(x, y) {
             Some((id, part)) => {
-                self.fx_sel = Some(id);
+                let mut group = self.fx_group();
+                if add {
+                    // Shift or Ctrl: in or out of the blocks picked.
+                    if let Some(k) = group.iter().position(|&g| g == id) {
+                        group.remove(k);
+                        self.fx_sel = group.last().copied();
+                        self.fx_many = group;
+                        return;
+                    }
+                    group.push(id);
+                    self.fx_many = group;
+                    self.fx_sel = Some(id);
+                } else if group.len() > 1 && group.contains(&id) {
+                    // One of several picked: they move together, and a click picks it alone.
+                    self.fx_sel = Some(id);
+                    self.fx_click = Some(id);
+                } else {
+                    self.pick_clips(&[id]);
+                }
                 let Some(cl) = self.ed.clip(id) else { return };
                 self.drag = match part {
-                    Part::Body => Drag::FxMove {
-                        id,
-                        grab: self.t_at(x) - cl.start,
-                    },
+                    Part::Body => {
+                        let grab = self.t_at(x) - cl.start;
+                        self.fx_orig = self.clip_places(&self.fx_group());
+                        Drag::FxMove { id, grab }
+                    }
                     Part::Start => Drag::FxEdge { id, end: false },
                     Part::End => Drag::FxEdge { id, end: true },
                 };
             }
-            None => {
+            None if self.fx_armed.is_some() => {
                 let t = self.ed.snapped(self.t_at(x));
                 self.drag = Drag::FxNew {
                     row: self.row_at(y),
                     from: t,
                     to: t,
+                };
+            }
+            None => {
+                let t = self.t_at(x);
+                self.drag = Drag::FxBox {
+                    t0: t,
+                    y0: y,
+                    t1: t,
+                    y1: y,
+                    add,
                 };
             }
         }
@@ -1133,15 +1481,24 @@ impl View {
         match self.drag {
             Drag::FxNew { row, from, .. } => self.drag = Drag::FxNew { row, from, to: t },
             Drag::FxMove { id, grab } => {
-                let row = self.row_at(y);
+                let Some(&(_, s0, _, r0)) = self.fx_orig.iter().find(|o| o.0 == id) else {
+                    return;
+                };
+                let row = self.row_at(y).min(self.clip_row_count());
                 let start = self.ed.snapped((self.t_at(x) - grab).max(0.0));
-                if self.ed.set_clip(id, true, |c| {
-                    let len = c.end - c.start;
-                    c.start = start;
-                    c.end = start + len;
-                    c.lane = row;
-                }) {
+                if start == s0 && row == r0 {
+                    return;
+                }
+                self.fx_click = None;
+                let from = self.fx_orig.clone();
+                if self
+                    .ed
+                    .move_clips(&from, start - s0, row as i32 - r0 as i32, true)
+                {
                     self.mark_stale();
+                }
+                if let Some(lane) = self.ed.clip(id).map(|c| c.lane) {
+                    self.show_row(lane);
                 }
             }
             Drag::FxEdge { id, end } => {
@@ -1156,27 +1513,91 @@ impl View {
                     self.mark_stale();
                 }
             }
+            Drag::FxBox { t0, y0, add, .. } => {
+                self.drag = Drag::FxBox {
+                    t0,
+                    y0,
+                    t1: self.t_at(x),
+                    y1: y,
+                    add,
+                };
+            }
             _ => {}
         }
     }
 
-    pub(super) fn clip_rows_up(&mut self, drag: Drag, x: f32) {
+    pub(super) fn clip_rows_up(&mut self, drag: Drag, x: f32, keys: Keys) {
         match drag {
             Drag::FxNew { row, from, to } => {
-                let (a, b) = (from.min(to), from.max(to));
-                if b - a >= 1.0 && (self.x_of(b) - self.x_of(a)) >= 4.0 {
-                    let armed = self.fx_armed;
-                    self.place_preset(armed, a, b, Some(row));
-                } else {
-                    // A click on an empty row: nothing picked, the playhead there.
-                    self.fx_sel = None;
-                    let t = self.ed.snapped(self.t_at(x));
-                    self.set_time(t);
+                let Some(armed) = self.fx_armed else { return };
+                let (mut a, mut b) = (from.min(to), from.max(to));
+                if b - a < 1.0 || (self.x_of(b) - self.x_of(a)) < 4.0 {
+                    // A click: one bar from there.
+                    a = from;
+                    let meter = crate::editor::timing::active_red(&self.ed.chart.timing, a)
+                        .map_or(4, |p| p.meter.max(1)) as f64;
+                    b = a + meter * self.ed.beat_at(a);
+                }
+                self.place_preset(armed, a, b, Some(row));
+                if !keys.shift {
+                    self.fx_armed = None;
                 }
             }
-            Drag::FxMove { .. } | Drag::FxEdge { .. } => {
+            Drag::FxMove { id, .. } => {
                 self.ed.end_drag();
                 self.mark_stale();
+                if self.fx_click.take() == Some(id) {
+                    self.pick_clips(&[id]);
+                }
+                self.fx_orig.clear();
+            }
+            Drag::FxEdge { .. } => {
+                self.ed.end_drag();
+                self.mark_stale();
+            }
+            Drag::FxBox {
+                t0,
+                y0,
+                t1,
+                y1,
+                add,
+            } => {
+                let click = (self.x_of(t1) - self.x_of(t0)).abs() < 3.0 && (y1 - y0).abs() < 3.0;
+                if click {
+                    // A click on an empty row: nothing picked, the playhead there.
+                    if !add {
+                        self.pick_clips(&[]);
+                        let t = self.ed.snapped(self.t_at(x));
+                        self.set_time(t);
+                    }
+                    return;
+                }
+                let (a, b) = (t0.min(t1), t0.max(t1));
+                let top = self.row_at(y0.min(y1));
+                let bottom = self.row_at(y0.max(y1));
+                let hit: Vec<u32> = self
+                    .ed
+                    .clips()
+                    .iter()
+                    .filter(|c| c.lane >= top && c.lane <= bottom && c.end > a && c.start < b)
+                    .map(|c| c.id)
+                    .collect();
+                let mut ids = if add { self.fx_group() } else { Vec::new() };
+                for id in hit {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+                let main = self.fx_sel.filter(|s| add && ids.contains(s));
+                self.pick_clips(&ids);
+                if main.is_some() {
+                    self.fx_sel = main;
+                }
+                self.status = match ids.len() {
+                    0 => "no blocks there".into(),
+                    1 => "1 block picked".into(),
+                    n => format!("{n} blocks picked: drag one to move them all, Ctrl+D copies"),
+                };
             }
             _ => {}
         }
@@ -1194,8 +1615,9 @@ impl View {
         if let Some((id, _)) = self.clip_at(x, y)
             && self.ed.delete_clip(id)
         {
+            self.fx_many.retain(|&k| k != id);
             if self.fx_sel == Some(id) {
-                self.fx_sel = None;
+                self.fx_sel = self.fx_many.first().copied();
             }
             self.mark_stale();
         }
@@ -1211,8 +1633,172 @@ impl View {
         Some(match self.clip_at(x, y) {
             Some((_, Part::Start | Part::End)) => I::EwResize,
             Some((_, Part::Body)) => I::Grab,
-            None => I::Crosshair,
+            None if self.fx_armed.is_some() => I::Crosshair,
+            None => I::Default,
         })
+    }
+
+    // ---- the dropdowns ----
+
+    /// The open dropdown of the clip picked: everything it can move in columns by kind, or its
+    /// eases.
+    pub(super) fn draw_fx_drop(&mut self, c: &mut Canvas) {
+        let Some((kind, at)) = self.fx_drop else {
+            return;
+        };
+        let Some(clip) = self.picked().cloned().filter(|_| self.clip_mode()) else {
+            self.fx_drop = None;
+            return;
+        };
+        if kind == 1 {
+            return self.draw_ease_drop(c, at, clip.ease);
+        }
+        let now = clip.target().map(|t| match t {
+            Target::Notes(_, p) => Target::Notes(None, p),
+            t => t,
+        });
+        let all = targets();
+        let cols = target_columns();
+        let short = |t: Target| -> String {
+            let l = target_label(t);
+            match l.split_once(": ") {
+                Some((_, rest)) => {
+                    let mut ch = rest.chars();
+                    ch.next()
+                        .map(|f| f.to_uppercase().chain(ch).collect())
+                        .unwrap_or_default()
+                }
+                None => l,
+            }
+        };
+        let cw = cols
+            .iter()
+            .flat_map(|(head, _, ts)| {
+                ts.iter()
+                    .map(|t| Canvas::text_width(7.0, &short(*t)))
+                    .chain([Canvas::text_width(6.0, head)])
+            })
+            .fold(60.0, f32::max)
+            + 16.0;
+        let tall = cols.iter().map(|(_, _, ts)| ts.len()).max().unwrap_or(1);
+        let about_h = 30.0;
+        let w = (cw * cols.len() as f32 + 8.0).min(c.width - 8.0);
+        let cw = (w - 8.0) / cols.len() as f32;
+        let h = 16.0 + tall as f32 * 14.0 + about_h;
+        let x = at[0].min(c.width - w - 4.0).max(4.0);
+        let y = if at[1] + at[3] + h < 476.0 {
+            at[1] + at[3] + 1.0
+        } else {
+            (at[1] - h - 1.0).max(4.0)
+        };
+        c.round_rect(
+            [x, y],
+            [w, h],
+            3.0,
+            rgba(0x15151d, 1.0),
+            rgba(0x5a5a78, 1.0),
+            1.0,
+        );
+        let mut about = None;
+        for (k, (head, col, ts)) in cols.iter().enumerate() {
+            let cx = x + 4.0 + k as f32 * cw;
+            c.rect(cx + 2.0, y + 12.0, cw - 4.0, 1.0, rgba(*col, 0.8));
+            c.text(cx + 4.0, y + 4.0, 6.0, rgba(*col, 1.0), head);
+            for (i, t) in ts.iter().enumerate() {
+                let r = [cx + 1.0, y + 15.0 + i as f32 * 14.0, cw - 2.0, 13.0];
+                let on = now == Some(*t);
+                let hover = c.hovered(r[0], r[1], r[2], r[3]);
+                if hover {
+                    about = Some(*t);
+                }
+                if on || hover {
+                    c.rect(
+                        r[0],
+                        r[1],
+                        r[2],
+                        r[3],
+                        rgba(if on { 0x4a221b } else { 0x2c2c3c }, 1.0),
+                    );
+                }
+                let label = Canvas::fit(7.0, r[2] - 8.0, &short(*t));
+                c.text(
+                    r[0] + 5.0,
+                    r[1] + 3.0,
+                    7.0,
+                    rgba(if on { 0xffffff } else { 0xd8d8e8 }, 1.0),
+                    &label,
+                );
+                if let Some(idx) = all.iter().position(|a| a == t) {
+                    self.buttons.push((r, Btn::Fx(FxAct::SetWhat(idx as u16))));
+                }
+            }
+        }
+        // What the one under the pointer (else the one in use) does.
+        let ay = y + h - about_h + 2.0;
+        c.rect(x + 4.0, ay - 2.0, w - 8.0, 1.0, rgba(0x2a2a38, 1.0));
+        if let Some(t) = about.or(now) {
+            let text = format!("{}: {}", target_label(t), target_about(t));
+            for (i, line) in wrap(6.0, w - 14.0, &text).iter().take(3).enumerate() {
+                c.text(
+                    x + 7.0,
+                    ay + 1.0 + i as f32 * 8.5,
+                    6.0,
+                    rgba(DIM, 1.0),
+                    line,
+                );
+            }
+        }
+    }
+
+    fn draw_ease_drop(&mut self, c: &mut Canvas, at: [f32; 4], now: Ease) {
+        // Step is for keyframes: a clip with it would do nothing.
+        let eases: Vec<(usize, Ease)> = Ease::ALL
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, e)| *e != Ease::Step)
+            .collect();
+        let w = eases
+            .iter()
+            .map(|(_, e)| Canvas::text_width(7.0, e.label()) + 26.0)
+            .fold(at[2], f32::max);
+        let h = eases.len() as f32 * 14.0 + 4.0;
+        let x = at[0].min(c.width - w - 4.0);
+        let y = if at[1] + at[3] + h < 476.0 {
+            at[1] + at[3] + 1.0
+        } else {
+            (at[1] - h - 1.0).max(4.0)
+        };
+        c.round_rect(
+            [x, y],
+            [w, h],
+            3.0,
+            rgba(0x15151d, 1.0),
+            rgba(0x5a5a78, 1.0),
+            1.0,
+        );
+        for (row, (i, e)) in eases.into_iter().enumerate() {
+            let r = [x + 2.0, y + 2.0 + row as f32 * 14.0, w - 4.0, 13.0];
+            let on = e == now;
+            let hover = c.hovered(r[0], r[1], r[2], r[3]);
+            if on || hover {
+                c.rect(
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    rgba(if on { 0x4a221b } else { 0x2c2c3c }, 1.0),
+                );
+            }
+            c.text(
+                r[0] + 6.0,
+                r[1] + 3.0,
+                7.0,
+                rgba(if on { 0xffffff } else { 0xd8d8e8 }, 1.0),
+                e.label(),
+            );
+            self.buttons.push((r, Btn::Fx(FxAct::SetEase(i as u8))));
+        }
     }
 }
 
