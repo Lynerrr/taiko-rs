@@ -30,10 +30,15 @@ pub enum KAct {
     MakeTko,
 }
 
+/// How fast or backwards the scroll graph shows at most; faster keys sit at its edge.
+const SCROLL_SHOWN: f64 = 8.0;
+
 impl View {
     /// The track being edited.
     pub(super) fn subject(&self) -> Subject {
-        if self.k_field {
+        if self.scroll_mode() {
+            Subject::Scroll
+        } else if self.k_field {
             Subject::Field(FieldProp::ALL[self.k_prop.min(FieldProp::ALL.len() - 1)])
         } else {
             Subject::Group(
@@ -45,7 +50,13 @@ impl View {
 
     /// Whether the graph under the timeline is the keyframe graph.
     pub(super) fn keyframe_mode(&self) -> bool {
-        self.mode == Mode::Effects && self.g_page == 2 && self.ed.is_tko()
+        self.mode == Mode::Effects && self.g_page == 2 && self.ed.is_tko() || self.scroll_mode()
+    }
+
+    /// Whether the graph under the timeline is the shared scroll's (the Motion page's Scroll
+    /// tab).
+    pub(super) fn scroll_mode(&self) -> bool {
+        self.motion_mode() && self.m_tab == 2
     }
 
     fn group_count(&self) -> usize {
@@ -318,10 +329,20 @@ impl View {
         }
         let s = self.subject();
         let (mut lo, mut hi) = (s.default_value(), s.default_value());
+        if s == Subject::Scroll {
+            // Stopped and as mapped always show; a jump's huge speed for a millisecond would
+            // flatten everything else, so the graph stops short of it.
+            lo = 0.0;
+        }
         if let Some(t) = self.ed.track_of(s) {
             for k in &t.keys {
-                lo = lo.min(k.v);
-                hi = hi.max(k.v);
+                let v = if s == Subject::Scroll {
+                    k.v.clamp(-SCROLL_SHOWN, SCROLL_SHOWN)
+                } else {
+                    k.v
+                };
+                lo = lo.min(v);
+                hi = hi.max(v);
             }
         }
         let span = (hi - lo).max(s.min_span());
@@ -333,7 +354,8 @@ impl View {
 
     pub(super) fn key_y(&self, v: f64, r: (f64, f64)) -> f32 {
         let [_, y, _, h] = self.layout.graph;
-        y + h - 6.0 - ((v - r.0) / (r.1 - r.0).max(1e-9)) as f32 * (h - 12.0)
+        let f = ((v - r.0) / (r.1 - r.0).max(1e-9)).clamp(-0.05, 1.05);
+        y + h - 6.0 - f as f32 * (h - 12.0)
     }
 
     fn y_key(&self, py: f32, r: (f64, f64)) -> f64 {

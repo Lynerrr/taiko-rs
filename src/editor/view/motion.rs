@@ -4,7 +4,7 @@
 //! note does as its own hit nears (ready-made moves, or keys on a small graph).
 
 use super::{Btn, Drag, Keys, Mode, View, inside};
-use crate::editor::motion::{BEFORES, PACES, PATHS, before_tracks, pace_track};
+use crate::editor::motion::{BEFORES, PACES, PATHS, SPEEDS, ScrollMove, before_tracks, pace_track};
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
 use crate::tko::gimmick::{FieldProp, NoteProp};
@@ -61,6 +61,20 @@ pub enum MAct {
     Before(usize),
     /// The property the graph shows (in `GRAPH_PROPS`).
     Prop(usize),
+    /// The shared scroll's speed from the playhead (in `SPEEDS`).
+    Speed(usize),
+    /// The speed at the playhead a step faster (true) or slower.
+    Nudge(bool),
+    /// A move of the shared scroll from the playhead (in `ScrollMove::ALL`).
+    Move(usize),
+    /// The speed key at the playhead glides to the next one, or stops gliding.
+    Glide,
+    ClearScroll,
+}
+
+/// A speed as mania mappers write it: 1x, 0.5x, -1x.
+fn speed_label(v: f64) -> String {
+    format!("{}x", (v * 100.0).round() / 100.0)
 }
 
 impl View {
@@ -86,6 +100,20 @@ impl View {
                 self.m_prop = i.min(GRAPH_PROPS.len() - 1);
                 false
             }
+            (MAct::Speed(i), _) => SPEEDS
+                .get(i)
+                .is_some_and(|&v| self.ed.set_scroll_speed(t, v)),
+            (MAct::Nudge(up), _) => {
+                let v = self.ed.scroll_speed(t);
+                let step = if up { 0.05 } else { -0.05 };
+                self.ed
+                    .set_scroll_speed(t, ((v + step) * 100.0).round() / 100.0)
+            }
+            (MAct::Move(i), _) => ScrollMove::ALL
+                .get(i)
+                .is_some_and(|&m| self.ed.scroll_move(m, t)),
+            (MAct::Glide, _) => self.ed.scroll_glide(t),
+            (MAct::ClearScroll, _) => self.ed.clear_scroll(),
             (MAct::UseSelection, _) => match self.ed.motion_group() {
                 Ok(g) => {
                     self.m_group = Some(g);
@@ -187,33 +215,38 @@ impl View {
     pub(super) fn draw_motion_page(&mut self, c: &mut Canvas, x: f32, mut y: f32, inner: f32) {
         let dim = rgba(0x9a9ab0, 1.0);
         let small = 6.0;
-        let about = if self.m_tab == 0 {
-            "Pick notes on the timeline and give them a path: they fly in along it and land on the drum on time."
-        } else {
-            "Pick notes on the timeline and give them a move: each note does it as its own hit nears."
+        let about = match self.m_tab {
+            0 => {
+                "Pick notes on the timeline and give them a path: they fly in along it and land on the drum on time."
+            }
+            1 => {
+                "Pick notes on the timeline and give them a move: each note does it as its own hit nears."
+            }
+            _ => {
+                "One speed for the whole lane, like mania SV: 0 freezes every note, below 0 runs them back. Green lines stay as they are."
+            }
         };
         c.text(x, y, small, dim, &Canvas::fit(small, inner, about));
         y += 10.0;
+        if self.m_tab == 2 {
+            let tabs = self.motion_tabs();
+            let y = self.chips(c, x, y, inner, &tabs) + 2.0;
+            self.m_graph = [0.0; 4];
+            return self.draw_scroll_tab(c, x, y, inner);
+        }
         // The tab, what to shape (the picked notes, or a group already moving), and the groups.
         let picked = self.ed.selection.len();
         let what = if self.m_tab == 0 { "a path" } else { "a move" };
-        let mut items = vec![
-            ("Path".to_string(), Btn::M(MAct::Tab(0)), self.m_tab == 0),
-            (
-                "Before the hit".to_string(),
-                Btn::M(MAct::Tab(1)),
-                self.m_tab == 1,
-            ),
-            (
-                if picked == 0 {
-                    format!("Give the picked notes {what}")
-                } else {
-                    format!("Give the {picked} picked notes {what}")
-                },
-                Btn::M(MAct::UseSelection),
-                false,
-            ),
-        ];
+        let mut items = self.motion_tabs();
+        items.extend([(
+            if picked == 0 {
+                format!("Give the picked notes {what}")
+            } else {
+                format!("Give the {picked} picked notes {what}")
+            },
+            Btn::M(MAct::UseSelection),
+            false,
+        )]);
         if self.m_copied.is_some() {
             items.push(("Paste motion".to_string(), Btn::M(MAct::Paste), false));
         }
@@ -244,6 +277,75 @@ impl View {
         } else {
             self.draw_before_tab(c, g, x, y, inner);
         }
+    }
+
+    fn motion_tabs(&self) -> Vec<(String, Btn, bool)> {
+        ["Path", "Before the hit", "Scroll"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                (
+                    name.to_string(),
+                    Btn::M(MAct::Tab(i as u8)),
+                    self.m_tab == i as u8,
+                )
+            })
+            .collect()
+    }
+
+    fn draw_scroll_tab(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
+        let head = rgba(accent(), 1.0);
+        let dim = rgba(0x9a9ab0, 1.0);
+        let t = self.ed.snapped(self.ed.time);
+        let now = self.ed.scroll_speed(t);
+        let col = (inner - 10.0) / 2.0;
+        let right = x + col + 10.0;
+        c.text(
+            x,
+            y,
+            6.5,
+            head,
+            &format!("Speed from the playhead (now {})", speed_label(now)),
+        );
+        let items: Vec<(String, Btn, bool)> = SPEEDS
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| (speed_label(v), Btn::M(MAct::Speed(i)), now == v))
+            .collect();
+        let ly = self.chips(c, x, y + 9.0, col, &items);
+        let items = vec![
+            ("Slower".to_string(), Btn::M(MAct::Nudge(false)), false),
+            ("Faster".to_string(), Btn::M(MAct::Nudge(true)), false),
+            (
+                "Glide to the next key".to_string(),
+                Btn::M(MAct::Glide),
+                false,
+            ),
+        ];
+        let ly = self.chips(c, x, ly, col, &items);
+        c.text(
+            x,
+            ly + 1.0,
+            5.5,
+            dim,
+            &Canvas::fit(
+                5.5,
+                col,
+                "The graph under the timeline is the speed: click adds a key, drag moves it.",
+            ),
+        );
+        c.text(right, y, 6.5, head, "Moves from the playhead");
+        let mut items: Vec<(String, Btn, bool)> = ScrollMove::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.name().to_string(), Btn::M(MAct::Move(i)), false))
+            .collect();
+        items.push((
+            "Clear the scroll".to_string(),
+            Btn::M(MAct::ClearScroll),
+            false,
+        ));
+        self.chips(c, right, y + 9.0, col, &items);
     }
 
     fn draw_path_tab(&mut self, c: &mut Canvas, g: usize, x: f32, mut y: f32, inner: f32) {

@@ -4236,6 +4236,37 @@ mod tests {
     const PATHS0: [f64; 2] = crate::editor::motion::PATHS[0].1[0];
 
     #[test]
+    fn the_scroll_tab_keys_the_shared_scroll_with_buttons_and_on_the_graph() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        press(&mut v, Btn::M(MAct::Tab(2)));
+        assert!(v.scroll_mode() && v.keyframe_mode());
+        draw(&mut v);
+        let scroll = |v: &View| v.ed.gimmick().unwrap().scroll.clone();
+        // 0x at the playhead freezes from there.
+        v.ed.time = 1000.0;
+        press(&mut v, Btn::M(MAct::Speed(0)));
+        assert_eq!(v.ed.scroll_speed(1500.0), 0.0);
+        press(&mut v, Btn::M(MAct::Nudge(true)));
+        assert!((v.ed.scroll_speed(1500.0) - 0.05).abs() < 1e-9);
+        // A click on the graph under the timeline adds a speed key there.
+        let [gx, gy, gw, gh] = v.layout.graph;
+        let x = gx + gw * 0.8;
+        click(&mut v, x, gy + gh / 2.0);
+        assert_eq!(scroll(&v).keys.len(), 2);
+        assert!(v.ed.undo());
+        press(&mut v, Btn::M(MAct::Move(0)));
+        assert!(scroll(&v).keys.len() >= 2);
+        press(&mut v, Btn::M(MAct::ClearScroll));
+        assert!(scroll(&v).is_empty());
+        // The other tabs leave the keyframe graph alone.
+        press(&mut v, Btn::M(MAct::Tab(0)));
+        assert!(!v.keyframe_mode());
+    }
+
+
+    #[test]
     fn picked_notes_get_a_move_before_their_hit_keyed_on_the_graph() {
         use motion::MAct;
         let mut v = clips_view();

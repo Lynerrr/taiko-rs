@@ -4,6 +4,7 @@
 //! A note flies with one group at a time (the runtime takes the first that holds it), so giving
 //! notes a path takes them out of any other group they were in.
 
+use super::keyframes::Subject;
 use super::state::Editor;
 use crate::tko::gimmick::{BEFORE_BEATS, Group, MAX_GROUPS, NoteProp};
 use crate::tko::path::NotePath;
@@ -368,6 +369,117 @@ impl Editor {
     }
 }
 
+/// A move of the shared scroll from the playhead (see `Editor::scroll_move`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollMove {
+    /// Every note stops for a beat.
+    Freeze,
+    /// Every note runs back for a beat.
+    Reverse,
+    /// For a bar, each beat lurches forward fast and settles slow, on time overall.
+    Lurch,
+    /// Every note jumps a beat closer at once.
+    Jump,
+}
+
+impl ScrollMove {
+    pub const ALL: [ScrollMove; 4] = [
+        ScrollMove::Freeze,
+        ScrollMove::Reverse,
+        ScrollMove::Lurch,
+        ScrollMove::Jump,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ScrollMove::Freeze => "Freeze a beat",
+            ScrollMove::Reverse => "Back up a beat",
+            ScrollMove::Lurch => "Lurch on each beat (a bar)",
+            ScrollMove::Jump => "Jump a beat ahead",
+        }
+    }
+}
+
+/// Speeds offered at the playhead, as mania mappers type them.
+pub const SPEEDS: [f64; 8] = [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 4.0, -1.0];
+
+impl Editor {
+    /// The shared scroll's speed at `t` (1 with none).
+    pub fn scroll_speed(&self, t: f64) -> f64 {
+        self.value_of(Subject::Scroll, t)
+    }
+
+    /// The speed from `t` on is `v`, until the next key.
+    pub fn set_scroll_speed(&mut self, t: f64, v: f64) -> bool {
+        self.edit_gimmick(false, |g| {
+            g.scroll.set(Key {
+                t,
+                v,
+                ease: Ease::Step,
+            });
+        })
+    }
+
+    /// Lays `keys` between `t0` and `t1` in place of the keys there, one undo step.
+    fn scroll_keys(&mut self, t0: f64, t1: f64, keys: &[(f64, f64)]) -> bool {
+        self.edit_gimmick(false, |g| {
+            g.scroll.keys.retain(|k| k.t < t0 || k.t > t1);
+            for &(t, v) in keys {
+                g.scroll.set(Key {
+                    t,
+                    v,
+                    ease: Ease::Step,
+                });
+            }
+        })
+    }
+
+    /// Puts move `m` on the shared scroll from `t`, coming back to the speed there after it.
+    pub fn scroll_move(&mut self, m: ScrollMove, t: f64) -> bool {
+        let beat = self.beat_at(t);
+        let speed = self.scroll_speed(t);
+        match m {
+            ScrollMove::Freeze => self.scroll_keys(t, t + beat, &[(t, 0.0), (t + beat, speed)]),
+            ScrollMove::Reverse => self.scroll_keys(t, t + beat, &[(t, -speed), (t + beat, speed)]),
+            ScrollMove::Lurch => {
+                // A quarter of each beat three times as fast, the rest a third: a beat's way.
+                let mut keys = Vec::new();
+                for b in 0..4 {
+                    let at = t + b as f64 * beat;
+                    keys.push((at, speed * 3.0));
+                    keys.push((at + beat / 4.0, speed / 3.0));
+                }
+                keys.push((t + 4.0 * beat, speed));
+                self.scroll_keys(t, t + 4.0 * beat, &keys)
+            }
+            ScrollMove::Jump => {
+                // A beat's scroll in 2 ms.
+                const SPAN: f64 = 2.0;
+                let fast = (beat / SPAN).min(crate::tko::scroll::MAX_SPEED);
+                self.scroll_keys(t, t + SPAN, &[(t, fast), (t + SPAN, speed)])
+            }
+        }
+    }
+
+    /// The speed key at or before `t` glides to the next one instead of jumping there.
+    pub fn scroll_glide(&mut self, t: f64) -> bool {
+        self.edit_gimmick(false, |g| {
+            let at = g.scroll.keys.partition_point(|k| k.t <= t);
+            if let Some(k) = at.checked_sub(1).and_then(|i| g.scroll.keys.get_mut(i)) {
+                k.ease = if k.ease == Ease::Step {
+                    Ease::SineInOut
+                } else {
+                    Ease::Step
+                };
+            }
+        })
+    }
+
+    pub fn clear_scroll(&mut self) -> bool {
+        self.edit_gimmick(false, |g| g.scroll.keys.clear())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,5 +603,37 @@ mod tests {
         assert!(e.before_of(g).unwrap().is_empty());
         assert!(e.undo());
         assert!(e.motion_of(g).unwrap().before.contains_key("opacity"));
+    }
+
+    #[test]
+    fn scroll_moves_come_back_to_the_speed_and_keep_notes_on_time() {
+        use crate::tko::scroll::ScrollTable;
+        let mut e = tko();
+        let t = 4000.0;
+        let beat = e.beat_at(t);
+        assert!(e.set_scroll_speed(0.0, 2.0));
+        assert_eq!(e.scroll_speed(t), 2.0);
+        for m in ScrollMove::ALL {
+            assert!(e.scroll_move(m, t), "{}", m.name());
+            let g = e.gimmick().unwrap();
+            let table = ScrollTable::new(&g.scroll).unwrap();
+            // After it, the speed it had.
+            assert_eq!(e.scroll_speed(t + 4.0 * beat + 1.0), 2.0, "{}", m.name());
+            let x = |t: f64| table.x(t);
+            match m {
+                ScrollMove::Freeze => assert_eq!(x(t + beat), x(t)),
+                ScrollMove::Reverse => assert!(x(t + beat) < x(t)),
+                // On time overall: a bar's way in a bar.
+                ScrollMove::Lurch => {
+                    assert!((x(t + 4.0 * beat) - x(t) - 2.0 * 4.0 * beat).abs() < 1e-6)
+                }
+                ScrollMove::Jump => assert!((x(t + 2.0) - x(t) - beat).abs() < 1e-6),
+            }
+            assert!(e.undo());
+        }
+        assert!(e.scroll_glide(t));
+        assert_eq!(e.gimmick().unwrap().scroll.keys[0].ease, Ease::SineInOut);
+        assert!(e.clear_scroll());
+        assert_eq!(e.scroll_speed(t), 1.0);
     }
 }
