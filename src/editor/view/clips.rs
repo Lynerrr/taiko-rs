@@ -5,8 +5,9 @@
 //! a row then draws it there (a click on a row lays one bar; buttons lay it over the kiai or the
 //! notes selected). A drag on empty rows picks every block it touches; Shift or Ctrl clicks add
 //! or take one away. Blocks picked move together, Ctrl+D copies them and Delete removes them;
-//! their ends resize one, a right click deletes one. The rows scroll, with a free one always at
-//! the bottom.
+//! their ends resize one, a right click deletes one. Ctrl+drag drags copies, Ctrl+C / X / V copy,
+//! cut and paste them at the playhead, Ctrl+A picks all. Blocks never share a stretch of a row.
+//! The rows scroll, with a free one always at the bottom.
 
 use super::chrome::wrap;
 use super::{Btn, Drag, Field, Keys, Mode, View, fmt_time, inside};
@@ -20,6 +21,12 @@ use crate::tko::track::Ease;
 
 /// Rows of clips shown at once (more scroll).
 pub(super) const ROWS: u8 = 6;
+thread_local! {
+    /// Blocks copied with Ctrl+C or Ctrl+X: kept while the game runs, so they paste into
+    /// another map too.
+    static CLIPBOARD: std::cell::RefCell<Vec<Clip>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Where (from the top of the panel) the strip of motion keys sits, and how tall it is.
 const STRIP_Y: f32 = 11.0;
 const STRIP_H: f32 = 10.0;
@@ -178,7 +185,7 @@ impl View {
         let n = self.fx_group().len();
         if n > 1 {
             let text = format!(
-                "{n} blocks picked: drag one to move them all, Ctrl+D copies them, Delete removes them. The settings below are the brightest one's."
+                "{n} blocks picked: drag one to move them all (Ctrl+drag copies), Ctrl+C / Ctrl+V copy and paste at the playhead, Ctrl+D copies them after, Delete removes them. The settings below are the brightest one's."
             );
             y = self.paragraph(c, x, y, inner, 6.0, 0xffffff, &text) + 2.0;
         }
@@ -343,7 +350,7 @@ impl View {
                 self.wrap_row(c, x, y + 1.0, inner, &row);
             }
             None => {
-                let hint = "Pick an effect, then drag on a row below to place it. Drag over empty rows to pick several blocks (Shift adds), then Ctrl+D copies them. Keys 1-9 record this tab's effects live while the song plays.";
+                let hint = "Pick an effect, then drag on a row below to place it. Drag over empty rows to pick several blocks (Shift adds), then Ctrl+drag, Ctrl+D or Ctrl+C / Ctrl+V copies them. Keys 1-9 record this tab's effects live while the song plays.";
                 self.paragraph(c, x, y, inner, 6.0, DIM, hint);
             }
         }
@@ -683,21 +690,6 @@ impl View {
         (a.is_finite() && b > a).then_some((a, b + 1.0))
     }
 
-    /// The first row with `rows` free ones from it over `start..end`.
-    fn free_row(&self, start: f64, end: f64, rows: usize) -> u8 {
-        let rows = (rows as u8).clamp(1, LANES);
-        (0..=LANES - rows)
-            .find(|&r| {
-                (0..rows).all(|k| {
-                    self.ed
-                        .clips()
-                        .iter()
-                        .all(|c| c.lane != r + k || c.end <= start || c.start >= end)
-                })
-            })
-            .unwrap_or(0)
-    }
-
     /// Lays preset `i` over `start..end` from row `row` on, and picks its first clip.
     fn place_preset(&mut self, i: usize, start: f64, end: f64, row: Option<u8>) {
         let Some(p) = PRESETS.get(i) else { return };
@@ -720,18 +712,24 @@ impl View {
                 }
             }
         }
-        let row = row.unwrap_or_else(|| self.free_row(start, end, clips.len()));
-        let last = (row as usize + clips.len())
-            .saturating_sub(1)
-            .min(LANES as usize - 1) as u8;
+        // From the row asked for (the top one else), moved to the nearest rows that are free
+        // over that stretch: blocks never sit on top of each other.
+        let n = clips.len().clamp(1, LANES as usize) as u8;
+        let row = row.unwrap_or(0).min(LANES - n);
         for (k, c) in clips.iter_mut().enumerate() {
             c.lane = (row + k as u8).min(LANES - 1);
         }
-        let ids = self.ed.add_clips(clips);
+        let ids = self.ed.add_clips_free(clips, false);
         if let Some(&id) = ids.first() {
             self.pick_clips(&[id]);
-            self.show_row(last);
-            self.show_row(row);
+            let lanes: Vec<u8> = ids
+                .iter()
+                .filter_map(|&k| self.ed.clip(k).map(|c| c.lane))
+                .collect();
+            if let (Some(&lo), Some(&hi)) = (lanes.iter().min(), lanes.iter().max()) {
+                self.show_row(hi);
+                self.show_row(lo);
+            }
             self.status = format!("{} from {} to {}", p.name, fmt_time(start), fmt_time(end));
             self.mark_stale();
         }
@@ -1315,6 +1313,77 @@ impl View {
         (used.saturating_add(1)).clamp(ROWS, LANES)
     }
 
+    /// Ctrl+C (`cut`: Ctrl+X) on the blocks picked: kept to paste with Ctrl+V, here or in
+    /// another map.
+    pub(super) fn copy_clips(&mut self, cut: bool) {
+        let group = self.fx_group();
+        let picked: Vec<Clip> = self
+            .ed
+            .clips()
+            .iter()
+            .filter(|c| group.contains(&c.id))
+            .cloned()
+            .collect();
+        if picked.is_empty() {
+            self.status = "pick blocks first".into();
+            return;
+        }
+        let n = picked.len();
+        CLIPBOARD.with(|b| *b.borrow_mut() = picked);
+        let what = format!("{n} block{}", if n == 1 { "" } else { "s" });
+        if cut {
+            self.pick_clips(&[]);
+            if self.ed.delete_clips(&group) {
+                self.mark_stale();
+            }
+            self.status = format!("cut {what}");
+        } else {
+            self.status = format!("copied {what}");
+        }
+    }
+
+    /// Whether Ctrl+C or Ctrl+X kept blocks to paste.
+    pub(super) fn has_copied_clips() -> bool {
+        CLIPBOARD.with(|b| !b.borrow().is_empty())
+    }
+
+    /// Ctrl+V: the blocks copied, from the playhead on with their spacing and rows (the nearest
+    /// free rows when those are taken there), picked; the playhead goes to where they end, so
+    /// pasting again lays the next copy after them, as in Ableton.
+    pub(super) fn paste_copied_clips(&mut self) {
+        let copied = CLIPBOARD.with(|b| b.borrow().clone());
+        let at = self.ed.snapped(self.ed.time.max(0.0));
+        let ids = self.ed.paste_clips(&copied, at);
+        if ids.is_empty() {
+            self.status = "nothing to paste: copy blocks with Ctrl+C first".into();
+            return;
+        }
+        self.pick_clips(&ids);
+        let placed: Vec<&Clip> = ids.iter().filter_map(|&k| self.ed.clip(k)).collect();
+        let end = placed.iter().map(|c| c.end).fold(at, f64::max);
+        let rows = placed.iter().map(|c| c.lane);
+        let (lo, hi) = (rows.clone().min(), rows.max());
+        if let (Some(lo), Some(hi)) = (lo, hi) {
+            self.show_row(hi);
+            self.show_row(lo);
+        }
+        let n = ids.len();
+        self.status = format!(
+            "pasted {n} block{} at {}",
+            if n == 1 { "" } else { "s" },
+            fmt_time(at)
+        );
+        self.set_time(end);
+        self.mark_stale();
+    }
+
+    /// Ctrl+A: every block picked.
+    pub(super) fn pick_all_clips(&mut self) {
+        let all: Vec<u32> = self.ed.clips().iter().map(|c| c.id).collect();
+        self.status = format!("picked {} blocks", all.len());
+        self.pick_clips(&all);
+    }
+
     /// Scrolls the rows so row `row` shows.
     fn show_row(&mut self, row: u8) {
         if row < self.fx_top {
@@ -1586,6 +1655,36 @@ impl View {
         c.text(x + 4.0, y + 3.0, 5.5, rgba(0x6a6a80, 1.0), &label);
     }
 
+    /// The first move of a Ctrl drag: copies of the blocks in `fx_orig` where they are, as the
+    /// first step of the drag (so the copy and its move undo together); the copies are picked
+    /// and dragged from then on. Returns the copy of `id`.
+    fn start_copy_drag(&mut self, id: u32, grab: f64) -> Option<u32> {
+        let from: Vec<u32> = self.fx_orig.iter().map(|o| o.0).collect();
+        let copies: Vec<Clip> = from
+            .iter()
+            .filter_map(|&k| self.ed.clip(k).cloned())
+            .collect();
+        let ids = self.ed.add_clips_as(copies, true);
+        if ids.len() != from.len() {
+            return None;
+        }
+        let main = from.iter().position(|&k| k == id).map(|k| ids[k])?;
+        self.fx_orig = self.clip_places(&ids);
+        self.fx_many = ids;
+        self.fx_sel = Some(main);
+        self.drag = Drag::FxMove {
+            id: main,
+            grab,
+            copy: false,
+        };
+        self.status = format!(
+            "copying {} block{}",
+            from.len(),
+            if from.len() == 1 { "" } else { "s" }
+        );
+        Some(main)
+    }
+
     /// Where clips `ids` are: id, start, end, row.
     fn clip_places(&self, ids: &[u32]) -> Vec<(u32, f64, f64, u8)> {
         ids.iter()
@@ -1605,6 +1704,21 @@ impl View {
         }
         let add = keys.shift || keys.ctrl;
         match self.clip_at(x, y) {
+            // Ctrl (or Ctrl+Shift) on a block, as in Ableton: dragging drags copies of it (of
+            // all the blocks picked, when it is one of them); a click takes it in or out.
+            Some((id, Part::Body)) if keys.ctrl => {
+                let Some(cl) = self.ed.clip(id) else { return };
+                let grab = self.t_at(x) - cl.start;
+                let group = self.fx_group();
+                let copied = if group.contains(&id) { group } else { vec![id] };
+                self.fx_orig = self.clip_places(&copied);
+                self.fx_click = Some(id);
+                self.drag = Drag::FxMove {
+                    id,
+                    grab,
+                    copy: true,
+                };
+            }
             Some((id, part)) => {
                 let mut group = self.fx_group();
                 if add {
@@ -1630,7 +1744,11 @@ impl View {
                     Part::Body => {
                         let grab = self.t_at(x) - cl.start;
                         self.fx_orig = self.clip_places(&self.fx_group());
-                        Drag::FxMove { id, grab }
+                        Drag::FxMove {
+                            id,
+                            grab,
+                            copy: false,
+                        }
                     }
                     Part::Start => Drag::FxEdge { id, end: false },
                     Part::End => Drag::FxEdge { id, end: true },
@@ -1661,7 +1779,7 @@ impl View {
         let t = self.ed.snapped(self.t_at(x).max(0.0));
         match self.drag {
             Drag::FxNew { row, from, .. } => self.drag = Drag::FxNew { row, from, to: t },
-            Drag::FxMove { id, grab } => {
+            Drag::FxMove { id, grab, copy } => {
                 let Some(&(_, s0, _, r0)) = self.fx_orig.iter().find(|o| o.0 == id) else {
                     return;
                 };
@@ -1671,6 +1789,14 @@ impl View {
                     return;
                 }
                 self.fx_click = None;
+                let id = if copy {
+                    match self.start_copy_drag(id, grab) {
+                        Some(copy) => copy,
+                        None => return,
+                    }
+                } else {
+                    id
+                };
                 let from = self.fx_orig.clone();
                 if self
                     .ed
@@ -1684,11 +1810,13 @@ impl View {
             }
             Drag::FxEdge { id, end } => {
                 let min = self.ed.beat_at(t) / self.ed.snap.max(1) as f64;
+                // An end stops at the next block on the row instead of going over it.
+                let (lo, hi) = self.ed.clip_room(id);
                 if self.ed.set_clip(id, true, |c| {
                     if end {
-                        c.end = t.max(c.start + min);
+                        c.end = t.max(c.start + min).min(hi.max(c.end));
                     } else {
-                        c.start = t.min(c.end - min);
+                        c.start = t.min(c.end - min).max(lo.min(c.start));
                     }
                 }) {
                     self.mark_stale();
@@ -1722,6 +1850,22 @@ impl View {
                 self.place_preset(armed, a, b, Some(row));
                 if !keys.shift {
                     self.fx_armed = None;
+                }
+            }
+            Drag::FxMove { id, copy: true, .. } => {
+                // Ctrl and a click, no drag: in or out of the blocks picked.
+                self.fx_orig.clear();
+                if self.fx_click.take() == Some(id) {
+                    let mut group = self.fx_group();
+                    if let Some(k) = group.iter().position(|&g| g == id) {
+                        group.remove(k);
+                        self.fx_sel = group.last().copied();
+                        self.fx_many = group;
+                    } else {
+                        group.push(id);
+                        self.fx_many = group;
+                        self.fx_sel = Some(id);
+                    }
                 }
             }
             Drag::FxMove { id, .. } => {

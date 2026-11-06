@@ -219,6 +219,8 @@ enum Drag {
     FxMove {
         id: u32,
         grab: f64,
+        /// Ctrl held: the first move drags copies (a click without one takes it in or out).
+        copy: bool,
     },
     /// An effect clip resized by one end.
     FxEdge {
@@ -4560,6 +4562,64 @@ mod tests {
         let (x, y) = (v.x_of(1500.0), row(&v, 1));
         click(&mut v, x, y);
         assert_eq!(v.fx_group(), vec![b]);
+    }
+
+    #[test]
+    fn blocks_copy_by_ctrl_drag_and_paste_at_the_playhead() {
+        let mut v = clips_view();
+        let row = |v: &View, r: u8| v.row_y(r) + v.row_h() / 2.0;
+        let a = clip_on(&mut v, 0, 1000.0, 2000.0);
+        let b = clip_on(&mut v, 2, 3000.0, 4000.0);
+        draw(&mut v);
+        let at = |v: &View, id: u32| {
+            let c = v.ed.clip(id).unwrap();
+            (c.start, c.end, c.lane)
+        };
+        // Ctrl and a click, no drag: in and out of the blocks picked; nothing is copied.
+        v.pick_clips(&[a]);
+        v.mouse_down(v.x_of(3500.0), row(&v, 2), ctrl(), None);
+        v.mouse_up(v.x_of(3500.0), row(&v, 2), ctrl());
+        assert_eq!(sorted(v.fx_group()), vec![a, b]);
+        assert_eq!(v.ed.clips().len(), 2);
+        v.mouse_down(v.x_of(3500.0), row(&v, 2), ctrl(), None);
+        v.mouse_up(v.x_of(3500.0), row(&v, 2), ctrl());
+        assert_eq!(v.fx_group(), vec![a]);
+        // Ctrl+drag: a copy is dragged, the block stays; one undo step takes it all back.
+        v.mouse_down(v.x_of(1500.0), row(&v, 0), ctrl(), None);
+        v.mouse_move(v.x_of(2000.0), row(&v, 0), ctrl());
+        v.mouse_move(v.x_of(5500.0), row(&v, 0), ctrl());
+        v.mouse_up(v.x_of(5500.0), row(&v, 0), ctrl());
+        assert_eq!(v.ed.clips().len(), 3);
+        assert_eq!(at(&v, a), (1000.0, 2000.0, 0), "the block stays");
+        let copy = v.fx_group();
+        assert_eq!(copy.len(), 1);
+        assert_eq!(at(&v, copy[0]), (5000.0, 6000.0, 0));
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.clips().len(), 2);
+        // Ctrl+A, Ctrl+C, then Ctrl+V at the playhead keeps their spacing and rows, and the
+        // playhead goes to their end, so the next paste follows on.
+        v.key(KeyCode::KeyA, false, ctrl(), None);
+        assert_eq!(sorted(v.fx_group()), vec![a, b]);
+        v.key(KeyCode::KeyC, false, ctrl(), None);
+        v.set_time(8000.0);
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        let first = v.fx_group();
+        let mut got: Vec<_> = first.iter().map(|&id| at(&v, id)).collect();
+        got.sort_by(|x, y| x.0.total_cmp(&y.0));
+        assert_eq!(got, [(8000.0, 9000.0, 0), (10000.0, 11000.0, 2)]);
+        assert_eq!(v.ed.time, 11000.0);
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        let mut got: Vec<_> = v.fx_group().iter().map(|&id| at(&v, id)).collect();
+        got.sort_by(|x, y| x.0.total_cmp(&y.0));
+        assert_eq!(got, [(11000.0, 12000.0, 0), (13000.0, 14000.0, 2)]);
+        // Ctrl+X takes them away; pasting over blocks puts them on free rows.
+        v.key(KeyCode::KeyX, false, ctrl(), None);
+        assert_eq!(v.ed.clips().len(), 4);
+        v.set_time(8000.0);
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        let mut rows: Vec<u8> = v.fx_group().iter().map(|&id| at(&v, id).2).collect();
+        rows.sort();
+        assert_eq!(rows, [1, 3]);
     }
 
     #[test]
