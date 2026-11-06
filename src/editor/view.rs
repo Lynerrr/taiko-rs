@@ -4265,7 +4265,6 @@ mod tests {
         assert!(!v.keyframe_mode());
     }
 
-
     #[test]
     fn picked_notes_get_a_move_before_their_hit_keyed_on_the_graph() {
         use motion::MAct;
