@@ -2573,7 +2573,7 @@ pub fn draw_mod_select(
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
     let score = format!("score x{mult:.2}{rank}");
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &score);
-    let hint = "arrows + Space toggle   F / right-click favourite   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift)   F1 / Esc closes";
+    let hint = "arrows + Space toggle   F / right-click favourite   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift, Tact, OD Override)   F1 / Esc closes";
     let room = pw - 70.0 - 16.0 - Canvas::text_width(8.0, &score) - 16.0;
     c.text(
         px + 70.0,

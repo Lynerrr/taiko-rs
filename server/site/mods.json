@@ -133,6 +133,11 @@
         "acronym": "AB",
         "description": "Every don and kat is a big note.",
         "name": "All Big"
+      },
+      {
+        "acronym": "OV",
+        "description": "Play at the OD you pick, 0 to 20 (C: which). Not saved.",
+        "name": "OD Override"
       }
     ],
     "title": "CONVERSION"

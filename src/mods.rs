@@ -122,6 +122,7 @@ pub enum Mod {
     Gearbox,
     Roulette,
     Tact,
+    OdOverride,
     // SV experiments.
     AntiSv,
     HyperSv,
@@ -173,7 +174,7 @@ pub enum Mod {
 
 use Mod::*;
 
-pub const ALL: [Mod; 78] = [
+pub const ALL: [Mod; 79] = [
     Easy,
     NoFail,
     HalfTime,
@@ -253,6 +254,7 @@ pub const ALL: [Mod; 78] = [
     Multiverse,
     // Added later: a mod's place in this list is its bit (`Mod::bit`), so new ones go last.
     Tact,
+    OdOverride,
 ];
 
 /// Mod select columns: (title, accent colour, mods).
@@ -290,6 +292,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
             WindUp,
             WindDown,
             AllBig,
+            OdOverride,
         ],
     ),
     (
@@ -333,7 +336,13 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
 ];
 
 /// The mods with settings of their own, in the order of the mod customization's tabs.
-const CUSTOMIZABLE: [Mod; 4] = [Mod::Random, Mod::Multiverse, Mod::Shapeshift, Mod::Tact];
+const CUSTOMIZABLE: [Mod; 5] = [
+    Mod::Random,
+    Mod::Multiverse,
+    Mod::Shapeshift,
+    Mod::Tact,
+    Mod::OdOverride,
+];
 
 /// The tabs of the mod customization: the mods with settings that are on (only those show).
 pub fn customizable(mods: Mods) -> Vec<Mod> {
@@ -392,6 +401,7 @@ impl Mod {
             Gearbox => "GB",
             Roulette => "RL",
             Tact => "TC",
+            OdOverride => "OV",
             AntiSv => "AS",
             HyperSv => "HS",
             Even => "EV",
@@ -475,6 +485,7 @@ impl Mod {
             Gearbox => "Gearbox",
             Roulette => "Roulette",
             Tact => "Tact",
+            OdOverride => "OD Override",
             AntiSv => "Anti-SV",
             HyperSv => "Hyper SV",
             Even => "Even",
@@ -560,6 +571,7 @@ impl Mod {
             Gearbox => "Every beat of a bar shifts up a gear (+15%); the next bar starts over.",
             Roulette => "Every 4 bars a random speed (0.5x-2x); a marker shows where it changes.",
             Tact => "Notes crawl through each bar, then rush to where they belong (C: how often).",
+            OdOverride => "Play at the OD you pick, 0 to 20 (C: which). Not saved.",
             AntiSv => "The map's speed changes are turned upside down: 2x becomes 0.5x.",
             HyperSv => "The map's speed changes are exaggerated: 1.5x becomes 2.25x.",
             Even => "Notes are evenly spaced: bursts fly in fast, slow parts crawl. Play by ear.",
@@ -748,7 +760,8 @@ impl Mod {
     /// early, or there's nothing left to read).
     fn shuffle_cost(self) -> Option<i32> {
         Some(match self {
-            Autoplay | Relax | SuddenDeath | Perfect | GreatOrNothing | Memory | Overtime => {
+            Autoplay | Relax | SuddenDeath | Perfect | GreatOrNothing | Memory | Overtime
+            | OdOverride => {
                 return None;
             }
             Half => -3,
@@ -830,12 +843,13 @@ impl Mod {
 }
 
 /// Mods a Defense match can't have (see `Mod::defense_ok`).
-pub const DEFENSE_BANNED: [Mod; 5] = [
+pub const DEFENSE_BANNED: [Mod; 6] = [
     Mod::Autoplay,
     Mod::Relax,
     Mod::NoFail,
     Mod::SuddenDeath,
     Mod::Perfect,
+    Mod::OdOverride,
 ];
 
 impl Mods {
@@ -846,9 +860,9 @@ impl Mods {
         Mods(self.0 & SPEED.iter().fold(0, |bits, m| bits | m.bit()))
     }
 
-    /// The rest: each player's own in a lobby.
+    /// The rest: each player's own in a lobby. Not OD Override: everyone's judged by the map's.
     pub fn free(self) -> Mods {
-        Mods(self.0 & !self.shared().0)
+        Mods(self.0 & !self.shared().0 & !Mod::OdOverride.bit())
     }
 
     /// What the host's mods make of the lobby's match: in an ordinary one just the speed's (the
@@ -1040,8 +1054,11 @@ impl Mods {
         }
     }
 
-    /// OD after EZ / HR / Precise.
+    /// OD after EZ / HR / Precise, or the one picked for OD Override instead of all of them.
     pub fn od(self, od: f64) -> f64 {
+        if self.has(OdOverride) {
+            return crate::od_override::get();
+        }
         let mut od = od;
         if self.has(Easy) {
             od *= 0.5;
@@ -1078,9 +1095,10 @@ impl Mods {
     }
 
     /// Mods that make a play's score not count (no local score, replay or leaderboard row).
-    /// Relax counts, on boards and a pp total of its own (`relax`).
+    /// Relax counts, on boards and a pp total of its own (`relax`). OD Override's value isn't in
+    /// the mods, so a saved play couldn't be judged again, and OD 0 would be free accuracy.
     pub fn unranked(self) -> bool {
-        self.has(Autoplay)
+        self.has(Autoplay) || self.has(OdOverride)
     }
 
     /// Whether a play goes on the Relax boards instead of the usual ones.
@@ -1261,6 +1279,7 @@ mod tests {
     #[test]
     fn only_autoplay_keeps_a_play_off_the_boards() {
         assert!(Mods::parse("AT").unranked());
+        assert!(Mods::parse("OV").unranked());
         assert!(!Mods::parse("RX").unranked());
         assert!(Mods::parse("RX").relax());
         assert!(!Mods::parse("HD").relax());
@@ -1497,5 +1516,26 @@ mod tests {
             "without the Maze lane the rail stays"
         );
         assert!(DEFENSE_BANNED.iter().all(|m| !m.defense_ok()));
+    }
+
+    #[test]
+    fn od_override_replaces_the_od_and_stays_out_of_lobbies() {
+        crate::od_override::set(17.5);
+        let m = Mods::parse("OV");
+        assert_eq!(m.od(3.0), 17.5);
+        // Over EZ, HR and Precise, and past the 10 they stop at.
+        assert_eq!(Mods::parse("OV,HR,PR").od(3.0), 17.5);
+        assert_eq!(Mods::parse("OV,EZ").od(3.0), 17.5);
+        crate::od_override::set(crate::od_override::DEFAULT);
+        assert!(!m.free().has(Mod::OdOverride) && !m.shared().has(Mod::OdOverride));
+        assert_eq!(Mods::parse("OV,HD").free(), Mods::parse("HD"));
+        assert!(!Mod::OdOverride.defense_ok());
+        assert_eq!(m.multiplier(), 1.0);
+        // A shuffle mustn't make a play unsaved by chance.
+        assert!((0..5000).all(|seed| !Mods::shuffle(seed).has(Mod::OdOverride)));
+        assert!(customizable(m).contains(&Mod::OdOverride));
+        // Last in the list: every other mod keeps its bit.
+        assert_eq!(ALL[ALL.len() - 1], Mod::OdOverride);
+        assert_eq!(ALL[ALL.len() - 2], Mod::Tact);
     }
 }

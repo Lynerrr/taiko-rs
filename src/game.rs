@@ -230,9 +230,19 @@ pub struct Windows {
 impl Windows {
     pub fn new(od: f64) -> Windows {
         Windows {
-            great: beatmap::difficulty_range(od, 50.0, 35.0, 20.0),
-            ok: beatmap::difficulty_range(od, 120.0, 80.0, 50.0),
-            miss: beatmap::difficulty_range(od, 135.0, 95.0, 70.0),
+            great: beatmap::great_ms(od),
+            ok: beatmap::window_ms(od, 120.0, 80.0, 50.0),
+            miss: beatmap::window_ms(od, 135.0, 95.0, 70.0),
+        }
+    }
+
+    /// As wide as they are in real time at `rate`: they're timed in the song.
+    pub fn at_rate(self, rate: f64) -> Windows {
+        let rate = rate.max(0.01);
+        Windows {
+            great: self.great / rate,
+            ok: self.ok / rate,
+            miss: self.miss / rate,
         }
     }
 }
