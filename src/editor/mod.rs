@@ -12,6 +12,7 @@ pub mod home;
 pub mod keyframes;
 pub mod new_map;
 pub mod nodes;
+pub mod setup;
 pub mod state;
 pub mod sv_curves;
 pub mod svt;

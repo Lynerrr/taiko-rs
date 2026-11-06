@@ -142,6 +142,19 @@ pub(crate) fn load_played(
     Some(map)
 }
 
+/// The star rating at 1x, no mods, of a map held as `text` (the editor's, saved or not).
+pub fn star_rating_text(text: &str) -> Option<f64> {
+    let mut map = Beatmap::from_bytes(text.as_bytes()).ok()?;
+    drop_tiny_sliders(&mut map);
+    if !calculable(&map) {
+        return None;
+    }
+    Difficulty::new()
+        .calculate_for_mode::<Taiko>(&map)
+        .ok()
+        .map(|a| a.stars)
+}
+
 pub fn star_rating(path: &Path, rate: f64) -> Option<f64> {
     star_rating_with(path, rate, 0)
 }

@@ -35,6 +35,7 @@ mod menu;
 mod nodes;
 mod panel;
 mod run;
+mod setup;
 mod timing_win;
 mod upload;
 
@@ -81,6 +82,19 @@ pub enum Field {
     Fx(CF),
     /// The text of the text block picked.
     FxText,
+    /// A setting of Song setup.
+    Meta(crate::editor::setup::Key),
+}
+
+impl Field {
+    /// Typed as free text (`type_text`), not as a number.
+    fn is_text(self) -> bool {
+        match self {
+            Field::FxText => true,
+            Field::Meta(k) => k.is_text(),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -333,6 +347,8 @@ enum Modal {
     Upload,
     /// The manual.
     Manual,
+    /// File > Song setup.
+    Setup,
 }
 
 pub struct View {
@@ -380,6 +396,8 @@ pub struct View {
     typing: Option<(Field, String)>,
     /// A text block's words just opened for typing: the first key replaces them all.
     typing_fresh: bool,
+    /// Song setup's star rating, as of a history revision.
+    setup_stars: Option<(u64, Option<f64>)>,
     /// A test play asked for: from this map time, or (None) from the start.
     want_test: Option<Option<f64>>,
     mouse: (f32, f32),
@@ -550,6 +568,7 @@ impl View {
             sel_line: None,
             typing: None,
             typing_fresh: false,
+            setup_stars: None,
             want_test: None,
             mouse: (0.0, 0.0),
             width: 853.0,
@@ -2425,6 +2444,9 @@ impl View {
         if let Field::Fx(cf) = f {
             return self.clip_change(cf, dir, keys);
         }
+        if let Field::Meta(k) = f {
+            return self.step_setting(k, dir, keys);
+        }
         if f == Field::FxText {
             return;
         }
@@ -2454,7 +2476,7 @@ impl View {
                 Field::Time => p.time = (p.time + dir * k).max(0.0),
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::FxText => {}
+                Field::S(_) | Field::Fx(_) | Field::FxText | Field::Meta(_) => {}
             },
             false,
         );
@@ -2467,7 +2489,7 @@ impl View {
     /// Applies what is being typed into a field (if anything) and stops typing.
     fn commit_typing(&mut self) {
         if let Some((f, text)) = self.typing.take()
-            && (f == Field::FxText || !text.trim().is_empty())
+            && (f.is_text() || !text.trim().is_empty())
         {
             self.apply_typed(f, &text);
         }
@@ -2482,6 +2504,9 @@ impl View {
     fn apply_typed(&mut self, f: Field, text: &str) {
         if f == Field::FxText {
             return self.layer_text_set(text);
+        }
+        if let Field::Meta(k) = f {
+            return self.apply_setting(k, text);
         }
         if let Field::Fx(cf) = f {
             match text.trim().parse::<f64>() {
@@ -2518,7 +2543,7 @@ impl View {
                 Field::Time => p.time = v,
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::FxText => {}
+                Field::S(_) | Field::Fx(_) | Field::FxText | Field::Meta(_) => {}
             },
             false,
         );
@@ -2616,6 +2641,7 @@ impl View {
             }
             Btn::Dec(f) => self.change(f, -1.0, keys),
             Btn::Inc(f) => self.change(f, 1.0, keys),
+            Btn::Edit(Field::Meta(k)) => self.type_setting(k),
             Btn::Edit(f) => {
                 if self.sel_line.is_some()
                     || matches!(f, Field::S(_))
@@ -2654,19 +2680,25 @@ impl View {
 
     // ---- the keyboard ----
 
-    /// Whether typed text is wanted (a text block's words being typed).
+    /// Whether typed text is wanted (a text block's words or a name in Song setup).
     pub fn wants_text(&self) -> bool {
-        matches!(self.typing, Some((Field::FxText, _)))
+        self.typing.as_ref().is_some_and(|(f, _)| f.is_text())
     }
 
     /// Text typed while `wants_text`.
     pub fn type_text(&mut self, s: &str) {
-        if let Some((Field::FxText, text)) = &mut self.typing {
+        if let Some((f, text)) = &mut self.typing
+            && f.is_text()
+        {
+            let most = match f {
+                Field::Meta(k) => k.max_len(),
+                _ => crate::tko::clips::MAX_TEXT,
+            };
             if std::mem::take(&mut self.typing_fresh) && s.chars().any(|c| !c.is_control()) {
                 text.clear();
             }
             for ch in s.chars().filter(|c| !c.is_control()) {
-                if text.chars().count() < crate::tko::clips::MAX_TEXT {
+                if text.chars().count() < most {
                     text.push(ch);
                 }
             }
@@ -2714,6 +2746,20 @@ impl View {
                     self.apply_typed(f, &text);
                 }
                 KeyCode::Escape => self.typing = None,
+                // Tab keeps what was typed and goes on to the next box of Song setup.
+                KeyCode::Tab if matches!(f, Field::Meta(_)) => {
+                    let (f, text) = (*f, std::mem::take(text));
+                    self.typing = None;
+                    self.apply_typed(f, &text);
+                    if let Field::Meta(k) = f {
+                        let next = if k.is_text() {
+                            setup::next_text(k, keys.shift)
+                        } else {
+                            k
+                        };
+                        self.type_setting(next);
+                    }
+                }
                 // Words opened for typing go in one press, like selected text.
                 KeyCode::Backspace if fresh => text.clear(),
                 // Ctrl+Backspace takes the last word.
@@ -2738,7 +2784,7 @@ impl View {
                     self.typing_fresh = true;
                 }
                 // Free text comes as text (`type_text`), not as keys.
-                _ if *f == Field::FxText => {}
+                _ if f.is_text() => {}
                 KeyCode::Period | KeyCode::NumpadDecimal => text.push('.'),
                 KeyCode::Minus | KeyCode::NumpadSubtract => text.push('-'),
                 c => {
@@ -2811,6 +2857,13 @@ impl View {
                 KeyCode::End => self.manual_scroll(i32::MAX / 2),
                 _ => {}
             }
+            return KeyResult::Handled;
+        }
+        // Song setup takes back, redoes and saves its changes where they are made.
+        if self.modal == Some(Modal::Setup)
+            && let Some(cmd @ (Cmd::Undo | Cmd::Redo | Cmd::Save)) = cmd::find(code, keys, repeat)
+        {
+            self.run(cmd, audio);
             return KeyResult::Handled;
         }
         if self.modal.is_some() {
@@ -5832,5 +5885,63 @@ mod tests {
             None,
         );
         assert!(v.sheet);
+    }
+
+    #[test]
+    fn song_setup_types_names_steps_numbers_and_undoes() {
+        use crate::editor::setup::Key;
+        let mut v = view();
+        press(&mut v, Btn::C(Cmd::SongSetup));
+        assert_eq!(v.modal, Some(Modal::Setup));
+        draw(&mut v);
+        // The difficulty name: the first letter replaces it, Tab keeps it and goes on to Source.
+        click_btn(&mut v, Btn::Edit(Field::Meta(Key::Version)));
+        assert!(v.wants_text());
+        v.type_text("Muzukashii");
+        v.key(KeyCode::Tab, false, Keys::default(), None);
+        assert_eq!(v.ed.setting(Key::Version), "Muzukashii");
+        assert!(matches!(v.typing, Some((Field::Meta(Key::Source), _))));
+        v.type_text("Original");
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert_eq!(v.ed.setting(Key::Source), "Original");
+        assert!(v.label().ends_with("[Muzukashii]"));
+        // Numbers: - and + step, and a typed one is kept in range.
+        draw(&mut v);
+        click_btn(&mut v, Btn::Inc(Field::Meta(Key::Od)));
+        assert_eq!(v.ed.setting(Key::Od), "5.5");
+        click_btn(&mut v, Btn::Edit(Field::Meta(Key::Hp)));
+        assert!(!v.wants_text(), "a number is typed as keys");
+        v.key(KeyCode::Digit1, false, Keys::default(), None);
+        v.key(KeyCode::Digit4, false, Keys::default(), None);
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert_eq!(v.ed.setting(Key::Hp), "10");
+        assert!(v.ed.modified());
+        // The map stays playable: the preview is rebuilt with the new OD.
+        draw(&mut v);
+        assert!(v.setup_stars.is_some_and(|(_, s)| s.is_some()));
+        // Ctrl+Z works in the window; Esc closes it.
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        v.key(KeyCode::KeyZ, false, ctrl, None);
+        assert_eq!(v.ed.setting(Key::Hp), "5");
+        assert_eq!(v.modal, Some(Modal::Setup));
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert_eq!(v.modal, None);
+        for _ in 0..3 {
+            v.key(KeyCode::KeyZ, false, ctrl, None);
+        }
+        assert_eq!(v.ed.setting(Key::Version), "Oni");
+        assert!(!v.ed.modified());
+    }
+
+    #[test]
+    fn song_setup_is_in_the_file_menu() {
+        let file = menu::MENUS[0].items;
+        assert!(
+            file.iter()
+                .any(|i| matches!(i, menu::Item::Do(Cmd::SongSetup)))
+        );
     }
 }

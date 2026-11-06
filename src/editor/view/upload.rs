@@ -130,7 +130,7 @@ pub fn checks(path: &Path, saved: bool, logged_in: bool) -> Vec<Check> {
             if ok {
                 format!("{what}: {value}")
             } else {
-                format!("{what} is empty: fill it in the map's metadata")
+                format!("{what} is empty: fill it in File > Song setup")
             },
         ));
     }
