@@ -1,15 +1,14 @@
 //! Working with timing lines as a group: selecting several in the velocity graph, dragging them
 //! together, and the tools that act on a selection (set, multiply, ramp, copy, delete).
 
-use super::chrome::DIM;
-use super::{Btn, Drag, Keys, SAct, View};
+use super::chrome::sample_name;
+use super::{Btn, Drag, Field, Keys, SAct, View};
+use crate::editor::chart::TimingPoint;
 use crate::editor::timing;
 use crate::render::{Canvas, accent, rgba};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TAct {
-    Value(i32),
-    SetValue,
     /// Move the selected line to the playhead.
     Here,
     /// Copy the selected lines to the playhead.
@@ -222,14 +221,6 @@ impl View {
     pub(super) fn press_line_action(&mut self, a: TAct) {
         let ids = self.selected_lines();
         let result: Result<String, String> = match a {
-            TAct::Value(d) => {
-                self.t_value = (self.t_value + d as f64 * 0.05).clamp(0.05, 10.0);
-                return;
-            }
-            TAct::SetValue => self
-                .ed
-                .set_sv(&ids, self.t_value)
-                .map(|n| format!("set {n} lines to x{:.2}", self.t_value)),
             TAct::Here => match self.sel_line {
                 Some(id) => {
                     let at = self.ed.time;
@@ -287,32 +278,49 @@ impl View {
             ),
         );
         y += 14.0;
-        let row = |this: &mut View,
-                   c: &mut Canvas,
-                   y: f32,
-                   name: &str,
-                   value: String,
-                   dec: TAct,
-                   inc: TAct,
-                   go: (&str, TAct)| {
-            c.text(x, y + 4.0, 6.0, rgba(DIM, 1.0), name);
-            let vx = x + 52.0;
-            this.button(c, [vx, y, 14.0, 14.0], "-", Btn::T(dec), false);
-            c.text_centered(vx + 36.0, y + 3.5, 7.5, rgba(0xffffff, 1.0), &value);
-            this.button(c, [vx + 58.0, y, 14.0, 14.0], "+", Btn::T(inc), false);
-            let gw = Canvas::text_width(7.0, go.0) + 14.0;
-            this.button(c, [vx + 78.0, y, gw, 14.0], go.0, Btn::T(go.1), false);
+        // One field for all of them: the value they share, else "mixed". Typing or - / + changes
+        // every selected line (the speed only of the green ones).
+        let lines: Vec<&TimingPoint> = ids
+            .iter()
+            .filter_map(|id| self.ed.chart.timing_point(*id))
+            .collect();
+        let shared = |label: &str,
+                      of: &dyn Fn(&TimingPoint) -> String,
+                      only: &dyn Fn(&TimingPoint) -> bool| {
+            let mut vals = lines.iter().filter(|p| only(p)).map(|p| of(p));
+            let first = vals.next().unwrap_or_default();
+            if vals.all(|v| v == first) {
+                format!("{label} {first}")
+            } else {
+                format!("{label} mixed")
+            }
         };
-        row(
-            self,
-            c,
-            y,
-            "Set to",
-            format!("x{:.2}", self.t_value),
-            TAct::Value(-1),
-            TAct::Value(1),
-            ("Set", TAct::SetValue),
-        );
+        let mut fields: Vec<(Field, String)> = Vec::new();
+        if greens > 0 {
+            fields.push((
+                Field::Sv,
+                shared("SV", &|p| format!("x{:.2}", p.sv()), &|p| !p.is_red()),
+            ));
+        }
+        fields.push((
+            Field::Volume,
+            shared("Volume", &|p| p.volume.to_string(), &|_| true),
+        ));
+        fields.push((
+            Field::Sample,
+            shared(
+                "Sample",
+                &|p| sample_name(p.sample_set).to_string(),
+                &|_| true,
+            ),
+        ));
+        fields.push((
+            Field::Index,
+            shared("Index", &|p| p.sample_index.to_string(), &|_| true),
+        ));
+        let all_kiai = lines.iter().all(|p| p.kiai());
+        y = self.line_fields(c, x, y, w, fields);
+        self.row(c, x, y, &[("Kiai".to_string(), Btn::Kiai, all_kiai)]);
         y += 20.0;
         self.row(
             c,

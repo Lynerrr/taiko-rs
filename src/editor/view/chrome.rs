@@ -466,6 +466,41 @@ impl View {
         }
     }
 
+    /// Fields of the selected line(s), two to a row, each typed into or stepped with - and +.
+    /// Returns where the next row goes.
+    pub(super) fn line_fields(
+        &mut self,
+        c: &mut Canvas,
+        x: f32,
+        y: f32,
+        w: f32,
+        fields: Vec<(Field, String)>,
+    ) -> f32 {
+        let col = (w / 2.0 - 4.0).max(100.0);
+        let mut fy = y;
+        for (cell, (f, label)) in fields.into_iter().enumerate() {
+            let cx = x + (cell % 2) as f32 * (col + 8.0);
+            if cell % 2 == 0 && cell > 0 {
+                fy += 18.0;
+            }
+            let shown = match &self.typing {
+                Some((tf, text)) if *tf == f => format!("{label}: {text}_"),
+                _ => label,
+            };
+            let lw = col - 40.0;
+            self.button(
+                c,
+                [cx, fy, lw, 14.0],
+                &shown,
+                Btn::Edit(f),
+                self.typing.as_ref().is_some_and(|(tf, _)| *tf == f),
+            );
+            self.button(c, [cx + lw + 3.0, fy, 16.0, 14.0], "-", Btn::Dec(f), false);
+            self.button(c, [cx + lw + 21.0, fy, 16.0, 14.0], "+", Btn::Inc(f), false);
+        }
+        fy + 20.0
+    }
+
     /// What can be done to the selected timing line(s): its numbers, kiai, copies.
     pub(super) fn draw_line_editor(&mut self, c: &mut Canvas, x: f32, mut y: f32, w: f32) {
         let white = rgba(0xffffff, 1.0);
@@ -518,29 +553,7 @@ impl View {
             ));
             fields.push((Field::Index, format!("Index {}", p.sample_index)));
             fields.push((Field::Time, format!("Time {}", fmt_time(p.time))));
-            let col = (w / 2.0 - 4.0).max(100.0);
-            let mut fy = y;
-            for (cell, (f, label)) in fields.into_iter().enumerate() {
-                let cx = x + (cell % 2) as f32 * (col + 8.0);
-                if cell % 2 == 0 && cell > 0 {
-                    fy += 18.0;
-                }
-                let shown = match &self.typing {
-                    Some((tf, text)) if *tf == f => format!("{label}: {text}_"),
-                    _ => label,
-                };
-                let lw = col - 40.0;
-                self.button(
-                    c,
-                    [cx, fy, lw, 14.0],
-                    &shown,
-                    Btn::Edit(f),
-                    self.typing.as_ref().is_some_and(|(tf, _)| *tf == f),
-                );
-                self.button(c, [cx + lw + 3.0, fy, 16.0, 14.0], "-", Btn::Dec(f), false);
-                self.button(c, [cx + lw + 21.0, fy, 16.0, 14.0], "+", Btn::Inc(f), false);
-            }
-            fy += 20.0;
+            let fy = self.line_fields(c, x, y, w, fields);
             let mut items = vec![("Kiai".to_string(), Btn::Kiai, p.kiai())];
             if p.is_red() {
                 items.push(("Omit bar".to_string(), Btn::Omit, p.omits_barline()));

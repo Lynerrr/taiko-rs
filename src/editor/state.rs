@@ -748,24 +748,6 @@ impl Editor {
         Ok(())
     }
 
-    /// Gives every selected green line the velocity `to`.
-    pub fn set_sv(&mut self, ids: &[u64], to: f64) -> Result<usize, String> {
-        let n = self.greens(ids).len();
-        let ids = self.greens(ids);
-        self.edit_timings(&ids, |p| drop(p.set_sv(to)), false)?;
-        Ok(n)
-    }
-
-    /// The green lines among `ids`, in the chart's order.
-    fn greens(&self, ids: &[u64]) -> Vec<u64> {
-        self.chart
-            .timing
-            .iter()
-            .filter(|p| !p.is_red() && ids.contains(&p.id))
-            .map(|p| p.id)
-            .collect()
-    }
-
     /// Removes timing lines as one step, never the last red one.
     pub fn delete_timings(&mut self, ids: &[u64]) -> Result<usize, String> {
         let gone: Vec<TimingPoint> = self
@@ -1226,27 +1208,6 @@ mod tests {
         assert!(e.delete_timing_at(4000.0).is_err());
         assert_eq!(e.chart.timing.len(), 1);
         assert!(e.delete_timing_at(0.0).is_err(), "the only red line stays");
-    }
-
-    #[test]
-    fn the_set_tool_acts_on_green_lines_in_one_step_and_leaves_red_ones() {
-        let mut e = editor();
-        let ids: Vec<u64> = [(1000.0, 1.0), (2000.0, 1.0), (3000.0, 2.0)]
-            .iter()
-            .map(|(t, sv)| e.add_green(*t, *sv).unwrap())
-            .collect();
-        let sv = |e: &Editor, i: usize| e.chart.timing_point(ids[i]).unwrap().sv();
-        assert_eq!(e.set_sv(&ids, 1.5).unwrap(), 3);
-        assert!((0..3).all(|i| sv(&e, i) == 1.5));
-        assert!(e.undo());
-        assert_eq!(sv(&e, 0), 1.0);
-        // The red line isn't a velocity: it is left alone.
-        let red = e.chart.timing[0].id;
-        let mut all = ids.clone();
-        all.push(red);
-        let beat = e.chart.timing[0].beat_length;
-        assert_eq!(e.set_sv(&all, 0.5).unwrap(), 3);
-        assert_eq!(e.chart.timing_point(red).unwrap().beat_length, beat);
     }
 
     #[test]

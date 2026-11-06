@@ -483,7 +483,6 @@ pub struct View {
     /// The graph's range, held still while its dots are dragged.
     g_frozen: Option<(f64, f64)>,
     /// The Timing panel's tools: the velocity to set and the factor to multiply by.
-    t_value: f64,
     /// The modifier keys as of the last pointer event, for the scrolling that carries on without one.
     held: Keys,
     svt: curves::SvtUi,
@@ -600,7 +599,6 @@ impl View {
             sel_extra: Default::default(),
             line_origin: Vec::new(),
             g_frozen: None,
-            t_value: 1.0,
             held: Keys::default(),
             svt: curves::SvtUi::new(),
             last_tick: None,
@@ -2379,11 +2377,11 @@ impl View {
         };
     }
 
-    /// The lines an edit of `f` reaches: the volume and hitsounds of all the selected lines, the
-    /// rest (time, BPM, meter, velocity) of the main one.
+    /// The lines an edit of `f` reaches: the speed, volume and hitsounds of all the selected lines
+    /// (a red line has no speed to set), the rest (time, BPM, meter) of the main one.
     fn edit_targets(&self, f: Field) -> Vec<u64> {
         match f {
-            Field::Volume | Field::Sample | Field::Index => self.selected_lines(),
+            Field::Sv | Field::Volume | Field::Sample | Field::Index => self.selected_lines(),
             _ => self.sel_line.into_iter().collect(),
         }
     }
@@ -3575,8 +3573,39 @@ mod tests {
         let c = draw(&mut v);
         assert!(!c.shapes.is_empty(), "the tools panel draws");
         let sv = |v: &View, i: usize| v.ed.chart.timing_point(ids[i]).unwrap().sv();
-        press(&mut v, Btn::T(TAct::SetValue));
-        assert!((0..3).all(|i| (sv(&v, i) - 1.0).abs() < 1e-9));
+        // One typed speed and one volume for all of them; a red line among them keeps its BPM.
+        let red =
+            v.ed.chart
+                .timing
+                .iter()
+                .find(|p| p.is_red())
+                .unwrap()
+                .clone();
+        v.sel_extra.insert(red.id);
+        let k = Keys::default();
+        press(&mut v, Btn::Edit(Field::Sv));
+        for key in [
+            KeyCode::Digit1,
+            KeyCode::Period,
+            KeyCode::Digit5,
+            KeyCode::Enter,
+        ] {
+            v.key(key, false, k, None);
+        }
+        press(&mut v, Btn::Edit(Field::Volume));
+        for key in [KeyCode::Digit3, KeyCode::Digit5, KeyCode::Enter] {
+            v.key(key, false, k, None);
+        }
+        assert!((0..3).all(|i| (sv(&v, i) - 1.5).abs() < 1e-9));
+        let vol = |v: &View, i: usize| v.ed.chart.timing_point(ids[i]).unwrap().volume;
+        assert!((0..3).all(|i| vol(&v, i) == 35));
+        let now = v.ed.chart.timing_point(red.id).unwrap();
+        assert_eq!((now.beat_length, now.volume), (red.beat_length, 35));
+        v.sel_extra.remove(&red.id);
+        press(&mut v, Btn::Inc(Field::Volume));
+        assert!((0..3).all(|i| vol(&v, i) == 40));
+        draw(&mut v);
+        assert!(v.buttons.iter().any(|(_, b)| *b == Btn::Kiai));
         // The ramps and multiplying live in the SV tool, one press away.
         press(&mut v, Btn::S(SAct::Tab(1)));
         assert_eq!(v.svt.tab, 1);
