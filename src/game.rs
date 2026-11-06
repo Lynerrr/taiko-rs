@@ -4272,6 +4272,15 @@ impl Game {
                     32.0 * amp * f * (0.8 + 0.4 * pulse) * (TAU * 1.3 * u - PI * jolt + flip).sin();
             }
             let (x, y, _, mut size) = place(side_of(n.kind, s), side);
+            // A .tko approach path: from the drum along the group's curve instead of the lane,
+            // as far off the lane as the path's weight says.
+            let (x, y) = match fx.path {
+                Some([px, py, w]) => {
+                    let (hx, hy, _, _) = place(0.0, 0.0);
+                    (x + (hx + px - x) * w, y + (hy + py - y) * w)
+                }
+                None => (x, y),
+            };
             // A .tko group's motion for this note.
             let (mut x, mut y, a) = (x + fx.dx, y + fx.dy, a * fx.opacity);
             if fx.swirl != 0.0 {
@@ -4718,6 +4727,19 @@ impl Game {
                 beatmap::control_point_at(&self.map.control_points, n.time).sv,
             )
         };
+        // .tko approach paths the map shows the player: faint dots from where notes come in to
+        // the drum.
+        if let Some(rt) = &self.tko {
+            let (hx, hy, _, _) = place(0.0, 0.0);
+            for (table, w) in rt.shown_paths(vt) {
+                let mut d = 0.0;
+                while d < table.len() {
+                    let [px, py] = table.at(d);
+                    c.circle(hx + px, hy + py, 1.6, rgba(WHITE, 0.22 * w), [0.0; 4], 0.0);
+                    d += 9.0;
+                }
+            }
+        }
         let mut order = self.visible.clone();
         order.sort_by(|&a, &b| {
             let (na, nb) = (&self.map.notes[a], &self.map.notes[b]);
@@ -4813,11 +4835,15 @@ impl Game {
                                 } else {
                                     note_alpha(s) * radar_lit(s, n.time, n.velocity)
                                 };
-                                let nfx = self
+                                let mut nfx = self
                                     .tko
                                     .as_ref()
                                     .and_then(|r| r.note(i, vt))
                                     .unwrap_or_default();
+                                nfx.path = self
+                                    .tko
+                                    .as_ref()
+                                    .and_then(|r| r.note_path(i, vt, s, lane_len));
                                 if a > 0.01 && !nfx.hidden {
                                     draw_hit(
                                         c,
@@ -10514,6 +10540,47 @@ mod tests {
         let plain = run(None);
         assert!(plain.0 > 30, "autoplay hits the notes: {plain:?}");
         assert_eq!(run(Some(some_gimmick())), plain);
+    }
+
+    #[test]
+    fn notes_on_an_approach_path_look_different_and_are_judged_the_same() {
+        use crate::tko::gimmick::Group;
+        use crate::tko::path::NotePath;
+        pin_drawing_globals();
+        let mut gm = crate::tko::gimmick::Gimmick::default();
+        gm.groups.push(Group {
+            notes: (0..64)
+                .map(|b| b as f64 * 500.0 - beatmap::OSU_TIMING_MS)
+                .collect(),
+            path: Some(NotePath {
+                points: vec![[300.0, -300.0], [60.0, -200.0]],
+                show: true,
+                ..NotePath::default()
+            }),
+            ..Group::default()
+        });
+        let mut plain = tko_game(None, Mods::NONE);
+        let mut flown = tko_game(Some(gm.clone()), Mods::NONE);
+        assert!(frame_bytes(&mut plain, 9000.0) != frame_bytes(&mut flown, 9000.0));
+        let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
+            let mut g = tko_game(gimmick, Mods::NONE);
+            let mut t = -2000.0;
+            while t < 20_000.0 {
+                g.time = t;
+                g.autoplay(None);
+                g.expire(t);
+                if (t as i64) % 1000 == 0 {
+                    let mut c = Canvas::default();
+                    c.clear(853.3);
+                    g.draw_playfield(&mut c, 1.0);
+                }
+                t += 5.0;
+            }
+            (g.stats.great, g.stats.ok, g.stats.miss, g.stats.score)
+        };
+        let base = run(None);
+        assert!(base.0 > 30);
+        assert_eq!(run(Some(gm)), base);
     }
 
     /// Every screen effect at once, steady.

@@ -4,6 +4,7 @@
 //! so a replay looks the same every time. Nothing here is read by judging: the game only tells
 //! the runtime what happened.
 
+use super::path::PathTable;
 use std::sync::Arc;
 
 use std::collections::HashMap;
@@ -141,6 +142,8 @@ pub struct NoteFx {
     /// How far towards `tint_hue` (degrees) the colour goes.
     pub tint: f32,
     pub tint_hue: f32,
+    /// On its group's approach path: where (from the drum) and how far off the lane onto it.
+    pub path: Option<[f32; 3]>,
 }
 
 impl Default for NoteFx {
@@ -156,6 +159,7 @@ impl Default for NoteFx {
             stretch_y: 1.0,
             tint: 0.0,
             tint_hue: 0.0,
+            path: None,
         }
     }
 }
@@ -339,6 +343,8 @@ pub struct Runtime {
     all_notes_delta: [f64; NoteProp::ALL.len()],
     /// The lane shape clips bend the lane into at the last `prepare` (shape plus one, how far).
     lane: (u8, f64),
+    /// Per group: its approach path laid out, if it has one.
+    paths: Vec<Option<PathTable>>,
 }
 
 /// How far a note's time may be from the one a group holds (the chart's whole milliseconds).
@@ -430,6 +436,11 @@ impl Runtime {
                     .any(|id| index.get(id).is_some_and(|&j| dynamic[j]));
         }
         let groups = gimmick.groups.len();
+        let paths = gimmick
+            .groups
+            .iter()
+            .map(|g| g.path.as_ref().and_then(PathTable::new))
+            .collect();
         let mut rt = Runtime {
             lists: vec![Vec::new(); nodes.len()],
             notes,
@@ -449,6 +460,7 @@ impl Runtime {
             clip_lists: Vec::new(),
             all_notes_delta: Default::default(),
             lane: (0, 0.0),
+            paths,
         };
         rt.rebuild(false);
         rt
@@ -1170,6 +1182,34 @@ impl Runtime {
         }
     }
 
+    /// Where note `i`, `s` along a lane `lane` long, sits on its group's path at game time `t`:
+    /// from the drum, and how far it is off the lane onto the path. None off any path.
+    pub fn note_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
+        let gi = self.group_of(i)?;
+        let table = self.paths.get(gi)?.as_ref()?;
+        let path = self.gimmick.groups[gi].path.as_ref()?;
+        let w = path.weight_at(t - self.shift) as f32;
+        if w <= 0.0 {
+            return None;
+        }
+        let [x, y] = table.place(path, s, lane);
+        Some([x, y, w])
+    }
+
+    /// The paths drawn for the player at game time `t`, with how far notes are on each.
+    pub fn shown_paths(&self, t: f64) -> impl Iterator<Item = (&PathTable, f32)> {
+        let t = t - self.shift;
+        self.gimmick
+            .groups
+            .iter()
+            .zip(&self.paths)
+            .filter_map(move |(g, table)| {
+                let path = g.path.as_ref().filter(|p| p.show)?;
+                let w = path.weight_at(t) as f32;
+                (w > 0.0).then_some((table.as_ref()?, w))
+            })
+    }
+
     /// What note `i` is doing at game time `t`; nothing for a note in no group while no clip
     /// moves all the notes.
     pub fn note(&self, i: usize, t: f64) -> Option<NoteFx> {
@@ -1206,6 +1246,7 @@ impl Runtime {
             stretch_y: v(NoteProp::StretchY) as f32,
             tint: v(NoteProp::Tint) as f32,
             tint_hue: v(NoteProp::TintHue) as f32,
+            path: None,
         })
     }
 }
@@ -2409,5 +2450,37 @@ mod tests {
         let mut rt = Runtime::new(Arc::new(gm), [1.0].into_iter(), 0.0);
         rt.prepare(10.0);
         assert_eq!(rt.field(10.0), FieldFx::default());
+    }
+
+    #[test]
+    fn a_group_with_a_path_places_its_notes_on_it() {
+        use crate::tko::path::NotePath;
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![1000.0],
+            path: Some(NotePath {
+                points: vec![[0.0, -400.0]],
+                ..NotePath::default()
+            }),
+            ..Group::default()
+        });
+        let rt = Runtime::new(Arc::new(gm.clone()), [1000.0, 2000.0].into_iter(), 0.0);
+        // Where it comes in at the end of the lane, on the drum when hit.
+        let [x, y, w] = rt.note_path(0, 0.0, 800.0, 800.0).unwrap();
+        assert!(x.abs() < 0.5 && (y + 400.0).abs() < 0.5 && w == 1.0);
+        let [x, y, _] = rt.note_path(0, 0.0, 0.0, 800.0).unwrap();
+        assert!(x.abs() < 0.5 && y.abs() < 0.5);
+        // A note in no group keeps to the lane.
+        assert!(rt.note_path(1, 0.0, 400.0, 800.0).is_none());
+        // Weight 0 at that moment: on the lane.
+        let p = gm.groups[0].path.as_mut().unwrap();
+        p.weight.set(key(0.0, 0.0));
+        p.weight.set(key(1000.0, 1.0));
+        p.show = true;
+        let rt = Runtime::new(Arc::new(gm), [1000.0].into_iter(), 0.0);
+        assert!(rt.note_path(0, 0.0, 400.0, 800.0).is_none());
+        assert_eq!(rt.note_path(0, 500.0, 400.0, 800.0).unwrap()[2], 0.5);
+        assert_eq!(rt.shown_paths(500.0).count(), 1);
+        assert_eq!(rt.shown_paths(0.0).count(), 0);
     }
 }
