@@ -1504,7 +1504,7 @@ impl View {
         c.clip_since(start, x, y, w, h);
         self.tips.push((
             [x, y, w, RULER],
-            "The ruler\nClick or drag to move the playhead. Alt+wheel zooms, the middle button pans."
+            "The ruler\nClick or drag to move the playhead; drag past an edge to scroll on. Alt+wheel zooms, the middle button pans."
                 .to_string(),
         ));
     }
@@ -1759,7 +1759,11 @@ impl View {
             || !(graph
                 || matches!(
                     self.drag,
-                    Drag::Box { .. } | Drag::Move { .. } | Drag::Resize { .. } | Drag::Place { .. }
+                    Drag::Box { .. }
+                        | Drag::Move { .. }
+                        | Drag::Resize { .. }
+                        | Drag::Place { .. }
+                        | Drag::Scrub
                 ))
         {
             return;
@@ -1808,7 +1812,10 @@ impl View {
         self.held = keys;
         match self.drag {
             Drag::Scrub => {
-                let t = self.t_at(x);
+                // The playhead stays on the timeline; held at an edge or past it, the view
+                // scrolls on under it (`edge_scroll`), at a pace set by how far out the pointer is.
+                let [l, _, w, _] = self.layout.timeline;
+                let t = self.t_at(x.clamp(l, l + w));
                 self.set_time(t);
             }
             Drag::Overview => {
@@ -3055,6 +3062,54 @@ mod tests {
         }
         assert_eq!(v.view_start, start);
         assert!(v.ed.time <= v.view_end());
+    }
+
+    #[test]
+    fn scrubbing_past_an_edge_scrolls_at_a_steady_pace() {
+        let mut v = view();
+        draw(&mut v);
+        let [x, y, w, _] = v.layout.timeline;
+        let ruler = y + 3.0;
+        let k = Keys::default();
+        let span = w as f64 * v.ms_per_px;
+        v.view_start = 5000.0;
+        v.mouse_down(x + w * 0.5, ruler, k, None);
+        // Held past the right end: the view moves on, the playhead with it at the edge.
+        v.mouse_move(x + w + 40.0, ruler, k);
+        let mut now = Instant::now();
+        v.update(now, None);
+        let start = v.view_start;
+        for _ in 0..10 {
+            now += std::time::Duration::from_millis(100);
+            v.update(now, None);
+        }
+        let moved = v.view_start - start;
+        assert!(moved > 0.0, "it scrolls on");
+        assert!(
+            moved <= span * 1.6,
+            "about a view a second at most, not the whole song"
+        );
+        assert!(
+            (v.ed.time - v.t_at(x + w)).abs() <= 1.0,
+            "the playhead stays at the edge"
+        );
+        // Dragged far off to the left (onto another monitor): back, at the same steady pace,
+        // and the playhead stays on the timeline.
+        v.mouse_move(x - 3000.0, ruler, k);
+        let start = v.view_start;
+        for _ in 0..10 {
+            now += std::time::Duration::from_millis(100);
+            v.update(now, None);
+        }
+        let back = start - v.view_start;
+        assert!(back > 0.0 && back <= span * 1.6);
+        assert!((v.ed.time - v.view_start.max(0.0)).abs() <= 1.0);
+        // Let go: it stops.
+        v.mouse_up(x - 3000.0, ruler, k);
+        let stop = v.view_start;
+        now += std::time::Duration::from_millis(100);
+        v.update(now, None);
+        assert_eq!(v.view_start, stop);
     }
 
     #[test]
@@ -5832,6 +5887,44 @@ mod tests {
         press(&mut v, Btn::C(Cmd::TimingList));
         press(&mut v, Btn::C(Cmd::TimingList));
         assert!(!v.tw);
+    }
+
+    #[test]
+    fn the_timing_window_takes_copy_paste_and_delete_keys_on_any_page() {
+        let mut v = view();
+        assert_eq!(v.mode, Mode::Compose);
+        press(&mut v, Btn::C(Cmd::TimingList));
+        draw(&mut v);
+        let greens = |v: &View| v.ed.chart.timing.iter().filter(|p| !p.is_red()).count();
+        let ids: Vec<u64> =
+            v.ed.chart
+                .timing
+                .iter()
+                .filter(|p| !p.is_red())
+                .map(|p| p.id)
+                .collect();
+        let n = ids.len();
+        v.sel_line = Some(ids[0]);
+        v.sel_extra = ids.iter().copied().collect();
+        // Lines selected in F6 on the Compose page: Ctrl+C copies them, not the notes.
+        v.key(KeyCode::KeyC, false, ctrl(), None);
+        assert_eq!(v.status, format!("copied {n} lines"));
+        v.ed.time = 20000.0;
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        assert_eq!(v.status, format!("pasted {n} lines"));
+        assert_eq!(greens(&v), 2 * n);
+        // Ctrl+A selects every line, Delete removes the selected ones.
+        v.key(KeyCode::KeyA, false, ctrl(), None);
+        assert_eq!(v.selected_lines().len(), v.ed.chart.timing.len());
+        v.select_line(None);
+        v.sel_line = Some(ids[0]);
+        key(&mut v, KeyCode::Delete);
+        assert_eq!(greens(&v), 2 * n - 1);
+        // With F6 closed the keys go back to the notes.
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        v.ed.select_all();
+        v.key(KeyCode::KeyC, false, ctrl(), None);
+        assert_eq!(v.status, format!("copied {}", v.ed.chart.objects.len()));
     }
 
     #[test]

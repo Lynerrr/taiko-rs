@@ -788,6 +788,11 @@ impl Editor {
         self.line_clipboard.len()
     }
 
+    /// Whether lines were copied to paste.
+    pub fn has_copied_lines(&self) -> bool {
+        !self.line_clipboard.is_empty()
+    }
+
     /// Puts the copied lines down with the first at `t`; a line that would share a time with one
     /// already there is skipped. Returns how many went in.
     pub fn paste_lines(&mut self, t: f64) -> Result<usize, String> {
