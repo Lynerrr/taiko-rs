@@ -69,6 +69,9 @@ pub enum FieldProp {
     Slices,
     SliceY,
     SliceX,
+    /// How far along the lane the hit target sits, in virtual units: notes still meet it on
+    /// time.
+    Drum,
 }
 
 /// Where a property sits in the editor's lists.
@@ -92,7 +95,7 @@ impl PropGroup {
 }
 
 impl FieldProp {
-    pub const ALL: [FieldProp; 28] = [
+    pub const ALL: [FieldProp; 29] = [
         FieldProp::X,
         FieldProp::Y,
         FieldProp::Rotation,
@@ -121,6 +124,7 @@ impl FieldProp {
         FieldProp::Slices,
         FieldProp::SliceY,
         FieldProp::SliceX,
+        FieldProp::Drum,
     ];
 
     pub fn name(self) -> &'static str {
@@ -153,6 +157,7 @@ impl FieldProp {
             FieldProp::Slices => "slices",
             FieldProp::SliceY => "slice_y",
             FieldProp::SliceX => "slice_x",
+            FieldProp::Drum => "drum",
         }
     }
 
@@ -165,7 +170,8 @@ impl FieldProp {
             | FieldProp::Scroll
             | FieldProp::StretchX
             | FieldProp::StretchY
-            | FieldProp::Flip => PropGroup::Move,
+            | FieldProp::Flip
+            | FieldProp::Drum => PropGroup::Move,
             FieldProp::Flash
             | FieldProp::Vignette
             | FieldProp::Wash
@@ -243,6 +249,9 @@ impl FieldProp {
             FieldProp::SliceX => {
                 "How far the pieces spread out from the middle (together below 0), in virtual units."
             }
+            FieldProp::Drum => {
+                "Slides the hit target along the lane, in virtual units. Notes still meet it on time."
+            }
         }
     }
 
@@ -268,7 +277,8 @@ impl FieldProp {
             | FieldProp::Kaleido
             | FieldProp::Slices
             | FieldProp::SliceY
-            | FieldProp::SliceX => 0.0,
+            | FieldProp::SliceX
+            | FieldProp::Drum => 0.0,
             FieldProp::Zoom
             | FieldProp::Scroll
             | FieldProp::StretchX
@@ -305,6 +315,7 @@ impl FieldProp {
             FieldProp::Slices => (0.0, MAX_SLICES as f64),
             FieldProp::EchoRot => (-90.0, 90.0),
             FieldProp::EchoZoom => (0.5, 1.5),
+            FieldProp::Drum => (0.0, 600.0),
         }
     }
 }
