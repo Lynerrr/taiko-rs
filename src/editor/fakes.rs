@@ -52,6 +52,8 @@ impl Editor {
             return Err("select dons or kats first".into());
         }
         let mut made: Vec<HitObject> = Vec::new();
+        // A copy flies with its note's group (its path, its moves), as a copy should.
+        let mut gimmick = self.chart.gimmick.clone();
         for o in &notes {
             let t = (o.time + beats * self.beat_at(o.time)).round();
             let taken = |q: &HitObject| (q.time - t).abs() < 1.0;
@@ -61,13 +63,30 @@ impl Editor {
             let mut f = HitObject::hit(t, o.taiko() == Taiko::Kat, o.big());
             f.fake = true;
             made.push(f);
+            if let Some(gr) = gimmick.as_mut().and_then(|g| {
+                g.groups
+                    .iter_mut()
+                    .find(|gr| gr.notes.iter().any(|&n| (n - o.time).abs() <= 0.5))
+            }) {
+                gr.notes.push(t);
+                gr.notes.sort_by(f64::total_cmp);
+            }
         }
         if made.is_empty() {
             return Err("there are notes in all those places already".into());
         }
         let n = made.len();
-        self.history
-            .run(&mut self.chart, Command::InsertObjects(made));
+        let mut steps = vec![Command::InsertObjects(made)];
+        if let (Some(before), Some(mut after)) = (self.chart.gimmick.clone(), gimmick) {
+            after.sanitize();
+            if after != before {
+                steps.push(Command::Gimmick {
+                    before: Box::new(before),
+                    after: Box::new(after),
+                });
+            }
+        }
+        self.history.run(&mut self.chart, Command::Composite(steps));
         let mut ids: Vec<u64> = self.chart.objects.iter().map(|o| o.id).collect();
         ids.sort_unstable();
         self.selection = ids[ids.len() - n..].iter().copied().collect();
@@ -181,5 +200,37 @@ mod tests {
         // Without notes there is nothing to show it on.
         let mut empty = tko();
         assert!(empty.motion_example(20_000.0).is_err());
+    }
+
+    #[test]
+    fn a_map_with_fakes_saves_and_reads_back() {
+        let mut e = tko();
+        pick(&mut e, 2);
+        e.toggle_fake().unwrap();
+        let dir = std::env::temp_dir().join(format!("taiko-rs-fakes-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.tko");
+        let saved = e.chart.save(&path, false);
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(saved, Ok(()));
+        let back = Chart::parse_tko(&text).unwrap();
+        assert_eq!(back.objects.iter().filter(|o| o.fake).count(), 2);
+    }
+
+    #[test]
+    fn fake_copies_fly_with_their_notes_group() {
+        let mut e = tko();
+        pick(&mut e, 1);
+        let g = e.motion_group().unwrap();
+        e.set_path_preset(g, 2);
+        let groups = |e: &Editor| e.gimmick().unwrap().groups[g].notes.len();
+        assert_eq!(groups(&e), 1);
+        assert_eq!(e.add_fake_copies(0.5), Ok(1));
+        assert_eq!(groups(&e), 2, "the copy joins the group");
+        // The copy and its place in the group are one undo step.
+        assert!(e.undo());
+        assert_eq!(groups(&e), 1);
+        assert!(e.chart.objects.iter().all(|o| !o.fake));
     }
 }

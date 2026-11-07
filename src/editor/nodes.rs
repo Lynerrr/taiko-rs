@@ -6,6 +6,24 @@ use crate::tko::gimmick::{MAX_MARKS, Mark};
 use crate::tko::graph::{Kind, Node, Target, clip_preset};
 use crate::tko::recipes::Recipe;
 
+/// Gives the nodes that name a mark by number (1 is the first; 0 is the map's start or end)
+/// the number `to` says, or with None one no mark has.
+fn renumber_marks(g: &mut crate::tko::gimmick::Gimmick, to: impl Fn(usize) -> Option<usize>) {
+    for n in &mut g.graph.nodes {
+        let count = match n.kind {
+            Kind::OnMark => 1,
+            Kind::Between | Kind::Span => 2,
+            _ => 0,
+        };
+        for p in n.p.iter_mut().take(count) {
+            let m = *p as usize;
+            if m > 0 {
+                *p = to(m).map_or(256.0, |m| m as f64);
+            }
+        }
+    }
+}
+
 impl Editor {
     pub fn node(&self, id: u32) -> Option<&Node> {
         self.gimmick()?.graph.node(id)
@@ -106,6 +124,9 @@ impl Editor {
         let t = t.round();
         self.edit_gimmick(false, |g| {
             if g.marks.len() < MAX_MARKS && !g.marks.iter().any(|m| (m.time - t).abs() < 1.0) {
+                // Marks go by time and nodes name them by number: those after it move up one.
+                let k = g.marks.iter().filter(|m| m.time < t).count() + 1;
+                renumber_marks(g, |m| if m >= k { Some(m + 1) } else { Some(m) });
                 g.marks.push(Mark {
                     name: String::new(),
                     time: t,
@@ -126,6 +147,13 @@ impl Editor {
                 .map(|(i, _)| i);
             if let Some(i) = near {
                 g.marks.remove(i);
+                // Nodes on it name none there is (so they never fire); those after move down.
+                let k = i + 1;
+                renumber_marks(g, |m| match m.cmp(&k) {
+                    std::cmp::Ordering::Less => Some(m),
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(m - 1),
+                });
             }
         })
     }
@@ -291,5 +319,27 @@ mod tests {
         assert!(ed.undo());
         assert_eq!(ed.gimmick().unwrap().marks.len(), 2);
         assert!(!plain().add_mark(1.0));
+    }
+
+    #[test]
+    fn nodes_keep_their_marks_when_marks_come_and_go() {
+        let mut ed = editor();
+        ed.add_mark(1000.0);
+        ed.add_mark(5000.0);
+        let at = ed.add_node(Kind::OnMark, 0.0, 0.0).unwrap();
+        ed.set_node_param(at, 0, 2.0);
+        let span = ed.add_node(Kind::Between, 0.0, 0.0).unwrap();
+        ed.set_node_param(span, 0, 1.0);
+        ed.set_node_param(span, 1, 2.0);
+        let p = |ed: &Editor, id: u32| ed.node(id).unwrap().p.clone();
+        // A mark between them: the 5 s one is the third now.
+        ed.add_mark(3000.0);
+        assert_eq!(p(&ed, at)[0], 3.0);
+        assert_eq!(p(&ed, span)[..2], [1.0, 3.0]);
+        // The first goes: the rest move down, and one on it names no mark.
+        ed.remove_mark(1000.0, 10.0);
+        assert_eq!(p(&ed, at)[0], 2.0);
+        assert_eq!(p(&ed, span)[0], 256.0);
+        assert_eq!(p(&ed, span)[1], 2.0);
     }
 }

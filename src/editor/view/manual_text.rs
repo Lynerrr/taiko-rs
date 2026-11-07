@@ -209,8 +209,9 @@ Blocks add up with each other, with keyframes and with nodes. Keyframes and Node
 F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw instead of scrolling along the lane, and land on the drum exactly when they are hit.
 
 # Giving notes a path
-- Select notes on the timeline (one is fine), then press Give the picked notes a path. They get a group of their own and come in From above to start with.
-- Pick another start under Where they come from: from below, from behind the drum, the corner, an arc, a drop, a zigzag, a spiral, a loop.
+- Press 1 for the Select tool (it keeps you on this page) and click a note on the timeline, or drag a box over several. On the Effects pages a click on the timeline only picks notes, it never places them.
+- Pick where they come from: from above, from below, from behind the drum, the corner, an arc, a drop, a zigzag, a spiral, a loop. The picked notes get a group of their own and fly that way at once. (Give the picked notes a path does the same, starting from above.)
+- Whatever is picked is what the page shapes: click a group under Moving to pick its notes again.
 - Shape it in the preview: drag a point to move it, double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
 
 # How they move on it
@@ -241,7 +242,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 
 # Fake notes
 - The Fakes tab turns the picked dons and kats into fakes (and back): they look and move like notes, but are never hit, give no score or combo, make no sound, and vanish at the drum.
-- Add fake copies of the picked notes puts fakes half a beat or a 1/4 before or after them, or a beat after, where no note is yet.
+- Add fake copies of the picked notes puts fakes half a beat or a 1/4 before or after them, or a beat after, where no note is yet. A copy flies with its note's group: the same path and moves.
 - On the timeline fakes are hollow with an F. Select, move, copy and delete them like any note; groups, paths, moves and the scroll take them by their time.
 
 # Show as
@@ -263,7 +264,7 @@ F4 Effects, Keyframes page: animate the playfield (move, look and clone properti
 
 # How
 - Pick the target: the playfield, or a group of notes. Then pick a property (for example Zoom).
-- The graph under the timeline shows its keys: click adds one, drag moves it, right click deletes it. Or put the playhead somewhere and use Key here; Value +/- changes it.
+- The graph under the timeline shows its keys: click adds one, drag moves it, right click deletes it. Dragged, a value snaps to a round step (Shift: free). Or put the playhead somewhere and use Key here. Click the picked key's Value or At ms to type it exactly, - and + step it. Ctrl+C / Ctrl+V copy the picked key (or all of the track with none picked) to the playhead, on any property.
 - Between two keys the value glides; Ease sets how.
 - Groups: select notes in Compose and make a new group, then give it its own motion (shift, scale, opacity, hide, swirl).
 
@@ -556,8 +557,9 @@ F4 Effects открывается на Clips: самый простой спос
 F4 Effects, страница Motion (.tko-карты): выбранные ноты летят по нарисованному пути, а не по лайну, и приходят на барабан ровно в момент удара.
 
 # Как дать нотам путь
-- Выделите ноты на таймлайне (можно одну) и нажмите Give the picked notes a path. Они получат свою группу и для начала прилетят сверху (From above).
-- В Where they come from можно выбрать другой старт: снизу, из-за барабана, из угла, дугой, падением, зигзагом, спиралью, петлёй.
+- Нажмите 1 (инструмент Select, страница при этом не меняется) и кликните ноту на таймлайне или обведите рамкой несколько. На страницах Effects клик по таймлайну только выделяет ноты и никогда их не ставит.
+- Выберите в Where they come from, откуда они летят: сверху, снизу, из-за барабана, из угла, дугой, падением, зигзагом, спиралью, петлёй. Выделенные ноты сразу получат свою группу и полетят так. (Give the picked notes a path делает то же, начиная со «сверху».)
+- Страница всегда правит то, что выделено: клик по группе в Moving снова выделяет её ноты.
 - Путь правится прямо на превью: тащите точку, двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
 
 # Как они по нему летят
@@ -588,7 +590,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 
 # Фейковые ноты
 - Вкладка Fakes делает выбранные доны и каты фейками (и обратно): они выглядят и двигаются как ноты, но по ним не бьют, они не дают счёта и комбо, не звучат и исчезают на барабане.
-- Add fake copies of the picked notes ставит фейки на полдоли или 1/4 до или после выбранных нот, или на долю после, где ноты ещё нет.
+- Add fake copies of the picked notes ставит фейки на полдоли или 1/4 до или после выбранных нот, или на долю после, где ноты ещё нет. Копия летит вместе с группой своей ноты: тот же путь и те же движения.
 - На таймлайне фейки полые с буквой F. Их выделяют, двигают, копируют и удаляют как обычные ноты; группы, траектории, движения и скролл берут их по времени.
 
 # Show as
@@ -610,7 +612,7 @@ F4 Effects, страница Keyframes: анимация игрового пол
 
 # Как
 - Выберите цель: игровое поле или группу нот. Затем свойство (например Zoom).
-- График под таймлайном показывает его ключи: клик добавляет, перетаскивание двигает, правый клик удаляет. Или поставьте курсор и нажмите Key here; Value +/- меняет значение.
+- График под таймлайном показывает его ключи: клик добавляет, перетаскивание двигает, правый клик удаляет. При перетаскивании значение прилипает к круглому шагу (Shift: свободно). Или поставьте курсор и нажмите Key here. Клик по Value или At ms выбранного ключа: ввести число точно, - и + меняют шагом. Ctrl+C / Ctrl+V копируют выбранный ключ (или весь трек, если ключ не выбран) на курсор, на любое свойство.
 - Между двумя ключами значение плавно переходит; Ease задаёт, как именно.
 - Группы: выделите ноты в Compose и создайте новую группу, затем дайте ей свою анимацию (сдвиг, масштаб, прозрачность, скрытие, вращение).
 

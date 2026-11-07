@@ -1449,6 +1449,8 @@ impl Editor {
                 [self.chart.objects.partition_point(|o| o.time < c.start)..]
                 .iter()
                 .take_while(|o| o.time < c.end)
+                // The game acts on real notes only.
+                .filter(|o| !o.fake)
                 .filter(|o| match notes {
                     Notes::All => true,
                     Notes::Dons => o.taiko() == Taiko::Don,

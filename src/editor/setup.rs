@@ -217,7 +217,14 @@ impl Editor {
         // Drumrolls are written in osu!pixels, which the base SV turns into time: they are
         // rewritten to last as long as they did.
         if k == Key::BaseSv && now > 0.0 {
-            let scale = v / now;
+            // From what the game read, which isn't held to the range the field shows.
+            let was = self.chart.slider_multiplier();
+            let was = if was.is_finite() && was > 0.0 {
+                was
+            } else {
+                now
+            };
+            let scale = v / was;
             let (mut before, mut after) = (Vec::new(), Vec::new());
             for o in &self.chart.objects {
                 let Some(len) = o.length().filter(|l| l.is_finite() && *l > TINY) else {
