@@ -782,6 +782,9 @@ struct State {
     shot_view: Option<ShotView>,
     /// Last time the pointer moved (gameplay hides it after a second of stillness).
     mouse_moved_at: Instant,
+    /// Where the pointer was at `mouse_moved_at`: a hidden pointer comes back only once it
+    /// travels away from here, not on every twitch.
+    mouse_moved_from: (f64, f64),
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
     /// The interface editor, while it's open.
@@ -829,6 +832,12 @@ struct ListDrag {
 
 /// How far (virtual units) a held button must move before it counts as dragging, not a click.
 const DRAG_START: f32 = 5.0;
+
+/// How far (window pixels) a pointer that gameplay hid has to travel to show again: about 1% of
+/// the window's height, so desk vibration or a jittery sensor doesn't keep bringing it back.
+fn pointer_wake_px(window_h: f32) -> f64 {
+    (window_h as f64 * 0.01).max(6.0)
+}
 
 fn fmt_time(ms: f64) -> String {
     let s = (ms / 1000.0).max(0.0) as u64;
@@ -8053,10 +8062,18 @@ impl State {
     /// Pointer moved: drags the area if a drag is active, otherwise updates the hover state.
     /// Returns the cursor to show.
     fn mouse_moved(&mut self, x: f64, y: f64) -> CursorIcon {
-        let moved = (x, y) != self.mouse;
+        let now = Instant::now();
+        let mut moved = (x, y) != self.mouse;
+        // While gameplay has the pointer hidden, a twitch (a bumped or vibrating desk, sensor
+        // noise) doesn't count: it has to travel a little before it shows again.
+        if moved && self.cursor_hidden(now) && self.idle.amount() < 1.0 {
+            let (fx, fy) = self.mouse_moved_from;
+            moved = (x - fx).hypot(y - fy) >= pointer_wake_px(self.window_px().1);
+        }
         if moved {
-            self.mouse_moved_at = Instant::now();
-            self.idle.input(self.mouse_moved_at);
+            self.mouse_moved_at = now;
+            self.mouse_moved_from = (x, y);
+            self.idle.input(now);
         }
         self.mouse = (x, y);
         let (vx, vy) = self.mouse_virtual();
@@ -8292,10 +8309,21 @@ impl State {
             }
             return CursorIcon::Default;
         }
-        self.hover = layout::hit(self.cfg.playfield_area, x, y, sw, sh);
+        // A hidden pointer isn't pointing at an edge: no frame for it.
+        self.hover = if self.cursor_hidden(now) {
+            None
+        } else {
+            layout::hit(self.cfg.playfield_area, x, y, sw, sh)
+        };
         self.hover
             .map(|g| g.cursor())
             .unwrap_or(CursorIcon::Default)
+    }
+
+    /// The pointer left the window: it no longer hovers an edge of the playfield area, so the
+    /// area's frame doesn't stay up (a drag in progress keeps going).
+    fn mouse_left(&mut self) {
+        self.hover = None;
     }
 
     /// Right button on song select: hold it and move up and down to fly through the list, like
@@ -17951,6 +17979,10 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let hide = s.cursor_hidden(now);
             if hide != cursor_hidden {
                 cursor_hidden = hide;
+                // The pointer resting on an edge of the area goes away with its frame.
+                if hide {
+                    s.hover = None;
+                }
                 let _ = proxy.send_event(UserEvent::HideCursor(hide));
             }
             let background = s.preview.bg_upload.take();
@@ -18299,6 +18331,7 @@ impl App {
                     }
                 }
             }
+            WindowEvent::CursorLeft { .. } => lock(&self.state).mouse_left(),
             WindowEvent::Focused(false) => {
                 // Losing focus mid-song (alt-tab, notification) pauses instead of failing the map.
                 let mut guard = lock(&self.state);
@@ -18927,6 +18960,7 @@ impl State {
             replay_bar: None,
             replay_scrub: None,
             mouse_moved_at: Instant::now(),
+            mouse_moved_from: (0.0, 0.0),
             preview: preview::Preview::default(),
             stars: stars::Stars::default(),
             potentials: pp::Potentials::default(),
@@ -19626,5 +19660,21 @@ mod drawing_hook_tests {
             )
             .contains("DX12")
         );
+    }
+}
+
+#[cfg(test)]
+mod pointer_wake_tests {
+    use super::*;
+
+    #[test]
+    fn a_hidden_pointer_needs_more_than_a_twitch_to_show() {
+        // 1080p: a few pixels of desk vibration stay under it, a real move gets past it.
+        let wake = pointer_wake_px(1080.0);
+        assert!(wake > 3.0f64.hypot(3.0));
+        assert!(wake < 20.0);
+        // Bigger windows need a bigger move, small ones still ignore single-pixel noise.
+        assert!(pointer_wake_px(2160.0) > wake);
+        assert!(pointer_wake_px(300.0) >= 6.0);
     }
 }
