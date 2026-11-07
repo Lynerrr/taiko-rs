@@ -153,6 +153,11 @@ impl View {
             }
             Cmd::Stay => self.modal = None,
             Cmd::Undo => {
+                // A key is picked by its place in the track, which undo may change; a drag
+                // going on would go on editing what was undone.
+                self.drag = Drag::None;
+                self.k_sel = None;
+                self.m_key = None;
                 if self.ed.undo() {
                     self.mark_stale();
                 } else {
@@ -160,6 +165,9 @@ impl View {
                 }
             }
             Cmd::Redo => {
+                self.drag = Drag::None;
+                self.k_sel = None;
+                self.m_key = None;
                 if self.ed.redo() {
                     self.mark_stale();
                 } else {
@@ -167,8 +175,9 @@ impl View {
                 }
             }
             Cmd::Cut if self.line_keys(false) => self.run(Cmd::CopyNotes, audio),
-            Cmd::Cut if self.clip_mode() && self.fx_sel.is_some() => self.copy_clips(true),
+            Cmd::Cut if self.clip_mode() && self.picked().is_some() => self.copy_clips(true),
             Cmd::Cut => {
+                self.k_copied = None;
                 let n = self.ed.cut();
                 self.status = format!("cut {n}");
                 self.mark_stale();
@@ -176,13 +185,21 @@ impl View {
             Cmd::CopyNotes if self.line_keys(false) => {
                 self.press_line_action(TAct::Copy);
             }
-            Cmd::CopyNotes if self.clip_mode() && self.fx_sel.is_some() => self.copy_clips(false),
+            Cmd::CopyNotes if self.clip_mode() && self.picked().is_some() => self.copy_clips(false),
+            // On the key graph: the key picked, or every key of the track when no notes are
+            // picked either.
+            Cmd::CopyNotes
+                if self.keyframe_mode()
+                    && (self.k_sel.is_some() || self.ed.selection.is_empty())
+                    && self.copy_keys() => {}
             Cmd::CopyNotes => {
+                self.k_copied = None;
                 let n = self.ed.copy();
                 self.status = format!("copied {n}");
             }
             Cmd::Paste if self.line_keys(true) => self.press_line_action(TAct::Paste),
             Cmd::Paste if self.clip_mode() && View::has_copied_clips() => self.paste_copied_clips(),
+            Cmd::Paste if self.keyframe_mode() && self.k_copied.is_some() => self.paste_keys(),
             Cmd::Paste => {
                 let at = self.ed.snapped(t);
                 let n = self.ed.paste(at);
@@ -201,17 +218,17 @@ impl View {
             {
                 self.press_line_action(TAct::Delete);
             }
-            Cmd::Delete if self.clip_mode() && self.fx_sel.is_some() => {
+            Cmd::Delete if self.clip_mode() && self.picked().is_some() => {
                 self.press_fx(super::clips::FxAct::Delete);
             }
-            Cmd::Duplicate if self.clip_mode() && self.fx_sel.is_some() => {
+            Cmd::Duplicate if self.clip_mode() && self.picked().is_some() => {
                 self.press_fx(super::clips::FxAct::Duplicate);
             }
             Cmd::Delete => {
                 if self.node_mode() {
                     self.delete_selected_node();
                 } else if self.keyframe_mode() && self.k_sel.is_some() {
-                    self.press_key_action(KAct::DeleteKey, false, false);
+                    self.press_key_action(KAct::DeleteKey);
                 } else {
                     let n = self.ed.delete_selected();
                     if n > 0 {
@@ -248,7 +265,9 @@ impl View {
             Cmd::Tool(tool) => {
                 self.ed.tool = tool;
                 self.roll_start = None;
-                if self.mode != Mode::Compose {
+                // Picking notes is wanted on every page (Motion, groups, clips over the notes);
+                // only the tools that place notes take the editor to Compose.
+                if tool != Tool::Select && self.mode != Mode::Compose {
                     self.set_mode(Mode::Compose);
                 }
             }

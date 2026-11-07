@@ -389,7 +389,17 @@ impl Editor {
         if before.is_empty() || delta == 0.0 || first + delta < 0.0 {
             return false;
         }
-        let after = before.iter().map(|o| o.shifted(delta)).collect();
+        let after: Vec<HitObject> = before.iter().map(|o| o.shifted(delta)).collect();
+        // Never onto another note's millisecond, as placing and pasting refuse it too.
+        let taken = |t: f64| {
+            self.chart
+                .objects
+                .iter()
+                .any(|q| (q.time - t).abs() < 1.0 && !self.selection.contains(&q.id))
+        };
+        if after.iter().any(|o| taken(o.time)) {
+            return false;
+        }
         self.edit(before, after, drag);
         true
     }
@@ -669,13 +679,12 @@ impl Editor {
     }
 
     fn run_timing(&mut self, p: TimingPoint) -> Result<u64, String> {
-        self.history
-            .run(&mut self.chart, Command::InsertTiming(vec![p]));
-        // Checked now so a bad line is undone rather than discovered at save.
-        if let Err(why) = self.chart.validate() {
-            self.history.undo(&mut self.chart);
-            return Err(why);
-        }
+        // Checked now so a bad line is taken back rather than discovered at save.
+        self.history.run_checked(
+            &mut self.chart,
+            Command::InsertTiming(vec![p]),
+            Chart::validate,
+        )?;
         // The new line sorts after any at its time, so it's the last one there.
         Ok(self.chart.timing.iter().map(|p| p.id).max().unwrap_or(0))
     }
@@ -817,12 +826,11 @@ impl Editor {
             return Ok(0);
         }
         let n = made.len();
-        self.history
-            .run(&mut self.chart, Command::InsertTiming(made));
-        if let Err(why) = self.chart.validate() {
-            self.history.undo(&mut self.chart);
-            return Err(why);
-        }
+        self.history.run_checked(
+            &mut self.chart,
+            Command::InsertTiming(made),
+            Chart::validate,
+        )?;
         Ok(n)
     }
 
@@ -1019,6 +1027,29 @@ mod tests {
         e.paste(20000.0);
         let o = e.chart.objects.last().unwrap();
         assert_eq!((o.time, o.spinner_end()), (20000.0, Some(22000.0)));
+    }
+
+    #[test]
+    fn a_line_turned_down_leaves_undo_and_redo_as_they_were() {
+        let mut e = editor();
+        let lines = e.chart.timing.len();
+        e.add_green(5000.0, 1.5).unwrap();
+        assert!(e.undo());
+        assert!(e.add_red(f64::NAN, 120.0).is_err());
+        assert_eq!(e.chart.timing.len(), lines);
+        assert!(e.redo(), "the green line can still come back");
+        assert_eq!(e.chart.timing.len(), lines + 1);
+        assert!(!e.redo(), "and the line turned down never does");
+    }
+
+    #[test]
+    fn notes_never_move_onto_another_notes_millisecond() {
+        let mut e = editor();
+        let (a, b) = (e.chart.objects[0].clone(), e.chart.objects[1].clone());
+        e.selection = [a.id].into();
+        assert!(!e.move_selected(b.time - a.time, false));
+        assert_eq!(e.chart.object(a.id).unwrap().time, a.time);
+        assert!(e.move_selected(1.0, false));
     }
 
     #[test]

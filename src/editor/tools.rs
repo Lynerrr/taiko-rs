@@ -5,7 +5,7 @@
 //! the base timing snapshot they read, the kiai and volume carried onto what they write, the SV
 //! lines a wall replaces, and the checks before anything is committed.
 
-use super::chart::{HitObject, Taiko, TimingPoint};
+use super::chart::{Chart, HitObject, Taiko, TimingPoint};
 use super::gimmicks::{self, FakeKind, GimmickConfig, NoteKind};
 use super::history::Command;
 use super::state::Editor;
@@ -137,7 +137,8 @@ impl Editor {
             if notes.is_empty() {
                 notes = self.chart.objects.clone();
             }
-            notes.retain(|o| o.is_circle());
+            // Fakes are never hit, so a wall needs no slit for them.
+            notes.retain(|o| o.is_circle() && !o.fake);
             if notes.is_empty() {
                 return Err("no notes to build a wall around".into());
             }
@@ -272,18 +273,8 @@ impl Editor {
 
     /// Runs a plan as one undo step.
     pub fn commit_plan(&mut self, plan: Plan) {
-        let mut steps = Vec::new();
-        if !plan.remove.is_empty() {
-            steps.push(Command::RemoveTiming(plan.remove));
-        }
-        if !plan.timing.is_empty() {
-            steps.push(Command::InsertTiming(plan.timing));
-        }
-        if !plan.objects.is_empty() {
-            steps.push(Command::InsertObjects(plan.objects));
-        }
-        if !steps.is_empty() {
-            self.history.run(&mut self.chart, Command::Composite(steps));
+        if let Some(cmd) = plan_command(plan) {
+            self.history.run(&mut self.chart, cmd);
         }
     }
 
@@ -294,13 +285,27 @@ impl Editor {
             return Err("nothing to write".into());
         }
         let said = plan.summary();
-        self.commit_plan(plan);
-        if let Err(why) = self.chart.validate() {
-            self.history.undo(&mut self.chart);
-            return Err(why);
+        if let Some(cmd) = plan_command(plan) {
+            self.history
+                .run_checked(&mut self.chart, cmd, Chart::validate)?;
         }
         Ok(said)
     }
+}
+
+/// A plan as one command, if it does anything.
+fn plan_command(plan: Plan) -> Option<Command> {
+    let mut steps = Vec::new();
+    if !plan.remove.is_empty() {
+        steps.push(Command::RemoveTiming(plan.remove));
+    }
+    if !plan.timing.is_empty() {
+        steps.push(Command::InsertTiming(plan.timing));
+    }
+    if !plan.objects.is_empty() {
+        steps.push(Command::InsertObjects(plan.objects));
+    }
+    (!steps.is_empty()).then_some(Command::Composite(steps))
 }
 
 #[cfg(test)]
