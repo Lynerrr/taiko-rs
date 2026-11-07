@@ -812,6 +812,18 @@ impl Preview {
     }
 
     /// Where the music is in map time, while `entry`'s song plays.
+    /// Whether the music playing is `e`'s (a new song's starts a moment after it's picked).
+    #[cfg(target_os = "android")]
+    pub fn plays(&self, e: &Entry) -> bool {
+        self.audio_active && self.audio.as_ref().is_some_and(|s| s.path == audio_path(e))
+    }
+
+    /// The panel isn't on screen: nothing of it is there to press.
+    pub fn hide_panel(&mut self) {
+        self.graph_rect = None;
+        self.play_rect = None;
+    }
+
     pub fn map_time(&self, entry: Option<usize>) -> Option<f64> {
         let (i, ..) = self.map.as_ref().filter(|_| self.audio_active)?;
         (Some(*i) == entry && self.last_time.is_finite()).then_some(self.last_time)
@@ -1260,7 +1272,11 @@ impl Preview {
                 by + bh - 10.0,
                 6.0,
                 rgba(0x6f6f86, 1.0),
-                "click: fullscreen (Ctrl+Enter)",
+                if crate::mobile::active() {
+                    "tap: fullscreen"
+                } else {
+                    "click: fullscreen (Ctrl+Enter)"
+                },
             );
         }
         if fade < 1.0 {
@@ -1430,7 +1446,9 @@ fn draw_play_button(
     button: Option<(&str, &str)>,
 ) -> Option<[f32; 4]> {
     let (Some(t), Some((verb, hint))) = (marker, button) else {
-        let text = if button.is_some() {
+        let text = if crate::mobile::active() {
+            "tap or drag to scroll"
+        } else if button.is_some() {
             "click / drag / wheel to scroll - play from where you stop"
         } else {
             "click / drag / wheel to scroll"

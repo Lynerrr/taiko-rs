@@ -754,8 +754,14 @@ impl Setup {
         first_focus: usize,
     ) {
         let w = c.width;
-        c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.6));
-        let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
+        c.rect(
+            0.0,
+            0.0,
+            w,
+            480.0,
+            rgba(0x000000, crate::mobile::pick(0.6, 0.97)),
+        );
+        let (px, py, pw, ph) = crate::mobile::setup_rect(w);
         c.round_rect(
             [px, py],
             [pw, ph],
@@ -781,14 +787,19 @@ impl Setup {
             py + 16.0,
             6.0,
             rgba(0x6f6f86, 1.0),
-            &Canvas::fit(6.0, pw - title_w - 42.0, hint),
+            &crate::mobile::key_hint(6.0, pw - title_w - 42.0, hint),
         );
 
         // Columns: number and its notes, colours, shape, speed, the mod chips.
-        let (num_w, look_w, shape_w, speed_w) = (70.0, 72.0, 62.0, 46.0);
+        let (num_w, look_w, shape_w, speed_w) = if crate::mobile::active() {
+            (72.0, 128.0, 108.0, 70.0)
+        } else {
+            (70.0, 72.0, 62.0, 46.0)
+        };
         let x0 = px + 12.0;
         let chips_x = x0 + num_w + look_w + shape_w + speed_w;
-        let chip_w = ((px + pw - 12.0 - chips_x) / MODS.len() as f32).min(34.0);
+        let chip_w =
+            ((px + pw - 12.0 - chips_x) / MODS.len() as f32).min(crate::mobile::pick(34.0, 60.0));
         let col_x = |col: usize| match col {
             0 => (x0 + num_w, look_w),
             1 => (x0 + num_w + look_w, shape_w),
@@ -874,7 +885,7 @@ impl Setup {
         }
 
         // What's being typed, else what the pointed-at (or the selected) setting is.
-        let line_y = py + ph - 48.0;
+        let line_y = py + ph - crate::mobile::pick(48.0, 68.0);
         let (line, col) = match &self.typing {
             Some(Typing::Colours(s)) => {
                 let n = self.row + 1;
@@ -924,7 +935,11 @@ impl Setup {
 
         // Presets: the built-in ones and the player's, the one the universes are now lit; the
         // player's have an x to delete them.
-        let (by, bh, bw) = (py + ph - 26.0, 16.0, 56.0);
+        let (by, bh, bw) = if crate::mobile::active() {
+            (py + ph - 46.0, 38.0, 96.0)
+        } else {
+            (py + ph - 26.0, 16.0, 56.0)
+        };
         c.button(
             px + pw - bw - 12.0,
             by,
@@ -955,12 +970,28 @@ impl Setup {
             Hit::Key(KeyCode::KeyS),
             false,
         );
-        let room_end = px + pw - 3.0 * bw - 32.0;
+        // Own colours are a key on a monitor.
+        let own_w = crate::mobile::pick(0.0, 124.0);
+        if crate::mobile::active() {
+            let own_label = tr!("Own colours", "自分の色", "Свои цвета");
+            let own_x = px + pw - 3.0 * bw - 30.0 - own_w;
+            c.button(
+                own_x,
+                by,
+                own_w,
+                bh,
+                own_label,
+                7.0,
+                Hit::Key(KeyCode::KeyE),
+                false,
+            );
+        }
+        let room_end = px + pw - 3.0 * bw - 32.0 - own_w;
         let mut x = px
             + 16.0
             + c.text(
                 px + 16.0,
-                by + 5.0,
+                by + (bh - 6.0) / 2.0,
                 6.0,
                 rgba(0x8a8aa0, 1.0),
                 tr!("PRESETS", "プリセット", "ПРЕСЕТЫ"),
@@ -970,12 +1001,12 @@ impl Setup {
         let list = presets(own);
         for (i, (name, _)) in list.iter().enumerate() {
             let mine = i >= BUILTIN_PRESETS;
-            let name_w = Canvas::text_width(7.0, name).min(90.0);
+            let name_w = Canvas::text_width(7.0, name).min(crate::mobile::pick(90.0, 130.0));
             let cw = name_w + 14.0 + if mine { 12.0 } else { 0.0 };
             if x + cw > room_end {
                 c.text(
                     x,
-                    by + 4.5,
+                    by + (bh - 7.0) / 2.0,
                     7.0,
                     rgba(0x8a8aa0, 1.0),
                     &format!("+{}", list.len() - i),
@@ -993,7 +1024,7 @@ impl Setup {
             );
             c.text(
                 x + 7.0,
-                by + 4.5,
+                by + (bh - 7.0) / 2.0,
                 7.0,
                 rgba(0xffffff, 1.0),
                 &Canvas::fit(7.0, name_w, name),
@@ -1006,7 +1037,13 @@ impl Setup {
                 Hit::UniversePreset(i),
             );
             if mine {
-                c.text(x + cw - 11.0, by + 4.5, 7.0, rgba(0x8a8aa0, 1.0), "x");
+                c.text(
+                    x + cw - 11.0,
+                    by + (bh - 7.0) / 2.0,
+                    7.0,
+                    rgba(0x8a8aa0, 1.0),
+                    "x",
+                );
                 c.hit(x + cw - 13.0, by, 13.0, bh, Hit::UniversePresetDelete(i));
             }
             x += cw + 5.0;

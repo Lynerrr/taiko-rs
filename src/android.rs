@@ -106,6 +106,122 @@ pub fn keyboard(show: bool) {
     }
 }
 
+/// How far in from the sides and from the top and bottom the screen's rounded corners and camera
+/// reach, in pixels. None until the window is up.
+pub fn safe_insets() -> Option<[u32; 2]> {
+    let app = APP.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+    let packed = JavaVM::singleton()
+        .and_then(|vm| {
+            vm.attach_current_thread(|env| -> jni::errors::Result<i32> {
+                // SAFETY: as in `keyboard`.
+                let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+                env.call_method(&activity, jni_str!("safeInsets"), jni_sig!("()I"), &[])?
+                    .i()
+            })
+        })
+        .ok()?;
+    (packed >= 0).then_some([packed as u32 >> 16, packed as u32 & 0xffff])
+}
+
+/// Lets the screen turn upright with the phone, or keeps it on its side.
+pub fn allow_portrait(on: bool) {
+    let Some(app) = APP.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+        return;
+    };
+    let called = JavaVM::singleton().and_then(|vm| {
+        vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            // SAFETY: as in `keyboard`.
+            let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+            env.call_method(
+                &activity,
+                jni_str!("allowPortrait"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(on)],
+            )?;
+            Ok(())
+        })
+    });
+    if let Err(e) = called {
+        eprintln!("screen turning: {e}");
+    }
+}
+
+/// What's playing, for the system's media controls.
+pub struct NowPlaying<'a> {
+    pub title: &'a str,
+    pub artist: &'a str,
+    /// The difficulty.
+    pub detail: &'a str,
+    /// The map's background image ("": none).
+    pub art: &'a str,
+    pub length_ms: i64,
+    pub at_ms: i64,
+    /// How fast it plays (map time a second, in seconds).
+    pub speed: f32,
+    pub paused: bool,
+}
+
+/// Tells the system's media controls what's playing.
+pub fn now_playing(song: &NowPlaying) {
+    let Some(app) = APP.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+        return;
+    };
+    let called = JavaVM::singleton().and_then(|vm| {
+        vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            // SAFETY: as in `keyboard`.
+            let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+            let title = env.new_string(song.title)?;
+            let artist = env.new_string(song.artist)?;
+            let detail = env.new_string(song.detail)?;
+            let art = env.new_string(song.art)?;
+            env.call_method(
+                &activity,
+                jni_str!("nowPlaying"),
+                jni_sig!(
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JJFZ)V"
+                ),
+                &[
+                    JValue::Object(&title),
+                    JValue::Object(&artist),
+                    JValue::Object(&detail),
+                    JValue::Object(&art),
+                    JValue::Long(song.length_ms),
+                    JValue::Long(song.at_ms),
+                    JValue::Float(song.speed),
+                    JValue::Bool(song.paused),
+                ],
+            )?;
+            Ok(())
+        })
+    });
+    if let Err(e) = called {
+        eprintln!("media controls: {e}");
+    }
+}
+
+/// Whether leaving the app should keep the music alive (the activity's `MusicService`).
+pub fn keep_music(on: bool) {
+    let Some(app) = APP.lock().unwrap_or_else(|e| e.into_inner()).clone() else {
+        return;
+    };
+    let called = JavaVM::singleton().and_then(|vm| {
+        vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            // SAFETY: as in `keyboard`.
+            let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+            env.call_method(
+                &activity,
+                jni_str!("keepMusic"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(on)],
+            )?;
+            Ok(())
+        })
+    });
+    if let Err(e) = called {
+        eprintln!("background music: {e}");
+    }
+}
+
 /// Binds the activity's `native` methods (the keyboard's) to their Rust side here.
 fn register_natives(app: &AndroidApp) -> jni::errors::Result<()> {
     JavaVM::singleton()?.attach_current_thread(|env| -> jni::errors::Result<()> {
@@ -125,6 +241,11 @@ fn register_natives(app: &AndroidApp) -> jni::errors::Result<()> {
                     jni_str!("keyboardShown"),
                     jni_str!("(Z)V"),
                     keyboard_shown as *mut _,
+                ),
+                NativeMethod::from_raw_parts(
+                    jni_str!("media"),
+                    jni_str!("(IJ)V"),
+                    media_press as *mut _,
                 ),
             ]
         };
@@ -170,6 +291,33 @@ extern "system" fn keyboard_shown<'local>(
         Ok(())
     })
     .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+/// `TaikoActivity.media(what, ms)`.
+extern "system" fn media_press<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    what: jint,
+    ms: jni::sys::jlong,
+) {
+    env.with_env(|_| -> jni::errors::Result<()> {
+        // Not through the event loop: it sleeps with the app in the background, and this is
+        // when they're pressed. The game takes them each frame, background ones too.
+        MEDIA
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((what, ms));
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
+/// Presses of the media controls not yet taken.
+static MEDIA: Mutex<Vec<(i32, i64)>> = Mutex::new(Vec::new());
+
+/// The media controls' presses since the last call: what (`MusicService`) and where to.
+pub fn take_media() -> Vec<(i32, i64)> {
+    std::mem::take(&mut *MEDIA.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 fn send(typed: Typed) {

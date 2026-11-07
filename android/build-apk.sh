@@ -16,6 +16,9 @@
 #                        the newest one in the SDK)
 #   TAIKO_ABIS           ABIs to include (default "arm64-v8a"; e.g. "arm64-v8a x86_64")
 #   TAIKO_VERSION_CODE   versionCode (default: the number of commits)
+#   TAIKO_DEV=1          a test build beside the installed game: its own package
+#                        (io.github.lynerrr.taiko.dev, so its own songs and settings), debuggable,
+#                        labelled "taiko.rs dev", from the quicker android-dev Cargo profile
 #   ANDROID_KEYSTORE, ANDROID_KEYSTORE_PASS, ANDROID_KEY_ALIAS
 #                        signing key. Default: the release key ~/.android/taiko-rs-release.jks
 #                        (password in taiko-rs-release.pass next to it, alias taiko-rs) if it is
@@ -58,6 +61,16 @@ abis=${TAIKO_ABIS:-arm64-v8a}
 version_name=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 version_code=${TAIKO_VERSION_CODE:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 
+dev=${TAIKO_DEV:-}
+profile=release
+label=taiko.rs
+link_flags=""
+if [ -n "$dev" ]; then
+    profile=android-dev
+    label="taiko.rs dev"
+    link_flags="--rename-manifest-package io.github.lynerrr.taiko.dev --debug-mode"
+fi
+
 out="$root/target/android"
 stage="$out/stage"
 rm -rf "$stage"
@@ -72,9 +85,9 @@ for abi in $abis; do
         x86) triple=i686-linux-android ;;
         *) echo "unknown ABI $abi" >&2; exit 1 ;;
     esac
-    cargo ndk -t "$abi" -P "$min_sdk" rustc --lib --release --locked --crate-type cdylib
+    cargo ndk -t "$abi" -P "$min_sdk" rustc --lib --profile "$profile" --locked --crate-type cdylib
     mkdir -p "$stage/lib/$abi"
-    "$strip" -o "$stage/lib/$abi/libtaiko_rs.so" "target/$triple/release/libtaiko_rs.so"
+    "$strip" -o "$stage/lib/$abi/libtaiko_rs.so" "target/$triple/$profile/libtaiko_rs.so"
 done
 
 echo "== java"
@@ -83,8 +96,11 @@ javac -nowarn --release 11 -classpath "$android_jar" -d "$stage/classes" $(find 
 
 echo "== resources and manifest"
 cp assets/taiko-rs.png "$stage/res/mipmap-xxxhdpi/ic_launcher.png"
+cp -r android/res/. "$stage/res/"
 "$tools/aapt2" compile --dir "$stage/res" -o "$stage/res.zip"
-"$tools/aapt2" link -o "$stage/unsigned.apk" -I "$android_jar" --manifest android/AndroidManifest.xml \
+sed "s/android:label=\"taiko.rs\"/android:label=\"$label\"/" android/AndroidManifest.xml > "$stage/AndroidManifest.xml"
+# shellcheck disable=SC2086 # link_flags is a list of flags
+"$tools/aapt2" link -o "$stage/unsigned.apk" -I "$android_jar" --manifest "$stage/AndroidManifest.xml" $link_flags \
     --min-sdk-version "$min_sdk" --target-sdk-version "$target_sdk" \
     --version-code "$version_code" --version-name "$version_name" "$stage/res.zip"
 

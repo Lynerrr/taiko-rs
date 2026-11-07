@@ -1262,6 +1262,16 @@ impl Select {
         self.group_of.get(row).is_some() && self.group_of.get(row) == self.group_of.get(self.cursor)
     }
 
+    /// The songs as ranges of `rows`.
+    pub fn song_groups(&self) -> &[std::ops::Range<usize>] {
+        &self.groups
+    }
+
+    /// What's listed, in order: the difficulties' library indices.
+    pub fn rows(&self) -> &[usize] {
+        &self.visible
+    }
+
     /// Row of the visible list under the cursor.
     pub fn cursor(&self) -> usize {
         self.cursor
@@ -2929,11 +2939,18 @@ pub fn draw_mod_select(
 
 /// The mod customization's tabs, above its panel: one per customizable mod that's on.
 pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: crate::mods::Mod) {
-    let (y, h) = (20.0, 18.0);
-    let mut x = 16.0 + c.text(16.0, y + 4.0, 9.0, rgba(0xffffff, 1.0), "MOD CUSTOMIZATION") + 12.0;
+    let phone = crate::mobile::active();
+    let (y, h) = if phone { (0.0, 44.0) } else { (20.0, 18.0) };
+    let mut x = if phone {
+        // Over the mods' own bar: its buttons aren't for now.
+        c.rect(0.0, 0.0, c.width, 49.0, rgba(0x0b0b10, 1.0));
+        0.0
+    } else {
+        16.0 + c.text(16.0, y + 4.0, 9.0, rgba(0xffffff, 1.0), "MOD CUSTOMIZATION") + 12.0
+    };
     for (i, &m) in tabs.iter().enumerate() {
         let name = m.name().to_uppercase();
-        let tw = Canvas::text_width(7.0, &name) + 20.0;
+        let tw = Canvas::text_width(7.0, &name) + crate::mobile::pick(20.0, 36.0);
         let on = m == open;
         c.round_rect(
             [x, y],
@@ -2945,7 +2962,7 @@ pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: 
         );
         c.text_centered(
             x + tw / 2.0,
-            y + 5.5,
+            y + (h - 7.0) / 2.0,
             7.0,
             rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0),
             &name,
@@ -2953,7 +2970,7 @@ pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: 
         c.hit(x, y, tw, h, Hit::CustomTab(i));
         x += tw + 6.0;
     }
-    if tabs.len() > 1 {
+    if tabs.len() > 1 && !phone {
         c.text(x + 4.0, y + 6.0, 6.0, rgba(0x6f6f86, 1.0), "Tab: next");
     }
 }
@@ -3093,11 +3110,13 @@ pub enum SetUpdate {
 impl Select {
     /// The right-click menu, next to the pointer and kept on screen.
     fn draw_menu(&self, c: &mut Canvas, library: &[Entry]) {
-        const ROW: f32 = 18.0;
+        // Sized for a thumb on a phone.
+        let phone = crate::mobile::active();
+        let (row, size) = if phone { (44.0, 12.0) } else { (18.0, 7.0) };
         let Some(m) = &self.menu else { return };
         let items = self.menu_items(library);
-        let bw = 200.0;
-        let bh = items.len() as f32 * ROW + 26.0;
+        let bw = if phone { 340.0 } else { 200.0 };
+        let bh = items.len() as f32 * row + if phone { 12.0 } else { 26.0 };
         let x = m.x.min(c.width - bw - 8.0).max(8.0);
         let y = m.y.min(480.0 - bh - 8.0).max(8.0);
         c.round_rect(
@@ -3109,38 +3128,42 @@ impl Select {
             1.5,
         );
         for (k, (label, _)) in items.iter().enumerate() {
-            let ry = y + 6.0 + k as f32 * ROW;
-            if c.hovered(x + 4.0, ry, bw - 8.0, ROW - 2.0) {
+            let ry = y + 6.0 + k as f32 * row;
+            if c.hovered(x + 4.0, ry, bw - 8.0, row - 2.0) {
                 c.round_rect(
                     [x + 4.0, ry],
-                    [bw - 8.0, ROW - 2.0],
+                    [bw - 8.0, row - 2.0],
                     4.0,
                     rgba(0x34344a, 1.0),
                     rgba(accent(), 1.0),
                     1.0,
                 );
             }
-            c.hit(x + 4.0, ry, bw - 8.0, ROW - 2.0, Hit::SongMenu(k));
+            c.hit(x + 4.0, ry, bw - 8.0, row - 2.0, Hit::SongMenu(k));
             c.text(
                 x + 12.0,
-                ry + 5.0,
-                7.0,
+                ry + (row - 2.0 - size) / 2.0,
+                size,
                 rgba(0xffffff, 1.0),
-                &Canvas::fit(7.0, bw - 20.0, label),
+                &Canvas::fit(size, bw - 20.0, label),
             );
         }
-        c.text(
-            x + 12.0,
-            y + bh - 14.0,
-            6.0,
-            rgba(0x6f6f86, 1.0),
-            &Canvas::fit(6.0, bw - 24.0, "hiding: only in taiko.rs; files stay"),
-        );
+        if !phone {
+            c.text(
+                x + 12.0,
+                y + bh - 14.0,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                &Canvas::fit(6.0, bw - 24.0, "hiding: only in taiko.rs; files stay"),
+            );
+        }
     }
 
     /// The collection or sort list over the song list.
     fn draw_picker(&self, c: &mut Canvas, cursor: usize) {
-        const ROW: f32 = 18.0;
+        // Sized for a thumb on a phone.
+        let phone = crate::mobile::active();
+        let (row, size) = if phone { (40.0, 12.0) } else { (18.0, 7.0) };
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.5));
         let (title, mark, rows, now): (_, _, Vec<String>, _) = if self.sorting {
@@ -3163,8 +3186,12 @@ impl Select {
                 Some(self.collection.map_or(0, |c| c + 1)),
             )
         };
-        let (bw, max_h) = (320.0, 380.0);
-        let bh = (rows.len() as f32 * ROW + 56.0).min(max_h);
+        let (bw, max_h) = if phone {
+            (440.0, 472.0)
+        } else {
+            (320.0, 380.0)
+        };
+        let bh = (rows.len() as f32 * row + if phone { 46.0 } else { 56.0 }).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         c.round_rect(
             [bx, by],
@@ -3174,43 +3201,49 @@ impl Select {
             rgba(accent(), 0.8),
             1.5,
         );
-        c.text(bx + 14.0, by + 12.0, 9.0, rgba(0xffffff, 1.0), title);
-        let (top, view) = (by + 32.0, bh - 50.0);
-        let scroll = (cursor as f32 * ROW - view / 2.0)
-            .clamp(0.0, (rows.len() as f32 * ROW - view).max(0.0));
+        let title_size = if phone { 12.0 } else { 9.0 };
+        c.text(bx + 14.0, by + 12.0, title_size, rgba(0xffffff, 1.0), title);
+        let (top, view) = if phone {
+            (by + 38.0, bh - 44.0)
+        } else {
+            (by + 32.0, bh - 50.0)
+        };
+        let scroll = (cursor as f32 * row - view / 2.0)
+            .clamp(0.0, (rows.len() as f32 * row - view).max(0.0));
         for (i, label) in rows.iter().enumerate() {
-            let y = top + i as f32 * ROW - scroll;
-            if y < top - 1.0 || y + ROW > top + view + 1.0 {
+            let y = top + i as f32 * row - scroll;
+            if y < top - 1.0 || y + row > top + view + 1.0 {
                 continue;
             }
             let selected = i == cursor;
             let current = now == Some(i);
-            let hover = c.hovered(bx + 8.0, y, bw - 16.0, ROW - 2.0);
+            let hover = c.hovered(bx + 8.0, y, bw - 16.0, row - 2.0);
             if selected || hover {
                 c.round_rect(
                     [bx + 8.0, y],
-                    [bw - 16.0, ROW - 2.0],
+                    [bw - 16.0, row - 2.0],
                     4.0,
                     rgba(0x34344a, 1.0),
                     rgba(if selected { accent() } else { 0x3a3a4e }, 1.0),
                     1.0,
                 );
             }
-            c.hit(bx + 8.0, y, bw - 16.0, ROW, Hit::PickRow(i));
+            c.hit(bx + 8.0, y, bw - 16.0, row, Hit::PickRow(i));
             let shown_w = if current {
-                Canvas::text_width(7.0, mark) + 10.0
+                Canvas::text_width(size, mark) + 10.0
             } else {
                 0.0
             };
+            let ty = y + (row - 2.0 - size) / 2.0;
             c.text(
                 bx + 20.0,
-                y + 5.0,
-                7.0,
+                ty,
+                size,
                 rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0),
-                &Canvas::fit(7.0, bw - 40.0 - shown_w, label),
+                &Canvas::fit(size, bw - 40.0 - shown_w, label),
             );
             if current {
-                c.text_right(bx + bw - 20.0, y + 5.0, 7.0, rgba(0x86E05A, 1.0), mark);
+                c.text_right(bx + bw - 20.0, ty, size, rgba(0x86E05A, 1.0), mark);
             }
         }
         let hint = if self.sorting {
@@ -3218,7 +3251,9 @@ impl Select {
         } else {
             "Up/Down or mouse   Enter/click show   Esc close"
         };
-        c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), hint);
+        if !phone {
+            c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), hint);
+        }
     }
 
     pub fn picker_len(&self) -> usize {
@@ -3572,7 +3607,13 @@ impl Results {
             "Song select  (Esc)"
         };
         buttons.push((back, Hit::Key(KeyCode::Escape), false));
-        c.button_row(424.0, &buttons);
+        // Taller on a phone: clear of the pill under them.
+        let row_y = if crate::mobile::active() {
+            402.0
+        } else {
+            424.0
+        };
+        c.button_row(row_y, &buttons);
         // Where the pp went: one click (or the wheel) away, and back.
         // Where the pp went: a pill under the buttons, its arrows bobbing the way to go.
         let down = self.scroll_to < RESULTS_SCROLL / 2.0;

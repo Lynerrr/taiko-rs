@@ -119,11 +119,19 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
         204.0,
         10.0,
         rgba(0xc8c8d8, 1.0),
-        tr!(
-            "By ear, with any drum key. It works best with your eyes closed",
-            "耳だけで、どのドラムキーでも。目を閉じるのがおすすめです",
-            "Только на слух, любой клавишей барабана. Лучше с закрытыми глазами"
-        ),
+        if crate::mobile::active() {
+            tr!(
+                "By ear: tap anywhere on the beat. It works best with your eyes closed",
+                "耳だけで: ビートに合わせてどこでもタップ。目を閉じるのがおすすめです",
+                "На слух: тапай в любом месте в ритм. Лучше с закрытыми глазами"
+            )
+        } else {
+            tr!(
+                "By ear, with any drum key. It works best with your eyes closed",
+                "耳だけで、どのドラムキーでも。目を閉じるのがおすすめです",
+                "Только на слух, любой клавишей барабана. Лучше с закрытыми глазами"
+            )
+        },
     );
     let hits = game.stats.errors.len();
     if hitting {
@@ -294,22 +302,32 @@ pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64, 
             &format!("Only {} hits; at least {MIN_HITS} recommended", e.hits),
         );
     }
+    let phone = crate::mobile::active();
     c.button_row(
-        352.0,
+        crate::mobile::pick(352.0, 330.0),
         &[
             ("Apply  (Enter)", Hit::Key(KeyCode::Enter), true),
             ("Retry  (R)", Hit::Key(KeyCode::KeyR), false),
             ("Discard  (Esc)", Hit::Key(KeyCode::Escape), false),
         ],
     );
-    let tempo = format!("retry tempo: {bpm:.0} BPM   (Left/Right)");
+    let tempo = if phone {
+        format!("retry tempo: {bpm:.0} BPM")
+    } else {
+        format!("retry tempo: {bpm:.0} BPM   (Left/Right)")
+    };
     let tw = Canvas::text_width(9.0, &tempo);
-    c.text_centered(cx, 388.0, 9.0, rgba(0x9a9ab0, 1.0), &tempo);
+    let (ty, bw, bh) = if phone {
+        (396.0, 50.0, 42.0)
+    } else {
+        (384.0, 22.0, 16.0)
+    };
+    c.text_centered(cx, ty + (bh - 8.0) / 2.0, 9.0, rgba(0x9a9ab0, 1.0), &tempo);
     c.button(
-        cx - tw / 2.0 - 30.0,
-        384.0,
-        22.0,
-        16.0,
+        cx - tw / 2.0 - bw - 8.0,
+        ty,
+        bw,
+        bh,
         "<",
         8.0,
         Hit::Key(KeyCode::ArrowLeft),
@@ -317,9 +335,9 @@ pub fn draw_result(c: &mut Canvas, e: &Estimate, current_offset: f64, bpm: f64, 
     );
     c.button(
         cx + tw / 2.0 + 8.0,
-        384.0,
-        22.0,
-        16.0,
+        ty,
+        bw,
+        bh,
         ">",
         8.0,
         Hit::Key(KeyCode::ArrowRight),

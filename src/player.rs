@@ -2,6 +2,8 @@
 //! song's disc with its spectrum around it, the list of songs on one side and what's queued on
 //! the other, and everything for playing it: shuffle, repeat, volume, speed and pitch.
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use crate::game::DON;
 use crate::genres::GENRES;
 use crate::library::Entry;
@@ -25,20 +27,62 @@ const DISC_PIXELS: usize = 46;
 const DISC_R: f32 = 92.0;
 /// Where the rim starts, as a part of the radius.
 pub(crate) const DISC_RIM: f32 = 0.85;
-const DISC_Y: f32 = 196.0;
+fn disc_y() -> f32 {
+    crate::mobile::pick(196.0, 172.0)
+}
 /// How fast it turns (radians a second).
 const SPIN: f32 = 0.6;
 const BLOCK: f32 = 3.0;
 const BLOCK_STEP: f32 = 4.0;
 const MAX_BLOCKS: usize = 16;
-const BAR_Y: f32 = 388.0;
+fn bar_y() -> f32 {
+    crate::mobile::pick(388.0, 372.0)
+}
 /// The list of songs on the left, and from this wide on, what's queued on the right.
-const LIST_W: f32 = 210.0;
-const QUEUE_W: f32 = 170.0;
+fn list_w() -> f32 {
+    if tall() {
+        return TALL_W.load(Ordering::Relaxed) as f32;
+    }
+    crate::mobile::pick(210.0, 300.0)
+}
+fn queue_w() -> f32 {
+    crate::mobile::pick(170.0, 180.0)
+}
 const QUEUE_FROM: f32 = 853.0;
-const LIST_TOP: f32 = 52.0;
-const ROW_H: f32 = 20.0;
-const ROWS: usize = 18;
+fn list_top() -> f32 {
+    if tall() {
+        return 36.0;
+    }
+    crate::mobile::pick(52.0, 54.0)
+}
+fn row_h() -> f32 {
+    if tall() {
+        return 34.0;
+    }
+    crate::mobile::pick(20.0, 40.0)
+}
+fn rows() -> usize {
+    if tall() {
+        return 11;
+    }
+    if crate::mobile::active() { 8 } else { 18 }
+}
+
+/// The player is drawn upright, on a phone held that way: its own layout.
+static TALL: AtomicBool = AtomicBool::new(false);
+/// The screen's width then.
+static TALL_W: AtomicU32 = AtomicU32::new(0);
+
+pub fn tall() -> bool {
+    TALL.load(Ordering::Relaxed)
+}
+
+/// Text sizes upright, where a virtual unit is twice as big: whole font pixels on the grid.
+const TALL_SMALL: f32 = 5.0;
+const TALL_TEXT: f32 = 7.0;
+/// The disc upright.
+const TALL_DISC_R: f32 = 66.0;
+const TALL_DISC_Y: f32 = 140.0;
 /// Rows the wheel moves.
 const WHEEL_ROWS: i32 = 3;
 const SEMITONE_RANGE: i32 = 12;
@@ -365,6 +409,10 @@ pub struct Player {
     pub semitones: i32,
     /// The folders are showing, instead of the list.
     pub folders_open: bool,
+    /// Upright: the list is up, over the player.
+    pub list_open: bool,
+    /// The speed picked by hand and whether it keeps the pitch, with no speed mod on.
+    custom_rate: (f64, bool),
     /// The first row of the list on screen, and the track that was last scrolled to.
     scroll: usize,
     followed: Option<usize>,
@@ -419,6 +467,8 @@ impl Player {
             speed: None,
             semitones: 0,
             folders_open: false,
+            list_open: false,
+            custom_rate: (1.0, true),
             scroll: 0,
             followed: None,
             angle: 0.0,
@@ -428,7 +478,13 @@ impl Player {
 
     /// The speed the music plays at, and whether that keeps its pitch.
     pub fn rate(&self) -> (f64, bool) {
-        self.speed.map_or((1.0, true), Speed::rate)
+        self.speed.map_or(self.custom_rate, Speed::rate)
+    }
+
+    /// The speed picked by hand: the speed mods give way to it.
+    pub fn set_custom_rate(&mut self, rate: f64, keep_pitch: bool) {
+        self.speed = None;
+        self.custom_rate = (rate, keep_pitch);
     }
 
     /// How far `[` `]` move the pitch.
@@ -446,7 +502,7 @@ impl Player {
     }
 
     pub fn scroll_by(&mut self, rows: i32) {
-        let last = self.list.shown.len().saturating_sub(ROWS);
+        let last = self.list.shown.len().saturating_sub(self::rows());
         self.scroll = (self.scroll as i64 + rows as i64).clamp(0, last as i64) as usize;
     }
 
@@ -456,7 +512,7 @@ impl Player {
 
     /// Over the list of songs.
     pub fn over_list(&self, x: f32) -> bool {
-        x < LIST_W + 10.0
+        x < list_w() + 10.0
     }
 
     /// Goes into folder `i` of the list's folders.
@@ -484,32 +540,44 @@ impl Player {
         if let Some(t) = f.times {
             self.times = t;
         }
+        let upright = crate::mobile::active() && c.width < crate::render::VIRTUAL_HEIGHT;
+        TALL.store(upright, Ordering::Relaxed);
+        TALL_W.store(c.width as u32, Ordering::Relaxed);
+        if upright {
+            return self.draw_tall(c, f);
+        }
         let wide = c.width >= QUEUE_FROM;
         let (left, right) = (
-            LIST_W + 20.0,
-            c.width - if wide { QUEUE_W + 20.0 } else { 10.0 },
+            list_w() + 20.0,
+            c.width - if wide { queue_w() + 20.0 } else { 10.0 },
         );
         let x = (left + right) / 2.0;
-        self.spectrum.draw_rays(c, x, DISC_Y, DISC_R, 1.0);
-        draw_disc(c, x, DISC_Y, self.angle, f.pictured);
+        self.spectrum.draw_rays(c, x, disc_y(), DISC_R, 1.0);
+        draw_disc(c, x, disc_y(), self.angle, f.pictured);
         if f.pictured {
             // A hair past the rim's inside edge, smooth under its pixels.
-            c.disc = Some([x, DISC_Y, DISC_R * (DISC_RIM + 0.02), self.angle]);
+            c.disc = Some([x, disc_y(), DISC_R * (DISC_RIM + 0.02), self.angle]);
             for groove in [0.34, 0.5, 0.66] {
-                c.ring(x, DISC_Y, DISC_R * groove, rgba(0x000000, 0.12), 1.0);
+                c.ring(x, disc_y(), DISC_R * groove, rgba(0x000000, 0.12), 1.0);
             }
         }
+        let phone = crate::mobile::active();
+        let back = if phone {
+            [0.0, 0.0, 96.0, 46.0]
+        } else {
+            [10.0, 24.0, 74.0, 20.0]
+        };
         c.button(
-            10.0,
-            24.0,
-            74.0,
-            20.0,
+            back[0],
+            back[1],
+            back[2],
+            back[3],
             tr!("< menu", "< メニュー", "< меню"),
-            8.0,
+            crate::mobile::pick(8.0, 12.0),
             Hit::Key(winit::keyboard::KeyCode::Escape),
             false,
         );
-        if wide {
+        if wide && !phone {
             c.text_right(c.width - 14.0, 34.0, 7.0, rgba(0x9a9ab0, 1.0), f.hint);
         }
         if self.folders_open {
@@ -518,17 +586,22 @@ impl Player {
             self.draw_list(c);
         }
         if wide {
-            self.draw_queue(c, c.width - QUEUE_W - 10.0);
+            self.draw_queue(c, c.width - queue_w() - 10.0);
         }
         c.text_centered(
             x,
-            BAR_Y - 18.0,
+            bar_y() - crate::mobile::pick(18.0, 22.0),
             9.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(9.0, right - left, f.song),
         );
         self.draw_timeline(c, x, right - left);
-        let (w, gap, y) = (40.0, 6.0, BAR_Y + 18.0);
+        let (w, gap, y) = if phone {
+            (60.0, 8.0, bar_y() + 16.0)
+        } else {
+            (40.0, 6.0, bar_y() + 18.0)
+        };
+        let button_h = crate::mobile::pick(26.0, 42.0);
         let start = x - (w * 6.0 + gap * 5.0) / 2.0;
         let loved = self.list.is_favourite(self.list.now());
         let row = [
@@ -542,7 +615,7 @@ impl Player {
         for (i, (control, on)) in row.into_iter().enumerate() {
             button(
                 c,
-                [start + i as f32 * (w + gap), y, w, 26.0],
+                [start + i as f32 * (w + gap), y, w, button_h],
                 control,
                 f.paused,
                 on,
@@ -557,7 +630,201 @@ impl Player {
                 "1",
             );
         }
-        self.draw_sound(c, x, y + 34.0, f.volume);
+        self.draw_sound(c, x, y + crate::mobile::pick(34.0, 50.0), f.volume);
+    }
+
+    /// The player on a phone held upright: the disc, the song, and big controls under the thumb.
+    /// The list comes up over it.
+    fn draw_tall(&mut self, c: &mut Canvas, f: &Frame) {
+        let (w, cx) = (c.width, c.width / 2.0);
+        // The picture stays, quieter, so the text sits on something calm.
+        c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.45));
+        if self.list_open {
+            return self.draw_tall_list(c);
+        }
+        let escape = Hit::Key(winit::keyboard::KeyCode::Escape);
+        c.button(0.0, 0.0, 44.0, 30.0, "<", TALL_TEXT, escape, false);
+        let heading = tr!("NOW PLAYING", "再生中", "СЕЙЧАС ИГРАЕТ");
+        c.text_centered(cx, 11.0, TALL_SMALL, rgba(0x9a9ab0, 1.0), heading);
+        c.button(
+            w - 44.0,
+            0.0,
+            44.0,
+            30.0,
+            "",
+            TALL_TEXT,
+            Hit::PlayerList,
+            false,
+        );
+        for k in 0..3 {
+            let y = 9.0 + k as f32 * 5.0;
+            c.rect(w - 30.0, y, 16.0, pixel_size(2.0), rgba(0xffffff, 1.0));
+        }
+
+        self.spectrum
+            .draw_rays(c, cx, TALL_DISC_Y, TALL_DISC_R, 1.0);
+        draw_disc_sized(c, cx, TALL_DISC_Y, TALL_DISC_R, self.angle, f.pictured, 1.0);
+        if f.pictured {
+            let r = TALL_DISC_R * (DISC_RIM + 0.02);
+            c.disc = Some([cx, TALL_DISC_Y, r, self.angle]);
+            for groove in [0.34, 0.5, 0.66] {
+                c.ring(
+                    cx,
+                    TALL_DISC_Y,
+                    TALL_DISC_R * groove,
+                    rgba(0x000000, 0.12),
+                    1.0,
+                );
+            }
+        }
+
+        // The song: its name big, the artist under it.
+        let (artist, title) = f.song.split_once(" - ").unwrap_or(("", f.song));
+        let room = w - 8.0;
+        let chars = (room / Canvas::char_width(TALL_TEXT)).max(8.0) as usize;
+        let lines = crate::social::wrap(title, chars);
+        let mut y = 284.0;
+        for line in lines.iter().take(2) {
+            let shown = Canvas::fit(TALL_TEXT, room, line);
+            c.text_centered(cx, y, TALL_TEXT, rgba(0xffffff, 1.0), &shown);
+            y += 15.0;
+        }
+        let by = Canvas::fit(TALL_SMALL, room, artist);
+        c.text_centered(cx, y + 1.0, TALL_SMALL, rgba(0xc8c8d8, 1.0), &by);
+
+        self.draw_tall_timeline(c, 332.0);
+
+        // Play in the middle, the biggest thing here.
+        let loved = self.list.is_favourite(self.list.now());
+        let (y, h, gap) = (358.0, 40.0, 6.0);
+        let widths = [32.0, 38.0, 52.0, 38.0, 32.0];
+        let row = [
+            (Control::Shuffle, self.list.is_shuffled()),
+            (Control::Prev, false),
+            (Control::Toggle, true),
+            (Control::Next, false),
+            (Control::Repeat, self.list.repeat != Repeat::Off),
+        ];
+        let total = widths.iter().sum::<f32>() + gap * 4.0;
+        let mut x = cx - total / 2.0;
+        for ((control, on), bw) in row.into_iter().zip(widths) {
+            button(c, [x, y, bw, h], control, f.paused, on);
+            if control == Control::Repeat && self.list.repeat == Repeat::One {
+                c.text(x + bw - 8.0, y + 3.0, TALL_SMALL, rgba(0xffffff, 1.0), "1");
+            }
+            x += bw + gap;
+        }
+
+        // The speed mods, the pitch and the heart.
+        let (y, h) = (404.0, 28.0);
+        let heart_w = 34.0;
+        button(c, [0.0, y, heart_w, h], Control::Favourite, f.paused, loved);
+        let mut x = heart_w + 5.0;
+        let speed_w = 46.0;
+        let chip = (w - x - speed_w - 5.0 * 4.0) / 4.0;
+        for (i, speed) in Speed::ALL.into_iter().enumerate() {
+            let on = self.speed == Some(speed);
+            let fill = if on {
+                crate::render::accent()
+            } else {
+                0x23232f
+            };
+            let edge = if on { 0xffffff } else { 0x3a3a4e };
+            c.round_rect(
+                [x, y],
+                [chip, h],
+                4.0,
+                rgba(fill, 1.0),
+                rgba(edge, 1.0),
+                1.0,
+            );
+            let ty = y + (h - TALL_SMALL) / 2.0;
+            c.text_centered(
+                x + chip / 2.0,
+                ty,
+                TALL_SMALL,
+                rgba(0xffffff, 1.0),
+                speed.name(),
+            );
+            c.hit(x, y, chip, h, Hit::PlayerSpeed(i));
+            x += chip + 5.0;
+        }
+        let label = format!("{:.2}x", self.rate().0);
+        let changed = (self.rate().0 - 1.0).abs() > 1e-6 || self.semitones != 0;
+        c.button(x, y, speed_w, h, &label, TALL_SMALL, Hit::RateOpen, changed);
+
+        // The volume, and the way into the map.
+        let (y, h) = (440.0, 34.0);
+        let play = tr!("play map", "譜面をプレイ", "сыграть карту");
+        let play_w = 96.0;
+        let hit = Hit::Music(Control::PlayMap);
+        c.button(w - play_w, y, play_w, h, play, TALL_SMALL, hit, true);
+        let volume_w = w - play_w - 12.0;
+        self.volume_bar = (0.0, volume_w);
+        let step = pixel_size(4.0);
+        let blocks = (volume_w / step) as usize;
+        let lit = (f.volume.clamp(0.0, 1.0) * blocks as f32).round() as usize;
+        for b in 0..blocks {
+            let high = pixel_size(4.0 + b as f32 / blocks as f32 * 14.0);
+            let col = if b < lit { 0xffffff } else { 0x3a3a4e };
+            c.rect(
+                snap_to_grid(b as f32 * step),
+                snap_to_grid(y + h - 8.0 - high),
+                step - pixel_size(1.0),
+                high,
+                rgba(col, 1.0),
+            );
+        }
+        c.hit(0.0, y - 4.0, volume_w, h + 8.0, Hit::PlayerVolume);
+    }
+
+    /// The song's progress across the screen, the times under it.
+    fn draw_tall_timeline(&mut self, c: &mut Canvas, y: f32) {
+        let (at, len) = self.times;
+        let w = c.width;
+        self.timeline = (0.0, w, len);
+        let done = if len > 0.0 {
+            (at / len).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        let step = pixel_size(3.0);
+        let blocks = (w / step) as usize;
+        let lit = (done * blocks as f32).round() as usize;
+        for b in 0..blocks {
+            let col = if b < lit {
+                crate::render::accent()
+            } else {
+                0x3a3a4e
+            };
+            c.rect(
+                b as f32 * step,
+                snap_to_grid(y),
+                step - pixel_size(1.0),
+                pixel_size(5.0),
+                rgba(col, 1.0),
+            );
+        }
+        c.hit(0.0, y - 8.0, w, 24.0, Hit::MusicBar);
+        let clock = |ms: f64| {
+            let s = (ms / 1000.0).max(0.0) as u32;
+            format!("{}:{:02}", s / 60, s % 60)
+        };
+        let colour = rgba(0xc8c8d8, 1.0);
+        c.text(0.0, y + 9.0, TALL_SMALL, colour, &clock(at));
+        c.text_right(w, y + 9.0, TALL_SMALL, colour, &clock(len));
+    }
+
+    /// The list over the player, the whole screen for it.
+    fn draw_tall_list(&mut self, c: &mut Canvas) {
+        c.rect(0.0, 0.0, c.width, 480.0, rgba(0x0e0e14, 0.9));
+        c.button(0.0, 0.0, 44.0, 30.0, "<", TALL_TEXT, Hit::PlayerList, false);
+        if self.folders_open {
+            self.draw_folders(c);
+        } else {
+            self.draw_list(c);
+        }
+        self.draw_folder_button(c);
     }
 
     /// The name of a folder.
@@ -572,11 +839,18 @@ impl Player {
 
     /// The button at the list's top that goes to the folders, showing the one that's open.
     fn draw_folder_button(&self, c: &mut Canvas) {
-        let hover = c.hovered(10.0 + 84.0, 24.0, LIST_W - 84.0, 20.0);
+        let [bx, by, bw, bh] = if tall() {
+            [50.0, 0.0, list_w() - 50.0, 30.0]
+        } else if crate::mobile::active() {
+            [104.0, 0.0, list_w() - 104.0, 46.0]
+        } else {
+            [94.0, 24.0, list_w() - 84.0, 20.0]
+        };
+        let hover = c.hovered(bx, by, bw, bh);
         let open = self.folders_open;
         c.round_rect(
-            [94.0, 24.0],
-            [LIST_W - 84.0, 20.0],
+            [bx, by],
+            [bw, bh],
             4.0,
             rgba(if hover { 0x34344a } else { 0x23232f }, 1.0),
             rgba(
@@ -591,19 +865,19 @@ impl Player {
         );
         draw_folder_icon(
             c,
-            100.0,
-            29.0,
+            bx + 6.0,
+            by + bh / 2.0 - 5.0,
             pixel_size(1.0),
             folder_colour(self.list.folder),
         );
         c.text(
-            120.0,
-            30.5,
+            bx + 26.0,
+            by + (bh - 7.0) / 2.0,
             7.0,
             rgba(0xffffff, 1.0),
-            &Canvas::fit(7.0, LIST_W - 118.0, Self::folder_name(self.list.folder)),
+            &Canvas::fit(7.0, bw - 34.0, Self::folder_name(self.list.folder)),
         );
-        c.hit(94.0, 24.0, LIST_W - 84.0, 20.0, Hit::PlayerFolders);
+        c.hit(bx, by, bw, bh, Hit::PlayerFolders);
     }
 
     /// The folders, one to a row: a pixel folder in its colour, its name and how many.
@@ -612,16 +886,16 @@ impl Player {
         const GAP: f32 = 3.0;
         self.draw_folder_button(c);
         let folders = self.list.folders();
-        let room = ROWS as f32 * ROW_H + 26.0;
+        let room = rows() as f32 * row_h() + 26.0;
         let h = ((room + GAP) / folders.len().max(1) as f32 - GAP).clamp(17.0, 36.0);
         for (i, &(folder, count)) in folders.iter().enumerate() {
-            let y = LIST_TOP + i as f32 * (h + GAP);
+            let y = list_top() + i as f32 * (h + GAP);
             let on = folder == self.list.folder;
-            let hover = c.hovered(X, y, LIST_W, h);
+            let hover = c.hovered(X, y, list_w(), h);
             let colour = folder_colour(folder);
             c.round_rect(
                 [X, y],
-                [LIST_W, h],
+                [list_w(), h],
                 4.0,
                 rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92),
                 rgba(if on { colour } else { 0x3a3a4e }, 1.0),
@@ -631,7 +905,7 @@ impl Player {
             draw_folder_icon(c, X + 7.0, y + (h - 12.0 * px) / 2.0, px, colour);
             let count = count.to_string();
             let name_x = X + 8.0 + 16.0 * px + 8.0;
-            let room = X + LIST_W - 8.0 - Canvas::text_width(7.0, &count) - 8.0 - name_x;
+            let room = X + list_w() - 8.0 - Canvas::text_width(7.0, &count) - 8.0 - name_x;
             c.text(
                 name_x,
                 y + (h - 7.0) / 2.0,
@@ -640,28 +914,36 @@ impl Player {
                 &Canvas::fit(7.0, room, Self::folder_name(folder)),
             );
             c.text_right(
-                X + LIST_W - 8.0,
+                X + list_w() - 8.0,
                 y + (h - 7.0) / 2.0,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
                 &count,
             );
-            c.hit(X, y, LIST_W, h, Hit::PlayerFolder(i));
+            c.hit(X, y, list_w(), h, Hit::PlayerFolder(i));
         }
     }
 
     /// The song list: a search box, then a row for each song, with a heart and a `+`.
     fn draw_list(&mut self, c: &mut Canvas) {
-        const X: f32 = 10.0;
-        self.draw_folder_button(c);
+        let x0 = crate::mobile::pick(10.0, 0.0);
+        let search_h = if tall() {
+            30.0
+        } else {
+            crate::mobile::pick(18.0, 40.0)
+        };
+        let text_size = if tall() { TALL_SMALL } else { 7.0 };
+        if !tall() {
+            self.draw_folder_button(c);
+        }
         let border = if self.searching {
             rgba(crate::render::accent(), 1.0)
         } else {
             rgba(0x3a3a4e, 1.0)
         };
         c.round_rect(
-            [X, LIST_TOP],
-            [LIST_W, 18.0],
+            [x0, list_top()],
+            [list_w(), search_h],
             4.0,
             rgba(0x15151d, 0.95),
             border,
@@ -670,25 +952,29 @@ impl Player {
         let filter = self.list.filter.clone();
         let (text, col) = if filter.is_empty() && !self.searching {
             (
-                tr!("search (Ctrl+F)", "検索 (Ctrl+F)", "поиск (Ctrl+F)").to_string(),
+                if crate::mobile::active() {
+                    tr!("search", "検索", "поиск").to_string()
+                } else {
+                    tr!("search (Ctrl+F)", "検索 (Ctrl+F)", "поиск (Ctrl+F)").to_string()
+                },
                 0x6f6f86,
             )
         } else {
             (format!("{filter}_"), 0xffffff)
         };
         c.text(
-            X + 7.0,
-            LIST_TOP + 5.5,
-            7.0,
+            x0 + 7.0,
+            list_top() + (search_h - text_size) / 2.0,
+            text_size,
             rgba(col, 1.0),
-            &Canvas::fit_end(7.0, LIST_W - 14.0, &text),
+            &Canvas::fit_end(text_size, list_w() - 14.0, &text),
         );
-        c.hit(X, LIST_TOP, LIST_W, 18.0, Hit::PlayerSearch);
+        c.hit(x0, list_top(), list_w(), search_h, Hit::PlayerSearch);
 
-        let top = LIST_TOP + 22.0;
+        let top = list_top() + search_h + 4.0;
         c.round_rect(
-            [X, top],
-            [LIST_W, ROWS as f32 * ROW_H + 4.0],
+            [x0, top],
+            [list_w(), rows() as f32 * row_h() + 4.0],
             4.0,
             rgba(0x15151d, 0.82),
             rgba(0x3a3a4e, 1.0),
@@ -699,76 +985,84 @@ impl Player {
         if self.followed != Some(now) {
             self.followed = Some(now);
             if let Some(pos) = self.list.shown.iter().position(|&t| t == now)
-                && (pos < self.scroll || pos >= self.scroll + ROWS)
+                && (pos < self.scroll || pos >= self.scroll + rows())
             {
-                self.scroll = pos.saturating_sub(ROWS / 2);
+                self.scroll = pos.saturating_sub(rows() / 2);
                 self.scroll_by(0);
             }
         }
-        const ADD_W: f32 = 18.0;
-        const HEART_W: f32 = 16.0;
+        let add_w = if tall() {
+            34.0
+        } else {
+            crate::mobile::pick(18.0, 44.0)
+        };
+        let heart_w = if tall() {
+            30.0
+        } else {
+            crate::mobile::pick(16.0, 44.0)
+        };
         for (row, &track) in self
             .list
             .shown
             .iter()
             .skip(self.scroll)
-            .take(ROWS)
+            .take(rows())
             .enumerate()
         {
-            let y = top + 2.0 + row as f32 * ROW_H;
-            let hover = c.hovered(X, y, LIST_W, ROW_H);
+            let y = top + 2.0 + row as f32 * row_h();
+            let hover = c.hovered(x0, y, list_w(), row_h());
             if track == now {
                 c.rect(
-                    X + 2.0,
+                    x0 + 2.0,
                     y,
-                    LIST_W - 4.0,
-                    ROW_H,
+                    list_w() - 4.0,
+                    row_h(),
                     rgba(crate::render::accent(), 0.3),
                 );
             } else if hover {
-                c.rect(X + 2.0, y, LIST_W - 4.0, ROW_H, rgba(0x34344a, 0.8));
+                c.rect(x0 + 2.0, y, list_w() - 4.0, row_h(), rgba(0x34344a, 0.8));
             }
-            let room = LIST_W - 14.0 - ADD_W - HEART_W;
+            let room = list_w() - 14.0 - add_w - heart_w;
             c.text(
-                X + 7.0,
-                y + 6.5,
-                7.0,
+                x0 + 7.0,
+                y + (row_h() - text_size) / 2.0,
+                text_size,
                 rgba(if track == now { 0xffffff } else { 0xc8c8d8 }, 1.0),
-                &Canvas::fit(7.0, room, &self.list.tracks[track].label),
+                &Canvas::fit(text_size, room, &self.list.tracks[track].label),
             );
-            let heart_x = X + LIST_W - ADD_W - HEART_W - 2.0;
-            c.hit(X, y, heart_x - X, ROW_H, Hit::PlayerRow(track));
+            let heart_x = x0 + list_w() - add_w - heart_w - 2.0;
+            c.hit(x0, y, heart_x - x0, row_h(), Hit::PlayerRow(track));
             let loved = self.list.is_favourite(track);
-            if loved || hover {
+            if loved || hover || tall() {
                 draw_heart(
                     c,
                     heart_x + 4.0,
-                    y + 6.0,
+                    y + (row_h() - 8.0) / 2.0,
                     pixel_size(1.0),
                     if loved { 0xff5fa2 } else { 0x6a6a88 },
                 );
             }
-            c.hit(heart_x, y, HEART_W, ROW_H, Hit::PlayerFavourite(track));
-            if hover {
+            c.hit(heart_x, y, heart_w, row_h(), Hit::PlayerFavourite(track));
+            if hover || tall() {
                 c.text_centered(
-                    X + LIST_W - ADD_W / 2.0 - 2.0,
-                    y + 6.5,
+                    x0 + list_w() - add_w / 2.0 - 2.0,
+                    y + (row_h() - 7.0) / 2.0,
                     7.0,
                     rgba(0xffffff, 1.0),
                     "+",
                 );
             }
             c.hit(
-                X + LIST_W - ADD_W - 2.0,
+                x0 + list_w() - add_w - 2.0,
                 y,
-                ADD_W,
-                ROW_H,
+                add_w,
+                row_h(),
                 Hit::PlayerQueue(track),
             );
         }
         if self.list.shown.is_empty() {
             c.text(
-                X + 7.0,
+                x0 + 7.0,
                 top + 9.0,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
@@ -777,9 +1071,9 @@ impl Player {
         }
         let count = self.list.shown.len();
         c.text(
-            X + 2.0,
-            top + ROWS as f32 * ROW_H + 9.0,
-            7.0,
+            x0 + 2.0,
+            top + rows() as f32 * row_h() + 9.0,
+            text_size,
             rgba(0x9a9ab0, 1.0),
             &tr!("{count} songs", "{count}曲", "{count} песен";),
         );
@@ -789,33 +1083,33 @@ impl Player {
     fn draw_queue(&self, c: &mut Canvas, x: f32) {
         c.text(
             x + 2.0,
-            LIST_TOP + 5.5,
+            list_top() + crate::mobile::pick(5.5, 14.0),
             7.0,
             rgba(0x9a9ab0, 1.0),
             tr!("UP NEXT", "次に再生", "ДАЛЬШЕ"),
         );
-        let top = LIST_TOP + 22.0;
+        let top = list_top() + crate::mobile::pick(18.0, 40.0) + 4.0;
         c.round_rect(
             [x, top],
-            [QUEUE_W, ROWS as f32 * ROW_H + 4.0],
+            [queue_w(), rows() as f32 * row_h() + 4.0],
             4.0,
             rgba(0x15151d, 0.82),
             rgba(0x3a3a4e, 1.0),
             1.0,
         );
-        for (row, &track) in self.list.queue.iter().take(ROWS).enumerate() {
-            let y = top + 2.0 + row as f32 * ROW_H;
-            if c.hovered(x, y, QUEUE_W, ROW_H) {
-                c.rect(x + 2.0, y, QUEUE_W - 4.0, ROW_H, rgba(0x34344a, 0.8));
+        for (row, &track) in self.list.queue.iter().take(rows()).enumerate() {
+            let y = top + 2.0 + row as f32 * row_h();
+            if c.hovered(x, y, queue_w(), row_h()) {
+                c.rect(x + 2.0, y, queue_w() - 4.0, row_h(), rgba(0x34344a, 0.8));
             }
             c.text(
                 x + 7.0,
-                y + 6.5,
+                y + (row_h() - 7.0) / 2.0,
                 7.0,
                 rgba(0xc8c8d8, 1.0),
-                &Canvas::fit(7.0, QUEUE_W - 14.0, &self.list.tracks[track].label),
+                &Canvas::fit(7.0, queue_w() - 14.0, &self.list.tracks[track].label),
             );
-            c.hit(x, y, QUEUE_W, ROW_H, Hit::PlayerUnqueue(row));
+            c.hit(x, y, queue_w(), row_h(), Hit::PlayerUnqueue(row));
         }
         if self.list.queue.is_empty() {
             c.text(
@@ -825,7 +1119,7 @@ impl Player {
                 rgba(0x6f6f86, 1.0),
                 &Canvas::fit(
                     7.0,
-                    QUEUE_W - 14.0,
+                    queue_w() - 14.0,
                     tr!("+ on a song adds it", "曲の + で追加", "+ у песни добавит"),
                 ),
             );
@@ -834,25 +1128,38 @@ impl Player {
 
     /// The bottom row: going to the map, the speed mods, the pitch, the volume.
     fn draw_sound(&mut self, c: &mut Canvas, cx: f32, y: f32, volume: f32) {
-        const H: f32 = 18.0;
+        let phone = crate::mobile::active();
+        let h = crate::mobile::pick(18.0, 36.0);
         let pitch = if self.semitones == 0 {
-            tr!("pitch [ ]", "ピッチ [ ]", "питч [ ]").to_string()
+            if phone {
+                tr!("pitch", "ピッチ", "питч").to_string()
+            } else {
+                tr!("pitch [ ]", "ピッチ [ ]", "питч [ ]").to_string()
+            }
         } else {
-            format!("{:+} [ ]", self.semitones)
+            if phone {
+                format!("{:+}", self.semitones)
+            } else {
+                format!("{:+} [ ]", self.semitones)
+            }
         };
         let play = tr!("play map", "譜面をプレイ", "сыграть карту");
         let play_w = Canvas::text_width(7.0, play) + 12.0;
-        let pitch_w = Canvas::text_width(7.0, &pitch) + 10.0;
-        const MOD_W: f32 = 24.0;
-        const VOLUME_W: f32 = 62.0;
+        let pitch_w = if phone {
+            76.0
+        } else {
+            Canvas::text_width(7.0, &pitch) + 10.0
+        };
+        let mod_w = crate::mobile::pick(24.0, 40.0);
+        let volume_w = crate::mobile::pick(62.0, 80.0);
         const GAP: f32 = 6.0;
-        let total = play_w + GAP * 2.0 + (MOD_W + GAP) * 4.0 + pitch_w + GAP * 2.0 + VOLUME_W;
+        let total = play_w + GAP * 2.0 + (mod_w + GAP) * 4.0 + pitch_w + GAP * 2.0 + volume_w;
         let mut x = cx - total / 2.0;
         c.button(
             x,
             y,
             play_w,
-            H,
+            h,
             play,
             7.0,
             Hit::Music(Control::PlayMap),
@@ -861,7 +1168,7 @@ impl Player {
         x += play_w + GAP * 2.0;
         for (i, speed) in Speed::ALL.into_iter().enumerate() {
             let on = self.speed == Some(speed);
-            let hover = c.hovered(x, y, MOD_W, H);
+            let hover = c.hovered(x, y, mod_w, h);
             let fill = if on {
                 crate::render::accent()
             } else if hover {
@@ -871,41 +1178,50 @@ impl Player {
             };
             c.round_rect(
                 [x, y],
-                [MOD_W, H],
+                [mod_w, h],
                 4.0,
                 rgba(fill, 1.0),
                 rgba(if on { 0xffffff } else { 0x3a3a4e }, 1.0),
                 1.0,
             );
             c.text_centered(
-                x + MOD_W / 2.0,
-                y + 5.5,
+                x + mod_w / 2.0,
+                y + (h - 7.0) / 2.0,
                 7.0,
                 rgba(0xffffff, 1.0),
                 speed.name(),
             );
-            c.hit(x, y, MOD_W, H, Hit::PlayerSpeed(i));
-            x += MOD_W + GAP;
+            c.hit(x, y, mod_w, h, Hit::PlayerSpeed(i));
+            x += mod_w + GAP;
         }
-        c.text(
-            x + 3.0,
-            y + 5.5,
-            7.0,
-            rgba(
-                if self.semitones == 0 {
-                    0x9a9ab0
-                } else {
-                    0xffffff
-                },
-                1.0,
-            ),
-            &pitch,
-        );
-        c.hit(x, y, pitch_w, H, Hit::PlayerPitch);
+        if !phone {
+            c.text(
+                x + 3.0,
+                y + (h - 7.0) / 2.0,
+                7.0,
+                rgba(
+                    if self.semitones == 0 {
+                        0x9a9ab0
+                    } else {
+                        0xffffff
+                    },
+                    1.0,
+                ),
+                &pitch,
+            );
+        }
+        if phone {
+            // Over the label: on a phone it opens the speed panel, with the pitch in it.
+            let label = format!("{:.2}x", self.rate().0);
+            let changed = (self.rate().0 - 1.0).abs() > 1e-6 || self.semitones != 0;
+            c.button(x, y, pitch_w, h, &label, 7.0, Hit::RateOpen, changed);
+        } else {
+            c.hit(x, y, pitch_w, h, Hit::PlayerPitch);
+        }
         x += pitch_w + GAP * 2.0;
-        self.volume_bar = (x, VOLUME_W);
+        self.volume_bar = (x, volume_w);
         let step = pixel_size(4.0);
-        let blocks = (VOLUME_W / step) as usize;
+        let blocks = (volume_w / step) as usize;
         let lit = (volume.clamp(0.0, 1.0) * blocks as f32).round() as usize;
         for b in 0..blocks {
             let tall = pixel_size(4.0 + b as f32 / blocks as f32 * 10.0);
@@ -916,13 +1232,13 @@ impl Player {
             };
             c.rect(
                 snap_to_grid(x) + b as f32 * step,
-                snap_to_grid(y + H - 2.0 - tall),
+                snap_to_grid(y + h - 2.0 - tall),
                 step - pixel_size(1.0),
                 tall,
                 col,
             );
         }
-        c.hit(x - 2.0, y, VOLUME_W + 4.0, H, Hit::PlayerVolume);
+        c.hit(x - 2.0, y, volume_w + 4.0, h, Hit::PlayerVolume);
     }
 
     /// The song's progress in blocks, with the times either side.
@@ -939,7 +1255,7 @@ impl Player {
         let step = pixel_size(4.0);
         let blocks = (w / step) as usize;
         let lit = (done * blocks as f32).round() as usize;
-        let top = snap_to_grid(BAR_Y);
+        let top = snap_to_grid(bar_y());
         for b in 0..blocks {
             let col = if b < lit {
                 rgba(crate::render::accent(), 1.0)
@@ -954,7 +1270,13 @@ impl Player {
                 col,
             );
         }
-        c.hit(left - 4.0, BAR_Y - 6.0, w + 8.0, 18.0, Hit::MusicBar);
+        c.hit(
+            left - 4.0,
+            bar_y() - 10.0,
+            w + 8.0,
+            crate::mobile::pick(18.0, 26.0),
+            Hit::MusicBar,
+        );
         let clock = |ms: f64| {
             format!(
                 "{}:{:02}",
@@ -964,12 +1286,18 @@ impl Player {
         };
         c.text_right(
             left - 8.0,
-            BAR_Y,
+            bar_y(),
             7.0,
             rgba(0xc8c8d8, 1.0),
             &clock(at.max(0.0)),
         );
-        c.text(left + w + 8.0, BAR_Y, 7.0, rgba(0xc8c8d8, 1.0), &clock(len));
+        c.text(
+            left + w + 8.0,
+            bar_y(),
+            7.0,
+            rgba(0xc8c8d8, 1.0),
+            &clock(len),
+        );
     }
 }
 
