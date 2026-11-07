@@ -486,7 +486,8 @@ impl State {
         let (vx, vy) = (x as f32 * k, y as f32 * k);
         match phase {
             TouchPhase::Started => {
-                if self.mob.gesture.is_some() || self.touch_mouse.is_some() {
+                // During a song every finger is a drum hit, the moment it lands.
+                if self.touch_drums() || self.mob.gesture.is_some() || self.touch_mouse.is_some() {
                     return false;
                 }
                 // Screens made of things to drag, and bars and timelines, are pressed at once
@@ -507,10 +508,10 @@ impl State {
                             | Hit::PlayerVolume
                             | Hit::SongScrollbar
                     )
-                ) || self
-                    .preview
-                    .graph_rect()
-                    .is_some_and(|[x, y, w, h]| vx >= x && vx <= x + w && vy >= y && vy <= y + h);
+                ) || !self.mob.rate_open
+                    && self.preview.graph_rect().is_some_and(|[x, y, w, h]| {
+                        vx >= x && vx <= x + w && vy >= y && vy <= y + h
+                    });
                 if dragged {
                     return false;
                 }
@@ -574,7 +575,9 @@ impl State {
                 }
                 // A finger held there a while and lifted isn't a tap either.
                 let quick = at.saturating_duration_since(g.since) < LONG_PRESS;
-                if !g.moved && !g.long && quick && phase == TouchPhase::Ended {
+                // A finger that went down in a menu and came up in a song clicks nothing.
+                let tap = !g.moved && !g.long && quick && phase == TouchPhase::Ended;
+                if tap && !self.touch_drums() {
                     self.mouse_moved(x, y);
                     #[cfg(target_os = "android")]
                     self.keyboard_tap();
@@ -742,6 +745,11 @@ impl State {
             }
             _ => {}
         }
+    }
+
+    /// Whether a phone panel covers song select's preview, which then takes no presses.
+    pub(crate) fn mobile_over_preview(&self) -> bool {
+        active() && self.mob.rate_open
     }
 
     /// The speed panel, over song select or the player: steps, presets and the pitch.

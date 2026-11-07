@@ -8089,6 +8089,7 @@ impl State {
             return CursorIcon::Pointer;
         }
         if !self.on_menu()
+            && !self.mobile_over_preview()
             && matches!(
                 self.scene,
                 Scene::Select | Scene::Preview { .. } | Scene::Download
@@ -8442,10 +8443,12 @@ impl State {
             }
             return;
         }
-        if matches!(
-            self.scene,
-            Scene::Select | Scene::Preview { .. } | Scene::Download
-        ) {
+        if !self.mobile_over_preview()
+            && matches!(
+                self.scene,
+                Scene::Select | Scene::Preview { .. } | Scene::Download
+            )
+        {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
                 if self.preview.play_button_at(vx, vy) {
