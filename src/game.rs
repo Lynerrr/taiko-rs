@@ -1,6 +1,6 @@
 //! Gameplay: judging, scoring and drawing the playfield.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -386,6 +386,9 @@ pub struct Game {
     /// empty for all but dons and kats), worked out once for those settings.
     pub autoplay_style: crate::autoplay::Settings,
     auto_plan: Option<(crate::autoplay::Settings, Vec<Vec<usize>>)>,
+    /// Autoplay sounds already handed to the audio engine ahead of their hit: (note, key slot or
+    /// roll tick). The hit itself then stays quiet.
+    auto_sched: BTreeSet<(usize, usize)>,
     /// Pause menu cursor while paused.
     pub paused: Option<usize>,
     paused_at: Instant,
@@ -466,6 +469,13 @@ pub struct Game {
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
     offset: f64,
+    /// The global offset as the player has it, in osu!'s direction (`Config::offset_osu_ms`);
+    /// set by the app every frame, for the advice to be given in it.
+    pub osu_offset: f64,
+    /// The output latency (ms) the play offset was worked out with (`Config::offset_latency_ms`);
+    /// set by the app every frame. Autoplay hitsounds go this much later in the song than the
+    /// clock's note time, so that they sound with the music as in osu!.
+    pub latency: f64,
     /// Speed modifier: map milliseconds per real millisecond (1.5 = DT). Taken from the track,
     /// which was prepared at this rate. The game clock runs in track time; map time is
     /// `speed.map(track - offset)`, so the offset stays in real milliseconds.
@@ -789,6 +799,10 @@ fn radar_light(s: f32, u: f32, len: f32, sweep: f32) -> f32 {
 
 /// Echo: where its bar sits, under the lane.
 const ECHO_Y: f32 = LANE_Y + LANE_H / 2.0 + 50.0;
+/// How far ahead of the clock (ms of song) autoplay hands a hitsound to the audio engine, on top
+/// of the output latency: an audio buffer and a frame or two.
+const AUTO_SOUND_LEAD_MS: f64 = 80.0;
+
 /// Echo: how long a note rings once the cursor reaches it.
 const ECHO_RING_MS: f32 = 300.0;
 
@@ -2115,6 +2129,7 @@ impl Game {
             raw_time: track_start,
             autoplay_style: crate::autoplay::Settings::default(),
             auto_plan: None,
+            auto_sched: BTreeSet::new(),
             paused: None,
             paused_at: Instant::now(),
             resuming: None,
@@ -2156,6 +2171,8 @@ impl Game {
             combo_break: None,
             ur_scaled_hint: true,
             offset: 0.0,
+            osu_offset: 0.0,
+            latency: 0.0,
             rate,
             speed,
             mods,
@@ -2669,6 +2686,18 @@ impl Game {
     /// Autoplay: hits every object exactly on time, with the hands its playstyle says.
     pub fn autoplay(&mut self, audio: Option<&Engine>) {
         let t = self.time;
+        let running =
+            self.paused.is_none() && self.resuming.is_none() && !self.held && self.failed.is_none();
+        if !running {
+            self.auto_sched.clear();
+        } else if let Some(a) = audio.filter(|_| !self.mute_hits) {
+            // The hitsound goes into the stream where its note is in the music: that moment is
+            // `latency` ahead of what's audible now (and the clock), plus a buffer and a frame.
+            let lead = a.latencies_ms().0 + AUTO_SOUND_LEAD_MS;
+            for (song_ms, sfx, volume) in self.plan_auto_sounds(lead) {
+                a.sfx_at_song(sfx, volume, song_ms);
+            }
+        }
         for i in self.cursor..self.map.notes.len() {
             let n = &self.map.notes[i];
             if n.time > t {
@@ -2678,8 +2707,8 @@ impl Game {
             let st = &self.state[i];
             match kind {
                 Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
-                    for key in self.auto_keys()[i].clone() {
-                        self.auto_hit(key, time, audio);
+                    for (j, key) in self.auto_keys()[i].clone().into_iter().enumerate() {
+                        self.auto_hit(key, time, audio, (i, j));
                     }
                 }
                 // A roll mapped across notes is played as the notes alone (owner, 2026-10-28):
@@ -2691,7 +2720,7 @@ impl Game {
                     let k = ((t - time) / spacing).floor().max(0.0) as usize;
                     if self.state[i].ticks.get(k).is_some_and(|hit| !hit) {
                         let key = crate::autoplay::roll_key(k, self.autoplay_style.left_handed);
-                        self.auto_hit(key, time + k as f64 * spacing, audio);
+                        self.auto_hit(key, time + k as f64 * spacing, audio, (i, k));
                     }
                 }
                 // One swell at a time (`judge_press` gives the earliest every press), at most every
@@ -2707,12 +2736,86 @@ impl Game {
                         > 40.0
                         && self.note_under_swell(t, Some(next_kat)).is_none()
                     {
-                        self.auto_hit(if next_kat { 0 } else { 1 }, t, audio);
+                        self.auto_hit(if next_kat { 0 } else { 1 }, t, audio, (i, usize::MAX));
                     }
                 }
                 _ => {}
             }
         }
+    }
+
+    /// Autoplay sounds to start ahead of their hits: every hit within `lead` ms of song time of
+    /// the clock, once, as (song ms to start at, sound, volume). Swell presses are decided on the
+    /// fly and aren't planned. Judging is untouched: each hit still lands at its note's time.
+    fn plan_auto_sounds(&mut self, lead: f64) -> Vec<(f64, Sfx, f32)> {
+        let mut out = Vec::new();
+        let horizon = self.speed.track(self.time) + lead;
+        self.auto_sched.retain(|&(i, _)| i >= self.cursor);
+        for i in self.cursor..self.map.notes.len() {
+            let n = &self.map.notes[i];
+            if self.speed.track(n.time) > horizon {
+                break;
+            }
+            let (time, kind, big) = (n.time, n.kind, n.big);
+            let st = &self.state[i];
+            match kind {
+                Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
+                    let keys = self.auto_keys()[i].clone();
+                    for (j, &key) in keys.iter().enumerate() {
+                        if !self.auto_sched.insert((i, j)) {
+                            continue;
+                        }
+                        // The second hand's press of a big note is the finisher (`judge_press`).
+                        let finisher = big && j > 0 && (keys[j - 1] < 2) != (key < 2);
+                        let sfx = match (kind == Kind::Kat, finisher) {
+                            (false, false) => Sfx::Don,
+                            (false, true) => Sfx::BigDon,
+                            (true, false) => Sfx::Kat,
+                            (true, true) => Sfx::BigKat,
+                        };
+                        out.push((
+                            self.speed.track(time) + self.offset + self.latency,
+                            sfx,
+                            self.volume_at(time),
+                        ));
+                    }
+                }
+                Kind::Roll if !st.finished && !n.tiny && !self.roll_over_notes(i) => {
+                    let spacing = self.map.notes[i].tick_spacing;
+                    // Too rapid to queue ticks for; they sound as they are hit.
+                    if spacing < 10.0 {
+                        continue;
+                    }
+                    let first = ((self.time - time) / spacing).floor().max(0.0) as usize;
+                    for k in first..first + 16 {
+                        let at = time + k as f64 * spacing;
+                        if self.speed.track(at) > horizon
+                            || self.state[i].ticks.get(k).is_none_or(|&hit| hit)
+                        {
+                            break;
+                        }
+                        if self.auto_sched.insert((i, k)) {
+                            let key = crate::autoplay::roll_key(k, self.autoplay_style.left_handed);
+                            let sfx = if key == 0 || key == 3 {
+                                Sfx::Kat
+                            } else {
+                                Sfx::Don
+                            };
+                            let song_ms = self.speed.track(at) + self.offset + self.latency;
+                            out.push((song_ms, sfx, self.volume_at(at)));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Forgets the autoplay sounds handed to the audio engine (it drops them when the song moves
+    /// or pauses), so that they are planned again.
+    fn drop_scheduled(&mut self) {
+        self.auto_sched.clear();
     }
 
     /// Whether roll `i` has a hittable don/kat anywhere in its span.
@@ -2725,13 +2828,16 @@ impl Game {
             .any(|m| matches!(m.kind, Kind::Don | Kind::Kat) && !m.unhittable)
     }
 
-    fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
+    /// `id`: the note and key slot (or roll tick) this press is, to tell whether its sound went
+    /// to the engine ahead of time.
+    fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&Engine>, id: (usize, usize)) {
         if self.record || self.log_inputs {
             self.inputs.push((t, key as u8));
         }
         self.presses[key] = t;
         let sfx = self.judge_press(key, key == 0 || key == 3, t);
-        if let Some(a) = audio {
+        let planned = self.auto_sched.remove(&id);
+        if let Some(a) = audio.filter(|_| !planned && !self.mute_hits) {
             a.sfx_at(sfx, self.volume_at(t));
         }
     }
@@ -2778,6 +2884,7 @@ impl Game {
     /// Stops a replay where it is, or sets it going again.
     pub fn toggle_held(&mut self, audio: Option<&Engine>) {
         self.held = !self.held;
+        self.drop_scheduled();
         if let Some(a) = audio {
             a.set_paused(self.held);
         }
@@ -2804,12 +2911,14 @@ impl Game {
             a.play(track.clone(), target);
             a.set_paused(self.held || self.paused.is_some());
         }
+        self.drop_scheduled();
         self.track = track;
         self.clock = GameClock::new(target, audio.is_some());
         self.raw_time = target;
     }
 
     pub fn pause(&mut self, audio: Option<&Engine>) {
+        self.drop_scheduled();
         // Pausing again (e.g. losing focus) during the resume countdown shows the menu again.
         self.cancel_resume();
         // The menu's Continue is what sets it going now.
@@ -2824,6 +2933,7 @@ impl Game {
     }
 
     pub fn resume(&mut self, audio: Option<&Engine>) {
+        self.drop_scheduled();
         self.resuming = None;
         if self.paused.take().is_some()
             && let Some(a) = audio
@@ -2901,6 +3011,13 @@ impl Game {
         })
     }
 
+    /// The osu! offset that makes up for `suggested`, an `OffsetHint`'s offset (the one the clock
+    /// takes off, global and map's): positive osu! offsets bring the notes earlier, so wanting the
+    /// clock's offset lowered by e means raising this one by e.
+    pub fn suggested_osu_offset(&self, suggested: f64) -> f64 {
+        (self.osu_offset - (suggested - self.offset)).round()
+    }
+
     /// Marks everything ending before `t` as already played, without scoring or animations (the
     /// song select preview jumps into the middle of the song).
     pub fn skip_to(&mut self, t: f64) {
@@ -2924,6 +3041,7 @@ impl Game {
         let start = self.speed.map(self.speed.track(t) - 2000.0).max(self.time);
         let target = self.speed.track(start) + offset;
         self.hp_exempt = true;
+        self.drop_scheduled();
         if let Some(a) = audio {
             a.seek(target);
         }
@@ -2943,6 +3061,7 @@ impl Game {
         self.offset = offset;
         self.set_time(t);
         let target = self.speed.track(t) + offset;
+        self.drop_scheduled();
         if let Some(a) = audio {
             a.seek(target);
         }
@@ -2994,6 +3113,7 @@ impl Game {
         let skipped = self.can_skip();
         if skipped {
             let target = self.speed.track(self.skip_target()) + offset;
+            self.drop_scheduled();
             if let Some(a) = audio {
                 a.seek(target);
             }
@@ -6827,7 +6947,8 @@ impl Game {
         };
         let ur = e.ur;
         let stats = tr!("UR {ur:.0}, {hits} hits"; ur, hits);
-        let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
+        let suggested = self.suggested_osu_offset(e.suggested_offset);
+        let (error, margin) = (e.error_ms.abs(), e.margin_ms);
         if h.significant {
             let dir = if e.error_ms > 0.0 {
                 tr!("late")
@@ -8662,6 +8783,17 @@ mod tests {
     }
 
     #[test]
+    fn a_late_hitter_is_advised_a_lower_osu_offset() {
+        let mut g = game();
+        hits(&mut g, &spread(8.0, 2.0, 25), 0.0);
+        g.osu_offset = 5.0;
+        let h = g.offset_suggestion(0.0).unwrap();
+        // Late by 8: the clock's offset +8 is the osu! one -8, whatever the map's own offset.
+        assert_eq!(h.estimate.suggested_offset, 8.0);
+        assert_eq!(g.suggested_osu_offset(h.estimate.suggested_offset), -3.0);
+    }
+
+    #[test]
     fn needs_ten_hits() {
         let mut g = game();
         hits(&mut g, &[9.0; 9], 0.0);
@@ -8964,6 +9096,92 @@ mod tests {
             );
         }
         assert_eq!((g.state[6].judged, g.stats.miss), (Some(Judge::Great), 0));
+    }
+
+    fn quiet_game(osu: &str) -> Game {
+        Game::new(
+            beatmap::tests::parse(osu),
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate: 1.0,
+                stream: None,
+            }),
+            None,
+        )
+    }
+
+    #[test]
+    fn autoplay_hands_each_sound_over_once_at_its_notes_place_in_the_song() {
+        // A don, a kat, a big don and a roll.
+        let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,1500,1,2,0:0:0:0:\n256,192,2000,1,4,0:0:0:0:\n256,192,3000,2,0,L|356:192,1,70\n";
+        let mut g = quiet_game(osu);
+        g.offset = 30.0;
+        g.time = 700.0;
+        // Nothing within the lead yet.
+        assert!(g.plan_auto_sounds(200.0).is_empty());
+        g.time = 850.0;
+        let got = g.plan_auto_sounds(200.0);
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].0, got[0].1), (1030.0, Sfx::Don));
+        // Not twice, however often it is asked.
+        assert!(g.plan_auto_sounds(200.0).is_empty());
+        g.time = 1400.0;
+        let got = g.plan_auto_sounds(200.0);
+        assert_eq!(
+            got.iter().map(|g| (g.0, g.1)).collect::<Vec<_>>(),
+            [(1530.0, Sfx::Kat)]
+        );
+        // The hit finds its sound already sent and leaves it be.
+        g.time = 1000.0;
+        g.autoplay(None);
+        assert!(!g.auto_sched.contains(&(0, 0)));
+        assert!(g.auto_sched.contains(&(1, 0)));
+        // A big note: the second hand's press is the finisher.
+        g.time = 1900.0;
+        let got = g.plan_auto_sounds(200.0);
+        assert!(!got.is_empty() && got.iter().all(|s| s.0 == 2030.0));
+        assert_eq!(got[0].1, Sfx::Don);
+        assert!(got[1..].iter().all(|s| s.1 == Sfx::BigDon));
+        // Roll ticks, each at its own place.
+        g.time = 2900.0;
+        let ticks = g.plan_auto_sounds(600.0);
+        assert!(ticks.len() >= 2);
+        assert_eq!(ticks[0].0, 3030.0);
+        assert_eq!(ticks[1].0, 3030.0 + g.map.notes[3].tick_spacing);
+        assert!(g.plan_auto_sounds(600.0).is_empty());
+    }
+
+    #[test]
+    fn autoplay_sounds_are_heard_with_the_music_at_the_osu_note_time() {
+        // The test maps are not shifted on load: a .osu note at 1000 is at map time 1023; with an osu! offset of 0 and a latency of 30
+        // the clock's offset is -23 - 30, and the sound goes to song position 1000 all the same.
+        let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1023,1,0,0:0:0:0:\n";
+        let mut g = quiet_game(osu);
+        g.latency = 30.0;
+        g.offset = crate::config::play_offset_of(0.0, 30.0);
+        g.time = 950.0;
+        let got = g.plan_auto_sounds(30.0 + AUTO_SOUND_LEAD_MS);
+        assert_eq!(got.len(), 1);
+        assert!((got[0].0 - 1000.0).abs() < 1e-9, "{}", got[0].0);
+    }
+
+    #[test]
+    fn autoplay_sounds_follow_the_speed_and_start_again_after_a_seek() {
+        let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,3000,1,0,0:0:0:0:\n";
+        let mut g = quiet_game(osu);
+        g.speed = Speed::constant(1.5);
+        g.offset = -20.0;
+        // Map time 2700 is song time 1800; the lead is song time.
+        g.time = 2700.0;
+        assert!(g.plan_auto_sounds(100.0).is_empty());
+        g.time = 2900.0;
+        let got = g.plan_auto_sounds(100.0);
+        assert_eq!(got.len(), 1);
+        assert!((got[0].0 - (3000.0 / 1.5 - 20.0)).abs() < 1e-9);
+        assert!(g.plan_auto_sounds(100.0).is_empty());
+        // The engine drops what waits when the song moves; the game plans it again.
+        g.drop_scheduled();
+        assert_eq!(g.plan_auto_sounds(100.0).len(), 1);
     }
 
     #[test]

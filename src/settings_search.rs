@@ -21,7 +21,7 @@ fn words(item: Item) -> &'static str {
         Item::Rate => "dt ht nightcore double half time ускорение замедление",
         Item::RateKeepPitch => "nightcore daycore тон высота",
         Item::Offset | Item::VisualOffset | Item::Calibrate => {
-            "latency delay sync timing late early задержка рассинхрон тайминг опаздывает раньше позже"
+            "latency delay sync timing universal osu late early задержка рассинхрон тайминг опаздывает раньше позже"
         }
         Item::ResetMapOffsets | Item::LiveOffset | Item::LiveOffsetUr => {
             "latency timing задержка тайминг"

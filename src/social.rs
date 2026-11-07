@@ -145,6 +145,9 @@ pub struct Social {
     pub global: Vec<ChatLine>,
     pub global_unread: usize,
     pub open: bool,
+    /// A text field of the panel was clicked: it takes the letter keys. Only the editor scenes
+    /// ask for it (elsewhere an open panel takes the keyboard whole).
+    pub typing: bool,
     pub opened_at: Option<Instant>,
     /// There's a screenshot to send.
     pub shot_ready: bool,
@@ -295,6 +298,7 @@ impl Social {
 
     /// Closes the overlay; it slides away (`closing`).
     pub fn close(&mut self) {
+        self.typing = false;
         if self.open {
             self.open = false;
             self.closed_at = Some(Instant::now());
@@ -872,7 +876,8 @@ pub fn ago(at: u64, now: u64) -> String {
 
 /// The overlay: a panel on the right over whatever screen is showing (`dim`: the rest of the
 /// screen darkens a little, not over a play being watched). `lobby`: the room's chat when in
-/// one (name, line).
+/// one (name, line). `solid`: nothing shows through it (over the editor, which isn't dimmed).
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     c: &mut Canvas,
     s: &Social,
@@ -880,6 +885,7 @@ pub fn draw(
     lobby: Option<&[(String, String)]>,
     lobby_unread: usize,
     dim: bool,
+    solid: bool,
     tab: Option<f32>,
 ) {
     // It slides out of the edge of the screen, and back in there.
@@ -921,7 +927,7 @@ pub fn draw(
         [x, y],
         [PANEL_W + EDGE_BLEED, h],
         8.0,
-        rgba(PANEL_BG, 0.97 * a),
+        rgba(PANEL_BG, if solid { 1.0 } else { 0.97 } * a),
         rgba(0x34344a, a),
         1.0,
     );
@@ -2395,7 +2401,7 @@ fn badge(c: &mut Canvas, cx: f32, cy: f32, n: usize, a: f32) {
 }
 
 /// The notification cards, stacked at the top right (newest on top); clicking one acts on it.
-pub fn draw_notes(c: &mut Canvas, s: &Social) {
+pub fn draw_notes(c: &mut Canvas, s: &Social, editor: bool) {
     let w = 210.0;
     // Clear of the tab, which rides on the overlay when it's open.
     let right = if s.open {
@@ -2403,8 +2409,13 @@ pub fn draw_notes(c: &mut Canvas, s: &Social) {
     } else {
         c.width
     };
-    let x = right - TAB_W - w - 8.0;
+    let mut x = right - TAB_W - w - 8.0;
     let mut y = if s.open { 30.0 } else { 58.0 };
+    if editor {
+        // No tab here: over the preview at the left, clear of the menus, modes and inspector.
+        x = EDITOR_NOTES_X;
+        y = EDITOR_NOTES_Y;
+    }
     for (i, n) in s.notes.iter().enumerate().rev() {
         let age = n.at.elapsed().as_secs_f32();
         let a = (age / 0.15).min(1.0) * ((NOTE_SECS - age) / 0.5).clamp(0.0, 1.0);
@@ -2439,6 +2450,36 @@ pub fn draw_notes(c: &mut Canvas, s: &Social) {
         }
         y += h + 4.0;
     }
+}
+
+/// Where the notification cards sit in the editor's scenes: over the left preview.
+pub const EDITOR_NOTES_X: f32 = 16.0;
+pub const EDITOR_NOTES_Y: f32 = 70.0;
+
+/// The editor's way in to the panel: a chip in its menu bar with `x` its left edge (the bar is
+/// 14 tall), who is online and a badge for what is unread. Returns its width.
+pub fn draw_editor_chip(c: &mut Canvas, s: &Social, x: f32, lobby_unread: usize) -> f32 {
+    let unread = s.unread_total() + lobby_unread + s.requests.len();
+    let label = if s.connected {
+        format!("F9 friends {}", s.online_count())
+    } else {
+        "F9 friends".into()
+    };
+    let (y, h) = (2.0, 10.0);
+    let w = Canvas::text_width(6.5, &label) + 10.0;
+    let hover = c.hovered(x, y, w, h);
+    let (bg, edge) = if s.open {
+        (0x4a221b, accent())
+    } else if hover {
+        (0x2a2a3a, 0x6a6a88)
+    } else {
+        (0x15151d, 0x3a3a4e)
+    };
+    c.round_rect([x, y], [w, h], h / 2.0, rgba(bg, 1.0), rgba(edge, 1.0), 1.0);
+    c.text(x + 5.0, y + 2.0, 6.5, rgba(0xb4b4c6, 1.0), &label);
+    c.hit(x, y, w, h, Hit::SocialToggle);
+    badge(c, x + w, y + 1.0, unread, 1.0);
+    w
 }
 
 /// The overlay panel's rectangle (for clicks): x, y, w, h.
@@ -2533,7 +2574,7 @@ mod tests {
         let mut c = Canvas::default();
         c.clear(853.0);
         if open {
-            draw(&mut c, s, true, None, 0, true, Some(TAB_MIDDLE));
+            draw(&mut c, s, true, None, 0, true, false, Some(TAB_MIDDLE));
         } else {
             draw_chip(&mut c, s, TAB_MIDDLE, 0);
         }

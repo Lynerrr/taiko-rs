@@ -44,6 +44,8 @@ mod timing_panel;
 mod timing_win;
 mod upload;
 
+#[cfg(test)]
+pub use chrome::FRIENDS_CHIP_ROOM;
 use clips::{CF, FxAct};
 use cmd::Cmd;
 pub use cmd::Mode;

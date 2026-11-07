@@ -28,6 +28,8 @@ mod download;
 mod drum_nav;
 mod editor;
 #[cfg(test)]
+mod editor_friends_tests;
+#[cfg(test)]
 mod editor_test_play_tests;
 mod folder_watch;
 mod font;
@@ -4184,7 +4186,7 @@ impl State {
         let on = |b: bool| if b { on_text() } else { off_text() }.to_string();
         match item {
             Item::ScrollSpeed => format!("{:.2}x", c.scroll_speed),
-            Item::Offset => format!("{:+.0} ms", c.offset_ms),
+            Item::Offset => format!("{:+.0} ms", c.offset_osu_ms),
             Item::VisualOffset => format!("{:+.0} ms", c.visual_offset_ms),
             Item::UpdateChannel => {
                 let picked = self.updater.channel();
@@ -4450,7 +4452,9 @@ impl State {
             Item::ScrollSpeed => {
                 self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d)
             }
-            Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::Offset => self.cfg.set_osu_offset(
+                self.cfg.offset_osu_ms + d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            ),
             Item::VisualOffset => {
                 self.cfg.visual_offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 }
             }
@@ -5164,7 +5168,7 @@ impl State {
             Item::LetterboxY => format!("{:.0}", c.letterbox_pos.1),
             Item::ScrollSpeed => format!("{:.2}", c.scroll_speed),
             Item::Rate => format!("{:.2}", c.rate),
-            Item::Offset => format!("{:.0}", c.offset_ms),
+            Item::Offset => format!("{:.0}", c.offset_osu_ms),
             Item::VisualOffset => format!("{:.0}", c.visual_offset_ms),
             Item::VsyncTune => format!("{:.0}", c.vsync_tune_ms),
             Item::CalibrationBpm => format!("{:.0}", c.calibration_bpm),
@@ -5256,7 +5260,7 @@ impl State {
             Item::Rate => {
                 c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1)
             }
-            Item::Offset => c.offset_ms = number()?.round().clamp(-1000.0, 1000.0),
+            Item::Offset => c.set_osu_offset(number()?.round().clamp(-1000.0, 1000.0)),
             Item::VisualOffset => c.visual_offset_ms = number()?.round().clamp(-1000.0, 1000.0),
             Item::VsyncTune => c.vsync_tune_ms = number()?.round().clamp(-200.0, 200.0),
             Item::CalibrationBpm => {
@@ -6522,7 +6526,12 @@ impl State {
         } else {
             self.cfg.offset_ms
         };
-        let found = calibrate::estimate(&game.stats.errors, current);
+        let mut found = calibrate::estimate(&game.stats.errors, current);
+        if let (Some(e), false) = (&mut found, vsync) {
+            // The suggestion is in the global offset's own terms (osu!'s). Hitting late by e is
+            // the clock's offset up by e, which is the osu! one down by e.
+            e.suggested_offset = (self.cfg.offset_osu_ms - e.error_ms).round();
+        }
         if let Some(e) = &found {
             audiolog::line(&format!(
                 "calibration vsync={vsync} hits={} error={:.1} margin={:.1} ur={:.0} suggested={} current={current}",
@@ -6561,7 +6570,7 @@ impl State {
                         self.cfg.vsync_tune_ms
                     ));
                 } else if apply {
-                    self.cfg.offset_ms = estimate.suggested_offset;
+                    self.cfg.set_osu_offset(estimate.suggested_offset);
                     self.cfg.save();
                     self.toast(tr!("offset set to {:+.0} ms", estimate.suggested_offset));
                 }
@@ -6651,13 +6660,14 @@ impl State {
             // Shift+O: the suggestion is about every map (the same on all of them), so it goes
             // to the global offset.
             Some(h) if self.modifiers_shift => {
-                let was = self.cfg.offset_ms;
-                self.cfg.offset_ms =
-                    h.estimate.suggested_offset - self.map_offset(Some(entry)) / self.song_rate();
+                // Late by e is the clock's offset up by e, so osu!'s down by e.
+                let was = self.cfg.offset_osu_ms;
+                let osu = game.suggested_osu_offset(h.estimate.suggested_offset);
+                self.cfg.set_osu_offset(osu);
                 self.cfg.save();
                 self.refresh_play_offset();
                 self.toast(tr!(
-                    "offset {:+.0} ms for all maps (was {was:+.0})", self.cfg.offset_ms;
+                    "offset {:+.0} ms for all maps (was {was:+.0})", self.cfg.offset_osu_ms;
                     was
                 ));
             }
@@ -6734,6 +6744,7 @@ impl State {
     }
 
     fn refresh_play_offset(&mut self) {
+        self.follow_latency();
         let was = self.play_offset;
         let offset = self.map_offset(self.offset_entry());
         // As osu! has them: the global offset is about this machine, so real ms at any rate; a
@@ -6746,6 +6757,27 @@ impl State {
             ));
         }
         self.preview.map_offset = offset;
+        if let Scene::Play { game, .. } | Scene::MpPlay { game, .. } = &mut self.scene {
+            game.osu_offset = self.cfg.offset_osu_ms;
+            game.latency = self.cfg.offset_latency_ms;
+        }
+    }
+
+    /// Keeps the play offset to what the clock takes off: the global offset is osu!'s, and the
+    /// play offset follows from it and the output latency. The first settled latency also turns a
+    /// config from before into osu!'s terms (`Config::set_latency`).
+    fn follow_latency(&mut self) {
+        let Some(audio) = &self.audio else { return };
+        let (latency, _) = audio.latencies_ms();
+        self.apply_latency(latency, audio.latency_settled());
+    }
+
+    fn apply_latency(&mut self, latency: f64, settled: bool) {
+        let moved = (latency - self.cfg.offset_latency_ms).abs() > 0.01;
+        if (moved || (settled && self.cfg.offset_pending)) && self.cfg.set_latency(latency, settled)
+        {
+            self.cfg.save();
+        }
     }
 
     /// Plays the current map again from where it was started (in game, paused or on results).
@@ -6948,16 +6980,18 @@ impl State {
                         let ms = self.map_offset(Some(entry)) + d;
                         self.set_map_offset(entry, ms);
                         let text = tr!(
-                            "this map: offset {ms:+.0} ms (total {:+.0})", self.play_offset;
+                            "this map: offset {ms:+.0} ms (total {:+.0})",
+                            config::osu_offset_of(self.play_offset, self.cfg.offset_latency_ms);
                             ms
                         );
                         self.toast(text);
                     }
                     None => {
-                        self.cfg.offset_ms += d;
+                        // As in osu!: + brings the notes earlier.
+                        self.cfg.set_osu_offset(self.cfg.offset_osu_ms + d);
                         self.cfg.save();
                         self.refresh_play_offset();
-                        self.toast(tr!("offset {:+.0} ms (all maps)", self.cfg.offset_ms));
+                        self.toast(tr!("offset {:+.0} ms (all maps)", self.cfg.offset_osu_ms));
                     }
                 }
                 return true;
@@ -8113,6 +8147,9 @@ impl State {
                 Some(render::Hit::SocialToggle | render::Hit::SocialNote(_))
             );
             if on_panel || on_social {
+                if on_panel {
+                    self.social.typing = false;
+                }
                 if let Some(hit) = self.hit_at(vx, vy) {
                     self.click(hit, window);
                 }
@@ -10393,7 +10430,7 @@ impl State {
     /// Tab in play: hides (or shows again) the offset / UR line.
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
-        self.social.open
+        self.social_keys()
             || matches!(&self.scene, Scene::EditorHome(h) if h.needs_text())
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
@@ -10531,7 +10568,7 @@ impl State {
                 multiverse::Typing::Name(s) => ("Preset name".into(), s.clone()),
             });
         }
-        if self.social.open {
+        if self.social_keys() {
             let label = match self.social.row(self.mp.is_some()) {
                 social::Row::AddFriend => "Add friend",
                 social::Row::Search => "Search players",
@@ -10658,7 +10695,7 @@ impl State {
         if let Some(e) = &self.settings_ui.editing {
             return Some(e.text.clone()).filter(|t| !t.is_empty());
         }
-        if self.social.open {
+        if self.social_keys() {
             return Some(self.social.input.clone()).filter(|t| !t.is_empty());
         }
         match &self.scene {
@@ -10976,6 +11013,7 @@ impl State {
     /// that takes up the whole screen (F9 still opens the panel there).
     fn social_tab_middle(&self) -> Option<f32> {
         let covered = self.in_song()
+            || self.in_editor()
             || self.player.is_some()
             || self.mod_select.is_some()
             || self.random_setup.is_some()
@@ -10994,6 +11032,17 @@ impl State {
             social::TAB_MIDDLE
         };
         (!covered).then_some(middle)
+    }
+
+    /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
+    /// open panel leaves the keys to the editor until one of its fields is clicked.
+    fn in_editor(&self) -> bool {
+        matches!(self.scene, Scene::Editor(_) | Scene::EditorHome(_))
+    }
+
+    /// The open friends panel has the keyboard.
+    fn social_keys(&self) -> bool {
+        self.social.open && (self.social.typing || !self.in_editor())
     }
 
     fn open_social(&mut self) {
@@ -13040,7 +13089,11 @@ impl State {
             self.toggle_social();
             return;
         }
-        if self.social.open {
+        if self.social.open && !self.social_keys() && code == KeyCode::Escape {
+            self.social_key(code, text);
+            return;
+        }
+        if self.social_keys() {
             let function_key = matches!(
                 code,
                 KeyCode::F1
@@ -15258,7 +15311,7 @@ impl State {
                 let current = if *vsync {
                     self.cfg.vsync_tune_ms
                 } else {
-                    self.cfg.offset_ms
+                    self.cfg.offset_osu_ms
                 };
                 calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
             }
@@ -15630,7 +15683,7 @@ impl State {
                 None => (None, 0),
             };
             // The screen behind darkens, but not a play being watched.
-            let dim = !self.in_song();
+            let dim = !self.in_song() && !self.in_editor();
             let animate = self.cfg.animations;
             let tab = self
                 .social_tab_middle()
@@ -15644,6 +15697,7 @@ impl State {
                     lobby,
                     lobby_unread,
                     dim,
+                    self.in_editor(),
                     tab,
                 );
             } else if self.social.closing().is_some() {
@@ -15655,13 +15709,23 @@ impl State {
                     lobby,
                     lobby_unread,
                     dim,
+                    self.in_editor(),
                     tab,
                 );
                 canvas.hits.truncate(hits);
             } else if let Some(middle) = tab {
                 social::draw_chip(canvas, &self.social, middle, lobby_unread);
             }
-            social::draw_notes(canvas, &self.social);
+            if let Scene::Editor(_) | Scene::EditorHome(_) = self.scene {
+                let x = match &self.scene {
+                    Scene::Editor(_) => editor::view::View::menu_end() + 6.0,
+                    _ => canvas.width - 100.0,
+                };
+                if logged_in {
+                    social::draw_editor_chip(canvas, &self.social, x, lobby_unread);
+                }
+            }
+            social::draw_notes(canvas, &self.social, self.in_editor());
         }
         if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
             let hold = self
@@ -16758,7 +16822,8 @@ impl State {
                 self.send_shot(row);
             }
             // Tapped: brings up the on-screen keyboard (`keyboard_tap`); the keys type there anyway.
-            Hit::SocialPanel | Hit::TextField => {}
+            Hit::SocialPanel => {}
+            Hit::TextField => self.social.typing = self.social.open,
             Hit::SocialTab(tab) => {
                 self.social.set_tab(tab);
                 self.social.mark_read(self.mp.is_some());
@@ -16766,6 +16831,10 @@ impl State {
             Hit::SocialRow(i) => {
                 let in_lobby = self.mp.is_some();
                 self.social.cursor = i;
+                self.social.typing = matches!(
+                    self.social.row(in_lobby),
+                    social::Row::AddFriend | social::Row::Search
+                );
                 if matches!(
                     self.social.row(in_lobby),
                     social::Row::Friend(_) | social::Row::Lobby

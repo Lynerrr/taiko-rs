@@ -383,7 +383,7 @@ impl Item {
             Item::PlayfieldPreset => tr!("Playfield preset"),
             Item::Rate => tr!("Speed (rate)"),
             Item::RateKeepPitch => tr!("Rate keeps pitch"),
-            Item::Offset => tr!("Audio offset"),
+            Item::Offset => tr!("Universal offset (as in osu!)"),
             Item::VisualOffset => tr!("Visual offset"),
             Item::Calibrate => tr!("Offset calibration"),
             Item::CalibrationBpm => tr!("Calibration tempo"),
@@ -605,7 +605,7 @@ impl Item {
                 "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore)."
             ),
             Item::Offset => tr!(
-                "For every map; raise it if you hit late. In a song, - / + set that map's own offset on top."
+                "Works as in osu!: the same number there is the same here. For every map; positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top."
             ),
             Item::Calibrate => tr!(
                 "Enter: hit along to a click track by ear, with no notes to watch; it measures and sets your offset."

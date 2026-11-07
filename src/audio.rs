@@ -93,6 +93,8 @@ enum Cmd {
     Stop,
     /// A sound and its volume (0..1, the map's timing point volume for hits).
     Sfx(Sfx, f32),
+    /// A sound to start when the stream gets to this song frame.
+    SfxAt(i64, Sfx, f32),
     /// Replaces the hitsounds (indexed by `Sfx`).
     Sounds(Arc<Sounds>),
 }
@@ -116,6 +118,8 @@ struct Stamp {
     latency: Duration,
     /// That delay as the stream reported it (`SteadyLatency`).
     reported: Duration,
+    /// `latency` is past the stream's start-up and won't change any more.
+    settled: bool,
     /// The last Play / Seek the callback had applied.
     epoch: u64,
 }
@@ -152,6 +156,7 @@ impl Engine {
             at: Instant::now(),
             latency: Duration::ZERO,
             reported: Duration::ZERO,
+            settled: false,
             epoch: 0,
         }));
         let volume = Arc::new([
@@ -269,6 +274,14 @@ impl Engine {
         let _ = self.tx.send(Cmd::Sfx(s, volume));
     }
 
+    /// Plays a sound when the song reaches `song_ms` (the units of `position_ms`), so that it is
+    /// heard with the music at that moment, whatever the output latency. A sound whose moment has
+    /// passed plays at once. Dropped by a seek, pause, restart or stop.
+    pub fn sfx_at_song(&self, s: Sfx, volume: f32, song_ms: f64) {
+        let frame = (song_ms / 1000.0 * self.rate as f64).round() as i64;
+        let _ = self.tx.send(Cmd::SfxAt(frame, s, volume));
+    }
+
     /// Hands over prepared mono samples at the device rate without rebuilding them here.
     pub fn set_hitsounds(&self, sounds: Arc<Sounds>) {
         let _ = self.tx.send(Cmd::Sounds(sounds));
@@ -286,6 +299,12 @@ impl Engine {
             s.latency.as_secs_f64() * 1000.0,
             s.reported.as_secs_f64() * 1000.0,
         )
+    }
+
+    /// Whether `latencies_ms().0` is done changing for this stream (the first second or so of a
+    /// stream it moves about while it starts up).
+    pub fn latency_settled(&self) -> bool {
+        self.stamp.lock().unwrap().settled
     }
 
     /// Song position (ms) audible at `now`, or None when nothing is playing yet.
@@ -330,6 +349,16 @@ where
         )
         .map_err(|e| e.to_string())
 }
+
+/// A sound waiting for its song frame.
+struct Pending {
+    frame: i64,
+    sound: Sfx,
+    volume: f32,
+}
+
+/// Room for sounds waiting on the audio thread (no allocating there).
+const PENDING_CAPACITY: usize = 64;
 
 struct Voice {
     sound: Sfx,
@@ -424,6 +453,8 @@ struct Mixer {
     /// A stream's next frames, read once a callback.
     streamed: Vec<f32>,
     voices: Vec<Voice>,
+    /// Sounds for song frames not written yet.
+    pending: Vec<Pending>,
     sounds: Arc<Sounds>,
     limiter: Limiter,
 }
@@ -453,8 +484,85 @@ impl Mixer {
             paused: false,
             streamed: vec![0.0; 1 << 16],
             voices: Vec::with_capacity(64),
+            pending: Vec::with_capacity(PENDING_CAPACITY),
             sounds,
             limiter: Limiter::new(rate),
+        }
+    }
+
+    fn apply(&mut self, cmd: Cmd) {
+        match cmd {
+            Cmd::Play {
+                track,
+                start_frame,
+                base,
+            } => {
+                if let Some(old) = self.track.replace(track) {
+                    let _ = self.gc.send(Garbage::Track(old));
+                }
+                self.base = base;
+                self.frame = start_frame;
+                self.paused = false;
+                self.pending.clear();
+            }
+            Cmd::Swap { track, base } => {
+                if let Some(old) = self.track.replace(track) {
+                    let _ = self.gc.send(Garbage::Track(old));
+                }
+                self.base = base;
+            }
+            Cmd::Seek(f) => {
+                self.frame = f;
+                self.pending.clear();
+            }
+            Cmd::Epoch(e) => self.epoch = e,
+            Cmd::Pause(p) => {
+                self.paused = p;
+                if p {
+                    self.pending.clear();
+                }
+            }
+            Cmd::Stop => {
+                self.pending.clear();
+                if let Some(old) = self.track.take() {
+                    let _ = self.gc.send(Garbage::Track(old));
+                }
+            }
+            Cmd::Sounds(sounds) => {
+                let _ = self
+                    .gc
+                    .send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
+            }
+            Cmd::Sfx(sound, volume) => start_voice(&mut self.voices, sound, volume),
+            Cmd::SfxAt(frame, sound, volume) => {
+                // Nothing moving the song on (or no room to wait): now is the best there is.
+                if self.track.is_none()
+                    || self.paused
+                    || frame <= self.frame
+                    || self.pending.len() == self.pending.capacity()
+                {
+                    start_voice(&mut self.voices, sound, volume);
+                } else {
+                    self.pending.push(Pending {
+                        frame,
+                        sound,
+                        volume,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Starts the waiting sounds whose song frame the stream is at.
+    fn start_due(&mut self) {
+        let mut i = 0;
+        while i < self.pending.len() {
+            if self.pending[i].frame <= self.frame {
+                let p = self.pending.swap_remove(i);
+                start_voice(&mut self.voices, p.sound, p.volume);
+            } else {
+                i += 1;
+            }
         }
     }
 
@@ -466,40 +574,7 @@ impl Mixer {
         let now = Instant::now();
         {
             while let Ok(cmd) = self.rx.try_recv() {
-                match cmd {
-                    Cmd::Play {
-                        track,
-                        start_frame,
-                        base,
-                    } => {
-                        if let Some(old) = self.track.replace(track) {
-                            let _ = self.gc.send(Garbage::Track(old));
-                        }
-                        self.base = base;
-                        self.frame = start_frame;
-                        self.paused = false;
-                    }
-                    Cmd::Swap { track, base } => {
-                        if let Some(old) = self.track.replace(track) {
-                            let _ = self.gc.send(Garbage::Track(old));
-                        }
-                        self.base = base;
-                    }
-                    Cmd::Seek(f) => self.frame = f,
-                    Cmd::Epoch(e) => self.epoch = e,
-                    Cmd::Pause(p) => self.paused = p,
-                    Cmd::Stop => {
-                        if let Some(old) = self.track.take() {
-                            let _ = self.gc.send(Garbage::Track(old));
-                        }
-                    }
-                    Cmd::Sounds(sounds) => {
-                        let _ = self
-                            .gc
-                            .send(Garbage::Sounds(std::mem::replace(&mut self.sounds, sounds)));
-                    }
-                    Cmd::Sfx(sound, volume) => start_voice(&mut self.voices, sound, volume),
-                }
+                self.apply(cmd);
             }
         }
 
@@ -509,7 +584,13 @@ impl Mixer {
             self.steady
                 .of(reported, out.len() / self.channels, self.rate)
         } else {
+            self.steady.callbacks = self.steady.callbacks.saturating_add(1);
             reported
+        };
+        let settled = if cfg!(windows) {
+            self.steady.total.is_some()
+        } else {
+            self.steady.callbacks > LATENCY_SETTLE
         };
         if let Ok(mut s) = self.stamp.try_lock() {
             *s = Stamp {
@@ -518,6 +599,7 @@ impl Mixer {
                 at: now,
                 latency,
                 reported,
+                settled,
                 epoch: self.epoch,
             };
         }
@@ -542,6 +624,9 @@ impl Mixer {
         }
         let mut read = 0;
         for frame in out.chunks_mut(ch) {
+            if !self.pending.is_empty() {
+                self.start_due();
+            }
             let (mut l, mut r) = (0.0f32, 0.0f32);
             if let Some(track) = self.track.as_ref().filter(|_| !self.paused) {
                 let at = self.frame - self.base;
@@ -701,6 +786,124 @@ mod tests {
             .iter()
             .fold((f32::MAX, 0f32), |(lo, hi), &r| (lo.min(r), hi.max(r)));
         assert!(hi / lo < 1.02, "{lo}..{hi}");
+    }
+
+    fn mixer() -> Mixer {
+        let (_tx, rx) = mpsc::channel();
+        let (gc, _garbage) = mpsc::channel();
+        let stamp = Arc::new(Mutex::new(Stamp {
+            playing: false,
+            frame: 0,
+            at: Instant::now(),
+            latency: Duration::ZERO,
+            settled: false,
+            reported: Duration::ZERO,
+            epoch: 0,
+        }));
+        let volume = Arc::new([AtomicU32::new(1), AtomicU32::new(1)]);
+        Mixer::new(rx, gc, stamp, volume, 48_000, 2)
+    }
+
+    fn silence(frames: usize) -> Arc<Track> {
+        Arc::new(Track {
+            samples: vec![0.0; frames * 2],
+            rate: 1.0,
+            stream: None,
+        })
+    }
+
+    fn playing(m: &mut Mixer, at: i64) {
+        let track = silence(48_000 * 10);
+        m.apply(Cmd::Play {
+            track,
+            start_frame: at,
+            base: 0,
+        });
+    }
+
+    /// Runs the frames of a callback the way `render` does for sounds: the song frame each voice
+    /// starts on (None if it hasn't).
+    fn run(m: &mut Mixer, frames: usize) -> Vec<i64> {
+        let mut started = Vec::new();
+        for _ in 0..frames {
+            let before = m.voices.len();
+            if !m.pending.is_empty() {
+                m.start_due();
+            }
+            if m.voices.len() > before {
+                started.push(m.frame);
+            }
+            m.frame += 1;
+        }
+        started
+    }
+
+    #[test]
+    fn a_scheduled_sound_starts_on_its_song_frame_inside_a_buffer() {
+        let mut m = mixer();
+        playing(&mut m, 1000);
+        m.apply(Cmd::SfxAt(1300, Sfx::Don, 1.0));
+        assert_eq!(m.pending.len(), 1);
+        assert!(m.voices.is_empty());
+        assert_eq!(run(&mut m, 256), Vec::<i64>::new());
+        assert_eq!(run(&mut m, 256), vec![1300]);
+        assert!(m.pending.is_empty());
+        // Never again.
+        assert_eq!(run(&mut m, 1000), Vec::<i64>::new());
+        assert_eq!(m.voices.len(), 1);
+    }
+
+    #[test]
+    fn a_sound_whose_frame_has_passed_plays_at_once() {
+        let mut m = mixer();
+        playing(&mut m, 1000);
+        m.apply(Cmd::SfxAt(900, Sfx::Kat, 1.0));
+        m.apply(Cmd::SfxAt(1000, Sfx::Kat, 1.0));
+        assert!(m.pending.is_empty());
+        assert_eq!(m.voices.len(), 2);
+    }
+
+    #[test]
+    fn seek_pause_restart_and_stop_drop_waiting_sounds() {
+        let cmds: [fn() -> Cmd; 4] = [
+            || Cmd::Seek(50),
+            || Cmd::Pause(true),
+            || Cmd::Stop,
+            || Cmd::Play {
+                track: silence(100),
+                start_frame: 0,
+                base: 0,
+            },
+        ];
+        for cmd in cmds {
+            let mut m = mixer();
+            playing(&mut m, 1000);
+            m.apply(Cmd::SfxAt(5000, Sfx::Don, 1.0));
+            m.apply(Cmd::SfxAt(6000, Sfx::Kat, 1.0));
+            assert_eq!(m.pending.len(), 2);
+            m.apply(cmd());
+            assert!(m.pending.is_empty());
+            m.frame = 10_000;
+            m.start_due();
+            assert!(m.voices.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_swap_keeps_waiting_sounds_and_a_full_queue_plays_at_once() {
+        let mut m = mixer();
+        playing(&mut m, 0);
+        m.apply(Cmd::SfxAt(5000, Sfx::Don, 1.0));
+        m.apply(Cmd::Swap {
+            track: silence(100),
+            base: 0,
+        });
+        assert_eq!(m.pending.len(), 1);
+        for _ in 0..m.pending.capacity() {
+            m.apply(Cmd::SfxAt(5000, Sfx::Kat, 1.0));
+        }
+        assert_eq!(m.pending.len(), m.pending.capacity());
+        assert!(!m.voices.is_empty());
     }
 
     #[test]
