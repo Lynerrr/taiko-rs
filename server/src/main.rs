@@ -1563,6 +1563,37 @@ impl State {
         out
     }
 
+    /// Everyone in a group, for the tags in chats (`Down::Groups`): the developers (admins),
+    /// loved nominators and the "200" group. Banned accounts are in none.
+    fn groups(&self) -> Down {
+        let a = self.accounts.lock().unwrap();
+        let mut list: Vec<(String, Vec<String>)> = a
+            .users
+            .iter()
+            .filter(|(_, u)| !u.banned)
+            .filter_map(|(key, u)| {
+                let mut tags = Vec::new();
+                if is_admin(key) {
+                    tags.push("DEV".to_string());
+                } else if u.nominator {
+                    tags.push("LOVED".to_string());
+                }
+                if u.two_hundred {
+                    tags.push("200".to_string());
+                }
+                (!tags.is_empty()).then(|| (u.name.clone(), tags))
+            })
+            .collect();
+        list.sort_by_key(|(name, _)| name.to_ascii_lowercase());
+        Down::Groups(list)
+    }
+
+    /// A group changed: everyone online gets the list again.
+    fn push_groups(&self) {
+        let groups = self.groups();
+        self.hub.lock().unwrap().send_to_all(&groups);
+    }
+
     /// Admins, and those they've made loved nominators.
     fn is_nominator(&self, key: &str) -> bool {
         is_admin(key)
@@ -1634,6 +1665,7 @@ impl State {
             "{shown} {} (by {by})",
             if on { "banned" } else { "unbanned" }
         );
+        self.push_groups();
         Ok(if on {
             format!("{shown} is banned")
         } else {
@@ -1697,6 +1729,7 @@ impl State {
             self.push_friends(&friend);
         }
         println!("{shown} renamed to {new} (by {by})");
+        self.push_groups();
         plays.map_err(|e| format!("renamed, but their plays weren't: {e}"))?;
         Ok(new.to_string())
     }
@@ -1717,11 +1750,13 @@ impl State {
             .ok_or("there's no player by that name")?;
         user.nominator = on;
         let shown = user.name.clone();
+        drop(a);
         self.save();
         println!(
             "{shown} {} loved nominator (by {by})",
             if on { "made" } else { "no longer" }
         );
+        self.push_groups();
         Ok(if on {
             format!("{shown} is a loved nominator now")
         } else {
@@ -1758,6 +1793,7 @@ impl State {
             "{shown} {} the 200 group (by {by})",
             if on { "put in" } else { "taken out of" }
         );
+        self.push_groups();
         Ok(if on {
             format!("{shown} is in the 200 group now")
         } else {
@@ -2326,6 +2362,8 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String,
         eprintln!("social connection of {name}: {e}");
         return;
     }
+    // Before the hub's lock: the list takes the accounts' own.
+    let groups = state.groups();
     let id = {
         let mut hub = state.hub.lock().unwrap();
         hub.next_conn += 1;
@@ -2341,6 +2379,7 @@ fn social_session(state: &State, mut reader: BufReader<TcpStream>, name: String,
         });
         hub.players_changed = true;
         let _ = tx.send(hub.players());
+        let _ = tx.send(groups);
         for line in &hub.global {
             let _ = tx.send(Down::GlobalChat(line.clone()));
         }
@@ -2983,6 +3022,43 @@ mod tests {
 
     fn lines(rx: &mpsc::Receiver<Line>) -> Vec<String> {
         rx.try_iter().map(|l| l.to_string()).collect()
+    }
+
+    #[test]
+    fn groups_tag_devs_nominators_and_the_200_group_and_go_out_when_they_change() {
+        let state = test_state("groups");
+        {
+            let mut a = state.accounts.lock().unwrap();
+            for n in ["auneu", "Nomi", "semfi", "plain", "gone"] {
+                a.users.insert(n.to_ascii_lowercase(), user(n));
+            }
+            a.users.get_mut("gone").unwrap().two_hundred = true;
+            a.users.get_mut("gone").unwrap().banned = true;
+        }
+        state.set_nominator("auneu", "nomi", true).unwrap();
+        let (_, _, rx) = connect(&state, "plain", "t");
+        state.set_two_hundred("auneu", "semfi", true).unwrap();
+        let Down::Groups(list) = state.groups() else {
+            unreachable!()
+        };
+        let tags = |l: &[&str]| l.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            list,
+            [
+                ("auneu".to_string(), tags(&["DEV"])),
+                ("Nomi".to_string(), tags(&["LOVED"])),
+                ("semfi".to_string(), tags(&["200"])),
+            ],
+            "the banned and the plain have none"
+        );
+        // The change went to everyone online.
+        let sent = lines(&rx);
+        assert!(
+            sent.iter().any(|l| l.contains("Groups") && l.contains("semfi")),
+            "{sent:?}"
+        );
+        state.set_two_hundred("auneu", "semfi", false).unwrap();
+        assert!(lines(&rx).iter().any(|l| l.contains("Groups") && !l.contains("semfi")));
     }
 
     #[test]
