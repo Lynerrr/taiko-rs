@@ -605,7 +605,7 @@ impl Home {
                     self.bpm,
                     self.audio_offset(),
                     self.per_bar,
-                    0.8,
+                    tempo::MUSIC_UNDER_CLICKS,
                 );
             }
             baked_to = from + len;

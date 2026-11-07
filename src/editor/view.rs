@@ -860,7 +860,7 @@ impl View {
             &self.click_sections(),
             OSU_TIMING_MS,
             speed,
-            0.8,
+            tempo::MUSIC_UNDER_CLICKS,
         );
         if f1 < frames {
             self.met_until = Some(f1 as f64 / rate * 1000.0 * speed - OSU_TIMING_MS);

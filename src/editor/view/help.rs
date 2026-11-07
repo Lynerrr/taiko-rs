@@ -360,43 +360,75 @@ impl View {
             rows.push(Row::Key(k, t));
         }
         let cols = if w > 600.0 { 3 } else { 2 };
-        let per = rows.len().div_ceil(cols);
         let colw = (w - 28.0) / cols as f32;
-        // The key column is as wide as the longest key name in the sheet.
-        let label_w = rows
-            .iter()
-            .filter_map(|r| match r {
-                Row::Key(k, _) => Some(Canvas::text_width(6.5, k)),
-                Row::Head(_) => None,
-            })
-            .fold(0.0, f32::max)
-            + 8.0;
         let top = y + 44.0;
-        let mut at = 0;
-        for col in 0..cols {
+        let room = y + h - 8.0 - top;
+        // Columns filled by height, wrapped lines and all, at the largest size that fits the
+        // sheet: counting rows let a column of long descriptions run out of the bottom.
+        let fit = |size: f32| {
+            let k = size / 6.5;
+            // The key column is as wide as the longest key name in the sheet.
+            let label_w = rows
+                .iter()
+                .filter_map(|r| match r {
+                    Row::Key(k, _) => Some(Canvas::text_width(size, k)),
+                    Row::Head(_) => None,
+                })
+                .fold(0.0, f32::max)
+                + 8.0 * k;
+            let text_w = colw - label_w - 10.0 * k;
+            let height = |r: &Row, first: bool| match r {
+                Row::Head(_) => 11.0 * k + if first { 0.0 } else { 4.0 * k },
+                Row::Key(_, t) => wrap(size, text_w, t).len() as f32 * 9.0 * k + k,
+            };
+            // Where each column starts.
+            let mut starts = vec![0];
+            let mut used = 0.0;
+            for (i, r) in rows.iter().enumerate() {
+                let first = *starts.last().unwrap() == i;
+                let mut need = height(r, first);
+                // A heading goes with the row under it.
+                if matches!(r, Row::Head(_)) {
+                    need += rows.get(i + 1).map_or(0.0, |n| height(n, false));
+                }
+                if !first && used + need > room {
+                    starts.push(i);
+                    used = height(r, true);
+                } else {
+                    used += height(r, first);
+                }
+            }
+            (starts.len() <= cols).then_some((starts, label_w, text_w, k))
+        };
+        let (starts, label_w, text_w, k, size) = [6.5, 6.0, 5.5, 5.0]
+            .into_iter()
+            .find_map(|size| fit(size).map(|(s, l, t, k)| (s, l, t, k, size)))
+            .unwrap_or_else(|| {
+                let (s, l, t, k) = fit(4.5).unwrap_or((vec![0], 0.0, colw, 4.5 / 6.5));
+                (s, l, t, k, 4.5)
+            });
+        for (col, &from) in starts.iter().enumerate() {
+            let to = starts.get(col + 1).copied().unwrap_or(rows.len());
             let cx = x + 14.0 + col as f32 * colw;
             let mut ry = top;
-            let mut n = 0;
-            while at < rows.len() && n < per {
-                match &rows[at] {
+            for (n, row) in rows[from..to].iter().enumerate() {
+                match row {
                     Row::Head(name) => {
                         if n > 0 {
-                            ry += 4.0;
+                            ry += 4.0 * k;
                         }
-                        c.text(cx, ry, 7.0, rgba(accent(), 1.0), name);
-                        ry += 11.0;
+                        c.text(cx, ry, 7.0 * k, rgba(accent(), 1.0), name);
+                        ry += 11.0 * k;
                     }
-                    Row::Key(k, t) => {
-                        c.text(cx, ry, 6.5, rgba(0xffffff, 1.0), k);
-                        for line in wrap(6.5, colw - label_w - 10.0, t) {
-                            c.text(cx + label_w, ry, 6.5, rgba(0xb4b4c8, 1.0), &line);
-                            ry += 9.0;
+                    Row::Key(key, t) => {
+                        c.text(cx, ry, size, rgba(0xffffff, 1.0), key);
+                        for line in wrap(size, text_w, t) {
+                            c.text(cx + label_w, ry, size, rgba(0xb4b4c8, 1.0), &line);
+                            ry += 9.0 * k;
                         }
-                        ry += 1.0;
+                        ry += k;
                     }
                 }
-                at += 1;
-                n += 1;
             }
         }
     }

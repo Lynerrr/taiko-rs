@@ -146,6 +146,10 @@ pub struct Preview {
     /// New background for the renderer: `Some(None)` clears it.
     pub bg_upload: Option<Option<Image>>,
     pub has_background: bool,
+    /// The screen shows its own map's background (the editor, a play): the selection's waits
+    /// until it's left, so a slow preview load can't swap it for another map's.
+    pub own_background: bool,
+    owned_background: bool,
     /// The music player is open: songs play whole, and don't loop.
     pub player: bool,
     /// The main menu is showing: a song that ends gives way to the next too.
@@ -401,6 +405,14 @@ impl Preview {
             self.requested = None;
             self.changed_at = Some(now.checked_sub(DEBOUNCE).unwrap_or(now));
         }
+        // Back from a screen with its own background: the selection's again.
+        if self.owned_background
+            && !self.own_background
+            && let Some(e) = self.requested.and_then(|i| library.get(i))
+        {
+            self.show_background_for(e);
+        }
+        self.owned_background = self.own_background;
         if selected != self.seen {
             self.seen = selected;
             self.resume_at = None;
@@ -440,7 +452,9 @@ impl Preview {
                     let _ = tx.send((i, map, curve));
                 });
                 self.map_rx = Some(rx);
-                self.show_background_for(e);
+                if !self.own_background {
+                    self.show_background_for(e);
+                }
                 let song = audio_path(e);
                 let loaded = self.audio.as_ref().is_some_and(|s| {
                     s.path == song && (s.rate, s.keep_pitch) == rate && s.pitch == shift

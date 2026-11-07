@@ -440,10 +440,12 @@ pub fn mix_clicks(
 /// first beat.
 fn put_click(window: &mut [f32], rate: f64, at: i64, accent: bool) {
     let frames = (window.len() / 2) as i64;
+    // Loud enough to cut through a loudly mastered song (the output's limiter keeps the peaks):
+    // at 0.35 it was lost under the music (player report, 2026-11-07).
     let (pitch, gain) = if accent {
-        (1800.0, 0.55)
+        (1800.0, 1.0)
     } else {
-        (1100.0, 0.35)
+        (1100.0, 0.75)
     };
     for k in 0..(CLICK_MS / 1000.0 * rate) as i64 {
         let f = at + k;
@@ -451,13 +453,15 @@ fn put_click(window: &mut [f32], rate: f64, at: i64, accent: bool) {
             continue;
         }
         let t = k as f64 / rate;
-        let v = ((std::f64::consts::TAU * pitch * t).sin() * (-t * 180.0).exp() * gain) as f32;
+        let v = ((std::f64::consts::TAU * pitch * t).sin() * (-t * 90.0).exp() * gain) as f32;
         window[2 * f as usize] += v;
         window[2 * f as usize + 1] += v;
     }
 }
 
 const CLICK_MS: f64 = 40.0;
+/// How loud the music stays under the metronome's clicks.
+pub const MUSIC_UNDER_CLICKS: f32 = 0.7;
 
 /// One stretch of a map's timing: a red line's start, its beat length (ms) and beats to a bar.
 #[derive(Clone, Copy, Debug, PartialEq)]
