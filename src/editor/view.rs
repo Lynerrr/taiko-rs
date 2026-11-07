@@ -1945,7 +1945,7 @@ impl View {
     /// another note is drawn, that note wins.
     fn tail_at(&self, x: f32, y: f32) -> Option<u64> {
         let cy = self.lane_cy();
-        let (t0, t1) = (self.t_at(x - TAIL_GRAB), self.t_at(x + TAIL_GRAB));
+        let (t0, t1) = (self.t_at(x - BIG_R - 4.0), self.t_at(x + TAIL_GRAB));
         let first = self
             .ed
             .chart
@@ -1960,8 +1960,10 @@ impl View {
             let (ox, ex) = (self.x_of(o.time), self.x_of(end));
             let r = if o.big() { BIG_R } else { NOTE_R };
             let d = (x - ex).abs();
+            // From a little inside the end to the right edge of the rounded cap drawn there.
+            let reach = if x > ex { r * 0.8 + 2.0 } else { TAIL_GRAB };
             if ex > ox
-                && d <= TAIL_GRAB
+                && d <= reach
                 && (y - cy).abs() <= r + 2.0
                 && x > ox + 2.0
                 && best.is_none_or(|(bd, _)| d < bd)
@@ -7297,6 +7299,18 @@ mod tests {
         assert!(end > 40_500.0 && end < 41_000.0, "{end}");
         assert!(v.ed.undo());
         assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_500.0);
+    }
+
+    #[test]
+    fn the_rounded_cap_past_the_tail_is_grabbable() {
+        let (mut v, id) = roll_view();
+        let y = lane_y(&v);
+        let cap = v.x_of(40_500.0) + NOTE_R * 0.8 + 1.0;
+        assert_eq!(v.tail_at(cap, y), Some(id));
+        assert_eq!(v.tail_at(v.x_of(40_500.0) + NOTE_R * 0.8 + 4.0, y), None);
+        let k = Keys::default();
+        v.mouse_down(cap, y, k, None);
+        assert!(matches!(v.drag, Drag::Resize { .. }));
     }
 
     #[test]
