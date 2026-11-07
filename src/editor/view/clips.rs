@@ -192,36 +192,54 @@ impl View {
         self.draw_clip_settings(c, x, y, inner);
     }
 
-    /// The clips page, scrolled when it is taller than the panel (a picture's settings): cut to
-    /// the panel, with a bar on its right; what is scrolled out of sight can't be clicked.
+    /// The clips page, scrolled when it is taller than the panel (a picture's settings).
     pub(super) fn draw_clips_scrolled(&mut self, c: &mut Canvas, x: f32, top: f32, inner: f32) {
         if self.fx_scroll_for != self.fx_sel {
             self.fx_scroll_for = self.fx_sel;
             self.fx_scroll = 0.0;
         }
+        let (scroll, most) = self.draw_scrolled(c, x, top, inner, self.fx_scroll, |v, c, y, _| {
+            v.draw_clips_page(c, x, y, inner)
+        });
+        (self.fx_scroll, self.fx_page_most) = (scroll, most);
+    }
+
+    /// A page of the panel that can be taller than it, drawn `scroll` up from `top`: cut to the
+    /// panel, with a bar on its right; what is scrolled out of sight can't be clicked. `page`
+    /// draws it from a y, given the scroll. Returns the scroll (less when the page got shorter)
+    /// and the most it can be (0 when the page fits).
+    pub(super) fn draw_scrolled(
+        &mut self,
+        c: &mut Canvas,
+        x: f32,
+        top: f32,
+        inner: f32,
+        mut scroll: f32,
+        page: impl Fn(&mut Self, &mut Canvas, f32, f32),
+    ) -> (f32, f32) {
         let [_, py, pw, ph] = self.layout.inspector;
         let bottom = py + ph - 4.0;
         let (shapes, buttons, tips) = (c.shapes.len(), self.buttons.len(), self.tips.len());
-        self.draw_clips_page(c, x, top - self.fx_scroll, inner);
-        let end = c.shapes[shapes..]
-            .iter()
-            .map(|s| s.center[1] + s.half[1])
-            .fold(top, f32::max)
-            + self.fx_scroll;
-        let most = (end - bottom + 4.0).max(0.0);
-        self.fx_page_most = most;
-        if most <= 0.0 {
-            self.fx_scroll = 0.0;
-            return;
-        }
-        if self.fx_scroll > most {
+        let most = loop {
+            page(self, c, top - scroll, scroll);
+            let end = c.shapes[shapes..]
+                .iter()
+                .map(|s| s.center[1] + s.half[1])
+                .fold(top, f32::max)
+                + scroll;
+            let most = (end - bottom + 4.0).max(0.0);
+            if most <= 0.0 {
+                return (0.0, 0.0);
+            }
+            if scroll <= most {
+                break most;
+            }
             // Shorter than it was (another tab): drawn again at the most it can scroll.
-            self.fx_scroll = most;
+            scroll = most;
             c.shapes.truncate(shapes);
             self.buttons.truncate(buttons);
             self.tips.truncate(tips);
-            return self.draw_clips_scrolled(c, x, top, inner);
-        }
+        };
         let view = [x - 8.0, top - 2.0, pw, bottom - top + 2.0];
         c.clip_since(shapes, view[0], view[1], view[2], view[3]);
         let seen = |r: &[f32; 4]| r[1] + r[3] * 0.5 >= view[1] && r[1] + r[3] * 0.5 <= bottom;
@@ -236,7 +254,7 @@ impl View {
         // The bar.
         let track = [x + inner + 3.0, top, 3.0, bottom - top];
         let thumb = (track[3] * track[3] / (track[3] + most)).max(12.0);
-        let ty = track[1] + (track[3] - thumb) * self.fx_scroll / most;
+        let ty = track[1] + (track[3] - thumb) * scroll / most;
         c.rect(track[0], track[1], track[2], track[3], rgba(0xffffff, 0.05));
         c.round_rect(
             [track[0], ty],
@@ -246,6 +264,7 @@ impl View {
             rgba(0, 0.0),
             0.0,
         );
+        (scroll, most)
     }
 
     /// The wheel over the clips page scrolls it, when it is taller than the panel. False when it
