@@ -1477,6 +1477,7 @@ impl View {
             } => Some((from.min(to), from.max(to), add)),
             _ => None,
         };
+        let gimmick = self.ed.gimmick();
         for o in &objs[first..] {
             if o.time > to + 40.0 * self.ms_per_px {
                 break;
@@ -1530,6 +1531,17 @@ impl View {
                     let col = if o.taiko() == Taiko::Kat { KAT } else { DON };
                     c.circle(ox, cy, r, rgba(col, 1.0), outline, lw);
                 }
+            }
+            // Drawn over every effect: a white dot over it.
+            if gimmick.is_some_and(|g| g.is_above(o.time)) {
+                c.circle(
+                    ox,
+                    cy - r - 4.0,
+                    2.2,
+                    rgba(0xffffff, 1.0),
+                    rgba(0x000000, 0.8),
+                    1.0,
+                );
             }
         }
         // The ghost of what a click would place.

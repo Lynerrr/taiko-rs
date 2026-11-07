@@ -129,7 +129,7 @@ fn motion_look(a: MAct) -> Look {
         | MAct::ShowColour(_)
         | MAct::ShowSize(_)
         | MAct::Reveal(_) => Look::Chip,
-        MAct::Show => Look::Toggle,
+        MAct::Show | MAct::Above => Look::Toggle,
         MAct::Clear | MAct::ClearScroll => Look::Danger,
         MAct::Groups(_) => Look::Step,
         MAct::Switch(_)

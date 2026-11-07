@@ -87,6 +87,8 @@ pub enum MAct {
     Reveal(usize),
     /// The one-line row of groups shows a page of later ones (true) or earlier ones.
     Groups(bool),
+    /// The picked notes are drawn over every effect, or not again.
+    Above,
 }
 
 /// What to do when nothing is picked to shape.
@@ -138,6 +140,25 @@ const DRUM_SPOTS: [(&str, f64); 4] = [
 ];
 
 /// A speed as mania mappers write it: 1x, 0.5x, -1x.
+/// "1 note" or "3 notes".
+fn count_word(n: usize) -> String {
+    format!("{n} note{}", if n == 1 { "" } else { "s" })
+}
+
+/// "picked note" or "3 picked notes", after "the".
+fn picked_word(n: usize) -> String {
+    if n == 1 {
+        "picked note".to_string()
+    } else {
+        format!("{n} picked notes")
+    }
+}
+
+/// "1 note shows" or "3 notes show": `n` notes and a verb that agrees.
+fn notes_word(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", count_word(n), if n == 1 { one } else { many })
+}
+
 fn speed_label(v: f64) -> String {
     format!("{}x", (v * 100.0).round() / 100.0)
 }
@@ -231,6 +252,23 @@ impl View {
                 .get(i)
                 .is_some_and(|&(_, to)| self.ed.drum_to(t, to)),
             (MAct::ClearScroll, _) => self.ed.clear_scroll(),
+            (MAct::Above, _) => match self.ed.toggle_above() {
+                Ok((n, on)) => {
+                    self.status = if on {
+                        format!(
+                            "{} over every effect now (a blackout too)",
+                            notes_word(n, "shows", "show")
+                        )
+                    } else {
+                        format!("{} under the effects again", notes_word(n, "is", "are"))
+                    };
+                    true
+                }
+                Err(e) => {
+                    self.status = e;
+                    false
+                }
+            },
             (MAct::ToggleFake, _) => match self.ed.toggle_fake() {
                 Ok((n, on)) => {
                     self.status = if on {
@@ -722,11 +760,11 @@ impl View {
             ),
             None => {
                 items.push((
-                    format!("Give the {picked} picked notes {what}"),
+                    format!("Give the {} {what}", picked_word(picked)),
                     Btn::M(MAct::UseSelection),
                     true,
                 ));
-                format!("{picked} notes picked: pick {what} below, or")
+                format!("{} picked: pick {what} below, or", count_word(picked))
             }
         };
         let head = rgba(0xffffff, 1.0);
@@ -815,16 +853,49 @@ impl View {
             .enumerate()
             .map(|(i, &(name, b))| (name.to_string(), Btn::M(MAct::Reveal(i)), show.reveal == b))
             .collect();
+        let first = self.buttons.len();
         let ly = self.chips(c, right, y + 9.0, col, &items);
-        for (i, line) in [
-            "What hits them, the score and the sound stay",
-            "their own. Rolls and swells never lie. Players",
-            "can turn lies off: Settings, Show true notes.",
-        ]
-        .iter()
-        .enumerate()
-        {
-            c.text(right, ly + 1.0 + i as f32 * 8.0, 5.5, dim, line);
+        let rects: Vec<[f32; 4]> = self.buttons[first..].iter().map(|(r, _)| *r).collect();
+        for r in rects {
+            self.tips.push((
+                r,
+                "When the lie gives way to the truth. What hits them, the score and the sound stay their own. Rolls and swells never lie. Players can turn lies off: Settings, Show true notes.".to_string(),
+            ));
+        }
+        // Over the effects: for a note that must show through a blackout.
+        let y = self.heading(c, right, ly + 2.0, col, "Over effects");
+        let (above, picked) = self.ed.above_picked();
+        if picked == 0 {
+            c.text(
+                right,
+                y + 1.0,
+                5.5,
+                dim,
+                &Canvas::fit(
+                    5.5,
+                    col,
+                    "Pick notes to show them over every effect, a blackout too.",
+                ),
+            );
+            return;
+        }
+        let label = format!(
+            "show over every effect ({picked} note{})",
+            if picked == 1 { "" } else { "s" }
+        );
+        let first = self.buttons.len();
+        self.chips(
+            c,
+            right,
+            y,
+            col,
+            &[(label, Btn::M(MAct::Above), above == picked)],
+        );
+        if let Some(&(r, _)) = self.buttons.get(first) {
+            self.tips.push((
+                r,
+                "Drawn over every effect: a blackout, a flash or a glitch doesn't hide them, and effects on all the notes leave them be. They still move with the playfield, and with effects on a group they are in. On the timeline they wear a white dot.".to_string(),
+            ));
         }
     }
 
