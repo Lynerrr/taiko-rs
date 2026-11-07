@@ -14323,6 +14323,7 @@ impl State {
             for action in script.due(elapsed) {
                 match action {
                     debug::Action::Key(code) => self.key(code, false, None, now, None),
+                    debug::Action::Shot => self.screenshot_due = true,
                     debug::Action::Wheel(n) => self.wheel(n),
                     debug::Action::Drag {
                         corner,

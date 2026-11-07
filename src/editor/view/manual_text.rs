@@ -199,7 +199,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - The notes disappear in the last chorus: select its notes, click Hide the notes.
 - A quarter turn each bar that stays: Quarter turns.
 
-Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes are under Advanced... for what clips can't do yet.
+Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes, after the divider in the page tabs, are for what clips can't do yet.
 
 > Everything here is visual only: judging, score and pp never change.
 ",
@@ -551,7 +551,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Ноты пропадают в последнем припеве: выделите его ноты, нажмите Hide the notes.
 - Четверть оборота каждый такт, и так и остаётся: Quarter turns.
 
-Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes спрятаны под Advanced... — для того, чего блоки пока не умеют.
+Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes, за чертой во вкладках страниц, — для того, чего блоки пока не умеют.
 
 > Всё здесь только визуальное: судейство, очки и pp не меняются.
 ",

@@ -3,6 +3,7 @@
 //! the preview, with a pace along it and moments it takes them on and off the lane) and what each
 //! note does as its own hit nears (ready-made moves, or keys on a small graph).
 
+use super::look::{self, Look, look_of};
 use super::{Btn, Drag, Keys, Mode, View, inside};
 use crate::editor::motion::{
     BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, holds, pace_track,
@@ -402,14 +403,16 @@ impl View {
         items: &[(String, Btn, bool)],
     ) -> f32 {
         let mut x = x0;
-        for (label, b, on) in items {
-            let bw = (Canvas::text_width(7.0, label) + 10.0).min(w);
+        for (k, (label, b, on)) in items.iter().enumerate() {
+            let l = look_of(*b);
+            let bw = look::width(l, label).min(w);
             if x > x0 && x + bw > x0 + w {
                 x = x0;
                 y += CHIP_ROW;
             }
-            self.button(c, [x, y, bw, CHIP_ROW - 2.0], label, *b, *on);
-            x += bw + 3.0;
+            self.styled(c, [x, y, bw, CHIP_ROW - 2.0], label, *b, *on, l);
+            let next = items.get(k + 1).map_or(Look::Plain, |n| look_of(n.1));
+            x += bw + look::gap(l, next).min(3.0);
         }
         y + CHIP_ROW
     }
@@ -715,7 +718,7 @@ impl View {
                 }
             }
             None if picked == 0 => format!(
-                "Step 1: press 1 (Select) and click a note on the timeline, or drag a box over several. Step 2: give them {what} below."
+                "First pick notes: press 1 (Select), then click a note on the timeline or drag a box over several. Then give them {what} below."
             ),
             None => {
                 items.push((
@@ -726,7 +729,21 @@ impl View {
                 format!("{picked} notes picked: pick {what} below, or")
             }
         };
-        let head = rgba(accent(), 1.0);
+        let head = rgba(0xffffff, 1.0);
+        if items.is_empty() {
+            // Nothing to put beside it: wrapped, never cut off.
+            y = self.paragraph(c, x, y + 2.0, inner, 6.5, 0xffffff, &step) + 2.0;
+            if self.m_tab == 0 {
+                self.m_graph = [0.0; 4];
+                self.draw_path_tab(c, current, x, y, inner);
+            } else if self.m_tab == SHOW_TAB {
+                self.m_graph = [0.0; 4];
+                self.draw_show_tab(c, current, x, y, inner);
+            } else {
+                self.draw_before_tab(c, current, x, y, inner, scroll);
+            }
+            return;
+        }
         let chips_w: f32 = items
             .iter()
             .map(|(l, _, _)| Canvas::text_width(7.0, l) + 13.0)
@@ -768,12 +785,11 @@ impl View {
     }
 
     fn draw_show_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, y: f32, inner: f32) {
-        let head = rgba(accent(), 1.0);
         let dim = rgba(0x9a9ab0, 1.0);
         let show = g.map(|g| self.ed.show_of(g)).unwrap_or_default();
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
-        c.text(x, y, 6.5, head, &Canvas::fit(6.5, col, "Colour"));
+        self.heading(c, x, y, col, "Colour");
         let items: Vec<(String, Btn, bool)> = SHOW_COLOURS
             .iter()
             .enumerate()
@@ -786,20 +802,14 @@ impl View {
             })
             .collect();
         let ly = self.chips(c, x, y + 9.0, col, &items) + 2.0;
-        c.text(x, ly, 6.5, head, &Canvas::fit(6.5, col, "Size"));
+        self.heading(c, x, ly, col, "Size");
         let items: Vec<(String, Btn, bool)> = SHOW_SIZES
             .iter()
             .enumerate()
             .map(|(i, &(name, v))| (name.to_string(), Btn::M(MAct::ShowSize(i)), show.size == v))
             .collect();
         self.chips(c, x, ly + 9.0, col, &items);
-        c.text(
-            right,
-            y,
-            6.5,
-            head,
-            &Canvas::fit(6.5, col, "The truth shows"),
-        );
+        self.heading(c, right, y, col, "The truth shows");
         let items: Vec<(String, Btn, bool)> = REVEALS
             .iter()
             .enumerate()
@@ -819,14 +829,13 @@ impl View {
     }
 
     fn draw_fakes_tab(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
-        let head = rgba(accent(), 1.0);
         let dim = rgba(0x9a9ab0, 1.0);
         let picked = self.ed.selected();
         let hits = picked.iter().filter(|o| !o.fake).count();
         let fakes = picked.len() - hits;
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
-        c.text(x, y, 6.5, head, &Canvas::fit(6.5, col, "The picked notes"));
+        self.heading(c, x, y, col, "The picked notes");
         let label = if fakes > 0 && hits == 0 {
             format!("Make the {fakes} fakes real")
         } else {
@@ -849,13 +858,7 @@ impl View {
         {
             c.text(x, ly + 1.0 + i as f32 * 8.0, 5.5, dim, line);
         }
-        c.text(
-            right,
-            y,
-            6.5,
-            head,
-            &Canvas::fit(6.5, col, "Add fake copies of the picked notes"),
-        );
+        self.heading(c, right, y, col, "Add fake copies of the picked notes");
         let items: Vec<(String, Btn, bool)> = FAKE_SHIFTS
             .iter()
             .enumerate()
@@ -865,23 +868,13 @@ impl View {
     }
 
     fn draw_scroll_tab(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32) {
-        let head = rgba(accent(), 1.0);
         let dim = rgba(0x9a9ab0, 1.0);
         let t = self.ed.snapped(self.ed.time);
         let now = self.ed.scroll_speed(t);
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
-        c.text(
-            x,
-            y,
-            6.5,
-            head,
-            &Canvas::fit(
-                6.5,
-                col,
-                &format!("Speed from the playhead (now {})", speed_label(now)),
-            ),
-        );
+        let label = format!("Speed from the playhead (now {})", speed_label(now));
+        self.heading(c, x, y, col, &label);
         let items: Vec<(String, Btn, bool)> = SPEEDS
             .iter()
             .enumerate()
@@ -909,13 +902,7 @@ impl View {
                 "The graph under the timeline is the speed: click adds a key, drag moves it.",
             ),
         );
-        c.text(
-            right,
-            y,
-            6.5,
-            head,
-            &Canvas::fit(6.5, col, "Moves from the playhead"),
-        );
+        self.heading(c, right, y, col, "Moves from the playhead");
         let mut items: Vec<(String, Btn, bool)> = ScrollMove::ALL
             .iter()
             .enumerate()
@@ -927,12 +914,12 @@ impl View {
             false,
         ));
         let ry = self.chips(c, right, y + 9.0, col, &items);
-        c.text(
+        self.heading(
+            c,
             right,
             ry,
-            6.5,
-            head,
-            &Canvas::fit(6.5, col, "Slide the drum along the lane (over a beat)"),
+            col,
+            "Slide the drum along the lane (over a beat)",
         );
         let items: Vec<(String, Btn, bool)> = DRUM_SPOTS
             .iter()
@@ -943,19 +930,12 @@ impl View {
     }
 
     fn draw_path_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, y: f32, inner: f32) {
-        let head = rgba(accent(), 1.0);
         let path = g.and_then(|g| self.ed.path_of(g)).cloned();
         // Two columns: where the path starts on the left, when and how fast on the right.
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
         let top = y;
-        c.text(
-            x,
-            y,
-            6.5,
-            head,
-            &Canvas::fit(6.5, col, "Where they come from"),
-        );
+        self.heading(c, x, y, col, "Where they come from");
         let items: Vec<(String, Btn, bool)> = PATHS
             .iter()
             .enumerate()
@@ -972,11 +952,7 @@ impl View {
         let Some(path) = path else {
             let dim = rgba(0x9a9ab0, 1.0);
             let lines: &[&str] = if self.ed.selection.is_empty() {
-                &[
-                    "Pick notes on the timeline first (key 1 is the",
-                    "Select tool), then where they come from.",
-                    "Fakes too: they fly the same way.",
-                ]
+                &[]
             } else {
                 &[
                     "These notes have no path yet: pick where",
@@ -989,12 +965,12 @@ impl View {
             }
             return;
         };
-        c.text(
+        self.heading(
+            c,
             right,
             top,
-            6.5,
-            head,
-            &Canvas::fit(6.5, col, "When (\"here\": over a beat from the playhead)"),
+            col,
+            "When (\"here\": over a beat from the playhead)",
         );
         let items = vec![
             (
@@ -1015,7 +991,7 @@ impl View {
             ("Show the path".to_string(), Btn::M(MAct::Show), path.show),
         ];
         let y = self.chips(c, right, top + 9.0, col, &items);
-        c.text(right, y, 6.5, head, &Canvas::fit(6.5, col, "Pace along it"));
+        self.heading(c, right, y, col, "Pace along it");
         let items: Vec<(String, Btn, bool)> = PACES
             .iter()
             .enumerate()
@@ -1039,7 +1015,6 @@ impl View {
         inner: f32,
         scroll: f32,
     ) {
-        let head = rgba(accent(), 1.0);
         let dim = rgba(0x9a9ab0, 1.0);
         let before = g
             .and_then(|g| self.ed.before_of(g))
@@ -1048,7 +1023,7 @@ impl View {
         let col = (inner - 10.0) * 0.42;
         let right = x + col + 10.0;
         let rw = inner - col - 10.0;
-        c.text(x, y, 6.5, head, &Canvas::fit(6.5, col, "Ready-made"));
+        self.heading(c, x, y, col, "Ready-made");
         let items: Vec<(String, Btn, bool)> = BEFORES
             .iter()
             .enumerate()
@@ -1068,13 +1043,7 @@ impl View {
         }
         // The graph: one property's keys, beats before the hit left to right (a key put on it
         // gives the picked notes their group).
-        c.text(
-            right,
-            y,
-            6.5,
-            head,
-            &Canvas::fit(6.5, rw, "Keys by beats before each note's hit"),
-        );
+        self.heading(c, right, y, rw, "Keys by beats before each note's hit");
         let items: Vec<(String, Btn, bool)> = GRAPH_PROPS
             .iter()
             .enumerate()
