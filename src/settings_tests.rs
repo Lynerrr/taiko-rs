@@ -779,7 +779,8 @@ fn a_maps_offset_goes_by_with_its_song_and_the_global_one_doesnt() {
     s.cfg.set_osu_offset(2.0);
     assert_eq!(s.cfg.offset_ms, -25.0);
     let entry = s.select.selected().expect("a map");
-    s.set_map_offset(entry, 30.0);
+    // The osu! way: -30 takes this map's notes 30 ms later.
+    s.set_map_offset(entry, -30.0);
 
     s.cfg.rate = 1.0;
     s.refresh_play_offset();
@@ -793,6 +794,31 @@ fn a_maps_offset_goes_by_with_its_song_and_the_global_one_doesnt() {
     s.cfg.mods = Mods::parse("DT");
     s.refresh_play_offset();
     assert_eq!(s.play_offset, -5.0);
+}
+
+#[test]
+fn plus_on_a_map_moves_its_notes_the_way_plus_on_the_global_offset_does() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.cfg.mods = Mods::NONE;
+    s.cfg.rate = 1.0;
+    s.cfg.set_osu_offset(0.0);
+    s.refresh_play_offset();
+    let start = s.play_offset;
+    s.cfg.set_osu_offset(5.0);
+    s.refresh_play_offset();
+    let global = s.play_offset - start;
+    s.cfg.set_osu_offset(0.0);
+    let entry = s.select.selected().expect("a map");
+    s.set_map_offset(entry, 5.0);
+    assert_eq!(s.play_offset - start, global);
+    assert_eq!(
+        config::osu_offset_of(s.play_offset, s.cfg.offset_latency_ms),
+        5.0,
+        "the total is the two added up"
+    );
 }
 
 #[test]
