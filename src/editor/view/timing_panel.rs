@@ -98,7 +98,27 @@ impl View {
         w: f32,
         p: &TimingPoint,
     ) -> f32 {
-        let two = w >= 420.0;
+        // Side by side only when the widest row (the BPM steps, then the meter row) fits a column.
+        let row = |labels: &[&str]| {
+            CAPTION
+                + labels
+                    .iter()
+                    .map(|l| look::width(Look::Action, l).max(24.0) + 3.0)
+                    .sum::<f32>()
+        };
+        let steps = row(&["-1", "+1", "-0.01", "+0.01", "x2", "/2"]);
+        let meter = CAPTION
+            + 40.0
+            + 2.0
+            + 2.0 * ROW
+            + 6.0
+            + look::width(Look::Toggle, "Kiai")
+            + look::width(Look::Toggle, "Omit bar")
+            + 6.0;
+        let need = steps
+            .max(meter)
+            .max(row(&["-1 bar", "+1 bar", "-1 beat", "+1 beat"]));
+        let two = w >= 2.0 * need + 16.0;
         let col = if two { (w - 16.0) / 2.0 } else { w };
         let (lx, rx) = (x, if two { x + col + 16.0 } else { x });
 
