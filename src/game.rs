@@ -234,12 +234,31 @@ pub struct Windows {
     pub miss: f64,
 }
 
+/// How wide the hit windows are made from the OD.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowRule {
+    /// osu!'s: whole ms less a half (`beatmap::judged_window_ms`).
+    #[default]
+    Osu,
+    /// Replays from before it (version 4 and below): the OD's widths as they come.
+    Exact,
+}
+
 impl Windows {
+    /// The windows plays are judged with.
     pub fn new(od: f64) -> Windows {
+        Windows::with_rule(od, WindowRule::Osu)
+    }
+
+    pub fn with_rule(od: f64, rule: WindowRule) -> Windows {
+        let width = match rule {
+            WindowRule::Osu => beatmap::judged_window_ms,
+            WindowRule::Exact => beatmap::window_ms,
+        };
         Windows {
-            great: beatmap::great_ms(od),
-            ok: beatmap::window_ms(od, 120.0, 80.0, 50.0),
-            miss: beatmap::window_ms(od, 135.0, 95.0, 70.0),
+            great: width(od, 50.0, 35.0, 20.0),
+            ok: width(od, 120.0, 80.0, 50.0),
+            miss: width(od, 135.0, 95.0, 70.0),
         }
     }
 
@@ -3374,6 +3393,11 @@ impl Game {
         }
         self.play_combo_break(audio);
         sfx
+    }
+
+    /// Judges with the hit windows `rule` makes (a replay's own, see `Replay::window_rule`).
+    pub fn set_window_rule(&mut self, rule: WindowRule) {
+        self.windows = Windows::with_rule(self.mods.od(self.map.meta.od), rule);
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses
@@ -8202,6 +8226,20 @@ mod tests {
         assert_eq!(g.state[1].judged, None, "gone before the frame after");
         g.update(at(close + 6.0), None, 0.0);
         assert_eq!(g.state[1].judged, Some(Judge::Miss));
+    }
+
+    #[test]
+    fn plays_judge_with_osus_windows_and_old_replays_with_their_own() {
+        let mut g = game();
+        let od = g.mods.od(g.map.meta.od);
+        let exact = Windows::with_rule(od, WindowRule::Exact);
+        let whole = |w: f64| (w + 1e-9).floor() - 0.5;
+        assert_eq!(
+            (g.windows.great, g.windows.ok, g.windows.miss),
+            (whole(exact.great), whole(exact.ok), whole(exact.miss))
+        );
+        g.set_window_rule(WindowRule::Exact);
+        assert_eq!(g.windows.great, exact.great);
     }
 
     #[test]
