@@ -12222,6 +12222,7 @@ impl State {
                 .social
                 .notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
             Down::GlobalChatDeleted { from, at } => self.social.delete_global(&from, at),
+            Down::Groups(list) => self.social.set_groups(list),
             Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
             Down::AdminLookup(l) => {
                 let now = discord::unix_now();
