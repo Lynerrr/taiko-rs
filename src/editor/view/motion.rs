@@ -5,7 +5,7 @@
 
 use super::{Btn, Drag, Keys, Mode, View, inside};
 use crate::editor::motion::{
-    BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, pace_track,
+    BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, holds, pace_track,
 };
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
@@ -84,10 +84,21 @@ pub enum MAct {
     ShowSize(usize),
     /// When their truth shows (`REVEALS`).
     Reveal(usize),
+    /// The one-line row of groups shows a page of later ones (true) or earlier ones.
+    Groups(bool),
 }
 
 /// What to do when nothing is picked to shape.
 const PICK_FIRST: &str = "pick notes first: press 1 (Select), then click a note on the timeline or drag a box over several";
+
+/// What each of the page's tabs is for.
+const TAB_ABOUT: [&str; 5] = [
+    "Pick notes on the timeline and give them a path: they fly in along it and land on the drum on time.",
+    "Pick notes on the timeline and give them a move: each note does it as its own hit nears.",
+    "Pick notes and make them show as another colour or size until just before the hit. Only the look lies.",
+    "One speed for the whole lane, like mania SV: 0 freezes every note, below 0 runs them back. Green lines stay as they are.",
+    "Fake notes look like notes and move like them, but are never hit: no score, no combo, no sound. They vanish at the drum.",
+];
 
 /// The Show as tab's tab number.
 const SHOW_TAB: u8 = 2;
@@ -271,6 +282,11 @@ impl View {
                     false
                 }
             },
+            (MAct::Groups(on), _) => {
+                let by = self.m_strip_shown.max(1);
+                self.page_groups(on, by);
+                false
+            }
             (MAct::Pick(i), _) => {
                 // Its notes picked on the timeline too, so what is shaped is what is picked.
                 self.m_group = Some(i);
@@ -398,31 +414,270 @@ impl View {
         y + CHIP_ROW
     }
 
-    pub(super) fn draw_motion_page(&mut self, c: &mut Canvas, x: f32, mut y: f32, inner: f32) {
-        let dim = rgba(0x9a9ab0, 1.0);
-        let small = 6.0;
-        let about = match self.m_tab {
-            0 => {
-                "Pick notes on the timeline and give them a path: they fly in along it and land on the drum on time."
+    /// The Motion page, scrolled when it is taller than the panel (a narrow window).
+    pub(super) fn draw_motion_page(&mut self, c: &mut Canvas, x: f32, top: f32, inner: f32) {
+        if self.m_scroll_tab != self.m_tab {
+            self.m_scroll_tab = self.m_tab;
+            self.m_scroll = 0.0;
+        }
+        self.m_strip = [0.0; 4];
+        let (scroll, most) = self.draw_scrolled(c, x, top, inner, self.m_scroll, |v, c, y, s| {
+            v.draw_motion_body(c, x, y, inner, s)
+        });
+        (self.m_scroll, self.m_page_most) = (scroll, most);
+    }
+
+    /// The wheel over the Motion page: over the row of groups it pages through them, elsewhere it
+    /// scrolls the page when it is taller than the panel. False when it isn't its.
+    pub(super) fn wheel_motion_page(&mut self, notches: i32) -> bool {
+        let (mx, my) = self.mouse;
+        if !self.motion_mode() || !inside(self.layout.inspector, mx, my) {
+            return false;
+        }
+        if inside(self.m_strip, mx, my) {
+            self.page_groups(notches < 0, 1);
+            return true;
+        }
+        if self.m_page_most <= 0.0 {
+            return false;
+        }
+        self.m_scroll = (self.m_scroll - notches as f32 * 20.0).clamp(0.0, self.m_page_most);
+        true
+    }
+
+    /// On the timeline, under the notes, the group the Motion page shapes: a bracket under each
+    /// run of its notes, named where it starts, so it can be told from the rest of the song.
+    /// `bottom` is the lane's.
+    pub(super) fn draw_group_on_timeline(&self, c: &mut Canvas, left: f32, bottom: f32) {
+        if !self.motion_mode() || self.m_tab >= SCROLL_TAB {
+            return;
+        }
+        let Some(gr) = self
+            .motion_group()
+            .and_then(|g| self.ed.gimmick()?.groups.get(g))
+        else {
+            return;
+        };
+        let (from, to) = (self.view_start, self.view_end());
+        let pad = 40.0 * self.ms_per_px;
+        let objs = &self.ed.chart.objects;
+        let first = objs.partition_point(|o| o.time < from - pad);
+        // Runs of the group's notes with none of the others between them.
+        let mut runs: Vec<(f64, f64)> = Vec::new();
+        let mut open: Option<(f64, f64)> = None;
+        for o in &objs[first..] {
+            if o.time > to + pad {
+                break;
             }
-            1 => {
-                "Pick notes on the timeline and give them a move: each note does it as its own hit nears."
+            if holds(&gr.notes, o.time) {
+                open = Some(open.map_or((o.time, o.time), |(a, _)| (a, o.time)));
+            } else if let Some(run) = open.take() {
+                runs.push(run);
             }
-            SHOW_TAB => {
-                "Pick notes and make them show as another colour or size until just before the hit. Only the look lies."
+        }
+        runs.extend(open);
+        let col = accent();
+        let by = bottom - 6.0;
+        let mut named_to = f32::MIN;
+        for (a, b) in runs {
+            let (ax, bx) = (self.x_of(a) - 8.0, self.x_of(b) + 8.0);
+            c.rect(ax, by, bx - ax, 2.5, rgba(col, 0.95));
+            c.rect(ax, by - 4.0, 1.5, 6.5, rgba(col, 0.95));
+            c.rect(bx - 1.5, by - 4.0, 1.5, 6.5, rgba(col, 0.95));
+            // Named at its start (or the lane's left edge), unless the last name is still there.
+            let nx = ax.max(left + 2.0) + 3.0;
+            if nx >= named_to && bx > left {
+                let label = format!("{} ({})", gr.name, gr.notes.len());
+                c.text(nx, by - 8.0, 5.5, rgba(col, 1.0), &label);
+                named_to = nx + Canvas::text_width(5.5, &label) + 8.0;
             }
-            SCROLL_TAB => {
-                "One speed for the whole lane, like mania SV: 0 freezes every note, below 0 runs them back. Green lines stay as they are."
+        }
+    }
+
+    /// The groups the row shows: those that move or lie, as their index and label.
+    pub(super) fn moving_groups(&self) -> Vec<(usize, String)> {
+        self.ed.gimmick().map_or_else(Vec::new, |g| {
+            g.groups
+                .iter()
+                .enumerate()
+                .filter(|(_, gr)| gr.path.is_some() || !gr.before.is_empty() || !gr.show.is_true())
+                .map(|(i, gr)| (i, format!("{} ({})", gr.name, gr.notes.len())))
+                .collect()
+        })
+    }
+
+    /// The row of groups shows `by` later ones (`on`) or earlier ones.
+    fn page_groups(&mut self, on: bool, by: usize) {
+        let n = self.moving_groups().len();
+        self.m_first = if on {
+            (self.m_first + by).min(n.saturating_sub(1))
+        } else {
+            self.m_first.saturating_sub(by)
+        };
+    }
+
+    /// The groups already moving, in one line however many there are: what doesn't fit is paged
+    /// to with the arrows (or the wheel), which say how many are hidden each way, and the group
+    /// being shaped is kept in sight. Pasting what was copied leads it.
+    fn draw_groups_row(&mut self, c: &mut Canvas, x: f32, y: f32, w: f32, current: Option<usize>) {
+        let groups = self.moving_groups();
+        let paste = self.m_copied.is_some();
+        if groups.is_empty() && !paste {
+            return;
+        }
+        let mut lx = x;
+        if w >= 220.0 {
+            // (Left out in a narrow window, for the groups' room.)
+            c.text(x, y + 3.0, 6.0, rgba(0x9a9ab0, 1.0), "Moving:");
+            lx += Canvas::text_width(6.0, "Moving:") + 5.0;
+        }
+        let end = x + w;
+        self.m_strip = [x, y, w, CHIP_ROW];
+        let chip = |label: &str| Canvas::text_width(7.0, label) + 10.0;
+        if paste {
+            let label = "Paste motion";
+            let bw = chip(label);
+            self.button(
+                c,
+                [lx, y, bw, CHIP_ROW - 2.0],
+                label,
+                Btn::M(MAct::Paste),
+                false,
+            );
+            lx += bw + 3.0;
+        }
+        let n = groups.len();
+        self.m_strip_shown = n;
+        if n == 0 {
+            return;
+        }
+        let widths: Vec<f32> = groups.iter().map(|(_, l)| chip(l) + 3.0).collect();
+        let room = end - lx;
+        if widths.iter().sum::<f32>() <= room {
+            self.m_first = 0;
+            for (i, label) in &groups {
+                lx = self.group_chip(c, lx, y, end - lx, label, *i, current);
             }
-            _ => {
-                "Fake notes look like notes and move like them, but are never hit: no score, no combo, no sound. They vanish at the drum."
+            return;
+        }
+        // Paged: arrows at both ends, the groups between them.
+        let arrow = |k: usize, on: bool| {
+            if on {
+                format!("{k} >")
+            } else {
+                format!("< {k}")
             }
         };
-        c.text(x, y, small, dim, &Canvas::fit(small, inner, about));
-        y += 10.0;
+        let aw = chip(&arrow(n, true)) + 3.0;
+        let room = (room - 2.0 * aw).max(0.0);
+        // How many fit from `first` on (one at least, cut to the room).
+        let fit = |first: usize| {
+            let mut used = 0.0;
+            let mut k = 0;
+            for wd in &widths[first..] {
+                if k > 0 && used + wd > room {
+                    break;
+                }
+                used += wd;
+                k += 1;
+            }
+            k
+        };
+        // The latest start that still fills the row, so the last page isn't mostly empty.
+        let mut last = n - 1;
+        while last > 0 && last - 1 + fit(last - 1) >= n {
+            last -= 1;
+        }
+        let mut first = self.m_first.min(last);
+        if self.m_first_for != current {
+            // A newly shaped group comes into sight.
+            self.m_first_for = current;
+            if let Some(k) = groups.iter().position(|(i, _)| Some(*i) == current) {
+                first = first.min(k);
+                while first < k && first + fit(first) <= k {
+                    first += 1;
+                }
+            }
+        }
+        self.m_first = first;
+        let k = fit(first);
+        self.m_strip_shown = k;
+        let a = arrow(first, false);
+        self.button(
+            c,
+            [lx, y, chip(&a), CHIP_ROW - 2.0],
+            &a,
+            Btn::M(MAct::Groups(false)),
+            false,
+        );
+        let mut gx = lx + aw;
+        for (i, label) in &groups[first..first + k] {
+            gx = self.group_chip(c, gx, y, end - aw - gx, label, *i, current);
+        }
+        let b = arrow(n - first - k, true);
+        let bw = chip(&b);
+        self.button(
+            c,
+            [end - bw, y, bw, CHIP_ROW - 2.0],
+            &b,
+            Btn::M(MAct::Groups(true)),
+            false,
+        );
+    }
+
+    /// One group's button in the row, at most `w` wide. Returns where the next one goes.
+    #[allow(clippy::too_many_arguments)]
+    fn group_chip(
+        &mut self,
+        c: &mut Canvas,
+        x: f32,
+        y: f32,
+        w: f32,
+        label: &str,
+        i: usize,
+        current: Option<usize>,
+    ) -> f32 {
+        // Never so narrow that its name is cut to nothing.
+        let bw = (Canvas::text_width(7.0, label) + 10.0).min(w.max(44.0));
+        let text = Canvas::fit(7.0, bw - 8.0, label);
+        self.button(
+            c,
+            [x, y, bw, CHIP_ROW - 2.0],
+            &text,
+            Btn::M(MAct::Pick(i)),
+            current == Some(i),
+        );
+        x + bw + 3.0
+    }
+
+    /// The page from `y`, scrolled `scroll` up.
+    fn draw_motion_body(&mut self, c: &mut Canvas, x: f32, mut y: f32, inner: f32, scroll: f32) {
+        let dim = rgba(0x9a9ab0, 1.0);
+        let small = 6.0;
+        // The tabs, each saying what it is for when hovered.
+        let tabs = self.motion_tabs();
+        let first = self.buttons.len();
+        y = self.chips(c, x, y, inner, &tabs) + 1.0;
+        for (k, text) in TAB_ABOUT.iter().enumerate() {
+            if let Some(&(r, _)) = self.buttons.get(first + k) {
+                self.tips.push((r, text.to_string()));
+            }
+        }
+        // Under them the groups moving already, in one line however many there are; before
+        // there are any (and on the Scroll and Fakes tabs), what the tab is for.
+        let current = self.motion_group();
+        let listed = self.m_tab < SCROLL_TAB
+            && (self.m_copied.is_some() || !self.moving_groups().is_empty());
+        if listed {
+            self.draw_groups_row(c, x, y, inner, current);
+            y += CHIP_ROW;
+        } else {
+            let about = TAB_ABOUT[(self.m_tab as usize).min(TAB_ABOUT.len() - 1)];
+            c.text(x, y + 1.0, small, dim, &Canvas::fit(small, inner, about));
+            y += 10.0;
+        }
         if self.m_tab >= SCROLL_TAB {
-            let tabs = self.motion_tabs();
-            let y = self.chips(c, x, y, inner, &tabs) + 2.0;
+            let y = y + 1.0;
             self.m_graph = [0.0; 4];
             return if self.m_tab == SCROLL_TAB {
                 self.draw_scroll_tab(c, x, y, inner)
@@ -430,8 +685,7 @@ impl View {
                 self.draw_fakes_tab(c, x, y, inner)
             };
         }
-        let tabs = self.motion_tabs();
-        y = self.chips(c, x, y, inner, &tabs) + 1.0;
+        y += 1.0;
         // What is being shaped, and the step to take next: the notes picked on the timeline are
         // what the buttons below work on.
         let picked = self.ed.selection.len();
@@ -440,17 +694,22 @@ impl View {
             SHOW_TAB => "a disguise",
             _ => "a move",
         };
-        let current = self.motion_group();
         let mut items = Vec::new();
         let step = match current {
             Some(g) => {
+                // What can be done to the group as a whole sits on its line.
+                items.push(("Select them".to_string(), Btn::M(MAct::SelectNotes), false));
+                items.push(("Copy motion".to_string(), Btn::M(MAct::Copy), false));
+                if self.m_tab == 0 && self.ed.path_of(g).is_some() {
+                    items.push(("Remove path".to_string(), Btn::M(MAct::Clear), false));
+                }
                 let (name, n) = self
                     .ed
                     .gimmick()
                     .and_then(|gm| gm.groups.get(g))
                     .map_or((String::new(), 0), |gr| (gr.name.clone(), gr.notes.len()));
                 if picked == 0 {
-                    format!("Shaping {name} ({n} notes). Pick other notes to shape them instead.")
+                    format!("Shaping {name} ({n} notes); pick others to switch.")
                 } else {
                     format!("Shaping the {n} picked notes ({name}).")
                 }
@@ -468,45 +727,21 @@ impl View {
             }
         };
         let head = rgba(accent(), 1.0);
+        let chips_w: f32 = items
+            .iter()
+            .map(|(l, _, _)| Canvas::text_width(7.0, l) + 13.0)
+            .sum();
         let lw = if items.is_empty() {
             inner
         } else {
-            Canvas::text_width(6.5, &step).min(inner * 0.6)
+            Canvas::text_width(6.5, &step).min((inner - chips_w - 6.0).max(inner * 0.4))
         };
         c.text(x, y + 3.0, 6.5, head, &Canvas::fit(6.5, lw, &step));
         if !items.is_empty() {
-            self.chips(c, x + lw + 6.0, y, inner - lw - 6.0, &items);
+            // (Wrapping under itself in a narrow window rather than over what follows.)
+            y = self.chips(c, x + lw + 6.0, y, inner - lw - 6.0, &items) - CHIP_ROW;
         }
-        y += CHIP_ROW;
-        // The groups moving already, and pasting what was copied.
-        let mut items = Vec::new();
-        if self.m_copied.is_some() {
-            items.push(("Paste motion".to_string(), Btn::M(MAct::Paste), false));
-        }
-        if let Some(g) = self.ed.gimmick() {
-            items.extend(
-                g.groups
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, gr)| {
-                        gr.path.is_some() || !gr.before.is_empty() || !gr.show.is_true()
-                    })
-                    .map(|(i, gr)| {
-                        (
-                            format!("{} ({})", gr.name, gr.notes.len()),
-                            Btn::M(MAct::Pick(i)),
-                            current == Some(i),
-                        )
-                    }),
-            );
-        }
-        if !items.is_empty() {
-            let dim = rgba(0x9a9ab0, 1.0);
-            c.text(x, y + 3.0, 6.0, dim, "Moving:");
-            let lx = Canvas::text_width(6.0, "Moving:") + 5.0;
-            y = self.chips(c, x + lx, y, inner - lx, &items);
-        }
-        y += 2.0;
+        y += CHIP_ROW + 2.0;
         if self.m_tab == 0 {
             self.m_graph = [0.0; 4];
             self.draw_path_tab(c, current, x, y, inner);
@@ -514,7 +749,7 @@ impl View {
             self.m_graph = [0.0; 4];
             self.draw_show_tab(c, current, x, y, inner);
         } else {
-            self.draw_before_tab(c, current, x, y, inner);
+            self.draw_before_tab(c, current, x, y, inner, scroll);
         }
     }
 
@@ -538,7 +773,7 @@ impl View {
         let show = g.map(|g| self.ed.show_of(g)).unwrap_or_default();
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
-        c.text(x, y, 6.5, head, "Colour");
+        c.text(x, y, 6.5, head, &Canvas::fit(6.5, col, "Colour"));
         let items: Vec<(String, Btn, bool)> = SHOW_COLOURS
             .iter()
             .enumerate()
@@ -551,21 +786,20 @@ impl View {
             })
             .collect();
         let ly = self.chips(c, x, y + 9.0, col, &items) + 2.0;
-        c.text(x, ly, 6.5, head, "Size");
+        c.text(x, ly, 6.5, head, &Canvas::fit(6.5, col, "Size"));
         let items: Vec<(String, Btn, bool)> = SHOW_SIZES
             .iter()
             .enumerate()
             .map(|(i, &(name, v))| (name.to_string(), Btn::M(MAct::ShowSize(i)), show.size == v))
             .collect();
-        let ly = self.chips(c, x, ly + 9.0, col, &items) + 2.0;
-        if g.is_some() {
-            let items = vec![
-                ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
-                ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
-            ];
-            self.chips(c, x, ly, col, &items);
-        }
-        c.text(right, y, 6.5, head, "The truth shows");
+        self.chips(c, x, ly + 9.0, col, &items);
+        c.text(
+            right,
+            y,
+            6.5,
+            head,
+            &Canvas::fit(6.5, col, "The truth shows"),
+        );
         let items: Vec<(String, Btn, bool)> = REVEALS
             .iter()
             .enumerate()
@@ -592,7 +826,7 @@ impl View {
         let fakes = picked.len() - hits;
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
-        c.text(x, y, 6.5, head, "The picked notes");
+        c.text(x, y, 6.5, head, &Canvas::fit(6.5, col, "The picked notes"));
         let label = if fakes > 0 && hits == 0 {
             format!("Make the {fakes} fakes real")
         } else {
@@ -615,7 +849,13 @@ impl View {
         {
             c.text(x, ly + 1.0 + i as f32 * 8.0, 5.5, dim, line);
         }
-        c.text(right, y, 6.5, head, "Add fake copies of the picked notes");
+        c.text(
+            right,
+            y,
+            6.5,
+            head,
+            &Canvas::fit(6.5, col, "Add fake copies of the picked notes"),
+        );
         let items: Vec<(String, Btn, bool)> = FAKE_SHIFTS
             .iter()
             .enumerate()
@@ -636,7 +876,11 @@ impl View {
             y,
             6.5,
             head,
-            &format!("Speed from the playhead (now {})", speed_label(now)),
+            &Canvas::fit(
+                6.5,
+                col,
+                &format!("Speed from the playhead (now {})", speed_label(now)),
+            ),
         );
         let items: Vec<(String, Btn, bool)> = SPEEDS
             .iter()
@@ -665,7 +909,13 @@ impl View {
                 "The graph under the timeline is the speed: click adds a key, drag moves it.",
             ),
         );
-        c.text(right, y, 6.5, head, "Moves from the playhead");
+        c.text(
+            right,
+            y,
+            6.5,
+            head,
+            &Canvas::fit(6.5, col, "Moves from the playhead"),
+        );
         let mut items: Vec<(String, Btn, bool)> = ScrollMove::ALL
             .iter()
             .enumerate()
@@ -682,7 +932,7 @@ impl View {
             ry,
             6.5,
             head,
-            "Slide the drum along the lane (over a beat)",
+            &Canvas::fit(6.5, col, "Slide the drum along the lane (over a beat)"),
         );
         let items: Vec<(String, Btn, bool)> = DRUM_SPOTS
             .iter()
@@ -692,14 +942,20 @@ impl View {
         self.chips(c, right, ry + 9.0, col, &items);
     }
 
-    fn draw_path_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, mut y: f32, inner: f32) {
+    fn draw_path_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, y: f32, inner: f32) {
         let head = rgba(accent(), 1.0);
         let path = g.and_then(|g| self.ed.path_of(g)).cloned();
-        // Two columns: the path's shape on the left, when and what else on the right.
+        // Two columns: where the path starts on the left, when and how fast on the right.
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
         let top = y;
-        c.text(x, y, 6.5, head, "Where they come from");
+        c.text(
+            x,
+            y,
+            6.5,
+            head,
+            &Canvas::fit(6.5, col, "Where they come from"),
+        );
         let items: Vec<(String, Btn, bool)> = PATHS
             .iter()
             .enumerate()
@@ -711,7 +967,7 @@ impl View {
                 )
             })
             .collect();
-        y = self.chips(c, x, y + 9.0, col, &items);
+        self.chips(c, x, y + 9.0, col, &items);
         let Some(path) = path else {
             let dim = rgba(0x9a9ab0, 1.0);
             let lines: &[&str] = if self.ed.selection.is_empty() {
@@ -732,25 +988,12 @@ impl View {
             }
             return;
         };
-        c.text(x, y, 6.5, head, "Pace along it");
-        let items: Vec<(String, Btn, bool)> = PACES
-            .iter()
-            .enumerate()
-            .map(|(i, (name, _))| {
-                (
-                    name.to_string(),
-                    Btn::M(MAct::Pace(i)),
-                    path.pace == pace_track(i),
-                )
-            })
-            .collect();
-        self.chips(c, x, y + 9.0, col, &items);
         c.text(
             right,
             top,
             6.5,
             head,
-            "When (\"here\": over a beat from the playhead)",
+            &Canvas::fit(6.5, col, "When (\"here\": over a beat from the playhead)"),
         );
         let items = vec![
             (
@@ -771,16 +1014,30 @@ impl View {
             ("Show the path".to_string(), Btn::M(MAct::Show), path.show),
         ];
         let y = self.chips(c, right, top + 9.0, col, &items);
-        c.text(right, y, 6.5, head, "These notes");
-        let items = vec![
-            ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
-            ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
-            ("Remove path".to_string(), Btn::M(MAct::Clear), false),
-        ];
+        c.text(right, y, 6.5, head, &Canvas::fit(6.5, col, "Pace along it"));
+        let items: Vec<(String, Btn, bool)> = PACES
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| {
+                (
+                    name.to_string(),
+                    Btn::M(MAct::Pace(i)),
+                    path.pace == pace_track(i),
+                )
+            })
+            .collect();
         self.chips(c, right, y + 9.0, col, &items);
     }
 
-    fn draw_before_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, y: f32, inner: f32) {
+    fn draw_before_tab(
+        &mut self,
+        c: &mut Canvas,
+        g: Option<usize>,
+        x: f32,
+        y: f32,
+        inner: f32,
+        scroll: f32,
+    ) {
         let head = rgba(accent(), 1.0);
         let dim = rgba(0x9a9ab0, 1.0);
         let before = g
@@ -790,7 +1047,7 @@ impl View {
         let col = (inner - 10.0) * 0.42;
         let right = x + col + 10.0;
         let rw = inner - col - 10.0;
-        c.text(x, y, 6.5, head, "Ready-made");
+        c.text(x, y, 6.5, head, &Canvas::fit(6.5, col, "Ready-made"));
         let items: Vec<(String, Btn, bool)> = BEFORES
             .iter()
             .enumerate()
@@ -803,21 +1060,20 @@ impl View {
                 (name.to_string(), Btn::M(MAct::Before(i)), on)
             })
             .collect();
-        let ly = self.chips(c, x, y + 9.0, col, &items);
-        if g.is_some() {
-            let items = vec![
-                ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
-                ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
-            ];
-            self.chips(c, x, ly + 2.0, col, &items);
-        }
+        self.chips(c, x, y + 9.0, col, &items);
         if g.is_none() && self.ed.selection.is_empty() {
             self.m_graph = [0.0; 4];
             return;
         }
         // The graph: one property's keys, beats before the hit left to right (a key put on it
         // gives the picked notes their group).
-        c.text(right, y, 6.5, head, "Keys by beats before each note's hit");
+        c.text(
+            right,
+            y,
+            6.5,
+            head,
+            &Canvas::fit(6.5, rw, "Keys by beats before each note's hit"),
+        );
         let items: Vec<(String, Btn, bool)> = GRAPH_PROPS
             .iter()
             .enumerate()
@@ -835,8 +1091,9 @@ impl View {
             })
             .collect();
         let gy = self.chips(c, right, y + 9.0, rw, &items) + 1.0;
+        // As tall as the panel leaves, measured unscrolled so scrolling doesn't stretch it.
         let bottom = self.layout.inspector[1] + self.layout.inspector[3] - 6.0;
-        let gh = (bottom - gy - 26.0).max(24.0);
+        let gh = (bottom - gy - scroll - 26.0).max(24.0);
         let rect = [right, gy, rw, gh];
         self.m_graph = rect;
         self.draw_before_graph(c, rect, &before);

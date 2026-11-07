@@ -212,7 +212,7 @@ pub fn before_tracks(i: usize) -> BTreeMap<String, Track> {
     out
 }
 
-fn holds(notes: &[f64], t: f64) -> bool {
+pub(crate) fn holds(notes: &[f64], t: f64) -> bool {
     let at = notes.partition_point(|&n| n < t - SAME);
     notes.get(at).is_some_and(|&n| (n - t).abs() <= SAME)
 }

@@ -475,6 +475,17 @@ pub struct View {
     m_graph: [f32; 4],
     /// The key picked on the before-the-hit graph (in the track it shows).
     m_key: Option<usize>,
+    /// How far the Motion page is scrolled, the most it can be, and the tab it is for.
+    m_scroll: f32,
+    m_page_most: f32,
+    m_scroll_tab: u8,
+    /// The first moving group the one-line row of groups shows, the group it was last kept in
+    /// sight for, and where the row was drawn (for the wheel).
+    m_first: usize,
+    m_first_for: Option<usize>,
+    m_strip: [f32; 4],
+    /// How many groups that row shows, the most an arrow pages by.
+    m_strip_shown: usize,
     /// Keys copied with Ctrl+C on the key graph, for Ctrl+V.
     k_copied: Option<Vec<crate::tko::track::Key>>,
     /// Effects being recorded live (keys 1..9): the shelf effect and where it started.
@@ -643,6 +654,13 @@ impl View {
             m_prop: 0,
             m_graph: [0.0; 4],
             m_key: None,
+            m_scroll: 0.0,
+            m_page_most: 0.0,
+            m_scroll_tab: 0,
+            m_first: 0,
+            m_first_for: None,
+            m_strip: [0.0; 4],
+            m_strip_shown: 0,
             k_copied: None,
             fx_live: Vec::new(),
             k_ease: crate::tko::track::Ease::Linear,
@@ -1619,6 +1637,8 @@ impl View {
                 &format!("{} ({beats:.2} beats)", fmt_time(to)),
             );
         }
+        // The group the Motion page shapes, under its notes.
+        self.draw_group_on_timeline(c, x, y + h);
         // The playhead.
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 1.0));
@@ -2497,7 +2517,10 @@ impl View {
             self.node_zoom(notches);
             return true;
         }
-        if self.wheel_clip_rows(notches, keys) || self.wheel_clips_page(notches) {
+        if self.wheel_clip_rows(notches, keys)
+            || self.wheel_clips_page(notches)
+            || self.wheel_motion_page(notches)
+        {
             return true;
         }
         let over_time = inside(self.layout.timeline, mx, my) || inside(self.layout.graph, mx, my);
@@ -4451,6 +4474,74 @@ mod tests {
         press(&mut v, Btn::K(KAct::MakeTko));
         draw(&mut v);
         v
+    }
+
+    #[test]
+    fn many_moving_groups_stay_on_one_line_and_the_page_fits() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        // One group of one note each, 40 of them, all flying in.
+        let first = v.ed.chart.objects[0].clone();
+        for i in 0..40u64 {
+            let mut o = first.clone();
+            o.id = 10_000 + i;
+            o.time = 12_000.0 + i as f64 * 100.0;
+            v.ed.chart.objects.push(o);
+        }
+        for i in 0..40u64 {
+            v.ed.selection = [10_000 + i].into();
+            press(&mut v, Btn::M(MAct::UseSelection));
+        }
+        let last = v.m_group.unwrap();
+        draw(&mut v);
+        let picks = |v: &View| -> Vec<(f32, usize)> {
+            v.buttons
+                .iter()
+                .filter_map(|(r, b)| match b {
+                    Btn::M(MAct::Pick(i)) => Some((r[1], *i)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let shown = picks(&v);
+        assert!(shown.len() > 2 && shown.len() < 40, "{}", shown.len());
+        assert!(
+            shown.iter().all(|(y, _)| *y == shown[0].0),
+            "the groups take one line"
+        );
+        assert!(
+            shown.iter().any(|(_, i)| *i == last),
+            "the group being shaped is in sight"
+        );
+        let [_, py, _, ph] = v.layout.inspector;
+        assert!(
+            v.buttons
+                .iter()
+                .filter(|(_, b)| matches!(b, Btn::M(_)))
+                .all(|(r, _)| r[1] + r[3] / 2.0 <= py + ph),
+            "nothing is drawn below the panel"
+        );
+        assert_eq!(v.m_page_most, 0.0, "the path tab fits the panel");
+        assert!(v.buttons.iter().any(|(_, b)| *b == Btn::M(MAct::Pace(1))));
+        // The arrows page back to the first groups and on again.
+        for _ in 0..40 {
+            press(&mut v, Btn::M(MAct::Groups(false)));
+        }
+        draw(&mut v);
+        let start = picks(&v);
+        assert_eq!(start[0].1, v.moving_groups()[0].0, "back at the start");
+        press(&mut v, Btn::M(MAct::Groups(true)));
+        draw(&mut v);
+        let next = picks(&v);
+        assert!(next[0].1 > start[start.len() - 1].1, "a page on");
+        // The wheel over the row pages it too, and leaves the playhead alone.
+        let [sx, sy, _, sh] = v.m_strip;
+        v.mouse = (sx + 30.0, sy + sh / 2.0);
+        v.wheel(1, Keys::default());
+        draw(&mut v);
+        assert!(picks(&v)[0].1 < next[0].1);
+        assert_eq!(v.ed.time, 0.0);
     }
 
     #[test]
