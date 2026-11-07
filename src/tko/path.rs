@@ -33,6 +33,10 @@ pub struct NotePath {
     /// Draws the path faintly, for the player to read where notes will come from.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub show: bool,
+    /// The notes keep to a plain straight lane instead, whatever shape the lane is bent into,
+    /// as far from the drum and as fast as on it; `points` and `pace` aren't used.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub straight: bool,
 }
 
 impl NotePath {

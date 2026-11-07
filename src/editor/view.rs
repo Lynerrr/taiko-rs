@@ -1933,7 +1933,7 @@ impl View {
         };
         let span = self.timeline_w() as f64 * self.ms_per_px;
         let moved = (self.view_start + push as f64 * span * 0.75 * dt)
-            .clamp(-1000.0, self.end_ms().max(1000.0));
+            .clamp(self.ed.clip_floor() - 1000.0, self.end_ms().max(1000.0));
         if moved == self.view_start {
             return;
         }

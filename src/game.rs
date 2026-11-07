@@ -1958,7 +1958,7 @@ impl Game {
         });
         let first_note = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let end_time = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
-        let start = (first_note - 2000.0).min(0.0).min(-map.meta.audio_lead_in);
+        let start = beatmap::play_start(first_note, map.meta.audio_lead_in);
         let rate = track.rate.clamp(0.25, 4.0);
         let speed = Speed::for_play(mods, rate, first_note, end_time);
         let track_ms = audio
