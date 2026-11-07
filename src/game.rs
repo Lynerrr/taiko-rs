@@ -5581,8 +5581,21 @@ impl Game {
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
         }
-        // Its copies go behind it, each where its clips take it.
-        crate::tko::screen::copies(c, start_shape, &tko_fx, [w / 2.0, dest[1]]);
+        // Its copies go behind it, each where its own clips take it from the playfield's usual
+        // place: the map moving, turning or zooming the playfield leaves them be (mods that sway
+        // or spin it still take them along).
+        let home = [dest[0] - tko_fx.x, dest[1] - tko_fx.y];
+        let unmove = crate::tko::screen::Unmove {
+            from: dest,
+            angle: -tko_fx.rotation.to_radians(),
+            zoom: if tko_fx.zoom.abs() > 1e-3 {
+                1.0 / tko_fx.zoom
+            } else {
+                1.0
+            },
+            to: home,
+        };
+        crate::tko::screen::copies(c, start_shape, &tko_fx, [w / 2.0, home[1]], unmove);
         // Its tears, washes and flashes lie over the screen as it ends up.
         crate::tko::screen::screen(c, start_shape, &tko_fx, vt);
         let [x0, y0, x1, y1] = local_zone;
