@@ -314,6 +314,9 @@ struct Globals {
     screen_px: [f32; 2],
     px_per_unit: f32,
     _pad: f32,
+    /// Where virtual (0, 0) is, in pixels of the image drawn to.
+    origin: [f32; 2],
+    _pad2: [f32; 2],
 }
 
 pub struct Renderer {
@@ -369,6 +372,10 @@ pub struct Renderer {
     pub pixel_scale: u32,
     /// The game's `[x, y, w, h]` on the screen, in pixels, black all round; None: all of it.
     pub letterbox: Option<[u32; 4]>,
+    /// The part of the screen clear of its rounded corners and camera (x, y, w, h in pixels, even
+    /// so it holds at half resolution). The interface stays inside it; the background, and the
+    /// bars reaching the interface's edges (`Canvas::bleed`), still fill the screen.
+    pub safe: Option<[u32; 4]>,
     /// The last image came Suboptimal: configure the surface again before the next.
     reconfigure: bool,
     /// The half-resolution image and its bind group for the upscale, sized for the screen.
@@ -817,7 +824,7 @@ const _: () = assert!(crate::avatars::GRID * crate::avatars::CELL <= PICTURE_CEL
 const PICTURE_BASE: f32 = 1000.0;
 
 const SHADER: &str = r#"
-struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32 };
+struct Globals { screen_px: vec2<f32>, px_per_unit: f32, _pad: f32, origin: vec2<f32>, _pad2: vec2<f32> };
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var<uniform> sprites: array<vec4<f32>, SPRITE_COUNT>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
@@ -850,7 +857,7 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     let half_px = inst.half * g.px_per_unit;
     let pad = 1.5 + max(inst.params.z, 0.0) * g.px_per_unit;
     let local = corner * (half_px + vec2<f32>(pad));
-    let center_px = inst.center * g.px_per_unit;
+    let center_px = inst.center * g.px_per_unit + g.origin;
     // Rotated shapes turn their quad; the fragment works in the shape's own (unrotated) frame.
     let cs = vec2<f32>(cos(inst.angle), sin(inst.angle));
     let p = center_px + vec2<f32>(local.x * cs.x - local.y * cs.y, local.x * cs.y + local.y * cs.x);
@@ -1442,6 +1449,7 @@ impl Renderer {
             backend: adapter.get_info().backend,
             pixel_scale: 1,
             letterbox: None,
+            safe: None,
             reconfigure: false,
             low: None,
             upscale_layout,
@@ -1653,12 +1661,16 @@ impl Renderer {
         } else {
             (1.0, l.aspect)
         };
-        let half_y = VIRTUAL_HEIGHT / 2.0;
+        // From the interface's rect to the whole picture.
+        let (sw, sh) = self.size();
+        let [ax, ay, aw, ah] = self.safe_rect().map(|v| v as f32);
+        let (px, py) = (ax + x / width * aw, ay + y / VIRTUAL_HEIGHT * ah);
+        let (sw, sh) = (sw.max(1) as f32, sh.max(1) as f32);
         let uniform = [
-            x / width * 2.0 - 1.0,
-            1.0 - y / half_y,
-            r / width * 2.0,
-            r / half_y,
+            px / sw * 2.0 - 1.0,
+            1.0 - py / sh * 2.0,
+            r / width * aw / sw * 2.0,
+            r / VIRTUAL_HEIGHT * ah / sh * 2.0,
             cos,
             sin,
             u,
@@ -1903,9 +1915,20 @@ impl Renderer {
 
     /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
     /// resolution.
+    /// How much smaller the safe area draws the interface than the screen would: text picks its
+    /// whole font pixels as if on the whole screen (`set_text_bias`), so it keeps its size.
+    pub fn text_bias(&self) -> f32 {
+        self.size().1 as f32 / self.game_size().1.max(1) as f32
+    }
+
     pub fn text_grid(&self) -> Option<f32> {
-        (self.pixel_scale > 1)
-            .then(|| (self.size().1 / self.pixel_scale).max(1) as f32 / VIRTUAL_HEIGHT)
+        // A phone keeps this text with Half resolution off too: at its exact size it's unreadable.
+        let scale = if crate::mobile::active() {
+            2
+        } else {
+            self.pixel_scale
+        };
+        (scale > 1).then(|| (self.game_size().1 / scale).max(1) as f32 / VIRTUAL_HEIGHT)
     }
 
     /// Where the game goes, if not on all of the screen. Only a place on the screen as it is now:
@@ -1924,9 +1947,23 @@ impl Renderer {
             })
     }
 
+    /// The interface's part of the screen: the safe area, or all of the game's.
+    fn safe_rect(&self) -> [u32; 4] {
+        let (w, h) = self.size();
+        self.safe
+            .filter(|&[x, y, sw, sh]| sw > 0 && sh > 0 && x + sw <= w && y + sh <= h)
+            .unwrap_or([0, 0, w, h])
+    }
+
+    /// The size the interface is laid out for, in pixels.
+    pub fn game_size(&self) -> (u32, u32) {
+        let [_, _, w, h] = self.safe_rect();
+        (w, h)
+    }
+
     /// Canvas width in virtual units.
     pub fn virtual_width(&self) -> f32 {
-        let (w, h) = self.size();
+        let (w, h) = self.game_size();
         VIRTUAL_HEIGHT * w as f32 / h.max(1) as f32
     }
 
@@ -1989,14 +2026,16 @@ impl Renderer {
             .into_iter()
             .filter(|(range, _)| range.start < range.end && range.end <= shapes.len())
             .collect();
+        // The interface's rect in the image drawn to.
+        let [ax, ay, aw, ah] = self.safe_rect().map(|v| (v / self.pixel_scale) as f32);
         let clip: Vec<(std::ops::Range<usize>, [u32; 4])> = flatten_clips(clips)
             .into_iter()
             .map(|(range, r)| {
                 let (sw, sh) = (w as f32, h as f32);
-                let x = (r[0] * sw).floor().clamp(0.0, sw - 1.0);
-                let y = (r[1] * sh).floor().clamp(0.0, sh - 1.0);
-                let w = (r[2] * sw).ceil().clamp(1.0, sw - x);
-                let h = (r[3] * sh).ceil().clamp(1.0, sh - y);
+                let x = (ax + r[0] * aw).floor().clamp(0.0, sw - 1.0);
+                let y = (ay + r[1] * ah).floor().clamp(0.0, sh - 1.0);
+                let w = (r[2] * aw).ceil().clamp(1.0, sw - x);
+                let h = (r[3] * ah).ceil().clamp(1.0, sh - y);
                 // Nothing of it shows (an inner clip outside its outer one): no size, not drawn.
                 if r[2] <= 0.0 || r[3] <= 0.0 {
                     return (range, [0; 4]);
@@ -2010,8 +2049,10 @@ impl Renderer {
         }
         let globals = Globals {
             screen_px: [w as f32, h as f32],
-            px_per_unit: h as f32 / VIRTUAL_HEIGHT,
+            px_per_unit: ah / VIRTUAL_HEIGHT,
             _pad: 0.0,
+            origin: [ax, ay],
+            _pad2: [0.0; 2],
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -2054,8 +2095,11 @@ impl Renderer {
         // under it).
         let hole = opaque.and_then(|[x, y, rw, rh]| {
             let (sw, sh) = (w as f32, h as f32);
-            let (x0, y0) = ((x * sw).ceil() + 1.0, (y * sh).ceil() + 1.0);
-            let (x1, y1) = (((x + rw) * sw).floor() - 1.0, ((y + rh) * sh).floor() - 1.0);
+            let (x0, y0) = ((ax + x * aw).ceil() + 1.0, (ay + y * ah).ceil() + 1.0);
+            let (x1, y1) = (
+                (ax + (x + rw) * aw).floor() - 1.0,
+                (ay + (y + rh) * ah).floor() - 1.0,
+            );
             let (x0, y0, x1, y1) = (x0.max(0.0), y0.max(0.0), x1.min(sw), y1.min(sh));
             (x1 > x0 && y1 > y0).then_some([x0 as u32, y0 as u32, x1 as u32, y1 as u32])
         });
@@ -2251,6 +2295,8 @@ impl Renderer {
             screen_px: [w as f32, h as f32],
             px_per_unit: h as f32 / VIRTUAL_HEIGHT,
             _pad: 0.0,
+            origin: [0.0; 2],
+            _pad2: [0.0; 2],
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -2608,6 +2654,7 @@ fn limit_of(bytes: u64) -> usize {
 thread_local! {
     /// Render pixels per virtual unit when text snaps to whole pixels, else 0 (`set_text_grid`).
     static TEXT_GRID: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+    static TEXT_BIAS: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
 }
 
 /// Half resolution: text is laid on a grid of `px_per_unit` render pixels per virtual unit, each
@@ -2618,12 +2665,20 @@ pub fn set_text_grid(px_per_unit: Option<f32>) {
     TEXT_GRID.with(|g| g.set(px_per_unit.filter(|p| *p > 0.0).unwrap_or(0.0)));
 }
 
+/// See `Renderer::text_bias`.
+pub fn set_text_bias(bias: f32) {
+    TEXT_BIAS.with(|b| b.set(bias));
+}
+
 /// One font pixel (in virtual units) of text `size` units tall.
 fn font_px(size: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
     if grid > 0.0 {
+        let bias = TEXT_BIAS.with(std::cell::Cell::get);
         // A hair of slack so 2.01 pixels stays 2.
-        (size / 7.0 * grid - 0.05).ceil().max(1.0) / grid
+        // On a phone the smallest text is two pixels to a font pixel: one can't be read.
+        let least = if crate::mobile::active() { 2.0 } else { 1.0 };
+        (size / 7.0 * grid * bias - 0.05).ceil().max(least) / grid
     } else {
         size / 7.0
     }
@@ -2774,6 +2829,18 @@ pub enum Hit {
     SendShot,
     /// Song select's heart on the song it's showing.
     SelectLike,
+    /// A phone's speed panel: opens it, closes it, moves the speed by hundredths or sets it, flips
+    /// keeping the pitch, moves the pitch by semitones.
+    RateOpen,
+    RateClose,
+    RateStep(i32),
+    RateSet(i32),
+    RateKeepPitch,
+    PitchStep(i32),
+    /// The upright player: the list comes up or goes.
+    PlayerList,
+    /// A phone's song select: slides between the preview and the leaderboard.
+    BoardPage,
     PlayerFolders,
     PlayerFolder(usize),
     PlayerQueue(usize),
@@ -2930,6 +2997,15 @@ pub struct Canvas {
     pub picture_slots: std::sync::Arc<std::collections::HashMap<String, (u32, f32)>>,
     /// Map pictures drawn this frame (file names, lowercase), for the app to load.
     pub pictures_wanted: Vec<String>,
+}
+
+/// A button's label: on a phone without the key that presses it ("Retry  (Enter)").
+fn label_of(label: &str, phone: bool) -> &str {
+    if phone {
+        label.split("  (").next().unwrap_or(label)
+    } else {
+        label
+    }
 }
 
 pub fn rgba(hex: u32, a: f32) -> [f32; 4] {
@@ -3152,6 +3228,36 @@ impl Canvas {
     /// already have a clip of their own keep it, cut down to this rect: the renderer takes one
     /// clip per shape, so an outer clip laid over inner ones (the editor's preview over a sliced
     /// playfield) must not hide them.
+    /// Stretches plain rects that reach the canvas's edges past them by `out` (left, top, right,
+    /// bottom, in virtual units): dimming, bars and lanes go on to the screen's edges beyond the
+    /// safe area.
+    pub fn bleed(&mut self, out: [f32; 4]) {
+        let (w, h) = (self.width, VIRTUAL_HEIGHT);
+        for s in &mut self.shapes {
+            if s.params != [0.0; 4] || s.angle != 0.0 {
+                continue;
+            }
+            let [mut x0, mut y0] = [s.center[0] - s.half[0], s.center[1] - s.half[1]];
+            let [mut x1, mut y1] = [s.center[0] + s.half[0], s.center[1] + s.half[1]];
+            // A thin line along an edge (a progress bar) stays one.
+            let (wide, tall) = (x1 - x0 > 12.0, y1 - y0 > 12.0);
+            if x0 <= 0.01 && wide {
+                x0 -= out[0];
+            }
+            if y0 <= 0.01 && tall {
+                y0 -= out[1];
+            }
+            if x1 >= w - 0.01 && wide {
+                x1 += out[2];
+            }
+            if y1 >= h - 0.01 && tall {
+                y1 += out[3];
+            }
+            s.center = [(x0 + x1) / 2.0, (y0 + y1) / 2.0];
+            s.half = [(x1 - x0) / 2.0, (y1 - y0) / 2.0];
+        }
+    }
+
     pub fn clip_since(&mut self, start: usize, x: f32, y: f32, w: f32, h: f32) {
         let end = self.shapes.len();
         if end <= start {
@@ -3246,7 +3352,14 @@ impl Canvas {
 
     /// A centred row of buttons: (label, hit, accent).
     pub fn button_row(&mut self, y: f32, buttons: &[(&str, Hit, bool)]) {
-        const SIZE: f32 = 8.0;
+        // On a phone: big enough for a thumb, and no keys to name.
+        let phone = crate::mobile::active();
+        let (size, height) = if phone { (12.0, 44.0) } else { (8.0, 20.0) };
+        let y = if phone {
+            y.min(VIRTUAL_HEIGHT - height)
+        } else {
+            y
+        };
         const GAP: f32 = 8.0;
         let gaps = GAP * (buttons.len().saturating_sub(1)) as f32;
         let room = self.width - 32.0 - gaps;
@@ -3254,7 +3367,7 @@ impl Canvas {
         // shrink and get cut in `button`).
         let text: Vec<f32> = buttons
             .iter()
-            .map(|(l, _, _)| Canvas::text_width(SIZE, l))
+            .map(|(l, _, _)| Canvas::text_width(size, label_of(l, phone)))
             .collect();
         let padded = |pad: f32| text.iter().map(|t| t + pad).collect::<Vec<f32>>();
         let mut widths = padded(28.0);
@@ -3268,7 +3381,8 @@ impl Canvas {
         let total = widths.iter().sum::<f32>() + gaps;
         let mut x = (self.width - total) / 2.0;
         for ((label, hit, accent), w) in buttons.iter().zip(widths) {
-            self.button(x, y, w, 20.0, label, SIZE, *hit, *accent);
+            let label = label_of(label, phone);
+            self.button(x, y, w, height, label, size, *hit, *accent);
             x += w + GAP;
         }
     }
@@ -3782,6 +3896,10 @@ impl Canvas {
     /// A line of key hints ("Enter play  Esc back"; items apart by two or more spaces) as it
     /// fits in `max_w`: the first items that fit, whole.
     pub fn fit_hints(size: f32, max_w: f32, s: &str) -> String {
+        // These name keys; a phone has none.
+        if crate::mobile::active() {
+            return String::new();
+        }
         if Self::text_width(size, s) <= max_w {
             return s.to_string();
         }

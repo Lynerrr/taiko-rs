@@ -14,7 +14,9 @@ use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, rgba};
 use crate::splash::hash;
 
 /// Rows of medals on a page, and how tall each is.
-const ROW_H: f32 = 44.0;
+fn row_h() -> f32 {
+    crate::mobile::pick(44.0, 62.0)
+}
 /// What the mod collection takes above the medals of its tab.
 const TILES_H: f32 = 118.0;
 const TILE_W: f32 = 20.0;
@@ -263,7 +265,18 @@ impl View {
     pub fn draw(&self, c: &mut Canvas) {
         let w = c.width;
         c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(0x000000, 0.72));
-        let (px, py, pw, ph) = (16.0, 20.0, w - 32.0, 444.0);
+        let phone = crate::mobile::active();
+        let (px, py, pw, ph) = if phone {
+            (0.0, 0.0, w, 480.0)
+        } else {
+            (16.0, 20.0, w - 32.0, 444.0)
+        };
+        // The tabs under the title.
+        let (tab_y, tab_h) = if phone {
+            (py + 46.0, 36.0)
+        } else {
+            (py + 32.0, 14.0)
+        };
         c.round_rect(
             [px, py],
             [pw, ph],
@@ -272,14 +285,18 @@ impl View {
             rgba(0xFFD34D, 0.8),
             1.5,
         );
-        let (by, bw) = (py + ph - 24.0, 56.0);
+        let (by, bw, bh) = if phone {
+            (py + 6.0, 96.0, 36.0)
+        } else {
+            (py + ph - 24.0, 56.0, 16.0)
+        };
         c.button(
             px + pw - bw - 12.0,
             by,
             bw,
-            16.0,
+            bh,
             tr!("Back"),
-            7.0,
+            crate::mobile::pick(7.0, 12.0),
             Hit::Key(KeyCode::Escape),
             true,
         );
@@ -317,11 +334,15 @@ impl View {
         };
         let title_w = Canvas::text_width(14.0, title);
         c.text_right(
-            px + pw - 16.0,
+            px + pw - 16.0 - if phone { bw + 12.0 } else { 0.0 },
             py + 16.0,
             8.0,
             rgba(0xFFD34D, 1.0),
-            &Canvas::fit(8.0, pw - title_w - 56.0, &stats),
+            &Canvas::fit(
+                8.0,
+                pw - title_w - 56.0 - if phone { bw + 12.0 } else { 0.0 },
+                &stats,
+            ),
         );
         // The tabs.
         let tab_w = (pw - 24.0) / TABS as f32;
@@ -329,11 +350,11 @@ impl View {
             let x = px + 12.0 + tab as f32 * tab_w;
             let on = tab == self.tab;
             let name = tab_name(tab);
-            let hover = c.hovered(x, py + 32.0, tab_w, 14.0);
+            let hover = c.hovered(x, tab_y, tab_w, tab_h);
             let fill = if hover { 0x20202b } else { 0x1a1a24 };
             c.round_rect(
-                [x + 1.0, py + 32.0],
-                [tab_w - 2.0, 14.0],
+                [x + 1.0, tab_y],
+                [tab_w - 2.0, tab_h],
                 3.0,
                 rgba(fill, 1.0),
                 rgba(0x2a2a38, 1.0),
@@ -341,25 +362,33 @@ impl View {
             );
             if on {
                 // The tab open: a gold pill, the selector sliding to it.
-                crate::style::pill(c, x + 1.0, py + 32.0, tab_w - 2.0, 14.0, 0xC89A2A);
-                crate::style::selector(c, "medals", [x - 2.0, py + 29.0, tab_w + 4.0, 20.0]);
+                crate::style::pill(c, x + 1.0, tab_y, tab_w - 2.0, tab_h, 0xC89A2A);
+                crate::style::selector(
+                    c,
+                    "medals",
+                    [x - 2.0, tab_y - 3.0, tab_w + 4.0, tab_h + 6.0],
+                );
             }
             c.text_centered(
                 x + tab_w / 2.0,
-                py + 36.0,
+                tab_y + (tab_h - 6.0) / 2.0,
                 6.0,
                 rgba(if on { 0xffffff } else { 0x9a9ab0 }, 1.0),
                 &Canvas::fit(6.0, tab_w - 6.0, name),
             );
-            c.hit(x, py + 32.0, tab_w, 14.0, Hit::MedalTab(tab));
+            c.hit(x, tab_y, tab_w, tab_h, Hit::MedalTab(tab));
         }
-        let (top, bottom) = (py + 52.0, by - 4.0);
+        let (top, bottom) = if phone {
+            (tab_y + tab_h + 8.0, py + ph - 6.0)
+        } else {
+            (py + 52.0, by - 4.0)
+        };
         let start = c.shapes.len();
         if self.tab == 0 {
             overview(c, v, px + 16.0, top, pw - 32.0, bottom);
         } else {
             let section = self.tab - 1;
-            let mut y = top - self.scroll as f32 * ROW_H;
+            let mut y = top - self.scroll as f32 * row_h();
             if section == 1 {
                 tiles(c, v, px + 16.0, y, pw - 32.0);
                 y += TILES_H;
@@ -367,8 +396,8 @@ impl View {
             let rows = of_section(v, section);
             let col_w = (pw - 40.0) / 2.0;
             for (i, m) in rows.iter().enumerate() {
-                let row_y = y + (i / 2) as f32 * ROW_H;
-                if row_y + ROW_H < top || row_y > bottom {
+                let row_y = y + (i / 2) as f32 * row_h();
+                if row_y + row_h() < top || row_y > bottom {
                     continue;
                 }
                 medal_row(
@@ -410,7 +439,7 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
     let lit = m.at.is_some();
     c.round_rect(
         [x, y],
-        [w, ROW_H - 3.0],
+        [w, row_h() - 3.0],
         5.0,
         rgba(if lit { 0x1f1f2a } else { 0x18181f }, 1.0),
         rgba(0x2a2a38, 1.0),
@@ -437,7 +466,7 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
     let name = m.name.as_ref().map_or("???", said);
     c.text(
         x + 44.0,
-        y + 5.0,
+        y + crate::mobile::pick(5.0, 6.0),
         8.0,
         rgba(if lit { 0xffffff } else { 0xb4b4c8 }, 1.0),
         &Canvas::fit(8.0, room, name),
@@ -449,7 +478,7 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
         .map_or(tr!("Nobody has found this one"), said);
     c.text(
         x + 44.0,
-        y + 17.0,
+        y + crate::mobile::pick(17.0, 23.0),
         6.0,
         rgba(0x9a9ab0, 1.0),
         &Canvas::fit(6.0, room, about),
@@ -462,7 +491,7 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
     let tier = tier_name(m.tier, m.secret);
     c.text(
         x + 44.0,
-        y + 28.0,
+        y + crate::mobile::pick(28.0, 40.0),
         6.0,
         rgba(medal_colour(m.tier, m.secret), 1.0),
         tier,
@@ -470,7 +499,7 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
     let right = x + w - 8.0;
     c.text_right(
         right,
-        y + 28.0,
+        y + crate::mobile::pick(28.0, 40.0),
         6.0,
         rgba(0x6f6f86, 1.0),
         &format!("{share:.0}%"),
@@ -478,10 +507,11 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
     if !lit && m.need > 0 {
         let left = x + 44.0 + Canvas::text_width(6.0, tier) + 8.0;
         let bar = (right - 30.0 - left).max(0.0);
-        c.rect(left, y + 30.0, bar, 3.0, rgba(0x2a2a38, 1.0));
+        let bar_y = y + crate::mobile::pick(30.0, 46.0);
+        c.rect(left, bar_y, bar, 3.0, rgba(0x2a2a38, 1.0));
         c.rect(
             left,
-            y + 30.0,
+            bar_y,
             bar * progress(m),
             3.0,
             rgba(medal_colour(m.tier, false), 1.0),
@@ -504,8 +534,8 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
         );
     }
     for (i, m) in goals.iter().enumerate() {
-        let y = top + 12.0 + i as f32 * ROW_H;
-        if y + ROW_H <= bottom {
+        let y = top + 12.0 + i as f32 * row_h();
+        if y + row_h() <= bottom {
             medal_row(c, m, v.players, x, y, col_w);
         }
     }
@@ -517,8 +547,8 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
         c.text(right, top + 14.0, 7.0, rgba(0x6f6f86, 1.0), tr!("None yet"));
     }
     for (i, m) in latest.iter().take(NEXT_UP).enumerate() {
-        let y = top + 12.0 + i as f32 * ROW_H;
-        if y + ROW_H <= bottom {
+        let y = top + 12.0 + i as f32 * row_h();
+        if y + row_h() <= bottom {
             medal_row(c, m, v.players, right, y, col_w);
         }
     }

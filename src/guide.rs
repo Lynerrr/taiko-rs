@@ -9,6 +9,11 @@ use crate::menu::{self, Item};
 use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, pixel_size, rgba, snap_to_grid};
 
 pub const PAGES: usize = 7;
+/// How many pages this build's guide has: a phone's is its own, shorter one.
+pub fn pages() -> usize {
+    if crate::mobile::active() { 3 } else { PAGES }
+}
+
 /// The page with the button that starts calibrating.
 pub const OFFSET_PAGE: usize = 1;
 
@@ -539,6 +544,9 @@ const PICTURE_H: f32 = 108.0;
 
 /// Page `i` of the guide, over everything. With `hold`, seconds to wait before moving on.
 pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, hold: Option<u32>, cfg: &Config) {
+    if crate::mobile::active() {
+        return draw_touch(c, i, hold, cfg);
+    }
     let p = page(i, cfg);
     c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x000000, 0.7));
     c.hit(0.0, 0.0, c.width, VIRTUAL_HEIGHT, Hit::Overlay);
@@ -665,6 +673,133 @@ pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, hold: Option<u32>,
             Hit::Guide(if last { Action::Close } else { Action::Next }),
             true,
         ),
+    }
+}
+
+/// The guide on a phone: how a finger plays, the offset, and where things are.
+fn draw_touch(c: &mut Canvas, i: usize, hold: Option<u32>, cfg: &Config) {
+    const SIZE: f32 = 12.0;
+    c.rect(0.0, 0.0, c.width, VIRTUAL_HEIGHT, rgba(0x000000, 0.7));
+    c.hit(0.0, 0.0, c.width, VIRTUAL_HEIGHT, Hit::Overlay);
+    let w = 760.0f32.min(c.width);
+    let (x, y, h) = ((c.width - w) / 2.0, 0.0, VIRTUAL_HEIGHT);
+    let cx = c.width / 2.0;
+    c.round_rect(
+        [x, y],
+        [w, h],
+        8.0,
+        rgba(0x1d1d27, 1.0),
+        rgba(accent(), 1.0),
+        1.5,
+    );
+    let (title, lines): (&str, Vec<&str>) = match i {
+        0 => (
+            tr!("Your drum"),
+            vec![
+                tr!("During a song the screen is four columns, each a side of the drum."),
+                tr!("Red notes are don, blue notes are kat. Tap with both thumbs in turn."),
+                tr!("Settings > Input > Touch layout changes the order."),
+            ],
+        ),
+        OFFSET_PAGE => (
+            tr!("Offset"),
+            vec![
+                tr!("A phone's sound arrives a little late, and each phone differs."),
+                tr!("If notes feel early or late, calibrate: tap along with the beat for a while."),
+                tr!("You can do it later in Settings > Offset."),
+            ],
+        ),
+        _ => (
+            tr!("Finding your way"),
+            vec![
+                tr!("Get maps in Download, or open an .osz file with taiko.rs."),
+                tr!("Drag lists to scroll. Tap a difficulty, then tap it again or Play."),
+                tr!("Hold a song for its menu. The pause button is at the top during a song."),
+                tr!("Your phone's back gesture goes back everywhere."),
+            ],
+        ),
+    };
+    crate::style::title(
+        c,
+        cx - Canvas::text_width(18.0, title) / 2.0,
+        y + 14.0,
+        18.0,
+        0xffffff,
+        title,
+    );
+    let mut row = y + 52.0;
+    if i == 0 {
+        // The columns, as they come out.
+        let colours = crate::multiverse::note_colours();
+        let (bx, bw, bh) = (x + 20.0, w - 40.0, 96.0);
+        let col_w = bw / 4.0;
+        for (k, key) in cfg.touch_layout.keys().into_iter().enumerate() {
+            let (colour, name) = if key == 0 || key == 3 {
+                (colours.kat(), "KAT")
+            } else {
+                (colours.don(), "DON")
+            };
+            let at = bx + k as f32 * col_w;
+            c.round_rect(
+                [at + 3.0, row],
+                [col_w - 6.0, bh],
+                6.0,
+                rgba(colour, 0.3),
+                rgba(colour, 1.0),
+                1.5,
+            );
+            let mid = at + col_w / 2.0;
+            let ty = row + (bh - SIZE) / 2.0;
+            c.text_centered(mid, ty, SIZE, rgba(0xffffff, 1.0), name);
+        }
+        row += bh + 16.0;
+    }
+    for line in lines {
+        for part in crate::social::wrap(line, ((w - 40.0) / Canvas::char_width(SIZE)) as usize) {
+            c.text(x + 20.0, row, SIZE, rgba(0xdedeea, 1.0), &part);
+            row += 21.0;
+        }
+        row += 8.0;
+    }
+    let (bw, bh) = (180.0, 48.0);
+    let by = y + h - bh - 14.0;
+    if i > 0 {
+        let back = tr!("< Back");
+        c.button(
+            x + 16.0,
+            by,
+            bw,
+            bh,
+            back,
+            SIZE,
+            Hit::Guide(Action::Back),
+            false,
+        );
+    } else {
+        let skip = tr!("Skip");
+        let (label, hit) = match hold {
+            Some(s) => (format!("{skip} {s}"), Hit::Overlay),
+            None => (skip.to_string(), Hit::Guide(Action::Close)),
+        };
+        c.button(x + 16.0, by, bw, bh, &label, SIZE, hit, false);
+    }
+    if i == OFFSET_PAGE {
+        let label = tr!("Calibrate");
+        let hit = Hit::Guide(Action::Calibrate);
+        c.button(cx - bw / 2.0, by, bw, bh, label, SIZE, hit, true);
+    }
+    let last = i + 1 == pages();
+    let next = if last { tr!("Done") } else { tr!("Next >") };
+    let nx = x + w - 16.0 - bw;
+    match hold {
+        Some(s) => {
+            let label = format!("{next} {s}");
+            c.button(nx, by, bw, bh, &label, SIZE, Hit::Overlay, false);
+        }
+        None => {
+            let hit = Hit::Guide(if last { Action::Close } else { Action::Next });
+            c.button(nx, by, bw, bh, next, SIZE, hit, true);
+        }
     }
 }
 

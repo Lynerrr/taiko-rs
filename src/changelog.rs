@@ -135,8 +135,13 @@ impl View {
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
         // Swallows clicks meant for what's underneath.
         c.hit(0.0, 0.0, w, 480.0, Hit::Overlay);
-        let pw = (w - 32.0).min(640.0);
-        let (px, py, ph) = ((w - pw) / 2.0, 36.0, 420.0);
+        let phone = crate::mobile::active();
+        let pw = if phone { w } else { (w - 32.0).min(640.0) };
+        let (px, py, ph) = if phone {
+            (0.0, 0.0, 480.0)
+        } else {
+            ((w - pw) / 2.0, 36.0, 420.0)
+        };
         c.round_rect(
             [px, py],
             [pw, ph],
@@ -168,24 +173,30 @@ impl View {
             rgba(0x8a8aa0, 1.0),
             &Canvas::fit(7.0, pw - 180.0, &about),
         );
-        let (by, bw) = (py + ph - 26.0, 64.0);
+        let (by, bw, bh) = if phone {
+            (py + ph - 52.0, 130.0, 44.0)
+        } else {
+            (py + ph - 26.0, 64.0, 16.0)
+        };
         c.button(
             px + pw - bw - 12.0,
             by,
             bw,
-            16.0,
+            bh,
             tr!("Close"),
-            7.0,
+            crate::mobile::pick(7.0, 12.0),
             Hit::Key(KeyCode::Escape),
             true,
         );
-        c.text(
-            px + 16.0,
-            by + 4.5,
-            6.0,
-            rgba(0x6f6f86, 1.0),
-            tr!("Up/Down, wheel: scroll   Esc: close"),
-        );
+        if !phone {
+            c.text(
+                px + 16.0,
+                by + 4.5,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                tr!("Up/Down, wheel: scroll   Esc: close"),
+            );
+        }
         let changes = match &self.state {
             State::Loading(_) => {
                 c.text_centered(
@@ -220,7 +231,10 @@ impl View {
             State::Loaded(changes) => changes,
         };
         let lines = layout(changes, pw - 40.0);
-        let (top, line_h) = (py + 40.0, 13.0);
+        let (top, line_h) = (
+            py + crate::mobile::pick(40.0, 48.0),
+            crate::mobile::pick(13.0, 20.0),
+        );
         let fits = ((by - 8.0 - top) / line_h).floor().max(1.0) as usize;
         self.shown.set((fits, lines.len()));
         let scroll = self.scroll.min(lines.len().saturating_sub(fits));

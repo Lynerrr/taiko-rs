@@ -71,8 +71,9 @@ pub fn selector_colour() -> u32 {
 
 /// Corner brackets round `[x, y, w, h]`, `alpha` of their strength, brighter on the beat.
 pub fn brackets(c: &mut Canvas, [x, y, w, h]: [f32; 4], alpha: f32) {
-    let t = pixel_size(2.0);
-    let arm = (w.min(h) * 0.35).clamp(5.0, 10.0);
+    // Bolder on a phone, to be seen from arm's length.
+    let t = pixel_size(crate::mobile::pick(2.0, 3.0));
+    let arm = (w.min(h) * 0.35).clamp(5.0, crate::mobile::pick(10.0, 20.0));
     let (l, r, top, bot) = (
         snap_to_grid(x),
         snap_to_grid(x + w),

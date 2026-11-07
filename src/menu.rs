@@ -58,25 +58,50 @@ const BURST_MS: f32 = 520.0;
 
 /// The panel of notes, with the selected section's name and what it is under it: the two
 /// together in the middle of the screen's height.
-const LANE_H: f32 = 124.0;
-const TITLE_GAP: f32 = 22.0;
+fn lane_h() -> f32 {
+    crate::mobile::pick(124.0, 176.0)
+}
+fn title_gap() -> f32 {
+    crate::mobile::pick(22.0, 16.0)
+}
 /// The name's height, the gap to the line about it and that line's.
-const TITLE_H: f32 = 44.0 + 10.0;
-const LANE_TOP: f32 = (render::VIRTUAL_HEIGHT - (LANE_H + TITLE_GAP + TITLE_H)) / 2.0;
-const LANE_MID: f32 = LANE_TOP + LANE_H / 2.0;
+fn title_h() -> f32 {
+    crate::mobile::pick(44.0 + 10.0, 70.0)
+}
+fn lane_top() -> f32 {
+    (render::VIRTUAL_HEIGHT - (lane_h() + title_gap() + title_h())) / 2.0
+}
+fn lane_mid() -> f32 {
+    lane_top() + lane_h() / 2.0
+}
 /// The panel the notes sit on, in from the screen's sides.
-const PANEL_X: f32 = 12.0;
-const DRUM_W: f32 = 112.0;
+fn panel_x() -> f32 {
+    crate::mobile::pick(12.0, 0.0)
+}
+fn drum_w() -> f32 {
+    crate::mobile::pick(112.0, 150.0)
+}
 /// Where the notes' middles are, and their biggest radius (narrow screens take less).
-const NOTE_Y: f32 = LANE_MID - 10.0;
-const NOTE_MAX_R: f32 = 29.0;
+fn note_y() -> f32 {
+    lane_mid() - crate::mobile::pick(10.0, 14.0)
+}
+fn note_max_r() -> f32 {
+    crate::mobile::pick(29.0, 41.0)
+}
 /// How much bigger the selected note is (it grows as the selector arrives).
-const GROW: f32 = 0.4;
+fn grow() -> f32 {
+    // More on a phone: it has to read at a glance on a small screen.
+    crate::mobile::pick(0.4, 0.62)
+}
 /// The song's own notes cross the panel like a play's, behind the menu's: a big one as big as the
 /// drum, a small one in proportion (as in a song), hit in a target just past the drum. They stay in
 /// the background: this faint.
-const SONG_BIG_R: f32 = 44.0;
-const SONG_NOTE_R: f32 = SONG_BIG_R * crate::game::NOTE_R / crate::game::BIG_R;
+fn song_big_r() -> f32 {
+    crate::mobile::pick(44.0, 60.0)
+}
+fn song_note_r() -> f32 {
+    song_big_r() * crate::game::NOTE_R / crate::game::BIG_R
+}
 const SONG_ALPHA: f32 = 0.1;
 /// How far apart 1/4 notes are, in small notes' widths: the scroll speed follows the song's
 /// As in a song at osu!'s default slider multiplier: 1.4 x 1.4 x 100 osu!px a beat (the game's
@@ -85,7 +110,9 @@ const SLIDER_MULTIPLIER: f64 = 1.4;
 const TAIKO_VELOCITY: f64 = 1.4 * 100.0;
 /// How long a hit lights the target (ms).
 const SONG_HIT_MS: f32 = 140.0;
-const TITLE_Y: f32 = LANE_TOP + LANE_H + TITLE_GAP;
+fn title_y() -> f32 {
+    lane_top() + lane_h() + title_gap()
+}
 /// Kiai: how long a beat's kick and the opening's flash last, and a spark's life (ms).
 const BEAT_MS: f32 = 300.0;
 const OPENING_MS: f32 = 420.0;
@@ -474,7 +501,7 @@ impl Menu {
             selected: 0,
             shown: 0.0,
             appear: 0.0,
-            spot: [0.0, NOTE_Y],
+            spot: [0.0, note_y()],
             song_at: None,
             song_hand: 1,
             song_hit: (f32::MIN, false),
@@ -739,10 +766,10 @@ impl Menu {
         }
         let kick = self.kick();
         let px = pixel_size(LANE_PIXEL);
-        let (left, w) = (PANEL_X, c.width - 2.0 * PANEL_X);
+        let (left, w) = (panel_x(), c.width - 2.0 * panel_x());
         c.round_rect(
-            [left, LANE_TOP],
-            [w, LANE_H],
+            [left, lane_top()],
+            [w, lane_h()],
             10.0,
             rgba(GOLD, self.kiai * 0.05 + kick * 0.11),
             rgba(GOLD, self.kiai * (0.55 + kick * 0.45)),
@@ -768,8 +795,8 @@ impl Menu {
         let opening = 1.0 - (self.clock - self.kiai_at) / OPENING_MS;
         if opening > 0.0 {
             c.round_rect(
-                [left, LANE_TOP],
-                [w, LANE_H],
+                [left, lane_top()],
+                [w, lane_h()],
                 10.0,
                 rgba(0xffffff, opening * opening * 0.55),
                 rgba(0, 0.0),
@@ -780,7 +807,7 @@ impl Menu {
             for tear in 0..6u32 {
                 let mix = (tear + 1).wrapping_mul(2_654_435_761) ^ seed.wrapping_mul(40_503);
                 let (y, x) = (
-                    LANE_TOP + 4.0 + ((mix >> 8) % (LANE_H as u32 - 8)) as f32,
+                    lane_top() + 4.0 + ((mix >> 8) % (lane_h() as u32 - 8)) as f32,
                     left + ((mix >> 16) % 240) as f32,
                 );
                 c.rect(
@@ -801,7 +828,7 @@ impl Menu {
             let up = (1.0 - opening) * 16.0;
             c.text_centered(
                 self.spot[0],
-                LANE_TOP - 26.0 - up,
+                lane_top() - 26.0 - up,
                 16.0,
                 rgba(GOLD, opening.min(0.5) * 2.0),
                 "KIAI!",
@@ -823,21 +850,27 @@ impl Menu {
     /// The song's lane on a screen `width` wide: where its notes are hit, and how big a big one
     /// is (as big as the drum, less on narrow screens).
     fn song_lane(width: f32) -> (f32, f32) {
-        let big = SONG_BIG_R.min(width * 0.055);
-        (PANEL_X + DRUM_W + 4.0 + big, big)
+        let big = song_big_r().min(width * 0.055);
+        (panel_x() + drum_w() + 4.0 + big, big)
     }
 
     /// Where the notes' slots start and how wide each is, on a screen `width` wide.
     fn slots(width: f32) -> (f32, f32) {
-        let left = PANEL_X + DRUM_W + 4.0;
-        (left, (width - PANEL_X - 4.0 - left) / ITEMS.len() as f32)
+        let left = panel_x() + drum_w() + 4.0;
+        (left, (width - panel_x() - 4.0 - left) / ITEMS.len() as f32)
     }
 
     /// The notes in their places on a dark panel, each with its name under it, and the selector:
     /// corner brackets that slide to the selected one. Choosing moves only the selector; in a
     /// kiai the notes hop on the beat.
     fn draw_panel(&self, c: &mut Canvas) {
-        crate::style::panel(c, PANEL_X, LANE_TOP, c.width - 2.0 * PANEL_X, LANE_H);
+        crate::style::panel(
+            c,
+            panel_x(),
+            lane_top(),
+            c.width - 2.0 * panel_x(),
+            lane_h(),
+        );
     }
 
     /// The song playing, as autoplay would play it: its notes cross the panel behind the menu's
@@ -865,7 +898,7 @@ impl Menu {
         }
         self.song_at = Some(now);
         let (hit_x, big_r) = Self::song_lane(c.width);
-        let small_r = big_r * SONG_NOTE_R / SONG_BIG_R;
+        let small_r = big_r * song_note_r() / song_big_r();
         let start = c.shapes.len();
         let fade = song.fade() * SONG_ALPHA;
         let colours = crate::multiverse::note_colours();
@@ -874,21 +907,21 @@ impl Menu {
         let big = c.sprite(
             Sprite::HitTargetBig,
             hit_x,
-            LANE_MID,
+            lane_mid(),
             big_r,
             rgba(0xffffff, 0.22 * fade),
         );
         let ring = c.sprite(
             Sprite::HitTarget,
             hit_x,
-            LANE_MID,
+            lane_mid(),
             small_r,
             rgba(0xffffff, 0.47 * fade),
         );
         if !big && !ring {
             c.circle(
                 hit_x,
-                LANE_MID,
+                lane_mid(),
                 big_r,
                 rgba(0xffffff, 0.03 * fade),
                 rgba(0xffffff, 0.12 * fade),
@@ -896,7 +929,7 @@ impl Menu {
             );
             c.circle(
                 hit_x,
-                LANE_MID,
+                lane_mid(),
                 small_r + 1.0,
                 rgba(0xffffff, 0.06 * fade),
                 rgba(0xffffff, 0.4 * fade),
@@ -909,14 +942,14 @@ impl Menu {
             let col = if self.song_hit.1 { kat } else { don };
             c.circle(
                 hit_x,
-                LANE_MID,
+                lane_mid(),
                 small_r + 6.0 * (1.0 - lit),
                 rgba(col, 0.35 * lit * fade),
                 rgba(0xffffff, 0.6 * lit * fade),
                 2.0,
             );
         }
-        let room = (c.width - PANEL_X - hit_x + big_r) as f64;
+        let room = (c.width - panel_x() - hit_x + big_r) as f64;
         // osu!px a ms at the song's BPM (120 without one), scaled with the notes.
         let beat_ms = beat.filter(|&b| b > 1.0).unwrap_or(500.0);
         let speed = (SLIDER_MULTIPLIER * TAIKO_VELOCITY / beat_ms
@@ -928,12 +961,12 @@ impl Menu {
             let x = hit_x + ((note.time - now) * speed) as f32;
             let r = if note.big { big_r } else { small_r };
             let col = if note.kat { kat } else { don };
-            if !crate::game::skin_note(c, x, LANE_MID, r, note.big, col, fade) {
+            if !crate::game::skin_note(c, x, lane_mid(), r, note.big, col, fade) {
                 crate::multiverse::note(
                     c,
                     crate::multiverse::Shape::Round,
                     x,
-                    LANE_MID,
+                    lane_mid(),
                     r,
                     col,
                     fade,
@@ -943,18 +976,18 @@ impl Menu {
         // Inside the panel, past the drum.
         c.clip_since(
             start,
-            PANEL_X + DRUM_W + 2.0,
-            LANE_TOP,
-            c.width - 2.0 * PANEL_X - DRUM_W - 2.0,
-            LANE_H,
+            panel_x() + drum_w() + 2.0,
+            lane_top(),
+            c.width - 2.0 * panel_x() - drum_w() - 2.0,
+            lane_h(),
         );
     }
 
     fn draw_lane(&mut self, c: &mut Canvas) {
         let (left, slot) = Self::slots(c.width);
-        let r = NOTE_MAX_R.min(slot * 0.36);
+        let r = note_max_r().min(slot * 0.36);
         // Names stay where they are whichever note is grown.
-        let label_y = NOTE_Y + r * (1.0 + GROW) + 6.0;
+        let label_y = note_y() + r * (1.0 + grow()) + 6.0;
         let names = ITEMS.map(Item::name);
         // One size for every name, the largest the narrowest slot takes.
         let size = names
@@ -965,7 +998,7 @@ impl Menu {
         // Small marks between the notes.
         for k in 1..ITEMS.len() {
             let x = snap_to_grid(left + k as f32 * slot - px);
-            c.rect(x, NOTE_Y - px, px * 2.0, px * 2.0, rgba(0x6a6a88, 0.8));
+            c.rect(x, note_y() - px, px * 2.0, px * 2.0, rgba(0x6a6a88, 0.8));
         }
         for (i, item) in ITEMS.iter().enumerate() {
             let x = left + (i as f32 + 0.5) * slot;
@@ -982,7 +1015,7 @@ impl Menu {
             let near = (1.0 - (self.shown - i as f32).abs()).clamp(0.0, 1.0);
             let spin = self.spinning(i);
             let pressed = spin.map_or(0.0, |k| press_depth(k * SPIN_MS));
-            let grown = r * (1.0 + GROW * near) * (1.0 - PRESS_SHRINK * pressed);
+            let grown = r * (1.0 + grow() * near) * (1.0 - PRESS_SHRINK * pressed);
             if *item == Item::Editor && self.fresh {
                 self.new_aura(c, x, grown, hop, near);
             }
@@ -990,7 +1023,7 @@ impl Menu {
             if near > 0.01 {
                 c.glow(
                     x,
-                    NOTE_Y - hop,
+                    note_y() - hop,
                     grown * 1.18,
                     grown * 0.35,
                     rgba(tint(item.colour(), 0xffffff, 0.2), 0.35 * near),
@@ -1001,19 +1034,19 @@ impl Menu {
                 Some(k) => draw_spin(
                     c,
                     &self.arts[i],
-                    [x, NOTE_Y - hop],
+                    [x, note_y() - hop],
                     grown,
                     k,
                     pressed,
                     // Exit asks a calm question: it turns, but stays whole.
                     (self.glitch && *item != Item::Exit).then_some((self.clock / GLITCH_MS) as u32),
                 ),
-                None => draw_note(c, &self.arts[i], x, NOTE_Y - hop, grown, 1.0),
+                None => draw_note(c, &self.arts[i], x, note_y() - hop, grown, 1.0),
             }
             if near < 0.99 {
                 c.fade_since(start, 1.0, 0.55 + 0.45 * near);
             }
-            let hovered = c.hovered(left + i as f32 * slot, LANE_TOP, slot, LANE_H);
+            let hovered = c.hovered(left + i as f32 * slot, lane_top(), slot, lane_h());
             let on = self.is_selected(i);
             let w = Canvas::text_width(size, names[i]);
             let label_y = label_y + PRESS_DIP * pressed.max(0.0);
@@ -1031,82 +1064,114 @@ impl Menu {
             let col = if on || hovered { 0xffffff } else { 0xc8c8d8 };
             c.text_centered(x, label_y, size, rgba(col, 1.0), names[i]);
             if hovered && !on {
-                self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 0.35);
+                self.brackets(c, x, r * (1.0 + grow()), label_y + size, w, 0.35);
             }
             c.hit(
                 left + i as f32 * slot,
-                LANE_TOP,
+                lane_top(),
                 slot,
-                LANE_H,
+                lane_h(),
                 Hit::MenuItem(i),
             );
             if *item == Item::Editor && self.fresh {
                 let bounce = (self.clock / 260.0).sin() * 2.0 + self.kick() * 5.0;
                 let wiggle = (self.clock / 410.0).sin() * 2.5;
-                let grown = r * (1.0 + GROW * near);
-                self.chip = Some((x + wiggle, NOTE_Y - hop - grown - 18.0 - bounce));
+                let grown = r * (1.0 + grow() * near);
+                self.chip = Some((x + wiggle, note_y() - hop - grown - 18.0 - bounce));
             }
         }
         // The selector, on its way to the selected note: brighter on the beat, gold in a kiai.
         let x = left + (self.shown + 0.5) * slot;
-        self.spot = [left + (self.index() as f32 + 0.5) * slot, NOTE_Y];
+        self.spot = [left + (self.index() as f32 + 0.5) * slot, note_y()];
         let w = Canvas::text_width(size, names[self.index()]);
-        self.brackets(c, x, r * (1.0 + GROW), label_y + size, w, 1.0);
+        self.brackets(c, x, r * (1.0 + grow()), label_y + size, w, 1.0);
     }
 
     /// Corner brackets around a note (`r`) and its name (`w` wide, ending at `bottom`).
     fn brackets(&self, c: &mut Canvas, x: f32, r: f32, bottom: f32, w: f32, alpha: f32) {
         let half = (r + 10.0).max(w / 2.0 + 10.0);
-        let top = NOTE_Y - r - 8.0;
+        let top = note_y() - r - 8.0;
         crate::style::brackets(c, [x - half, top, 2.0 * half, bottom + 8.0 - top], alpha);
     }
 
     /// The head of the panel: the rim lights up on kat, the face on don.
     fn draw_drum(&self, c: &mut Canvas) {
-        let x = PANEL_X + DRUM_W / 2.0;
+        let x = panel_x() + drum_w() / 2.0;
+        // Bigger on a phone, like the rest of the menu.
+        let k = crate::mobile::pick(1.0, 1.45);
         c.rect(
-            PANEL_X + DRUM_W,
-            LANE_TOP + 10.0,
+            panel_x() + drum_w(),
+            lane_top() + 10.0,
             2.0,
-            LANE_H - 20.0,
+            lane_h() - 20.0,
             rgba(0x3a3a4e, 1.0),
         );
         let px = pixel_size(LANE_PIXEL);
-        pixel_ring(c, [x, LANE_MID], 44.0, 44.0, 0, px, rgba(0x23232f, 1.0));
-        pixel_ring(c, [x, LANE_MID], 44.0, px * 2.0, 0, px, rgba(0x6a6a88, 1.0));
+        pixel_ring(
+            c,
+            [x, lane_mid()],
+            44.0 * k,
+            44.0 * k,
+            0,
+            px,
+            rgba(0x23232f, 1.0),
+        );
+        pixel_ring(
+            c,
+            [x, lane_mid()],
+            44.0 * k,
+            px * 2.0,
+            0,
+            px,
+            rgba(0x6a6a88, 1.0),
+        );
         let rim = 1.0 - (self.clock - self.rim.0) / FLASH_MS;
         if rim > 0.0 {
             pixel_ring(
                 c,
-                [x, LANE_MID],
-                42.0,
-                14.0,
+                [x, lane_mid()],
+                42.0 * k,
+                14.0 * k,
                 self.rim.1.signum(),
                 px,
                 rgba(KAT, rim),
             );
         }
-        pixel_ring(c, [x, LANE_MID], 28.0, 28.0, 0, px, rgba(0x2d2d3c, 1.0));
+        pixel_ring(
+            c,
+            [x, lane_mid()],
+            28.0 * k,
+            28.0 * k,
+            0,
+            px,
+            rgba(0x2d2d3c, 1.0),
+        );
         let face = (1.0 - (self.clock - self.face.0) / FLASH_MS).max(0.0);
         if face > 0.0 {
             pixel_ring(
                 c,
-                [x, LANE_MID],
-                28.0,
-                28.0,
+                [x, lane_mid()],
+                28.0 * k,
+                28.0 * k,
                 self.face.1.signum(),
                 px,
                 rgba(DON, 0.35 + 0.65 * face),
             );
         }
-        c.rect(x - 0.5, LANE_MID - 28.0, 1.0, 56.0, rgba(0xffffff, 0.2));
+        c.rect(
+            x - 0.5,
+            lane_mid() - 28.0 * k,
+            1.0,
+            56.0,
+            rgba(0xffffff, 0.2),
+        );
     }
 
     /// The editor is new: a colour-cycling glow behind it and sparkles circling it. `r` is the
     /// note's radius as drawn, `hop` how high it is, `near` how selected (0 to 1).
     fn new_aura(&self, c: &mut Canvas, x: f32, r: f32, hop: f32, near: f32) {
         let t = self.clock;
-        let y = NOTE_Y - hop;
+        let y = note_y() - hop;
         let glow = rainbow(t / 2400.0);
         let breathe = 0.5 + 0.5 * (t / 380.0).sin();
         c.glow(
@@ -1174,7 +1239,7 @@ impl Menu {
         );
         c.text_centered(
             self.spot[0],
-            LANE_TOP - 22.0 - k * 18.0,
+            lane_top() - 22.0 - k * 18.0,
             12.0,
             rgba(0xFFD34D, a),
             "GREAT",
@@ -1184,35 +1249,36 @@ impl Menu {
     fn draw_title(&self, c: &mut Canvas, maps: usize) {
         let item = self.current();
         let mid = c.width / 2.0;
+        let title_size = crate::mobile::pick(34.0, 46.0);
         // A kiai's beat shakes the title apart into red and cyan for a moment.
         let split = self.kick() * 3.0;
         if split > 0.2 {
             c.text_centered(
                 mid - split,
-                TITLE_Y,
-                34.0,
+                title_y(),
+                title_size,
                 rgba(GLITCH_RED, 0.9),
                 item.name(),
             );
             c.text_centered(
                 mid + split,
-                TITLE_Y,
-                34.0,
+                title_y(),
+                title_size,
                 rgba(GLITCH_CYAN, 0.9),
                 item.name(),
             );
         }
-        c.text_centered(mid, TITLE_Y, 34.0, rgba(0xffffff, 1.0), item.name());
+        c.text_centered(mid, title_y(), title_size, rgba(0xffffff, 1.0), item.name());
         c.text_centered(
             mid,
-            TITLE_Y + 44.0,
+            title_y() + crate::mobile::pick(44.0, 56.0),
             10.0,
             rgba(0xc8c8d8, 1.0),
             &item.about(maps),
         );
         if item == Item::Editor && self.fresh {
-            let x = mid + Canvas::text_width(34.0, item.name()) / 2.0 + 30.0;
-            self.new_chip(c, x, TITLE_Y + 4.0, 12.0);
+            let x = mid + Canvas::text_width(title_size, item.name()) / 2.0 + 30.0;
+            self.new_chip(c, x, title_y() + 4.0, 12.0);
         }
     }
 }
@@ -1432,7 +1498,7 @@ pub fn note(c: &mut Canvas, item: Item, x: f32, y: f32, r: f32) {
 
 /// The way to our Discord server, in pixels like the notes.
 fn draw_discord(c: &mut Canvas, right: f32, bottom: f32) {
-    let px = pixel_size(1.5);
+    let px = pixel_size(crate::mobile::pick(1.5, 2.5));
     let (w, h) = (16.0 * px + 12.0, 12.0 * px + 10.0);
     let (x, y) = (right - w, bottom - h);
     let hover = c.hovered(x, y, w, h);
@@ -1483,31 +1549,52 @@ fn draw_discord(c: &mut Canvas, right: f32, bottom: f32) {
 }
 
 fn draw_footer(c: &mut Canvas, f: &Frame) {
-    const Y: f32 = 436.0;
-    draw_discord(c, c.width - 14.0, Y + 32.0);
+    let phone = crate::mobile::active();
+    let y0 = crate::mobile::pick(436.0, 424.0);
+    let side = crate::mobile::pick(14.0, 0.0);
+    draw_discord(c, c.width - side, crate::mobile::pick(y0 + 32.0, 480.0));
     let Some(song) = f.song else { return };
-    const BUTTON_W: f32 = 26.0;
-    const BUTTON_GAP: f32 = 4.0;
-    const SONG_W: f32 = 240.0;
+    let button_w = crate::mobile::pick(26.0, 50.0);
+    let button_h = crate::mobile::pick(24.0, 50.0);
+    let button_gap = crate::mobile::pick(4.0, 6.0);
+    let song_w = crate::mobile::pick(240.0, 320.0);
+    let box_h = crate::mobile::pick(38.0, 56.0);
     // The same size whatever plays: a long name is cut, and the buttons stay put.
-    let w = SONG_W.min((c.width - 100.0 - (BUTTON_W + BUTTON_GAP) * 4.0).max(120.0));
+    let w = song_w.min((c.width - 100.0 - (button_w + button_gap) * 4.0).max(120.0));
     let song = Canvas::fit(8.0, w - 22.0, song);
     c.round_rect(
-        [14.0, Y - 6.0],
-        [w, 38.0],
+        [side, y0 - 6.0],
+        [w, box_h],
         6.0,
         rgba(0x15151d, 0.88),
         rgba(0x3a3a4e, 1.0),
         1.0,
     );
-    c.text(25.0, Y + 1.0, 7.0, rgba(0x9a9ab0, 1.0), tr!("NOW PLAYING"));
-    c.text(25.0, Y + 16.0, 8.0, rgba(0xffffff, 1.0), &song);
+    c.text(
+        side + 11.0,
+        y0 + crate::mobile::pick(1.0, 3.0),
+        7.0,
+        rgba(0x9a9ab0, 1.0),
+        tr!("NOW PLAYING"),
+    );
+    c.text(
+        side + 11.0,
+        y0 + crate::mobile::pick(16.0, 24.0),
+        8.0,
+        rgba(0xffffff, 1.0),
+        &song,
+    );
     let controls = [Control::Prev, Control::Toggle, Control::Next, Control::Open];
     for (i, control) in controls.into_iter().enumerate() {
-        let x = 14.0 + w + 6.0 + i as f32 * (BUTTON_W + BUTTON_GAP);
+        let x = side + w + 6.0 + i as f32 * (button_w + button_gap);
         crate::player::button(
             c,
-            [x, Y + 1.0, BUTTON_W, 24.0],
+            [
+                x,
+                if phone { y0 - 3.0 } else { y0 + 1.0 },
+                button_w,
+                button_h,
+            ],
             control,
             f.paused,
             control == Control::Open,
@@ -1660,7 +1747,7 @@ mod tests {
         let kiai = c
             .shapes
             .iter()
-            .rposition(|s| (s.half[1] - LANE_H / 2.0).abs() < 1e-3 && s.half[0] > 300.0)
+            .rposition(|s| (s.half[1] - lane_h() / 2.0).abs() < 1e-3 && s.half[0] > 300.0)
             .unwrap();
         assert!(chip > kiai, "the sticker comes after the kiai's frame");
         assert!(m.chip.is_none(), "drawn once a frame");
@@ -1778,7 +1865,7 @@ mod tests {
                 .windows(2)
                 .all(|w| w[0][0] + w[0][2] <= w[1][0] + 0.01)
         );
-        assert!(first[0][0] > DRUM_W && first[6][0] + first[6][2] <= 853.3 - PANEL_X);
+        assert!(first[0][0] > drum_w() && first[6][0] + first[6][2] <= 853.3 - panel_x());
         m.step(3);
         let c = frame(&mut m, 16.0);
         assert_eq!(note_spots(&c), first, "choosing doesn't move the notes");

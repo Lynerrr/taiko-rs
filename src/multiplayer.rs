@@ -681,7 +681,7 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, server: &str, status: &str, busy: 
     let size = Canvas::fit_size(9.0, 6.5, room, msg);
     c.text_centered(
         w / 2.0,
-        440.0 + (9.0 - size) / 2.0,
+        crate::mobile::pick(440.0, 460.0) + (9.0 - size) / 2.0,
         size,
         rgba(0xFFD34D, 1.0),
         &Canvas::fit(size, room, msg),
@@ -705,9 +705,13 @@ pub fn draw_menu(c: &mut Canvas, menu: &Menu, server: &str, status: &str, busy: 
 /// Logged out (or in one of the account's forms): its card, in the middle.
 fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     let w = c.width;
-    let col = (w - 48.0).min(420.0);
+    let col = (w - 48.0).min(crate::mobile::pick(420.0, 640.0));
     let x = (w - col) / 2.0;
-    let (top, bottom) = (52.0, 428.0);
+    let (top, bottom) = (crate::mobile::pick(52.0, 54.0), 432.0);
+    let (rh, step) = (
+        crate::mobile::pick(30.0, 46.0),
+        crate::mobile::pick(38.0, 52.0),
+    );
     card(c, x - 14.0, top, col + 28.0, bottom - top);
     let heading = menu.title().unwrap_or(tr!("ONLINE ACCOUNT"));
     c.text(x, top + 12.0, 9.0, rgba(accent(), 1.0), heading);
@@ -717,7 +721,7 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             let size = Canvas::fit_size(7.0, 6.0, col, line);
             c.text_centered(
                 x + col / 2.0,
-                y + 4.0 + 14.0 * k as f32,
+                y + 4.0 + crate::mobile::pick(14.0, 20.0) * k as f32,
                 size,
                 rgba(0x8a8aa0, 1.0),
                 &Canvas::fit(size, col, line),
@@ -742,8 +746,8 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     ""
                 };
                 let (v, ph) = field(&menu.user, hint);
-                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                y += step;
             }
             Row::Password => {
                 let stars = "*".repeat(menu.password.chars().count());
@@ -753,8 +757,8 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     tr!("6 characters or more")
                 };
                 let (v, ph) = field(&stars, hint);
-                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                y += step;
             }
             Row::Email => {
                 let hint = if menu.form == Form::Register {
@@ -763,17 +767,17 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     tr!("your email")
                 };
                 let (v, ph) = field(&menu.email, hint);
-                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                y += step;
             }
             Row::Code => {
                 let (v, ph) = field(&menu.code, tr!("6 digits"));
-                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                y += step;
             }
             Row::LogIn => {
-                menu_row(c, sel, i, x, y, col, 30.0, tr!("LOG IN"), RowLook::Action);
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, tr!("LOG IN"), RowLook::Action);
+                y += step;
             }
             // On the login form, the ways to its other forms, side by side.
             Row::Register if menu.form == Form::Main => {
@@ -788,9 +792,9 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     half,
                     tr!("FORGOT PASSWORD?"),
                 );
-                y += 34.0;
+                y += crate::mobile::pick(34.0, 52.0);
                 steps(c, y);
-                y += 34.0;
+                y += crate::mobile::pick(34.0, 48.0);
             }
             Row::Forgot if menu.form == Form::Main => {}
             Row::Register => {
@@ -799,8 +803,8 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 } else {
                     tr!("SEND CODE")
                 };
-                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Action);
+                y += step;
             }
             Row::Forgot => {
                 let label = if menu.code_for == Some(CodeFor::Reset) {
@@ -808,8 +812,8 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 } else {
                     tr!("SEND CODE")
                 };
-                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Action);
+                y += step;
             }
             Row::LinkEmail => {
                 let label = if menu.code_for == Some(CodeFor::Link) {
@@ -817,12 +821,22 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 } else {
                     tr!("SEND CODE")
                 };
-                menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
-                y += 38.0;
+                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Action);
+                y += step;
             }
             Row::Back => {
-                menu_row(c, sel, i, x, y, col, 24.0, tr!("BACK"), RowLook::Action);
-                y += 32.0;
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    col,
+                    crate::mobile::pick(24.0, 42.0),
+                    tr!("BACK"),
+                    RowLook::Action,
+                );
+                y += crate::mobile::pick(32.0, 46.0);
                 steps(c, y);
             }
             _ => {}
@@ -833,11 +847,16 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
 /// Logged in: the lobbies (left), the account and a new lobby (right).
 fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     let w = c.width;
-    let (top, bottom) = (52.0, 428.0);
-    let lx = 24.0;
-    let lw = ((w - 64.0) * 0.6).max(280.0);
-    let rx = lx + lw + 16.0;
-    let rw = w - 24.0 - rx;
+    let phone = crate::mobile::active();
+    let (top, bottom) = if phone { (54.0, 454.0) } else { (52.0, 428.0) };
+    let lx = crate::mobile::pick(24.0, 0.0);
+    let lw = if phone {
+        (w * 0.56).round()
+    } else {
+        ((w - 64.0) * 0.6).max(280.0)
+    };
+    let rx = lx + lw + crate::mobile::pick(16.0, 10.0);
+    let rw = w - crate::mobile::pick(24.0, crate::social::TAB_ROOM) - rx;
 
     // The lobbies.
     card(c, lx, top, lw, bottom - top);
@@ -854,7 +873,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         top + 13.0,
         7.0,
         rgba(0x6f6f86, 1.0),
-        &tr!("{count} open   F5 refresh"; count),
+        &tr!("{count} open"; count),
     );
     let lobby_rows: Vec<(usize, usize)> = rows
         .iter()
@@ -867,9 +886,9 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             }
         })
         .collect();
-    const ROW_H: f32 = 40.0;
+    let row_h = crate::mobile::pick(40.0, 62.0);
     let list_top = top + 32.0;
-    let shown = ((bottom - list_top - 6.0) / ROW_H).floor().max(1.0) as usize;
+    let shown = ((bottom - list_top - 6.0) / row_h).floor().max(1.0) as usize;
     let first = lobby_rows
         .iter()
         .position(|(i, _)| *i == cursor)
@@ -890,33 +909,33 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     }
     for (n, &(i, k)) in lobby_rows.iter().enumerate().skip(first).take(shown) {
         let Some(r) = menu.rooms.get(k) else { continue };
-        let (x, y, rw_) = (lx + 8.0, list_top + (n - first) as f32 * ROW_H, lw - 16.0);
+        let (x, y, rw_) = (lx + 8.0, list_top + (n - first) as f32 * row_h, lw - 16.0);
         let sel = i == cursor;
         let bg = if sel {
             0x34344a
-        } else if c.hovered(x, y, rw_, ROW_H - 4.0) {
+        } else if c.hovered(x, y, rw_, row_h - 4.0) {
             0x262634
         } else {
             0x1d1d27
         };
         c.round_rect(
             [x, y],
-            [rw_, ROW_H - 4.0],
+            [rw_, row_h - 4.0],
             7.0,
             rgba(bg, 1.0),
             rgba(0x2a2a38, 1.0),
             1.0,
         );
         if sel {
-            crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, rw_ + 6.0, ROW_H + 2.0]);
+            crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, rw_ + 6.0, row_h + 2.0]);
         }
-        c.hit(x, y, rw_, ROW_H - 4.0, Hit::MpRow(i));
+        c.hit(x, y, rw_, row_h - 4.0, Hit::MpRow(i));
         // Right: how full it is, and whether a match is on.
         let full = r.players >= r.slots;
         let players = format!("{}/{}", r.players, r.slots);
         c.text_right(
             x + rw_ - 12.0,
-            y + 7.0,
+            y + crate::mobile::pick(7.0, 12.0),
             9.0,
             rgba(if full { 0xFF4B4B } else { 0xffffff }, 1.0),
             &players,
@@ -926,17 +945,18 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         } else {
             (tr!("open"), 0x86E05A)
         };
-        c.text_right(x + rw_ - 12.0, y + 21.0, 7.0, rgba(colour, 1.0), state);
+        let info_y = y + crate::mobile::pick(21.0, 33.0);
+        c.text_right(x + rw_ - 12.0, info_y, 7.0, rgba(colour, 1.0), state);
         let right = Canvas::text_width(9.0, &players).max(Canvas::text_width(7.0, state)) + 24.0;
         // Left: the padlock, the title, then the host, the mode and the map.
         let mut tx = x + 12.0;
         if r.locked {
-            padlock(c, tx, y + 6.0, 10.0, 0xFFD34D);
+            padlock(c, tx, y + crate::mobile::pick(6.0, 11.0), 10.0, 0xFFD34D);
             tx += 14.0;
         }
         c.text(
             tx,
-            y + 7.0,
+            y + crate::mobile::pick(7.0, 12.0),
             9.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(9.0, x + rw_ - right - tx, &r.title),
@@ -954,7 +974,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         }
         c.text(
             x + 12.0,
-            y + 22.0,
+            info_y,
             6.5,
             rgba(0x8a8aa0, 1.0),
             &Canvas::fit(6.5, rw_ - right - 12.0, &info),
@@ -973,7 +993,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
 
     // The account.
     let has_link = rows.contains(&Row::LinkEmail);
-    let account_h = if has_link { 108.0 } else { 80.0 };
+    let account_h = crate::mobile::pick(1.0, 1.4) * if has_link { 108.0 } else { 80.0 };
     card(c, rx, top, rw, account_h);
     c.text(
         rx + 14.0,
@@ -985,13 +1005,13 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     let who = menu.account.as_deref().unwrap_or("");
     c.text(
         rx + 14.0,
-        top + 27.0,
+        top + crate::mobile::pick(27.0, 30.0),
         8.0,
         rgba(0xc8c8d8, 1.0),
         &Canvas::fit(8.0, rw - 28.0, &tr!("logged in as {who}"; who)),
     );
     let half = (rw - 28.0 - 8.0) / 2.0;
-    let mut y = top + 44.0;
+    let mut y = top + crate::mobile::pick(44.0, 50.0);
     for (i, r) in rows.iter().enumerate() {
         match *r {
             Row::LogOut => {
@@ -1005,7 +1025,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     half,
                     tr!("CHANGE PASSWORD"),
                 );
-                y += 30.0;
+                y += crate::mobile::pick(30.0, 46.0);
             }
             Row::LinkEmail => {
                 half_row(
@@ -1050,11 +1070,11 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     fx,
                     y,
                     fw,
-                    28.0,
+                    crate::mobile::pick(28.0, 42.0),
                     tr!("Mode"),
                     RowLook::Stepper(mode),
                 );
-                y += 34.0;
+                y += crate::mobile::pick(34.0, 48.0);
             }
             Row::NewPassword => {
                 let stars = "*".repeat(menu.new_password.chars().count());
@@ -1070,11 +1090,11 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     fx,
                     y,
                     fw,
-                    28.0,
+                    crate::mobile::pick(28.0, 42.0),
                     tr!("Password"),
                     RowLook::Field(&v, ph),
                 );
-                y += 34.0;
+                y += crate::mobile::pick(34.0, 48.0);
             }
             Row::NewSlots => {
                 let slots = menu.slots().to_string();
@@ -1085,11 +1105,11 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     fx,
                     y,
                     fw,
-                    28.0,
+                    crate::mobile::pick(28.0, 42.0),
                     tr!("Players"),
                     RowLook::Stepper(&slots),
                 );
-                y += 38.0;
+                y += crate::mobile::pick(38.0, 50.0);
             }
             Row::HostOnline => {
                 menu_row(
@@ -1099,7 +1119,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     fx,
                     y,
                     fw,
-                    32.0,
+                    crate::mobile::pick(32.0, 46.0),
                     tr!("OPEN LOBBY"),
                     RowLook::Action,
                 );
@@ -1113,14 +1133,16 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     } else {
         tr!("The host picks the maps; the rest can download them.")
     };
-    let size = Canvas::fit_size(7.0, 6.0, fw, note);
-    c.text_centered(
-        rx + rw / 2.0,
-        y,
-        size,
-        rgba(0x6f6f86, 1.0),
-        &Canvas::fit(size, fw, note),
-    );
+    if !phone {
+        let size = Canvas::fit_size(7.0, 6.0, fw, note);
+        c.text_centered(
+            rx + rw / 2.0,
+            y,
+            size,
+            rgba(0x6f6f86, 1.0),
+            &Canvas::fit(size, fw, note),
+        );
+    }
 }
 
 /// Joining a locked lobby: its password, over the darkened menu.
@@ -1193,29 +1215,23 @@ fn draw_join_prompt(
 
 /// An action row narrower than a column (two side by side), 24 tall.
 fn half_row(c: &mut Canvas, sel: bool, i: usize, x: f32, y: f32, w: f32, label: &str) {
+    let h = crate::mobile::pick(24.0, 42.0);
     let bg = if sel {
         0x34344a
-    } else if c.hovered(x, y, w, 24.0) {
+    } else if c.hovered(x, y, w, h) {
         0x262634
     } else {
         0x1d1d27
     };
-    c.round_rect(
-        [x, y],
-        [w, 24.0],
-        7.0,
-        rgba(bg, 1.0),
-        rgba(0x2a2a38, 1.0),
-        1.0,
-    );
+    c.round_rect([x, y], [w, h], 7.0, rgba(bg, 1.0), rgba(0x2a2a38, 1.0), 1.0);
     if sel {
-        crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, w + 6.0, 30.0]);
+        crate::style::selector(c, "multiplayer", [x - 3.0, y - 3.0, w + 6.0, h + 6.0]);
     }
-    c.hit(x, y, w, 24.0, Hit::MpRow(i));
+    c.hit(x, y, w, h, Hit::MpRow(i));
     let size = Canvas::fit_size(11.0, 7.0, w - 12.0, label);
     c.text_centered(
         x + w / 2.0,
-        y + 12.0 - size / 2.0,
+        y + h / 2.0 - size / 2.0,
         size,
         rgba(if sel { 0xffffff } else { 0xc8c8d8 }, 1.0),
         &Canvas::fit(size, w - 12.0, label),
@@ -1318,11 +1334,17 @@ pub fn draw_lobby(
     let w = c.width;
     let right = format!("{}   ping {:.0} ms", s.label, s.client.rtt_ms);
     crate::settings::tab_bar(c, 2, &right);
-    let (top, bottom) = (52.0, 418.0);
-    let lx = 24.0;
-    let lw = ((w - 64.0) * 0.6).max(300.0);
-    let rx = lx + lw + 16.0;
-    let rw = w - 24.0 - rx;
+    let phone = crate::mobile::active();
+    let (top, bottom) = if phone { (54.0, 428.0) } else { (52.0, 418.0) };
+    let lx = crate::mobile::pick(24.0, 0.0);
+    let lw = if phone {
+        (w * 0.56).round()
+    } else {
+        ((w - 64.0) * 0.6).max(300.0)
+    };
+    let rx = lx + lw + crate::mobile::pick(16.0, 10.0);
+    // On a phone the friends' tab keeps its strip of the right edge.
+    let rw = w - crate::mobile::pick(24.0, crate::social::TAB_ROOM) - rx;
     let host = s.is_host() && !s.in_match;
 
     // The map.
@@ -1436,7 +1458,11 @@ pub fn draw_lobby(
         }
         None => {
             let t = if s.is_host() {
-                tr!("Press M to pick a map")
+                if phone {
+                    tr!("Tap Pick map to choose one")
+                } else {
+                    tr!("Press M to pick a map")
+                }
             } else {
                 tr!("Waiting for the host to pick a map")
             };
@@ -1471,7 +1497,7 @@ pub fn draw_lobby(
     );
     let my_id = s.client.id;
     let cell_w = (iw - 8.0) / 2.0;
-    let cell_h = 26.0;
+    let cell_h = crate::mobile::pick(26.0, 46.0);
     let per_col = (((ph - 32.0) / (cell_h + 4.0)).floor() as usize).max(1);
     for (i, p) in s.players.iter().enumerate().take(per_col * 2) {
         let (x, y) = (
@@ -1491,15 +1517,29 @@ pub fn draw_lobby(
         let mut name_end = x + cell_w - 8.0;
         if host && !me {
             for (label, hit) in [("kick", Hit::Kick(p.id)), ("host", Hit::GiveHost(p.id))] {
-                let bw = Canvas::text_width(6.5, label) + 10.0;
+                let bw = Canvas::text_width(6.5, label) + crate::mobile::pick(10.0, 16.0);
+                let bh = crate::mobile::pick(14.0, 34.0);
                 name_end -= bw;
-                c.button(name_end, y + 6.0, bw, 14.0, label, 6.5, hit, false);
+                c.button(
+                    name_end,
+                    y + (cell_h - bh) / 2.0,
+                    bw,
+                    bh,
+                    label,
+                    6.5,
+                    hit,
+                    false,
+                );
                 name_end -= 6.0;
             }
         } else {
             let (st, colour) = status_text(p, s.map.is_some());
-            c.text_right(name_end, y + 5.0, 7.0, rgba(colour, 1.0), st);
-            name_end -= Canvas::text_width(7.0, st) + 8.0;
+            // A phone has the height: the name keeps the row's width.
+            let sy = y + crate::mobile::pick(5.0, 25.0);
+            c.text_right(name_end, sy, 7.0, rgba(colour, 1.0), st);
+            if !phone {
+                name_end -= Canvas::text_width(7.0, st) + 8.0;
+            }
         }
         let mut name = p.name.clone();
         if p.host {
@@ -1507,7 +1547,7 @@ pub fn draw_lobby(
         }
         c.text(
             x + 8.0,
-            y + 5.0,
+            y + crate::mobile::pick(5.0, 6.0),
             8.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(8.0, name_end - x - 12.0, &name),
@@ -1525,7 +1565,7 @@ pub fn draw_lobby(
         };
         c.text(
             x + 8.0,
-            y + 16.0,
+            y + crate::mobile::pick(16.0, 25.0),
             6.0,
             rgba(0x8a8aa0, 1.0),
             &Canvas::fit(6.0, name_end - x - 12.0, &under),
@@ -1571,7 +1611,7 @@ pub fn draw_lobby(
             settings.push((format!("  {}", o.name()), o.value(&d), Some(key)));
         }
     }
-    let row_h = 18.0;
+    let row_h = crate::mobile::pick(18.0, 34.0);
     let room_h = 30.0 + settings.len() as f32 * row_h + 8.0;
     c.round_rect(
         [rx, top],
@@ -1614,14 +1654,18 @@ pub fn draw_lobby(
             }
             if let Some(key) = key {
                 c.hit(x, y, w2, row_h - 2.0, Hit::Key(*key));
-                c.text(x + 6.0, y + 4.0, 6.5, rgba(0x55556a, 1.0), key_name(*key));
+                if !phone {
+                    c.text(x + 6.0, y + 4.0, 6.5, rgba(0x55556a, 1.0), key_name(*key));
+                }
             }
         }
-        c.text(x + 30.0, y + 4.0, 7.5, rgba(0x9a9ab0, 1.0), label);
+        let ty = y + (row_h - 2.0 - 7.5) / 2.0 - 1.0;
+        let tx = x + crate::mobile::pick(30.0, 6.0);
+        c.text(tx, ty, 7.5, rgba(0x9a9ab0, 1.0), label);
         let label_w = Canvas::text_width(7.5, label);
         c.text_right(
             x + w2 - 6.0,
-            y + 4.0,
+            ty,
             7.5,
             rgba(if editing { 0xFFD34D } else { 0xffffff }, 1.0),
             &Canvas::fit(7.5, w2 - 46.0 - label_w, value),
@@ -1631,7 +1675,7 @@ pub fn draw_lobby(
     // The chat.
     let cy = top + room_h + 8.0;
     let ch = bottom - cy;
-    if ch > 44.0 {
+    if ch > crate::mobile::pick(44.0, 70.0) {
         c.round_rect(
             [rx, cy],
             [rw, ch],
@@ -1642,7 +1686,8 @@ pub fn draw_lobby(
         );
         c.text(rx + 14.0, cy + 10.0, 8.0, rgba(0x4fb4ff, 1.0), tr!("CHAT"));
         // The line to write on, along the bottom of the box.
-        let (ix, iw, ih) = (rx + 8.0, rw - 16.0, 16.0);
+        let (ix, iw, ih) = (rx + 8.0, rw - 16.0, crate::mobile::pick(16.0, 36.0));
+        let text_y = (ih - 7.0) / 2.0;
         let iy = cy + ch - ih - 6.0;
         let focused = s.chat_input.is_some();
         let hover = c.hovered(ix, iy, iw, ih);
@@ -1667,7 +1712,7 @@ pub fn draw_lobby(
             Some(typed) => {
                 let room = iw - 16.0;
                 let shown = Canvas::fit_end(7.0, room, typed);
-                c.text(ix + 8.0, iy + 4.5, 7.0, rgba(0xffffff, 1.0), &shown);
+                c.text(ix + 8.0, iy + text_y, 7.0, rgba(0xffffff, 1.0), &shown);
                 // The caret sits in the text when all of it fits, else at the end.
                 let at = if shown == *typed {
                     crate::settings::caret_x(7.0, typed, s.chat_caret)
@@ -1679,15 +1724,20 @@ pub fn draw_lobby(
             None => {
                 c.text(
                     ix + 8.0,
-                    iy + 4.5,
+                    iy + text_y,
                     7.0,
                     rgba(0x6f6f86, 1.0),
-                    tr!("T - write"),
+                    if phone {
+                        tr!("Tap to write")
+                    } else {
+                        tr!("T - write")
+                    },
                 );
             }
         }
         c.hit(ix, iy, iw, ih, Hit::LobbyChat);
-        let lines = ((ch - 30.0 - ih - 6.0) / 11.0).max(0.0) as usize;
+        let line_h = crate::mobile::pick(11.0, 18.0);
+        let lines = ((ch - 30.0 - ih - 6.0) / line_h).max(0.0) as usize;
         for (k, (from, text)) in s
             .chat
             .iter()
@@ -1696,7 +1746,7 @@ pub fn draw_lobby(
         {
             c.text(
                 rx + 14.0,
-                cy + 26.0 + k as f32 * 11.0,
+                cy + 26.0 + k as f32 * line_h,
                 6.5,
                 rgba(0xdedeea, 1.0),
                 &Canvas::fit(6.5, rw - 28.0, &format!("{from}: {text}")),

@@ -57,6 +57,13 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 
+# Test builds for a phone (`TAIKO_DEV=1 android/build-apk.sh`): near release speed, built far quicker.
+[profile.android-dev]
+inherits = "release"
+lto = "off"
+codegen-units = 64
+incremental = true
+
 # One profile for CI builds, Clippy, and tests. Keep unwind enabled so normal and test
 # targets can share dependencies; omit debug symbols and incremental data on CI runners.
 [profile.ci-test]
