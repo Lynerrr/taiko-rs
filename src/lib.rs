@@ -4184,7 +4184,7 @@ impl State {
         let on = |b: bool| if b { on_text() } else { off_text() }.to_string();
         match item {
             Item::ScrollSpeed => format!("{:.2}x", c.scroll_speed),
-            Item::Offset => format!("{:+.0} ms", c.offset_ms),
+            Item::Offset => format!("{:+.0} ms", c.offset_osu_ms),
             Item::VisualOffset => format!("{:+.0} ms", c.visual_offset_ms),
             Item::UpdateChannel => {
                 let picked = self.updater.channel();
@@ -4450,7 +4450,9 @@ impl State {
             Item::ScrollSpeed => {
                 self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d)
             }
-            Item::Offset => self.cfg.offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::Offset => self.cfg.set_osu_offset(
+                self.cfg.offset_osu_ms + d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            ),
             Item::VisualOffset => {
                 self.cfg.visual_offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 }
             }
@@ -5164,7 +5166,7 @@ impl State {
             Item::LetterboxY => format!("{:.0}", c.letterbox_pos.1),
             Item::ScrollSpeed => format!("{:.2}", c.scroll_speed),
             Item::Rate => format!("{:.2}", c.rate),
-            Item::Offset => format!("{:.0}", c.offset_ms),
+            Item::Offset => format!("{:.0}", c.offset_osu_ms),
             Item::VisualOffset => format!("{:.0}", c.visual_offset_ms),
             Item::VsyncTune => format!("{:.0}", c.vsync_tune_ms),
             Item::CalibrationBpm => format!("{:.0}", c.calibration_bpm),
@@ -5256,7 +5258,7 @@ impl State {
             Item::Rate => {
                 c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1)
             }
-            Item::Offset => c.offset_ms = number()?.round().clamp(-1000.0, 1000.0),
+            Item::Offset => c.set_osu_offset(number()?.round().clamp(-1000.0, 1000.0)),
             Item::VisualOffset => c.visual_offset_ms = number()?.round().clamp(-1000.0, 1000.0),
             Item::VsyncTune => c.vsync_tune_ms = number()?.round().clamp(-200.0, 200.0),
             Item::CalibrationBpm => {
@@ -6522,7 +6524,12 @@ impl State {
         } else {
             self.cfg.offset_ms
         };
-        let found = calibrate::estimate(&game.stats.errors, current);
+        let mut found = calibrate::estimate(&game.stats.errors, current);
+        if let (Some(e), false) = (&mut found, vsync) {
+            // The suggestion is in the global offset's own terms (osu!'s). Hitting late by e is
+            // the clock's offset up by e, which is the osu! one down by e.
+            e.suggested_offset = (self.cfg.offset_osu_ms - e.error_ms).round();
+        }
         if let Some(e) = &found {
             audiolog::line(&format!(
                 "calibration vsync={vsync} hits={} error={:.1} margin={:.1} ur={:.0} suggested={} current={current}",
@@ -6561,7 +6568,7 @@ impl State {
                         self.cfg.vsync_tune_ms
                     ));
                 } else if apply {
-                    self.cfg.offset_ms = estimate.suggested_offset;
+                    self.cfg.set_osu_offset(estimate.suggested_offset);
                     self.cfg.save();
                     self.toast(tr!("offset set to {:+.0} ms", estimate.suggested_offset));
                 }
@@ -6651,13 +6658,14 @@ impl State {
             // Shift+O: the suggestion is about every map (the same on all of them), so it goes
             // to the global offset.
             Some(h) if self.modifiers_shift => {
-                let was = self.cfg.offset_ms;
-                self.cfg.offset_ms =
-                    h.estimate.suggested_offset - self.map_offset(Some(entry)) / self.song_rate();
+                // Late by e is the clock's offset up by e, so osu!'s down by e.
+                let was = self.cfg.offset_osu_ms;
+                let osu = game.suggested_osu_offset(h.estimate.suggested_offset);
+                self.cfg.set_osu_offset(osu);
                 self.cfg.save();
                 self.refresh_play_offset();
                 self.toast(tr!(
-                    "offset {:+.0} ms for all maps (was {was:+.0})", self.cfg.offset_ms;
+                    "offset {:+.0} ms for all maps (was {was:+.0})", self.cfg.offset_osu_ms;
                     was
                 ));
             }
@@ -6734,6 +6742,7 @@ impl State {
     }
 
     fn refresh_play_offset(&mut self) {
+        self.follow_latency();
         let was = self.play_offset;
         let offset = self.map_offset(self.offset_entry());
         // As osu! has them: the global offset is about this machine, so real ms at any rate; a
@@ -6746,6 +6755,27 @@ impl State {
             ));
         }
         self.preview.map_offset = offset;
+        if let Scene::Play { game, .. } | Scene::MpPlay { game, .. } = &mut self.scene {
+            game.osu_offset = self.cfg.offset_osu_ms;
+            game.latency = self.cfg.offset_latency_ms;
+        }
+    }
+
+    /// Keeps the play offset to what the clock takes off: the global offset is osu!'s, and the
+    /// play offset follows from it and the output latency. The first settled latency also turns a
+    /// config from before into osu!'s terms (`Config::set_latency`).
+    fn follow_latency(&mut self) {
+        let Some(audio) = &self.audio else { return };
+        let (latency, _) = audio.latencies_ms();
+        self.apply_latency(latency, audio.latency_settled());
+    }
+
+    fn apply_latency(&mut self, latency: f64, settled: bool) {
+        let moved = (latency - self.cfg.offset_latency_ms).abs() > 0.01;
+        if (moved || (settled && self.cfg.offset_pending)) && self.cfg.set_latency(latency, settled)
+        {
+            self.cfg.save();
+        }
     }
 
     /// Plays the current map again from where it was started (in game, paused or on results).
@@ -6948,16 +6978,18 @@ impl State {
                         let ms = self.map_offset(Some(entry)) + d;
                         self.set_map_offset(entry, ms);
                         let text = tr!(
-                            "this map: offset {ms:+.0} ms (total {:+.0})", self.play_offset;
+                            "this map: offset {ms:+.0} ms (total {:+.0})",
+                            config::osu_offset_of(self.play_offset, self.cfg.offset_latency_ms);
                             ms
                         );
                         self.toast(text);
                     }
                     None => {
-                        self.cfg.offset_ms += d;
+                        // As in osu!: + brings the notes earlier.
+                        self.cfg.set_osu_offset(self.cfg.offset_osu_ms + d);
                         self.cfg.save();
                         self.refresh_play_offset();
-                        self.toast(tr!("offset {:+.0} ms (all maps)", self.cfg.offset_ms));
+                        self.toast(tr!("offset {:+.0} ms (all maps)", self.cfg.offset_osu_ms));
                     }
                 }
                 return true;
@@ -15258,7 +15290,7 @@ impl State {
                 let current = if *vsync {
                     self.cfg.vsync_tune_ms
                 } else {
-                    self.cfg.offset_ms
+                    self.cfg.offset_osu_ms
                 };
                 calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
             }
