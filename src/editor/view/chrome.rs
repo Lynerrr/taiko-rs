@@ -17,6 +17,8 @@ pub(super) const FAINT: u32 = 0x6a6a80;
 pub(super) const WARN: u32 = 0xfcb806;
 pub(super) const PANEL: u32 = 0x15151d;
 pub(super) const EDGE: u32 = 0x2c2c3c;
+/// What the menu bar keeps free after the menus for the game's friends chip.
+pub const FRIENDS_CHIP_ROOM: f32 = 90.0;
 
 /// `text` broken into lines no wider than `w` at `size`.
 pub(super) fn wrap(size: f32, w: f32, text: &str) -> Vec<String> {
@@ -79,6 +81,14 @@ impl View {
 
     // ---- the menu bar ----
 
+    /// Where the menus end: the friends chip starts after this.
+    pub fn menu_end() -> f32 {
+        4.0 + menu::MENUS
+            .iter()
+            .map(|m| Canvas::text_width(7.0, m.name) + 14.0)
+            .sum::<f32>()
+    }
+
     pub(super) fn draw_menubar(&mut self, c: &mut Canvas) {
         let [_, _, w, h] = self.layout.menu;
         c.rect(0.0, 0.0, w, h, rgba(0x0e0e14, 1.0));
@@ -106,7 +116,8 @@ impl View {
             c.text_right(right, 3.5, 7.0, rgba(WARN, 1.0), mark);
             right -= Canvas::text_width(7.0, mark) + 12.0;
         }
-        let room = (right - x - 16.0).max(40.0);
+        // The friends chip (drawn by the game) sits between the menus and the title.
+        let room = (right - x - 16.0 - FRIENDS_CHIP_ROOM).max(40.0);
         c.text_right(
             right,
             3.5,
@@ -772,7 +783,7 @@ impl View {
             y + 22.0,
             5.5,
             rgba(FAINT, 1.0),
-            "? shortcuts   F1-F4 modes   Ctrl+S save",
+            "? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save",
         );
     }
 
