@@ -113,6 +113,46 @@ impl Field {
     }
 }
 
+/// A number on the timing page that can be typed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Num {
+    Bpm,
+    Offset,
+}
+
+/// A number being typed: the text so far, and whether the first key replaces all of it (the
+/// field was just clicked, so the old value is as good as selected).
+#[derive(Clone, Debug)]
+struct NumEdit {
+    which: Num,
+    text: String,
+    caret: usize,
+    fresh: bool,
+}
+
+/// A typed BPM: digits with `.` or `,` for the decimals, held to the range `set_bpm` keeps.
+fn parse_bpm(text: &str) -> Option<f64> {
+    let v: f64 = text.trim().replace(',', ".").parse().ok()?;
+    v.is_finite()
+        .then(|| ((v * 1000.0).round() / 1000.0).clamp(20.0, 600.0))
+}
+
+/// A typed first beat (ms, may be negative), rounded to a whole ms.
+fn parse_offset(text: &str) -> Option<f64> {
+    let v: f64 = text.trim().replace(',', ".").parse().ok()?;
+    (v.is_finite() && v.abs() < 1e7).then(|| v.round())
+}
+
+/// The beats of the grid inside `start..=end` (ms): each with its number, counted from the first
+/// beat at `first`, so beats before it (and before the song) are drawn too.
+fn beat_times(start: f64, end: f64, first: f64, period: f64) -> Vec<(f64, i64)> {
+    let k0 = ((start - first) / period).ceil() as i64;
+    (k0..k0 + 4000)
+        .map(|k| (first + k as f64 * period, k))
+        .take_while(|(t, _)| *t <= end)
+        .collect()
+}
+
 /// What a click can mean here.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Act {
@@ -142,6 +182,8 @@ pub enum Act {
     Half,
     Double,
     Meter(u8),
+    /// The BPM or the first beat's field: type a value there.
+    EditNum(Num),
     Tap,
     Detect,
     BeatHere,
@@ -212,6 +254,8 @@ pub struct Home {
     texts: [String; 8],
     carets: [usize; 8],
     focus: Option<Field>,
+    /// The BPM or first beat being typed on the timing page.
+    num_edit: Option<NumEdit>,
     background: Option<PathBuf>,
     tko: bool,
     loading: Loading,
@@ -263,6 +307,7 @@ impl Home {
             texts: Default::default(),
             carets: [0; 8],
             focus: None,
+            num_edit: None,
             background: None,
             tko: false,
             loading: Loading::Nothing,
@@ -333,7 +378,8 @@ impl Home {
     }
 
     pub fn needs_text(&self) -> bool {
-        self.page == Page::Details && self.focus.is_some()
+        (self.page == Page::Details && self.focus.is_some())
+            || (self.page == Page::Timing && self.num_edit.is_some())
     }
 
     /// The map as it would be made now.
@@ -521,7 +567,13 @@ impl Home {
     /// The loop's start and end in the song (ms).
     fn loop_range(&self) -> (f64, f64) {
         let period = 60_000.0 / self.bpm.max(1.0);
-        let a = self.audio_offset().max(0.0);
+        // A first beat before the song starts: the loop begins on the first beat after it.
+        let off = self.audio_offset();
+        let a = if off < 0.0 {
+            off + (-off / period).ceil() * period
+        } else {
+            off
+        };
         (a, a + period * (self.per_bar * LOOP_BARS) as f64)
     }
 
@@ -600,6 +652,14 @@ impl Home {
             Act::Focus(f) => Some(f),
             _ => None,
         };
+        // A click elsewhere puts down what was being typed.
+        if self
+            .num_edit
+            .as_ref()
+            .is_some_and(|e| act != Act::EditNum(e.which))
+        {
+            self.commit_num(audio);
+        }
         match act {
             Act::Back => return self.back(audio),
             Act::Next => self.next(audio),
@@ -661,6 +721,23 @@ impl Home {
                 self.per_bar = n as u32;
                 self.changed(audio);
             }
+            Act::EditNum(which) => {
+                if self.num_edit.as_ref().map(|e| e.which) != Some(which) {
+                    let text = match which {
+                        Num::Bpm => format!("{:.3}", self.bpm)
+                            .trim_end_matches('0')
+                            .trim_end_matches('.')
+                            .to_string(),
+                        Num::Offset => format!("{}", self.offset.round()),
+                    };
+                    self.num_edit = Some(NumEdit {
+                        which,
+                        caret: text.chars().count(),
+                        text,
+                        fresh: true,
+                    });
+                }
+            }
             Act::Tap => self.tap(None, audio),
             Act::Detect => self.detect(),
             Act::BeatHere => {
@@ -670,6 +747,75 @@ impl Home {
             Act::Create => return self.create(),
         }
         Out::None
+    }
+
+    /// Takes what was typed in the BPM or first beat field; text that isn't a number keeps the
+    /// old value.
+    fn commit_num(&mut self, audio: Option<&Engine>) {
+        let Some(e) = self.num_edit.take() else {
+            return;
+        };
+        match e.which {
+            Num::Bpm => match parse_bpm(&e.text) {
+                Some(v) => self.set_bpm(v, audio),
+                None => self.status = "that isn't a BPM: kept the old one".into(),
+            },
+            Num::Offset => match parse_offset(&e.text) {
+                Some(v) => {
+                    self.offset = v;
+                    self.changed(audio);
+                }
+                None => self.status = "that isn't a time: kept the old one".into(),
+            },
+        }
+    }
+
+    /// A key while a number is typed.
+    fn type_num(&mut self, code: KeyCode, text: Option<&str>, ctrl: bool, audio: Option<&Engine>) {
+        let Some(e) = self.num_edit.as_mut() else {
+            return;
+        };
+        match code {
+            KeyCode::Escape => self.num_edit = None,
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Tab => self.commit_num(audio),
+            KeyCode::Backspace => {
+                if e.fresh {
+                    e.text.clear();
+                    e.caret = 0;
+                } else {
+                    caret_backspace(&mut e.text, &mut e.caret);
+                }
+                e.fresh = false;
+            }
+            KeyCode::ArrowLeft
+            | KeyCode::ArrowRight
+            | KeyCode::Home
+            | KeyCode::End
+            | KeyCode::Delete => {
+                e.fresh = false;
+                caret_nav(&mut e.text, &mut e.caret, code);
+            }
+            _ if ctrl => {}
+            _ => {
+                if let Some(typed) = text {
+                    let which = e.which;
+                    let keep = |ch: &char| {
+                        ch.is_ascii_digit()
+                            || matches!(ch, '.' | ',')
+                            || (*ch == '-' && which == Num::Offset)
+                    };
+                    let typed: String = typed.chars().filter(keep).collect();
+                    if !typed.is_empty() {
+                        if e.fresh {
+                            e.text.clear();
+                            e.caret = 0;
+                            e.fresh = false;
+                        }
+                        caret_insert(&mut e.text, &mut e.caret, &typed, 12);
+                    }
+                }
+            }
+        }
     }
 
     fn set_bpm(&mut self, bpm: f64, audio: Option<&Engine>) {
@@ -772,7 +918,12 @@ impl Home {
             // tempo found by listening the first beat is kept.
             if song_ms.is_some() && self.analysis.is_none() {
                 let period = 60_000.0 / self.bpm;
-                self.offset = (beat - OSU_TIMING_MS).rem_euclid(period).round();
+                // The beat nearest the start of the song, which may be a little before it.
+                let mut at = (beat - OSU_TIMING_MS).rem_euclid(period);
+                if at > period / 2.0 {
+                    at -= period;
+                }
+                self.offset = at.round();
             }
             self.status = format!("{} taps: {:.2} BPM", self.taps.len(), bpm);
         } else {
@@ -892,6 +1043,10 @@ impl Home {
     ) -> Out {
         if let Some(f) = self.focus.filter(|_| self.page == Page::Details) {
             return self.type_key(f, code, text, ctrl, shift, audio);
+        }
+        if self.page == Page::Timing && self.num_edit.is_some() {
+            self.type_num(code, text, ctrl, audio);
+            return Out::None;
         }
         match (self.page, code) {
             (_, KeyCode::Escape) => return self.back(audio),
@@ -1199,6 +1354,34 @@ impl Home {
             rgba(DIM, 1.0),
             "Esc: back to the menu",
         );
+    }
+
+    /// A number you can click and type over: a sunken field between its - and + buttons.
+    fn draw_num(&self, c: &mut Canvas, x: f32, y: f32, h: f32, which: Num, shown: &str) {
+        let w = 76.0;
+        let edit = self.num_edit.as_ref().filter(|e| e.which == which);
+        c.round_rect(
+            [x, y],
+            [w, h],
+            4.0,
+            rgba(0x12121a, 1.0),
+            rgba(if edit.is_some() { VIOLET } else { EDGE }, 1.0),
+            if edit.is_some() { 1.5 } else { 1.0 },
+        );
+        match edit {
+            Some(e) => {
+                let before: String = e.text.chars().take(e.caret).collect();
+                let bw = Canvas::text_width(9.0, &before);
+                let tw = Canvas::text_width(9.0, &e.text);
+                let left = x + (w - tw) / 2.0;
+                c.text(left, y + 6.0, 9.0, rgba(TEXT, 1.0), &e.text);
+                if (self.clock.elapsed().as_millis() / 500).is_multiple_of(2) {
+                    c.rect(left + bw, y + 4.0, 1.0, h - 8.0, rgba(0xffffff, 1.0));
+                }
+            }
+            None => c.text_centered(x + w / 2.0, y + 5.0, 10.0, rgba(0xffffff, 1.0), shown),
+        }
+        c.hit(x, y, w, h, Hit::EditorHome(Act::EditNum(which)));
     }
 
     fn draw_field(&self, c: &mut Canvas, f: Field, x: f32, y: f32, w: f32) {
@@ -1539,15 +1722,11 @@ impl Home {
             );
             bx += 36.0;
         }
-        c.text_centered(
-            bx + 40.0,
-            y + 5.0,
-            10.0,
-            rgba(0xffffff, 1.0),
-            format!("{:.3}", self.bpm)
-                .trim_end_matches('0')
-                .trim_end_matches('.'),
-        );
+        let shown = format!("{:.3}", self.bpm)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string();
+        self.draw_num(c, bx + 2.0, y, bh, Num::Bpm, &shown);
         bx += 84.0;
         for (label, d) in [("+.01", 10i16), ("+.1", 100), ("+1", 1000)] {
             c.button(
@@ -1609,11 +1788,12 @@ impl Home {
             );
             bx += 36.0;
         }
-        c.text_centered(
-            bx + 40.0,
-            y + 5.0,
-            10.0,
-            rgba(0xffffff, 1.0),
+        self.draw_num(
+            c,
+            bx + 2.0,
+            y,
+            bh,
+            Num::Offset,
             &format!("{} ms", self.offset.round()),
         );
         bx += 84.0;
@@ -1821,23 +2001,13 @@ impl Home {
         let period = 60_000.0 / self.bpm.max(1.0);
         let spacing = period / len * w as f64;
         if spacing >= 3.0 || self.per_bar as f64 * spacing >= 3.0 {
-            let first = ((start - self.audio_offset()) / period).ceil() as i64;
-            let mut k = first;
-            loop {
-                let t = self.audio_offset() + k as f64 * period;
-                if t > start + len {
-                    break;
-                }
+            for (t, k) in beat_times(start, start + len, self.audio_offset(), period) {
                 let px = x + ((t - start) / len * w as f64) as f32;
                 let bar = k.rem_euclid(self.per_bar as i64) == 0;
                 if bar {
                     c.rect(px - 0.5, y + 2.0, 1.5, h - 4.0, rgba(0xff5a5a, 0.95));
                 } else if spacing >= 3.0 {
                     c.rect(px - 0.25, y + 6.0, 1.0, h - 12.0, rgba(0xffffff, 0.45));
-                }
-                k += 1;
-                if k - first > 4000 {
-                    break;
                 }
             }
         }
@@ -1992,6 +2162,176 @@ mod tests {
             "a chart's time is the song's minus 23"
         );
         assert!(h.touched);
+    }
+
+    fn type_into(h: &mut Home, keys: &[(KeyCode, Option<&str>)]) {
+        let now = Instant::now();
+        for (code, text) in keys {
+            h.key(*code, *text, false, false, now, None);
+        }
+    }
+
+    #[test]
+    fn a_typed_bpm_is_taken_on_enter_and_kept_in_range() {
+        let mut h = home();
+        h.page = Page::Timing;
+        h.click(Act::EditNum(Num::Bpm), 0.0, None);
+        assert!(h.needs_text());
+        // The first key replaces the old value; a comma is a decimal point.
+        type_into(
+            &mut h,
+            &[
+                (KeyCode::Digit1, Some("1")),
+                (KeyCode::Digit7, Some("7")),
+                (KeyCode::Digit4, Some("4")),
+                (KeyCode::Comma, Some(",")),
+                (KeyCode::Digit9, Some("9")),
+                (KeyCode::Digit7, Some("7")),
+                (KeyCode::KeyM, Some("m")),
+            ],
+        );
+        assert_eq!(h.num_edit.as_ref().unwrap().text, "174,97");
+        assert!(h.metronome, "M didn't reach the screen's hotkey");
+        type_into(&mut h, &[(KeyCode::Enter, None)]);
+        assert_eq!(h.bpm, 174.97);
+        assert!(h.num_edit.is_none() && h.touched);
+        // Too big is held at 600, and Backspace edits.
+        h.click(Act::EditNum(Num::Bpm), 0.0, None);
+        type_into(
+            &mut h,
+            &[
+                (KeyCode::Digit9, Some("9")),
+                (KeyCode::Digit9, Some("9")),
+                (KeyCode::Digit9, Some("9")),
+                (KeyCode::Backspace, None),
+                (KeyCode::Digit8, Some("8")),
+                (KeyCode::Enter, None),
+            ],
+        );
+        assert_eq!(h.bpm, 600.0);
+    }
+
+    #[test]
+    fn a_typed_value_can_be_cancelled_or_ignored_and_a_click_away_commits() {
+        let mut h = home();
+        h.page = Page::Timing;
+        h.bpm = 140.0;
+        h.click(Act::EditNum(Num::Bpm), 0.0, None);
+        type_into(
+            &mut h,
+            &[(KeyCode::Digit9, Some("9")), (KeyCode::Escape, None)],
+        );
+        assert_eq!((h.bpm, h.page), (140.0, Page::Timing), "Esc only cancels");
+        assert!(h.num_edit.is_none());
+        // Nothing usable keeps the old value.
+        h.click(Act::EditNum(Num::Bpm), 0.0, None);
+        type_into(
+            &mut h,
+            &[(KeyCode::Period, Some(".")), (KeyCode::Enter, None)],
+        );
+        assert_eq!(h.bpm, 140.0);
+        h.click(Act::EditNum(Num::Bpm), 0.0, None);
+        type_into(
+            &mut h,
+            &[(KeyCode::Backspace, None), (KeyCode::Enter, None)],
+        );
+        assert_eq!(h.bpm, 140.0, "an empty field keeps the value");
+        // Clicking another button commits it first.
+        h.click(Act::EditNum(Num::Bpm), 0.0, None);
+        type_into(
+            &mut h,
+            &[(KeyCode::Digit9, Some("9")), (KeyCode::Digit0, Some("0"))],
+        );
+        h.click(Act::Metronome, 0.0, None);
+        assert_eq!(h.bpm, 90.0);
+        assert!(h.num_edit.is_none());
+    }
+
+    #[test]
+    fn the_first_beat_can_be_typed_and_can_be_negative() {
+        let mut h = home();
+        h.page = Page::Timing;
+        h.audio = Some(PathBuf::from("song.mp3"));
+        h.click(Act::EditNum(Num::Offset), 0.0, None);
+        type_into(
+            &mut h,
+            &[
+                (KeyCode::Minus, Some("-")),
+                (KeyCode::Digit1, Some("1")),
+                (KeyCode::Digit2, Some("2")),
+                (KeyCode::Digit0, Some("0")),
+                (KeyCode::Enter, None),
+            ],
+        );
+        assert_eq!(h.offset, -120.0);
+        assert_eq!(
+            h.plan().unwrap().offset_ms,
+            -120.0,
+            "the new map gets the negative time"
+        );
+        // The step buttons carry on below zero too.
+        h.click(Act::Offset(-10), 0.0, None);
+        assert_eq!(h.offset, -130.0);
+        // Letters never get in.
+        h.click(Act::EditNum(Num::Offset), 0.0, None);
+        type_into(
+            &mut h,
+            &[(KeyCode::KeyB, Some("b")), (KeyCode::Enter, None)],
+        );
+        assert_eq!(h.offset, -130.0);
+    }
+
+    #[test]
+    fn a_negative_first_beat_is_written_to_the_map() {
+        let m = NewMap {
+            audio: PathBuf::from("a.mp3"),
+            background: None,
+            artist: "A".into(),
+            title: "T".into(),
+            artist_romanised: String::new(),
+            title_romanised: String::new(),
+            creator: "me".into(),
+            version: "Oni".into(),
+            source: String::new(),
+            tags: String::new(),
+            bpm: 120.0,
+            offset_ms: -250.0,
+            per_bar: 4,
+            length_ms: 10_000.0,
+            tko: false,
+        };
+        let text = new_map::osu_text(&m, "a.mp3", None);
+        let chart = super::super::chart::Chart::parse(&text);
+        assert_eq!(chart.timing[0].time, -250.0);
+        assert!(text.contains("-250,500,4,"));
+    }
+
+    #[test]
+    fn the_loop_starts_on_the_first_beat_inside_the_song() {
+        let mut h = home();
+        h.bpm = 120.0;
+        h.offset = -1000.0 - OSU_TIMING_MS + 100.0;
+        let (a, _) = h.loop_range();
+        assert!((a - 100.0).abs() < 1e-6, "{a}");
+    }
+
+    #[test]
+    fn tap_tempo_picks_the_beat_nearest_the_song_start() {
+        let mut h = home();
+        h.page = Page::Timing;
+        // Beats at 120 BPM, 450 ms + k * 500 (audio time): the nearest to zero is -50.
+        for k in 0..6 {
+            h.tap(Some(450.0 + k as f64 * 500.0), None);
+        }
+        assert_eq!(h.offset, (-50.0 - OSU_TIMING_MS).round());
+    }
+
+    #[test]
+    fn beat_ticks_start_at_the_beginning_of_the_song() {
+        let ticks = beat_times(0.0, 3000.0, 1234.0, 500.0);
+        assert_eq!(ticks.first().map(|t| t.0), Some(234.0));
+        assert_eq!(ticks[0].1, -2, "extrapolated back from the first beat");
+        assert!(ticks.iter().all(|t| t.0 >= 0.0 && t.0 <= 3000.0));
     }
 
     #[test]

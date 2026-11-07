@@ -68,6 +68,7 @@ pub enum Cmd {
     CopyNotes,
     Paste,
     SelectAll,
+    SelectNone,
     Delete,
     Duplicate,
     Reverse,
@@ -111,6 +112,8 @@ pub enum Cmd {
     AddGreen,
     DeleteLine,
     TimingList,
+    /// Clicks on every beat of the red lines while the song plays.
+    Metronome,
     // The editor itself.
     Mode(Mode),
     Tour,
@@ -138,6 +141,7 @@ impl Cmd {
             Cmd::CopyNotes => "Copy",
             Cmd::Paste => "Paste",
             Cmd::SelectAll => "Select all",
+            Cmd::SelectNone => "Deselect all",
             Cmd::Delete => "Delete",
             Cmd::Duplicate => "Clone selection",
             Cmd::Reverse => "Reverse selection",
@@ -182,6 +186,7 @@ impl Cmd {
             Cmd::AddGreen => "Add green line (SV)",
             Cmd::DeleteLine => "Delete timing line",
             Cmd::TimingList => "Timing window (all lines, their fields, the SV tool)",
+            Cmd::Metronome => "Metronome on / off",
             Cmd::Mode(m) => m.name(),
             Cmd::Tour => "Take the tour",
             Cmd::Manual => "Manual",
@@ -213,6 +218,7 @@ impl Cmd {
             Cmd::Cut | Cmd::CopyNotes => "Keeps the selected notes to paste elsewhere.",
             Cmd::Paste => "Puts the copied notes at the playhead.",
             Cmd::SelectAll => "Selects every note.",
+            Cmd::SelectNone => "Lets go of the selection (Esc does too).",
             Cmd::Delete => "Removes the selected notes (right click removes one).",
             Cmd::Duplicate => "Copies the selection to one measure after its last note.",
             Cmd::Reverse => "Mirrors the selected notes in time.",
@@ -262,6 +268,9 @@ impl Cmd {
             Cmd::AddGreen => "A slider velocity change at the playhead.",
             Cmd::DeleteLine => "Removes the timing line at the playhead.",
             Cmd::TimingList => "Every red and green line in a table.",
+            Cmd::Metronome => {
+                "While the song plays, clicks on every beat of the red lines (a higher click on each bar's first beat), following BPM and meter changes and the playback speed."
+            }
             Cmd::Mode(m) => m.about(),
             Cmd::Tour => "A short walk through the editor.",
             Cmd::Manual => "How to time a song, use the SV tool and nodes, and upload a map.",
@@ -362,6 +371,14 @@ pub const BINDS: &[Bind] = &[
     b(KeyCode::KeyC, "c", false, Cmd::CopyNotes, "Ctrl+C", EDIT),
     b(KeyCode::KeyV, "c", false, Cmd::Paste, "Ctrl+V", EDIT),
     b(KeyCode::KeyA, "c", false, Cmd::SelectAll, "Ctrl+A", EDIT),
+    b(
+        KeyCode::KeyA,
+        "cs",
+        false,
+        Cmd::SelectNone,
+        "Ctrl+Shift+A",
+        EDIT,
+    ),
     b(KeyCode::Delete, "", false, Cmd::Delete, "Delete", EDIT),
     b(KeyCode::Backspace, "", false, Cmd::Delete, "", EDIT),
     b(KeyCode::KeyD, "c", false, Cmd::Duplicate, "Ctrl+D", EDIT),
@@ -536,6 +553,7 @@ pub const BINDS: &[Bind] = &[
     ),
     b(KeyCode::KeyI, "c", false, Cmd::DeleteLine, "Ctrl+I", LINES),
     b(KeyCode::F6, "", false, Cmd::TimingList, "F6", LINES),
+    b(KeyCode::KeyT, "", false, Cmd::Metronome, "T", LINES),
     b(
         KeyCode::F1,
         "",

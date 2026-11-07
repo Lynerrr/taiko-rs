@@ -213,6 +213,8 @@ impl View {
             }
             Cmd::SelectAll if self.clip_mode() => self.pick_all_clips(),
             Cmd::SelectAll => self.ed.select_all(),
+            Cmd::SelectNone if self.mode == Mode::Timing || self.tw => self.select_line(None),
+            Cmd::SelectNone => self.ed.select_none(),
             Cmd::Delete
                 if (self.mode == Mode::Timing || self.tw) && !self.selected_lines().is_empty() =>
             {
@@ -318,6 +320,20 @@ impl View {
                     "waveform on".into()
                 } else {
                     "waveform off".into()
+                };
+            }
+            Cmd::Metronome => {
+                self.metronome = !self.metronome;
+                if self.playing.is_some() {
+                    // The clicks are in the music: cut it out again from here.
+                    self.reseek = true;
+                }
+                self.status = if !self.metronome {
+                    "metronome off".into()
+                } else if self.track.as_ref().is_some_and(|t| t.samples.is_empty()) {
+                    "metronome on, but this song is streamed and can't carry the clicks".into()
+                } else {
+                    "metronome on: a click on every beat while the song plays".into()
                 };
             }
             Cmd::LeftPan => {

@@ -468,6 +468,28 @@ pub enum Activity {
     Watching {
         name: String,
     },
+    /// In the map editor. `map` is empty on its start screen. Older builds don't know this
+    /// variant (their parse of the whole message would fail), so it never goes on the wire to
+    /// other players as is: see [`downgrade`].
+    Editing {
+        map: String,
+    },
+}
+
+/// What older builds understand of an activity: `Editing` shows to them as the menus, with the
+/// map in a separate field they ignore (newer builds put it back with [`upgrade`]).
+fn downgrade(a: Activity) -> (Activity, Option<String>) {
+    match a {
+        Activity::Editing { map } => (Activity::Menus, Some(map)),
+        a => (a, None),
+    }
+}
+
+fn upgrade(a: Activity, editing: Option<String>) -> Activity {
+    match (a, editing) {
+        (Activity::Menus, Some(map)) => Activity::Editing { map },
+        (a, _) => a,
+    }
 }
 
 impl Activity {
@@ -482,15 +504,52 @@ impl Activity {
             Activity::Watching { name } => {
                 tr!("watching {name}"; name)
             }
+            Activity::Editing { map } if map.is_empty() => tr!("in the editor").into(),
+            Activity::Editing { map } => {
+                tr!("editing {map}"; map)
+            }
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(from = "FriendWire", into = "FriendWire")]
 pub struct Friend {
     pub name: String,
     /// None when offline.
     pub activity: Option<Activity>,
+}
+
+/// `Friend` as sent: an editing friend is `Menus` plus `editing` (see [`downgrade`]).
+#[derive(Serialize, Deserialize)]
+struct FriendWire {
+    name: String,
+    activity: Option<Activity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    editing: Option<String>,
+}
+
+impl From<Friend> for FriendWire {
+    fn from(f: Friend) -> Self {
+        let (activity, editing) = match f.activity.map(downgrade) {
+            Some((a, e)) => (Some(a), e),
+            None => (None, None),
+        };
+        FriendWire {
+            name: f.name,
+            activity,
+            editing,
+        }
+    }
+}
+
+impl From<FriendWire> for Friend {
+    fn from(f: FriendWire) -> Self {
+        Friend {
+            name: f.name,
+            activity: f.activity.map(|a| upgrade(a, f.editing)),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -710,9 +769,39 @@ pub fn medal_badge(
 
 /// Someone connected to the server right now.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(from = "OnlinePlayerWire", into = "OnlinePlayerWire")]
 pub struct OnlinePlayer {
     pub name: String,
     pub activity: Activity,
+}
+
+/// `OnlinePlayer` as sent (see [`downgrade`]).
+#[derive(Serialize, Deserialize)]
+struct OnlinePlayerWire {
+    name: String,
+    activity: Activity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    editing: Option<String>,
+}
+
+impl From<OnlinePlayer> for OnlinePlayerWire {
+    fn from(p: OnlinePlayer) -> Self {
+        let (activity, editing) = downgrade(p.activity);
+        OnlinePlayerWire {
+            name: p.name,
+            activity,
+            editing,
+        }
+    }
+}
+
+impl From<OnlinePlayerWire> for OnlinePlayer {
+    fn from(p: OnlinePlayerWire) -> Self {
+        OnlinePlayer {
+            name: p.name,
+            activity: upgrade(p.activity, p.editing),
+        }
+    }
 }
 
 /// The most players `Down::Players` lists (its count is everyone).
@@ -825,6 +914,7 @@ pub enum AdminOp {
 
 /// Someone online, as an admin sees them.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(from = "AdminPlayerWire", into = "AdminPlayerWire")]
 pub struct AdminPlayer {
     pub name: String,
     /// What they're really doing (an admin watching someone shows as in the menus to others).
@@ -834,6 +924,47 @@ pub struct AdminPlayer {
     pub watching: Option<String>,
     /// Unix seconds their global chat mute lasts until.
     pub muted_until: Option<u64>,
+}
+
+/// `AdminPlayer` as sent (see [`downgrade`]).
+#[derive(Serialize, Deserialize)]
+struct AdminPlayerWire {
+    name: String,
+    activity: Option<Activity>,
+    connections: u32,
+    watching: Option<String>,
+    muted_until: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    editing: Option<String>,
+}
+
+impl From<AdminPlayer> for AdminPlayerWire {
+    fn from(p: AdminPlayer) -> Self {
+        let (activity, editing) = match p.activity.map(downgrade) {
+            Some((a, e)) => (Some(a), e),
+            None => (None, None),
+        };
+        AdminPlayerWire {
+            name: p.name,
+            activity,
+            connections: p.connections,
+            watching: p.watching,
+            muted_until: p.muted_until,
+            editing,
+        }
+    }
+}
+
+impl From<AdminPlayerWire> for AdminPlayer {
+    fn from(p: AdminPlayerWire) -> Self {
+        AdminPlayer {
+            name: p.name,
+            activity: p.activity.map(|a| upgrade(a, p.editing)),
+            connections: p.connections,
+            watching: p.watching,
+            muted_until: p.muted_until,
+        }
+    }
 }
 
 /// The server right now, for admins (`AdminOp::Overview`).
@@ -1460,5 +1591,114 @@ mod relax_wire_tests {
         p.as_object_mut().unwrap().remove("relax");
         let p: Profile = serde_json::from_value(p).unwrap();
         assert_eq!(p.relax, RelaxStanding::default());
+    }
+}
+
+#[cfg(test)]
+mod editing_activity_tests {
+    use super::*;
+
+    fn editing(map: &str) -> Activity {
+        Activity::Editing { map: map.into() }
+    }
+
+    /// The previous release's `Activity` (no `Editing`) and the rows holding it.
+    #[derive(Deserialize, Debug, PartialEq)]
+    enum OldActivity {
+        Menus,
+        Playing { map: String },
+    }
+    #[derive(Deserialize, Debug)]
+    struct OldFriend {
+        activity: Option<OldActivity>,
+    }
+    #[derive(Deserialize, Debug)]
+    struct OldPlayer {
+        activity: OldActivity,
+    }
+    /// The previous release's server `Up`.
+    #[derive(Deserialize, Debug)]
+    #[allow(dead_code)]
+    enum OldUp {
+        Status(OldActivity),
+    }
+
+    #[test]
+    fn describes_with_and_without_a_map() {
+        assert_eq!(editing("a - b [c]").describe(), "editing a - b [c]");
+        assert_eq!(editing("").describe(), "in the editor");
+    }
+
+    #[test]
+    fn activity_round_trips() {
+        let s = serde_json::to_string(&editing("m")).unwrap();
+        assert_eq!(s, r#"{"Editing":{"map":"m"}}"#);
+        assert_eq!(serde_json::from_str::<Activity>(&s).unwrap(), editing("m"));
+    }
+
+    #[test]
+    fn old_clients_parse_an_editing_friend_as_menus() {
+        let d = Down::Friends {
+            friends: vec![Friend {
+                name: "a".into(),
+                activity: Some(editing("m")),
+            }],
+            requests: vec![],
+            sent: vec![],
+        };
+        let s = serde_json::to_string(&d).unwrap();
+        assert!(!s.contains("Editing"), "{s}");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        let old: OldFriend = serde_json::from_value(v["Friends"]["friends"][0].clone()).unwrap();
+        assert_eq!(old.activity, Some(OldActivity::Menus));
+        match serde_json::from_str::<Down>(&s).unwrap() {
+            Down::Friends { friends, .. } => assert_eq!(friends[0].activity, Some(editing("m"))),
+            _ => panic!("not friends"),
+        }
+    }
+
+    #[test]
+    fn old_clients_parse_an_editing_player_and_admin_row() {
+        let p = OnlinePlayer {
+            name: "a".into(),
+            activity: editing(""),
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        let old: OldPlayer = serde_json::from_str(&s).unwrap();
+        assert_eq!(old.activity, OldActivity::Menus);
+        assert_eq!(serde_json::from_str::<OnlinePlayer>(&s).unwrap(), p);
+        let a = AdminPlayer {
+            name: "a".into(),
+            activity: Some(editing("m")),
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&a).unwrap();
+        assert!(!s.contains("Editing"), "{s}");
+        assert_eq!(serde_json::from_str::<AdminPlayer>(&s).unwrap(), a);
+    }
+
+    #[test]
+    fn old_server_rows_parse_and_other_activities_are_sent_unchanged() {
+        let f: Friend =
+            serde_json::from_str(r#"{"name":"a","activity":{"Playing":{"map":"m"}}}"#).unwrap();
+        assert_eq!(f.activity, Some(Activity::Playing { map: "m".into() }));
+        let p: OnlinePlayer = serde_json::from_str(r#"{"name":"a","activity":"Menus"}"#).unwrap();
+        assert_eq!(p.activity, Activity::Menus);
+        let s = serde_json::to_string(&Friend {
+            name: "a".into(),
+            activity: Some(Activity::Menus),
+        })
+        .unwrap();
+        assert_eq!(s, r#"{"name":"a","activity":"Menus"}"#);
+    }
+
+    #[test]
+    fn an_old_server_cannot_parse_an_editing_status() {
+        // It skips a line that fails to parse (server/src/main.rs, the read loop), so the
+        // status it had stays: harmless.
+        let s = serde_json::to_string(&Up::Status(editing("m"))).unwrap();
+        assert!(serde_json::from_str::<OldUp>(&s).is_err());
+        let s = serde_json::to_string(&Up::Status(Activity::Menus)).unwrap();
+        assert!(serde_json::from_str::<OldUp>(&s).is_ok());
     }
 }

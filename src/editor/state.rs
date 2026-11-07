@@ -577,8 +577,13 @@ impl Editor {
         let Some(before) = self.chart.object(id).cloned() else {
             return false;
         };
-        let end = end.round();
-        if end <= before.time {
+        // At least one snap step long, and never over the next note.
+        let step = timing::step(&self.chart.timing, before.time, true, self.snap);
+        let mut end = end.round().max(step.round());
+        if let Some(next) = self.chart.objects.iter().find(|o| o.time > before.time) {
+            end = end.min(next.time);
+        }
+        if end <= before.time || end == self.end_of(&before).round() {
             return false;
         }
         let mut after = before.clone();

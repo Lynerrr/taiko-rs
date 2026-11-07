@@ -181,6 +181,7 @@ impl View {
             || self.sheet
             || self.svt.drop.is_some()
             || self.fx_drop.is_some()
+            || self.snap_pop.is_some()
             || self.moved_at.elapsed() < Duration::from_millis(400)
             || !matches!(self.drag, super::Drag::None)
         {
@@ -224,6 +225,7 @@ impl View {
         self.draw_menu_drop(c);
         self.draw_svt_drop(c);
         self.draw_fx_drop(c);
+        self.draw_snap_pop(c);
         if self.node_mode() {
             self.draw_node_pick(c);
         }

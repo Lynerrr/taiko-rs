@@ -13,7 +13,8 @@ use winit::keyboard::KeyCode;
 
 use super::chart::{HitObject, Taiko};
 use super::state::{Editor, Tool};
-use super::timing::{self, SNAP_DIVISORS};
+use super::tempo;
+use super::timing;
 use super::tools::{GimmickTool, Target};
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, OSU_TIMING_MS};
@@ -38,6 +39,8 @@ mod nodes;
 mod panel;
 mod run;
 mod setup;
+mod snap;
+mod timing_panel;
 mod timing_win;
 mod upload;
 
@@ -126,6 +129,8 @@ pub enum Btn {
     M(motion::MAct),
     N(NAct),
     T(TAct),
+    /// The snap popover.
+    Snap(snap::SnapAct),
     /// The SV tool and the velocity graph.
     S(SAct),
     /// A command by name (the same ones the keys and the menus run).
@@ -277,6 +282,8 @@ const TOOLS: [(&str, &str, Tool); 4] = [
 const RATES: [u32; 4] = [25, 50, 75, 100];
 
 const NOTE_R: f32 = 12.0;
+/// How far from the end of a roll or swell its tail can be grabbed, in pixels.
+const TAIL_GRAB: f32 = 7.0;
 const BIG_R: f32 = 16.0;
 const DON: u32 = 0xEB452C;
 const KAT: u32 = 0x438EAD;
@@ -307,6 +314,8 @@ pub struct Layout {
     pub window: [f32; 4],
 }
 
+/// How much music is cut out with the metronome's clicks in it at a time (ms of the track).
+const METRONOME_BAKE_MS: f64 = 45_000.0;
 /// The colour of effect marks (.tko).
 pub(super) const MARK_COL: u32 = 0xB36BFF;
 /// How tall the ruler across the top of the timeline is.
@@ -381,6 +390,10 @@ pub struct View {
     wave: Option<Arc<super::wave::Wave>>,
     wave_rx: Option<Receiver<super::wave::Wave>>,
     pub wave_on: bool,
+    /// Clicks on the beats of the red lines while the song plays (Timing mode).
+    pub metronome: bool,
+    /// Map ms up to which the clicks are baked into the music playing, when they are.
+    met_until: Option<f64>,
     /// A left drag over empty timeline pans it (View > Left drag pans); a box is Ctrl+drag.
     pub left_pan: bool,
     /// Sample rate the engine plays at, to know how long the track is.
@@ -457,6 +470,16 @@ pub struct View {
     fx_page_most: f32,
     /// The open "what it moves" menu and the button it hangs from.
     fx_drop: Option<(u8, [f32; 4])>,
+    /// The snap popover, when open.
+    snap_pop: Option<snap::Pop>,
+    /// Where the toolbar draws its Snap control (the popover hangs under it).
+    snap_anchor: [f32; 4],
+    /// The mapper's own snap presets.
+    pub snap_presets: Vec<crate::editor::snaps::SnapPreset>,
+    /// The preset in use (an index into `snap_presets`); `None` is the built-in "All".
+    pub snap_active: Option<usize>,
+    /// The presets or the choice changed: the game saves them to the config.
+    pub snap_dirty: bool,
     /// The clips being moved and where they were: id, start, end, row.
     fx_orig: Vec<(u32, f64, f64, u8)>,
     /// A press on a clip already picked with others: picks it alone if it isn't dragged.
@@ -572,6 +595,9 @@ pub struct View {
     seek_to: Option<f64>,
     view_to: Option<f64>,
     glide_tick: Option<Instant>,
+    /// Where the last wheel notch sent the playhead while playing, and when: the next notch
+    /// goes on from there, not from where playback has got to since (`wheel_base`).
+    wheel_chain: Option<(f64, Instant)>,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -601,6 +627,8 @@ impl View {
             wave: None,
             wave_rx: None,
             wave_on: true,
+            metronome: false,
+            met_until: None,
             left_pan: false,
             audio_rate: 48000.0,
             rate: 100,
@@ -647,6 +675,11 @@ impl View {
             fx_scroll_for: None,
             fx_page_most: 0.0,
             fx_drop: None,
+            snap_pop: None,
+            snap_anchor: [0.0; 4],
+            snap_presets: Vec::new(),
+            snap_active: None,
+            snap_dirty: false,
             fx_orig: Vec::new(),
             fx_click: None,
             fx_end: false,
@@ -710,6 +743,7 @@ impl View {
             last_tick: None,
             seek_to: None,
             view_to: None,
+            wheel_chain: None,
             glide_tick: None,
         };
         v.follow(true);
@@ -781,12 +815,63 @@ impl View {
         }
         self.reseek = false;
         self.sought = Instant::now();
-        if let (Some(track), Some(a)) = (&self.track, audio) {
-            a.play(
-                track.clone(),
-                (self.ed.time + OSU_TIMING_MS) / self.speed().max(0.01),
-            );
+        if let (Some(track), Some(a)) = (self.track.clone(), audio) {
+            self.play_music(a, track);
         }
+    }
+
+    /// The red lines as the metronome follows them.
+    fn click_sections(&self) -> Vec<tempo::Section> {
+        self.ed
+            .chart
+            .timing
+            .iter()
+            .filter(|p| p.is_red() && p.beat_length > 0.0 && p.beat_length.is_finite())
+            .map(|p| tempo::Section {
+                time: p.time,
+                beat: p.beat_length,
+                per_bar: p.meter.max(1) as u32,
+            })
+            .collect()
+    }
+
+    /// Starts the music at the playhead. With the metronome on, a stretch of it is cut out with
+    /// a click on every beat of the red lines mixed in (it is baked again before it runs out, and
+    /// when the timing or the playhead changes).
+    fn play_music(&mut self, a: &Engine, track: Arc<Track>) {
+        let speed = self.speed().max(0.01);
+        let start_ms = (self.ed.time + OSU_TIMING_MS) / speed;
+        self.met_until = None;
+        if !self.metronome || track.samples.is_empty() {
+            a.play(track, start_ms);
+            return;
+        }
+        let rate = self.audio_rate;
+        let frames = track.frames();
+        let f0 = ((start_ms / 1000.0 * rate).round().max(0.0) as usize).min(frames);
+        let f1 = (f0 + (METRONOME_BAKE_MS / 1000.0 * rate) as usize).min(frames);
+        let mut samples = track.samples[2 * f0..2 * f1].to_vec();
+        tempo::mix_section_clicks(
+            &mut samples,
+            rate,
+            f0 as i64,
+            &self.click_sections(),
+            OSU_TIMING_MS,
+            speed,
+            0.8,
+        );
+        if f1 < frames {
+            self.met_until = Some(f1 as f64 / rate * 1000.0 * speed - OSU_TIMING_MS);
+        }
+        a.play_part(
+            Arc::new(Track {
+                samples,
+                rate: track.rate,
+                stream: None,
+            }),
+            f0 as i64,
+            start_ms,
+        );
     }
 
     fn timeline_w(&self) -> f32 {
@@ -953,6 +1038,9 @@ impl View {
                 }
                 self.last_played = t;
                 self.ed.time = t;
+                if self.met_until.is_some_and(|until| t > until - 2000.0) {
+                    self.reseek = true;
+                }
                 self.follow(false);
             }
         }
@@ -1003,10 +1091,8 @@ impl View {
             self.status = "the music isn't loaded".into();
             return;
         };
-        a.play(
-            track.clone(),
-            (self.ed.time + OSU_TIMING_MS) / self.speed().max(0.01),
-        );
+        let track = track.clone();
+        self.play_music(a, track);
         self.playing = Some((Instant::now(), self.ed.time));
         self.last_played = self.ed.time;
     }
@@ -1031,6 +1117,10 @@ impl View {
     // ---- the preview ----
 
     fn mark_stale(&mut self) {
+        // The clicks are baked into the music from the timing as it was: bake them again.
+        if self.metronome && self.playing.is_some() {
+            self.reseek = true;
+        }
         self.stale.get_or_insert_with(Instant::now);
     }
 
@@ -1221,38 +1311,13 @@ impl View {
 
     /// Grid lines in view: (time, 0 sub-beat / 1 beat / 2 bar).
     fn grid(&self) -> Vec<(f64, u8)> {
-        let (from, to) = (self.view_start, self.view_end());
-        let points = &self.ed.chart.timing;
-        let reds: Vec<_> = points
-            .iter()
-            .filter(|p| p.is_red() && p.beat_length > 0.0 && p.beat_length.is_finite())
-            .collect();
-        let snap = self.ed.snap.max(1) as f64;
-        let mut out = Vec::new();
-        for (i, p) in reds.iter().enumerate() {
-            let end = reds.get(i + 1).map_or(f64::INFINITY, |n| n.time);
-            if end < from || p.time > to {
-                continue;
-            }
-            let step = p.beat_length / snap;
-            if step / self.ms_per_px < 3.0 {
-                continue;
-            }
-            let start = from.max(p.time);
-            let mut k = ((start - p.time) / step).ceil() as i64;
-            while out.len() < 4000 {
-                let t = p.time + k as f64 * step;
-                if t >= to.min(end) {
-                    break;
-                }
-                let beat = k % self.ed.snap.max(1) as i64 == 0;
-                let beats = k / self.ed.snap.max(1) as i64;
-                let bar = beat && beats % p.meter.max(1) as i64 == 0;
-                out.push((t, if bar { 2 } else { beat as u8 }));
-                k += 1;
-            }
-        }
-        out
+        timing::grid_lines(
+            &self.ed.chart.timing,
+            self.view_start,
+            self.view_end(),
+            self.ed.snap,
+            self.ms_per_px,
+        )
     }
 
     /// The tools, in a column beside the timeline.
@@ -1485,6 +1550,13 @@ impl View {
             } => Some((from.min(to), from.max(to), add)),
             _ => None,
         };
+        let tail_hot = match self.drag {
+            Drag::Resize { id } => Some(id),
+            Drag::None if self.mode != Mode::Effects && self.playing.is_none() => {
+                self.tail_at(self.mouse.0, self.mouse.1)
+            }
+            _ => None,
+        };
         let gimmick = self.ed.gimmick();
         for o in &objs[first..] {
             if o.time > to + 40.0 * self.ms_per_px {
@@ -1523,10 +1595,18 @@ impl View {
                     };
                     c.capsule([ox, ex], cy, r * 0.8, rgba(col, 0.9), outline, lw);
                     c.circle(ox, cy, r, rgba(col, 1.0), outline, lw);
-                    if selected {
-                        // The handle that stretches it.
-                        c.rect(ex - 1.5, cy - r * 0.8, 3.0, r * 1.6, rgba(0xffffff, 0.9));
-                    }
+                    // The handle that stretches it: faint on every long note, bright when
+                    // selected or when the pointer is on it (or dragging it).
+                    let grabbed = tail_hot == Some(o.id);
+                    let (w, a) = if grabbed {
+                        (5.0, 1.0)
+                    } else if selected {
+                        (3.0, 0.9)
+                    } else {
+                        (2.0, 0.35)
+                    };
+                    let col = if grabbed { 0xffe9a8 } else { 0xffffff };
+                    c.rect(ex - w / 2.0, cy - r * 0.8, w, r * 1.6, rgba(col, a));
                 }
                 _ if o.fake => {
                     // A fake: hollow, in its colour, with an F in it.
@@ -1555,7 +1635,10 @@ impl View {
         // The ghost of what a click would place.
         let (mx, my) = self.mouse;
         let in_lane = inside(self.layout.timeline, mx, my) && my > y + RULER + 16.0;
-        if in_lane && self.playing.is_none() && matches!(self.drag, Drag::None | Drag::Place { .. })
+        if in_lane
+            && self.playing.is_none()
+            && tail_hot.is_none()
+            && matches!(self.drag, Drag::None | Drag::Place { .. })
         {
             let at = self.ed.snapped(self.t_at(mx));
             let gx = self.x_of(at);
@@ -1857,6 +1940,52 @@ impl View {
         top + (y + h - top) / 2.0
     }
 
+    /// The roll or swell whose tail (the right end of its body) is under the pointer: the end
+    /// can be grabbed from a few pixels either side of it, selected or not. Where the head of
+    /// another note is drawn, that note wins.
+    fn tail_at(&self, x: f32, y: f32) -> Option<u64> {
+        let cy = self.lane_cy();
+        let (t0, t1) = (self.t_at(x - BIG_R - 4.0), self.t_at(x + TAIL_GRAB));
+        let first = self
+            .ed
+            .chart
+            .objects
+            .partition_point(|o| o.time < t0 - 60_000.0);
+        let mut best: Option<(f32, u64)> = None;
+        for o in &self.ed.chart.objects[first..] {
+            if o.time > t1 {
+                break;
+            }
+            let end = self.ed.end_of(o);
+            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let r = if o.big() { BIG_R } else { NOTE_R };
+            let d = (x - ex).abs();
+            // From a little inside the end to the right edge of the rounded cap drawn there.
+            let reach = if x > ex { r * 0.8 + 2.0 } else { TAIL_GRAB };
+            if ex > ox
+                && d <= reach
+                && (y - cy).abs() <= r + 2.0
+                && x > ox + 2.0
+                && best.is_none_or(|(bd, _)| d < bd)
+            {
+                best = Some((d, o.id));
+            }
+        }
+        let id = best?;
+        // A head drawn right over the tail (a note of its own) is what the pointer means.
+        if let Some(h) = self.object_at_point(x, y)
+            && h != id.1
+            && self
+                .ed
+                .chart
+                .object(h)
+                .is_some_and(|o| (self.x_of(o.time) - x).abs() <= NOTE_R)
+        {
+            return None;
+        }
+        Some(id.1)
+    }
+
     /// The note under the pointer: its head by the circle drawn, a roll or swell also along its
     /// body. Anywhere else in the lane is empty, which is what lets a box start between notes.
     fn object_at_point(&self, x: f32, y: f32) -> Option<u64> {
@@ -2087,14 +2216,11 @@ impl View {
             if y < tl[1] + RULER + 16.0 {
                 return I::EwResize;
             }
-            if let Some(id) = self.object_at_point(x, y) {
-                let end_grab = self.ed.chart.object(id).is_some_and(|o| {
-                    let end = self.ed.end_of(o);
-                    end > o.time
-                        && self.ed.selection.contains(&id)
-                        && (self.x_of(end) - x).abs() <= 6.0
-                });
-                return if end_grab { I::EwResize } else { I::Grab };
+            if self.mode != Mode::Effects && self.tail_at(x, y).is_some() {
+                return I::EwResize;
+            }
+            if self.object_at_point(x, y).is_some() {
+                return I::Grab;
             }
             return match self.ed.tool {
                 Tool::Select => I::Default,
@@ -2142,6 +2268,16 @@ impl View {
         // A dropdown closes on any press; one that lists switches stays open for the next.
         let was = self.svt.drop.take();
         let fx_was = self.fx_drop.take();
+        // The snap popover stays for its own buttons and for clicks on itself.
+        let snap_hit = matches!(self.button_at(x, y), Some(Btn::Snap(_)));
+        if !snap_hit && self.snap_pop.as_ref().is_some_and(|p| inside(p.rect, x, y)) {
+            return;
+        }
+        let snap_was = if snap_hit {
+            false
+        } else {
+            self.snap_pop.take().is_some()
+        };
         if let Some(b) = self.button_at(x, y) {
             self.press(b, keys, audio);
             match b {
@@ -2155,6 +2291,7 @@ impl View {
         // A click that hits nothing closes what's open (a menu, a dropdown) and goes no further.
         if self.menu.take().is_some()
             || self.n_pick.take().is_some()
+            || snap_was
             || was.is_some()
             || fx_was.is_some()
         {
@@ -2217,7 +2354,7 @@ impl View {
 
     /// Selects the note under a press and starts dragging it; a second press on it soon after
     /// puts the playhead there instead.
-    fn grab_object(&mut self, id: u64, x: f32, t: f64, keys: Keys) {
+    fn grab_object(&mut self, id: u64, t: f64, keys: Keys) {
         let Some(o) = self.ed.chart.object(id).cloned() else {
             return;
         };
@@ -2232,13 +2369,6 @@ impl View {
             return;
         }
         self.last_click = Some((now, id));
-        // The right end of a selected roll or swell stretches it.
-        let end = self.ed.end_of(&o);
-        if end > o.time && (self.x_of(end) - x).abs() <= 6.0 {
-            self.ed.selection = [id].into();
-            self.drag = Drag::Resize { id };
-            return;
-        }
         if keys.shift {
             self.ed.toggle(id);
         } else if !self.ed.selection.contains(&id) {
@@ -2271,6 +2401,18 @@ impl View {
             }
             return;
         }
+        // The tail of a roll or swell stretches it, whatever the tool and selection are.
+        if !keys.ctrl
+            && self.mode != Mode::Effects
+            && let Some(id) = self.tail_at(x, y)
+        {
+            if !self.ed.selection.contains(&id) {
+                self.ed.selection = [id].into();
+            }
+            self.select_line(None);
+            self.drag = Drag::Resize { id };
+            return;
+        }
         // Ctrl drags a box whatever the tool is, and even starting on a note.
         if keys.ctrl {
             self.select_line(None);
@@ -2301,7 +2443,7 @@ impl View {
                         self.status = "note recoloured".into();
                         return;
                     }
-                    self.grab_object(id, x, t, keys);
+                    self.grab_object(id, t, keys);
                 } else if tool == Tool::Select && self.left_pan && !keys.shift {
                     self.select_line(None);
                     self.drag = Drag::Slide {
@@ -2384,9 +2526,14 @@ impl View {
         match drag {
             Drag::Box { from, moved, .. } => {
                 if !moved {
-                    self.ed.select_none();
-                    let t = self.ed.snapped(from);
-                    self.set_time(t);
+                    // Only Ctrl starts a box on a note: Ctrl+click toggles that note.
+                    if let Some(id) = self.object_at_point(self.x_of(from), self.lane_cy()) {
+                        self.ed.toggle(id);
+                    } else {
+                        self.ed.select_none();
+                        let t = self.ed.snapped(from);
+                        self.set_time(t);
+                    }
                 } else {
                     self.ed.select_range(from, self.t_at(x), keys.shift);
                 }
@@ -2553,6 +2700,18 @@ impl View {
             let per = if keys.shift { 4 } else { 1 };
             // Notches in quick succession go on from where the last one is gliding to.
             let mut t = self.seek_to.unwrap_or(self.ed.time);
+            if self.playing.is_some()
+                && notches > 0
+                && let Some((target, at)) = self.wheel_chain
+                && let Some(base) = wheel_base(
+                    target,
+                    at.elapsed().as_secs_f64() * 1000.0,
+                    self.speed(),
+                    self.ed.time,
+                )
+            {
+                t = base;
+            }
             let view = self.view_to.unwrap_or(self.view_start);
             let w = self.timeline_w() as f64 * self.ms_per_px;
             if t < view || t > view + w * 0.96 {
@@ -2565,17 +2724,16 @@ impl View {
                 t = timing::step(&self.ed.chart.timing, t, notches < 0, self.ed.snap);
             }
             self.seek_smoothly(t);
+            self.wheel_chain = self
+                .playing
+                .is_some()
+                .then(|| (t.max(0.0).round(), Instant::now()));
         }
         true
     }
 
     fn step_snap(&mut self, dir: i32) {
-        let at = SNAP_DIVISORS
-            .iter()
-            .position(|d| *d == self.ed.snap)
-            .unwrap_or(3) as i32;
-        let next = (at + dir).clamp(0, SNAP_DIVISORS.len() as i32 - 1) as usize;
-        self.ed.snap = SNAP_DIVISORS[next];
+        self.ed.snap = crate::editor::snaps::step(&self.snap_list(), self.ed.snap, dir);
     }
 
     // ---- actions ----
@@ -2724,7 +2882,7 @@ impl View {
                 }
                 Field::Volume => p.volume = (p.volume + (dir * 5.0 * k) as i32).clamp(0, 100),
                 Field::Meter => p.meter = (p.meter + (dir * k.max(1.0)) as i32).max(1),
-                Field::Time => p.time = (p.time + dir * k).max(0.0),
+                Field::Time => p.time += dir * k,
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
                 Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
@@ -2798,7 +2956,7 @@ impl View {
                 }
                 Field::Volume => p.volume = v as i32,
                 Field::Meter => p.meter = v as i32,
-                Field::Time => p.time = v.round().max(0.0),
+                Field::Time => p.time = v.round(),
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
                 Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
@@ -2820,6 +2978,7 @@ impl View {
             Btn::C(cmd) => self.run(cmd, audio),
             Btn::U(act) => self.press_upload(act),
             Btn::Man(act) => self.press_manual(act, audio),
+            Btn::Snap(act) => self.press_snap(act),
             Btn::Menu(i) => self.menu = if self.menu == Some(i) { None } else { Some(i) },
             Btn::TourNext => {
                 let at = self.tour.unwrap_or(0);
@@ -3067,6 +3226,7 @@ impl View {
             }
             if self.menu.take().is_some()
                 || self.n_pick.take().is_some()
+                || self.snap_pop.take().is_some()
                 || self.svt.drop.take().is_some()
                 || self.fx_drop.take().is_some()
                 || self.roll_start.take().is_some()
@@ -3091,6 +3251,13 @@ impl View {
             }
             if self.tw {
                 self.tw = false;
+                return KeyResult::Handled;
+            }
+            // Then a note selection lets go, before Esc would leave the editor.
+            if matches!(self.mode, Mode::Compose | Mode::Gimmicks) && !self.ed.selection.is_empty()
+            {
+                self.ed.select_none();
+                self.status = "selection cleared".into();
                 return KeyResult::Handled;
             }
         }
@@ -3169,6 +3336,20 @@ fn digit(c: KeyCode) -> Option<char> {
         KeyCode::Digit9 | KeyCode::Numpad9 => '9',
         _ => return None,
     })
+}
+
+/// How long a wheel notch while playing still counts as part of the same scroll.
+const WHEEL_CHAIN_MS: f64 = 600.0;
+
+/// Where a wheel notch while playing steps from. Playback keeps moving between notches, so
+/// stepping from the playhead would give back what the music has carried it forward by (one
+/// snap back, a notch or two later it is level again: you'd have to fight it). A notch soon after
+/// the last one goes on from the place that one sent the playhead to (`target`), as long as the
+/// playhead is still where playback from there would have it (`now`): not clicked or dragged
+/// elsewhere meanwhile. `age_ms` is the time since that notch, `speed` the playback rate.
+fn wheel_base(target: f64, age_ms: f64, speed: f64, now: f64) -> Option<f64> {
+    let expected = target + age_ms * speed;
+    (age_ms <= WHEEL_CHAIN_MS && (now - expected).abs() <= 50.0).then_some(target)
 }
 
 #[cfg(test)]
@@ -4161,6 +4342,9 @@ mod tests {
         // Make a change and try to leave.
         v.ed.place_hit(3000.0, false);
         assert!(v.ed.modified());
+        // The first Esc only lets go of the placed note's selection.
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.ed.selection.is_empty() && v.modal.is_none());
         assert!(matches!(
             v.key(KeyCode::Escape, false, Keys::default(), None),
             KeyResult::Handled
@@ -4175,6 +4359,7 @@ mod tests {
         // Saving first also leaves.
         let mut w = view();
         w.ed.place_hit(3000.0, false);
+        w.ed.select_none();
         w.key(KeyCode::Escape, false, Keys::default(), None);
         press(&mut w, Btn::C(Cmd::LeaveSave));
         assert!(w.take_exit() && !w.ed.modified(), "{}", w.status);
@@ -4207,6 +4392,103 @@ mod tests {
 
     fn press(v: &mut View, b: Btn) {
         v.press(b, Keys::default(), None);
+    }
+
+    #[test]
+    fn a_snap_preset_limits_the_wheel_and_the_snap_follows_to_its_nearest() {
+        use super::snap::SnapAct;
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        let mut v = view();
+        v.ed.snap = 4;
+        // Make 1/3 1/6 1/12 through the popover.
+        press(&mut v, Btn::Snap(SnapAct::Open));
+        assert!(v.snap_pop.is_some());
+        press(&mut v, Btn::Snap(SnapAct::New));
+        for d in [12, 3, 6] {
+            press(&mut v, Btn::Snap(SnapAct::Draft(d)));
+        }
+        press(&mut v, Btn::Snap(SnapAct::Create));
+        assert_eq!(v.snap_presets.len(), 1);
+        assert_eq!(v.snap_presets[0].name, "1/3 1/6 1/12");
+        assert_eq!(v.snap_active, Some(0));
+        assert!(v.snap_dirty);
+        assert_eq!(v.ed.snap, 3, "4 is not in it: the nearest is 3");
+        v.wheel(1, ctrl);
+        assert_eq!(v.ed.snap, 6);
+        v.wheel(5, ctrl);
+        assert_eq!(v.ed.snap, 12, "stops at its finest");
+        v.wheel(-1, ctrl);
+        v.wheel(-1, ctrl);
+        v.wheel(-1, ctrl);
+        assert_eq!(v.ed.snap, 3, "and at its coarsest");
+        // Back to All: the full list again.
+        press(&mut v, Btn::Snap(SnapAct::All));
+        v.wheel(1, ctrl);
+        assert_eq!(v.ed.snap, 4);
+        // Deleting the preset in use falls back to All.
+        press(&mut v, Btn::Snap(SnapAct::Preset(0)));
+        press(&mut v, Btn::Snap(SnapAct::Delete));
+        assert!(v.snap_presets.is_empty());
+        assert_eq!(v.snap_active, None);
+        // What the config holds loads back, a name that is gone means All.
+        v.set_snap_presets(&["1,2,4,8|Basic".to_string()], "Basic");
+        assert_eq!(v.snap_active, Some(0));
+        assert_eq!(
+            v.snap_config(),
+            (vec!["1,2,4,8|Basic".to_string()], "Basic".to_string())
+        );
+        v.set_snap_presets(&["1,2,4,8|Basic".to_string()], "Gone");
+        assert_eq!(v.snap_active, None);
+    }
+
+    #[test]
+    fn the_snap_popover_closes_on_esc_and_outside_clicks_and_leaves_keys_alone() {
+        use super::snap::SnapAct;
+        let mut v = view();
+        // Closed, Esc is not its business.
+        assert!(v.snap_pop.is_none());
+        press(&mut v, Btn::Snap(SnapAct::Open));
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Snap(SnapAct::Div(4))),
+            "the snaps are offered"
+        );
+        let [px, py, pw, ph] = v.snap_pop.as_ref().unwrap().rect;
+        assert!(pw > 0.0 && ph > 0.0);
+        // A click on a bare spot of the popover keeps it open.
+        click(&mut v, px + pw - 2.0, py + ph - 2.0);
+        assert!(v.snap_pop.is_some());
+        // Picking a division directly works and keeps it open.
+        let r = v
+            .buttons
+            .iter()
+            .find(|(_, b)| *b == Btn::Snap(SnapAct::Div(8)))
+            .unwrap()
+            .0;
+        click(&mut v, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        assert_eq!(v.ed.snap, 8);
+        assert!(v.snap_pop.is_some());
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.snap_pop.is_none(), "Esc closes it");
+        press(&mut v, Btn::Snap(SnapAct::Open));
+        click(&mut v, 5.0, 470.0);
+        assert!(v.snap_pop.is_none(), "so does a click outside");
+        // Closed, the number keys still change the snap.
+        v.key(
+            KeyCode::Digit3,
+            false,
+            Keys {
+                shift: true,
+                ..Keys::default()
+            },
+            None,
+        );
+        assert_eq!(v.ed.snap, 3);
     }
 
     #[test]
@@ -4398,6 +4680,56 @@ mod tests {
             },
         );
         assert_eq!(v.ed.tool, Tool::Roll);
+    }
+
+    #[test]
+    fn a_notch_while_playing_goes_on_from_the_last_target() {
+        // Back one step from 1000, then 100 ms on the music has carried it to 1100.
+        assert_eq!(wheel_base(875.0, 100.0, 1.0, 975.0), Some(875.0));
+        // Slow playback moves less.
+        assert_eq!(wheel_base(875.0, 200.0, 0.5, 975.0), Some(875.0));
+        // Moved elsewhere meanwhile, or too long ago: from the playhead.
+        assert_eq!(wheel_base(875.0, 100.0, 1.0, 5000.0), None);
+        assert_eq!(wheel_base(875.0, 900.0, 1.0, 1775.0), None);
+    }
+
+    #[test]
+    fn wheel_notches_while_playing_move_back_though_the_music_runs_on() {
+        let mut v = view();
+        v.ed.snap = 1;
+        v.ed.time = 10_000.0;
+        v.playing = Some((Instant::now(), 10_000.0));
+        v.follow(false);
+        v.wheel(-1, Keys::default());
+        let first = v.ed.time;
+        let step = first - 10_000.0;
+        assert!(step > 300.0, "{step}");
+        // Notches up go back; the music runs on 200 ms between them, which must not eat the step.
+        v.wheel(1, Keys::default());
+        let back = v.ed.time;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        v.update(Instant::now(), None);
+        v.wheel(1, Keys::default());
+        assert_eq!(
+            v.ed.time,
+            back - step,
+            "a whole step back from the last target"
+        );
+    }
+
+    #[test]
+    fn a_forward_notch_while_playing_never_lands_before_the_playhead() {
+        let mut v = view();
+        v.ed.snap = 1;
+        v.ed.time = 10_000.0;
+        v.playing = Some((Instant::now(), 10_000.0));
+        v.follow(false);
+        v.wheel(1, Keys::default());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        v.update(Instant::now(), None);
+        let live = v.ed.time;
+        v.wheel(-1, Keys::default());
+        assert!(v.ed.time >= live, "{} < {live}", v.ed.time);
     }
 
     #[test]
@@ -6842,5 +7174,252 @@ mod tests {
             file.iter()
                 .any(|i| matches!(i, menu::Item::Do(Cmd::SongSetup)))
         );
+    }
+
+    fn red_id(v: &View) -> u64 {
+        v.ed.chart.timing.iter().find(|p| p.is_red()).unwrap().id
+    }
+
+    #[test]
+    fn the_timing_panel_moves_a_red_line_by_bars_and_beats_one_undo_step_each() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        let id = red_id(&v);
+        v.select_line(Some(id));
+        let notes: Vec<f64> = v.ed.chart.objects.iter().map(|o| o.time).collect();
+        let time = |v: &View| v.ed.chart.timing_point(id).unwrap().time;
+        press(&mut v, Btn::T(TAct::Bars(1)));
+        assert_eq!(time(&v), 2000.0, "a bar of 4 beats of 500 ms");
+        press(&mut v, Btn::T(TAct::Beats(-1)));
+        assert_eq!(time(&v), 1500.0);
+        press(&mut v, Btn::T(TAct::Ms(10)));
+        press(&mut v, Btn::T(TAct::Ms(-1)));
+        assert_eq!(time(&v), 1509.0);
+        let after: Vec<f64> = v.ed.chart.objects.iter().map(|o| o.time).collect();
+        assert_eq!(after, notes, "the notes stay where they are");
+        // One undo per press.
+        v.ed.undo();
+        assert_eq!(time(&v), 1510.0);
+        v.ed.undo();
+        v.ed.undo();
+        assert_eq!(time(&v), 2000.0);
+        // Back before the song starts is allowed.
+        press(&mut v, Btn::T(TAct::Bars(-2)));
+        assert_eq!(time(&v), -2000.0);
+    }
+
+    #[test]
+    fn the_timing_panel_changes_the_bpm_by_steps_and_a_time_can_be_typed_negative() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        let id = red_id(&v);
+        v.select_line(Some(id));
+        let bpm = |v: &View| v.ed.chart.timing_point(id).unwrap().bpm().unwrap();
+        assert_eq!(bpm(&v), 120.0);
+        press(&mut v, Btn::T(TAct::Bpm(100)));
+        assert!((bpm(&v) - 121.0).abs() < 1e-9);
+        press(&mut v, Btn::T(TAct::Bpm(-1)));
+        assert!((bpm(&v) - 120.99).abs() < 1e-6);
+        press(&mut v, Btn::T(TAct::BpmTimes(true)));
+        assert!((bpm(&v) - 241.98).abs() < 1e-6);
+        press(&mut v, Btn::T(TAct::BpmTimes(false)));
+        assert!((bpm(&v) - 120.99).abs() < 1e-6);
+        // Typing a time before zero.
+        v.typing = Some((Field::Time, "-120".to_string()));
+        v.commit_typing();
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().time, -120.0);
+        // The - and + step it by a millisecond, past zero too.
+        v.change(Field::Time, -1.0, Keys::default());
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().time, -121.0);
+        // The green line after it is not a red line: the buttons refuse it.
+        let green = v.ed.chart.timing.iter().find(|p| !p.is_red()).unwrap().id;
+        v.select_line(Some(green));
+        press(&mut v, Btn::T(TAct::Bars(1)));
+        assert_eq!(v.ed.chart.timing_point(green).unwrap().time, 4000.0);
+    }
+
+    #[test]
+    fn the_metronome_follows_every_red_line_and_its_key_toggles_it() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        assert!(!v.metronome);
+        v.key(KeyCode::KeyT, false, Keys::default(), None);
+        assert!(v.metronome);
+        // A faster red line in 3/4 further on; the green line in between is no section.
+        let id = v.ed.add_red(8000.0, 180.0).unwrap();
+        v.ed.edit_timing(id, |p| p.meter = 3, false).unwrap();
+        let s = v.click_sections();
+        assert_eq!(s.len(), 2);
+        assert_eq!((s[0].time, s[0].beat, s[0].per_bar), (0.0, 500.0, 4));
+        assert_eq!(s[1].time, 8000.0);
+        assert!((s[1].beat - 60_000.0 / 180.0).abs() < 1e-9);
+        assert_eq!(s[1].per_bar, 3);
+        // Playing: an edit of the timing has the music cut out again with the new clicks.
+        v.playing = Some((Instant::now(), 0.0));
+        v.reseek = false;
+        v.mark_stale();
+        assert!(v.reseek);
+        v.key(KeyCode::KeyT, false, Keys::default(), None);
+        assert!(!v.metronome);
+    }
+
+    /// A roll at 40000..40500 (and a note at 41000 after it) in a quiet part of the map.
+    fn roll_view() -> (View, u64) {
+        let mut v = view();
+        v.ed.snap = 4;
+        v.ed.tool = Tool::Select;
+        let id = v.ed.place_roll(40_000.0, 40_500.0).unwrap();
+        v.ed.place_hit(41_000.0, false);
+        v.ed.select_none();
+        v.view_start = 39_000.0;
+        draw(&mut v);
+        (v, id)
+    }
+
+    #[test]
+    fn dragging_the_tail_of_a_roll_resizes_it_snapped_as_one_undo() {
+        let (mut v, id) = roll_view();
+        let y = lane_y(&v);
+        let k = Keys::default();
+        // Just right of the end still grabs it, selected or not.
+        assert!(v.ed.selection.is_empty());
+        assert_eq!(v.tail_at(v.x_of(40_500.0) + 4.0, y), Some(id));
+        v.mouse = (v.x_of(40_500.0) + 4.0, y);
+        assert_eq!(v.cursor(), winit::window::CursorIcon::EwResize);
+        let a = v.x_of(40_500.0) + 4.0;
+        v.mouse_down(a, y, k, None);
+        for step in 1..=6 {
+            v.mouse_move(a + 5.0 * step as f32, y, k);
+        }
+        v.mouse_up(a + 30.0, y, k);
+        // On the snap grid (1/4 of 500 ms), not where the pointer was.
+        let want = v.ed.snapped(v.t_at(a + 30.0));
+        let end = v.ed.end_of(v.ed.chart.object(id).unwrap());
+        assert_eq!(end, want);
+        assert!(end > 40_500.0 && end < 41_000.0, "{end}");
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_500.0);
+    }
+
+    #[test]
+    fn the_rounded_cap_past_the_tail_is_grabbable() {
+        let (mut v, id) = roll_view();
+        let y = lane_y(&v);
+        let cap = v.x_of(40_500.0) + NOTE_R * 0.8 + 1.0;
+        assert_eq!(v.tail_at(cap, y), Some(id));
+        assert_eq!(v.tail_at(v.x_of(40_500.0) + NOTE_R * 0.8 + 4.0, y), None);
+        let k = Keys::default();
+        v.mouse_down(cap, y, k, None);
+        assert!(matches!(v.drag, Drag::Resize { .. }));
+    }
+
+    #[test]
+    fn a_resize_keeps_one_snap_step_and_stops_at_the_next_note() {
+        let (mut v, id) = roll_view();
+        let y = lane_y(&v);
+        let k = Keys::default();
+        let a = v.x_of(40_500.0);
+        v.mouse_down(a, y, k, None);
+        // Far past the next note.
+        v.mouse_move(v.x_of(43_000.0), y, k);
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 41_000.0);
+        // Back before the head: one snap step (125 ms) is the least.
+        v.mouse_move(v.x_of(39_500.0), y, k);
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_125.0);
+        v.mouse_up(v.x_of(39_500.0), y, k);
+        assert_eq!(
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.time == 41_000.0)
+                .count(),
+            1
+        );
+        // The whole drag is one undo.
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_500.0);
+    }
+
+    #[test]
+    fn a_swell_tail_resizes_and_a_selected_one_keeps_its_selection() {
+        let mut v = view();
+        v.ed.tool = Tool::Note;
+        let id = v.ed.place_swell(40_000.0, 40_500.0).unwrap();
+        v.ed.selection = [id].into();
+        v.view_start = 39_000.0;
+        draw(&mut v);
+        let y = lane_y(&v);
+        let k = Keys::default();
+        let a = v.x_of(40_500.0) - 3.0;
+        v.mouse_down(a, y, k, None);
+        v.mouse_move(v.x_of(40_750.0), y, k);
+        v.mouse_up(v.x_of(40_750.0), y, k);
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_750.0);
+        assert!(v.ed.selection.contains(&id));
+        assert_eq!(
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.time >= 40_000.0)
+                .count(),
+            1,
+            "the Note tool placed nothing"
+        );
+    }
+
+    #[test]
+    fn esc_clears_the_selection_before_it_leaves() {
+        let mut v = view();
+        v.ed.selection = v.ed.chart.objects.iter().take(2).map(|o| o.id).collect();
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.ed.selection.is_empty());
+        assert!(!v.exit && v.modal.is_none(), "the first Esc only deselects");
+    }
+
+    #[test]
+    fn ctrl_click_toggles_one_note_and_ctrl_shift_a_deselects_all() {
+        let mut v = view();
+        draw(&mut v);
+        let y = lane_y(&v);
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        let x = v.x_of(1000.0);
+        v.mouse_down(x, y, ctrl, None);
+        v.mouse_up(x, y, ctrl);
+        let id =
+            v.ed.chart
+                .objects
+                .iter()
+                .find(|o| o.time == 1000.0)
+                .unwrap()
+                .id;
+        assert_eq!(v.ed.selection, [id].into());
+        v.mouse_down(x, y, ctrl, None);
+        v.mouse_up(x, y, ctrl);
+        assert!(v.ed.selection.is_empty(), "a second Ctrl+click removes it");
+        v.ed.select_all();
+        let both = Keys {
+            ctrl: true,
+            shift: true,
+            ..Keys::default()
+        };
+        v.key(KeyCode::KeyA, false, both, None);
+        assert!(v.ed.selection.is_empty());
+    }
+
+    #[test]
+    fn a_click_on_empty_lane_with_select_clears_the_selection() {
+        let mut v = view();
+        draw(&mut v);
+        v.ed.tool = Tool::Select;
+        v.ed.selection = v.ed.chart.objects.iter().take(2).map(|o| o.id).collect();
+        v.view_start = 59_000.0;
+        draw(&mut v);
+        let y = lane_y(&v);
+        let x = v.x_of(60_000.0);
+        click(&mut v, x, y);
+        assert!(v.ed.selection.is_empty());
     }
 }

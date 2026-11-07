@@ -731,6 +731,8 @@
 "in lobby {title}" = "в лобби {title}"
 "in a match: {map}" = "в матче: {map}"
 "watching {name}" = "смотрит {name}"
+"in the editor" = "в редакторе"
+"editing {map}" = "редактирует {map}"
 "{player} found the secret {name}" = "{player} находит секрет «{name}»"
 "{player} earned {name}" = "{player} получает «{name}»"
 "first on the server" = "первым на сервере"

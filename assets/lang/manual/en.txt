@@ -46,11 +46,15 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 # Check it by ear
 - Put notes on 4 bars of beats, set Speed to 50% and Play. If the notes are early or late by the same amount everywhere, move the offset. If they drift further the longer the song goes, the BPM is a little off.
 - The BPM and the offset have small +/- buttons for fine steps (down to 0.01 BPM and 1 ms).
+- Click the BPM or the offset to type a value (a comma works as a decimal point; Enter or a click elsewhere takes it, Esc cancels). The offset may be negative, and the beat lines are drawn from the start of the song.
 - Compare the grid lines with the waveform spikes: a spike should sit on a line.
 - The waveform's colour is the kind of sound: red is bass (a kick, often a don), blue is treble (a snare or a hat, often a kat). It is under the notes in the editor too (View > Waveform on / off).
 
 # Inside the editor
 - F3 Timing: select the red line to edit its BPM, offset and meter. F6 lists every line.
+- The panel's Position block moves the red line: type a time (it may be negative, a map can start its first beat before 0), nudge it by 1 or 10 ms, or move it a bar or a beat at a time. Each press is one undo step and the notes stay where they are. Tempo has the BPM with - and +, steps of 1 and 0.01, x2 and /2, and the meter.
+- The beat lines also run backwards from the first red line to the start of the song, and notes you place there snap to them.
+- T (or the Metronome switch in the Timing panel) makes the song click on every beat while it plays, higher on each bar's first beat. It follows every red line, BPM and meter change, and the playback speed.
 - Ctrl+P adds a red line at the playhead (a BPM change; it resets the grid). Ctrl+I deletes the line at the playhead.
 - The Kiai switch on a line marks kiai time. The overview bar shows it in orange.
 
@@ -60,6 +64,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 # Placing
 - Tools: 1 Select, 2 Note, 3 Drumroll, 4 Denden. With Note a click on the lane places on the grid; right click deletes (on a selected note: the whole selection); drag moves (Shift ignores the grid).
 - Snap sets how finely a beat divides: Ctrl+wheel or Shift+1 to 9. Left / Right step by one snap.
+- Click Snap in the transport to open the snap presets. All is the full list and stays the default. New preset lets you tick the snaps you want (say 1/1 1/2 1/4 1/8, or 1/3 1/6 1/12) and saves them under a name made from them; Delete removes the preset in use. With a preset on, Ctrl+wheel steps only through its snaps, and the snap jumps to the nearest one in it. Clicking a snap in the list, or Shift+1 to 9, still picks any single snap. Esc or a click outside closes the list. Presets are kept in your settings.
 - Speed (Ctrl+Up / Down) slows the music so you can place by ear.
 
 # Colour and size
@@ -68,6 +73,8 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 
 # Selecting and copying
 - Drag a box on empty lane (Ctrl+drag with any tool). Ctrl+A selects all.
+- To deselect: press Esc, click empty lane with the Select tool, or press Ctrl+Shift+A. Ctrl+click on a note adds it to the selection or, when it is selected already, takes it out. With Note, Drumroll or Denden a click on empty lane places, so use Esc there.
+- Drag the right end (the light bar) of a drumroll or denden to change its length. It snaps to the grid (Shift: to the millisecond), is never shorter than one snap step and stops at the next note. One drag is one undo step.
 - Ctrl+X / C / V cut, copy, paste at the playhead.
 
 # Bookmarks and the song
@@ -305,10 +312,10 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
 
 # Notes
 - 1 2 3 4: tools. W E: kat, big. Q: flip. J K: nudge. Ctrl+D: clone. Ctrl+G: reverse.
-- Ctrl+Z / Y: undo, redo. Ctrl+X / C / V: cut, copy, paste. Ctrl+A: select all. Delete.
+- Ctrl+Z / Y: undo, redo. Ctrl+X / C / V: cut, copy, paste. Ctrl+A: select all. Ctrl+Shift+A or Esc: deselect. Delete.
 
 # Timing and the rest
-- Ctrl+P: red line. Ctrl+Shift+P: green line. Ctrl+I: delete line. F6: the timing window.
+- Ctrl+P: red line. Ctrl+Shift+P: green line. Ctrl+I: delete line. F6: the timing window. T: metronome.
 - Ctrl+B: bookmark. Ctrl+Left / Right: previous / next bookmark.
 - M: effect mark at the playhead (.tko). Shift+M removes the nearest.
 - F1 F2 F3 F4: modes. Ctrl+S: save. Esc: leave (asks if unsaved).

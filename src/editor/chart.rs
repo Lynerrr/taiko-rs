@@ -1071,6 +1071,29 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_negative_first_red_line_survives_a_save_and_load() {
+        let mut c = Chart::parse(MAP);
+        c.timing[0].time = -250.0;
+        c.sort_timing();
+        c.dirty = true;
+        let text = c.to_text();
+        assert!(text.contains("\n-250,500,4,1,0,100,1,0"), "{text}");
+        let back = Chart::parse(&text);
+        assert_eq!(back.timing[0].time, -250.0);
+        assert!(back.timing[0].is_red());
+        assert_eq!(back.to_text(), text, "and again");
+        // The game plays it too: a barline at the line, none lost.
+        let map = crate::beatmap::from_text(&text).unwrap();
+        assert_eq!(map.barlines[0].time, -250.0 + crate::beatmap::OSU_TIMING_MS);
+        assert_eq!(
+            map.control_points[0].time,
+            -250.0 + crate::beatmap::OSU_TIMING_MS
+        );
+        // The file checks out when read back for the save.
+        assert!(check_round_trip(&c, &text).is_ok());
+    }
+
+    #[test]
     fn parses_the_two_owned_sections() {
         let c = Chart::parse(MAP);
         assert_eq!(c.timing.len(), 2);
