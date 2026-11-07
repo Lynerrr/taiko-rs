@@ -4600,6 +4600,37 @@ mod tests {
     }
 
     #[test]
+    fn the_motion_page_deletes_the_group_it_shapes() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        let has = |v: &View, b: Btn| v.buttons.iter().any(|(_, x)| *x == b);
+        draw(&mut v);
+        assert!(!has(&v, Btn::M(MAct::DeleteGroup)), "no group yet");
+        let ids: Vec<u64> = v.ed.chart.objects.iter().take(3).map(|o| o.id).collect();
+        v.ed.selection = ids.into_iter().collect();
+        press(&mut v, Btn::M(MAct::UseSelection));
+        assert_eq!(v.ed.gimmick().unwrap().groups.len(), 1);
+        draw(&mut v);
+        assert!(has(&v, Btn::M(MAct::DeleteGroup)));
+        press(&mut v, Btn::M(MAct::DeleteGroup));
+        assert!(v.ed.gimmick().unwrap().groups.is_empty());
+        assert!(v.status.contains("deleted"), "{}", v.status);
+        assert_eq!(v.m_group, None);
+        draw(&mut v);
+        assert!(
+            !has(&v, Btn::M(MAct::DeleteGroup)),
+            "nothing left to delete"
+        );
+        assert!(v.ed.undo());
+        assert_eq!(
+            v.ed.gimmick().unwrap().groups.len(),
+            1,
+            "Ctrl+Z brings it back"
+        );
+    }
+
+    #[test]
     fn picked_notes_get_a_path_shaped_by_hand_in_the_preview() {
         use motion::MAct;
         let mut v = clips_view();

@@ -516,30 +516,66 @@ impl View {
             typed.is_some(),
             Look::Field,
         );
+        // The value always shows whole; its name takes what room is left, and its unit only
+        // where both fit.
+        let pad = 4.0;
+        let right = x + lw - pad;
+        // Beats to two places: 1.75, not 1.748 (typed ones keep every digit).
+        let value = typed.clone().unwrap_or_else(|| {
+            if f.unit() == "beats" {
+                trim((value * 100.0).round() / 100.0)
+            } else {
+                trim(value)
+            }
+        });
+        let vw = Canvas::text_width(7.0, &value);
         let name = f.label();
-        c.text(x + 5.0, y + 4.5, 6.0, rgba(DIM, 1.0), name);
-        let right = x + lw - 5.0;
+        let nw = Canvas::text_width(6.0, name);
         let unit = if typed.is_none() { f.unit() } else { "" };
         let uw = if unit.is_empty() {
             0.0
         } else {
             Canvas::text_width(5.5, unit) + 3.0
         };
-        let room = lw - Canvas::text_width(6.0, name) - 14.0;
-        let value = typed.unwrap_or_else(|| trim(value));
-        let shown = if uw > 0.0 && Canvas::text_width(7.0, &value) + uw <= room {
+        let inner = lw - 2.0 * pad;
+        let unit_fits = uw > 0.0 && nw + 6.0 + vw + uw <= inner;
+        let value_right = if unit_fits {
             c.text_right(right, y + 5.0, 5.5, rgba(DIM, 1.0), unit);
             right - uw
         } else {
             right
         };
         c.text_right(
-            shown,
+            value_right,
             y + 4.0,
             7.0,
             rgba(0xffffff, 1.0),
-            &Canvas::fit(7.0, room.max(10.0), &value),
+            &Canvas::fit(7.0, inner, &value),
         );
+        let name_room = value_right - vw - 6.0 - (x + pad);
+        if name_room >= 12.0 {
+            c.text(
+                x + pad,
+                y + 4.5,
+                6.0,
+                rgba(DIM, 1.0),
+                &Canvas::fit(6.0, name_room, name),
+            );
+        }
+        if name_room < nw {
+            // Cut short or left out: the tip says what it is.
+            self.tips.push((
+                [x, y, lw, h],
+                format!(
+                    "{name}: {value}{}",
+                    if unit.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {unit}")
+                    }
+                ),
+            ));
+        }
         self.styled(
             c,
             [x + lw + 1.0, y, 14.0, h],
@@ -682,7 +718,7 @@ impl View {
         let two = inner >= 400.0;
         // (The left a little wider: its rows of choices are the longer.)
         let (col, right_col) = if two {
-            ((inner - 14.0) * 0.58, (inner - 14.0) * 0.42)
+            ((inner - 14.0) * 0.565, (inner - 14.0) * 0.435)
         } else {
             (inner, inner)
         };
