@@ -211,7 +211,8 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 # Giving notes a path
 - Press 1 for the Select tool (it keeps you on this page) and click a note on the timeline, or drag a box over several. On the Effects pages a click on the timeline only picks notes, it never places them.
 - Pick where they come from: from above, from below, from behind the drum, the corner, an arc, a drop, a zigzag, a spiral, a loop. The picked notes get a group of their own and fly that way at once. (Give the picked notes a path does the same, starting from above.)
-- Whatever is picked is what the page shapes: click a group under Moving to pick its notes again.
+- Whatever is picked is what the page shapes: click a group under Moving to pick its notes again. The groups stay on one line: when there are more than fit, the arrows (or the wheel over them) page through them, and their numbers say how many are hidden each way.
+- On the timeline a bar under the notes, with the group's name, shows which ones the page is shaping.
 - Shape it in the preview: drag a point to move it, double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
 
 # How they move on it
@@ -559,7 +560,8 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 # Как дать нотам путь
 - Нажмите 1 (инструмент Select, страница при этом не меняется) и кликните ноту на таймлайне или обведите рамкой несколько. На страницах Effects клик по таймлайну только выделяет ноты и никогда их не ставит.
 - Выберите в Where they come from, откуда они летят: сверху, снизу, из-за барабана, из угла, дугой, падением, зигзагом, спиралью, петлёй. Выделенные ноты сразу получат свою группу и полетят так. (Give the picked notes a path делает то же, начиная со «сверху».)
-- Страница всегда правит то, что выделено: клик по группе в Moving снова выделяет её ноты.
+- Страница всегда правит то, что выделено: клик по группе в Moving снова выделяет её ноты. Группы всегда в одну строку: если все не помещаются, стрелки (или колесо над ними) листают их, а числа на стрелках говорят, сколько скрыто с каждой стороны.
+- На таймлайне полоса под нотами с именем группы показывает, какие ноты сейчас правит страница.
 - Путь правится прямо на превью: тащите точку, двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
 
 # Как они по нему летят
