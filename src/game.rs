@@ -4412,7 +4412,11 @@ impl Game {
         };
         // A don or kat `s` along the lane (`k`th drawn, in a 1/`flow` stream): Snake swings it
         // sideways, Party pumps and squishes it. Nothing changes at the drum.
-        let (don, kat) = if mods.has(Mod::Colorless) || mods.has(Mod::Echo) {
+        let colorless = mods.has(Mod::Colorless) || mods.has(Mod::Echo);
+        // The kiai flash keeps stable's colours, except where notes look alike: a coloured flash
+        // would tell them apart on every beat.
+        let (flash_don, flash_kat) = if colorless { (GREY, GREY) } else { (DON, KAT) };
+        let (don, kat) = if colorless {
             (GREY, GREY)
         } else {
             (
@@ -5404,7 +5408,11 @@ impl Game {
                         }
                         (
                             s,
-                            if n.kind == Kind::Kat { KAT } else { DON },
+                            if n.kind == Kind::Kat {
+                                flash_kat
+                            } else {
+                                flash_don
+                            },
                             note_alpha(s) * radar_lit(s, n.time, n.velocity) * fx.opacity,
                         )
                     }
@@ -5443,7 +5451,11 @@ impl Game {
                 }
                 let a = note_alpha(s) * radar_lit(s, n.time, n.velocity) * fx.opacity;
                 let flash = self.kiai_flash(vt, n.time, n.end_time) * KIAI_FLASH_ALPHA;
-                let col = kiai_brighten(if n.kind == Kind::Kat { KAT } else { DON });
+                let col = kiai_brighten(if n.kind == Kind::Kat {
+                    flash_kat
+                } else {
+                    flash_don
+                });
                 if flash > 0.0 && a > 0.01 && on_lane(s, r) {
                     let sprite = if n.big {
                         Sprite::BigCircle

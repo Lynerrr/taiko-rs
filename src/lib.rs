@@ -133,6 +133,8 @@ enum Scene {
         label: String,
         entry: usize,
         from: Option<f64>,
+        /// A retry: the intro was heard already, so it's skipped.
+        retry: bool,
     },
     Play {
         game: Box<Game>,
@@ -3005,6 +3007,7 @@ impl State {
             label,
             entry,
             from: None,
+            retry: false,
         };
     }
 
@@ -3323,7 +3326,16 @@ impl State {
             label,
             entry,
             from,
+            retry: false,
         };
+    }
+
+    /// Plays the map again, like starting it except that the intro is skipped.
+    fn retry_from(&mut self, entry: usize, from: Option<f64>) {
+        self.start_loading_from(entry, from);
+        if let Scene::Loading { retry, .. } = &mut self.scene {
+            *retry = true;
+        }
     }
 
     /// Leaves the editor for a test play of `text` (its map as it is now) from `from`.
@@ -7174,7 +7186,7 @@ impl State {
     /// Plays the current map again from where it was started (in game, paused or on results).
     fn restart_map(&mut self) {
         if let Scene::Play { entry, from, .. } | Scene::Results { entry, from, .. } = self.scene {
-            self.start_loading_from(entry, from);
+            self.retry_from(entry, from);
         }
     }
 
@@ -7328,7 +7340,7 @@ impl State {
                 0 => game.resume_after(delay, self.audio.as_ref()),
                 1 => {
                     let (e, f) = (*entry, *from);
-                    self.start_loading_from(e, f);
+                    self.retry_from(e, f);
                 }
                 2 => self.open_dropdown(),
                 3 => self.open_settings(),
@@ -14175,7 +14187,7 @@ impl State {
             Scene::Results { entry, from, .. } => match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
                     let (e, f) = (*entry, *from);
-                    self.start_loading_from(e, f);
+                    self.retry_from(e, f);
                 }
                 KeyCode::Escape => {
                     let path = self.library[*entry].path.clone();
@@ -14293,6 +14305,7 @@ impl State {
             };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
+            self.preview.own_background = shows_own_background(&self.scene);
             self.preview.autoplay = self.cfg.autoplay;
             self.preview.player = self.player.is_some();
             self.preview.menu = self.on_menu();
@@ -14915,6 +14928,7 @@ impl State {
                 label,
                 entry,
                 from,
+                retry,
             } => {
                 canvas.text_centered(
                     canvas.width / 2.0,
@@ -14956,6 +14970,8 @@ impl State {
                         );
                         if let Some(t) = *from {
                             game.start_from(t, self.audio.as_ref(), self.play_offset);
+                        } else if *retry {
+                            game.skip(self.audio.as_ref(), self.play_offset);
                         }
                         match self.pending_replay.take() {
                             Some(r) => {
@@ -17830,6 +17846,17 @@ const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
+/// Whether `scene` shows its own map's background, which the song select's preview leaves be.
+fn shows_own_background(scene: &Scene) -> bool {
+    match scene {
+        Scene::Editor(_) | Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } => {
+            true
+        }
+        Scene::Settings { prev } => shows_own_background(prev),
+        _ => false,
+    }
+}
+
 /// How long the quick retry key is held for the map to restart (ms).
 /// How long the exit question takes to slide in.
 const QUIT_SLIDE_MS: f32 = 160.0;
