@@ -338,6 +338,20 @@ impl Shelf {
         }
     }
 
+    /// What its effects do, in a line.
+    pub fn about(self) -> &'static str {
+        match self {
+            Shelf::Move => "The whole playfield moves: pulses, turns, zooms, shakes.",
+            Shelf::Lane => "The lane bends into a shape.",
+            Shelf::Notes => "The notes themselves: hidden, faded, bigger, wobbling.",
+            Shelf::Look => "Flashes, colours, echoes and glitches.",
+            Shelf::Copies => {
+                "Copies of the playfield moved on their own, and the picture cut in pieces."
+            }
+            Shelf::Text => "Words and pictures on screen.",
+        }
+    }
+
     /// The colour its tab wears: that of what its effects move.
     pub fn colour(self) -> u32 {
         match self {

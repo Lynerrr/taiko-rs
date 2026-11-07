@@ -620,6 +620,11 @@ pub struct Gimmick {
     /// Notes that are only drawn: never hit, never judged, silent, gone when they reach the drum.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fakes: Vec<FakeNote>,
+    /// Notes (chart ms, ascending) drawn over every effect: a blackout, a flash or a glitch
+    /// doesn't hide them, and effects on all the notes leave them be. They still move with the
+    /// playfield, and with effects on a group they are in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub above: Vec<f64>,
 }
 
 /// How many fake notes a map may have.
@@ -650,6 +655,13 @@ impl Gimmick {
             && self.clips.is_empty()
             && self.scroll.is_empty()
             && self.fakes.is_empty()
+            && self.above.is_empty()
+    }
+
+    /// Whether the note at chart time `t` is drawn over every effect (see `above`).
+    pub fn is_above(&self, t: f64) -> bool {
+        let at = self.above.partition_point(|&n| n < t - 0.5);
+        self.above.get(at).is_some_and(|&n| (n - t).abs() <= 0.5)
     }
 
     pub fn field_track(&self, p: FieldProp) -> Option<&Track> {
@@ -745,6 +757,10 @@ impl Gimmick {
             }
         }
         self.field.retain(|_, t| !t.is_empty());
+        self.above.retain(|t| t.is_finite());
+        self.above.sort_by(f64::total_cmp);
+        self.above.dedup();
+        self.above.truncate(MAX_GROUPED_NOTES);
         self.marks.retain(|m| m.time.is_finite());
         self.marks.sort_by(|a, b| a.time.total_cmp(&b.time));
         self.marks.truncate(MAX_MARKS);

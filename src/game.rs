@@ -4789,6 +4789,8 @@ impl Game {
         // (lane distance, fake, index, flow, colour, alpha, motion)
         let mut on_path: Vec<(f32, bool, usize, u8, u32, f32, NoteFx)> = Vec::new();
         let over_panel = |fx: &NoteFx| !crossfire && fx.path.is_some_and(|p| p[2] > 0.0);
+        // The shapes of notes a .tko map draws over every effect: lifted over them at the end.
+        let mut above_shapes: Vec<std::ops::Range<usize>> = Vec::new();
         // A .tko map's fake notes, under the real ones: drawn like them, never judged, gone when
         // they reach the drum.
         let fakes_on: Vec<usize> = {
@@ -4819,7 +4821,11 @@ impl Game {
                 if over_panel(&nfx) {
                     on_path.push((s, true, k, 1, col, a, nfx));
                 } else {
+                    let from = c.shapes.len();
                     draw_hit(c, s, n, k, 1, col, a, nfx);
+                    if nfx.above {
+                        above_shapes.push(from..c.shapes.len());
+                    }
                 }
             }
         }
@@ -4932,7 +4938,11 @@ impl Game {
                                     if over_panel(&nfx) {
                                         on_path.push((s, false, i, self.flows[i], col, a, nfx));
                                     } else {
+                                        let from = c.shapes.len();
                                         draw_hit(c, s, n, i, self.flows[i], col, a, nfx);
+                                        if nfx.above {
+                                            above_shapes.push(from..c.shapes.len());
+                                        }
                                     }
                                     if let Some(ring) = theirs {
                                         let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
@@ -5362,7 +5372,11 @@ impl Game {
             } else {
                 &self.map.notes[k]
             };
+            let from = c.shapes.len();
             draw_hit(c, s, n, k, flow, col, a, nfx);
+            if nfx.above {
+                above_shapes.push(from..c.shapes.len());
+            }
         }
         // The combo: on the drum, or with Crossfire under the hit target.
         let combo_y = |h: f32| {
@@ -5576,6 +5590,9 @@ impl Game {
         self.lane_path = if plain { Vec::new() } else { path };
         self.lane_half = half;
         let dest = [dest[0] + dx, dest[1] + dy];
+        // Notes drawn over every effect leave a hole where they were (nothing moves in the
+        // list, which clips count by), and come back on top once the effects are on.
+        let lifted = lift_shapes(c, &above_shapes);
         // A .tko map's trails, stretches and fringes turn and zoom with the playfield.
         crate::tko::screen::local(c, start_shape, &tko_fx, pivot);
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
@@ -5598,6 +5615,14 @@ impl Game {
         crate::tko::screen::copies(c, start_shape, &tko_fx, [w / 2.0, home[1]], unmove);
         // Its tears, washes and flashes lie over the screen as it ends up.
         crate::tko::screen::screen(c, start_shape, &tko_fx, vt);
+        // Over them all, where the playfield took them, the notes drawn over every effect.
+        if !lifted.is_empty() {
+            let from = c.shapes.len();
+            c.shapes.extend(lifted);
+            if angle != 0.0 || zoom != 1.0 || dest != pivot {
+                c.rotate_since(from, pivot, angle, zoom, dest);
+            }
+        }
         let [x0, y0, x1, y1] = local_zone;
         let (x0, x1) = (flip_x(x0).min(flip_x(x1)), flip_x(x0).max(flip_x(x1)));
         self.zone = Some(turned_box(
@@ -7090,6 +7115,23 @@ fn darken_outside(c: &mut Canvas, x: f32, y: f32, r: f32, w: f32) {
     }
 }
 
+/// Copies of the shapes in `ranges`, which are left in place but drawn as nothing: shapes are
+/// counted by their place in the list (clips, effects since a shape), so none may move.
+fn lift_shapes(c: &mut Canvas, ranges: &[std::ops::Range<usize>]) -> Vec<crate::render::Shape> {
+    let mut out = Vec::new();
+    for r in ranges {
+        let Some(shapes) = c.shapes.get_mut(r.clone()) else {
+            continue;
+        };
+        out.extend_from_slice(shapes);
+        for sh in shapes {
+            sh.fill = [0.0; 4];
+            sh.border = [0.0; 4];
+        }
+    }
+    out
+}
+
 /// The box (x, y, w, h) around `rect` turned by `angle` and scaled by `scale` about `pivot`,
 /// which lands on `dest` (as `Canvas::rotate_since` moves shapes).
 fn turned_box(rect: [f32; 4], pivot: [f32; 2], angle: f32, scale: f32, dest: [f32; 2]) -> [f32; 4] {
@@ -7530,6 +7572,27 @@ fn tko_moved(fx: &NoteFx, x: f32, y: f32, (hx, hy): (f32, f32)) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifted_shapes_leave_a_hole_where_they_were_and_nothing_moves() {
+        let mut c = Canvas::default();
+        for x in [10.0, 20.0, 30.0, 40.0] {
+            c.circle(x, 5.0, 3.0, [1.0; 4], [1.0; 4], 1.0);
+        }
+        // Two notes of a shape each.
+        let lifted = lift_shapes(&mut c, &[1..2, 2..3]);
+        assert_eq!(lifted.len(), 2);
+        assert_eq!(lifted[0].center[0], 20.0, "copies, as they were drawn");
+        assert_eq!(lifted[0].fill, [1.0; 4]);
+        assert_eq!(c.shapes.len(), 4, "the list keeps its places");
+        assert_eq!(c.shapes[1].fill, [0.0; 4], "drawn as nothing");
+        assert_eq!(c.shapes[2].border, [0.0; 4]);
+        assert_eq!(c.shapes[3].fill, [1.0; 4], "the rest untouched");
+        assert!(
+            lift_shapes(&mut c, &[9..12, 20..21]).is_empty(),
+            "out of range: none"
+        );
+    }
 
     /// The left end of the HP bar, which ends 18 from the right.
     fn hp_bar_x(w: f32) -> f32 {
