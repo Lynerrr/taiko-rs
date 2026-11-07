@@ -4305,7 +4305,8 @@ impl State {
         let on = |b: bool| if b { on_text() } else { off_text() }.to_string();
         match item {
             Item::ScrollSpeed => format!("{:.2}x", c.scroll_speed),
-            Item::Offset => format!("{:+.0} ms", c.offset_osu_ms),
+            Item::Offset => format!("{:+.0} ms", c.shown_offset()),
+            Item::OffsetScale => offset_scale_name(c.offset_scale).into(),
             Item::VisualOffset => format!("{:+.0} ms", c.visual_offset_ms),
             Item::UpdateChannel => {
                 let picked = self.updater.channel();
@@ -4612,9 +4613,17 @@ impl State {
             Item::ScrollSpeed => {
                 self.cfg.scroll_speed = config::step_scroll_speed(self.cfg.scroll_speed, d)
             }
-            Item::Offset => self.cfg.set_osu_offset(
-                self.cfg.offset_osu_ms + d * if self.modifiers_shift { 5.0 } else { 1.0 },
+            Item::Offset => self.cfg.set_shown_offset(
+                self.cfg.shown_offset() + d * if self.modifiers_shift { 5.0 } else { 1.0 },
             ),
+            Item::OffsetScale => {
+                let scale = match self.cfg.offset_scale {
+                    config::OffsetScale::Osu => config::OffsetScale::Sound,
+                    config::OffsetScale::Sound => config::OffsetScale::Osu,
+                };
+                self.set_offset_scale(scale);
+                return;
+            }
             Item::VisualOffset => {
                 self.cfg.visual_offset_ms += d * if self.modifiers_shift { 5.0 } else { 1.0 }
             }
@@ -5051,6 +5060,17 @@ impl State {
                     format!("{rate} Hz"),
                 )
             }
+            Item::OffsetScale => (
+                strings(
+                    &mut config::OffsetScale::ALL
+                        .iter()
+                        .map(|&scale| offset_scale_name(scale)),
+                ),
+                config::OffsetScale::ALL
+                    .iter()
+                    .position(|&scale| scale == c.offset_scale),
+                String::new(),
+            ),
             Item::UpdateChannel => {
                 let all = [update::Channel::Stable, update::Channel::Dev];
                 let running = update::BUILD_CHANNEL.name();
@@ -5303,6 +5323,7 @@ impl State {
             Item::UpdateChannel => {
                 self.set_update_channel([update::Channel::Stable, update::Channel::Dev][i])
             }
+            Item::OffsetScale => self.set_offset_scale(config::OffsetScale::ALL[i]),
             Item::Accent => self.cfg.accent = render::ACCENTS[i].1,
             Item::NoteColours => self.cfg.note_colours.palette = i,
             Item::InterfaceHides => {
@@ -5414,7 +5435,7 @@ impl State {
             Item::LetterboxY => format!("{:.0}", c.letterbox_pos.1),
             Item::ScrollSpeed => format!("{:.2}", c.scroll_speed),
             Item::Rate => format!("{:.2}", c.rate),
-            Item::Offset => format!("{:.0}", c.offset_osu_ms),
+            Item::Offset => format!("{:.0}", c.shown_offset()),
             Item::VisualOffset => format!("{:.0}", c.visual_offset_ms),
             Item::VsyncTune => format!("{:.0}", c.vsync_tune_ms),
             Item::CalibrationBpm => format!("{:.0}", c.calibration_bpm),
@@ -5510,7 +5531,7 @@ impl State {
             Item::Rate => {
                 c.rate = ((number()? * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1)
             }
-            Item::Offset => c.set_osu_offset(number()?.round().clamp(-1000.0, 1000.0)),
+            Item::Offset => c.set_shown_offset(number()?.round().clamp(-1000.0, 1000.0)),
             Item::VisualOffset => c.visual_offset_ms = number()?.round().clamp(-1000.0, 1000.0),
             Item::VsyncTune => c.vsync_tune_ms = number()?.round().clamp(-200.0, 200.0),
             Item::CalibrationBpm => {
@@ -6926,7 +6947,7 @@ impl State {
         if let (Some(e), false) = (&mut found, vsync) {
             // The suggestion is in the global offset's own terms (osu!'s). Hitting late by e is
             // the clock's offset up by e, which is the osu! one down by e.
-            e.suggested_offset = (self.cfg.offset_osu_ms - e.error_ms).round();
+            e.suggested_offset = (self.cfg.shown_offset() - e.error_ms).round();
         }
         if let Some(e) = &found {
             audiolog::line(&format!(
@@ -6970,7 +6991,7 @@ impl State {
                     self.cfg.save();
                     self.toast(tr!("vsync compensation fine tune set to {:+.0} ms", "垂直同期の補正の微調整を{:+.0} msにしました", "точная компенсация vsync: {:+.0} мс"; self.cfg.vsync_tune_ms));
                 } else if apply {
-                    self.cfg.set_osu_offset(estimate.suggested_offset);
+                    self.cfg.set_shown_offset(estimate.suggested_offset);
                     self.cfg.save();
                     self.toast(tr!("offset set to {:+.0} ms", "オフセットを{:+.0} msにしました", "смещение: {:+.0} мс"; estimate.suggested_offset));
                 }
@@ -7058,12 +7079,12 @@ impl State {
             // to the global offset.
             Some(h) if self.modifiers_shift => {
                 // Late by e is the clock's offset up by e, so osu!'s down by e.
-                let was = self.cfg.offset_osu_ms;
-                let osu = game.suggested_osu_offset(h.estimate.suggested_offset);
-                self.cfg.set_osu_offset(osu);
+                let was = self.cfg.shown_offset();
+                let shown = game.suggested_shown_offset(h.estimate.suggested_offset);
+                self.cfg.set_shown_offset(shown);
                 self.cfg.save();
                 self.refresh_play_offset();
-                self.toast(tr!("offset {:+.0} ms for all maps (was {was:+.0})", "全譜面のオフセット {:+.0} ms (前は{was:+.0})", "смещение {:+.0} мс для всех карт (было {was:+.0})"; self.cfg.offset_osu_ms));
+                self.toast(tr!("offset {:+.0} ms for all maps (was {was:+.0})", "全譜面のオフセット {:+.0} ms (前は{was:+.0})", "смещение {:+.0} мс для всех карт (было {was:+.0})"; self.cfg.shown_offset()));
             }
             Some(h) => {
                 let was = self.map_offset(Some(entry));
@@ -7145,6 +7166,13 @@ impl State {
         rate.max(0.01)
     }
 
+    /// Switches the scale the global offset is set by; the timing stays as it is.
+    fn set_offset_scale(&mut self, scale: config::OffsetScale) {
+        self.cfg.set_offset_scale(scale);
+        self.cfg.save();
+        self.refresh_play_offset();
+    }
+
     fn refresh_play_offset(&mut self) {
         self.follow_latency();
         let was = self.play_offset;
@@ -7161,7 +7189,7 @@ impl State {
         }
         self.preview.map_offset = offset;
         if let Scene::Play { game, .. } | Scene::MpPlay { game, .. } = &mut self.scene {
-            game.osu_offset = self.cfg.offset_osu_ms;
+            game.shown_offset = self.cfg.shown_offset();
             game.latency = self.cfg.offset_latency_ms;
         }
     }
@@ -7387,15 +7415,15 @@ impl State {
                     Some(entry) => {
                         let ms = self.map_offset(Some(entry)) + d;
                         self.set_map_offset(entry, ms);
-                        let text = tr!("this map: offset {ms:+.0} ms (total {:+.0})", "この譜面: オフセット {ms:+.0} ms (合計 {:+.0})", "эта карта: смещение {ms:+.0} мс (всего {:+.0})"; config::osu_offset_of(self.play_offset, self.cfg.offset_latency_ms));
+                        let text = tr!("this map: offset {ms:+.0} ms (total {:+.0})", "この譜面: オフセット {ms:+.0} ms (合計 {:+.0})", "эта карта: смещение {ms:+.0} мс (всего {:+.0})"; self.cfg.shown_of_play(self.play_offset));
                         self.toast(text);
                     }
                     None => {
                         // As in osu!: + brings the notes earlier.
-                        self.cfg.set_osu_offset(self.cfg.offset_osu_ms + d);
+                        self.cfg.set_shown_offset(self.cfg.shown_offset() + d);
                         self.cfg.save();
                         self.refresh_play_offset();
-                        self.toast(tr!("offset {:+.0} ms (all maps)", "オフセット {:+.0} ms (全譜面)", "смещение {:+.0} мс (все карты)"; self.cfg.offset_osu_ms));
+                        self.toast(tr!("offset {:+.0} ms (all maps)", "オフセット {:+.0} ms (全譜面)", "смещение {:+.0} мс (все карты)"; self.cfg.shown_offset()));
                     }
                 }
                 return true;
@@ -15904,7 +15932,7 @@ impl State {
                 let current = if *vsync {
                     self.cfg.vsync_tune_ms
                 } else {
-                    self.cfg.offset_osu_ms
+                    self.cfg.shown_offset()
                 };
                 calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
             }
@@ -19876,5 +19904,13 @@ mod pointer_wake_tests {
         // Bigger windows need a bigger move, small ones still ignore single-pixel noise.
         assert!(pointer_wake_px(2160.0) > wake);
         assert!(pointer_wake_px(300.0) >= 6.0);
+    }
+}
+
+/// What the offset scale setting shows for `scale`.
+fn offset_scale_name(scale: config::OffsetScale) -> &'static str {
+    match scale {
+        config::OffsetScale::Osu => "osu!",
+        config::OffsetScale::Sound => tr!("By sound", "音基準", "По звуку"),
     }
 }

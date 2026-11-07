@@ -2741,3 +2741,26 @@ fn the_offset_key_between_songs_raises_the_osu_offset() {
     assert!(s.handle_global_key(KeyCode::Minus, None));
     assert_eq!(s.cfg.offset_osu_ms, -1.0);
 }
+
+#[test]
+fn the_offset_scale_setting_switches_the_number_not_the_timing() {
+    let mut s = layout_tests::state();
+    s.cfg = config::Config::default();
+    s.scene = Scene::Select;
+    s.cfg.mods = Mods::NONE;
+    s.cfg.rate = 1.0;
+    s.apply_latency(7.0, true);
+    s.cfg.set_osu_offset(-20.0);
+    s.refresh_play_offset();
+    let before = s.play_offset;
+    assert_eq!(s.setting_value(Item::OffsetScale), "osu!");
+    s.adjust_setting(Item::OffsetScale, 1, None);
+    assert_eq!(s.cfg.offset_scale, config::OffsetScale::Sound);
+    assert_eq!(s.play_offset, before, "the timing doesn't move");
+    assert_eq!(s.setting_value(Item::Offset), "+10 ms");
+    // + still brings the notes earlier.
+    s.adjust_setting(Item::Offset, 1, None);
+    s.refresh_play_offset();
+    assert_eq!(s.setting_value(Item::Offset), "+11 ms");
+    assert_eq!(s.play_offset, before - 1.0);
+}

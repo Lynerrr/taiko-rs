@@ -100,6 +100,8 @@ pub enum Item {
     Guide,
     CheckUpdates,
     UpdateChannel,
+    /// What the global offset is set by: osu!'s universal offset or the sound.
+    OffsetScale,
     Update,
     /// Opens what's new.
     Changelog,
@@ -122,7 +124,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 133] = [
+pub const ITEMS: [(&str, Item); 134] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -197,6 +199,7 @@ pub const ITEMS: [(&str, Item); 133] = [
     ("INPUT", Item::Hotkey(32)),
     ("INPUT", Item::Hotkey(33)),
     ("OFFSET", Item::Offset),
+    ("OFFSET", Item::OffsetScale),
     ("OFFSET", Item::VisualOffset),
     ("OFFSET", Item::Calibrate),
     ("OFFSET", Item::ResetMapOffsets),
@@ -439,11 +442,8 @@ impl Item {
                 "レートで音程を保つ",
                 "Рейт сохраняет тон"
             ),
-            Item::Offset => tr!(
-                "Universal offset (as in osu!)",
-                "ユニバーサルオフセット (osu!と同じ)",
-                "Универсальное смещение (как в osu!)"
-            ),
+            Item::Offset => tr!("Global offset", "全体のオフセット", "Общее смещение"),
+            Item::OffsetScale => tr!("Offset scale", "オフセットの基準", "Шкала смещения"),
             Item::VisualOffset => tr!("Visual offset", "表示オフセット", "Смещение картинки"),
             Item::Calibrate => tr!(
                 "Offset calibration",
@@ -729,6 +729,7 @@ impl Item {
             | Item::PresentMode
             | Item::Renderer
             | Item::UpdateChannel
+            | Item::OffsetScale
             | Item::Skin
             | Item::SkinParts
             | Item::SkinPart(_)
@@ -836,9 +837,14 @@ impl Item {
                 "Вкл: музыка просто быстрее (DT). Выкл: тон растёт со скоростью (nightcore)."
             ),
             Item::Offset => tr!(
-                "Works as in osu!: the same number there is the same here. For every map; positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top.",
-                "osu!と同じ働き: osu!の値をそのまま使えます。全譜面に共通。プラスでノーツが早くなるので、叩くのが遅れるなら下げます。曲中の - / + でその譜面だけのオフセットを足せます。",
-                "Работает как в osu!: то же число там и здесь. Для всех карт; плюс сдвигает ноты раньше, так что уменьшите, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху."
+                "For every map. Positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top. Where 0 is depends on the offset scale below.",
+                "全譜面に共通。プラスでノーツが早くなるので、叩くのが遅れるなら下げます。曲中の - / + でその譜面だけのオフセットを足せます。0の位置は下のオフセットの基準で決まります。",
+                "Для всех карт. Плюс сдвигает ноты раньше, так что уменьшите, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху. Где ноль, зависит от шкалы смещения ниже."
+            ),
+            Item::OffsetScale => tr!(
+                "osu!: 0 is osu!'s, so an osu! universal offset carries over as it is. By sound: 0 is hitting exactly when you hear the note (the audio latency is taken off), and the number is how far ahead of the sound you hit. Switching keeps your timing as it is.",
+                "osu!: 0はosu!と同じなので、osu!のユニバーサルオフセットをそのまま使えます。音基準: 0は音が聞こえた瞬間に叩くこと (音声の遅延は差し引き済み) で、値は音よりどれだけ早く叩くかです。切り替えてもタイミングは変わりません。",
+                "osu!: ноль как в osu!, так что универсальное смещение оттуда подходит как есть. По звуку: ноль — удар ровно в момент, когда слышите ноту (задержка звука уже учтена), а число — на сколько раньше звука вы бьёте. При переключении тайминг не меняется."
             ),
             Item::Calibrate => tr!(
                 "Enter: hit along to a click track by ear, with no notes to watch; it measures and sets your offset.",
