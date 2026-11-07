@@ -826,8 +826,17 @@ fn shimmer_name(c: &mut Canvas, x: f32, y: f32, name: &str, colours: (u32, u32),
 
 const TAG_SIZE: f32 = 5.5;
 
+/// What a group's tag says: three characters at most, so every pill is about as wide ("LVD"
+/// for the loved nominators; a longer tag from a newer server is cut).
+fn tag_label(tag: &str) -> &str {
+    match tag {
+        "LOVED" => "LVD",
+        _ => tag.char_indices().nth(3).map_or(tag, |(i, _)| &tag[..i]),
+    }
+}
+
 fn tag_width(tag: &str) -> f32 {
-    Canvas::text_width(TAG_SIZE, tag) + 6.0
+    Canvas::text_width(TAG_SIZE, tag_label(tag)) + 6.0
 }
 
 /// A group's tag, a small pill at `x` on a name row; returns its width.
@@ -845,7 +854,7 @@ fn group_tag(c: &mut Canvas, x: f32, y: f32, tag: &str, a: f32) -> f32 {
         rgba(colour, 0.85 * a),
         1.0,
     );
-    c.text(x + 3.0, top + 1.5, SIZE, rgba(light, a), tag);
+    c.text(x + 3.0, top + 1.5, SIZE, rgba(light, a), tag_label(tag));
     w
 }
 
@@ -2631,6 +2640,18 @@ mod tests {
         s.set_groups(vec![("semfi".into(), tags(&["200"]))]);
         assert!(s.tags_of("auneu").is_empty());
         assert_eq!(s.tags_of("semfi"), ["200"]);
+    }
+
+    #[test]
+    fn group_tags_say_three_characters_at_most() {
+        assert_eq!(tag_label("DEV"), "DEV");
+        assert_eq!(tag_label("LOVED"), "LVD");
+        assert_eq!(tag_label("200"), "200");
+        assert_eq!(tag_label("SOMETHING NEW"), "SOM");
+        assert_eq!(tag_label("ÄÖÜß"), "ÄÖÜ");
+        assert_eq!(tag_label("GM"), "GM");
+        // The colours still go by the whole group.
+        assert_eq!(group_colours("LOVED"), (0xFF66AA, 0xC39BFF));
     }
 
     #[test]
