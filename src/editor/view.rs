@@ -572,6 +572,9 @@ pub struct View {
     seek_to: Option<f64>,
     view_to: Option<f64>,
     glide_tick: Option<Instant>,
+    /// Where the last wheel notch sent the playhead while playing, and when: the next notch
+    /// goes on from there, not from where playback has got to since (`wheel_base`).
+    wheel_chain: Option<(f64, Instant)>,
 }
 
 fn fmt_time(ms: f64) -> String {
@@ -710,6 +713,7 @@ impl View {
             last_tick: None,
             seek_to: None,
             view_to: None,
+            wheel_chain: None,
             glide_tick: None,
         };
         v.follow(true);
@@ -2553,6 +2557,18 @@ impl View {
             let per = if keys.shift { 4 } else { 1 };
             // Notches in quick succession go on from where the last one is gliding to.
             let mut t = self.seek_to.unwrap_or(self.ed.time);
+            if self.playing.is_some()
+                && notches > 0
+                && let Some((target, at)) = self.wheel_chain
+                && let Some(base) = wheel_base(
+                    target,
+                    at.elapsed().as_secs_f64() * 1000.0,
+                    self.speed(),
+                    self.ed.time,
+                )
+            {
+                t = base;
+            }
             let view = self.view_to.unwrap_or(self.view_start);
             let w = self.timeline_w() as f64 * self.ms_per_px;
             if t < view || t > view + w * 0.96 {
@@ -2565,6 +2581,10 @@ impl View {
                 t = timing::step(&self.ed.chart.timing, t, notches < 0, self.ed.snap);
             }
             self.seek_smoothly(t);
+            self.wheel_chain = self
+                .playing
+                .is_some()
+                .then(|| (t.max(0.0).round(), Instant::now()));
         }
         true
     }
@@ -3169,6 +3189,20 @@ fn digit(c: KeyCode) -> Option<char> {
         KeyCode::Digit9 | KeyCode::Numpad9 => '9',
         _ => return None,
     })
+}
+
+/// How long a wheel notch while playing still counts as part of the same scroll.
+const WHEEL_CHAIN_MS: f64 = 600.0;
+
+/// Where a wheel notch while playing steps from. Playback keeps moving between notches, so
+/// stepping from the playhead would give back what the music has carried it forward by (one
+/// snap back, a notch or two later it is level again: you'd have to fight it). A notch soon after
+/// the last one goes on from the place that one sent the playhead to (`target`), as long as the
+/// playhead is still where playback from there would have it (`now`): not clicked or dragged
+/// elsewhere meanwhile. `age_ms` is the time since that notch, `speed` the playback rate.
+fn wheel_base(target: f64, age_ms: f64, speed: f64, now: f64) -> Option<f64> {
+    let expected = target + age_ms * speed;
+    (age_ms <= WHEEL_CHAIN_MS && (now - expected).abs() <= 50.0).then_some(target)
 }
 
 #[cfg(test)]
@@ -4398,6 +4432,56 @@ mod tests {
             },
         );
         assert_eq!(v.ed.tool, Tool::Roll);
+    }
+
+    #[test]
+    fn a_notch_while_playing_goes_on_from_the_last_target() {
+        // Back one step from 1000, then 100 ms on the music has carried it to 1100.
+        assert_eq!(wheel_base(875.0, 100.0, 1.0, 975.0), Some(875.0));
+        // Slow playback moves less.
+        assert_eq!(wheel_base(875.0, 200.0, 0.5, 975.0), Some(875.0));
+        // Moved elsewhere meanwhile, or too long ago: from the playhead.
+        assert_eq!(wheel_base(875.0, 100.0, 1.0, 5000.0), None);
+        assert_eq!(wheel_base(875.0, 900.0, 1.0, 1775.0), None);
+    }
+
+    #[test]
+    fn wheel_notches_while_playing_move_back_though_the_music_runs_on() {
+        let mut v = view();
+        v.ed.snap = 1;
+        v.ed.time = 10_000.0;
+        v.playing = Some((Instant::now(), 10_000.0));
+        v.follow(false);
+        v.wheel(-1, Keys::default());
+        let first = v.ed.time;
+        let step = first - 10_000.0;
+        assert!(step > 300.0, "{step}");
+        // Notches up go back; the music runs on 200 ms between them, which must not eat the step.
+        v.wheel(1, Keys::default());
+        let back = v.ed.time;
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        v.update(Instant::now(), None);
+        v.wheel(1, Keys::default());
+        assert_eq!(
+            v.ed.time,
+            back - step,
+            "a whole step back from the last target"
+        );
+    }
+
+    #[test]
+    fn a_forward_notch_while_playing_never_lands_before_the_playhead() {
+        let mut v = view();
+        v.ed.snap = 1;
+        v.ed.time = 10_000.0;
+        v.playing = Some((Instant::now(), 10_000.0));
+        v.follow(false);
+        v.wheel(1, Keys::default());
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        v.update(Instant::now(), None);
+        let live = v.ed.time;
+        v.wheel(-1, Keys::default());
+        assert!(v.ed.time >= live, "{} < {live}", v.ed.time);
     }
 
     #[test]
