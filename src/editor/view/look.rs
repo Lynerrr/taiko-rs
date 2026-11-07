@@ -130,7 +130,7 @@ fn motion_look(a: MAct) -> Look {
         | MAct::ShowSize(_)
         | MAct::Reveal(_) => Look::Chip,
         MAct::Show | MAct::Above => Look::Toggle,
-        MAct::Clear | MAct::ClearScroll => Look::Danger,
+        MAct::Clear | MAct::ClearScroll | MAct::DeleteGroup => Look::Danger,
         MAct::Groups(_) => Look::Step,
         MAct::Switch(_)
         | MAct::SelectNotes

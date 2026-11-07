@@ -89,6 +89,8 @@ pub enum MAct {
     Groups(bool),
     /// The picked notes are drawn over every effect, or not again.
     Above,
+    /// Deletes the group being shaped, with the effects on it.
+    DeleteGroup,
 }
 
 /// What to do when nothing is picked to shape.
@@ -340,6 +342,22 @@ impl View {
             (MAct::SelectNotes, Some(g)) => {
                 self.ed.select_group(g);
                 false
+            }
+            (MAct::DeleteGroup, Some(g)) => {
+                let name = self
+                    .ed
+                    .gimmick()
+                    .and_then(|gm| gm.groups.get(g))
+                    .map_or_else(String::new, |gr| gr.name.clone());
+                let gone = self.ed.delete_group(g);
+                if gone {
+                    self.m_group = None;
+                    self.m_key = None;
+                    self.status = format!(
+                        "{name} deleted, with its motion and the effects on it; its notes are plain notes again (Ctrl+Z brings it back)"
+                    );
+                }
+                gone
             }
             (MAct::Copy, Some(g)) => {
                 self.m_copied = self.ed.motion_of(g);
@@ -744,6 +762,7 @@ impl View {
                 if self.m_tab == 0 && self.ed.path_of(g).is_some() {
                     items.push(("Remove path".to_string(), Btn::M(MAct::Clear), false));
                 }
+                items.push(("Delete".to_string(), Btn::M(MAct::DeleteGroup), false));
                 let (name, n) = self
                     .ed
                     .gimmick()
@@ -794,7 +813,19 @@ impl View {
         c.text(x, y + 3.0, 6.5, head, &Canvas::fit(6.5, lw, &step));
         if !items.is_empty() {
             // (Wrapping under itself in a narrow window rather than over what follows.)
+            let first = self.buttons.len();
             y = self.chips(c, x + lw + 6.0, y, inner - lw - 6.0, &items) - CHIP_ROW;
+            let delete: Vec<[f32; 4]> = self.buttons[first..]
+                .iter()
+                .filter(|(_, b)| *b == Btn::M(MAct::DeleteGroup))
+                .map(|(r, _)| *r)
+                .collect();
+            for r in delete {
+                self.tips.push((
+                    r,
+                    "Deletes this group: its path, moves and disguise, and the effect blocks on it. Its notes become plain notes. Ctrl+Z brings it back.".to_string(),
+                ));
+            }
         }
         y += CHIP_ROW + 2.0;
         if self.m_tab == 0 {
