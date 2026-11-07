@@ -2459,3 +2459,26 @@ fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
     });
     assert!(rows.is_empty(), "{rows:?}");
 }
+
+/// An installed update restarts the game only where that loses nothing.
+#[test]
+fn an_update_restarts_the_game_only_in_a_quiet_menu() {
+    let mut s = state();
+    for scene in [Scene::Select, Scene::Download, Scene::MpMenu] {
+        s.scene = scene;
+        assert!(s.can_restart());
+    }
+    s.scene = Scene::Settings {
+        prev: Box::new(Scene::Select),
+    };
+    assert!(s.can_restart());
+    // The settings over something that's still going.
+    s.scene = Scene::Settings {
+        prev: Box::new(Scene::Lobby),
+    };
+    assert!(!s.can_restart());
+    s.scene = Scene::Lobby;
+    assert!(!s.can_restart());
+    s.scene = Scene::MpResults;
+    assert!(!s.can_restart());
+}
