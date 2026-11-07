@@ -912,6 +912,10 @@ pub enum Down {
         from: String,
         at: u64,
     },
+    /// Players in a group, for the tag by their name in chats: (name as written, its groups'
+    /// tags, such as "DEV", "LOVED" and "200"). Sent on connecting and whenever a group
+    /// changes; games from before it skip it, and a tag a game doesn't know is shown plain.
+    Groups(Vec<(String, Vec<String>)>),
     /// For admins: the answer to `AdminOp::Overview`.
     AdminOverview(Box<AdminOverview>),
     /// For admins: the answer to `AdminOp::Lookup`.

@@ -966,6 +966,10 @@ fn assert_every_screen_fits() {
     );
     s.social.cursor = 0;
     s.social.input = "a message being typed that is longer than the input box can show".into();
+    // The longest name with two group tags in front of it.
+    let tags = |t: &[&str]| t.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+    s.social
+        .set_groups(vec![(LONG_NAME.into(), tags(&["DEV", "200"]))]);
     check(&mut s, "friends chat", &mut out);
     s.social.unread.insert("bob".into(), 12);
     s.social.cursor = 2;
@@ -989,6 +993,18 @@ fn assert_every_screen_fits() {
     s.social.global = (0..40)
         .map(|i| line(&format!("{LONG_NAME}{i}"), ""))
         .collect();
+    s.social.set_groups(
+        (30..40)
+            .map(|i| {
+                let t: &[&str] = match i % 3 {
+                    0 => &["DEV", "200"],
+                    1 => &["LOVED"],
+                    _ => &["SOMETHING NEW"],
+                };
+                (format!("{LONG_NAME}{i}"), tags(t))
+            })
+            .collect(),
+    );
     for (i, tier, secret) in [
         (33, 1, false),
         (35, 2, false),
