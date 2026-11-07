@@ -776,7 +776,8 @@ fn a_maps_offset_goes_by_with_its_song_and_the_global_one_doesnt() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
     s.cfg.mods = Mods::NONE;
-    s.cfg.offset_ms = -25.0;
+    s.cfg.set_osu_offset(2.0);
+    assert_eq!(s.cfg.offset_ms, -25.0);
     let entry = s.select.selected().expect("a map");
     s.set_map_offset(entry, 30.0);
 
@@ -989,7 +990,7 @@ fn calibrating_from_the_guide_comes_back_to_it() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert_eq!(s.guide, None, "not over its results either");
     s.leave_calibration(true);
-    assert_eq!(s.cfg.offset_ms, 12.0);
+    assert_eq!(s.cfg.offset_osu_ms, 12.0);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert_eq!(
         s.guide,
@@ -1017,7 +1018,7 @@ fn typed_values_are_clamped_and_bad_ones_refused() {
     s.apply_typed(Item::Rate, "1.337").unwrap();
     assert_eq!(s.cfg.rate, 1.34);
     s.apply_typed(Item::Offset, "-23.4 ms").unwrap();
-    assert_eq!(s.cfg.offset_ms, -23.0);
+    assert_eq!(s.cfg.offset_osu_ms, -23.0);
     s.apply_typed(Item::MusicVolume, "35%").unwrap();
     assert!((s.cfg.music_volume - 0.35).abs() < 1e-6);
     s.apply_typed(Item::ResumeDelay, "off").unwrap();
@@ -1149,7 +1150,7 @@ fn vsync_lead_goes_by_the_refresh_the_frames_came_at() {
 #[test]
 fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
     let mut s = layout_tests::state();
-    s.cfg.offset_ms = 12.0;
+    s.cfg.set_osu_offset(-35.0);
     s.cfg.vsync_tune_ms = 3.0;
     s.start_calibration_as(true);
     assert!(
@@ -2648,4 +2649,69 @@ fn leaving_a_replay_forgets_its_speed() {
     s.scene = Scene::Select;
     s.poll_replay_speed();
     assert_eq!((s.replay_speed, s.replay_speed_wanted), (1.0, 1.0));
+}
+
+#[test]
+fn a_config_from_before_plays_as_it_did_until_the_latency_is_known_then_without_a_jump() {
+    let mut s = layout_tests::state();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.cfg.mods = Mods::NONE;
+    s.cfg.rate = 1.0;
+    s.cfg.offset_ms = -25.0;
+    s.cfg.offset_pending = true;
+    s.refresh_play_offset();
+    let entry = s.select.selected().expect("a map");
+    let own = s.map_offset(Some(entry));
+    assert_eq!(s.play_offset, -25.0 + own);
+    // A latency still moving about doesn't convert it, and doesn't move the play offset.
+    s.apply_latency(40.0, false);
+    s.refresh_play_offset();
+    assert_eq!((s.cfg.offset_pending, s.play_offset), (true, -25.0 + own));
+    // Settled at 32 ms: -25 played here is -30 in osu!, and plays the same.
+    s.apply_latency(32.0, true);
+    s.refresh_play_offset();
+    assert_eq!((s.cfg.offset_pending, s.cfg.offset_osu_ms), (false, -30.0));
+    assert_eq!(s.play_offset, -25.0 + own, "no jump");
+    // The latency changing later keeps the osu! offset and moves the play one.
+    s.apply_latency(37.0, true);
+    s.refresh_play_offset();
+    assert_eq!((s.cfg.offset_osu_ms, s.play_offset), (-30.0, -30.0 + own));
+}
+
+#[test]
+fn a_new_players_offset_is_osus_zero_and_plus_brings_the_notes_earlier() {
+    let mut s = layout_tests::state();
+    s.cfg = config::Config::default();
+    s.play_when_scanned = false;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.scene = Scene::Select;
+    s.cfg.mods = Mods::NONE;
+    s.cfg.rate = 1.0;
+    s.apply_latency(20.0, true);
+    s.refresh_play_offset();
+    assert_eq!(s.cfg.offset_osu_ms, 0.0);
+    let entry = s.select.selected().expect("a map");
+    let own = s.map_offset(Some(entry));
+    let before = s.play_offset;
+    assert_eq!(before, -23.0 - 20.0 + own);
+    // The settings step and the in-play + both raise it, and the notes come earlier.
+    s.adjust_setting(Item::Offset, 1, None);
+    s.refresh_play_offset();
+    assert_eq!(s.cfg.offset_osu_ms, 1.0);
+    assert_eq!(s.play_offset, before - 1.0);
+}
+
+#[test]
+fn the_offset_key_between_songs_raises_the_osu_offset() {
+    let mut s = layout_tests::state();
+    s.cfg = config::Config::default();
+    s.scene = Scene::Select;
+    assert!(s.song_entry().is_none());
+    assert!(s.handle_global_key(KeyCode::Equal, None));
+    assert_eq!(s.cfg.offset_osu_ms, 1.0);
+    assert!(s.handle_global_key(KeyCode::Minus, None));
+    assert!(s.handle_global_key(KeyCode::Minus, None));
+    assert_eq!(s.cfg.offset_osu_ms, -1.0);
 }

@@ -151,8 +151,19 @@ pub struct Config {
     pub screenshot_to: ScreenshotTo,
     /// The interface's language.
     pub language: crate::lang::Lang,
-    /// Positive when your audio reaches you late; notes are shifted later by this much.
+    /// The global offset as osu! has it (its universal offset): positive brings the notes
+    /// earlier. This is what the player sets and sees; `offset_ms` follows from it.
+    pub offset_osu_ms: f64,
+    /// The same offset the way the clock takes it, `-offset_osu_ms - OSU_TIMING_MS - latency`:
+    /// positive when your audio reaches you late, notes are shifted later by this much. Kept up
+    /// to date by `sync_offset` (`set_latency` follows the output latency). While
+    /// `offset_pending` it is the player's old setting, played as it was.
     pub offset_ms: f64,
+    /// The output latency (ms) `offset_ms` was worked out with: what the clock took off.
+    pub offset_latency_ms: f64,
+    /// The config has the old `offset_ms` and no `offset` yet: it becomes one the first time the
+    /// engine reports its settled latency (`set_latency`).
+    pub offset_pending: bool,
     /// Notes are drawn this many ms ahead to make up for display latency (judging is unaffected).
     pub visual_offset_ms: f64,
     /// With vsync, notes drawn where they'll be when the frame is shown (`State::vsync_lead`),
@@ -362,10 +373,18 @@ pub struct Config {
     pub songs: Vec<PathBuf>,
 }
 
-/// The offset of a first launch. 0 is exact against what the speakers play, but players press
-/// ahead of what they hear: online plays settle at about -25 on Linux and -35 on Windows. osu!
-/// hides this, subtracting no output latency and with maps timed about 23 ms before their drums.
-pub const NEW_PLAYER_OFFSET_MS: f64 = -25.0;
+/// The play offset (what the clock subtracts, `Config::offset_ms`) that feels like osu!'s
+/// universal offset `osu` when the clock also takes `latency` ms of output latency off. osu! adds
+/// its offset to a clock with no latency taken off and plays maps as they are, where here maps
+/// from .osu files are shifted `OSU_TIMING_MS` later and the offset is subtracted.
+pub fn play_offset_of(osu: f64, latency: f64) -> f64 {
+    -osu - crate::beatmap::OSU_TIMING_MS - latency
+}
+
+/// The osu! universal offset a play offset `play` feels like (`play_offset_of` the other way).
+pub fn osu_offset_of(play: f64, latency: f64) -> f64 {
+    -play - crate::beatmap::OSU_TIMING_MS - latency
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -378,7 +397,11 @@ impl Default for Config {
                 ScreenshotTo::Clipboard
             },
             language: crate::lang::Lang::En,
-            offset_ms: NEW_PLAYER_OFFSET_MS,
+            // osu!'s default: a new player starts where an osu! player does.
+            offset_osu_ms: 0.0,
+            offset_ms: play_offset_of(0.0, 0.0),
+            offset_latency_ms: 0.0,
+            offset_pending: false,
             visual_offset_ms: 0.0,
             vsync_compensation: true,
             vsync_tune_ms: 0.0,
@@ -957,12 +980,13 @@ impl Config {
 
     /// The settings in the config file's `text`.
     pub(crate) fn parse_text(text: &str) -> Config {
-        // A config from before the default moved keeps what it played on.
         let mut cfg = Config {
             existed: true,
-            offset_ms: 0.0,
             ..Config::default()
         };
+        // The offset is worked out after the lines: `offset` and `offset_latency_ms` can come in
+        // any order, and `offset_ms` may have been changed by an older build.
+        let (mut old_offset, mut new_offset) = (None, None);
         let mut osu_scroll_speed = false;
         for line in text.lines() {
             let line = line.trim();
@@ -974,7 +998,11 @@ impl Config {
             };
             let (k, v) = (k.trim(), v.trim());
             match k {
-                "offset_ms" => cfg.offset_ms = v.parse().unwrap_or(cfg.offset_ms),
+                "offset_ms" => old_offset = v.parse::<f64>().ok().or(old_offset),
+                "offset" => new_offset = v.parse::<f64>().ok().or(new_offset),
+                "offset_latency_ms" => {
+                    cfg.offset_latency_ms = v.parse().unwrap_or(cfg.offset_latency_ms)
+                }
                 "visual_offset_ms" => {
                     cfg.visual_offset_ms = v.parse().unwrap_or(cfg.visual_offset_ms)
                 }
@@ -1194,7 +1222,96 @@ impl Config {
                 * SCROLL_STEP)
                 .clamp(0.3, 4.0);
         }
+        cfg.read_offset(old_offset, new_offset);
         cfg
+    }
+
+    /// Settles the offset from the config's lines: `old` is `offset_ms`, `new` is `offset`.
+    ///
+    /// - Both: this build wrote them together (`to_text`), the old one worked out with the latency
+    ///   it also wrote. If `offset_ms` is not what `offset` makes of it, an older build changed it
+    ///   since, and the player's choice is the newer one: `offset` is worked out from it again.
+    /// - Only `offset_ms`: a config from before the osu! style (or one an older build stripped of
+    ///   the new lines). It plays as it was and is converted once the latency is known
+    ///   (`set_latency`).
+    /// - Neither: a new player, at osu!'s 0.
+    fn read_offset(&mut self, old: Option<f64>, new: Option<f64>) {
+        if !(self.offset_latency_ms.is_finite() && self.offset_latency_ms >= 0.0) {
+            self.offset_latency_ms = 0.0;
+        }
+        match (old, new) {
+            (Some(x), Some(o)) => {
+                self.offset_osu_ms = o;
+                if (x - play_offset_of(o, self.offset_latency_ms)).abs() > 0.01 {
+                    self.offset_osu_ms = osu_offset_of(x, self.offset_latency_ms);
+                }
+                self.sync_offset();
+            }
+            (Some(x), None) => {
+                self.offset_ms = x;
+                self.offset_pending = true;
+            }
+            (None, Some(o)) => {
+                self.offset_osu_ms = o;
+                self.sync_offset();
+            }
+            (None, None) => self.sync_offset(),
+        }
+    }
+
+    /// Works `offset_ms` out from the osu! offset and the latency (not while the old offset is
+    /// still waiting to be converted: that one is played as it is).
+    pub fn sync_offset(&mut self) {
+        if !self.offset_pending {
+            self.offset_ms = play_offset_of(self.offset_osu_ms, self.offset_latency_ms);
+        }
+    }
+
+    /// Sets the global offset the osu! way: positive brings the notes earlier.
+    pub fn set_osu_offset(&mut self, osu: f64) {
+        // A player's own choice leaves nothing to convert.
+        self.offset_pending = false;
+        self.offset_osu_ms = osu;
+        self.sync_offset();
+    }
+
+    /// Follows the output latency the clock takes off. `settled`: the engine has stopped changing
+    /// its mind about it (`Engine::latency_settled`). A config waiting to be converted
+    /// (`offset_pending`) is, at the first settled latency, given the osu! offset that plays the
+    /// same as its old one did, and from then on `offset_ms` follows the latency, so the notes are
+    /// where they were. Returns whether the config should be saved now.
+    pub fn set_latency(&mut self, latency: f64, settled: bool) -> bool {
+        if !latency.is_finite() || latency < 0.0 {
+            return false;
+        }
+        let mut converted = false;
+        if self.offset_pending && settled {
+            self.offset_osu_ms = osu_offset_of(self.offset_ms, latency);
+            self.offset_pending = false;
+            converted = true;
+        }
+        self.offset_latency_ms = latency;
+        self.sync_offset();
+        converted
+    }
+
+    /// The offset lines of the config file. Older builds read `offset_ms` and keep the other
+    /// lines when they save: if one changes `offset_ms`, the next start notices (`read_offset`).
+    fn offset_lines(&self) -> String {
+        if self.offset_pending {
+            return format!("offset_ms = {}", self.offset_ms);
+        }
+        format!(
+            "# as in osu!: positive brings the notes earlier\n\
+             offset = {}\n\
+             # the same for older versions of the game (positive shifts the notes later), worked out with\n\
+             # the output latency below; if it is changed there, the new value is the one used\n\
+             offset_ms = {}\n\
+             offset_latency_ms = {}",
+            self.offset_osu_ms,
+            play_offset_of(self.offset_osu_ms, self.offset_latency_ms),
+            self.offset_latency_ms
+        )
     }
 
     /// The settings as the config file has them.
@@ -1217,7 +1334,7 @@ impl Config {
              saved_presets = {}\n\
              # where each playfield size was last put: WxH@x/y (fractions of the screen)\n\
              preset_spots = {}\n\
-             offset_ms = {}\n\
+             {}\n\
              # notes drawn this many ms early to make up for display latency (judging is unaffected)\n\
              visual_offset_ms = {}\n\
              # 1.00 = osu!'s scroll speed\n\
@@ -1301,7 +1418,7 @@ impl Config {
                 .map(|((w, h), (x, y))| format!("{w}x{h}@{x:.4}/{y:.4}"))
                 .collect::<Vec<_>>()
                 .join(", "),
-            self.offset_ms,
+            self.offset_lines(),
             self.visual_offset_ms,
             self.scroll_speed,
             self.master_volume,
@@ -1706,15 +1823,80 @@ mod tests {
     }
 
     #[test]
-    fn only_a_first_launch_gets_the_new_offset() {
-        assert_eq!(Config::default().offset_ms, NEW_PLAYER_OFFSET_MS);
+    fn only_a_first_launch_starts_at_osus_zero() {
+        let new = Config::default();
+        assert_eq!((new.offset_osu_ms, new.offset_pending), (0.0, false));
+        assert_eq!(new.offset_ms, -crate::beatmap::OSU_TIMING_MS);
+        let blank = Config::parse_text("");
+        assert_eq!((blank.offset_osu_ms, blank.offset_pending), (0.0, false));
+        // A config with the old line only plays as it did until the latency is known.
+        for x in [0.0, -12.0, 40.0] {
+            let old = Config::parse_text(&format!("offset_ms = {x}\n"));
+            assert_eq!((old.offset_ms, old.offset_pending), (x, true));
+        }
+    }
+
+    #[test]
+    fn the_two_offset_conventions_convert_both_ways() {
+        for (x, l, o) in [(-25.0, 32.0, -30.0), (0.0, 7.0, -30.0), (-50.0, 27.0, 0.0)] {
+            assert_eq!(osu_offset_of(x, l), o);
+            assert_eq!(play_offset_of(o, l), x);
+        }
+        // An earlier osu! offset is later notes here.
+        assert!(play_offset_of(10.0, 20.0) < play_offset_of(0.0, 20.0));
+    }
+
+    #[test]
+    fn an_old_offset_is_converted_at_the_first_settled_latency_and_plays_the_same() {
+        for (x, l, o) in [(-25.0, 32.0, -30.0), (0.0, 7.0, -30.0), (-50.0, 27.0, 0.0)] {
+            let mut cfg = Config::parse_text(&format!("offset_ms = {x}\n"));
+            // Until the latency is settled it plays as it did, and saves as it was.
+            assert!(!cfg.set_latency(l, false));
+            assert_eq!((cfg.offset_ms, cfg.offset_pending), (x, true));
+            assert!(!cfg.to_text().contains("\noffset = "));
+            assert!(cfg.to_text().contains(&format!("\noffset_ms = {x}\n")));
+            // Then it is the osu! offset that feels the same, and the play offset hasn't moved.
+            assert!(cfg.set_latency(l, true), "converted: to be saved");
+            assert_eq!(
+                (cfg.offset_osu_ms, cfg.offset_ms, cfg.offset_pending),
+                (o, x, false)
+            );
+            assert!(!cfg.set_latency(l, true), "once only");
+            // The latency changing later moves the play offset with it; the osu! one stays.
+            cfg.set_latency(l + 5.0, true);
+            assert_eq!((cfg.offset_osu_ms, cfg.offset_ms), (o, x - 5.0));
+        }
+    }
+
+    #[test]
+    fn both_offset_keys_survive_a_round_trip_and_an_older_builds_edit_is_taken() {
+        let mut cfg = Config::default();
+        cfg.set_latency(32.0, true);
+        cfg.set_osu_offset(-30.0);
+        assert_eq!(cfg.offset_ms, -25.0);
+        let text = cfg.to_text();
+        assert!(text.contains("\noffset = -30\n"));
+        assert!(text.contains("\noffset_ms = -25\n"));
+        assert!(text.contains("\noffset_latency_ms = 32\n"));
+        let back = Config::parse_text(&text);
         assert_eq!(
-            Config::parse_text("").offset_ms,
-            0.0,
-            "a config with no offset line stays where it was"
+            (back.offset_osu_ms, back.offset_ms, back.offset_pending),
+            (-30.0, -25.0, false)
         );
-        assert_eq!(Config::parse_text("offset_ms = 0\n").offset_ms, 0.0);
-        assert_eq!(Config::parse_text("offset_ms = -12\n").offset_ms, -12.0);
+        assert_eq!(back.offset_latency_ms, 32.0);
+        // An older build moves its offset_ms by 10 and leaves the other lines be.
+        let edited = text.replace("\noffset_ms = -25\n", "\noffset_ms = -35\n");
+        let back = Config::parse_text(&edited);
+        assert_eq!((back.offset_osu_ms, back.offset_ms), (-20.0, -35.0));
+        // One that dropped the new lines altogether is converted again.
+        let stripped: String = edited
+            .lines()
+            .filter(|l| !l.starts_with("offset = ") && !l.starts_with("offset_latency_ms"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let back = Config::parse_text(&stripped);
+        assert!(back.offset_pending);
+        assert_eq!(back.offset_ms, -35.0);
     }
 
     #[test]

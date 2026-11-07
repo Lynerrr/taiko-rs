@@ -439,7 +439,11 @@ impl Item {
                 "レートで音程を保つ",
                 "Рейт сохраняет тон"
             ),
-            Item::Offset => tr!("Audio offset", "音声オフセット", "Смещение звука"),
+            Item::Offset => tr!(
+                "Universal offset (as in osu!)",
+                "ユニバーサルオフセット (osu!と同じ)",
+                "Универсальное смещение (как в osu!)"
+            ),
             Item::VisualOffset => tr!("Visual offset", "表示オフセット", "Смещение картинки"),
             Item::Calibrate => tr!(
                 "Offset calibration",
@@ -832,9 +836,9 @@ impl Item {
                 "Вкл: музыка просто быстрее (DT). Выкл: тон растёт со скоростью (nightcore)."
             ),
             Item::Offset => tr!(
-                "For every map; raise it if you hit late. In a song, - / + set that map's own offset on top.",
-                "全譜面に共通。叩くのが遅れるなら上げます。曲中の - / + でその譜面だけのオフセットを足せます。",
-                "Для всех карт; увеличьте, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху."
+                "Works as in osu!: the same number there is the same here. For every map; positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top.",
+                "osu!と同じ働き: osu!の値をそのまま使えます。全譜面に共通。プラスでノーツが早くなるので、叩くのが遅れるなら下げます。曲中の - / + でその譜面だけのオフセットを足せます。",
+                "Работает как в osu!: то же число там и здесь. Для всех карт; плюс сдвигает ноты раньше, так что уменьшите, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху."
             ),
             Item::Calibrate => tr!(
                 "Enter: hit along to a click track by ear, with no notes to watch; it measures and sets your offset.",
