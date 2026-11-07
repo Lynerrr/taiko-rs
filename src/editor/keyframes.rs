@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use super::history::Command;
 use super::state::Editor;
-use crate::tko::gimmick::{FieldProp, Gimmick, Group, MAX_GROUPS, NoteProp};
+use crate::tko::gimmick::{FieldProp, Gimmick, NoteProp};
 use crate::tko::scroll::MAX_SPEED;
 use crate::tko::track::{Ease, Key};
 
@@ -180,27 +180,10 @@ impl Editor {
         })
     }
 
-    /// A group of the selected notes. Returns its index.
+    /// A new group of the selected notes, which leave any other group: a note goes with the
+    /// first group that holds it, so a later one would do nothing to it. Returns its index.
     pub fn add_group_from_selection(&mut self) -> Result<usize, String> {
-        let times: Vec<f64> = self.selected().iter().map(|o| o.time).collect();
-        if times.is_empty() {
-            return Err("select some notes first".into());
-        }
-        let Some(g) = self.gimmick() else {
-            return Err("this chart isn't a .tko yet".into());
-        };
-        if g.groups.len() >= MAX_GROUPS {
-            return Err("too many groups".into());
-        }
-        let at = g.groups.len();
-        self.edit_gimmick(false, |g| {
-            g.groups.push(Group {
-                name: format!("Group {}", at + 1),
-                notes: times,
-                ..Group::default()
-            });
-        });
-        Ok(at)
+        self.group_selection("Group", false, |_, _| {})
     }
 
     /// Deletes group `i`, with the clips and nodes that move it; those on later groups keep
@@ -321,6 +304,7 @@ mod tests {
     #[test]
     fn deleting_a_group_leaves_the_clips_and_nodes_of_the_others_on_them() {
         use crate::tko::clips::{Clip, Target as ClipTarget};
+        use crate::tko::gimmick::Group;
         use crate::tko::graph::{Kind, Target};
         let mut e = tko_editor();
         e.edit_gimmick(false, |g| {
