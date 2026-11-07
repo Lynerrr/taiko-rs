@@ -343,3 +343,27 @@ fn a_score_link_opens_its_results_on_its_map() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn replays_before_version_5_keep_the_windows_they_were_judged_with() {
+    let mut r = replay(std::path::Path::new("x.osu"), Vec::new());
+    r.version = 4;
+    assert_eq!(r.window_rule(), crate::game::WindowRule::Exact);
+    r.version = scores::new_version();
+    assert_eq!(r.window_rule(), crate::game::WindowRule::Osu);
+}
+
+#[test]
+fn an_old_replay_plays_back_with_the_windows_it_was_judged_with() {
+    // OD 6: a great is 32 ms wide, 31.5 as osu! judges it. Every hit 31.8 ms late.
+    let (dir, path) = map("old-windows");
+    let mut r = replay(&path, inputs(31.8));
+    r.version = 4;
+    let (old, _) = scores::simulate(&path, &r).expect("played through");
+    assert_eq!((old.great, old.ok), (400, 0), "judged as it was played");
+    r.version = scores::new_version();
+    let (new, windows) = scores::simulate(&path, &r).expect("played through");
+    assert_eq!((new.great, new.ok), (0, 400));
+    assert_eq!(windows.great, 31.5);
+    let _ = std::fs::remove_dir_all(&dir);
+}

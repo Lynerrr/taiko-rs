@@ -210,6 +210,7 @@ pub fn replay_game(map: &Beatmap, track: &Arc<Track>, r: &Replay) -> Game {
     g.replay = Some((r.inputs.clone(), 0));
     g.mash = r.mash();
     g.scoring = r.scoring();
+    g.set_window_rule(r.window_rule());
     g.mute_hits = true;
     g
 }
