@@ -59,17 +59,18 @@
 
 ## graphify
 
-A knowledge graph of the code (god nodes, communities, cross-file links) can live in
-`graphify-out/`. It is built locally and ignored by git: 11 MB rewritten on every build would
+A graph of the code (who calls what, what references what) can live in `graphify-out/`. It is
+built locally and ignored by git: its 11 MB graph.json is rewritten on every build and would
 conflict between parallel branches. Install the tool once with `uv tool install graphifyy`.
 
-- In a checkout or worktree without `graphify-out/graph.json`, build it first with
-  `graphify update .` (AST only, no API cost, about ten seconds).
-- Run `graphify query "<question>"` before your first grep, search or source-file read for a
-  codebase question, and put this rule in every subagent prompt that explores code. Read raw
-  files only for lines the graph or an earlier read already located.
-- Use `graphify path "<A>" "<B>"` for relationships, `graphify explain "<concept>"` for one
-  item and `graphify affected "<X>"` for what a change reaches. Read
-  `graphify-out/GRAPH_REPORT.md` only for broad architecture review.
-- After modifying code, run `graphify update .` to keep the graph current. Never commit
-  `graphify-out/`.
+- In a checkout or worktree without `graphify-out/graph.json`, build it with
+  `graphify update .` (AST only, no API cost, about ten seconds), and run it again after
+  changing code. Never commit `graphify-out/`.
+- For a symbol you know by name, ask the graph before grepping for its uses:
+  `graphify explain "<name>"` (where it is, its callers and callees),
+  `graphify affected "<name>"` (what a change to it reaches, tests included) and
+  `graphify path "<A>" "<B>"` (how two things connect).
+- To find where something happens, grep as usual. `graphify query "<question>"` only matches
+  words in names: on this repo it returns loosely related nodes and misses the target, so use
+  it at most for a first look at an unfamiliar area.
+- Pass these rules on to subagents that explore code.
