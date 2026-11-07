@@ -1550,17 +1550,9 @@ impl Select {
                 .is_some_and(|d| self.map_skin_off(d));
             items.push((
                 if off {
-                    tr!(
-                        "Use this map's skin",
-                        "この譜面のスキンを使う",
-                        "Включить скин карты"
-                    )
+                    tr!("Use this map's skin")
                 } else {
-                    tr!(
-                        "Turn off this map's skin",
-                        "この譜面のスキンをオフ",
-                        "Выключить скин карты"
-                    )
+                    tr!("Turn off this map's skin")
                 }
                 .to_string(),
                 MenuAction::MapSkin,
@@ -1736,9 +1728,9 @@ impl Select {
             crate::settings::tab_bar(c, 0, &summary);
         } else {
             let back = if self.to_menu {
-                tr!("< MENU", "< メニュー", "< МЕНЮ")
+                tr!("< MENU")
             } else {
-                tr!("< BACK", "< 戻る", "< НАЗАД")
+                tr!("< BACK")
             };
             if self.covered {
                 left += Canvas::text_width(8.0, back) + 26.0;
@@ -2453,11 +2445,7 @@ impl Select {
             && !self.visible.is_empty()
             && (cursor_y < top - DIFF_H || cursor_y > bottom)
         {
-            let label = tr!(
-                "back to the selected song",
-                "選択中の曲へ戻る",
-                "к выбранной песне"
-            );
+            let label = tr!("back to the selected song");
             let bw = Canvas::text_width(7.0, label) + 20.0;
             c.button(
                 24.0 + (lw - bw) / 2.0,
@@ -2472,12 +2460,9 @@ impl Select {
         }
 
         if !legacy {
-            let random = tr!("Random", "ランダム", "Случайная");
-            let (download, settings, online) = (
-                tr!("Download", "ダウンロード", "Загрузка"),
-                tr!("Settings", "設定", "Настройки"),
-                tr!("Multiplayer", "マルチ", "Мультиплеер"),
-            );
+            let random = tr!("Random");
+            let (download, settings, online) =
+                (tr!("Download"), tr!("Settings"), tr!("Multiplayer"));
             let accent_mods = !self.mods_label.is_empty();
             c.button_row(
                 BUTTONS_Y,
@@ -2491,9 +2476,7 @@ impl Select {
             );
         }
         let hints = tr!(
-            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit",
-            "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了",
-            "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка  Ctrl+L коллекция  Tab настройки  Esc выход"
+            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit"
         );
         if legacy {
             c.text(

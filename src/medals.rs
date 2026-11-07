@@ -54,15 +54,15 @@ pub struct View {
 /// The tabs after the overview, in the server's order of sections.
 fn section_name(section: usize) -> &'static str {
     match section {
-        0 => tr!("PATH", "道", "ПУТЬ"),
-        1 => tr!("MODS", "モード", "МОДЫ"),
-        2 => tr!("DAN", "段位", "ДАНЫ"),
-        3 => tr!("SKILL", "腕前", "НАВЫК"),
-        4 => tr!("TRIALS", "試練", "ИСПЫТАНИЯ"),
-        5 => tr!("GROWTH", "成長", "РОСТ"),
-        6 => tr!("RIVALS", "ライバル", "СОПЕРНИКИ"),
-        7 => tr!("URA", "裏", "УРА"),
-        _ => tr!("TOGETHER", "みんなで", "ВМЕСТЕ"),
+        0 => tr!("PATH"),
+        1 => tr!(medals: "MODS"),
+        2 => tr!("DAN"),
+        3 => tr!("SKILL"),
+        4 => tr!("TRIALS"),
+        5 => tr!("GROWTH"),
+        6 => tr!("RIVALS"),
+        7 => tr!("URA"),
+        _ => tr!("TOGETHER"),
     }
 }
 
@@ -70,7 +70,7 @@ pub const TABS: usize = 10;
 
 fn tab_name(tab: usize) -> &'static str {
     if tab == 0 {
-        tr!("OVERVIEW", "概要", "ОБЗОР")
+        tr!("OVERVIEW")
     } else {
         section_name(tab - 1)
     }
@@ -209,14 +209,7 @@ impl View {
                     _ => Err(crate::lang::odd_reply()),
                 },
             );
-            let no_medals = || {
-                tr!(
-                    "this server doesn't have medals yet",
-                    "このサーバーにはまだメダルがありません",
-                    "на этом сервере ещё нет медалей"
-                )
-                .to_string()
-            };
+            let no_medals = || tr!("this server doesn't have medals yet").to_string();
             let _ = tx.send(result.map_err(|e| if e == "bad request" { no_medals() } else { e }));
         });
         View {
@@ -234,14 +227,7 @@ impl View {
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.state = State::Failed(
-                        tr!(
-                            "lost the connection",
-                            "接続が切れました",
-                            "соединение потеряно"
-                        )
-                        .into(),
-                    )
+                    self.state = State::Failed(tr!("lost the connection").into())
                 }
             }
         }
@@ -292,12 +278,12 @@ impl View {
             by,
             bw,
             16.0,
-            tr!("Back", "戻る", "Назад"),
+            tr!("Back"),
             7.0,
             Hit::Key(KeyCode::Escape),
             true,
         );
-        let title = tr!("MEDALS", "メダル", "МЕДАЛИ");
+        let title = tr!("MEDALS");
         crate::style::title(c, px + 16.0, py + 12.0, 14.0, 0xffffff, title);
         let v = match &self.state {
             State::Loading(_) => {
@@ -306,11 +292,7 @@ impl View {
                     py + ph / 2.0,
                     9.0,
                     rgba(0xc8c8d8, 1.0),
-                    tr!(
-                        "loading the medals...",
-                        "メダルを読み込み中...",
-                        "загрузка медалей..."
-                    ),
+                    tr!("loading the medals..."),
                 );
                 return;
             }
@@ -329,14 +311,9 @@ impl View {
         let (earned, total) = (v.earned, v.medals.len());
         let stats = match &self.name {
             Some(name) => {
-                tr!("{name}: {earned} of {total}", "{name}: {total}個中{earned}個", "{name}: {earned} из {total}";)
+                tr!("{name}: {earned} of {total}"; name, earned, total)
             }
-            None => tr!(
-                "Log in to earn them",
-                "ログインで獲得できます",
-                "Войди, чтобы их получать"
-            )
-            .to_string(),
+            None => tr!("Log in to earn them").to_string(),
         };
         let title_w = Canvas::text_width(14.0, title);
         c.text_right(
@@ -409,7 +386,7 @@ impl View {
                     top + 40.0,
                     8.0,
                     rgba(0x6f6f86, 1.0),
-                    tr!("nothing here yet", "まだ何もありません", "здесь пока пусто"),
+                    tr!("nothing here yet"),
                 );
             }
         }
@@ -422,11 +399,7 @@ impl View {
             &Canvas::fit_hints(
                 6.0,
                 pw - bw - 44.0,
-                tr!(
-                    "Left/Right tabs  wheel scrolls  Esc back",
-                    "左右でタブ  ホイールでスクロール  Escで戻る",
-                    "Влево/вправо вкладки  колесо листает  Esc назад"
-                ),
+                tr!("Left/Right tabs  wheel scrolls  Esc back"),
             ),
         );
     }
@@ -469,14 +442,11 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
         rgba(if lit { 0xffffff } else { 0xb4b4c8 }, 1.0),
         &Canvas::fit(8.0, room, name),
     );
-    let about = m.how.as_ref().or(m.hint.as_ref()).map_or(
-        tr!(
-            "Nobody has found this one",
-            "まだ誰も見つけていません",
-            "Пока никто не нашёл"
-        ),
-        said,
-    );
+    let about = m
+        .how
+        .as_ref()
+        .or(m.hint.as_ref())
+        .map_or(tr!("Nobody has found this one"), said);
     c.text(
         x + 44.0,
         y + 17.0,
@@ -522,13 +492,7 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
 /// The overview: how many, what's next, and the latest ones.
 fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f32) {
     let col_w = (w - 8.0) / 2.0;
-    c.text(
-        x,
-        top,
-        7.0,
-        rgba(0xFFD34D, 1.0),
-        tr!("CLOSEST", "もうすぐ", "БЛИЖЕ ВСЕГО"),
-    );
+    c.text(x, top, 7.0, rgba(0xFFD34D, 1.0), tr!("CLOSEST"));
     let goals = next_up(v);
     if goals.is_empty() {
         c.text(
@@ -536,11 +500,7 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
             top + 14.0,
             7.0,
             rgba(0x6f6f86, 1.0),
-            tr!(
-                "Play a few maps to see your goals",
-                "プレイすると目標が表示されます",
-                "Сыграй пару карт, и тут появятся цели"
-            ),
+            tr!("Play a few maps to see your goals"),
         );
     }
     for (i, m) in goals.iter().enumerate() {
@@ -550,23 +510,11 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
         }
     }
     let right = x + col_w + 8.0;
-    c.text(
-        right,
-        top,
-        7.0,
-        rgba(0xFFD34D, 1.0),
-        tr!("LATEST", "最新", "ПОСЛЕДНИЕ"),
-    );
+    c.text(right, top, 7.0, rgba(0xFFD34D, 1.0), tr!("LATEST"));
     let mut latest: Vec<&MedalRow> = v.medals.iter().filter(|m| m.at.is_some()).collect();
     latest.sort_by_key(|m| std::cmp::Reverse(m.at));
     if latest.is_empty() {
-        c.text(
-            right,
-            top + 14.0,
-            7.0,
-            rgba(0x6f6f86, 1.0),
-            tr!("None yet", "まだありません", "Пока нет"),
-        );
+        c.text(right, top + 14.0, 7.0, rgba(0x6f6f86, 1.0), tr!("None yet"));
     }
     for (i, m) in latest.iter().take(NEXT_UP).enumerate() {
         let y = top + 12.0 + i as f32 * ROW_H;
@@ -594,21 +542,19 @@ fn in_collection(m: &crate::mods::Mod) -> bool {
 fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
     let have = v.collection.len();
     let size = v.collection_size;
-    c.text(x, top, 7.0, rgba(0xFFD34D, 1.0), &tr!("COLLECTION  {have} of {size}", "コレクション  {size}個中{have}個", "КОЛЛЕКЦИЯ  {have} из {size}";));
+    c.text(
+        x,
+        top,
+        7.0,
+        rgba(0xFFD34D, 1.0),
+        &tr!("COLLECTION  {have} of {size}"; have, size),
+    );
     c.text_right(
         x + w,
         top,
         6.0,
         rgba(0x6f6f86, 1.0),
-        &Canvas::fit(
-            6.0,
-            w * 0.6,
-            tr!(
-                "3★+, 80%+, up to 3 mods, no NF",
-                "★3以上・精度80%以上・3モードまで・NFなし",
-                "3★+, 80%+, до 3 модов, без NF"
-            ),
-        ),
+        &Canvas::fit(6.0, w * 0.6, tr!("3★+, 80%+, up to 3 mods, no NF")),
     );
     // Autoplay and Relax never count; Tact isn't in the server's collection (yet).
     for (row, (_, colour, mods)) in crate::mods::GROUPS.iter().enumerate() {
@@ -1104,9 +1050,9 @@ pub fn draw_unlock(c: &mut Canvas, m: &MedalNote, ms: f32, leave: f32) {
         let shake = |salt: u32| (hash(salt, bucket, 13) - 0.5) * 2.0 * heat * (1.0 + 7.0 * g);
         let jitter = [shake(1), shake(2)];
         let title = if m.secret {
-            tr!("SECRET FOUND", "秘密を発見", "СЕКРЕТ НАЙДЕН")
+            tr!("SECRET FOUND")
         } else {
-            tr!("MEDAL UNLOCKED", "メダル獲得", "МЕДАЛЬ ПОЛУЧЕНА")
+            tr!("MEDAL UNLOCKED")
         };
         stamp(
             c,

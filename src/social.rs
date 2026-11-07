@@ -187,8 +187,8 @@ pub fn draw_spectators(c: &mut Canvas, names: &[&str]) {
     let n = names.len();
     let (x, y0, h) = (18.0, 282.0, 14.0);
     let more = n.saturating_sub(SPECTATORS_LISTED);
-    let title = tr!("Spectators ({n})", "観戦者 ({n})", "Зрители ({n})";);
-    let rest = (more > 0).then(|| tr!("and {more} more", "他{more}人", "и ещё {more}";));
+    let title = tr!("Spectators ({n})"; n);
+    let rest = (more > 0).then(|| tr!("and {more} more"; more));
     let listed = &names[..n.min(SPECTATORS_LISTED)];
     let lines = 1 + listed.len() + usize::from(rest.is_some());
     let longest = listed
@@ -2089,7 +2089,7 @@ fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
         }
         if let Some(id) = crate::shots::shot_in(&line.text) {
             rows.push(ChatRow {
-                text: tr!("Screenshot", "スクリーンショット", "Скриншот").into(),
+                text: tr!("Screenshot").into(),
                 colour: 0x66ccff,
                 kind: ChatKind::Shot(id),
                 gap,
@@ -2215,7 +2215,7 @@ fn chat_lines(
             }
             ChatKind::Shot(id) => {
                 let x = inner + 3.0 + MESSAGE_INDENT;
-                let hint = tr!("click to view", "クリックで表示", "нажмите, чтобы открыть");
+                let hint = tr!("click to view");
                 let w =
                     Canvas::text_width(CHAT_SIZE, &row.text) + Canvas::text_width(6.0, hint) + 20.0;
                 let w = w.min(inner + iw - x);
@@ -2308,7 +2308,7 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
     c.hit(inner, input_y, iw, 18.0, Hit::TextField);
     // The last F12's, on its way to whoever this is with.
     if s.shot_ready && !typing {
-        let label = tr!("Send screenshot", "スクショを送信", "Отправить скриншот");
+        let label = tr!("Send screenshot");
         button(c, inner + iw - 3.0, input_y + 3.0, label, Hit::SendShot, a);
     }
 }

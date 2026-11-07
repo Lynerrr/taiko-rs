@@ -3437,6 +3437,7 @@ dependencies = [
  "serde_json",
  "souvlaki",
  "symphonia",
+ "toml",
  "ureq",
  "wayland-backend",
  "wayland-client",

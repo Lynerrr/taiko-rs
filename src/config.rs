@@ -553,7 +553,7 @@ pub fn renderer_name(api: &str) -> &'static str {
         "vulkan" => "Vulkan",
         "gl" => "OpenGL",
         "metal" => "Metal",
-        _ => tr!("Auto", "自動", "Авто"),
+        _ => tr!("Auto"),
     }
 }
 

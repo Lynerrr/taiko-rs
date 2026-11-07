@@ -504,7 +504,7 @@ impl Player {
             24.0,
             74.0,
             20.0,
-            tr!("< menu", "< メニュー", "< меню"),
+            tr!("< menu"),
             8.0,
             Hit::Key(winit::keyboard::KeyCode::Escape),
             false,
@@ -563,10 +563,10 @@ impl Player {
     /// The name of a folder.
     fn folder_name(folder: Folder) -> &'static str {
         match folder {
-            Folder::All => tr!("All songs", "すべての曲", "Все песни"),
-            Folder::Favourites => tr!("Favourites", "お気に入り", "Любимые"),
+            Folder::All => tr!("All songs"),
+            Folder::Favourites => tr!("Favourites"),
             Folder::Genre(i) => (GENRES[i].name)(),
-            Folder::Other => tr!("No genre", "ジャンルなし", "Без жанра"),
+            Folder::Other => tr!("No genre"),
         }
     }
 
@@ -669,10 +669,7 @@ impl Player {
         );
         let filter = self.list.filter.clone();
         let (text, col) = if filter.is_empty() && !self.searching {
-            (
-                tr!("search (Ctrl+F)", "検索 (Ctrl+F)", "поиск (Ctrl+F)").to_string(),
-                0x6f6f86,
-            )
+            (tr!("search (Ctrl+F)").to_string(), 0x6f6f86)
         } else {
             (format!("{filter}_"), 0xffffff)
         };
@@ -772,7 +769,7 @@ impl Player {
                 top + 9.0,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
-                tr!("nothing found", "見つかりません", "ничего не нашлось"),
+                tr!("nothing found"),
             );
         }
         let count = self.list.shown.len();
@@ -781,7 +778,7 @@ impl Player {
             top + ROWS as f32 * ROW_H + 9.0,
             7.0,
             rgba(0x9a9ab0, 1.0),
-            &tr!("{count} songs", "{count}曲", "{count} песен";),
+            &tr!("{count} songs"; count),
         );
     }
 
@@ -792,7 +789,7 @@ impl Player {
             LIST_TOP + 5.5,
             7.0,
             rgba(0x9a9ab0, 1.0),
-            tr!("UP NEXT", "次に再生", "ДАЛЬШЕ"),
+            tr!("UP NEXT"),
         );
         let top = LIST_TOP + 22.0;
         c.round_rect(
@@ -823,11 +820,7 @@ impl Player {
                 top + 9.0,
                 7.0,
                 rgba(0x6f6f86, 1.0),
-                &Canvas::fit(
-                    7.0,
-                    QUEUE_W - 14.0,
-                    tr!("+ on a song adds it", "曲の + で追加", "+ у песни добавит"),
-                ),
+                &Canvas::fit(7.0, QUEUE_W - 14.0, tr!("+ on a song adds it")),
             );
         }
     }
@@ -836,11 +829,11 @@ impl Player {
     fn draw_sound(&mut self, c: &mut Canvas, cx: f32, y: f32, volume: f32) {
         const H: f32 = 18.0;
         let pitch = if self.semitones == 0 {
-            tr!("pitch [ ]", "ピッチ [ ]", "питч [ ]").to_string()
+            tr!("pitch [ ]").to_string()
         } else {
             format!("{:+} [ ]", self.semitones)
         };
-        let play = tr!("play map", "譜面をプレイ", "сыграть карту");
+        let play = tr!("play map");
         let play_w = Canvas::text_width(7.0, play) + 12.0;
         let pitch_w = Canvas::text_width(7.0, &pitch) + 10.0;
         const MOD_W: f32 = 24.0;

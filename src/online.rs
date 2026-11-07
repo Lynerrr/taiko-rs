@@ -473,14 +473,14 @@ pub enum Activity {
 impl Activity {
     pub fn describe(&self) -> String {
         match self {
-            Activity::Menus => tr!("in the menus", "メニュー中", "в меню").into(),
-            Activity::Playing { map } => tr!("playing {map}", "プレイ中: {map}", "играет: {map}";),
+            Activity::Menus => tr!("in the menus").into(),
+            Activity::Playing { map } => tr!("playing {map}"; map),
             Activity::Lobby { title, .. } => {
-                tr!("in lobby {title}", "ロビー: {title}", "в лобби {title}";)
+                tr!("in lobby {title}"; title)
             }
-            Activity::Match { map } => tr!("in a match: {map}", "対戦中: {map}", "в матче: {map}";),
+            Activity::Match { map } => tr!("in a match: {map}"; map),
             Activity::Watching { name } => {
-                tr!("watching {name}", "{name}を観戦中", "смотрит {name}";)
+                tr!("watching {name}"; name)
             }
         }
     }
@@ -573,16 +573,16 @@ impl ChatLine {
         let (player, name, holders, players) = (&m.player, said(&m.name), m.holders, m.players);
         let line = match m.secret {
             true => {
-                tr!("{player} found the secret {name}", "{player}が秘密のメダル「{name}」を見つけた", "{player} находит секрет «{name}»";)
+                tr!("{player} found the secret {name}"; player, name)
             }
             false => {
-                tr!("{player} earned {name}", "{player}がメダル「{name}」を獲得", "{player} получает «{name}»";)
+                tr!("{player} earned {name}"; player, name)
             }
         };
         let rarity = match m.first {
-            true => tr!("first on the server", "サーバー初", "первым на сервере").to_string(),
+            true => tr!("first on the server").to_string(),
             false => {
-                tr!("{holders} of {players} have it", "{players}人中{holders}人", "есть у {holders} из {players}";)
+                tr!("{holders} of {players} have it"; holders, players)
             }
         };
         format!("{line} · {rarity}")
@@ -1057,11 +1057,7 @@ pub fn read_line(reader: &mut impl BufRead) -> Result<String, String> {
         .read_line(&mut line)
         .map_err(|e| network_error(&e))?;
     if n == 0 {
-        return Err(unreachable(tr!(
-            "the connection dropped. Try again",
-            "接続が切れました。もう一度試してください",
-            "соединение оборвалось. Попробуй ещё раз"
-        )));
+        return Err(unreachable(tr!("the connection dropped. Try again")));
     }
     if !line.ends_with('\n') {
         return Err("message too large".into());
@@ -1082,11 +1078,7 @@ fn unreachable(why: &str) -> String {
 }
 
 fn unreachable_lead() -> &'static str {
-    tr!(
-        "can't reach the server: ",
-        "サーバーに接続できません: ",
-        "нет связи с сервером: "
-    )
+    tr!("can't reach the server: ")
 }
 
 /// The request never got an answer (the network or the server is down), rather than the
@@ -1101,51 +1093,27 @@ pub fn is_unreachable(e: &str) -> bool {
 pub fn network_error(e: &std::io::Error) -> String {
     use std::io::ErrorKind as K;
     unreachable(&match e.kind() {
-        K::TimedOut | K::WouldBlock => tr!(
-            "it didn't answer in time. Check your internet and try again",
-            "応答がありません。インターネット接続を確認してもう一度試してください",
-            "он не ответил вовремя. Проверь интернет и попробуй ещё раз"
-        )
-        .to_string(),
-        K::ConnectionRefused => tr!(
-            "it's restarting or down. Try again in a minute",
-            "再起動中か停止中です。少し待ってからもう一度",
-            "он перезапускается или лежит. Попробуй через минуту"
-        )
-        .to_string(),
+        K::TimedOut | K::WouldBlock => {
+            tr!("it didn't answer in time. Check your internet and try again").to_string()
+        }
+        K::ConnectionRefused => tr!("it's restarting or down. Try again in a minute").to_string(),
         K::ConnectionReset
         | K::ConnectionAborted
         | K::UnexpectedEof
         | K::BrokenPipe
-        | K::NotConnected => tr!(
-            "the connection dropped. Try again",
-            "接続が切れました。もう一度試してください",
-            "соединение оборвалось. Попробуй ещё раз"
-        )
-        .to_string(),
-        K::HostUnreachable | K::NetworkUnreachable | K::NetworkDown | K::AddrNotAvailable => tr!(
-            "no internet connection",
-            "インターネットに接続されていません",
-            "нет подключения к интернету"
-        )
-        .to_string(),
+        | K::NotConnected => tr!("the connection dropped. Try again").to_string(),
+        K::HostUnreachable | K::NetworkUnreachable | K::NetworkDown | K::AddrNotAvailable => {
+            tr!("no internet connection").to_string()
+        }
         // A TLS handshake that went wrong (something between rewrote it, or an old game).
-        K::InvalidData => tr!(
-            "the secure connection failed. Check your internet, or update taiko.rs",
-            "安全な接続に失敗しました。インターネット接続を確認するか、taiko.rsを更新してください",
-            "не удалось защищённое соединение. Проверь интернет или обнови taiko.rs"
-        )
-        .to_string(),
+        K::InvalidData => {
+            tr!("the secure connection failed. Check your internet, or update taiko.rs").to_string()
+        }
         _ => match e.raw_os_error() {
             Some(code) => {
-                tr!("network error {code}. Try again", "ネットワークエラー {code}。もう一度試してください", "сетевая ошибка {code}. Попробуй ещё раз";)
+                tr!("network error {code}. Try again"; code)
             }
-            None => tr!(
-                "network error. Try again",
-                "ネットワークエラー。もう一度試してください",
-                "сетевая ошибка. Попробуй ещё раз"
-            )
-            .to_string(),
+            None => tr!("network error. Try again").to_string(),
         },
     })
 }
@@ -1169,13 +1137,7 @@ fn connect(server: &str) -> Result<TcpStream, String> {
     } else {
         format!("{server}:{DEFAULT_PORT}")
     };
-    let no_address = || {
-        unreachable(tr!(
-            "its address wasn't found. Check your internet",
-            "アドレスが見つかりません。インターネット接続を確認してください",
-            "не найден его адрес. Проверь интернет"
-        ))
-    };
+    let no_address = || unreachable(tr!("its address wasn't found. Check your internet"));
     let addrs: Vec<_> = with_port
         .to_socket_addrs()
         .map_err(|_| no_address())?
@@ -1208,12 +1170,7 @@ pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpS
     let mut reader = BufReader::new(stream);
     let line = read_line(&mut reader)?;
     let reply: Reply = serde_json::from_str(&line).map_err(|_| {
-        tr!(
-            "the server answered something this version doesn't know: update taiko.rs",
-            "サーバーの応答が読めません: taiko.rsを更新してください",
-            "ответ сервера не понятен этой версии: обнови taiko.rs"
-        )
-        .to_string()
+        tr!("the server answered something this version doesn't know: update taiko.rs").to_string()
     })?;
     Ok((reply, reader))
 }
@@ -1339,14 +1296,7 @@ impl Social {
                     }
                 }
                 let _ = stream.shutdown(std::net::Shutdown::Both);
-                let _ = events.send(SocialEvent::Disconnected(
-                    tr!(
-                        "lost the connection",
-                        "接続が切れました",
-                        "соединение потеряно"
-                    )
-                    .into(),
-                ));
+                let _ = events.send(SocialEvent::Disconnected(tr!("lost the connection").into()));
                 announced_down = true;
                 std::thread::sleep(Duration::from_secs(2));
             }

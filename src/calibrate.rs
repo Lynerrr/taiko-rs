@@ -86,11 +86,7 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
         70.0,
         14.0,
         rgba(0x9a9ab0, 1.0),
-        tr!(
-            "OFFSET CALIBRATION",
-            "オフセット調整",
-            "КАЛИБРОВКА СМЕЩЕНИЯ"
-        ),
+        tr!("OFFSET CALIBRATION"),
     );
     let first = game.map.notes.first().map_or(0.0, |n| n.time);
     let beat = game
@@ -101,17 +97,9 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
     // Between two clicks, so the words changing isn't a beat to follow.
     let hitting = game.time >= first - beat / 2.0;
     let headline = if hitting {
-        tr!(
-            "Hit on every click",
-            "クリックごとに叩いて",
-            "Бейте на каждый клик"
-        )
+        tr!("Hit on every click")
     } else {
-        tr!(
-            "Listen to the clicks",
-            "クリック音を聞いて",
-            "Слушайте клики"
-        )
+        tr!("Listen to the clicks")
     };
     line(c, 160.0, 20.0, rgba(0xffffff, 1.0), headline);
     line(
@@ -119,18 +107,14 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
         204.0,
         10.0,
         rgba(0xc8c8d8, 1.0),
-        tr!(
-            "By ear, with any drum key. It works best with your eyes closed",
-            "耳だけで、どのドラムキーでも。目を閉じるのがおすすめです",
-            "Только на слух, любой клавишей барабана. Лучше с закрытыми глазами"
-        ),
+        tr!("By ear, with any drum key. It works best with your eyes closed"),
     );
     let hits = game.stats.errors.len();
     if hitting {
         let count = if hits < MIN_HITS {
-            tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}";)
+            tr!("{hits} of {MIN_HITS} hits"; hits, MIN_HITS)
         } else {
-            tr!("{hits} hits", "{hits} 打", "ударов: {hits}";)
+            tr!("{hits} hits"; hits)
         };
         line(c, 262.0, 10.0, rgba(0xFFD34D, 1.0), &count);
     }
@@ -144,11 +128,7 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
         4.0,
         rgba(accent(), 0.9),
     );
-    let hints = tr!(
-        "Enter finish early    Esc cancel",
-        "Enter 早めに終了    Esc 中止",
-        "Enter закончить раньше    Esc отмена"
-    );
+    let hints = tr!("Enter finish early    Esc cancel");
     c.text_centered(
         c.width / 2.0,
         448.0,

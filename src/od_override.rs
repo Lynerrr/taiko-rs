@@ -76,11 +76,8 @@ impl Setup {
             rgba(0xffffff, 1.0),
             "OD OVERRIDE",
         );
-        let hint = tr!(
-            "Left/Right change by 0.5   Shift by 0.1   D default   Tab next tab   Esc back",
-            "左右 0.5ずつ   Shift 0.1ずつ   D 初期設定   Tab 次のタブ   Esc 戻る",
-            "влево/вправо на 0.5   Shift на 0.1   D сброс   Tab вкладка   Esc назад"
-        );
+        let hint =
+            tr!("Left/Right change by 0.5   Shift by 0.1   D default   Tab next tab   Esc back");
         c.text(
             px + 26.0 + title_w,
             py + 16.0,
@@ -138,9 +135,7 @@ impl Setup {
             ),
         );
         let about = tr!(
-            "Plays every map at this OD, in place of the map's and of what EZ, HR and Precise would make it. The speed still shifts it, so song select shows more than this with DT. Past OD 13.3 the windows shrink ever more slowly instead of reaching zero. Plays aren't saved, and it stays off in multiplayer.",
-            "すべての譜面をこのODで遊びます。譜面のODとEZ、HR、Preciseの効果の代わりに使われます。速度の変化は反映されるので、DTでは選曲画面の値がこれより高くなります。OD 13.3を超えると判定幅はゼロにならず、ゆるやかに縮みます。プレイは保存されず、マルチプレイでは無効です。",
-            "Все карты играются с этим OD вместо своего и вместо того, что дали бы EZ, HR и Precise. Скорость по-прежнему меняет его, так что с DT на выборе песни будет больше. После OD 13.3 окна сужаются всё медленнее и не доходят до нуля. Игры не сохраняются, в мультиплеере мод выключен."
+            "Plays every map at this OD, in place of the map's and of what EZ, HR and Precise would make it. The speed still shifts it, so song select shows more than this with DT. Past OD 13.3 the windows shrink ever more slowly instead of reaching zero. Plays aren't saved, and it stays off in multiplayer."
         );
         let mut ty = y + h + 18.0;
         let chars = ((pw - 32.0) / Canvas::char_width(7.0)).max(10.0) as usize;
@@ -154,7 +149,7 @@ impl Setup {
             by,
             back_w,
             16.0,
-            tr!("Back", "戻る", "Назад"),
+            tr!("Back"),
             7.0,
             Hit::Key(KeyCode::Escape),
             true,

@@ -33,14 +33,7 @@ impl View {
                 },
             );
             // Servers from before profiles don't know the request.
-            let no_profiles = || {
-                tr!(
-                    "the server doesn't have profiles yet",
-                    "このサーバーにはまだプロフィールがありません",
-                    "на сервере ещё нет профилей"
-                )
-                .to_string()
-            };
+            let no_profiles = || tr!("the server doesn't have profiles yet").to_string();
             let _ = tx.send(result.map_err(|e| if e == "bad request" { no_profiles() } else { e }));
         });
         View {
@@ -57,14 +50,7 @@ impl View {
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.state = State::Failed(
-                        tr!(
-                            "lost the connection",
-                            "接続が切れました",
-                            "соединение потеряно"
-                        )
-                        .into(),
-                    )
+                    self.state = State::Failed(tr!("lost the connection").into())
                 }
             }
         }
@@ -88,7 +74,7 @@ impl View {
             by,
             bw,
             16.0,
-            tr!("Back", "戻る", "Назад"),
+            tr!("Back"),
             7.0,
             Hit::Key(KeyCode::Escape),
             true,
@@ -99,7 +85,7 @@ impl View {
             by,
             browser_w,
             16.0,
-            tr!("Open in browser", "ブラウザで開く", "В браузере"),
+            tr!("Open in browser"),
             7.0,
             Hit::Key(KeyCode::KeyB),
             false,
@@ -110,7 +96,7 @@ impl View {
                 by,
                 bw,
                 16.0,
-                tr!("Medals", "メダル", "Медали"),
+                tr!("Medals"),
                 7.0,
                 Hit::Key(KeyCode::KeyM),
                 false,
@@ -130,11 +116,7 @@ impl View {
                     py + ph / 2.0,
                     9.0,
                     rgba(0xc8c8d8, 1.0),
-                    tr!(
-                        "loading the profile...",
-                        "プロフィールを読み込み中...",
-                        "загрузка профиля..."
-                    ),
+                    tr!("loading the profile..."),
                 );
                 return;
             }
@@ -161,22 +143,20 @@ impl View {
         let rank = p
             .rank
             .map(|r| format!("#{r}"))
-            .unwrap_or_else(|| tr!("unranked", "ランクなし", "без ранга").into());
+            .unwrap_or_else(|| tr!("unranked").into());
         let hours = p.play_ms as f64 / 3_600_000.0;
         let minutes = hours * 60.0;
         let time = if hours >= 1.0 {
-            tr!("{hours:.0}h played   ", "{hours:.0}時間プレイ   ", "{hours:.0} ч в игре   ";)
+            tr!("{hours:.0}h played   "; hours)
         } else if p.play_ms > 0 {
-            tr!("{minutes:.0}m played   ", "{minutes:.0}分プレイ   ", "{minutes:.0} мин в игре   ";)
+            tr!("{minutes:.0}m played   "; minutes)
         } else {
             String::new()
         };
         let (pp, plays, joined) = (p.pp + 0.0, p.plays, crate::scores::age(p.joined));
-        let plays_ru = crate::lang::ru_plural(plays, ["игра", "игры", "игр"]);
         let stats = tr!(
-            "{rank}   {pp:.0} pp   {plays} plays   {time}joined {joined} ago",
-            "{rank}   {pp:.0} pp   {plays}プレイ   {time}{joined}前に登録",
-            "{rank}   {pp:.0} pp   {plays} {plays_ru}   {time}с нами {joined}";
+            "{rank}   {pp:.0} pp   {plays} plays   {time}joined {joined} ago";
+            rank, pp, plays, time, joined
         );
         let stats_w = Canvas::text_width(8.0, &stats).min(pw * 0.6);
         // Their picture, left of the name and the medals line.
@@ -198,7 +178,7 @@ impl View {
         );
         // Their medals: how many, their dan and their rarest.
         let (earned, total) = (p.medals.earned, p.medals.total);
-        let mut line = tr!("MEDALS  {earned} of {total}", "メダル  {total}個中{earned}個", "МЕДАЛИ  {earned} из {total}";);
+        let mut line = tr!("MEDALS  {earned} of {total}"; earned, total);
         if let Some(dan) = &p.medals.dan {
             line += "   ";
             line += online::said(dan);
@@ -225,11 +205,7 @@ impl View {
                 &Canvas::fit(
                     7.0,
                     pw * 0.4,
-                    &tr!(
-                        "RELAX  {place}{rx_pp:.0} pp   {rx_plays} plays",
-                        "RELAX  {place}{rx_pp:.0} pp   {rx_plays}プレイ",
-                        "RELAX  {place}{rx_pp:.0} pp   игр: {rx_plays}";
-                    ),
+                    &tr!("RELAX  {place}{rx_pp:.0} pp   {rx_plays} plays"; place, rx_pp, rx_plays),
                 ),
             );
         }
@@ -240,26 +216,14 @@ impl View {
         let lists = [
             (
                 if self.relax {
-                    tr!("BEST RELAX", "ベストRELAX", "ЛУЧШИЕ RELAX")
+                    tr!("BEST RELAX")
                 } else {
-                    tr!(
-                        "BEST PERFORMANCE",
-                        "ベストパフォーマンス",
-                        "ЛУЧШИЕ РЕЗУЛЬТАТЫ"
-                    )
+                    tr!("BEST PERFORMANCE")
                 },
                 if self.relax { &p.relax.top } else { &p.top },
-                tr!(
-                    "no pp plays yet",
-                    "ppのプレイはまだありません",
-                    "пока нет игр с pp"
-                ),
+                tr!("no pp plays yet"),
             ),
-            (
-                tr!("RECENT PLAYS", "最近のプレイ", "ПОСЛЕДНИЕ ИГРЫ"),
-                &p.recent,
-                tr!("no plays yet", "プレイはまだありません", "пока нет игр"),
-            ),
+            (tr!("RECENT PLAYS"), &p.recent, tr!("no plays yet")),
         ];
         for (k, (title, rows, empty)) in lists.into_iter().enumerate() {
             let x = px + 16.0 + k as f32 * (col_w + 16.0);
@@ -318,9 +282,8 @@ fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bo
             crate::scores::age(r.date),
         );
         let line = tr!(
-            "{acc:.2}%  {combo}x  {miss} miss{mods}{rate}  {age}",
-            "{acc:.2}%  {combo}x  ミス{miss}{mods}{rate}  {age}",
-            "{acc:.2}%  {combo}x  {miss} мимо{mods}{rate}  {age}";
+            "{acc:.2}%  {combo}x  {miss} miss{mods}{rate}  {age}";
+            acc, combo, miss, mods, rate, age
         );
         c.text(
             x + 8.0,

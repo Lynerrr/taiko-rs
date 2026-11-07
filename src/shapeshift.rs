@@ -10,13 +10,13 @@ use crate::render::{Canvas, Hit, accent, rgba};
 /// Shape `i`'s name, by the index `game::SHAPESHIFT` uses.
 pub fn shape_name(i: usize) -> &'static str {
     match i {
-        0 => tr!("Zigzag", "ジグザグ", "Зигзаг"),
-        1 => tr!("U-Turn", "Uターン", "Разворот"),
-        2 => tr!("Spiral", "らせん", "Спираль"),
-        3 => tr!("Loop", "ループ", "Петля"),
-        4 => tr!("Elbow", "L字", "Колено"),
-        6 => tr!("Meadow", "草原", "Луг"),
-        _ => tr!("Straight", "まっすぐ", "Прямая"),
+        0 => tr!("Zigzag"),
+        1 => tr!("U-Turn"),
+        2 => tr!("Spiral"),
+        3 => tr!("Loop"),
+        4 => tr!("Elbow"),
+        6 => tr!("Meadow"),
+        _ => tr!("Straight"),
     }
 }
 const KEYS: [&str; 7] = [
@@ -28,10 +28,10 @@ pub const EVERY: [usize; 4] = [4, 8, 16, 32];
 pub const MORPH: [f64; 4] = [0.5, 1.0, 2.0, 4.0];
 fn morph_name(i: usize) -> &'static str {
     match i {
-        0 => tr!("1/2 bar", "1/2小節", "1/2 такта"),
-        1 => tr!("1 bar", "1小節", "1 такт"),
-        2 => tr!("2 bars", "2小節", "2 такта"),
-        _ => tr!("4 bars", "4小節", "4 такта"),
+        0 => tr!("1/2 bar"),
+        1 => tr!("1 bar"),
+        2 => tr!("2 bars"),
+        _ => tr!("4 bars"),
     }
 }
 
@@ -313,9 +313,7 @@ impl Setup {
             "SHAPESHIFT",
         );
         let hint = tr!(
-            "arrows choose   Space pick   Shift + Left/Right move a shape   D defaults   Tab next tab   Esc back",
-            "矢印 選択   Space 決定   Shift + 左右 形を移動   D 初期設定   Tab 次のタブ   Esc 戻る",
-            "стрелки выбор   Space отметить   Shift + влево/вправо двигать   D сброс   Tab вкладка   Esc назад"
+            "arrows choose   Space pick   Shift + Left/Right move a shape   D defaults   Tab next tab   Esc back"
         );
         c.text(
             px + 26.0 + title_w,
@@ -331,7 +329,7 @@ impl Setup {
             by,
             bw,
             16.0,
-            tr!("Back", "戻る", "Назад"),
+            tr!("Back"),
             7.0,
             Hit::Key(KeyCode::Escape),
             true,
@@ -341,7 +339,7 @@ impl Setup {
             by,
             bw,
             16.0,
-            tr!("Defaults", "初期設定", "Сброс"),
+            tr!("Defaults"),
             7.0,
             Hit::Key(KeyCode::KeyD),
             false,
@@ -365,12 +363,7 @@ impl Setup {
         let mut y = py;
         for row in 0..ROWS {
             let h = if row == SHAPES_ROW { 76.0 } else { 24.0 };
-            let name = [
-                tr!("EVERY", "間隔", "КАЖДЫЕ"),
-                tr!("MORPH", "変形", "ПЕРЕХОД"),
-                tr!("ORDER", "順番", "ПОРЯДОК"),
-                tr!("SHAPES", "形", "ФОРМЫ"),
-            ][row];
+            let name = [tr!("EVERY"), tr!("MORPH"), tr!("ORDER"), tr!("SHAPES")][row];
             c.text(x0, y + h / 2.0 - 4.0, 7.0, rgba(0x8a8aa0, 1.0), name);
             let n = row_len(row);
             let room = px + pw - 16.0 - (x0 + label_w);
@@ -416,15 +409,10 @@ impl Setup {
                 let text = match row {
                     0 => {
                         let n = EVERY[col];
-                        let bars_ru = crate::lang::ru_plural(n, ["такт", "такта", "тактов"]);
-                        tr!("{n} bars", "{n}小節", "{n} {bars_ru}";)
+                        tr!("{n} bars"; n)
                     }
                     1 => morph_name(col).to_string(),
-                    2 => [
-                        tr!("Shuffled", "シャッフル", "Перемешать"),
-                        tr!("In order", "順番どおり", "По порядку"),
-                    ][col]
-                        .to_string(),
+                    2 => [tr!("Shuffled"), tr!("In order")][col].to_string(),
                     _ => format!("{}. {}", col + 1, shape_name(cfg.shapes[col].0 as usize)),
                 };
                 let text_col = if on { 0xffffff } else { 0x8a8aa0 };
@@ -466,7 +454,7 @@ impl Setup {
                 y,
                 70.0,
                 16.0,
-                tr!("< earlier", "< 前へ", "< раньше"),
+                tr!("< earlier"),
                 7.0,
                 Hit::ShapeshiftMove(-1),
                 false,
@@ -476,7 +464,7 @@ impl Setup {
                 y,
                 70.0,
                 16.0,
-                tr!("later >", "後へ >", "позже >"),
+                tr!("later >"),
                 7.0,
                 Hit::ShapeshiftMove(1),
                 false,
@@ -484,28 +472,19 @@ impl Setup {
         }
         let bars = cfg.bars();
         let morph_note = if cfg.morph_bars() < MORPH[cfg.morph] {
-            tr!(" (at most half of {bars} bars)", " (最大で{bars}小節の半分)", " (не больше половины из {bars})";)
+            tr!(" (at most half of {bars} bars)"; bars)
         } else {
             String::new()
         };
         let about = match hovered.unwrap_or((self.row, self.col)).0 {
-            0 => tr!("Every: how many bars the lane keeps one shape.", "間隔: レーンが一つの形を保つ小節数。", "Каждые: сколько тактов дорожка держит одну форму.").to_string(),
+            0 => tr!("Every: how many bars the lane keeps one shape.").to_string(),
             1 => tr!(
-                "Morph: how long the lane takes to bend into the next shape{morph_note}.",
-                "変形: レーンが次の形に曲がるまでの長さ{morph_note}。",
-                "Переход: сколько дорожка изгибается в следующую форму{morph_note}.";
+                "Morph: how long the lane takes to bend into the next shape{morph_note}.";
+                morph_note
             ),
-            2 => tr!(
-                "Order: Shuffled gives each map its own order (the same every time you play it); In order goes along the shapes below.",
-                "順番: シャッフルは譜面ごとに決まった順番 (毎回同じ)。順番どおりは下の形の順に進みます。",
-                "Порядок: Перемешать даёт каждой карте свой порядок (всегда один и тот же); По порядку идёт по формам ниже."
-            )
+            2 => tr!("Order: Shuffled gives each map its own order (the same every time you play it); In order goes along the shapes below.")
             .to_string(),
-            _ => tr!(
-                "Shapes: click or Space to leave one out; Shift + Left/Right moves the selected one earlier or later.",
-                "形: クリックかSpaceで外す。Shift + 左右で選んだ形を前後に動かします。",
-                "Формы: клик или Space убирает форму; Shift + влево/вправо двигает выбранную раньше или позже."
-            )
+            _ => tr!("Shapes: click or Space to leave one out; Shift + Left/Right moves the selected one earlier or later.")
             .to_string(),
         };
         c.text(
