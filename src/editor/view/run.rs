@@ -213,6 +213,8 @@ impl View {
             }
             Cmd::SelectAll if self.clip_mode() => self.pick_all_clips(),
             Cmd::SelectAll => self.ed.select_all(),
+            Cmd::SelectNone if self.mode == Mode::Timing || self.tw => self.select_line(None),
+            Cmd::SelectNone => self.ed.select_none(),
             Cmd::Delete
                 if (self.mode == Mode::Timing || self.tw) && !self.selected_lines().is_empty() =>
             {

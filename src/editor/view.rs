@@ -282,6 +282,8 @@ const TOOLS: [(&str, &str, Tool); 4] = [
 const RATES: [u32; 4] = [25, 50, 75, 100];
 
 const NOTE_R: f32 = 12.0;
+/// How far from the end of a roll or swell its tail can be grabbed, in pixels.
+const TAIL_GRAB: f32 = 7.0;
 const BIG_R: f32 = 16.0;
 const DON: u32 = 0xEB452C;
 const KAT: u32 = 0x438EAD;
@@ -1548,6 +1550,13 @@ impl View {
             } => Some((from.min(to), from.max(to), add)),
             _ => None,
         };
+        let tail_hot = match self.drag {
+            Drag::Resize { id } => Some(id),
+            Drag::None if self.mode != Mode::Effects && self.playing.is_none() => {
+                self.tail_at(self.mouse.0, self.mouse.1)
+            }
+            _ => None,
+        };
         let gimmick = self.ed.gimmick();
         for o in &objs[first..] {
             if o.time > to + 40.0 * self.ms_per_px {
@@ -1586,10 +1595,18 @@ impl View {
                     };
                     c.capsule([ox, ex], cy, r * 0.8, rgba(col, 0.9), outline, lw);
                     c.circle(ox, cy, r, rgba(col, 1.0), outline, lw);
-                    if selected {
-                        // The handle that stretches it.
-                        c.rect(ex - 1.5, cy - r * 0.8, 3.0, r * 1.6, rgba(0xffffff, 0.9));
-                    }
+                    // The handle that stretches it: faint on every long note, bright when
+                    // selected or when the pointer is on it (or dragging it).
+                    let grabbed = tail_hot == Some(o.id);
+                    let (w, a) = if grabbed {
+                        (5.0, 1.0)
+                    } else if selected {
+                        (3.0, 0.9)
+                    } else {
+                        (2.0, 0.35)
+                    };
+                    let col = if grabbed { 0xffe9a8 } else { 0xffffff };
+                    c.rect(ex - w / 2.0, cy - r * 0.8, w, r * 1.6, rgba(col, a));
                 }
                 _ if o.fake => {
                     // A fake: hollow, in its colour, with an F in it.
@@ -1618,7 +1635,10 @@ impl View {
         // The ghost of what a click would place.
         let (mx, my) = self.mouse;
         let in_lane = inside(self.layout.timeline, mx, my) && my > y + RULER + 16.0;
-        if in_lane && self.playing.is_none() && matches!(self.drag, Drag::None | Drag::Place { .. })
+        if in_lane
+            && self.playing.is_none()
+            && tail_hot.is_none()
+            && matches!(self.drag, Drag::None | Drag::Place { .. })
         {
             let at = self.ed.snapped(self.t_at(mx));
             let gx = self.x_of(at);
@@ -1920,6 +1940,50 @@ impl View {
         top + (y + h - top) / 2.0
     }
 
+    /// The roll or swell whose tail (the right end of its body) is under the pointer: the end
+    /// can be grabbed from a few pixels either side of it, selected or not. Where the head of
+    /// another note is drawn, that note wins.
+    fn tail_at(&self, x: f32, y: f32) -> Option<u64> {
+        let cy = self.lane_cy();
+        let (t0, t1) = (self.t_at(x - TAIL_GRAB), self.t_at(x + TAIL_GRAB));
+        let first = self
+            .ed
+            .chart
+            .objects
+            .partition_point(|o| o.time < t0 - 60_000.0);
+        let mut best: Option<(f32, u64)> = None;
+        for o in &self.ed.chart.objects[first..] {
+            if o.time > t1 {
+                break;
+            }
+            let end = self.ed.end_of(o);
+            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let r = if o.big() { BIG_R } else { NOTE_R };
+            let d = (x - ex).abs();
+            if ex > ox
+                && d <= TAIL_GRAB
+                && (y - cy).abs() <= r + 2.0
+                && x > ox + 2.0
+                && best.is_none_or(|(bd, _)| d < bd)
+            {
+                best = Some((d, o.id));
+            }
+        }
+        let id = best?;
+        // A head drawn right over the tail (a note of its own) is what the pointer means.
+        if let Some(h) = self.object_at_point(x, y)
+            && h != id.1
+            && self
+                .ed
+                .chart
+                .object(h)
+                .is_some_and(|o| (self.x_of(o.time) - x).abs() <= NOTE_R)
+        {
+            return None;
+        }
+        Some(id.1)
+    }
+
     /// The note under the pointer: its head by the circle drawn, a roll or swell also along its
     /// body. Anywhere else in the lane is empty, which is what lets a box start between notes.
     fn object_at_point(&self, x: f32, y: f32) -> Option<u64> {
@@ -2150,14 +2214,11 @@ impl View {
             if y < tl[1] + RULER + 16.0 {
                 return I::EwResize;
             }
-            if let Some(id) = self.object_at_point(x, y) {
-                let end_grab = self.ed.chart.object(id).is_some_and(|o| {
-                    let end = self.ed.end_of(o);
-                    end > o.time
-                        && self.ed.selection.contains(&id)
-                        && (self.x_of(end) - x).abs() <= 6.0
-                });
-                return if end_grab { I::EwResize } else { I::Grab };
+            if self.mode != Mode::Effects && self.tail_at(x, y).is_some() {
+                return I::EwResize;
+            }
+            if self.object_at_point(x, y).is_some() {
+                return I::Grab;
             }
             return match self.ed.tool {
                 Tool::Select => I::Default,
@@ -2291,7 +2352,7 @@ impl View {
 
     /// Selects the note under a press and starts dragging it; a second press on it soon after
     /// puts the playhead there instead.
-    fn grab_object(&mut self, id: u64, x: f32, t: f64, keys: Keys) {
+    fn grab_object(&mut self, id: u64, t: f64, keys: Keys) {
         let Some(o) = self.ed.chart.object(id).cloned() else {
             return;
         };
@@ -2306,13 +2367,6 @@ impl View {
             return;
         }
         self.last_click = Some((now, id));
-        // The right end of a selected roll or swell stretches it.
-        let end = self.ed.end_of(&o);
-        if end > o.time && (self.x_of(end) - x).abs() <= 6.0 {
-            self.ed.selection = [id].into();
-            self.drag = Drag::Resize { id };
-            return;
-        }
         if keys.shift {
             self.ed.toggle(id);
         } else if !self.ed.selection.contains(&id) {
@@ -2345,6 +2399,18 @@ impl View {
             }
             return;
         }
+        // The tail of a roll or swell stretches it, whatever the tool and selection are.
+        if !keys.ctrl
+            && self.mode != Mode::Effects
+            && let Some(id) = self.tail_at(x, y)
+        {
+            if !self.ed.selection.contains(&id) {
+                self.ed.selection = [id].into();
+            }
+            self.select_line(None);
+            self.drag = Drag::Resize { id };
+            return;
+        }
         // Ctrl drags a box whatever the tool is, and even starting on a note.
         if keys.ctrl {
             self.select_line(None);
@@ -2375,7 +2441,7 @@ impl View {
                         self.status = "note recoloured".into();
                         return;
                     }
-                    self.grab_object(id, x, t, keys);
+                    self.grab_object(id, t, keys);
                 } else if tool == Tool::Select && self.left_pan && !keys.shift {
                     self.select_line(None);
                     self.drag = Drag::Slide {
@@ -2458,9 +2524,14 @@ impl View {
         match drag {
             Drag::Box { from, moved, .. } => {
                 if !moved {
-                    self.ed.select_none();
-                    let t = self.ed.snapped(from);
-                    self.set_time(t);
+                    // Only Ctrl starts a box on a note: Ctrl+click toggles that note.
+                    if let Some(id) = self.object_at_point(self.x_of(from), self.lane_cy()) {
+                        self.ed.toggle(id);
+                    } else {
+                        self.ed.select_none();
+                        let t = self.ed.snapped(from);
+                        self.set_time(t);
+                    }
                 } else {
                     self.ed.select_range(from, self.t_at(x), keys.shift);
                 }
@@ -3178,6 +3249,13 @@ impl View {
             }
             if self.tw {
                 self.tw = false;
+                return KeyResult::Handled;
+            }
+            // Then a note selection lets go, before Esc would leave the editor.
+            if matches!(self.mode, Mode::Compose | Mode::Gimmicks) && !self.ed.selection.is_empty()
+            {
+                self.ed.select_none();
+                self.status = "selection cleared".into();
                 return KeyResult::Handled;
             }
         }
@@ -4262,6 +4340,9 @@ mod tests {
         // Make a change and try to leave.
         v.ed.place_hit(3000.0, false);
         assert!(v.ed.modified());
+        // The first Esc only lets go of the placed note's selection.
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.ed.selection.is_empty() && v.modal.is_none());
         assert!(matches!(
             v.key(KeyCode::Escape, false, Keys::default(), None),
             KeyResult::Handled
@@ -4276,6 +4357,7 @@ mod tests {
         // Saving first also leaves.
         let mut w = view();
         w.ed.place_hit(3000.0, false);
+        w.ed.select_none();
         w.key(KeyCode::Escape, false, Keys::default(), None);
         press(&mut w, Btn::C(Cmd::LeaveSave));
         assert!(w.take_exit() && !w.ed.modified(), "{}", w.status);
@@ -7177,5 +7259,153 @@ mod tests {
         assert!(v.reseek);
         v.key(KeyCode::KeyT, false, Keys::default(), None);
         assert!(!v.metronome);
+    }
+
+    /// A roll at 40000..40500 (and a note at 41000 after it) in a quiet part of the map.
+    fn roll_view() -> (View, u64) {
+        let mut v = view();
+        v.ed.snap = 4;
+        v.ed.tool = Tool::Select;
+        let id = v.ed.place_roll(40_000.0, 40_500.0).unwrap();
+        v.ed.place_hit(41_000.0, false);
+        v.ed.select_none();
+        v.view_start = 39_000.0;
+        draw(&mut v);
+        (v, id)
+    }
+
+    #[test]
+    fn dragging_the_tail_of_a_roll_resizes_it_snapped_as_one_undo() {
+        let (mut v, id) = roll_view();
+        let y = lane_y(&v);
+        let k = Keys::default();
+        // Just right of the end still grabs it, selected or not.
+        assert!(v.ed.selection.is_empty());
+        assert_eq!(v.tail_at(v.x_of(40_500.0) + 4.0, y), Some(id));
+        v.mouse = (v.x_of(40_500.0) + 4.0, y);
+        assert_eq!(v.cursor(), winit::window::CursorIcon::EwResize);
+        let a = v.x_of(40_500.0) + 4.0;
+        v.mouse_down(a, y, k, None);
+        for step in 1..=6 {
+            v.mouse_move(a + 5.0 * step as f32, y, k);
+        }
+        v.mouse_up(a + 30.0, y, k);
+        // On the snap grid (1/4 of 500 ms), not where the pointer was.
+        let want = v.ed.snapped(v.t_at(a + 30.0));
+        let end = v.ed.end_of(v.ed.chart.object(id).unwrap());
+        assert_eq!(end, want);
+        assert!(end > 40_500.0 && end < 41_000.0, "{end}");
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_500.0);
+    }
+
+    #[test]
+    fn a_resize_keeps_one_snap_step_and_stops_at_the_next_note() {
+        let (mut v, id) = roll_view();
+        let y = lane_y(&v);
+        let k = Keys::default();
+        let a = v.x_of(40_500.0);
+        v.mouse_down(a, y, k, None);
+        // Far past the next note.
+        v.mouse_move(v.x_of(43_000.0), y, k);
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 41_000.0);
+        // Back before the head: one snap step (125 ms) is the least.
+        v.mouse_move(v.x_of(39_500.0), y, k);
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_125.0);
+        v.mouse_up(v.x_of(39_500.0), y, k);
+        assert_eq!(
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.time == 41_000.0)
+                .count(),
+            1
+        );
+        // The whole drag is one undo.
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_500.0);
+    }
+
+    #[test]
+    fn a_swell_tail_resizes_and_a_selected_one_keeps_its_selection() {
+        let mut v = view();
+        v.ed.tool = Tool::Note;
+        let id = v.ed.place_swell(40_000.0, 40_500.0).unwrap();
+        v.ed.selection = [id].into();
+        v.view_start = 39_000.0;
+        draw(&mut v);
+        let y = lane_y(&v);
+        let k = Keys::default();
+        let a = v.x_of(40_500.0) - 3.0;
+        v.mouse_down(a, y, k, None);
+        v.mouse_move(v.x_of(40_750.0), y, k);
+        v.mouse_up(v.x_of(40_750.0), y, k);
+        assert_eq!(v.ed.end_of(v.ed.chart.object(id).unwrap()), 40_750.0);
+        assert!(v.ed.selection.contains(&id));
+        assert_eq!(
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.time >= 40_000.0)
+                .count(),
+            1,
+            "the Note tool placed nothing"
+        );
+    }
+
+    #[test]
+    fn esc_clears_the_selection_before_it_leaves() {
+        let mut v = view();
+        v.ed.selection = v.ed.chart.objects.iter().take(2).map(|o| o.id).collect();
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.ed.selection.is_empty());
+        assert!(!v.exit && v.modal.is_none(), "the first Esc only deselects");
+    }
+
+    #[test]
+    fn ctrl_click_toggles_one_note_and_ctrl_shift_a_deselects_all() {
+        let mut v = view();
+        draw(&mut v);
+        let y = lane_y(&v);
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        let x = v.x_of(1000.0);
+        v.mouse_down(x, y, ctrl, None);
+        v.mouse_up(x, y, ctrl);
+        let id =
+            v.ed.chart
+                .objects
+                .iter()
+                .find(|o| o.time == 1000.0)
+                .unwrap()
+                .id;
+        assert_eq!(v.ed.selection, [id].into());
+        v.mouse_down(x, y, ctrl, None);
+        v.mouse_up(x, y, ctrl);
+        assert!(v.ed.selection.is_empty(), "a second Ctrl+click removes it");
+        v.ed.select_all();
+        let both = Keys {
+            ctrl: true,
+            shift: true,
+            ..Keys::default()
+        };
+        v.key(KeyCode::KeyA, false, both, None);
+        assert!(v.ed.selection.is_empty());
+    }
+
+    #[test]
+    fn a_click_on_empty_lane_with_select_clears_the_selection() {
+        let mut v = view();
+        draw(&mut v);
+        v.ed.tool = Tool::Select;
+        v.ed.selection = v.ed.chart.objects.iter().take(2).map(|o| o.id).collect();
+        v.view_start = 59_000.0;
+        draw(&mut v);
+        let y = lane_y(&v);
+        let x = v.x_of(60_000.0);
+        click(&mut v, x, y);
+        assert!(v.ed.selection.is_empty());
     }
 }

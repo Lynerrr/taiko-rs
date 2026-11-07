@@ -111,6 +111,8 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 
 # Selecting and copying
 - Drag a box on empty lane (Ctrl+drag with any tool). Ctrl+A selects all.
+- To deselect: press Esc, click empty lane with the Select tool, or press Ctrl+Shift+A. Ctrl+click on a note adds it to the selection or, when it is selected already, takes it out. With Note, Drumroll or Denden a click on empty lane places, so use Esc there.
+- Drag the right end (the light bar) of a drumroll or denden to change its length. It snaps to the grid (Shift: to the millisecond), is never shorter than one snap step and stops at the next note. One drag is one undo step.
 - Ctrl+X / C / V cut, copy, paste at the playhead.
 
 # Bookmarks and the song
@@ -379,7 +381,7 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
 
 # Notes
 - 1 2 3 4: tools. W E: kat, big. Q: flip. J K: nudge. Ctrl+D: clone. Ctrl+G: reverse.
-- Ctrl+Z / Y: undo, redo. Ctrl+X / C / V: cut, copy, paste. Ctrl+A: select all. Delete.
+- Ctrl+Z / Y: undo, redo. Ctrl+X / C / V: cut, copy, paste. Ctrl+A: select all. Ctrl+Shift+A or Esc: deselect. Delete.
 
 # Timing and the rest
 - Ctrl+P: red line. Ctrl+Shift+P: green line. Ctrl+I: delete line. F6: the timing window. T: metronome.
@@ -469,6 +471,8 @@ File > Open song folder открывает папку карты. Бросьте
 
 # Выделение и копирование
 - Рамка по пустой дорожке (Ctrl+рамка любым инструментом). Ctrl+A выделяет всё.
+- Чтобы снять выделение: Esc, клик по пустой дорожке инструментом Select или Ctrl+Shift+A. Ctrl+клик по ноте добавляет её в выделение, а если она уже выделена — убирает. С Note, Drumroll и Denden клик по пустой дорожке ставит ноту, поэтому там нажмите Esc.
+- Потяните правый конец (светлую полоску) драмролла или дендена, чтобы изменить длину. Он липнет к сетке (Shift — к миллисекунде), не короче одного шага сетки и упирается в следующую ноту. Одно перетаскивание — один шаг отмены.
 - Ctrl+X / C / V — вырезать, копировать, вставить в курсор.
 
 # Закладки и песня
@@ -737,7 +741,7 @@ File > Upload отправляет сохранённую карту на taiko.
 
 # Ноты
 - 1 2 3 4: инструменты. W E: кат, большая. Q: сменить цвет. J K: сдвиг. Ctrl+D: клон. Ctrl+G: разворот.
-- Ctrl+Z / Y: отмена, повтор. Ctrl+X / C / V: вырезать, копировать, вставить. Ctrl+A: выделить всё. Delete.
+- Ctrl+Z / Y: отмена, повтор. Ctrl+X / C / V: вырезать, копировать, вставить. Ctrl+A: выделить всё. Ctrl+Shift+A или Esc: снять выделение. Delete.
 
 # Тайминг и прочее
 - Ctrl+P: красная линия. Ctrl+Shift+P: зелёная линия. Ctrl+I: удалить линию. F6: окно таймингов. T: метроном.
