@@ -3374,7 +3374,8 @@ impl Results {
             format!(
                 "You hit {:.0} ms {dir} on average; press {} a few times to adjust this map's offset.",
                 s.mean_error().abs(),
-                if s.mean_error() > 0.0 { "=" } else { "-" }
+                // As with the global offset: lower it when you hit late.
+                if s.mean_error() > 0.0 { "-" } else { "=" }
             )
         } else {
             format!(
