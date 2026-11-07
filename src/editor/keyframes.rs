@@ -270,6 +270,8 @@ impl Editor {
             return Err(e);
         }
         self.path = path.clone();
+        // Its name is the `.osu`'s with "(tko)" only inside: a save doesn't move it for that.
+        self.named = super::state::named_by(&self.chart);
         self.history.mark_saved();
         Ok(path)
     }
