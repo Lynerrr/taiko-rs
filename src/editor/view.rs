@@ -2588,14 +2588,8 @@ impl View {
     /// Saves, and packs the set into a file in the Exports folder (`custom::export`), on a
     /// thread: the game shows the file when it is written.
     fn export(&mut self) {
-        if self.export_rx.is_some() {
+        if self.export_rx.is_some() || !self.save_for_export() {
             return;
-        }
-        if self.ed.chart.dirty {
-            self.save();
-            if self.ed.chart.dirty {
-                return;
-            }
         }
         let Some(folder) = self.ed.path.parent().map(|p| p.to_path_buf()) else {
             return;
@@ -2608,6 +2602,23 @@ impl View {
         });
         self.export_rx = Some(rx);
         self.status = "packing the map...".into();
+    }
+
+    /// Saves what changed before the set is packed. False when the save failed (the status
+    /// says why): packing then would give people the map without the latest edits.
+    /// `chart.dirty` stays set after a save (it means changed since the file was read), so it
+    /// can't tell whether the save went through.
+    fn save_for_export(&mut self) -> bool {
+        if !self.ed.chart.dirty && !self.ed.modified() {
+            return true;
+        }
+        match self.ed.save() {
+            Ok(()) => true,
+            Err(e) => {
+                self.status = format!("can't save: {e}");
+                false
+            }
+        }
     }
 
     fn poll_export(&mut self) {
@@ -3157,6 +3168,23 @@ mod tests {
         v.view_start = 0.0;
         v.ms_per_px = 10.0;
         v
+    }
+
+    #[test]
+    fn exporting_after_an_edit_packs_once_it_is_saved() {
+        let mut v = view();
+        // An edit: the chart stays dirty after it is saved (changed since it was read).
+        v.ed.chart.dirty = true;
+        assert!(v.save_for_export());
+        assert!(v.ed.chart.dirty);
+        assert!(!v.ed.modified());
+        // A second export goes ahead too.
+        assert!(v.save_for_export());
+        // A map that can't be saved isn't packed, and says why.
+        v.ed.chart.lossy = true;
+        assert!(!v.save_for_export());
+        assert!(v.status.starts_with("can't save"), "{}", v.status);
+        let _ = std::fs::remove_dir_all(v.ed.path.parent().unwrap());
     }
 
     fn draw(v: &mut View) -> Canvas {
