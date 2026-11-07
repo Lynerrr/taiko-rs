@@ -173,3 +173,25 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
     until_playing(&mut s);
     assert!(!autoplayed(&s));
 }
+
+#[test]
+fn friends_see_editing_through_the_editor_its_start_screen_and_a_test_play() {
+    use online::Activity;
+    let mut s = editing();
+    assert!(matches!(s.activity(), Activity::Editing { map } if !map.is_empty()));
+    // A test play of the map being edited is still editing: nothing to watch there.
+    press(&mut s, KeyCode::F5, Keys::default());
+    frame(&mut s);
+    assert!(matches!(s.activity(), Activity::Editing { .. }), "loading");
+    until_playing(&mut s);
+    assert!(matches!(s.activity(), Activity::Editing { .. }), "playing");
+    s.show_select();
+    assert!(matches!(s.activity(), Activity::Editing { .. }), "back");
+    // Leaving the editor goes back to the menus.
+    s.editor_back = None;
+    s.scene = Scene::Select;
+    assert_eq!(s.activity(), Activity::Menus);
+    // The editor's start screen has no map yet.
+    s.open_editor_home();
+    assert_eq!(s.activity(), Activity::Editing { map: String::new() });
+}

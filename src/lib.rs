@@ -12095,6 +12095,20 @@ impl State {
                 .unwrap_or_default()
         };
         match &self.scene {
+            // The editor and its test plays (`editor_back` holds the editor while one runs)
+            // count as editing: a test play is the mapper checking their own work, there's
+            // nothing to watch, and flipping to "playing" would offer friends a Watch button.
+            Scene::Editor(view) => Activity::Editing { map: view.label() },
+            Scene::EditorHome(_) => Activity::Editing { map: String::new() },
+            Scene::Loading { .. } | Scene::Play { .. } if self.editor_back.is_some() => {
+                Activity::Editing {
+                    map: self
+                        .editor_back
+                        .as_ref()
+                        .map(|v| v.label())
+                        .unwrap_or_default(),
+                }
+            }
             Scene::Play { game, entry, .. } if game.replay.is_none() => Activity::Playing {
                 map: self
                     .library
