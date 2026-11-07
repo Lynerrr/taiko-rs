@@ -147,11 +147,7 @@ pub fn save(replay: &Replay, pp: Option<f64>) -> Result<ScoreRow, String> {
         max_combo: replay.max_combo,
         miss: replay.miss,
         rate: replay.rate,
-        player: replay
-            .player
-            .chars()
-            .filter(|c| *c != '\t' && *c != '\n')
-            .collect(),
+        player: index_name(&replay.player),
         file,
         mods: crate::mods::Mods::from_list(&replay.mods).label(),
         pp,
@@ -213,6 +209,54 @@ pub fn rewrite_index(rows: &[ScoreRow]) -> Result<(), String> {
     let tmp = index.with_extension("tsv.tmp");
     std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &index).map_err(|e| e.to_string())
+}
+
+/// A player name as the index can hold it (a tab or a line break would split the line).
+fn index_name(name: &str) -> String {
+    name.chars().filter(|c| *c != '\t' && *c != '\n').collect()
+}
+
+/// Puts `from`'s rows under `to` and returns their replay files.
+fn rename_rows(rows: &mut [ScoreRow], from: &str, to: &str) -> Vec<PathBuf> {
+    let (from, to) = (index_name(from), index_name(to));
+    rows.iter_mut()
+        .filter(|r| r.player == from)
+        .map(|r| {
+            r.player = to.clone();
+            r.file.clone()
+        })
+        .collect()
+}
+
+/// Moves the local plays saved as `from` to the name `to`: the index right away, their replays
+/// in the background. Returns how many plays moved.
+pub fn rename_player(rows: &mut [ScoreRow], from: &str, to: &str) -> Result<usize, String> {
+    let files = rename_rows(rows, from, to);
+    if files.is_empty() {
+        return Ok(0);
+    }
+    rewrite_index(rows)?;
+    let (from, to) = (from.to_string(), to.to_string());
+    let moved = files.len();
+    std::thread::spawn(move || {
+        for file in files {
+            let Ok(mut r) = load_replay(&file) else {
+                continue;
+            };
+            if r.player != from {
+                continue;
+            }
+            r.player = to.clone();
+            let Ok(bytes) = serde_json::to_vec(&r) else {
+                continue;
+            };
+            let tmp = file.with_extension("json.tmp");
+            if std::fs::write(&tmp, bytes).is_err() || std::fs::rename(&tmp, &file).is_err() {
+                eprintln!("couldn't rename the player in {}", file.display());
+            }
+        }
+    });
+    Ok(moved)
 }
 
 pub fn load_replay(path: &Path) -> Result<Replay, String> {
@@ -368,6 +412,18 @@ mod board_tests {
             mods: mods.into(),
             pp: None,
         }
+    }
+
+    #[test]
+    fn renaming_moves_only_that_players_rows() {
+        let mut rows = vec![row(1, 10, ""), row(2, 20, ""), row(3, 30, "")];
+        rows[1].player = "friend".into();
+        rows[2].file = PathBuf::from("c.json");
+        let files = rename_rows(&mut rows, "p", "new\tname");
+        assert_eq!(files, vec![PathBuf::new(), PathBuf::from("c.json")]);
+        let names: Vec<&str> = rows.iter().map(|r| r.player.as_str()).collect();
+        assert_eq!(names, ["newname", "friend", "newname"]);
+        assert!(rename_rows(&mut rows, "nobody", "x").is_empty());
     }
 
     #[test]
