@@ -723,6 +723,7 @@ fn status_colour(activity: Option<&Activity>) -> u32 {
         Some(Activity::Match { .. }) => 0xFF7A59,
         Some(Activity::Lobby { .. }) => 0x4fb4ff,
         Some(Activity::Watching { .. }) => 0xB48CFF,
+        Some(Activity::Editing { .. }) => 0xF2D45C,
     }
 }
 
