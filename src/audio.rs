@@ -118,6 +118,8 @@ struct Stamp {
     latency: Duration,
     /// That delay as the stream reported it (`SteadyLatency`).
     reported: Duration,
+    /// `latency` is past the stream's start-up and won't change any more.
+    settled: bool,
     /// The last Play / Seek the callback had applied.
     epoch: u64,
 }
@@ -154,6 +156,7 @@ impl Engine {
             at: Instant::now(),
             latency: Duration::ZERO,
             reported: Duration::ZERO,
+            settled: false,
             epoch: 0,
         }));
         let volume = Arc::new([
@@ -296,6 +299,12 @@ impl Engine {
             s.latency.as_secs_f64() * 1000.0,
             s.reported.as_secs_f64() * 1000.0,
         )
+    }
+
+    /// Whether `latencies_ms().0` is done changing for this stream (the first second or so of a
+    /// stream it moves about while it starts up).
+    pub fn latency_settled(&self) -> bool {
+        self.stamp.lock().unwrap().settled
     }
 
     /// Song position (ms) audible at `now`, or None when nothing is playing yet.
@@ -575,7 +584,13 @@ impl Mixer {
             self.steady
                 .of(reported, out.len() / self.channels, self.rate)
         } else {
+            self.steady.callbacks = self.steady.callbacks.saturating_add(1);
             reported
+        };
+        let settled = if cfg!(windows) {
+            self.steady.total.is_some()
+        } else {
+            self.steady.callbacks > LATENCY_SETTLE
         };
         if let Ok(mut s) = self.stamp.try_lock() {
             *s = Stamp {
@@ -584,6 +599,7 @@ impl Mixer {
                 at: now,
                 latency,
                 reported,
+                settled,
                 epoch: self.epoch,
             };
         }

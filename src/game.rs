@@ -473,6 +473,9 @@ pub struct Game {
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
     offset: f64,
+    /// The global offset as the player has it, in osu!'s direction (`Config::offset_osu_ms`);
+    /// set by the app every frame, for the advice to be given in it.
+    pub osu_offset: f64,
     /// Speed modifier: map milliseconds per real millisecond (1.5 = DT). Taken from the track,
     /// which was prepared at this rate. The game clock runs in track time; map time is
     /// `speed.map(track - offset)`, so the offset stays in real milliseconds.
@@ -2168,6 +2171,7 @@ impl Game {
             combo_break: None,
             ur_scaled_hint: true,
             offset: 0.0,
+            osu_offset: 0.0,
             rate,
             speed,
             mods,
@@ -3009,6 +3013,13 @@ impl Game {
             needed,
             significant,
         })
+    }
+
+    /// The osu! offset that makes up for `suggested`, an `OffsetHint`'s offset (the one the clock
+    /// takes off, global and map's): positive osu! offsets bring the notes earlier, so wanting the
+    /// clock's offset lowered by e means raising this one by e.
+    pub fn suggested_osu_offset(&self, suggested: f64) -> f64 {
+        (self.osu_offset - (suggested - self.offset)).round()
     }
 
     /// Marks everything ending before `t` as already played, without scoring or animations (the
@@ -6978,7 +6989,8 @@ impl Game {
         let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
         let stats =
             tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
-        let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
+        let suggested = self.suggested_osu_offset(e.suggested_offset);
+        let (error, margin) = (e.error_ms.abs(), e.margin_ms);
         if h.significant {
             let dir = if e.error_ms > 0.0 {
                 tr!("late", "遅い", "поздно")
@@ -8811,6 +8823,17 @@ mod tests {
         let t0 = g.map.notes[0].time;
         g.judge_press(1, false, t0 - (g.windows.ok + g.windows.miss) / 2.0);
         assert_eq!(g.state[0].judged, Some(Judge::Miss));
+    }
+
+    #[test]
+    fn a_late_hitter_is_advised_a_lower_osu_offset() {
+        let mut g = game();
+        hits(&mut g, &spread(8.0, 2.0, 25), 0.0);
+        g.osu_offset = 5.0;
+        let h = g.offset_suggestion(0.0).unwrap();
+        // Late by 8: the clock's offset +8 is the osu! one -8, whatever the map's own offset.
+        assert_eq!(h.estimate.suggested_offset, 8.0);
+        assert_eq!(g.suggested_osu_offset(h.estimate.suggested_offset), -3.0);
     }
 
     #[test]
