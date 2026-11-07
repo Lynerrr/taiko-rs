@@ -5825,8 +5825,7 @@ impl State {
         match self.updater.status() {
             update::Status::Available { commit, .. } => {
                 self.updater.install();
-                let build = update::short(&commit);
-                self.toast(tr!("downloading {build}...", "{build}をダウンロード中...", "загрузка {build}...";));
+                self.toast_download(&commit);
             }
             update::Status::Checking | update::Status::Downloading | update::Status::Installed => {}
             _ => {
@@ -5843,8 +5842,27 @@ impl State {
         }
     }
 
+    fn toast_download(&mut self, commit: &str) {
+        let build = update::short(commit);
+        self.toast(
+            tr!("downloading {build}...", "{build}をダウンロード中...", "загрузка {build}...";),
+        );
+    }
+
+    /// Nothing is lost by restarting the game now: it's in a menu, with no game paused behind the
+    /// settings and no multiplayer room to drop out of.
+    fn can_restart(&self) -> bool {
+        let scene = match &self.scene {
+            Scene::Settings { prev } => prev.as_ref(),
+            scene => scene,
+        };
+        matches!(scene, Scene::Select | Scene::MpMenu | Scene::Download)
+            && self.mp.is_none()
+            && self.splash.is_none()
+    }
+
     /// The badge top right while there's an update to install (menus only), and the restart
-    /// once it's installed.
+    /// once it's installed (which waits for a moment that costs the player nothing).
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
         let menus = matches!(
@@ -5938,6 +5956,12 @@ impl State {
             update::Status::Available { commit, .. } => update_badge(&commit),
             update::Status::Downloading => updating_badge(self.updater.progress()),
             update::Status::Installed => {
+                if !self.can_restart() {
+                    return;
+                }
+                // On disk before the new game reads it (saves are written in the background).
+                self.cfg.save();
+                config::flush_saves();
                 match update::restart() {
                     Ok(()) => self.quit = true,
                     Err(e) => {
@@ -14273,6 +14297,12 @@ impl State {
         }
         if self.cfg.check_updates {
             self.updater.check_every(UPDATE_CHECK_EVERY);
+        }
+        // A song started before the check came back keeps the machine to itself until it's over.
+        if !self.in_song()
+            && let Some(commit) = self.updater.install_at_launch()
+        {
+            self.toast_download(&commit);
         }
         self.poll_downloads();
         self.poll_score_link();
