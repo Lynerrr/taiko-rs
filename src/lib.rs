@@ -14387,6 +14387,7 @@ impl State {
                         match self.pending_replay.take() {
                             Some(r) => {
                                 game.mash = r.mash();
+                                game.set_window_rule(r.window_rule());
                                 game.scroll_speed = r.scroll_speed;
                                 game.replay_of = Some(r.player.clone());
                                 game.banner = Some(format!("REPLAY  -  {}", r.player));

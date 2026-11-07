@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// 3: scored with `Scoring::Standard` (below: `Classic`). 2: judged with `Mash::Nearest` (1: with
-/// the `anti_mash` setting).
-const REPLAY_VERSION: u32 = 4;
+/// 5: judged with osu!'s hit windows, whole ms less a half (below: the OD's exact widths, see
+/// `WindowRule`). 4: Half by `HalfRule::OnTheBeat`. 3: scored with `Scoring::Standard` (below:
+/// `Classic`). 2: judged with `Mash::Nearest` (1: with the `anti_mash` setting).
+const REPLAY_VERSION: u32 = 5;
 
 /// A recorded play: the map time each drum key was judged at, plus what the judging depended
 /// on. Playing the inputs back through the same map reproduces the play exactly.
@@ -240,6 +241,15 @@ impl Replay {
             crate::mods::HalfRule::OnTheBeat
         } else {
             crate::mods::HalfRule::EveryOther
+        }
+    }
+
+    /// How wide its hit windows were.
+    pub fn window_rule(&self) -> crate::game::WindowRule {
+        if self.version >= 5 {
+            crate::game::WindowRule::Osu
+        } else {
+            crate::game::WindowRule::Exact
         }
     }
 

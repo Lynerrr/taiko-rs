@@ -192,6 +192,21 @@ pub fn window_ms(od: f64, min: f64, mid: f64, max: f64) -> f64 {
     at_bend * (-(od - WINDOW_BEND_OD) * per_od / at_bend).exp()
 }
 
+/// A hit window as osu!(lazer) judges it, the way stable did: whole ms (stable's clock and
+/// windows were ints, compared with <), less half a ms, compared with <=. Past `WINDOW_BEND_OD`
+/// it bends as `window_ms` does, from the rounded width there, so it still never gets to zero.
+pub fn judged_window_ms(od: f64, min: f64, mid: f64, max: f64) -> f64 {
+    // A width that is a whole number on paper can come out a hair under it (29.000000000000004
+    // or 28.999999999999996): it's still that whole number.
+    let line = |d: f64| (difficulty_range(d, min, mid, max) + 1e-9).floor() - 0.5;
+    if od <= WINDOW_BEND_OD {
+        return line(od);
+    }
+    let at_bend = line(WINDOW_BEND_OD);
+    let per_od = (mid - max) / 5.0;
+    at_bend * (-(od - WINDOW_BEND_OD) * per_od / at_bend).exp()
+}
+
 /// The great window at `od`, in ms.
 pub fn great_ms(od: f64) -> f64 {
     window_ms(od, 50.0, 35.0, 20.0)
@@ -1100,6 +1115,53 @@ SliderTickRate:1
         assert_eq!(difficulty_range(5.0, 50.0, 35.0, 20.0), 35.0);
         assert_eq!(difficulty_range(10.0, 50.0, 35.0, 20.0), 20.0);
         assert_eq!(difficulty_range(0.0, 120.0, 80.0, 50.0), 120.0);
+    }
+
+    #[test]
+    fn judged_windows_are_lazers() {
+        // osu!(lazer)'s TaikoHitWindows: floor(DifficultyRange) - 0.5.
+        let great = |od: f64| judged_window_ms(od, 50.0, 35.0, 20.0);
+        let ok = |od: f64| judged_window_ms(od, 120.0, 80.0, 50.0);
+        let miss = |od: f64| judged_window_ms(od, 135.0, 95.0, 70.0);
+        assert_eq!([great(0.0), ok(0.0), miss(0.0)], [49.5, 119.5, 134.5]);
+        assert_eq!([great(5.0), ok(5.0), miss(5.0)], [34.5, 79.5, 94.5]);
+        assert_eq!([great(10.0), ok(10.0), miss(10.0)], [19.5, 49.5, 69.5]);
+        assert_eq!(great(5.4), 32.5);
+        assert_eq!(great(7.2), 27.5);
+        // Whole numbers on paper stay whole, whatever the floating point does.
+        for tenth in 0..=100 {
+            let od = tenth as f64 / 10.0;
+            let exact = 50.0 - 3.0 * od;
+            assert_eq!(great(od), (exact + 1e-9).floor() - 0.5, "od {od}");
+        }
+    }
+
+    #[test]
+    fn judged_windows_keep_their_order_and_bend_without_a_jump() {
+        let at = |od: f64| {
+            [
+                judged_window_ms(od, 50.0, 35.0, 20.0),
+                judged_window_ms(od, 120.0, 80.0, 50.0),
+                judged_window_ms(od, 135.0, 95.0, 70.0),
+            ]
+        };
+        let below = at(WINDOW_BEND_OD);
+        let above = at(WINDOW_BEND_OD + 1e-6);
+        for k in 0..3 {
+            assert!((below[k] - above[k]).abs() < 1e-3, "{below:?} {above:?}");
+        }
+        let mut last = at(0.0);
+        for hundredth in 1..=2000 {
+            let now = at(hundredth as f64 / 100.0);
+            assert!(
+                now[0] > 0.0 && now[0] < now[1] && now[1] < now[2],
+                "{hundredth}: {now:?}"
+            );
+            for k in 0..3 {
+                assert!(now[k] <= last[k], "{hundredth}: {now:?} after {last:?}");
+            }
+            last = now;
+        }
     }
 
     #[test]
