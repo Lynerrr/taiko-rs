@@ -55,7 +55,7 @@ impl Area {
 
     pub fn describe(&self) -> String {
         if self.is_full() {
-            tr!("full screen", "全画面", "весь экран").into()
+            tr!("full screen").into()
         } else {
             let (w, h, x, y) = (
                 self.w * 100.0,
@@ -63,7 +63,7 @@ impl Area {
                 self.x * 100.0,
                 self.y * 100.0,
             );
-            tr!("{w:.0}% x {h:.0}% at {x:.0}%, {y:.0}%", "{w:.0}% x {h:.0}% 位置 {x:.0}%, {y:.0}%", "{w:.0}% x {h:.0}% в {x:.0}%, {y:.0}%";)
+            tr!("{w:.0}% x {h:.0}% at {x:.0}%, {y:.0}%"; w, h, x, y)
         }
     }
 

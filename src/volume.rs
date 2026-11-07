@@ -41,9 +41,9 @@ const NOTE_Y: f32 = 47.0;
 
 fn name(note: usize) -> &'static str {
     match note {
-        MUSIC => tr!("MUSIC", "音楽", "МУЗЫКА"),
-        MASTER => tr!("ALL", "全体", "ВСЁ"),
-        _ => tr!("HITSOUNDS", "ヒット音", "ХИТСАУНДЫ"),
+        MUSIC => tr!("MUSIC"),
+        MASTER => tr!("ALL"),
+        _ => tr!("HITSOUNDS"),
     }
 }
 

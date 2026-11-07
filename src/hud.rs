@@ -74,37 +74,21 @@ impl Part {
     /// For the settings list.
     pub fn label(self) -> &'static str {
         match self {
-            Part::Score => tr!("Score", "スコア", "Счёт"),
-            Part::Accuracy => tr!("Accuracy", "精度", "Точность"),
-            Part::Pp => tr!("pp counter", "ppカウンター", "Счётчик pp"),
-            Part::Combo => tr!(
-                "Combo (on the drum)",
-                "コンボ (太鼓の上)",
-                "Комбо (на барабане)"
-            ),
-            Part::Progress => tr!("Progress bar", "進行バー", "Полоса прогресса"),
-            Part::Health => tr!("Health bar", "ゲージ", "Полоса здоровья"),
-            Part::Mods => tr!("Mods", "Mod", "Моды"),
-            Part::HitError => tr!("Hit error bar", "判定ズレのバー", "Полоса ошибок попаданий"),
-            Part::OffsetHint => tr!(
-                "Offset suggestion",
-                "オフセットの提案",
-                "Подсказка смещения"
-            ),
+            Part::Score => tr!("Score"),
+            Part::Accuracy => tr!("Accuracy"),
+            Part::Pp => tr!("pp counter"),
+            Part::Combo => tr!("Combo (on the drum)"),
+            Part::Progress => tr!("Progress bar"),
+            Part::Health => tr!("Health bar"),
+            Part::Mods => tr!("Mods"),
+            Part::HitError => tr!("Hit error bar"),
+            Part::OffsetHint => tr!("Offset suggestion"),
             Part::Judgements => "GREAT / OK / MISS",
-            Part::HitAnimation => tr!(
-                "Note hit animation",
-                "ノーツを叩いた時の動き",
-                "Анимация удара по ноте"
-            ),
-            Part::Scoreboard => tr!("Match scoreboard", "対戦のスコアボード", "Таблица матча"),
-            Part::Spectators => tr!("Spectators", "観戦者", "Зрители"),
-            Part::Ur => tr!("UR counter", "URカウンター", "Счётчик UR"),
-            Part::Counts => tr!(
-                "Hit counter (300 / 100 / MISS)",
-                "判定カウンター (300 / 100 / MISS)",
-                "Счётчик попаданий (300 / 100 / MISS)"
-            ),
+            Part::HitAnimation => tr!("Note hit animation"),
+            Part::Scoreboard => tr!("Match scoreboard"),
+            Part::Spectators => tr!("Spectators"),
+            Part::Ur => tr!("UR counter"),
+            Part::Counts => tr!("Hit counter (300 / 100 / MISS)"),
         }
     }
 
@@ -273,11 +257,11 @@ impl Target {
 
     pub fn label(self) -> &'static str {
         match self {
-            Target::Screen => tr!("Screen", "画面", "Экран"),
-            Target::Playfield => tr!("Playfield", "プレイフィールド", "Поле"),
-            Target::Lane => tr!("Lane", "レーン", "Дорожка"),
-            Target::Drum => tr!("Drum", "太鼓", "Барабан"),
-            Target::HitPoint => tr!("Hit point", "判定点", "Точка удара"),
+            Target::Screen => tr!("Screen"),
+            Target::Playfield => tr!(hud: "Playfield"),
+            Target::Lane => tr!("Lane"),
+            Target::Drum => tr!("Drum"),
+            Target::HitPoint => tr!("Hit point"),
         }
     }
 
@@ -871,11 +855,11 @@ pub fn builtin_presets() -> Vec<(&'static str, Layout)> {
     }
 
     vec![
-        (tr!("Default", "標準", "Обычный"), default),
-        (tr!("Full stats", "全情報", "Вся статистика"), stats),
-        (tr!("Classic", "クラシック", "Классика"), classic),
-        (tr!("Follow the lane", "レーンに追従", "За дорожкой"), lane),
-        (tr!("Clean", "すっきり", "Чисто"), clean),
+        (tr!("Default"), default),
+        (tr!("Full stats"), stats),
+        (tr!("Classic"), classic),
+        (tr!("Follow the lane"), lane),
+        (tr!("Clean"), clean),
     ]
 }
 

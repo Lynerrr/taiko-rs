@@ -12,7 +12,7 @@ pub struct Genre {
 
 pub const GENRES: [Genre; 17] = [
     Genre {
-        name: || tr!("Electronic", "エレクトロニック", "Электроника"),
+        name: || tr!("Electronic"),
         colour: 0x4fb4ff,
         words: &[
             "electronic",
@@ -25,7 +25,7 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || tr!("Hardcore", "ハードコア", "Хардкор"),
+        name: || tr!("Hardcore"),
         colour: 0xeb452c,
         words: &[
             "hardcore",
@@ -75,42 +75,42 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || tr!("Trance", "トランス", "Транс"),
+        name: || tr!("Trance"),
         colour: 0x5ee6c8,
         words: &["trance", "psytrance", "psy-trance", "goa"],
     },
     Genre {
-        name: || tr!("Techno & House", "テクノ / ハウス", "Техно и хаус"),
+        name: || tr!("Techno & House"),
         colour: 0xff8a3d,
         words: &["techno", "house", "eurobeat", "garage", "disco"],
     },
     Genre {
-        name: || tr!("Pop", "ポップ", "Поп"),
+        name: || tr!("Pop"),
         colour: 0xff5fa2,
         words: &["pop", "j-pop", "jpop", "k-pop", "kpop", "denpa"],
     },
     Genre {
-        name: || tr!("Rock", "ロック", "Рок"),
+        name: || tr!("Rock"),
         colour: 0xd9654b,
         words: &["rock", "j-rock", "jrock", "punk", "grunge", "emo"],
     },
     Genre {
-        name: || tr!("Metal", "メタル", "Метал"),
+        name: || tr!("Metal"),
         colour: 0x8a8aa0,
         words: &["metal", "metalcore", "deathcore", "djent", "thrash"],
     },
     Genre {
-        name: || tr!("Hip Hop", "ヒップホップ", "Хип-хоп"),
+        name: || tr!("Hip Hop"),
         colour: 0xe0a458,
         words: &["hip-hop", "hiphop", "rap", "hip hop", "lofi", "lo-fi"],
     },
     Genre {
-        name: || tr!("Anime", "アニメ", "Аниме"),
+        name: || tr!("Anime"),
         colour: 0xff7eb6,
         words: &["anime", "tv size", "tv-size", "アニメ"],
     },
     Genre {
-        name: || tr!("Game music", "ゲーム音楽", "Музыка из игр"),
+        name: || tr!("Game music"),
         colour: 0x7bd88f,
         words: &["vgm", "videogame", "video game", "game soundtrack", "ost"],
     },
@@ -125,7 +125,7 @@ pub const GENRES: [Genre; 17] = [
         words: &["vocaloid", "miku", "初音ミク", "utau", "ボーカロイド"],
     },
     Genre {
-        name: || tr!("Classical", "クラシック", "Классика"),
+        name: || tr!("Classical"),
         colour: 0xc9b37e,
         words: &[
             "classical",
@@ -136,7 +136,7 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || tr!("Chiptune", "チップチューン", "Чиптюн"),
+        name: || tr!("Chiptune"),
         colour: 0x9fe870,
         words: &["chiptune", "chip", "8bit", "8-bit", "bitpop"],
     },

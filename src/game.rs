@@ -99,15 +99,11 @@ pub const PAUSE_ITEMS: usize = 5;
 /// Pause menu item `i`'s name.
 fn pause_item(i: usize) -> &'static str {
     match i {
-        0 => tr!("Continue", "続ける", "Продолжить"),
-        1 => tr!("Retry", "やり直す", "Заново"),
-        2 => tr!(
-            "Playfield size",
-            "プレイフィールドのサイズ",
-            "Размер игрового поля"
-        ),
-        3 => tr!("Settings", "設定", "Настройки"),
-        _ => tr!("Quit to song select", "選曲に戻る", "Выйти к выбору песни"),
+        0 => tr!("Continue"),
+        1 => tr!("Retry"),
+        2 => tr!("Playfield size"),
+        3 => tr!("Settings"),
+        _ => tr!("Quit to song select"),
     }
 }
 
@@ -2437,13 +2433,8 @@ impl Game {
                 self.refresh_defense();
                 (
                     at,
-                    tr!("tagged in", "交代", "перехватил ход").to_string(),
-                    tr!(
-                        "took over the rest of this turn",
-                        "このターンの残りを引き継いだ",
-                        "забрал остаток этого хода"
-                    )
-                    .to_string(),
+                    tr!("tagged in").to_string(),
+                    tr!("took over the rest of this turn").to_string(),
                 )
             }
         };
@@ -5929,7 +5920,7 @@ impl Game {
             y0 + 18.0,
             7.0,
             rgba(fill, 1.0),
-            &tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";),
+            &tr!("LIVES {left}/{lives}"; left, lives),
         );
         if st.shield > 0 {
             let shield = st.shield;
@@ -5938,19 +5929,16 @@ impl Game {
                 y0 + 18.0,
                 7.0,
                 rgba(SPLIT_CYAN, 1.0),
-                &tr!("+{shield} shield", "+{shield}シールド", "+{shield} щит";),
+                &tr!("+{shield} shield"; shield),
             );
         }
         let (turn_text, col) = if wait == 0 {
-            (
-                tr!("YOUR TURN", "あなたの番", "ТВОЙ ХОД").to_string(),
-                team_colour(d.me),
-            )
+            (tr!("YOUR TURN").to_string(), team_colour(d.me))
         } else {
             let name = d.team.get(turn).map_or("?", |p| p.1.as_str());
             let name = Canvas::fit(7.0, 110.0, name);
             (
-                tr!("{name}  (you in {wait})", "{name}  (あと{wait}小節)", "{name}  (ты через {wait})";),
+                tr!("{name}  (you in {wait})"; name, wait),
                 team_colour(turn),
             )
         };
@@ -6001,19 +5989,13 @@ impl Game {
             0.0,
         );
         let gold = st.gold;
-        c.text(
-            x,
-            y,
-            7.0,
-            rgba(0xFFD34D, 1.0),
-            &tr!("GOLD {gold}", "ゴールド {gold}", "ЗОЛОТО {gold}";),
-        );
+        c.text(x, y, 7.0, rgba(0xFFD34D, 1.0), &tr!("GOLD {gold}"; gold));
         c.text_right(
             x + 184.0,
             y,
             6.5,
             rgba(0x9a9ab0, 1.0),
-            tr!("a GREAT = 1 gold", "GREAT = 1ゴールド", "GREAT = 1 золото"),
+            tr!("a GREAT = 1 gold"),
         );
         y += 12.0;
         if !d.rules.shop {
@@ -6022,11 +6004,7 @@ impl Game {
                 y,
                 6.5,
                 rgba(0x55556a, 1.0),
-                tr!(
-                    "the host turned the shop off",
-                    "ホストがショップをオフにした",
-                    "хост выключил магазин"
-                ),
+                tr!("the host turned the shop off"),
             );
         }
         for (k, item) in DefenseItem::ALL
@@ -6054,7 +6032,7 @@ impl Game {
             y,
             6.5,
             rgba(tag, 1.0),
-            &tr!("T tag in ({left} left)", "T 交代 (残り{left})", "T перехват (осталось {left})";),
+            &tr!("T tag in ({left} left)"; left),
         );
         y += 12.0;
         for (at, who, what, _) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {
@@ -6109,11 +6087,7 @@ impl Game {
                 330.0,
                 12.0,
                 rgba(WHITE, 0.7),
-                tr!(
-                    "SPACE to skip intro",
-                    "SPACEでイントロを飛ばす",
-                    "ПРОБЕЛ: пропустить вступление"
-                ),
+                tr!("SPACE to skip intro"),
             );
         }
         if let (Some(_), Some((start, end))) = (self.paused, self.resuming) {
@@ -6155,11 +6129,7 @@ impl Game {
                 cy + 36.0,
                 8.0,
                 rgba(0x9a9ab0, 1.0),
-                tr!(
-                    "get ready   (Esc: back to menu)",
-                    "準備して   (Esc: メニューに戻る)",
-                    "приготовьтесь   (Esc: назад в меню)"
-                ),
+                tr!("get ready   (Esc: back to menu)"),
             );
         } else if let Some(cursor) = self.paused.filter(|_| !self.watched) {
             // The main menu's look: one panel, the options as notes on it (don and kat in turn),
@@ -6173,7 +6143,7 @@ impl Game {
             let (px, py) = (w / 2.0 - pw / 2.0, (480.0 - ph) / 2.0 - 6.0 - rise);
             let start = c.shapes.len();
             crate::style::panel(c, px, py, pw, ph);
-            let title = tr!("PAUSED", "ポーズ", "ПАУЗА");
+            let title = tr!("PAUSED");
             crate::style::title(
                 c,
                 w / 2.0 - Canvas::text_width(26.0, title) / 2.0,
@@ -6219,7 +6189,7 @@ impl Game {
             let (rx, rw) = (px + 12.0, pw - 24.0);
             let test = self.test_play;
             let items = (0..PAUSE_ITEMS).map(|i| match i {
-                4 if test => tr!("Back to the editor", "エディターに戻る", "Назад в редактор"),
+                4 if test => tr!("Back to the editor"),
                 _ => pause_item(i),
             });
             for (i, item) in items.enumerate() {
@@ -6277,11 +6247,7 @@ impl Game {
                 self.paused_at + std::time::Duration::from_millis(220),
                 150.0,
             );
-            let hint = tr!(
-                "Up/Down + Enter    Esc: continue",
-                "上下 + Enter    Esc: 続ける",
-                "Вверх/вниз + Enter    Esc: продолжить"
-            );
+            let hint = tr!("Up/Down + Enter    Esc: continue");
             c.text_centered(
                 w / 2.0,
                 py + ph - 18.0,
@@ -6293,13 +6259,7 @@ impl Game {
         if let Some((_, at)) = self.failed {
             let p = progress(at, 400.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.6 * p));
-            c.text_centered(
-                w / 2.0,
-                200.0,
-                32.0,
-                rgba(0xEB452C, p),
-                tr!("FAILED", "失敗", "ПРОВАЛ"),
-            );
+            c.text_centered(w / 2.0, 200.0, 32.0, rgba(0xEB452C, p), tr!("FAILED"));
         }
     }
 
@@ -6605,12 +6565,7 @@ impl Game {
         if shown(Part::OffsetHint) {
             let hint = if self.hud_sample {
                 Some((
-                    tr!(
-                        "offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)",
-                        "オフセットは良好: +1.2 ±3.4 ms (UR 95、120回)",
-                        "смещение в порядке: +1.2 +-3.4 мс (UR 95, 120 ударов)"
-                    )
-                    .to_string(),
+                    tr!("offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)").to_string(),
                     rgba(0x86E05A, 0.9),
                 ))
             } else {
@@ -6866,34 +6821,35 @@ impl Game {
         let e = &h.estimate;
         let (hits, needed) = (e.hits, h.needed);
         let building = if hits < needed {
-            tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}";)
+            tr!("  confidence {hits}/{needed}"; hits, needed)
         } else {
             String::new()
         };
         let ur = e.ur;
-        let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
-        let stats =
-            tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
+        let stats = tr!("UR {ur:.0}, {hits} hits"; ur, hits);
         let (error, margin, suggested) = (e.error_ms.abs(), e.margin_ms, e.suggested_offset);
         if h.significant {
             let dir = if e.error_ms > 0.0 {
-                tr!("late", "遅い", "поздно")
+                tr!("late")
             } else {
-                tr!("early", "早い", "рано")
+                tr!("early")
             };
-            let apply = self.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
+            let apply = self.offset_key.as_ref().map_or(String::new(), |k| {
+                tr!(
+                    "  |  {k}: this map  Shift+{k}: all";
+                    k
+                )
+            });
             let text = tr!(
-                "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
-                "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
-                "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}";
+                "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}";
+                error, margin, dir, stats, suggested, apply, building
             );
             Some((text, rgba(0xFFD34D, 0.95)))
         } else {
             let error = e.error_ms;
             let text = tr!(
-                "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}",
-                "オフセットは良好: {error:+.1} ±{margin:.1} ms ({stats}){building}",
-                "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}";
+                "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}";
+                error, margin, stats, building
             );
             Some((text, rgba(0x86E05A, 0.9)))
         }
@@ -7544,11 +7500,7 @@ pub fn draw_preview(c: &mut Canvas) {
         300.0,
         14.0,
         rgba(WHITE, 0.85),
-        tr!(
-            "drag to move, edges to resize",
-            "ドラッグで移動、端でサイズ変更",
-            "тяните — двигать, края — размер"
-        ),
+        tr!("drag to move, edges to resize"),
     );
 }
 

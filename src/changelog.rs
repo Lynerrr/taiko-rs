@@ -98,14 +98,7 @@ impl View {
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.state = State::Failed(
-                        tr!(
-                            "couldn't get the changes",
-                            "変更点を取得できませんでした",
-                            "не удалось получить изменения"
-                        )
-                        .into(),
-                    )
+                    self.state = State::Failed(tr!("couldn't get the changes").into())
                 }
             }
         }
@@ -157,21 +150,16 @@ impl View {
             py + 12.0,
             14.0,
             rgba(0xffffff, 1.0),
-            tr!("What's new", "更新内容", "Что нового"),
+            tr!("What's new"),
         );
         let about = match (self.after_update, crate::update::BUILD) {
             (true, Some(b)) => {
-                tr!("updated to {}", "{}に更新しました", "обновлено до {}"; crate::update::short(b))
+                tr!("updated to {}", crate::update::short(b))
             }
             (false, Some(b)) => {
-                tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; crate::update::short(b))
+                tr!("this build: {}", crate::update::short(b))
             }
-            (_, None) => tr!(
-                "a local build: the latest changes",
-                "ローカルビルド: 最新の変更",
-                "локальная сборка: последние изменения"
-            )
-            .into(),
+            (_, None) => tr!("a local build: the latest changes").into(),
         };
         c.text_right(
             px + pw - 16.0,
@@ -186,7 +174,7 @@ impl View {
             by,
             bw,
             16.0,
-            tr!("Close", "閉じる", "Закрыть"),
+            tr!("Close"),
             7.0,
             Hit::Key(KeyCode::Escape),
             true,
@@ -196,11 +184,7 @@ impl View {
             by + 4.5,
             6.0,
             rgba(0x6f6f86, 1.0),
-            tr!(
-                "Up/Down, wheel: scroll   Esc: close",
-                "上下、ホイール: スクロール   Esc: 閉じる",
-                "Вверх/вниз, колесо: прокрутка   Esc: закрыть"
-            ),
+            tr!("Up/Down, wheel: scroll   Esc: close"),
         );
         let changes = match &self.state {
             State::Loading(_) => {
@@ -209,11 +193,7 @@ impl View {
                     py + ph / 2.0,
                     9.0,
                     rgba(0xc8c8d8, 1.0),
-                    tr!(
-                        "getting the changes...",
-                        "変更点を取得中...",
-                        "получаем изменения..."
-                    ),
+                    tr!("getting the changes..."),
                 );
                 return;
             }
@@ -233,7 +213,7 @@ impl View {
                     py + ph / 2.0,
                     9.0,
                     rgba(0xc8c8d8, 1.0),
-                    tr!("nothing new", "新しいものはありません", "ничего нового"),
+                    tr!("nothing new"),
                 );
                 return;
             }

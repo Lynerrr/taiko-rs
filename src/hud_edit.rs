@@ -333,10 +333,10 @@ impl Editor {
     fn start_naming(&mut self, cfg: &Config) {
         let mut n = cfg.hud_presets.len() + 1;
         let taken = |name: &str| cfg.hud_presets.iter().any(|p| p.0 == name);
-        let mut name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}";);
+        let mut name = tr!("Layout {n}"; n);
         while taken(&name) {
             n += 1;
-            name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}";);
+            name = tr!("Layout {n}"; n);
         }
         let caret = name.len();
         self.naming = Some((name, caret));
@@ -383,9 +383,7 @@ impl Editor {
                     cfg.hud_presets[i].1 = cfg.hud;
                     cfg.save();
                     let name = cfg.hud_presets[i].0.clone();
-                    return Outcome::Toast(
-                        tr!("saved {name}", "{name}を保存しました", "сохранено: {name}";),
-                    );
+                    return Outcome::Toast(tr!("saved {name}"; name));
                 }
                 None => self.start_naming(cfg),
             },
@@ -397,39 +395,20 @@ impl Editor {
                     let last = self.preset_count(cfg).saturating_sub(PRESET_ROWS);
                     self.preset_scroll = self.preset_scroll.min(last);
                     cfg.save();
-                    return Outcome::Toast(
-                        tr!("deleted {name}", "{name}を削除しました", "удалено: {name}";),
-                    );
+                    return Outcome::Toast(tr!("deleted {name}"; name));
                 }
             }
             Button::Copy => {
                 return Outcome::Toast(if crate::clipboard::set(&cfg.hud.format()) {
-                    tr!(
-                        "layout copied: paste it to share it",
-                        "レイアウトをコピーしました",
-                        "раскладка скопирована: вставьте, чтобы поделиться"
-                    )
-                    .into()
+                    tr!("layout copied: paste it to share it").into()
                 } else {
-                    tr!(
-                        "can't reach the clipboard",
-                        "クリップボードを使えません",
-                        "нет доступа к буферу обмена"
-                    )
-                    .into()
+                    tr!("can't reach the clipboard").into()
                 });
             }
             Button::Paste => {
                 let pasted = crate::clipboard::get().and_then(|t| Layout::parse(&t));
                 let Some(layout) = pasted else {
-                    return Outcome::Toast(
-                        tr!(
-                            "no layout on the clipboard",
-                            "クリップボードにレイアウトがありません",
-                            "в буфере обмена нет раскладки"
-                        )
-                        .into(),
-                    );
+                    return Outcome::Toast(tr!("no layout on the clipboard").into());
                 };
                 self.remember(cfg);
                 cfg.hud = layout;
@@ -624,7 +603,7 @@ impl Editor {
         c.hit(x, y0, PANEL_W, h, Hit::HudPanel);
         let (ix, iw) = (x + 8.0, PANEL_W - 16.0);
         let mut y = y0 + 7.0;
-        let title = tr!("INTERFACE", "インターフェース", "ИНТЕРФЕЙС");
+        let title = tr!("INTERFACE");
         c.text(ix, y, 9.0, rgba(0xffffff, 1.0), title);
         let side = if self.panel_left { ">" } else { "<" };
         button(
@@ -680,16 +659,8 @@ impl Editor {
                 let stop = stops[(a.at * 2.0).round() as usize % 3];
                 format!("{name}: {} {stop}", a.target.label())
             };
-            let lr = [
-                tr!("left", "左", "слева"),
-                tr!("centre", "中央", "центр"),
-                tr!("right", "右", "справа"),
-            ];
-            let tb = [
-                tr!("top", "上", "сверху"),
-                tr!("centre", "中央", "центр"),
-                tr!("bottom", "下", "снизу"),
-            ];
+            let lr = [tr!("left"), tr!("centre"), tr!("right")];
+            let tb = [tr!("top"), tr!("centre"), tr!("bottom")];
             let fit = |s: String| Canvas::fit(7.0, iw - 8.0, &s);
             button(
                 c,
@@ -707,7 +678,7 @@ impl Editor {
                 Button::AttachY,
             );
             y += 13.0 + GAP;
-            let reset = tr!("Reset", "戻す", "Сброс");
+            let reset = tr!("Reset");
             let size = format!("{:.0}%", b.place.scale * 100.0);
             button(c, [ix, y, 16.0, 13.0], "-", true, Button::Smaller);
             c.text_centered(ix + 40.0, y + 3.0, 7.5, rgba(0xe8e8f0, 1.0), &size);
@@ -724,13 +695,13 @@ impl Editor {
             if self.part().has_text() {
                 self.draw_swatches(c, cfg, ix, y);
             } else {
-                let none = tr!("no text to colour", "文字なし", "нет текста");
+                let none = tr!("no text to colour");
                 c.text(ix, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), none);
             }
             y += SWATCH + 5.0;
             if self.part() == Part::Counts {
                 let on = cfg.hud.counter;
-                let titles = tr!("Titles", "題名", "Подписи");
+                let titles = tr!("Titles");
                 let w = (iw - 3.0 * GAP) / 4.0;
                 for (i, (label, on, b)) in [
                     ("300", on.great, Button::CounterGreat),
@@ -748,13 +719,7 @@ impl Editor {
             }
         }
 
-        c.text(
-            ix,
-            y,
-            7.5,
-            rgba(0x9a9ab0, 1.0),
-            tr!("PRESETS", "プリセット", "ПРЕСЕТЫ"),
-        );
+        c.text(ix, y, 7.5, rgba(0x9a9ab0, 1.0), tr!("PRESETS"));
         y += 11.0;
         let rows = self.preset_rows();
         self.presets_rect = [ix, y, iw, rows as f32 * ROW_H];
@@ -805,9 +770,9 @@ impl Editor {
             let cx = ix + 4.0 + settings::caret_x(7.5, name, *caret);
             c.rect(cx, y + 2.0, 1.0, 9.0, rgba(0xffffff, 0.9));
         } else {
-            let save = tr!("Save", "保存", "Сохр.");
-            let new = tr!("New", "新規", "Новый");
-            let delete = tr!("Delete", "削除", "Удалить");
+            let save = tr!("Save");
+            let new = tr!("New");
+            let delete = tr!("Delete");
             button(c, [ix, y, third, 13.0], save, true, Button::SavePreset);
             button(
                 c,
@@ -825,8 +790,8 @@ impl Editor {
             );
         }
         y += 13.0 + GAP;
-        let copy = tr!("Copy", "コピー", "Копировать");
-        let paste = tr!("Paste", "貼り付け", "Вставить");
+        let copy = tr!("Copy");
+        let paste = tr!("Paste");
         button(c, [ix, y, half, 13.0], copy, true, Button::Copy);
         button(
             c,
@@ -836,8 +801,8 @@ impl Editor {
             Button::Paste,
         );
         y += 13.0 + GAP;
-        let undo = tr!("Undo", "元に戻す", "Отменить");
-        let reset_all = tr!("Reset all", "全て戻す", "Сбросить всё");
+        let undo = tr!("Undo");
+        let reset_all = tr!("Reset all");
         button(
             c,
             [ix, y, half, 13.0],
@@ -853,13 +818,7 @@ impl Editor {
             Button::ResetAll,
         );
         y += 17.0;
-        button(
-            c,
-            [ix, y, iw, 15.0],
-            tr!("Done", "完了", "Готово"),
-            true,
-            Button::Done,
-        );
+        button(c, [ix, y, iw, 15.0], tr!("Done"), true, Button::Done);
     }
 
     /// The selected part's text colours in a row from `x`: its own, marked with a line, then
@@ -900,9 +859,7 @@ impl Editor {
 
     fn draw_help(&self, c: &mut Canvas) {
         let help = tr!(
-            "Drag: near the lane it attaches to it (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel",
-            "ドラッグ: レーン付近で取り付け (Shift: 自由)。ホイール: サイズ。矢印: 微調整。H: 表示。P: パネル",
-            "Тяните: у дорожки крепится к ней (Shift: свободно). Колесо: размер. Стрелки: сдвиг. H: показать. P: панель"
+            "Drag: near the lane it attaches to it (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel"
         );
         let panel = if self.panel_hidden {
             0.0

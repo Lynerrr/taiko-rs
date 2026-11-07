@@ -262,52 +262,27 @@ const CROSS: Icon = [
 impl Item {
     fn name(self) -> &'static str {
         match self {
-            Item::Play => tr!("PLAY", "プレイ", "ИГРАТЬ"),
-            Item::Multiplayer => tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
-            Item::Download => tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
-            Item::Medals => tr!("MEDALS", "メダル", "МЕДАЛИ"),
-            Item::Editor => tr!("EDITOR", "エディタ", "РЕДАКТОР"),
-            Item::Settings => tr!("SETTINGS", "設定", "НАСТРОЙКИ"),
-            Item::Exit => tr!("EXIT", "終了", "ВЫХОД"),
+            Item::Play => tr!("PLAY"),
+            Item::Multiplayer => tr!("MULTIPLAYER"),
+            Item::Download => tr!("DOWNLOAD"),
+            Item::Medals => tr!("MEDALS"),
+            Item::Editor => tr!("EDITOR"),
+            Item::Settings => tr!("SETTINGS"),
+            Item::Exit => tr!("EXIT"),
         }
     }
 
     fn about(self, maps: usize) -> String {
         match self {
             Item::Play => {
-                tr!("{maps} maps in your library", "ライブラリに{maps}譜面", "{maps} карт в библиотеке";)
+                tr!("{maps} maps in your library"; maps)
             }
-            Item::Multiplayer => tr!(
-                "Play with friends and everyone else",
-                "フレンドやみんなと遊ぶ",
-                "Играть с друзьями и не только"
-            )
-            .into(),
-            Item::Download => tr!(
-                "Find and get new maps",
-                "新しい譜面を探す",
-                "Найти и скачать новые карты"
-            )
-            .into(),
-            Item::Medals => tr!(
-                "What you've earned, and what's next",
-                "獲得したメダルと次の目標",
-                "Что уже получено и что дальше"
-            )
-            .into(),
-            Item::Editor => tr!(
-                "Make your own maps and share them",
-                "自分の譜面を作って公開しよう",
-                "Делай свои карты и делись ими"
-            )
-            .into(),
-            Item::Settings => tr!(
-                "Sound, keys, skin, offset",
-                "音、キー、スキン、オフセット",
-                "Звук, клавиши, скин, оффсет"
-            )
-            .into(),
-            Item::Exit => tr!("Close taiko.rs", "taiko.rsを閉じる", "Закрыть taiko.rs").into(),
+            Item::Multiplayer => tr!("Play with friends and everyone else").into(),
+            Item::Download => tr!("Find and get new maps").into(),
+            Item::Medals => tr!("What you've earned, and what's next").into(),
+            Item::Editor => tr!("Make your own maps and share them").into(),
+            Item::Settings => tr!("Sound, keys, skin, offset").into(),
+            Item::Exit => tr!("Close taiko.rs").into(),
         }
     }
 
@@ -1255,11 +1230,7 @@ fn time_text(secs: f64) -> String {
 /// How long the game has been running, and how much of that was in songs.
 fn draw_session(c: &mut Canvas, (running, playing): (f64, f64)) {
     let (running, playing) = (time_text(running), time_text(playing));
-    let text = tr!(
-        "Running {running}   In songs {playing}",
-        "起動 {running}   プレイ {playing}",
-        "Запущено {running}   В песнях {playing}";
-    );
+    let text = tr!("Running {running}   In songs {playing}"; running, playing);
     let (w, h) = (Canvas::text_width(7.0, &text), Canvas::text_height(7.0));
     c.round_rect(
         [18.0, 47.5],
@@ -1529,13 +1500,7 @@ fn draw_footer(c: &mut Canvas, f: &Frame) {
         rgba(0x3a3a4e, 1.0),
         1.0,
     );
-    c.text(
-        25.0,
-        Y + 1.0,
-        7.0,
-        rgba(0x9a9ab0, 1.0),
-        tr!("NOW PLAYING", "再生中", "СЕЙЧАС ИГРАЕТ"),
-    );
+    c.text(25.0, Y + 1.0, 7.0, rgba(0x9a9ab0, 1.0), tr!("NOW PLAYING"));
     c.text(25.0, Y + 16.0, 8.0, rgba(0xffffff, 1.0), &song);
     let controls = [Control::Prev, Control::Toggle, Control::Next, Control::Open];
     for (i, control) in controls.into_iter().enumerate() {

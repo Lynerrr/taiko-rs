@@ -159,36 +159,21 @@ impl DefenseOption {
 
     pub fn name(self) -> &'static str {
         match self {
-            DefenseOption::Lives => tr!("Team lives", "チームのライフ", "Жизни команды"),
-            DefenseOption::Bars => tr!("Turn length", "交代の長さ", "Длина хода"),
-            DefenseOption::TagIns => tr!(
-                "Tag-ins per player",
-                "1人あたりの交代割込み",
-                "Перехватов на игрока"
-            ),
-            DefenseOption::Shop => tr!(
-                "Shop (gold, towers...)",
-                "ショップ (ゴールド・タワー)",
-                "Магазин (золото, башни...)"
-            ),
-            DefenseOption::Maze => tr!("Maze lane", "迷路レーン", "Дорожка-лабиринт"),
+            DefenseOption::Lives => tr!("Team lives"),
+            DefenseOption::Bars => tr!("Turn length"),
+            DefenseOption::TagIns => tr!("Tag-ins per player"),
+            DefenseOption::Shop => tr!("Shop (gold, towers...)"),
+            DefenseOption::Maze => tr!("Maze lane"),
         }
     }
 
     pub fn value(self, d: &Defense) -> String {
-        let on = |b: bool| {
-            if b {
-                tr!("on", "オン", "вкл")
-            } else {
-                tr!("off", "オフ", "выкл")
-            }
-            .to_string()
-        };
+        let on = |b: bool| if b { tr!("on") } else { tr!("off") }.to_string();
         match self {
             DefenseOption::Lives => d.lives.to_string(),
             DefenseOption::Bars => {
                 let bars = d.bars;
-                tr!("{bars} bars", "{bars}小節", "{bars} тактов";)
+                tr!("{bars} bars"; bars)
             }
             DefenseOption::TagIns if d.tag_ins == 0 => on(false),
             DefenseOption::TagIns => d.tag_ins.to_string(),
@@ -283,41 +268,27 @@ impl DefenseItem {
 
     pub fn name(self) -> &'static str {
         match self {
-            DefenseItem::Slow => tr!("Slow", "スロー", "Замедление"),
-            DefenseItem::Shield => tr!("Shield", "シールド", "Щит"),
-            DefenseItem::Heal => tr!("Heal", "回復", "Лечение"),
-            DefenseItem::DonTower => tr!("Don tower", "ドンタワー", "Башня дон"),
-            DefenseItem::KatTower => tr!("Kat tower", "カツタワー", "Башня кат"),
+            DefenseItem::Slow => tr!("Slow"),
+            DefenseItem::Shield => tr!("Shield"),
+            DefenseItem::Heal => tr!("Heal"),
+            DefenseItem::DonTower => tr!("Don tower"),
+            DefenseItem::KatTower => tr!("Kat tower"),
         }
     }
 
     /// What it does, for the banner when someone buys it.
     pub fn about(self) -> &'static str {
         match self {
-            DefenseItem::Slow => tr!(
-                "the lane crawls at half speed for 6 seconds",
-                "6秒間レーンが半分の速さに",
-                "6 секунд дорожка ползёт вдвое медленнее"
-            ),
-            DefenseItem::Shield => tr!(
-                "the next 3 notes that get through cost no lives (every shield costs more)",
-                "次に抜けた3ノーツはライフが減らない (買うたび高くなる)",
-                "следующие 3 прорыва не отнимут жизни (каждый щит дороже)"
-            ),
-            DefenseItem::Heal => tr!(
-                "one life back (every heal costs more)",
-                "ライフ1回復 (回復するたび高くなる)",
-                "одна жизнь назад (каждое лечение дороже)"
-            ),
+            DefenseItem::Slow => tr!("the lane crawls at half speed for 6 seconds"),
+            DefenseItem::Shield => {
+                tr!("the next 3 notes that get through cost no lives (every shield costs more)")
+            }
+            DefenseItem::Heal => tr!("one life back (every heal costs more)"),
             DefenseItem::DonTower => tr!(
-                "every red don for 4 bars is shot down: just hit the kats (one tower at a time)",
-                "4小節の間ドンを全部撃ち落とす: カツだけ叩こう (タワーは同時に1つ)",
-                "4 такта сбивает все красные доны: бей только каты (только одна башня)"
+                "every red don for 4 bars is shot down: just hit the kats (one tower at a time)"
             ),
             DefenseItem::KatTower => tr!(
-                "every blue kat for 4 bars is shot down: just hit the dons (one tower at a time)",
-                "4小節の間カツを全部撃ち落とす: ドンだけ叩こう (タワーは同時に1つ)",
-                "4 такта сбивает все синие каты: бей только доны (только одна башня)"
+                "every blue kat for 4 bars is shot down: just hit the dons (one tower at a time)"
             ),
         }
     }
@@ -520,7 +491,7 @@ impl MapInfo {
             .from
             .map(|t| {
                 let (m, s) = ((t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60);
-                tr!("  from {m}:{s:02}", "  {m}:{s:02}から", "  с {m}:{s:02}";)
+                tr!("  from {m}:{s:02}"; m, s)
             })
             .unwrap_or_default();
         let mods = if self.mods.is_empty() {
@@ -532,7 +503,7 @@ impl MapInfo {
             .defense
             .map(|d| {
                 let (lives, bars) = (d.lives, d.bars);
-                tr!("  DEFENSE {lives} lives, {bars} bars a turn", "  ディフェンス ライフ{lives} {bars}小節交代", "  ОБОРОНА {lives} жизней, ход {bars} тактов";)
+                tr!("  DEFENSE {lives} lives, {bars} bars a turn"; lives, bars)
             })
             .unwrap_or_default();
         format!(
@@ -1073,9 +1044,7 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     }
     if listeners.is_empty() {
         let e = last_err.map(|e| e.to_string()).unwrap_or_default();
-        return Err(
-            tr!("can't listen on port {port}: {e}", "ポート{port}で待ち受けできません: {e}", "не удаётся слушать порт {port}: {e}";),
-        );
+        return Err(tr!("can't listen on port {port}: {e}"; port, e));
     }
     for l in &listeners {
         l.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -1521,12 +1490,7 @@ fn room_loop(
                         let target = players.iter().find(|q| q.info.id == who && !q.info.host);
                         if let (true, Some(q)) = (is_host, target) {
                             let _ = q.tx.send(ServerMsg::Rejected(
-                                tr!(
-                                    "the host took you out of this lobby",
-                                    "このロビーからホストに外されました",
-                                    "хост убрал тебя из этого лобби"
-                                )
-                                .to_string(),
+                                tr!("the host took you out of this lobby").to_string(),
                             ));
                             kicked.insert(q.info.name.to_lowercase());
                             let text =
@@ -1797,27 +1761,15 @@ fn room_loop(
                         let (lower, joined_as_host) = (p.info.name.to_lowercase(), p.info.host);
                         if !joined_as_host {
                             let why = if kicked.contains(&lower) {
-                                Some(tr!(
-                                    "the host took you out of this lobby",
-                                    "このロビーからホストに外されました",
-                                    "хост убрал тебя из этого лобби"
-                                ))
+                                Some(tr!("the host took you out of this lobby"))
                             } else if settings.password.is_some() && password != settings.password {
                                 Some(if password.is_none() {
-                                    tr!(
-                                        "this lobby needs a password",
-                                        "このロビーはパスワードが必要です",
-                                        "в это лобби нужен пароль"
-                                    )
+                                    tr!("this lobby needs a password")
                                 } else {
-                                    tr!("wrong password", "パスワードが違います", "неверный пароль")
+                                    tr!("wrong password")
                                 })
                             } else if others_in(&players, id) >= settings.slots {
-                                Some(tr!(
-                                    "the lobby is full",
-                                    "ロビーは満員です",
-                                    "лобби заполнено"
-                                ))
+                                Some(tr!("the lobby is full"))
                             } else {
                                 None
                             };
@@ -2196,9 +2148,9 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     };
     with_port
         .to_socket_addrs()
-        .map_err(|e| tr!("can't resolve {addr}: {e}", "{addr}が見つかりません: {e}", "не удаётся найти {addr}: {e}";))?
+        .map_err(|e| tr!("can't resolve {addr}: {e}"; addr, e))?
         .next()
-        .ok_or_else(|| tr!("can't resolve {addr}", "{addr}が見つかりません", "не удаётся найти {addr}";))
+        .ok_or_else(|| tr!("can't resolve {addr}"; addr))
 }
 
 impl Client {
@@ -2216,7 +2168,12 @@ impl Client {
         password: Option<String>,
     ) -> Result<Client, String> {
         let sa = resolve(addr)?;
-        let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| tr!("can't connect to {sa}: {e}", "{sa}に接続できません: {e}", "не удаётся подключиться к {sa}: {e}";))?;
+        let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| {
+            tr!(
+                "can't connect to {sa}: {e}";
+                sa, e
+            )
+        })?;
         Client::over(BufReader::new(stream), name, host_token, password)
     }
 
@@ -2260,14 +2217,7 @@ impl Client {
             }
             let _ = inbox.send((
                 Instant::now(),
-                ServerMsg::Disconnected(
-                    tr!(
-                        "connection closed",
-                        "接続が切れました",
-                        "соединение закрыто"
-                    )
-                    .into(),
-                ),
+                ServerMsg::Disconnected(tr!("connection closed").into()),
             ));
         });
         // Ping quickly at first to sync clocks, then once a second to track drift.

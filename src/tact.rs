@@ -34,12 +34,12 @@ pub const DEFAULT: usize = 1;
 /// Step `i`'s name.
 pub fn step_name(i: usize) -> &'static str {
     match i {
-        0 => tr!("2 bars", "2小節", "2 такта"),
-        1 => tr!("1 bar", "1小節", "1 такт"),
-        2 => tr!("1/2 bar", "1/2小節", "1/2 такта"),
-        3 => tr!("1 beat", "1拍", "1 доля"),
-        4 => tr!("1/2 beat", "1/2拍", "1/2 доли"),
-        _ => tr!("1/4 beat", "1/4拍", "1/4 доли"),
+        0 => tr!("2 bars"),
+        1 => tr!("1 bar"),
+        2 => tr!("1/2 bar"),
+        3 => tr!("1 beat"),
+        4 => tr!("1/2 beat"),
+        _ => tr!("1/4 beat"),
     }
 }
 
@@ -176,11 +176,7 @@ impl Setup {
             1.5,
         );
         let title_w = c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "TACT");
-        let hint = tr!(
-            "Left/Right choose   Space pick   D default   Tab next tab   Esc back",
-            "左右 選択   Space 決定   D 初期設定   Tab 次のタブ   Esc 戻る",
-            "влево/вправо выбор   Space отметить   D сброс   Tab вкладка   Esc назад"
-        );
+        let hint = tr!("Left/Right choose   Space pick   D default   Tab next tab   Esc back");
         c.text(
             px + 26.0 + title_w,
             py + 16.0,
@@ -196,7 +192,7 @@ impl Setup {
             y + h / 2.0 - 4.0,
             7.0,
             rgba(0x8a8aa0, 1.0),
-            tr!("MOVE EVERY", "移動", "ШАГ"),
+            tr!("MOVE EVERY"),
         );
         let n = STEPS.len();
         let room = px + pw - 16.0 - (x0 + label_w);
@@ -237,9 +233,7 @@ impl Setup {
             c.hit(cx, y, cw, h, Hit::TactCell(col));
         }
         let about = tr!(
-            "Far off, the notes crawl through each step, then rush the rest of the way at its end. Closer in they move as usual, so each one is in the hit circle on time. A shorter step rushes more often.",
-            "遠くのノーツは各ステップでゆっくり進み、終わりに一気に残りを進みます。近づくといつも通りに動くので、どのノーツも時間通りに判定円に来ます。短いほど頻繁に加速します。",
-            "Вдали ноты медленно ползут на каждом шаге, а в конце рывком проходят остаток. Ближе они движутся как обычно, так что каждая нота вовремя в круге удара. Чем короче шаг, тем чаще рывки."
+            "Far off, the notes crawl through each step, then rush the rest of the way at its end. Closer in they move as usual, so each one is in the hit circle on time. A shorter step rushes more often."
         );
         let mut ty = y + h + 18.0;
         let chars = ((pw - 32.0) / Canvas::char_width(7.0)).max(10.0) as usize;
@@ -253,7 +247,7 @@ impl Setup {
             by,
             bw,
             16.0,
-            tr!("Back", "戻る", "Назад"),
+            tr!("Back"),
             7.0,
             Hit::Key(KeyCode::Escape),
             true,
@@ -263,7 +257,7 @@ impl Setup {
             by,
             bw,
             16.0,
-            tr!("Default", "初期設定", "Сброс"),
+            tr!(tact: "Default"),
             7.0,
             Hit::Key(KeyCode::KeyD),
             false,

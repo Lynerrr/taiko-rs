@@ -173,12 +173,12 @@ fn defense_verdict(
     let left = team.map_or(lives.saturating_sub(leaked), |t| t.lives);
     if left == 0 {
         (
-            tr!("THE TEAM FELL  ({leaked} notes got through)", "チーム敗北  ({leaked}ノーツ突破)", "КОМАНДА ПАЛА  (прорвалось {leaked})";),
+            tr!("THE TEAM FELL  ({leaked} notes got through)"; leaked),
             0xEB452C,
         )
     } else {
         (
-            tr!("DEFENDED  ({left}/{lives} lives left)", "防衛成功  (ライフ {left}/{lives})", "ОБОРОНА УСТОЯЛА  ({left}/{lives} жизней)";),
+            tr!("DEFENDED  ({left}/{lives} lives left)"; left, lives),
             0x86E05A,
         )
     }
@@ -407,14 +407,14 @@ impl Menu {
     /// A text field's label, as this form means it.
     pub fn field_label(&self, row: Row) -> Option<&'static str> {
         Some(match row {
-            Row::User if self.form == Form::Register => tr!("Name", "名前", "Ник"),
-            Row::User => tr!("Name or email", "名前かメール", "Ник или почта"),
+            Row::User if self.form == Form::Register => tr!("Name"),
+            Row::User => tr!("Name or email"),
             Row::Password if self.form == Form::Reset => {
-                tr!("New password", "新しいパスワード", "Новый пароль")
+                tr!("New password")
             }
-            Row::Password => tr!("Password", "パスワード", "Пароль"),
-            Row::Email => tr!("Email", "メール", "Почта"),
-            Row::Code => tr!("Code from the email", "メールのコード", "Код из письма"),
+            Row::Password => tr!("Password"),
+            Row::Email => tr!("Email"),
+            Row::Code => tr!("Code from the email"),
             _ => return None,
         })
     }
@@ -422,16 +422,12 @@ impl Menu {
     /// Above the form: what it's for.
     fn title(&self) -> Option<&'static str> {
         Some(match self.form {
-            Form::Register => tr!("NEW ACCOUNT", "新規アカウント", "НОВЫЙ АККАУНТ"),
+            Form::Register => tr!("NEW ACCOUNT"),
             Form::Reset if self.account.is_some() => {
-                tr!("CHANGE PASSWORD", "パスワード変更", "СМЕНА ПАРОЛЯ")
+                tr!(title: "CHANGE PASSWORD")
             }
-            Form::Reset => tr!(
-                "FORGOT PASSWORD",
-                "パスワードを忘れた",
-                "ВОССТАНОВЛЕНИЕ ПАРОЛЯ"
-            ),
-            Form::Link => tr!("LINK AN EMAIL", "メールを登録", "ПРИВЯЗКА ПОЧТЫ"),
+            Form::Reset => tr!("FORGOT PASSWORD"),
+            Form::Link => tr!(title: "LINK AN EMAIL"),
             Form::Main => return None,
         })
     }
@@ -441,88 +437,32 @@ impl Menu {
         let sent = self.code_for.is_some();
         match self.form {
             Form::Register if sent => [
-                tr!(
-                    "The code is in your email (look in spam too).",
-                    "コードはメールにあります(迷惑メールも確認)。",
-                    "Код пришёл на почту (загляни и в спам)."
-                ),
-                tr!(
-                    "Type it above, then CREATE ACCOUNT.",
-                    "上に入力して「アカウント作成」。",
-                    "Введи его выше и нажми СОЗДАТЬ АККАУНТ."
-                ),
+                tr!("The code is in your email (look in spam too)."),
+                tr!("Type it above, then CREATE ACCOUNT."),
             ],
             Form::Register => [
-                tr!(
-                    "Pick a name and a password, type your email,",
-                    "名前とパスワードを決め、メールを入力して",
-                    "Придумай ник и пароль, впиши почту"
-                ),
-                tr!(
-                    "then SEND CODE: it comes to that email.",
-                    "「コードを送信」。そのメールに届きます。",
-                    "и нажми ОТПРАВИТЬ КОД: он придёт туда."
-                ),
+                tr!("Pick a name and a password, type your email,"),
+                tr!("then SEND CODE: it comes to that email."),
             ],
             Form::Reset if sent => [
-                tr!(
-                    "The code is in your email (look in spam too).",
-                    "コードはメールにあります(迷惑メールも確認)。",
-                    "Код пришёл на почту (загляни и в спам)."
-                ),
-                tr!(
-                    "Type it and a new password, then SET PASSWORD.",
-                    "コードと新しいパスワードを入力して「設定」。",
-                    "Введи его и новый пароль, затем СОХРАНИТЬ."
-                ),
+                tr!("The code is in your email (look in spam too)."),
+                tr!("Type it and a new password, then SET PASSWORD."),
             ],
             Form::Reset if self.account.is_some() => [
-                tr!(
-                    "SEND CODE: it goes to your account's email.",
-                    "「コードを送信」: アカウントのメールに届きます。",
-                    "ОТПРАВИТЬ КОД: он придёт на почту аккаунта."
-                ),
-                tr!(
-                    "Then you type it with the new password.",
-                    "そのコードと新しいパスワードを入力します。",
-                    "Потом вводишь его и новый пароль."
-                ),
+                tr!("SEND CODE: it goes to your account's email."),
+                tr!("Then you type it with the new password."),
             ],
             Form::Reset => [
-                tr!(
-                    "Type your name or email, then SEND CODE:",
-                    "名前かメールを入力して「コードを送信」:",
-                    "Впиши ник или почту и нажми ОТПРАВИТЬ КОД:"
-                ),
-                tr!(
-                    "it goes to the account's email.",
-                    "アカウントのメールに届きます。",
-                    "он придёт на почту аккаунта."
-                ),
+                tr!("Type your name or email, then SEND CODE:"),
+                tr!("it goes to the account's email."),
             ],
             Form::Link => [
-                tr!(
-                    "A code goes to the email: type it, then LINK.",
-                    "メールにコードが届きます: 入力して「登録」。",
-                    "На почту придёт код: введи его и нажми ПРИВЯЗАТЬ."
-                ),
-                tr!(
-                    "With it, a lost password can be reset.",
-                    "これでパスワードを忘れても再設定できます。",
-                    "С ней можно восстановить забытый пароль."
-                ),
+                tr!("A code goes to the email: type it, then LINK."),
+                tr!("With it, a lost password can be reset."),
             ],
             Form::Main => [
-                tr!(
-                    "An account plays online: lobbies, friends, leaderboards.",
-                    "アカウントでオンライン: ロビー・フレンド・ランキング。",
-                    "С аккаунтом играешь онлайн: лобби, друзья, рейтинги."
-                ),
-                tr!(
-                    "No account yet? CREATE ACCOUNT takes a minute.",
-                    "まだない? 「アカウント作成」はすぐです。",
-                    "Нет аккаунта? РЕГИСТРАЦИЯ займёт минуту."
-                ),
+                tr!("An account plays online: lobbies, friends, leaderboards."),
+                tr!("No account yet? CREATE ACCOUNT takes a minute."),
             ],
         }
     }
@@ -722,9 +662,9 @@ fn padlock(c: &mut Canvas, x: f32, y: f32, size: f32, colour: u32) {
 pub fn draw_menu(c: &mut Canvas, menu: &Menu, server: &str, status: &str, busy: bool) {
     let w = c.width;
     let state = match &menu.online {
-        Some(Ok(())) => tr!("online", "オンライン", "онлайн"),
-        Some(Err(_)) => tr!("no connection", "接続なし", "нет связи"),
-        None => tr!("connecting...", "接続中...", "подключение..."),
+        Some(Ok(())) => tr!("online"),
+        Some(Err(_)) => tr!("no connection"),
+        None => tr!("connecting..."),
     };
     crate::settings::tab_bar(c, 2, &format!("{}   {state}", server_label(server)));
     let rows = menu.rows();
@@ -769,11 +709,7 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     let x = (w - col) / 2.0;
     let (top, bottom) = (52.0, 428.0);
     card(c, x - 14.0, top, col + 28.0, bottom - top);
-    let heading = menu.title().unwrap_or(tr!(
-        "ONLINE ACCOUNT",
-        "オンラインアカウント",
-        "ОНЛАЙН-АККАУНТ"
-    ));
+    let heading = menu.title().unwrap_or(tr!("ONLINE ACCOUNT"));
     c.text(x, top + 12.0, 9.0, rgba(accent(), 1.0), heading);
     let mut y = top + 32.0;
     let steps = |c: &mut Canvas, y: f32| {
@@ -814,7 +750,7 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 let hint = if menu.form == Form::Main {
                     ""
                 } else {
-                    tr!("6 characters or more", "6文字以上", "от 6 символов")
+                    tr!("6 characters or more")
                 };
                 let (v, ph) = field(&stars, hint);
                 menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
@@ -822,45 +758,27 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             }
             Row::Email => {
                 let hint = if menu.form == Form::Register {
-                    tr!("the code comes here", "コードの送り先", "сюда придёт код")
+                    tr!("the code comes here")
                 } else {
-                    tr!("your email", "あなたのメール", "твоя почта")
+                    tr!("your email")
                 };
                 let (v, ph) = field(&menu.email, hint);
                 menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
                 y += 38.0;
             }
             Row::Code => {
-                let (v, ph) = field(&menu.code, tr!("6 digits", "6桁", "6 цифр"));
+                let (v, ph) = field(&menu.code, tr!("6 digits"));
                 menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Field(&v, ph));
                 y += 38.0;
             }
             Row::LogIn => {
-                menu_row(
-                    c,
-                    sel,
-                    i,
-                    x,
-                    y,
-                    col,
-                    30.0,
-                    tr!("LOG IN", "ログイン", "ВОЙТИ"),
-                    RowLook::Action,
-                );
+                menu_row(c, sel, i, x, y, col, 30.0, tr!("LOG IN"), RowLook::Action);
                 y += 38.0;
             }
             // On the login form, the ways to its other forms, side by side.
             Row::Register if menu.form == Form::Main => {
                 let half = (col - 8.0) / 2.0;
-                half_row(
-                    c,
-                    sel,
-                    i,
-                    x,
-                    y,
-                    half,
-                    tr!("CREATE ACCOUNT", "アカウント作成", "РЕГИСТРАЦИЯ"),
-                );
+                half_row(c, sel, i, x, y, half, tr!(title: "CREATE ACCOUNT"));
                 half_row(
                     c,
                     i + 1 == cursor,
@@ -868,7 +786,7 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     x + half + 8.0,
                     y,
                     half,
-                    tr!("FORGOT PASSWORD?", "パスワードを忘れた?", "ЗАБЫЛ ПАРОЛЬ?"),
+                    tr!("FORGOT PASSWORD?"),
                 );
                 y += 34.0;
                 steps(c, y);
@@ -877,43 +795,33 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             Row::Forgot if menu.form == Form::Main => {}
             Row::Register => {
                 let label = if menu.code_for == Some(CodeFor::Register) {
-                    tr!("CREATE ACCOUNT", "アカウント作成", "СОЗДАТЬ АККАУНТ")
+                    tr!("CREATE ACCOUNT")
                 } else {
-                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
+                    tr!("SEND CODE")
                 };
                 menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
                 y += 38.0;
             }
             Row::Forgot => {
                 let label = if menu.code_for == Some(CodeFor::Reset) {
-                    tr!("SET PASSWORD", "設定", "СОХРАНИТЬ")
+                    tr!("SET PASSWORD")
                 } else {
-                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
+                    tr!("SEND CODE")
                 };
                 menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
                 y += 38.0;
             }
             Row::LinkEmail => {
                 let label = if menu.code_for == Some(CodeFor::Link) {
-                    tr!("LINK", "登録", "ПРИВЯЗАТЬ")
+                    tr!("LINK")
                 } else {
-                    tr!("SEND CODE", "コードを送信", "ОТПРАВИТЬ КОД")
+                    tr!("SEND CODE")
                 };
                 menu_row(c, sel, i, x, y, col, 30.0, label, RowLook::Action);
                 y += 38.0;
             }
             Row::Back => {
-                menu_row(
-                    c,
-                    sel,
-                    i,
-                    x,
-                    y,
-                    col,
-                    24.0,
-                    tr!("BACK", "戻る", "НАЗАД"),
-                    RowLook::Action,
-                );
+                menu_row(c, sel, i, x, y, col, 24.0, tr!("BACK"), RowLook::Action);
                 y += 32.0;
                 steps(c, y);
             }
@@ -938,7 +846,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         top + 12.0,
         9.0,
         rgba(accent(), 1.0),
-        tr!("LOBBIES", "ロビー", "ЛОББИ"),
+        tr!("LOBBIES"),
     );
     let count = menu.rooms.len();
     c.text_right(
@@ -946,7 +854,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         top + 13.0,
         7.0,
         rgba(0x6f6f86, 1.0),
-        &tr!("{count} open   F5 refresh", "{count}件   F5 更新", "открыто: {count}   F5 обновить";),
+        &tr!("{count} open   F5 refresh"; count),
     );
     let lobby_rows: Vec<(usize, usize)> = rows
         .iter()
@@ -970,12 +878,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     if lobby_rows.is_empty() {
         let msg = match &menu.online {
             Some(Err(e)) => e.clone(),
-            _ => tr!(
-                "Nobody is hosting right now: open a lobby on the right.",
-                "今はロビーがありません: 右で作ろう。",
-                "Сейчас никто не хостит: создай лобби справа."
-            )
-            .to_string(),
+            _ => tr!("Nobody is hosting right now: open a lobby on the right.").to_string(),
         };
         c.text_centered(
             lx + lw / 2.0,
@@ -1019,9 +922,9 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             &players,
         );
         let (state, colour) = if r.in_match {
-            (tr!("in a match", "対戦中", "идёт матч"), 0x438EAD)
+            (tr!("in a match"), 0x438EAD)
         } else {
-            (tr!("open", "待機中", "ждут"), 0x86E05A)
+            (tr!("open"), 0x86E05A)
         };
         c.text_right(x + rw_ - 12.0, y + 21.0, 7.0, rgba(colour, 1.0), state);
         let right = Canvas::text_width(9.0, &players).max(Canvas::text_width(7.0, state)) + 24.0;
@@ -1038,16 +941,12 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             rgba(0xffffff, 1.0),
             &Canvas::fit(9.0, x + rw_ - right - tx, &r.title),
         );
-        let mut info = format!("{} {}", tr!("host", "ホスト", "хост"), r.host);
+        let mut info = format!("{} {}", tr!("host"), r.host);
         if r.mapguessr {
             info.push_str("   MAPGUESSR");
         }
         if r.defense {
-            info.push_str(tr!(
-                "   DEFENSE co-op",
-                "   ディフェンス協力",
-                "   ОБОРОНА кооп"
-            ));
+            info.push_str(tr!("   DEFENSE co-op"));
         }
         if let Some(m) = &r.map {
             info.push_str("   ");
@@ -1068,7 +967,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             bottom - 12.0,
             6.5,
             rgba(0x6f6f86, 1.0),
-            &tr!("{more} more (Up/Down)", "あと{more}件 (上下)", "ещё {more} (вверх/вниз)";),
+            &tr!("{more} more (Up/Down)"; more),
         );
     }
 
@@ -1081,7 +980,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         top + 12.0,
         9.0,
         rgba(accent(), 1.0),
-        tr!("ACCOUNT", "アカウント", "АККАУНТ"),
+        tr!("ACCOUNT"),
     );
     let who = menu.account.as_deref().unwrap_or("");
     c.text(
@@ -1089,26 +988,14 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         top + 27.0,
         8.0,
         rgba(0xc8c8d8, 1.0),
-        &Canvas::fit(
-            8.0,
-            rw - 28.0,
-            &tr!("logged in as {who}", "{who} でログイン中", "ты вошёл как {who}";),
-        ),
+        &Canvas::fit(8.0, rw - 28.0, &tr!("logged in as {who}"; who)),
     );
     let half = (rw - 28.0 - 8.0) / 2.0;
     let mut y = top + 44.0;
     for (i, r) in rows.iter().enumerate() {
         match *r {
             Row::LogOut => {
-                half_row(
-                    c,
-                    i == cursor,
-                    i,
-                    rx + 14.0,
-                    y,
-                    half,
-                    tr!("LOG OUT", "ログアウト", "ВЫЙТИ"),
-                );
+                half_row(c, i == cursor, i, rx + 14.0, y, half, tr!("LOG OUT"));
                 half_row(
                     c,
                     i + 1 == cursor,
@@ -1116,7 +1003,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     rx + 22.0 + half,
                     y,
                     half,
-                    tr!("CHANGE PASSWORD", "パスワード変更", "СМЕНИТЬ ПАРОЛЬ"),
+                    tr!("CHANGE PASSWORD"),
                 );
                 y += 30.0;
             }
@@ -1128,7 +1015,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     rx + 14.0,
                     y,
                     rw - 28.0,
-                    tr!("LINK AN EMAIL", "メールを登録", "ПРИВЯЗАТЬ ПОЧТУ"),
+                    tr!("LINK AN EMAIL"),
                 );
             }
             _ => {}
@@ -1143,7 +1030,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         ny + 12.0,
         9.0,
         rgba(accent(), 1.0),
-        tr!("NEW LOBBY", "ロビーを作る", "НОВОЕ ЛОББИ"),
+        tr!("NEW LOBBY"),
     );
     let (fx, fw) = (rx + 14.0, rw - 28.0);
     let mut y = ny + 32.0;
@@ -1154,7 +1041,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 let mode = if menu.new_guessr {
                     "Mapguessr"
                 } else {
-                    tr!("Match", "対戦", "Матч")
+                    tr!("Match")
                 };
                 menu_row(
                     c,
@@ -1164,7 +1051,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     y,
                     fw,
                     28.0,
-                    tr!("Mode", "モード", "Режим"),
+                    tr!("Mode"),
                     RowLook::Stepper(mode),
                 );
                 y += 34.0;
@@ -1172,10 +1059,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             Row::NewPassword => {
                 let stars = "*".repeat(menu.new_password.chars().count());
                 let (v, ph) = if stars.is_empty() {
-                    (
-                        tr!("none: open to all", "なし: 誰でも", "нет: для всех").to_string(),
-                        true,
-                    )
+                    (tr!("none: open to all").to_string(), true)
                 } else {
                     (stars, false)
                 };
@@ -1187,7 +1071,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     y,
                     fw,
                     28.0,
-                    tr!("Password", "パスワード", "Пароль"),
+                    tr!("Password"),
                     RowLook::Field(&v, ph),
                 );
                 y += 34.0;
@@ -1202,7 +1086,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     y,
                     fw,
                     28.0,
-                    tr!("Players", "人数", "Игроков"),
+                    tr!("Players"),
                     RowLook::Stepper(&slots),
                 );
                 y += 38.0;
@@ -1216,7 +1100,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     y,
                     fw,
                     32.0,
-                    tr!("OPEN LOBBY", "ロビーを開く", "ОТКРЫТЬ ЛОББИ"),
+                    tr!("OPEN LOBBY"),
                     RowLook::Action,
                 );
                 y += 40.0;
@@ -1225,17 +1109,9 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         }
     }
     let note = if menu.new_guessr {
-        tr!(
-            "Mapguessr: guess the song from a few seconds of it.",
-            "マップ当て: 数秒で曲を当てよう。",
-            "Угадайка: узнай песню по паре секунд."
-        )
+        tr!("Mapguessr: guess the song from a few seconds of it.")
     } else {
-        tr!(
-            "The host picks the maps; the rest can download them.",
-            "曲はホストが選び、他の人はダウンロードできます。",
-            "Карты выбирает хост, остальные могут их скачать."
-        )
+        tr!("The host picks the maps; the rest can download them.")
     };
     let size = Canvas::fit_size(7.0, 6.0, fw, note);
     c.text_centered(
@@ -1269,7 +1145,7 @@ fn draw_join_prompt(
     );
     let info = format!(
         "{} {}   {}/{}",
-        tr!("host", "ホスト", "хост"),
+        tr!("host"),
         room.host,
         room.players,
         room.slots
@@ -1286,11 +1162,7 @@ fn draw_join_prompt(
         y + 48.0,
         8.0,
         rgba(0xc8c8d8, 1.0),
-        tr!(
-            "This lobby needs a password.",
-            "このロビーはパスワードが必要です。",
-            "В это лобби нужен пароль."
-        ),
+        tr!("This lobby needs a password."),
     );
     let (fx, fw) = (x + 16.0, cw - 32.0);
     let half = (fw - 8.0) / 2.0;
@@ -1308,22 +1180,12 @@ fn draw_join_prompt(
                     y + 66.0,
                     fw,
                     30.0,
-                    tr!("Password", "パスワード", "Пароль"),
+                    tr!("Password"),
                     RowLook::Field(&stars, ph),
                 );
             }
-            Row::JoinLocked => {
-                half_row(c, sel, i, fx, y + 108.0, half, tr!("JOIN", "参加", "ВОЙТИ"))
-            }
-            Row::CancelJoin => half_row(
-                c,
-                sel,
-                i,
-                fx + half + 8.0,
-                y + 108.0,
-                half,
-                tr!("CANCEL", "キャンセル", "ОТМЕНА"),
-            ),
+            Row::JoinLocked => half_row(c, sel, i, fx, y + 108.0, half, tr!("JOIN")),
+            Row::CancelJoin => half_row(c, sel, i, fx + half + 8.0, y + 108.0, half, tr!("CANCEL")),
             _ => {}
         }
     }
@@ -1540,10 +1402,10 @@ pub fn draw_lobby(
             }
             if let Some(t) = m.from {
                 let (min, sec) = ((t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60);
-                extra.push(tr!("from {min}:{sec:02}", "{min}:{sec:02}から", "с {min}:{sec:02}";));
+                extra.push(tr!("from {min}:{sec:02}"; min, sec));
             }
             if m.defense.is_some() {
-                extra.push(tr!("DEFENSE co-op", "ディフェンス協力", "ОБОРОНА кооп").to_string());
+                extra.push(tr!("DEFENSE co-op").to_string());
             }
             c.text(
                 ix,
@@ -1556,23 +1418,10 @@ pub fn draw_lobby(
             let (note, colour) = match (&download, have_map) {
                 (Some((d, _)), _) => (d.clone(), 0xFFD34D),
                 (None, false) => (
-                    tr!(
-                        "not in your Songs folder - D: from the host   M: the mirrors",
-                        "Songsにありません - D: ホストから   M: ミラーから",
-                        "нет в папке Songs - D: от хоста   M: с зеркал"
-                    )
-                    .to_string(),
+                    tr!("not in your Songs folder - D: from the host   M: the mirrors").to_string(),
                     0xFF4B4B,
                 ),
-                (None, true) => (
-                    tr!(
-                        "click to preview (P)",
-                        "クリックでプレビュー (P)",
-                        "клик: превью (P)"
-                    )
-                    .to_string(),
-                    0x6f6f86,
-                ),
+                (None, true) => (tr!("click to preview (P)").to_string(), 0x6f6f86),
             };
             c.text(
                 ix,
@@ -1587,17 +1436,9 @@ pub fn draw_lobby(
         }
         None => {
             let t = if s.is_host() {
-                tr!(
-                    "Press M to pick a map",
-                    "Mで曲を選ぶ",
-                    "Нажми M, чтобы выбрать карту"
-                )
+                tr!("Press M to pick a map")
             } else {
-                tr!(
-                    "Waiting for the host to pick a map",
-                    "ホストの選曲待ち",
-                    "Ждём, пока хост выберет карту"
-                )
+                tr!("Waiting for the host to pick a map")
             };
             c.text_centered(
                 lx + lw / 2.0,
@@ -1626,7 +1467,7 @@ pub fn draw_lobby(
         py + 10.0,
         9.0,
         rgba(accent(), 1.0),
-        &tr!("PLAYERS  {count}/{slots}", "プレイヤー  {count}/{slots}", "ИГРОКИ  {count}/{slots}";),
+        &tr!("PLAYERS  {count}/{slots}"; count, slots),
     );
     let my_id = s.client.id;
     let cell_w = (iw - 8.0) / 2.0;
@@ -1662,7 +1503,7 @@ pub fn draw_lobby(
         }
         let mut name = p.name.clone();
         if p.host {
-            name.push_str(tr!("  (host)", "  (ホスト)", "  (хост)"));
+            name.push_str(tr!("  (host)"));
         }
         c.text(
             x + 8.0,
@@ -1696,36 +1537,28 @@ pub fn draw_lobby(
     let mut settings: Vec<(String, String, Option<KeyCode>)> = Vec::new();
     let password = match &s.edit_password {
         Some(typed) => format!("{typed}_"),
-        None if s.locked => tr!("set", "あり", "есть").to_string(),
-        None => tr!("none: open to all", "なし: 誰でも", "нет: для всех").to_string(),
+        None if s.locked => tr!("set").to_string(),
+        None => tr!("none: open to all").to_string(),
     };
+    settings.push((tr!("Password").into(), password, Some(KeyCode::KeyK)));
     settings.push((
-        tr!("Password", "パスワード", "Пароль").into(),
-        password,
-        Some(KeyCode::KeyK),
-    ));
-    settings.push((
-        tr!("Players", "人数", "Игроков").into(),
+        tr!("Players").into(),
         s.slots.to_string(),
         Some(KeyCode::KeyL),
     ));
     if let Some(m) = &s.map {
         settings.push((
-            tr!("Match rate", "速度", "Скорость").into(),
+            tr!("Match rate").into(),
             format!("{:.2}x", m.rate),
             Some(KeyCode::BracketRight),
         ));
     }
     let mode = if defense.is_some() {
-        tr!("Defense co-op", "ディフェンス協力", "Оборона (кооп)")
+        tr!("Defense co-op")
     } else {
-        tr!("Match", "対戦", "Матч")
+        tr!("Match")
     };
-    settings.push((
-        tr!("Mode", "モード", "Режим").into(),
-        mode.into(),
-        Some(KeyCode::KeyC),
-    ));
+    settings.push((tr!("Mode").into(), mode.into(), Some(KeyCode::KeyC)));
     if let Some(d) = defense {
         let keys = [
             KeyCode::Digit1,
@@ -1748,13 +1581,7 @@ pub fn draw_lobby(
         rgba(0x2a2a38, 1.0),
         1.0,
     );
-    c.text(
-        rx + 14.0,
-        top + 10.0,
-        9.0,
-        rgba(accent(), 1.0),
-        tr!("ROOM", "ルーム", "КОМНАТА"),
-    );
+    c.text(rx + 14.0, top + 10.0, 9.0, rgba(accent(), 1.0), tr!("ROOM"));
     if s.locked {
         padlock(c, rx + rw - 24.0, top + 9.0, 10.0, 0xFFD34D);
     }
@@ -1813,13 +1640,7 @@ pub fn draw_lobby(
             rgba(0x2a2a38, 1.0),
             1.0,
         );
-        c.text(
-            rx + 14.0,
-            cy + 10.0,
-            8.0,
-            rgba(0x4fb4ff, 1.0),
-            tr!("CHAT", "チャット", "ЧАТ"),
-        );
+        c.text(rx + 14.0, cy + 10.0, 8.0, rgba(0x4fb4ff, 1.0), tr!("CHAT"));
         // The line to write on, along the bottom of the box.
         let (ix, iw, ih) = (rx + 8.0, rw - 16.0, 16.0);
         let iy = cy + ch - ih - 6.0;
@@ -1861,7 +1682,7 @@ pub fn draw_lobby(
                     iy + 4.5,
                     7.0,
                     rgba(0x6f6f86, 1.0),
-                    tr!("T - write", "T - 書く", "T - написать"),
+                    tr!("T - write"),
                 );
             }
         }
@@ -2090,18 +1911,9 @@ pub fn draw_waiting(
 /// have), or that Space asks.
 pub fn draw_skip_votes(c: &mut Canvas, s: &Session) {
     let text = match (s.skip_asked, s.skip_votes) {
-        (_, Some((votes, of))) => tr!(
-            "SKIP {votes}/{of}  waiting for everyone",
-            "スキップ {votes}/{of}  全員待ち",
-            "ПРОПУСК {votes}/{of}  ждём всех";
-        ),
-        (true, None) => tr!("SKIP asked", "スキップ要求済み", "ПРОПУСК запрошен").to_string(),
-        (false, None) => tr!(
-            "Space: ask to skip (everyone must)",
-            "Space: スキップ (全員必要)",
-            "Space: попросить пропуск (нужны все)"
-        )
-        .to_string(),
+        (_, Some((votes, of))) => tr!("SKIP {votes}/{of}  waiting for everyone"; votes, of),
+        (true, None) => tr!("SKIP asked").to_string(),
+        (false, None) => tr!("Space: ask to skip (everyone must)").to_string(),
     };
     let (w, y) = (c.width, 392.0);
     let tw = Canvas::text_width(8.0, &text) + 20.0;
@@ -2121,12 +1933,12 @@ pub fn draw_skip_votes(c: &mut Canvas, s: &Session) {
 fn team_columns() -> String {
     format!(
         "{:<12} {:>5} {:>4} {:>6} {:>4} {:>4}",
-        tr!("NAME", "名前", "ИМЯ"),
-        tr!("HIT", "命中", "БИТО"),
-        tr!("MISS", "ミス", "МИМО"),
-        tr!("ACC", "精度", "ТОЧН"),
-        tr!("TAGS", "交代", "ХОДЫ"),
-        tr!("BUYS", "購入", "КУПЛ"),
+        tr!("NAME"),
+        tr!("HIT"),
+        tr!("MISS"),
+        tr!("ACC"),
+        tr!("TAGS"),
+        tr!("BUYS"),
     )
 }
 
@@ -2156,11 +1968,7 @@ fn draw_team_board(c: &mut Canvas, s: &Session, defense: net::Defense, my_live: 
     let mut lines: Vec<(String, u32)> = Vec::new();
     let (lives, max, gold, shield) = (team.lives, team.max, team.gold, team.shield);
     lines.push((
-        tr!(
-            "TEAM  lives {lives}/{max}   gold {gold}   shield {shield}",
-            "チーム  ライフ {lives}/{max}   ゴールド {gold}   シールド {shield}",
-            "КОМАНДА  жизни {lives}/{max}   золото {gold}   щит {shield}";
-        ),
+        tr!("TEAM  lives {lives}/{max}   gold {gold}   shield {shield}"; lives, max, gold, shield),
         0xFFD34D,
     ));
     lines.push((team_columns(), 0x6f6f86));

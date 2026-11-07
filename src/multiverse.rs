@@ -31,17 +31,17 @@ pub const PALETTES: [(&str, u32, u32); 10] = [
 /// Palette `i`'s name as shown (`CUSTOM`: the player's own colours).
 pub fn palette_label(i: usize) -> &'static str {
     match i {
-        0 => tr!("classic", "クラシック", "классика"),
-        1 => tr!("neon", "ネオン", "неон"),
-        2 => tr!("sunset", "夕焼け", "закат"),
-        3 => tr!("ice", "氷", "лёд"),
-        4 => tr!("forest", "森", "лес"),
-        5 => tr!("candy", "キャンディ", "конфеты"),
-        6 => tr!("ember", "残り火", "угли"),
-        7 => tr!("mono", "モノクロ", "моно"),
-        8 => tr!("toxic", "毒々しい", "токсик"),
-        9 => tr!("swapped", "入れ替え", "наоборот"),
-        _ => tr!("custom", "自分の色", "свои"),
+        0 => tr!("classic"),
+        1 => tr!("neon"),
+        2 => tr!("sunset"),
+        3 => tr!("ice"),
+        4 => tr!("forest"),
+        5 => tr!("candy"),
+        6 => tr!("ember"),
+        7 => tr!("mono"),
+        8 => tr!("toxic"),
+        9 => tr!("swapped"),
+        _ => tr!(colours: "custom"),
     }
 }
 
@@ -197,11 +197,11 @@ impl Shape {
     /// Its name as shown (`name` is the config's).
     pub fn label(self) -> &'static str {
         match self {
-            Shape::Round => tr!("round", "丸", "круг"),
-            Shape::Square => tr!("square", "四角", "квадрат"),
-            Shape::Diamond => tr!("diamond", "ひし形", "ромб"),
-            Shape::Ring => tr!("ring", "輪", "кольцо"),
-            Shape::Pill => tr!("pill", "カプセル", "капсула"),
+            Shape::Round => tr!("round"),
+            Shape::Square => tr!("square"),
+            Shape::Diamond => tr!("diamond"),
+            Shape::Ring => tr!("ring"),
+            Shape::Pill => tr!("pill"),
         }
     }
 }
@@ -428,14 +428,8 @@ fn clean_name(s: &str) -> String {
 /// Every preset in the order the setup lists them: the built-in ones, then the player's.
 fn presets(own: &[Preset]) -> Vec<(String, [Universe; COUNT])> {
     let builtin = [
-        (
-            tr!("defaults", "初期設定", "исходные").to_string(),
-            defaults(),
-        ),
-        (
-            tr!("classic", "クラシック", "классика").to_string(),
-            classic(),
-        ),
+        (tr!("defaults").to_string(), defaults()),
+        (tr!("classic").to_string(), classic()),
     ];
     builtin
         .into_iter()
@@ -772,9 +766,7 @@ impl Setup {
             "MULTIVERSE",
         );
         let hint = tr!(
-            "arrows choose   Space change (Shift back)   E own colours   S save preset   [ ] presets   R shuffle   Esc back",
-            "矢印 選択   Space 変更 (Shiftで戻す)   E 自分の色   S プリセット保存   [ ] プリセット   R シャッフル   Esc 戻る",
-            "стрелки выбор   Space менять (Shift назад)   E свои цвета   S сохранить   [ ] пресеты   R перемешать   Esc назад"
+            "arrows choose   Space change (Shift back)   E own colours   S save preset   [ ] presets   R shuffle   Esc back"
         );
         c.text(
             px + 26.0 + title_w,
@@ -797,10 +789,10 @@ impl Setup {
         };
         let head_y = py + 36.0;
         for (col, name) in [
-            (0, tr!("COLOURS", "色", "ЦВЕТА")),
-            (1, tr!("SHAPE", "形", "ФОРМА")),
-            (2, tr!("SPEED", "速度", "СКОРОСТЬ")),
-            (3, tr!("MODS", "MOD", "МОДЫ")),
+            (0, tr!("COLOURS")),
+            (1, tr!("SHAPE")),
+            (2, tr!("SPEED")),
+            (3, tr!("MODS")),
         ] {
             c.text(col_x(col).0 + 4.0, head_y, 6.0, rgba(0x8a8aa0, 1.0), name);
         }
@@ -879,34 +871,24 @@ impl Setup {
             Some(Typing::Colours(s)) => {
                 let n = self.row + 1;
                 let line = tr!(
-                    "Universe {n}'s own colours, don then kat: {s}_   Enter set   Esc cancel",
-                    "宇宙{n}の自分の色 (ドン、カッの順): {s}_   Enter 決定   Esc 取消",
-                    "Свои цвета вселенной {n}, дон и кат: {s}_   Enter задать   Esc отмена";
+                    "Universe {n}'s own colours, don then kat: {s}_   Enter set   Esc cancel";
+                    n, s
                 );
                 (line, 0xFFD34D)
             }
             Some(Typing::Name(s)) => {
                 let line = tr!(
-                    "Save these universes as: {s}_   Enter save (the same name replaces it)   Esc cancel",
-                    "この宇宙たちの保存名: {s}_   Enter 保存 (同じ名前は上書き)   Esc 取消",
-                    "Сохранить вселенные как: {s}_   Enter сохранить (то же имя заменяет)   Esc отмена";
+                    "Save these universes as: {s}_   Enter save (the same name replaces it)   Esc cancel";
+                    s
                 );
                 (line, 0xFFD34D)
             }
             None => {
                 let about = match hovered.unwrap_or(self.col) {
-                    0 => tr!(
-                        "Colours: dons' and kats' (out of focus they stay alike, faintly tinted). E: your own, like #d03020 #40a0ff.",
-                        "色: ドンとカッ (焦点外では同じ色にうっすら色付き)。E: 自分の色 (#d03020 #40a0ffのように)。",
-                        "Цвета: донов и катов (вне фокуса одинаковые, слегка подкрашены). E: свои, вроде #d03020 #40a0ff."
-                    )
+                    0 => tr!("Colours: dons' and kats' (out of focus they stay alike, faintly tinted). E: your own, like #d03020 #40a0ff.")
                     .to_string(),
-                    1 => tr!("Shape: how its notes look. Round ones use your skin.", "形: ノーツの見た目。丸はスキンを使います。", "Форма: как выглядят ноты. Круглые берутся из скина.").to_string(),
-                    2 => tr!(
-                        "Speed: how fast its notes scroll, times your scroll speed. The timing is the map's either way.",
-                        "速度: ノーツが流れる速さ (スクロール速度に掛けます)。タイミングはどちらでも譜面のまま。",
-                        "Скорость: как быстро летят ноты, умноженная на вашу. Тайминг в любом случае как в карте."
-                    )
+                    1 => tr!("Shape: how its notes look. Round ones use your skin.").to_string(),
+                    2 => tr!("Speed: how fast its notes scroll, times your scroll speed. The timing is the map's either way.")
                     .to_string(),
                     c => format!("{}: {}", MODS[c - 3].name(), MODS[c - 3].description()),
                 };
@@ -930,7 +912,7 @@ impl Setup {
             by,
             bw,
             bh,
-            tr!("Back", "戻る", "Назад"),
+            tr!("Back"),
             7.0,
             Hit::Key(KeyCode::Escape),
             true,
@@ -940,7 +922,7 @@ impl Setup {
             by,
             bw,
             bh,
-            tr!("Shuffle", "シャッフル", "Смешать"),
+            tr!("Shuffle"),
             7.0,
             Hit::Key(KeyCode::KeyR),
             false,
@@ -950,7 +932,7 @@ impl Setup {
             by,
             bw,
             bh,
-            tr!("+ Save", "+ 保存", "+ Сохр."),
+            tr!("+ Save"),
             7.0,
             Hit::Key(KeyCode::KeyS),
             false,
@@ -963,7 +945,7 @@ impl Setup {
                 by + 5.0,
                 6.0,
                 rgba(0x8a8aa0, 1.0),
-                tr!("PRESETS", "プリセット", "ПРЕСЕТЫ"),
+                tr!("PRESETS"),
             )
             + 8.0;
         let current = Self::current(all, own);
