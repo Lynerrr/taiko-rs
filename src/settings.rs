@@ -1199,9 +1199,9 @@ impl Item {
                 "Enter: последние изменения. После обновления они показываются сами."
             ),
             Item::CheckUpdates => tr!(
-                "Look for a newer build each time taiko.rs starts (a badge top right says when there is one), and for newer versions of the songs you pick on osu!.",
-                "起動のたびに新しいビルドを探し (あれば右上に表示)、選んだ曲のosu!での新しい版も探します。",
-                "Искать новую сборку при каждом запуске (значок справа вверху) и новые версии выбранных песен на osu!."
+                "Look for a newer build each time taiko.rs starts and install it straight away (the game restarts by itself once you're in a menu), and for newer versions of the songs you pick on osu!.",
+                "起動のたびに新しいビルドを探してすぐに入れ (メニューにいるときに自動で再起動します)、選んだ曲のosu!での新しい版も探します。",
+                "Искать новую сборку при каждом запуске и сразу ставить её (игра перезапустится сама, когда вы в меню), а также новые версии выбранных песен на osu!."
             ),
             Item::Fullscreen => tr!("Shortcut: F11.", "ショートカット: F11。", "Клавиша: F11."),
             Item::WindowSize => tr!(
