@@ -527,6 +527,7 @@
 "unliked {title}" = "{title}をお気に入りから削除"
 "{title}: your skin" = "{title}: 自分のスキン"
 "{title}: its own skin" = "{title}: 譜面のスキン"
+"By sound" = "音基準"
 
 # src/medals.rs
 "PATH" = "道"
@@ -830,7 +831,8 @@
 "Playfield preset" = "プレイフィールドのプリセット"
 "Speed (rate)" = "再生速度 (レート)"
 "Rate keeps pitch" = "レートで音程を保つ"
-"Universal offset (as in osu!)" = "ユニバーサルオフセット (osu!と同じ)"
+"Global offset" = "全体のオフセット"
+"Offset scale" = "オフセットの基準"
 "Visual offset" = "表示オフセット"
 "Offset calibration" = "オフセット調整"
 "Calibration tempo" = "調整のテンポ"
@@ -921,7 +923,8 @@
 "Enter: pick from a list (grouped by aspect ratio). Left/Right: previous/next." = "Enter: リストから選ぶ (縦横比ごと)。左/右: 前/次。"
 "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps)." = "DT (1.50x) / HT (0.75x) のような曲の速さ。選曲画面: [ と ] (Shiftで0.25x刻み)。"
 "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore)." = "オン: 音程はそのまま速くなる (DT)。オフ: 速さと共に音程も上がる (nightcore)。"
-"Works as in osu!: the same number there is the same here. For every map; positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top." = "osu!と同じ働き: osu!の値をそのまま使えます。全譜面に共通。プラスでノーツが早くなるので、叩くのが遅れるなら下げます。曲中の - / + でその譜面だけのオフセットを足せます。"
+"For every map. Positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top. Where 0 is depends on the offset scale below." = "全譜面に共通。プラスでノーツが早くなるので、叩くのが遅れるなら下げます。曲中の - / + でその譜面だけのオフセットを足せます。0の位置は下のオフセットの基準で決まります。"
+"osu!: 0 is osu!'s, so an osu! universal offset carries over as it is. By sound: 0 is hitting exactly when you hear the note (the audio latency is taken off), and the number is how far ahead of the sound you hit. Switching keeps your timing as it is." = "osu!: 0はosu!と同じなので、osu!のユニバーサルオフセットをそのまま使えます。音基準: 0は音が聞こえた瞬間に叩くこと (音声の遅延は差し引き済み) で、値は音よりどれだけ早く叩くかです。切り替えてもタイミングは変わりません。"
 "Enter: hit along to a click track by ear, with no notes to watch; it measures and sets your offset." = "Enter: ノーツなしのクリック音に耳だけで合わせて叩き、オフセットを測って設定します。"
 "Tempo of the calibration click track. Pick one close to the maps you play." = "調整用クリック音のテンポ。よく遊ぶ譜面に近いものを選んでください。"
 "While playing, suggest an offset from your recent hits. To apply it with a key, give \"Song: apply offset suggestion\" one in the hotkeys." = "プレイ中、最近の叩きからオフセットを提案します。キーで適用するには、ホットキーで「曲: オフセットの提案を適用」に割り当ててください。"

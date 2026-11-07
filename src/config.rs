@@ -152,8 +152,12 @@ pub struct Config {
     /// The interface's language.
     pub language: crate::lang::Lang,
     /// The global offset as osu! has it (its universal offset): positive brings the notes
-    /// earlier. This is what the player sets and sees; `offset_ms` follows from it.
+    /// earlier. On `OffsetScale::Osu` this is what the player sets and `offset_ms` follows from
+    /// it; on `Sound` it follows from `offset_ms`. What the player sees is `shown_offset`.
     pub offset_osu_ms: f64,
+    /// Which scale the player sets the global offset on, and so which of the two stays put when
+    /// the output latency changes.
+    pub offset_scale: OffsetScale,
     /// The same offset the way the clock takes it, `-offset_osu_ms - OSU_TIMING_MS - latency`:
     /// positive when your audio reaches you late, notes are shifted later by this much. Kept up
     /// to date by `sync_offset` (`set_latency` follows the output latency). While
@@ -373,6 +377,33 @@ pub struct Config {
     pub songs: Vec<PathBuf>,
 }
 
+/// What the global offset is set by (`Config::offset_scale`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OffsetScale {
+    /// osu!'s universal offset: the same number as there, and like there the output latency
+    /// counts: when it changes, the notes move with the audio stream, not with what you hear.
+    #[default]
+    Osu,
+    /// 0 is hitting exactly when the sound reaches you, the output latency taken off; the number
+    /// is how far ahead of the sound you hit. It stays right whatever the latency does.
+    Sound,
+}
+
+impl OffsetScale {
+    pub const ALL: [OffsetScale; 2] = [OffsetScale::Osu, OffsetScale::Sound];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OffsetScale::Osu => "osu",
+            OffsetScale::Sound => "sound",
+        }
+    }
+
+    pub fn parse(v: &str) -> Option<OffsetScale> {
+        OffsetScale::ALL.into_iter().find(|s| s.name() == v.trim())
+    }
+}
+
 /// The play offset (what the clock subtracts, `Config::offset_ms`) that feels like osu!'s
 /// universal offset `osu` when the clock also takes `latency` ms of output latency off. osu! adds
 /// its offset to a clock with no latency taken off and plays maps as they are, where here maps
@@ -399,6 +430,7 @@ impl Default for Config {
             language: crate::lang::Lang::En,
             // osu!'s default: a new player starts where an osu! player does.
             offset_osu_ms: 0.0,
+            offset_scale: OffsetScale::Osu,
             offset_ms: play_offset_of(0.0, 0.0),
             offset_latency_ms: 0.0,
             offset_pending: false,
@@ -1062,6 +1094,7 @@ impl Config {
                     cfg.fx_volume = v.parse::<f32>().unwrap_or(cfg.fx_volume).clamp(0.0, 1.0)
                 }
                 "present_mode" => cfg.present = PresentChoice::parse(v).unwrap_or(cfg.present),
+                "offset_scale" => cfg.offset_scale = OffsetScale::parse(v).unwrap_or_default(),
                 "menu_vsync" => cfg.menu_vsync = v != "false",
                 "half_resolution" => cfg.half_resolution = v == "true",
                 "graphics_api" => cfg.graphics_api = v.trim().to_ascii_lowercase(),
@@ -1264,9 +1297,17 @@ impl Config {
     ///   the new lines). It plays as it was and is converted once the latency is known
     ///   (`set_latency`).
     /// - Neither: a new player, at osu!'s 0.
+    ///
+    /// On `OffsetScale::Sound`, `offset_ms` is the player's setting whenever it's there.
     fn read_offset(&mut self, old: Option<f64>, new: Option<f64>) {
         if !(self.offset_latency_ms.is_finite() && self.offset_latency_ms >= 0.0) {
             self.offset_latency_ms = 0.0;
+        }
+        if self.offset_scale == OffsetScale::Sound {
+            self.offset_ms =
+                old.unwrap_or_else(|| play_offset_of(new.unwrap_or(0.0), self.offset_latency_ms));
+            self.sync_offset();
+            return;
         }
         match (old, new) {
             (Some(x), Some(o)) => {
@@ -1288,11 +1329,19 @@ impl Config {
         }
     }
 
-    /// Works `offset_ms` out from the osu! offset and the latency (not while the old offset is
-    /// still waiting to be converted: that one is played as it is).
+    /// Works one offset out from the other and the latency: on the osu! scale `offset_ms` from
+    /// the osu! offset (not while the old offset is still waiting to be converted: that one is
+    /// played as it is), on the sound's the other way round.
     pub fn sync_offset(&mut self) {
-        if !self.offset_pending {
-            self.offset_ms = play_offset_of(self.offset_osu_ms, self.offset_latency_ms);
+        match self.offset_scale {
+            OffsetScale::Osu if !self.offset_pending => {
+                self.offset_ms = play_offset_of(self.offset_osu_ms, self.offset_latency_ms)
+            }
+            OffsetScale::Osu => {}
+            OffsetScale::Sound => {
+                self.offset_pending = false;
+                self.offset_osu_ms = osu_offset_of(self.offset_ms, self.offset_latency_ms);
+            }
         }
     }
 
@@ -1301,6 +1350,42 @@ impl Config {
         // A player's own choice leaves nothing to convert.
         self.offset_pending = false;
         self.offset_osu_ms = osu;
+        self.offset_ms = play_offset_of(osu, self.offset_latency_ms);
+        self.sync_offset();
+    }
+
+    /// The global offset on the player's scale (`offset_scale`). Either way positive brings the
+    /// notes earlier.
+    pub fn shown_offset(&self) -> f64 {
+        match self.offset_scale {
+            OffsetScale::Osu if !self.offset_pending => self.offset_osu_ms,
+            _ => self.shown_of_play(self.offset_ms),
+        }
+    }
+
+    /// The global offset on the player's scale that a clock offset `play` amounts to.
+    pub fn shown_of_play(&self, play: f64) -> f64 {
+        match self.offset_scale {
+            OffsetScale::Osu => osu_offset_of(play, self.offset_latency_ms),
+            OffsetScale::Sound => -play,
+        }
+    }
+
+    /// Sets the global offset on the player's scale.
+    pub fn set_shown_offset(&mut self, shown: f64) {
+        match self.offset_scale {
+            OffsetScale::Osu => self.set_osu_offset(shown),
+            OffsetScale::Sound => {
+                self.offset_ms = -shown;
+                self.sync_offset();
+            }
+        }
+    }
+
+    /// Changes the scale. The play stays exactly as it is now: only the number's zero moves, and
+    /// what stays put when the latency changes.
+    pub fn set_offset_scale(&mut self, scale: OffsetScale) {
+        self.offset_scale = scale;
         self.sync_offset();
     }
 
@@ -1331,14 +1416,18 @@ impl Config {
             return format!("offset_ms = {}", self.offset_ms);
         }
         format!(
-            "# as in osu!: positive brings the notes earlier\n\
+            "# what offset is set by: osu (0 is osu!'s, the output latency counts as there) | sound\n\
+             # (0 is hitting exactly on the sound you hear, the latency is taken off)\n\
+             offset_scale = {}\n\
+             # the global offset on the osu! scale: positive brings the notes earlier\n\
              offset = {}\n\
              # the same for older versions of the game (positive shifts the notes later), worked out with\n\
              # the output latency below; if it is changed there, the new value is the one used\n\
              offset_ms = {}\n\
              offset_latency_ms = {}",
+            self.offset_scale.name(),
             self.offset_osu_ms,
-            play_offset_of(self.offset_osu_ms, self.offset_latency_ms),
+            self.offset_ms,
             self.offset_latency_ms
         )
     }
@@ -1913,6 +2002,67 @@ mod tests {
             cfg.set_latency(l + 5.0, true);
             assert_eq!((cfg.offset_osu_ms, cfg.offset_ms), (o, x - 5.0));
         }
+    }
+
+    #[test]
+    fn switching_the_offset_scale_keeps_the_timing_and_shows_it_by_the_sound() {
+        let mut cfg = Config::default();
+        cfg.set_latency(6.666666, true);
+        cfg.set_osu_offset(-20.0);
+        let play = cfg.offset_ms;
+        cfg.set_offset_scale(OffsetScale::Sound);
+        assert_eq!(cfg.offset_ms, play, "the timing doesn't move");
+        // -20 on osu!'s scale at 6.7 ms of latency: hitting about 10 ms ahead of the sound.
+        assert!((cfg.shown_offset() - 9.666666).abs() < 1e-9);
+        // The same direction on both: + brings the notes earlier, so the clock's offset down.
+        cfg.set_shown_offset(cfg.shown_offset() + 5.0);
+        assert!(cfg.offset_ms < play);
+        cfg.set_offset_scale(OffsetScale::Osu);
+        assert!((cfg.shown_offset() - -15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn by_the_sound_the_timing_stays_put_when_the_latency_changes() {
+        let mut cfg = Config::default();
+        cfg.set_latency(4.67, true);
+        cfg.set_offset_scale(OffsetScale::Sound);
+        cfg.set_shown_offset(10.0);
+        assert_eq!(cfg.offset_ms, -10.0);
+        cfg.set_latency(6.67, true);
+        assert_eq!((cfg.offset_ms, cfg.shown_offset()), (-10.0, 10.0));
+        // On osu!'s, the osu! number stays and the clock's offset follows the latency.
+        cfg.set_offset_scale(OffsetScale::Osu);
+        let osu = cfg.shown_offset();
+        cfg.set_latency(4.67, true);
+        assert_eq!(cfg.shown_offset(), osu);
+        assert!((cfg.offset_ms - -8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_offset_scale_and_a_sound_offset_survive_saving() {
+        let mut cfg = Config::default();
+        cfg.set_latency(2.0, true);
+        cfg.set_offset_scale(OffsetScale::Sound);
+        cfg.set_shown_offset(11.0);
+        let back = Config::parse_text(&cfg.to_text());
+        assert_eq!(back.offset_scale, OffsetScale::Sound);
+        assert_eq!((back.offset_ms, back.shown_offset()), (-11.0, 11.0));
+        // osu!'s line is still there for builds that only know it: the same timing.
+        assert_eq!(back.offset_osu_ms, osu_offset_of(-11.0, 2.0));
+        // A config from before the scale, or an older build, stays on osu!'s.
+        assert_eq!(
+            Config::parse_text("offset = -5\n").offset_scale,
+            OffsetScale::Osu
+        );
+    }
+
+    #[test]
+    fn an_old_offset_by_the_sound_needs_no_converting() {
+        let mut cfg = Config::parse_text("offset_scale = sound\noffset_ms = -22\n");
+        assert!(!cfg.offset_pending);
+        assert_eq!(cfg.shown_offset(), 22.0);
+        assert!(!cfg.set_latency(6.7, true), "nothing to convert");
+        assert_eq!(cfg.offset_ms, -22.0);
     }
 
     #[test]
