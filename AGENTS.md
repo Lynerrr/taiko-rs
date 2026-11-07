@@ -56,3 +56,20 @@
 - Never commit or push code directly to `worktree-taiko-client`.
 - Integrate changes into `worktree-taiko-client` only through a pull request after the required CI checks pass.
 - Requests to bypass this workflow do not waive the branch, pull request, or validation requirements.
+
+## graphify
+
+A knowledge graph of the code (god nodes, communities, cross-file links) can live in
+`graphify-out/`. It is built locally and ignored by git: 11 MB rewritten on every build would
+conflict between parallel branches. Install the tool once with `uv tool install graphifyy`.
+
+- In a checkout or worktree without `graphify-out/graph.json`, build it first with
+  `graphify update .` (AST only, no API cost, about ten seconds).
+- Run `graphify query "<question>"` before your first grep, search or source-file read for a
+  codebase question, and put this rule in every subagent prompt that explores code. Read raw
+  files only for lines the graph or an earlier read already located.
+- Use `graphify path "<A>" "<B>"` for relationships, `graphify explain "<concept>"` for one
+  item and `graphify affected "<X>"` for what a change reaches. Read
+  `graphify-out/GRAPH_REPORT.md` only for broad architecture review.
+- After modifying code, run `graphify update .` to keep the graph current. Never commit
+  `graphify-out/`.
