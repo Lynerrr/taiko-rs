@@ -28,6 +28,8 @@ mod download;
 mod drum_nav;
 mod editor;
 #[cfg(test)]
+mod editor_friends_tests;
+#[cfg(test)]
 mod editor_test_play_tests;
 mod folder_watch;
 mod font;
@@ -8563,6 +8565,9 @@ impl State {
                 Some(render::Hit::SocialToggle | render::Hit::SocialNote(_))
             );
             if on_panel || on_social {
+                if on_panel {
+                    self.social.typing = false;
+                }
                 if let Some(hit) = self.hit_at(vx, vy) {
                     self.click(hit, window);
                 }
@@ -10961,7 +10966,7 @@ impl State {
     /// Tab in play: hides (or shows again) the offset / UR line.
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
-        self.social.open
+        self.social_keys()
             || matches!(&self.scene, Scene::EditorHome(h) if h.needs_text())
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
@@ -11099,7 +11104,7 @@ impl State {
                 multiverse::Typing::Name(s) => ("Preset name".into(), s.clone()),
             });
         }
-        if self.social.open {
+        if self.social_keys() {
             let label = match self.social.row(self.mp.is_some()) {
                 social::Row::AddFriend => "Add friend",
                 social::Row::Search => "Search players",
@@ -11226,7 +11231,7 @@ impl State {
         if let Some(e) = &self.settings_ui.editing {
             return Some(e.text.clone()).filter(|t| !t.is_empty());
         }
-        if self.social.open {
+        if self.social_keys() {
             return Some(self.social.input.clone()).filter(|t| !t.is_empty());
         }
         match &self.scene {
@@ -11544,6 +11549,7 @@ impl State {
     /// that takes up the whole screen (F9 still opens the panel there).
     fn social_tab_middle(&self) -> Option<f32> {
         let covered = self.in_song()
+            || self.in_editor()
             || self.player.is_some()
             || self.mod_select.is_some()
             || self.random_setup.is_some()
@@ -11562,6 +11568,17 @@ impl State {
             social::TAB_MIDDLE
         };
         (!covered).then_some(middle)
+    }
+
+    /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
+    /// open panel leaves the keys to the editor until one of its fields is clicked.
+    fn in_editor(&self) -> bool {
+        matches!(self.scene, Scene::Editor(_) | Scene::EditorHome(_))
+    }
+
+    /// The open friends panel has the keyboard.
+    fn social_keys(&self) -> bool {
+        self.social.open && (self.social.typing || !self.in_editor())
     }
 
     fn open_social(&mut self) {
@@ -13648,7 +13665,11 @@ impl State {
             self.toggle_social();
             return;
         }
-        if self.social.open {
+        if self.social.open && !self.social_keys() && code == KeyCode::Escape {
+            self.social_key(code, text);
+            return;
+        }
+        if self.social_keys() {
             let function_key = matches!(
                 code,
                 KeyCode::F1
@@ -16235,7 +16256,7 @@ impl State {
                 None => (None, 0),
             };
             // The screen behind darkens, but not a play being watched.
-            let dim = !self.in_song();
+            let dim = !self.in_song() && !self.in_editor();
             let animate = self.cfg.animations;
             let tab = self
                 .social_tab_middle()
@@ -16249,6 +16270,7 @@ impl State {
                     lobby,
                     lobby_unread,
                     dim,
+                    self.in_editor(),
                     tab,
                 );
             } else if self.social.closing().is_some() {
@@ -16260,13 +16282,23 @@ impl State {
                     lobby,
                     lobby_unread,
                     dim,
+                    self.in_editor(),
                     tab,
                 );
                 canvas.hits.truncate(hits);
             } else if let Some(middle) = tab {
                 social::draw_chip(canvas, &self.social, middle, lobby_unread);
             }
-            social::draw_notes(canvas, &self.social);
+            if let Scene::Editor(_) | Scene::EditorHome(_) = self.scene {
+                let x = match &self.scene {
+                    Scene::Editor(_) => editor::view::View::menu_end() + 6.0,
+                    _ => canvas.width - 100.0,
+                };
+                if logged_in {
+                    social::draw_editor_chip(canvas, &self.social, x, lobby_unread);
+                }
+            }
+            social::draw_notes(canvas, &self.social, self.in_editor());
         }
         if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
             let hold = self
@@ -17363,7 +17395,8 @@ impl State {
                 self.send_shot(row);
             }
             // Tapped: brings up the on-screen keyboard (`keyboard_tap`); the keys type there anyway.
-            Hit::SocialPanel | Hit::TextField => {}
+            Hit::SocialPanel => {}
+            Hit::TextField => self.social.typing = self.social.open,
             Hit::SocialTab(tab) => {
                 self.social.set_tab(tab);
                 self.social.mark_read(self.mp.is_some());
@@ -17371,6 +17404,10 @@ impl State {
             Hit::SocialRow(i) => {
                 let in_lobby = self.mp.is_some();
                 self.social.cursor = i;
+                self.social.typing = matches!(
+                    self.social.row(in_lobby),
+                    social::Row::AddFriend | social::Row::Search
+                );
                 if matches!(
                     self.social.row(in_lobby),
                     social::Row::Friend(_) | social::Row::Lobby
