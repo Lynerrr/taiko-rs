@@ -472,7 +472,12 @@ impl Runtime {
         let paths = gimmick
             .groups
             .iter()
-            .map(|g| g.path.as_ref().and_then(PathTable::new))
+            .map(|g| {
+                g.path
+                    .as_ref()
+                    .filter(|p| !p.straight)
+                    .and_then(PathTable::new)
+            })
             .collect();
         let mut rt = Runtime {
             lists: vec![Vec::new(); nodes.len()],
@@ -1236,12 +1241,16 @@ impl Runtime {
     }
 
     fn path_of(&self, gi: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
-        let table = self.paths.get(gi)?.as_ref()?;
         let path = self.gimmick.groups[gi].path.as_ref()?;
         let w = path.weight_at(t - self.shift) as f32;
         if w <= 0.0 {
             return None;
         }
+        if path.straight {
+            // Right of the drum by as much as it is along the lane: the lane unbent.
+            return Some([s, 0.0, w]);
+        }
+        let table = self.paths.get(gi)?.as_ref()?;
         let [x, y] = table.place(path, s, lane);
         Some([x, y, w])
     }
@@ -2674,6 +2683,34 @@ mod tests {
         assert!(rt.note_path(0, 0.0, 400.0, 800.0).is_none());
         assert_eq!(rt.note_path(0, 500.0, 400.0, 800.0).unwrap()[2], 0.5);
         assert_eq!(rt.shown_paths(500.0).count(), 1);
+        assert_eq!(rt.shown_paths(0.0).count(), 0);
+    }
+
+    #[test]
+    fn notes_on_a_straight_lane_ignore_its_bend() {
+        use crate::tko::path::NotePath;
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![1000.0],
+            // Points left from a path picked before: not drawn, not flown.
+            path: Some(NotePath {
+                points: vec![[0.0, -400.0]],
+                straight: true,
+                show: true,
+                ..NotePath::default()
+            }),
+            ..Group::default()
+        });
+        let rt = Runtime::new(Arc::new(gm), [1000.0].into_iter(), 0.0);
+        // As far right of the drum as it is along the lane, however long the bent lane is.
+        for (s, lane) in [
+            (300.0, 700.0),
+            (300.0, 1320.0),
+            (900.0, 1320.0),
+            (0.0, 700.0),
+        ] {
+            assert_eq!(rt.note_path(0, 0.0, s, lane), Some([s, 0.0, 1.0]));
+        }
         assert_eq!(rt.shown_paths(0.0).count(), 0);
     }
 

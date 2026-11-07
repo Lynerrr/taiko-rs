@@ -38,7 +38,7 @@ pub const REVEALS: [(&str, f64); 5] = [
 
 /// Ready-made paths: a name and the points notes come in by (playfield units from the drum, x
 /// right, y down; the drum ends each one).
-pub const PATHS: [(&str, &[[f64; 2]]); 9] = [
+pub const PATHS: [(&str, &[[f64; 2]]); 10] = [
     ("From above", &[[0.0, -190.0]]),
     ("From below", &[[0.0, 280.0]]),
     ("From behind", &[[-155.0, 0.0]]),
@@ -77,7 +77,12 @@ pub const PATHS: [(&str, &[[f64; 2]]); 9] = [
             [60.0, 10.0],
         ],
     ),
+    // No points: the lane itself, kept straight while clips bend it (`NotePath::straight`).
+    (STRAIGHT_LANE, &[]),
 ];
+
+/// The ready-made path that keeps notes on a plain straight lane, whatever shape it is bent into.
+pub const STRAIGHT_LANE: &str = "Straight lane";
 
 /// Ready-made paces: how much of the path is left (value) by how much of the lane is left
 /// (time), both 1 coming in and 0 at the drum. The first is even.
@@ -370,11 +375,15 @@ impl Editor {
     }
 
     /// Lays ready-made path `i` on group `group`, keeping its pace, weight and whether it shows.
+    /// The one without points is the straight lane.
     pub fn set_path_preset(&mut self, group: usize, i: usize) -> bool {
         let Some((_, points)) = PATHS.get(i) else {
             return false;
         };
-        self.edit_path(group, false, |p| p.points = points.to_vec())
+        self.edit_path(group, false, |p| {
+            p.points = points.to_vec();
+            p.straight = points.is_empty();
+        })
     }
 
     pub fn clear_path(&mut self, group: usize) -> bool {
@@ -826,6 +835,12 @@ mod tests {
         let g = e.motion_group().unwrap();
         for (i, (name, points)) in PATHS.iter().enumerate() {
             assert!(e.set_path_preset(g, i), "{name}");
+            if points.is_empty() {
+                // The straight lane: no points to fly, see `notes_on_a_straight_lane_ignore_its_bend`.
+                assert!(e.path_of(g).unwrap().straight, "{name}");
+                continue;
+            }
+            assert!(!e.path_of(g).unwrap().straight, "{name}");
             for (k, (pace, _)) in PACES.iter().enumerate() {
                 let mut p = e.path_of(g).unwrap().clone();
                 p.pace = pace_track(k);

@@ -1914,7 +1914,8 @@ impl View {
     }
 
     pub(super) fn clip_rows_drag(&mut self, x: f32, y: f32) {
-        let t = self.ed.snapped(self.t_at(x).max(0.0));
+        let floor = self.ed.clip_floor();
+        let t = self.ed.snapped(self.t_at(x)).max(floor);
         match self.drag {
             Drag::FxNew { row, from, .. } => self.drag = Drag::FxNew { row, from, to: t },
             Drag::FxMove { id, grab, copy } => {
@@ -1922,7 +1923,7 @@ impl View {
                     return;
                 };
                 let row = self.row_at(y).min(self.clip_row_count());
-                let start = self.ed.snapped((self.t_at(x) - grab).max(0.0));
+                let start = self.ed.snapped(self.t_at(x) - grab).max(floor);
                 if start == s0 && row == r0 {
                     return;
                 }

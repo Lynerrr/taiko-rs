@@ -963,7 +963,8 @@ impl View {
                 (
                     name.to_string(),
                     Btn::M(MAct::Path(i)),
-                    path.as_ref().is_some_and(|p| p.points == pts.to_vec()),
+                    path.as_ref()
+                        .is_some_and(|p| p.points == pts.to_vec() && p.straight == pts.is_empty()),
                 )
             })
             .collect();
@@ -1556,10 +1557,11 @@ impl View {
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map_or(0, |(i, _)| i + 1);
         let p = self.path_point_at(x, y);
-        if self
-            .ed
-            .edit_path(g, false, |path| path.points.insert(at, p))
-        {
+        if self.ed.edit_path(g, false, |path| {
+            // A point drawn makes it a path of its own, off the straight lane.
+            path.points.insert(at, p);
+            path.straight = false;
+        }) {
             self.mark_stale();
         }
     }
