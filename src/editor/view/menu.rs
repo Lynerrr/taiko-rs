@@ -44,6 +44,7 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::CopyNotes),
             Do(Cmd::Paste),
             Do(Cmd::SelectAll),
+            Do(Cmd::SelectNone),
             Do(Cmd::Delete),
             Sep,
             Do(Cmd::Duplicate),

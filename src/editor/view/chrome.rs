@@ -754,7 +754,17 @@ impl View {
         let (msg, col) = if fresh {
             (self.status.clone(), 0xffe9a8)
         } else {
-            (self.mode_hint().to_string(), DIM)
+            let n = self.ed.selection.len();
+            if n > 0 && self.mode == Mode::Compose {
+                (
+                    format!(
+                        "{n} selected: Esc or a click on empty space deselects, Ctrl+click toggles one note"
+                    ),
+                    DIM,
+                )
+            } else {
+                (self.mode_hint().to_string(), DIM)
+            }
         };
         c.text(x, y + 13.0, 7.0, rgba(col, 1.0), &Canvas::fit(7.0, w, &msg));
         c.text_right(
