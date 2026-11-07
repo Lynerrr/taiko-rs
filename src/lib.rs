@@ -7146,6 +7146,7 @@ impl State {
         self.preview.map_offset = offset;
         if let Scene::Play { game, .. } | Scene::MpPlay { game, .. } = &mut self.scene {
             game.osu_offset = self.cfg.offset_osu_ms;
+            game.latency = self.cfg.offset_latency_ms;
         }
     }
 

@@ -796,6 +796,7 @@ mod tests {
             frame: 0,
             at: Instant::now(),
             latency: Duration::ZERO,
+            settled: false,
             reported: Duration::ZERO,
             epoch: 0,
         }));
