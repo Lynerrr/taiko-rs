@@ -4,6 +4,7 @@
 use super::cmd::{Cmd, Mode};
 use super::lines::TAct;
 use super::menu;
+use super::snap::SnapAct;
 use super::{Btn, Field, RED_LINE, SAct, View, fmt_time};
 use crate::editor::chart::{HitObject, Taiko};
 use crate::editor::state::Tool;
@@ -127,16 +128,36 @@ impl View {
         value: &str,
         dec: Cmd,
         inc: Cmd,
+        open: Option<(Btn, &str)>,
     ) -> f32 {
         let mut x = x;
-        c.text(x, y + 6.5, 6.0, rgba(FAINT, 1.0), label);
-        x += Canvas::text_width(6.0, label) + 5.0;
+        let (lx, lw) = (x, Canvas::text_width(6.0, label));
+        // The label and the value, when they are a button too: lit while pointed at or open.
+        let hot = |s: &mut Self, c: &Canvas, r: [f32; 4]| match open {
+            Some((b, tip)) => {
+                s.buttons.push((r, b));
+                s.tips.push((r, tip.to_string()));
+                c.hovered(r[0], r[1], r[2], r[3]) || s.snap_pop.is_some()
+            }
+            None => false,
+        };
+        let lit = hot(self, c, [lx, y + 2.0, lw + 3.0, 16.0]);
+        let col = if lit { 0xffffff } else { FAINT };
+        c.text(x, y + 6.5, 6.0, rgba(col, 1.0), label);
+        x += lw + 5.0;
         self.button(c, [x, y + 2.0, 14.0, 16.0], "-", Btn::C(dec), false);
         x += 16.0;
         let vw = Canvas::text_width(8.0, value).max(26.0);
+        let lit = hot(self, c, [x, y + 2.0, vw + 4.0, 16.0]);
         c.text_centered(x + vw / 2.0 + 2.0, y + 6.0, 8.0, rgba(0xffffff, 1.0), value);
+        if lit {
+            c.rect(x + 2.0, y + 15.0, vw, 1.0, rgba(accent(), 1.0));
+        }
         x += vw + 4.0;
         self.button(c, [x, y + 2.0, 14.0, 16.0], "+", Btn::C(inc), false);
+        if open.is_some() {
+            self.snap_anchor = [lx, y + 2.0, x + 14.0 - lx, 16.0];
+        }
         x + 20.0
     }
 
@@ -238,11 +259,31 @@ impl View {
         x += Canvas::text_width(9.0, &time) + 12.0;
         if x + 100.0 < right {
             let snap = format!("1/{}", self.ed.snap);
-            x = self.stepper(c, x, y, "Snap", &snap, Cmd::SnapStep(-1), Cmd::SnapStep(1));
+            let tip = "Click to pick a snap or make your own snap presets; the wheel then steps only through the preset's snaps.";
+            let open = Some((Btn::Snap(SnapAct::Open), tip));
+            x = self.stepper(
+                c,
+                x,
+                y,
+                "Snap",
+                &snap,
+                Cmd::SnapStep(-1),
+                Cmd::SnapStep(1),
+                open,
+            );
         }
         if x + 110.0 < right {
             let rate = format!("{}%", self.rate);
-            x = self.stepper(c, x, y, "Speed", &rate, Cmd::RateStep(-1), Cmd::RateStep(1));
+            x = self.stepper(
+                c,
+                x,
+                y,
+                "Speed",
+                &rate,
+                Cmd::RateStep(-1),
+                Cmd::RateStep(1),
+                None,
+            );
         }
         if x + 90.0 < right {
             c.text(x, y + 6.5, 6.0, rgba(FAINT, 1.0), "Zoom");

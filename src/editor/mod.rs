@@ -15,6 +15,7 @@ pub mod motion;
 pub mod new_map;
 pub mod nodes;
 pub mod setup;
+pub mod snaps;
 pub mod state;
 pub mod sv_curves;
 pub mod svt;

@@ -12,6 +12,8 @@ use crate::render::PresentChoice;
 
 /// How many maps the editor remembers as recent.
 pub const MAX_RECENT_MAPS: usize = 8;
+/// How many editor snap presets are kept.
+const MAX_SNAP_PRESETS: usize = 24;
 pub const RATE_RANGE: (f64, f64) = (0.5, 2.0);
 pub const FPS_CAPS: [u32; 7] = [0, 2000, 1000, 500, 240, 144, 60];
 /// What scroll speed 1.0 was before it matched osu!, in today's terms (at 16:9: 0.7 virtual
@@ -257,6 +259,10 @@ pub struct Config {
     pub editor_recent: Vec<String>,
     /// In the editor a left drag on empty timeline pans it (View > Left drag pans).
     pub editor_left_pan: bool,
+    /// The editor's own snap presets, one `3,6,12|Name` value each (`editor::snaps`).
+    pub editor_snap_presets: Vec<String>,
+    /// The name of the snap preset in use (empty: the built-in "All").
+    pub editor_snap_active: String,
     /// Star out swear words in chats.
     pub chat_filter: bool,
     /// A chime when a friend messages you.
@@ -449,6 +455,8 @@ impl Default for Config {
             editor_tour_done: false,
             editor_recent: Vec::new(),
             editor_left_pan: false,
+            editor_snap_presets: Vec::new(),
+            editor_snap_active: String::new(),
             discord_app_id: String::new(),
             chat_filter: true,
             message_sound: true,
@@ -1062,6 +1070,12 @@ impl Config {
                 "send_crash_reports" => cfg.send_crash_reports = v != "false",
                 "editor_tour_done" => cfg.editor_tour_done = v == "true",
                 "editor_left_pan" => cfg.editor_left_pan = v == "true",
+                "editor_snap_preset" if !v.is_empty() => {
+                    if cfg.editor_snap_presets.len() < MAX_SNAP_PRESETS {
+                        cfg.editor_snap_presets.push(v.to_string());
+                    }
+                }
+                "editor_snap_active" => cfg.editor_snap_active = v.to_string(),
                 "editor_recent" if !v.is_empty() => {
                     if cfg.editor_recent.len() < MAX_RECENT_MAPS
                         && !cfg.editor_recent.iter().any(|r| r == v)
@@ -1367,6 +1381,15 @@ impl Config {
         out.push_str(&format!("# after a crash, the next start sends its report to the developers\nsend_crash_reports = {}\n", self.send_crash_reports));
         out.push_str(&format!("# the map editor's first-run tour was seen (Help > Take the tour shows it again)\neditor_tour_done = {}\n", self.editor_tour_done));
         out.push_str(&format!("# in the map editor a left drag on empty timeline pans it (View > Left drag pans)\neditor_left_pan = {}\n", self.editor_left_pan));
+        if !self.editor_snap_presets.is_empty() {
+            out.push_str("# the map editor's own snap presets: beat divisions, then the name (one line each)\n");
+            for p in self.editor_snap_presets.iter().take(MAX_SNAP_PRESETS) {
+                out.push_str(&format!("editor_snap_preset = {p}\n"));
+            }
+        }
+        if !self.editor_snap_active.is_empty() {
+            out.push_str(&format!("# the snap preset in use in the map editor (none: all snaps)\neditor_snap_active = {}\n", self.editor_snap_active));
+        }
         if !self.editor_recent.is_empty() {
             out.push_str("# maps lately opened in the editor, the latest first (one line each)\n");
             for path in self.editor_recent.iter().take(MAX_RECENT_MAPS) {
@@ -1573,7 +1596,14 @@ fn keep_unknown(out: &mut String, old: &str) {
     // These have a line each only when there's something to say; none left means none left.
     let ours = |k: &str| {
         known.contains(k)
-            || matches!(k, "songs" | "multiverse_preset" | "skin_part")
+            || matches!(
+                k,
+                "songs"
+                    | "multiverse_preset"
+                    | "skin_part"
+                    | "editor_snap_preset"
+                    | "editor_snap_active"
+            )
             || k.strip_prefix("hotkey.")
                 .is_some_and(crate::keys::Hotkey::known)
     };
@@ -1645,6 +1675,23 @@ mod tests {
             "hotkey.apply_offset = none\nsongs = /a\nmultiverse_preset = x: y\nskin_part = a = b\n",
         );
         assert_eq!(out, "keys = A, S, K, L\n");
+    }
+
+    #[test]
+    fn snap_presets_round_trip_and_a_removed_one_stays_removed() {
+        let cfg = Config {
+            editor_snap_presets: vec!["1,2,4,8|Basic".into(), "3,6,12|Triplets".into()],
+            editor_snap_active: "Triplets".into(),
+            ..Config::default()
+        };
+        let text = cfg.to_text();
+        let back = Config::parse_text(&text);
+        assert_eq!(back.editor_snap_presets, cfg.editor_snap_presets);
+        assert_eq!(back.editor_snap_active, "Triplets");
+        // With none left, the old lines are not kept as another version's.
+        let mut out = Config::default().to_text();
+        keep_unknown(&mut out, &text);
+        assert!(!out.contains("editor_snap"));
     }
 
     #[test]

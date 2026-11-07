@@ -99,6 +99,7 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 # Placing
 - Tools: 1 Select, 2 Note, 3 Drumroll, 4 Denden. With Note a click on the lane places on the grid; right click deletes (on a selected note: the whole selection); drag moves (Shift ignores the grid).
 - Snap sets how finely a beat divides: Ctrl+wheel or Shift+1 to 9. Left / Right step by one snap.
+- Click Snap in the transport to open the snap presets. All is the full list and stays the default. New preset lets you tick the snaps you want (say 1/1 1/2 1/4 1/8, or 1/3 1/6 1/12) and saves them under a name made from them; Delete removes the preset in use. With a preset on, Ctrl+wheel steps only through its snaps, and the snap jumps to the nearest one in it. Clicking a snap in the list, or Shift+1 to 9, still picks any single snap. Esc or a click outside closes the list. Presets are kept in your settings.
 - Speed (Ctrl+Up / Down) slows the music so you can place by ear.
 
 # Colour and size
@@ -453,6 +454,7 @@ File > Open song folder открывает папку карты. Бросьте
 # Расстановка
 - Инструменты: 1 Select, 2 Note, 3 Drumroll, 4 Denden. С Note клик по дорожке ставит ноту на сетку; правый клик удаляет (по выделенной ноте — всё выделение); перетаскивание двигает (Shift — без сетки).
 - Snap — на сколько делится бит: Ctrl+колесо или Shift+1..9. Влево / вправо — на один шаг.
+- Клик по Snap на панели воспроизведения открывает пресеты snap. All — полный список, он остаётся по умолчанию. New preset — отметьте нужные деления (например 1/1 1/2 1/4 1/8 или 1/3 1/6 1/12), пресет сохранится с именем из них; Delete удаляет текущий пресет. С включённым пресетом Ctrl+колесо листает только его деления, а текущий snap прыгает на ближайшее из них. Клик по делению в списке или Shift+1..9 по-прежнему выбирает любое одно деление. Esc или клик мимо закрывает список. Пресеты хранятся в ваших настройках.
 - Speed (Ctrl+вверх / вниз) замедляет музыку, чтобы ставить на слух.
 
 # Цвет и размер

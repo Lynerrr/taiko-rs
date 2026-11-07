@@ -13,7 +13,7 @@ use winit::keyboard::KeyCode;
 
 use super::chart::{HitObject, Taiko};
 use super::state::{Editor, Tool};
-use super::timing::{self, SNAP_DIVISORS};
+use super::timing;
 use super::tools::{GimmickTool, Target};
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, OSU_TIMING_MS};
@@ -38,6 +38,7 @@ mod nodes;
 mod panel;
 mod run;
 mod setup;
+mod snap;
 mod timing_win;
 mod upload;
 
@@ -126,6 +127,8 @@ pub enum Btn {
     M(motion::MAct),
     N(NAct),
     T(TAct),
+    /// The snap popover.
+    Snap(snap::SnapAct),
     /// The SV tool and the velocity graph.
     S(SAct),
     /// A command by name (the same ones the keys and the menus run).
@@ -457,6 +460,16 @@ pub struct View {
     fx_page_most: f32,
     /// The open "what it moves" menu and the button it hangs from.
     fx_drop: Option<(u8, [f32; 4])>,
+    /// The snap popover, when open.
+    snap_pop: Option<snap::Pop>,
+    /// Where the toolbar draws its Snap control (the popover hangs under it).
+    snap_anchor: [f32; 4],
+    /// The mapper's own snap presets.
+    pub snap_presets: Vec<crate::editor::snaps::SnapPreset>,
+    /// The preset in use (an index into `snap_presets`); `None` is the built-in "All".
+    pub snap_active: Option<usize>,
+    /// The presets or the choice changed: the game saves them to the config.
+    pub snap_dirty: bool,
     /// The clips being moved and where they were: id, start, end, row.
     fx_orig: Vec<(u32, f64, f64, u8)>,
     /// A press on a clip already picked with others: picks it alone if it isn't dragged.
@@ -650,6 +663,11 @@ impl View {
             fx_scroll_for: None,
             fx_page_most: 0.0,
             fx_drop: None,
+            snap_pop: None,
+            snap_anchor: [0.0; 4],
+            snap_presets: Vec::new(),
+            snap_active: None,
+            snap_dirty: false,
             fx_orig: Vec::new(),
             fx_click: None,
             fx_end: false,
@@ -2146,6 +2164,16 @@ impl View {
         // A dropdown closes on any press; one that lists switches stays open for the next.
         let was = self.svt.drop.take();
         let fx_was = self.fx_drop.take();
+        // The snap popover stays for its own buttons and for clicks on itself.
+        let snap_hit = matches!(self.button_at(x, y), Some(Btn::Snap(_)));
+        if !snap_hit && self.snap_pop.as_ref().is_some_and(|p| inside(p.rect, x, y)) {
+            return;
+        }
+        let snap_was = if snap_hit {
+            false
+        } else {
+            self.snap_pop.take().is_some()
+        };
         if let Some(b) = self.button_at(x, y) {
             self.press(b, keys, audio);
             match b {
@@ -2159,6 +2187,7 @@ impl View {
         // A click that hits nothing closes what's open (a menu, a dropdown) and goes no further.
         if self.menu.take().is_some()
             || self.n_pick.take().is_some()
+            || snap_was
             || was.is_some()
             || fx_was.is_some()
         {
@@ -2590,12 +2619,7 @@ impl View {
     }
 
     fn step_snap(&mut self, dir: i32) {
-        let at = SNAP_DIVISORS
-            .iter()
-            .position(|d| *d == self.ed.snap)
-            .unwrap_or(3) as i32;
-        let next = (at + dir).clamp(0, SNAP_DIVISORS.len() as i32 - 1) as usize;
-        self.ed.snap = SNAP_DIVISORS[next];
+        self.ed.snap = crate::editor::snaps::step(&self.snap_list(), self.ed.snap, dir);
     }
 
     // ---- actions ----
@@ -2840,6 +2864,7 @@ impl View {
             Btn::C(cmd) => self.run(cmd, audio),
             Btn::U(act) => self.press_upload(act),
             Btn::Man(act) => self.press_manual(act, audio),
+            Btn::Snap(act) => self.press_snap(act),
             Btn::Menu(i) => self.menu = if self.menu == Some(i) { None } else { Some(i) },
             Btn::TourNext => {
                 let at = self.tour.unwrap_or(0);
@@ -3087,6 +3112,7 @@ impl View {
             }
             if self.menu.take().is_some()
                 || self.n_pick.take().is_some()
+                || self.snap_pop.take().is_some()
                 || self.svt.drop.take().is_some()
                 || self.fx_drop.take().is_some()
                 || self.roll_start.take().is_some()
@@ -4241,6 +4267,103 @@ mod tests {
 
     fn press(v: &mut View, b: Btn) {
         v.press(b, Keys::default(), None);
+    }
+
+    #[test]
+    fn a_snap_preset_limits_the_wheel_and_the_snap_follows_to_its_nearest() {
+        use super::snap::SnapAct;
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        let mut v = view();
+        v.ed.snap = 4;
+        // Make 1/3 1/6 1/12 through the popover.
+        press(&mut v, Btn::Snap(SnapAct::Open));
+        assert!(v.snap_pop.is_some());
+        press(&mut v, Btn::Snap(SnapAct::New));
+        for d in [12, 3, 6] {
+            press(&mut v, Btn::Snap(SnapAct::Draft(d)));
+        }
+        press(&mut v, Btn::Snap(SnapAct::Create));
+        assert_eq!(v.snap_presets.len(), 1);
+        assert_eq!(v.snap_presets[0].name, "1/3 1/6 1/12");
+        assert_eq!(v.snap_active, Some(0));
+        assert!(v.snap_dirty);
+        assert_eq!(v.ed.snap, 3, "4 is not in it: the nearest is 3");
+        v.wheel(1, ctrl);
+        assert_eq!(v.ed.snap, 6);
+        v.wheel(5, ctrl);
+        assert_eq!(v.ed.snap, 12, "stops at its finest");
+        v.wheel(-1, ctrl);
+        v.wheel(-1, ctrl);
+        v.wheel(-1, ctrl);
+        assert_eq!(v.ed.snap, 3, "and at its coarsest");
+        // Back to All: the full list again.
+        press(&mut v, Btn::Snap(SnapAct::All));
+        v.wheel(1, ctrl);
+        assert_eq!(v.ed.snap, 4);
+        // Deleting the preset in use falls back to All.
+        press(&mut v, Btn::Snap(SnapAct::Preset(0)));
+        press(&mut v, Btn::Snap(SnapAct::Delete));
+        assert!(v.snap_presets.is_empty());
+        assert_eq!(v.snap_active, None);
+        // What the config holds loads back, a name that is gone means All.
+        v.set_snap_presets(&["1,2,4,8|Basic".to_string()], "Basic");
+        assert_eq!(v.snap_active, Some(0));
+        assert_eq!(
+            v.snap_config(),
+            (vec!["1,2,4,8|Basic".to_string()], "Basic".to_string())
+        );
+        v.set_snap_presets(&["1,2,4,8|Basic".to_string()], "Gone");
+        assert_eq!(v.snap_active, None);
+    }
+
+    #[test]
+    fn the_snap_popover_closes_on_esc_and_outside_clicks_and_leaves_keys_alone() {
+        use super::snap::SnapAct;
+        let mut v = view();
+        // Closed, Esc is not its business.
+        assert!(v.snap_pop.is_none());
+        press(&mut v, Btn::Snap(SnapAct::Open));
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Snap(SnapAct::Div(4))),
+            "the snaps are offered"
+        );
+        let [px, py, pw, ph] = v.snap_pop.as_ref().unwrap().rect;
+        assert!(pw > 0.0 && ph > 0.0);
+        // A click on a bare spot of the popover keeps it open.
+        click(&mut v, px + pw - 2.0, py + ph - 2.0);
+        assert!(v.snap_pop.is_some());
+        // Picking a division directly works and keeps it open.
+        let r = v
+            .buttons
+            .iter()
+            .find(|(_, b)| *b == Btn::Snap(SnapAct::Div(8)))
+            .unwrap()
+            .0;
+        click(&mut v, r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        assert_eq!(v.ed.snap, 8);
+        assert!(v.snap_pop.is_some());
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(v.snap_pop.is_none(), "Esc closes it");
+        press(&mut v, Btn::Snap(SnapAct::Open));
+        click(&mut v, 5.0, 470.0);
+        assert!(v.snap_pop.is_none(), "so does a click outside");
+        // Closed, the number keys still change the snap.
+        v.key(
+            KeyCode::Digit3,
+            false,
+            Keys {
+                shift: true,
+                ..Keys::default()
+            },
+            None,
+        );
+        assert_eq!(v.ed.snap, 3);
     }
 
     #[test]
