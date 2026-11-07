@@ -152,6 +152,13 @@ impl Meta {
 }
 
 /// osu!'s `IBeatmapDifficultyInfo.DifficultyRange`.
+/// Map time play starts at: two seconds before the first note, or the song's start, or the
+/// map's audio lead-in before it, whichever is earliest. A `.tko` map's effects can start this
+/// early, so the playfield is set before the song begins.
+pub fn play_start(first_note: f64, audio_lead_in: f64) -> f64 {
+    (first_note - 2000.0).min(0.0).min(-audio_lead_in)
+}
+
 pub fn difficulty_range(d: f64, min: f64, mid: f64, max: f64) -> f64 {
     if d > 5.0 {
         mid + (max - mid) * (d - 5.0) / 5.0

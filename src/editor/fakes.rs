@@ -41,6 +41,40 @@ impl Editor {
         Ok((n, on))
     }
 
+    /// How many of the selected notes are drawn over every effect, and how many are selected.
+    pub fn above_picked(&self) -> (usize, usize) {
+        let picked = self.selected();
+        let above = self
+            .gimmick()
+            .map_or(0, |g| picked.iter().filter(|o| g.is_above(o.time)).count());
+        (above, picked.len())
+    }
+
+    /// Draws the selected notes over every effect (a blackout, a flash, effects on all the
+    /// notes), or not again when they all are; one undo step. Returns how many changed and
+    /// whether they are drawn over now.
+    pub fn toggle_above(&mut self) -> Result<(usize, bool), String> {
+        if !self.is_tko() {
+            return Err("notes over the effects need a .tko map".into());
+        }
+        let times: Vec<f64> = self.selected().iter().map(|o| o.time).collect();
+        if times.is_empty() {
+            return Err("select notes first".into());
+        }
+        let (above, all) = self.above_picked();
+        let on = above < all;
+        let n = if on { all - above } else { all };
+        self.edit_gimmick(false, |g| {
+            if on {
+                g.above.extend(times.iter().copied());
+            } else {
+                g.above
+                    .retain(|&a| !times.iter().any(|&t| (t - a).abs() <= 0.5));
+            }
+        });
+        Ok((n, on))
+    }
+
     /// Adds a fake copy of each selected don and kat `beats` beats later (earlier below 0), where
     /// no note is yet. The copies become the selection. Returns how many.
     pub fn add_fake_copies(&mut self, beats: f64) -> Result<usize, String> {
@@ -116,6 +150,35 @@ mod tests {
             .map(|o| o.id)
             .collect();
         e.selection = ids.into_iter().collect();
+    }
+
+    #[test]
+    fn notes_go_over_the_effects_and_back_and_stay_so_when_moved() {
+        let mut e = tko();
+        assert!(e.toggle_above().is_err(), "nothing picked");
+        pick(&mut e, 2);
+        assert_eq!(e.above_picked(), (0, 2));
+        assert_eq!(e.toggle_above().unwrap(), (2, true));
+        assert_eq!(e.above_picked(), (2, 2));
+        let first = e.selected()[0].time;
+        let g = e.gimmick().unwrap();
+        assert!(g.is_above(first));
+        // Saved with the map and read back.
+        let text = e.chart.to_text();
+        let back = Chart::parse_tko(&text).unwrap();
+        assert!(back.gimmick.as_ref().unwrap().is_above(first));
+        // Moved, they stay over the effects where they went.
+        assert!(e.move_selected(10.0, false));
+        let g = e.gimmick().unwrap();
+        assert!(g.is_above(first + 10.0) && !g.is_above(first));
+        // Toggled again, they are under the effects; undo puts them back over.
+        assert_eq!(e.toggle_above().unwrap(), (2, false));
+        assert!(e.gimmick().unwrap().above.is_empty());
+        assert!(e.undo());
+        assert_eq!(e.above_picked(), (2, 2));
+        let mut plain = Editor::new(Chart::parse(MAP), std::path::PathBuf::from("a.osu"));
+        plain.selection = e.selection.clone();
+        assert!(plain.toggle_above().is_err(), "a plain .osu has no effects");
     }
 
     #[test]

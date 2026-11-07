@@ -78,7 +78,7 @@ fn set_objects(c: &mut Chart, list: &[HitObject]) {
 }
 
 /// Each group's note at a `from` time is at its `to` now, all at once (so notes swapping places
-/// swap groups too).
+/// swap groups too), and so is each note drawn over the effects.
 fn move_group_notes(g: &mut crate::tko::gimmick::Gimmick, moved: &[(f64, f64)]) {
     for gr in &mut g.groups {
         let mut changed = false;
@@ -92,6 +92,17 @@ fn move_group_notes(g: &mut crate::tko::gimmick::Gimmick, moved: &[(f64, f64)]) 
         if changed {
             gr.notes.sort_by(f64::total_cmp);
         }
+    }
+    // Notes drawn over every effect stay so.
+    let mut changed = false;
+    for t in &mut g.above {
+        if let Some(&(_, to)) = moved.iter().find(|(from, _)| (*from - *t).abs() <= 0.5) {
+            *t = to;
+            changed = true;
+        }
+    }
+    if changed {
+        g.above.sort_by(f64::total_cmp);
     }
 }
 

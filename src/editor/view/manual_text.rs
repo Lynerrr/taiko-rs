@@ -162,6 +162,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - Cut in pieces cuts the picture into 2-12 upright pieces; Pieces up / down pushes every other one the other way, Pieces apart spreads them from the middle. Try Broken lane, Shatter on the beat, Split open.
 - Blackout and Fade to black turn the screen black (text over the lane still shows); Ghost playfield makes it faint; Only the notes leaves notes and drum alone on black. Notes that can't be seen are still there to hit.
 - Click an effect to pick it, then drag on a row from where it should start to where it should end. A click on a row lays one bar. Over the kiai here and Over the notes selected lay it over those. Shift keeps it picked for more; Esc puts it back.
+- A block can start before the song when play does: two seconds before an early first note, or the map's AudioLeadIn. Lay one there to have the playfield set (zoomed out, turned, dark) from the first frame.
 - Drag a block to move it (also to another row), drag its ends to make it longer or shorter (a short block's ends stick out a little), right click deletes it. Blocks never sit on top of each other: one dropped or moved over another goes to the nearest free row there, and an end stops at the next block.
 - Drag over empty rows to pick every block in the box; Shift or Ctrl+click adds or takes one away. Blocks picked move together, Ctrl+D copies them after themselves, Delete removes them.
 - As in Ableton: Ctrl+drag (or Ctrl+Shift+drag) a block to drag a copy of it (of all picked, when it is one of them). Ctrl+C or Ctrl+X keeps the blocks picked, Ctrl+V lays them at the playhead and moves the playhead to their end, so pasting again lays them one after another. They paste into another map too. Ctrl+A picks every block.
@@ -198,7 +199,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - The notes disappear in the last chorus: select its notes, click Hide the notes.
 - A quarter turn each bar that stays: Quarter turns.
 
-Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes are under Advanced... for what clips can't do yet.
+Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes, after the divider in the page tabs, are for what clips can't do yet.
 
 > Everything here is visual only: judging, score and pp never change.
 ",
@@ -212,6 +213,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 # Giving notes a path
 - Press 1 for the Select tool (it keeps you on this page) and click a note on the timeline, or drag a box over several. On the Effects pages a click on the timeline only picks notes, it never places them.
 - Pick where they come from: from above, from below, from behind the drum, the corner, an arc, a drop, a zigzag, a spiral, a loop. The picked notes get a group of their own and fly that way at once. (Give the picked notes a path does the same, starting from above.)
+- Straight lane keeps the picked notes on a plain straight lane while clips bend the lane into a zigzag, a spiral or any other shape: as far from the drum and as fast as on it. With When, they can go onto it and back to the bent lane over a beat.
 - Whatever is picked is what the page shapes: click a group under Moving to pick its notes again. The groups stay on one line: when there are more than fit, the arrows (or the wheel over them) page through them, and their numbers say how many are hidden each way.
 - On the timeline a bar under the notes, with the group's name, shows which ones the page is shaping.
 - Shape it in the preview: drag a point to move it, double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
@@ -252,6 +254,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - The truth shows takes them back to what they are, over a 1/4 beat ending at the hit or up to two beats before it. A colour that only shows at the hit can't be read, only learned: Upload warns about it.
 - What hits a note, its score and its sound stay its own. Fakes lie with their group too; drumrolls and swells never lie.
 - Players can turn every lie off in Settings, Gameplay, Show true notes. With it on, your own preview shows the truth too.
+- Over effects, on the same tab, draws the picked notes over every effect: a blackout, a flash or a glitch doesn't hide them, and effects on all the notes leave them be. They still turn and zoom with the playfield, and effects on a group they are in still move them. On the timeline they wear a white dot.
 
 - Put an example on this map (the button below) lays all of this over the map's first kiai, four beats each: a path, a pop in with fakes, a freeze as the drum slides, swapped colours. Each part is its own Ctrl+Z.
 
@@ -512,6 +515,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Cut in pieces режет картинку на 2-12 вертикальных кусков; Pieces up / down двигает их через один вверх и вниз, Pieces apart раздвигает от середины. Попробуйте Broken lane, Shatter on the beat, Split open.
 - Blackout и Fade to black делают экран чёрным (текст над лайном всё равно виден); Ghost playfield делает поле полупрозрачным; Only the notes оставляет на чёрном только ноты и барабан. Невидимые ноты всё равно нужно бить.
 - Нажмите эффект, чтобы взять его, и протяните по дорожке от места, где он начинается, до места, где кончается. Клик по дорожке кладёт один такт. Over the kiai here и Over the notes selected кладут его на кийай или на выделенные ноты. С Shift он остаётся в руке; Esc кладёт обратно.
+- Блок может начинаться до песни, если игра начинается раньше: за две секунды до ранней первой ноты или за AudioLeadIn карты. Положите его туда, чтобы поле было уже настроено (отдалено, повёрнуто, затемнено) с первого кадра.
 - Блок тащится мышью (и на другую дорожку), за края — длиннее или короче (у короткого блока края чуть выступают), правый клик удаляет. Блоки не ложатся друг на друга: брошенный или сдвинутый на другой уходит на ближайшую свободную там дорожку, а край останавливается у соседнего блока.
 - Протяните рамку по пустым дорожкам, чтобы выбрать все блоки в ней; Shift или Ctrl+клик добавляет или убирает один. Выбранные двигаются вместе, Ctrl+D копирует их следом, Delete удаляет.
 - Как в Ableton: Ctrl+перетаскивание (или Ctrl+Shift) тащит копию блока (всех выбранных, если он среди них). Ctrl+C или Ctrl+X запоминает выбранные блоки, Ctrl+V кладёт их от плейхеда и переносит плейхед на их конец, так что следующая вставка ляжет сразу за ними. Вставлять можно и в другую карту. Ctrl+A выбирает все блоки.
@@ -548,7 +552,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Ноты пропадают в последнем припеве: выделите его ноты, нажмите Hide the notes.
 - Четверть оборота каждый такт, и так и остаётся: Quarter turns.
 
-Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes спрятаны под Advanced... — для того, чего блоки пока не умеют.
+Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes, за чертой во вкладках страниц, — для того, чего блоки пока не умеют.
 
 > Всё здесь только визуальное: судейство, очки и pp не меняются.
 ",
@@ -562,6 +566,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 # Как дать нотам путь
 - Нажмите 1 (инструмент Select, страница при этом не меняется) и кликните ноту на таймлайне или обведите рамкой несколько. На страницах Effects клик по таймлайну только выделяет ноты и никогда их не ставит.
 - Выберите в Where they come from, откуда они летят: сверху, снизу, из-за барабана, из угла, дугой, падением, зигзагом, спиралью, петлёй. Выделенные ноты сразу получат свою группу и полетят так. (Give the picked notes a path делает то же, начиная со «сверху».)
+- Straight lane держит выделенные ноты на обычном прямом лайне, пока клипы гнут лайн в зигзаг, спираль или другую форму: на том же расстоянии от барабана и с той же скоростью. Через When они могут уйти на него и вернуться на изогнутый лайн за одну долю.
 - Страница всегда правит то, что выделено: клик по группе в Moving снова выделяет её ноты. Группы всегда в одну строку: если все не помещаются, стрелки (или колесо над ними) листают их, а числа на стрелках говорят, сколько скрыто с каждой стороны.
 - На таймлайне полоса под нотами с именем группы показывает, какие ноты сейчас правит страница.
 - Путь правится прямо на превью: тащите точку, двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
@@ -602,6 +607,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - The truth shows возвращает им настоящий вид за 1/4 доли, к самому удару или за две доли до него. Цвет, который виден только в момент удара, не прочитать, только выучить: Upload об этом предупредит.
 - Чем бить ноту, её счёт и звук остаются её собственными. Фейки врут вместе со своей группой; дроби и свели не врут никогда.
 - Игроки могут выключить любой обман в настройках: Игра, «Показывать настоящие ноты». Если это включено у вас самих, превью тоже покажет правду.
+- Over effects на той же вкладке рисует выбранные ноты поверх всех эффектов: блэкаут, вспышка или глитч их не прячут, а эффекты на все ноты их не трогают. Они всё так же поворачиваются и приближаются вместе с полем, и эффекты на их группу их двигают. На таймлайне над ними белая точка.
 
 - Положить пример на эту карту (кнопка внизу) раскладывает всё это по первому киаю карты, по четыре доли: траектория, выскакивание с фейками, заморозка, пока едет барабан, перепутанные цвета. Каждая часть отменяется своим Ctrl+Z.
 

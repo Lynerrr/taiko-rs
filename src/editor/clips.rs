@@ -338,6 +338,20 @@ impl Shelf {
         }
     }
 
+    /// What its effects do, in a line.
+    pub fn about(self) -> &'static str {
+        match self {
+            Shelf::Move => "The whole playfield moves: pulses, turns, zooms, shakes.",
+            Shelf::Lane => "The lane bends into a shape.",
+            Shelf::Notes => "The notes themselves: hidden, faded, bigger, wobbling.",
+            Shelf::Look => "Flashes, colours, echoes and glitches.",
+            Shelf::Copies => {
+                "Copies of the playfield moved on their own, and the picture cut in pieces."
+            }
+            Shelf::Text => "Words and pictures on screen.",
+        }
+    }
+
     /// The colour its tab wears: that of what its effects move.
     pub fn colour(self) -> u32 {
         match self {
@@ -1337,16 +1351,38 @@ impl Editor {
         self.add_clips_as(new, drag)
     }
 
-    /// The stretch block `id` can grow into on its row, up to the blocks either side.
+    /// The earliest a block may start: where play starts, before the song when the first note
+    /// comes early or the map has an audio lead-in (`beatmap::play_start`), so the playfield can
+    /// be set before the song begins. 0 otherwise.
+    pub fn clip_floor(&self) -> f64 {
+        let first = self
+            .chart
+            .objects
+            .iter()
+            .map(|o| o.time)
+            .fold(f64::INFINITY, f64::min);
+        let lead_in = self
+            .chart
+            .get_key("General", "AudioLeadIn")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        let first = if first.is_finite() { first } else { 0.0 };
+        crate::beatmap::play_start(first, lead_in.max(0.0))
+    }
+
+    /// The stretch block `id` can grow into on its row, up to the blocks either side, and back no
+    /// further than `clip_floor`.
     pub fn clip_room(&self, id: u32) -> (f64, f64) {
+        let floor = self.clip_floor();
         let Some(me) = self.clip(id) else {
-            return (0.0, f64::INFINITY);
+            return (floor, f64::INFINITY);
         };
         let row = self
             .clips()
             .iter()
             .filter(|c| c.id != id && c.lane == me.lane);
-        row.fold((0.0, f64::INFINITY), |(lo, hi), c| {
+        row.fold((floor, f64::INFINITY), |(lo, hi), c| {
             if c.end <= me.start + 0.5 {
                 (lo.max(c.end), hi)
             } else if c.start >= me.end - 0.5 {
@@ -1416,7 +1452,7 @@ impl Editor {
         drag: bool,
     ) -> bool {
         let earliest = from.iter().map(|f| f.1).fold(f64::INFINITY, f64::min);
-        let dt = dt.max(-earliest.max(0.0));
+        let dt = dt.max(self.clip_floor().min(earliest) - earliest);
         let low = from.iter().map(|f| f.3 as i32).min().unwrap_or(0);
         let high = from.iter().map(|f| f.3 as i32).max().unwrap_or(0);
         let drows = drows.clamp(-low, clips::LANES as i32 - 1 - high);
@@ -1624,7 +1660,44 @@ mod tests {
         // An end grows only up to the next block on its row.
         let c = e.add_clips(vec![block(0, 5000.0, 6000.0)])[0];
         assert_eq!(e.clip_room(c), (3000.0, f64::INFINITY));
-        assert_eq!(e.clip_room(a), (0.0, 5000.0));
+        // Back to where play starts: 2 s before the first note at 1000.
+        assert_eq!(e.clip_room(a), (-1000.0, 5000.0));
+    }
+
+    #[test]
+    fn blocks_can_start_before_the_song_as_early_as_play_does() {
+        use crate::tko::gimmick::FieldProp;
+        let mut e = tko();
+        // The first note at 1000: play starts 2 s before it.
+        assert_eq!(e.clip_floor(), -1000.0);
+        let id = e.add_clips(vec![Clip::new(
+            clips::Target::Field(FieldProp::Zoom),
+            0.0,
+            2000.0,
+        )])[0];
+        assert!(e.move_clips(&[(id, 0.0, 2000.0, 0)], -5000.0, 0, false));
+        let c = e.clip(id).unwrap();
+        assert_eq!(
+            (c.start, c.end),
+            (-1000.0, 1000.0),
+            "no earlier than play starts"
+        );
+        // An audio lead-in starts play earlier still.
+        e.chart.set_key("General", "AudioLeadIn", "3000");
+        assert_eq!(e.clip_floor(), -3000.0);
+        assert_eq!(e.clip_room(id).0, -3000.0);
+        // A map whose first note is late starts at the song: nothing before 0.
+        e.chart.set_key("General", "AudioLeadIn", "0");
+        e.chart.objects.retain(|o| o.time >= 9000.0);
+        assert_eq!(e.clip_floor(), 0.0);
+        // The runtime keeps a block before 0 as it is.
+        let mut kept = vec![Clip::new(
+            clips::Target::Field(FieldProp::Zoom),
+            -800.0,
+            500.0,
+        )];
+        crate::tko::clips::sanitize(&mut kept);
+        assert_eq!((kept[0].start, kept[0].end), (-800.0, 500.0));
     }
 
     #[test]

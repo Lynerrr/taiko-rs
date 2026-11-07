@@ -163,6 +163,8 @@ pub struct NoteFx {
     pub lie_big: Option<bool>,
     /// How far the truth shows through the lie: 0 all lie, 1 all truth.
     pub truth: f32,
+    /// Drawn over every effect, which effects on all the notes leave be (`Gimmick::above`).
+    pub above: bool,
 }
 
 impl Default for NoteFx {
@@ -182,6 +184,7 @@ impl Default for NoteFx {
             lie_kat: None,
             lie_big: None,
             truth: 1.0,
+            above: false,
         }
     }
 }
@@ -344,6 +347,10 @@ pub struct Runtime {
     group_of: Vec<u16>,
     /// The same for the fake notes, in the gimmick's order.
     fake_group_of: Vec<u16>,
+    /// Per note: drawn over every effect (`Gimmick::above`).
+    above_of: Vec<bool>,
+    /// The same for the fake notes.
+    fake_above: Vec<bool>,
     /// How far the game's clock is ahead of the chart's (the game shifts every time of a loaded
     /// map; a gimmick's times are the chart's).
     shift: f64,
@@ -445,6 +452,12 @@ impl Runtime {
         };
         let group_of = times.iter().map(|&t| group_at(t)).collect();
         let fake_group_of = gimmick.fakes.iter().map(|f| group_at(f.t)).collect();
+        let above_of = times.iter().map(|&t| gimmick.is_above(t)).collect();
+        let fake_above = gimmick
+            .fakes
+            .iter()
+            .map(|f| gimmick.is_above(f.t))
+            .collect();
         let sections: Vec<BeatSection> = beats
             .iter()
             .filter(|b| b.length.is_finite() && b.length > 0.0)
@@ -472,7 +485,12 @@ impl Runtime {
         let paths = gimmick
             .groups
             .iter()
-            .map(|g| g.path.as_ref().and_then(PathTable::new))
+            .map(|g| {
+                g.path
+                    .as_ref()
+                    .filter(|p| !p.straight)
+                    .and_then(PathTable::new)
+            })
             .collect();
         let mut rt = Runtime {
             lists: vec![Vec::new(); nodes.len()],
@@ -496,6 +514,8 @@ impl Runtime {
             paths,
             scroll,
             fake_group_of,
+            above_of,
+            fake_above,
         };
         rt.rebuild(false);
         rt
@@ -1236,12 +1256,16 @@ impl Runtime {
     }
 
     fn path_of(&self, gi: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
-        let table = self.paths.get(gi)?.as_ref()?;
         let path = self.gimmick.groups[gi].path.as_ref()?;
         let w = path.weight_at(t - self.shift) as f32;
         if w <= 0.0 {
             return None;
         }
+        if path.straight {
+            // Right of the drum by as much as it is along the lane: the lane unbent.
+            return Some([s, 0.0, w]);
+        }
+        let table = self.paths.get(gi)?.as_ref()?;
         let [x, y] = table.place(path, s, lane);
         Some([x, y, w])
     }
@@ -1277,11 +1301,23 @@ impl Runtime {
     pub fn note(&self, i: usize, t: f64) -> Option<NoteFx> {
         let n = self.notes.get(i)?;
         let gi = self.group_of(i);
-        let fx = self.fx_of(gi, n.time, t);
+        let above = self.above_of.get(i).copied().unwrap_or(false);
+        let fx = Self::lifted(self.fx_of(gi, n.time, t, above), above);
         if n.class == NoteClass::Long {
             return fx;
         }
         self.with_lie(fx, gi, n.class == NoteClass::Kat, n.big, n.time, t)
+    }
+
+    /// `fx` of a note drawn over every effect (`above`) says so, even when nothing moves it.
+    fn lifted(fx: Option<NoteFx>, above: bool) -> Option<NoteFx> {
+        if !above {
+            return fx;
+        }
+        Some(NoteFx {
+            above: true,
+            ..fx.unwrap_or_default()
+        })
     }
 
     /// The group fake note `i` (the gimmick's order) is in.
@@ -1296,7 +1332,8 @@ impl Runtime {
     pub fn fake(&self, i: usize, t: f64) -> Option<NoteFx> {
         let f = self.gimmick.fakes.get(i)?;
         let gi = self.fake_group_of(i);
-        let fx = self.fx_of(gi, f.t, t);
+        let above = self.fake_above.get(i).copied().unwrap_or(false);
+        let fx = Self::lifted(self.fx_of(gi, f.t, t, above), above);
         self.with_lie(fx, gi, f.kat, f.big, f.t, t)
     }
 
@@ -1334,9 +1371,17 @@ impl Runtime {
         self.path_of(self.fake_group_of(i)?, t, s, lane)
     }
 
-    /// What a note in group `gi` hit at chart time `hit` is doing at game time `t`.
-    fn fx_of(&self, gi: Option<usize>, hit: f64, t: f64) -> Option<NoteFx> {
-        let all = self.all_notes_delta.iter().any(|&d| d != 0.0);
+    /// What a note in group `gi` hit at chart time `hit` is doing at game time `t`. Effects on
+    /// all the notes leave one drawn over every effect (`above`) be.
+    fn fx_of(&self, gi: Option<usize>, hit: f64, t: f64, above: bool) -> Option<NoteFx> {
+        let all = !above && self.all_notes_delta.iter().any(|&d| d != 0.0);
+        let all_delta = |p: NoteProp| {
+            if above {
+                0.0
+            } else {
+                self.all_notes_delta[note_slot(p)]
+            }
+        };
         if gi.is_none() && !all {
             return None;
         }
@@ -1353,7 +1398,7 @@ impl Runtime {
             let add = gi
                 .and_then(|gi| self.group_delta.get(gi))
                 .map_or(0.0, |row| row[note_slot(p)])
-                + self.all_notes_delta[note_slot(p)];
+                + all_delta(p);
             if add == 0.0 {
                 base
             } else {
@@ -1723,6 +1768,44 @@ mod tests {
         rt.prepare(2020.0);
         assert_eq!(rt.field(2020.0).y, 20.0);
         assert_eq!(rt.field(2020.0).x, 0.0, "a miss isn't a hit");
+    }
+
+    #[test]
+    fn a_note_over_the_effects_ignores_those_on_all_notes_but_keeps_its_group_s() {
+        use crate::tko::clips::{Clip, Target as T};
+        let all = Clip {
+            amount: 1.0,
+            ..Clip::new(T::Notes(None, NoteProp::Hidden), 500.0, 2500.0)
+        };
+        let group = Clip {
+            amount: 30.0,
+            ..Clip::new(T::Notes(Some(0), NoteProp::Dy), 0.0, 9000.0)
+        };
+        let mut rt = with_clips(vec![all, group]);
+        let mut gm = (*rt.gimmick).clone();
+        gm.above = vec![2000.0, 1000.0];
+        gm.sanitize();
+        assert_eq!(gm.above, vec![1000.0, 2000.0], "kept in order");
+        rt = Runtime::with_beats(
+            Arc::new(gm),
+            [
+                (1000.0, NoteClass::Don, false),
+                (2000.0, NoteClass::Kat, true),
+                (3000.0, NoteClass::Long, false),
+            ]
+            .map(|(time, class, big)| NoteInfo { time, class, big })
+            .into_iter(),
+            0.0,
+            &GRID,
+        );
+        rt.prepare(1000.0);
+        let lone = rt.note(1, 1000.0).expect("said, though nothing moves it");
+        assert!(lone.above && !lone.hidden, "not hidden with all the notes");
+        let grouped = rt.note(0, 1000.0).unwrap();
+        assert!(grouped.above && !grouped.hidden);
+        assert_eq!(grouped.dy, 30.0, "its group's own move still holds");
+        let other = rt.note(2, 1000.0).unwrap();
+        assert!(other.hidden && !other.above, "the rest are hidden");
     }
 
     #[test]
@@ -2674,6 +2757,34 @@ mod tests {
         assert!(rt.note_path(0, 0.0, 400.0, 800.0).is_none());
         assert_eq!(rt.note_path(0, 500.0, 400.0, 800.0).unwrap()[2], 0.5);
         assert_eq!(rt.shown_paths(500.0).count(), 1);
+        assert_eq!(rt.shown_paths(0.0).count(), 0);
+    }
+
+    #[test]
+    fn notes_on_a_straight_lane_ignore_its_bend() {
+        use crate::tko::path::NotePath;
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![1000.0],
+            // Points left from a path picked before: not drawn, not flown.
+            path: Some(NotePath {
+                points: vec![[0.0, -400.0]],
+                straight: true,
+                show: true,
+                ..NotePath::default()
+            }),
+            ..Group::default()
+        });
+        let rt = Runtime::new(Arc::new(gm), [1000.0].into_iter(), 0.0);
+        // As far right of the drum as it is along the lane, however long the bent lane is.
+        for (s, lane) in [
+            (300.0, 700.0),
+            (300.0, 1320.0),
+            (900.0, 1320.0),
+            (0.0, 700.0),
+        ] {
+            assert_eq!(rt.note_path(0, 0.0, s, lane), Some([s, 0.0, 1.0]));
+        }
         assert_eq!(rt.shown_paths(0.0).count(), 0);
     }
 
