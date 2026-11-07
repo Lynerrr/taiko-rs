@@ -16239,6 +16239,7 @@ impl State {
                     lobby,
                     lobby_unread,
                     dim,
+                    self.in_editor(),
                     tab,
                 );
             } else if self.social.closing().is_some() {
@@ -16250,6 +16251,7 @@ impl State {
                     lobby,
                     lobby_unread,
                     dim,
+                    self.in_editor(),
                     tab,
                 );
                 canvas.hits.truncate(hits);

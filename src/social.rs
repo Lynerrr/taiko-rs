@@ -876,7 +876,8 @@ pub fn ago(at: u64, now: u64) -> String {
 
 /// The overlay: a panel on the right over whatever screen is showing (`dim`: the rest of the
 /// screen darkens a little, not over a play being watched). `lobby`: the room's chat when in
-/// one (name, line).
+/// one (name, line). `solid`: nothing shows through it (over the editor, which isn't dimmed).
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     c: &mut Canvas,
     s: &Social,
@@ -884,6 +885,7 @@ pub fn draw(
     lobby: Option<&[(String, String)]>,
     lobby_unread: usize,
     dim: bool,
+    solid: bool,
     tab: Option<f32>,
 ) {
     // It slides out of the edge of the screen, and back in there.
@@ -925,7 +927,7 @@ pub fn draw(
         [x, y],
         [PANEL_W + EDGE_BLEED, h],
         8.0,
-        rgba(PANEL_BG, 0.97 * a),
+        rgba(PANEL_BG, if solid { 1.0 } else { 0.97 } * a),
         rgba(0x34344a, a),
         1.0,
     );
@@ -2572,7 +2574,7 @@ mod tests {
         let mut c = Canvas::default();
         c.clear(853.0);
         if open {
-            draw(&mut c, s, true, None, 0, true, Some(TAB_MIDDLE));
+            draw(&mut c, s, true, None, 0, true, false, Some(TAB_MIDDLE));
         } else {
             draw_chip(&mut c, s, TAB_MIDDLE, 0);
         }
