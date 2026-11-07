@@ -13,6 +13,7 @@ use winit::keyboard::KeyCode;
 
 use super::chart::{HitObject, Taiko};
 use super::state::{Editor, Tool};
+use super::tempo;
 use super::timing;
 use super::tools::{GimmickTool, Target};
 use crate::audio::{Engine, Sfx, Track};
@@ -39,6 +40,7 @@ mod panel;
 mod run;
 mod setup;
 mod snap;
+mod timing_panel;
 mod timing_win;
 mod upload;
 
@@ -310,6 +312,8 @@ pub struct Layout {
     pub window: [f32; 4],
 }
 
+/// How much music is cut out with the metronome's clicks in it at a time (ms of the track).
+const METRONOME_BAKE_MS: f64 = 45_000.0;
 /// The colour of effect marks (.tko).
 pub(super) const MARK_COL: u32 = 0xB36BFF;
 /// How tall the ruler across the top of the timeline is.
@@ -384,6 +388,10 @@ pub struct View {
     wave: Option<Arc<super::wave::Wave>>,
     wave_rx: Option<Receiver<super::wave::Wave>>,
     pub wave_on: bool,
+    /// Clicks on the beats of the red lines while the song plays (Timing mode).
+    pub metronome: bool,
+    /// Map ms up to which the clicks are baked into the music playing, when they are.
+    met_until: Option<f64>,
     /// A left drag over empty timeline pans it (View > Left drag pans); a box is Ctrl+drag.
     pub left_pan: bool,
     /// Sample rate the engine plays at, to know how long the track is.
@@ -617,6 +625,8 @@ impl View {
             wave: None,
             wave_rx: None,
             wave_on: true,
+            metronome: false,
+            met_until: None,
             left_pan: false,
             audio_rate: 48000.0,
             rate: 100,
@@ -803,12 +813,63 @@ impl View {
         }
         self.reseek = false;
         self.sought = Instant::now();
-        if let (Some(track), Some(a)) = (&self.track, audio) {
-            a.play(
-                track.clone(),
-                (self.ed.time + OSU_TIMING_MS) / self.speed().max(0.01),
-            );
+        if let (Some(track), Some(a)) = (self.track.clone(), audio) {
+            self.play_music(a, track);
         }
+    }
+
+    /// The red lines as the metronome follows them.
+    fn click_sections(&self) -> Vec<tempo::Section> {
+        self.ed
+            .chart
+            .timing
+            .iter()
+            .filter(|p| p.is_red() && p.beat_length > 0.0 && p.beat_length.is_finite())
+            .map(|p| tempo::Section {
+                time: p.time,
+                beat: p.beat_length,
+                per_bar: p.meter.max(1) as u32,
+            })
+            .collect()
+    }
+
+    /// Starts the music at the playhead. With the metronome on, a stretch of it is cut out with
+    /// a click on every beat of the red lines mixed in (it is baked again before it runs out, and
+    /// when the timing or the playhead changes).
+    fn play_music(&mut self, a: &Engine, track: Arc<Track>) {
+        let speed = self.speed().max(0.01);
+        let start_ms = (self.ed.time + OSU_TIMING_MS) / speed;
+        self.met_until = None;
+        if !self.metronome || track.samples.is_empty() {
+            a.play(track, start_ms);
+            return;
+        }
+        let rate = self.audio_rate;
+        let frames = track.frames();
+        let f0 = ((start_ms / 1000.0 * rate).round().max(0.0) as usize).min(frames);
+        let f1 = (f0 + (METRONOME_BAKE_MS / 1000.0 * rate) as usize).min(frames);
+        let mut samples = track.samples[2 * f0..2 * f1].to_vec();
+        tempo::mix_section_clicks(
+            &mut samples,
+            rate,
+            f0 as i64,
+            &self.click_sections(),
+            OSU_TIMING_MS,
+            speed,
+            0.8,
+        );
+        if f1 < frames {
+            self.met_until = Some(f1 as f64 / rate * 1000.0 * speed - OSU_TIMING_MS);
+        }
+        a.play_part(
+            Arc::new(Track {
+                samples,
+                rate: track.rate,
+                stream: None,
+            }),
+            f0 as i64,
+            start_ms,
+        );
     }
 
     fn timeline_w(&self) -> f32 {
@@ -975,6 +1036,9 @@ impl View {
                 }
                 self.last_played = t;
                 self.ed.time = t;
+                if self.met_until.is_some_and(|until| t > until - 2000.0) {
+                    self.reseek = true;
+                }
                 self.follow(false);
             }
         }
@@ -1025,10 +1089,8 @@ impl View {
             self.status = "the music isn't loaded".into();
             return;
         };
-        a.play(
-            track.clone(),
-            (self.ed.time + OSU_TIMING_MS) / self.speed().max(0.01),
-        );
+        let track = track.clone();
+        self.play_music(a, track);
         self.playing = Some((Instant::now(), self.ed.time));
         self.last_played = self.ed.time;
     }
@@ -1053,6 +1115,10 @@ impl View {
     // ---- the preview ----
 
     fn mark_stale(&mut self) {
+        // The clicks are baked into the music from the timing as it was: bake them again.
+        if self.metronome && self.playing.is_some() {
+            self.reseek = true;
+        }
         self.stale.get_or_insert_with(Instant::now);
     }
 
@@ -1243,38 +1309,13 @@ impl View {
 
     /// Grid lines in view: (time, 0 sub-beat / 1 beat / 2 bar).
     fn grid(&self) -> Vec<(f64, u8)> {
-        let (from, to) = (self.view_start, self.view_end());
-        let points = &self.ed.chart.timing;
-        let reds: Vec<_> = points
-            .iter()
-            .filter(|p| p.is_red() && p.beat_length > 0.0 && p.beat_length.is_finite())
-            .collect();
-        let snap = self.ed.snap.max(1) as f64;
-        let mut out = Vec::new();
-        for (i, p) in reds.iter().enumerate() {
-            let end = reds.get(i + 1).map_or(f64::INFINITY, |n| n.time);
-            if end < from || p.time > to {
-                continue;
-            }
-            let step = p.beat_length / snap;
-            if step / self.ms_per_px < 3.0 {
-                continue;
-            }
-            let start = from.max(p.time);
-            let mut k = ((start - p.time) / step).ceil() as i64;
-            while out.len() < 4000 {
-                let t = p.time + k as f64 * step;
-                if t >= to.min(end) {
-                    break;
-                }
-                let beat = k % self.ed.snap.max(1) as i64 == 0;
-                let beats = k / self.ed.snap.max(1) as i64;
-                let bar = beat && beats % p.meter.max(1) as i64 == 0;
-                out.push((t, if bar { 2 } else { beat as u8 }));
-                k += 1;
-            }
-        }
-        out
+        timing::grid_lines(
+            &self.ed.chart.timing,
+            self.view_start,
+            self.view_end(),
+            self.ed.snap,
+            self.ms_per_px,
+        )
     }
 
     /// The tools, in a column beside the timeline.
@@ -2768,7 +2809,7 @@ impl View {
                 }
                 Field::Volume => p.volume = (p.volume + (dir * 5.0 * k) as i32).clamp(0, 100),
                 Field::Meter => p.meter = (p.meter + (dir * k.max(1.0)) as i32).max(1),
-                Field::Time => p.time = (p.time + dir * k).max(0.0),
+                Field::Time => p.time += dir * k,
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
                 Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
@@ -2842,7 +2883,7 @@ impl View {
                 }
                 Field::Volume => p.volume = v as i32,
                 Field::Meter => p.meter = v as i32,
-                Field::Time => p.time = v.round().max(0.0),
+                Field::Time => p.time = v.round(),
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
                 Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
@@ -7049,5 +7090,92 @@ mod tests {
             file.iter()
                 .any(|i| matches!(i, menu::Item::Do(Cmd::SongSetup)))
         );
+    }
+
+    fn red_id(v: &View) -> u64 {
+        v.ed.chart.timing.iter().find(|p| p.is_red()).unwrap().id
+    }
+
+    #[test]
+    fn the_timing_panel_moves_a_red_line_by_bars_and_beats_one_undo_step_each() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        let id = red_id(&v);
+        v.select_line(Some(id));
+        let notes: Vec<f64> = v.ed.chart.objects.iter().map(|o| o.time).collect();
+        let time = |v: &View| v.ed.chart.timing_point(id).unwrap().time;
+        press(&mut v, Btn::T(TAct::Bars(1)));
+        assert_eq!(time(&v), 2000.0, "a bar of 4 beats of 500 ms");
+        press(&mut v, Btn::T(TAct::Beats(-1)));
+        assert_eq!(time(&v), 1500.0);
+        press(&mut v, Btn::T(TAct::Ms(10)));
+        press(&mut v, Btn::T(TAct::Ms(-1)));
+        assert_eq!(time(&v), 1509.0);
+        let after: Vec<f64> = v.ed.chart.objects.iter().map(|o| o.time).collect();
+        assert_eq!(after, notes, "the notes stay where they are");
+        // One undo per press.
+        v.ed.undo();
+        assert_eq!(time(&v), 1510.0);
+        v.ed.undo();
+        v.ed.undo();
+        assert_eq!(time(&v), 2000.0);
+        // Back before the song starts is allowed.
+        press(&mut v, Btn::T(TAct::Bars(-2)));
+        assert_eq!(time(&v), -2000.0);
+    }
+
+    #[test]
+    fn the_timing_panel_changes_the_bpm_by_steps_and_a_time_can_be_typed_negative() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        let id = red_id(&v);
+        v.select_line(Some(id));
+        let bpm = |v: &View| v.ed.chart.timing_point(id).unwrap().bpm().unwrap();
+        assert_eq!(bpm(&v), 120.0);
+        press(&mut v, Btn::T(TAct::Bpm(100)));
+        assert!((bpm(&v) - 121.0).abs() < 1e-9);
+        press(&mut v, Btn::T(TAct::Bpm(-1)));
+        assert!((bpm(&v) - 120.99).abs() < 1e-6);
+        press(&mut v, Btn::T(TAct::BpmTimes(true)));
+        assert!((bpm(&v) - 241.98).abs() < 1e-6);
+        press(&mut v, Btn::T(TAct::BpmTimes(false)));
+        assert!((bpm(&v) - 120.99).abs() < 1e-6);
+        // Typing a time before zero.
+        v.typing = Some((Field::Time, "-120".to_string()));
+        v.commit_typing();
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().time, -120.0);
+        // The - and + step it by a millisecond, past zero too.
+        v.change(Field::Time, -1.0, Keys::default());
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().time, -121.0);
+        // The green line after it is not a red line: the buttons refuse it.
+        let green = v.ed.chart.timing.iter().find(|p| !p.is_red()).unwrap().id;
+        v.select_line(Some(green));
+        press(&mut v, Btn::T(TAct::Bars(1)));
+        assert_eq!(v.ed.chart.timing_point(green).unwrap().time, 4000.0);
+    }
+
+    #[test]
+    fn the_metronome_follows_every_red_line_and_its_key_toggles_it() {
+        let mut v = view();
+        v.run(Cmd::Mode(Mode::Timing), None);
+        assert!(!v.metronome);
+        v.key(KeyCode::KeyT, false, Keys::default(), None);
+        assert!(v.metronome);
+        // A faster red line in 3/4 further on; the green line in between is no section.
+        let id = v.ed.add_red(8000.0, 180.0).unwrap();
+        v.ed.edit_timing(id, |p| p.meter = 3, false).unwrap();
+        let s = v.click_sections();
+        assert_eq!(s.len(), 2);
+        assert_eq!((s[0].time, s[0].beat, s[0].per_bar), (0.0, 500.0, 4));
+        assert_eq!(s[1].time, 8000.0);
+        assert!((s[1].beat - 60_000.0 / 180.0).abs() < 1e-9);
+        assert_eq!(s[1].per_bar, 3);
+        // Playing: an edit of the timing has the music cut out again with the new clicks.
+        v.playing = Some((Instant::now(), 0.0));
+        v.reseek = false;
+        v.mark_stale();
+        assert!(v.reseek);
+        v.key(KeyCode::KeyT, false, Keys::default(), None);
+        assert!(!v.metronome);
     }
 }

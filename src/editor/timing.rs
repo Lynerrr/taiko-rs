@@ -87,6 +87,54 @@ pub fn snap_time(points: &[TimingPoint], t: f64, divisor: u32) -> f64 {
     origin + ((t - origin) / step).round_ties_even() * step
 }
 
+/// The grid lines inside `from..to`: (time, 0 sub-beat / 1 beat / 2 bar), at 1/`snap` of a beat,
+/// with none closer than 3 `ms_per_px` pixels. Each red line's grid runs to the next one; the
+/// first one's also runs backwards before its line, down to the start of the song (or its own
+/// time, if that is earlier), the way osu! draws it, so a song that starts before its first red
+/// line can be snapped to.
+pub fn grid_lines(
+    points: &[TimingPoint],
+    from: f64,
+    to: f64,
+    snap: u32,
+    ms_per_px: f64,
+) -> Vec<(f64, u8)> {
+    let reds: Vec<&TimingPoint> = points.iter().filter(|p| playable_red(p)).collect();
+    let snap = snap.max(1) as i64;
+    let mut out = Vec::new();
+    for (i, p) in reds.iter().enumerate() {
+        let (lo, end) = (
+            if i == 0 { p.time.min(0.0) } else { p.time },
+            reds.get(i + 1).map_or(f64::INFINITY, |n| n.time),
+        );
+        if end < from || (i > 0 && p.time > to) || lo > to {
+            continue;
+        }
+        let step = p.beat_length / snap as f64;
+        if step / ms_per_px < 3.0 {
+            continue;
+        }
+        let mut k = ((from.max(lo) - p.time) / step).ceil() as i64;
+        while out.len() < 4000 {
+            let t = p.time + k as f64 * step;
+            if t >= to.min(end) {
+                break;
+            }
+            let beat = k.rem_euclid(snap) == 0;
+            let bar = beat && (k.div_euclid(snap)).rem_euclid(p.meter.max(1) as i64) == 0;
+            out.push((t, if bar { 2 } else { beat as u8 }));
+            k += 1;
+        }
+    }
+    out
+}
+
+/// The red line `by_beats` beats (of its own length) away from `p`, as a time: moved by whole
+/// bars or beats, in whole milliseconds the way the editor commits a time.
+pub fn moved_by_beats(p: &TimingPoint, by_beats: f64) -> f64 {
+    (p.time + by_beats * p.beat_length).round()
+}
+
 /// The millisecond a note placed at `t` on 1/`divisor` lands on.
 pub fn snapped_ms(points: &[TimingPoint], t: f64, divisor: u32) -> i64 {
     osu_snap_ms(snap_time(points, t, divisor))
@@ -230,5 +278,39 @@ mod tests {
         assert_eq!(own_divisor(&p, 1124.5, 1.0), Some(4));
         assert_eq!(resnap(&p, 1001.0), Some(1000));
         assert_eq!(resnap(&p, 1060.0), None, "put there on purpose");
+    }
+
+    #[test]
+    fn the_grid_runs_backwards_from_the_first_red_line_to_the_song_start() {
+        let p = pts(&[(1000.0, 500.0, true), (3000.0, 400.0, true)]);
+        let g = grid_lines(&p, -500.0, 1600.0, 1, 1.0);
+        let times: Vec<f64> = g.iter().map(|x| x.0).collect();
+        assert_eq!(times, vec![0.0, 500.0, 1000.0, 1500.0]);
+        // Bars of 4 count back from the line too: 1000 - 4 * 500 = -1000 is a bar, 0 is a beat.
+        assert_eq!(g.iter().map(|x| x.1).collect::<Vec<_>>(), vec![1, 1, 2, 1]);
+        // Snapping there uses the same grid.
+        assert_eq!(snap_time(&p, 740.0, 1), 500.0);
+        assert_eq!(snap_time(&p, 760.0, 1), 1000.0);
+        assert_eq!(snap_time(&p, 100.0, 2), 0.0);
+        // A first line at a negative time starts the grid there.
+        let n = pts(&[(-300.0, 500.0, true)]);
+        let g = grid_lines(&n, -1000.0, 800.0, 1, 1.0);
+        assert_eq!(
+            g.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![-300.0, 200.0, 700.0]
+        );
+        assert_eq!(g[0].1, 2);
+        // The bars of a middle line sit on its own downbeat.
+        let g = grid_lines(&p, 3000.0, 3900.0, 1, 1.0);
+        assert_eq!(g.iter().map(|x| x.1).collect::<Vec<_>>(), vec![2, 1, 1]);
+    }
+
+    #[test]
+    fn a_line_moves_by_bars_and_beats_of_its_own_length() {
+        let mut line = TimingPoint::new(1000.0, 333.333, true);
+        line.meter = 3;
+        assert_eq!(moved_by_beats(&line, 1.0), 1333.0);
+        assert_eq!(moved_by_beats(&line, -3.0), 0.0);
+        assert_eq!(moved_by_beats(&line, -6.0), -1000.0, "past zero is allowed");
     }
 }

@@ -16,6 +16,16 @@ pub enum TAct {
     Copy,
     Paste,
     Delete,
+    /// Move the selected red line by this many beats (of its own length).
+    Beats(i32),
+    /// ... by this many bars (its meter's worth of beats).
+    Bars(i32),
+    /// ... by this many milliseconds.
+    Ms(i32),
+    /// Change the red line's BPM by this many hundredths.
+    Bpm(i32),
+    /// Double (true) or halve its BPM.
+    BpmTimes(bool),
 }
 
 impl View {
@@ -142,7 +152,7 @@ impl View {
             |p| {
                 if let Some(&(_, ot, ov)) = origin.iter().find(|o| o.0 == p.id) {
                     if !(volume && p.is_red()) {
-                        p.time = (ot + dt).max(0.0).round();
+                        p.time = (ot + dt).round();
                     }
                     if volume {
                         p.volume = (ov + add).round().clamp(0.0, 100.0) as i32;
@@ -255,6 +265,42 @@ impl View {
                 let at = self.ed.time;
                 self.ed.paste_lines(at).map(|n| format!("pasted {n} lines"))
             }
+            TAct::Beats(n) => self.edit_red(
+                |p| p.time = timing::moved_by_beats(p, n as f64),
+                &format!(
+                    "moved {} beat{}",
+                    n.abs(),
+                    if n.abs() == 1 { "" } else { "s" }
+                ),
+            ),
+            TAct::Bars(n) => self.edit_red(
+                |p| p.time = timing::moved_by_beats(p, (n * p.meter) as f64),
+                &format!(
+                    "moved {} bar{}",
+                    n.abs(),
+                    if n.abs() == 1 { "" } else { "s" }
+                ),
+            ),
+            TAct::Ms(n) => self.edit_red(|p| p.time += n as f64, &format!("moved {n} ms")),
+            TAct::Bpm(h) => self.edit_red(
+                |p| {
+                    if let Some(bpm) = p.bpm() {
+                        let to = ((bpm + h as f64 / 100.0) * 1000.0).round() / 1000.0;
+                        p.beat_length = 60_000.0 / to.clamp(1.0, 1_000_000.0);
+                    }
+                },
+                "BPM changed",
+            ),
+            TAct::BpmTimes(double) => self.edit_red(
+                |p| {
+                    p.beat_length = if double {
+                        p.beat_length / 2.0
+                    } else {
+                        p.beat_length * 2.0
+                    }
+                },
+                if double { "BPM doubled" } else { "BPM halved" },
+            ),
             TAct::Delete => self.ed.delete_timings(&ids).map(|n| {
                 self.select_line(None);
                 format!("deleted {n} lines")
@@ -267,6 +313,25 @@ impl View {
             }
             Err(e) => self.status = e,
         }
+    }
+
+    /// Changes the selected red line as one undo step. The notes keep their times.
+    pub(super) fn edit_red(
+        &mut self,
+        change: impl FnOnce(&mut TimingPoint),
+        said: &str,
+    ) -> Result<String, String> {
+        let id = self.sel_line.ok_or("no line selected")?;
+        if !self
+            .ed
+            .chart
+            .timing_point(id)
+            .is_some_and(TimingPoint::is_red)
+        {
+            return Err("select a red line".into());
+        }
+        self.ed.edit_timing(id, change, false)?;
+        Ok(said.to_string())
     }
 
     /// The panel's content when several lines are selected.
