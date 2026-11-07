@@ -354,4 +354,55 @@ mod tests {
         ed.history.undo(&mut ed.chart);
         assert_eq!(ends(&ed), before);
     }
+
+    /// A folder of its own with the test map in it as `file`, opened.
+    fn on_disk(test: &str, file: &str) -> (std::path::PathBuf, Editor) {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(file), MAP).unwrap();
+        let ed = Editor::open(dir.join(file)).unwrap();
+        (dir, ed)
+    }
+
+    #[test]
+    fn renaming_the_map_renames_its_file_and_its_backup() {
+        let (dir, mut ed) = on_disk("rename-file", "old.osu");
+        // Other edits keep the file's own name, however it was named.
+        ed.set_setting(Key::Od, "7").unwrap();
+        assert_eq!(ed.save().unwrap(), None);
+        assert_eq!(ed.path, dir.join("old.osu"));
+        ed.set_setting(Key::Version, "Inner Oni").unwrap();
+        ed.set_setting(Key::Artist, "Someone").unwrap();
+        ed.set_setting(Key::Creator, "me").unwrap();
+        assert_eq!(ed.save().unwrap(), None);
+        let new = dir.join("Someone - Test (me) [Inner Oni].osu");
+        let (moved, gone, bak) = (
+            new.exists(),
+            dir.join("old.osu").exists(),
+            dir.join("Someone - Test (me) [Inner Oni].osu.bak").exists(),
+        );
+        let path = ed.path.clone();
+        let reread = Editor::open(path.clone()).map(|e| e.setting(Key::Version));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(path, new);
+        assert!(moved && !gone && bak);
+        assert_eq!(reread.unwrap(), "Inner Oni");
+    }
+
+    #[test]
+    fn a_name_another_difficulty_has_is_left_to_it() {
+        let (dir, mut ed) = on_disk("rename-taken", "old.osu");
+        let taken = dir.join("- Test () [Muzukashii].osu");
+        std::fs::write(&taken, "the other difficulty").unwrap();
+        ed.set_setting(Key::Version, "Muzukashii").unwrap();
+        let kept = ed.save().unwrap();
+        let other = std::fs::read_to_string(&taken).unwrap();
+        let saved = std::fs::read_to_string(dir.join("old.osu")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(kept.is_some_and(|why| why.contains("already exists")));
+        assert_eq!(ed.path, dir.join("old.osu"));
+        assert_eq!(other, "the other difficulty");
+        assert!(saved.contains("Version:Muzukashii"));
+    }
 }

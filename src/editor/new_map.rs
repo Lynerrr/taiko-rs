@@ -213,6 +213,21 @@ pub fn osu_text(m: &NewMap, audio_name: &str, background_name: Option<&str>) -> 
     t
 }
 
+/// A difficulty's file name without its extension, the way osu! names them:
+/// `Artist - Title (Mapper) [Difficulty]`, safe on any system.
+pub fn file_stem(artist: &str, title: &str, creator: &str, version: &str) -> String {
+    format!(
+        "{} [{}]",
+        sanitise(&format!(
+            "{} - {} ({})",
+            artist.trim(),
+            title.trim(),
+            creator.trim()
+        )),
+        sanitise(version)
+    )
+}
+
 /// The folder for a new set: `Artist - Title` in `songs`, numbered when that is taken by another.
 fn set_folder(songs: &Path, m: &NewMap) -> PathBuf {
     let base = sanitise(&format!("{} - {}", m.artist.trim(), m.title.trim()));
@@ -264,14 +279,8 @@ pub fn create(m: &NewMap, songs: &Path) -> Result<PathBuf, String> {
             (osu, "osu")
         };
         let file = dir.join(format!(
-            "{} [{}].{extension}",
-            sanitise(&format!(
-                "{} - {} ({})",
-                m.artist.trim(),
-                m.title.trim(),
-                m.creator.trim()
-            )),
-            sanitise(&m.version)
+            "{}.{extension}",
+            file_stem(&m.artist, &m.title, &m.creator, &m.version)
         ));
         std::fs::write(&file, text).map_err(|e| format!("writing the map: {e}"))?;
         Ok(file)

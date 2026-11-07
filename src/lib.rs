@@ -2526,6 +2526,28 @@ impl State {
         self.select.refilter(&self.library);
     }
 
+    /// The editor saved its map under a new file name: the library entry (and the editor's
+    /// recent maps) follow it, so the folder watch reads it again in place instead of listing a
+    /// new map and a missing one.
+    fn map_renamed(&mut self, from: &Path, to: PathBuf) {
+        if let Some(e) = self.library.iter_mut().find(|e| e.path == from) {
+            e.path = to.clone();
+        }
+        self.select.gone.remove(from);
+        let (from, to) = (
+            from.to_string_lossy().into_owned(),
+            to.to_string_lossy().into_owned(),
+        );
+        if self.cfg.editor_recent.contains(&from) {
+            for p in &mut self.cfg.editor_recent {
+                if *p == from {
+                    p.clone_from(&to);
+                }
+            }
+            self.cfg.save();
+        }
+    }
+
     /// The library entry of a map file; one that isn't in the library (a map made just now, a file
     /// dropped from elsewhere) is added to it.
     fn entry_for(&mut self, path: &Path) -> Option<usize> {
@@ -14279,6 +14301,7 @@ impl State {
         let mut editor_test: Option<(usize, Option<f64>)> = None;
         let mut test_over = false;
         let mut editor_folder: Option<PathBuf> = None;
+        let mut editor_renamed: Option<(PathBuf, PathBuf)> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
         let mut home_out: Option<editor::home::Out> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
@@ -15634,6 +15657,7 @@ impl State {
                     editor_test = Some((view.entry, from));
                 }
                 editor_folder = view.take_folder_request();
+                editor_renamed = view.take_renamed();
                 // Maps dropped into its folder (or taken out) join the list as they come.
                 if let Some(dir) = view.ed.path.parent() {
                     if self.folder_watch.as_ref().map(|w| w.folder()) != Some(dir) {
@@ -15988,6 +16012,9 @@ impl State {
         }
         if let Some(file) = editor_folder {
             self.show_in_folder(&file);
+        }
+        if let Some((from, to)) = editor_renamed {
+            self.map_renamed(&from, to);
         }
         if let Some(news) = folder_news {
             self.folder_changed(news);
