@@ -731,6 +731,8 @@
 "in lobby {title}" = "ロビー: {title}"
 "in a match: {map}" = "対戦中: {map}"
 "watching {name}" = "{name}を観戦中"
+"in the editor" = "エディター中"
+"editing {map}" = "編集中: {map}"
 "{player} found the secret {name}" = "{player}が秘密のメダル「{name}」を見つけた"
 "{player} earned {name}" = "{player}がメダル「{name}」を獲得"
 "first on the server" = "サーバー初"

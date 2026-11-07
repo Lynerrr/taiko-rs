@@ -426,27 +426,103 @@ pub fn mix_clicks(
     let period = 60_000.0 / bpm;
     let start_ms = first_frame as f64 / rate * 1000.0;
     let end_ms = (first_frame + frames) as f64 / rate * 1000.0;
-    let click_ms = 40.0;
+    let click_ms = CLICK_MS;
     let first = ((start_ms - click_ms - offset_ms) / period).floor() as i64;
     let last = ((end_ms - offset_ms) / period).ceil() as i64;
     for beat in first..=last {
         let accent = beat.rem_euclid(per_bar as i64) == 0;
-        let (pitch, gain) = if accent {
-            (1800.0, 0.55)
-        } else {
-            (1100.0, 0.35)
-        };
         let at = ((offset_ms + beat as f64 * period) / 1000.0 * rate).round() as i64 - first_frame;
-        for k in 0..(click_ms / 1000.0 * rate) as i64 {
-            let f = at + k;
-            if f < 0 || f >= frames {
-                continue;
-            }
-            let t = k as f64 / rate;
-            let v = ((std::f64::consts::TAU * pitch * t).sin() * (-t * 180.0).exp() * gain) as f32;
-            window[2 * f as usize] += v;
-            window[2 * f as usize + 1] += v;
+        put_click(window, rate, at, accent);
+    }
+}
+
+/// One click starting at frame `at` of interleaved stereo `window`, higher and louder on a bar's
+/// first beat.
+fn put_click(window: &mut [f32], rate: f64, at: i64, accent: bool) {
+    let frames = (window.len() / 2) as i64;
+    let (pitch, gain) = if accent {
+        (1800.0, 0.55)
+    } else {
+        (1100.0, 0.35)
+    };
+    for k in 0..(CLICK_MS / 1000.0 * rate) as i64 {
+        let f = at + k;
+        if f < 0 || f >= frames {
+            continue;
         }
+        let t = k as f64 / rate;
+        let v = ((std::f64::consts::TAU * pitch * t).sin() * (-t * 180.0).exp() * gain) as f32;
+        window[2 * f as usize] += v;
+        window[2 * f as usize + 1] += v;
+    }
+}
+
+const CLICK_MS: f64 = 40.0;
+
+/// One stretch of a map's timing: a red line's start, its beat length (ms) and beats to a bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Section {
+    pub time: f64,
+    pub beat: f64,
+    pub per_bar: u32,
+}
+
+/// Sections closer together than this (ms) are gimmick lines: a click on each would be a buzz.
+const MIN_CLICK_BEAT_MS: f64 = 60.0;
+
+/// Where the clicks fall in map time `from..to` (ms) for `sections` (sorted by time): a beat of
+/// each red line's grid, a bar's first accented, each line starting a bar of its own. The first
+/// section's grid goes on backwards before its line, as the editor's grid does.
+pub fn clicks_between(sections: &[Section], from: f64, to: f64) -> Vec<(f64, bool)> {
+    let mut out = Vec::new();
+    for (i, s) in sections.iter().enumerate() {
+        if !(s.beat >= MIN_CLICK_BEAT_MS && s.beat.is_finite()) || s.per_bar == 0 {
+            continue;
+        }
+        let lo = if i == 0 { from } else { from.max(s.time) };
+        let hi = sections.get(i + 1).map_or(to, |n| to.min(n.time));
+        if lo >= hi {
+            continue;
+        }
+        let mut k = ((lo - s.time) / s.beat).ceil() as i64;
+        loop {
+            let t = s.time + k as f64 * s.beat;
+            if t >= hi || out.len() > 20_000 {
+                break;
+            }
+            out.push((t, k.rem_euclid(s.per_bar as i64) == 0));
+            k += 1;
+        }
+    }
+    out
+}
+
+/// Mixes the clicks of a map's `sections` into interleaved stereo `window` (starting at frame
+/// `first_frame` of the track), and scales the music under them by `music`. The track plays the
+/// map `speed` times as fast, `shift_ms` of map time behind its notes (see `OSU_TIMING_MS`), so
+/// the clicks follow the playback speed.
+#[allow(clippy::too_many_arguments)]
+pub fn mix_section_clicks(
+    window: &mut [f32],
+    rate: f64,
+    first_frame: i64,
+    sections: &[Section],
+    shift_ms: f64,
+    speed: f64,
+    music: f32,
+) {
+    for s in window.iter_mut() {
+        *s *= music;
+    }
+    let speed = speed.max(0.01);
+    let frames = (window.len() / 2) as i64;
+    let to_map = |track_ms: f64| track_ms * speed - shift_ms;
+    let start_ms = first_frame as f64 / rate * 1000.0;
+    let end_ms = (first_frame + frames) as f64 / rate * 1000.0;
+    for (t, accent) in clicks_between(sections, to_map(start_ms - CLICK_MS), to_map(end_ms)) {
+        let track_ms = (t + shift_ms) / speed;
+        let at = (track_ms / 1000.0 * rate).round() as i64 - first_frame;
+        put_click(window, rate, at, accent);
     }
 }
 
@@ -598,5 +674,77 @@ mod tests {
         let mut music = vec![1.0f32; 2 * 100];
         mix_clicks(&mut music, RATE, 0, 120.0, 10_100.0, 4, 0.5);
         assert!(music.iter().all(|s| (*s - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn the_metronome_follows_red_lines_meters_and_speed() {
+        let sections = [
+            Section {
+                time: 0.0,
+                beat: 500.0,
+                per_bar: 4,
+            },
+            Section {
+                time: 2100.0,
+                beat: 250.0,
+                per_bar: 3,
+            },
+        ];
+        let c = clicks_between(&sections, 0.0, 3000.0);
+        let times: Vec<f64> = c.iter().map(|x| x.0).collect();
+        assert_eq!(
+            times,
+            vec![
+                0.0, 500.0, 1000.0, 1500.0, 2000.0, 2100.0, 2350.0, 2600.0, 2850.0
+            ]
+        );
+        let accents: Vec<f64> = c.iter().filter(|x| x.1).map(|x| x.0).collect();
+        // The bar of 4 restarts at 0 and 2000; the red line at 2100 starts a bar of 3 of its own.
+        assert_eq!(accents, vec![0.0, 2000.0, 2100.0, 2850.0]);
+        // Before the first line the grid goes on backwards.
+        let c = clicks_between(&sections[..1], -1000.0, 600.0);
+        let times: Vec<f64> = c.iter().map(|x| x.0).collect();
+        assert_eq!(times, vec![-1000.0, -500.0, 0.0, 500.0]);
+        assert_eq!(
+            c.iter().filter(|x| x.1).map(|x| x.0).collect::<Vec<_>>(),
+            vec![0.0]
+        );
+        // A gimmick line's 1 ms beat makes no buzz.
+        let gimmick = [Section {
+            time: 0.0,
+            beat: 1.0,
+            per_bar: 4,
+        }];
+        assert!(clicks_between(&gimmick, 0.0, 1000.0).is_empty());
+    }
+
+    #[test]
+    fn baked_clicks_land_where_the_slowed_track_plays_them() {
+        let sections = [Section {
+            time: 100.0,
+            beat: 500.0,
+            per_bar: 4,
+        }];
+        let loud = |w: &[f32], ms: f64| {
+            let f = (ms / 1000.0 * RATE) as usize;
+            (f..f + 200).map(|i| w[2 * i].abs()).fold(0.0, f32::max)
+        };
+        // At half speed the track is twice as long: the map's 500 ms beat is 1000 ms of track.
+        let mut w = vec![0.0f32; 2 * 48_000 * 3];
+        mix_section_clicks(&mut w, RATE, 0, &sections, 23.0, 0.5, 1.0);
+        assert!(loud(&w, (100.0 + 23.0) / 0.5) > 0.1);
+        assert!(loud(&w, (600.0 + 23.0) / 0.5) > 0.1);
+        assert!(loud(&w, 600.0) < 0.001, "not at the full-speed spot");
+        // A window cut from the middle holds the same click, by its first frame.
+        let first = (1.2 * RATE) as i64;
+        let mut part = vec![0.0f32; 2 * 48_000];
+        mix_section_clicks(&mut part, RATE, first, &sections, 23.0, 0.5, 1.0);
+        let at = ((600.0 + 23.0) / 0.5 / 1000.0 * RATE) as i64 - first;
+        assert!(
+            (0..200)
+                .map(|i| part[2 * (at + i) as usize].abs())
+                .fold(0.0, f32::max)
+                > 0.1
+        );
     }
 }

@@ -2520,6 +2520,7 @@ impl State {
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
                 view.set_track_loader(rx, rate);
                 view.left_pan = self.cfg.editor_left_pan;
+                view.set_snap_presets(&self.cfg.editor_snap_presets, &self.cfg.editor_snap_active);
                 // `TAIKO_EDIT_AT=<ms>`: starts with the playhead there (headless screenshots).
                 if let Some(at) = std::env::var("TAIKO_EDIT_AT")
                     .ok()
@@ -11554,6 +11555,20 @@ impl State {
                 .unwrap_or_default()
         };
         match &self.scene {
+            // The editor and its test plays (`editor_back` holds the editor while one runs)
+            // count as editing: a test play is the mapper checking their own work, there's
+            // nothing to watch, and flipping to "playing" would offer friends a Watch button.
+            Scene::Editor(view) => Activity::Editing { map: view.label() },
+            Scene::EditorHome(_) => Activity::Editing { map: String::new() },
+            Scene::Loading { .. } | Scene::Play { .. } if self.editor_back.is_some() => {
+                Activity::Editing {
+                    map: self
+                        .editor_back
+                        .as_ref()
+                        .map(|v| v.label())
+                        .unwrap_or_default(),
+                }
+            }
             Scene::Play { game, entry, .. } if game.replay.is_none() => Activity::Playing {
                 map: self
                     .library
@@ -15130,6 +15145,12 @@ impl State {
                 }
                 if view.left_pan != self.cfg.editor_left_pan {
                     self.cfg.editor_left_pan = view.left_pan;
+                    self.cfg.save();
+                }
+                if view.snap_dirty {
+                    view.snap_dirty = false;
+                    (self.cfg.editor_snap_presets, self.cfg.editor_snap_active) =
+                        view.snap_config();
                     self.cfg.save();
                 }
                 if let Some(from) = view.take_test_play() {
