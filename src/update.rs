@@ -9,10 +9,14 @@
 //! inside the .app, and the rest of the app stays as it is) rename over the running file; Windows
 //! can't overwrite a running exe but can rename it, so the old one becomes `taiko-rs.exe.old`
 //! (deleted on the next start). Then the game restarts itself.
+//!
+//! A build found by the check at launch installs by itself. One found later (a game left running,
+//! a switched channel) waits for the player, with a badge: it would otherwise restart the game
+//! under them.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -99,6 +103,8 @@ pub struct Updater {
     total: Arc<AtomicU64>,
     /// When the last check started (startup counts, checked or not).
     last_check: Mutex<std::time::Instant>,
+    /// The check at launch hasn't settled yet: what it finds installs by itself.
+    at_launch: AtomicBool,
 }
 
 /// Short form of a commit hash for display.
@@ -115,9 +121,11 @@ impl Updater {
             done: Arc::default(),
             total: Arc::default(),
             last_check: Mutex::new(std::time::Instant::now()),
+            at_launch: AtomicBool::new(false),
         };
         // An APK can't replace itself; Android installs updates.
         if check && !cfg!(target_os = "android") {
+            u.at_launch.store(true, Ordering::Relaxed);
             u.check();
         }
         u
@@ -143,6 +151,8 @@ impl Updater {
             return;
         }
         *self.channel.lock().unwrap() = channel;
+        // Picking a channel only looks: installing it stays the player's call.
+        self.at_launch.store(false, Ordering::Relaxed);
         if matches!(self.status(), Status::Checking) {
             // The check under way is for the other channel; let it know it's stale.
             *self.status.lock().unwrap() = Status::Off;
@@ -192,6 +202,24 @@ impl Updater {
                 Status::Failed(e)
             });
         });
+    }
+
+    /// Starts installing what the check at launch found: the commit, once, when it found one.
+    /// Call every frame the game could take it.
+    pub fn install_at_launch(&self) -> Option<String> {
+        if !self.at_launch.load(Ordering::Relaxed) {
+            return None;
+        }
+        let status = self.status();
+        if status == Status::Checking {
+            return None;
+        }
+        self.at_launch.store(false, Ordering::Relaxed);
+        let Status::Available { commit, .. } = status else {
+            return None;
+        };
+        self.install();
+        Some(commit)
     }
 
     /// Downloads and swaps in the available build. Status goes to `Installed` (then call
@@ -449,6 +477,61 @@ fn swap(exe: &Path, new: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{Channel, Ordering, Status, Updater};
+
+    /// An updater whose check at launch is under way, whatever this build is.
+    fn launching() -> Updater {
+        let u = Updater::new(false);
+        u.at_launch.store(true, Ordering::Relaxed);
+        *u.status.lock().unwrap() = Status::Checking;
+        u
+    }
+
+    fn found(u: &Updater) {
+        *u.status.lock().unwrap() = Status::Available {
+            commit: "abc".into(),
+            // Nothing listens there: the install fails at once, without the network.
+            url: "http://127.0.0.1:1/x".into(),
+            size: 1,
+        };
+    }
+
+    #[test]
+    fn the_check_at_launch_installs_what_it_finds_once() {
+        let u = launching();
+        assert_eq!(u.install_at_launch(), None);
+        found(&u);
+        assert_eq!(u.install_at_launch().as_deref(), Some("abc"));
+        assert_ne!(u.status(), Status::Checking);
+        found(&u);
+        assert_eq!(u.install_at_launch(), None);
+    }
+
+    #[test]
+    fn a_later_check_only_shows_the_badge() {
+        let u = launching();
+        *u.status.lock().unwrap() = Status::UpToDate;
+        assert_eq!(u.install_at_launch(), None);
+        found(&u);
+        assert_eq!(u.install_at_launch(), None);
+        assert!(matches!(u.status(), Status::Available { .. }));
+    }
+
+    #[test]
+    fn nothing_installs_without_the_check_at_launch() {
+        let u = Updater::new(false);
+        found(&u);
+        assert_eq!(u.install_at_launch(), None);
+    }
+
+    #[test]
+    fn switching_channel_during_the_launch_check_doesnt_install() {
+        let u = launching();
+        u.set_channel(Channel::Dev);
+        found(&u);
+        assert_eq!(u.install_at_launch(), None);
+    }
+
     #[test]
     fn finds_a_file_in_a_tar() {
         // A tar with one directory entry and one file, built by hand.
