@@ -5,6 +5,10 @@
 
     <!-- Map downloads, multiplayer and the online features. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Music playing on with the app in the background and the screen off (MusicService). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- wgpu prefers Vulkan and falls back to OpenGL ES. -->
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x400003" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen.multitouch.distinct" android:required="false" />
@@ -17,6 +21,11 @@
         android:appCategory="game"
         android:extractNativeLibs="true"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+
+        <service
+            android:name=".MusicService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
         <!-- singleTask: opening another .osz while the game runs reaches this activity
              (onNewIntent) instead of starting a second game. -->

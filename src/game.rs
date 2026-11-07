@@ -6302,9 +6302,11 @@ impl Game {
             let t = progress(self.paused_at, 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
             let rise = (1.0 - t) * 12.0;
-            const ROW_H: f32 = 36.0;
-            let pw = (w - 40.0).min(340.0);
-            let ph = 92.0 + PAUSE_ITEMS as f32 * ROW_H + 26.0;
+            let phone = crate::mobile::active();
+            let row_h: f32 = if phone { 62.0 } else { 36.0 };
+            let label: f32 = if phone { 18.0 } else { 11.0 };
+            let pw = (w - 40.0).min(if phone { 480.0 } else { 340.0 });
+            let ph = 92.0 + PAUSE_ITEMS as f32 * row_h + 26.0;
             let (px, py) = (w / 2.0 - pw / 2.0, (480.0 - ph) / 2.0 - 6.0 - rise);
             let start = c.shapes.len();
             crate::style::panel(c, px, py, pw, ph);
@@ -6327,14 +6329,14 @@ impl Game {
             let fit = pw - 28.0;
             c.text_centered(
                 w / 2.0,
-                py + 50.0,
+                py + if phone { 44.0 } else { 50.0 },
                 8.0,
                 rgba(0x9a9ab0, 1.0),
                 &Canvas::fit(8.0, fit, &format!("{} - {}", m.artist, m.title)),
             );
             c.text_centered(
                 w / 2.0,
-                py + 62.0,
+                py + if phone { 60.0 } else { 62.0 },
                 8.0,
                 rgba(0x6f6f86, 1.0),
                 &Canvas::fit(
@@ -6363,13 +6365,13 @@ impl Game {
                     self.paused_at + std::time::Duration::from_millis(25 * i as u64),
                     180.0,
                 );
-                let y = py + 88.0 + i as f32 * ROW_H + (1.0 - ti) * 18.0;
+                let y = py + 88.0 + i as f32 * row_h + (1.0 - ti) * 18.0;
                 let selected = i == cursor;
                 let row = c.shapes.len();
                 if selected {
                     c.round_rect(
                         [rx, y],
-                        [rw, ROW_H - 6.0],
+                        [rw, row_h - 6.0],
                         7.0,
                         rgba(
                             crate::style::selector_colour(),
@@ -6378,19 +6380,19 @@ impl Game {
                         rgba(0, 0.0),
                         0.0,
                     );
-                    crate::style::selector(c, "pause", [rx - 3.0, y - 3.0, rw + 6.0, ROW_H]);
-                } else if c.hovered(rx, y, rw, ROW_H - 6.0) {
+                    crate::style::selector(c, "pause", [rx - 3.0, y - 3.0, rw + 6.0, row_h]);
+                } else if c.hovered(rx, y, rw, row_h - 6.0) {
                     c.round_rect(
                         [rx, y],
-                        [rw, ROW_H - 6.0],
+                        [rw, row_h - 6.0],
                         7.0,
                         rgba(0x262634, 0.6),
                         rgba(0, 0.0),
                         0.0,
                     );
                 }
-                c.hit(rx, y, rw, ROW_H - 6.0, Hit::PauseItem(i));
-                let (nx, ny) = (rx + 18.0, y + (ROW_H - 6.0) / 2.0);
+                c.hit(rx, y, rw, row_h - 6.0, Hit::PauseItem(i));
+                let (nx, ny) = (rx + 18.0, y + (row_h - 6.0) / 2.0);
                 let col = if i % 2 == 0 {
                     colours.don()
                 } else {
@@ -6400,10 +6402,10 @@ impl Game {
                 crate::style::note(c, nx, ny, r, col, selected, 0.6);
                 c.text(
                     rx + 36.0,
-                    y + (ROW_H - 6.0 - 11.0) / 2.0,
-                    11.0,
+                    y + (row_h - 6.0 - label) / 2.0,
+                    label,
                     rgba(if selected { WHITE } else { 0xa8a8bc }, 1.0),
-                    &Canvas::fit(11.0, rw - 48.0, item),
+                    &Canvas::fit(label, rw - 48.0, item),
                 );
                 c.fade_since(row, ti, 1.0);
             }
@@ -6413,13 +6415,16 @@ impl Game {
                 150.0,
             );
             let hint = tr!("Up/Down + Enter    Esc: continue");
-            c.text_centered(
-                w / 2.0,
-                py + ph - 18.0,
-                7.0,
-                rgba(0x8a8aa0, th),
-                &Canvas::fit_hints(7.0, pw - 28.0, hint),
-            );
+            // Nothing to say to a finger.
+            if !phone {
+                c.text_centered(
+                    w / 2.0,
+                    py + ph - 18.0,
+                    7.0,
+                    rgba(0x8a8aa0, th),
+                    &Canvas::fit_hints(7.0, pw - 28.0, hint),
+                );
+            }
         }
         if let Some((_, at)) = self.failed {
             let p = progress(at, 400.0);

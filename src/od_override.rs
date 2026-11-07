@@ -59,8 +59,14 @@ impl Setup {
     pub fn draw_panel(&self, c: &mut Canvas, od: f64) {
         const COLOUR: u32 = 0x4fb4ff;
         let w = c.width;
-        c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.6));
-        let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
+        c.rect(
+            0.0,
+            0.0,
+            w,
+            480.0,
+            rgba(0x000000, crate::mobile::pick(0.6, 0.97)),
+        );
+        let (px, py, pw, ph) = crate::mobile::setup_rect(w);
         c.round_rect(
             [px, py],
             [pw, ph],
@@ -83,11 +89,16 @@ impl Setup {
             py + 16.0,
             6.0,
             rgba(0x6f6f86, 1.0),
-            &Canvas::fit(6.0, pw - title_w - 42.0, hint),
+            &crate::mobile::key_hint(6.0, pw - title_w - 42.0, hint),
         );
 
-        let (x0, y, h) = (px + 16.0, py + 40.0, 24.0);
-        let (bw, vw) = (24.0, 70.0);
+        let phone = crate::mobile::active();
+        let (x0, y, h) = if phone {
+            (px + 16.0, py + 44.0, 48.0)
+        } else {
+            (px + 16.0, py + 40.0, 24.0)
+        };
+        let (bw, vw) = if phone { (64.0, 120.0) } else { (24.0, 70.0) };
         c.button(
             x0,
             y,
@@ -141,16 +152,16 @@ impl Setup {
         let chars = ((pw - 32.0) / Canvas::char_width(7.0)).max(10.0) as usize;
         for line in crate::social::wrap(about, chars) {
             c.text(x0, ty, 7.0, rgba(0x9a9ab0, 1.0), &line);
-            ty += 12.0;
+            ty += crate::mobile::pick(12.0, 20.0);
         }
-        let (by, back_w) = (py + ph - 26.0, 56.0);
+        let (by, back_w, bh, size) = crate::mobile::setup_button(py + ph);
         c.button(
             px + pw - back_w - 12.0,
             by,
             back_w,
-            16.0,
+            bh,
             tr!("Back"),
-            7.0,
+            size,
             Hit::Key(KeyCode::Escape),
             true,
         );

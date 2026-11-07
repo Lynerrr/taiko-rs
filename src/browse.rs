@@ -110,6 +110,17 @@ impl Browse {
         self.search = Some((page, rx));
     }
 
+    /// Fetches the next page of results, if there is one and nothing is on its way.
+    pub fn load_more(&mut self) {
+        if self.more
+            && self.search.is_none()
+            && self.edited.is_none()
+            && let Some(query) = self.searched.clone()
+        {
+            self.fetch(query, self.page + 1);
+        }
+    }
+
     /// Fetches the next page of results once the selection gets near the end of the list.
     fn load_more_near_end(&mut self) {
         if self.more

@@ -11,8 +11,12 @@ use crate::layout::{Area, Guide};
 use crate::render::{Canvas, Hit, accent, rgba};
 use crate::settings;
 
-const PANEL_W: f32 = 190.0;
-const ROW_H: f32 = 14.0;
+fn panel_w() -> f32 {
+    crate::mobile::pick(190.0, 380.0)
+}
+fn row_h() -> f32 {
+    crate::mobile::pick(14.0, 22.0)
+}
 /// Preset rows the panel shows at once.
 const PRESET_ROWS: usize = 5;
 /// How close (virtual units) a dragged part has to come to catch on a line.
@@ -24,7 +28,9 @@ const COLOURS: [u32; 11] = [
     0xffffff, 0xc8c8d8, 0x6f6f86, 0xeb452c, 0xff9a3c, 0xffd34d, 0x86e05a, 0x4fc3f7, 0x5a7dff,
     0xc77dff, 0xff8ad8,
 ];
-const SWATCH: f32 = 11.0;
+fn swatch() -> f32 {
+    crate::mobile::pick(11.0, 22.0)
+}
 const SNAP_COLOUR: u32 = 0x4fc3f7;
 /// Between the panel's buttons.
 const GAP: f32 = 4.0;
@@ -291,6 +297,10 @@ impl Editor {
 
     /// Preset rows showing: the hit counter's options take one.
     fn preset_rows(&self) -> usize {
+        if crate::mobile::active() {
+            // Two to a row there.
+            return 3 - usize::from(self.part() == Part::Counts);
+        }
         PRESET_ROWS - usize::from(self.part() == Part::Counts)
     }
 
@@ -590,57 +600,73 @@ impl Editor {
     }
 
     fn draw_panel(&mut self, c: &mut Canvas, cfg: &Config) {
+        let phone = crate::mobile::active();
+        let edge = crate::mobile::pick(8.0, 0.0);
         let x = if self.panel_left {
-            8.0
+            edge
         } else {
-            c.width - PANEL_W - 8.0
+            c.width - panel_w() - edge
         };
-        // Under the FPS overlay in the corner.
-        let (y0, h) = (18.0, 442.0);
-        self.panel_rect = [x, y0, PANEL_W, h];
-        crate::style::panel(c, x, y0, PANEL_W, h);
+        // Under the FPS overlay in the corner; a phone needs all the height.
+        let (y0, h) = if phone { (0.0, 480.0) } else { (18.0, 442.0) };
+        // Button height, and how many parts and presets to a row.
+        let bh = crate::mobile::pick(13.0, 21.0);
+        let cols = if phone { 2 } else { 1 };
+        self.panel_rect = [x, y0, panel_w(), h];
+        crate::style::panel(c, x, y0, panel_w(), h);
         // Clicks on the panel never reach the parts or the playfield behind it.
-        c.hit(x, y0, PANEL_W, h, Hit::HudPanel);
-        let (ix, iw) = (x + 8.0, PANEL_W - 16.0);
+        c.hit(x, y0, panel_w(), h, Hit::HudPanel);
+        let (ix, iw) = (x + 8.0, panel_w() - 16.0);
         let mut y = y0 + 7.0;
         let title = tr!("INTERFACE");
         c.text(ix, y, 9.0, rgba(0xffffff, 1.0), title);
         let side = if self.panel_left { ">" } else { "<" };
         button(
             c,
-            [ix + iw - 16.0, y - 2.0, 16.0, 12.0],
+            [ix + iw - bh - 8.0, y - 2.0, bh + 8.0, bh - 1.0],
             side,
             true,
             Button::SwapSide,
         );
-        y += 15.0;
+        y += crate::mobile::pick(15.0, 24.0);
 
+        let cell_w = (iw - GAP * (cols as f32 - 1.0)) / cols as f32;
+        let text_y = (row_h() - 7.5) / 2.0;
+        let list_y = y;
         for (i, part) in Part::PLACED.into_iter().enumerate() {
             let on = cfg.hud.shown(part);
+            let (ix, iw) = (ix + (i % cols) as f32 * (cell_w + GAP), cell_w);
+            let y = list_y + (i / cols) as f32 * row_h();
             if i == self.selected {
                 c.round_rect(
                     [ix - 2.0, y],
-                    [iw + 4.0, ROW_H - 1.0],
+                    [iw + 4.0, row_h() - 1.0],
                     3.0,
                     rgba(accent(), 0.22),
                     rgba(0, 0.0),
                     0.0,
                 );
-            } else if c.hovered(ix, y, iw, ROW_H - 1.0) {
+            } else if c.hovered(ix, y, iw, row_h() - 1.0) {
                 c.round_rect(
                     [ix - 2.0, y],
-                    [iw + 4.0, ROW_H - 1.0],
+                    [iw + 4.0, row_h() - 1.0],
                     3.0,
                     rgba(0x262634, 0.7),
                     rgba(0, 0.0),
                     0.0,
                 );
             }
-            c.hit(ix, y, iw, ROW_H - 1.0, Hit::HudRow(i));
-            c.hit(ix, y, 13.0, ROW_H - 1.0, Hit::HudToggle(i));
+            c.hit(ix, y, iw, row_h() - 1.0, Hit::HudRow(i));
+            c.hit(
+                ix,
+                y,
+                crate::mobile::pick(13.0, 24.0),
+                row_h() - 1.0,
+                Hit::HudToggle(i),
+            );
             let fill = if on { accent() } else { 0x15151d };
             c.round_rect(
-                [ix + 1.0, y + 2.0],
+                [ix + 1.0, y + (row_h() - 10.0) / 2.0],
                 [9.0, 9.0],
                 2.0,
                 rgba(fill, 1.0),
@@ -649,10 +675,9 @@ impl Editor {
             );
             let colour = if on { 0xe8e8f0 } else { 0x6f6f86 };
             let label = Canvas::fit(7.5, iw - 18.0, part.label());
-            c.text(ix + 15.0, y + 3.0, 7.5, rgba(colour, 1.0), &label);
-            y += ROW_H;
+            c.text(ix + 15.0, y + text_y, 7.5, rgba(colour, 1.0), &label);
         }
-        y += 4.0;
+        y += Part::PLACED.len().div_ceil(cols) as f32 * row_h() + 4.0;
 
         if let Some(b) = self.boxes[self.selected] {
             let describe = |a: hud::Axis, name: &str, stops: [&str; 3]| {
@@ -664,41 +689,46 @@ impl Editor {
             let fit = |s: String| Canvas::fit(7.0, iw - 8.0, &s);
             button(
                 c,
-                [ix, y, iw, 13.0],
+                [ix, y, iw, bh],
                 &fit(describe(b.place.x, "X", lr)),
                 true,
                 Button::AttachX,
             );
-            y += 13.0 + GAP;
+            y += bh + GAP;
             button(
                 c,
-                [ix, y, iw, 13.0],
+                [ix, y, iw, bh],
                 &fit(describe(b.place.y, "Y", tb)),
                 true,
                 Button::AttachY,
             );
-            y += 13.0 + GAP;
+            y += bh + GAP;
             let reset = tr!("Reset");
             let size = format!("{:.0}%", b.place.scale * 100.0);
-            button(c, [ix, y, 16.0, 13.0], "-", true, Button::Smaller);
-            c.text_centered(ix + 40.0, y + 3.0, 7.5, rgba(0xe8e8f0, 1.0), &size);
-            button(c, [ix + 64.0, y, 16.0, 13.0], "+", true, Button::Bigger);
+            let step_w = crate::mobile::pick(16.0, 44.0);
+            let plus_x = crate::mobile::pick(64.0, 124.0);
+            let text_x = ix + (step_w + plus_x) / 2.0;
+            button(c, [ix, y, step_w, bh], "-", true, Button::Smaller);
+            let ty = y + (bh - 7.5) / 2.0;
+            c.text_centered(text_x, ty, 7.5, rgba(0xe8e8f0, 1.0), &size);
+            button(c, [ix + plus_x, y, step_w, bh], "+", true, Button::Bigger);
+            let reset_x = plus_x + step_w + 8.0;
             let moved = cfg.hud.place(self.part()).is_some();
             button(
                 c,
-                [ix + 88.0, y, iw - 88.0, 13.0],
+                [ix + reset_x, y, iw - reset_x, bh],
                 reset,
                 moved,
                 Button::ResetPart,
             );
-            y += 13.0 + GAP;
+            y += bh + GAP;
             if self.part().has_text() {
                 self.draw_swatches(c, cfg, ix, y);
             } else {
                 let none = tr!("no text to colour");
                 c.text(ix, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), none);
             }
-            y += SWATCH + 5.0;
+            y += swatch() + 5.0;
             if self.part() == Part::Counts {
                 let on = cfg.hud.counter;
                 let titles = tr!("Titles");
@@ -713,26 +743,28 @@ impl Editor {
                 .enumerate()
                 {
                     let x = ix + i as f32 * (w + GAP);
-                    switch(c, [x, y, w, 13.0], label, on, b);
+                    switch(c, [x, y, w, bh], label, on, b);
                 }
-                y += 13.0 + GAP;
+                y += bh + GAP;
             }
         }
 
         c.text(ix, y, 7.5, rgba(0x9a9ab0, 1.0), tr!("PRESETS"));
-        y += 11.0;
+        y += crate::mobile::pick(11.0, 16.0);
         let rows = self.preset_rows();
-        self.presets_rect = [ix, y, iw, rows as f32 * ROW_H];
+        self.presets_rect = [ix, y, iw, rows as f32 * row_h()];
         let count = self.preset_count(cfg);
-        self.preset_scroll = self.preset_scroll.min(count.saturating_sub(rows));
-        for row in 0..rows {
-            let i = self.preset_scroll + row;
-            let ry = y + row as f32 * ROW_H;
+        self.preset_scroll = self.preset_scroll.min(count.saturating_sub(rows * cols));
+        let list_y = y;
+        for cell in 0..rows * cols {
+            let i = self.preset_scroll + cell;
+            let (ix, iw) = (ix + (cell % cols) as f32 * (cell_w + GAP), cell_w);
+            let ry = list_y + (cell / cols) as f32 * row_h();
             let Some((name, layout)) = self.preset_at(i, cfg) else {
                 continue;
             };
             let current = layout == cfg.hud;
-            if current || c.hovered(ix, ry, iw, ROW_H - 1.0) {
+            if current || c.hovered(ix, ry, iw, row_h() - 1.0) {
                 let (col, a) = if current {
                     (accent(), 0.22)
                 } else {
@@ -740,19 +772,19 @@ impl Editor {
                 };
                 c.round_rect(
                     [ix - 2.0, ry],
-                    [iw + 4.0, ROW_H - 1.0],
+                    [iw + 4.0, row_h() - 1.0],
                     3.0,
                     rgba(col, a),
                     rgba(0, 0.0),
                     0.0,
                 );
             }
-            c.hit(ix, ry, iw, ROW_H - 1.0, Hit::HudPreset(i));
+            c.hit(ix, ry, iw, row_h() - 1.0, Hit::HudPreset(i));
             let colour = if current { 0xffffff } else { 0xc8c8d8 };
             let name = Canvas::fit(7.5, iw - 4.0, &name);
-            c.text(ix + 3.0, ry + 3.0, 7.5, rgba(colour, 1.0), &name);
+            c.text(ix + 3.0, ry + text_y, 7.5, rgba(colour, 1.0), &name);
         }
-        y += rows as f32 * ROW_H + 3.0;
+        y += rows as f32 * row_h() + 3.0;
 
         let third = (iw - 2.0 * GAP) / 3.0;
         let half = (iw - GAP) / 2.0;
@@ -760,7 +792,7 @@ impl Editor {
         if let Some((name, caret)) = &self.naming {
             c.round_rect(
                 [ix, y],
-                [iw, 13.0],
+                [iw, bh],
                 3.0,
                 rgba(0x15151d, 1.0),
                 rgba(accent(), 1.0),
@@ -773,72 +805,78 @@ impl Editor {
             let save = tr!("Save");
             let new = tr!("New");
             let delete = tr!("Delete");
-            button(c, [ix, y, third, 13.0], save, true, Button::SavePreset);
+            button(c, [ix, y, third, bh], save, true, Button::SavePreset);
             button(
                 c,
-                [ix + third + GAP, y, third, 13.0],
+                [ix + third + GAP, y, third, bh],
                 new,
                 true,
                 Button::NewPreset,
             );
             button(
                 c,
-                [ix + 2.0 * (third + GAP), y, third, 13.0],
+                [ix + 2.0 * (third + GAP), y, third, bh],
                 delete,
                 own,
                 Button::DeletePreset,
             );
         }
-        y += 13.0 + GAP;
+        y += bh + GAP;
         let copy = tr!("Copy");
         let paste = tr!("Paste");
-        button(c, [ix, y, half, 13.0], copy, true, Button::Copy);
+        button(c, [ix, y, half, bh], copy, true, Button::Copy);
         button(
             c,
-            [ix + half + GAP, y, half, 13.0],
+            [ix + half + GAP, y, half, bh],
             paste,
             true,
             Button::Paste,
         );
-        y += 13.0 + GAP;
+        y += bh + GAP;
         let undo = tr!("Undo");
         let reset_all = tr!("Reset all");
         button(
             c,
-            [ix, y, half, 13.0],
+            [ix, y, half, bh],
             undo,
             !self.undo.is_empty(),
             Button::Undo,
         );
         button(
             c,
-            [ix + half + GAP, y, half, 13.0],
+            [ix + half + GAP, y, half, bh],
             reset_all,
             true,
             Button::ResetAll,
         );
-        y += 17.0;
-        button(c, [ix, y, iw, 15.0], tr!("Done"), true, Button::Done);
+        y += crate::mobile::pick(17.0, bh + GAP);
+        button(
+            c,
+            [ix, y, iw, crate::mobile::pick(15.0, bh)],
+            tr!("Done"),
+            true,
+            Button::Done,
+        );
     }
 
     /// The selected part's text colours in a row from `x`: its own, marked with a line, then
     /// the rest.
     fn draw_swatches(&self, c: &mut Canvas, cfg: &Config, x: f32, y: f32) {
         let now = cfg.hud.colour(self.part());
-        let step = SWATCH + GAP - 0.5;
+        let step = swatch() + GAP - 0.5;
         let choices = std::iter::once(None).chain(COLOURS.into_iter().map(Some));
         for (i, colour) in choices.enumerate() {
             let sx = x + i as f32 * step;
             let edge = if now == colour {
                 0xffffff
-            } else if c.hovered(sx, y, SWATCH, SWATCH) {
+            } else if c.hovered(sx, y, swatch(), swatch()) {
                 0xc8c8d8
             } else {
                 0x3a3a4e
             };
             c.round_rect(
                 [sx, y],
-                [SWATCH, SWATCH],
+                [swatch(), swatch()],
                 2.0,
                 rgba(colour.unwrap_or(0x15151d), 1.0),
                 rgba(edge, 1.0),
@@ -847,24 +885,28 @@ impl Editor {
             if colour.is_none() {
                 c.rect(
                     sx + 2.0,
-                    y + SWATCH / 2.0 - 0.5,
-                    SWATCH - 4.0,
+                    y + swatch() / 2.0 - 0.5,
+                    swatch() - 4.0,
                     1.0,
                     rgba(0xc8c8d8, 1.0),
                 );
             }
-            c.hit(sx, y, SWATCH, SWATCH, Hit::HudColour(colour));
+            c.hit(sx, y, swatch(), swatch(), Hit::HudColour(colour));
         }
     }
 
     fn draw_help(&self, c: &mut Canvas) {
+        // The keys it names aren't there on a phone; the panel says the rest.
+        if crate::mobile::active() {
+            return;
+        }
         let help = tr!(
             "Drag: near the lane it attaches to it (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel"
         );
         let panel = if self.panel_hidden {
             0.0
         } else {
-            PANEL_W + 16.0
+            panel_w() + 16.0
         };
         let room = c.width - panel - 16.0;
         let x = if self.panel_left { panel + 8.0 } else { 8.0 };

@@ -53,6 +53,7 @@ mod medals;
 mod media;
 mod menu;
 mod menu_notes;
+mod mobile;
 mod mods;
 mod multiplayer;
 mod multiverse;
@@ -756,6 +757,26 @@ struct State {
     /// The window's own size, and where the game is in it with Letterbox on.
     real_window: (f32, f32),
     letterbox: Option<[u32; 4]>,
+    /// The phone interface's own state.
+    mob: mobile::Ui,
+    /// Android: the app is in the background.
+    backgrounded: bool,
+    /// Android: what the activity was last told about keeping the music alive.
+    #[cfg(target_os = "android")]
+    music_service: bool,
+    /// Android: the screen may turn upright now (the player's up).
+    #[cfg(target_os = "android")]
+    may_turn: bool,
+    /// Android: what the media controls were last told: the song, paused and its length; where
+    /// it was then, and when.
+    #[cfg(target_os = "android")]
+    media_sent: Option<((PathBuf, bool, i64), f64, Instant)>,
+    /// The screen's rounded corners and camera: how far in from the sides and from the top and
+    /// bottom the interface stays, in pixels. None: right to the edges.
+    safe_insets: Option<[u32; 2]>,
+    /// When the phone was last asked for them.
+    #[cfg(target_os = "android")]
+    safe_asked: Option<Instant>,
     /// Shapes of this frame to clip to the playfield area.
     frame_clip: Option<(std::ops::Range<usize>, Area)>,
     /// Song select preview: background, preview music, autoplay preview.
@@ -1811,6 +1832,22 @@ fn draw_preview_chrome(
     );
     c.text(ax + 16.0, by + 4.5, 7.0, rgba(0x0c1a28, 1.0), badge);
 
+    // A phone's bar: the way back, the map and its stars.
+    if mobile::active() {
+        let back = if lobby { tr!("< LOBBY") } else { tr!("< BACK") };
+        settings::back_button(c, 0.0, back, render::Hit::Key(KeyCode::Escape));
+        let pill = stars::draw_pill(c, c.width, 14.0, 12.0, stars);
+        let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+        let room = c.width - 112.0 - pill - 12.0;
+        c.text(
+            112.0,
+            16.0,
+            12.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(12.0, room, &title),
+        );
+        return;
+    }
     c.round_rect(
         [24.0, 10.0],
         [c.width - 48.0, 34.0],
@@ -3428,7 +3465,8 @@ impl State {
     /// Music and hitsound volume as played now: lower while another window has focus.
     fn heard_volumes(&self) -> (f32, f32) {
         let (music, fx) = self.cfg.volumes();
-        let left = if self.focused {
+        // A phone's other apps aren't beside it: the music plays on at its own volume.
+        let left = if self.focused || mobile::active() {
             1.0
         } else {
             self.cfg.unfocused_volume
@@ -3436,14 +3474,23 @@ impl State {
         (music * left, fx * left)
     }
 
-    /// Android: the app went to the background (or came back). The music holds meanwhile; a
-    /// song already paused itself when focus went, and stays paused until you resume it.
+    /// Whether the music may carry on with the app in the background: anywhere but a song.
+    fn music_goes_on(&self) -> bool {
+        !self.in_song() && !matches!(self.scene, Scene::Loading { .. })
+    }
+
+    /// Android: the app went to the background (or came back). The menus' music and the player
+    /// play on (the render thread keeps them going, `background_tick`); a song holds, having
+    /// already paused itself when focus went, and stays paused until you resume it.
     fn set_background(&mut self, background: bool) {
+        self.backgrounded = background;
         let Some(a) = &self.audio else { return };
         let game_paused = matches!(&self.scene, Scene::Play { game, .. } if game.paused.is_some());
         if background {
-            a.set_paused(true);
-        } else if !game_paused {
+            if !self.music_goes_on() {
+                a.set_paused(true);
+            }
+        } else if !game_paused && !self.music_paused {
             a.set_paused(false);
         }
     }
@@ -3586,7 +3633,7 @@ impl State {
         }
         self.guide_binding = None;
         let closing = action == guide::Action::Close
-            || (action == guide::Action::Next && page + 1 == guide::PAGES);
+            || (action == guide::Action::Next && page + 1 == guide::pages());
         match action {
             // A new player doesn't leave without the page that says to calibrate.
             _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => {
@@ -3594,7 +3641,7 @@ impl State {
             }
             guide::Action::Bind(slot) => self.guide_binding = Some(slot),
             guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
-            guide::Action::Next if page + 1 < guide::PAGES => self.guide = Some(page + 1),
+            guide::Action::Next if page + 1 < guide::pages() => self.guide = Some(page + 1),
             guide::Action::Next | guide::Action::Close => self.guide = None,
             guide::Action::Page(i) => self.guide = Some(i),
             guide::Action::Calibrate => {
@@ -4067,12 +4114,13 @@ impl State {
     fn sync_letterbox(&mut self) -> Option<[u32; 4]> {
         let (w, h) = self.real_window;
         let on = self.cfg.letterbox && self.fullscreen;
-        self.letterbox = layout::letterbox(
+        let safe = self.safe_area();
+        self.letterbox = safe.or(layout::letterbox(
             (w as u32, h as u32),
             self.cfg.letterbox_size,
             self.cfg.letterbox_pos,
         )
-        .filter(|_| on);
+        .filter(|_| on));
         let (gw, gh) = self
             .letterbox
             .map_or((w, h), |[_, _, gw, gh]| (gw as f32, gh as f32));
@@ -4080,7 +4128,28 @@ impl State {
             (self.window_w, self.window_h) = (gw, gh);
             self.refresh_presets();
         }
-        self.letterbox
+        self.letterbox.filter(|_| safe.is_none())
+    }
+
+    /// The part of the screen clear of its rounded corners and camera (x, y, w, h in pixels, all
+    /// even). The same on both sides, so turning the phone over moves nothing. To the game's
+    /// input it's a letterbox; the renderer draws the background past it (`Renderer::safe`).
+    fn safe_area(&mut self) -> Option<[u32; 4]> {
+        #[cfg(target_os = "android")]
+        if self
+            .safe_asked
+            .is_none_or(|at| at.elapsed() > Duration::from_millis(500))
+        {
+            // Asked again and again: turning the phone upright changes them.
+            self.safe_asked = Some(Instant::now());
+            if let Some(insets) = android::safe_insets() {
+                self.safe_insets = Some(insets);
+            }
+        }
+        let [side, edge] = self.safe_insets?;
+        let (w, h) = (self.real_window.0 as u32, self.real_window.1 as u32);
+        let (x, y) = (side.next_multiple_of(2), edge.next_multiple_of(2));
+        (w > 2 * x + 320 && h > 2 * y + 240).then(|| [x, y, (w - 2 * x) & !1, (h - 2 * y) & !1])
     }
 
     /// A point of the window as the game sees it: from the game's own corner.
@@ -5603,6 +5672,7 @@ impl State {
             Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download
         );
         if menus
+            && !self.mobile_bar()
             && self.splash.is_none()
             && self.changelog.is_none()
             && self.player.is_none()
@@ -5615,26 +5685,33 @@ impl State {
                 update::Status::Downloading => Canvas::text_width(7.0, &updating_badge(1.0)) + 20.0,
                 _ => 0.0,
             };
+            // Tall enough for a thumb on a phone.
+            let (chip_y, chip_h, chip_pad) = if mobile::active() {
+                (0.0, 34.0, 28.0)
+            } else {
+                (2.0, 14.0, 14.0)
+            };
+            let chip_text = chip_y + (chip_h - 7.0) / 2.0 + 1.0;
             let label = tr!("what's new");
-            let w = Canvas::text_width(7.0, label) + 14.0;
+            let w = Canvas::text_width(7.0, label) + chip_pad;
             let x = c.width - 8.0 - badge - w;
-            let hover = c.hovered(x, 2.0, w, 14.0);
+            let hover = c.hovered(x, chip_y, w, chip_h);
             c.round_rect(
-                [x, 2.0],
-                [w, 14.0],
+                [x, chip_y],
+                [w, chip_h],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
                 rgba(0x3a3a4e, 1.0),
                 1.0,
             );
             c.text(
-                x + 7.0,
-                5.5,
+                x + chip_pad / 2.0,
+                chip_text,
                 7.0,
                 rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 label,
             );
-            c.hit(x, 2.0, w, 14.0, render::Hit::Changelog);
+            c.hit(x, chip_y, w, chip_h, render::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
             // With Relax on, how they stand on its boards.
             let relax = self.cfg.mods.relax();
@@ -5659,10 +5736,10 @@ impl State {
             };
             let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
-            let hover = c.hovered(ax, 2.0, aw, 14.0);
+            let hover = c.hovered(ax, chip_y, aw, chip_h);
             c.round_rect(
-                [ax, 2.0],
-                [aw, 14.0],
+                [ax, chip_y],
+                [aw, chip_h],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
                 rgba(
@@ -5676,11 +5753,17 @@ impl State {
                 1.0,
             );
             if pic > 0.0 {
-                c.avatar(&name, ax + 9.0, 9.0, 4.5, accent(), 1.0);
+                c.avatar(&name, ax + 9.0, chip_y + chip_h / 2.0, 4.5, accent(), 1.0);
             }
-            let nw = c.text(ax + 7.0 + pic, 5.5, 7.0, rgba(0xffffff, 1.0), &name);
-            c.text(ax + 7.0 + pic + nw, 5.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
-            c.hit(ax, 2.0, aw, 14.0, render::Hit::Account);
+            let nw = c.text(ax + 7.0 + pic, chip_text, 7.0, rgba(0xffffff, 1.0), &name);
+            c.text(
+                ax + 7.0 + pic + nw,
+                chip_text,
+                7.0,
+                rgba(0xff8ad8, 1.0),
+                &rest,
+            );
+            c.hit(ax, chip_y, aw, chip_h, render::Hit::Account);
         }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => update_badge(&commit),
@@ -7710,6 +7793,22 @@ impl State {
     ) {
         self.idle.input(at);
         self.touch_used = true;
+        if self.mobile_touch(id, phase, x, y, at, window) {
+            return;
+        }
+        if phase == TouchPhase::Started
+            && self.touch_drums()
+            && mobile::on_pause_button(self.mouse_at(x, y), self.window_width())
+        {
+            // Calibrating, it finishes with the hits so far; the back gesture cancels.
+            let code = if matches!(self.scene, Scene::Calibrate { .. }) {
+                KeyCode::Enter
+            } else {
+                KeyCode::Escape
+            };
+            self.key(code, false, None, at, window);
+            return;
+        }
         if phase == TouchPhase::Started && self.touch_drums() {
             let col = (x / self.window_w.max(1.0) as f64 * 4.0)
                 .floor()
@@ -7739,8 +7838,20 @@ impl State {
         }
     }
 
+    /// The window's pixels `x`, `y` in virtual units.
+    fn mouse_at(&self, x: f64, y: f64) -> (f32, f32) {
+        let k = render::VIRTUAL_HEIGHT / self.window_h.max(1.0);
+        (x as f32 * k, y as f32 * k)
+    }
+
+    /// The canvas's width in virtual units.
+    fn window_width(&self) -> f32 {
+        render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0)
+    }
+
     /// The touch columns along the bottom of the screen during play, each flashing when hit.
     fn draw_touch_zones(&self, c: &mut Canvas, now: Instant) {
+        mobile::draw_pause_button(c, matches!(self.scene, Scene::Calibrate { .. }));
         let col_w = c.width / 4.0;
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
@@ -10513,7 +10624,6 @@ impl State {
                 .dropdown
                 .as_ref()
                 .is_some_and(|d| d.editing.is_some())
-            || self.random_setup.is_some()
             || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
@@ -10571,6 +10681,57 @@ impl State {
         }
     }
 
+    /// Android: tells the system's media controls what's playing, when that changes or the song
+    /// isn't where they'd think it is by now.
+    #[cfg(target_os = "android")]
+    fn tell_media_controls(&mut self, now: Instant) {
+        let Some(e) = self.preview_target().and_then(|i| self.library.get(i)) else {
+            return;
+        };
+        // Only the song's own music says where it is: just picked, the last one's still going.
+        if !self.preview.plays(e) {
+            return;
+        }
+        let paused = self.music_paused;
+        let speed = self.preview_rate().0;
+        let sent = self.media_sent.as_ref();
+        // Paused, the music has no clock: it's where it was last told.
+        let (at, length) = match self.preview.music_times(self.audio.as_ref(), now) {
+            Some(times) => times,
+            None => match sent {
+                Some(((path, _, length), at, _)) if *path == e.path => (*at, *length as f64),
+                _ => return,
+            },
+        };
+        let key = (e.path.clone(), paused, length as i64);
+        // Where the controls think it is by now, their bar running at the music's speed.
+        let expected = sent.map_or(at, |(_, sent_at, when)| {
+            let gone = now.saturating_duration_since(*when).as_secs_f64() * 1000.0;
+            sent_at + if paused { 0.0 } else { gone * speed }
+        });
+        let same = sent.is_some_and(|sent| sent.0 == key);
+        if same && (at - expected).abs() < 700.0 {
+            return;
+        }
+        let art = e
+            .meta
+            .background
+            .as_ref()
+            .and_then(|b| Some(e.path.parent()?.join(b)))
+            .filter(|p| p.is_file());
+        android::now_playing(&android::NowPlaying {
+            title: &e.meta.title,
+            artist: &e.meta.artist,
+            detail: &e.meta.version,
+            art: art.as_deref().and_then(|p| p.to_str()).unwrap_or_default(),
+            length_ms: length as i64,
+            at_ms: at as i64,
+            speed: speed as f32,
+            paused,
+        });
+        self.media_sent = Some((key, at, now));
+    }
+
     /// Android: what the on-screen keyboard typed, as presses of those keys.
     #[cfg(target_os = "android")]
     fn soft_keyboard(&mut self, typed: android::Typed, window: Option<&Window>) {
@@ -10612,6 +10773,9 @@ impl State {
             .filter(|_| matches!(self.scene, Scene::Settings { .. }))
         {
             return Some((e.item.label().into(), e.text.clone()));
+        }
+        if let Some(seed) = &self.random_setup {
+            return Some(("Random seed".into(), seed.clone()));
         }
         if let Some(t) = self.universe_setup.as_ref().and_then(|u| u.typing.as_ref()) {
             return Some(match t {
@@ -12777,6 +12941,13 @@ impl State {
         at: Instant,
         window: Option<&Window>,
     ) {
+        // Back first takes the upright player's list away.
+        if code == KeyCode::Escape
+            && let Some(p) = self.player.as_mut().filter(|p| p.list_open)
+        {
+            p.list_open = false;
+            return;
+        }
         // A key that wakes the idle screen does nothing else.
         if self.idle.input(at) {
             return;
@@ -13733,6 +13904,8 @@ impl State {
         canvas.picture_slots = self.pictures.slots();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
+        self.mob.begin_frame();
+        self.mobile_long_press(now);
         self.glitch_between_menus(canvas, now);
         let idle_allowed = self.idle_allowed();
         self.idle
@@ -13753,7 +13926,37 @@ impl State {
         }
         self.frame_clip = None;
         #[cfg(target_os = "android")]
-        self.update_keyboard();
+        {
+            self.update_keyboard();
+            // A service keeps the music alive with the screen off; it starts on leaving the app.
+            // Once out of the app it stays while paused: its controls are the way back.
+            let wanted = self.music_goes_on() && (!self.music_paused || self.backgrounded);
+            if wanted != self.music_service {
+                self.music_service = wanted;
+                android::keep_music(wanted);
+            }
+            for (what, ms) in android::take_media() {
+                match what {
+                    0 => self.set_music_paused(!self.music_paused),
+                    1 => self.music_step(1),
+                    2 => self.music_step(-1),
+                    _ => {
+                        self.preview.seek_music(ms as f64, self.audio.as_ref());
+                        // The controls already show it there.
+                        if let Some(sent) = &mut self.media_sent {
+                            (sent.1, sent.2) = (ms as f64, now);
+                        }
+                    }
+                }
+            }
+            self.tell_media_controls(now);
+            // Only the player turns upright.
+            let upright = self.player.is_some();
+            if upright != self.may_turn {
+                self.may_turn = upright;
+                android::allow_portrait(upright);
+            }
+        }
         self.poll_scan();
         self.poll_folder_pick();
         self.poll_data_move();
@@ -14223,17 +14426,27 @@ impl State {
                 self.select.scrubbing =
                     (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
                 self.select.list_share = self.cfg.song_list_share;
-                self.select.draw(
-                    canvas,
-                    &self.library,
-                    dt,
-                    &self.status,
-                    &|i| stars.get(i, rate),
-                    &|e| scores::best_grade(plays, e.hash()),
-                );
+                let phone = mobile::active();
+                if phone {
+                    self.draw_mobile_select(canvas);
+                } else {
+                    self.select.draw(
+                        canvas,
+                        &self.library,
+                        dt,
+                        &self.status,
+                        &|i| stars.get(i, rate),
+                        &|e| scores::best_grade(plays, e.hash()),
+                    );
+                }
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
-                let x = 24.0 + lw + 12.0;
-                let pw = canvas.width - x - 24.0;
+                // The panel beside the list: from `x`, `pw` wide, `panel_top` down to `panel_end`.
+                let [x, panel_top, pw, panel_end] = if phone {
+                    self.mobile_select_panel(canvas.width)
+                } else {
+                    let x = 24.0 + lw + 12.0;
+                    [x, 54.0, canvas.width - x - 24.0, 436.0]
+                };
                 self.board_rect = None;
                 // Always at full size (no longer dragged smaller).
                 self.preview.size = preview::PREVIEW_SIZE.1;
@@ -14247,11 +14460,21 @@ impl State {
                     ),
                     None => None,
                 };
-                self.leaderboard.clear();
-                if pw > 160.0 {
+                if phone {
+                    let status = self.select.selected().and_then(|i| self.map_status(i));
+                    let liked = self
+                        .preview_target()
+                        .and_then(|i| self.library.get(i))
+                        .map(|e| self.select.is_liked(e));
+                    let rect = [x, panel_top, pw, panel_end];
+                    self.draw_mobile_panels(canvas, rect, selected_stars, status, liked);
+                } else {
+                    self.leaderboard.clear();
+                }
+                if pw > 160.0 && !phone {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
                     // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
-                    let panel_h = 436.0 - 54.0 - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
+                    let panel_h = panel_end - panel_top - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
                     let liked = self
                         .preview_target()
                         .and_then(|i| self.library.get(i))
@@ -14260,7 +14483,7 @@ impl State {
                         canvas,
                         &self.library,
                         x,
-                        54.0,
+                        panel_top,
                         pw,
                         panel_h,
                         self.cfg.scroll_speed,
@@ -14273,7 +14496,7 @@ impl State {
                     }
                     if let Some(i) = self.select.selected() {
                         let top = self.preview.panel_bottom + 8.0;
-                        let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
+                        let fits = ((panel_end - top - 16.0) / 18.0).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
                             let relax = self.cfg.mods.relax();
@@ -14335,13 +14558,15 @@ impl State {
                     // The song list's right edge: the gap between the list's box (`ui`, ending
                     // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
                     let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
-                    draw_divider(
-                        canvas,
-                        [24.0 + lw + 4.0, 54.0, 8.0, 382.0],
-                        true,
-                        dragging,
-                        render::Hit::SplitList,
-                    );
+                    if !phone {
+                        draw_divider(
+                            canvas,
+                            [24.0 + lw + 4.0, 54.0, 8.0, 382.0],
+                            true,
+                            dragging,
+                            render::Hit::SplitList,
+                        );
+                    }
                 }
                 let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
                 if let Some(g) = self
@@ -14350,7 +14575,7 @@ impl State {
                     .filter(|_| self.picking_lobby_map && guessing)
                 {
                     mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
-                } else if self.pick_to_edit {
+                } else if self.pick_to_edit && !phone {
                     let w = canvas.width;
                     canvas.round_rect(
                         [24.0, 438.0],
@@ -14371,7 +14596,7 @@ impl State {
                             "Choose a map to edit: Enter opens it in the editor, Esc cancels",
                         ),
                     );
-                } else if self.picking_lobby_map {
+                } else if self.picking_lobby_map && !phone {
                     let w = canvas.width;
                     canvas.round_rect(
                         [24.0, 438.0],
@@ -14772,12 +14997,17 @@ impl State {
                 let dir = self.songs_dir.display().to_string();
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
                 self.preview.size = preview::PREVIEW_SIZE.1;
-                self.browse
-                    .draw(canvas, &self.downloads, &installed, &dir, lw);
+                let phone = mobile::active();
+                if phone {
+                    self.draw_mobile_download(canvas, &installed);
+                } else {
+                    self.browse
+                        .draw(canvas, &self.downloads, &installed, &dir, lw);
+                }
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
                 let x = 24.0 + lw + 12.0;
-                let pw = canvas.width - x - 24.0;
+                let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
                 let stars = self.browse.selected_diff().map(|d| d.stars);
                 if pw > 160.0 && self.browse.selected().is_some() {
                     match self.preview.draw_panel(
@@ -14849,13 +15079,19 @@ impl State {
                             [x + 12.0, y + 10.0, w - 24.0, 34.0],
                             button,
                         );
+                        // A thumb's over the timeline on a phone, where its times don't run into it.
+                        let [bx, by, bw, bh] = if mobile::active() {
+                            [x + w - 130.0, y - 50.0, 130.0, 44.0]
+                        } else {
+                            [x + 12.0, y + 54.0, pause_width(), 16.0]
+                        };
                         canvas.button(
-                            x + 12.0,
-                            y + 54.0,
-                            pause_width(),
-                            16.0,
+                            bx,
+                            by,
+                            bw,
+                            bh,
                             pause_label(self.preview.held),
-                            7.0,
+                            mobile::pick(7.0, 12.0),
                             render::Hit::Key(KeyCode::Space),
                             false,
                         );
@@ -15388,45 +15624,50 @@ impl State {
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 self.settings_ui.krokodil = self.is_krokodil();
-                settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
-                let searching = !self.settings_ui.search.is_empty();
-                let footer = if self
-                    .settings_ui
-                    .editing
-                    .as_ref()
-                    .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
-                {
-                    "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
-                } else if self.settings_ui.editing.is_some() {
-                    "type a value   Enter set   Esc cancel".to_string()
+                if mobile::active() {
+                    self.draw_mobile_settings(canvas);
+                    self.draw_mobile_choices(canvas);
                 } else {
-                    let enter = match self.settings_ui.item().kind() {
-                        Kind::List => "Enter list",
-                        Kind::Value => "Enter type a value",
-                        Kind::Toggle => "Enter toggle",
-                        Kind::Key => "Enter rebind",
-                        Kind::Action => "Enter go",
-                    };
-                    let back = if searching {
-                        "Esc clear the search"
-                    } else if from_game {
-                        "Esc back to pause menu"
+                    settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
+                    let searching = !self.settings_ui.search.is_empty();
+                    let footer = if self
+                        .settings_ui
+                        .editing
+                        .as_ref()
+                        .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
+                    {
+                        "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
+                    } else if self.settings_ui.editing.is_some() {
+                        "type a value   Enter set   Esc cancel".to_string()
                     } else {
-                        "Esc or Tab back"
+                        let enter = match self.settings_ui.item().kind() {
+                            Kind::List => "Enter list",
+                            Kind::Value => "Enter type a value",
+                            Kind::Toggle => "Enter toggle",
+                            Kind::Key => "Enter rebind",
+                            Kind::Action => "Enter go",
+                        };
+                        let back = if searching {
+                            "Esc clear the search"
+                        } else if from_game {
+                            "Esc back to pause menu"
+                        } else {
+                            "Esc or Tab back"
+                        };
+                        format!(
+                            "Type to search   Up/Down select   Left/Right change   {enter}   {back}"
+                        )
                     };
-                    format!(
-                        "Type to search   Up/Down select   Left/Right change   {enter}   {back}"
-                    )
-                };
-                let this = &*self;
-                this.settings_ui.draw(
-                    canvas,
-                    &|item| this.setting_value(item),
-                    &|item| this.setting_control(item),
-                    &footer,
-                );
-                if let Some(p) = &self.settings_ui.choices {
-                    p.draw(canvas);
+                    let this = &*self;
+                    this.settings_ui.draw(
+                        canvas,
+                        &|item| this.setting_value(item),
+                        &|item| this.setting_control(item),
+                        &footer,
+                    );
+                    if let Some(p) = &self.settings_ui.choices {
+                        p.draw(canvas);
+                    }
                 }
             }
             Scene::LayoutEdit { .. } => {
@@ -15466,7 +15707,11 @@ impl State {
                     rgba(0xffffff, 1.0),
                     &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())),
                 );
-                let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
+                let help = if mobile::active() {
+                    "Back when done"
+                } else {
+                    "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done"
+                };
                 let size = Canvas::fit_size(7.0, 5.5, room, help);
                 canvas.text_centered(
                     w / 2.0,
@@ -15525,6 +15770,7 @@ impl State {
             self.draw_touch_zones(canvas, now);
         }
         if self.cfg.show_playfield_size
+            && !mobile::active()
             && matches!(
                 self.scene,
                 Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
@@ -15537,6 +15783,7 @@ impl State {
         } else {
             self.readout_rect = None;
         }
+        self.draw_mobile_rate(canvas);
         if let Some(cur) = self.mod_select {
             let seed = if matches!(self.scene, Scene::Lobby) {
                 self.mp
@@ -15547,17 +15794,22 @@ impl State {
             } else {
                 self.cfg.random_seed
             };
-            ui::draw_mod_select(
-                canvas,
-                self.shown_mods(),
-                self.cfg.favourite_mods,
-                cur,
-                seed,
-            );
+            if mobile::active() {
+                self.draw_mobile_mods(canvas, self.shown_mods());
+            } else {
+                ui::draw_mod_select(
+                    canvas,
+                    self.shown_mods(),
+                    self.cfg.favourite_mods,
+                    cur,
+                    seed,
+                );
+            }
             if let Some(input) = &self.random_setup {
                 canvas.hits.clear();
                 let w = canvas.width;
                 canvas.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
+                let phone = mobile::active();
                 canvas.text_centered(w / 2.0, 160.0, 14.0, rgba(0xffffff, 1.0), "Random seed");
                 canvas.text_centered(
                     w / 2.0,
@@ -15573,33 +15825,70 @@ impl State {
                     rgba(0x9a9ab0, 1.0),
                     "Same map + same seed = same colours. Retries keep the seed.",
                 );
-                canvas.text_centered(
-                    w / 2.0,
-                    250.0,
-                    7.0,
-                    rgba(0x9a9ab0, 1.0),
-                    "Delete clears   R new seed   Ctrl+C / Ctrl+V copy / paste",
-                );
-                canvas.button(
-                    w / 2.0 - 100.0,
-                    280.0,
-                    90.0,
-                    24.0,
-                    "Apply",
-                    9.0,
-                    render::Hit::Key(KeyCode::Enter),
-                    true,
-                );
-                canvas.button(
-                    w / 2.0 + 10.0,
-                    280.0,
-                    90.0,
-                    24.0,
-                    "Cancel",
-                    9.0,
-                    render::Hit::Key(KeyCode::Escape),
-                    false,
-                );
+                if phone {
+                    // Tapping the number brings up the keyboard.
+                    canvas.hit(w / 2.0 - 220.0, 188.0, 440.0, 36.0, render::Hit::TextField);
+                    let (bw, bh, by) = (150.0, 46.0, 280.0);
+                    let key = render::Hit::Key;
+                    canvas.button(
+                        w / 2.0 - 235.0,
+                        by,
+                        bw,
+                        bh,
+                        "Apply",
+                        12.0,
+                        key(KeyCode::Enter),
+                        true,
+                    );
+                    canvas.button(
+                        w / 2.0 - 75.0,
+                        by,
+                        bw,
+                        bh,
+                        "New seed",
+                        12.0,
+                        key(KeyCode::KeyR),
+                        false,
+                    );
+                    canvas.button(
+                        w / 2.0 + 85.0,
+                        by,
+                        bw,
+                        bh,
+                        "Cancel",
+                        12.0,
+                        key(KeyCode::Escape),
+                        false,
+                    );
+                } else {
+                    canvas.text_centered(
+                        w / 2.0,
+                        250.0,
+                        7.0,
+                        rgba(0x9a9ab0, 1.0),
+                        "Delete clears   R new seed   Ctrl+C / Ctrl+V copy / paste",
+                    );
+                    canvas.button(
+                        w / 2.0 - 100.0,
+                        280.0,
+                        90.0,
+                        24.0,
+                        "Apply",
+                        9.0,
+                        render::Hit::Key(KeyCode::Enter),
+                        true,
+                    );
+                    canvas.button(
+                        w / 2.0 + 10.0,
+                        280.0,
+                        90.0,
+                        24.0,
+                        "Cancel",
+                        9.0,
+                        render::Hit::Key(KeyCode::Escape),
+                        false,
+                    );
+                }
             }
             if let Some(setup) = &self.universe_setup {
                 setup.draw(
@@ -15704,7 +15993,7 @@ impl State {
                 rgba(0x121219, 0.85 * (1.0 - fade)),
             );
         }
-        if self.cfg.show_fps {
+        if self.cfg.show_fps && !self.mobile_bar() {
             let mode = match self.present {
                 PresentChoice::Fifo => "vsync".to_string(),
                 p if self.cfg.fps_cap > 0 => format!("{} cap {}", p.name(), self.cfg.fps_cap),
@@ -16711,6 +17000,9 @@ impl State {
 
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
     fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
+        if mobile::active() {
+            return mobile::hit_near(&self.hits, x, y);
+        }
         self.hits
             .iter()
             .rev()
@@ -16989,6 +17281,18 @@ impl State {
                 }
             }
             Hit::BoardTab(online) => self.board_online = online,
+            Hit::BoardPage => self.mob.flip_board(),
+            Hit::RateOpen
+            | Hit::RateClose
+            | Hit::RateStep(_)
+            | Hit::RateSet(_)
+            | Hit::RateKeepPitch
+            | Hit::PitchStep(_) => self.mobile_rate(hit),
+            Hit::PlayerList => {
+                if let Some(p) = &mut self.player {
+                    p.list_open = !p.list_open;
+                }
+            }
             Hit::BoardWebsite => self.open_map_website(),
             Hit::Changelog => self.changelog = Some(changelog::View::recent(false)),
             Hit::Account => match self.mp_menu.account.clone() {
@@ -17493,6 +17797,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             size,
             atlas,
             letterbox,
+            safe,
             pixel_scale,
             avatar_uploads,
             picture_uploads,
@@ -17514,6 +17819,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let surface = s.surface_swap.take();
             let size = s.want_size.take();
             let letterbox = s.sync_letterbox();
+            let safe = s.safe_area();
             if matches!(s.scene, Scene::Play { .. })
                 && let Some(sm) = &mut s.smooth
             {
@@ -17527,6 +17833,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 size,
                 s.sprites_upload.take(),
                 letterbox,
+                safe,
                 if s.cfg.half_resolution { 2 } else { 1 },
                 s.avatars.take_uploads(),
                 s.pictures.take_uploads(),
@@ -17540,6 +17847,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             renderer.resize(w, h);
         }
         renderer.letterbox = letterbox;
+        renderer.safe = safe;
         if requested_present != Some(wanted) {
             renderer.set_present(wanted);
             requested_present = Some(wanted);
@@ -17563,7 +17871,20 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
 
         let t0 = timing.then(Instant::now);
         let Some(frame) = renderer.acquire() else {
-            std::thread::sleep(Duration::from_millis(2));
+            // In the background nothing is drawn, but the music is still looked after: the next
+            // song of the player comes from the frame. A few times a second is plenty.
+            let mut s = lock(&state);
+            if s.backgrounded {
+                if s.music_goes_on() {
+                    s.build_frame(&mut canvas, Instant::now(), renderer.virtual_width());
+                }
+                drop(s);
+                // Often enough that the media controls' presses feel immediate.
+                std::thread::sleep(Duration::from_millis(60));
+            } else {
+                drop(s);
+                std::thread::sleep(Duration::from_millis(2));
+            }
             continue;
         };
         let acquired = Instant::now();
@@ -17635,11 +17956,18 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let mut s = lock(&state);
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
+            render::set_text_bias(renderer.text_bias());
             render::set_frame_time(Some(now));
             s.frame_acquired = Some(acquired);
             s.pace_shift_ms = pace_shift_ms;
             s.seen_refresh_ms = pacer.refresh_ms();
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            if let Some([x, y, _, h]) = safe {
+                // The margins in the interface's units.
+                let (side, edge) = (x as f32, y as f32);
+                let k = render::VIRTUAL_HEIGHT / h.max(1) as f32;
+                canvas.bleed([side * k, edge * k, side * k, edge * k]);
+            }
             render::set_frame_time(None);
             render::set_text_grid(None);
             if canvas.audit {
@@ -18629,6 +18957,17 @@ impl State {
             window_h: 720.0,
             real_window: (1280.0, 720.0),
             letterbox: None,
+            mob: mobile::Ui::default(),
+            backgrounded: false,
+            #[cfg(target_os = "android")]
+            music_service: false,
+            #[cfg(target_os = "android")]
+            may_turn: false,
+            #[cfg(target_os = "android")]
+            media_sent: None,
+            safe_insets: None,
+            #[cfg(target_os = "android")]
+            safe_asked: None,
             frame_clip: None,
             guides: Vec::new(),
             hud_edit: None,
