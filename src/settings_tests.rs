@@ -1478,6 +1478,22 @@ fn a_maps_status_comes_from_the_mirror_else_osu_db() {
 }
 
 #[test]
+fn a_custom_maps_status_is_the_websites() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // A .tko set has no osu! number: before, the panel called it not submitted.
+    s.library[0].meta.set_id = None;
+    let folder = s.library[0].path.parent().unwrap().to_path_buf();
+    s.select.custom_folder.insert(folder, 2);
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("CUSTOM"));
+    s.select.custom_approved.insert(2);
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("CUSTOM APPROVED"));
+    // An edited copy of it is nobody's, as in the song list.
+    s.select.edited.insert(s.library[0].path.clone());
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("NOT SUBMITTED"));
+}
+
+#[test]
 fn scroll_speed_changes_between_songs_only() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
