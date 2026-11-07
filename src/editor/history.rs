@@ -58,13 +58,41 @@ fn remove_objects(c: &mut Chart, list: &[HitObject]) {
 }
 
 fn set_objects(c: &mut Chart, list: &[HitObject]) {
+    // Moved notes: (from, to). Groups hold their notes by time, so they go along.
+    let mut moved: Vec<(f64, f64)> = Vec::new();
     for o in list {
         if let Some(at) = c.objects.iter().position(|q| q.id == o.id) {
+            if c.objects[at].time != o.time {
+                moved.push((c.objects[at].time, o.time));
+            }
             c.objects[at] = o.clone();
         }
     }
+    if !moved.is_empty()
+        && let Some(g) = c.gimmick.as_mut()
+    {
+        move_group_notes(g, &moved);
+    }
     c.sort_objects();
     c.dirty = true;
+}
+
+/// Each group's note at a `from` time is at its `to` now, all at once (so notes swapping places
+/// swap groups too).
+fn move_group_notes(g: &mut crate::tko::gimmick::Gimmick, moved: &[(f64, f64)]) {
+    for gr in &mut g.groups {
+        let mut changed = false;
+        for t in &mut gr.notes {
+            if let Some(&(_, to)) = moved.iter().find(|(from, _)| (*from - *t).abs() <= 0.5) {
+                *t = to;
+                changed = true;
+            }
+        }
+        // No dedup: two notes stacked on one ms and undone must both come back.
+        if changed {
+            gr.notes.sort_by(f64::total_cmp);
+        }
+    }
 }
 
 fn insert_timing(c: &mut Chart, list: &[TimingPoint]) {
@@ -238,9 +266,32 @@ impl History {
         self.rev
     }
 
+    /// Applies `cmd` and keeps it only if `check` passes on the chart it makes; otherwise takes
+    /// it back and leaves the history as it was, the redo steps too.
+    pub fn run_checked(
+        &mut self,
+        chart: &mut Chart,
+        mut cmd: Command,
+        check: impl FnOnce(&Chart) -> Result<(), String>,
+    ) -> Result<(), String> {
+        cmd.assign_ids(chart);
+        cmd.apply(chart);
+        if let Err(why) = check(chart) {
+            cmd.revert(chart);
+            return Err(why);
+        }
+        self.record(cmd, false);
+        Ok(())
+    }
+
     fn push(&mut self, chart: &mut Chart, mut cmd: Command, drag: bool) {
         cmd.assign_ids(chart);
         cmd.apply(chart);
+        self.record(cmd, drag);
+    }
+
+    /// Keeps `cmd`, applied already, as the newest step.
+    fn record(&mut self, cmd: Command, drag: bool) {
         self.rev += 1;
         if !self.undone.is_empty() {
             self.undone.clear();
@@ -294,6 +345,8 @@ impl History {
     }
 
     pub fn mark_saved(&mut self) {
+        // A drag going on past the save is a step of its own, or it would look saved.
+        self.open = false;
         self.saved = Some(self.done.len());
     }
 

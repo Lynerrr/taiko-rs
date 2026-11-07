@@ -1013,11 +1013,13 @@ fn with_ending(line: &str, ending: &str) -> String {
 /// what the editor shows.
 fn check_round_trip(chart: &Chart, text: &str) -> Result<(), String> {
     let back = Chart::parse(text);
-    if back.objects.len() != chart.objects.len() {
+    // Fake notes are written into the gimmick, not as hit objects.
+    let real = || chart.objects.iter().filter(|o| !o.fake);
+    if back.objects.len() != real().count() {
         return Err(format!(
             "the saved file would hold {} objects, not {}",
             back.objects.len(),
-            chart.objects.len()
+            real().count()
         ));
     }
     if back.timing.len() != chart.timing.len() {
@@ -1027,9 +1029,7 @@ fn check_round_trip(chart: &Chart, text: &str) -> Result<(), String> {
             chart.timing.len()
         ));
     }
-    let mut want: Vec<_> = chart
-        .objects
-        .iter()
+    let mut want: Vec<_> = real()
         .map(|o| (o.time.to_bits(), o.kind, o.sound))
         .collect();
     let mut got: Vec<_> = back

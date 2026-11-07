@@ -4784,6 +4784,11 @@ impl Game {
                 }
             }
         }
+        // Notes flying in on a .tko approach path, drawn over the drum panel after it: a path
+        // from behind the drum starts under the panel, where they'd be hidden most of the way.
+        // (lane distance, fake, index, flow, colour, alpha, motion)
+        let mut on_path: Vec<(f32, bool, usize, u8, u32, f32, NoteFx)> = Vec::new();
+        let over_panel = |fx: &NoteFx| !crossfire && fx.path.is_some_and(|p| p[2] > 0.0);
         // A .tko map's fake notes, under the real ones: drawn like them, never judged, gone when
         // they reach the drum.
         let fakes_on: Vec<usize> = {
@@ -4811,7 +4816,11 @@ impl Game {
                 .and_then(|rt| rt.fake_path(k, vt, s, lane_len));
             if a > 0.01 && !nfx.hidden {
                 let col = if n.kind == Kind::Kat { kat } else { don };
-                draw_hit(c, s, n, k, 1, col, a, nfx);
+                if over_panel(&nfx) {
+                    on_path.push((s, true, k, 1, col, a, nfx));
+                } else {
+                    draw_hit(c, s, n, k, 1, col, a, nfx);
+                }
             }
         }
         let mut order = self.visible.clone();
@@ -4919,16 +4928,12 @@ impl Game {
                                     .as_ref()
                                     .and_then(|r| r.note_path(i, vt, s, lane_len));
                                 if a > 0.01 && !nfx.hidden {
-                                    draw_hit(
-                                        c,
-                                        s,
-                                        n,
-                                        i,
-                                        self.flows[i],
-                                        col,
-                                        if theirs.is_some() { 0.3 * a } else { a },
-                                        nfx,
-                                    );
+                                    let a = if theirs.is_some() { 0.3 * a } else { a };
+                                    if over_panel(&nfx) {
+                                        on_path.push((s, false, i, self.flows[i], col, a, nfx));
+                                    } else {
+                                        draw_hit(c, s, n, i, self.flows[i], col, a, nfx);
+                                    }
                                     if let Some(ring) = theirs {
                                         let (x, y, _, size) = place(side_of(n.kind, s), 0.0);
                                         c.ring(x, y, (r + 2.0) * size, rgba(ring, 0.8 * a), 2.0);
@@ -5350,6 +5355,15 @@ impl Game {
         } else {
             draw_drum(c, self.presses.map(flash), uni.don(), uni.kat())
         };
+        // Back to front, as they were met.
+        for (s, fake, k, flow, col, a, nfx) in on_path {
+            let n = if fake {
+                &self.map.fakes[k]
+            } else {
+                &self.map.notes[k]
+            };
+            draw_hit(c, s, n, k, flow, col, a, nfx);
+        }
         // The combo: on the drum, or with Crossfire under the hit target.
         let combo_y = |h: f32| {
             if crossfire {

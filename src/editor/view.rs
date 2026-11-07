@@ -44,7 +44,7 @@ use clips::{CF, FxAct};
 use cmd::Cmd;
 pub use cmd::Mode;
 use curves::{SAct, SF};
-use keys::KAct;
+use keys::{KAct, KF};
 use lines::TAct;
 use nodes::NAct;
 use panel::{GFlag, GParam};
@@ -81,6 +81,8 @@ pub enum Field {
     S(SF),
     /// A number of the effect clip picked.
     Fx(CF),
+    /// A number of the keyframe picked.
+    Key(KF),
     /// The text of the text block picked.
     FxText,
     /// A setting of Song setup.
@@ -471,6 +473,10 @@ pub struct View {
     m_prop: usize,
     /// Where that graph was drawn last.
     m_graph: [f32; 4],
+    /// The key picked on the before-the-hit graph (in the track it shows).
+    m_key: Option<usize>,
+    /// Keys copied with Ctrl+C on the key graph, for Ctrl+V.
+    k_copied: Option<Vec<crate::tko::track::Key>>,
     /// Effects being recorded live (keys 1..9): the shelf effect and where it started.
     fx_live: Vec<(usize, f64)>,
     k_ease: crate::tko::track::Ease,
@@ -636,6 +642,8 @@ impl View {
             m_tab: 0,
             m_prop: 0,
             m_graph: [0.0; 4],
+            m_key: None,
+            k_copied: None,
             fx_live: Vec::new(),
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
@@ -2248,11 +2256,18 @@ impl View {
             };
             return;
         }
-        match self.ed.tool {
+        // On the Effects pages the timeline picks notes for groups, paths and clips; notes are
+        // placed in Compose.
+        let tool = if self.mode == Mode::Effects {
+            Tool::Select
+        } else {
+            self.ed.tool
+        };
+        match tool {
             Tool::Select | Tool::Note => {
                 if let Some(id) = self.object_at_point(x, y) {
                     // The Note tool paints a placed note with the colour of the one in hand.
-                    if self.ed.tool == Tool::Note && !keys.shift && self.ed.recolour(id) {
+                    if tool == Tool::Note && !keys.shift && self.ed.recolour(id) {
                         self.ed.selection = [id].into();
                         self.select_line(None);
                         self.mark_stale();
@@ -2260,14 +2275,14 @@ impl View {
                         return;
                     }
                     self.grab_object(id, x, t, keys);
-                } else if self.ed.tool == Tool::Select && self.left_pan && !keys.shift {
+                } else if tool == Tool::Select && self.left_pan && !keys.shift {
                     self.select_line(None);
                     self.drag = Drag::Slide {
                         from_x: x,
                         start: self.view_start,
                         left: true,
                     };
-                } else if self.ed.tool == Tool::Select {
+                } else if tool == Tool::Select {
                     self.select_line(None);
                     self.drag = Drag::Box {
                         from: t,
@@ -2290,7 +2305,7 @@ impl View {
             }
             Tool::Roll | Tool::Swell => {
                 let at = self.grid_or_free(t, keys);
-                let swell = self.ed.tool == Tool::Swell;
+                let swell = tool == Tool::Swell;
                 if let Some(start) = self.roll_start.take() {
                     self.finish_roll(start, at, swell);
                 } else {
@@ -2616,6 +2631,9 @@ impl View {
         if let Field::Fx(cf) = f {
             return self.clip_change(cf, dir, keys);
         }
+        if let Field::Key(kf) = f {
+            return self.key_step(kf, dir, keys);
+        }
         if let Field::Meta(k) = f {
             return self.step_setting(k, dir, keys);
         }
@@ -2648,7 +2666,7 @@ impl View {
                 Field::Time => p.time = (p.time + dir * k).max(0.0),
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::FxText | Field::Meta(_) => {}
+                Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
             },
             false,
         );
@@ -2679,6 +2697,13 @@ impl View {
         }
         if let Field::Meta(k) = f {
             return self.apply_setting(k, text);
+        }
+        if let Field::Key(kf) = f {
+            match text.trim().parse::<f64>() {
+                Ok(v) => self.key_typed(kf, v),
+                Err(_) => self.status = "not a number".into(),
+            }
+            return;
         }
         if let Field::Fx(cf) = f {
             match text.trim().parse::<f64>() {
@@ -2712,10 +2737,10 @@ impl View {
                 }
                 Field::Volume => p.volume = v as i32,
                 Field::Meter => p.meter = v as i32,
-                Field::Time => p.time = v,
+                Field::Time => p.time = v.round().max(0.0),
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::FxText | Field::Meta(_) => {}
+                Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
             },
             false,
         );
@@ -2817,7 +2842,7 @@ impl View {
             Btn::Edit(Field::Meta(k)) => self.type_setting(k),
             Btn::Edit(f) => {
                 if self.sel_line.is_some()
-                    || matches!(f, Field::S(_))
+                    || matches!(f, Field::S(_) | Field::Key(_))
                     || (matches!(f, Field::Fx(_) | Field::FxText) && self.fx_sel.is_some())
                 {
                     let now = match f {
@@ -2839,7 +2864,7 @@ impl View {
             Btn::GPreview => self.gimmick_preview(),
             Btn::GKeep => self.settle_preview(),
             Btn::GCancel => self.gimmick_cancel(),
-            Btn::K(a) => self.press_key_action(a, keys.shift, keys.alt),
+            Btn::K(a) => self.press_key_action(a),
             Btn::Fx(a) => self.press_fx(a),
             Btn::M(a) => self.press_motion(a),
             Btn::N(a) => self.press_node_action(a, keys.shift),
@@ -4181,8 +4206,33 @@ mod tests {
             v.ed.track_of(v.subject()).unwrap().keys[1].ease,
             keys[1].ease
         );
-        press(&mut v, Btn::K(KAct::Value(1)));
+        press(&mut v, Btn::Inc(Field::Key(KF::Value)));
         assert!(v.ed.track_of(v.subject()).unwrap().keys[1].v > keys[1].v);
+        // Its value typed, and Enter puts it in.
+        draw(&mut v);
+        press(&mut v, Btn::Edit(Field::Key(KF::Value)));
+        for k in [
+            KeyCode::Digit1,
+            KeyCode::Period,
+            KeyCode::Digit2,
+            KeyCode::Digit5,
+        ] {
+            v.key(k, false, Keys::default(), None);
+        }
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert_eq!(v.ed.track_of(v.subject()).unwrap().keys[1].v, 1.25);
+        // Ctrl+C / Ctrl+V lay a copy of it at the playhead.
+        v.run(Cmd::CopyNotes, None);
+        v.ed.time = 4000.0;
+        v.run(Cmd::Paste, None);
+        let now = v.ed.track_of(v.subject()).unwrap().keys.clone();
+        assert_eq!(now.len(), 3, "{now:?}");
+        assert!(
+            now.iter()
+                .any(|k| (k.t - v.ed.snapped(4000.0)).abs() < 1e-6 && k.v == 1.25)
+        );
+        assert!(v.ed.undo(), "one undo step");
+        v.k_sel = Some(1);
         press(&mut v, Btn::K(KAct::DeleteKey));
         assert_eq!(v.ed.track_of(v.subject()).unwrap().keys.len(), 1);
         // Right-click deletes too. A group needs notes selected first.
@@ -4410,13 +4460,20 @@ mod tests {
         press(&mut v, Btn::GPage(motion::PAGE));
         assert!(v.motion_mode());
         draw(&mut v);
+        // With nothing picked the page says how to pick, and a path pressed says it again.
+        let has = |v: &View, b: Btn| v.buttons.iter().any(|(_, x)| *x == b);
+        assert!(!has(&v, Btn::M(MAct::UseSelection)));
         assert!(
-            v.buttons
-                .iter()
-                .any(|(_, b)| *b == Btn::M(MAct::UseSelection))
+            has(&v, Btn::M(MAct::Path(2))),
+            "the paths show from the start"
         );
+        press(&mut v, Btn::M(MAct::Path(2)));
+        assert!(v.status.contains("press 1"), "{}", v.status);
+        assert!(v.ed.gimmick().unwrap().groups.is_empty());
         let ids: Vec<u64> = v.ed.chart.objects.iter().take(4).map(|o| o.id).collect();
         v.ed.selection = ids.into_iter().collect();
+        draw(&mut v);
+        assert!(has(&v, Btn::M(MAct::UseSelection)));
         press(&mut v, Btn::M(MAct::UseSelection));
         let g = v.m_group.unwrap();
         let points = |v: &View| v.ed.path_of(g).unwrap().points.clone();
@@ -4473,6 +4530,47 @@ mod tests {
     }
 
     const PATHS0: [f64; 2] = crate::editor::motion::PATHS[0].1[0];
+
+    #[test]
+    fn on_the_motion_page_key_1_picks_notes_and_a_path_goes_on_what_is_picked() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        v.ed.tool = Tool::Note;
+        // 1 is the Select tool and the page stays; 2 places notes, in Compose.
+        key(&mut v, KeyCode::Digit1);
+        assert_eq!(v.ed.tool, Tool::Select);
+        assert!(v.motion_mode(), "still on the Motion page");
+        draw(&mut v);
+        // A click on a note picks it; on the Effects pages the timeline never places notes.
+        v.ed.tool = Tool::Note;
+        let n = v.ed.chart.objects.len();
+        let o = v.ed.chart.objects[1].clone();
+        let (x, y) = (
+            v.x_of(o.time),
+            v.layout.timeline[1] + v.layout.timeline[3] * 0.6,
+        );
+        click(&mut v, x, y);
+        assert_eq!(v.ed.chart.objects.len(), n);
+        assert_eq!(v.ed.selection, [o.id].into());
+        // It becomes a fake, and From behind goes on it straight from the path button.
+        press(&mut v, Btn::M(MAct::Tab(4)));
+        press(&mut v, Btn::M(MAct::ToggleFake));
+        assert!(v.ed.chart.object(o.id).unwrap().fake);
+        press(&mut v, Btn::M(MAct::Tab(0)));
+        press(&mut v, Btn::M(MAct::Path(2)));
+        let g = v.motion_group().expect("the picked fake has a group");
+        assert_eq!(
+            v.ed.path_of(g).unwrap().points,
+            crate::editor::motion::PATHS[2].1.to_vec()
+        );
+        let text = v.ed.chart.to_text();
+        let gm = crate::beatmap::from_text(&text).unwrap().gimmick.unwrap();
+        assert_eq!(gm.fakes.len(), 1);
+        assert!(gm.groups[0].path.is_some());
+        key(&mut v, KeyCode::Digit2);
+        assert_eq!(v.mode, Mode::Compose);
+    }
 
     #[test]
     fn the_scroll_tab_keys_the_shared_scroll_with_buttons_and_on_the_graph() {

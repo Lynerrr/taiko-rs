@@ -231,23 +231,38 @@ pub fn pace_track(i: usize) -> Track {
 }
 
 impl Editor {
+    /// The selected notes' times, in order, once each.
+    fn selected_times(&self) -> Vec<f64> {
+        let mut times: Vec<f64> = self.selected().iter().map(|o| o.time).collect();
+        times.sort_by(f64::total_cmp);
+        times.dedup();
+        times
+    }
+
+    /// The group that holds just the selected notes, if there is one.
+    pub fn group_of_selection(&self) -> Option<usize> {
+        let times = self.selected_times();
+        if times.is_empty() {
+            return None;
+        }
+        self.gimmick()?.groups.iter().position(|gr| {
+            gr.notes.len() == times.len() && times.iter().all(|&t| holds(&gr.notes, t))
+        })
+    }
+
     /// The group the selected notes fly with: the one that holds just them, else a new one they
     /// move into, out of any other (one undo step). Returns its index.
     pub fn motion_group(&mut self) -> Result<usize, String> {
-        let mut times: Vec<f64> = self.selected().iter().map(|o| o.time).collect();
+        let times = self.selected_times();
         if times.is_empty() {
             return Err("select notes on the timeline first".into());
         }
-        times.sort_by(f64::total_cmp);
-        times.dedup();
+        if let Some(i) = self.group_of_selection() {
+            return Ok(i);
+        }
         let Some(g) = self.gimmick() else {
             return Err("this chart isn't a .tko yet".into());
         };
-        if let Some(i) = g.groups.iter().position(|gr| {
-            gr.notes.len() == times.len() && times.iter().all(|&t| holds(&gr.notes, t))
-        }) {
-            return Ok(i);
-        }
         if g.groups.len() >= MAX_GROUPS {
             return Err("too many groups".into());
         }
@@ -658,6 +673,20 @@ mod tests {
         assert_eq!(groups[g].notes, [times[2]]);
         assert!(e.undo());
         assert_eq!(e.gimmick().unwrap().groups.len(), 1, "one undo step");
+    }
+
+    #[test]
+    fn a_moved_note_keeps_its_motion_and_undo_brings_it_back() {
+        let mut e = tko();
+        let times = pick(&mut e, 2);
+        let g = e.motion_group().unwrap();
+        e.set_path_preset(g, 2);
+        assert!(e.nudge_selected(true));
+        let now: Vec<f64> = e.selected().iter().map(|o| o.time).collect();
+        assert_ne!(now, times);
+        assert_eq!(e.group_of_selection(), Some(g), "the group went with them");
+        assert!(e.undo());
+        assert_eq!(e.gimmick().unwrap().groups[g].notes, times);
     }
 
     #[test]

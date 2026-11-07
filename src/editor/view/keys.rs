@@ -25,13 +25,55 @@ pub enum KAct {
     Tab(usize),
     KeyHere,
     Ease,
-    Value(i32),
     DeleteKey,
     MakeTko,
 }
 
 /// How fast or backwards the scroll graph shows at most; faster keys sit at its edge.
 const SCROLL_SHOWN: f64 = 8.0;
+
+/// A number of the key picked, typed or stepped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KF {
+    /// The value of the key picked on the graph under the timeline.
+    Value,
+    /// Its time, in ms.
+    Time,
+    /// The value of the key picked on the Motion page's before-the-hit graph.
+    BeforeValue,
+    /// Its beats before the hit.
+    BeforeBeats,
+}
+
+/// A round step for values over `span`: about a fortieth of it, as 1, 2 or 5 of a power of ten,
+/// so a dragged key lands on 0.25 or 40, not 0.2371.
+pub(super) fn nice_step(span: f64) -> f64 {
+    let raw = (span.abs() / 40.0).max(1e-4);
+    let p = 10f64.powf(raw.log10().floor());
+    let m = raw / p;
+    let n = if m <= 1.0 {
+        1.0
+    } else if m <= 2.0 {
+        2.0
+    } else if m <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    n * p
+}
+
+/// `v` on the `step` grid, without float dust (0.30000000000000004).
+pub(super) fn snap_value(v: f64, step: f64) -> f64 {
+    ((v / step).round() * step * 1e6).round() / 1e6
+}
+
+/// A number as typed: no trailing zeros.
+pub(super) fn trim_num(v: f64) -> String {
+    let s = format!("{:.3}", (v * 1000.0).round() / 1000.0);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".into() } else { s.into() }
+}
 
 impl View {
     /// The track being edited.
@@ -179,33 +221,189 @@ impl View {
             (format!("Ease: {}", ease.label()), Btn::K(KAct::Ease), false),
         ];
         if key.is_some() {
-            row.push(("Value -".to_string(), Btn::K(KAct::Value(-1)), false));
-            row.push(("Value +".to_string(), Btn::K(KAct::Value(1)), false));
             row.push(("Delete key".to_string(), Btn::K(KAct::DeleteKey), false));
         }
-        self.row(c, x, y, &row);
+        let end = self.row(c, x, y, &row);
+        // The picked key's value and time: click one to type it, - and + step it.
+        if let Some(k) = key {
+            let w = ((x + inner - end) / 2.0 - 3.0).max(60.0);
+            self.key_number(c, [end, y, w], KF::Value, "Value", trim_num(k.v));
+            self.key_number(
+                c,
+                [end + w + 4.0, y, w],
+                KF::Time,
+                "At ms",
+                format!("{}", k.t.round()),
+            );
+        }
         y += 20.0;
         let hint = match key {
             Some(k) => format!(
-                "key at {}: {:.2}   shift: x10, alt: x0.1",
+                "key at {}: {}   click a number to type it   drag snaps to {}, Shift: free   Ctrl+C / Ctrl+V: copy keys",
                 fmt_time(k.t),
-                k.v
+                trim_num(k.v),
+                trim_num(nice_step(self.key_range().1 - self.key_range().0)),
             ),
             None => {
-                "click the graph below to add a key, drag to move it, right-click to delete".into()
+                "click the graph below to add a key, drag to move it, right-click to delete   Ctrl+C / Ctrl+V: copy all keys"
+                    .into()
             }
         };
         c.text(x, y, 6.0, dim, &Canvas::fit(6.0, inner, &hint));
     }
 
-    pub(super) fn press_key_action(&mut self, a: KAct, shift: bool, alt: bool) {
-        let step = if shift {
+    /// A typed number of the key picked: label and value (click to type), then - and +.
+    pub(super) fn key_number(
+        &mut self,
+        c: &mut Canvas,
+        [x, y, w]: [f32; 3],
+        f: KF,
+        label: &str,
+        value: String,
+    ) {
+        let field = super::Field::Key(f);
+        let typing = matches!(&self.typing, Some((tf, _)) if *tf == field);
+        let text = match &self.typing {
+            Some((tf, t)) if *tf == field => format!("{label}: {t}_"),
+            _ => format!("{label} {value}"),
+        };
+        let lw = (w - 32.0).max(20.0);
+        self.button(c, [x, y, lw, 16.0], &text, Btn::Edit(field), typing);
+        self.button(
+            c,
+            [x + lw + 2.0, y, 14.0, 16.0],
+            "-",
+            Btn::Dec(field),
+            false,
+        );
+        self.button(
+            c,
+            [x + lw + 17.0, y, 14.0, 16.0],
+            "+",
+            Btn::Inc(field),
+            false,
+        );
+    }
+
+    /// The key picked (on the graph under the timeline, or the Motion page's) gets `v` for its
+    /// number `f`.
+    pub(super) fn key_typed(&mut self, f: KF, v: f64) {
+        if !v.is_finite() {
+            self.status = "not a number".into();
+            return;
+        }
+        match f {
+            KF::Value | KF::Time => {
+                let s = self.subject();
+                let Some(i) = self.k_sel else { return };
+                let Some(k) = self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied() else {
+                    return;
+                };
+                let key = if f == KF::Value {
+                    Key { v, ..k }
+                } else {
+                    Key { t: v.max(0.0), ..k }
+                };
+                if self.ed.move_key(s, i, key, false) {
+                    self.k_sel = self.ed.track_of(s).and_then(|tr| tr.near(key.t, 0.0));
+                    self.mark_stale();
+                }
+            }
+            KF::BeforeValue | KF::BeforeBeats => self.before_key_set(f, v),
+        }
+    }
+
+    /// Steps number `f` of the key picked a notch (Shift: ten, Alt: a tenth).
+    pub(super) fn key_step(&mut self, f: KF, dir: f64, keys: super::Keys) {
+        let k = if keys.shift {
             10.0
-        } else if alt {
+        } else if keys.alt {
             0.1
         } else {
             1.0
         };
+        match f {
+            KF::Value | KF::Time => {
+                let s = self.subject();
+                let Some(key) = self
+                    .k_sel
+                    .and_then(|i| self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied())
+                else {
+                    return;
+                };
+                let v = if f == KF::Value {
+                    let (lo, hi) = self.key_range();
+                    let step = nice_step(hi - lo) * k;
+                    snap_value(key.v + dir * step, step.min(nice_step(hi - lo)))
+                } else {
+                    // A snap step of the editor's grid; Shift a beat's worth of them.
+                    let mut t = key.t;
+                    let n = if keys.shift { 4 } else { 1 };
+                    for _ in 0..n {
+                        t = crate::editor::timing::step(
+                            &self.ed.chart.timing,
+                            t,
+                            dir > 0.0,
+                            self.ed.snap,
+                        );
+                    }
+                    t
+                };
+                self.key_typed(f, v);
+            }
+            KF::BeforeValue | KF::BeforeBeats => self.before_key_step(f, dir * k),
+        }
+    }
+
+    /// Ctrl+C on the key graph: the key picked, or with none every key of the track. False
+    /// when there is nothing to copy (so notes are copied instead).
+    pub(super) fn copy_keys(&mut self) -> bool {
+        let s = self.subject();
+        let Some(tr) = self.ed.track_of(s) else {
+            return false;
+        };
+        let keys: Vec<Key> = match self.k_sel {
+            Some(i) => tr.keys.get(i).copied().into_iter().collect(),
+            None => tr.keys.clone(),
+        };
+        if keys.is_empty() {
+            return false;
+        }
+        let n = keys.len();
+        self.k_copied = Some(keys);
+        self.status = format!(
+            "{n} key{} copied: Ctrl+V lays {} at the playhead (on any property)",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "it" } else { "them" },
+        );
+        true
+    }
+
+    /// Ctrl+V on the key graph: the keys copied, the first at the playhead, the rest as far
+    /// apart as they were. The playhead goes past them, so pasting again lays the next copy.
+    pub(super) fn paste_keys(&mut self) {
+        let Some(keys) = self.k_copied.clone() else {
+            return;
+        };
+        let s = self.subject();
+        let at = self.ed.snapped(self.ed.time.max(0.0));
+        if self.ed.paste_keys(s, &keys, at) {
+            let first = keys.first().map_or(0.0, |k| k.t);
+            let last = keys.last().map_or(0.0, |k| k.t);
+            self.k_sel = self.ed.track_of(s).and_then(|tr| tr.near(at, 0.0));
+            if keys.len() > 1 {
+                self.set_time(at + (last - first));
+            }
+            self.status = format!(
+                "pasted {} key{}",
+                keys.len(),
+                if keys.len() == 1 { "" } else { "s" }
+            );
+            self.mark_stale();
+        }
+    }
+
+    pub(super) fn press_key_action(&mut self, a: KAct) {
         match a {
             KAct::Target(field) => {
                 self.k_field = field;
@@ -277,25 +475,6 @@ impl View {
                         }
                     }
                     None => self.k_ease = self.k_ease.next(),
-                }
-            }
-            KAct::Value(dir) => {
-                let s = self.subject();
-                let (lo, hi) = s.range();
-                let unit = ((hi - lo) / 100.0).max(0.01) * step;
-                if let Some(i) = self.k_sel
-                    && let Some(k) = self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied()
-                    && self.ed.move_key(
-                        s,
-                        i,
-                        Key {
-                            v: k.v + dir as f64 * unit,
-                            ..k
-                        },
-                        false,
-                    )
-                {
-                    self.mark_stale();
                 }
             }
             KAct::DeleteKey => {
@@ -449,6 +628,16 @@ impl View {
             .map(|(i, _)| i)
     }
 
+    /// A value read off the graph showing range `r`: on a round step of it, or to the
+    /// hundredth with Shift held.
+    fn graph_snap(&self, v: f64, r: (f64, f64)) -> f64 {
+        if self.held.shift {
+            (v * 100.0).round() / 100.0
+        } else {
+            snap_value(v, nice_step(r.1 - r.0))
+        }
+    }
+
     pub(super) fn key_graph_down(&mut self, x: f32, y: f32) {
         let s = self.subject();
         self.k_frozen = Some(self.key_range());
@@ -459,7 +648,7 @@ impl View {
             return;
         }
         let t = self.ed.snapped(self.t_at(x));
-        let v = (self.y_key(y, r) * 100.0).round() / 100.0;
+        let v = self.graph_snap(self.y_key(y, r), r);
         if self.ed.key(
             s,
             Key {
@@ -486,7 +675,7 @@ impl View {
             return;
         };
         let t = self.ed.snapped(self.t_at(x)).max(0.0);
-        let v = (self.y_key(y, r) * 100.0).round() / 100.0;
+        let v = self.graph_snap(self.y_key(y, r), r);
         if self.ed.move_key(s, index, Key { t, v, ..old }, true) {
             let now = self
                 .ed
