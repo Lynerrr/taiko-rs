@@ -391,6 +391,8 @@ pub struct View {
     /// The player asked to see the map's folder (File > Open song folder).
     /// A file for the game to show in the file manager (the map, or what was exported).
     show: Option<std::path::PathBuf>,
+    /// A save moved the map's file to a new name (from, to), for the game's list to follow.
+    renamed: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// An export on its way: the file it wrote.
     export_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
     game: Option<Box<Game>>,
@@ -604,6 +606,7 @@ impl View {
             want_rate: None,
             play_when_loaded: false,
             show: None,
+            renamed: None,
             export_rx: None,
             game: None,
             game_err: None,
@@ -731,6 +734,11 @@ impl View {
     /// The map file to show in its folder, once asked for.
     pub fn take_folder_request(&mut self) -> Option<std::path::PathBuf> {
         self.show.take()
+    }
+
+    /// The map's file a save renamed (from, to), once.
+    pub fn take_renamed(&mut self) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        self.renamed.take()
     }
 
     /// A test play asked for (F5): where to start (None: the start).
@@ -2612,13 +2620,33 @@ impl View {
         if !self.ed.chart.dirty && !self.ed.modified() {
             return true;
         }
-        match self.ed.save() {
-            Ok(()) => true,
+        match self.save_file() {
+            Ok(_) => true,
             Err(e) => {
                 self.status = format!("can't save: {e}");
                 false
             }
         }
+    }
+
+    /// Saves, noting a rename of the file for the game. The status line when it went through.
+    fn save_file(&mut self) -> Result<String, String> {
+        let was = self.ed.path.clone();
+        let kept = self.ed.save()?;
+        let file = self
+            .ed
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if self.ed.path != was {
+            self.renamed = Some((was, self.ed.path.clone()));
+            return Ok(format!("saved as {file}"));
+        }
+        Ok(match kept {
+            Some(why) => format!("saved {} ({why})", self.ed.path.display()),
+            None => format!("saved {}", self.ed.path.display()),
+        })
     }
 
     fn poll_export(&mut self) {
@@ -2643,8 +2671,8 @@ impl View {
     }
 
     fn save(&mut self) {
-        self.status = match self.ed.save() {
-            Ok(()) => format!("saved {}", self.ed.path.display()),
+        self.status = match self.save_file() {
+            Ok(said) => said,
             Err(e) => format!("can't save: {e}"),
         };
     }

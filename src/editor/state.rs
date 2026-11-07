@@ -3,7 +3,7 @@
 //! every time it writes is a whole millisecond the way stable's editor writes it.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::chart::{Chart, HitObject, Taiko, TimingPoint};
 use super::gimmicks::GimmickConfig;
@@ -50,10 +50,47 @@ pub struct Editor {
     /// Read the chart's SV as the curves it was drawn with (ramps between notes) rather than as
     /// osu! steps, for the anti-barline wall.
     pub sv_curves: bool,
+    /// The file name (without extension) the metadata gave when the file was opened or last
+    /// renamed: a save moves the file once the names in it make a different one.
+    pub(super) named: String,
+}
+
+/// The file name (without extension) `chart`'s metadata gives a difficulty, as a new map is
+/// named: the artist and title in their own script, the romanised ones when those are empty.
+pub(super) fn named_by(chart: &Chart) -> String {
+    let get = |key: &str| {
+        chart
+            .get_key("Metadata", key)
+            .filter(|v| !v.trim().is_empty())
+    };
+    let either =
+        |own: &str, romanised: &str| get(own).or_else(|| get(romanised)).unwrap_or_default();
+    super::new_map::file_stem(
+        &either("ArtistUnicode", "Artist"),
+        &either("TitleUnicode", "Title"),
+        &get("Creator").unwrap_or_default(),
+        &get("Version").unwrap_or_default(),
+    )
+}
+
+/// Whether `a` and `b` are one file (a name differing only in case, on a system that ignores it).
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// `path` with `.bak` added, where a save keeps the file's first version.
+fn backup_of(path: &Path) -> PathBuf {
+    let mut bak = path.as_os_str().to_owned();
+    bak.push(".bak");
+    PathBuf::from(bak)
 }
 
 impl Editor {
     pub fn new(chart: Chart, path: PathBuf) -> Editor {
+        let named = named_by(&chart);
         let time = chart
             .objects
             .first()
@@ -86,6 +123,7 @@ impl Editor {
             gimmick: GimmickConfig::default(),
             base: None,
             sv_curves: false,
+            named,
         }
     }
 
@@ -97,7 +135,10 @@ impl Editor {
         self.history.modified() || self.bookmarks_changed
     }
 
-    pub fn save(&mut self) -> Result<(), String> {
+    /// Writes the chart to its file. When the artist, title, mapper or difficulty name changed
+    /// since the file was opened, the file then takes the name they give (`path` follows).
+    /// `Ok(Some(why))`: saved, but the file kept its old name.
+    pub fn save(&mut self) -> Result<Option<String>, String> {
         if self.bookmarks_changed {
             let list: Vec<String> = self
                 .bookmarks
@@ -109,6 +150,42 @@ impl Editor {
         self.chart.save(&self.path, true)?;
         self.history.mark_saved();
         self.bookmarks_changed = false;
+        Ok(self.follow_name().err())
+    }
+
+    /// Moves the saved file to the name its metadata gives, once that changed.
+    fn follow_name(&mut self) -> Result<(), String> {
+        let named = named_by(&self.chart);
+        if named == self.named {
+            return Ok(());
+        }
+        let ext = self
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("osu");
+        let dir = self.path.parent().unwrap_or(Path::new("."));
+        let target = dir.join(format!("{named}.{ext}"));
+        if target == self.path {
+            self.named = named;
+            return Ok(());
+        }
+        let file = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if target.exists() && !same_file(&target, &self.path) {
+            return Err(format!("{file} already exists, so the file keeps its name"));
+        }
+        std::fs::rename(&self.path, &target)
+            .map_err(|e| format!("can't rename the file to {file}: {e}"))?;
+        // The first version kept beside it goes along.
+        let (bak, new_bak) = (backup_of(&self.path), backup_of(&target));
+        if bak.exists() && !new_bak.exists() {
+            let _ = std::fs::rename(&bak, &new_bak);
+        }
+        self.path = target;
+        self.named = named;
         Ok(())
     }
 
