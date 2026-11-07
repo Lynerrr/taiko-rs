@@ -218,6 +218,9 @@ const MUSIC_SEEK_MS: f64 = 5000.0;
 /// How often a running game looks for a newer build (with "Check for updates" on).
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 
+/// How often the open song list asks again which of its custom sets the website approved.
+const CUSTOM_REFRESH: Duration = Duration::from_secs(2 * 60);
+
 /// How far behind the live match spectators watch, so players' presses arrive in time.
 const SPECTATE_DELAY: Duration = Duration::from_millis(1500);
 
@@ -615,10 +618,10 @@ struct State {
     /// way, for the message), and whether it's been asked since starting.
     loved_call: Option<LovedCall>,
     loved_asked: bool,
-    /// Asking the website which custom sets in the library are approved, and whether it's been
-    /// asked for this library.
+    /// Asking the website which custom sets in the library are approved, and when it was last
+    /// asked for this library (None: ask now).
     custom_call: Option<Receiver<CustomKnown>>,
-    custom_asked: bool,
+    custom_asked: Option<Instant>,
     /// The folder of the map in the editor, looked at for maps dropped into it.
     folder_watch: Option<folder_watch::Watch>,
     /// The editor a test play (F5) came from: the play goes back to it, saves nothing and sends
@@ -10185,14 +10188,19 @@ impl State {
     }
 
     /// Which map folders of the library were sent to (or came from) the custom maps, and which
-    /// of those sets are approved: one question per library, on a thread.
-    fn poll_custom(&mut self) {
-        if !self.custom_asked
+    /// of those sets are approved: asked on a thread once per library, then again every
+    /// `CUSTOM_REFRESH` while the song list is open, so a set approved meanwhile shows it.
+    fn poll_custom(&mut self, now: Instant) {
+        let due = self.custom_asked.is_none_or(|t| {
+            matches!(self.scene, Scene::Select)
+                && now.saturating_duration_since(t) >= CUSTOM_REFRESH
+        });
+        if due
             && self.custom_call.is_none()
             && !self.library.is_empty()
             && self.cfg.online_server == online::DEFAULT_SERVER
         {
-            self.custom_asked = true;
+            self.custom_asked = Some(now);
             let mut folders: Vec<PathBuf> = self
                 .library
                 .iter()
@@ -10269,7 +10277,7 @@ impl State {
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
         self.poll_loved();
-        self.poll_custom();
+        self.poll_custom(Instant::now());
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
             menu.session_loaded = true;
@@ -10515,7 +10523,7 @@ impl State {
         let server_loved = std::mem::take(&mut self.select.server_loved);
         let custom_folder = std::mem::take(&mut self.select.custom_folder);
         let custom_approved = std::mem::take(&mut self.select.custom_approved);
-        self.custom_asked = false;
+        self.custom_asked = None;
         let nominator = self.select.nominator;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
@@ -11296,11 +11304,25 @@ impl State {
         }
     }
 
-    /// The status on osu! of library map `i`, as (label, colour): the mirrors' when known,
-    /// else osu!.db's (which can't tell graveyard from pending).
+    /// The status of library map `i`, as (label, colour): the custom maps' for a set sent to
+    /// (or downloaded from) them, else osu!'s: the mirrors' when known, else osu!.db's (which
+    /// can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let Some(set) = e.set_id().filter(|_| !self.select.edited.contains(&e.path)) else {
+        let edited = self.select.edited.contains(&e.path);
+        // As the song list has it (`Select::status_of`): an edited copy is nobody's.
+        let custom = e
+            .path
+            .parent()
+            .and_then(|d| self.select.custom_folder.get(d));
+        if let Some(id) = custom.filter(|_| !edited) {
+            return Some(if self.select.custom_approved.contains(id) {
+                ("CUSTOM APPROVED", 0x4fd1b0)
+            } else {
+                ("CUSTOM", 0x9b6cff)
+            });
+        }
+        let Some(set) = e.set_id().filter(|_| !edited) else {
             return Some(("NOT SUBMITTED", 0x8a8aa0));
         };
         if self.select.server_loved.contains(&set) {
@@ -15846,7 +15868,7 @@ impl State {
                 }
                 if view.take_exit() {
                     // It may have been sent just now: ask which sets are custom again.
-                    self.custom_asked = false;
+                    self.custom_asked = None;
                     next = Some(Scene::Select);
                 }
             }
@@ -19112,7 +19134,7 @@ impl State {
             loved_call: None,
             loved_asked: false,
             custom_call: None,
-            custom_asked: false,
+            custom_asked: None,
             folder_watch: None,
             editor_back: None,
             test_auto: false,
