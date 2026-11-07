@@ -89,12 +89,36 @@ fn slice(c: &mut Canvas, start: usize, fx: &FieldFx) {
     }
 }
 
+/// What takes the playfield's shapes from where the map's own clips moved them (their x, y, turn
+/// and zoom) back to where the playfield would be without those: about `from`, turned by `angle`,
+/// sized by `zoom`, landing on `to` (as `rotate_shapes`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Unmove {
+    pub from: [f32; 2],
+    pub angle: f32,
+    pub zoom: f32,
+    pub to: [f32; 2],
+}
+
+impl Unmove {
+    /// Nothing to take back.
+    pub const NONE: Unmove = Unmove {
+        from: [0.0, 0.0],
+        angle: 0.0,
+        zoom: 1.0,
+        to: [0.0, 0.0],
+    };
+}
+
 /// Copies of the playfield (`fx.copies`), each moved on its own, made from the shapes drawn since
-/// `start`: call once the playfield is where it ends up. They turn and size about `centre`.
+/// `start`: call once the playfield is where it ends up. Moving the playfield itself with clips
+/// leaves them be: `unmove` takes each copy back from that first, so a copy sits where its own
+/// clips put it from the playfield's usual place. They turn and size about `centre` (that usual
+/// place).
 /// Their lanes go behind everything of the playfield; the rest of them (notes, drum, hit target)
 /// over its lane but under its own notes, so a copy that overlaps the lane (one swaying to the
 /// side) still shows on it instead of hiding under it.
-pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2]) {
+pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2], unmove: Unmove) {
     let end = c.shapes.len();
     if start >= end || fx.copies.iter().all(|k| k.show < 0.01) {
         return;
@@ -118,6 +142,9 @@ pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2]) {
             let a = if is_panel(s, w) { lane } else { show };
             s.fill[3] *= a;
             s.border[3] *= a;
+        }
+        if unmove != Unmove::NONE {
+            rotate_shapes(&mut part, unmove.from, unmove.angle, unmove.zoom, unmove.to);
         }
         rotate_shapes(
             &mut part,
@@ -692,7 +719,7 @@ mod tests {
             turn: 180.0,
             ..CopyFx::default()
         };
-        copies(&mut c, 0, &fx, [320.0, 240.0]);
+        copies(&mut c, 0, &fx, [320.0, 240.0], Unmove::NONE);
         // The first copy's lane, the field's lane, the first copy's 2 notes and the third's,
         // then the field's own notes on top.
         assert_eq!(c.shapes.len(), 1 + 1 + 2 + 2 + 2);
@@ -712,8 +739,51 @@ mod tests {
             "the field's notes, on top"
         );
         let mut c = field(1);
-        copies(&mut c, 0, &FieldFx::default(), [320.0, 240.0]);
+        copies(&mut c, 0, &FieldFx::default(), [320.0, 240.0], Unmove::NONE);
         assert_eq!(c.shapes.len(), 2, "no copies, nothing added");
+    }
+
+    #[test]
+    fn moving_the_playfield_leaves_its_copies_where_they_are() {
+        use super::super::runtime::CopyFx;
+        let mut c = field(1);
+        let (half, home) = (c.shapes[1].half, [100.0, 240.0]);
+        // The map's clips move the playfield 60 right and 30 up, turn it and zoom it.
+        let dest = [160.0, 210.0];
+        c.rotate_since(0, home, 0.5, 1.5, dest);
+        let mut fx = FieldFx::default();
+        fx.copies[0] = CopyFx {
+            show: 1.0,
+            y: -100.0,
+            ..CopyFx::default()
+        };
+        let unmove = Unmove {
+            from: dest,
+            angle: -0.5,
+            zoom: 1.0 / 1.5,
+            to: home,
+        };
+        copies(&mut c, 0, &fx, [320.0, 240.0], unmove);
+        // The copy's lane, the field's lane, the copy's note, the field's note.
+        assert_eq!(c.shapes.len(), 4);
+        let near =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-3 && (a[1] - b[1]).abs() < 1e-3;
+        assert!(
+            near(c.shapes[0].center, [320.0, 140.0]),
+            "{:?}",
+            c.shapes[0].center
+        );
+        assert!(
+            near(c.shapes[2].center, [150.0, 140.0]),
+            "{:?}",
+            c.shapes[2].center
+        );
+        assert!(near(c.shapes[2].half, half), "its own size");
+        assert!(c.shapes[2].angle.abs() < 1e-5, "upright");
+        assert!(
+            !near(c.shapes[3].center, [150.0, 240.0]),
+            "the field itself moved"
+        );
     }
 
     #[test]
