@@ -6673,8 +6673,9 @@ impl State {
             }
             Some(h) => {
                 let was = self.map_offset(Some(entry));
-                // The suggestion is real ms; a map's offset is song ms.
-                let map = (h.estimate.suggested_offset - self.cfg.offset_ms) * self.song_rate();
+                // The suggestion is the clock's offset in real ms; a map's offset is song ms, the
+                // osu! way round.
+                let map = (self.cfg.offset_ms - h.estimate.suggested_offset) * self.song_rate();
                 self.set_map_offset(entry, map);
                 self.toast(tr!("this map: offset {map:+.0} ms (was {was:+.0})"; map, was));
             }
@@ -6748,8 +6749,9 @@ impl State {
         let was = self.play_offset;
         let offset = self.map_offset(self.offset_entry());
         // As osu! has them: the global offset is about this machine, so real ms at any rate; a
-        // map's is about its song, so it goes by as the song does.
-        self.play_offset = self.cfg.offset_ms + offset / self.song_rate();
+        // map's is about its song, so it goes by as the song does. Both bring the notes earlier
+        // with +, which takes the clock's offset down.
+        self.play_offset = self.cfg.offset_ms - offset / self.song_rate();
         if self.play_offset != was {
             audiolog::line(&format!(
                 "offset total={} global={}",
@@ -6976,6 +6978,7 @@ impl State {
                     step
                 };
                 match self.song_entry() {
+                    // As in osu!, for a map as for all of them: + brings the notes earlier.
                     Some(entry) => {
                         let ms = self.map_offset(Some(entry)) + d;
                         self.set_map_offset(entry, ms);
@@ -14384,6 +14387,7 @@ impl State {
                         match self.pending_replay.take() {
                             Some(r) => {
                                 game.mash = r.mash();
+                                game.set_window_rule(r.window_rule());
                                 game.scroll_speed = r.scroll_speed;
                                 game.replay_of = Some(r.player.clone());
                                 game.banner = Some(format!("REPLAY  -  {}", r.player));

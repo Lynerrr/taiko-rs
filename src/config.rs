@@ -626,7 +626,9 @@ fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
     let mut out: Vec<Option<PathBuf>> = [
         "replays",
         "videos",
-        "map_offsets.tsv",
+        MAP_OFFSETS,
+        OLD_SIGN_MAP_OFFSETS,
+        OLD_SIGN_KEPT,
         "plays.tsv",
         "hidden.tsv",
         "map_skins_off.txt",
@@ -752,13 +754,15 @@ fn remove_all(p: &Path) -> std::io::Result<()> {
 }
 
 /// Each map's own offset (on top of the global one), by the .osu's content hash:
-/// `map_offsets.tsv` in the config folder, one `hash<TAB>ms` per line.
-pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
-    let Some(text) =
-        data_dir().and_then(|d| std::fs::read_to_string(d.join("map_offsets.tsv")).ok())
-    else {
-        return Default::default();
-    };
+/// `map_offsets_osu.tsv` in the config folder, one `hash<TAB>ms` per line. Like the global one
+/// and osu!'s local offset: + brings the notes earlier.
+pub const MAP_OFFSETS: &str = "map_offsets_osu.tsv";
+/// Before: the other way round (+ took the notes later). Read once, turned round into
+/// `MAP_OFFSETS`, then kept under `OLD_SIGN_KEPT` to go back to by hand.
+const OLD_SIGN_MAP_OFFSETS: &str = "map_offsets.tsv";
+const OLD_SIGN_KEPT: &str = "map_offsets.before-osu-sign.tsv";
+
+fn parse_map_offsets(text: &str) -> std::collections::HashMap<u64, f64> {
     text.lines()
         .filter_map(|l| {
             let (h, ms) = l.split_once('\t')?;
@@ -770,15 +774,43 @@ pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
         .collect()
 }
 
+pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
+    let Some(dir) = data_dir() else {
+        return Default::default();
+    };
+    load_map_offsets_in(&dir)
+}
+
+fn load_map_offsets_in(dir: &Path) -> std::collections::HashMap<u64, f64> {
+    if let Ok(text) = std::fs::read_to_string(dir.join(MAP_OFFSETS)) {
+        return parse_map_offsets(&text);
+    }
+    let Ok(text) = std::fs::read_to_string(dir.join(OLD_SIGN_MAP_OFFSETS)) else {
+        return Default::default();
+    };
+    let offsets: std::collections::HashMap<u64, f64> = parse_map_offsets(&text)
+        .into_iter()
+        .map(|(h, ms)| (h, -ms))
+        .collect();
+    if save_map_offsets_in(dir, &offsets) {
+        let _ = std::fs::rename(dir.join(OLD_SIGN_MAP_OFFSETS), dir.join(OLD_SIGN_KEPT));
+    }
+    offsets
+}
+
 pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
     let Some(dir) = data_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
+    save_map_offsets_in(&dir, offsets);
+}
+
+fn save_map_offsets_in(dir: &Path, offsets: &std::collections::HashMap<u64, f64>) -> bool {
+    let _ = std::fs::create_dir_all(dir);
     let mut lines: Vec<String> = offsets
         .iter()
         .map(|(h, ms)| format!("{h:016x}\t{ms}"))
         .collect();
     lines.sort();
-    let _ = std::fs::write(dir.join("map_offsets.tsv"), lines.join("\n") + "\n");
+    std::fs::write(dir.join(MAP_OFFSETS), lines.join("\n") + "\n").is_ok()
 }
 
 /// The folders of the maps whose own skin is turned off: `map_skins_off.txt` in the config folder,
@@ -806,10 +838,7 @@ pub fn save_map_skins_off(folders: &std::collections::HashSet<String>) {
 /// Clears every map's own offset, keeping them in `map_offsets.backup.tsv` to go back to by hand.
 pub fn reset_map_offsets() {
     if let Some(dir) = data_dir() {
-        let _ = std::fs::rename(
-            dir.join("map_offsets.tsv"),
-            dir.join("map_offsets.backup.tsv"),
-        );
+        let _ = std::fs::rename(dir.join(MAP_OFFSETS), dir.join("map_offsets.backup.tsv"));
     }
 }
 
@@ -1737,6 +1766,24 @@ fn keep_unknown(out: &mut String, old: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_map_offsets_are_turned_round_once_and_kept() {
+        let dir = std::env::temp_dir().join(format!("taiko-map-offsets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(OLD_SIGN_MAP_OFFSETS), "00000000000000ab\t12\n").unwrap();
+        let first = load_map_offsets_in(&dir);
+        assert_eq!(first.get(&0xab), Some(&-12.0));
+        assert!(!dir.join(OLD_SIGN_MAP_OFFSETS).exists());
+        assert!(
+            dir.join(OLD_SIGN_KEPT).exists(),
+            "the old file is kept to go back to"
+        );
+        // From then on it's the new file, as it is.
+        assert_eq!(load_map_offsets_in(&dir), first);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn background_saves_flush_the_latest_snapshot_and_preserve_unknown_settings() {

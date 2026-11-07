@@ -230,12 +230,31 @@ pub struct Windows {
     pub miss: f64,
 }
 
+/// How wide the hit windows are made from the OD.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WindowRule {
+    /// osu!'s: whole ms less a half (`beatmap::judged_window_ms`).
+    #[default]
+    Osu,
+    /// Replays from before it (version 4 and below): the OD's widths as they come.
+    Exact,
+}
+
 impl Windows {
+    /// The windows plays are judged with.
     pub fn new(od: f64) -> Windows {
+        Windows::with_rule(od, WindowRule::Osu)
+    }
+
+    pub fn with_rule(od: f64, rule: WindowRule) -> Windows {
+        let width = match rule {
+            WindowRule::Osu => beatmap::judged_window_ms,
+            WindowRule::Exact => beatmap::window_ms,
+        };
         Windows {
-            great: beatmap::great_ms(od),
-            ok: beatmap::window_ms(od, 120.0, 80.0, 50.0),
-            miss: beatmap::window_ms(od, 135.0, 95.0, 70.0),
+            great: width(od, 50.0, 35.0, 20.0),
+            ok: width(od, 120.0, 80.0, 50.0),
+            miss: width(od, 135.0, 95.0, 70.0),
         }
     }
 
@@ -398,6 +417,9 @@ pub struct Game {
     /// for the profile's play time; and the frame they were last counted at.
     pub played_ms: f64,
     played_at: Option<Instant>,
+    /// The map time of the frame before this one: a frame only lets notes go up to there (see
+    /// `update`).
+    last_frame_time: f64,
     /// The scroll speed setting this play is at: fixed when it starts (it counts for pp), and
     /// a replay's own.
     pub scroll_speed: f64,
@@ -2135,6 +2157,7 @@ impl Game {
             resuming: None,
             played_ms: 0.0,
             played_at: None,
+            last_frame_time: f64::NEG_INFINITY,
             scroll_speed: 1.0,
             show_hp: true,
             mute_hits: false,
@@ -2620,7 +2643,12 @@ impl Game {
             return now.duration_since(at).as_secs_f64() > 1.6;
         }
         self.feed_replay(audio);
-        self.expire(self.time);
+        // Up to the frame before only: a press stamped before this frame may still be waiting for
+        // the state lock while it's built, and it has to find its note still there. Presses let
+        // notes go at their own time (`judge_press`), so they're judged exactly either way.
+        let upto = self.last_frame_time.min(self.time);
+        self.last_frame_time = self.time;
+        self.expire(upto);
         self.play_combo_break(audio);
         self.play_scares(audio);
         self.outro_skipped || self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
@@ -3356,6 +3384,11 @@ impl Game {
         }
         self.play_combo_break(audio);
         sfx
+    }
+
+    /// Judges with the hit windows `rule` makes (a replay's own, see `Replay::window_rule`).
+    pub fn set_window_rule(&mut self, rule: WindowRule) {
+        self.windows = Windows::with_rule(self.mods.od(self.map.meta.od), rule);
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses
@@ -8080,6 +8113,73 @@ mod tests {
         }
         let end = g.end_time + 2000.0;
         g.set_time(end);
+    }
+
+    #[test]
+    fn a_press_stamped_before_the_frame_that_closes_its_window_still_hits() {
+        let ms = |x: f64| std::time::Duration::from_secs_f64(x / 1000.0);
+        // The press comes in first, or waits for the state lock while the frame after it is
+        // built: either way it's judged at its own time.
+        for press_first in [true, false] {
+            let mut g = game();
+            let t0 = Instant::now();
+            g.update(t0, None, 0.0);
+            let start = g.time;
+            let at = |t: f64| t0 + ms(t - start);
+            let n = g.map.notes[1].time;
+            let ok = g.windows.ok;
+            let mut t = start;
+            while t < n + ok - 3.0 {
+                g.update(at(t), None, 0.0);
+                t += 4.0;
+            }
+            let (press, frame) = (at(n + ok - 2.0), at(n + ok + 2.0));
+            if press_first {
+                g.press(1, press, None, 0.0);
+                g.update(frame, None, 0.0);
+            } else {
+                g.update(frame, None, 0.0);
+                g.press(1, press, None, 0.0);
+            }
+            assert_eq!(
+                g.state[1].judged,
+                Some(Judge::Ok),
+                "press first: {press_first}"
+            );
+            assert_eq!(
+                g.state[2].judged, None,
+                "the press went on to the next note"
+            );
+        }
+    }
+
+    #[test]
+    fn a_note_nobody_hits_is_a_miss_a_frame_after_its_window() {
+        let ms = |x: f64| std::time::Duration::from_secs_f64(x / 1000.0);
+        let mut g = game();
+        let t0 = Instant::now();
+        g.update(t0, None, 0.0);
+        let start = g.time;
+        let at = |t: f64| t0 + ms(t - start);
+        let close = g.map.notes[1].time + g.windows.ok;
+        g.update(at(close + 2.0), None, 0.0);
+        assert_eq!(g.state[1].judged, None, "gone before the frame after");
+        g.update(at(close + 6.0), None, 0.0);
+        assert_eq!(g.state[1].judged, Some(Judge::Miss));
+    }
+
+    #[test]
+    fn plays_judge_with_osus_windows_and_old_replays_with_their_own() {
+        let mut g = game();
+        let od = g.mods.od(g.map.meta.od);
+        let exact = Windows::with_rule(od, WindowRule::Exact);
+        let whole = |w: f64| (w + 1e-9).floor() - 0.5;
+        assert_eq!(
+            (g.windows.great, g.windows.ok, g.windows.miss),
+            (whole(exact.great), whole(exact.ok), whole(exact.miss))
+        );
+        g.set_window_rule(WindowRule::Exact);
+        assert_eq!(g.windows.great, exact.great);
     }
 
     #[test]

@@ -180,10 +180,8 @@ impl View {
             },
         );
         let od = self.ed.setting_number(Key::Od);
-        let (great, ok) = (
-            crate::beatmap::great_ms(od),
-            crate::beatmap::window_ms(od, 120.0, 80.0, 50.0),
-        );
+        let windows = crate::game::Windows::new(od);
+        let (great, ok) = (windows.great, windows.ok);
         let stars = match self.setup_stars() {
             Some(s) => format!("{s:.2} stars"),
             None => "no star rating".to_string(),
