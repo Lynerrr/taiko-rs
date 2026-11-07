@@ -10207,6 +10207,28 @@ impl State {
                             } else if fresh {
                                 self.mp_status = tr!("logged in as {name}", "{name} でログインしました", "ты вошёл как {name}";);
                             }
+                            // Local plays take the account's name. Plays under a local name (the
+                            // computer's user, at first) move to it; another account's stay theirs.
+                            if self.cfg.mp_name != name {
+                                let local = self.cfg.mp_name != self.cfg.online_user;
+                                if local {
+                                    match scores::rename_player(
+                                        &mut self.scores,
+                                        &self.cfg.mp_name,
+                                        &name,
+                                    ) {
+                                        Ok(0) => {}
+                                        Ok(n) => {
+                                            self.toast = Some(Toast {
+                                                text: tr!("{n} local plays now show as {name}", "ローカルの {n} プレイを {name} の名前にしました", "локальные игры ({n}) теперь под ником {name}";),
+                                                until: Instant::now() + Duration::from_secs(5),
+                                            })
+                                        }
+                                        Err(e) => eprintln!("couldn't rename the local plays: {e}"),
+                                    }
+                                }
+                                self.cfg.mp_name = name.clone();
+                            }
                             if fresh {
                                 menu.cursor = 0;
                                 // A new login: reconnect the social side with its token.
