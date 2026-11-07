@@ -133,6 +133,9 @@ pub struct Social {
     pub sent: Vec<String>,
     /// Conversations by friend (lowercased), oldest first.
     pub chats: HashMap<String, Vec<ChatLine>>,
+    /// Players in a group (lowercased) and their groups' tags ("DEV", "LOVED", "200"): a tag by
+    /// their name in chats, and the name shimmers in the group's colours.
+    pub groups: HashMap<String, Vec<String>>,
     pub unread: HashMap<String, usize>,
     /// Everyone online (None until the server says: older servers don't).
     pub players: Option<Vec<OnlinePlayer>>,
@@ -447,6 +450,20 @@ impl Social {
         }
     }
 
+    /// Who is in a group, as the server says (`Down::Groups`): the whole list each time.
+    pub fn set_groups(&mut self, list: Vec<(String, Vec<String>)>) {
+        self.groups = list
+            .into_iter()
+            .filter(|(_, tags)| !tags.is_empty())
+            .map(|(name, tags)| (key(&name), tags))
+            .collect();
+    }
+
+    /// The tags of `name`'s groups (none for most).
+    pub fn tags_of(&self, name: &str) -> &[String] {
+        self.groups.get(&key(name)).map_or(&[], Vec::as_slice)
+    }
+
     /// A global chat line an admin took down goes away here too.
     pub fn delete_global(&mut self, from: &str, at: u64) {
         self.global.retain(|l| !(l.from == from && l.at == at));
@@ -753,6 +770,83 @@ fn name_colour(name: &str, mine: bool) -> u32 {
         .bytes()
         .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
     PALETTE[h as usize % PALETTE.len()]
+}
+
+/// The two colours a group's names shimmer between, the first also its tag's: the website's
+/// badge colours (DEV, LOVED) and the "200" badge's fire.
+fn group_colours(tag: &str) -> (u32, u32) {
+    match tag {
+        "DEV" => (0xEB452C, 0xFFB15C),
+        "LOVED" => (0xFF66AA, 0xC39BFF),
+        "200" => (0xE23A2E, 0xFFB940),
+        // A group from a newer server: a quiet one.
+        _ => (0x9FB4FF, 0xDEDEEA),
+    }
+}
+
+/// `a` towards `b` by `t` (0..=1), channel by channel.
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    let ch = |shift: u32| {
+        let (x, y) = ((a >> shift) & 0xFF, (b >> shift) & 0xFF);
+        ((x as f32 + (y as f32 - x as f32) * t.clamp(0.0, 1.0)).round() as u32) << shift
+    };
+    ch(16) | ch(8) | ch(0)
+}
+
+/// The colour of letter `i` of `n` in a group member's name, `secs` into the shimmer: a soft
+/// gradient between the group's two colours that drifts slowly along the name, and a faint glint
+/// passing every few seconds. Slow and low in contrast on purpose: a flex, not a strobe.
+fn shimmer(colours: (u32, u32), i: usize, n: usize, secs: f32) -> u32 {
+    let x = (i as f32 + 0.5) / n.max(1) as f32;
+    let wave = 0.5 + 0.5 * ((x * 1.3 - secs / 3.5) * std::f32::consts::TAU).sin();
+    let base = mix(colours.0, colours.1, wave);
+    // The glint crosses the name in the first part of each 4.5 s, then rests.
+    let at = (secs / 4.5).fract() * 2.2 - 0.3;
+    let d = (x - at) / 0.13;
+    mix(base, 0xFFFFFF, 0.32 * (-d * d).exp())
+}
+
+/// Seconds since the shimmer started (the first name drawn), for its slow motion.
+fn shimmer_secs() -> f32 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f32()
+}
+
+/// A group member's name, letter by letter in the shimmer's colours.
+fn shimmer_name(c: &mut Canvas, x: f32, y: f32, name: &str, colours: (u32, u32), a: f32) {
+    let secs = shimmer_secs();
+    let n = name.chars().count();
+    let mut buf = [0u8; 4];
+    let mut cx = x;
+    for (i, ch) in name.chars().enumerate() {
+        let colour = shimmer(colours, i, n, secs);
+        cx += c.text(cx, y, CHAT_SIZE, rgba(colour, a), ch.encode_utf8(&mut buf));
+    }
+}
+
+const TAG_SIZE: f32 = 5.5;
+
+fn tag_width(tag: &str) -> f32 {
+    Canvas::text_width(TAG_SIZE, tag) + 6.0
+}
+
+/// A group's tag, a small pill at `x` on a name row; returns its width.
+fn group_tag(c: &mut Canvas, x: f32, y: f32, tag: &str, a: f32) -> f32 {
+    const SIZE: f32 = TAG_SIZE;
+    let (colour, light) = group_colours(tag);
+    let w = tag_width(tag);
+    let h = Canvas::text_height(SIZE) + 3.0;
+    let top = y + 1.0 + (Canvas::text_height(CHAT_SIZE) - h) / 2.0;
+    c.round_rect(
+        [x, top],
+        [w, h],
+        2.0,
+        rgba(colour, 0.22 * a),
+        rgba(colour, 0.85 * a),
+        1.0,
+    );
+    c.text(x + 3.0, top + 1.5, SIZE, rgba(light, a), tag);
+    w
 }
 
 /// How long ago `at` was, short: "now", "5m", "3h", "2d".
@@ -2069,10 +2163,25 @@ fn chat_lines(
                     row.colour,
                     a,
                 );
-                let nx = inner + 3.0 + MESSAGE_INDENT;
-                c.text(nx, ly + 1.0, CHAT_SIZE, rgba(row.colour, a), &row.text);
+                let mut nx = inner + 3.0 + MESSAGE_INDENT;
+                let right = inner + iw;
+                let tags = s.tags_of(&row.text);
+                // Tags while the name keeps some room; then the name, cut to what's left.
+                for tag in tags {
+                    if nx + tag_width(tag) > right - 40.0 {
+                        break;
+                    }
+                    nx += group_tag(c, nx, ly, tag, a) + 3.0;
+                }
+                let name = Canvas::fit(CHAT_SIZE, right - nx, &row.text);
+                match tags.first() {
+                    Some(tag) => shimmer_name(c, nx, ly + 1.0, &name, group_colours(tag), a),
+                    None => {
+                        c.text(nx, ly + 1.0, CHAT_SIZE, rgba(row.colour, a), &name);
+                    }
+                }
                 if let Some(at) = at {
-                    let after = nx + Canvas::text_width(CHAT_SIZE, &row.text) + 5.0;
+                    let after = nx + Canvas::text_width(CHAT_SIZE, &name) + 5.0;
                     let when = ago(at, now);
                     if after + Canvas::text_width(6.0, &when) < inner + iw {
                         c.text(after, ly + 2.0, 6.0, rgba(0x55556a, a), &when);
@@ -2506,6 +2615,49 @@ mod tests {
             matches!(person[0].kind, ChatKind::Name { .. })
                 && matches!(person[1].kind, ChatKind::Text { .. })
         );
+    }
+
+    #[test]
+    fn groups_come_from_the_server_whole_and_by_any_case() {
+        let mut s = Social::default();
+        let tags = |t: &[&str]| t.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        s.set_groups(vec![
+            ("Auneu".into(), tags(&["DEV", "200"])),
+            ("nobody".into(), Vec::new()),
+        ]);
+        assert_eq!(s.tags_of("AUNEU"), ["DEV", "200"]);
+        assert!(s.tags_of("nobody").is_empty() && s.tags_of("anyone").is_empty());
+        // The next list replaces it.
+        s.set_groups(vec![("semfi".into(), tags(&["200"]))]);
+        assert!(s.tags_of("auneu").is_empty());
+        assert_eq!(s.tags_of("semfi"), ["200"]);
+    }
+
+    #[test]
+    fn a_shimmer_stays_near_its_colours_and_moves_slowly() {
+        let (a, b) = group_colours("DEV");
+        let channels = |c: u32| [(c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF];
+        let (ca, cb) = (channels(a), channels(b));
+        for step in 0..200 {
+            let secs = step as f32 * 0.05;
+            for i in 0..8 {
+                let c = channels(shimmer((a, b), i, 8, secs));
+                for k in 0..3 {
+                    // Between the two colours, or lifted a little towards white by the glint.
+                    let lo = ca[k].min(cb[k]);
+                    let hi =
+                        (ca[k].max(cb[k]) as f32 + (255 - ca[k].max(cb[k])) as f32 * 0.33) as u32;
+                    assert!(c[k] + 1 >= lo && c[k] <= hi + 1, "{c:?} at {secs}");
+                }
+            }
+        }
+        // It moves, but a frame later a letter has barely changed: no flicker.
+        let at = |secs: f32| channels(shimmer((a, b), 3, 8, secs));
+        assert_ne!(at(0.0), at(1.0));
+        let (x, y) = (at(1.0), at(1.0 + 1.0 / 60.0));
+        assert!((0..3).all(|k| x[k].abs_diff(y[k]) <= 6), "{x:?} {y:?}");
+        // A tag from a newer server still gets a colour.
+        assert_ne!(group_colours("SOMETHING NEW"), group_colours("DEV"));
     }
 
     #[test]
