@@ -62,6 +62,12 @@ pub enum FxAct {
     What(i32),
     /// The previous or next group of notes (0 is all of them).
     Group(i32),
+    /// A clip on notes moves just the notes selected on the timeline (their own group).
+    OnSelection,
+    /// The notes selected join (true) or leave its group.
+    SelectionInGroup(bool),
+    /// Selects the notes of its group on the timeline.
+    SelectGroup,
     /// Which copy of the playfield it moves (0 the first).
     CopyNo(u8),
     /// For its whole length, every few beats, on notes, on hits, on misses.
@@ -401,6 +407,69 @@ impl View {
         x + w + 6.0
     }
 
+    /// The group of notes clip `id` moves (None: all of them, or it isn't on notes).
+    fn clip_group(&self, id: u32) -> Option<usize> {
+        let clip = self.ed.clip(id)?;
+        if !matches!(clip.target(), Some(Target::Notes(..))) {
+            return None;
+        }
+        (clip.group as usize).checked_sub(1)
+    }
+
+    /// Group `g` as the clip settings name it: its name and how many notes it holds.
+    fn group_label(&self, g: usize) -> String {
+        match self.ed.gimmick().and_then(|gm| gm.groups.get(g)) {
+            Some(gr) => {
+                let n = gr.notes.len();
+                format!("{} ({n} note{})", gr.name, if n == 1 { "" } else { "s" })
+            }
+            None => format!("group {}", g + 1),
+        }
+    }
+
+    /// The buttons that give clip `id`, one on notes, the notes selected on the timeline, so a
+    /// group needs no trip to the Keyframes page. Returns the y under them.
+    fn draw_clip_notes(&mut self, c: &mut Canvas, x: f32, y: f32, inner: f32, id: u32) -> f32 {
+        let grouped = self.clip_group(id).is_some();
+        let mut items = vec![(
+            "only the selected notes".to_string(),
+            Btn::Fx(FxAct::OnSelection),
+            false,
+        )];
+        if grouped {
+            items.extend([
+                (
+                    "+ selected".to_string(),
+                    Btn::Fx(FxAct::SelectionInGroup(true)),
+                    false,
+                ),
+                (
+                    "- selected".to_string(),
+                    Btn::Fx(FxAct::SelectionInGroup(false)),
+                    false,
+                ),
+                (
+                    "select its notes".to_string(),
+                    Btn::Fx(FxAct::SelectGroup),
+                    false,
+                ),
+            ]);
+        }
+        let first = self.buttons.len();
+        let y = self.wrap_row(c, x, y, inner, &items);
+        let tips = [
+            "Select notes on the timeline, then click: the effect moves just them. They get a group of their own and leave any other (a note goes with one group).",
+            "The notes selected on the timeline join this effect's group, leaving any other.",
+            "The notes selected on the timeline leave this effect's group.",
+            "Selects this effect's notes on the timeline, to see which they are.",
+        ];
+        let rects: Vec<[f32; 4]> = self.buttons[first..].iter().map(|(r, _)| *r).collect();
+        for (r, tip) in rects.into_iter().zip(tips) {
+            self.tips.push((r, tip.to_string()));
+        }
+        y
+    }
+
     fn draw_clip_settings(&mut self, c: &mut Canvas, x: f32, mut y: f32, inner: f32) {
         let Some(clip) = self.picked().cloned() else {
             return;
@@ -418,13 +487,14 @@ impl View {
             (format!("   {what}   v"), Btn::Fx(FxAct::Menu(0)), open),
             (">".to_string(), Btn::Fx(FxAct::What(1)), false),
         ];
-        if matches!(target, Some(Target::Notes(..))) {
+        let on_notes = matches!(target, Some(Target::Notes(..)));
+        if on_notes {
             let groups = self.ed.gimmick().map_or(0, |g| g.groups.len());
             if groups > 0 {
                 row.push((
-                    match clip.group {
-                        0 => "all notes".to_string(),
-                        g => format!("group {g}"),
+                    match self.clip_group(clip.id) {
+                        None => "all notes".to_string(),
+                        Some(g) => self.group_label(g),
                     },
                     Btn::Fx(FxAct::Group(1)),
                     false,
@@ -461,6 +531,9 @@ impl View {
             ));
         }
         y += 19.0;
+        if on_notes {
+            y = self.draw_clip_notes(c, x, y, inner, clip.id);
+        }
         // When.
         let kind = match clip.when {
             When::Span => 0,
@@ -1048,6 +1121,52 @@ impl View {
                     c.group = k.min(crate::tko::clips::MAX_COPIES as u8 - 1) as u16 + 1;
                 }
             }),
+            FxAct::OnSelection => match self.ed.clip_on_selection(id) {
+                Ok(g) => {
+                    self.status = format!("the effect moves just {} now", self.group_label(g));
+                    true
+                }
+                Err(e) => {
+                    self.status = e;
+                    false
+                }
+            },
+            FxAct::SelectionInGroup(join) => {
+                let Some(g) = self.clip_group(id) else {
+                    return;
+                };
+                let done = if join {
+                    self.ed.add_selection_to_group(g)
+                } else {
+                    self.ed.remove_selection_from_group(g)
+                };
+                match done {
+                    Ok(n) => {
+                        let (verb, none) = if join {
+                            ("joined", "they are all in it already")
+                        } else {
+                            ("left", "none of them is in it")
+                        };
+                        self.status = if n == 0 {
+                            none.to_string()
+                        } else {
+                            format!("{n} notes {verb} {}", self.group_label(g))
+                        };
+                        n > 0
+                    }
+                    Err(e) => {
+                        self.status = e;
+                        false
+                    }
+                }
+            }
+            FxAct::SelectGroup => {
+                if let Some(g) = self.clip_group(id) {
+                    self.ed.select_group(g);
+                    self.status = format!("selected {}", self.group_label(g));
+                }
+                false
+            }
             FxAct::Group(d) => {
                 let groups = self.ed.gimmick().map_or(0, |g| g.groups.len()) as i32;
                 self.ed.set_clip(id, false, |c| {

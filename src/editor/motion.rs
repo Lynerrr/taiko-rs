@@ -7,8 +7,9 @@
 use super::chart::Taiko;
 use super::keyframes::Subject;
 use super::state::Editor;
+use crate::tko::clips::Target as ClipTarget;
 use crate::tko::gimmick::{
-    BEFORE_BEATS, FieldProp, Group, MAX_GROUPS, NoteProp, ShowAs, ShowColour,
+    BEFORE_BEATS, FieldProp, Gimmick, Group, MAX_GROUPS, NoteProp, ShowAs, ShowColour,
 };
 use crate::tko::path::NotePath;
 use crate::tko::track::{Ease, Key, Track};
@@ -253,21 +254,35 @@ impl Editor {
     /// The group the selected notes fly with: the one that holds just them, else a new one they
     /// move into, out of any other (one undo step). Returns its index.
     pub fn motion_group(&mut self) -> Result<usize, String> {
+        self.group_selection("Motion", true, |_, _| {})
+    }
+
+    /// The selected notes as a group named `prefix` and its number, out of any other group
+    /// (a note goes with the first group that holds it, so being in two would leave the later
+    /// one doing nothing to it). `reuse`: the group that already holds just them, if there is
+    /// one. `then` changes the gimmick in the same undo step, given the group. Returns the group.
+    pub(crate) fn group_selection(
+        &mut self,
+        prefix: &str,
+        reuse: bool,
+        then: impl FnOnce(&mut Gimmick, usize),
+    ) -> Result<usize, String> {
         let times = self.selected_times();
         if times.is_empty() {
             return Err("select notes on the timeline first".into());
         }
-        if let Some(i) = self.group_of_selection() {
-            return Ok(i);
-        }
         let Some(g) = self.gimmick() else {
             return Err("this chart isn't a .tko yet".into());
         };
+        if let Some(i) = self.group_of_selection().filter(|_| reuse) {
+            self.edit_gimmick(false, |g| then(g, i));
+            return Ok(i);
+        }
         if g.groups.len() >= MAX_GROUPS {
             return Err("too many groups".into());
         }
         let at = g.groups.len();
-        let name = format!("Motion {}", at + 1);
+        let name = format!("{prefix} {}", at + 1);
         self.edit_gimmick(false, |g| {
             for gr in &mut g.groups {
                 gr.notes.retain(|&n| !holds(&times, n));
@@ -277,8 +292,65 @@ impl Editor {
                 notes: times,
                 ..Group::default()
             });
+            then(g, at);
         });
         Ok(at)
+    }
+
+    /// Puts clip `id`, one on notes, on just the selected notes: the group that holds just
+    /// them, else a new one they move into (one undo step). Returns the group.
+    pub fn clip_on_selection(&mut self, id: u32) -> Result<usize, String> {
+        if !matches!(
+            self.clip(id).and_then(|c| c.target()),
+            Some(ClipTarget::Notes(..))
+        ) {
+            return Err("this effect doesn't move notes".into());
+        }
+        self.group_selection("Group", true, |g, i| {
+            if let Some(c) = g.clips.iter_mut().find(|c| c.id == id) {
+                c.group = i as u16 + 1;
+            }
+        })
+    }
+
+    /// Moves the selected notes into group `group`, out of any other. Returns how many joined.
+    pub fn add_selection_to_group(&mut self, group: usize) -> Result<usize, String> {
+        let times = self.selected_times();
+        if times.is_empty() {
+            return Err("select notes on the timeline first".into());
+        }
+        let Some(gr) = self.gimmick().and_then(|g| g.groups.get(group)) else {
+            return Err("no such group".into());
+        };
+        let joined = times.iter().filter(|&&t| !holds(&gr.notes, t)).count();
+        self.edit_gimmick(false, |g| {
+            for (i, gr) in g.groups.iter_mut().enumerate() {
+                if i == group {
+                    gr.notes.extend(&times);
+                } else {
+                    gr.notes.retain(|&n| !holds(&times, n));
+                }
+            }
+        });
+        Ok(joined)
+    }
+
+    /// Takes the selected notes out of group `group`. Returns how many left it.
+    pub fn remove_selection_from_group(&mut self, group: usize) -> Result<usize, String> {
+        let times = self.selected_times();
+        if times.is_empty() {
+            return Err("select notes on the timeline first".into());
+        }
+        let Some(gr) = self.gimmick().and_then(|g| g.groups.get(group)) else {
+            return Err("no such group".into());
+        };
+        let left = gr.notes.iter().filter(|&&n| holds(&times, n)).count();
+        self.edit_gimmick(false, |g| {
+            if let Some(gr) = g.groups.get_mut(group) {
+                gr.notes.retain(|&n| !holds(&times, n));
+            }
+        });
+        Ok(left)
     }
 
     pub fn path_of(&self, group: usize) -> Option<&NotePath> {
@@ -673,6 +745,64 @@ mod tests {
         assert_eq!(groups[g].notes, [times[2]]);
         assert!(e.undo());
         assert_eq!(e.gimmick().unwrap().groups.len(), 1, "one undo step");
+    }
+
+    #[test]
+    fn a_new_group_takes_its_notes_out_of_the_others() {
+        let mut e = tko();
+        let three = pick(&mut e, 3);
+        let g = e.motion_group().unwrap();
+        // Two of them again from the Keyframes page: a group of their own, not a second one
+        // that would do nothing to them.
+        pick(&mut e, 2);
+        let h = e.add_group_from_selection().unwrap();
+        let groups = &e.gimmick().unwrap().groups;
+        assert_eq!(groups[g].notes, [three[2]]);
+        assert_eq!(groups[h].notes, three[..2]);
+        // The same notes once more: yet another group, the last one emptied.
+        let k = e.add_group_from_selection().unwrap();
+        let groups = &e.gimmick().unwrap().groups;
+        assert!(groups[h].notes.is_empty());
+        assert_eq!(groups[k].notes, three[..2]);
+    }
+
+    #[test]
+    fn a_clip_goes_on_the_selected_notes_and_they_join_or_leave_its_group() {
+        use crate::tko::clips::Clip;
+        let mut e = tko();
+        let hide = Clip::new(ClipTarget::Notes(None, NoteProp::Hidden), 0.0, 5000.0);
+        let id = e.add_clips(vec![hide])[0];
+        assert!(e.clip_on_selection(id).is_err(), "nothing picked");
+        let two = pick(&mut e, 2);
+        let g = e.clip_on_selection(id).unwrap();
+        assert_eq!(e.clip(id).unwrap().group, g as u16 + 1);
+        assert_eq!(e.gimmick().unwrap().groups[g].notes, two);
+        assert_eq!(
+            e.clip_on_selection(id).unwrap(),
+            g,
+            "the same notes: the same group"
+        );
+        assert!(e.undo());
+        assert!(e.gimmick().unwrap().groups.is_empty(), "one undo step");
+        assert_eq!(e.clip(id).unwrap().group, 0);
+        let g = e.clip_on_selection(id).unwrap();
+        // A third note joins, then the first leaves.
+        let three = pick(&mut e, 3);
+        assert_eq!(e.add_selection_to_group(g).unwrap(), 1);
+        assert_eq!(e.gimmick().unwrap().groups[g].notes, three);
+        pick(&mut e, 1);
+        assert_eq!(e.remove_selection_from_group(g).unwrap(), 1);
+        assert_eq!(e.gimmick().unwrap().groups[g].notes, three[1..]);
+        // A note joining leaves the group it was in.
+        let h = e.motion_group().unwrap();
+        assert_eq!(e.add_selection_to_group(g).unwrap(), 1);
+        let groups = &e.gimmick().unwrap().groups;
+        assert!(groups[h].notes.is_empty());
+        assert_eq!(groups[g].notes, three);
+        // A clip on the playfield takes no notes.
+        let zoom = Clip::new(ClipTarget::Field(FieldProp::Zoom), 0.0, 1000.0);
+        let zoom = e.add_clips(vec![zoom])[0];
+        assert!(e.clip_on_selection(zoom).is_err());
     }
 
     #[test]

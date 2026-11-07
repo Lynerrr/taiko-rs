@@ -5202,6 +5202,49 @@ mod tests {
         v.ed.add_clips(vec![c])[0]
     }
 
+    #[test]
+    fn a_notes_clip_takes_the_selected_notes_from_its_settings() {
+        use crate::tko::clips::{Clip, Target};
+        use crate::tko::gimmick::NoteProp;
+        let mut v = clips_view();
+        let id = v.ed.add_clips(vec![Clip::new(
+            Target::Notes(None, NoteProp::Hidden),
+            0.0,
+            5000.0,
+        )])[0];
+        v.pick_clips(&[id]);
+        draw(&mut v);
+        let shown = |v: &View, b: FxAct| v.buttons.iter().any(|(_, x)| *x == Btn::Fx(b));
+        assert!(shown(&v, FxAct::OnSelection));
+        assert!(
+            !shown(&v, FxAct::SelectGroup),
+            "all notes: no group to add to"
+        );
+        let pick = |v: &mut View, n: usize| {
+            v.ed.selection = v.ed.chart.objects.iter().take(n).map(|o| o.id).collect();
+        };
+        pick(&mut v, 2);
+        press(&mut v, Btn::Fx(FxAct::OnSelection));
+        let g = (v.ed.clip(id).unwrap().group as usize)
+            .checked_sub(1)
+            .unwrap();
+        assert_eq!(v.ed.gimmick().unwrap().groups[g].notes.len(), 2);
+        assert!(v.status.contains("(2 notes)"), "{}", v.status);
+        draw(&mut v);
+        assert!(shown(&v, FxAct::SelectGroup));
+        // A third joins; then the group's notes are selected back.
+        pick(&mut v, 3);
+        press(&mut v, Btn::Fx(FxAct::SelectionInGroup(true)));
+        assert_eq!(v.ed.gimmick().unwrap().groups[g].notes.len(), 3);
+        v.ed.selection.clear();
+        press(&mut v, Btn::Fx(FxAct::SelectGroup));
+        assert_eq!(v.ed.selection.len(), 3);
+        pick(&mut v, 1);
+        press(&mut v, Btn::Fx(FxAct::SelectionInGroup(false)));
+        assert_eq!(v.ed.gimmick().unwrap().groups[g].notes.len(), 2);
+        assert_eq!(v.picked().map(|c| c.id), Some(id), "the clip stays picked");
+    }
+
     fn sorted(mut ids: Vec<u32>) -> Vec<u32> {
         ids.sort();
         ids
