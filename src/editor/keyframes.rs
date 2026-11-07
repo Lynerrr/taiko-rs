@@ -138,6 +138,35 @@ impl Editor {
         })
     }
 
+    /// Lays copies of `keys` on `s`'s track, the first at `at` and the rest as far from it as
+    /// they were, replacing keys at those times; one undo step.
+    pub fn paste_keys(&mut self, s: Subject, keys: &[Key], at: f64) -> bool {
+        let Some(first) = keys.first().map(|k| k.t) else {
+            return false;
+        };
+        let (lo, hi) = s.range();
+        self.edit_gimmick(false, |g| {
+            let track = match s {
+                Subject::Field(p) => g.field_track_mut(p),
+                Subject::Group(i, p) => match g.groups.get_mut(i) {
+                    Some(group) => group.track_mut(p),
+                    None => return,
+                },
+                Subject::Scroll => &mut g.scroll,
+            };
+            for k in keys {
+                let t = at + (k.t - first);
+                if t >= 0.0 && t.is_finite() && k.v.is_finite() {
+                    track.set(Key {
+                        t,
+                        v: k.v.clamp(lo, hi),
+                        ease: k.ease,
+                    });
+                }
+            }
+        })
+    }
+
     pub fn remove_key(&mut self, s: Subject, index: usize) -> bool {
         self.edit_gimmick(false, |g| {
             match s {
@@ -174,10 +203,44 @@ impl Editor {
         Ok(at)
     }
 
+    /// Deletes group `i`, with the clips and nodes that move it; those on later groups keep
+    /// their own (groups are referred to by place).
     pub fn delete_group(&mut self, i: usize) -> bool {
+        use crate::tko::graph::{Kind, Target};
         self.edit_gimmick(false, |g| {
-            if i < g.groups.len() {
-                g.groups.remove(i);
+            if i >= g.groups.len() {
+                return;
+            }
+            g.groups.remove(i);
+            // A notes clip names its group as `group - 1` (0 is all notes).
+            let k = i as u16 + 1;
+            g.clips
+                .retain(|c| !(c.what.starts_with("notes.") && c.group == k));
+            for c in &mut g.clips {
+                if c.what.starts_with("notes.") && c.group > k {
+                    c.group -= 1;
+                }
+            }
+            for n in &mut g.graph.nodes {
+                // Events name a group as their first number the same way; one on the group
+                // gone names none there is, so it no longer fires (0 would be every note).
+                if matches!(n.kind, Kind::OnNoteReach | Kind::OnHit | Kind::OnMiss)
+                    && let Some(p) = n.p.first_mut()
+                {
+                    let k = k as f64;
+                    if *p == k {
+                        *p = 256.0;
+                    } else if *p > k {
+                        *p -= 1.0;
+                    }
+                }
+                match n.target {
+                    Some(Target::Group(gi, _)) if gi == i => n.target = None,
+                    Some(Target::Group(gi, p)) if gi > i => {
+                        n.target = Some(Target::Group(gi - 1, p))
+                    }
+                    _ => {}
+                }
             }
         })
     }
@@ -253,6 +316,43 @@ mod tests {
             v,
             ease: Ease::Linear,
         }
+    }
+
+    #[test]
+    fn deleting_a_group_leaves_the_clips_and_nodes_of_the_others_on_them() {
+        use crate::tko::clips::{Clip, Target as ClipTarget};
+        use crate::tko::graph::{Kind, Target};
+        let mut e = tko_editor();
+        e.edit_gimmick(false, |g| {
+            for i in 0..3 {
+                g.groups.push(Group {
+                    name: format!("G{i}"),
+                    notes: vec![1000.0 * (i + 1) as f64],
+                    ..Group::default()
+                });
+            }
+            for gi in [1, 2] {
+                g.clips.push(Clip::new(
+                    ClipTarget::Notes(Some(gi), NoteProp::Dx),
+                    0.0,
+                    500.0,
+                ));
+            }
+        });
+        let on2 = e.add_node(Kind::Pulse, 0.0, 0.0).unwrap();
+        e.set_node_target(on2, Some(Target::Group(2, NoteProp::Dy)));
+        let hit2 = e.add_node(Kind::OnHit, 0.0, 0.0).unwrap();
+        e.set_node_param(hit2, 0, 3.0);
+        assert!(e.delete_group(1));
+        let g = e.gimmick().unwrap();
+        // The clip on the group gone goes; the one on the third is on what is now the second.
+        assert_eq!(g.clips.len(), 1);
+        assert_eq!(g.clips[0].group, 2);
+        assert_eq!(
+            e.node(on2).unwrap().target,
+            Some(Target::Group(1, NoteProp::Dy))
+        );
+        assert_eq!(e.node(hit2).unwrap().p[0], 2.0);
     }
 
     #[test]

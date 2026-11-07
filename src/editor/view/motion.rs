@@ -9,7 +9,7 @@ use crate::editor::motion::{
 };
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
-use crate::tko::gimmick::{FieldProp, NoteProp, ShowColour, ShowSize};
+use crate::tko::gimmick::{BEFORE_BEATS, FieldProp, NoteProp, ShowColour, ShowSize};
 use crate::tko::path::PathTable;
 use crate::tko::track::{Ease, Key};
 use crate::video::FRAME_VW;
@@ -86,6 +86,9 @@ pub enum MAct {
     Reveal(usize),
 }
 
+/// What to do when nothing is picked to shape.
+const PICK_FIRST: &str = "pick notes first: press 1 (Select), then click a note on the timeline or drag a box over several";
+
 /// The Show as tab's tab number.
 const SHOW_TAB: u8 = 2;
 /// The Scroll tab's.
@@ -132,15 +135,64 @@ impl View {
         self.mode == Mode::Effects && self.g_page == PAGE && self.ed.is_tko()
     }
 
-    /// The group being shaped, if it is still there.
-    fn motion_group(&self) -> Option<usize> {
+    /// The group being shaped: the one that holds just the notes picked on the timeline, or
+    /// with nothing picked the one shaped last, if it is still there. None while the notes
+    /// picked have no group of their own yet.
+    pub(super) fn motion_group(&self) -> Option<usize> {
+        if !self.ed.selection.is_empty() {
+            return self.ed.group_of_selection();
+        }
         let g = self.m_group?;
         (g < self.ed.gimmick()?.groups.len()).then_some(g)
     }
 
+    /// The group a "give them ..." button works on: the picked notes' own, made for them if they
+    /// have none yet; with nothing picked, the one shaped last. Says what to do when there is
+    /// none.
+    fn motion_target(&mut self) -> Option<usize> {
+        if self.ed.selection.is_empty() {
+            let g = self.motion_group();
+            if g.is_none() {
+                self.status = PICK_FIRST.into();
+            }
+            return g;
+        }
+        match self.ed.motion_group() {
+            Ok(g) => {
+                self.m_group = Some(g);
+                Some(g)
+            }
+            Err(e) => {
+                self.status = e;
+                None
+            }
+        }
+    }
+
     pub(super) fn press_motion(&mut self, a: MAct) {
         let t = self.ed.snapped(self.ed.time);
-        let g = self.motion_group();
+        let groups = |v: &View| v.ed.gimmick().map_or(0, |g| g.groups.len());
+        let had = groups(self);
+        // What gives the picked notes something makes them a group first; the rest work on the
+        // group there is.
+        let g = match a {
+            MAct::Path(_)
+            | MAct::Before(_)
+            | MAct::ShowColour(_)
+            | MAct::ShowSize(_)
+            | MAct::Reveal(_) => self.motion_target(),
+            _ => self.motion_group(),
+        };
+        if let Some(g) = g {
+            self.m_group = Some(g);
+        }
+        let made = groups(self) != had;
+        if matches!(
+            a,
+            MAct::Prop(_) | MAct::Pick(_) | MAct::Before(_) | MAct::Tab(_)
+        ) {
+            self.m_key = None;
+        }
         let done = match (a, g) {
             (MAct::Tab(i), _) => {
                 self.m_tab = i;
@@ -220,7 +272,9 @@ impl View {
                 }
             },
             (MAct::Pick(i), _) => {
+                // Its notes picked on the timeline too, so what is shaped is what is picked.
                 self.m_group = Some(i);
+                self.ed.select_group(i);
                 false
             }
             (MAct::Path(i), Some(g)) => self.ed.set_path_preset(g, i),
@@ -272,11 +326,24 @@ impl View {
                 self.ed.set_before_preset(g, i)
             }
             (_, None) => {
-                self.status = "pick notes on the timeline first".into();
+                if self.ed.selection.is_empty() {
+                    self.status = PICK_FIRST.into();
+                } else if !matches!(
+                    a,
+                    MAct::Path(_)
+                        | MAct::Before(_)
+                        | MAct::ShowColour(_)
+                        | MAct::ShowSize(_)
+                        | MAct::Reveal(_)
+                ) {
+                    // (Those that give something said why they couldn't.)
+                    self.status =
+                        "the picked notes have no motion yet: give them some first".into();
+                }
                 false
             }
         };
-        if done {
+        if done || made {
             self.mark_stale();
         }
     }
@@ -363,27 +430,59 @@ impl View {
                 self.draw_fakes_tab(c, x, y, inner)
             };
         }
-        // The tab, what to shape (the picked notes, or a group already moving), and the groups.
+        let tabs = self.motion_tabs();
+        y = self.chips(c, x, y, inner, &tabs) + 1.0;
+        // What is being shaped, and the step to take next: the notes picked on the timeline are
+        // what the buttons below work on.
         let picked = self.ed.selection.len();
         let what = match self.m_tab {
             0 => "a path",
             SHOW_TAB => "a disguise",
             _ => "a move",
         };
-        let mut items = self.motion_tabs();
-        items.extend([(
-            if picked == 0 {
-                format!("Give the picked notes {what}")
-            } else {
-                format!("Give the {picked} picked notes {what}")
-            },
-            Btn::M(MAct::UseSelection),
-            false,
-        )]);
+        let current = self.motion_group();
+        let mut items = Vec::new();
+        let step = match current {
+            Some(g) => {
+                let (name, n) = self
+                    .ed
+                    .gimmick()
+                    .and_then(|gm| gm.groups.get(g))
+                    .map_or((String::new(), 0), |gr| (gr.name.clone(), gr.notes.len()));
+                if picked == 0 {
+                    format!("Shaping {name} ({n} notes). Pick other notes to shape them instead.")
+                } else {
+                    format!("Shaping the {n} picked notes ({name}).")
+                }
+            }
+            None if picked == 0 => format!(
+                "Step 1: press 1 (Select) and click a note on the timeline, or drag a box over several. Step 2: give them {what} below."
+            ),
+            None => {
+                items.push((
+                    format!("Give the {picked} picked notes {what}"),
+                    Btn::M(MAct::UseSelection),
+                    true,
+                ));
+                format!("{picked} notes picked: pick {what} below, or")
+            }
+        };
+        let head = rgba(accent(), 1.0);
+        let lw = if items.is_empty() {
+            inner
+        } else {
+            Canvas::text_width(6.5, &step).min(inner * 0.6)
+        };
+        c.text(x, y + 3.0, 6.5, head, &Canvas::fit(6.5, lw, &step));
+        if !items.is_empty() {
+            self.chips(c, x + lw + 6.0, y, inner - lw - 6.0, &items);
+        }
+        y += CHIP_ROW;
+        // The groups moving already, and pasting what was copied.
+        let mut items = Vec::new();
         if self.m_copied.is_some() {
             items.push(("Paste motion".to_string(), Btn::M(MAct::Paste), false));
         }
-        let current = self.motion_group();
         if let Some(g) = self.ed.gimmick() {
             items.extend(
                 g.groups
@@ -401,19 +500,21 @@ impl View {
                     }),
             );
         }
-        y = self.chips(c, x, y, inner, &items) + 2.0;
-        let Some(g) = current else {
-            self.m_graph = [0.0; 4];
-            return;
-        };
+        if !items.is_empty() {
+            let dim = rgba(0x9a9ab0, 1.0);
+            c.text(x, y + 3.0, 6.0, dim, "Moving:");
+            let lx = Canvas::text_width(6.0, "Moving:") + 5.0;
+            y = self.chips(c, x + lx, y, inner - lx, &items);
+        }
+        y += 2.0;
         if self.m_tab == 0 {
             self.m_graph = [0.0; 4];
-            self.draw_path_tab(c, g, x, y, inner);
+            self.draw_path_tab(c, current, x, y, inner);
         } else if self.m_tab == SHOW_TAB {
             self.m_graph = [0.0; 4];
-            self.draw_show_tab(c, g, x, y, inner);
+            self.draw_show_tab(c, current, x, y, inner);
         } else {
-            self.draw_before_tab(c, g, x, y, inner);
+            self.draw_before_tab(c, current, x, y, inner);
         }
     }
 
@@ -431,10 +532,10 @@ impl View {
             .collect()
     }
 
-    fn draw_show_tab(&mut self, c: &mut Canvas, g: usize, x: f32, y: f32, inner: f32) {
+    fn draw_show_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, y: f32, inner: f32) {
         let head = rgba(accent(), 1.0);
         let dim = rgba(0x9a9ab0, 1.0);
-        let show = self.ed.show_of(g);
+        let show = g.map(|g| self.ed.show_of(g)).unwrap_or_default();
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
         c.text(x, y, 6.5, head, "Colour");
@@ -457,11 +558,13 @@ impl View {
             .map(|(i, &(name, v))| (name.to_string(), Btn::M(MAct::ShowSize(i)), show.size == v))
             .collect();
         let ly = self.chips(c, x, ly + 9.0, col, &items) + 2.0;
-        let items = vec![
-            ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
-            ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
-        ];
-        self.chips(c, x, ly, col, &items);
+        if g.is_some() {
+            let items = vec![
+                ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
+                ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
+            ];
+            self.chips(c, x, ly, col, &items);
+        }
         c.text(right, y, 6.5, head, "The truth shows");
         let items: Vec<(String, Btn, bool)> = REVEALS
             .iter()
@@ -589,9 +692,9 @@ impl View {
         self.chips(c, right, ry + 9.0, col, &items);
     }
 
-    fn draw_path_tab(&mut self, c: &mut Canvas, g: usize, x: f32, mut y: f32, inner: f32) {
+    fn draw_path_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, mut y: f32, inner: f32) {
         let head = rgba(accent(), 1.0);
-        let path = self.ed.path_of(g).cloned();
+        let path = g.and_then(|g| self.ed.path_of(g)).cloned();
         // Two columns: the path's shape on the left, when and what else on the right.
         let col = (inner - 10.0) / 2.0;
         let right = x + col + 10.0;
@@ -610,13 +713,23 @@ impl View {
             .collect();
         y = self.chips(c, x, y + 9.0, col, &items);
         let Some(path) = path else {
-            c.text(
-                right,
-                top,
-                6.0,
-                rgba(0x9a9ab0, 1.0),
-                "These notes have no path yet: pick one.",
-            );
+            let dim = rgba(0x9a9ab0, 1.0);
+            let lines: &[&str] = if self.ed.selection.is_empty() {
+                &[
+                    "Pick notes on the timeline first (key 1 is the",
+                    "Select tool), then where they come from.",
+                    "Fakes too: they fly the same way.",
+                ]
+            } else {
+                &[
+                    "These notes have no path yet: pick where",
+                    "they come from on the left, then drag its",
+                    "points in the preview above.",
+                ]
+            };
+            for (i, line) in lines.iter().enumerate() {
+                c.text(right, top + i as f32 * 8.0, 6.0, dim, line);
+            }
             return;
         };
         c.text(x, y, 6.5, head, "Pace along it");
@@ -667,10 +780,13 @@ impl View {
         self.chips(c, right, y + 9.0, col, &items);
     }
 
-    fn draw_before_tab(&mut self, c: &mut Canvas, g: usize, x: f32, y: f32, inner: f32) {
+    fn draw_before_tab(&mut self, c: &mut Canvas, g: Option<usize>, x: f32, y: f32, inner: f32) {
         let head = rgba(accent(), 1.0);
         let dim = rgba(0x9a9ab0, 1.0);
-        let before = self.ed.before_of(g).cloned().unwrap_or_default();
+        let before = g
+            .and_then(|g| self.ed.before_of(g))
+            .cloned()
+            .unwrap_or_default();
         let col = (inner - 10.0) * 0.42;
         let right = x + col + 10.0;
         let rw = inner - col - 10.0;
@@ -688,12 +804,19 @@ impl View {
             })
             .collect();
         let ly = self.chips(c, x, y + 9.0, col, &items);
-        let items = vec![
-            ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
-            ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
-        ];
-        self.chips(c, x, ly + 2.0, col, &items);
-        // The graph: one property's keys, beats before the hit left to right.
+        if g.is_some() {
+            let items = vec![
+                ("Select them".to_string(), Btn::M(MAct::SelectNotes), false),
+                ("Copy motion".to_string(), Btn::M(MAct::Copy), false),
+            ];
+            self.chips(c, x, ly + 2.0, col, &items);
+        }
+        if g.is_none() && self.ed.selection.is_empty() {
+            self.m_graph = [0.0; 4];
+            return;
+        }
+        // The graph: one property's keys, beats before the hit left to right (a key put on it
+        // gives the picked notes their group).
         c.text(right, y, 6.5, head, "Keys by beats before each note's hit");
         let items: Vec<(String, Btn, bool)> = GRAPH_PROPS
             .iter()
@@ -713,21 +836,95 @@ impl View {
             .collect();
         let gy = self.chips(c, right, y + 9.0, rw, &items) + 1.0;
         let bottom = self.layout.inspector[1] + self.layout.inspector[3] - 6.0;
-        let gh = (bottom - gy - 8.0).max(24.0);
+        let gh = (bottom - gy - 26.0).max(24.0);
         let rect = [right, gy, rw, gh];
         self.m_graph = rect;
         self.draw_before_graph(c, rect, &before);
-        c.text(
-            right,
-            gy + gh + 1.0,
-            5.5,
-            dim,
-            &Canvas::fit(
-                5.5,
-                rw,
-                "click: add a key   drag: move it   right click: remove it   Shift: off the 1/8 beat grid",
-            ),
-        );
+        let ky = gy + gh + 2.0;
+        match self.before_key() {
+            Some(k) => {
+                let w = (rw / 2.0 - 2.0).max(60.0);
+                self.key_number(
+                    c,
+                    [right, ky, w],
+                    super::keys::KF::BeforeValue,
+                    "Value",
+                    super::keys::trim_num(k.v),
+                );
+                self.key_number(
+                    c,
+                    [right + w + 4.0, ky, w],
+                    super::keys::KF::BeforeBeats,
+                    "Beats before",
+                    super::keys::trim_num(k.t),
+                );
+            }
+            None => {
+                c.text(
+                    right,
+                    ky + 4.0,
+                    5.5,
+                    dim,
+                    &Canvas::fit(
+                        5.5,
+                        rw,
+                        "click: add a key   drag: move it   right click: remove it   Shift: free, off the 1/8 beat grid and round values",
+                    ),
+                );
+            }
+        }
+    }
+
+    /// The key picked on the before-the-hit graph, if it is still there.
+    fn before_key(&self) -> Option<Key> {
+        let g = self.motion_group()?;
+        let (p, _, _) = self.graph_prop();
+        let i = self.m_key?;
+        self.ed.before_of(g)?.get(p.name())?.keys.get(i).copied()
+    }
+
+    /// The picked before-the-hit key gets `v` for its value or its beats before the hit.
+    pub(super) fn before_key_set(&mut self, f: super::keys::KF, v: f64) {
+        let (Some(g), Some(k), Some(i)) = (self.motion_group(), self.before_key(), self.m_key)
+        else {
+            return;
+        };
+        let (p, _, _) = self.graph_prop();
+        let key = if f == super::keys::KF::BeforeValue {
+            Key { v, ..k }
+        } else {
+            Key { t: v, ..k }
+        };
+        let mut at = i;
+        if self.ed.edit_before(g, p, false, |t| {
+            t.remove(i);
+            at = t.set(key);
+        }) {
+            // Held in range by the edit, so look it up again by where it went.
+            self.m_key = self
+                .ed
+                .before_of(g)
+                .and_then(|b| b.get(p.name()))
+                .and_then(|tr| tr.near(key.t.clamp(-BEFORE_BEATS.1, BEFORE_BEATS.0), 1e-6))
+                .or(Some(at));
+            self.mark_stale();
+        }
+    }
+
+    /// Steps the picked before-the-hit key's value or beats by `n` notches.
+    pub(super) fn before_key_step(&mut self, f: super::keys::KF, n: f64) {
+        let Some(k) = self.before_key() else {
+            return;
+        };
+        let (_, lo, hi) = self.graph_prop();
+        let v = if f == super::keys::KF::BeforeValue {
+            let step = super::keys::nice_step(hi - lo);
+            super::keys::snap_value(k.v + n * step, (step * n.abs()).min(step))
+        } else {
+            // An eighth of a beat each.
+            super::keys::snap_value(k.t + n / 8.0, (n.abs() / 8.0).min(0.125))
+        };
+        self.before_key_set(f, v);
     }
 
     fn graph_prop(&self) -> (NoteProp, f64, f64) {
@@ -760,8 +957,10 @@ impl View {
         let mut v = lo + fy * (hi - lo);
         v = if p == NoteProp::Hidden {
             v.round()
-        } else {
+        } else if free {
             (v * 100.0).round() / 100.0
+        } else {
+            super::keys::snap_value(v, super::keys::nice_step(hi - lo))
         };
         (b, v)
     }
@@ -865,7 +1064,13 @@ impl View {
         if !self.motion_mode() || self.m_tab != 1 || !inside(self.m_graph, x, y) {
             return false;
         }
-        let Some(g) = self.motion_group() else {
+        // A key on the graph for notes picked with no group yet makes them one.
+        let g = match self.motion_group() {
+            Some(g) => Some(g),
+            None if !self.ed.selection.is_empty() => self.motion_target(),
+            None => None,
+        };
+        let Some(g) = g else {
             return false;
         };
         let index = match self.graph_key_near(x, y) {
@@ -886,6 +1091,7 @@ impl View {
                 at
             }
         };
+        self.m_key = Some(index);
         self.drag = Drag::BeforeKey { group: g, index };
         true
     }
@@ -906,6 +1112,7 @@ impl View {
                 });
             }
         });
+        self.m_key = Some(at);
         self.drag = Drag::BeforeKey { group, index: at };
         self.mark_stale();
     }
@@ -920,6 +1127,7 @@ impl View {
             self.ed.edit_before(g, p, false, |t| {
                 t.remove(i);
             });
+            self.m_key = None;
             self.mark_stale();
         }
         true
