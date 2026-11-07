@@ -15932,7 +15932,7 @@ impl State {
                 let current = if *vsync {
                     self.cfg.vsync_tune_ms
                 } else {
-                    self.cfg.offset_osu_ms
+                    self.cfg.shown_offset()
                 };
                 calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
             }
