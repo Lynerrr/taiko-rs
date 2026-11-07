@@ -217,7 +217,7 @@ impl Smoothness {
 }
 
 /// `TAIKO_INPUT=ms:Key,ms:Key,...` injects key presses at wall-clock times after launch, for
-/// driving menus in headless tests. Keys use winit `KeyCode` names (`Escape`, `ArrowDown`, `KeyS`).
+/// driving menus in headless tests (`ms:Shot` takes a screenshot, as F12). Keys use winit `KeyCode` names (`Escape`, `ArrowDown`, `KeyS`).
 pub struct InputScript {
     events: Vec<(f64, Action)>,
 }
@@ -262,6 +262,9 @@ pub enum Action {
     CtrlKey(winit::keyboard::KeyCode),
     /// Typed text (search boxes): `Type:frums`.
     Type(String),
+    /// A screenshot of the next frame, as F12 takes (`Shot`); scripted keys skip the window's
+    /// own F12, so editor screens can be captured too.
+    Shot,
 }
 
 impl InputScript {
@@ -293,6 +296,7 @@ impl InputScript {
                         hold: false,
                     },
                     "Release" => Action::Release,
+                    "Shot" => Action::Shot,
                     "RightUp" => Action::RightUp,
                     "LeftUp" => Action::LeftUp,
                     k if k.starts_with("LeftDown:") || k.starts_with("LeftMove:") => {

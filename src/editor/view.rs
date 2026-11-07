@@ -29,6 +29,7 @@ mod gizmo;
 mod help;
 mod keys;
 mod lines;
+mod look;
 mod manual;
 mod manual_text;
 mod menu;
@@ -46,6 +47,7 @@ pub use cmd::Mode;
 use curves::{SAct, SF};
 use keys::{KAct, KF};
 use lines::TAct;
+use look::Look;
 use nodes::NAct;
 use panel::{GFlag, GParam};
 
@@ -457,7 +459,6 @@ pub struct View {
     fx_orig: Vec<(u32, f64, f64, u8)>,
     /// A press on a clip already picked with others: picks it alone if it isn't dragged.
     fx_click: Option<u32>,
-    fx_advanced: bool,
     /// The settings of a text or picture block edit its pose at its end.
     fx_end: bool,
     /// The group whose approach path the Motion page shapes.
@@ -645,7 +646,6 @@ impl View {
             fx_drop: None,
             fx_orig: Vec::new(),
             fx_click: None,
-            fx_advanced: false,
             fx_end: false,
             m_group: None,
             m_copied: None,
@@ -1121,34 +1121,19 @@ impl View {
         self.draw_overlays(c);
     }
 
-    fn button(&mut self, c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, b: Btn, on: bool) {
-        let hover = c.hovered(x, y, w, h);
-        let (bg, border) = match (on, hover) {
-            (true, _) => (0x4a221b, accent()),
-            (false, true) => (0x34344a, 0x6a6a88),
-            (false, false) => (0x23232f, 0x3a3a4e),
-        };
-        c.round_rect([x, y], [w, h], 3.0, rgba(bg, 1.0), rgba(border, 1.0), 1.0);
-        let size = 7.0;
-        c.text_centered(
-            x + w / 2.0,
-            y + (h - size) / 2.0,
-            size,
-            rgba(0xffffff, 1.0),
-            &Canvas::fit(size, w - 4.0, label),
-        );
-        self.buttons.push(([x, y, w, h], b));
-        if let Btn::C(cmd) = b {
-            self.tips.push(([x, y, w, h], cmd.tip()));
-        }
+    /// Button `b`, looking like what it is for (`look::look_of`).
+    fn button(&mut self, c: &mut Canvas, r: [f32; 4], label: &str, b: Btn, on: bool) {
+        self.styled(c, r, label, b, on, look::look_of(b));
     }
 
     /// A row of buttons from `x`, each as wide as its text. Returns where it ended.
     fn row(&mut self, c: &mut Canvas, mut x: f32, y: f32, items: &[(String, Btn, bool)]) -> f32 {
-        for (label, b, on) in items {
-            let w = Canvas::text_width(7.0, label) + 12.0;
-            self.button(c, [x, y, w, 16.0], label, *b, *on);
-            x += w + 4.0;
+        for (k, (label, b, on)) in items.iter().enumerate() {
+            let l = look::look_of(*b);
+            let w = look::width(l, label);
+            self.styled(c, [x, y, w, 16.0], label, *b, *on, l);
+            let next = items.get(k + 1).map_or(Look::Plain, |n| look::look_of(n.1));
+            x += w + look::gap(l, next);
         }
         x
     }
@@ -1163,14 +1148,16 @@ impl View {
         items: &[(String, Btn, bool)],
     ) -> f32 {
         let mut x = x0;
-        for (label, b, on) in items {
-            let bw = Canvas::text_width(7.0, label) + 12.0;
+        for (k, (label, b, on)) in items.iter().enumerate() {
+            let l = look::look_of(*b);
+            let bw = look::width(l, label);
             if x > x0 && x + bw > x0 + w {
                 x = x0;
                 y += 19.0;
             }
-            self.button(c, [x, y, bw, 16.0], label, *b, *on);
-            x += bw + 4.0;
+            self.styled(c, [x, y, bw, 16.0], label, *b, *on, l);
+            let next = items.get(k + 1).map_or(Look::Plain, |n| look::look_of(n.1));
+            x += bw + look::gap(l, next);
         }
         y + 19.0
     }
@@ -1490,6 +1477,7 @@ impl View {
             } => Some((from.min(to), from.max(to), add)),
             _ => None,
         };
+        let gimmick = self.ed.gimmick();
         for o in &objs[first..] {
             if o.time > to + 40.0 * self.ms_per_px {
                 break;
@@ -1543,6 +1531,17 @@ impl View {
                     let col = if o.taiko() == Taiko::Kat { KAT } else { DON };
                     c.circle(ox, cy, r, rgba(col, 1.0), outline, lw);
                 }
+            }
+            // Drawn over every effect: a white dot over it.
+            if gimmick.is_some_and(|g| g.is_above(o.time)) {
+                c.circle(
+                    ox,
+                    cy - r - 4.0,
+                    2.2,
+                    rgba(0xffffff, 1.0),
+                    rgba(0x000000, 0.8),
+                    1.0,
+                );
             }
         }
         // The ghost of what a click would place.
@@ -4768,21 +4767,15 @@ mod tests {
     }
 
     #[test]
-    fn effects_open_on_clips_and_keep_the_advanced_pages_out_of_the_way() {
+    fn effects_open_on_clips_with_every_page_in_sight() {
         let mut v = clips_view();
         assert!(v.clip_mode(), "Effects starts on the clips");
-        let tabs = |v: &View| {
-            (
-                v.buttons.iter().any(|(_, b)| *b == Btn::GPage(3)),
-                v.buttons
-                    .iter()
-                    .any(|(_, b)| *b == Btn::Fx(FxAct::Advanced)),
-            )
-        };
-        assert_eq!(tabs(&v), (false, true), "nodes hidden, Advanced offered");
-        press(&mut v, Btn::Fx(FxAct::Advanced));
-        draw(&mut v);
-        assert!(tabs(&v).0);
+        for page in [4, super::motion::PAGE, 2, 3] {
+            assert!(
+                v.buttons.iter().any(|(_, b)| *b == Btn::GPage(page)),
+                "page {page} has a tab"
+            );
+        }
         // Every shelf effect has a button in its tab.
         press(&mut v, Btn::GPage(4));
         for (k, tab) in crate::editor::clips::Shelf::ALL.iter().enumerate() {
@@ -5215,7 +5208,10 @@ mod tests {
         v.pick_clips(&[id]);
         draw(&mut v);
         let shown = |v: &View, b: FxAct| v.buttons.iter().any(|(_, x)| *x == Btn::Fx(b));
-        assert!(shown(&v, FxAct::OnSelection));
+        assert!(
+            !shown(&v, FxAct::OnSelection),
+            "nothing selected: a hint, not a button that does nothing"
+        );
         assert!(
             !shown(&v, FxAct::SelectGroup),
             "all notes: no group to add to"
@@ -5224,6 +5220,8 @@ mod tests {
             v.ed.selection = v.ed.chart.objects.iter().take(n).map(|o| o.id).collect();
         };
         pick(&mut v, 2);
+        draw(&mut v);
+        assert!(shown(&v, FxAct::OnSelection));
         press(&mut v, Btn::Fx(FxAct::OnSelection));
         let g = (v.ed.clip(id).unwrap().group as usize)
             .checked_sub(1)

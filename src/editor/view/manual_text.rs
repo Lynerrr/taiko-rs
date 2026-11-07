@@ -199,7 +199,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - The notes disappear in the last chorus: select its notes, click Hide the notes.
 - A quarter turn each bar that stays: Quarter turns.
 
-Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes are under Advanced... for what clips can't do yet.
+Blocks add up with each other, with keyframes and with nodes. Keyframes and Nodes, after the divider in the page tabs, are for what clips can't do yet.
 
 > Everything here is visual only: judging, score and pp never change.
 ",
@@ -254,6 +254,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - The truth shows takes them back to what they are, over a 1/4 beat ending at the hit or up to two beats before it. A colour that only shows at the hit can't be read, only learned: Upload warns about it.
 - What hits a note, its score and its sound stay its own. Fakes lie with their group too; drumrolls and swells never lie.
 - Players can turn every lie off in Settings, Gameplay, Show true notes. With it on, your own preview shows the truth too.
+- Over effects, on the same tab, draws the picked notes over every effect: a blackout, a flash or a glitch doesn't hide them, and effects on all the notes leave them be. They still turn and zoom with the playfield, and effects on a group they are in still move them. On the timeline they wear a white dot.
 
 - Put an example on this map (the button below) lays all of this over the map's first kiai, four beats each: a path, a pop in with fakes, a freeze as the drum slides, swapped colours. Each part is its own Ctrl+Z.
 
@@ -551,7 +552,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Ноты пропадают в последнем припеве: выделите его ноты, нажмите Hide the notes.
 - Четверть оборота каждый такт, и так и остаётся: Quarter turns.
 
-Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes спрятаны под Advanced... — для того, чего блоки пока не умеют.
+Блоки складываются друг с другом, с ключевыми кадрами и с нодами. Keyframes и Nodes, за чертой во вкладках страниц, — для того, чего блоки пока не умеют.
 
 > Всё здесь только визуальное: судейство, очки и pp не меняются.
 ",
@@ -606,6 +607,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - The truth shows возвращает им настоящий вид за 1/4 доли, к самому удару или за две доли до него. Цвет, который виден только в момент удара, не прочитать, только выучить: Upload об этом предупредит.
 - Чем бить ноту, её счёт и звук остаются её собственными. Фейки врут вместе со своей группой; дроби и свели не врут никогда.
 - Игроки могут выключить любой обман в настройках: Игра, «Показывать настоящие ноты». Если это включено у вас самих, превью тоже покажет правду.
+- Over effects на той же вкладке рисует выбранные ноты поверх всех эффектов: блэкаут, вспышка или глитч их не прячут, а эффекты на все ноты их не трогают. Они всё так же поворачиваются и приближаются вместе с полем, и эффекты на их группу их двигают. На таймлайне над ними белая точка.
 
 - Положить пример на эту карту (кнопка внизу) раскладывает всё это по первому киаю карты, по четыре доли: траектория, выскакивание с фейками, заморозка, пока едет барабан, перепутанные цвета. Каждая часть отменяется своим Ctrl+Z.
 

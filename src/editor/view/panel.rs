@@ -350,8 +350,8 @@ impl View {
         let dim = rgba(0x9a9ab0, 1.0);
         if effects {
             // The pages sit in the title row, so the content gets the whole panel. Keyframes and
-            // nodes are the advanced ways: shown on asking.
-            let mut tabs = vec![
+            // nodes, the advanced ways, come after a divider.
+            let tabs = [
                 ("Clips".to_string(), Btn::GPage(4), self.g_page == 4),
                 (
                     "Motion".to_string(),
@@ -359,18 +359,25 @@ impl View {
                     self.g_page == super::motion::PAGE,
                 ),
             ];
-            if self.fx_advanced || self.g_page < 4 {
-                tabs.push(("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2));
-                tabs.push(("Nodes".to_string(), Btn::GPage(3), self.g_page == 3));
-            } else {
-                tabs.push((
-                    "Advanced...".to_string(),
-                    Btn::Fx(super::clips::FxAct::Advanced),
-                    false,
-                ));
-            }
+            let more = [
+                ("Keyframes".to_string(), Btn::GPage(2), self.g_page == 2),
+                ("Nodes".to_string(), Btn::GPage(3), self.g_page == 3),
+            ];
             let ty = self.layout.inspector[1] + 0.5;
-            self.row(c, x + 100.0, ty, &tabs);
+            let tx = self.row(c, x + 100.0, ty, &tabs) + 4.0;
+            c.rect(tx, ty + 3.0, 1.0, 10.0, rgba(0x3a3a4e, 1.0));
+            let label = "advanced";
+            c.text(tx + 8.0, ty + 5.0, 5.5, rgba(0x6a6a80, 1.0), label);
+            let first = self.buttons.len();
+            self.row(c, tx + 12.0 + Canvas::text_width(5.5, label), ty, &more);
+            let tips = [
+                "Keyframes: values set at points in time, eased between. For exact control of the playfield and groups of notes.",
+                "Nodes: wire events (a beat, a hit, a miss) to actions. For effects that react to how the player plays.",
+            ];
+            let rects: Vec<[f32; 4]> = self.buttons[first..].iter().map(|(r, _)| *r).collect();
+            for (r, tip) in rects.into_iter().zip(tips) {
+                self.tips.push((r, tip.to_string()));
+            }
         }
         if self.g_page == super::motion::PAGE {
             self.draw_motion_page(c, x, y, inner);

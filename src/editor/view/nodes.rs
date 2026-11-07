@@ -3,6 +3,7 @@
 //! a node editor is. Everything here edits `Graph` through the editor, one undo step each.
 
 use super::chrome::wrap;
+use super::look::{self, Look};
 use super::{Btn, Drag, Mode, View, inside};
 use crate::render::{Canvas, rgba};
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
@@ -733,14 +734,16 @@ impl View {
         items: &[(String, Btn, bool)],
     ) -> f32 {
         let mut cx = x;
-        for (label, b, on) in items {
-            let w = Canvas::text_width(7.0, label) + 12.0;
+        for (k, (label, b, on)) in items.iter().enumerate() {
+            let l = look::look_of(*b);
+            let w = look::width(l, label);
             if cx + w > x + inner && cx > x {
                 cx = x;
                 y += 18.0;
             }
-            self.button(c, [cx, y, w, 16.0], label, *b, *on);
-            cx += w + 4.0;
+            self.styled(c, [cx, y, w, 16.0], label, *b, *on, l);
+            let next = items.get(k + 1).map_or(Look::Plain, |n| look::look_of(n.1));
+            cx += w + look::gap(l, next);
         }
         y + 18.0
     }
@@ -765,7 +768,7 @@ impl View {
             .collect();
         let mut cats = cats;
         cats.push((
-            "+ Recipe v".into(),
+            "+ Recipe".into(),
             Btn::N(NAct::Open(Pick::Recipe)),
             self.n_pick == Some(Pick::Recipe),
         ));
@@ -872,7 +875,7 @@ impl View {
         if n.kind.needs_target() {
             let label = n.target.map_or("none".to_string(), |t| t.label());
             row.push((
-                format!("Target: {label} v"),
+                format!("Target: {label}"),
                 Btn::N(NAct::Open(Pick::Target)),
                 self.n_pick == Some(Pick::Target),
             ));
