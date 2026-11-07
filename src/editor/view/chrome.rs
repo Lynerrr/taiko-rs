@@ -3,6 +3,7 @@
 
 use super::cmd::{Cmd, Mode};
 use super::lines::TAct;
+use super::look::{self, Look};
 use super::menu;
 use super::snap::SnapAct;
 use super::{Btn, Field, RED_LINE, SAct, View, fmt_time};
@@ -484,6 +485,17 @@ impl View {
         let r = self.layout.inspector;
         let (x, y) = self.panel_frame(c, r, "TIMING LINES");
         self.line_tabs(c, r[0] + r[2] - 8.0, r[1] + 2.0);
+        let label = "Metronome";
+        let mw = look::width(Look::Toggle, label);
+        let tabs = 2.0 * (Canvas::text_width(6.5, "SV tool") + 15.0);
+        self.styled(
+            c,
+            [r[0] + r[2] - 8.0 - tabs - 12.0 - mw, r[1] + 2.0, mw, 12.0],
+            label,
+            Btn::C(Cmd::Metronome),
+            self.metronome,
+            Look::Toggle,
+        );
         if self.svt.tab == 1 {
             self.draw_svt_panel(c, x, y, r[2] - 16.0);
         } else {
@@ -580,13 +592,12 @@ impl View {
         );
         y += 14.0;
         if let Some(p) = line {
-            let mut fields: Vec<(Field, String)> = Vec::new();
             if p.is_red() {
-                fields.push((Field::Bpm, format!("BPM {:.3}", p.bpm().unwrap_or(0.0))));
-                fields.push((Field::Meter, format!("Meter {}", p.meter)));
-            } else {
-                fields.push((Field::Sv, format!("SV x{:.2}", p.sv())));
+                self.draw_red_line(c, x, y, w, &p);
+                return;
             }
+            let mut fields: Vec<(Field, String)> = Vec::new();
+            fields.push((Field::Sv, format!("SV x{:.2}", p.sv())));
             fields.push((Field::Volume, format!("Volume {}", p.volume)));
             fields.push((
                 Field::Sample,
@@ -596,9 +607,6 @@ impl View {
             fields.push((Field::Time, format!("Time {}", fmt_time(p.time))));
             let fy = self.line_fields(c, x, y, w, fields);
             let mut items = vec![("Kiai".to_string(), Btn::Kiai, p.kiai())];
-            if p.is_red() {
-                items.push(("Omit bar".to_string(), Btn::Omit, p.omits_barline()));
-            }
             items.push(("At playhead".to_string(), Btn::T(TAct::Here), false));
             items.push(("Clone here".to_string(), Btn::T(TAct::CloneHere), false));
             items.push(("Delete".to_string(), Btn::C(Cmd::DeleteLine), false));

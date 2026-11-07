@@ -320,6 +320,20 @@ impl View {
                     "waveform off".into()
                 };
             }
+            Cmd::Metronome => {
+                self.metronome = !self.metronome;
+                if self.playing.is_some() {
+                    // The clicks are in the music: cut it out again from here.
+                    self.reseek = true;
+                }
+                self.status = if !self.metronome {
+                    "metronome off".into()
+                } else if self.track.as_ref().is_some_and(|t| t.samples.is_empty()) {
+                    "metronome on, but this song is streamed and can't carry the clicks".into()
+                } else {
+                    "metronome on: a click on every beat while the song plays".into()
+                };
+            }
             Cmd::LeftPan => {
                 self.left_pan = !self.left_pan;
                 self.status = if self.left_pan {

@@ -86,6 +86,9 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 
 # Inside the editor
 - F3 Timing: select the red line to edit its BPM, offset and meter. F6 lists every line.
+- The panel's Position block moves the red line: type a time (it may be negative, a map can start its first beat before 0), nudge it by 1 or 10 ms, or move it a bar or a beat at a time. Each press is one undo step and the notes stay where they are. Tempo has the BPM with - and +, steps of 1 and 0.01, x2 and /2, and the meter.
+- The beat lines also run backwards from the first red line to the start of the song, and notes you place there snap to them.
+- T (or the Metronome switch in the Timing panel) makes the song click on every beat while it plays, higher on each bar's first beat. It follows every red line, BPM and meter change, and the playback speed.
 - Ctrl+P adds a red line at the playhead (a BPM change; it resets the grid). Ctrl+I deletes the line at the playhead.
 - The Kiai switch on a line marks kiai time. The overview bar shows it in orange.
 
@@ -379,7 +382,7 @@ Custom maps have their own headings in song select (taiko.rs custom, Custom, app
 - Ctrl+Z / Y: undo, redo. Ctrl+X / C / V: cut, copy, paste. Ctrl+A: select all. Delete.
 
 # Timing and the rest
-- Ctrl+P: red line. Ctrl+Shift+P: green line. Ctrl+I: delete line. F6: the timing window.
+- Ctrl+P: red line. Ctrl+Shift+P: green line. Ctrl+I: delete line. F6: the timing window. T: metronome.
 - Ctrl+B: bookmark. Ctrl+Left / Right: previous / next bookmark.
 - M: effect mark at the playhead (.tko). Shift+M removes the nearest.
 - F1 F2 F3 F4: modes. Ctrl+S: save. Esc: leave (asks if unsaved).
@@ -441,6 +444,9 @@ File > Open song folder открывает папку карты. Бросьте
 
 # Внутри редактора
 - F3 Timing: выберите красную линию, чтобы править BPM, смещение и размер. F6 показывает все линии.
+- Блок Position в панели двигает красную линию: впишите время (оно может быть отрицательным: первый бит карты может быть раньше 0), сдвиньте на 1 или 10 мс или на такт или бит за нажатие. Каждое нажатие это один шаг отмены, ноты остаются на месте. В блоке Tempo: BPM с - и +, шаги 1 и 0.01, x2 и /2, и размер.
+- Линии бита идут и назад от первой красной линии до начала песни, ноты там привязываются к ним.
+- T (или переключатель Metronome в панели Timing) включает щелчки на каждый бит при проигрывании, выше на первом бите такта. Он следует за всеми красными линиями, сменами BPM и размера и скоростью воспроизведения.
 - Ctrl+P добавляет красную линию в курсоре (смена BPM; сетка начинается заново). Ctrl+I удаляет линию в курсоре.
 - Переключатель Kiai на линии отмечает kiai-время. На полосе обзора оно оранжевое.
 
@@ -734,7 +740,7 @@ File > Upload отправляет сохранённую карту на taiko.
 - Ctrl+Z / Y: отмена, повтор. Ctrl+X / C / V: вырезать, копировать, вставить. Ctrl+A: выделить всё. Delete.
 
 # Тайминг и прочее
-- Ctrl+P: красная линия. Ctrl+Shift+P: зелёная линия. Ctrl+I: удалить линию. F6: окно таймингов.
+- Ctrl+P: красная линия. Ctrl+Shift+P: зелёная линия. Ctrl+I: удалить линию. F6: окно таймингов. T: метроном.
 - Ctrl+B: закладка. Ctrl+влево / вправо: предыдущая / следующая закладка.
 - M: метка эффектов в курсоре (.tko). Shift+M убирает ближайшую.
 - F1 F2 F3 F4: режимы. Ctrl+S: сохранить. Esc: выйти (спросит, если не сохранено).

@@ -96,6 +96,7 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::AddGreen),
             Do(Cmd::DeleteLine),
             Do(Cmd::TimingList),
+            Do(Cmd::Metronome),
             Do(Cmd::PrevLine),
             Do(Cmd::NextLine),
             Sep,

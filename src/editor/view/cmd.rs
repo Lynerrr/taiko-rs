@@ -111,6 +111,8 @@ pub enum Cmd {
     AddGreen,
     DeleteLine,
     TimingList,
+    /// Clicks on every beat of the red lines while the song plays.
+    Metronome,
     // The editor itself.
     Mode(Mode),
     Tour,
@@ -182,6 +184,7 @@ impl Cmd {
             Cmd::AddGreen => "Add green line (SV)",
             Cmd::DeleteLine => "Delete timing line",
             Cmd::TimingList => "Timing window (all lines, their fields, the SV tool)",
+            Cmd::Metronome => "Metronome on / off",
             Cmd::Mode(m) => m.name(),
             Cmd::Tour => "Take the tour",
             Cmd::Manual => "Manual",
@@ -262,6 +265,9 @@ impl Cmd {
             Cmd::AddGreen => "A slider velocity change at the playhead.",
             Cmd::DeleteLine => "Removes the timing line at the playhead.",
             Cmd::TimingList => "Every red and green line in a table.",
+            Cmd::Metronome => {
+                "While the song plays, clicks on every beat of the red lines (a higher click on each bar's first beat), following BPM and meter changes and the playback speed."
+            }
             Cmd::Mode(m) => m.about(),
             Cmd::Tour => "A short walk through the editor.",
             Cmd::Manual => "How to time a song, use the SV tool and nodes, and upload a map.",
@@ -536,6 +542,7 @@ pub const BINDS: &[Bind] = &[
     ),
     b(KeyCode::KeyI, "c", false, Cmd::DeleteLine, "Ctrl+I", LINES),
     b(KeyCode::F6, "", false, Cmd::TimingList, "F6", LINES),
+    b(KeyCode::KeyT, "", false, Cmd::Metronome, "T", LINES),
     b(
         KeyCode::F1,
         "",
