@@ -491,9 +491,9 @@ pub struct Game {
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
     offset: f64,
-    /// The global offset as the player has it, in osu!'s direction (`Config::offset_osu_ms`);
-    /// set by the app every frame, for the advice to be given in it.
-    pub osu_offset: f64,
+    /// The global offset as the player has it, on their scale (`Config::shown_offset`); set by
+    /// the app every frame, for the advice to be given in it.
+    pub shown_offset: f64,
     /// The output latency (ms) the play offset was worked out with (`Config::offset_latency_ms`);
     /// set by the app every frame. Autoplay hitsounds go this much later in the song than the
     /// clock's note time, so that they sound with the music as in osu!.
@@ -2194,7 +2194,7 @@ impl Game {
             combo_break: None,
             ur_scaled_hint: true,
             offset: 0.0,
-            osu_offset: 0.0,
+            shown_offset: 0.0,
             latency: 0.0,
             rate,
             speed,
@@ -3039,11 +3039,11 @@ impl Game {
         })
     }
 
-    /// The osu! offset that makes up for `suggested`, an `OffsetHint`'s offset (the one the clock
-    /// takes off, global and map's): positive osu! offsets bring the notes earlier, so wanting the
-    /// clock's offset lowered by e means raising this one by e.
-    pub fn suggested_osu_offset(&self, suggested: f64) -> f64 {
-        (self.osu_offset - (suggested - self.offset)).round()
+    /// The global offset, on the player's scale, that makes up for `suggested`, an `OffsetHint`'s
+    /// offset (the one the clock takes off, global and map's): positive ones bring the notes
+    /// earlier, so wanting the clock's offset lowered by e means raising this one by e.
+    pub fn suggested_shown_offset(&self, suggested: f64) -> f64 {
+        (self.shown_offset - (suggested - self.offset)).round()
     }
 
     /// Marks everything ending before `t` as already played, without scoring or animations (the
@@ -6992,7 +6992,7 @@ impl Game {
         };
         let ur = e.ur;
         let stats = tr!("UR {ur:.0}, {hits} hits"; ur, hits);
-        let suggested = self.suggested_osu_offset(e.suggested_offset);
+        let suggested = self.suggested_shown_offset(e.suggested_offset);
         let (error, margin) = (e.error_ms.abs(), e.margin_ms);
         if h.significant {
             let dir = if e.error_ms > 0.0 {
@@ -8895,14 +8895,14 @@ mod tests {
     }
 
     #[test]
-    fn a_late_hitter_is_advised_a_lower_osu_offset() {
+    fn a_late_hitter_is_advised_a_lower_shown_offset() {
         let mut g = game();
         hits(&mut g, &spread(8.0, 2.0, 25), 0.0);
-        g.osu_offset = 5.0;
+        g.shown_offset = 5.0;
         let h = g.offset_suggestion(0.0).unwrap();
         // Late by 8: the clock's offset +8 is the osu! one -8, whatever the map's own offset.
         assert_eq!(h.estimate.suggested_offset, 8.0);
-        assert_eq!(g.suggested_osu_offset(h.estimate.suggested_offset), -3.0);
+        assert_eq!(g.suggested_shown_offset(h.estimate.suggested_offset), -3.0);
     }
 
     #[test]

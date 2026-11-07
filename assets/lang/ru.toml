@@ -527,6 +527,7 @@
 "unliked {title}" = "убрано из любимых: {title}"
 "{title}: your skin" = "{title}: ваш скин"
 "{title}: its own skin" = "{title}: скин карты"
+"By sound" = "По звуку"
 
 # src/medals.rs
 "PATH" = "ПУТЬ"
@@ -830,7 +831,8 @@
 "Playfield preset" = "Пресет игрового поля"
 "Speed (rate)" = "Скорость (рейт)"
 "Rate keeps pitch" = "Рейт сохраняет тон"
-"Universal offset (as in osu!)" = "Универсальное смещение (как в osu!)"
+"Global offset" = "Общее смещение"
+"Offset scale" = "Шкала смещения"
 "Visual offset" = "Смещение картинки"
 "Offset calibration" = "Калибровка смещения"
 "Calibration tempo" = "Темп калибровки"
@@ -921,7 +923,8 @@
 "Enter: pick from a list (grouped by aspect ratio). Left/Right: previous/next." = "Enter: выбрать из списка (по соотношению сторон). Влево/вправо: пред./след."
 "Song speed like DT (1.50x) / HT (0.75x). Song select: [ and ] (Shift = 0.25x steps)." = "Скорость песни, как DT (1.50x) / HT (0.75x). В выборе песни: [ и ] (Shift = шаг 0.25x)."
 "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore)." = "Вкл: музыка просто быстрее (DT). Выкл: тон растёт со скоростью (nightcore)."
-"Works as in osu!: the same number there is the same here. For every map; positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top." = "Работает как в osu!: то же число там и здесь. Для всех карт; плюс сдвигает ноты раньше, так что уменьшите, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху."
+"For every map. Positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top. Where 0 is depends on the offset scale below." = "Для всех карт. Плюс сдвигает ноты раньше, так что уменьшите, если бьёте поздно. В песне - / + (и O) задают смещение этой карты сверху. Где ноль, зависит от шкалы смещения ниже."
+"osu!: 0 is osu!'s, so an osu! universal offset carries over as it is. By sound: 0 is hitting exactly when you hear the note (the audio latency is taken off), and the number is how far ahead of the sound you hit. Switching keeps your timing as it is." = "osu!: ноль как в osu!, так что универсальное смещение оттуда подходит как есть. По звуку: ноль — удар ровно в момент, когда слышите ноту (задержка звука уже учтена), а число — на сколько раньше звука вы бьёте. При переключении тайминг не меняется."
 "Enter: hit along to a click track by ear, with no notes to watch; it measures and sets your offset." = "Enter: бейте под метроном на слух, нот на экране нет; игра измерит и выставит смещение."
 "Tempo of the calibration click track. Pick one close to the maps you play." = "Темп метронома для калибровки. Выберите близкий к вашим картам."
 "While playing, suggest an offset from your recent hits. To apply it with a key, give \"Song: apply offset suggestion\" one in the hotkeys." = "Во время игры подсказывает смещение по последним ударам. Чтобы применять клавишей, назначьте \"Песня: применить подсказку смещения\" в хоткеях."

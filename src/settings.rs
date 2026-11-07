@@ -100,6 +100,8 @@ pub enum Item {
     Guide,
     CheckUpdates,
     UpdateChannel,
+    /// What the global offset is set by: osu!'s universal offset or the sound.
+    OffsetScale,
     Update,
     /// Opens what's new.
     Changelog,
@@ -122,7 +124,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 133] = [
+pub const ITEMS: [(&str, Item); 134] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -197,6 +199,7 @@ pub const ITEMS: [(&str, Item); 133] = [
     ("INPUT", Item::Hotkey(32)),
     ("INPUT", Item::Hotkey(33)),
     ("OFFSET", Item::Offset),
+    ("OFFSET", Item::OffsetScale),
     ("OFFSET", Item::VisualOffset),
     ("OFFSET", Item::Calibrate),
     ("OFFSET", Item::ResetMapOffsets),
@@ -383,7 +386,8 @@ impl Item {
             Item::PlayfieldPreset => tr!("Playfield preset"),
             Item::Rate => tr!("Speed (rate)"),
             Item::RateKeepPitch => tr!("Rate keeps pitch"),
-            Item::Offset => tr!("Universal offset (as in osu!)"),
+            Item::Offset => tr!("Global offset"),
+            Item::OffsetScale => tr!("Offset scale"),
             Item::VisualOffset => tr!("Visual offset"),
             Item::Calibrate => tr!("Offset calibration"),
             Item::CalibrationBpm => tr!("Calibration tempo"),
@@ -516,6 +520,7 @@ impl Item {
             | Item::PresentMode
             | Item::Renderer
             | Item::UpdateChannel
+            | Item::OffsetScale
             | Item::Skin
             | Item::SkinParts
             | Item::SkinPart(_)
@@ -605,7 +610,10 @@ impl Item {
                 "On: music sounds normal, just faster (DT). Off: pitch rises with speed (nightcore)."
             ),
             Item::Offset => tr!(
-                "Works as in osu!: the same number there is the same here. For every map; positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top."
+                "For every map. Positive brings the notes earlier, so lower it if you hit late. In a song, - / + set that map's own offset on top. Where 0 is depends on the offset scale below."
+            ),
+            Item::OffsetScale => tr!(
+                "osu!: 0 is osu!'s, so an osu! universal offset carries over as it is. By sound: 0 is hitting exactly when you hear the note (the audio latency is taken off), and the number is how far ahead of the sound you hit. Switching keeps your timing as it is."
             ),
             Item::Calibrate => tr!(
                 "Enter: hit along to a click track by ear, with no notes to watch; it measures and sets your offset."

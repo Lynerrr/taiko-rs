@@ -20,7 +20,7 @@ fn words(item: Item) -> &'static str {
         Item::ScrollSpeed => "sv speed lane fast slow скорость нот быстро медленно",
         Item::Rate => "dt ht nightcore double half time ускорение замедление",
         Item::RateKeepPitch => "nightcore daycore тон высота",
-        Item::Offset | Item::VisualOffset | Item::Calibrate => {
+        Item::Offset | Item::OffsetScale | Item::VisualOffset | Item::Calibrate => {
             "latency delay sync timing universal osu late early задержка рассинхрон тайминг опаздывает раньше позже"
         }
         Item::ResetMapOffsets | Item::LiveOffset | Item::LiveOffsetUr => {
