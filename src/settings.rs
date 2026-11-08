@@ -54,6 +54,8 @@ pub enum Item {
     CalmMaps,
     DrumMenus,
     HideGreat,
+    /// Sudden Death / Perfect fails start the map over (`Config::fail_restart`).
+    FailRestart,
     ChatFilter,
     MessageSound,
     NotifyPlaying,
@@ -124,7 +126,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 134] = [
+pub const ITEMS: [(&str, Item); 135] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -136,6 +138,7 @@ pub const ITEMS: [(&str, Item); 134] = [
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
+    ("GAMEPLAY", Item::FailRestart),
     ("GAMEPLAY", Item::HideGreat),
     ("GAMEPLAY", Item::TrueNotes),
     ("GAMEPLAY", Item::CalmMaps),
@@ -546,6 +549,11 @@ impl Item {
                 "本当のノーツを表示",
                 "Показывать настоящие ноты"
             ),
+            Item::FailRestart => tr!(
+                "Restart on SD/PF fail",
+                "SD/PF失敗で即リトライ",
+                "Рестарт при провале SD/PF"
+            ),
             Item::HideGreat => tr!(
                 "Hide GREAT splash",
                 "GREATの表示を隠す",
@@ -757,6 +765,7 @@ impl Item {
             | Item::MapSkins
             | Item::AutoplayLeftHanded
             | Item::HideGreat
+            | Item::FailRestart
             | Item::TrueNotes
             | Item::CalmMaps
             | Item::HitFlash
@@ -1000,6 +1009,11 @@ impl Item {
                 "Some .tko maps draw notes as another colour or size until just before the hit. On: every note shows what it is.",
                 "一部の.tko譜面は叩く直前までノーツを別の色や大きさで描きます。オン: すべてのノーツが本当の姿で表示されます。",
                 "Некоторые .tko-карты рисуют ноты другим цветом или размером почти до самого удара. Вкл.: каждая нота видна такой, какая она есть."
+            ),
+            Item::FailRestart => tr!(
+                "When Sudden Death or Perfect fails a play, the map starts over straight away instead of going to the results.",
+                "Sudden DeathやPerfectで失敗したとき、リザルトに行かずすぐに最初からやり直します。",
+                "Когда Sudden Death или Perfect заваливают игру, карта сразу начинается заново, без экрана результатов."
             ),
             Item::HideGreat => tr!(
                 "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show.",

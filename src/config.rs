@@ -250,6 +250,8 @@ pub struct Config {
     pub autoplay: crate::autoplay::Settings,
     /// GREAT hits without their flash and label (only OKs and misses show).
     pub hide_great: bool,
+    /// A play failed by Sudden Death or Perfect starts over at once instead of showing results.
+    pub fail_restart: bool,
     /// The lane and the drum's panel drawn pure black.
     pub black_lane: bool,
     /// .tko notes drawn as what they are, whatever their map makes them show as.
@@ -498,6 +500,7 @@ impl Default for Config {
             menu_glitch: true,
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
+            fail_restart: false,
             black_lane: false,
             true_notes: false,
             calm_maps: false,
@@ -1149,6 +1152,7 @@ impl Config {
                 }
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
+                "fail_restart" => cfg.fail_restart = v == "true",
                 "black_lane" => cfg.black_lane = v == "true",
                 "true_notes" => cfg.true_notes = v == "true",
                 "calm_maps" => cfg.calm_maps = v == "true",
@@ -1500,6 +1504,8 @@ impl Config {
              kiai_effects = {}\n\
              # GREAT hits without their flash and label (only OKs and misses show)\n\
              hide_great = {}\n\
+             # a play failed by Sudden Death or Perfect starts over at once\n\
+             fail_restart = {}\n\
              # the lane and the drum's panel pure black\n\
              black_lane = {}\n\
              # .tko notes drawn as what they are, whatever colour or size their map shows them as\n\
@@ -1568,6 +1574,7 @@ impl Config {
             self.sort,
             self.kiai_effects,
             self.hide_great,
+            self.fail_restart,
             self.black_lane,
             self.true_notes,
             self.calm_maps,
