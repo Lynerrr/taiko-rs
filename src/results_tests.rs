@@ -367,3 +367,57 @@ fn an_old_replay_plays_back_with_the_windows_it_was_judged_with() {
     assert_eq!(windows.great, 31.5);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// With "Restart on SD/PF fail" on, a Sudden Death fail goes straight into a retry of the map
+/// (after a shorter FAILED sign); off, it shows the failed results as before.
+#[test]
+fn a_sudden_death_fail_starts_the_map_over_when_asked() {
+    let (dir, path) = map("fail-restart");
+    for restart in [true, false] {
+        let mut s = crate::layout_tests::state();
+        s.cfg.mods = Mods::parse("SD");
+        s.cfg.fail_restart = restart;
+        let meta = beatmap::Meta {
+            mode: 1,
+            ..Default::default()
+        };
+        let (tx, rx) = mpsc::channel();
+        tx.send(Scanned::Done(vec![library::Entry::new(path.clone(), meta)]))
+            .unwrap();
+        s.scan = Some((rx, Arc::new(AtomicUsize::new(0))));
+        s.play_when_scanned = false;
+        s.poll_scan();
+        s.start_loading_from(0, None);
+        let frame = |s: &mut State| {
+            let mut c = Canvas::default();
+            s.build_frame(&mut c, Instant::now(), 853.0);
+        };
+        let until = Instant::now() + Duration::from_secs(10);
+        while !matches!(s.scene, Scene::Play { .. }) && Instant::now() < until {
+            frame(&mut s);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let Scene::Play { game, .. } = &mut s.scene else {
+            panic!("the play never started");
+        };
+        assert_eq!(
+            game.fail_linger,
+            if restart { FAIL_RESTART_LINGER } else { 1.6 }
+        );
+        // Three notes go by unhit: the first miss fails the play.
+        let t = game.map.notes[2].time + 500.0;
+        game.set_time(t);
+        assert!(game.failed_early());
+        game.fail_linger = 0.0;
+        while matches!(s.scene, Scene::Play { .. }) && Instant::now() < until {
+            frame(&mut s);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        match &s.scene {
+            Scene::Loading { retry, entry, .. } if restart => assert!(*retry && *entry == 0),
+            Scene::Results { results, .. } if !restart => assert!(results.failed),
+            _ => panic!("restart {restart}: ended up elsewhere"),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

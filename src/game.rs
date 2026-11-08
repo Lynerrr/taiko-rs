@@ -522,6 +522,8 @@ pub struct Game {
     hp_exempt: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
     failed: Option<(f64, Instant)>,
+    /// Seconds the FAILED sign stays before the play ends (shorter when it starts over by itself).
+    pub fail_linger: f64,
     /// Alternate: the hand of the last accepted press (true = left) and when; None while either
     /// hand may hit (after a finisher, a drumroll or a swell, until a press hits a note).
     last_hand: Option<(bool, f64)>,
@@ -2209,6 +2211,7 @@ impl Game {
             hp_miss,
             hp_exempt: false,
             failed: None,
+            fail_linger: 1.6,
             last_hand: None,
             quake_at: f64::NEG_INFINITY,
             cracks: Vec::new(),
@@ -2649,7 +2652,7 @@ impl Game {
         self.time = self.speed.map(raw - offset);
         // Failed: the lane keeps scrolling under the FAILED sign, but nothing more is judged.
         if let Some((_, at)) = self.failed {
-            return now.duration_since(at).as_secs_f64() > 1.6;
+            return now.duration_since(at).as_secs_f64() > self.fail_linger;
         }
         self.feed_replay(audio);
         // Up to the frame before only: a press stamped before this frame may still be waiting for
