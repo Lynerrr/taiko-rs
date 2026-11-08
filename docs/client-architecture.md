@@ -22,6 +22,8 @@ client.
 | Performance is the main focus | [4.12](#412-performance-first): drop the shared `State` mutex from the input path, hot-path rules, perf gate in CI |
 | SQLite for local data (map index, scores) with search and filtering | [4.11](#411-local-data-in-sqlite): `rusqlite` bundled + FTS5, schema, import of the old files |
 
+**Review round 2.** "Collections for local maps aren't covered" → [4.11](#411-local-data-in-sqlite), *Collections*: local editable collections in SQLite by MD5, osu! `collection.db` mirrored on scan, optional export back, re-linking after map updates, `collection=` in search.
+
 ---
 
 ## 1. Where we are
@@ -683,9 +685,17 @@ Today the client keeps its data in about ten files with their own formats:
 | `favourite-songs.txt` | the music player's favourites |
 | `set-status.tsv` (cache dir) | ranked/loved status from the mirrors |
 | `config.txt` | settings |
+| osu!'s `collection.db` (read-only, not kept) | collections, see below |
 
 Plus star ratings and map info worked out again in the background (`mapinfo`, `stars`), and
 search done in memory over `Vec<Entry>` (`search.rs`).
+
+**Collections today.** `osudb.rs` reads osu! stable's `collection.db` (named lists of map MD5s)
+next to the Songs folder; `lib.rs` folds it into `Select::collections` as
+`Vec<(String, HashSet<usize>)>` — library *indices*, rebuilt on every rescan — and the song
+select's collection picker filters by one of them. So collections exist only for players with
+an osu! install, can't be created or changed in the client, aren't saved anywhere, and the
+search language has no `collection=` filter.
 
 **Target:** one database file `taiko.db` in the data folder, behind `services::store`, the only
 module that writes SQL.
@@ -724,12 +734,53 @@ CREATE TABLE map_prefs (           -- plays.tsv, hidden, offsets, skins off, fav
   offset_ms REAL, skin_off INTEGER DEFAULT 0, favourite INTEGER DEFAULT 0
 );
 CREATE TABLE set_status (set_id INTEGER PRIMARY KEY, status TEXT, checked_at INTEGER);
+
+CREATE TABLE collections (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'local',   -- 'local' (made in the client) / 'osu' (from collection.db)
+  osu_name TEXT,                          -- the name in collection.db, for re-sync
+  position INTEGER,                       -- order in the picker
+  created_at INTEGER, changed_at INTEGER,
+  UNIQUE (source, name)
+);
+CREATE TABLE collection_maps (
+  collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  map_md5 TEXT NOT NULL,                  -- by hash, like osu!: survives moving Songs
+  beatmap_id INTEGER, set_id INTEGER, version TEXT, -- to find the map again after an update
+  added_at INTEGER,
+  PRIMARY KEY (collection_id, map_md5)
+);
+CREATE INDEX collection_maps_md5 ON collection_maps(map_md5);
 ```
 
+**Collections, target:**
+
+- **Local collections**: create, rename, delete, reorder; add/remove the selected map or the
+  whole set from song select (right-click / a key, and the phone's long press). Stored in
+  `collections`/`collection_maps`, so they work without osu! installed.
+- **osu! collections**: imported as `source = 'osu'` on each library scan when `collection.db`'s
+  mtime changed (the DB keeps the last mtime). They are mirrored, not edited: a change in osu!
+  shows up here. "Copy to my collections" turns one into a local, editable collection.
+- **Export to osu!** (optional, explicit button): write local collections into
+  `collection.db` (version + count + name + MD5 list — the format `osudb.rs` already reads).
+  Only when the player asks and osu! is closed (osu! rewrites `collection.db` when it exits), with a
+  `.bak` copy first.
+- **Map updates**: an updated map has a new MD5. When the library sees a replaced file, rows
+  pointing at the old MD5 are re-pointed by `(beatmap_id)` or `(set_id, version)` — the same
+  "is this the same difficulty" rule the set updater uses (`download::is_own`).
+- **Missing maps** stay in the collection (shown greyed, with a download button when
+  `beatmap_id` is known) instead of silently vanishing like today's index-based sets.
+- **Search**: `collection="name"` (and `collection=none`) in the query language →
+  `EXISTS (SELECT 1 FROM collection_maps …)`; the picker becomes a shortcut for that filter.
+- **Later, if wanted**: the music player's favourites and Mapguessr pools can be collections
+  too, and collections could sync to the website through `taiko-proto` — not part of this plan.
+
 Search: the osu!-style query parser in `search.rs` stays (it's the user-facing language) and
-compiles `stars>5 status=r length<2:30 creator=x words` into `WHERE` clauses plus an FTS
-`MATCH`. Song select still keeps an in-memory list of row ids for drawing (scrolling must never
-wait for a query); the DB is where it comes from and where sorting/filtering run.
+compiles `stars>5 status=r length<2:30 creator=x collection="pools" words` into `WHERE` clauses
+plus an FTS `MATCH`. Song select still keeps an in-memory list of row ids for drawing
+(scrolling must never wait for a query); the DB is where it comes from and where
+sorting/filtering run.
 
 Things to know: +~1 MB binary; the regression suite opens an in-memory DB per test; Android
 needs the DB in the app's data folder (already where `config::data_dir` points).
@@ -824,7 +875,7 @@ step changes behaviour; if a golden changes, the step is wrong.
 |---|---|---|---|
 | 0 | Fill gaps in the regression suite for what each step touches (input routing per scene, settings round-trip, mp messages); perf gate in CI with the missing `perf_audit` cases | low | everything |
 | 1 | Registry up (Forgejo cargo + npm); repo `taiko-proto` with fixtures; client, `server/` and `@taiko/backend` switch to it | low | server/client independence |
-| 1b | `services::store`: SQLite, schema, import of the old files; scores and per-map prefs first, then the library index and search | medium | fast search/filtering |
+| 1b | `services::store`: SQLite, schema, import of the old files; scores and per-map prefs first, then the library index, collections (osu! import + local editing) and search | medium | fast search/filtering, collections |
 | 2 | Cut wrong-way deps: `render → screens` (generic `Hit`), `config → ui/preview/hud/video`, `beatmap → game`, `scores → video`, `mods → net/render`, `tko → editor` (test-only) | medium | crate split |
 | 3 | Globals → `Theme`/`DrawCtx`/`FormFactor`; remove `pin_*` hooks | medium | parallel tests, crate split |
 | 4 | Split `game.rs`: `logic::sim` vs `play::field`/`play::hud`; split `draw_field` | medium | `taiko-logic` |
