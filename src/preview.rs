@@ -926,6 +926,17 @@ impl Preview {
             marker,
             button,
         );
+        // The same slack as `time_at`.
+        c.hit(
+            rect[0] - 2.0,
+            rect[1] - 2.0,
+            rect[2] + 4.0,
+            rect[3] + 4.0,
+            Hit::Preview,
+        );
+        if let Some([x, y, w, h]) = self.play_rect {
+            c.hit(x, y, w, h, Hit::Preview);
+        }
     }
 
     pub fn graph_rect(&self) -> Option<[f32; 4]> {
@@ -1225,6 +1236,7 @@ impl Preview {
             1.0,
         );
         self.box_rect = Some([bx, by, bw, bh]);
+        c.hit(bx, by, bw, bh, Hit::Preview);
         let loaded = loaded.is_some();
         if loaded {
             self.draw_timeline(c, e, [bx, by + bh + 8.0, bw, GRAPH_H], button);
@@ -1565,6 +1577,61 @@ mod beat_tests {
         p.ready_for = Some(0);
         assert!(draw(&mut p).0);
         assert!(p.graph_rect.is_some());
+    }
+
+    #[test]
+    fn whatever_is_drawn_over_the_preview_takes_the_pointer() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let mut p = Preview {
+            seen: Some(0),
+            ready_for: Some(0),
+            game: Some(new_preview_game(&map, 1.0)),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            marker: Some((audio_path(&library[0]), 1000.0)),
+            ..Default::default()
+        };
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        p.draw_panel(
+            &mut c,
+            &library,
+            500.0,
+            40.0,
+            340.0,
+            400.0,
+            1.0,
+            None,
+            Some(("Play from", "Shift+Enter")),
+            None,
+            None,
+        );
+        let top = |c: &Canvas, x: f32, y: f32| {
+            c.hits
+                .iter()
+                .rev()
+                .find(|h| h.contains(x, y))
+                .map(|h| h.hit)
+        };
+        let [bx, by, bw, bh] = p.box_rect.unwrap();
+        let [gx, gy, gw, gh] = p.graph_rect.unwrap();
+        let [px, py, pw, ph] = p.play_rect.unwrap();
+        let spots = [
+            (bx + bw / 2.0, by + bh / 2.0),
+            (gx + gw / 2.0, gy + gh / 2.0),
+            (px + pw / 2.0, py + ph / 2.0),
+        ];
+        for (x, y) in spots {
+            assert!(matches!(top(&c, x, y), Some(Hit::Preview)));
+        }
+        // An overlay over everything, like the friends panel.
+        c.hit(0.0, 0.0, 853.3, 480.0, Hit::SocialPanel);
+        for (x, y) in spots {
+            assert!(matches!(top(&c, x, y), Some(Hit::SocialPanel)));
+        }
     }
 
     #[test]
