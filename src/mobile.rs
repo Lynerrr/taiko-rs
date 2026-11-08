@@ -1796,9 +1796,11 @@ impl State {
             .position(|&k| k == self.browse.sort)
             .unwrap_or(0);
         let next = (at + 1) % sorts.len();
-        let sort = match source {
-            Source::Osu => sorts[at].name(),
-            Source::Ours => sorts[at].name_for_ours(),
+        // The website's lists name some orders their own way (sent, not ranked).
+        let sort = if self.browse.category.is_custom() {
+            sorts[at].name_for_ours()
+        } else {
+            sorts[at].name()
         };
         let label = tr!("Sort: {sort}"; sort);
         let hit = Hit::DlSort(next);
