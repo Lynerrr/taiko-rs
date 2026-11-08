@@ -10,7 +10,8 @@
 //! (a glitch's slices and the washes are in screen space).
 
 use super::runtime::{FieldFx, hash01};
-use crate::render::{Canvas, Shape, VIRTUAL_HEIGHT, rgba, rotate_shapes};
+use crate::hit::Canvas;
+use crate::render::{Shape, VIRTUAL_HEIGHT, rgba, rotate_shapes};
 
 /// Trail copies at most.
 pub const MAX_ECHO: usize = 8;

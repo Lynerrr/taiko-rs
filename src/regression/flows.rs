@@ -179,7 +179,7 @@ fn pausing_resuming_retrying_and_quitting() {
 }
 
 /// The pause menu's items as drawn.
-fn pause_menu(c: &render::Canvas) -> Vec<&'static str> {
+fn pause_menu(c: &crate::hit::Canvas) -> Vec<&'static str> {
     let mut v = vec![
         "Continue",
         "Retry",
@@ -290,7 +290,7 @@ fn the_top_tabs_lead_to_every_part_of_the_game() {
     let (mut s, _songs, mut now) = client("tabs", vec![maps::basics()]);
     let mut log = String::new();
     for tab in 0..3 {
-        s.click(render::Hit::Tab(tab), None);
+        s.click(crate::hit::Hit::Tab(tab), None);
         now += Duration::from_millis(16);
         frame(&mut s, now);
         let _ = writeln!(log, "tab {tab}: {}", scene_name(&s));

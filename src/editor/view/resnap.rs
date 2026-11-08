@@ -7,7 +7,8 @@ use super::chrome::{DIM, WARN, wrap};
 use super::look::{self, Look};
 use super::{Btn, Modal, View};
 use crate::editor::resnap::{DIVISORS, PATTERN_MS, SHIFTS, SnapOpts, SnapPlan};
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum RsAct {

@@ -6,8 +6,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use crate::download::{self, Category, Diff, Job, SetInfo, SortKey};
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
-use crate::render::{Canvas, Hit, accent, approach, rgba};
+use crate::render::{accent, approach, rgba};
 
 /// Search this long after the last keystroke.
 const TYPE_DELAY: Duration = Duration::from_millis(450);

@@ -11,8 +11,9 @@ use crate::audio::{self, Engine, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::difficulty::{self, Graph};
 use crate::game::{self, Game};
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, rgba};
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.

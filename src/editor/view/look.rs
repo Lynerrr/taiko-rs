@@ -17,7 +17,8 @@ use super::keys::KAct;
 use super::motion::MAct;
 use super::nodes::NAct;
 use super::{Btn, Field, View};
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 /// The size of a button's text.
 pub(super) const TEXT: f32 = 7.0;

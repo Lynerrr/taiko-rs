@@ -6,7 +6,7 @@
 
 use super::harness::{self, *};
 use super::maps;
-use crate::render::{Hit, HitBox};
+use crate::hit::{Hit, HitBox};
 use crate::*;
 use winit::window::CursorIcon;
 

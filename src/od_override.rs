@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{accent, rgba};
 
 pub const MIN: f64 = 0.0;
 pub const MAX: f64 = 20.0;

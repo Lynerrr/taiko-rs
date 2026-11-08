@@ -5,7 +5,8 @@ use super::chrome::{DIM, wrap};
 use super::manual_text::{self, TryIt};
 use super::{Btn, Modal, View};
 use crate::audio::Engine;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 use crate::tko::recipes::Recipe;
 
 /// A button of the manual.

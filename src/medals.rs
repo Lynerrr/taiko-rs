@@ -7,10 +7,11 @@ use std::time::Instant;
 
 use winit::keyboard::KeyCode;
 
+use crate::hit::{Canvas, Hit};
 use crate::online::{
     self, BADGE, MedalNote, MedalRow, MedalsView, medal_badge, medal_colour, said,
 };
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, rgba};
+use crate::render::{VIRTUAL_HEIGHT, rgba};
 use crate::splash::hash;
 
 /// Rows of medals on a page, and how tall each is.

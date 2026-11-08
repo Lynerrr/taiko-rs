@@ -14,7 +14,8 @@ use crate::editor::sv_curves::{self, Anchor, Curve, MAX_EXPONENT, MIN_EXPONENT, 
 use crate::editor::svt::{self, Segment, Shape, SvtParams};
 use crate::editor::timing;
 use crate::editor::tools::Plan;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 pub(super) const VOLUME_COL: u32 = 0x4f9dff;
 const CURVE_COL: u32 = 0xffc857;

@@ -13,9 +13,10 @@ use std::time::Instant;
 use crate::audio::{self, Sfx, Sounds, Track};
 use crate::beatmap::Beatmap;
 use crate::game::{self, Game};
+use crate::hit::{Canvas, Hit};
 use crate::layout::{Area, Grip};
 use crate::mods::Speed;
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, rgba};
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 use crate::scores::Replay;
 use winit::keyboard::KeyCode;
 

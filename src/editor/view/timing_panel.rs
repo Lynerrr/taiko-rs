@@ -8,7 +8,8 @@ use super::lines::TAct;
 use super::look::{self, Look};
 use super::{Btn, Field, View};
 use crate::editor::chart::{TimingPoint, fmt_num};
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 
 /// A row of the panel is this tall.
 const ROW: f32 = 16.0;

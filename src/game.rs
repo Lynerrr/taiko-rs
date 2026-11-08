@@ -47,12 +47,13 @@ use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
+use crate::hit::{Canvas, Hit};
 use crate::hud::{self, Part};
 use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
 use crate::mods::{Mod, Mods, Speed};
 use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
-use crate::render::{Canvas, Font, Hit, Shape, Sprite, VIRTUAL_HEIGHT, accent, progress, rgba};
+use crate::render::{Font, Shape, Sprite, VIRTUAL_HEIGHT, accent, progress, rgba};
 use crate::shapeshift;
 use crate::tko::runtime::NoteFx;
 

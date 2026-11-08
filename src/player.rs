@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::game::DON;
 use crate::genres::GENRES;
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::playlist::{Folder, Playlist, Repeat};
-use crate::render::{Canvas, Hit, pixel_size, rgba, snap_to_grid};
+use crate::render::{pixel_size, rgba, snap_to_grid};
 
 /// Spectrum bands, each drawn twice (mirrored left and right).
 const BANDS: usize = 64;

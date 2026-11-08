@@ -4,8 +4,9 @@ use std::sync::mpsc::{self, Receiver};
 
 use winit::keyboard::KeyCode;
 
+use crate::hit::{Canvas, Hit};
 use crate::online::{self, OnlineScore, Profile};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 
 pub enum State {
     Loading(Receiver<Result<Profile, String>>),

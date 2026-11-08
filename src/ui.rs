@@ -3,8 +3,9 @@
 use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
-use crate::render::{Canvas, Glide, Hit, accent, progress, rgba};
+use crate::render::{Glide, accent, progress, rgba};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortMode {

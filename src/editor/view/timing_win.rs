@@ -10,7 +10,8 @@ use super::lines::TAct;
 use super::{Btn, Drag, Keys, RED_LINE, View, fmt_time, inside};
 use crate::audio::Engine;
 use crate::editor::timing;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 const ROW: f32 = 13.0;
 /// Where the columns start, from the table's left edge.

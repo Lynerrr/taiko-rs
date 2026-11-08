@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::game::{DON, KAT};
+use crate::hit::Canvas;
 use crate::menu::pixel_ring;
-use crate::render::{self, Canvas, VIRTUAL_HEIGHT, approach, pixel_size, rgba, snap_to_grid};
+use crate::render::{self, VIRTUAL_HEIGHT, approach, pixel_size, rgba, snap_to_grid};
 
 pub const MUSIC: usize = 0;
 pub const MASTER: usize = 1;
