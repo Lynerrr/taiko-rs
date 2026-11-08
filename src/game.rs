@@ -532,6 +532,9 @@ pub struct Game {
     crumbs: Vec<Crumb>,
     /// Panic / Mercy: map times of the latest misses.
     misses: VecDeque<f64>,
+    /// Replays: the seek bar's difficulty graph and the map time of every miss, worked out the
+    /// first time the bar is drawn.
+    pub replay_timeline: Option<(crate::difficulty::Graph, Vec<f64>)>,
     /// Drop / Barrel Roll: where each kiai starts (map ms) and the beat length there.
     kiai_starts: Vec<(f64, f64)>,
     /// Roulette: where each 4-bar section starts (map ms), its speed, and the velocity its
@@ -2213,6 +2216,7 @@ impl Game {
             cracks: Vec::new(),
             crumbs: Vec::new(),
             misses: VecDeque::new(),
+            replay_timeline: None,
             kiai_starts,
             sections,
             decoys,
@@ -3128,6 +3132,24 @@ impl Game {
             *next = 0;
         }
         self.time = self.start;
+    }
+
+    /// Replays: the map time of every note the whole replay misses, judged ahead from the
+    /// recorded presses; play is put back where it was.
+    pub fn replay_misses(&mut self) -> Vec<f64> {
+        if self.replay.is_none() {
+            return Vec::new();
+        }
+        let now = self.time;
+        self.rewind();
+        self.set_time(self.end_time);
+        let misses = (self.map.notes.iter().zip(&self.state))
+            .filter(|(_, st)| st.judged == Some(Judge::Miss))
+            .map(|(n, _)| n.time)
+            .collect();
+        self.rewind();
+        self.set_time(now);
+        misses
     }
 
     /// Map time of the start and end of play, for a timeline.
@@ -8700,6 +8722,39 @@ mod tests {
         assert!(
             a.miss > 0 && a.great > 0,
             "the test play should mix judgements"
+        );
+    }
+
+    #[test]
+    fn a_replay_knows_its_misses_ahead_and_stays_where_it_was() {
+        let mut g = game();
+        // Every fifth hit note left alone: those are the misses.
+        let hits: Vec<&crate::beatmap::Note> = g
+            .map
+            .notes
+            .iter()
+            .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat))
+            .collect();
+        let inputs: Vec<(f64, u8)> = (hits.iter().enumerate())
+            .filter(|(k, _)| k % 5 != 0)
+            .map(|(_, n)| (n.time, if n.kind == Kind::Kat { 0 } else { 1 }))
+            .collect();
+        let skipped: Vec<f64> = (hits.iter().enumerate())
+            .filter(|(k, _)| k % 5 == 0)
+            .map(|(_, n)| n.time)
+            .collect();
+        g.replay = Some((inputs, 0));
+        let (start, end) = g.span();
+        let mid = (start + end) / 2.0;
+        g.seek(mid, None, 0.0);
+        let before = (g.time, g.stats.great, g.stats.miss, g.stats.score);
+        let misses = g.replay_misses();
+        assert!(!skipped.is_empty());
+        assert_eq!(misses, skipped);
+        assert_eq!(
+            (g.time, g.stats.great, g.stats.miss, g.stats.score),
+            before,
+            "still in the middle, judged as before"
         );
     }
 
