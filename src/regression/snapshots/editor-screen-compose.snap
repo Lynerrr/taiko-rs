@@ -1,0 +1,62 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  677,4    Regression - basics [basics]
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  506,24   1/4
+text  600,24   100%
+text  347,25   Play
+text  458,25   Snap
+text  550,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  534,26   +
+text  632,26   +
+text  488,28   -
+text  585,28   -
+text  305,49   NOTES
+text  305,65   Nothing selected
+text  637,65   THIS DIFFICULTY
+text  637,77   64 notes
+text  305,83   New notes:
+text  370,84   Kat  W
+text  422,84   Big  E
+text  637,88   32 don, 32 kat
+text  637,99   0 drumrolls, 0 dendens
+text  305,101  Click the lane to place a note on the grid. W makes the
+text  637,110  200.0 BPM at the playhead
+text  305,111  note in hand a kat (or a don again), E a big one. Click
+text  305,120  a placed note to give it that colour. Right click
+text  637,121  Length 0:20.450
+text  305,130  deletes.
+text  637,132  0 bookmarks
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  786,211  0:02.000
+text   21,214  1
+text  536,224  200 BPM
+text   10,234  Select
+text   20,250  2
+text   14,269  Note
+text   20,285  3
+text   14,305  Roll
+text   20,321  4
+text   10,340  Denden
+text  531,361  Slider velocity (read only here: edit it in Timing mode, F3)
+text   11,372  x2
+text   11,393  x1
+text   11,414  x0.5
+text    8,447  0:00.000    1/4 snap    200.0 BPM    SV x1.00    64 notes
+text    8,460  Compose: place and edit notes. Hover anything for a tip.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save

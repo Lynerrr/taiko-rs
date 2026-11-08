@@ -8,6 +8,7 @@ pub mod harness;
 pub mod maps;
 pub mod snapshot;
 
+mod editor;
 mod flows;
 mod formats;
 mod gameplay;

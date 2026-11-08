@@ -1,0 +1,60 @@
+snapped(1013) = 987.00
+first red line to 200 BPM: Ok(())
+delete it: Ok(())
+copy two lines: 2
+paste them at 20000: Ok(2)
+resnap everything: 0 moved
+delete every red line: Err("a chart needs at least one red line")
+chart:
+  line 2300.00 beat -50.0000 meter 4 vol 100 red 0 fx 0
+  line 3800.00 beat -200.0000 meter 4 vol 80 red 0 fx 1
+  line 5300.00 beat 250.0000 meter 3 vol 90 red 1 fx 8
+  line 6800.00 beat -100.0000 meter 3 vol 70 red 0 fx 1
+  line 8300.00 beat -25.0000 meter 3 vol 100 red 0 fx 0
+  line 20000.00 beat -50.0000 meter 4 vol 100 red 0 fx 0
+  line 21500.00 beat -200.0000 meter 4 vol 80 red 0 fx 1
+  obj 800.00 kind 1 sound 0 0:0:0:0:
+  obj 1175.00 kind 1 sound 0 0:0:0:0:
+  obj 1550.00 kind 1 sound 2 0:0:0:0:
+  obj 1925.00 kind 1 sound 0 0:0:0:0:
+  obj 2300.00 kind 1 sound 0 0:0:0:0:
+  obj 2675.00 kind 1 sound 2 0:0:0:0:
+  obj 3050.00 kind 1 sound 0 0:0:0:0:
+  obj 3425.00 kind 1 sound 0 0:0:0:0:
+  obj 3800.00 kind 1 sound 2 0:0:0:0:
+  obj 4175.00 kind 1 sound 0 0:0:0:0:
+  obj 4550.00 kind 1 sound 0 0:0:0:0:
+  obj 4925.00 kind 1 sound 2 0:0:0:0:
+  obj 5300.00 kind 1 sound 4 0:0:0:0:
+  obj 5425.00 kind 1 sound 2 0:0:0:0:
+  obj 5550.00 kind 1 sound 2 0:0:0:0:
+  obj 5675.00 kind 1 sound 0 0:0:0:0:
+  obj 5800.00 kind 1 sound 4 0:0:0:0:
+  obj 5925.00 kind 1 sound 2 0:0:0:0:
+  obj 6050.00 kind 1 sound 2 0:0:0:0:
+  obj 6175.00 kind 1 sound 0 0:0:0:0:
+  obj 6300.00 kind 1 sound 4 0:0:0:0:
+  obj 6425.00 kind 1 sound 2 0:0:0:0:
+  obj 6550.00 kind 1 sound 2 0:0:0:0:
+  obj 6675.00 kind 1 sound 0 0:0:0:0:
+  obj 6800.00 kind 1 sound 4 0:0:0:0:
+  obj 6925.00 kind 1 sound 2 0:0:0:0:
+  obj 7050.00 kind 1 sound 2 0:0:0:0:
+  obj 7175.00 kind 1 sound 0 0:0:0:0:
+  obj 7300.00 kind 1 sound 4 0:0:0:0:
+  obj 7425.00 kind 1 sound 2 0:0:0:0:
+  obj 7550.00 kind 1 sound 2 0:0:0:0:
+  obj 7675.00 kind 1 sound 0 0:0:0:0:
+  obj 7800.00 kind 1 sound 4 0:0:0:0:
+  obj 7925.00 kind 1 sound 2 0:0:0:0:
+  obj 8050.00 kind 1 sound 2 0:0:0:0:
+  obj 8175.00 kind 1 sound 0 0:0:0:0:
+  obj 8300.00 kind 2 sound 0 L|456:192,1,300
+  obj 9500.00 kind 1 sound 2 0:0:0:0:
+  obj 9750.00 kind 1 sound 2 0:0:0:0:
+  obj 10000.00 kind 1 sound 2 0:0:0:0:
+  obj 10250.00 kind 1 sound 2 0:0:0:0:
+  obj 10500.00 kind 1 sound 2 0:0:0:0:
+  obj 10750.00 kind 1 sound 2 0:0:0:0:
+
+plays: great 42 ok 0 miss 0 | combo 42 max 42 | score 1000000 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false

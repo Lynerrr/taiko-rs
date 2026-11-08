@@ -10,7 +10,7 @@ use crate::scores::{self, Replay};
 use std::fmt::Write as _;
 
 /// Everything judging and drawing take from a parsed chart, one line per object.
-pub fn describe(map: &Beatmap) -> String {
+pub(super) fn describe(map: &Beatmap) -> String {
     let m = &map.meta;
     let mut out = format!(
         "meta: {} - {} [{}] by {} | mode {} od {} hp {} sm {} tick {} v{} | audio {:?} preview {} \
@@ -103,7 +103,7 @@ fn every_test_chart_parses_the_same() {
 }
 
 /// Charts people really have: odd versions, converts, gimmicks, broken lines.
-fn odd_charts() -> Vec<(&'static str, String)> {
+pub(super) fn odd_charts() -> Vec<(&'static str, String)> {
     let head = |mode: u8, extra: &str| {
         format!(
             "osu file format v14\n\n[General]\nMode: {mode}\n\n[Metadata]\nTitle:t\nArtist:a\n\

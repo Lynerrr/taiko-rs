@@ -1,0 +1,100 @@
+opened:  | 64 objects, 1 lines, modified false
+place a don after the end: true | 65 objects, 1 lines, modified true
+place a kat: true | 66 objects, 1 lines, modified true
+place on an existing note: false | 66 objects, 1 lines, modified true
+place a drumroll: true | 67 objects, 1 lines, modified true
+place a swell: true | 68 objects, 1 lines, modified true
+select 1000-1450: 4 selected | 68 objects, 1 lines, modified true
+make them big:  | 68 objects, 1 lines, modified true
+flip their colours:  | 68 objects, 1 lines, modified true
+move them 300 ms later: false | 68 objects, 1 lines, modified true
+copy: 4 | 68 objects, 1 lines, modified true
+paste at 15000: 4 | 72 objects, 1 lines, modified true
+clone the selection: 4 | 76 objects, 1 lines, modified true
+delete 5000-6000: 7 | 69 objects, 1 lines, modified true
+toggle finish on the selection: true | 69 objects, 1 lines, modified true
+add a 240 BPM red line: Ok(()) | 69 objects, 2 lines, modified true
+add a 1.5x green line: Ok(()) | 69 objects, 3 lines, modified true
+first line to volume 60: Ok(()) | 69 objects, 3 lines, modified true
+bookmark 2000: true | 69 objects, 3 lines, modified true
+edited chart:
+  line 1000.00 beat 300.0000 meter 4 vol 60 red 1 fx 0
+  line 16000.00 beat 250.0000 meter 4 vol 100 red 1 fx 0
+  line 17000.00 beat -66.6667 meter 4 vol 100 red 0 fx 0
+  obj 1000.00 kind 1 sound 6 0:0:0:0:
+  obj 1150.00 kind 1 sound 4 0:0:0:0:
+  obj 1300.00 kind 1 sound 4 0:0:0:0:
+  obj 1450.00 kind 1 sound 6 0:0:0:0:
+  obj 1600.00 kind 1 sound 0 0:0:0:0:
+  obj 1750.00 kind 1 sound 2 0:0:0:0:
+  obj 1900.00 kind 1 sound 0 0:0:0:0:
+  obj 2050.00 kind 1 sound 0 0:0:0:0:
+  obj 2200.00 kind 1 sound 0 0:0:0:0:
+  obj 2350.00 kind 1 sound 2 0:0:0:0:
+  obj 2500.00 kind 1 sound 2 0:0:0:0:
+  obj 2650.00 kind 1 sound 2 0:0:0:0:
+  obj 2800.00 kind 1 sound 0 0:0:0:0:
+  obj 2950.00 kind 1 sound 2 0:0:0:0:
+  obj 3100.00 kind 1 sound 2 0:0:0:0:
+  obj 3250.00 kind 1 sound 0 0:0:0:0:
+  obj 3400.00 kind 1 sound 0 0:0:0:0:
+  obj 3550.00 kind 1 sound 2 0:0:0:0:
+  obj 3700.00 kind 1 sound 0 0:0:0:0:
+  obj 3850.00 kind 1 sound 0 0:0:0:0:
+  obj 4000.00 kind 1 sound 0 0:0:0:0:
+  obj 4150.00 kind 1 sound 2 0:0:0:0:
+  obj 4300.00 kind 1 sound 2 0:0:0:0:
+  obj 4450.00 kind 1 sound 2 0:0:0:0:
+  obj 4600.00 kind 1 sound 0 0:0:0:0:
+  obj 4750.00 kind 1 sound 2 0:0:0:0:
+  obj 4900.00 kind 1 sound 2 0:0:0:0:
+  obj 6100.00 kind 1 sound 2 0:0:0:0:
+  obj 6250.00 kind 1 sound 2 0:0:0:0:
+  obj 6400.00 kind 1 sound 0 0:0:0:0:
+  obj 6550.00 kind 1 sound 2 0:0:0:0:
+  obj 6700.00 kind 1 sound 2 0:0:0:0:
+  obj 6850.00 kind 1 sound 0 0:0:0:0:
+  obj 7000.00 kind 1 sound 0 0:0:0:0:
+  obj 7150.00 kind 1 sound 2 0:0:0:0:
+  obj 7300.00 kind 1 sound 0 0:0:0:0:
+  obj 7450.00 kind 1 sound 0 0:0:0:0:
+  obj 7600.00 kind 1 sound 0 0:0:0:0:
+  obj 7750.00 kind 1 sound 2 0:0:0:0:
+  obj 7900.00 kind 1 sound 2 0:0:0:0:
+  obj 8050.00 kind 1 sound 2 0:0:0:0:
+  obj 8200.00 kind 1 sound 0 0:0:0:0:
+  obj 8350.00 kind 1 sound 2 0:0:0:0:
+  obj 8500.00 kind 1 sound 2 0:0:0:0:
+  obj 8650.00 kind 1 sound 0 0:0:0:0:
+  obj 8800.00 kind 1 sound 0 0:0:0:0:
+  obj 8950.00 kind 1 sound 2 0:0:0:0:
+  obj 9100.00 kind 1 sound 0 0:0:0:0:
+  obj 9250.00 kind 1 sound 0 0:0:0:0:
+  obj 9400.00 kind 1 sound 0 0:0:0:0:
+  obj 9550.00 kind 1 sound 2 0:0:0:0:
+  obj 9700.00 kind 1 sound 2 0:0:0:0:
+  obj 9850.00 kind 1 sound 2 0:0:0:0:
+  obj 10000.00 kind 1 sound 0 0:0:0:0:
+  obj 10150.00 kind 1 sound 2 0:0:0:0:
+  obj 10300.00 kind 1 sound 2 0:0:0:0:
+  obj 10450.00 kind 1 sound 0 0:0:0:0:
+  obj 11000.00 kind 1 sound 0 0:0:0:0:
+  obj 11150.00 kind 1 sound 2 0:0:0:0:
+  obj 11500.00 kind 2 sound 0 L|676:192,1,420,0|0,0:0|0:0,0:0:0:0:
+  obj 12700.00 kind 8 sound 0 14000,0:0:0:0:
+  obj 15000.00 kind 1 sound 6 0:0:0:0:
+  obj 15150.00 kind 1 sound 4 0:0:0:0:
+  obj 15300.00 kind 1 sound 4 0:0:0:0:
+  obj 15450.00 kind 1 sound 6 0:0:0:0:
+  obj 16675.00 kind 1 sound 6 0:0:0:0:
+  obj 16825.00 kind 1 sound 4 0:0:0:0:
+  obj 16975.00 kind 1 sound 4 0:0:0:0:
+  obj 17125.00 kind 1 sound 6 0:0:0:0:
+
+undid 12 edits, modified true
+redid 12 edits
+save: Ok(None), modified after false
+saved bookmarks line: Some("Bookmarks:2000")
+saved map: 69 notes
+played perfectly: great 67 ok 0 miss 0 | combo 67 max 67 | score 1000000 | rolls 13 swells 1 strong 12 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+played with jitter: great 61 ok 6 miss 0 | combo 67 max 67 | score 861579 | rolls 13 swells 1 strong 12 | acc 95.5224 | err -3.01 ur 221.26 | hp 1.0000 | failed false
