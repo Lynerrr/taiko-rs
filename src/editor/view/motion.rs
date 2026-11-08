@@ -4,7 +4,7 @@
 //! note does as its own hit nears (ready-made moves, or keys on a small graph).
 
 use super::look::{self, Look, look_of};
-use super::{Btn, Drag, Keys, Mode, View, inside};
+use super::{Btn, Drag, Keys, Mode, View, draw_preview_hint, inside};
 use crate::editor::motion::{
     BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, holds, pace_track,
 };
@@ -20,6 +20,8 @@ use std::time::Instant;
 pub(super) const PAGE: u8 = 5;
 /// How close (preview units) to a point a press takes it.
 const GRAB: f32 = 6.0;
+/// How far inside the preview's edge the handle of a point off it is drawn and taken.
+const HANDLE_INSET: f32 = 4.0;
 /// Two presses this close in time and place are a double click.
 const DOUBLE_MS: u128 = 350;
 /// Height of a line of the page's buttons.
@@ -1497,8 +1499,20 @@ impl View {
             .collect()
     }
 
-    fn handle_near(&self, x: f32, y: f32) -> Option<usize> {
+    /// Where each point's handle is drawn and taken: on the point, or for a point off the
+    /// preview (a path may come in from off screen), on the preview's edge towards it, so it can
+    /// always be picked up again.
+    pub(super) fn handle_spots(&self) -> Vec<(f32, f32)> {
+        let [fx, fy, fw, fh] = self.layout.preview;
+        let m = HANDLE_INSET.min(fw / 2.0).min(fh / 2.0);
         self.path_handles()
+            .into_iter()
+            .map(|(hx, hy)| (hx.clamp(fx + m, fx + fw - m), hy.clamp(fy + m, fy + fh - m)))
+            .collect()
+    }
+
+    fn handle_near(&self, x: f32, y: f32) -> Option<usize> {
+        self.handle_spots()
             .iter()
             .enumerate()
             .map(|(i, (hx, hy))| (i, (hx - x).hypot(hy - y)))
@@ -1542,9 +1556,20 @@ impl View {
         };
         let (mx, my) = self.mouse;
         let hover = self.handle_near(mx, my);
-        for (i, (hx, hy)) in self.path_handles().into_iter().enumerate() {
+        let real = self.path_handles();
+        for (i, (hx, hy)) in self.handle_spots().into_iter().enumerate() {
             let lit = live == Some(i) || hover == Some(i);
             let colour = if i == 0 { 0xffffff } else { accent() };
+            // Off the preview: two dots point on from the edge to where it really is.
+            let (rx, ry) = real[i];
+            let (ox, oy) = (rx - hx, ry - hy);
+            let off = ox.hypot(oy);
+            if off > 0.5 {
+                for d in [4.5, 6.5] {
+                    let (px, py) = (hx + ox / off * d, hy + oy / off * d);
+                    c.rect(px - 0.8, py - 0.8, 1.6, 1.6, rgba(colour, 0.9));
+                }
+            }
             c.round_rect(
                 [hx - 3.0, hy - 3.0],
                 [6.0, 6.0],
@@ -1557,16 +1582,14 @@ impl View {
         c.ring(dx, dy, 5.0, rgba(accent(), 0.9), 1.0);
         let [fx, fy, fw, fh] = self.layout.preview;
         if c.hovered(fx, fy, fw, fh) {
-            c.text(
-                fx + 4.0,
-                fy + fh - 9.0,
-                5.5,
-                rgba(0xffffff, 0.8),
-                &Canvas::fit(
-                    5.5,
-                    fw - 8.0,
-                    "drag a point: move it   double click: add one   right click: take it away",
-                ),
+            draw_preview_hint(
+                c,
+                self.layout.preview,
+                &[
+                    "drag a point: move it",
+                    "double click: add one",
+                    "right click: take it away",
+                ],
             );
         }
     }

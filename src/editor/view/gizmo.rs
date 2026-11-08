@@ -5,7 +5,7 @@
 //! click on one goes there and a right click takes that moment's keys away.
 
 use super::clips::pose_mut;
-use super::{Drag, Keys, Mode, View, inside};
+use super::{Drag, Keys, Mode, View, draw_preview_hint, inside};
 use crate::editor::keyframes::Subject;
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
@@ -93,18 +93,17 @@ impl View {
             c.ring(px, py, 9.0, rgba(accent(), a), 1.5);
             c.rect(px - 13.0, py - 0.5, 26.0, 1.0, rgba(accent(), a * 0.8));
             c.rect(px - 0.5, py - 13.0, 1.0, 26.0, rgba(accent(), a * 0.8));
-            let hint = if self.picked_layer().is_some() {
-                "drag: place it   Shift: turn   Ctrl: size"
+            let hint: &[&str] = if self.picked_layer().is_some() {
+                &["drag: place it", "Shift: turn", "Ctrl: size"]
             } else {
-                "drag: move   Shift: turn   Ctrl: zoom   (keys at the playhead)"
+                &[
+                    "drag: move",
+                    "Shift: turn",
+                    "Ctrl: zoom",
+                    "(keys at the playhead)",
+                ]
             };
-            c.text(
-                fx + 4.0,
-                fy + fh - 9.0,
-                5.5,
-                rgba(0xffffff, 0.8),
-                &Canvas::fit(5.5, fw - 8.0, hint),
-            );
+            draw_preview_hint(c, self.layout.preview, hint);
         }
     }
 
