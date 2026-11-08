@@ -2568,3 +2568,37 @@ fn mod_presets_are_saved_named_applied_and_removed() {
     s.remove_mod_preset(0);
     assert!(s.cfg.mod_presets.is_empty());
 }
+
+#[test]
+fn mod_presets_are_saved_and_applied_with_the_mouse() {
+    let mut s = state();
+    s.play_when_scanned = false;
+    s.open_mod_select();
+    s.cfg.mods = mods::Mods::parse("HD,PF");
+    let click = |s: &mut State, hit: render::Hit| {
+        s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
+        let r = s
+            .hits
+            .iter()
+            .rev()
+            .find(|h| h.hit == hit)
+            .map(|h| h.rect)
+            .unwrap_or_else(|| panic!("{hit:?} is drawn"));
+        // Virtual units to window pixels (the test window is 1080 high).
+        let k = s.window_h / render::VIRTUAL_HEIGHT;
+        s.mouse = (
+            f64::from((r[0] + r[2] / 2.0) * k),
+            f64::from((r[1] + r[3] / 2.0) * k),
+        );
+        s.mouse_button(true, None);
+        s.mouse_button(false, None);
+    };
+    click(&mut s, render::Hit::ModPresetSave);
+    assert!(s.preset_naming.is_some(), "+ Save starts naming a preset");
+    s.key_inner(KeyCode::Enter, false, None, Instant::now(), None);
+    assert_eq!(s.cfg.mod_presets.len(), 1);
+    s.cfg.mods = mods::Mods::NONE;
+    click(&mut s, render::Hit::ModPreset(0));
+    assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"), "a click applies it");
+    assert!(s.mod_select.is_some());
+}
