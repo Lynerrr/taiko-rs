@@ -13,8 +13,30 @@ $dir = Join-Path $env:LOCALAPPDATA 'Programs\taiko-rs'
 $exe = Join-Path $dir 'taiko-rs.exe'
 $zip = Join-Path $env:TEMP 'taiko-rs-windows-x64.zip'
 
+# GitHub sometimes answers 504 on the release download link for a while: retry, then take the
+# API's link to the same file, which goes through a different front end.
+function Get-Archive($from, $headers) {
+    for ($try = 1; ; $try++) {
+        try {
+            Invoke-WebRequest $from -OutFile $zip -UseBasicParsing -Headers $headers
+            return
+        } catch {
+            if ($try -ge 3) { throw }
+            Start-Sleep -Seconds 3
+        }
+    }
+}
+
 Write-Host 'Downloading taiko.rs...'
-Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
+try {
+    Get-Archive $url @{}
+} catch {
+    Write-Host "Trying GitHub's other download link..."
+    $release = Invoke-RestMethod "https://api.github.com/repos/Lynerrr/taiko-rs/releases/tags/$tag" -UseBasicParsing
+    $asset = $release.assets | Where-Object name -eq 'taiko-rs-windows-x64.zip' | Select-Object -First 1
+    if (-not $asset) { throw }
+    Get-Archive $asset.url @{ Accept = 'application/octet-stream' }
+}
 
 # Updating: the old exe can't be replaced while it's running.
 Get-Process taiko-rs -ErrorAction SilentlyContinue | Stop-Process -Force
