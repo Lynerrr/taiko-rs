@@ -1,0 +1,11 @@
+opened: tko true objects 64
+fake don at 1000: true
+fake kat at 1075: true
+fake don at 11000: true
+save: Ok(None)
+fakes in the gimmick: 3
+plays: 64 notes, 3 fakes, tko version 4
+perfect: great 64 ok 0 miss 0 | combo 64 max 64 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+[Gimmick]: {"field":{},"groups":[],"fakes":[{"t":1000.0},{"t":1075.0,"kat":true},{"t":11000.0}]}
+fake in a plain .osu: false
+newer .tko: None

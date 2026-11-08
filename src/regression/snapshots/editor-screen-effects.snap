@@ -1,0 +1,54 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  677,4    Regression - basics [basics]
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  506,24   1/4
+text  600,24   100%
+text  347,25   Play
+text  458,25   Snap
+text  550,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  534,26   +
+text  632,26   +
+text  488,28   -
+text  585,28   -
+text  305,49   EFFECTS (.tko)
+text  410,49   Clips
+text  454,49   Motion
+text  558,49   Keyframes
+text  626,49   Nodes
+text  511,50   advanced
+text  305,65   This map is a plain .osu
+text  305,79   Effects animate the playfield and the notes: keyframes move things over time, nodes react to
+text  305,89   the beat and to how the player plays.
+text  305,101  They only exist in this client. Making a .tko saves a copy next to your .osu and leaves the
+text  306,111  .osu exactly as it is, so it still plays the same in osu!stable.
+text  317,132  Make a .tko copy
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  786,211  0:02.000
+text   21,217  1
+text  536,224  200 BPM
+text   20,240  2
+text   20,263  3
+text   20,286  4
+text  531,311  Slider velocity (read only here: edit it in Timing mode, F3)
+text   11,326  x2
+text   11,368  x1
+text   11,410  x0.5
+text    8,447  0:00.000    1/4 snap    200.0 BPM    SV x1.00    64 notes
+text    8,460  Effects: animate the playfield. Only .tko maps play these; the .osu is untouched.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save

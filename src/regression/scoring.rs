@@ -8,10 +8,11 @@ use crate::{online, pp, stars};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-/// Writes `chart` into a folder of its own (stars and pp read map files).
-pub fn chart_file(chart: &maps::Chart) -> PathBuf {
+/// Writes `chart` into a folder of its own for test `tag` (stars and pp read map files). Tests
+/// run side by side, and one rewriting a file another is reading would hand it an empty map.
+pub fn chart_file(chart: &maps::Chart, tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "taiko-rs-regression-{}-{}",
+        "taiko-rs-regression-{tag}-{}-{}",
         chart.name,
         std::process::id()
     ));
@@ -29,7 +30,7 @@ fn opt(v: Option<f64>, places: usize) -> String {
 fn star_ratings_by_rate_and_mods() {
     let mut out = String::new();
     for chart in maps::all() {
-        let path = chart_file(&chart);
+        let path = chart_file(&chart, "stars");
         let _ = write!(
             out,
             "{:<18} text {}",
@@ -65,7 +66,7 @@ fn star_ratings_by_rate_and_mods() {
 fn pp_for_plays() {
     let mut out = String::new();
     for chart in maps::all() {
-        let path = chart_file(&chart);
+        let path = chart_file(&chart, "pp");
         let map = chart.beatmap();
         for (player, mods) in [
             (Player::Perfect, ""),
@@ -192,7 +193,7 @@ fn letters_levels_and_totals() {
 fn the_results_of_a_saved_replay_are_worked_out_again_the_same() {
     // What the results screen does with a replay file: the same numbers as the play itself.
     let chart = maps::rolls_and_swells();
-    let path = chart_file(&chart);
+    let path = chart_file(&chart, "simulated");
     let map = chart.beatmap();
     let inputs = maps::presses(&map, Player::Jitter(35.0));
     let mut r = super::gameplay::replay(inputs, &["HR"], crate::scores::new_version());

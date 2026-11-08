@@ -1,0 +1,74 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  677,4    Regression - basics [basics]
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  506,24   1/4
+text  600,24   100%
+text  347,25   Play
+text  458,25   Snap
+text  550,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  534,26   +
+text  632,26   +
+text  488,28   -
+text  585,28   -
+text  305,49   GIMMICKS
+text  311,70   Barline note
+text  399,70   Fake slider
+text  481,70   Big fake
+text  545,70   Shiny
+text  311,89   Hidden note
+text  393,89   Red line
+text  457,89   Anti-barline
+text  545,89   Hidden anti
+text  305,105  a note drawn out of barlines (don: one bar, kat: three)
+text  323,119  Line BPM: 60000
+text  500,119  Spacing ms: 1
+text  678,119  Kat spacing ms: 1
+text  466,120  +
+text  644,120  +
+text  821,120  +
+text  309,122  -
+text  486,122  -
+text  664,122  -
+text  311,138  Hide the note
+text  405,138  Place note
+text  481,138  Mirror kat
+text  311,158  At playhead: don
+text  423,158  kat
+text  457,158  On selection
+text  551,158  Preview
+text  305,173  BPM and SV come from the base timing.
+text  720,174  Use current as base
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  786,211  0:02.000
+text   21,214  1
+text  536,224  200 BPM
+text   10,234  Select
+text   20,250  2
+text   14,269  Note
+text   20,285  3
+text   14,305  Roll
+text   20,321  4
+text   10,340  Denden
+text  531,361  Slider velocity (read only here: edit it in Timing mode, F3)
+text   11,372  x2
+text   11,393  x1
+text   11,414  x0.5
+text    8,447  0:00.000    1/4 snap    200.0 BPM    SV x1.00    64 notes
+text    8,460  Gimmicks: build stable-compatible structures at the playhead or on the selection.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save

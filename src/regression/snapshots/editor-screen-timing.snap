@@ -1,0 +1,55 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  677,4    Regression - basics [basics]
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  506,24   1/4
+text  600,24   100%
+text  347,25   Play
+text  458,25   Snap
+text  550,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  534,26   +
+text  632,26   +
+text  488,28   -
+text  585,28   -
+text  305,49   TIMING LINES
+text  659,49   Metronome
+text  754,49   Line
+text  791,49   SV tool
+text  305,65   Now: 200.00 BPM   SV x1.00
+text  311,84   + Red line  Ctrl+P
+text  435,84   + Green line  Ctrl+Shift+P
+text  305,101  A red line sets the BPM and the beat grid; a green line sets the slider velocity (how fast
+text  305,111  notes scroll). Lines are added at the playhead. Click a line on the timeline or in the graph to
+text  305,120  edit it, F6 opens the window with them all.
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  786,211  0:02.000
+text   21,217  1
+text  536,224  200 BPM
+text   20,240  2
+text   20,263  3
+text   20,286  4
+text   67,311  Slider velocity   double click: add a line   drag a dot: change it (Alt: add)   drag a box: select   click a curve: edit it
+text  732,314  SV
+text  758,314  Volume
+text  806,314  Brush
+text   11,326  x2
+text   11,368  x1
+text   11,410  x0.5
+text    8,447  0:00.000    1/4 snap    200.0 BPM    SV x1.00    64 notes
+text    8,460  Timing: double click the graph to add a green line, drag a dot to change its velocity.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save

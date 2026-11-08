@@ -1,0 +1,5 @@
+objects: 64 -> undo 64 -> redo 65
+saved: changed true modified false
+test play: 65 notes, no fail true, test true
+after quitting the test play: Editor
+after Escape: Select
