@@ -51,6 +51,8 @@ pub struct Pop {
     pub rect: [f32; 4],
     /// The divisions ticked for a new preset, while one is being made.
     pub draft: Option<Vec<u32>>,
+    /// Delete was pressed once: a second press deletes the preset, anything else keeps it.
+    pub deleting: bool,
 }
 
 const WIDTH: f32 = 300.0;
@@ -107,6 +109,11 @@ impl View {
     }
 
     pub(super) fn press_snap(&mut self, act: SnapAct) {
+        // Delete asks first: anything but a second Delete keeps the preset.
+        let armed = match &mut self.snap_pop {
+            Some(p) => std::mem::take(&mut p.deleting),
+            None => false,
+        };
         match act {
             SnapAct::Open => {
                 self.snap_pop = match self.snap_pop {
@@ -114,6 +121,7 @@ impl View {
                     None => Some(Pop {
                         rect: [0.0; 4],
                         draft: None,
+                        deleting: false,
                     }),
                 };
             }
@@ -163,6 +171,16 @@ impl View {
             }
             SnapAct::Delete => {
                 if let Some(i) = self.snap_active.filter(|i| *i < self.snap_presets.len()) {
+                    if !armed {
+                        if let Some(p) = &mut self.snap_pop {
+                            p.deleting = true;
+                        }
+                        self.status = format!(
+                            "delete the snap preset {}? Press Delete again to delete it",
+                            self.snap_presets[i].name
+                        );
+                        return;
+                    }
                     let gone = self.snap_presets.remove(i);
                     self.status = format!("deleted the snap preset {}", gone.name);
                     self.use_snap_preset(None);
@@ -212,11 +230,17 @@ impl View {
             lower.push(("New preset".into(), Btn::Snap(SnapAct::New), false));
             if let Some(i) = active {
                 custom = Some(self.snap_presets[i].name.clone());
-                lower.push((
-                    format!("Delete {}", self.snap_presets[i].name),
-                    Btn::Snap(SnapAct::Delete),
-                    false,
-                ));
+                let name = &self.snap_presets[i].name;
+                if pop.deleting {
+                    lower.push((
+                        format!("Yes, delete {name}"),
+                        Btn::Snap(SnapAct::Delete),
+                        false,
+                    ));
+                    lower.push(("Keep it".into(), Btn::Snap(SnapAct::Cancel), false));
+                } else {
+                    lower.push((format!("Delete {name}"), Btn::Snap(SnapAct::Delete), false));
+                }
             }
         }
         // The height first, so the panel can be drawn under what goes on it.

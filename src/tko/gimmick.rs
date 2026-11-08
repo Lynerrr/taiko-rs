@@ -639,6 +639,12 @@ pub struct FakeNote {
     pub kat: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub big: bool,
+    /// The motion group it flies with, named by place instead of found by its time: 0 none,
+    /// n the n-th group. Unset (older maps, and a fake never given one), the first group that
+    /// holds its time, as for a note. So fakes stacked on one millisecond, or on a note, can
+    /// each have a path and moves of their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<u16>,
 }
 
 impl Gimmick {
@@ -777,9 +783,9 @@ impl Gimmick {
         super::clips::sanitize(&mut self.clips);
         super::scroll::sanitize(&mut self.scroll);
         self.fakes.retain(|f| f.t.is_finite());
+        // No dedup: any number of fakes may be stacked on one millisecond on purpose.
         self.fakes
             .sort_by(|a, b| a.t.total_cmp(&b.t).then(a.kat.cmp(&b.kat)));
-        self.fakes.dedup_by(|b, a| a.t == b.t && a.kat == b.kat);
         self.fakes.truncate(MAX_FAKES);
         // A clip on a group of notes that isn't there moves nothing (a copy's clip holds which
         // copy in the same place).

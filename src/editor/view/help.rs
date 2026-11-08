@@ -250,6 +250,10 @@ impl View {
                 self.modal_from = self.buttons.len();
                 self.draw_setup(c);
             }
+            Some(Modal::Resnap) => {
+                self.modal_from = self.buttons.len();
+                self.draw_resnap(c);
+            }
             None => {}
         }
         if self.tour.is_some() {

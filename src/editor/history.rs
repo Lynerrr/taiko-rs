@@ -59,11 +59,11 @@ fn remove_objects(c: &mut Chart, list: &[HitObject]) {
 
 fn set_objects(c: &mut Chart, list: &[HitObject]) {
     // Moved notes: (from, to). Groups hold their notes by time, so they go along.
-    let mut moved: Vec<(f64, f64)> = Vec::new();
+    let mut moved: Vec<(f64, f64, bool)> = Vec::new();
     for o in list {
         if let Some(at) = c.objects.iter().position(|q| q.id == o.id) {
             if c.objects[at].time != o.time {
-                moved.push((c.objects[at].time, o.time));
+                moved.push((c.objects[at].time, o.time, false));
             }
             c.objects[at] = o.clone();
         }
@@ -71,6 +71,15 @@ fn set_objects(c: &mut Chart, list: &[HitObject]) {
     if !moved.is_empty()
         && let Some(g) = c.gimmick.as_mut()
     {
+        // A note (or fake) that shared the millisecond and stayed keeps its groups there: the
+        // one that left takes a copy of the time instead of it.
+        let ids: std::collections::HashSet<u64> = list.iter().map(|o| o.id).collect();
+        for m in &mut moved {
+            m.2 = c
+                .objects
+                .iter()
+                .any(|q| !ids.contains(&q.id) && (q.time - m.0).abs() <= 0.5);
+        }
         move_group_notes(g, &moved);
     }
     c.sort_objects();
@@ -78,32 +87,33 @@ fn set_objects(c: &mut Chart, list: &[HitObject]) {
 }
 
 /// Each group's note at a `from` time is at its `to` now, all at once (so notes swapping places
-/// swap groups too), and so is each note drawn over the effects.
-fn move_group_notes(g: &mut crate::tko::gimmick::Gimmick, moved: &[(f64, f64)]) {
-    for gr in &mut g.groups {
+/// swap groups too), and so is each note drawn over the effects. With `stays` something else is
+/// still at `from`, so `to` is added beside it rather than taking its place.
+fn move_group_notes(g: &mut crate::tko::gimmick::Gimmick, moved: &[(f64, f64, bool)]) {
+    let follow = |list: &mut Vec<f64>| {
+        let mut added = Vec::new();
         let mut changed = false;
-        for t in &mut gr.notes {
-            if let Some(&(_, to)) = moved.iter().find(|(from, _)| (*from - *t).abs() <= 0.5) {
-                *t = to;
+        for t in list.iter_mut() {
+            if let Some(&(_, to, stays)) = moved.iter().find(|m| (m.0 - *t).abs() <= 0.5) {
+                if stays {
+                    added.push(to);
+                } else {
+                    *t = to;
+                }
                 changed = true;
             }
         }
+        list.extend(added);
         // No dedup: two notes stacked on one ms and undone must both come back.
         if changed {
-            gr.notes.sort_by(f64::total_cmp);
+            list.sort_by(f64::total_cmp);
         }
+    };
+    for gr in &mut g.groups {
+        follow(&mut gr.notes);
     }
     // Notes drawn over every effect stay so.
-    let mut changed = false;
-    for t in &mut g.above {
-        if let Some(&(_, to)) = moved.iter().find(|(from, _)| (*from - *t).abs() <= 0.5) {
-            *t = to;
-            changed = true;
-        }
-    }
-    if changed {
-        g.above.sort_by(f64::total_cmp);
-    }
+    follow(&mut g.above);
 }
 
 fn insert_timing(c: &mut Chart, list: &[TimingPoint]) {
@@ -223,6 +233,67 @@ impl Command {
                     before: before.clone(),
                     after: after.clone(),
                 })
+            }
+            // A step that moves lines and the notes following them: each part folds in, taking
+            // what the later step touched for the first time too.
+            (Command::Composite(a), Command::Composite(b)) if a.len() == b.len() => a
+                .iter()
+                .zip(b)
+                .map(|(x, y)| x.folded(y))
+                .collect::<Option<Vec<_>>>()
+                .map(Command::Composite),
+            _ => None,
+        }
+    }
+}
+
+impl Command {
+    /// `self` then `later` as one edit of the same kind, whatever each touched: every thing as it
+    /// was before the first of them that touched it, and as the last one left it.
+    fn folded(&self, later: &Command) -> Option<Command> {
+        fn fold<T: Clone>(
+            before: &[T],
+            after: &[T],
+            later_before: &[T],
+            later_after: &[T],
+            id: impl Fn(&T) -> u64,
+        ) -> (Vec<T>, Vec<T>) {
+            let mut b = before.to_vec();
+            b.extend(
+                later_before
+                    .iter()
+                    .filter(|x| !before.iter().any(|y| id(y) == id(x)))
+                    .cloned(),
+            );
+            let mut a = later_after.to_vec();
+            a.extend(
+                after
+                    .iter()
+                    .filter(|x| !later_after.iter().any(|y| id(y) == id(x)))
+                    .cloned(),
+            );
+            (b, a)
+        }
+        match (self, later) {
+            (
+                Command::EditObjects { before, after },
+                Command::EditObjects {
+                    before: lb,
+                    after: la,
+                },
+            ) => {
+                let (before, after) = fold(before, after, lb, la, |o| o.id);
+                Some(Command::EditObjects { before, after })
+            }
+            (
+                Command::EditTiming { before, after },
+                Command::EditTiming {
+                    before: lb,
+                    after: la,
+                },
+            ) => {
+                let (before, after) = fold(before, after, lb, la, |p| p.id);
+                Some(Command::EditTiming { before, after })
             }
             _ => None,
         }

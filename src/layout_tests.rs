@@ -2603,10 +2603,75 @@ fn mod_presets_are_saved_and_applied_with_the_mouse() {
     };
     click(&mut s, render::Hit::ModPresetSave);
     assert!(s.preset_naming.is_some(), "+ Save starts naming a preset");
-    s.key_inner(KeyCode::Enter, false, None, Instant::now(), None);
-    assert_eq!(s.cfg.mod_presets.len(), 1);
+    // The naming window's Cancel and Save take the mouse.
+    click(&mut s, render::Hit::Key(KeyCode::Escape));
+    assert!(s.preset_naming.is_none() && s.mod_select.is_some());
+    assert!(s.cfg.mod_presets.is_empty(), "Cancel saves nothing");
+    click(&mut s, render::Hit::ModPresetSave);
+    click(&mut s, render::Hit::Key(KeyCode::Enter));
+    assert!(s.preset_naming.is_none());
+    assert_eq!(s.cfg.mod_presets.len(), 1, "Save keeps it");
+    // A click elsewhere while naming does nothing (no mod toggles under the window).
+    click(&mut s, render::Hit::ModPresetSave);
+    s.mouse = (5.0, 5.0);
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+    assert!(s.preset_naming.is_some());
+    s.key_inner(KeyCode::Escape, false, None, Instant::now(), None);
     s.cfg.mods = mods::Mods::NONE;
     click(&mut s, render::Hit::ModPreset(0));
     assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"), "a click applies it");
+    assert!(s.mod_select.is_some());
+}
+
+#[test]
+fn deleting_a_mod_preset_asks_first() {
+    let mut s = state();
+    s.play_when_scanned = false;
+    s.open_mod_select();
+    s.cfg.mod_presets = vec![mods::Preset {
+        name: "HD PF".into(),
+        mods: mods::Mods::parse("HD,PF"),
+        rate: 1.0,
+    }];
+    let point_at = |s: &mut State, hit: render::Hit| {
+        s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
+        let r = s
+            .hits
+            .iter()
+            .rev()
+            .find(|h| h.hit == hit)
+            .map(|h| h.rect)
+            .unwrap_or_else(|| panic!("{hit:?} is drawn"));
+        let k = s.window_h / render::VIRTUAL_HEIGHT;
+        s.mouse = (
+            f64::from((r[0] + r[2] / 2.0) * k),
+            f64::from((r[1] + r[3] / 2.0) * k),
+        );
+    };
+    // A right-click asks; Keep (a click) leaves it.
+    point_at(&mut s, render::Hit::ModPreset(0));
+    s.right_button(true);
+    s.right_button(false);
+    assert_eq!(s.preset_deleting, Some(0));
+    assert_eq!(s.cfg.mod_presets.len(), 1, "nothing goes before the yes");
+    point_at(&mut s, render::Hit::Key(KeyCode::Escape));
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+    assert_eq!(s.preset_deleting, None);
+    assert_eq!(s.cfg.mod_presets.len(), 1);
+    // Keys while asking go to the question, not the mod select (1 would apply the preset).
+    point_at(&mut s, render::Hit::ModPreset(0));
+    s.right_button(true);
+    s.right_button(false);
+    s.cfg.mods = mods::Mods::NONE;
+    s.key_inner(KeyCode::Digit1, false, None, Instant::now(), None);
+    assert_eq!(s.cfg.mods, mods::Mods::NONE);
+    // Delete (a click) deletes it.
+    point_at(&mut s, render::Hit::Key(KeyCode::Enter));
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+    assert!(s.cfg.mod_presets.is_empty());
+    assert_eq!(s.preset_deleting, None);
     assert!(s.mod_select.is_some());
 }
