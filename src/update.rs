@@ -67,11 +67,12 @@ impl Channel {
         }
     }
 
-    /// The release it's published as.
+    /// The release it's published as. Not "dev": a tag named like the `dev` branch made
+    /// `git fetch origin dev` and `git log dev` pick the tag instead of the branch.
     fn tag(self) -> &'static str {
         match self {
             Channel::Stable => "latest",
-            Channel::Dev => "dev",
+            Channel::Dev => "dev-build",
         }
     }
 }
