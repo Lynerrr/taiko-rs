@@ -513,7 +513,31 @@ fn assert_every_screen_fits() {
         .step_by(3)
         .fold(mods::Mods::NONE, |f, &m| f.flip(m));
     check(&mut s, "mod select favourites", &mut out);
+    // Presets: long names, more than fit, one of them the mods on now; and one being named.
+    s.cfg.mod_presets = (0..mods::MAX_PRESETS)
+        .map(|k| mods::Preset {
+            name: if k % 2 == 0 {
+                format!("{k} a very long preset name that goes on and on")
+            } else {
+                "x".into()
+            },
+            mods: if k == 1 {
+                s.cfg.mods
+            } else {
+                mods::Mods::parse("HD,DT")
+            },
+            rate: s.cfg.rate,
+        })
+        .collect();
+    check(&mut s, "mod select presets and favourites", &mut out);
     s.cfg.favourite_mods = mods::Mods::NONE;
+    s.cfg.mod_presets.truncate(2);
+    check(&mut s, "mod select presets", &mut out);
+    s.preset_naming = Some("a name that is forty characters long ok!".into());
+    check(&mut s, "mod preset naming", &mut out);
+    s.preset_naming = None;
+    s.cfg.mod_presets.clear();
+    check(&mut s, "mod select, no presets", &mut out);
     // A customizable mod on: the Customize button and its tab (Multiverse and the rails conflict).
     let mods_before = s.cfg.mods;
     s.cfg.mods = mods::Mods::parse("MV,SS");
@@ -2481,4 +2505,66 @@ fn an_update_restarts_the_game_only_in_a_quiet_menu() {
     assert!(!s.can_restart());
     s.scene = Scene::MpResults;
     assert!(!s.can_restart());
+}
+
+/// The mod select's presets: S names one of the mods on now and the speed, 1-9 (or a click) put
+/// it back, a right-click takes it away; a lobby guest keeps the host's speed.
+#[test]
+fn mod_presets_are_saved_named_applied_and_removed() {
+    let mut s = state();
+    // Song select, not straight into the first map (the test state's command-line map).
+    s.play_when_scanned = false;
+    let key = |s: &mut State, code: KeyCode, text: Option<&str>| {
+        s.key_inner(code, false, text, Instant::now(), None);
+    };
+    s.open_mod_select();
+    s.cfg.mods = mods::Mods::parse("HD,PF");
+    s.cfg.rate = 1.2;
+    key(&mut s, KeyCode::KeyS, None);
+    let auto = format!("{} 1.20x", s.cfg.mods.label());
+    assert_eq!(s.preset_naming.as_deref(), Some(auto.as_str()));
+    // Typing goes to the name, not to the mod select (S, F, R, digits).
+    for _ in 0..4 {
+        key(&mut s, KeyCode::Backspace, None);
+    }
+    key(&mut s, KeyCode::KeyR, Some("r"));
+    key(&mut s, KeyCode::Digit1, Some("1"));
+    assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"));
+    key(&mut s, KeyCode::Enter, None);
+    assert_eq!(s.preset_naming, None);
+    assert_eq!(
+        s.cfg.mod_presets,
+        vec![mods::Preset {
+            name: format!("{}r1", &auto[..auto.len() - 4]),
+            mods: mods::Mods::parse("HD,PF"),
+            rate: 1.2,
+        }]
+    );
+    // Escape leaves the name unsaved and the mod select open.
+    key(&mut s, KeyCode::KeyS, None);
+    key(&mut s, KeyCode::Escape, None);
+    assert!(s.preset_naming.is_none() && s.mod_select.is_some());
+    assert_eq!(s.cfg.mod_presets.len(), 1);
+    // Applied by its digit.
+    s.cfg.mods = mods::Mods::NONE;
+    s.cfg.rate = 1.0;
+    key(&mut s, KeyCode::Digit1, None);
+    assert_eq!((s.cfg.mods, s.cfg.rate), (mods::Mods::parse("HD,PF"), 1.2));
+    key(&mut s, KeyCode::Digit2, None);
+    assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"), "no preset 2");
+    // Clicked in the drawn row, and right-clicked away.
+    s.cfg.mods = mods::Mods::NONE;
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.0);
+    let at = s
+        .hits
+        .iter()
+        .find(|h| h.hit == render::Hit::ModPreset(0))
+        .map(|h| h.rect)
+        .expect("preset 1 is drawn");
+    s.click(render::Hit::ModPreset(0), None);
+    assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"));
+    assert!(at[2] > 0.0);
+    s.remove_mod_preset(0);
+    assert!(s.cfg.mod_presets.is_empty());
 }
