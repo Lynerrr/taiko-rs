@@ -59,14 +59,36 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# get URL FILE [HEADER]: downloads with a few retries (GitHub sometimes answers 504 for a while).
+get() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fL --retry 3 --retry-delay 3 --progress-bar ${3:+-H "$3"} "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --show-progress --tries=4 --waitretry=3 --retry-on-http-error=502,503,504 \
+            ${3:+--header="$3"} "$1" -O "$2"
+    else
+        echo "Needs curl or wget." >&2
+        exit 1
+    fi
+}
+
+# The API's link to the same archive: it goes through a different GitHub front end, which
+# still works when the release download link answers 504.
+api_url() {
+    get "https://api.github.com/repos/Lynerrr/taiko-rs/releases/tags/$tag" "$tmp/release.json" \
+        2>/dev/null || return 1
+    # Each asset's "url" comes before its "name", one field per line.
+    awk -v want="\"$asset\"" '
+        /"url": *"https:\/\/api\.github\.com\/.*\/releases\/assets\// { u = $0 }
+        /"name":/ && index($0, want) { sub(/.*"url": *"/, "", u); sub(/".*/, "", u); print u; exit }
+    ' "$tmp/release.json"
+}
+
 echo "Downloading taiko.rs..."
-if command -v curl >/dev/null 2>&1; then
-    curl -fL --progress-bar "$url" -o "$tmp/taiko-rs.tar.gz"
-elif command -v wget >/dev/null 2>&1; then
-    wget -q --show-progress "$url" -O "$tmp/taiko-rs.tar.gz"
-else
-    echo "Needs curl or wget." >&2
-    exit 1
+if ! get "$url" "$tmp/taiko-rs.tar.gz"; then
+    [ -z "${TAIKO_RS_URL:-}" ] && fallback="$(api_url)" && [ -n "$fallback" ] || exit 1
+    echo "Trying GitHub's other download link..."
+    get "$fallback" "$tmp/taiko-rs.tar.gz" "Accept: application/octet-stream"
 fi
 tar -xzf "$tmp/taiko-rs.tar.gz" -C "$tmp"
 
