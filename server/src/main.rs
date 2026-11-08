@@ -73,6 +73,8 @@ const LOOKUPS_PER_HOUR: usize = 20_000;
 const FAILED_LOGINS: usize = 10;
 /// Per IP: codes mailed per hour.
 const MAILS_PER_HOUR: usize = 10;
+/// An address a banned account used makes no new accounts for this long (ban evasion).
+const BANNED_IP_DAYS: u64 = 30;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct User {
@@ -946,19 +948,30 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         );
     }
     let out = match env.request {
+        Request::Register { .. } if state.evading_ban(ip) => {
+            println!("sign-up refused: {ip} was used by a banned account");
+            Reply::Error("new accounts can't be made from here".into())
+        }
         Request::Register {
             name,
             password,
             email,
             code,
-        } => register(
-            state,
-            ip,
-            &name,
-            Some(&password),
-            email.as_deref(),
-            code.as_deref(),
-        ),
+        } => {
+            let r = register(
+                state,
+                ip,
+                &name,
+                Some(&password),
+                email.as_deref(),
+                code.as_deref(),
+            );
+            // Known from its first moment, so a ban covers where it was made.
+            if let Reply::Account { name, .. } = &r {
+                state.admin.seen(&name.to_ascii_lowercase(), limit_key(ip));
+            }
+            r
+        }
         Request::Login { name, password } => {
             let r = login(state, ip, &name, &password);
             if let Reply::Account { name, .. } = &r {
@@ -1650,6 +1663,16 @@ impl State {
 
     /// Admin `by` bans `name`: logged out everywhere, unable to log in or reset their password,
     /// and off the boards. Or lets them back.
+    /// Whether a banned account was at `ip` lately: a new account from there is them again.
+    fn evading_ban(&self, ip: IpAddr) -> bool {
+        let banned: Vec<String> = (self.accounts.lock().unwrap().users.iter())
+            .filter(|(_, u)| u.banned)
+            .map(|(k, _)| k.clone())
+            .collect();
+        self.admin
+            .used_by_banned(limit_key(ip), &banned, BANNED_IP_DAYS)
+    }
+
     fn set_banned(&self, by: &str, name: &str, on: bool) -> Result<String, String> {
         let (key, shown) = self.admin_target(by, name)?;
         {
@@ -3061,11 +3084,16 @@ mod tests {
         // The change went to everyone online.
         let sent = lines(&rx);
         assert!(
-            sent.iter().any(|l| l.contains("Groups") && l.contains("semfi")),
+            sent.iter()
+                .any(|l| l.contains("Groups") && l.contains("semfi")),
             "{sent:?}"
         );
         state.set_two_hundred("auneu", "semfi", false).unwrap();
-        assert!(lines(&rx).iter().any(|l| l.contains("Groups") && !l.contains("semfi")));
+        assert!(
+            lines(&rx)
+                .iter()
+                .any(|l| l.contains("Groups") && !l.contains("semfi"))
+        );
     }
 
     #[test]

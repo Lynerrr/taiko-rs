@@ -177,6 +177,21 @@ struct Standing {
     has_pp: bool,
 }
 
+/// The most pp a play can claim on a map of `stars`: past `300 + 150 × stars²` it's forged. Real
+/// plays reach about 70 × stars² at most (easy maps, custom mods stacked) and the 35★ joke maps
+/// about 18 × stars²; forged ones ask for thousands of times that. Without stars, a flat cap.
+fn pp_ceiling(stars: Option<f64>) -> f64 {
+    match stars.filter(|s| s.is_finite() && *s > 0.0) {
+        // shortcut: stars come from the client too, so a forger can raise both; the stored
+        // stars stop at 50. Working pp out on the server from the map is the full fix.
+        Some(s) => {
+            let s = s.min(50.0);
+            300.0 + 150.0 * s * s
+        }
+        None => 3000.0,
+    }
+}
+
 /// What's wrong with a play sent in, if anything.
 fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
     let hits = play.great as u64 + play.ok as u64 + play.miss as u64;
@@ -184,8 +199,9 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
         && (1..=100_000).contains(&hits)
         && play.max_combo as u64 <= hits
         && (0.25..=4.0).contains(&play.map.rate)
-        // No upper limit on pp for now (tests need it); just a real, non-negative number.
-        && play.pp.is_none_or(|pp| pp.is_finite() && pp >= 0.0)
+        && play
+            .pp
+            .is_none_or(|pp| pp.is_finite() && pp >= 0.0 && pp <= pp_ceiling(play.stars))
         && play.inputs.len() <= MAX_INPUTS
         && play.score <= MAX_SCORE
         && play.map.hash != 0;
@@ -1829,8 +1845,33 @@ pub(crate) mod tests {
         let mut p = play(7, 1, 1.0);
         p.accuracy = 1.5;
         assert!(s.submit("a", "A", p, 0).is_err());
-        // Any amount of pp, but a real one.
-        assert!(s.submit("a", "A", play(7, 1, 12_345.0), 0).is_ok());
+        // Real pp, up to what the map's stars allow: the best real plays stay in, forged ones
+        // (a cheater's 18,460 pp on a 4.47★ map, 2.2e16 on 7.17★) are turned away.
+        assert!(s.submit("a", "A", play(7, 1, 3_000.0), 0).is_ok());
+        let at = |pp: f64, stars: Option<f64>| {
+            let mut p = play(7, 1, pp);
+            p.stars = stars;
+            p
+        };
+        for (pp, stars) in [(24_660.0, 37.6), (2_290.0, 6.11), (70.0, 0.92)] {
+            assert!(
+                s.submit("b", "B", at(pp, Some(stars)), 0).is_ok(),
+                "{pp} at {stars}"
+            );
+            s.submits.clear();
+        }
+        for (pp, stars) in [
+            (18_460.0, Some(4.47)),
+            (2.2e16, Some(7.17)),
+            (5_000.0, None),
+        ] {
+            assert!(
+                s.submit("a", "A", at(pp, stars), 0).is_err(),
+                "{pp} at {stars:?}"
+            );
+        }
+        // Stars past what's stored don't raise the ceiling past it.
+        assert!(s.submit("a", "A", at(1e9, Some(1e6)), 0).is_err());
         for pp in [-1.0, f64::NAN, f64::INFINITY] {
             assert!(s.submit("a", "A", play(7, 1, pp), 0).is_err(), "{pp}");
         }
