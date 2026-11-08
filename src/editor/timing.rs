@@ -129,6 +129,18 @@ pub fn grid_lines(
     out
 }
 
+/// Where a note stored at the whole millisecond `t` is drawn: on the grid tick it was snapped
+/// from. The file holds whole ms (placing floors the tick, other editors may round it), so a
+/// snapped note sat up to a millisecond off its line, pixels off when zoomed in. A tick less than
+/// a millisecond away counts, coarser grids first; a note near no tick is drawn where it is.
+pub fn shown_time(points: &[TimingPoint], t: f64) -> f64 {
+    [1, 2, 3, 4, 6, 8, 12, 16]
+        .into_iter()
+        .map(|d| snap_time(points, t, d))
+        .find(|s| (s - t).abs() < 1.0)
+        .unwrap_or(t)
+}
+
 /// `bpm` stepped by `step` (+1, -0.01, ...) onto the step's own grid, in thousandths: a BPM off
 /// that grid goes to the next mark in the step's direction first, so 173.998 and +0.01 make 174
 /// (not 174.008), and a detected tempo a hair off a whole number can be fixed with the buttons.
@@ -358,5 +370,20 @@ mod tests {
         assert_eq!(whole_bpm_if_near(173.998), 174.0);
         assert_eq!(whole_bpm_if_near(174.5), 174.5);
         assert_eq!(whole_bpm_if_near(173.95), 173.95);
+    }
+
+    #[test]
+    fn a_floored_note_is_drawn_on_the_tick_it_was_snapped_from() {
+        let p = vec![TimingPoint::red(0.0, 174.0)];
+        let step = 60_000.0 / 174.0 / 4.0;
+        for k in 1..40 {
+            let tick = k as f64 * step;
+            let stored = snapped_ms(&p, tick, 4) as f64;
+            assert!((shown_time(&p, stored) - tick).abs() < 1e-6, "tick {k}");
+        }
+        // Rounded the other way (by another editor) it is still drawn on its tick.
+        assert!((shown_time(&p, (3.0 * step).round()) - 3.0 * step).abs() < 1e-6);
+        // A note off the grid stays where it is.
+        assert_eq!(shown_time(&p, 40.0), 40.0);
     }
 }

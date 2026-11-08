@@ -1033,6 +1033,11 @@ impl View {
         self.layout.timeline[0] + ((t - self.view_start) / self.ms_per_px) as f32
     }
 
+    /// Where a note at `t` is drawn: on its grid line, not the floored millisecond the file keeps.
+    fn note_x(&self, t: f64) -> f32 {
+        self.x_of(timing::shown_time(&self.ed.chart.timing, t))
+    }
+
     fn t_at(&self, x: f32) -> f64 {
         self.view_start + (x - self.layout.timeline[0]) as f64 * self.ms_per_px
     }
@@ -1645,7 +1650,7 @@ impl View {
             if end < from - 20.0 * self.ms_per_px {
                 continue;
             }
-            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let (ox, ex) = (self.note_x(o.time), self.note_x(end));
             let selected = match boxed {
                 Some((a, b, add, real, fake)) => {
                     (o.time >= a && o.time <= b && if o.fake { fake } else { real })
@@ -1736,7 +1741,7 @@ impl View {
             && matches!(self.drag, Drag::None | Drag::Place { .. })
         {
             let at = self.ed.snapped(self.t_at(mx));
-            let gx = self.x_of(at);
+            let gx = self.note_x(at);
             match self.ed.tool {
                 Tool::Note => {
                     let r = if self.ed.big { BIG_R } else { NOTE_R };
@@ -2101,7 +2106,7 @@ impl View {
                 continue;
             }
             let end = self.ed.end_of(o);
-            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let (ox, ex) = (self.note_x(o.time), self.note_x(end));
             let r = if o.big() { BIG_R } else { NOTE_R };
             let d = (x - ex).abs();
             // From a little inside the end to the right edge of the rounded cap drawn there.
@@ -2123,7 +2128,7 @@ impl View {
                 .ed
                 .chart
                 .object(h)
-                .is_some_and(|o| (self.x_of(o.time) - x).abs() <= NOTE_R)
+                .is_some_and(|o| (self.note_x(o.time) - x).abs() <= NOTE_R)
         {
             return None;
         }
@@ -2148,7 +2153,7 @@ impl View {
             let end = self.ed.end_of(o);
             let r = self.radius_of(o) + 2.0;
             let cy = if o.fake { fakes } else { lane };
-            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let (ox, ex) = (self.note_x(o.time), self.note_x(end));
             let (dx, dy) = (x - ox, y - cy);
             let key = if dx * dx + dy * dy <= r * r {
                 Some((0, dx * dx + dy * dy))

@@ -555,7 +555,7 @@ impl View {
         );
         let start = c.shapes.len();
         for o in &self.ed.chart.objects {
-            let ox = self.x_of(o.time);
+            let ox = self.note_x(o.time);
             if (x..x + w).contains(&ox) {
                 c.rect(ox - 1.0, y + h / 2.0 - 3.0, 2.0, 6.0, rgba(0x9a9ab0, 0.8));
             }
