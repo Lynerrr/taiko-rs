@@ -48,7 +48,7 @@ jobs:
       # The client regression suite (docs/regression-tests.md) on its own, so a failure is
       # named as one; the full run below skips it.
       - name: Client regression suite
-        run: cargo test --profile ci-test --locked --lib regression::
+        run: "cargo test --profile ci-test --locked --lib regression::"
 
       - name: Upload changed golden output
         if: failure()
@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Run prebuilt tests
-        run: cargo test --profile ci-test --locked --all-targets -- --skip regression::
+        run: "cargo test --profile ci-test --locked --all-targets -- --skip regression::"
 
   server:
     name: Server
