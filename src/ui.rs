@@ -297,6 +297,8 @@ pub struct Select {
     rng: u64,
     /// The song list's share of the width (`Config::song_list_share`).
     pub list_share: f32,
+    /// A banner takes the band under the panels (picking a map): they stop above it.
+    pub banner: bool,
     /// The Legacy menu setting: tabs on top, keys spelled out at the bottom.
     pub legacy: bool,
     /// The way back leads to the main menu, not to a lobby.
@@ -408,11 +410,10 @@ fn status_heading(code: u8) -> (&'static str, u32) {
 }
 /// The legacy layout's list runs down to its hint line.
 const LIST_BOTTOM_LEGACY: f32 = 440.0;
-/// Its frame (4 below) ends where the map panel's column does (436), leaving the button
-/// row a band of its own between the panels and the status line.
-const LIST_BOTTOM: f32 = 432.0;
-/// The button row under the panels: 6 below them, 4 above the status line.
-const BUTTONS_Y: f32 = 442.0;
+/// Its frame (4 below) runs down to just over the status line, or stops at 436 while a
+/// banner (picking a map) takes the band under the panels.
+const LIST_BOTTOM: f32 = 454.0;
+const LIST_BOTTOM_BANNER: f32 = 432.0;
 
 pub enum SelectAction {
     None,
@@ -431,6 +432,7 @@ impl Select {
             .unwrap_or(0x9e37_79b9_7f4a_7c15);
         let mut s = Select {
             list_share: LIST_SHARE.2,
+            banner: false,
             legacy: false,
             to_menu: true,
             covered: false,
@@ -1016,9 +1018,16 @@ impl Select {
     fn list_bottom(&self) -> f32 {
         if self.legacy {
             LIST_BOTTOM_LEGACY
+        } else if self.banner {
+            LIST_BOTTOM_BANNER
         } else {
             LIST_BOTTOM
         }
+    }
+
+    /// The top and bottom of the song list's frame, for the panel beside it to line up with.
+    pub fn frame_span(&self) -> [f32; 2] {
+        [self.list_top() - 4.0, self.list_bottom() + 4.0]
     }
 
     /// The wheel: moves the list `notches` on, the selection staying where it is.
@@ -2482,22 +2491,6 @@ impl Select {
             );
         }
 
-        if !legacy {
-            let random = tr!("Random");
-            let (download, settings, online) =
-                (tr!("Download"), tr!("Settings"), tr!("Multiplayer"));
-            let accent_mods = !self.mods_label.is_empty();
-            c.button_row(
-                BUTTONS_Y,
-                &[
-                    (&mods[0], Hit::ModsButton, accent_mods),
-                    (random, Hit::Key(KeyCode::F2), false),
-                    (download, Hit::Tab(3), false),
-                    (settings, Hit::Tab(1), false),
-                    (online, Hit::Tab(2), false),
-                ],
-            );
-        }
         let hints = tr!(
             "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit"
         );

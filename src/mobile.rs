@@ -333,6 +333,16 @@ impl Ui {
         self.board_open = !self.board_open;
     }
 
+    /// Moves the slide toward the page shown and gives how far it is at the leaderboard (0 to 1).
+    pub fn slide_board(&mut self, dt_ms: f32) -> f32 {
+        let goal = if self.board_open { 1.0 } else { 0.0 };
+        approach(&mut self.board_slide, goal, dt_ms, 45.0);
+        if (self.board_slide - goal).abs() < 0.004 {
+            self.board_slide = goal;
+        }
+        self.board_slide
+    }
+
     /// A new frame: its screens say again which lists are up.
     pub fn begin_frame(&mut self) {
         self.regions.clear();
@@ -386,7 +396,7 @@ fn panel(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32) {
 }
 
 /// `text` broken into lines `w` wide, `lines` at most.
-fn wrap(size: f32, w: f32, text: &str, lines: usize) -> Vec<String> {
+pub(crate) fn wrap(size: f32, w: f32, text: &str, lines: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
@@ -896,12 +906,7 @@ impl State {
         status: Option<(&str, u32)>,
         liked: Option<bool>,
     ) {
-        let goal = if self.mob.board_open { 1.0 } else { 0.0 };
-        approach(&mut self.mob.board_slide, goal, c.dt_ms, 45.0);
-        if (self.mob.board_slide - goal).abs() < 0.004 {
-            self.mob.board_slide = goal;
-        }
-        let t = self.mob.board_slide;
+        let t = self.mob.slide_board(c.dt_ms);
         let step = w + 24.0;
         let h = bottom - top;
         self.leaderboard.clear();
@@ -1093,9 +1098,19 @@ impl State {
             let score = format!("{:08}", line.score);
             let score_w = Canvas::text_width(SMALL, &score);
             let first = if k == 0 { 0xFFD34D } else { 0xffffff };
-            let name = format!("#{}  {}", k + 1, line.name);
-            let name = Canvas::fit(SMALL, inner - score_w - 36.0, &name);
-            c.text(rx + 10.0, ry + 8.0, SMALL, rgba(first, 1.0), &name);
+            let place = format!("#{}  ", k + 1);
+            let colour = rgba(first, 1.0);
+            let pw = c.text(rx + 10.0, ry + 8.0, SMALL, colour, &place);
+            let room = inner - score_w - 36.0 - pw;
+            crate::social::styled_name(
+                c,
+                rx + 10.0 + pw,
+                ry + 8.0,
+                SMALL,
+                &line.name,
+                colour,
+                room,
+            );
             c.text_right(
                 rx + inner - 10.0,
                 ry + 8.0,

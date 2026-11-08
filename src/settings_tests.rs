@@ -1888,7 +1888,15 @@ fn the_leaderboard_scrolls_with_the_wheel() {
     let mut s = select_with_scores();
     // Room for a few rows whatever the map's title (a long one wraps, making the panel taller).
     s.cfg.song_preview_size = preview::PREVIEW_SIZE.0;
+    // The preview is up first: the leaderboard is a page the button slides to.
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert_eq!(s.board_rect, None);
+    s.click(render::Hit::BoardPage, None);
+    let slid = || Canvas {
+        dt_ms: 1000.0,
+        ..Canvas::default()
+    };
+    s.build_frame(&mut slid(), Instant::now(), 853.3);
     let [bx, by, bw, bh] = s.board_rect.expect("a leaderboard");
     let shown = s.leaderboard.len();
     assert!(shown > 0 && shown < 40);
@@ -2198,10 +2206,8 @@ fn the_tabs_only_come_back_with_the_legacy_menu() {
     };
     assert!(!tab(&s), "no tabs on top");
     assert!(s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
-    assert!(
-        s.hits.iter().any(|h| h.hit == render::Hit::Tab(3)),
-        "download along the bottom"
-    );
+    // Download, settings and multiplayer are a step back, on the main menu.
+    assert!(!s.hits.iter().any(|h| h.hit == render::Hit::Tab(3)));
     s.click(render::Hit::ToMenu, None);
     assert!(s.on_menu());
 
