@@ -72,6 +72,17 @@ impl AdminState {
         self.seen_changed.store(true, Ordering::Relaxed);
     }
 
+    /// Whether one of `banned` (lowercased names) was seen at `ip` in the last `days`.
+    pub fn used_by_banned(&self, ip: IpAddr, banned: &[String], days: u64) -> bool {
+        let ip = ip.to_string();
+        let since = now_secs().saturating_sub(days * 86_400);
+        let seen = self.seen.lock().unwrap();
+        banned.iter().any(|k| {
+            seen.get(k)
+                .is_some_and(|list| list.iter().any(|(a, at)| *a == ip && *at >= since))
+        })
+    }
+
     /// Other accounts seen at one of `key`'s addresses.
     fn alts(&self, key: &str) -> Vec<String> {
         let seen = self.seen.lock().unwrap();
@@ -445,6 +456,35 @@ mod tests {
             a.seen("busy", ip(&format!("10.0.0.{i}")));
         }
         assert_eq!(a.seen.lock().unwrap()["busy"].len(), SEEN_PER_ACCOUNT);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_banned_accounts_recent_addresses_are_known() {
+        let dir = std::env::temp_dir().join(format!("taiko-admin-ban-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let a = AdminState::load(&dir);
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        a.seen("cheater", ip("1.2.3.4"));
+        a.seen("player", ip("5.6.7.8"));
+        // Seen there long ago: that address has moved on.
+        a.seen
+            .lock()
+            .unwrap()
+            .get_mut("cheater")
+            .unwrap()
+            .push(("9.9.9.9".into(), 0));
+        let banned = ["cheater".to_string()];
+        assert!(a.used_by_banned(ip("1.2.3.4"), &banned, 30));
+        assert!(
+            !a.used_by_banned(ip("5.6.7.8"), &banned, 30),
+            "a player who isn't banned"
+        );
+        assert!(
+            !a.used_by_banned(ip("9.9.9.9"), &banned, 30),
+            "too long ago"
+        );
+        assert!(!a.used_by_banned(ip("1.2.3.4"), &[], 30), "nobody banned");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
