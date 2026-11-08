@@ -12,7 +12,8 @@ use winit::keyboard::KeyCode;
 use winit::window::Window;
 
 use crate::config::RATE_RANGE;
-use crate::render::{Canvas, Hit, HitBox, VIRTUAL_HEIGHT, accent, approach, rgba};
+use crate::hit::{Canvas, Hit, HitBox};
+use crate::render::{VIRTUAL_HEIGHT, accent, approach, rgba};
 use crate::settings::{self, Control, ITEMS, Kind, SECTIONS};
 use crate::{Scene, State, mods, stars};
 

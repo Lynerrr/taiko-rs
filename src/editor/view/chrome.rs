@@ -10,7 +10,8 @@ use super::{Btn, Field, RED_LINE, SAct, View, fmt_time};
 use crate::editor::chart::{HitObject, Taiko};
 use crate::editor::state::Tool;
 use crate::editor::timing;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 pub(super) const DIM: u32 = 0x9a9ab0;
 pub(super) const FAINT: u32 = 0x6a6a80;

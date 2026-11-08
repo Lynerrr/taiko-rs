@@ -339,7 +339,7 @@ fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
 fn the_account_button_opens_your_profile_in_the_game() {
     let mut s = layout_tests::state();
     s.mp_menu.account = Some("Player".into());
-    s.click(render::Hit::Account, None);
+    s.click(crate::hit::Hit::Account, None);
     assert_eq!(s.profile.as_ref().map(|p| p.name.as_str()), Some("Player"));
     // And the profile offers the website.
     let mut c = Canvas::default();
@@ -347,7 +347,7 @@ fn the_account_button_opens_your_profile_in_the_game() {
     assert!(
         s.hits
             .iter()
-            .any(|h| h.hit == render::Hit::Key(winit::keyboard::KeyCode::KeyB))
+            .any(|h| h.hit == crate::hit::Hit::Key(winit::keyboard::KeyCode::KeyB))
     );
     assert!(profile_url("Player").ends_with("/u/Player"));
 }
@@ -360,14 +360,14 @@ fn a_song_liked_on_song_select_is_a_favourite_for_the_player_too() {
     s.scene = Scene::Select;
     let i = s.preview_target().expect("a song is showing");
     assert!(!s.select.is_liked(&s.library[i]));
-    s.click(render::Hit::SelectLike, None);
+    s.click(crate::hit::Hit::SelectLike, None);
     assert!(s.select.is_liked(&s.library[i]));
     assert!(
         s.select
             .favourites
             .contains(&playlist::favourite_key(&s.library[i]))
     );
-    s.click(render::Hit::SelectLike, None);
+    s.click(crate::hit::Hit::SelectLike, None);
     assert!(!s.select.is_liked(&s.library[i]));
 }
 
@@ -413,7 +413,7 @@ fn a_maps_skin_is_turned_off_and_back_on_from_its_menu() {
 
     let (k, label) = map_skin_item(&s).unwrap();
     assert!(label.starts_with("Turn off"), "{label}");
-    s.click(render::Hit::SongMenu(k), None);
+    s.click(crate::hit::Hit::SongMenu(k), None);
     assert!(s.select.menu.is_none());
     s.follow_map_skin();
     assert_eq!(s.skin_map, None);
@@ -427,7 +427,7 @@ fn a_maps_skin_is_turned_off_and_back_on_from_its_menu() {
     });
     let (k, label) = map_skin_item(&s).unwrap();
     assert!(label.starts_with("Use"), "{label}");
-    s.click(render::Hit::SongMenu(k), None);
+    s.click(crate::hit::Hit::SongMenu(k), None);
     s.follow_map_skin();
     assert_eq!(s.skin_map.as_ref(), Some(&dir));
     let _ = std::fs::remove_dir_all(dir);
@@ -584,7 +584,7 @@ fn a_songs_menu_likes_it() {
     let i = s.select.menu_map().unwrap();
     let items = s.select.menu_items(&s.library);
     assert!(items[0].0.starts_with("Like") && items[0].1 == ui::MenuAction::Like);
-    s.click(render::Hit::SongMenu(0), None);
+    s.click(crate::hit::Hit::SongMenu(0), None);
     assert!(s.select.is_liked(&s.library[i]));
     assert!(s.select.menu.is_none());
 }
@@ -1750,7 +1750,7 @@ fn the_friends_overlay_closes_on_a_click_outside_it_and_slides_away() {
     assert!(
         !s.hits
             .iter()
-            .any(|h| matches!(h.hit, render::Hit::SocialPanel))
+            .any(|h| matches!(h.hit, crate::hit::Hit::SocialPanel))
     );
 }
 
@@ -1806,17 +1806,17 @@ fn song_select_dividers_drag_within_limits_and_reset() {
     point(&mut s, 24.0 + lw + 8.0, 240.0);
     assert_eq!(
         s.hit_at(24.0 + lw + 8.0, 240.0),
-        Some(render::Hit::SplitList)
+        Some(crate::hit::Hit::SplitList)
     );
     assert_ne!(
         s.hit_at(24.0 + lw + 3.0, 240.0),
-        Some(render::Hit::SplitList),
+        Some(crate::hit::Hit::SplitList),
         "not on the list's box"
     );
     // Only its grip in the middle, not the whole edge.
     assert_ne!(
         s.hit_at(24.0 + lw + 8.0, 120.0),
-        Some(render::Hit::SplitList)
+        Some(crate::hit::Hit::SplitList)
     );
     s.mouse_button(true, None);
     point(&mut s, 24.0 + lw + 8.0 + 40.0, 240.0);
@@ -1891,7 +1891,7 @@ fn the_leaderboard_scrolls_with_the_wheel() {
     // The preview is up first: the leaderboard is a page the button slides to.
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert_eq!(s.board_rect, None);
-    s.click(render::Hit::BoardPage, None);
+    s.click(crate::hit::Hit::BoardPage, None);
     let slid = || Canvas {
         dt_ms: 1000.0,
         ..Canvas::default()
@@ -1915,7 +1915,7 @@ fn the_leaderboard_scrolls_with_the_wheel() {
     assert_eq!(s.board_scroll, 0);
     // The other tab starts at the top.
     s.wheel(-3);
-    s.click(render::Hit::BoardTab(true), None);
+    s.click(crate::hit::Hit::BoardTab(true), None);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert_eq!(s.board_scroll, 0);
 }
@@ -1954,13 +1954,13 @@ fn the_results_scroll_down_to_the_pp_and_back() {
     assert_eq!(scroll(&s), 0.0);
     // The hint under the buttons goes there too.
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.click(render::Hit::Key(KeyCode::PageDown), None);
+    s.click(crate::hit::Hit::Key(KeyCode::PageDown), None);
     assert_eq!(scroll(&s), ui::RESULTS_SCROLL);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(
         s.hits
             .iter()
-            .any(|h| h.hit == render::Hit::Key(KeyCode::PageUp)),
+            .any(|h| h.hit == crate::hit::Hit::Key(KeyCode::PageUp)),
         "and back up"
     );
 }
@@ -1971,7 +1971,7 @@ fn one_click_on_a_main_menu_note_opens_it() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
     s.main_menu = Some(menu::Menu::new());
-    s.click(render::Hit::MenuItem(5), None);
+    s.click(crate::hit::Hit::MenuItem(5), None);
     let m = s.main_menu.as_ref().unwrap();
     assert_eq!(m.current(), menu::Item::Settings);
     assert!(m.is_leaving(), "no second click at the circle needed");
@@ -2061,7 +2061,7 @@ fn the_wheel_scrolls_the_settings_and_stays_in_the_section() {
     assert!(
         s.hits
             .iter()
-            .any(|h| h.hit == render::Hit::SettingRow(last))
+            .any(|h| h.hit == crate::hit::Hit::SettingRow(last))
     );
 }
 
@@ -2073,7 +2073,7 @@ fn one_click_works_a_row_and_every_hotkey_has_one() {
         .position(|(_, it)| *it == Item::LegacyMenu)
         .unwrap();
     let was = s.cfg.main_menu;
-    s.click(render::Hit::SettingRow(row), None);
+    s.click(crate::hit::Hit::SettingRow(row), None);
     assert_ne!(s.cfg.main_menu, was);
     for i in 0..keys::Hotkey::ALL.len() {
         assert!(
@@ -2102,12 +2102,12 @@ fn a_volume_is_dragged_along_its_bar_and_saved_on_letting_go() {
     let bar = s
         .hits
         .iter()
-        .find(|h| h.hit == render::Hit::SettingLevel(row))
+        .find(|h| h.hit == crate::hit::Hit::SettingLevel(row))
         .expect("a bar")
         .rect;
     let y = bar[1] + bar[3] / 2.0;
     point(&mut s, bar[0] + 5.0, y);
-    s.click(render::Hit::SettingLevel(row), None);
+    s.click(crate::hit::Hit::SettingLevel(row), None);
     assert_eq!(s.cfg.music_volume, 0.0);
     point(&mut s, bar[0] + bar[2] / 2.0, y);
     s.mouse_moved(s.mouse.0, s.mouse.1);
@@ -2202,17 +2202,17 @@ fn the_tabs_only_come_back_with_the_legacy_menu() {
     let tab = |s: &State| {
         s.hits
             .iter()
-            .any(|h| matches!(h.hit, render::Hit::Tab(i) if h.rect[1] < 50.0 && i < 4))
+            .any(|h| matches!(h.hit, crate::hit::Hit::Tab(i) if h.rect[1] < 50.0 && i < 4))
     };
     assert!(!tab(&s), "no tabs on top");
-    assert!(s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
+    assert!(s.hits.iter().any(|h| h.hit == crate::hit::Hit::ToMenu));
     // Download, settings and multiplayer are a step back, on the main menu.
-    assert!(!s.hits.iter().any(|h| h.hit == render::Hit::Tab(3)));
-    s.click(render::Hit::ToMenu, None);
+    assert!(!s.hits.iter().any(|h| h.hit == crate::hit::Hit::Tab(3)));
+    s.click(crate::hit::Hit::ToMenu, None);
     assert!(s.on_menu());
 
     s.click(
-        render::Hit::SettingRow(
+        crate::hit::Hit::SettingRow(
             settings::ITEMS
                 .iter()
                 .position(|(_, it)| *it == Item::LegacyMenu)
@@ -2224,7 +2224,7 @@ fn the_tabs_only_come_back_with_the_legacy_menu() {
     assert!(s.main_menu.is_none(), "the menu goes at once");
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(tab(&s), "the old tabs");
-    assert!(!s.hits.iter().any(|h| h.hit == render::Hit::ToMenu));
+    assert!(!s.hits.iter().any(|h| h.hit == crate::hit::Hit::ToMenu));
 }
 
 #[test]
@@ -2234,9 +2234,9 @@ fn the_back_button_of_a_screen_does_what_esc_does() {
     assert!(
         s.hits
             .iter()
-            .any(|h| h.hit == render::Hit::Key(KeyCode::Escape))
+            .any(|h| h.hit == crate::hit::Hit::Key(KeyCode::Escape))
     );
-    s.click(render::Hit::Key(KeyCode::Escape), None);
+    s.click(crate::hit::Hit::Key(KeyCode::Escape), None);
     assert!(matches!(s.scene, Scene::Select));
 }
 
@@ -2439,7 +2439,7 @@ fn pointing_at_a_main_menu_note_selects_it() {
     let y = 240.0 - 30.0;
     let x = (0..853)
         .map(|x| x as f32)
-        .find(|&x| s.hit_at(x, y) == Some(render::Hit::MenuItem(medals)))
+        .find(|&x| s.hit_at(x, y) == Some(crate::hit::Hit::MenuItem(medals)))
         .expect("a note there");
     point(&mut s, x + 20.0, y);
     assert_eq!(s.main_menu.as_ref().unwrap().current(), menu::Item::Medals);

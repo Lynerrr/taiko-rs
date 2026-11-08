@@ -27,7 +27,7 @@ fn toggle_rect(s: &mut State) -> Option<[f32; 4]> {
     s.build_frame(&mut c, Instant::now(), 853.3);
     s.hits
         .iter()
-        .find(|h| h.hit == render::Hit::SocialToggle)
+        .find(|h| h.hit == crate::hit::Hit::SocialToggle)
         .map(|h| h.rect)
 }
 
@@ -53,9 +53,9 @@ fn the_chip_sits_in_the_menu_bar_clear_of_the_title_and_toggles_the_panel() {
         "inside the room the title leaves it"
     );
     assert!(!s.social.open);
-    s.click(render::Hit::SocialToggle, None);
+    s.click(crate::hit::Hit::SocialToggle, None);
     assert!(s.social.open);
-    s.click(render::Hit::SocialToggle, None);
+    s.click(crate::hit::Hit::SocialToggle, None);
     assert!(!s.social.open);
 }
 
@@ -72,7 +72,7 @@ fn the_open_panel_leaves_editor_keys_alone_until_a_field_is_clicked() {
     assert!(!s.social.open);
     // Clicking the message box gives the panel the keys.
     s.open_social();
-    s.click(render::Hit::TextField, None);
+    s.click(crate::hit::Hit::TextField, None);
     assert!(s.social_keys());
     s.key_inner(KeyCode::KeyA, false, Some("a"), Instant::now(), None);
     assert_eq!(s.social.input, "a");

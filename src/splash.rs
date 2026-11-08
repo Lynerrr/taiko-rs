@@ -15,7 +15,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::audio::{self, Engine, Track};
-use crate::render::{Canvas, VIRTUAL_HEIGHT, rgba};
+use crate::hit::Canvas;
+use crate::render::{VIRTUAL_HEIGHT, rgba};
 
 /// Pixel portraits, one picked at random each start.
 const PORTRAITS: [&[u8]; 9] = [

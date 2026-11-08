@@ -2,7 +2,7 @@
 //! fresh client, and where that leads is kept golden: the scene after the click, a message it
 //! shows, whether it quits, and which texts appeared on or went from the screen.
 //!
-//! These pin down the click routing (`render::Hit` → `State::click` and friends) so that
+//! These pin down the click routing (`crate::hit::Hit` → `State::click` and friends) so that
 //! reshaping it can't quietly send a button somewhere else. Clicks never start other programs
 //! or reach the internet (`crate::offline`).
 //!

@@ -3,7 +3,8 @@
 
 use std::cell::Cell;
 
-use crate::render::{Canvas, Glide, Hit, accent, approach, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{Glide, accent, approach, rgba};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {

@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{accent, rgba};
 
 /// A step: whole bars, or a part of a bar or of a beat.
 #[derive(Clone, Copy, Debug, PartialEq)]

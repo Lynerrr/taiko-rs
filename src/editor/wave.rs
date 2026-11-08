@@ -7,7 +7,8 @@
 //! colour says what kind of sound it is. Bass leans to a don's red and treble to a kat's blue,
 //! which is roughly where a taiko map puts them.
 
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 
 /// Frames of a cell of the finest level (1.3 ms at 48 kHz).
 const BASE: usize = 64;

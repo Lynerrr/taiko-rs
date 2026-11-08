@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 use crate::audio::Track;
 use crate::beatmap::{self, Beatmap};
 use crate::game::Game;
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::multiplayer::Session;
 use crate::net::{self, ClientMsg, PlayerInfo};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 use winit::keyboard::KeyCode;
 
 /// The pattern moves on in steps this long, so autoplay hits every note even after a slow

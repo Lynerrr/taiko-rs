@@ -36,6 +36,7 @@ mod font;
 mod game;
 mod genres;
 mod guide;
+mod hit;
 mod hud;
 mod hud_edit;
 mod idle;
@@ -119,10 +120,11 @@ use audio::{Engine, Track};
 use beatmap::Beatmap;
 use config::{Config, FPS_CAPS, RATE_RANGE};
 use game::{Game, PAUSE_ITEMS};
+use hit::Canvas;
 use layout::{Area, Grip};
 use library::Entry;
 use mods::Mods;
-use render::{Canvas, PresentChoice, Renderer, accent, rgba, themed};
+use render::{PresentChoice, Renderer, accent, rgba, themed};
 use settings::{Choices, Dropdown, Edit, Item, Kind, PresetAction, SettingsUi};
 use ui::{Results, Select, SelectAction};
 use winit::window::CursorIcon;
@@ -485,7 +487,7 @@ struct State {
     window_handle: Option<usize>,
     updater: update::Updater,
     /// Clickable areas of the last frame drawn.
-    hits: Vec<render::HitBox>,
+    hits: Vec<hit::HitBox>,
     browse: browse::Browse,
     downloads: Vec<download::Job>,
     /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
@@ -571,8 +573,8 @@ struct State {
     board_rect: Option<[f32; 4]>,
     /// A song select divider being dragged: which, where the pointer started (virtual units)
     /// and the size it had then; and the last press on one (a second soon after resets it).
-    split_drag: Option<(render::Hit, f32, f32)>,
-    split_click: Option<(render::Hit, Instant)>,
+    split_drag: Option<(hit::Hit, f32, f32)>,
+    split_click: Option<(hit::Hit, Instant)>,
     online_leaderboard: Vec<online::OnlineScore>,
     /// A video export in progress, and the editor's last message.
     export: Option<video::Export>,
@@ -605,7 +607,7 @@ struct State {
     scrollbar_drag: bool,
     /// Right button pressed on song select and not moved yet (virtual units, what's under it):
     /// released there it opens the row's menu; moved, it becomes right-click scrolling.
-    right_press: Option<(f32, f32, Option<render::Hit>)>,
+    right_press: Option<(f32, f32, Option<hit::Hit>)>,
     /// Left button pressed on a song list row: dragging scrolls the list, releasing without
     /// dragging clicks the row.
     list_drag: Option<ListDrag>,
@@ -874,7 +876,7 @@ fn draw_game_area(
 /// A press on a song list row (see `State::list_drag`).
 struct ListDrag {
     from_y: f32,
-    hit: render::Hit,
+    hit: hit::Hit,
     moved: bool,
 }
 
@@ -944,7 +946,7 @@ fn draw_replay_bar(
             16.0,
             text,
             7.0,
-            render::Hit::Key(hit),
+            hit::Hit::Key(hit),
             false,
         );
         left += bw + 4.0;
@@ -1152,7 +1154,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: 
             20.0,
             label,
             7.0,
-            render::Hit::BoardTab(on),
+            hit::Hit::BoardTab(on),
             on == online,
         );
         tx += tw + 6.0;
@@ -1182,7 +1184,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: 
         20.0,
         back,
         7.0,
-        render::Hit::BoardPage,
+        hit::Hit::BoardPage,
         true,
     );
     let right = right - bw - 6.0;
@@ -1195,7 +1197,7 @@ fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: 
         20.0,
         label,
         7.0,
-        render::Hit::BoardWebsite,
+        hit::Hit::BoardWebsite,
         false,
     );
     [tx + 4.0, right - tw - 10.0]
@@ -1278,7 +1280,7 @@ fn draw_online_leaderboard(
             mine: r.player.eq_ignore_ascii_case(me),
         };
         let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
-        board_row(c, x, ry, w, &line, render::Hit::OnlineScoreRow(k), None);
+        board_row(c, x, ry, w, &line, hit::Hit::OnlineScoreRow(k), None);
     }
 }
 
@@ -1310,8 +1312,8 @@ fn board_row(
     ry: f32,
     w: f32,
     l: &BoardLine,
-    hit: render::Hit,
-    video: Option<render::Hit>,
+    hit: hit::Hit,
+    video: Option<hit::Hit>,
 ) {
     let h = BOARD_ROW - 4.0;
     let hover = c.hovered(x, ry, w, h);
@@ -1469,8 +1471,8 @@ fn draw_leaderboard(
             mine: false,
         };
         let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
-        let video = Some(render::Hit::ScoreVideo(k));
-        board_row(c, x, ry, w, &line, render::Hit::ScoreRow(k), video);
+        let video = Some(hit::Hit::ScoreVideo(k));
+        board_row(c, x, ry, w, &line, hit::Hit::ScoreRow(k), video);
     }
     board_scrollbar(
         c,
@@ -1490,7 +1492,7 @@ fn draw_divider(
     [x, y, w, h]: [f32; 4],
     upright: bool,
     dragging: bool,
-    hit: render::Hit,
+    hit: hit::Hit,
 ) {
     const GRIP: f32 = 48.0;
     let (cx, cy) = (x + w / 2.0, y + h / 2.0);
@@ -1658,7 +1660,7 @@ fn draw_preset_deleting(c: &mut Canvas, k: usize, name: &str) {
         24.0,
         "Delete",
         9.0,
-        render::Hit::Key(KeyCode::Enter),
+        hit::Hit::Key(KeyCode::Enter),
         true,
     );
     c.button(
@@ -1668,7 +1670,7 @@ fn draw_preset_deleting(c: &mut Canvas, k: usize, name: &str) {
         24.0,
         "Keep",
         9.0,
-        render::Hit::Key(KeyCode::Escape),
+        hit::Hit::Key(KeyCode::Escape),
         false,
     );
 }
@@ -1717,7 +1719,7 @@ fn draw_preset_naming(c: &mut Canvas, name: &str) {
         24.0,
         "Save",
         9.0,
-        render::Hit::Key(KeyCode::Enter),
+        hit::Hit::Key(KeyCode::Enter),
         true,
     );
     c.button(
@@ -1727,7 +1729,7 @@ fn draw_preset_naming(c: &mut Canvas, name: &str) {
         24.0,
         "Cancel",
         9.0,
-        render::Hit::Key(KeyCode::Escape),
+        hit::Hit::Key(KeyCode::Escape),
         false,
     );
 }
@@ -2180,7 +2182,7 @@ fn draw_preview_chrome(
         } else {
             tr!("< BACK", "< 戻る", "< НАЗАД")
         };
-        settings::back_button(c, 0.0, back, render::Hit::Key(KeyCode::Escape));
+        settings::back_button(c, 0.0, back, hit::Hit::Key(KeyCode::Escape));
         let pill = stars::draw_pill(c, c.width, 14.0, 12.0, stars);
         let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
         let room = c.width - 112.0 - pill - 12.0;
@@ -2227,7 +2229,7 @@ fn draw_preview_chrome(
         20.0,
         back,
         8.0,
-        render::Hit::Key(KeyCode::Escape),
+        hit::Hit::Key(KeyCode::Escape),
         false,
     );
     // Right to left: the size button, the hints and the title share what's left. On a narrow
@@ -2245,16 +2247,7 @@ fn draw_preview_chrome(
     .unwrap_or_else(|| short_size.to_string());
     let pw = Canvas::text_width(8.0, &presets) + 24.0;
     let px = bx - 8.0 - pw;
-    c.button(
-        px,
-        17.0,
-        pw,
-        20.0,
-        &presets,
-        8.0,
-        render::Hit::Presets,
-        false,
-    );
+    c.button(px, 17.0, pw, 20.0, &presets, 8.0, hit::Hit::Presets, false);
     let hints = if lobby {
         tr!(
             "drag / wheel: playfield",
@@ -6308,7 +6301,7 @@ impl State {
                 rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 label,
             );
-            c.hit(x, chip_y, w, chip_h, render::Hit::Changelog);
+            c.hit(x, chip_y, w, chip_h, hit::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
             // With Relax on, how they stand on its boards.
             let relax = self.cfg.mods.relax();
@@ -6365,7 +6358,7 @@ impl State {
                 rgba(0xff8ad8, 1.0),
                 &rest,
             );
-            c.hit(ax, chip_y, aw, chip_h, render::Hit::Account);
+            c.hit(ax, chip_y, aw, chip_h, hit::Hit::Account);
         }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => update_badge(&commit),
@@ -6403,7 +6396,7 @@ impl State {
             1.0,
         );
         c.text(x + 7.0, 5.5, 7.0, rgba(0xffffff, 1.0), &text);
-        c.hit(x, 2.0, w, 14.0, render::Hit::Update);
+        c.hit(x, 2.0, w, 14.0, hit::Hit::Update);
     }
 
     /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
@@ -8622,7 +8615,7 @@ impl State {
         if moved
             && self.on_menu()
             && self.player.is_none()
-            && let Some(render::Hit::MenuItem(i)) = self.hit_at(vx, vy)
+            && let Some(hit::Hit::MenuItem(i)) = self.hit_at(vx, vy)
             && let Some(m) = self
                 .main_menu
                 .as_mut()
@@ -8783,12 +8776,12 @@ impl State {
         if self.scrubbing.is_none()
             && let Some(hit) = self.hit_at(vx, vy)
         {
-            if let (render::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
+            if let (hit::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
                 game.paused = Some(i);
             }
             self.hover = None;
             return match hit {
-                render::Hit::SplitList => CursorIcon::EwResize,
+                hit::Hit::SplitList => CursorIcon::EwResize,
                 _ => CursorIcon::Pointer,
             };
         }
@@ -8901,11 +8894,11 @@ impl State {
             if pressed && self.customization_tab().is_none() {
                 let (vx, vy) = self.mouse_virtual();
                 match self.hit_at(vx, vy) {
-                    Some(render::Hit::ModToggle(i)) => {
+                    Some(hit::Hit::ModToggle(i)) => {
                         self.mod_select = Some(i);
                         self.toggle_favourite(mods::ALL[i]);
                     }
-                    Some(render::Hit::ModPreset(k))
+                    Some(hit::Hit::ModPreset(k))
                         if self.preset_naming.is_none() && self.preset_deleting.is_none() =>
                     {
                         self.preset_deleting = Some(k);
@@ -8934,7 +8927,7 @@ impl State {
             return;
         }
         match press {
-            Some((x, y, Some(render::Hit::SongRow(row)))) => {
+            Some((x, y, Some(hit::Hit::SongRow(row)))) => {
                 let skin = self.menu_has_skin(row);
                 self.select.menu = Some(ui::SongMenu {
                     row,
@@ -8944,7 +8937,7 @@ impl State {
                     y,
                 })
             }
-            Some((x, y, Some(render::Hit::SongHeader(row)))) => {
+            Some((x, y, Some(hit::Hit::SongHeader(row)))) => {
                 let skin = self.menu_has_skin(row);
                 self.select.menu = Some(ui::SongMenu {
                     row,
@@ -8954,9 +8947,7 @@ impl State {
                     y,
                 })
             }
-            Some((_, y, Some(render::Hit::SongScrollbar))) => {
-                self.select.scroll_to(y, &self.library)
-            }
+            Some((_, y, Some(hit::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
             _ => {}
         }
     }
@@ -9028,7 +9019,7 @@ impl State {
                 self.social.open && vx >= px && vx <= px + pw && vy >= py && vy <= py + ph;
             let on_social = matches!(
                 self.hit_at(vx, vy),
-                Some(render::Hit::SocialToggle | render::Hit::SocialNote(_))
+                Some(hit::Hit::SocialToggle | hit::Hit::SocialNote(_))
             );
             if on_panel || on_social {
                 if on_panel {
@@ -9060,8 +9051,7 @@ impl State {
             // Its tabs and its Back button.
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ (render::Hit::Key(_) | render::Hit::MedalTab(_))) =
-                    self.hit_at(vx, vy)
+                if let Some(hit @ (hit::Hit::Key(_) | hit::Hit::MedalTab(_))) = self.hit_at(vx, vy)
                 {
                     self.click(hit, window);
                 }
@@ -9072,7 +9062,7 @@ impl State {
             // Only its buttons.
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy) {
+                if let Some(hit @ hit::Hit::Key(_)) = self.hit_at(vx, vy) {
                     self.click(hit, window);
                 }
             }
@@ -9084,7 +9074,7 @@ impl State {
                 let (vx, vy) = self.mouse_virtual();
                 let hit = self.hit_at(vx, vy);
                 let ours = if self.customization_tab().is_some() {
-                    use render::Hit as H;
+                    use hit::Hit as H;
                     matches!(
                         hit,
                         Some(
@@ -9101,12 +9091,9 @@ impl State {
                 } else if self.preset_naming.is_some() || self.preset_deleting.is_some() {
                     // Naming or deleting a preset: only the window's own buttons (Save or
                     // Delete is Enter, Cancel or Keep is Esc) take a click.
-                    matches!(
-                        hit,
-                        Some(render::Hit::Key(KeyCode::Enter | KeyCode::Escape))
-                    )
+                    matches!(hit, Some(hit::Hit::Key(KeyCode::Enter | KeyCode::Escape)))
                 } else {
-                    use render::Hit as H;
+                    use hit::Hit as H;
                     matches!(
                         hit,
                         Some(H::ModToggle(_) | H::ModPreset(_) | H::ModPresetSave | H::Key(_))
@@ -9122,7 +9109,7 @@ impl State {
         if pressed
             && self.replay_bar.is_some()
             && let (vx, vy) = self.mouse_virtual()
-            && let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy)
+            && let Some(hit @ hit::Hit::Key(_)) = self.hit_at(vx, vy)
         {
             self.click(hit, window);
             return;
@@ -9289,23 +9276,23 @@ impl State {
             let hit = self.hit_at(vx, vy);
             // The search box takes the keys when clicked, and gives them back on a click elsewhere.
             if matches!(self.scene, Scene::Select) {
-                self.select.searching = hit == Some(render::Hit::TextField);
+                self.select.searching = hit == Some(hit::Hit::TextField);
             }
             if self.select.picker.is_some()
                 && matches!(self.scene, Scene::Select)
-                && !matches!(hit, Some(render::Hit::PickRow(_)))
+                && !matches!(hit, Some(hit::Hit::PickRow(_)))
             {
                 self.select.picker = None;
                 return;
             }
             if self.select.menu.is_some()
                 && matches!(self.scene, Scene::Select)
-                && !matches!(hit, Some(render::Hit::SongMenu(_)))
+                && !matches!(hit, Some(hit::Hit::SongMenu(_)))
             {
                 self.select.menu = None;
                 return;
             }
-            if let (Scene::Select, Some(h @ render::Hit::SplitList)) = (&self.scene, hit) {
+            if let (Scene::Select, Some(h @ hit::Hit::SplitList)) = (&self.scene, hit) {
                 // Twice in quick succession: back to the usual size.
                 let now = Instant::now();
                 if self.split_click.take().is_some_and(|(last, at)| {
@@ -9319,15 +9306,13 @@ impl State {
                 return;
             }
             // A row acts on release, unless the press turns into dragging the list.
-            if let (Scene::Select, Some(render::Hit::SongScrollbar)) = (&self.scene, hit) {
+            if let (Scene::Select, Some(hit::Hit::SongScrollbar)) = (&self.scene, hit) {
                 self.scrollbar_drag = true;
                 self.select.scroll_to(vy, &self.library);
                 return;
             }
-            if let (
-                Scene::Select,
-                Some(h @ (render::Hit::SongRow(_) | render::Hit::SongHeader(_))),
-            ) = (&self.scene, hit)
+            if let (Scene::Select, Some(h @ (hit::Hit::SongRow(_) | hit::Hit::SongHeader(_)))) =
+                (&self.scene, hit)
             {
                 self.list_drag = Some(ListDrag {
                     from_y: vy,
@@ -9336,8 +9321,7 @@ impl State {
                 });
                 return;
             }
-            if self.settings_ui.choices.is_some() && !matches!(hit, Some(render::Hit::ChoiceRow(_)))
-            {
+            if self.settings_ui.choices.is_some() && !matches!(hit, Some(hit::Hit::ChoiceRow(_))) {
                 self.settings_ui.choices = None;
                 return;
             }
@@ -11625,8 +11609,8 @@ impl State {
 
     /// Android: whether tapping `hit` is tapping a text field.
     #[cfg(target_os = "android")]
-    fn is_text_field(&self, hit: render::Hit) -> bool {
-        use render::Hit;
+    fn is_text_field(&self, hit: hit::Hit) -> bool {
+        use hit::Hit;
         match hit {
             Hit::TextField | Hit::SettingsSearch | Hit::LobbyChat => true,
             Hit::MpRow(i) => {
@@ -11846,7 +11830,7 @@ impl State {
             rgba(0xffffff, 1.0),
             &Canvas::fit_end(10.0, c.width - x - 16.0, &format!("{text}_")),
         );
-        c.hit(0.0, 0.0, c.width, 31.0, render::Hit::TextField);
+        c.hit(0.0, 0.0, c.width, 31.0, hit::Hit::TextField);
     }
 
     /// `/np`'s line: the map on this screen, with its set's osu! link when it has one.
@@ -13844,7 +13828,7 @@ impl State {
             26.0,
             copy,
             9.0,
-            render::Hit::Key(KeyCode::KeyC),
+            hit::Hit::Key(KeyCode::KeyC),
             true,
         );
         c.button(
@@ -13854,7 +13838,7 @@ impl State {
             26.0,
             close,
             9.0,
-            render::Hit::Key(KeyCode::Escape),
+            hit::Hit::Key(KeyCode::Escape),
             false,
         );
     }
@@ -13911,14 +13895,14 @@ impl State {
                 tr!("Exit", "終了", "Выйти"),
                 "1 / Enter",
                 colours.don(),
-                render::Hit::Key(KeyCode::KeyY),
+                hit::Hit::Key(KeyCode::KeyY),
             ),
             (
                 x + 18.0 + button + gap,
                 tr!("Stay", "戻る", "Остаться"),
                 "2 / Esc",
                 colours.kat(),
-                render::Hit::Key(KeyCode::KeyN),
+                hit::Hit::Key(KeyCode::KeyN),
             ),
         ];
         let oy = y + 62.0;
@@ -14107,7 +14091,7 @@ impl State {
             KeyCode::ArrowRight => self.select_zone = self.select_zone.moved(&self.select_rows, 1),
             KeyCode::Escape => self.select_zone = drum_nav::Zone::List,
             KeyCode::Enter | KeyCode::NumpadEnter => match self.select_rows.get(bottom, at) {
-                Some(render::Hit::TextField) => self.select.searching = true,
+                Some(hit::Hit::TextField) => self.select.searching = true,
                 Some(hit) => {
                     self.select_zone = drum_nav::Zone::List;
                     self.click(hit, window);
@@ -15557,7 +15541,7 @@ impl State {
                         // As the board's back button: 10 in from the frame, then the rows' scroll
                         // bar room (`board_tabs`, inside `pw - 28`).
                         let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
-                        let hit = render::Hit::BoardPage;
+                        let hit = hit::Hit::BoardPage;
                         canvas.button(bx, by, bw, 20.0, label, 7.0, hit, false);
                         canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
                     } else {
@@ -15653,12 +15637,12 @@ impl State {
                     let mut buttons = vec![
                         (
                             mods_label.as_str(),
-                            render::Hit::ModsButton,
+                            hit::Hit::ModsButton,
                             !mods.is_empty(),
                             1.0,
                         ),
-                        (random, render::Hit::Key(KeyCode::F2), false, 1.0),
-                        (play, render::Hit::Key(KeyCode::Enter), true, 1.3),
+                        (random, hit::Hit::Key(KeyCode::F2), false, 1.0),
+                        (play, hit::Hit::Key(KeyCode::Enter), true, 1.3),
                     ];
                     if self.select.legacy {
                         buttons.drain(..2);
@@ -15674,14 +15658,14 @@ impl State {
                     }
                     // The song list's right edge: the gap between the list's box (`ui`, ending
                     // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
-                    let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
+                    let dragging = matches!(self.split_drag, Some((hit::Hit::SplitList, ..)));
                     if !phone {
                         draw_divider(
                             canvas,
                             [24.0 + lw + 4.0, panel_top, 8.0, panel_end - panel_top],
                             true,
                             dragging,
-                            render::Hit::SplitList,
+                            hit::Hit::SplitList,
                         );
                     }
                 }
@@ -16227,7 +16211,7 @@ impl State {
                             bh,
                             pause_label(self.preview.held),
                             mobile::pick(7.0, 12.0),
-                            render::Hit::Key(KeyCode::Space),
+                            hit::Hit::Key(KeyCode::Space),
                             false,
                         );
                     }
@@ -16976,9 +16960,9 @@ impl State {
                 );
                 if phone {
                     // Tapping the number brings up the keyboard.
-                    canvas.hit(w / 2.0 - 220.0, 188.0, 440.0, 36.0, render::Hit::TextField);
+                    canvas.hit(w / 2.0 - 220.0, 188.0, 440.0, 36.0, hit::Hit::TextField);
                     let (bw, bh, by) = (150.0, 46.0, 280.0);
-                    let key = render::Hit::Key;
+                    let key = hit::Hit::Key;
                     canvas.button(
                         w / 2.0 - 235.0,
                         by,
@@ -17024,7 +17008,7 @@ impl State {
                         24.0,
                         "Apply",
                         9.0,
-                        render::Hit::Key(KeyCode::Enter),
+                        hit::Hit::Key(KeyCode::Enter),
                         true,
                     );
                     canvas.button(
@@ -17034,7 +17018,7 @@ impl State {
                         24.0,
                         "Cancel",
                         9.0,
-                        render::Hit::Key(KeyCode::Escape),
+                        hit::Hit::Key(KeyCode::Escape),
                         false,
                     );
                 }
@@ -18235,7 +18219,7 @@ impl State {
     }
 
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
-    fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
+    fn hit_at(&self, x: f32, y: f32) -> Option<hit::Hit> {
         if mobile::active() {
             return mobile::hit_near(&self.hits, x, y);
         }
@@ -18284,22 +18268,22 @@ impl State {
         }
     }
 
-    fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
+    fn click(&mut self, hit: hit::Hit, window: Option<&Window>) {
         if let Some(ed) = &mut self.hud_edit {
             match hit {
-                render::Hit::HudPanel => return,
-                render::Hit::HudRow(i) => return ed.select(i),
-                render::Hit::HudToggle(i) => return ed.toggle_part(i, &mut self.cfg),
-                render::Hit::HudPreset(i) => return ed.load_preset(i, &mut self.cfg),
-                render::Hit::HudColour(colour) => return ed.set_colour(colour, &mut self.cfg),
-                render::Hit::HudButton(b) => {
+                hit::Hit::HudPanel => return,
+                hit::Hit::HudRow(i) => return ed.select(i),
+                hit::Hit::HudToggle(i) => return ed.toggle_part(i, &mut self.cfg),
+                hit::Hit::HudPreset(i) => return ed.load_preset(i, &mut self.cfg),
+                hit::Hit::HudColour(colour) => return ed.set_colour(colour, &mut self.cfg),
+                hit::Hit::HudButton(b) => {
                     let outcome = ed.press_button(b, &mut self.cfg);
                     return self.hud_outcome(outcome);
                 }
                 _ => {}
             }
         }
-        use render::Hit;
+        use hit::Hit;
         // The exit question takes only its own buttons.
         if self.quit_asked && !matches!(hit, Hit::Key(KeyCode::KeyY | KeyCode::KeyN)) {
             return;
@@ -18314,12 +18298,12 @@ impl State {
             s.chat_input = None;
         }
         match hit {
-            render::Hit::HudPanel
-            | render::Hit::HudRow(_)
-            | render::Hit::HudToggle(_)
-            | render::Hit::HudPreset(_)
-            | render::Hit::HudColour(_)
-            | render::Hit::HudButton(_) => {}
+            hit::Hit::HudPanel
+            | hit::Hit::HudRow(_)
+            | hit::Hit::HudToggle(_)
+            | hit::Hit::HudPreset(_)
+            | hit::Hit::HudColour(_)
+            | hit::Hit::HudButton(_) => {}
             Hit::LobbyChat => self.focus_lobby_chat(),
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),

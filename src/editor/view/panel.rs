@@ -6,7 +6,8 @@ use super::keys::KAct;
 use super::{Btn, Mode, View};
 use crate::editor::gimmicks::GimmickConfig;
 use crate::editor::tools::{GimmickTool, Target};
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 
 /// A number a gimmick tool takes.
 #[derive(Clone, Copy, PartialEq, Debug)]

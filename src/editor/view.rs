@@ -19,7 +19,8 @@ use super::tools::{GimmickTool, Target};
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, OSU_TIMING_MS};
 use crate::game::Game;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 use crate::video::FRAME_VW;
 
 mod chrome;

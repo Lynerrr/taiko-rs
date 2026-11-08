@@ -12,8 +12,9 @@ use super::new_map::{self, NewMap};
 use super::tempo;
 use crate::audio::{Engine, Track};
 use crate::beatmap::OSU_TIMING_MS;
+use crate::hit::{Canvas, Hit};
 use crate::library::FileKind;
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, rgba};
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 use crate::settings::{caret_backspace, caret_insert, caret_nav};
 
 /// The editor's own colour, as on the main menu's note.

@@ -3,8 +3,9 @@
 //! music and the background just carry on.
 
 use crate::game::{DON, KAT};
+use crate::hit::{Canvas, Hit};
 use crate::player::Control;
-use crate::render::{self, Canvas, Hit, Sprite, approach, pixel_size, rgba, snap_to_grid};
+use crate::render::{self, Sprite, approach, pixel_size, rgba, snap_to_grid};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {

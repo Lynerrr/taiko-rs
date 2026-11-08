@@ -5,7 +5,8 @@ use std::sync::RwLock;
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{accent, rgba};
 
 /// Shape `i`'s name, by the index `game::SHAPESHIFT` uses.
 pub fn shape_name(i: usize) -> &'static str {

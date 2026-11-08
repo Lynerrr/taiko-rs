@@ -2,7 +2,8 @@
 //! suggested offset. The vsync compensation's is the same notes by sight, with the sound off.
 
 use crate::game::Game;
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{accent, rgba};
 use winit::keyboard::KeyCode;
 
 /// Clicks before the first note, so the pulse is established before you have to hit.

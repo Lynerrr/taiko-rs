@@ -9,7 +9,8 @@ use rosu_pp::model::mode::GameMode;
 use rosu_pp::taiko::Taiko;
 use rosu_pp::{Beatmap, Difficulty};
 
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 
 /// Section length of lazer's strain skills (in rate-adjusted time).
 const SECTION_MS: f64 = 400.0;
