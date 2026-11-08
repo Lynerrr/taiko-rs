@@ -4639,8 +4639,18 @@ mod tests {
         press(&mut v, Btn::Snap(SnapAct::All));
         v.wheel(1, ctrl);
         assert_eq!(v.ed.snap, 4);
-        // Deleting the preset in use falls back to All.
+        // Deleting asks first: Delete once, then Keep it, and the preset stays.
         press(&mut v, Btn::Snap(SnapAct::Preset(0)));
+        if v.snap_pop.is_none() {
+            press(&mut v, Btn::Snap(SnapAct::Open));
+        }
+        press(&mut v, Btn::Snap(SnapAct::Delete));
+        assert_eq!(v.snap_presets.len(), 1, "one press only asks");
+        assert!(v.snap_pop.as_ref().is_some_and(|p| p.deleting));
+        press(&mut v, Btn::Snap(SnapAct::Cancel));
+        press(&mut v, Btn::Snap(SnapAct::Delete));
+        assert_eq!(v.snap_presets.len(), 1, "Keep it disarmed the first press");
+        // A second press deletes it, and the preset in use falls back to All.
         press(&mut v, Btn::Snap(SnapAct::Delete));
         assert!(v.snap_presets.is_empty());
         assert_eq!(v.snap_active, None);
