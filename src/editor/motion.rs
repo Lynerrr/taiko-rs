@@ -4,7 +4,7 @@
 //! A note flies with one group at a time (the runtime takes the first that holds it), so giving
 //! notes a path takes them out of any other group they were in.
 
-use super::chart::Taiko;
+use super::chart::{HitObject, Taiko};
 use super::keyframes::Subject;
 use super::state::Editor;
 use crate::tko::clips::Target as ClipTarget;
@@ -237,22 +237,60 @@ pub fn pace_track(i: usize) -> Track {
 }
 
 impl Editor {
-    /// The selected notes' times, in order, once each.
+    /// The selected notes' times (fakes aside: they join groups by place), in order, once each.
     fn selected_times(&self) -> Vec<f64> {
-        let mut times: Vec<f64> = self.selected().iter().map(|o| o.time).collect();
+        let mut times: Vec<f64> = self
+            .selected()
+            .iter()
+            .filter(|o| !o.fake)
+            .map(|o| o.time)
+            .collect();
         times.sort_by(f64::total_cmp);
         times.dedup();
         times
     }
 
-    /// The group that holds just the selected notes, if there is one.
+    /// The selected fakes.
+    fn selected_fakes(&self) -> Vec<u64> {
+        self.selected()
+            .iter()
+            .filter(|o| o.fake)
+            .map(|o| o.id)
+            .collect()
+    }
+
+    /// Whether group `i` holds `o`: a fake given a group by place by that, anything else by
+    /// its time (as the game takes it).
+    pub fn group_holds(&self, i: usize, o: &HitObject) -> bool {
+        let Some(g) = self.gimmick() else {
+            return false;
+        };
+        let Some(gr) = g.groups.get(i) else {
+            return false;
+        };
+        match o.group {
+            Some(n) if o.fake && n as usize <= g.groups.len() => n as usize == i + 1,
+            _ => holds(&gr.notes, o.time),
+        }
+    }
+
+    /// How many objects group `i` holds.
+    pub fn group_size(&self, i: usize) -> usize {
+        self.chart
+            .objects
+            .iter()
+            .filter(|o| self.group_holds(i, o))
+            .count()
+    }
+
+    /// The group that holds just the selected notes (and fakes), if there is one.
     pub fn group_of_selection(&self) -> Option<usize> {
-        let times = self.selected_times();
-        if times.is_empty() {
+        let picked = self.selected();
+        if picked.is_empty() {
             return None;
         }
-        self.gimmick()?.groups.iter().position(|gr| {
-            gr.notes.len() == times.len() && times.iter().all(|&t| holds(&gr.notes, t))
+        (0..self.gimmick()?.groups.len()).find(|&i| {
+            picked.iter().all(|o| self.group_holds(i, o)) && self.group_size(i) == picked.len()
         })
     }
 
@@ -272,10 +310,10 @@ impl Editor {
         reuse: bool,
         then: impl FnOnce(&mut Gimmick, usize),
     ) -> Result<usize, String> {
-        let times = self.selected_times();
-        if times.is_empty() {
+        if self.selection.is_empty() {
             return Err("select notes on the timeline first".into());
         }
+        let (times, fakes) = (self.selected_times(), self.selected_fakes());
         let Some(g) = self.gimmick() else {
             return Err("this chart isn't a .tko yet".into());
         };
@@ -288,17 +326,23 @@ impl Editor {
         }
         let at = g.groups.len();
         let name = format!("{prefix} {}", at + 1);
-        self.edit_gimmick(false, |g| {
-            for gr in &mut g.groups {
-                gr.notes.retain(|&n| !holds(&times, n));
-            }
-            g.groups.push(Group {
-                name,
-                notes: times,
-                ..Group::default()
-            });
-            then(g, at);
-        });
+        // The notes by their times; the fakes picked by place, so a fake on a note's
+        // millisecond (or on other fakes) gets a group of its own.
+        let k = at as u16 + 1;
+        self.edit_gimmick_and_fakes(
+            |g| {
+                for gr in &mut g.groups {
+                    gr.notes.retain(|&n| !holds(&times, n));
+                }
+                g.groups.push(Group {
+                    name,
+                    notes: times,
+                    ..Group::default()
+                });
+                then(g, at);
+            },
+            |o| fakes.contains(&o.id).then_some(Some(k)),
+        );
         Ok(at)
     }
 
@@ -320,41 +364,60 @@ impl Editor {
 
     /// Moves the selected notes into group `group`, out of any other. Returns how many joined.
     pub fn add_selection_to_group(&mut self, group: usize) -> Result<usize, String> {
-        let times = self.selected_times();
-        if times.is_empty() {
+        if self.selection.is_empty() {
             return Err("select notes on the timeline first".into());
         }
+        let (times, fakes) = (self.selected_times(), self.selected_fakes());
         let Some(gr) = self.gimmick().and_then(|g| g.groups.get(group)) else {
             return Err("no such group".into());
         };
-        let joined = times.iter().filter(|&&t| !holds(&gr.notes, t)).count();
-        self.edit_gimmick(false, |g| {
-            for (i, gr) in g.groups.iter_mut().enumerate() {
-                if i == group {
-                    gr.notes.extend(&times);
-                } else {
-                    gr.notes.retain(|&n| !holds(&times, n));
+        let k = group as u16 + 1;
+        let joined = times.iter().filter(|&&t| !holds(&gr.notes, t)).count()
+            + self
+                .selected()
+                .iter()
+                .filter(|o| o.fake && o.group != Some(k))
+                .count();
+        self.edit_gimmick_and_fakes(
+            |g| {
+                for (i, gr) in g.groups.iter_mut().enumerate() {
+                    if i == group {
+                        gr.notes.extend(&times);
+                    } else {
+                        gr.notes.retain(|&n| !holds(&times, n));
+                    }
                 }
-            }
-        });
+            },
+            |o| fakes.contains(&o.id).then_some(Some(k)),
+        );
         Ok(joined)
     }
 
     /// Takes the selected notes out of group `group`. Returns how many left it.
     pub fn remove_selection_from_group(&mut self, group: usize) -> Result<usize, String> {
-        let times = self.selected_times();
-        if times.is_empty() {
+        if self.selection.is_empty() {
             return Err("select notes on the timeline first".into());
         }
+        let times = self.selected_times();
         let Some(gr) = self.gimmick().and_then(|g| g.groups.get(group)) else {
             return Err("no such group".into());
         };
-        let left = gr.notes.iter().filter(|&&n| holds(&times, n)).count();
-        self.edit_gimmick(false, |g| {
-            if let Some(gr) = g.groups.get_mut(group) {
-                gr.notes.retain(|&n| !holds(&times, n));
-            }
-        });
+        // Fakes in it (by place or by time) are put in no group, by place.
+        let leaving: Vec<u64> = self
+            .selected()
+            .iter()
+            .filter(|o| o.fake && self.group_holds(group, o))
+            .map(|o| o.id)
+            .collect();
+        let left = gr.notes.iter().filter(|&&n| holds(&times, n)).count() + leaving.len();
+        self.edit_gimmick_and_fakes(
+            |g| {
+                if let Some(gr) = g.groups.get_mut(group) {
+                    gr.notes.retain(|&n| !holds(&times, n));
+                }
+            },
+            |o| leaving.contains(&o.id).then_some(Some(0)),
+        );
         Ok(left)
     }
 
@@ -952,5 +1015,65 @@ mod tests {
         assert_eq!(e.gimmick().unwrap().scroll.keys[0].ease, Ease::SineInOut);
         assert!(e.clear_scroll());
         assert_eq!(e.scroll_speed(t), 1.0);
+    }
+
+    #[test]
+    fn one_fake_of_a_stack_gets_a_path_of_its_own() {
+        let mut e = tko();
+        let note = e.chart.objects[0].clone();
+        let t = note.time;
+        // The note and three fakes on its millisecond share a group by time.
+        e.selection = [note.id].into();
+        let shared = e.motion_group().unwrap();
+        let fakes: Vec<u64> = (0..3)
+            .map(|_| e.place_note(t, false, true).unwrap())
+            .collect();
+        let obj = |e: &Editor, id: u64| e.chart.object(id).unwrap().clone();
+        assert!(fakes.iter().all(|f| e.group_holds(shared, &obj(&e, *f))));
+        // The second fake alone gets a group, and a path in it: only it.
+        e.selection = [fakes[1]].into();
+        let own = e.motion_group().unwrap();
+        assert_ne!(own, shared);
+        assert!(e.set_path_preset(own, 0));
+        assert_eq!(obj(&e, fakes[1]).group, Some(own as u16 + 1));
+        assert!(e.group_holds(own, &obj(&e, fakes[1])));
+        assert!(!e.group_holds(own, &obj(&e, fakes[0])));
+        assert!(!e.group_holds(own, &note));
+        assert!(e.group_holds(shared, &note) && e.group_holds(shared, &obj(&e, fakes[2])));
+        assert_eq!(e.group_of_selection(), Some(own));
+        assert_eq!(e.group_size(own), 1);
+        // Saved and read back, it keeps its group; the game gives it that one.
+        let back = Chart::parse_tko(&e.chart.to_text()).unwrap();
+        let groups: Vec<Option<u16>> = back
+            .objects
+            .iter()
+            .filter(|o| o.fake)
+            .map(|o| o.group)
+            .collect();
+        assert_eq!(
+            groups
+                .iter()
+                .filter(|g| **g == Some(own as u16 + 1))
+                .count(),
+            1
+        );
+        // Taken out of its group it is in none, not back in the note's.
+        assert_eq!(e.remove_selection_from_group(own), Ok(1));
+        assert_eq!(obj(&e, fakes[1]).group, Some(0));
+        assert!(!e.group_holds(shared, &obj(&e, fakes[1])));
+        // Undo puts it back in its own group, in one step with the gimmick.
+        assert!(e.undo());
+        assert_eq!(obj(&e, fakes[1]).group, Some(own as u16 + 1));
+        // Deleting the shared group (before it) moves its number down with it.
+        assert!(e.delete_group(shared));
+        let own = own - 1;
+        assert_eq!(obj(&e, fakes[1]).group, Some(own as u16 + 1));
+        assert!(e.group_holds(own, &obj(&e, fakes[1])));
+        // Deleting its own group leaves it in none.
+        assert!(e.delete_group(own));
+        assert_eq!(obj(&e, fakes[1]).group, Some(0));
+        // It can't become a note there: the note has that millisecond.
+        e.selection = [fakes[1]].into();
+        e.toggle_fake().unwrap_err();
     }
 }

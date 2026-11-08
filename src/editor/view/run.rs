@@ -336,6 +336,15 @@ impl View {
                     "metronome on: a click on every beat while the song plays".into()
                 };
             }
+            Cmd::FollowTiming => {
+                self.ed.follow_timing = !self.ed.follow_timing;
+                self.status = if self.ed.follow_timing {
+                    "notes follow: a red line's new time or BPM moves its notes along".into()
+                } else {
+                    "notes stay put when a red line changes".into()
+                };
+            }
+            Cmd::SnapToGrid => self.open_resnap(),
             Cmd::LeftPan => {
                 self.left_pan = !self.left_pan;
                 self.status = if self.left_pan {

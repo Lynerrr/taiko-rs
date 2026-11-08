@@ -128,7 +128,10 @@ A map is only as good as its timing: every note snaps to a grid made from the re
 A green line sets the slider velocity: how fast notes scroll and how long sliders are. x1.00 is normal, x2.00 is twice as fast. Notes keep their time; only the spacing on screen changes. Mappers use it to make a drop feel heavy, a build-up feel like it speeds up, a breakdown feel slow.
 
 # The graph (F3)
-- Double click empty space to add a green line, drag a dot to change it, right click to delete.
+- Double click empty space to add a green line, drag a dot to change it, right click to delete. A dragged dot moves along the grid; Shift moves it to the millisecond, Ctrl keeps its time and changes only the value.
+- The strip over the notes has red lines (BPM) on top and green lines (SV) below. Click a line to pick it, Shift+click adds one, drag over empty strip to box several; drag picked lines to move them together along the grid, or with Shift to the millisecond.
+- Notes follow (on the red line's Position heading, also in the Timing menu): with it on, changing a red line's time or BPM moves the notes and green lines of its section with it, so each keeps its place in the beat, like stable's \"Move already placed notes when changing the offset/BPM\".
+- Timing > Snap notes to the grid puts notes a little off back on the grid, like Mapping Tools' Map Cleaner: tick the divisions, set how far a note may move (farther off, it stays: put there on purpose), the selection or the whole map, and whether drumroll ends and free green lines snap too. Green lines on a note go with it, lines in SV patterns stay, no note lands on another. It shows what it would do before Snap, and one Ctrl+Z takes it back.
 - Drag a box to select several: move them together, or scale them (Alt adds instead of scaling).
 - A curve the lines already follow is drawn thin with a chip like sin x1.20 > x2.00. Click it to edit it as a curve: the round handles at its ends can be dragged.
 - The SV | Volume switch turns every gesture into a volume edit. Brush draws a curve by dragging from one point to another; an end dropped right by a line clings to it, so strokes join the lines already there (Alt keeps it free).
@@ -254,7 +257,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 # Fake notes
 - The Fakes tab turns the picked dons and kats into fakes (and back): they look and move like notes, but are never hit, give no score or combo, make no sound, and vanish at the drum.
 - Add fake copies of the picked notes puts fakes half a beat or a 1/4 before or after them, or a beat after, where no note is yet. A copy flies with its note's group: the same path and moves.
-- On the timeline fakes are hollow with an F. Select, move, copy and delete them like any note; groups, paths, moves and the scroll take them by their time.
+- On the timeline fakes have a row of their own along the bottom of the lane (FAKES), hollow with an F, so they never cover the notes. The row shows once the map has fakes: make the first ones here. With the Note tool every click in that row places one more fake, on a stack too; pick and drag fakes with the Select tool. A click on a stack picks one of its fakes, each click after it the next (the stack shows 2/3). A fake may sit on a note's millisecond, and any number of fakes may share one (a stack shows x3 and so on); only notes keep one to a millisecond. Select, move, copy and delete them like any note; a box takes the rows it covers. A fake goes with the group of its millisecond, like a note, until you give it its own: pick it (one of a stack too) and give it a path, a move or a group, and it flies its own way however many fakes or notes share its millisecond.
 
 # Show as
 - The Show as tab makes the picked notes lie about their look: all as dons, all as kats or swapped, and all small, all big or swapped.
@@ -488,7 +491,10 @@ File > Open song folder открывает папку карты. Бросьте
 Зелёная линия задаёт скорость слайдеров: как быстро идут ноты и какой длины слайдеры. x1.00 — обычная, x2.00 — вдвое быстрее. Время нот не меняется, меняется только расстояние между ними на экране. Мапперы делают так «тяжёлый» дроп, ощущение разгона на подъёме, медленный брейкдаун.
 
 # График (F3)
-- Двойной клик по пустому месту добавляет зелёную линию, перетащите точку, чтобы изменить, правый клик удаляет.
+- Двойной клик по пустому месту добавляет зелёную линию, перетащите точку, чтобы изменить, правый клик удаляет. Точка двигается по сетке; с Shift — по миллисекундам, с Ctrl время не меняется, только значение.
+- В полосе над нотами красные линии (BPM) сверху, зелёные (SV) снизу. Клик выбирает линию, Shift+клик добавляет, протяжка по пустой полосе выделяет рамкой несколько; выбранные линии тащатся вместе по сетке, с Shift — по миллисекундам.
+- Notes follow (на заголовке Position у красной линии и в меню Timing): когда включено, смена времени или BPM красной линии двигает ноты и зелёные линии её секции вместе с ней, и каждая остаётся на своей доле — как «Move already placed notes when changing the offset/BPM» в stable.
+- Timing > Snap notes to the grid возвращает немного сбитые ноты на сетку, как Map Cleaner из Mapping Tools: отметьте деления, задайте, насколько нота может сдвинуться (дальше — остаётся: поставлена так специально), выделение или вся карта, и снапать ли концы драмроллов и свободные зелёные линии. Зелёные линии на ноте едут с ней, линии в SV-паттернах остаются, нота не встанет на другую. До Snap видно, что изменится, и один Ctrl+Z всё возвращает.
 - Рамкой выделите несколько: двигайте вместе или масштабируйте (Alt добавляет вместо масштаба).
 - Кривая, по которой уже идут линии, рисуется тонкой с меткой вроде sin x1.20 > x2.00. Кликните по ней, чтобы править как кривую: круглые ручки на концах можно тянуть.
 - Переключатель SV | Volume превращает все жесты в правку громкости. Brush рисует кривую перетаскиванием от точки к точке; конец, отпущенный рядом с линией, прилипает к ней, так штрихи соединяют уже поставленные линии (Alt оставляет его свободным).
@@ -614,7 +620,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 # Фейковые ноты
 - Вкладка Fakes делает выбранные доны и каты фейками (и обратно): они выглядят и двигаются как ноты, но по ним не бьют, они не дают счёта и комбо, не звучат и исчезают на барабане.
 - Add fake copies of the picked notes ставит фейки на полдоли или 1/4 до или после выбранных нот, или на долю после, где ноты ещё нет. Копия летит вместе с группой своей ноты: тот же путь и те же движения.
-- На таймлайне фейки полые с буквой F. Их выделяют, двигают, копируют и удаляют как обычные ноты; группы, траектории, движения и скролл берут их по времени.
+- На таймлайне у фейков своя строка внизу дорожки (FAKES), они полые с буквой F и не закрывают ноты. Строка появляется, когда в карте есть фейки: первые делаются здесь. Инструментом Note каждый клик в этой строке ставит ещё один фейк, в том числе поверх стопки; выделяют и тащат фейки инструментом Select. Клик по стопке выбирает один фейк, каждый следующий клик — следующий (на стопке видно 2/3). Фейк может стоять на миллисекунде ноты, и фейков на одной миллисекунде может быть сколько угодно (у стопки подпись x3 и т. д.); одна нота на миллисекунду — только для обычных нот. Их выделяют, двигают, копируют и удаляют как обычные ноты; рамка берёт те строки, которые накрывает. Фейк летит с группой своей миллисекунды, как нота, пока не дать ему свою: выберите его (и один из стопки тоже) и дайте ему путь, движение или группу — он полетит по-своему, сколько бы фейков и нот ни стояло на той же миллисекунде.
 
 # Show as
 - Вкладка Show as заставляет выбранные ноты врать о своём виде: все как доны, все как каты или наоборот, и все маленькие, все большие или наоборот.

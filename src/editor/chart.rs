@@ -291,6 +291,9 @@ pub struct HitObject {
     /// A `.tko` fake note: drawn in the game, never judged. Kept in the gimmick's `fakes` on
     /// save, never in the chart's hit objects.
     pub fake: bool,
+    /// A fake's motion group by place (`FakeNote::group`): 0 none, n the n-th; `None` by its
+    /// time. Real notes always go by their time.
+    pub group: Option<u16>,
     raw: Option<Raw<ObjectKey>>,
 }
 
@@ -314,6 +317,7 @@ impl HitObject {
             sound,
             rest,
             fake: false,
+            group: None,
             raw: None,
         }
     }
@@ -485,6 +489,7 @@ impl HitObject {
             sound,
             rest,
             fake: false,
+            group: None,
             raw: None,
         };
         o.raw = Some(Raw {
@@ -658,6 +663,7 @@ impl Chart {
         for f in std::mem::take(&mut gimmick.fakes) {
             let mut o = HitObject::hit(f.t, f.kat, f.big);
             o.fake = true;
+            o.group = f.group;
             o.id = chart.take_id();
             let at = chart.objects.partition_point(|q| q.time <= o.time);
             chart.objects.insert(at, o);
@@ -899,6 +905,7 @@ impl Chart {
                 t: o.time,
                 kat: o.taiko() == Taiko::Kat,
                 big: o.big(),
+                group: o.group,
             })
             .collect();
         g.sanitize();

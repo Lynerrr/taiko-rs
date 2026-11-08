@@ -50,6 +50,9 @@ pub struct Editor {
     /// Read the chart's SV as the curves it was drawn with (ramps between notes) rather than as
     /// osu! steps, for the anti-barline wall.
     pub sv_curves: bool,
+    /// A change to a red line's time or BPM carries the notes and green lines of its section
+    /// along (stable's "Move already placed notes when changing the offset/BPM").
+    pub follow_timing: bool,
     /// The file name (without extension) the metadata gave when the file was opened or last
     /// renamed: a save moves the file once the names in it make a different one.
     pub(super) named: String,
@@ -123,6 +126,7 @@ impl Editor {
             gimmick: GimmickConfig::default(),
             base: None,
             sv_curves: false,
+            follow_timing: false,
             named,
         }
     }
@@ -253,21 +257,42 @@ impl Editor {
 
     // ---- placing ----
 
+    /// Whether something already stands where an object of the kind `fake` says would go on
+    /// `t`'s millisecond, other than those `skip` names. Only notes block: a millisecond holds
+    /// one note, and any number of fakes on top of it or by themselves.
+    pub fn occupied(&self, t: f64, fake: bool, skip: impl Fn(u64) -> bool) -> bool {
+        if fake {
+            return false;
+        }
+        let from = self.chart.objects.partition_point(|o| o.time <= t - 1.0);
+        self.chart.objects[from..]
+            .iter()
+            .take_while(|o| o.time < t + 1.0)
+            .any(|o| !o.fake && !skip(o.id))
+    }
+
     /// Puts a don or kat at `t` (made whole by the caller's snap). Nothing is put where a note
     /// already stands.
     pub fn place_hit(&mut self, t: f64, kat: bool) -> Option<u64> {
+        self.place_note(t, kat, false)
+    }
+
+    /// Puts a don or kat (`fake`: a fake one, only in a `.tko` map) at `t`, made whole. A note
+    /// doesn't go where a note stands; a fake goes anywhere, as many to a millisecond as wanted.
+    pub fn place_note(&mut self, t: f64, kat: bool, fake: bool) -> Option<u64> {
         let t = t.round();
-        if t < 0.0 || self.chart.objects.iter().any(|o| o.time == t) {
+        if t < 0.0 || (fake && !self.is_tko()) || self.occupied(t, fake, |_| false) {
             return None;
         }
-        let o = HitObject::hit(t, kat, self.big);
+        let mut o = HitObject::hit(t, kat, self.big);
+        o.fake = fake;
         Some(self.run_insert(o))
     }
 
     /// Puts a drumroll from `start` to `end` (made whole), at the velocity in force at its start.
     pub fn place_roll(&mut self, start: f64, end: f64) -> Option<u64> {
         let (start, end) = (start.round(), end.round());
-        if start < 0.0 || end <= start || self.chart.objects.iter().any(|o| o.time == start) {
+        if start < 0.0 || end <= start || self.occupied(start, false, |_| false) {
             return None;
         }
         let length = HitObject::length_for(
@@ -282,7 +307,7 @@ impl Editor {
 
     pub fn place_swell(&mut self, start: f64, end: f64) -> Option<u64> {
         let (start, end) = (start.round(), end.round());
-        if start < 0.0 || end <= start || self.chart.objects.iter().any(|o| o.time == start) {
+        if start < 0.0 || end <= start || self.occupied(start, false, |_| false) {
             return None;
         }
         Some(self.run_insert(HitObject::swell(start, end)))
@@ -415,7 +440,14 @@ impl Editor {
     }
 
     /// Selects what starts in `from..=to`; `add` keeps what was selected.
+    #[cfg(test)]
     pub fn select_range(&mut self, from: f64, to: f64, add: bool) {
+        self.select_range_of(from, to, add, true, true);
+    }
+
+    /// Selects the notes (`notes`) and the fakes (`fakes`) starting in `from..=to`; `add` keeps
+    /// what was selected.
+    pub fn select_range_of(&mut self, from: f64, to: f64, add: bool, notes: bool, fakes: bool) {
         let (from, to) = (from.min(to), from.max(to));
         if !add {
             self.selection.clear();
@@ -424,6 +456,7 @@ impl Editor {
         for o in self.chart.objects[first..]
             .iter()
             .take_while(|o| o.time <= to)
+            .filter(|o| if o.fake { fakes } else { notes })
         {
             self.selection.insert(o.id);
         }
@@ -467,14 +500,12 @@ impl Editor {
             return false;
         }
         let after: Vec<HitObject> = before.iter().map(|o| o.shifted(delta)).collect();
-        // Never onto another note's millisecond, as placing and pasting refuse it too.
-        let taken = |t: f64| {
-            self.chart
-                .objects
-                .iter()
-                .any(|q| (q.time - t).abs() < 1.0 && !self.selection.contains(&q.id))
-        };
-        if after.iter().any(|o| taken(o.time)) {
+        // A note never onto another note's millisecond, as placing and pasting refuse it too
+        // (fakes go anywhere).
+        if after
+            .iter()
+            .any(|o| self.occupied(o.time, o.fake, |id| self.selection.contains(&id)))
+        {
             return false;
         }
         self.edit(before, after, drag);
@@ -487,24 +518,24 @@ impl Editor {
     /// another's millisecond. Returns how many moved.
     pub fn resnap_selected(&mut self) -> usize {
         let before = self.selected();
-        let mut taken: std::collections::HashSet<i64> = self
+        let mut taken: std::collections::HashSet<(i64, bool)> = self
             .chart
             .objects
             .iter()
             .filter(|o| !self.selection.contains(&o.id))
-            .map(|o| o.time as i64)
+            .map(|o| (o.time as i64, o.fake))
             .collect();
         let (mut b, mut a) = (Vec::new(), Vec::new());
         for o in before {
             let Some(to) = timing::resnap(&self.chart.timing, o.time) else {
-                taken.insert(o.time as i64);
+                taken.insert((o.time as i64, o.fake));
                 continue;
             };
-            if to as f64 == o.time || taken.contains(&to) {
-                taken.insert(o.time as i64);
+            if to as f64 == o.time || (!o.fake && taken.contains(&(to, false))) {
+                taken.insert((o.time as i64, o.fake));
                 continue;
             }
-            taken.insert(to);
+            taken.insert((to, o.fake));
             a.push(o.shifted(to as f64 - o.time));
             b.push(o);
         }
@@ -580,7 +611,12 @@ impl Editor {
         // At least one snap step long, and never over the next note.
         let step = timing::step(&self.chart.timing, before.time, true, self.snap);
         let mut end = end.round().max(step.round());
-        if let Some(next) = self.chart.objects.iter().find(|o| o.time > before.time) {
+        if let Some(next) = self
+            .chart
+            .objects
+            .iter()
+            .find(|o| o.time > before.time && !o.fake)
+        {
             end = end.min(next.time);
         }
         if end <= before.time || end == self.end_of(&before).round() {
@@ -665,13 +701,10 @@ impl Editor {
                 o.shifted(to - o.time)
             })
             .collect();
-        let taken = |t: f64| {
-            self.chart
-                .objects
-                .iter()
-                .any(|q| q.time == t && !self.selection.contains(&q.id))
-        };
-        if after.iter().any(|o| taken(o.time)) {
+        if after
+            .iter()
+            .any(|o| self.occupied(o.time, o.fake, |id| self.selection.contains(&id)))
+        {
             return Err("reversed, a note would land on another".into());
         }
         let n = after.len();
@@ -709,8 +742,8 @@ impl Editor {
             // A plain .osu has nowhere to keep fakes: they come in as notes.
             n.fake &= self.chart.gimmick.is_some();
             if n.time >= 0.0
-                && !self.chart.objects.iter().any(|q| q.time == n.time)
-                && !made.iter().any(|q| q.time == n.time)
+                && !self.occupied(n.time, n.fake, |_| false)
+                && (n.fake || !made.iter().any(|q| q.time == n.time && !q.fake))
             {
                 made.push(n);
             }
@@ -783,10 +816,7 @@ impl Editor {
         if let Some(why) = after.problem() {
             return Err(why);
         }
-        let cmd = Command::EditTiming {
-            before: vec![before],
-            after: vec![after],
-        };
+        let cmd = self.timing_command(vec![before], vec![after])?;
         if drag {
             self.history.run_drag(&mut self.chart, cmd);
         } else {
@@ -832,7 +862,7 @@ impl Editor {
         if before.is_empty() {
             return Ok(());
         }
-        let cmd = Command::EditTiming { before, after };
+        let cmd = self.timing_command(before, after)?;
         if drag {
             self.history.run_drag(&mut self.chart, cmd);
         } else {

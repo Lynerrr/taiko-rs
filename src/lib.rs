@@ -554,6 +554,8 @@ struct State {
     random_setup: Option<String>,
     /// The name being typed for a new mod preset (S or "+ Save" in the mod select).
     preset_naming: Option<String>,
+    /// The mod preset a right-click asked to delete, waiting for a yes.
+    preset_deleting: Option<usize>,
     tact_setup: Option<tact::Setup>,
     od_setup: Option<od_override::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
@@ -1539,6 +1541,70 @@ fn preset_key(code: KeyCode) -> Option<usize> {
     ]
     .iter()
     .position(|&(a, b)| code == a || code == b)
+}
+
+/// Over the mod select: is preset `k` (named `name`) to be deleted?
+fn draw_preset_deleting(c: &mut Canvas, k: usize, name: &str) {
+    c.hits.clear();
+    let w = c.width;
+    c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
+    let bw = (w - 32.0).min(460.0);
+    let (bx, inner) = ((w - bw) / 2.0, bw - 32.0);
+    c.round_rect(
+        [bx, 140.0],
+        [bw, 164.0],
+        10.0,
+        rgba(0x15151d, 0.98),
+        rgba(0xff6b6b, 0.8),
+        1.5,
+    );
+    let title = format!("Delete preset {}?", k + 1);
+    c.text_centered(
+        w / 2.0,
+        156.0,
+        14.0,
+        rgba(0xffffff, 1.0),
+        &Canvas::fit(14.0, inner, &title),
+    );
+    let size = Canvas::fit_size(12.0, 7.0, inner, name);
+    c.text_centered(
+        w / 2.0,
+        196.0,
+        size,
+        rgba(0xffffff, 1.0),
+        &Canvas::fit(size, inner, name),
+    );
+    c.text_centered(
+        w / 2.0,
+        230.0,
+        7.0,
+        rgba(0x9a9ab0, 1.0),
+        &Canvas::fit(
+            7.0,
+            inner,
+            "It can't be brought back. The mods on now stay on. Enter deletes, Esc keeps it.",
+        ),
+    );
+    c.button(
+        w / 2.0 - 100.0,
+        264.0,
+        90.0,
+        24.0,
+        "Delete",
+        9.0,
+        render::Hit::Key(KeyCode::Enter),
+        true,
+    );
+    c.button(
+        w / 2.0 + 10.0,
+        264.0,
+        90.0,
+        24.0,
+        "Keep",
+        9.0,
+        render::Hit::Key(KeyCode::Escape),
+        false,
+    );
 }
 
 /// Over the mod select: the name a new mod preset gets, being typed.
@@ -2790,6 +2856,7 @@ impl State {
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
                 view.set_track_loader(rx, rate);
                 view.left_pan = self.cfg.editor_left_pan;
+                view.ed.follow_timing = self.cfg.editor_follow_timing;
                 view.set_snap_presets(&self.cfg.editor_snap_presets, &self.cfg.editor_snap_active);
                 // `TAIKO_EDIT_AT=<ms>`: starts with the playhead there (headless screenshots).
                 if let Some(at) = std::env::var("TAIKO_EDIT_AT")
@@ -8772,8 +8839,10 @@ impl State {
                         self.mod_select = Some(i);
                         self.toggle_favourite(mods::ALL[i]);
                     }
-                    Some(render::Hit::ModPreset(k)) if self.preset_naming.is_none() => {
-                        self.remove_mod_preset(k)
+                    Some(render::Hit::ModPreset(k))
+                        if self.preset_naming.is_none() && self.preset_deleting.is_none() =>
+                    {
+                        self.preset_deleting = Some(k);
                     }
                     _ => {}
                 }
@@ -8963,9 +9032,13 @@ impl State {
                                 | H::Key(_)
                         )
                     )
-                } else if self.preset_naming.is_some() {
-                    // Naming a preset: Enter keeps it, Esc doesn't, clicks change nothing.
-                    false
+                } else if self.preset_naming.is_some() || self.preset_deleting.is_some() {
+                    // Naming or deleting a preset: only the window's own buttons (Save or
+                    // Delete is Enter, Cancel or Keep is Esc) take a click.
+                    matches!(
+                        hit,
+                        Some(render::Hit::Key(KeyCode::Enter | KeyCode::Escape))
+                    )
                 } else {
                     use render::Hit as H;
                     matches!(
@@ -11256,7 +11329,23 @@ impl State {
         self.toast(format!("preset {}: {}", k + 1, p.name));
     }
 
-    /// Takes preset `k` away (right-click on it).
+    /// Keys while deleting a preset is being asked: Enter, Y or Delete deletes it, Esc or N
+    /// keeps it.
+    fn preset_deleting_key(&mut self, code: KeyCode) {
+        match code {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::KeyY | KeyCode::Delete => {
+                if let Some(k) = self.preset_deleting.take() {
+                    self.remove_mod_preset(k);
+                }
+            }
+            KeyCode::Escape | KeyCode::F1 | KeyCode::KeyN | KeyCode::Backspace => {
+                self.preset_deleting = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Takes preset `k` away (once a right-click on it is confirmed).
     fn remove_mod_preset(&mut self, k: usize) {
         if k < self.cfg.mod_presets.len() {
             let p = self.cfg.mod_presets.remove(k);
@@ -14231,6 +14320,10 @@ impl State {
             self.customization_key(code, text, repeat);
             return;
         }
+        if self.mod_select.is_some() && self.preset_deleting.is_some() {
+            self.preset_deleting_key(code);
+            return;
+        }
         if self.mod_select.is_some() && self.preset_naming.is_some() {
             self.preset_naming_key(code, text);
             return;
@@ -16475,6 +16568,10 @@ impl State {
                     self.cfg.editor_left_pan = view.left_pan;
                     self.cfg.save();
                 }
+                if view.ed.follow_timing != self.cfg.editor_follow_timing {
+                    self.cfg.editor_follow_timing = view.ed.follow_timing;
+                    self.cfg.save();
+                }
                 if view.snap_dirty {
                     view.snap_dirty = false;
                     (self.cfg.editor_snap_presets, self.cfg.editor_snap_active) =
@@ -16778,6 +16875,11 @@ impl State {
             }
             if let Some(name) = &self.preset_naming {
                 draw_preset_naming(canvas, name);
+            }
+            if let Some(k) = self.preset_deleting
+                && let Some(p) = self.cfg.mod_presets.get(k)
+            {
+                draw_preset_deleting(canvas, k, &p.name);
             }
             if let Some(input) = &self.random_setup {
                 canvas.hits.clear();
@@ -19959,6 +20061,7 @@ impl State {
             shapeshift_setup: None,
             random_setup: None,
             preset_naming: None,
+            preset_deleting: None,
             tact_setup: None,
             od_setup: None,
             leaderboard: Vec::new(),

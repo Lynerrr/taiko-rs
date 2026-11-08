@@ -451,7 +451,15 @@ impl Runtime {
                 .map_or(0, |i| i as u16 + 1)
         };
         let group_of = times.iter().map(|&t| group_at(t)).collect();
-        let fake_group_of = gimmick.fakes.iter().map(|f| group_at(f.t)).collect();
+        // A fake given a group by place flies with it (0: with none); else by its time.
+        let fake_group_of = gimmick
+            .fakes
+            .iter()
+            .map(|f| match f.group {
+                Some(n) if n as usize <= gimmick.groups.len() => n,
+                _ => group_at(f.t),
+            })
+            .collect();
         let above_of = times.iter().map(|&t| gimmick.is_above(t)).collect();
         let fake_above = gimmick
             .fakes
@@ -1655,6 +1663,7 @@ mod tests {
             t: 4000.0,
             kat: true,
             big: false,
+            group: None,
         });
         gm.sanitize();
         let notes = [
@@ -1680,6 +1689,30 @@ mod tests {
         // Fakes lie with their group too.
         let fake = rt.fake(0, 0.0).unwrap();
         assert_eq!((fake.lie_kat, fake.lie_big), (Some(false), Some(true)));
+    }
+
+    #[test]
+    fn a_fake_given_a_group_by_place_flies_with_it_whatever_its_time() {
+        use crate::tko::gimmick::FakeNote;
+        let mut gm = Gimmick::default();
+        gm.groups.push(Group {
+            notes: vec![4000.0],
+            ..Group::default()
+        });
+        gm.groups.push(Group::default());
+        // Four fakes stacked on the grouped note's millisecond: by time, in the second
+        // group, in none, and in a group that isn't there (so by time).
+        for group in [None, Some(2), Some(0), Some(9)] {
+            gm.fakes.push(FakeNote {
+                t: 4000.0,
+                group,
+                ..FakeNote::default()
+            });
+        }
+        gm.sanitize();
+        let rt = Runtime::new(Arc::new(gm), [4000.0].into_iter(), 0.0);
+        let groups: Vec<Option<usize>> = (0..4).map(|i| rt.fake_group_of(i)).collect();
+        assert_eq!(groups, vec![Some(0), Some(1), None, Some(0)]);
     }
 
     fn xs() -> Option<Target> {
