@@ -1423,6 +1423,15 @@ fn submit_score(
 }
 
 /// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
+/// Seconds the FAILED sign shows before a Sudden Death / Perfect fail starts the map over.
+const FAIL_RESTART_LINGER: f64 = 0.6;
+
+/// Whether a play that just ended starts over instead of showing results: one of the player's own
+/// (not a replay) failed by Sudden Death / Perfect, with `Config::fail_restart` on.
+fn fail_restarts(cfg: &Config, game: &Game) -> bool {
+    cfg.fail_restart && game.failed_early() && game.replay.is_none()
+}
+
 fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
     let part = from
         .map(|t| format!("  from {}", fmt_time(t)))
@@ -4315,6 +4324,7 @@ impl State {
             Item::DrumMenus => on(c.drum_menus),
             Item::MapSkins => on(c.map_skins),
             Item::HideGreat => on(c.hide_great),
+            Item::FailRestart => on(c.fail_restart),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
             Item::CrashReports => on(c.send_crash_reports),
@@ -4633,6 +4643,7 @@ impl State {
             }
             Item::MapSkins => self.cfg.map_skins = !self.cfg.map_skins,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
+            Item::FailRestart => self.cfg.fail_restart = !self.cfg.fail_restart,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
             Item::CrashReports => {
@@ -14123,6 +14134,7 @@ impl State {
         let mut editor_reload: Option<(usize, f64)> = None;
         let mut editor_test: Option<(usize, Option<f64>)> = None;
         let mut test_over = false;
+        let mut fail_restart = false;
         let mut editor_folder: Option<PathBuf> = None;
         let mut editor_renamed: Option<(PathBuf, PathBuf)> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
@@ -14710,6 +14722,9 @@ impl State {
                                 if mods.has(mods::Mod::Autoplay) {
                                     game.banner = Some("AUTOPLAY".into());
                                 }
+                                if self.cfg.fail_restart {
+                                    game.fail_linger = FAIL_RESTART_LINGER;
+                                }
                             }
                         }
                         next = Some(Scene::Play {
@@ -14806,6 +14821,9 @@ impl State {
                 if done && self.editor_back.is_some() {
                     // A test play has no results: back to the editor.
                     test_over = true;
+                } else if done && fail_restarts(&self.cfg, game) {
+                    // Failed plays aren't kept anyway: straight into the next try.
+                    fail_restart = true;
                 } else if done {
                     let title = results_title(&game.map.meta, *from);
                     let failed = game.failed();
@@ -15947,6 +15965,10 @@ impl State {
         }
         if test_over {
             self.back_to_editor();
+        }
+        if fail_restart {
+            self.stop_audio();
+            self.restart_map();
         }
         if let Some((entry, speed)) = editor_reload {
             let (rx, rate) = self.spawn_track_loader(entry, speed);

@@ -54,6 +54,8 @@ pub enum Item {
     CalmMaps,
     DrumMenus,
     HideGreat,
+    /// Sudden Death / Perfect fails start the map over (`Config::fail_restart`).
+    FailRestart,
     ChatFilter,
     MessageSound,
     NotifyPlaying,
@@ -124,7 +126,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 134] = [
+pub const ITEMS: [(&str, Item); 135] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -136,6 +138,7 @@ pub const ITEMS: [(&str, Item); 134] = [
     ("GAMEPLAY", Item::Rate),
     ("GAMEPLAY", Item::RateKeepPitch),
     ("GAMEPLAY", Item::ResumeDelay),
+    ("GAMEPLAY", Item::FailRestart),
     ("GAMEPLAY", Item::HideGreat),
     ("GAMEPLAY", Item::TrueNotes),
     ("GAMEPLAY", Item::CalmMaps),
@@ -430,6 +433,7 @@ impl Item {
             Item::DrumMenus => tr!("Drum keys in menus"),
             Item::CalmMaps => tr!("Reduce map effects"),
             Item::TrueNotes => tr!("Show true notes"),
+            Item::FailRestart => tr!("Restart on SD/PF fail"),
             Item::HideGreat => tr!("Hide GREAT splash"),
             Item::MapSkins => tr!("Beatmap skins"),
             Item::HitFlash => tr!("Hit flash"),
@@ -556,6 +560,7 @@ impl Item {
             | Item::MapSkins
             | Item::AutoplayLeftHanded
             | Item::HideGreat
+            | Item::FailRestart
             | Item::TrueNotes
             | Item::CalmMaps
             | Item::HitFlash
@@ -715,6 +720,9 @@ impl Item {
             ),
             Item::TrueNotes => tr!(
                 "Some .tko maps draw notes as another colour or size until just before the hit. On: every note shows what it is."
+            ),
+            Item::FailRestart => tr!(
+                "When Sudden Death or Perfect fails a play, the map starts over straight away instead of going to the results."
             ),
             Item::HideGreat => tr!(
                 "No flash and no \"GREAT\" on 300s, like skins with an empty hit300: only OKs and misses show."
