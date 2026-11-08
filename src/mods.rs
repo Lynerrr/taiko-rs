@@ -1186,8 +1186,80 @@ impl Speed {
     }
 }
 
+/// How many mod presets the player can keep (1-9 apply them in the mod select).
+pub const MAX_PRESETS: usize = 9;
+
+/// A saved set of mods and the song speed to go with it (the mod select's PRESETS row).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preset {
+    pub name: String,
+    pub mods: Mods,
+    pub rate: f64,
+}
+
+impl Preset {
+    /// What a preset is called until the player names it: its mods and speed, "HDHR 1.20x".
+    pub fn auto_name(mods: Mods, rate: f64) -> String {
+        let speed = ((rate - 1.0).abs() > 1e-6).then(|| format!("{rate:.2}x"));
+        let label = Some(mods.label()).filter(|l| !l.is_empty());
+        match [label, speed].into_iter().flatten().collect::<Vec<_>>() {
+            parts if parts.is_empty() => "No mod".to_string(),
+            parts => parts.join(" "),
+        }
+    }
+
+    /// The config's "1.2|HD,HR|name" (the name last: it may hold anything).
+    pub fn parse(s: &str) -> Option<Preset> {
+        let mut f = s.splitn(3, '|');
+        let rate: f64 = f.next()?.trim().parse().ok()?;
+        let mods = Mods::parse(f.next()?);
+        let name = f.next()?.trim().to_string();
+        (rate.is_finite() && !name.is_empty()).then_some(Preset { name, mods, rate })
+    }
+
+    pub fn format(&self) -> String {
+        format!("{}|{}|{}", self.rate, self.mods.to_config(), self.name)
+    }
+
+    /// What the mod select shows for it: its mods, and the speed when it isn't 1x.
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = self
+            .mods
+            .iter()
+            .map(|m| format!("{} {}", m.acronym(), m.name()))
+            .collect();
+        if parts.is_empty() {
+            parts.push("no mods".into());
+        }
+        if (self.rate - 1.0).abs() > 1e-6 {
+            parts.push(format!("speed {:.2}x", self.rate));
+        }
+        parts.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn presets_keep_their_mods_speed_and_name_through_the_config() {
+        use super::{Mods, Preset};
+        let p = Preset {
+            name: "85 acc | fail".into(),
+            mods: Mods::parse("HD,HR,PF"),
+            rate: 1.24,
+        };
+        assert_eq!(Preset::parse(&p.format()), Some(p.clone()));
+        assert_eq!(
+            Preset::auto_name(p.mods, p.rate),
+            format!("{} 1.24x", p.mods.label())
+        );
+        assert_eq!(Preset::auto_name(Mods::NONE, 1.0), "No mod");
+        assert_eq!(Preset::auto_name(Mods::NONE, 0.9), "0.90x");
+        assert!(p.summary().contains("speed 1.24x"));
+        assert_eq!(Preset::parse("x|HD|a"), None);
+        assert_eq!(Preset::parse("1|HD|  "), None);
+    }
+
     use super::*;
 
     /// Half of notes at these divisions of a 500 ms beat: the numbers of the ones it keeps.

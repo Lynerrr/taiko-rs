@@ -534,6 +534,8 @@ struct State {
     universe_setup: Option<multiverse::Setup>,
     shapeshift_setup: Option<shapeshift::Setup>,
     random_setup: Option<String>,
+    /// The name being typed for a new mod preset (S or "+ Save" in the mod select).
+    preset_naming: Option<String>,
     tact_setup: Option<tact::Setup>,
     od_setup: Option<od_override::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
@@ -1422,7 +1424,6 @@ fn submit_score(
     rx
 }
 
-/// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
 /// Seconds the FAILED sign shows before a Sudden Death / Perfect fail starts the map over.
 const FAIL_RESTART_LINGER: f64 = 0.6;
 
@@ -1432,6 +1433,84 @@ fn fail_restarts(cfg: &Config, game: &Game) -> bool {
     cfg.fail_restart && game.failed_early() && game.replay.is_none()
 }
 
+/// The mod preset (0-8) a digit key 1-9 (top row or keypad) picks in the mod select.
+fn preset_key(code: KeyCode) -> Option<usize> {
+    use KeyCode::*;
+    [
+        (Digit1, Numpad1),
+        (Digit2, Numpad2),
+        (Digit3, Numpad3),
+        (Digit4, Numpad4),
+        (Digit5, Numpad5),
+        (Digit6, Numpad6),
+        (Digit7, Numpad7),
+        (Digit8, Numpad8),
+        (Digit9, Numpad9),
+    ]
+    .iter()
+    .position(|&(a, b)| code == a || code == b)
+}
+
+/// Over the mod select: the name a new mod preset gets, being typed.
+fn draw_preset_naming(c: &mut Canvas, name: &str) {
+    c.hits.clear();
+    let w = c.width;
+    c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
+    let bw = (w - 32.0).min(460.0);
+    let (bx, inner) = ((w - bw) / 2.0, bw - 32.0);
+    c.round_rect(
+        [bx, 140.0],
+        [bw, 164.0],
+        10.0,
+        rgba(0x15151d, 0.98),
+        rgba(accent(), 0.8),
+        1.5,
+    );
+    c.text_centered(
+        w / 2.0,
+        156.0,
+        14.0,
+        rgba(0xffffff, 1.0),
+        &Canvas::fit(14.0, inner, "Name this preset"),
+    );
+    let typed = format!("{name}_");
+    let size = Canvas::fit_size(12.0, 7.0, inner, &typed);
+    let typed = Canvas::fit(size, inner, &typed);
+    c.text_centered(w / 2.0, 196.0, size, rgba(0xffffff, 1.0), &typed);
+    c.text_centered(
+        w / 2.0,
+        230.0,
+        7.0,
+        rgba(0x9a9ab0, 1.0),
+        &Canvas::fit(
+            7.0,
+            inner,
+            "It keeps the mods on now and the speed: 1-9 or a click puts them back.",
+        ),
+    );
+    c.button(
+        w / 2.0 - 100.0,
+        264.0,
+        90.0,
+        24.0,
+        "Save",
+        9.0,
+        render::Hit::Key(KeyCode::Enter),
+        true,
+    );
+    c.button(
+        w / 2.0 + 10.0,
+        264.0,
+        90.0,
+        24.0,
+        "Cancel",
+        9.0,
+        render::Hit::Key(KeyCode::Escape),
+        false,
+    );
+}
+
+/// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
 fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
     let part = from
         .map(|t| format!("  from {}", fmt_time(t)))
@@ -8201,9 +8280,15 @@ impl State {
             // Right-clicking a mod makes it a favourite (or not any more).
             if pressed && self.customization_tab().is_none() {
                 let (vx, vy) = self.mouse_virtual();
-                if let Some(render::Hit::ModToggle(i)) = self.hit_at(vx, vy) {
-                    self.mod_select = Some(i);
-                    self.toggle_favourite(mods::ALL[i]);
+                match self.hit_at(vx, vy) {
+                    Some(render::Hit::ModToggle(i)) => {
+                        self.mod_select = Some(i);
+                        self.toggle_favourite(mods::ALL[i]);
+                    }
+                    Some(render::Hit::ModPreset(k)) if self.preset_naming.is_none() => {
+                        self.remove_mod_preset(k)
+                    }
+                    _ => {}
                 }
             }
             return;
@@ -10441,6 +10526,8 @@ impl State {
                 self.mods_changed();
             }
             KeyCode::KeyF => self.toggle_favourite(mods::ALL[cur]),
+            KeyCode::KeyS => self.start_preset_naming(),
+            _ if preset_key(code).is_some() => self.apply_mod_preset(preset_key(code).unwrap_or(0)),
             KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
                 Some(&m) => self.open_customization(m),
                 None => self.toast(
@@ -10450,6 +10537,91 @@ impl State {
             },
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
+        }
+    }
+
+    /// Starts naming a new preset of the mods on now and the speed (S / "+ Save").
+    fn start_preset_naming(&mut self) {
+        if self.cfg.mod_presets.len() >= mods::MAX_PRESETS {
+            self.toast(format!(
+                "{} presets at most: right-click one to remove it",
+                mods::MAX_PRESETS
+            ));
+            return;
+        }
+        self.preset_naming = Some(mods::Preset::auto_name(self.cfg.mods, self.cfg.rate));
+    }
+
+    /// Keys while a new preset is being named: Enter keeps it, Esc doesn't.
+    fn preset_naming_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let Some(name) = &mut self.preset_naming else {
+            return;
+        };
+        match code {
+            KeyCode::Escape | KeyCode::F1 => self.preset_naming = None,
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                self.preset_naming = None;
+                if self.cfg.mod_presets.len() < mods::MAX_PRESETS {
+                    self.cfg.mod_presets.push(mods::Preset {
+                        name: name.clone(),
+                        mods: self.cfg.mods,
+                        rate: self.cfg.rate,
+                    });
+                    self.cfg.save();
+                    self.toast(format!(
+                        "preset {} saved: {name}",
+                        self.cfg.mod_presets.len()
+                    ));
+                }
+            }
+            KeyCode::Backspace => {
+                name.pop();
+            }
+            KeyCode::Delete => name.clear(),
+            KeyCode::KeyA if self.modifiers_ctrl => name.clear(),
+            _ => {
+                if let Some(text) = text {
+                    let room = 40usize.saturating_sub(name.chars().count());
+                    name.extend(text.chars().filter(|c| !c.is_control()).take(room));
+                }
+            }
+        }
+    }
+
+    /// Puts on preset `k`'s mods and speed. In a lobby a guest keeps the host's speed, and in
+    /// Defense the host picks everything.
+    fn apply_mod_preset(&mut self, k: usize) {
+        let Some(p) = self.cfg.mod_presets.get(k).cloned() else {
+            return;
+        };
+        let guest =
+            matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host());
+        if guest && self.lobby_defense().is_some() {
+            self.toast(
+                tr!("in Defense the host picks the mods").into(),
+            );
+            return;
+        }
+        if guest {
+            self.cfg.mods = self.cfg.mods.shared().plus(p.mods.free());
+        } else {
+            self.cfg.mods = p.mods;
+            self.cfg.rate = p.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
+        }
+        self.mods_changed();
+        self.toast(format!("preset {}: {}", k + 1, p.name));
+    }
+
+    /// Takes preset `k` away (right-click on it).
+    fn remove_mod_preset(&mut self, k: usize) {
+        if k < self.cfg.mod_presets.len() {
+            let p = self.cfg.mod_presets.remove(k);
+            self.cfg.save();
+            self.toast(format!("preset removed: {}", p.name));
         }
     }
 
@@ -10619,6 +10791,7 @@ impl State {
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
+            || self.preset_naming.is_some()
             || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
@@ -10646,6 +10819,7 @@ impl State {
                 .dropdown
                 .as_ref()
                 .is_some_and(|d| d.editing.is_some())
+            || self.preset_naming.is_some()
             || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
@@ -13375,6 +13549,10 @@ impl State {
             self.customization_key(code, text, repeat);
             return;
         }
+        if self.mod_select.is_some() && self.preset_naming.is_some() {
+            self.preset_naming_key(code, text);
+            return;
+        }
         if self.mod_select.is_some() {
             if !repeat
                 || matches!(
@@ -15830,9 +16008,14 @@ impl State {
                     canvas,
                     self.shown_mods(),
                     self.cfg.favourite_mods,
+                    &self.cfg.mod_presets,
+                    self.cfg.rate,
                     cur,
                     seed,
                 );
+            }
+            if let Some(name) = &self.preset_naming {
+                draw_preset_naming(canvas, name);
             }
             if let Some(input) = &self.random_setup {
                 canvas.hits.clear();
@@ -17376,6 +17559,8 @@ impl State {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);
             }
+            Hit::ModPreset(k) => self.apply_mod_preset(k),
+            Hit::ModPresetSave => self.start_preset_naming(),
             Hit::UniverseCell(row, col) => {
                 self.universe_setup = Some(multiverse::Setup::new(row, col));
                 let dir = if self.modifiers_shift { -1 } else { 1 };
@@ -18883,6 +19068,7 @@ impl State {
             universe_setup: None,
             shapeshift_setup: None,
             random_setup: None,
+            preset_naming: None,
             tact_setup: None,
             od_setup: None,
             leaderboard: Vec::new(),

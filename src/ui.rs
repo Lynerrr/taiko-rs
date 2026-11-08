@@ -2539,12 +2539,15 @@ fn shared_cap(widths: &[f32], total: f32) -> f32 {
     f32::INFINITY
 }
 
-/// The mod select (F1): a column per group, each mod a chip to switch on or off, and a row of
-/// the player's favourites. `cursor` is the keyboard selection (index into `mods::ALL`).
+/// The mod select (F1): a column per group, each mod a chip to switch on or off, a row of the
+/// player's presets (with the speed `rate` they're compared at) and one of their favourites.
+/// `cursor` is the keyboard selection (index into `mods::ALL`).
 pub fn draw_mod_select(
     c: &mut Canvas,
     mods: crate::mods::Mods,
     favourites: crate::mods::Mods,
+    presets: &[crate::mods::Preset],
+    rate: f64,
     cursor: usize,
     seed: u64,
 ) {
@@ -2566,7 +2569,7 @@ pub fn draw_mod_select(
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
     let score = format!("score x{mult:.2}{rank}");
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &score);
-    let hint = "arrows + Space toggle   F / right-click favourite   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift, Tact, OD Override)   F1 / Esc closes";
+    let hint = "arrows + Space toggle   F / right-click favourite   S saves a preset, 1-9 apply   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift, Tact, OD Override)   F1 / Esc closes";
     let room = pw - 70.0 - 16.0 - Canvas::text_width(8.0, &score) - 16.0;
     c.text(
         px + 70.0,
@@ -2576,10 +2579,11 @@ pub fn draw_mod_select(
         &Canvas::fit(6.0, room, hint),
     );
     let col_w = (pw - 24.0) / GROUPS.len() as f32;
-    // The favourites' row goes under the longest column.
+    // The presets' and favourites' rows go under the longest column.
     let fav_y = py + ph - 76.0;
+    let preset_y = fav_y - 22.0;
     let rows = GROUPS.iter().map(|g| g.2.len()).max().unwrap_or(1) as f32;
-    let row_h = ((fav_y - 4.0 - (py + 52.0)) / rows).min(27.0);
+    let row_h = ((preset_y - 4.0 - (py + 52.0)) / rows).min(27.0);
     let mut hovered = None;
     for (g, (title, accent, list)) in GROUPS.iter().enumerate() {
         let x = px + 12.0 + g as f32 * col_w;
@@ -2624,7 +2628,7 @@ pub fn draw_mod_select(
                 if i == cursor { 1.5 } else { 1.0 },
             );
             // The acronym's badge keeps room for its letters when there are many rows.
-            let inset = ((h - 13.0) / 2.0).clamp(3.0, 4.0);
+            let inset = ((h - 13.0) / 2.0).clamp(1.0, 4.0);
             c.round_rect(
                 [x + 4.0, y + inset],
                 [22.0, h - 2.0 * inset],
@@ -2665,9 +2669,76 @@ pub fn draw_mod_select(
             c.hit(x, y, col_w - 6.0, h, Hit::ModToggle(i));
         }
     }
+    // Presets: a click (or 1-9) puts on their mods and speed; lit while that's what is on.
+    const TEAL: u32 = 0x5ad6e0;
+    let label_w = c.text(px + 16.0, preset_y + 4.5, 7.0, rgba(TEAL, 1.0), "PRESETS");
+    let mut x = px + 28.0 + label_w.max(Canvas::text_width(7.0, "* FAVOURITES"));
+    let row_end = px + pw - 16.0;
+    let mut hovered_preset = None;
+    for (k, p) in presets.iter().enumerate() {
+        let text = format!("{} {}", k + 1, p.name);
+        let cw = (Canvas::text_width(6.0, &text) + 14.0).min(140.0);
+        if x + cw > row_end - 60.0 {
+            c.text(
+                x,
+                preset_y + 5.0,
+                7.0,
+                rgba(0x8a8aa0, 1.0),
+                &format!("+{}", presets.len() - k),
+            );
+            x += Canvas::text_width(7.0, &format!("+{}", presets.len() - k)) + 8.0;
+            break;
+        }
+        if c.hovered(x, preset_y, cw, 16.0) {
+            hovered_preset = Some(p);
+        }
+        let on = p.mods == mods && (p.rate - rate).abs() < 1e-6;
+        c.round_rect(
+            [x, preset_y],
+            [cw, 16.0],
+            4.0,
+            rgba(if on { TEAL } else { 0x1d1d27 }, if on { 0.9 } else { 1.0 }),
+            rgba(TEAL, if on { 1.0 } else { 0.6 }),
+            1.0,
+        );
+        c.text(
+            x + 7.0,
+            preset_y + 5.0,
+            6.0,
+            rgba(if on { 0x15151d } else { 0xc8c8d8 }, 1.0),
+            &Canvas::fit(6.0, cw - 12.0, &text),
+        );
+        c.hit(x, preset_y, cw, 16.0, Hit::ModPreset(k));
+        x += cw + 5.0;
+    }
+    if presets.len() < crate::mods::MAX_PRESETS {
+        let save = "+ Save";
+        let cw = Canvas::text_width(6.0, save) + 14.0;
+        if presets.is_empty() {
+            let hint = "keep the mods on now (and the speed) to put back with one click or 1-9";
+            c.text(
+                x + cw + 8.0,
+                preset_y + 5.0,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                &Canvas::fit(6.0, row_end - x - cw - 8.0, hint),
+            );
+        }
+        let hover = c.hovered(x, preset_y, cw, 16.0);
+        c.round_rect(
+            [x, preset_y],
+            [cw, 16.0],
+            4.0,
+            rgba(if hover { 0x262634 } else { 0x15151d }, 1.0),
+            rgba(TEAL, 0.6),
+            1.0,
+        );
+        c.text(x + 7.0, preset_y + 5.0, 6.0, rgba(TEAL, 1.0), save);
+        c.hit(x, preset_y, cw, 16.0, Hit::ModPresetSave);
+    }
     // Favourites: one click away, lit while on.
     let label_w = c.text(px + 16.0, fav_y + 4.5, 7.0, rgba(GOLD, 1.0), "* FAVOURITES");
-    let mut fx = px + 28.0 + label_w;
+    let mut fx = px + 28.0 + label_w.max(Canvas::text_width(7.0, "PRESETS"));
     if favourites.is_empty() {
         c.text(
             fx,
@@ -2737,30 +2808,43 @@ pub fn draw_mod_select(
         c.hit(fx, fav_y, cw, 16.0, Hit::ModToggle(i));
         fx += cw + 5.0;
     }
-    // What the pointed-at (else the selected) mod does.
+    // What the pointed-at preset holds, else what the pointed-at (else the selected) mod does.
     let shown = hovered.unwrap_or(ALL[cursor.min(ALL.len() - 1)]);
     let dy = py + ph - 46.0;
-    c.text(
-        px + 16.0,
-        dy,
-        8.0,
-        rgba(0xffffff, 1.0),
-        &format!("{} ({})", shown.name(), shown.acronym()),
-    );
-    let description = if mods.incompatible(shown) {
-        let removed = mods
-            .iter()
-            .filter(|&m| crate::mods::Mods::parse_set(shown.acronym()).incompatible(m))
-            .map(|m| m.acronym())
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!("Selecting this mod switches off: {removed}")
-    } else if shown == crate::mods::Mod::Random {
-        format!("Seed: {seed}   C: customize seed")
-    } else {
-        shown.description().to_string()
-    };
-    c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), &description);
+    if let Some(p) = hovered_preset {
+        c.text(px + 16.0, dy, 8.0, rgba(0xffffff, 1.0), &p.name);
+        let what = format!("{}   (click applies, right-click removes)", p.summary());
+        c.text(
+            px + 16.0,
+            dy + 13.0,
+            7.0,
+            rgba(0x9a9ab0, 1.0),
+            &Canvas::fit(7.0, pw - 32.0, &what),
+        );
+    }
+    if hovered_preset.is_none() {
+        c.text(
+            px + 16.0,
+            dy,
+            8.0,
+            rgba(0xffffff, 1.0),
+            &format!("{} ({})", shown.name(), shown.acronym()),
+        );
+        let description = if mods.incompatible(shown) {
+            let removed = mods
+                .iter()
+                .filter(|&m| crate::mods::Mods::parse_set(shown.acronym()).incompatible(m))
+                .map(|m| m.acronym())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("Selecting this mod switches off: {removed}")
+        } else if shown == crate::mods::Mod::Random {
+            format!("Seed: {seed}   C: customize seed")
+        } else {
+            shown.description().to_string()
+        };
+        c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), &description);
+    }
     let bw = 60.0;
     let active = if mods.is_empty() {
         "none".to_string()

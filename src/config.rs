@@ -229,6 +229,8 @@ pub struct Config {
     pub mp_scoreboard: bool,
     /// Mods picked in the mod select (F1 on song select).
     pub mods: Mods,
+    /// The player's mod presets (`mods::Preset`), at most `mods::MAX_PRESETS`, in their order.
+    pub mod_presets: Vec<crate::mods::Preset>,
     /// Multiplayer: display name, port to host on, last address joined.
     pub mp_name: String,
     pub mp_port: u16,
@@ -467,6 +469,7 @@ impl Default for Config {
             show_map_info: true,
             mp_scoreboard: true,
             mods: Mods::NONE,
+            mod_presets: Vec::new(),
             mp_name: std::env::var("USER")
                 .or_else(|_| std::env::var("USERNAME"))
                 .ok()
@@ -1274,6 +1277,13 @@ impl Config {
                 "tact" => cfg.tact = crate::tact::parse(v),
                 "od_override" => cfg.od_override = crate::od_override::parse(v),
                 "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
+                "mod_preset" => {
+                    if cfg.mod_presets.len() < crate::mods::MAX_PRESETS
+                        && let Some(p) = crate::mods::Preset::parse(v)
+                    {
+                        cfg.mod_presets.push(p);
+                    }
+                }
                 k if k.starts_with("video_") => {
                     cfg.video.parse(k, v);
                 }
@@ -1742,6 +1752,14 @@ impl Config {
             "# favourite mods (right-click or F in the mod select), e.g. HD,HR\nfavourite_mods = {}\n",
             self.favourite_mods.to_config()
         ));
+        if !self.mod_presets.is_empty() {
+            out.push_str(
+                "# mod presets (S saves one in the mod select, 1-9 apply them): speed|mods|name\n",
+            );
+        }
+        for p in &self.mod_presets {
+            out.push_str(&format!("mod_preset = {}\n", p.format()));
+        }
         out.push_str(&format!(
             "# note colours without Multiverse: a palette (classic, neon, sunset...) or custom #don/#kat\nnote_colours = {}\n",
             self.note_colours.format()
@@ -1842,6 +1860,7 @@ fn keep_unknown(out: &mut String, old: &str) {
                 k,
                 "songs"
                     | "multiverse_preset"
+                    | "mod_preset"
                     | "skin_part"
                     | "editor_snap_preset"
                     | "editor_snap_active"
@@ -1952,6 +1971,30 @@ mod tests {
         let mut out = Config::default().to_text();
         keep_unknown(&mut out, &text);
         assert!(!out.contains("editor_snap"));
+    }
+
+    #[test]
+    fn mod_presets_round_trip_and_a_removed_one_stays_removed() {
+        use crate::mods::{MAX_PRESETS, Preset};
+        let preset = |name: &str| Preset {
+            name: name.into(),
+            mods: Mods::parse("HD,DT"),
+            rate: 1.1,
+        };
+        let cfg = Config {
+            mod_presets: vec![preset("acc"), preset("speed")],
+            ..Config::default()
+        };
+        let text = cfg.to_text();
+        assert_eq!(Config::parse_text(&text).mod_presets, cfg.mod_presets);
+        let mut out = Config::default().to_text();
+        keep_unknown(&mut out, &text);
+        assert!(!out.contains("mod_preset"));
+        // No more than fit the row.
+        let many = (0..MAX_PRESETS + 3)
+            .map(|i| format!("mod_preset = {}\n", preset(&i.to_string()).format()))
+            .collect::<String>();
+        assert_eq!(Config::parse_text(&many).mod_presets.len(), MAX_PRESETS);
     }
 
     #[test]
