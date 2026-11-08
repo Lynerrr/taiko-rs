@@ -1,0 +1,15 @@
+od 0: range 50.000 window 50.000 judged 49.500
+od 5: range 35.000 window 35.000 judged 34.500
+od 10: range 20.000 window 20.000 judged 19.500
+play_start(500, 0) = -1500
+play_start(5000, 0) = -0
+play_start(1000, 3000) = -3000
+calibration map:
+meta: taiko.rs - Offset calibration [120 BPM click track] by taiko.rs | mode 1 od 0 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 4 notes, 2 barlines, 1 control points, 0 fakes
+  2000.00 Don v 0.3920
+  2500.00 Don v 0.3920
+  3000.00 Don v 0.3920
+  3500.00 Don v 0.3920
+  barlines: 0.0 2000.0
+  cp 0.00 origin 0.00 beat 500.000 sv 1.0000 kiai false vol 1.00

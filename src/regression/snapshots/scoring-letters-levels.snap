@@ -1,0 +1,22 @@
+100/0/0 acc 100.00 -> SS
+99/1/0 acc 99.50 -> S
+95/5/0 acc 97.50 -> S
+90/10/0 acc 95.00 -> S
+90/9/1 acc 94.50 -> A
+80/15/5 acc 87.50 -> B
+70/20/10 acc 80.00 -> B
+60/20/20 acc 70.00 -> C
+40/30/30 acc 55.00 -> D
+0/0/100 acc 0.00 -> D
+level(0) = 1.0000
+level(1) = 1.0000
+level(100000) = 2.7000
+level(1000000) = 5.5455
+level(30000000) = 16.7576
+level(1000000000) = 53.3812
+level(50000000000) = 100.2307
+weighted 1805.0106
+weighted empty 0.0000
+past the cap ["HD", "HR"]: false
+past the cap ["WV", "PY", "SU", "MR"]: true
+past the cap ["EZ", "HD", "HR", "FL", "NF", "SD"]: false

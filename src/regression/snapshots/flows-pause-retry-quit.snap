@@ -1,0 +1,5 @@
+after Escape: Play paused Some(0)
+pause menu says: ["Continue", "Retry", "Playfield size", "Settings", "Quit to song select"]
+after the second Escape: paused None resuming false
+retry: Loading
+quit: Select

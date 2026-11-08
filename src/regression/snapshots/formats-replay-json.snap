@@ -1,0 +1,42 @@
+{
+  "version": 5,
+  "map_hash": 1311768467463790320,
+  "map_path": "/songs/set/map.osu",
+  "map_label": "regression",
+  "player": "tester",
+  "date": 1700000000,
+  "rate": 1.5,
+  "keep_pitch": true,
+  "anti_mash": true,
+  "mods": [
+    "HD",
+    "DT"
+  ],
+  "scroll_speed": 1.0,
+  "score": 987654,
+  "accuracy": 0.987,
+  "max_combo": 4,
+  "great": 3,
+  "ok": 1,
+  "miss": 0,
+  "ur": 85.25,
+  "inputs": [
+    [
+      1023.0,
+      1
+    ],
+    [
+      1173.5,
+      0
+    ],
+    [
+      1324.25,
+      2
+    ],
+    [
+      1473.0,
+      3
+    ]
+  ],
+  "seed": 7
+}

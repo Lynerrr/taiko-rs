@@ -1,0 +1,105 @@
+text  671,18   01234560
+text   17,25   INTERFACE
+text  178,26   >
+text   31,43   Score
+text  671,49   Score  -  Screen / Screen
+text  689,50   312pp
+text  763,50   97.36%
+text   31,57   Accuracy
+text   31,71   pp counter
+text  820,72   HD
+text   31,85   Combo (on the drum)
+text   31,99   Progress bar
+text  128,110  GREAT
+text   31,113  Health bar
+text   31,127  Mods
+text   31,141  Hit error bar
+text   31,155  Offset suggestion
+text   31,169  GREAT / OK / MISS
+text   31,183  UR counter
+text   36,188  321
+text   31,197  Hit counter (300 / 10...
+text   31,211  Match scoreboard
+text   31,225  Spectators
+text   58,243  X: Screen right
+text   64,260  Y: Screen top
+text   44,277  100%
+text  132,277  Reset
+text   85,278  +
+text   21,280  -
+text   18,282  Spectators
+text  253,300  drag to move, edges to resize
+text   16,307  PRESETS
+text   19,321  Default
+text   19,335  Full stats
+text   19,349  Classic
+text   19,363  Follow the lane
+text   19,377  Clean
+text   32,394  Save
+text   94,394  New
+text  144,394  Delete
+text   18,400  Match scoreboard
+text   47,411  Copy
+text  133,411  Paste
+text   47,428  Undo
+text  121,428  Reset all
+text   91,446  Done
+text  255,450  offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)
+text  224,465  Drag: near the lane it attaches to it (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel
+hit     8,18    190x442  HudPanel
+hit   169,23     21x12   HudButton(SwapSide)
+hit    16,40    174x13   HudRow(0)
+hit    16,40     13x13   HudToggle(0)
+hit    16,54    174x13   HudRow(1)
+hit    16,54     13x13   HudToggle(1)
+hit    16,68    174x13   HudRow(2)
+hit    16,68     13x13   HudToggle(2)
+hit    16,82    174x13   HudRow(3)
+hit    16,82     13x13   HudToggle(3)
+hit    16,96    174x13   HudRow(4)
+hit    16,96     13x13   HudToggle(4)
+hit    16,110   174x13   HudRow(5)
+hit    16,110    13x13   HudToggle(5)
+hit    16,124   174x13   HudRow(6)
+hit    16,124    13x13   HudToggle(6)
+hit    16,138   174x13   HudRow(7)
+hit    16,138    13x13   HudToggle(7)
+hit    16,152   174x13   HudRow(8)
+hit    16,152    13x13   HudToggle(8)
+hit    16,166   174x13   HudRow(9)
+hit    16,166    13x13   HudToggle(9)
+hit    16,180   174x13   HudRow(10)
+hit    16,180    13x13   HudToggle(10)
+hit    16,194   174x13   HudRow(11)
+hit    16,194    13x13   HudToggle(11)
+hit    16,208   174x13   HudRow(12)
+hit    16,208    13x13   HudToggle(12)
+hit    16,222   174x13   HudRow(13)
+hit    16,222    13x13   HudToggle(13)
+hit    16,240   174x13   HudButton(AttachX)
+hit    16,257   174x13   HudButton(AttachY)
+hit    16,274    16x13   HudButton(Smaller)
+hit    80,274    16x13   HudButton(Bigger)
+hit    16,291    11x11   HudColour(None)
+hit    31,291    11x11   HudColour(Some(16777215))
+hit    45,291    11x11   HudColour(Some(13158616))
+hit    60,291    11x11   HudColour(Some(7303046))
+hit    74,291    11x11   HudColour(Some(15418668))
+hit    89,291    11x11   HudColour(Some(16751164))
+hit   103,291    11x11   HudColour(Some(16765773))
+hit   118,291    11x11   HudColour(Some(8839258))
+hit   132,291    11x11   HudColour(Some(5227511))
+hit   147,291    11x11   HudColour(Some(5930495))
+hit   161,291    11x11   HudColour(Some(13073919))
+hit   176,291    11x11   HudColour(Some(16747224))
+hit    16,318   174x13   HudPreset(0)
+hit    16,332   174x13   HudPreset(1)
+hit    16,346   174x13   HudPreset(2)
+hit    16,360   174x13   HudPreset(3)
+hit    16,374   174x13   HudPreset(4)
+hit    16,391    55x13   HudButton(SavePreset)
+hit    75,391    55x13   HudButton(NewPreset)
+hit    16,408    85x13   HudButton(Copy)
+hit   105,408    85x13   HudButton(Paste)
+hit   105,425    85x13   HudButton(ResetAll)
+hit    16,442   174x15   HudButton(Done)

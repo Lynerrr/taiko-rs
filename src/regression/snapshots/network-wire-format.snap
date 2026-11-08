@@ -1,0 +1,106 @@
+room protocol 7 | online protocol 1 | pp version 3
+== room: client -> server
+{"Hello":{"name":"me","protocol":7,"host_token":7,"password":"pw"}}
+{"Hello":{"name":"me","protocol":7,"host_token":null}}
+{"Ping":{"t":12.5}}
+{"SelectMap":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}}}
+{"HasMap":true}
+{"Ready":false}
+"StartMatch"
+{"Loaded":true}
+{"Live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6}}
+{"Finished":{"score":900000,"accuracy":0.99,"max_combo":300,"great":295,"ok":5,"miss":0,"ur":95.5,"quit":false}}
+"RequestMap"
+{"MapFile":{"to":3,"part":{"name":"123 Artist - Title","total":10,"offset":4,"data":"AAEC","error":null}}}
+{"Inputs":{"inputs":[[1023.0,1],[1100.5,3]],"anti_mash":true}}
+{"Spectate":true}
+{"Spectator":false}
+{"GiveHost":4}
+"Skipped"
+{"Chat":"hi"}
+{"Mods":["HR"]}
+{"Library":{"maps":[[1,2],[3,4]],"done":true}}
+{"StartGuessr":{"rounds":5}}
+{"Guess":{"hash":9,"song":10}}
+{"Defense":{"Buy":{"item":"Shield","at":5000.0,"until":0.0}}}
+{"Defense":{"TagIn":{"at":6000.0}}}
+{"SetPassword":"secret"}
+{"SetSlots":8}
+{"Kick":5}
+== room: server -> client
+{"Welcome":{"id":2}}
+{"Rejected":"full"}
+{"Pong":{"t":10.0,"server":20.0}}
+{"Room":{"players":[{"id":1,"name":"host","host":true,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]},{"id":2,"name":"me","host":false,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]}],"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"in_match":false,"mapguessr":false,"common":3,"team":{"lives":0,"max":0,"gold":0,"shield":0,"towers":0,"heals":0,"shields":0,"tower_buys":0},"locked":true,"slots":8}}
+{"Prepare":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}}}
+{"Start":{"at":5000.0}}
+{"Results":[{"id":1,"name":"host","host":true,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]}]}
+{"MapRequested":{"from":2}}
+{"MapFile":{"name":"123 Artist - Title","total":10,"offset":4,"data":"AAEC","error":null}}
+{"Spectate":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"at":100.0,"players":[[1,"host"]]}}
+{"Inputs":{"from":1,"inputs":[[1000.0,0]],"anti_mash":true}}
+{"Skipped":{"from":1}}
+{"SkipVotes":{"votes":1,"of":2}}
+"SkipNow"
+{"Chat":{"from":"host","text":"gl"}}
+{"GuessRound":{"round":1,"rounds":5,"hash":9,"from":0.25,"seconds":45}}
+{"GuessWrong":{"tries":2}}
+{"GuessReveal":{"hash":9,"got":[[2,100]],"last":false}}
+{"Defense":{"from":1,"act":{"TagIn":{"at":1.0}}}}
+{"Disconnected":"gone"}
+== online: requests
+{"protocol":1,"request":{"Register":{"name":"me","password":"pw","email":"a@b.c","code":null}}}
+{"protocol":1,"request":{"Login":{"name":"me","password":"pw"}}}
+{"protocol":1,"request":{"ResetPassword":{"who":"me","code":"123","password":null}}}
+{"protocol":1,"request":{"LinkEmail":{"token":"t","email":"a@b.c","code":null}}}
+{"protocol":1,"request":{"WhoAmI":{"token":"t"}}}
+{"protocol":1,"request":{"Logout":{"token":"t"}}}
+{"protocol":1,"request":"ListRooms"}
+{"protocol":1,"request":{"CreateRoom":{"token":"t","title":"room","mapguessr":false,"settings":{"password":"pw","slots":4}}}}
+{"protocol":1,"request":{"JoinRoom":{"token":"t","room":3}}}
+{"protocol":1,"request":{"Connect":{"token":"t"}}}
+{"protocol":1,"request":{"SubmitScore":{"token":"t","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"score":900000,"accuracy":0.99,"max_combo":300,"great":295,"ok":5,"miss":0,"pp":123.4,"date":1700000000,"replay_version":5,"inputs":[[1023.0,1]],"stars":5.25,"play_ms":120000,"scroll_speed":1.0,"md5":"abc","pp_version":3,"timing":null,"rolls":12}}}}
+{"protocol":1,"request":{"MapScores":{"map":1}}}
+{"protocol":1,"request":{"MapScores":{"map":1,"relax":true}}}
+{"protocol":1,"request":{"Profile":{"name":"me"}}}
+{"protocol":1,"request":{"Replay":{"id":5}}}
+{"protocol":1,"request":{"Score":{"id":5}}}
+{"protocol":1,"request":{"SetStatuses":{"token":"t","maps":[[1,2]]}}}
+{"protocol":1,"request":"LovedSets"}
+{"protocol":1,"request":"LovedMaps"}
+{"protocol":1,"request":{"SetLoved":{"token":"t","set":1,"loved":true,"version":"Oni"}}}
+{"protocol":1,"request":{"Played":{"token":"t","ms":1000}}}
+{"protocol":1,"request":{"Medals":{"name":"me"}}}
+== online: replies
+{"CodeSent":"a@b.c"}
+{"EmailLinked":"a@b.c"}
+{"LovedSets":[1,2]}
+{"LovedMaps":[[1,["Oni"]]]}
+{"SetStatuses":[[1,"ranked"]]}
+"Counted"
+"LoggedOut"
+{"Error":"nope"}
+{"Medals":{"players":0,"earned":0,"medals":[],"collection":[],"collection_size":0}}
+{"Scores":[{"player":"","map":"","map_hash":0,"score":0,"accuracy":0.0,"max_combo":0,"miss":0,"rate":0.0,"mods":[],"seed":null,"pp":null,"date":0,"great":0,"ok":0,"set_id":null,"stars":null,"id":0,"scroll_speed":null,"pp_version":0}]}
+{"Profile":{"name":"","joined":0,"plays":0,"pp":0.0,"rank":null,"top":[],"recent":[],"stats":{"ranked_score":0,"total_score":0,"accuracy":0.0,"total_hits":0,"max_combo":0,"ss":0,"s":0,"a":0},"firsts":[],"online":false,"play_ms":0,"medals":{"earned":0,"total":0,"dan":null,"rarest":[]},"relax":{"plays":0,"pp":0.0,"rank":null,"top":[]}}}
+{"Score":{"player":"","map":"","map_hash":0,"score":0,"accuracy":0.0,"max_combo":0,"miss":0,"rate":0.0,"mods":[],"seed":null,"pp":null,"date":0,"great":0,"ok":0,"set_id":null,"stars":null,"id":0,"scroll_speed":null,"pp_version":0}}
+== social: up
+{"Status":"Menus"}
+{"AddFriend":"friend"}
+{"RemoveFriend":"friend"}
+{"Watch":"friend"}
+"StopWatching"
+{"PlayStart":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"anti_mash":true}}
+"PlayEnd"
+"Ping"
+{"GlobalChat":"hello"}
+== social: down
+{"Notice":"maintenance"}
+{"WatchStart":{"player":"friend","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"anti_mash":true},"t":100.0,"paused":false,"inputs":[[50.0,1]]}}
+{"WatchFrame":{"t":200.0,"paused":true,"inputs":[]}}
+{"WatchEnd":{"player":"friend"}}
+{"WatchStopped":"offline"}
+"Pong"
+{"Medals":[{"id":"","name":["","",""],"about":["","",""],"tier":0,"secret":false,"art":[]}]}
+{"GlobalChatDeleted":{"from":"x","at":5}}
+{"Groups":[["dev",["DEV"]]]}

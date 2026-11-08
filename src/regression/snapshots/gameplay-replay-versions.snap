@@ -1,0 +1,54 @@
+v1 anti_mash false basics   mash             great 64 ok 0 miss 0 | combo 64 max 64 | score 26732 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+v1 anti_mash false basics   jitter +-90ms    great 24 ok 26 miss 14 | combo 1 max 9 | score 12001 | rolls 0 swells 0 strong 0 | acc 57.8125 | err -5.02 ur 390.50 | hp 0.5014 | failed false
+v1 anti_mash false basics   offset -110ms    great 0 ok 31 miss 33 | combo 0 max 2 | score 4939 | rolls 0 swells 0 strong 0 | acc 24.2188 | err 40.00 ur 0.00 | hp 0.0000 | failed true
+v1 anti_mash false stream   mash             great 160 ok 0 miss 0 | combo 160 max 160 | score 85652 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+v1 anti_mash false stream   jitter +-90ms    great 52 ok 60 miss 48 | combo 1 max 10 | score 26486 | rolls 0 swells 0 strong 0 | acc 51.2500 | err 1.79 ur 274.88 | hp 0.0096 | failed true
+v1 anti_mash false stream   offset -110ms    great 0 ok 106 miss 54 | combo 0 max 2 | score 16907 | rolls 0 swells 0 strong 0 | acc 33.1250 | err -26.50 ur 5.00 | hp 0.0000 | failed true
+v1 anti_mash false low-od   mash             great 24 ok 0 miss 0 | combo 24 max 24 | score 8498 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+v1 anti_mash false low-od   jitter +-90ms    great 15 ok 9 miss 0 | combo 24 max 24 | score 6926 | rolls 0 swells 0 strong 0 | acc 81.2500 | err -7.28 ur 475.24 | hp 1.0000 | failed false
+v1 anti_mash false low-od   offset -110ms    great 0 ok 24 miss 0 | combo 24 max 24 | score 4243 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -110.00 ur 0.00 | hp 0.7333 | failed false
+v1 anti_mash true  basics   mash             great 32 ok 0 miss 32 | combo 1 max 3 | score 10236 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.2963 | failed true
+v1 anti_mash true  basics   jitter +-90ms    great 21 ok 24 miss 19 | combo 1 max 8 | score 10681 | rolls 0 swells 0 strong 0 | acc 51.5625 | err -7.78 ur 390.04 | hp 0.3949 | failed true
+v1 anti_mash true  basics   offset -110ms    great 0 ok 31 miss 33 | combo 0 max 2 | score 4939 | rolls 0 swells 0 strong 0 | acc 24.2188 | err 40.00 ur 0.00 | hp 0.0000 | failed true
+v1 anti_mash true  stream   mash             great 81 ok 0 miss 79 | combo 0 max 3 | score 26001 | rolls 0 swells 0 strong 0 | acc 50.6250 | err 0.00 ur 0.00 | hp 0.0075 | failed true
+v1 anti_mash true  stream   jitter +-90ms    great 45 ok 55 miss 60 | combo 0 max 10 | score 23407 | rolls 0 swells 0 strong 0 | acc 45.3125 | err -1.88 ur 274.71 | hp 0.0000 | failed true
+v1 anti_mash true  stream   offset -110ms    great 0 ok 106 miss 54 | combo 0 max 2 | score 16907 | rolls 0 swells 0 strong 0 | acc 33.1250 | err -26.50 ur 5.00 | hp 0.0000 | failed true
+v1 anti_mash true  low-od   mash             great 12 ok 0 miss 12 | combo 0 max 1 | score 3816 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.9784 | failed false
+v1 anti_mash true  low-od   jitter +-90ms    great 15 ok 9 miss 0 | combo 24 max 24 | score 6926 | rolls 0 swells 0 strong 0 | acc 81.2500 | err -7.28 ur 475.24 | hp 1.0000 | failed false
+v1 anti_mash true  low-od   offset -110ms    great 0 ok 24 miss 0 | combo 24 max 24 | score 4243 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -110.00 ur 0.00 | hp 0.7333 | failed false
+v2 anti_mash true  basics   mash             great 32 ok 0 miss 32 | combo 1 max 3 | score 10236 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.2963 | failed true
+v2 anti_mash true  basics   jitter +-90ms    great 22 ok 25 miss 17 | combo 1 max 8 | score 11172 | rolls 0 swells 0 strong 0 | acc 53.9062 | err -6.53 ur 394.04 | hp 0.4296 | failed true
+v2 anti_mash true  basics   offset -110ms    great 0 ok 31 miss 33 | combo 0 max 2 | score 4939 | rolls 0 swells 0 strong 0 | acc 24.2188 | err 40.00 ur 0.00 | hp 0.0000 | failed true
+v2 anti_mash true  stream   mash             great 81 ok 0 miss 79 | combo 0 max 3 | score 26001 | rolls 0 swells 0 strong 0 | acc 50.6250 | err 0.00 ur 0.00 | hp 0.0075 | failed true
+v2 anti_mash true  stream   jitter +-90ms    great 48 ok 57 miss 55 | combo 0 max 10 | score 24698 | rolls 0 swells 0 strong 0 | acc 47.8125 | err -1.21 ur 274.32 | hp 0.0000 | failed true
+v2 anti_mash true  stream   offset -110ms    great 0 ok 106 miss 54 | combo 0 max 2 | score 16907 | rolls 0 swells 0 strong 0 | acc 33.1250 | err -26.50 ur 5.00 | hp 0.0000 | failed true
+v2 anti_mash true  low-od   mash             great 12 ok 0 miss 12 | combo 0 max 1 | score 3816 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.9784 | failed false
+v2 anti_mash true  low-od   jitter +-90ms    great 15 ok 9 miss 0 | combo 24 max 24 | score 6926 | rolls 0 swells 0 strong 0 | acc 81.2500 | err -7.28 ur 475.24 | hp 1.0000 | failed false
+v2 anti_mash true  low-od   offset -110ms    great 0 ok 24 miss 0 | combo 24 max 24 | score 4243 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -110.00 ur 0.00 | hp 0.7333 | failed false
+v3 anti_mash true  basics   mash             great 32 ok 0 miss 32 | combo 1 max 3 | score 85882 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.2963 | failed true
+v3 anti_mash true  basics   jitter +-90ms    great 22 ok 25 miss 17 | combo 1 max 8 | score 122540 | rolls 0 swells 0 strong 0 | acc 53.9062 | err -6.53 ur 394.04 | hp 0.4296 | failed true
+v3 anti_mash true  basics   offset -110ms    great 0 ok 31 miss 33 | combo 0 max 2 | score 37776 | rolls 0 swells 0 strong 0 | acc 24.2188 | err 40.00 ur 0.00 | hp 0.0000 | failed true
+v3 anti_mash true  stream   mash             great 81 ok 0 miss 79 | combo 0 max 3 | score 61639 | rolls 0 swells 0 strong 0 | acc 50.6250 | err 0.00 ur 0.00 | hp 0.0075 | failed true
+v3 anti_mash true  stream   jitter +-90ms    great 48 ok 57 miss 55 | combo 0 max 10 | score 64460 | rolls 0 swells 0 strong 0 | acc 47.8125 | err -1.21 ur 274.32 | hp 0.0000 | failed true
+v3 anti_mash true  stream   offset -110ms    great 0 ok 106 miss 54 | combo 0 max 2 | score 35030 | rolls 0 swells 0 strong 0 | acc 33.1250 | err -26.50 ur 5.00 | hp 0.0000 | failed true
+v3 anti_mash true  low-od   mash             great 12 ok 0 miss 12 | combo 0 max 1 | score 110736 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.9784 | failed false
+v3 anti_mash true  low-od   jitter +-90ms    great 15 ok 9 miss 0 | combo 24 max 24 | score 657118 | rolls 0 swells 0 strong 0 | acc 81.2500 | err -7.28 ur 475.24 | hp 1.0000 | failed false
+v3 anti_mash true  low-od   offset -110ms    great 0 ok 24 miss 0 | combo 24 max 24 | score 371311 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -110.00 ur 0.00 | hp 0.7333 | failed false
+v4 anti_mash true  basics   mash             great 32 ok 0 miss 32 | combo 1 max 3 | score 85882 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.2963 | failed true
+v4 anti_mash true  basics   jitter +-90ms    great 22 ok 25 miss 17 | combo 1 max 8 | score 122540 | rolls 0 swells 0 strong 0 | acc 53.9062 | err -6.53 ur 394.04 | hp 0.4296 | failed true
+v4 anti_mash true  basics   offset -110ms    great 0 ok 31 miss 33 | combo 0 max 2 | score 37776 | rolls 0 swells 0 strong 0 | acc 24.2188 | err 40.00 ur 0.00 | hp 0.0000 | failed true
+v4 anti_mash true  stream   mash             great 81 ok 0 miss 79 | combo 0 max 3 | score 61639 | rolls 0 swells 0 strong 0 | acc 50.6250 | err 0.00 ur 0.00 | hp 0.0075 | failed true
+v4 anti_mash true  stream   jitter +-90ms    great 48 ok 57 miss 55 | combo 0 max 10 | score 64460 | rolls 0 swells 0 strong 0 | acc 47.8125 | err -1.21 ur 274.32 | hp 0.0000 | failed true
+v4 anti_mash true  stream   offset -110ms    great 0 ok 106 miss 54 | combo 0 max 2 | score 35030 | rolls 0 swells 0 strong 0 | acc 33.1250 | err -26.50 ur 5.00 | hp 0.0000 | failed true
+v4 anti_mash true  low-od   mash             great 12 ok 0 miss 12 | combo 0 max 1 | score 110736 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.9784 | failed false
+v4 anti_mash true  low-od   jitter +-90ms    great 15 ok 9 miss 0 | combo 24 max 24 | score 657118 | rolls 0 swells 0 strong 0 | acc 81.2500 | err -7.28 ur 475.24 | hp 1.0000 | failed false
+v4 anti_mash true  low-od   offset -110ms    great 0 ok 24 miss 0 | combo 24 max 24 | score 371311 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -110.00 ur 0.00 | hp 0.7333 | failed false
+v5 anti_mash true  basics   mash             great 32 ok 0 miss 32 | combo 1 max 3 | score 85882 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.2963 | failed true
+v5 anti_mash true  basics   jitter +-90ms    great 22 ok 26 miss 16 | combo 1 max 8 | score 126814 | rolls 0 swells 0 strong 0 | acc 54.6875 | err -5.56 ur 395.53 | hp 0.4457 | failed true
+v5 anti_mash true  basics   offset -110ms    great 0 ok 31 miss 33 | combo 0 max 2 | score 37776 | rolls 0 swells 0 strong 0 | acc 24.2188 | err 40.00 ur 0.00 | hp 0.0000 | failed true
+v5 anti_mash true  stream   mash             great 81 ok 0 miss 79 | combo 0 max 3 | score 61639 | rolls 0 swells 0 strong 0 | acc 50.6250 | err 0.00 ur 0.00 | hp 0.0075 | failed true
+v5 anti_mash true  stream   jitter +-90ms    great 47 ok 58 miss 55 | combo 0 max 10 | score 63973 | rolls 0 swells 0 strong 0 | acc 47.5000 | err -1.21 ur 274.32 | hp 0.0000 | failed true
+v5 anti_mash true  stream   offset -110ms    great 0 ok 106 miss 54 | combo 0 max 2 | score 35030 | rolls 0 swells 0 strong 0 | acc 33.1250 | err -26.50 ur 5.00 | hp 0.0000 | failed true
+v5 anti_mash true  low-od   mash             great 12 ok 0 miss 12 | combo 0 max 1 | score 110736 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.9784 | failed false
+v5 anti_mash true  low-od   jitter +-90ms    great 15 ok 9 miss 0 | combo 24 max 24 | score 657118 | rolls 0 swells 0 strong 0 | acc 81.2500 | err -7.28 ur 475.24 | hp 1.0000 | failed false
+v5 anti_mash true  low-od   offset -110ms    great 0 ok 24 miss 0 | combo 24 max 24 | score 371311 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -110.00 ur 0.00 | hp 0.7333 | failed false

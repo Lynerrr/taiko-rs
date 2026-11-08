@@ -1,0 +1,69 @@
+text  728,8    войти
+text  778,9    что нового
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   ПЕСНИ
+text  264,27   НАСТРОЙКИ
+text  362,27   МУЛЬТИПЛЕЕР
+text  475,27   ЗАГРУЗКА
+text  558,27   Tab
+text  625,28   1 songs, 1 maps  |  taiko only
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text   34,61   click to search (ctrl+f)...
+text  336,63   Sort: artist
+text  434,63   Mods
+text  494,66   basics
+text  745,71   Рейтинг >
+text  494,85   Regression
+text   44,92   basics
+text  416,97   1 diff
+text  494,104  mapped by tests
+text  731,104  NOT SUBMITTED
+text   44,106  Regression  |  mapped by tests
+text  495,123  [basics]
+text  780,123  3.08
+text   56,126  basics
+text  430,126  3.08
+text  494,141  OD
+text  514,141  5.0
+text  545,141  BPM
+text  572,141  200
+text  603,141  Length
+text  651,141  0:09
+text  494,153  Notes
+text  535,153  64
+text  559,153  Don
+text  586,153  32
+text  610,153  Kat
+text  637,153  32
+text  494,165  SS
+text  514,165  93pp
+text  552,165  99%
+text  579,165  82pp
+text  617,165  98%
+text  644,165  69pp
+text  490,297  0:00 / 0:10
+text  675,297  peak 7.0 notes/s at 0:01
+text  508,313  click / drag / wheel to scroll - play from where you stop
+text  634,421  Играть
+text   24,452  Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт
+hit   188,20     59x22   Tab(0)
+hit   254,20     89x22   Tab(1)
+hit   352,20    105x22   Tab(2)
+hit   465,20     82x22   Tab(3)
+hit   424,56     44x20   ModsButton
+hit   326,56     92x20   SortList
+hit    24,54    296x24   TextField
+hit    24,86    444x34   SongHeader(0)
+hit    44,120   424x22   SongRow(0)
+hit   701,101    16x13   SelectLike
+hit   733,64     78x20   BoardPage
+hit   480,414   350x22   Key(Enter)
+hit   472,221     8x48   SplitList
+hit   771,2      74x14   Changelog
+hit   721,2      44x14   Account

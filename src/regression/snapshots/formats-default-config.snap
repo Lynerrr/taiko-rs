@@ -1,0 +1,192 @@
+# taiko.rs settings
+# keys = left rim, left centre, right centre, right rim
+keys = D, F, J, K
+# previous / next playfield resolution preset
+preset_keys = F5, F6
+# touch columns left to right: KDDK, KKDD, DKKD or DDKK (K = rim, D = centre)
+touch_layout = KDDK
+# where F12 screenshots go: clipboard, folder (Screenshots) or both
+screenshot_to = clipboard
+# the interface's language: en, ja or ru
+language = en
+show_playfield_size = true
+# your own playfield sizes (preset list, in this order)
+saved_presets =
+# where each playfield size was last put: WxH@x/y (fractions of the screen)
+preset_spots =
+# what offset is set by: osu (0 is osu!'s, the output latency counts as there) | sound
+# (0 is hitting exactly on the sound you hear, the latency is taken off)
+offset_scale = osu
+# the global offset on the osu! scale: positive brings the notes earlier
+offset = 0
+# the same for older versions of the game (positive shifts the notes later), worked out with
+# the output latency below; if it is changed there, the new value is the one used
+offset_ms = -23
+offset_latency_ms = 0
+# notes drawn this many ms early to make up for display latency (judging is unaffected)
+visual_offset_ms = 0
+# 1.00 = osu!'s scroll speed
+scroll_speed = 1.00
+scroll_speed_osu = true
+master_volume = 1.00
+music_volume = 0.70
+unfocused_volume = 0.35
+fx_volume = 1.00
+# mailbox | immediate | vsync
+present_mode = immediate
+# menus always use vsync (gameplay uses present_mode)
+menu_vsync = true
+# draw at half resolution, scaled up exactly 2x (crisp pixels, faster)
+half_resolution = false
+# auto | vulkan | dx12 (Windows) | gl; auto picks DX12 on Windows where Vulkan is known to crash
+graphics_api = auto
+# mailbox/immediate only; 0 = uncapped
+fps_cap = 0
+calibration_bpm = 120
+# playfield area: x, y, width, height as fractions of the screen
+playfield_area = 0.000,0.000,1.000,1.000
+# background darkening during play, 0 (none) to 1 (hidden)
+bg_dim = 0.80
+# speed modifier (1.5 = DT) and whether it keeps the music's pitch
+rate = 1.00
+rate_keep_pitch = true
+# audio device buffer in frames (lower = less latency, more risk of crackle)
+audio_buffer = 256
+show_fps = true
+fullscreen = true
+animations = true
+splash = true
+epilepsy_warning = true
+main_menu = true
+menu_notes = true
+# dims the song's notes on the main menu's lane, 0 (none) to 1 (hidden)
+menu_notes_dim = 0.00
+guide_seen = false
+check_updates = true
+# countdown before play continues after pausing (ms)
+resume_delay_ms = 1000
+# song select order: artist, title, difficulty, length, bpm, recently played, date added
+sort = artist
+kiai_effects = true
+# GREAT hits without their flash and label (only OKs and misses show)
+hide_great = true
+# a play failed by Sudden Death or Perfect starts over at once
+fail_restart = false
+# the lane and the drum's panel pure black
+black_lane = false
+# .tko notes drawn as what they are, whatever colour or size their map shows them as
+true_notes = false
+# .tko maps' flashes, glitches and camera moves toned down
+calm_maps = false
+# the drum keys move through song select and the pause menu
+drum_menus = false
+# the coloured flash on the hit target as notes are hit
+hit_flash = true
+show_offset_hint = true
+offset_hint_ur_scaled = true
+# offset/UR line during play (Tab toggles)
+show_map_info = true
+# mods picked on song select (F1), e.g. HD,HR
+mods =
+# the live scoreboard in lobby matches (Tab toggles)
+mp_scoreboard = true
+# how autoplay hits: full, semi, single, roll or ddkk; binding 1234, 1324 or 4231; left-handed
+autoplay_style = full
+autoplay_binding = 1234
+autoplay_left_handed = false
+# osu! skin (folder name in a Skins folder), empty = built-in
+skin =
+# parts of the skin from elsewhere: skin_part = <part> = <skin folder name> (or <built-in>)
+# draw maps with the skin images in their own folder
+map_skins = true
+# main menu notes glitch when hit, and the whole screen with them and between menus
+menu_glitch = true
+# interface colour: red (the default), pink, purple, blue, teal, green, yellow, orange or #rrggbb
+accent = red
+# Discord status ("Playing taiko.rs"); app id empty = the built-in one
+discord_presence = true
+discord_app_id =
+# minutes without input before the idle screen (0 = never)
+idle_minutes = 2
+# after a crash, the next start sends its report to the developers
+send_crash_reports = true
+# the map editor's first-run tour was seen (Help > Take the tour shows it again)
+editor_tour_done = false
+# in the map editor a left drag on empty timeline pans it (View > Left drag pans)
+editor_left_pan = false
+# in the map editor a red line's new time or BPM moves its notes along (Timing > Notes follow)
+editor_follow_timing = false
+# chats: star out swear words; a chime when a friend messages you
+chat_filter = true
+message_sound = true
+# pop-ups: a friend starts a map / comes online / messages you, a global chat line mentions you, friend requests
+notify_playing = false
+notify_online = true
+notify_messages = true
+notify_mentions = true
+notify_requests = true
+# multiplayer
+mp_port = 7777
+mp_address =
+# online server (accounts, lobbies) and your saved login there
+online_server = jashincraft.space:7800
+online_user =
+online_token =
+# with vsync, draw notes where they'll be once the frame is on screen; ms added to that
+vsync_compensation = true
+vsync_tune_ms = 0
+# in fullscreen, the game at this size with black around it, moved from the centre (percent)
+letterbox = false
+letterbox_size = 1280x720
+letterbox_x = 0
+letterbox_y = 0
+# the window's size out of fullscreen (empty = 1280x720)
+window_size =
+# where replays, scores, videos, taiko.rs's Songs and Skins and caches are (empty = the usual places); move it from Settings
+data_folder =
+# the mouse wheel resizes the playfield during play
+wheel_resizes_playfield = false
+# song select lists converts too
+show_converts = false
+# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)
+song_headings = false
+# during songs the background dims to black (false: the interface's grey)
+bg_dim_black = true
+# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators, ur, counts; ! before one that came later: not hidden) and its key
+interface_hidden = false
+interface_hides = score,accuracy,pp,combo,progress,health,mods,hit_error,offset_hint,hit_animation,scoreboard,spectators,ur,counts
+interface_key = Shift+Tab
+# song select: the song list's share of the width (drag the edge beside it); the preview's size is no longer used
+song_list_share = 0.520
+song_preview_size = 1.000
+# hotkeys moved or removed: hotkey.<name> = a key with Ctrl+ / Alt+ / Shift+ before it, or none
+# the build last started (what's new shows after an update)
+last_build =
+# replay videos: size, fps, quality (best, high, small file, target size), target size in MB, speed (fast, balanced, slow), motion blur (off, light, strong)
+video_size = 1280x720
+video_fps = 60
+video_quality = high
+video_target_mb = 10
+video_speed = fast
+video_blur = off
+video_hud = true
+video_hitsounds = true
+# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)
+multiverse = neon diamond 1x -; sunset square 1.25x -; ice ring 0.9x WV; forest pill 1x SK; classic round 1x -; candy round 1x PY; ember diamond 1.25x AC; mono square 1x BL
+# where the interface's parts go (the interface editor), and your own layouts, one per line: name: layout
+hud_layout = off=ur,counts
+# your own Multiverse presets, one per line: name: universes as above
+# Random: repeatable note colours (C in the mod select)
+# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)
+shapeshift = every=16 morph=2 order=shuffle shapes=zigzag,uturn,spiral,loop,elbow,straight,meadow
+# Tact: how often notes move (2bars, 1bar, 1/2bar, 1beat, 1/2beat, 1/4beat)
+tact = 1bar
+# OD Override: the OD played at (0 to 20)
+od_override = 10.0
+# favourite mods (right-click or F in the mod select), e.g. HD,HR
+favourite_mods =
+# note colours without Multiverse: a palette (classic, neon, sunset...) or custom #don/#kat
+note_colours = classic
+# Songs folder to scan instead of finding osu!'s (empty = find it)
+songs_folder =
+# extra song folders / .osz files, one per line
