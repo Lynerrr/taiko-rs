@@ -76,6 +76,9 @@ pub(crate) fn state() -> State {
         song_headings: true,
         ..Config::default()
     };
+    // Other tests flip the process-wide animation switch meanwhile: a panel caught sliding in
+    // (the volume lanes) would read as off screen.
+    render::pin_animations_for_this_thread(Some(cfg.animations));
     if let Some(a) = std::env::var("TAIKO_LAYOUT_ACCENT")
         .ok()
         .and_then(|a| render::parse_accent(&a))
