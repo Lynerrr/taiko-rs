@@ -9,7 +9,7 @@
 set -eu
 
 case "${TAIKO_RS_CHANNEL:-}" in
-    dev) tag=dev ;;
+    dev) tag=dev-build ;;
     *) tag=latest ;;
 esac
 system="$(uname -s)"

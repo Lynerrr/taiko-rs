@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 # The progress bar makes Invoke-WebRequest many times slower.
 $ProgressPreference = 'SilentlyContinue'
 
-$tag = if ($env:TAIKO_RS_CHANNEL -eq 'dev') { 'dev' } else { 'latest' }
+$tag = if ($env:TAIKO_RS_CHANNEL -eq 'dev') { 'dev-build' } else { 'latest' }
 $url = "https://github.com/Lynerrr/taiko-rs/releases/download/$tag/taiko-rs-windows-x64.zip"
 $dir = Join-Path $env:LOCALAPPDATA 'Programs\taiko-rs'
 $exe = Join-Path $dir 'taiko-rs.exe'
