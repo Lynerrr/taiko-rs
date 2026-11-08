@@ -2177,7 +2177,7 @@ impl View {
             }
             Drag::Node { .. } | Drag::Pan { .. } => self.node_drag(x, y),
             Drag::Gizmo { .. } => self.gizmo_drag(x, y),
-            Drag::PathPoint { .. } => self.path_drag(x, y),
+            Drag::PathPoint { .. } => self.path_drag(x, y, keys),
             Drag::BeforeKey { .. } => self.before_drag(x, y),
             Drag::Wire { .. } | Drag::None => {}
         }
@@ -5033,6 +5033,23 @@ mod tests {
             (PATHS0[1] as f32 + 4.0 / k).round() as f64,
         ];
         assert!((moved[0] - want[0]).abs() <= 1.0 && (moved[1] - want[1]).abs() <= 1.0);
+        assert!(v.ed.undo());
+        assert_eq!(points(&v)[0], PATHS0);
+        // With Shift the point keeps plumb over the drum, its only neighbour, however the mouse
+        // wanders off sideways; dragged far sideways it goes level with the drum instead.
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        v.mouse_down(hx, hy, Keys::default(), None);
+        v.mouse_move(hx + 6.0, hy - 15.0, shift);
+        assert_eq!(points(&v)[0][0], 0.0, "{:?}", points(&v));
+        assert!(points(&v)[0][1] < PATHS0[1]);
+        let (dx, dy) = v.drum_in_preview();
+        v.mouse_move(dx - 60.0, dy - 4.0, shift);
+        v.mouse_up(dx - 60.0, dy - 4.0, shift);
+        assert_eq!(points(&v)[0][1], 0.0, "{:?}", points(&v));
+        assert!(points(&v)[0][0] < 0.0);
         assert!(v.ed.undo());
         assert_eq!(points(&v)[0], PATHS0);
         // A double click on the preview adds a point between the start and the drum.
