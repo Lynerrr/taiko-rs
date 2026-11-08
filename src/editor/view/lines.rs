@@ -291,7 +291,7 @@ impl View {
             TAct::Bpm(h) => self.edit_red(
                 |p| {
                     if let Some(bpm) = p.bpm() {
-                        let to = ((bpm + h as f64 / 100.0) * 1000.0).round() / 1000.0;
+                        let to = timing::stepped_bpm(bpm, h as f64 / 100.0);
                         p.beat_length = 60_000.0 / to.clamp(1.0, 1_000_000.0);
                     }
                 },

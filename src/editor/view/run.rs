@@ -51,6 +51,8 @@ impl View {
 
     fn leave(&mut self, audio: Option<&Engine>) {
         self.stop(audio);
+        // A value still being typed is a change to ask about (and to save), not one to lose.
+        self.commit_typing();
         if self.ed.modified() {
             self.modal = Some(Modal::Leave);
         } else {
