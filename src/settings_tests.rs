@@ -317,6 +317,7 @@ fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
         rx,
         maps: Vec::new(),
         update: false,
+        cancel: Arc::default(),
     });
     let mut v = WatchView::new("bob".into());
     v.play = Some(play);

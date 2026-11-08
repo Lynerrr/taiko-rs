@@ -16,6 +16,10 @@ use crate::render::{PICTURE_CELL, PICTURE_SLOTS};
 /// Larger files are left alone (a picture this big is a mistake, and a slow one).
 const MAX_BYTES: u64 = 24 * 1024 * 1024;
 
+/// Names starting with this are the download tab's result covers, read from
+/// `download::covers_dir` whatever map folder is followed.
+pub const COVER_PREFIX: &str = "@cover/";
+
 /// How long a picture that couldn't be read waits before it is looked for again.
 const RETRY: Duration = Duration::from_secs(2);
 
@@ -65,17 +69,26 @@ impl Pictures {
     /// Follows the map folder `dir` and loads the pictures `wanted` (lowercase file names).
     pub fn update(&mut self, dir: Option<&Path>, wanted: &[String]) {
         if self.dir.as_deref() != dir {
+            // The covers don't come from the folder: they stay.
+            let cover = |n: &String| n.starts_with(COVER_PREFIX);
             self.dir = dir.map(Path::to_path_buf);
-            self.slots = Arc::default();
-            self.held.iter_mut().for_each(|h| *h = None);
-            self.pending.clear();
-            self.failed.clear();
+            let mut slots = (*self.slots).clone();
+            slots.retain(|n, _| cover(n));
+            self.slots = Arc::new(slots);
+            for h in &mut self.held {
+                if h.as_ref().is_some_and(|n| !cover(n)) {
+                    *h = None;
+                }
+            }
+            self.pending.retain(cover);
+            self.failed.retain(cover);
         }
         if !self.failed.is_empty() && Instant::now() >= self.retry_at {
             self.failed.clear();
         }
+        let covers = crate::download::covers_dir();
         while let Ok((from, name, got)) = self.rx.try_recv() {
-            if Some(&from) != self.dir.as_ref() {
+            if Some(&from) != self.dir.as_ref() && from != covers {
                 continue;
             }
             self.pending.retain(|n| *n != name);
@@ -88,7 +101,6 @@ impl Pictures {
                 }
             }
         }
-        let Some(dir) = self.dir.clone() else { return };
         for name in wanted {
             if self.slots.contains_key(name)
                 || self.pending.contains(name)
@@ -96,15 +108,22 @@ impl Pictures {
             {
                 continue;
             }
-            if !safe_name(name) {
+            let (dir, file) = match name.strip_prefix(COVER_PREFIX) {
+                Some(file) => (covers.clone(), file),
+                None => match &self.dir {
+                    Some(dir) => (dir.clone(), name.as_str()),
+                    None => continue,
+                },
+            };
+            if !safe_name(file) {
                 self.failed.push(name.clone());
                 self.retry_at = Instant::now() + RETRY;
                 continue;
             }
             self.pending.push(name.clone());
-            let (tx, dir, name) = (self.tx.clone(), dir.clone(), name.clone());
+            let (tx, name, file) = (self.tx.clone(), name.clone(), file.to_string());
             std::thread::spawn(move || {
-                let got = read(&dir, &name);
+                let got = read(&dir, &file);
                 let _ = tx.send((dir, name, got));
             });
         }
@@ -286,5 +305,35 @@ mod tests {
         p.update(None, &wanted);
         assert!(p.slots().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn covers_load_from_their_own_folder_and_stay_when_the_map_folder_changes() {
+        let covers = crate::download::covers_dir();
+        std::fs::create_dir_all(&covers).unwrap();
+        let file = format!("test-{}.img", std::process::id());
+        std::fs::write(covers.join(&file), png(30, 10, [9, 9, 9, 255])).unwrap();
+        let name = format!("{COVER_PREFIX}{file}");
+        let mut p = Pictures::default();
+        let wanted = vec![name.clone()];
+        // Without a map folder too.
+        for _ in 0..400 {
+            p.update(None, &wanted);
+            if p.slots().contains_key(&name) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(p.slots().get(&name).map(|s| s.1), Some(3.0));
+        p.update(Some(&std::env::temp_dir()), &wanted);
+        assert!(
+            p.slots().contains_key(&name),
+            "a cover outlives the map folder"
+        );
+        // Nothing climbs out of the covers' folder either.
+        let bad = format!("{COVER_PREFIX}../x.png");
+        p.update(None, std::slice::from_ref(&bad));
+        assert!(p.failed.contains(&bad));
+        let _ = std::fs::remove_file(covers.join(&file));
     }
 }

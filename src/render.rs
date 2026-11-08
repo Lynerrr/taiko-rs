@@ -2866,6 +2866,19 @@ pub enum Hit {
     /// Download tab status category / sort chips.
     /// The download tab's source: osu! or taiko.rs (`browse::Source::ALL`).
     DlSource(usize),
+    /// The download tab's drop-downs: 0 status, 1 order (`browse::Menu`).
+    DlMenu(u8),
+    /// Anywhere outside an open drop-down: closes it.
+    DlMenuClose,
+    /// Flips the download tab's order.
+    DlSortDir,
+    /// Plays result `i`, which is installed.
+    DlPlay(usize),
+    /// Stops download `i` (`App::downloads`).
+    DlCancel(usize),
+    /// Tries failed download `i` again, or forgets it (`Browse::failed_jobs`).
+    DlRetry(usize),
+    DlDismiss(usize),
     DlCategory(usize),
     DlSort(usize),
     /// A row of the song select leaderboard (opens its results) / its video button, and a row

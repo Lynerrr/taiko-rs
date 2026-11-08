@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -223,6 +223,8 @@ pub struct CustomSet {
     pub updated: u64,
     /// A difficulty of it is a `.tko` (plays only in taiko.rs).
     pub tko: bool,
+    /// The website has its background (`/c/<id>/bg`), for the download tab's cover.
+    pub background: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -536,7 +538,12 @@ pub struct Job {
     pub maps: Vec<u64>,
     /// A newer version of a set that's already here (see [`start_update`]).
     pub update: bool,
+    /// Set to stop the download: it then ends with [`CANCELLED`].
+    pub cancel: Arc<AtomicBool>,
 }
+
+/// What a download stopped by [`Job::cancel`] ends with.
+pub const CANCELLED: &str = "cancelled";
 
 impl Job {
     pub fn fraction(&self) -> Option<f32> {
@@ -552,6 +559,8 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     let done = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(0));
     let (d, t) = (done.clone(), total.clone());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
     let name = set.folder_name();
     // A custom set the preview fetched already is unpacked from there.
     let cached = set
@@ -570,7 +579,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
                     let dest = songs.join(&name);
                     extract(&archive, &dest).map(|()| dest)
                 }),
-            None => fetch(&sources, &name, &songs, &d, &t),
+            None => fetch(&sources, &name, &songs, &d, &t, &stop),
         };
         let _ = tx.send(result);
     });
@@ -581,6 +590,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
         rx,
         maps: Vec::new(),
         update: false,
+        cancel,
     }
 }
 
@@ -601,6 +611,8 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
     let done = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(0));
     let (d, t) = (done.clone(), total.clone());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
     let id = set.id;
     std::thread::spawn(move || {
         let result = (|| {
@@ -620,7 +632,7 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
                 .map(|m| m.path)
                 .collect();
             replacing(&replaced, || {
-                fetch(&mirror_sources(id), &name, songs, &d, &t)
+                fetch(&mirror_sources(id), &name, songs, &d, &t, &stop)
             })
         })();
         let _ = tx.send(result);
@@ -632,6 +644,7 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
         rx,
         maps: Vec::new(),
         update: true,
+        cancel,
     }
 }
 
@@ -811,6 +824,7 @@ fn fetch(
     songs: &Path,
     done: &AtomicU64,
     total: &AtomicU64,
+    cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(songs).map_err(|e| format!("{}: {e}", songs.display()))?;
     let dest = songs.join(name);
@@ -824,7 +838,10 @@ fn fetch(
         }
         if round > 0 {
             // osu.direct's 503s ask for up to 30 s.
-            std::thread::sleep(Duration::from_secs(5 * round));
+            let until = std::time::Instant::now() + Duration::from_secs(5 * round);
+            while std::time::Instant::now() < until && !cancel.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
         for (k, (_, url)) in sources.iter().enumerate() {
             if gone[k] {
@@ -832,7 +849,11 @@ fn fetch(
             }
             done.store(0, Ordering::Relaxed);
             total.store(0, Ordering::Relaxed);
-            match download_to(url, &archive, done, total) {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = std::fs::remove_file(&archive);
+                return Err(CANCELLED.into());
+            }
+            match download_to(url, &archive, done, total, cancel) {
                 Ok(()) => {
                     let result = extract(&archive, &dest);
                     let _ = std::fs::remove_file(&archive);
@@ -848,6 +869,9 @@ fn fetch(
             }
         }
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CANCELLED.into());
+    }
     Err(sources
         .iter()
         .zip(errors)
@@ -862,6 +886,7 @@ pub(crate) fn download_to(
     path: &Path,
     done: &AtomicU64,
     total: &AtomicU64,
+    cancel: &AtomicBool,
 ) -> Result<(), (String, bool)> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(15)))
@@ -898,6 +923,9 @@ pub(crate) fn download_to(
     let mut file = std::fs::File::create(path).map_err(|e| (e.to_string(), false))?;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err((CANCELLED.into(), false));
+        }
         // A dropped transfer is worth another try.
         let n = reader.read(&mut buf).map_err(|e| (e.to_string(), true))?;
         if n == 0 {
@@ -1082,6 +1110,7 @@ pub fn receive(
             rx,
             maps: Vec::new(),
             update: false,
+            cancel: Arc::default(),
         },
         feed,
     )
@@ -1138,6 +1167,7 @@ pub fn import(
         rx,
         maps,
         update: false,
+        cancel: Arc::default(),
     }
 }
 
@@ -1378,6 +1408,55 @@ pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
     Ok(osu)
 }
 
+/// Where the download tab keeps its result covers (`pictures.rs` reads them from there).
+pub fn covers_dir() -> PathBuf {
+    crate::config::cache_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
+        .join("covers")
+}
+
+/// A set's cover file in [`covers_dir`]: "o<id>.img" for osu!'s sets, "c<id>-v<n>.img" for the
+/// website's custom ones (a new upload may bring a new background).
+pub fn cover_name(set: &SetInfo) -> String {
+    match &set.custom {
+        Some(c) => format!("c{}-v{}.img", set.id, c.version),
+        None => format!("o{}.img", set.id),
+    }
+}
+
+/// Fetches a set's cover into [`covers_dir`] (osu!'s square list cover, or a custom set's
+/// background from the website). Err when it has none or it couldn't be fetched.
+pub fn fetch_cover(set: &SetInfo) -> Result<(), String> {
+    let url = match &set.custom {
+        Some(c) if c.background => format!("{}/c/{}/bg", crate::online::WEBSITE, set.id),
+        Some(_) => return Err("no background".into()),
+        None => format!(
+            "https://assets.ppy.sh/beatmaps/{}/covers/list@2x.jpg",
+            set.id
+        ),
+    };
+    let dir = covers_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
+        .into();
+    let bytes = agent
+        .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .with_config()
+        .limit(8 << 20)
+        .read_to_vec()
+        .map_err(|e| e.to_string())?;
+    let file = dir.join(cover_name(set));
+    let part = file.with_extension("part");
+    std::fs::write(&part, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&part, &file).map_err(|e| e.to_string())
+}
+
 /// The clip file in a preview folder.
 pub fn clip_in(dir: &Path) -> Option<String> {
     std::fs::read_dir(dir)
@@ -1462,6 +1541,21 @@ mod tests {
             b"mine"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cancelled_download_stops_before_asking_anyone_and_says_so() {
+        let songs = std::env::temp_dir().join(format!("taiko-rs-cancel-{}", std::process::id()));
+        let (done, total) = Default::default();
+        let cancel = AtomicBool::new(true);
+        // Nothing listens there: asking would fail with another error, not "cancelled".
+        let sources = [("nowhere", "http://127.0.0.1:9/set".to_string())];
+        let started = std::time::Instant::now();
+        let got = fetch(&sources, "1 A - T", &songs, &done, &total, &cancel);
+        assert_eq!(got, Err(CANCELLED.to_string()));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!songs.join("1 A - T").exists());
+        let _ = std::fs::remove_dir_all(&songs);
     }
 
     #[test]
