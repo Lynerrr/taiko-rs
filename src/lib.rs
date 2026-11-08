@@ -10635,9 +10635,7 @@ impl State {
         let guest =
             matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host());
         if guest && self.lobby_defense().is_some() {
-            self.toast(
-                tr!("in Defense the host picks the mods").into(),
-            );
+            self.toast(tr!("in Defense the host picks the mods").into());
             return;
         }
         if guest {
