@@ -63,6 +63,8 @@ pub enum Category {
     CustomApproved,
     /// Every custom set on the taiko.rs website.
     Custom,
+    /// osu! sets loved on the taiko.rs server (they give pp there), from the mirrors.
+    LovedHere,
 }
 
 impl Category {
@@ -77,12 +79,22 @@ impl Category {
         Category::Any,
     ];
 
-    /// The categories of the taiko.rs website's own maps.
-    pub const OURS: [Category; 2] = [Category::CustomApproved, Category::Custom];
+    /// The categories of taiko.rs's own maps: the website's custom sets, and the osu! sets
+    /// loved on the server.
+    pub const OURS: [Category; 3] = [
+        Category::CustomApproved,
+        Category::LovedHere,
+        Category::Custom,
+    ];
 
-    /// Whether this lists the taiko.rs website's maps, not the osu! mirrors'.
+    /// Whether this is one of taiko.rs's lists, not an osu! status.
     pub fn is_ours(self) -> bool {
         Category::OURS.contains(&self)
+    }
+
+    /// Whether this lists the taiko.rs website's custom sets (not osu! sets).
+    pub fn is_custom(self) -> bool {
+        matches!(self, Category::CustomApproved | Category::Custom)
     }
 
     pub fn name(self) -> &'static str {
@@ -97,6 +109,7 @@ impl Category {
             Category::Any => "Any",
             Category::CustomApproved => "Custom approved",
             Category::Custom => "All custom",
+            Category::LovedHere => "Loved here",
         }
     }
 
@@ -110,7 +123,9 @@ impl Category {
             Category::Pending => &[0],
             Category::Wip => &[-1],
             Category::Graveyard => &[-2],
-            Category::Any | Category::CustomApproved | Category::Custom => &[],
+            Category::Any | Category::CustomApproved | Category::Custom | Category::LovedHere => {
+                &[]
+            }
         }
     }
 }
@@ -495,6 +510,238 @@ pub fn search(
     }
     sort_sets(&mut sets, sort, desc);
     Ok((sets, more))
+}
+
+/// The sets loved on the server (`ids`, from its `LovedMaps`) that match `query`, ordered by
+/// `sort` (`Relevance`: newest set first). There is no mirror call for many sets at once, so
+/// each is asked for on its own, the sets shared out between the two mirrors and paced under
+/// their limits, and each answer is kept on disk for `LOVED_FRESH` (a set's details hardly
+/// change): only newly loved sets cost a request then. `progress` gets the list so far, and how
+/// many sets are done of how many, as they come. Sets no mirror has, or with no taiko
+/// difficulty, are left out; it fails only if none could be had.
+pub fn loved_here(
+    ids: &[u32],
+    query: &str,
+    sort: SortKey,
+    desc: bool,
+    progress: &(dyn Fn(Vec<SetInfo>, usize, usize) + Sync),
+) -> Result<Vec<SetInfo>, String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    // Fetched sets by id (None: no taiko difficulty, so it's never asked again).
+    static KNOWN: OnceLock<Mutex<HashMap<u32, Option<SetInfo>>>> = OnceLock::new();
+    let known = KNOWN.get_or_init(Mutex::default);
+    let listed = |known: &HashMap<u32, Option<SetInfo>>| {
+        let mut sets: Vec<SetInfo> = ids
+            .iter()
+            .filter_map(|id| known.get(id).cloned().flatten())
+            .filter(|set| matches_query(set, query))
+            .collect();
+        sets.sort_by_key(|s| std::cmp::Reverse(s.id));
+        sort_sets(&mut sets, sort, desc);
+        sets
+    };
+    // One load at a time: a search typed while the list loads waits for it, then finds the
+    // sets known, instead of asking the mirrors for them all over again.
+    static LOADING: Mutex<()> = Mutex::new(());
+    let _loading = LOADING.lock().unwrap_or_else(|e| e.into_inner());
+    // Newest first, as the list starts out: what comes in mostly goes below what's shown.
+    let mut missing: Vec<u32> = {
+        let known = known.lock().unwrap();
+        ids.iter()
+            .copied()
+            .filter(|id| !known.contains_key(id))
+            .collect()
+    };
+    missing.sort_unstable_by_key(|&id| std::cmp::Reverse(id));
+    let errors = Mutex::new(Vec::new());
+    let started = std::time::Instant::now();
+    if !missing.is_empty() {
+        let agent = agent();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let done = std::sync::atomic::AtomicUsize::new(0);
+        let lanes = [Lane::new(), Lane::new()];
+        let have = ids.len() - missing.len();
+        std::thread::scope(|s| {
+            for _ in 0..missing.len().min(LOVED_WORKERS) {
+                s.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(&id) = missing.get(i) else { break };
+                        // Every other set from the other mirror first.
+                        let result = loved_set(&agent, &lanes, i % MIRRORS.len(), id);
+                        let mut known = known.lock().unwrap();
+                        match result {
+                            Ok(set) => {
+                                known.insert(id, set);
+                            }
+                            Err(e) => errors.lock().unwrap().push(format!("set {id}: {e}")),
+                        }
+                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        let so_far = listed(&known);
+                        drop(known);
+                        progress(so_far, have + n, ids.len());
+                    }
+                });
+            }
+        });
+    }
+    let sets = listed(&known.lock().unwrap());
+    let errors = errors.into_inner().unwrap();
+    if sets.is_empty() && !errors.is_empty() {
+        return Err(errors.join("; "));
+    }
+    if !missing.is_empty() {
+        eprintln!(
+            "loved here: {} of {} sets looked up (on disk or the mirrors) in {:.1} s, {} not had{}",
+            missing.len(),
+            ids.len(),
+            started.elapsed().as_secs_f32(),
+            errors.len(),
+            errors
+                .first()
+                .map(|e| format!(" ({e})"))
+                .unwrap_or_default()
+        );
+    }
+    Ok(sets)
+}
+
+/// Mirror requests the loved list has under way at once.
+const LOVED_WORKERS: usize = 4;
+/// Between two requests to the same mirror: osu.direct allows 120 a minute (after a burst of
+/// 25), catboy.best 1200 an hour, and the game asks them for other things meanwhile.
+const LOVED_PACE: Duration = Duration::from_millis(550);
+/// How long a set's details kept on disk are used without asking again.
+const LOVED_FRESH: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// Where the mirrors' answers about loved sets are kept, one file per set.
+fn loved_dir() -> PathBuf {
+    covers_dir().with_file_name("loved-sets")
+}
+
+/// One loved set: from disk while fresh, else from the mirrors (and kept), else from disk however
+/// old. None: it has no taiko difficulty.
+fn loved_set(
+    agent: &ureq::Agent,
+    lanes: &[Lane],
+    first: usize,
+    id: u32,
+) -> Result<Option<SetInfo>, String> {
+    let file = loved_dir().join(format!("{id}.json"));
+    let parse =
+        |body: &str| parse_sets(&format!("[{body}]")).map(|(sets, _)| sets.into_iter().next());
+    let kept = std::fs::read_to_string(&file).ok();
+    let fresh = std::fs::metadata(&file)
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().is_ok_and(|age| age < LOVED_FRESH));
+    if fresh && let Some(set) = kept.as_deref().and_then(|b| parse(b).ok()) {
+        return Ok(set);
+    }
+    match mirror_set(agent, lanes, first, id) {
+        Ok(body) => {
+            let set = parse(&body)?;
+            let _ = std::fs::create_dir_all(loved_dir());
+            let _ = std::fs::write(&file, &body);
+            Ok(set)
+        }
+        Err(e) => kept.as_deref().map(parse).unwrap_or(Err(e)),
+    }
+}
+
+/// One mirror's share of the loved list: when its next request may go, and whether it has
+/// refused us (403) for the rest of this load.
+struct Lane {
+    next: std::sync::Mutex<std::time::Instant>,
+    refused: AtomicBool,
+}
+
+impl Lane {
+    fn new() -> Lane {
+        Lane {
+            next: std::sync::Mutex::new(std::time::Instant::now()),
+            refused: AtomicBool::new(false),
+        }
+    }
+
+    /// Waits for this mirror's turn.
+    fn wait_turn(&self) {
+        let at = {
+            let mut next = self.next.lock().unwrap();
+            let at = (*next).max(std::time::Instant::now());
+            *next = at + LOVED_PACE;
+            at
+        };
+        std::thread::sleep(at.saturating_duration_since(std::time::Instant::now()));
+    }
+
+    /// Holds every request to this mirror back for `pause`.
+    fn back_off(&self, pause: Duration) {
+        let mut next = self.next.lock().unwrap();
+        *next = (*next).max(std::time::Instant::now() + pause);
+    }
+}
+
+/// A set's details from the first mirror that has them, starting at mirror `first`, each
+/// request in its mirror's turn (`lanes`). A "too many requests" holds that mirror back a while;
+/// a "forbidden" (catboy.best's guard sometimes turns us away) drops it for the rest of the
+/// load, unless no mirror is left.
+fn mirror_set(
+    agent: &ureq::Agent,
+    lanes: &[Lane],
+    first: usize,
+    id: u32,
+) -> Result<String, String> {
+    let mut errors = Vec::new();
+    let all_refused = || lanes.iter().all(|l| l.refused.load(Ordering::Relaxed));
+    for k in 0..MIRRORS.len() {
+        let at = (first + k) % MIRRORS.len();
+        let (m, lane) = (&MIRRORS[at], &lanes[at]);
+        if lane.refused.load(Ordering::Relaxed) && !all_refused() {
+            continue;
+        }
+        for attempt in 0..3 {
+            lane.wait_turn();
+            let result = agent
+                .get(&format!("{}{id}", m.set))
+                .header("User-Agent", USER_AGENT)
+                .call()
+                .and_then(|mut r| r.body_mut().read_to_string());
+            match result {
+                Ok(body) => return Ok(body),
+                Err(ureq::Error::StatusCode(429)) if attempt < 2 => {
+                    // osu.direct's burst allowance comes back within 5 s.
+                    lane.back_off(Duration::from_secs(5));
+                }
+                Err(e) => {
+                    if matches!(e, ureq::Error::StatusCode(403))
+                        && !lane.refused.swap(true, Ordering::Relaxed)
+                    {
+                        eprintln!("loved here: {} refused us (403), asking the other", m.name);
+                    }
+                    errors.push(format!("{}: {e}", m.name));
+                    break;
+                }
+            }
+        }
+    }
+    Err(errors.join("; "))
+}
+
+/// Whether every word of `query` is in the set's artist, title, mapper or a difficulty's name
+/// (or is its id), ignoring case.
+fn matches_query(set: &SetInfo, query: &str) -> bool {
+    let haystack = std::iter::once(set.artist.as_str())
+        .chain([set.title.as_str(), set.creator.as_str()])
+        .chain(set.diffs.iter().map(|d| d.version.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let id = set.id.to_string();
+    query
+        .to_lowercase()
+        .split_whitespace()
+        .all(|word| word == id || haystack.contains(word))
 }
 
 /// Orders merged results (and does the sorts no mirror can do).
@@ -1843,5 +2090,35 @@ mod tests {
         );
         assert!(!broken.exists());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_loved_here_search_matches_every_word_anywhere_or_the_set_id() {
+        let set = SetInfo {
+            id: 1098825,
+            artist: "Camellia".into(),
+            title: "Exit This Earth's Atomosphere".into(),
+            creator: "Mapper".into(),
+            diffs: vec![Diff {
+                id: 1,
+                version: "Inner Oni".into(),
+                stars: 6.0,
+            }],
+            ..SetInfo::default()
+        };
+        assert!(matches_query(&set, ""));
+        assert!(matches_query(&set, "camellia earth"));
+        assert!(matches_query(&set, "INNER oni"));
+        assert!(matches_query(&set, "1098825"));
+        assert!(!matches_query(&set, "camellia kantan"));
+        assert!(!matches_query(&set, "109882"));
+    }
+
+    #[test]
+    fn nothing_loved_here_asks_no_mirror() {
+        assert_eq!(
+            loved_here(&[], "", SortKey::Relevance, true, &|_, _, _| {}).map(|s| s.len()),
+            Ok(0)
+        );
     }
 }
