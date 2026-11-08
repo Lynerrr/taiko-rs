@@ -195,23 +195,41 @@ impl VsyncPacer {
         t
     }
 
-    /// The refresh (ms) the images come at, once there are enough steps between them: the mean
-    /// of those near their median (the median alone lands on one step's jitter; the mean of them
-    /// all would count slow frames).
+    /// The refresh (ms) the images come at, once there are enough steps between them: the
+    /// longest step most of the others are whole numbers of, refined to their mean. Below the
+    /// screen's rate frames come one, two or more refreshes apart, and neither the median nor the
+    /// mean of those is a refresh (40 fps on 60 Hz made a 25 ms grid that ran ahead of the clock
+    /// and snapped back: notes stopping and stepping backwards). A slow frame and the quick image
+    /// after it are multiples of nothing, and drop out.
     fn seen_refresh(&self) -> Option<f64> {
         if self.steps.len() < PACE_STEPS {
             return None;
         }
         let mut sorted: Vec<f64> = self.steps.iter().copied().collect();
         sorted.sort_by(f64::total_cmp);
-        let median = sorted[sorted.len() / 2];
-        // A slow frame (two refreshes or more) and the quick one after it are well outside; any
-        // jitter, however lopsided, inside.
-        let near: Vec<f64> = sorted
-            .into_iter()
-            .filter(|s| (s - median).abs() < 0.5 * median)
-            .collect();
-        Some(near.iter().sum::<f64>() / near.len() as f64)
+        // How many refreshes of `p` a step is, if it's close to a whole number of them.
+        let whole = |s: f64, p: f64| {
+            let n = (s / p).round();
+            (n >= 1.0 && (s - n * p).abs() < 0.3 * p).then_some(n)
+        };
+        let need = sorted.len() * 3 / 4;
+        let base = sorted
+            .iter()
+            .rev()
+            .copied()
+            .find(|&p| sorted.iter().filter(|&&s| whole(s, p).is_some()).count() >= need)?;
+        // All of their time over the refreshes it took, each step's rounded: one image's jitter
+        // is the next one's the other way and cancels, and a slow frame with the quick image
+        // after it adds up to its whole refreshes.
+        // The first guess can be the long end of jittery steps (a two-refresh step then reads
+        // as one): count again by the better one until it settles.
+        let time: f64 = sorted.iter().sum();
+        let mut p = base;
+        for _ in 0..4 {
+            let refreshes: f64 = sorted.iter().map(|&s| (s / p).round()).sum();
+            p = time / refreshes.max(1.0);
+        }
+        Some(p)
     }
 
     /// The refresh interval (ms) frames are paced to, once it's been seen (for the vsync
@@ -366,6 +384,45 @@ mod tests {
             .map(|k| (p.frame_time(at(t0 + k as f64 * r), 60.0) - start).as_secs_f64() * 1000.0)
             .collect();
         assert!(t.windows(2).all(|w| (w[1] - w[0] - r).abs() < 0.2), "{t:?}");
+    }
+
+    #[test]
+    fn a_game_slower_than_the_screen_never_steps_back_or_runs_ahead() {
+        // Below the refresh rate, frames come one or two refreshes apart, unevenly: 40 fps on
+        // 60 Hz, 50 on 60, 100 on 144. The grid is the screen's refresh: times only go forward,
+        // by whole refreshes, and stay with the real clock.
+        for (hz, fps) in [(60.0, 40.0), (60.0, 50.0), (144.0, 100.0), (60.0, 45.0)] {
+            let r = 1000.0 / hz;
+            let jitter = [0.0, 0.6, -0.4, 0.9, -0.7, 0.3, -0.2];
+            // Each frame is shown at the first refresh after it's ready.
+            let mut acquired = Vec::new();
+            let mut last: f64 = -r;
+            for k in 0..900 {
+                let ready = k as f64 * 1000.0 / fps;
+                let shown = ((ready / r).ceil() * r).max(last + r);
+                last = shown;
+                acquired.push(shown + jitter[k % jitter.len()]);
+            }
+            let (t, p) = paced_told(&acquired, hz);
+            for (k, w) in t.windows(2).enumerate().skip(40) {
+                let step = (w[1] - w[0]) / r;
+                assert!(
+                    step > 0.9 && (step - step.round()).abs() < 0.1,
+                    "{fps} fps on {hz} Hz: step {k} is {step:.2} refreshes"
+                );
+            }
+            for (k, (a, b)) in t.iter().zip(&acquired).enumerate().skip(40) {
+                assert!(
+                    (a - b).abs() < 0.6 * r,
+                    "{fps} fps on {hz} Hz: frame {k} {:.1} ms off",
+                    a - b
+                );
+            }
+            assert!(
+                (p.refresh_ms().unwrap() - r).abs() < 0.05,
+                "{fps} fps on {hz} Hz"
+            );
+        }
     }
 
     #[test]

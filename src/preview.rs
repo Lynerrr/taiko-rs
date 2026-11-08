@@ -179,6 +179,9 @@ pub struct Preview {
     pub mods: crate::mods::Mods,
     /// Bottom of the song select panel as last drawn (virtual units).
     pub panel_bottom: f32,
+    /// Room kept free at the right of the title line, for a button over the panel's corner
+    /// (song select's way to the leaderboard); 0 elsewhere.
+    pub title_room: f32,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -1026,7 +1029,7 @@ impl Preview {
             Canvas::text_height(9.0),
             Canvas::text_height(8.0),
         );
-        let title = wrap(12.0, iw, &e.meta.title, 2);
+        let title = wrap(12.0, iw - self.title_room, &e.meta.title, 2);
         let artist = wrap(9.0, iw, &e.meta.artist, 2);
         // The star pill is about this wide; the difficulty name wraps beside it.
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
@@ -1383,19 +1386,7 @@ pub fn draw_graph(
     let bar_w = (bx1 - bx0) / n as f32;
     for (i, v) in g.bins(n).into_iter().enumerate() {
         let bh = 2.0 + v * (h - 8.0);
-        // Cool blue for easy parts, through yellow, to red at the peaks.
-        let lerp = |a: u32, b: u32, t: f32| -> u32 {
-            let ch = |s: u32| {
-                ((a >> s & 0xff) as f32 + ((b >> s & 0xff) as f32 - (a >> s & 0xff) as f32) * t)
-                    as u32
-            };
-            (ch(16) << 16) | (ch(8) << 8) | ch(0)
-        };
-        let col = if v < 0.5 {
-            lerp(0x3d6f8c, 0xFCB806, v * 2.0)
-        } else {
-            lerp(0xFCB806, 0xEB452C, (v - 0.5) * 2.0)
-        };
+        let col = strain_colour(v);
         let played = (bx0 + (i as f32 + 0.5) * bar_w) <= x_of(now);
         c.rect(
             bx0 + i as f32 * bar_w,
@@ -1434,6 +1425,22 @@ pub fn draw_graph(
 }
 
 pub const MARKER: u32 = 0x4fb4ff;
+
+/// A difficulty bar's colour for strain `v` (0..1): cool blue for easy parts, through yellow,
+/// to red at the peaks.
+pub fn strain_colour(v: f32) -> u32 {
+    let lerp = |a: u32, b: u32, t: f32| -> u32 {
+        let ch = |s: u32| {
+            ((a >> s & 0xff) as f32 + ((b >> s & 0xff) as f32 - (a >> s & 0xff) as f32) * t) as u32
+        };
+        (ch(16) << 16) | (ch(8) << 8) | ch(0)
+    };
+    if v < 0.5 {
+        lerp(0x3d6f8c, 0xFCB806, v * 2.0)
+    } else {
+        lerp(0xFCB806, 0xEB452C, (v - 0.5) * 2.0)
+    }
+}
 
 /// "<verb> 1:23" under the timeline once a start point is picked (else a hint). `button` is
 /// (verb, key hint); None shows no button (only the host picks a match's start). Returns the
