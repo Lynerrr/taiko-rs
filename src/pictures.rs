@@ -32,6 +32,9 @@ pub struct Pictures {
     /// When the failed ones are tried again (a file put in the folder later, or fixed).
     retry_at: Instant,
     uploads: Vec<(u32, Vec<u8>)>,
+    /// Pictures handed in ready (`provide`), not read from the map's folder: placed whenever
+    /// drawn, whatever folder is followed.
+    provided: HashMap<String, (Arc<Vec<u8>>, f32)>,
     tx: Sender<Loaded>,
     rx: Receiver<Loaded>,
 }
@@ -47,6 +50,7 @@ impl Default for Pictures {
             failed: Vec::new(),
             retry_at: Instant::now(),
             uploads: Vec::new(),
+            provided: HashMap::new(),
             tx,
             rx,
         }
@@ -60,6 +64,32 @@ impl Pictures {
 
     pub fn take_uploads(&mut self) -> Vec<(u32, Vec<u8>)> {
         std::mem::take(&mut self.uploads)
+    }
+
+    /// Hands in the pictures whose names start with `prefix` (lowercase), ready as `cell` made
+    /// them, in place of any it had: drawn by those names like a map's own.
+    pub fn provide(&mut self, prefix: &str, pictures: Vec<(String, Vec<u8>, f32)>) {
+        self.provided.retain(|name, _| !name.starts_with(prefix));
+        let gone: Vec<String> = self
+            .slots
+            .keys()
+            .filter(|n| n.starts_with(prefix))
+            .cloned()
+            .collect();
+        if !gone.is_empty() {
+            let mut slots = (*self.slots).clone();
+            for name in gone {
+                slots.remove(&name);
+                self.held
+                    .iter_mut()
+                    .filter(|h| h.as_ref() == Some(&name))
+                    .for_each(|h| *h = None);
+            }
+            self.slots = Arc::new(slots);
+        }
+        for (name, rgba, aspect) in pictures {
+            self.provided.insert(name, (Arc::new(rgba), aspect));
+        }
     }
 
     /// Follows the map folder `dir` and loads the pictures `wanted` (lowercase file names).
@@ -88,8 +118,19 @@ impl Pictures {
                 }
             }
         }
+        for name in wanted {
+            if !self.slots.contains_key(name)
+                && let Some((rgba, aspect)) = self.provided.get(name).cloned()
+            {
+                self.place(name.clone(), (*rgba).clone(), aspect, wanted);
+            }
+        }
         let Some(dir) = self.dir.clone() else { return };
         for name in wanted {
+            // Names starting with \u{1} are only ever handed in (`provide`), never files.
+            if self.provided.contains_key(name) || name.starts_with('\u{1}') {
+                continue;
+            }
             if self.slots.contains_key(name)
                 || self.pending.contains(name)
                 || self.failed.contains(name)
@@ -178,6 +219,12 @@ fn file_of(name: &str) -> Option<String> {
 /// width over its height.
 pub fn cell(bytes: &[u8]) -> Result<(Vec<u8>, f32), String> {
     let image = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    Ok(cell_of(&image))
+}
+
+/// `image` squeezed into a `PICTURE_CELL` square, premultiplied RGBA, and its width over its
+/// height.
+pub fn cell_of(image: &image::DynamicImage) -> (Vec<u8>, f32) {
     let aspect = image.width().max(1) as f32 / image.height().max(1) as f32;
     let mut px = image
         .resize_exact(
@@ -193,7 +240,7 @@ pub fn cell(bytes: &[u8]) -> Result<(Vec<u8>, f32), String> {
             *v = ((u16::from(*v) * a + 127) / 255) as u8;
         }
     }
-    Ok((px, aspect))
+    (px, aspect)
 }
 
 /// Whether `name` is a kind of picture a map can show.
@@ -286,5 +333,29 @@ mod tests {
         p.update(None, &wanted);
         assert!(p.slots().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn provided_pictures_are_placed_in_any_folder_and_replaced_by_prefix() {
+        let mut p = Pictures::default();
+        let cell = vec![0u8; (PICTURE_CELL * PICTURE_CELL * 4) as usize];
+        let name = "\u{1}ot:0".to_string();
+        p.provide("\u{1}ot:", vec![(name.clone(), cell.clone(), 2.0)]);
+        p.update(None, std::slice::from_ref(&name));
+        assert_eq!(p.slots().get(&name).map(|s| s.1), Some(2.0));
+        assert_eq!(p.take_uploads().len(), 1);
+        // Another folder starts over; it is placed again.
+        let dir = std::env::temp_dir();
+        p.update(Some(&dir), std::slice::from_ref(&name));
+        assert!(p.slots().contains_key(&name));
+        assert!(
+            p.pending.is_empty() && p.failed.is_empty(),
+            "never read as a file"
+        );
+        // Handed in again with none: gone.
+        p.provide("\u{1}ot:", Vec::new());
+        p.update(Some(&dir), std::slice::from_ref(&name));
+        assert!(!p.slots().contains_key(&name));
+        assert!(p.pending.is_empty() && p.failed.is_empty());
     }
 }

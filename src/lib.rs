@@ -72,6 +72,7 @@ mod recalc;
 mod render;
 #[cfg(test)]
 mod results_tests;
+mod scare;
 mod scores;
 mod search;
 mod setstatus;
@@ -572,6 +573,13 @@ struct State {
     admin: bool,
     skin_loader: Option<skin::Loader>,
     skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
+    /// The skin's sounds as last loaded, before Overtime's own scream goes in.
+    skin_sounds: Option<Arc<audio::Sounds>>,
+    /// Overtime's own scare (`scare`): what its folder held when last read, how long each of
+    /// its picture's frames shows, and its sound.
+    scare_seen: Option<scare::Signature>,
+    scare_frames: Vec<f64>,
+    scare_sound: Option<Arc<[f32]>>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
     /// the folder last checked for them.
     skin_map: Option<PathBuf>,
@@ -3341,6 +3349,9 @@ impl State {
             }
             None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
         };
+        if self.cfg.mods.has(mods::Mod::Overtime) {
+            self.refresh_scare();
+        }
         self.scene = Scene::Loading {
             rx,
             label,
@@ -4614,7 +4625,9 @@ impl State {
                 .get(i)
                 .map(|&p| self.skin_source_name(c.skin_parts.get(p)))
                 .unwrap_or_default(),
-            Item::SkinFolder => tr!("Enter to open", "Enterで開く", "Enter — открыть").into(),
+            Item::SkinFolder | Item::OvertimeFolder => {
+                tr!("Enter to open", "Enterで開く", "Enter — открыть").into()
+            }
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::NoteColours => c.note_colours.label().into(),
@@ -4932,7 +4945,7 @@ impl State {
                 self.load_skin();
             }
             // Acts on Enter in `settings_key`.
-            Item::SkinFolder => return,
+            Item::SkinFolder | Item::OvertimeFolder => return,
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
@@ -6104,10 +6117,51 @@ impl State {
             self.skin_key = Some((ready.key, Arc::downgrade(&ready.assets.images)));
             self.sprites_upload = Some(ready.assets.images.clone());
             skin::apply_map_spinner_warning(ready.assets.map_spinner);
-            if let (Some(audio), Some(sounds)) = (&self.audio, &ready.assets.sounds) {
-                audio.set_hitsounds(sounds.clone());
+            if let Some(sounds) = &ready.assets.sounds {
+                self.skin_sounds = Some(sounds.clone());
+                self.apply_sounds();
             }
         }
+    }
+
+    /// The skin's sounds to the audio engine, with Overtime's own scream in if there is one.
+    fn apply_sounds(&self) {
+        let (Some(audio), Some(sounds)) = (&self.audio, &self.skin_sounds) else {
+            return;
+        };
+        match &self.scare_sound {
+            Some(scream) => {
+                let mut own = (**sounds).clone();
+                own[audio::Sfx::Scream as usize] = scream.clone();
+                audio.set_hitsounds(Arc::new(own));
+            }
+            None => audio.set_hitsounds(sounds.clone()),
+        }
+    }
+
+    /// Reads Overtime's folder again if anything in it changed since the last time: its picture
+    /// goes to the map pictures, its sound in place of the scream.
+    fn refresh_scare(&mut self) {
+        let Some(dir) = scare::dir() else { return };
+        let seen = scare::signature(&dir);
+        if self.scare_seen.as_ref() == Some(&seen) {
+            return;
+        }
+        self.scare_seen = Some(seen);
+        let rate = self.audio.as_ref().map_or(48_000, |a| a.rate);
+        let custom = scare::load(&dir, rate);
+        self.scare_frames = custom.frames.iter().map(|f| f.2).collect();
+        self.pictures.provide(
+            scare::PREFIX,
+            custom
+                .frames
+                .into_iter()
+                .enumerate()
+                .map(|(k, (rgba, aspect, _))| (scare::frame_name(k), rgba, aspect))
+                .collect(),
+        );
+        self.scare_sound = custom.sound.map(Arc::from);
+        self.apply_sounds();
     }
 
     /// Swaps the playing map's own skin images in, and out again after: only when it has some,
@@ -6155,6 +6209,31 @@ impl State {
             .get(entry)
             .and_then(|e| e.path.parent())
             .map(Path::to_path_buf)
+    }
+
+    /// Opens Overtime's own scare folder (made if it isn't there yet).
+    fn open_overtime_folder(&mut self) {
+        let Some(dir) = scare::dir() else { return };
+        let _ = std::fs::create_dir_all(&dir);
+        let opener = if cfg!(windows) {
+            "explorer"
+        } else if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        if std::process::Command::new(opener)
+            .arg(&dir)
+            .spawn()
+            .is_err()
+        {
+            let dir = dir.display();
+            self.toast(tr!(
+                "Overtime's own picture and sound go in {dir}",
+                "Overtimeの画像と音は{dir}に置きます",
+                "свои картинка и звук Overtime кладутся в {dir}";
+            ));
+        }
     }
 
     fn open_skins_folder(&mut self) {
@@ -6828,6 +6907,11 @@ impl State {
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => {
                 self.open_skins_folder()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::OvertimeFolder =>
+            {
+                self.open_overtime_folder()
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::HiddenMaps => {
                 if self.select.hidden.is_empty() {
@@ -15043,6 +15127,9 @@ impl State {
                         } else if *retry {
                             game.skip(self.audio.as_ref(), self.play_offset);
                         }
+                        if game.mods.has(mods::Mod::Overtime) {
+                            game.scare_frames = self.scare_frames.clone();
+                        }
                         match self.pending_replay.take() {
                             Some(r) => {
                                 game.mash = r.mash();
@@ -19142,6 +19229,10 @@ impl State {
             sprites_upload: None,
             skin_loader: None,
             skin_key: None,
+            skin_sounds: None,
+            scare_seen: None,
+            scare_frames: Vec::new(),
+            scare_sound: None,
             skin_map: None,
             skin_map_seen: None,
             focused: true,

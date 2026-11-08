@@ -522,6 +522,9 @@ pub struct Game {
     hp_exempt: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
     failed: Option<(f64, Instant)>,
+    /// Overtime: how long each frame of the player's own picture shows (ms), in place of the
+    /// bear (`scare::frame_name` names them); empty for the bear.
+    pub scare_frames: Vec<f64>,
     /// Seconds the FAILED sign stays before the play ends (shorter when it starts over by itself).
     pub fail_linger: f64,
     /// Alternate: the hand of the last accepted press (true = left) and when; None while either
@@ -2212,6 +2215,7 @@ impl Game {
             hp_exempt: false,
             failed: None,
             fail_linger: 1.6,
+            scare_frames: Vec::new(),
             last_hand: None,
             quake_at: f64::NEG_INFINITY,
             cracks: Vec::new(),
@@ -6268,7 +6272,18 @@ impl Game {
             .iter()
             .find(|&&at| (at..at + SCARE_MS).contains(&t))
         {
-            draw_scare(c, ((t - at) / SCARE_MS) as f32, t);
+            let picture = (!self.scare_frames.is_empty()).then(|| {
+                // Real time, not the song's: a GIF moves at its own pace under DT and HT.
+                let ms = (t - at) / self.speed().rate_at(at).max(0.01);
+                crate::scare::frame_name(crate::scare::frame_at(&self.scare_frames, ms))
+            });
+            draw_scare(c, ((t - at) / SCARE_MS) as f32, t, picture.as_deref());
+        } else if self.mods.has(Mod::Overtime) {
+            // The player's own picture stays loaded, ready for when he comes.
+            for k in 0..self.scare_frames.len() {
+                let name = crate::scare::frame_name(k);
+                c.picture(&name, -1000.0, -1000.0, 1.0, 0.0, [0.0; 4]);
+            }
         }
 
         if self.can_skip() && self.paused.is_none() && !self.mute_hits && !self.watched {
@@ -7150,7 +7165,9 @@ fn skin_health(c: &Canvas) -> Option<[[f32; 2]; 2]> {
     Some([[bg[0] * k, bg[1] * k], [fill[0] * k, fill[1] * k]])
 }
 
-fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
+/// Overtime's scare `p` (0-1) of the way through: the bear, or the player's own `picture` (one of
+/// the map pictures, by name) once it's loaded.
+fn draw_scare(c: &mut Canvas, p: f32, t: f64, picture: Option<&str>) {
     let w = c.width;
     let start = c.shapes.len();
     // Lunges in over the first 12%, then holds, shaking, and flickers out at the end.
@@ -7166,6 +7183,14 @@ fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
         1.0
     };
     c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(0x050000, 0.92 * flicker));
+    if picture.is_some_and(|name| c.picture(name, 0.0, 0.0, 380.0, 0.0, [1.0; 4])) {
+        c.transform_since(start + 1, [0.0, 0.0], k, w / 2.0 + sx, 230.0 + sy);
+        for sh in &mut c.shapes[start..] {
+            sh.fill[3] *= flicker;
+            sh.border[3] *= flicker;
+        }
+        return;
+    }
     let (fur, dark, snout) = (0x5a3418, 0x3a2010, 0xb98552);
     // Ears, head, hat.
     for side in [-1.0, 1.0] {
@@ -10823,6 +10848,28 @@ mod tests {
         g.sfx_log = Some(Vec::new());
         g.set_time(at + 5000.0);
         assert_eq!(screams(&g), 0);
+    }
+
+    #[test]
+    fn overtime_shows_the_players_own_picture_frame_by_frame() {
+        let mut g = kiai_game("OT");
+        g.scare_frames = vec![100.0, 100.0];
+        let at = g.scares[0];
+        let wanted = |g: &mut Game, t: f64| {
+            g.set_time(t);
+            let mut c = Canvas::default();
+            c.clear(853.0);
+            g.draw_hud(&mut c);
+            c.pictures_wanted
+        };
+        // Before he comes, every frame is asked for (kept loaded); then the one due.
+        let names = [crate::scare::frame_name(0), crate::scare::frame_name(1)];
+        assert_eq!(wanted(&mut g, at - 500.0), names.to_vec());
+        assert_eq!(wanted(&mut g, at + 50.0), vec![names[0].clone()]);
+        assert_eq!(wanted(&mut g, at + 150.0), vec![names[1].clone()]);
+        // The bear without one: no pictures.
+        let mut g = kiai_game("OT");
+        assert!(wanted(&mut g, at + 50.0).is_empty());
     }
     /// 1/4s from 0 ms, triplets from 2880 ms and 1/6s from 6720 ms, at 125 BPM.
     fn rhythm_game(mods: &str) -> Game {

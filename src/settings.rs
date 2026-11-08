@@ -118,6 +118,8 @@ pub enum Item {
     CrashReports,
     Skin,
     SkinFolder,
+    /// Opens the folder of Overtime's own picture and sound (`scare`).
+    OvertimeFolder,
     MapSkins,
     NoteColours,
     DonColour,
@@ -126,7 +128,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 135] = [
+pub const ITEMS: [(&str, Item); 136] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -233,6 +235,7 @@ pub const ITEMS: [(&str, Item); 135] = [
     ("SKIN", Item::Skin),
     ("SKIN", Item::SkinParts),
     ("SKIN", Item::SkinFolder),
+    ("SKIN", Item::OvertimeFolder),
     ("SKIN", Item::MapSkins),
     ("SKIN", Item::HitFlash),
     ("SKIN", Item::NoteColours),
@@ -695,6 +698,11 @@ impl Item {
                 |p| p.label(),
             ),
             Item::SkinFolder => tr!("Skins folder", "スキンのフォルダ", "Папка скинов"),
+            Item::OvertimeFolder => tr!(
+                "Overtime scare folder",
+                "Overtimeの驚かしフォルダ",
+                "Папка скримера Overtime"
+            ),
             Item::Accent => tr!("UI colour", "UIの色", "Цвет интерфейса"),
             Item::AccentHue => tr!(
                 "UI colour: fine tune",
@@ -804,7 +812,8 @@ impl Item {
             | Item::Changelog
             | Item::KrokodilKoban
             | Item::SongSelectLayout
-            | Item::SkinFolder => Kind::Action,
+            | Item::SkinFolder
+            | Item::OvertimeFolder => Kind::Action,
         }
     }
 
@@ -1257,6 +1266,11 @@ impl Item {
                 "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
                 "スキンから描くものとその出どころ: 上のスキン、内蔵、または他のどれか (混ぜられます)。Enterでリスト。",
                 "Что берётся из скина и из какого: скин выше, встроенный или любой другой (можно смешивать). Enter: список."
+            ),
+            Item::OvertimeFolder => tr!(
+                "Enter: open the folder for Overtime's own scare. A picture there (png, jpg, webp, or an animated gif) shows instead of the bear, a sound (ogg, mp3, wav, flac) plays instead of the scream: the first of each by name.",
+                "Enter: Overtimeの驚かし用フォルダを開く。画像 (png, jpg, webp, アニメgif) を置くとクマの代わりに表示し、音 (ogg, mp3, wav, flac) を置くと叫び声の代わりに鳴らします。それぞれ名前順で最初のものを使います。",
+                "Enter: открыть папку своего скримера Overtime. Картинка там (png, jpg, webp или анимированный gif) показывается вместо медведя, звук (ogg, mp3, wav, flac) играет вместо крика: берётся первый файл каждого вида по имени."
             ),
             Item::SkinFolder => tr!(
                 "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",
