@@ -1,0 +1,4 @@
+screen editor-home: EditorHome, 3 areas
+EditorHome(Browse) @427,173 -> EditorHome [toast "blocked in tests: no programs, no internet"]
+EditorHome(PickInLibrary) @632,260 -> Select +"." +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +45 more -"Choose a song file...   [Enter]" -"Drop a song here: mp3, ogg, wav or flac" -"Esc: back to the menu" -"Go on with a map" -"MAP EDITOR" -"Make a new map" -5 more
+EditorHome(Tour) @632,290 -> EditorHome [toast "make a map first (drop a song on this screen), then take the tour"]

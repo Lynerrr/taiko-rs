@@ -17,6 +17,12 @@ a hitsound command reach the audio thread before the mutex is released.
 cargo test --profile perf-audit --locked --lib perf_audit:: -- --ignored --nocapture --test-threads=1
 ```
 
+Pull requests run it on their base and head and fail on a slowdown: see the perf gate in
+[ci.md](ci.md). Cases added after this report: `dense_playfield` (streams of 33 and 67 notes a
+second, with no mods, HD, HR+DT and MV), `whole_frames` (`State::build_frame` on song select,
+settings, multiplayer, the main menu, the friends overlay and a dense play) and
+`drum_press_in_play` (a drum key through `State::key`, judged on its note).
+
 The [harness](../src/perf_audit.rs) calls the real client functions, without a window or audio
 device. It generates its own maps, library entries, and PNGs in temporary directories, and
 does not benchmark the player's music library. `perf-audit` enables optimized application

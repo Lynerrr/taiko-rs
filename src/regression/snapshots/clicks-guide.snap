@@ -1,0 +1,15 @@
+screen guide: Select, 14 areas
+Overlay @217,31 -> Select
+Guide(Bind(0)) @340,92 -> Select +"?" +"Press the new key, Esc to keep the old one" -"Click a key to change it" -"D"
+Guide(Bind(1)) @367,92 -> Select +"?" +"Press the new key, Esc to keep the old one" -"Click a key to change it" -"F"
+Guide(Bind(2)) @486,92 -> Select +"?" +"Press the new key, Esc to keep the old one" -"Click a key to change it" -"J"
+Guide(Bind(3)) @513,92 -> Select +"?" +"Press the new key, Esc to keep the old one" -"Click a key to change it" -"K"
+Guide(Page(0)) @391,424 -> Select
+Guide(Page(1)) @403,424 -> Select +"-" +"< Back" +"=" +"Audio offset" +"C" +"Calibrate (C)" +17 more -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"Esc" -15 more
+Guide(Page(2)) @415,424 -> Select +"< Back" +"All of it is in Settings > Video, and these change it on the spot." +"F10" +"F11" +"F12" +"F7" +12 more -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"Esc" -15 more
+Guide(Page(3)) @427,424 -> Select +"1.82*" +"4.96*" +"6.31*" +"< Back" +"Artist - Song [Inner Oni]" +"Artist - Song [Kantan]" +20 more -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"Esc" -15 more
+Guide(Page(4)) @439,424 -> Select +"/" +"< Back" +"After a song, look at the results: early or late, your UR, pp." +"Ctrl+R" +"F3" +"F4" +14 more -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"F" -13 more
+Guide(Page(5)) @451,424 -> Select +"< Back" +"C" +"DT" +"Discord" +"F1" +"F9" +14 more -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"Esc" -15 more
+Guide(Page(6)) @463,424 -> Select +"< Back" +"Ctrl+Q" +"Ctrl+U" +"Done" +"F5" +"F6" +16 more -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"Esc" -15 more
+Guide(Close) @199,445 -> Select +"log in" +"what's new" -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"Esc" -16 more
+Guide(Next) @655,445 -> Select +"-" +"< Back" +"=" +"Audio offset" +"C" +"Calibrate (C)" +17 more -"Alt+wheel/arrows" -"Click a key to change it" -"Ctrl+O" -"D" -"Each has two keys, so you can play with both hands in turn." -"Esc" -15 more

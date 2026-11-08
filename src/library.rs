@@ -126,6 +126,9 @@ pub fn launch_osu() -> Result<(), String> {
     #[cfg(not(target_os = "android"))]
     {
         use std::process::{Command, Stdio};
+        if !crate::offline::may_spawn() {
+            return Err(crate::offline::BLOCKED.into());
+        }
         let quiet = |mut c: Command| {
             c.stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -221,6 +224,9 @@ pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
 /// Runs the first of the system's dialogs that exists: Ok(None) when cancelled, Err when there
 /// is none to show.
 fn run_dialogs(tries: Vec<std::process::Command>) -> Result<Option<PathBuf>, String> {
+    if !crate::offline::may_spawn() {
+        return Err(crate::offline::BLOCKED.into());
+    }
     for mut cmd in tries {
         let Ok(out) = cmd.stderr(std::process::Stdio::null()).output() else {
             continue;

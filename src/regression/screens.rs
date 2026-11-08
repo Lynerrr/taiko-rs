@@ -12,7 +12,7 @@ use crate::*;
 /// Texts that change by themselves and so aren't kept: the frame rate counter (the frames are
 /// drawn at made-up instants, with animations off, so the rest stays put) and the build the
 /// update setting names (a local build has none, CI's is its commit).
-const VOLATILE: &[&str] = &[
+pub(super) const VOLATILE: &[&str] = &[
     " fps  ",
     "local build (no updates)",
     ", Enter to check",

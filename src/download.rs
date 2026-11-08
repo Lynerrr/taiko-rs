@@ -381,6 +381,7 @@ fn search_status(
     sort: Option<(&str, bool)>,
     page: usize,
 ) -> Result<(Vec<SetInfo>, usize), String> {
+    crate::offline::internet()?;
     let mut errors = Vec::new();
     for m in &MIRRORS {
         let mut req = agent
@@ -421,6 +422,7 @@ fn search_status(
 /// A set's status on osu! ("ranked", "loved", "graveyard"...), from the mirrors; `setstatus::MISSING`
 /// when they all say they don't have the set.
 pub fn set_status(set: u32) -> Result<String, String> {
+    crate::offline::internet()?;
     #[derive(Deserialize)]
     struct Set {
         status: String,
@@ -692,6 +694,7 @@ fn mirror_set(
     first: usize,
     id: u32,
 ) -> Result<String, String> {
+    crate::offline::internet()?;
     let mut errors = Vec::new();
     let all_refused = || lanes.iter().all(|l| l.refused.load(Ordering::Relaxed));
     for k in 0..MIRRORS.len() {
@@ -941,6 +944,7 @@ pub type OnlineSet = std::collections::HashMap<u32, OnlineDiff>;
 /// Each difficulty of set `id` as osu! has it now, by beatmap ID (from the first mirror that
 /// answers).
 pub fn set_checksums(id: u32) -> Result<OnlineSet, String> {
+    crate::offline::internet()?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
         .build()
@@ -1135,6 +1139,7 @@ pub(crate) fn download_to(
     total: &AtomicU64,
     cancel: &AtomicBool,
 ) -> Result<(), (String, bool)> {
+    crate::offline::url(url).map_err(|e| (e, true))?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(15)))
         .build()
@@ -1569,6 +1574,7 @@ fn merge(from: &Path, into: &Path) -> std::io::Result<()> {
 /// set's ~10 s music clip (from its preview point) and its cover, cached per set. Returns the
 /// `.osu` path; the clip and cover sit next to it.
 pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
+    crate::offline::internet()?;
     let dir = crate::config::cache_dir()
         .unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
         .join("previews")
@@ -1674,6 +1680,7 @@ pub fn cover_name(set: &SetInfo) -> String {
 /// Fetches a set's cover into [`covers_dir`] (osu!'s square list cover, or a custom set's
 /// background from the website). Err when it has none or it couldn't be fetched.
 pub fn fetch_cover(set: &SetInfo) -> Result<(), String> {
+    crate::offline::internet()?;
     let url = match &set.custom {
         Some(c) if c.background => format!("{}/c/{}/bg", crate::online::WEBSITE, set.id),
         Some(_) => return Err("no background".into()),

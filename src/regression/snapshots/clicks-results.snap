@@ -1,0 +1,4 @@
+screen results: Results, 3 areas
+Key(Enter) @347,434 -> Play +"00000000" +"0pp" +"100.00%" +"1920x1080 (full screen)" -"00912345" -"123 pp" -"96.09%" -"A" -"BIG x2  0" -"DRUMROLL 0" -13 more
+Key(Escape) @493,434 -> Select +"." +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +44 more -"00912345" -"123 pp" -"96.09%" -"A" -"BIG x2  0" -"DRUMROLL 0" -13 more
+Key(PageDown) @427,459 -> Results +"scroll up: results" -"scroll down: 123 pp breakdown"

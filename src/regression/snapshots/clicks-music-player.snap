@@ -1,0 +1,21 @@
+screen player: Select, 20 areas
+Key(Escape) @47,34 -> Select +"." +"1 maps in your library" +"DOWNLOAD" +"EDITOR" +"EXIT" +"MEDALS" +15 more -"+ on a song adds it" -"0:00" -"1 songs" -"< menu" -"All songs" -"D K song   F J pause   L love   Tab folders" -9 more
+PlayerFolders @157,34 -> Select +"0" +"1" +"All songs" +"Favourites" +"No genre" -"1 songs" -"Regression - basics" -"search (Ctrl+F)"
+PlayerSearch @115,61 -> Select +"_" -"search (Ctrl+F)"
+PlayerRow(0) @97,86 -> Select +"+"
+PlayerFavourite(0) @192,86 -> Select +"+"
+PlayerQueue(0) @209,86 -> Select [toast "queued: 1"] +"+" +"Regression - basics" -"+ on a song adds it"
+MusicBar @447,387 -> Select
+Music(Shuffle) @332,419 -> Select
+Music(Prev) @378,419 -> Select
+Music(Toggle) @424,419 -> Select
+Music(Next) @470,419 -> Select
+Music(Repeat) @516,419 -> Select +"1"
+Music(Favourite) @562,419 -> Select
+Music(PlayMap) @312,449 -> Select +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +"3.08" +32 more -"+ on a song adds it" -"0:00" -"1 songs" -"< menu" -"All songs" -"D K song   F J pause   L love   Tab folders" -10 more
+PlayerSpeed(0) @366,449 -> Select
+PlayerSpeed(1) @396,449 -> Select
+PlayerSpeed(2) @426,449 -> Select
+PlayerSpeed(3) @456,449 -> Select
+PlayerPitch @506,449 -> Select
+PlayerVolume @581,449 -> Select

@@ -92,6 +92,9 @@ pub fn set_image(w: u32, h: u32, rgb: &[u8]) -> bool {
 /// `input` to it.
 #[allow(unused_variables)]
 fn tool(tries: &[(&str, &[&str])], input: Option<&[u8]>) -> Option<String> {
+    if !crate::offline::may_spawn() {
+        return None;
+    }
     #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
     {
         use std::io::Write;

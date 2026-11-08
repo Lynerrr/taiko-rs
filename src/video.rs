@@ -151,7 +151,7 @@ pub fn target_rates(mb: f64, seconds: f64) -> Option<(u32, u32)> {
 /// app there, so a console program would get a window of its own).
 fn ffmpeg_command(ffmpeg: &Path) -> Command {
     #[allow(unused_mut)]
-    let mut cmd = Command::new(ffmpeg);
+    let mut cmd = crate::offline::command(ffmpeg);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
