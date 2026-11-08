@@ -457,29 +457,19 @@ pub fn get() -> [Universe; COUNT] {
     *CURRENT.read().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The note colours of plays without Multiverse (Settings > Skin).
+/// The configured note colours of plays without Multiverse (Settings > Skin), for threads not
+/// building a frame (`game::Look`).
 pub fn set_note_colours(colours: Colours) {
     *NOTE_COLOURS.write().unwrap_or_else(|e| e.into_inner()) = colours;
 }
 
-pub fn note_colours() -> Colours {
-    #[cfg(test)]
-    if let Some(pinned) = PINNED_NOTE_COLOURS.with(std::cell::Cell::get) {
-        return pinned;
-    }
+pub fn configured_note_colours() -> Colours {
     *NOTE_COLOURS.read().unwrap_or_else(|e| e.into_inner())
 }
 
-#[cfg(test)]
-thread_local! {
-    static PINNED_NOTE_COLOURS: std::cell::Cell<Option<Colours>> = const { std::cell::Cell::new(None) };
-}
-
-/// Tests: this thread sees `colours` as the note colours whatever `set_note_colours` does
-/// meanwhile (tests building frames in parallel set them from their own configs).
-#[cfg(test)]
-pub fn pin_note_colours_for_this_thread(colours: Option<Colours>) {
-    PINNED_NOTE_COLOURS.with(|p| p.set(colours));
+/// The note colours of plays without Multiverse, as this thread draws them (`game::playfield_look`).
+pub fn note_colours() -> Colours {
+    crate::game::playfield_look().note_colours
 }
 
 /// A don or kat `r` across in `shape`. Round is the usual note (skins draw their own).
@@ -1057,12 +1047,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pinned_note_colours_hold_while_another_thread_sets_them() {
+    fn a_frame_s_note_colours_hold_while_another_thread_sets_them() {
         let mine = Colours {
             palette: 0,
             custom: [0x112233, 0x445566],
         };
-        pin_note_colours_for_this_thread(Some(mine));
+        crate::game::set_frame_look(Some(crate::game::Look {
+            note_colours: mine,
+            ..crate::game::Look::default()
+        }));
         std::thread::spawn(|| {
             for i in 0..1000 {
                 set_note_colours(Colours {
@@ -1074,7 +1067,12 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(note_colours(), mine);
-        pin_note_colours_for_this_thread(None);
+        crate::game::set_frame_look(None);
+        assert_ne!(
+            note_colours(),
+            mine,
+            "without a frame: the configured colours"
+        );
         set_note_colours(Colours::CLASSIC);
     }
 

@@ -105,10 +105,13 @@ pub fn settle(s: &mut State, now: &mut Instant) {
 
 /// A client with `library` scanned (taken in on the first frame) and settings `cfg`.
 pub fn state_with(cfg: Config, library: Vec<Entry>) -> State {
-    // Other tests set the process-wide drawing switches from their own settings meanwhile.
-    render::pin_animations_for_this_thread(Some(cfg.animations));
-    render::pin_accent_for_this_thread(Some(render::DEFAULT_ACCENT));
-    multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
+    // Before the first frame (which sets them from `cfg`): what this test's client draws with,
+    // whatever other tests' frames are drawn with meanwhile.
+    render::set_frame_theme(Some(render::Theme {
+        animations: cfg.animations,
+        ..render::Theme::default()
+    }));
+    crate::game::set_frame_look(Some(crate::game::Look::default()));
     let (tx, rx) = mpsc::channel();
     tx.send(Scanned::Done(library)).unwrap();
     let mut s = State::new(

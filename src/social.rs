@@ -2728,7 +2728,10 @@ mod tests {
 
     #[test]
     fn the_tab_stands_on_the_edge_and_rides_on_the_open_panel() {
-        crate::render::set_animations(false);
+        crate::render::set_frame_theme(Some(crate::render::Theme {
+            animations: false,
+            ..crate::render::Theme::default()
+        }));
         let mut s = Social::default();
         let [x, _, w, h] = tab_rect(&s, false);
         assert_eq!(x + w, 853.0, "against the edge of the screen");

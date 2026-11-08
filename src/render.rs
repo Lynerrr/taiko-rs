@@ -2709,17 +2709,72 @@ fn font_px(size: f32) -> f32 {
     }
 }
 
-thread_local! {
-    /// The Legacy menu setting, for the frame being built.
-    static LEGACY_MENU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+/// What the interface is drawn with apart from the canvas: the settings that change every
+/// screen's look, and the music's beat.
+///
+/// The thread building a frame draws with the theme it started the frame with
+/// (`set_frame_theme`, from `build_frame`), so frames built side by side (tests) each keep their
+/// own. Other threads, and one before its first frame, see the configured accent and animations
+/// (`set_accent`, `set_animations`: the window thread draws the pointer in the accent).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Theme {
+    /// The interface's accent: borders of what's selected, headings, sliders.
+    pub accent: u32,
+    /// UI animations (Settings -> Video). Off, every animation shows its end state.
+    pub animations: bool,
+    /// The Legacy menu setting: tabs along the top instead of the main menu.
+    pub legacy_menu: bool,
+    /// What's left of the music's beat (1 on it, falling to 0; `style::set_beat`).
+    pub pulse: f32,
+    /// How far into a kiai (0 to 1; `style::set_beat`).
+    pub kiai: f32,
 }
 
-pub fn set_legacy_menu(on: bool) {
-    LEGACY_MENU.with(|l| l.set(on));
+impl Default for Theme {
+    fn default() -> Theme {
+        Theme {
+            accent: DEFAULT_ACCENT,
+            animations: true,
+            legacy_menu: false,
+            pulse: 0.0,
+            kiai: 0.0,
+        }
+    }
+}
+
+thread_local! {
+    /// The theme of the frame this thread is building (`set_frame_theme`).
+    static FRAME_THEME: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
+}
+
+/// This thread draws with `theme` from now on (`None`: with the configured accent and
+/// animations, and no beat).
+pub fn set_frame_theme(theme: Option<Theme>) {
+    FRAME_THEME.with(|t| t.set(theme));
+}
+
+/// What this thread draws with.
+pub fn theme() -> Theme {
+    FRAME_THEME
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(|| Theme {
+            accent: ACCENT.load(std::sync::atomic::Ordering::Relaxed),
+            animations: ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed),
+            ..Theme::default()
+        })
+}
+
+/// Changes what this thread draws with for the rest of its frame.
+pub fn edit_frame_theme(edit: impl FnOnce(&mut Theme)) {
+    let mut t = theme();
+    edit(&mut t);
+    set_frame_theme(Some(t));
 }
 
 pub fn legacy_menu() -> bool {
-    LEGACY_MENU.with(std::cell::Cell::get)
+    FRAME_THEME
+        .with(std::cell::Cell::get)
+        .is_some_and(|t| t.legacy_menu)
 }
 
 /// `v` moved onto the text grid (unchanged without one).
@@ -2745,29 +2800,17 @@ pub fn pixel_size(want: f32) -> f32 {
 
 static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// UI animations on or off (Settings -> Video). Off, every animation shows its end state.
+/// The configured UI animations (Settings -> Video), for threads not building a frame (`Theme`).
 pub fn set_animations(on: bool) {
     ANIMATIONS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// UI animations on or off. Off, every animation shows its end state.
 pub fn animations() -> bool {
-    #[cfg(test)]
-    if let Some(on) = PINNED_ANIMATIONS.with(std::cell::Cell::get) {
-        return on;
-    }
-    ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-thread_local! {
-    static PINNED_ANIMATIONS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
-
-/// Tests: this thread sees animations `on` whatever `set_animations` does meanwhile (tests
-/// building frames in parallel set the switch from their own configs).
-#[cfg(test)]
-pub fn pin_animations_for_this_thread(on: Option<bool>) {
-    PINNED_ANIMATIONS.with(|p| p.set(on));
+    FRAME_THEME.with(std::cell::Cell::get).map_or_else(
+        || ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed),
+        |t| t.animations,
+    )
 }
 
 /// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
@@ -2947,30 +2990,18 @@ pub const ACCENTS: [(&str, u32); 8] = [
 
 static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(DEFAULT_ACCENT);
 
+/// The configured accent, for threads not building a frame (`Theme`; the window thread draws the
+/// pointer in it).
 pub fn set_accent(hex: u32) {
     ACCENT.store(hex, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The interface's accent: borders of what's selected, headings, sliders.
 pub fn accent() -> u32 {
-    #[cfg(test)]
-    if let Some(pinned) = PINNED_ACCENT.with(std::cell::Cell::get) {
-        return pinned;
-    }
-    ACCENT.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-thread_local! {
-    static PINNED_ACCENT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-}
-
-/// Tests: this thread sees `hex` as the accent whatever `set_accent` does meanwhile. The accent
-/// is process-wide (the window thread reads it too), and tests building frames in parallel set
-/// it from their own configs, so a test comparing draws pins it first.
-#[cfg(test)]
-pub fn pin_accent_for_this_thread(hex: Option<u32>) {
-    PINNED_ACCENT.with(|p| p.set(hex));
+    FRAME_THEME.with(std::cell::Cell::get).map_or_else(
+        || ACCENT.load(std::sync::atomic::Ordering::Relaxed),
+        |t| t.accent,
+    )
 }
 
 /// `default` with the default accent; with another, that accent mixed `t` of the way to `toward`
@@ -3915,8 +3946,13 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_accent_holds_while_another_thread_sets_it() {
-        super::pin_accent_for_this_thread(Some(0x123456));
+    fn a_frame_s_theme_holds_while_another_thread_sets_the_accent() {
+        let mine = super::Theme {
+            accent: 0x123456,
+            animations: false,
+            ..super::Theme::default()
+        };
+        super::set_frame_theme(Some(mine));
         let other = std::thread::spawn(|| {
             for i in 0..1000 {
                 super::set_accent(i);
@@ -3924,9 +3960,18 @@ mod tests {
             super::accent()
         });
         let seen = other.join().unwrap();
-        assert_eq!(super::accent(), 0x123456, "the pin holds on this thread");
-        assert_ne!(seen, 0x123456, "other threads see what's set");
-        super::pin_accent_for_this_thread(None);
+        assert_eq!(
+            super::accent(),
+            0x123456,
+            "the frame's accent holds on this thread"
+        );
+        assert!(!super::animations());
+        assert_eq!(super::theme(), mine);
+        assert_ne!(seen, 0x123456, "a thread without a frame sees what's set");
+        super::edit_frame_theme(|t| t.pulse = 0.5);
+        assert_eq!(super::theme().pulse, 0.5);
+        assert_eq!(super::accent(), 0x123456, "an edit keeps the rest");
+        super::set_frame_theme(None);
         super::set_accent(super::DEFAULT_ACCENT);
     }
 
