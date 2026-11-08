@@ -45,8 +45,21 @@ jobs:
       - name: Lint
         run: cargo clippy --profile ci-test --locked --all-targets -- -D warnings
 
+      # The client regression suite (docs/regression-tests.md) on its own, so a failure is
+      # named as one; the full run below skips it.
+      - name: Client regression suite
+        run: cargo test --profile ci-test --locked --lib regression::
+
+      - name: Upload changed golden output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-snapshots-${{ matrix.os }}
+          path: src/regression/snapshots/*.snap.new
+          if-no-files-found: ignore
+
       - name: Run prebuilt tests
-        run: cargo test --profile ci-test --locked --all-targets
+        run: cargo test --profile ci-test --locked --all-targets -- --skip regression::
 
   server:
     name: Server

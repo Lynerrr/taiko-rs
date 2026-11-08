@@ -1,0 +1,77 @@
+text  728,8    войти
+text  778,9    что нового
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   ПЕСНИ
+text  264,27   НАСТРОЙКИ
+text  362,27   МУЛЬТИПЛЕЕР
+text  475,27   ЗАГРУЗКА
+text  558,27   Tab
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text  223,58   БИБЛИОТЕКА
+text  586,63   начни печатать для поиска...
+text   73,69   БИБЛИОТЕКА
+text   73,83   папка Songs, скрытые...
+text  235,90   Папка Songs
+text  578,90   <  не найдена, Enter — выбрать  >
+text   73,109  ИГРА
+text  235,120  Карты osu!standard (конверты)
+text   73,124  скорость, рейт, интер...
+text   73,149  ВИД
+text  235,150  Заголовки в списке песен
+text   73,163  игровое поле, фон
+text  235,180  Скрытые карты
+text  777,182  none
+text   73,189  УПРАВЛЕНИЕ
+text   73,205  клавиши, горячие клавиши
+text  235,210  Макет выбора песни
+text  722,212  по умолчанию
+text   73,229  СМЕЩЕНИЕ
+text  235,240  Папка данных игры
+text  716,240  обычные места
+text   73,243  смещение звука, калиб...
+text   73,269  ЗВУК
+text  235,270  Скриншоты
+text  743,270  Clipboard
+text   73,285  громкость, задержка
+text  233,306  Папка с вашими картами. Enter: обзор, ввести путь или снова искать папку osu!.
+text   73,309  ГРАФИКА
+text   73,325  кадры, экран
+text   73,349  СКИН
+text   73,365  ноты, вспышка, цвет
+text   73,389  ОНЛАЙН
+text   73,403  чат, уведомления, Dis...
+text   73,429  СИСТЕМА
+text   73,443  язык, запуск, обновления
+text  146,462  Type to search   Up/Down select   Left/Right change   Enter list   Esc or Tab back
+hit   188,20     59x22   Tab(0)
+hit   254,20     89x22   Tab(1)
+hit   352,20    105x22   Tab(2)
+hit   465,20     82x22   Tab(3)
+hit    37,62    170x34   SettingsSection(0)
+hit    37,102   170x34   SettingsSection(1)
+hit    37,142   170x34   SettingsSection(2)
+hit    37,182   170x34   SettingsSection(3)
+hit    37,222   170x34   SettingsSection(4)
+hit    37,262   170x34   SettingsSection(5)
+hit    37,302   170x34   SettingsSection(6)
+hit    37,342   170x34   SettingsSection(7)
+hit    37,382   170x34   SettingsSection(8)
+hit    37,422   170x34   SettingsSection(9)
+hit   577,55    240x19   SettingsSearch
+hit   223,78    594x30   SettingRow(0)
+hit   572,80     20x26   SettingStep(0, -1)
+hit   791,80     24x26   SettingStep(0, 1)
+hit   223,108   594x30   SettingRow(1)
+hit   223,138   594x30   SettingRow(2)
+hit   223,168   594x30   SettingRow(3)
+hit   223,198   594x30   SettingRow(4)
+hit   223,228   594x30   SettingRow(5)
+hit   223,258   594x30   SettingRow(6)
+hit   771,2      74x14   Changelog
+hit   721,2      44x14   Account

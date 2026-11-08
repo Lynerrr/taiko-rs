@@ -1,0 +1,57 @@
+== osu!standard convert (circles, a slider with repeats, a spinner)
+meta: a - t [v] by c | mode 0 od 5 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 4 notes, 3 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.3920
+  1523.00 Kat v 0.3920
+  2023.00 Roll v 0.3920 end 3023.00 ticks every 62.500
+  4023.00 Swell v 0.3920 end 5023.00 hits 8
+  barlines: 23.0 2023.0 4023.0
+  cp 23.00 origin 23.00 beat 500.000 sv 1.0000 kiai false vol 1.00
+read_meta: a - t [v] mode 0 od 5 bg None
+== osu!mania chart (not playable)
+error: unsupported mode 3 (only osu!standard converts and taiko)
+read_meta: a - t [v] mode 3 od 5 bg None
+== fake sliders: negative, tiny and NaN lengths
+meta: a - t [v] by c | mode 1 od 5 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 5 notes, 2 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.3920
+  1523.00 Roll v 0.3920 ticks every 62.500 fake_len 178.571 fades false tiny true unhittable false
+  2023.00 Roll v 0.3920 ticks every 62.500 fake_len 0.000 fades false tiny true unhittable false
+  2523.00 Kat v 0.3920 fake_len 0.000 fades false tiny false unhittable true
+  3523.00 Don v 0.3920
+  barlines: 23.0 2023.0
+  cp 23.00 origin 23.00 beat 500.000 sv 1.0000 kiai false vol 1.00
+read_meta: a - t [v] mode 1 od 5 bg None
+== no timing points
+meta:  -  [] by  | mode 1 od 5 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 1 notes, 0 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.3920
+  barlines:
+  cp 23.00 origin 23.00 beat 500.000 sv 1.0000 kiai false vol 1.00
+read_meta:  -  [] mode 1 od 5 bg None
+== old format v5, extreme SV, kiai, omitted barline
+meta: a - t [v] by c | mode 1 od 5 hp 5 sm 1.4 tick 1 v5 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 3 notes, 2 barlines, 3 control points, 0 fakes
+  523.00 Don v 0.3920
+  1223.00 Don big v 3.9200
+  2223.00 Kat big v 0.0392
+  barlines: 23.0 2023.0
+  cp 23.00 origin 23.00 beat 500.000 sv 1.0000 kiai false vol 1.00
+  cp 1023.00 origin 23.00 beat 500.000 sv 10.0000 kiai true vol 1.00
+  cp 2023.00 origin 23.00 beat 500.000 sv 0.1000 kiai false vol 1.00
+read_meta: a - t [v] mode 1 od 5 bg None
+== garbage lines are skipped
+meta: a - t [v] by c | mode 1 od 5 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 2 notes, 1 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.3920
+  1323.00 Kat v 0.3920
+  barlines: 23.0
+  cp 23.00 origin 23.00 beat 500.000 sv 1.0000 kiai false vol 1.00
+read_meta: a - t [v] mode 1 od 5 bg None
+== CRLF line endings and a BOM
+meta: a - t [v] by c | mode 1 od 5 hp 5 sm 1.4 tick 1 v14 | audio "" preview 0 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 1 notes, 1 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.3920
+  barlines: 23.0
+  cp 23.00 origin 23.00 beat 500.000 sv 1.0000 kiai false vol 1.00
+read_meta: a - t [v] mode 1 od 5 bg None

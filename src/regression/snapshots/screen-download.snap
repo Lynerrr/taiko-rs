@@ -1,0 +1,37 @@
+text  723,7    log in
+text  778,7    what's new
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   SONGS
+text  264,27   SETTINGS
+text  354,27   MULTIPLAYER
+text  467,27   DOWNLOAD
+text  551,27   Tab
+text  596,28   maps from catboy.best / osu.direct
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text   34,61   search artist, title, mapper...
+text  361,62   osu!
+text  405,62   taiko.rs
+text   69,90   Has leaderboard
+text  230,90   Relevance
+text   32,91   STATUS
+text  204,91   SORT
+text  207,220  no results
+text   24,452  Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs
+text   24,466  saving to /nonexistent
+hit   188,20     59x22   Tab(0)
+hit   254,20     82x22   Tab(1)
+hit   344,20    105x22   Tab(2)
+hit   457,20     82x22   Tab(3)
+hit   353,54     43x24   DlSource(0)
+hit   397,54     71x24   DlSource(1)
+hit    24,54    321x24   TextField
+hit    24,84    166x20   DlMenu(0)
+hit   196,84    114x20   DlMenu(1)
+hit   771,2      74x14   Changelog
+hit   715,2      50x14   Account

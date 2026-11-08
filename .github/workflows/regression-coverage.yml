@@ -1,0 +1,34 @@
+name: Regression coverage
+
+# Client changes must come with regression tests (AGENTS.md, docs/regression-tests.md). A pull
+# request that changes client code without touching any test fails here, unless it carries the
+# `no-regression-test` label (a pure refactor the existing tests already prove, explained in the
+# description). Runs apart from Pre-merge so adding or removing the label doesn't rebuild.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-coverage-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Regression coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require tests with client changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          WAIVED: ${{ contains(github.event.pull_request.labels.*.name, 'no-regression-test') }}
+        run: sh .github/scripts/check-regression-tests.sh "$BASE_SHA" "$HEAD_SHA"

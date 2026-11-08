@@ -2751,7 +2751,23 @@ pub fn set_animations(on: bool) {
 }
 
 pub fn animations() -> bool {
+    #[cfg(test)]
+    if let Some(on) = PINNED_ANIMATIONS.with(std::cell::Cell::get) {
+        return on;
+    }
     ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PINNED_ANIMATIONS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: this thread sees animations `on` whatever `set_animations` does meanwhile (tests
+/// building frames in parallel set the switch from their own configs).
+#[cfg(test)]
+pub fn pin_animations_for_this_thread(on: Option<bool>) {
+    PINNED_ANIMATIONS.with(|p| p.set(on));
 }
 
 /// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with

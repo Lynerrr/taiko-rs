@@ -1,0 +1,7 @@
+basics             great 64 ok 0 miss 0 | combo 64 max 64 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+big-notes          great 40 ok 0 miss 0 | combo 40 max 40 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+rolls-and-swells   great 14 ok 0 miss 0 | combo 14 max 14 | score 1000000 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+sv-and-kiai        great 42 ok 0 miss 0 | combo 42 max 42 | score 1000000 | rolls 3 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+stream             great 160 ok 0 miss 0 | combo 160 max 160 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+low-od             great 24 ok 0 miss 0 | combo 24 max 24 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+high-od            great 48 ok 0 miss 0 | combo 48 max 48 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false

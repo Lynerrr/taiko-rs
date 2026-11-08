@@ -1,0 +1,79 @@
+EZ Easy "Easy" x0.5000 unranked false relax false hp(5) 2.500 scroll 0.800 od(5) 2.500 rate 1.000 | not with HR
+NF NoFail "No Fail" x0.5000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with SD,PF,RX,AT
+HT HalfTime "Half Time" x0.3000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 0.750 | not with DC,DT,NC,WU,WD
+DC Daycore "Daycore" x0.3000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 0.750 | not with HT,DT,NC,WU,WD
+HA Half "Half Notes" x0.5000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+NB NoFinishers "No Finishers" x0.9000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with AB
+HR HardRock "Hard Rock" x1.0600 unranked false relax false hp(5) 7.000 scroll 1.867 od(5) 7.000 rate 1.000 | not with EZ
+SD SuddenDeath "Sudden Death" x1.0000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with NF,PF,RX,AT
+PF Perfect "Perfect" x1.0000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with NF,SD,RX,AT
+DT DoubleTime "Double Time" x1.1200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.500 | not with HT,DC,NC,WU,WD
+NC Nightcore "Nightcore" x1.1200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.500 | not with HT,DC,DT,WU,WD
+HD Hidden "Hidden" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with SU,MM,RA
+FL Flashlight "Flashlight" x1.1200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with SP,RA,MV
+PR Precise "Precise" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 7.000 rate 1.000 | not with
+GN GreatOrNothing "Great or Nothing" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+RX Relax "Relax" x1.0000 unranked false relax true hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with NF,SD,PF,AT,AL
+AT Autoplay "Autoplay" x1.0000 unranked true relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with NF,SD,PF,RX,AL
+SW Swap "Swap" x1.0000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with RD
+RD Random "Random" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with SW
+CS ConstantSpeed "Constant Speed" x0.9000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with AS,HS
+AL Alternate "Alternate" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with RX,AT
+WU WindUp "Wind Up" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with HT,DC,DT,NC,WD
+WD WindDown "Wind Down" x0.8500 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with HT,DC,DT,NC,WU
+AB AllBig "All Big" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with NB
+AC Accel "Accel" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with BR
+BR Brake "Brake" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with AC
+WV Wave "Wave" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+PU Pulse "Pulse" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with ST,TC
+ST Stutter "Stutter" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with PU,TC
+CH SvChaos "SV Chaos" x1.0800 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+CC Crescendo "Crescendo" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+DR Drop "Drop" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+GB Gearbox "Gearbox" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+RL Roulette "Roulette" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+AS AntiSv "Anti-SV" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with CS,HS
+HS HyperSv "Hyper SV" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with CS,AS
+EV Even "Even" x1.0800 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+SL Split "Split" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+SG Swing "Swing" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+LF Leapfrog "Leapfrog" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+PN Panic "Panic" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with MC
+MC Mercy "Mercy" x0.9000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with PN
+LG LagSpike "Lag Spike" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+MW Moonwalk "Moonwalk" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+SR SnapSpeed "Snap Speed" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+SU Sudden "Sudden" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with HD,MM,RA
+BL Blink "Blink" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+BO Blackout "Blackout" x1.1000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with RA,MV
+SP Spotlight "Spotlight" x1.1000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with FL,RA,MV
+CL Colorless "Colorless" x1.1000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,MV
+MM Memory "Memory" x1.1000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with HD,SU,RA
+DY Decoy "Decoy" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+PY Party "Party" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+OT Overtime "Overtime" x1.0000 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+LI Liar "Liar" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+RA Radar "Radar" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with HD,FL,SU,BO,SP,MM,MV
+EC Echo "Echo" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with CL,ZZ,UT,SI,LP,EB,SS,MZ,SN,MN,MV
+ZZ Zigzag "Zigzag" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,UT,SI,LP,EB,SS,MZ,SN,MN,XF,MV
+UT UTurn "U-Turn" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,SI,LP,EB,SS,MZ,SN,MN,XF,MV
+SI Spiral "Spiral" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,UT,LP,EB,SS,MZ,SN,MN,XF,MV
+LP Loop "Loop" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,UT,SI,EB,SS,MZ,SN,MN,XF,MV
+EB Elbow "Elbow" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,UT,SI,LP,SS,MZ,SN,MN,XF,MV
+SS Shapeshift "Shapeshift" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,UT,SI,LP,EB,MZ,SN,MN,XF,MV
+SK Snake "Snake" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+MZ Maze "Maze" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,UT,SI,LP,EB,SS,SN,MN,XF,MV
+MR Mirror "Mirror" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+TL Tilt "Tilt" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with MV
+SN Spin "Spin" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,UT,SI,LP,EB,SS,MZ,MN,XF,MV
+MN Mania "Mania" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with EC,ZZ,UT,SI,LP,EB,SS,MZ,SN,XF,MV
+BA BarrelRoll "Barrel Roll" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with MV
+FF FlipFlop "Flip Flop" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with
+XF Crossfire "Crossfire" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with ZZ,UT,SI,LP,EB,SS,MZ,SN,MN,SH,CK,CR,PT,MV
+SH Shatter "Shatter" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with XF
+CK Cracked "Cracked" x1.0200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with XF,CR
+CR Crumble "Crumble" x1.0400 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with XF,CK
+PT Portal "Portal" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with XF
+MV Multiverse "Multiverse" x1.1200 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with FL,BO,SP,CL,RA,EC,ZZ,UT,SI,LP,EB,SS,MZ,TL,SN,MN,BA,XF
+TC Tact "Tact" x1.0600 unranked false relax false hp(5) 5.000 scroll 1.000 od(5) 5.000 rate 1.000 | not with PU,ST
+OV OdOverride "OD Override" x1.0000 unranked true relax false hp(5) 5.000 scroll 1.000 od(5) 10.000 rate 1.000 | not with

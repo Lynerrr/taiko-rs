@@ -1,0 +1,7 @@
+lobby: Lobby have_map true
+prepare: MpWait
+start: MpPlay
+after the map: MpResults
+finished: score 1000000 acc 1.0000 max combo 64 great 64 ok 0 miss 0 ur 0.00 quit false
+results: MpResults
+client sent: Hello HasMap Loaded Live Finished

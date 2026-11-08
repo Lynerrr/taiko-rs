@@ -1,0 +1,37 @@
+text  728,8    войти
+text  778,9    что нового
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   ПЕСНИ
+text  264,27   НАСТРОЙКИ
+text  362,27   МУЛЬТИПЛЕЕР
+text  475,27   ЗАГРУЗКА
+text  558,27   Tab
+text  673,28   127.0.0.1:9   нет связи
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text  217,64   ОНЛАЙН-АККАУНТ
+text  229,95   Ник или почта
+text  617,102  _
+text  229,133  Пароль
+text  403,170  ВОЙТИ
+text  268,205  РЕГИСТРАЦИЯ
+text  472,205  ЗАБЫЛ ПАРОЛЬ?
+text  271,236  С аккаунтом играешь онлайн: лобби, друзья, рейтинги.
+text  307,250  Нет аккаунта? РЕГИСТРАЦИЯ займёт минуту.
+text  238,462  Up/Down select   type to edit   Enter   Tab or Esc back
+hit   188,20     59x22   Tab(0)
+hit   254,20     89x22   Tab(1)
+hit   352,20    105x22   Tab(2)
+hit   465,20     82x22   Tab(3)
+hit   217,84    420x30   MpRow(0)
+hit   217,122   420x30   MpRow(1)
+hit   217,160   420x30   MpRow(2)
+hit   217,198   206x24   MpRow(3)
+hit   431,198   206x24   MpRow(4)
+hit   771,2      74x14   Changelog
+hit   721,2      44x14   Account

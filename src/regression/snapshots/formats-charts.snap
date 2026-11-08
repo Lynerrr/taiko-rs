@@ -1,0 +1,438 @@
+== basics
+meta: Regression - basics [basics] by tests | mode 1 od 5 hp 5 sm 1.4 tick 1 v14 | audio "audio.mp3" preview 1000 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.6533 | 64 notes, 8 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.6533
+  1173.00 Kat v 0.6533
+  1323.00 Kat v 0.6533
+  1473.00 Don v 0.6533
+  1623.00 Don v 0.6533
+  1773.00 Kat v 0.6533
+  1923.00 Don v 0.6533
+  2073.00 Don v 0.6533
+  2223.00 Don v 0.6533
+  2373.00 Kat v 0.6533
+  2523.00 Kat v 0.6533
+  2673.00 Kat v 0.6533
+  2823.00 Don v 0.6533
+  2973.00 Kat v 0.6533
+  3123.00 Kat v 0.6533
+  3273.00 Don v 0.6533
+  3423.00 Don v 0.6533
+  3573.00 Kat v 0.6533
+  3723.00 Don v 0.6533
+  3873.00 Don v 0.6533
+  4023.00 Don v 0.6533
+  4173.00 Kat v 0.6533
+  4323.00 Kat v 0.6533
+  4473.00 Kat v 0.6533
+  4623.00 Don v 0.6533
+  4773.00 Kat v 0.6533
+  4923.00 Kat v 0.6533
+  5073.00 Don v 0.6533
+  5223.00 Don v 0.6533
+  5373.00 Kat v 0.6533
+  5523.00 Don v 0.6533
+  5673.00 Don v 0.6533
+  5823.00 Don v 0.6533
+  5973.00 Kat v 0.6533
+  6123.00 Kat v 0.6533
+  6273.00 Kat v 0.6533
+  6423.00 Don v 0.6533
+  6573.00 Kat v 0.6533
+  6723.00 Kat v 0.6533
+  6873.00 Don v 0.6533
+  7023.00 Don v 0.6533
+  7173.00 Kat v 0.6533
+  7323.00 Don v 0.6533
+  7473.00 Don v 0.6533
+  7623.00 Don v 0.6533
+  7773.00 Kat v 0.6533
+  7923.00 Kat v 0.6533
+  8073.00 Kat v 0.6533
+  8223.00 Don v 0.6533
+  8373.00 Kat v 0.6533
+  8523.00 Kat v 0.6533
+  8673.00 Don v 0.6533
+  8823.00 Don v 0.6533
+  8973.00 Kat v 0.6533
+  9123.00 Don v 0.6533
+  9273.00 Don v 0.6533
+  9423.00 Don v 0.6533
+  9573.00 Kat v 0.6533
+  9723.00 Kat v 0.6533
+  9873.00 Kat v 0.6533
+  10023.00 Don v 0.6533
+  10173.00 Kat v 0.6533
+  10323.00 Kat v 0.6533
+  10473.00 Don v 0.6533
+  barlines: 1023.0 2223.0 3423.0 4623.0 5823.0 7023.0 8223.0 9423.0
+  cp 1023.00 origin 1023.00 beat 300.000 sv 1.0000 kiai false vol 1.00
+== big-notes
+meta: Regression - big-notes [big-notes] by tests | mode 1 od 6 hp 6 sm 1.4 tick 1 v14 | audio "audio.mp3" preview 1000 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.4900 | 40 notes, 5 barlines, 1 control points, 0 fakes
+  523.00 Don big v 0.4900
+  723.00 Kat v 0.4900
+  923.00 Kat big v 0.4900
+  1123.00 Don v 0.4900
+  1323.00 Kat v 0.4900
+  1523.00 Don big v 0.4900
+  1723.00 Kat v 0.4900
+  1923.00 Kat big v 0.4900
+  2123.00 Don v 0.4900
+  2323.00 Kat v 0.4900
+  2523.00 Don big v 0.4900
+  2723.00 Kat v 0.4900
+  2923.00 Kat big v 0.4900
+  3123.00 Don v 0.4900
+  3323.00 Kat v 0.4900
+  3523.00 Don big v 0.4900
+  3723.00 Kat v 0.4900
+  3923.00 Kat big v 0.4900
+  4123.00 Don v 0.4900
+  4323.00 Kat v 0.4900
+  4523.00 Don big v 0.4900
+  4723.00 Kat v 0.4900
+  4923.00 Kat big v 0.4900
+  5123.00 Don v 0.4900
+  5323.00 Kat v 0.4900
+  5523.00 Don big v 0.4900
+  5723.00 Kat v 0.4900
+  5923.00 Kat big v 0.4900
+  6123.00 Don v 0.4900
+  6323.00 Kat v 0.4900
+  6523.00 Don big v 0.4900
+  6723.00 Kat v 0.4900
+  6923.00 Kat big v 0.4900
+  7123.00 Don v 0.4900
+  7323.00 Kat v 0.4900
+  7523.00 Don big v 0.4900
+  7723.00 Kat v 0.4900
+  7923.00 Kat big v 0.4900
+  8123.00 Don v 0.4900
+  8323.00 Kat v 0.4900
+  barlines: 523.0 2123.0 3723.0 5323.0 6923.0
+  cp 523.00 origin 523.00 beat 400.000 sv 1.0000 kiai false vol 1.00
+== rolls-and-swells
+meta: Regression - rolls-and-swells [rolls-and-swells] by tests | mode 1 od 5 hp 4 sm 1.4 tick 4 v14 | audio "audio.mp3" preview 1000 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.3920 | 19 notes, 6 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.3920
+  1273.00 Kat v 0.3920
+  1523.00 Roll v 0.3920 end 2523.00 ticks every 62.500
+  3023.00 Don v 0.3920
+  3523.00 Roll big v 0.3920 end 5523.00 ticks every 62.500
+  6023.00 Kat v 0.3920
+  6523.00 Swell v 0.3920 end 8523.00 hits 16
+  9023.00 Don v 0.3920
+  9523.00 Swell v 0.3920 end 10023.00 hits 4
+  10523.00 Don v 0.3920
+  10648.00 Kat v 0.3920
+  10773.00 Don v 0.3920
+  10898.00 Kat v 0.3920
+  11023.00 Don v 0.3920
+  11148.00 Kat v 0.3920
+  11273.00 Don v 0.3920
+  11398.00 Kat v 0.3920
+  11773.00 Roll v 0.3920 end 12273.00 ticks every 62.500
+  12523.00 Don v 0.3920
+  barlines: 1023.0 3023.0 5023.0 7023.0 9023.0 11023.0
+  cp 1023.00 origin 1023.00 beat 500.000 sv 1.0000 kiai false vol 1.00
+== sv-and-kiai
+meta: Regression - sv-and-kiai [sv-and-kiai] by tests | mode 1 od 7 hp 5 sm 1.6 tick 1 v14 | audio "audio.mp3" preview 1000 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.5973 | 43 notes, 10 barlines, 6 control points, 0 fakes
+  823.00 Don v 0.5973
+  1198.00 Don v 0.5973
+  1573.00 Kat v 0.5973
+  1948.00 Don v 0.5973
+  2323.00 Don v 1.1947
+  2698.00 Kat v 1.1947
+  3073.00 Don v 1.1947
+  3448.00 Don v 1.1947
+  3823.00 Kat v 0.2987
+  4198.00 Don v 0.2987
+  4573.00 Don v 0.2987
+  4948.00 Kat v 0.2987
+  5323.00 Don big v 0.8960
+  5448.00 Kat v 0.8960
+  5573.00 Kat v 0.8960
+  5698.00 Don v 0.8960
+  5823.00 Don big v 0.8960
+  5948.00 Kat v 0.8960
+  6073.00 Kat v 0.8960
+  6198.00 Don v 0.8960
+  6323.00 Don big v 0.8960
+  6448.00 Kat v 0.8960
+  6573.00 Kat v 0.8960
+  6698.00 Don v 0.8960
+  6823.00 Don big v 0.8960
+  6948.00 Kat v 0.8960
+  7073.00 Kat v 0.8960
+  7198.00 Don v 0.8960
+  7323.00 Don big v 0.8960
+  7448.00 Kat v 0.8960
+  7573.00 Kat v 0.8960
+  7698.00 Don v 0.8960
+  7823.00 Don big v 0.8960
+  7948.00 Kat v 0.8960
+  8073.00 Kat v 0.8960
+  8198.00 Don v 0.8960
+  8323.00 Roll v 3.5840 end 8440.00 ticks every 62.500
+  9523.00 Kat v 3.5840
+  9773.00 Kat v 3.5840
+  10023.00 Kat v 3.5840
+  10273.00 Kat v 3.5840
+  10523.00 Kat v 3.5840
+  10773.00 Kat v 3.5840
+  barlines: 823.0 2323.0 3823.0 6073.0 6823.0 7573.0 8323.0 9073.0 9823.0 10573.0
+  cp 823.00 origin 823.00 beat 375.000 sv 1.0000 kiai false vol 1.00
+  cp 2323.00 origin 823.00 beat 375.000 sv 2.0000 kiai false vol 1.00
+  cp 3823.00 origin 823.00 beat 375.000 sv 0.5000 kiai true vol 0.80
+  cp 5323.00 origin 5323.00 beat 250.000 sv 1.0000 kiai false vol 0.90
+  cp 6823.00 origin 5323.00 beat 250.000 sv 1.0000 kiai true vol 0.70
+  cp 8323.00 origin 5323.00 beat 250.000 sv 4.0000 kiai false vol 1.00
+== stream
+meta: Regression - stream [stream] by tests | mode 1 od 8 hp 7 sm 1.4 tick 1 v14 | audio "audio.mp3" preview 1000 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.5880 | 160 notes, 10 barlines, 1 control points, 0 fakes
+  1023.00 Don v 0.5880
+  1106.00 Don v 0.5880
+  1190.00 Don v 0.5880
+  1273.00 Kat v 0.5880
+  1356.00 Kat v 0.5880
+  1440.00 Kat v 0.5880
+  1523.00 Don v 0.5880
+  1606.00 Don v 0.5880
+  1690.00 Don v 0.5880
+  1773.00 Kat v 0.5880
+  1856.00 Kat v 0.5880
+  1940.00 Kat v 0.5880
+  2023.00 Don v 0.5880
+  2106.00 Don v 0.5880
+  2190.00 Don v 0.5880
+  2273.00 Kat v 0.5880
+  2356.00 Kat v 0.5880
+  2440.00 Kat v 0.5880
+  2523.00 Don v 0.5880
+  2606.00 Don v 0.5880
+  2690.00 Don v 0.5880
+  2773.00 Kat v 0.5880
+  2856.00 Kat v 0.5880
+  2940.00 Kat v 0.5880
+  3023.00 Don v 0.5880
+  3106.00 Don v 0.5880
+  3190.00 Don v 0.5880
+  3273.00 Kat v 0.5880
+  3356.00 Kat v 0.5880
+  3440.00 Kat v 0.5880
+  3523.00 Don v 0.5880
+  3606.00 Don v 0.5880
+  3690.00 Don v 0.5880
+  3773.00 Kat v 0.5880
+  3856.00 Kat v 0.5880
+  3940.00 Kat v 0.5880
+  4023.00 Don v 0.5880
+  4106.00 Don v 0.5880
+  4190.00 Don v 0.5880
+  4273.00 Kat v 0.5880
+  4356.00 Kat v 0.5880
+  4440.00 Kat v 0.5880
+  4523.00 Don v 0.5880
+  4606.00 Don v 0.5880
+  4690.00 Don v 0.5880
+  4773.00 Kat v 0.5880
+  4856.00 Kat v 0.5880
+  4940.00 Kat v 0.5880
+  5023.00 Don v 0.5880
+  5106.00 Don v 0.5880
+  5190.00 Don v 0.5880
+  5273.00 Kat v 0.5880
+  5356.00 Kat v 0.5880
+  5440.00 Kat v 0.5880
+  5523.00 Don v 0.5880
+  5606.00 Don v 0.5880
+  5690.00 Don v 0.5880
+  5773.00 Kat v 0.5880
+  5856.00 Kat v 0.5880
+  5940.00 Kat v 0.5880
+  6023.00 Don v 0.5880
+  6106.00 Don v 0.5880
+  6190.00 Don v 0.5880
+  6273.00 Kat v 0.5880
+  6356.00 Kat v 0.5880
+  6440.00 Kat v 0.5880
+  6523.00 Don v 0.5880
+  6606.00 Don v 0.5880
+  6690.00 Don v 0.5880
+  6773.00 Kat v 0.5880
+  6856.00 Kat v 0.5880
+  6940.00 Kat v 0.5880
+  7023.00 Don v 0.5880
+  7106.00 Don v 0.5880
+  7190.00 Don v 0.5880
+  7273.00 Kat v 0.5880
+  7356.00 Kat v 0.5880
+  7440.00 Kat v 0.5880
+  7523.00 Don v 0.5880
+  7606.00 Don v 0.5880
+  7690.00 Don v 0.5880
+  7773.00 Kat v 0.5880
+  7856.00 Kat v 0.5880
+  7940.00 Kat v 0.5880
+  8023.00 Don v 0.5880
+  8106.00 Don v 0.5880
+  8190.00 Don v 0.5880
+  8273.00 Kat v 0.5880
+  8356.00 Kat v 0.5880
+  8440.00 Kat v 0.5880
+  8523.00 Don v 0.5880
+  8606.00 Don v 0.5880
+  8690.00 Don v 0.5880
+  8773.00 Kat v 0.5880
+  8856.00 Kat v 0.5880
+  8940.00 Kat v 0.5880
+  9023.00 Don v 0.5880
+  9106.00 Don v 0.5880
+  9190.00 Don v 0.5880
+  9273.00 Kat v 0.5880
+  9356.00 Kat v 0.5880
+  9440.00 Kat v 0.5880
+  9523.00 Don v 0.5880
+  9606.00 Don v 0.5880
+  9690.00 Don v 0.5880
+  9773.00 Kat v 0.5880
+  9856.00 Kat v 0.5880
+  9940.00 Kat v 0.5880
+  10023.00 Don v 0.5880
+  10106.00 Don v 0.5880
+  10190.00 Don v 0.5880
+  10273.00 Kat v 0.5880
+  10356.00 Kat v 0.5880
+  10440.00 Kat v 0.5880
+  10523.00 Don v 0.5880
+  10606.00 Don v 0.5880
+  10690.00 Don v 0.5880
+  10773.00 Kat v 0.5880
+  10856.00 Kat v 0.5880
+  10940.00 Kat v 0.5880
+  11023.00 Don v 0.5880
+  11106.00 Don v 0.5880
+  11190.00 Don v 0.5880
+  11273.00 Kat v 0.5880
+  11356.00 Kat v 0.5880
+  11440.00 Kat v 0.5880
+  11523.00 Don v 0.5880
+  11606.00 Don v 0.5880
+  11690.00 Don v 0.5880
+  11773.00 Kat v 0.5880
+  11856.00 Kat v 0.5880
+  11940.00 Kat v 0.5880
+  12023.00 Don v 0.5880
+  12106.00 Don v 0.5880
+  12190.00 Don v 0.5880
+  12273.00 Kat v 0.5880
+  12356.00 Kat v 0.5880
+  12440.00 Kat v 0.5880
+  12523.00 Don v 0.5880
+  12606.00 Don v 0.5880
+  12690.00 Don v 0.5880
+  12773.00 Kat v 0.5880
+  12856.00 Kat v 0.5880
+  12940.00 Kat v 0.5880
+  13023.00 Don v 0.5880
+  13106.00 Don v 0.5880
+  13190.00 Don v 0.5880
+  13273.00 Kat v 0.5880
+  13356.00 Kat v 0.5880
+  13440.00 Kat v 0.5880
+  13523.00 Don v 0.5880
+  13606.00 Don v 0.5880
+  13690.00 Don v 0.5880
+  13773.00 Kat v 0.5880
+  13856.00 Kat v 0.5880
+  13940.00 Kat v 0.5880
+  14023.00 Don v 0.5880
+  14106.00 Don v 0.5880
+  14190.00 Don v 0.5880
+  14273.00 Kat v 0.5880
+  barlines: 1023.0 2356.3 3689.7 5023.0 6356.3 7689.7 9023.0 10356.3 11689.7 13023.0
+  cp 1023.00 origin 1023.00 beat 333.333 sv 1.0000 kiai false vol 1.00
+== low-od
+meta: Regression - low-od [low-od] by tests | mode 1 od 0 hp 0 sm 1 tick 1 v14 | audio "audio.mp3" preview 1000 lead-in 0 | bg None | set None id None | playable true
+first velocity 0.2333 | 24 notes, 3 barlines, 1 control points, 0 fakes
+  2023.00 Don v 0.2333
+  2323.00 Kat v 0.2333
+  2623.00 Don v 0.2333
+  2923.00 Kat v 0.2333
+  3223.00 Don v 0.2333
+  3523.00 Kat v 0.2333
+  3823.00 Don v 0.2333
+  4123.00 Kat v 0.2333
+  4423.00 Don v 0.2333
+  4723.00 Kat v 0.2333
+  5023.00 Don v 0.2333
+  5323.00 Kat v 0.2333
+  5623.00 Don v 0.2333
+  5923.00 Kat v 0.2333
+  6223.00 Don v 0.2333
+  6523.00 Kat v 0.2333
+  6823.00 Don v 0.2333
+  7123.00 Kat v 0.2333
+  7423.00 Don v 0.2333
+  7723.00 Kat v 0.2333
+  8023.00 Don v 0.2333
+  8323.00 Kat v 0.2333
+  8623.00 Don v 0.2333
+  8923.00 Kat v 0.2333
+  barlines: 2023.0 4423.0 6823.0
+  cp 2023.00 origin 2023.00 beat 600.000 sv 1.0000 kiai false vol 1.00
+== high-od
+meta: Regression - high-od [high-od] by tests | mode 1 od 10 hp 10 sm 2 tick 2 v14 | audio "audio.mp3" preview 1000 lead-in 0 | bg None | set None id None | playable true
+first velocity 1.1667 | 48 notes, 6 barlines, 1 control points, 0 fakes
+  723.00 Don v 1.1667
+  843.00 Kat v 1.1667
+  963.00 Kat big v 1.1667
+  1083.00 Don v 1.1667
+  1203.00 Kat v 1.1667
+  1323.00 Don big v 1.1667
+  1443.00 Don v 1.1667
+  1563.00 Kat v 1.1667
+  1683.00 Kat big v 1.1667
+  1803.00 Don v 1.1667
+  1923.00 Kat v 1.1667
+  2043.00 Don big v 1.1667
+  2163.00 Don v 1.1667
+  2283.00 Kat v 1.1667
+  2403.00 Kat big v 1.1667
+  2523.00 Don v 1.1667
+  2643.00 Kat v 1.1667
+  2763.00 Don big v 1.1667
+  2883.00 Don v 1.1667
+  3003.00 Kat v 1.1667
+  3123.00 Kat big v 1.1667
+  3243.00 Don v 1.1667
+  3363.00 Kat v 1.1667
+  3483.00 Don big v 1.1667
+  3603.00 Don v 1.1667
+  3723.00 Kat v 1.1667
+  3843.00 Kat big v 1.1667
+  3963.00 Don v 1.1667
+  4083.00 Kat v 1.1667
+  4203.00 Don big v 1.1667
+  4323.00 Don v 1.1667
+  4443.00 Kat v 1.1667
+  4563.00 Kat big v 1.1667
+  4683.00 Don v 1.1667
+  4803.00 Kat v 1.1667
+  4923.00 Don big v 1.1667
+  5043.00 Don v 1.1667
+  5163.00 Kat v 1.1667
+  5283.00 Kat big v 1.1667
+  5403.00 Don v 1.1667
+  5523.00 Kat v 1.1667
+  5643.00 Don big v 1.1667
+  5763.00 Don v 1.1667
+  5883.00 Kat v 1.1667
+  6003.00 Kat big v 1.1667
+  6123.00 Don v 1.1667
+  6243.00 Kat v 1.1667
+  6363.00 Don big v 1.1667
+  barlines: 723.0 1683.0 2643.0 3603.0 4563.0 5523.0
+  cp 723.00 origin 723.00 beat 240.000 sv 1.0000 kiai false vol 1.00

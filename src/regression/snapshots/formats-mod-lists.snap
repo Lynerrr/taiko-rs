@@ -1,0 +1,8 @@
+shuffle(1) = HRAC
+shuffle(2) = ABDRBO
+shuffle(3) = ABDRBO
+shuffle(4) = HTRDDRMC
+shuffle(5) = HTRDDRMC
+shuffle(6) = NFNBWUMCSSFF
+label HD,HR,DT,FL = HRDTHDFL
+config HD,HR,DT,FL = HR,DT,HD,FL

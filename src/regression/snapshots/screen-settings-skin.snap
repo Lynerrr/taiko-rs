@@ -1,0 +1,87 @@
+text  723,7    log in
+text  778,7    what's new
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   SONGS
+text  264,27   SETTINGS
+text  354,27   MULTIPLAYER
+text  467,27   DOWNLOAD
+text  551,27   Tab
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text  223,58   SKIN
+text  586,61   type to search...
+text   73,69   LIBRARY
+text   73,83   Songs folder, hidden...
+text  235,90   Skin
+text  709,90   <  built-in  >
+text   73,109  GAMEPLAY
+text  235,120  Skin parts
+text  674,120  notes from the skin
+text   73,123  speed, rate, interface
+text   73,149  VIEW
+text  235,150  Skins folder
+text  716,150  Enter to open
+text   73,163  playfield, background
+text  235,180  Beatmap skins
+text   74,189  INPUT
+text   73,203  drum keys, hotkeys, t...
+text  235,210  Hit flash
+text   73,229  OFFSET
+text  225,236  Colours
+text   73,243  audio offset, calibra...
+text  235,258  Note colours
+text  757,258  classic
+text   73,269  AUDIO
+text   73,283  volume, latency
+text  235,288  Don colour
+text  757,288  #eb452c
+text   73,309  VIDEO
+text  235,318  Kat colour
+text  757,318  #438ead
+text   73,323  frame pacing, display
+text  235,348  UI colour
+text  784,348  red
+text   73,349  SKIN
+text   73,363  notes, hit flash, colour
+text  235,378  UI colour: fine tune
+text  757,378  #eb452c
+text   73,389  ONLINE
+text  233,396  Enter opens the list. osu! skins from osu!'s or taiko.rs's Skins folder.
+text   73,403  chat, notifications,...
+text   73,429  SYSTEM
+text   74,443  language, startup, up...
+text  146,462  Type to search   Up/Down select   Left/Right change   Enter list   Esc or Tab back
+hit   188,20     59x22   Tab(0)
+hit   254,20     82x22   Tab(1)
+hit   344,20    105x22   Tab(2)
+hit   457,20     82x22   Tab(3)
+hit    37,62    170x34   SettingsSection(0)
+hit    37,102   170x34   SettingsSection(1)
+hit    37,142   170x34   SettingsSection(2)
+hit    37,182   170x34   SettingsSection(3)
+hit    37,222   170x34   SettingsSection(4)
+hit    37,262   170x34   SettingsSection(5)
+hit    37,302   170x34   SettingsSection(6)
+hit    37,342   170x34   SettingsSection(7)
+hit    37,382   170x34   SettingsSection(8)
+hit    37,422   170x34   SettingsSection(9)
+hit   577,55    240x19   SettingsSearch
+hit   223,78    594x30   SettingRow(103)
+hit   703,80     20x26   SettingStep(103, -1)
+hit   791,80     24x26   SettingStep(103, 1)
+hit   223,108   594x30   SettingRow(104)
+hit   223,138   594x30   SettingRow(105)
+hit   223,168   594x30   SettingRow(106)
+hit   223,198   594x30   SettingRow(107)
+hit   223,246   594x30   SettingRow(108)
+hit   223,276   594x30   SettingRow(109)
+hit   223,306   594x30   SettingRow(110)
+hit   223,336   594x30   SettingRow(111)
+hit   223,366   594x14   SettingRow(112)
+hit   771,2      74x14   Changelog
+hit   715,2      50x14   Account

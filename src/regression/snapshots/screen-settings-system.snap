@@ -1,0 +1,86 @@
+text  723,7    log in
+text  778,7    what's new
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   SONGS
+text  264,27   SETTINGS
+text  354,27   MULTIPLAYER
+text  467,27   DOWNLOAD
+text  551,27   Tab
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text  223,58   SYSTEM
+text  586,61   type to search...
+text   73,69   LIBRARY
+text   73,83   Songs folder, hidden...
+text  235,90   Language
+text  716,90   <  English  >
+text   73,109  GAMEPLAY
+text  235,120  Startup splash
+text   73,123  speed, rate, interface
+text   73,149  VIEW
+text  235,150  Epilepsy warning
+text   73,163  playfield, background
+text  236,180  Idle screen
+text  702,180  After 2 minutes
+text   74,189  INPUT
+text   73,203  drum keys, hotkeys, t...
+text  235,210  Legacy menu
+text   73,229  OFFSET
+text  235,240  Notes behind the main menu
+text   73,243  audio offset, calibra...
+text   73,269  AUDIO
+text  235,270  Menu lane notes dim
+text  791,270  0%
+text   73,283  volume, latency
+text  235,300  First steps guide
+text  709,300  Enter to start
+text   73,309  VIDEO
+text   73,323  frame pacing, display
+text  225,326  Updates
+text  235,348  Build channel
+text  764,348  stable
+text   73,349  SKIN
+text   73,363  notes, hit flash, colour
+text  235,378  Update
+text  641,378  local build (no updates)
+text   73,389  ONLINE
+text  233,396  The language of menus, settings and messages. Song titles stay as their maps have them.
+text   73,403  chat, notifications,...
+text   73,429  SYSTEM
+text   74,443  language, startup, up...
+text  146,462  Type to search   Up/Down select   Left/Right change   Enter list   Esc or Tab back
+hit   188,20     59x22   Tab(0)
+hit   254,20     82x22   Tab(1)
+hit   344,20    105x22   Tab(2)
+hit   457,20     82x22   Tab(3)
+hit    37,62    170x34   SettingsSection(0)
+hit    37,102   170x34   SettingsSection(1)
+hit    37,142   170x34   SettingsSection(2)
+hit    37,182   170x34   SettingsSection(3)
+hit    37,222   170x34   SettingsSection(4)
+hit    37,262   170x34   SettingsSection(5)
+hit    37,302   170x34   SettingsSection(6)
+hit    37,342   170x34   SettingsSection(7)
+hit    37,382   170x34   SettingsSection(8)
+hit    37,422   170x34   SettingsSection(9)
+hit   577,55    240x19   SettingsSearch
+hit   223,78    594x30   SettingRow(123)
+hit   710,80     20x26   SettingStep(123, -1)
+hit   791,80     24x26   SettingStep(123, 1)
+hit   223,108   594x30   SettingRow(124)
+hit   223,138   594x30   SettingRow(125)
+hit   223,168   594x30   SettingRow(126)
+hit   223,198   594x30   SettingRow(127)
+hit   223,228   594x30   SettingRow(128)
+hit   223,258   594x30   SettingRow(129)
+hit   650,260   120x26   SettingLevel(129)
+hit   223,288   594x30   SettingRow(130)
+hit   223,336   594x30   SettingRow(131)
+hit   223,366   594x14   SettingRow(132)
+hit   771,2      74x14   Changelog
+hit   715,2      50x14   Account

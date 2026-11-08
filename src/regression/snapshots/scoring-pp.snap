@@ -1,0 +1,63 @@
+basics             perfect      NM         pp 92.549 | custom x1.0000 | breakdown diff 38.489 acc 54.060 fc 92.549 ss 92.549 stars 3.0762 combo 64
+basics             perfect      HRHD       pp 129.706 | custom x1.0000 | breakdown diff 43.416 acc 86.289 fc 129.706 ss 129.706 stars 3.1602 combo 64
+basics             perfect      DT         pp 188.910 | custom x1.0000 | breakdown diff 73.080 acc 115.830 fc 188.910 ss 188.910 stars 3.7624 combo 64
+basics             perfect      EZ         pp 70.832 | custom x1.0000 | breakdown diff 36.714 acc 34.119 fc 70.832 ss 70.832 stars 3.0762 combo 64
+basics             jitter +-45ms NM         pp 33.011 | custom x1.0000 | breakdown diff 26.254 acc 6.757 fc 33.011 ss 92.549 stars 3.0762 combo 64
+basics             skips every 6 HD         pp 36.048 | custom x1.0000 | breakdown diff 22.971 acc 13.077 fc 97.373 ss 97.373 stars 3.0762 combo 64
+basics             perfect      WVPY       pp 96.288 | custom x1.0404 | breakdown diff 40.044 acc 56.244 fc 96.288 ss 96.288 stars 3.0762 combo 64
+basics             perfect      AT         pp - | custom x1.0000 | breakdown -
+basics             potential 92.549 / 82.343 / 68.735
+big-notes          perfect      NM         pp 59.038 | custom x1.0000 | breakdown diff 8.986 acc 50.051 fc 59.038 ss 59.038 stars 1.9321 combo 40
+big-notes          perfect      HRHD       pp 106.895 | custom x1.0000 | breakdown diff 9.406 acc 97.488 fc 106.895 ss 106.895 stars 1.9326 combo 40
+big-notes          perfect      DT         pp 124.833 | custom x1.0000 | breakdown diff 15.553 acc 109.281 fc 124.833 ss 124.833 stars 2.2827 combo 40
+big-notes          perfect      EZ         pp 33.909 | custom x1.0000 | breakdown diff 8.255 acc 25.654 fc 33.909 ss 33.909 stars 1.9321 combo 40
+big-notes          jitter +-45ms NM         pp 14.775 | custom x1.0000 | breakdown diff 6.483 acc 8.292 fc 14.775 ss 59.038 stars 1.9321 combo 40
+big-notes          skips every 6 HD         pp 20.258 | custom x1.0000 | breakdown diff 6.159 acc 14.099 fc 62.971 ss 62.971 stars 1.9321 combo 40
+big-notes          perfect      WVPY       pp 61.423 | custom x1.0404 | breakdown diff 9.349 acc 52.074 fc 61.423 ss 61.423 stars 1.9321 combo 40
+big-notes          perfect      AT         pp - | custom x1.0000 | breakdown -
+big-notes          potential 59.038 / 47.615 / 39.492
+rolls-and-swells   perfect      NM         pp 13.960 | custom x1.0000 | breakdown diff 0.964 acc 12.996 fc 13.960 ss 13.960 stars 1.0316 combo 14
+rolls-and-swells   perfect      HRHD       pp 27.633 | custom x1.0000 | breakdown diff 1.119 acc 26.514 fc 27.633 ss 27.633 stars 1.0316 combo 14
+rolls-and-swells   perfect      DT         pp 45.668 | custom x1.0000 | breakdown diff 1.293 acc 44.376 fc 45.668 ss 45.668 stars 1.0582 combo 14
+rolls-and-swells   perfect      EZ         pp 6.961 | custom x1.0000 | breakdown diff 0.806 acc 6.154 fc 6.961 ss 6.961 stars 1.0316 combo 14
+rolls-and-swells   jitter +-45ms NM         pp 1.486 | custom x1.0000 | breakdown diff 0.511 acc 0.975 fc 1.486 ss 13.960 stars 1.0316 combo 14
+rolls-and-swells   skips every 6 HD         pp 3.372 | custom x1.0000 | breakdown diff 0.621 acc 2.751 fc 14.954 ss 14.954 stars 1.0316 combo 14
+rolls-and-swells   perfect      WVPY       pp 14.524 | custom x1.0404 | breakdown diff 1.003 acc 13.521 fc 14.524 ss 14.524 stars 1.0316 combo 14
+rolls-and-swells   perfect      AT         pp - | custom x1.0000 | breakdown -
+rolls-and-swells   potential 13.960 / 13.960 / 6.729
+sv-and-kiai        perfect      NM         pp 81.829 | custom x1.0000 | breakdown diff 17.450 acc 64.380 fc 81.829 ss 81.829 stars 2.3770 combo 42
+sv-and-kiai        perfect      HRHD       pp 163.780 | custom x1.0000 | breakdown diff 29.575 acc 134.205 fc 163.780 ss 163.780 stars 2.7892 combo 42
+sv-and-kiai        perfect      DT         pp 168.608 | custom x1.0000 | breakdown diff 38.883 acc 129.726 fc 168.608 ss 168.608 stars 3.0668 combo 42
+sv-and-kiai        perfect      EZ         pp 47.152 | custom x1.0000 | breakdown diff 16.215 acc 30.937 fc 47.152 ss 47.152 stars 2.3751 combo 42
+sv-and-kiai        jitter +-45ms NM         pp 19.246 | custom x1.0000 | breakdown diff 11.995 acc 7.251 fc 19.246 ss 81.829 stars 2.3770 combo 42
+sv-and-kiai        skips every 6 HD         pp 30.140 | custom x1.0000 | breakdown diff 12.049 acc 18.091 fc 87.007 ss 87.007 stars 2.3770 combo 42
+sv-and-kiai        perfect      WVPY       pp 85.135 | custom x1.0404 | breakdown diff 18.155 acc 66.981 fc 85.135 ss 85.135 stars 2.3770 combo 42
+sv-and-kiai        perfect      AT         pp - | custom x1.0000 | breakdown -
+sv-and-kiai        potential 81.829 / 68.858 / 59.374
+stream             perfect      NM         pp 294.517 | custom x1.0000 | breakdown diff 159.994 acc 134.523 fc 294.517 ss 294.517 stars 4.8951 combo 160
+stream             perfect      HRHD       pp 375.176 | custom x1.0000 | breakdown diff 171.065 acc 204.112 fc 375.176 ss 375.176 stars 4.9966 combo 160
+stream             perfect      DT         pp 554.504 | custom x1.0000 | breakdown diff 319.372 acc 235.132 fc 554.504 ss 554.504 stars 6.6248 combo 160
+stream             perfect      EZ         pp 227.892 | custom x1.0000 | breakdown diff 158.592 acc 69.300 fc 227.892 ss 227.892 stars 4.8951 combo 160
+stream             jitter +-45ms NM         pp 121.649 | custom x1.0000 | breakdown diff 113.054 acc 8.595 fc 121.649 ss 294.517 stars 4.8951 combo 160
+stream             skips every 6 HD         pp 121.748 | custom x1.0000 | breakdown diff 76.039 acc 45.709 fc 307.806 ss 307.806 stars 4.8951 combo 160
+stream             perfect      WVPY       pp 306.416 | custom x1.0404 | breakdown diff 166.458 acc 139.958 fc 306.416 ss 306.416 stars 4.8951 combo 160
+stream             perfect      AT         pp - | custom x1.0000 | breakdown -
+stream             potential 294.517 / 268.383 / 252.778
+low-od             perfect      NM         pp 8.351 | custom x1.0000 | breakdown diff 1.389 acc 6.962 fc 8.351 ss 8.351 stars 1.2076 combo 24
+low-od             perfect      HRHD       pp 8.901 | custom x1.0000 | breakdown diff 1.417 acc 7.484 fc 8.901 ss 8.901 stars 1.2076 combo 24
+low-od             perfect      DT         pp 32.214 | custom x1.0000 | breakdown diff 2.935 acc 29.279 fc 32.214 ss 32.214 stars 1.3855 combo 24
+low-od             perfect      EZ         pp 8.351 | custom x1.0000 | breakdown diff 1.389 acc 6.962 fc 8.351 ss 8.351 stars 1.2076 combo 24
+low-od             jitter +-45ms NM         pp 8.351 | custom x1.0000 | breakdown diff 1.389 acc 6.962 fc 8.351 ss 8.351 stars 1.2076 combo 24
+low-od             skips every 6 HD         pp 1.311 | custom x1.0000 | breakdown diff 0.685 acc 0.626 fc 8.901 ss 8.901 stars 1.2076 combo 24
+low-od             perfect      WVPY       pp 8.689 | custom x1.0404 | breakdown diff 1.445 acc 7.243 fc 8.689 ss 8.689 stars 1.2076 combo 24
+low-od             perfect      AT         pp - | custom x1.0000 | breakdown -
+low-od             potential 8.351 / 8.351 / 4.903
+high-od            perfect      NM         pp 158.213 | custom x1.0000 | breakdown diff 26.706 acc 131.507 fc 158.213 ss 158.213 stars 2.7154 combo 48
+high-od            perfect      HRHD       pp 186.371 | custom x1.0000 | breakdown diff 44.621 acc 141.750 fc 186.371 ss 186.371 stars 3.1853 combo 48
+high-od            perfect      DT         pp 276.907 | custom x1.0000 | breakdown diff 64.849 acc 212.058 fc 276.907 ss 276.907 stars 3.6197 combo 48
+high-od            perfect      EZ         pp 69.149 | custom x1.0000 | breakdown diff 23.697 acc 45.452 fc 69.149 ss 69.149 stars 2.6428 combo 48
+high-od            jitter +-45ms NM         pp 14.086 | custom x1.0000 | breakdown diff 12.475 acc 1.611 fc 14.086 ss 158.213 stars 2.7154 combo 48
+high-od            skips every 6 HD         pp 77.802 | custom x1.0000 | breakdown diff 21.000 acc 56.802 fc 168.610 ss 168.610 stars 2.7154 combo 48
+high-od            perfect      WVPY       pp 164.604 | custom x1.0404 | breakdown diff 27.785 acc 136.820 fc 164.604 ss 164.604 stars 2.7154 combo 48
+high-od            perfect      AT         pp - | custom x1.0000 | breakdown -
+high-od            potential 158.213 / 141.420 / 128.475

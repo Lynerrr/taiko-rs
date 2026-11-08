@@ -569,6 +569,12 @@ impl Menu {
 
 /// Creates or joins a lobby on the online server; the connection then becomes the room's.
 /// Opens or joins a lobby on the online server; `password` is the lobby's, when it has one.
+/// A session over a room connection made by the caller (the regression tests' scripted rooms).
+#[cfg(test)]
+pub fn joined(client: Client, label: &str) -> Session {
+    Session::new(client, None, label.into())
+}
+
 pub fn start_online(
     server: String,
     request: online::Request,

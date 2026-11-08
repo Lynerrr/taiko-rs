@@ -70,6 +70,8 @@ mod pp;
 mod preview;
 mod profile;
 mod recalc;
+#[cfg(test)]
+mod regression;
 mod render;
 #[cfg(test)]
 mod results_tests;
