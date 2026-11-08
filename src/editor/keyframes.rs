@@ -88,6 +88,51 @@ impl Editor {
         true
     }
 
+    /// Changes the gimmick and gives fakes groups by place, as one undo step: `group` says,
+    /// for each fake, its new group (`FakeNote::group`), or `None` to leave it. Returns whether
+    /// anything changed.
+    pub(crate) fn edit_gimmick_and_fakes(
+        &mut self,
+        f: impl FnOnce(&mut Gimmick),
+        group: impl Fn(&super::chart::HitObject) -> Option<Option<u16>>,
+    ) -> bool {
+        let Some(before) = self.chart.gimmick.clone() else {
+            return false;
+        };
+        let mut after = before.clone();
+        f(&mut after);
+        after.sanitize();
+        let (mut b, mut a) = (Vec::new(), Vec::new());
+        for o in self.chart.objects.iter().filter(|o| o.fake) {
+            if let Some(to) = group(o)
+                && to != o.group
+            {
+                let mut n = o.clone();
+                n.group = to;
+                b.push(o.clone());
+                a.push(n);
+            }
+        }
+        let mut steps = Vec::new();
+        if after != before {
+            steps.push(Command::Gimmick {
+                before: Box::new(before),
+                after: Box::new(after),
+            });
+        }
+        if !b.is_empty() {
+            steps.push(Command::EditObjects {
+                before: b,
+                after: a,
+            });
+        }
+        if steps.is_empty() {
+            return false;
+        }
+        self.history.run(&mut self.chart, Command::Composite(steps));
+        true
+    }
+
     /// The track of `s`, as it is now.
     pub fn track_of(&self, s: Subject) -> Option<&crate::tko::track::Track> {
         let g = self.gimmick()?;
@@ -190,58 +235,64 @@ impl Editor {
     /// their own (groups are referred to by place).
     pub fn delete_group(&mut self, i: usize) -> bool {
         use crate::tko::graph::{Kind, Target};
-        self.edit_gimmick(false, |g| {
-            if i >= g.groups.len() {
-                return;
-            }
-            g.groups.remove(i);
-            // A notes clip names its group as `group - 1` (0 is all notes).
-            let k = i as u16 + 1;
-            g.clips
-                .retain(|c| !(c.what.starts_with("notes.") && c.group == k));
-            for c in &mut g.clips {
-                if c.what.starts_with("notes.") && c.group > k {
-                    c.group -= 1;
+        // Fakes in it by place are in none now; those in later groups follow theirs down.
+        let k = i as u16 + 1;
+        let refit = move |o: &super::chart::HitObject| match o.group {
+            Some(n) if n == k => Some(Some(0)),
+            Some(n) if n > k => Some(Some(n - 1)),
+            _ => None,
+        };
+        self.edit_gimmick_and_fakes(
+            |g| {
+                if i >= g.groups.len() {
+                    return;
                 }
-            }
-            for n in &mut g.graph.nodes {
-                // Events name a group as their first number the same way; one on the group
-                // gone names none there is, so it no longer fires (0 would be every note).
-                if matches!(n.kind, Kind::OnNoteReach | Kind::OnHit | Kind::OnMiss)
-                    && let Some(p) = n.p.first_mut()
-                {
-                    let k = k as f64;
-                    if *p == k {
-                        *p = 256.0;
-                    } else if *p > k {
-                        *p -= 1.0;
+                g.groups.remove(i);
+                // A notes clip names its group as `group - 1` (0 is all notes).
+                let k = i as u16 + 1;
+                g.clips
+                    .retain(|c| !(c.what.starts_with("notes.") && c.group == k));
+                for c in &mut g.clips {
+                    if c.what.starts_with("notes.") && c.group > k {
+                        c.group -= 1;
                     }
                 }
-                match n.target {
-                    Some(Target::Group(gi, _)) if gi == i => n.target = None,
-                    Some(Target::Group(gi, p)) if gi > i => {
-                        n.target = Some(Target::Group(gi - 1, p))
+                for n in &mut g.graph.nodes {
+                    // Events name a group as their first number the same way; one on the group
+                    // gone names none there is, so it no longer fires (0 would be every note).
+                    if matches!(n.kind, Kind::OnNoteReach | Kind::OnHit | Kind::OnMiss)
+                        && let Some(p) = n.p.first_mut()
+                    {
+                        let k = k as f64;
+                        if *p == k {
+                            *p = 256.0;
+                        } else if *p > k {
+                            *p -= 1.0;
+                        }
                     }
-                    _ => {}
+                    match n.target {
+                        Some(Target::Group(gi, _)) if gi == i => n.target = None,
+                        Some(Target::Group(gi, p)) if gi > i => {
+                            n.target = Some(Target::Group(gi - 1, p))
+                        }
+                        _ => {}
+                    }
                 }
-            }
-        })
+            },
+            refit,
+        )
     }
 
     /// Selects the notes of group `i`.
     pub fn select_group(&mut self, i: usize) {
-        let Some(g) = self.gimmick().and_then(|g| g.groups.get(i)) else {
+        if self.gimmick().and_then(|g| g.groups.get(i)).is_none() {
             return;
-        };
-        let times = g.notes.clone();
+        }
         self.selection = self
             .chart
             .objects
             .iter()
-            .filter(|o| {
-                let at = times.partition_point(|&t| t < o.time - 0.5);
-                times.get(at).is_some_and(|&t| (t - o.time).abs() <= 0.5)
-            })
+            .filter(|o| self.group_holds(i, o))
             .map(|o| o.id)
             .collect();
     }

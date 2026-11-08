@@ -639,6 +639,12 @@ pub struct FakeNote {
     pub kat: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub big: bool,
+    /// The motion group it flies with, named by place instead of found by its time: 0 none,
+    /// n the n-th group. Unset (older maps, and a fake never given one), the first group that
+    /// holds its time, as for a note. So fakes stacked on one millisecond, or on a note, can
+    /// each have a path and moves of their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<u16>,
 }
 
 impl Gimmick {

@@ -6,7 +6,7 @@
 use super::look::{self, Look, look_of};
 use super::{Btn, Drag, Keys, Mode, View, draw_preview_hint, inside};
 use crate::editor::motion::{
-    BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, holds, pace_track,
+    BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, pace_track,
 };
 use crate::game::{HIT_X, LANE_Y};
 use crate::render::{Canvas, accent, rgba};
@@ -513,12 +513,13 @@ impl View {
         if !self.motion_mode() || self.m_tab >= SCROLL_TAB {
             return;
         }
-        let Some(gr) = self
-            .motion_group()
-            .and_then(|g| self.ed.gimmick()?.groups.get(g))
-        else {
+        let Some(gi) = self.motion_group() else {
             return;
         };
+        let Some(gr) = self.ed.gimmick().and_then(|g| g.groups.get(gi)) else {
+            return;
+        };
+        let size = self.ed.group_size(gi);
         let (from, to) = (self.view_start, self.view_end());
         let pad = 40.0 * self.ms_per_px;
         let objs = &self.ed.chart.objects;
@@ -530,7 +531,7 @@ impl View {
             if o.time > to + pad {
                 break;
             }
-            if holds(&gr.notes, o.time) {
+            if self.ed.group_holds(gi, o) {
                 open = Some(open.map_or((o.time, o.time), |(a, _)| (a, o.time)));
             } else if let Some(run) = open.take() {
                 runs.push(run);
@@ -548,7 +549,7 @@ impl View {
             // Named at its start (or the lane's left edge), unless the last name is still there.
             let nx = ax.max(left + 2.0) + 3.0;
             if nx >= named_to && bx > left {
-                let label = format!("{} ({})", gr.name, gr.notes.len());
+                let label = format!("{} ({size})", gr.name);
                 c.text(nx, by - 8.0, 5.5, rgba(col, 1.0), &label);
                 named_to = nx + Canvas::text_width(5.5, &label) + 8.0;
             }
