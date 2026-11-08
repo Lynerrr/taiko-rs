@@ -196,7 +196,7 @@ pub struct Select {
     /// search's `status=` filter.
     pub status: std::collections::HashMap<std::path::PathBuf, u8>,
     /// Map sets loved on the online server (they give pp there, whatever osu! says).
-    pub server_loved: std::collections::HashSet<u32>,
+    pub server_loved: ServerLoved,
     /// Map folders sent to (or downloaded from) taiko.rs custom maps: their set number there.
     pub custom_folder: std::collections::HashMap<std::path::PathBuf, u32>,
     /// Custom sets the server has approved.
@@ -440,7 +440,7 @@ impl Select {
             info: None,
             played: std::collections::HashMap::new(),
             status: std::collections::HashMap::new(),
-            server_loved: std::collections::HashSet::new(),
+            server_loved: ServerLoved::new(),
             custom_folder: std::collections::HashMap::new(),
             custom_approved: std::collections::HashSet::new(),
             nominator: false,
@@ -634,7 +634,7 @@ impl Select {
             };
         }
         match e.set_id() {
-            Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
+            Some(_) if loved_here(&self.server_loved, e) => crate::search::LOVED,
             set => self
                 .status
                 .get(&e.path)
@@ -1534,16 +1534,29 @@ impl Select {
             MenuAction::HideSong,
         ));
         if let Some(set) = library[i].set_id().filter(|_| self.nominator) {
-            let loved = self.server_loved.contains(&set);
-            items.push((
-                if loved {
-                    "Unlove on taiko.rs"
-                } else {
-                    "Love on taiko.rs (gives pp)"
-                }
-                .to_string(),
-                MenuAction::Love(set, !loved),
-            ));
+            let version = &library[i].meta.version;
+            match self.server_loved.get(&set) {
+                Some(versions) if versions.is_empty() => items.push((
+                    "Unlove on taiko.rs".into(),
+                    MenuAction::Love(set, false, false),
+                )),
+                Some(versions) if !m.header && covers(versions, version) => items.push((
+                    fit(format!("Unlove [{version}] on taiko.rs")),
+                    MenuAction::Love(set, false, true),
+                )),
+                _ if !m.header => items.push((
+                    fit(format!("Love [{version}] on taiko.rs (gives pp)")),
+                    MenuAction::Love(set, true, true),
+                )),
+                _ => {}
+            }
+            // The whole set: every difficulty, its rate edits too.
+            if self.server_loved.get(&set).is_none_or(|v| !v.is_empty()) {
+                items.push((
+                    "Love the whole set on taiko.rs".into(),
+                    MenuAction::Love(set, true, false),
+                ));
+            }
         }
         if let Some(id) = library[i].set_id() {
             let label = match self.updates.get(&id) {
@@ -2539,12 +2552,15 @@ fn shared_cap(widths: &[f32], total: f32) -> f32 {
     f32::INFINITY
 }
 
-/// The mod select (F1): a column per group, each mod a chip to switch on or off, and a row of
-/// the player's favourites. `cursor` is the keyboard selection (index into `mods::ALL`).
+/// The mod select (F1): a column per group, each mod a chip to switch on or off, a row of the
+/// player's presets (with the speed `rate` they're compared at) and one of their favourites.
+/// `cursor` is the keyboard selection (index into `mods::ALL`).
 pub fn draw_mod_select(
     c: &mut Canvas,
     mods: crate::mods::Mods,
     favourites: crate::mods::Mods,
+    presets: &[crate::mods::Preset],
+    rate: f64,
     cursor: usize,
     seed: u64,
 ) {
@@ -2566,7 +2582,7 @@ pub fn draw_mod_select(
     let rank = if mods.unranked() { "  (not saved)" } else { "" };
     let score = format!("score x{mult:.2}{rank}");
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &score);
-    let hint = "arrows + Space toggle   F / right-click favourite   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift, Tact, OD Override)   F1 / Esc closes";
+    let hint = "arrows + Space toggle   F / right-click favourite   S saves a preset, 1-9 apply   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift, Tact, OD Override)   F1 / Esc closes";
     let room = pw - 70.0 - 16.0 - Canvas::text_width(8.0, &score) - 16.0;
     c.text(
         px + 70.0,
@@ -2576,10 +2592,11 @@ pub fn draw_mod_select(
         &Canvas::fit(6.0, room, hint),
     );
     let col_w = (pw - 24.0) / GROUPS.len() as f32;
-    // The favourites' row goes under the longest column.
+    // The presets' and favourites' rows go under the longest column.
     let fav_y = py + ph - 76.0;
+    let preset_y = fav_y - 22.0;
     let rows = GROUPS.iter().map(|g| g.2.len()).max().unwrap_or(1) as f32;
-    let row_h = ((fav_y - 4.0 - (py + 52.0)) / rows).min(27.0);
+    let row_h = ((preset_y - 4.0 - (py + 52.0)) / rows).min(27.0);
     let mut hovered = None;
     for (g, (title, accent, list)) in GROUPS.iter().enumerate() {
         let x = px + 12.0 + g as f32 * col_w;
@@ -2624,7 +2641,7 @@ pub fn draw_mod_select(
                 if i == cursor { 1.5 } else { 1.0 },
             );
             // The acronym's badge keeps room for its letters when there are many rows.
-            let inset = ((h - 13.0) / 2.0).clamp(3.0, 4.0);
+            let inset = ((h - 13.0) / 2.0).clamp(1.0, 4.0);
             c.round_rect(
                 [x + 4.0, y + inset],
                 [22.0, h - 2.0 * inset],
@@ -2665,9 +2682,76 @@ pub fn draw_mod_select(
             c.hit(x, y, col_w - 6.0, h, Hit::ModToggle(i));
         }
     }
+    // Presets: a click (or 1-9) puts on their mods and speed; lit while that's what is on.
+    const TEAL: u32 = 0x5ad6e0;
+    let label_w = c.text(px + 16.0, preset_y + 4.5, 7.0, rgba(TEAL, 1.0), "PRESETS");
+    let mut x = px + 28.0 + label_w.max(Canvas::text_width(7.0, "* FAVOURITES"));
+    let row_end = px + pw - 16.0;
+    let mut hovered_preset = None;
+    for (k, p) in presets.iter().enumerate() {
+        let text = format!("{} {}", k + 1, p.name);
+        let cw = (Canvas::text_width(6.0, &text) + 14.0).min(140.0);
+        if x + cw > row_end - 60.0 {
+            c.text(
+                x,
+                preset_y + 5.0,
+                7.0,
+                rgba(0x8a8aa0, 1.0),
+                &format!("+{}", presets.len() - k),
+            );
+            x += Canvas::text_width(7.0, &format!("+{}", presets.len() - k)) + 8.0;
+            break;
+        }
+        if c.hovered(x, preset_y, cw, 16.0) {
+            hovered_preset = Some(p);
+        }
+        let on = p.mods == mods && (p.rate - rate).abs() < 1e-6;
+        c.round_rect(
+            [x, preset_y],
+            [cw, 16.0],
+            4.0,
+            rgba(if on { TEAL } else { 0x1d1d27 }, if on { 0.9 } else { 1.0 }),
+            rgba(TEAL, if on { 1.0 } else { 0.6 }),
+            1.0,
+        );
+        c.text(
+            x + 7.0,
+            preset_y + 5.0,
+            6.0,
+            rgba(if on { 0x15151d } else { 0xc8c8d8 }, 1.0),
+            &Canvas::fit(6.0, cw - 12.0, &text),
+        );
+        c.hit(x, preset_y, cw, 16.0, Hit::ModPreset(k));
+        x += cw + 5.0;
+    }
+    if presets.len() < crate::mods::MAX_PRESETS {
+        let save = "+ Save";
+        let cw = Canvas::text_width(6.0, save) + 14.0;
+        if presets.is_empty() {
+            let hint = "keep the mods on now (and the speed) to put back with one click or 1-9";
+            c.text(
+                x + cw + 8.0,
+                preset_y + 5.0,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                &Canvas::fit(6.0, row_end - x - cw - 8.0, hint),
+            );
+        }
+        let hover = c.hovered(x, preset_y, cw, 16.0);
+        c.round_rect(
+            [x, preset_y],
+            [cw, 16.0],
+            4.0,
+            rgba(if hover { 0x262634 } else { 0x15151d }, 1.0),
+            rgba(TEAL, 0.6),
+            1.0,
+        );
+        c.text(x + 7.0, preset_y + 5.0, 6.0, rgba(TEAL, 1.0), save);
+        c.hit(x, preset_y, cw, 16.0, Hit::ModPresetSave);
+    }
     // Favourites: one click away, lit while on.
     let label_w = c.text(px + 16.0, fav_y + 4.5, 7.0, rgba(GOLD, 1.0), "* FAVOURITES");
-    let mut fx = px + 28.0 + label_w;
+    let mut fx = px + 28.0 + label_w.max(Canvas::text_width(7.0, "PRESETS"));
     if favourites.is_empty() {
         c.text(
             fx,
@@ -2737,30 +2821,43 @@ pub fn draw_mod_select(
         c.hit(fx, fav_y, cw, 16.0, Hit::ModToggle(i));
         fx += cw + 5.0;
     }
-    // What the pointed-at (else the selected) mod does.
+    // What the pointed-at preset holds, else what the pointed-at (else the selected) mod does.
     let shown = hovered.unwrap_or(ALL[cursor.min(ALL.len() - 1)]);
     let dy = py + ph - 46.0;
-    c.text(
-        px + 16.0,
-        dy,
-        8.0,
-        rgba(0xffffff, 1.0),
-        &format!("{} ({})", shown.name(), shown.acronym()),
-    );
-    let description = if mods.incompatible(shown) {
-        let removed = mods
-            .iter()
-            .filter(|&m| crate::mods::Mods::parse_set(shown.acronym()).incompatible(m))
-            .map(|m| m.acronym())
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!("Selecting this mod switches off: {removed}")
-    } else if shown == crate::mods::Mod::Random {
-        format!("Seed: {seed}   C: customize seed")
-    } else {
-        shown.description().to_string()
-    };
-    c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), &description);
+    if let Some(p) = hovered_preset {
+        c.text(px + 16.0, dy, 8.0, rgba(0xffffff, 1.0), &p.name);
+        let what = format!("{}   (click applies, right-click removes)", p.summary());
+        c.text(
+            px + 16.0,
+            dy + 13.0,
+            7.0,
+            rgba(0x9a9ab0, 1.0),
+            &Canvas::fit(7.0, pw - 32.0, &what),
+        );
+    }
+    if hovered_preset.is_none() {
+        c.text(
+            px + 16.0,
+            dy,
+            8.0,
+            rgba(0xffffff, 1.0),
+            &format!("{} ({})", shown.name(), shown.acronym()),
+        );
+        let description = if mods.incompatible(shown) {
+            let removed = mods
+                .iter()
+                .filter(|&m| crate::mods::Mods::parse_set(shown.acronym()).incompatible(m))
+                .map(|m| m.acronym())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("Selecting this mod switches off: {removed}")
+        } else if shown == crate::mods::Mod::Random {
+            format!("Seed: {seed}   C: customize seed")
+        } else {
+            shown.description().to_string()
+        };
+        c.text(px + 16.0, dy + 13.0, 7.0, rgba(0x9a9ab0, 1.0), &description);
+    }
     let bw = 60.0;
     let active = if mods.is_empty() {
         "none".to_string()
@@ -2944,8 +3041,9 @@ pub struct SongMenu {
 pub enum MenuAction {
     HideDifficulty,
     HideSong,
-    /// Loved nominators: love the map set on the online server (false: take it back).
-    Love(u32, bool),
+    /// Loved nominators: love the map set on the online server (false: take it back), just the
+    /// menu's difficulty when the last is true.
+    Love(u32, bool, bool),
     /// Download the song's set again, its newest version (replacing its difficulties).
     UpdateSong,
     /// Like the song, or not any more.
@@ -2956,6 +3054,24 @@ pub enum MenuAction {
     Edit,
     /// Start a new, empty difficulty from this one's timing and music.
     NewDifficulty,
+}
+
+/// The map sets loved on the online server, each with the difficulties loved (none: all of them).
+pub type ServerLoved = std::collections::HashMap<u32, Vec<String>>;
+
+/// Whether `versions` (a set's in `ServerLoved`) take in difficulty `version`.
+pub fn covers(versions: &[String], version: &str) -> bool {
+    versions.is_empty()
+        || versions
+            .iter()
+            .any(|v| v.trim().eq_ignore_ascii_case(version.trim()))
+}
+
+/// Whether map `e` is loved on the online server: its set, or this difficulty of it.
+pub fn loved_here(loved: &ServerLoved, e: &Entry) -> bool {
+    e.set_id()
+        .and_then(|set| loved.get(&set))
+        .is_some_and(|v| covers(v, &e.meta.version))
 }
 
 /// The name a map's folder goes by in `map_skins_off`: the same wherever the Songs folder is.

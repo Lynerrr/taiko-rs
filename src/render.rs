@@ -94,10 +94,23 @@ pub enum Sprite {
     /// The health bar: behind, and the fill.
     HealthBg,
     HealthFill,
+    /// Overtime's scare from a skin: a picture, or the frames of an animation (`OVERTIME_FRAMES`
+    /// at most, from `overtime-N.png` or `overtime.gif`).
+    Overtime0,
+    Overtime1,
+    Overtime2,
+    Overtime3,
+    Overtime4,
+    Overtime5,
+    Overtime6,
+    Overtime7,
 }
 
 /// How many `Sprite`s there are (the shader's `sprites` array is this long too).
-pub const SPRITES: usize = 47;
+pub const SPRITES: usize = 55;
+
+/// How many frames of a skin's Overtime animation are kept.
+pub const OVERTIME_FRAMES: usize = 8;
 
 impl Sprite {
     /// Every sprite, in order.
@@ -149,6 +162,14 @@ impl Sprite {
         Sprite::Combo9,
         Sprite::HealthBg,
         Sprite::HealthFill,
+        Sprite::Overtime0,
+        Sprite::Overtime1,
+        Sprite::Overtime2,
+        Sprite::Overtime3,
+        Sprite::Overtime4,
+        Sprite::Overtime5,
+        Sprite::Overtime6,
+        Sprite::Overtime7,
     ];
 
     /// The score font's glyph for `ch` (digits, '%' and '.').
@@ -167,7 +188,7 @@ impl Sprite {
             .map(|d| Sprite::ALL[Sprite::Combo0 as usize + d as usize])
     }
 }
-const SPRITE_BASE: f32 = 10.0;
+pub(crate) const SPRITE_BASE: f32 = 10.0;
 
 /// What a shape needs, besides its position, to come out mirrored left to right: half circles
 /// swap sides, and a drumroll's end cap turns around (the other sprites are round).
@@ -205,6 +226,10 @@ pub struct SkinLayout {
     pub combo_overlap: f32,
     /// The drum skin is older than version 2.1: its halves are smaller and sit elsewhere.
     pub legacy_drum: bool,
+    /// Overtime's own scare: how many frames it has (0: none, the built-in bear) and how long
+    /// each shows (ms).
+    pub overtime_frames: usize,
+    pub overtime_frame_ms: f32,
 }
 
 /// A glyph of a skin font and its size (relative, like `Canvas::sprites`).
@@ -2860,6 +2885,10 @@ pub enum Hit {
     UpdateSet(usize),
     /// A mod in the mod select (index into `mods::ALL`) / the song select's Mods button.
     ModToggle(usize),
+    /// A mod preset in the mod select (index into `Config::mod_presets`): applies it.
+    ModPreset(usize),
+    /// The mod select's "+ Save": keeps the mods on now (and the speed) as a preset.
+    ModPresetSave,
     ModsButton,
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.

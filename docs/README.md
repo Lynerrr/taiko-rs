@@ -381,7 +381,7 @@ built-in sounds come from the quassbot v2 skin); an empty file mutes that sound,
 Everything else on the playfield and the interface can come from the skin too. **Skin parts**
 (Settings → Skin) lists them, and each can come from the skin picked above, the built-in look, or
 any other installed skin, so skins mix: one skin's notes with another's drum and a third's
-hitsounds. By default only the notes, drumrolls, swells and hitsounds follow the skin; the rest
+hitsounds. By default only the notes, drumrolls, swells, hitsounds and the Overtime scare follow the skin; the rest
 stays built-in until it's switched over. The parts and the images they use:
 
 | Part | Images |
@@ -397,6 +397,7 @@ stays built-in until it's switched over. The parts and the images they use:
 | Combo | the combo font (`ComboPrefix`, `ComboOverlap`), on the drum |
 | Health bar | `scorebar-bg`, `scorebar-colour`, top left at their own size like osu! |
 | Hitsounds | as above |
+| Overtime scare | `overtime.png`, or an animation: `overtime-0.png`, `overtime-1.png`... or `overtime.gif` (8 frames at most, spread over it); and `overtime.wav` / `.ogg` / `.mp3` for the scream (5 s at most). It lunges in like the built-in bear, filling the screen's height |
 
 Each image the chosen skin lacks is drawn the built-in way, and a font missing a digit isn't used.
 In the config these are `skin_part = <part> = <skin folder>` lines (`<main>` for the skin picked,

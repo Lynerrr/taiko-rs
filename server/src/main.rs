@@ -1141,10 +1141,17 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
         Request::LovedSets => {
             Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect())
         }
+        Request::LovedMaps => Reply::LovedMaps(
+            loved::all()
+                .into_iter()
+                .map(|(set, l)| (set, l.versions))
+                .collect(),
+        ),
         Request::SetLoved {
             token,
             set,
             loved: on,
+            version,
         } => {
             let Some(name) = state.user(&token) else {
                 return reply(
@@ -1152,7 +1159,7 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
                     Reply::Error("your session expired: log in again".into()),
                 );
             };
-            match state.love(&name.to_ascii_lowercase(), set, on) {
+            match state.love(&name.to_ascii_lowercase(), set, on, version.as_deref()) {
                 Ok(_) => Reply::LovedSets(loved::all().into_iter().map(|(set, _)| set).collect()),
                 Err(e) => Reply::Error(e),
             }
@@ -1825,14 +1832,15 @@ impl State {
         Ok(n)
     }
 
-    /// Nominator `by` (lowercased) loves map set `set` here, or takes it back: plays on it give
-    /// pp (or don't) from now on, the ones already sent too.
-    fn love(&self, by: &str, set: u32, on: bool) -> Result<String, String> {
+    /// Nominator `by` (lowercased) loves map set `set` here, or just its difficulty `version`, or
+    /// takes it back: plays on it give pp (or don't) from now on, the ones already sent too.
+    fn love(&self, by: &str, set: u32, on: bool, version: Option<&str>) -> Result<String, String> {
         if !self.is_nominator(by) {
             return Err("only loved nominators can love maps".into());
         }
-        if on && loved::contains(Some(set)) {
-            return Err("that set is loved here already".into());
+        let version = version.map(str::trim).filter(|v| !v.is_empty());
+        if let Some(why) = loved::refusal(set, on, version) {
+            return Err(why);
         }
         if on {
             // Only maps that don't give pp already, and that the mirrors know.
@@ -1852,18 +1860,17 @@ impl State {
             }
         }
         let name = self.display_name(by);
-        if !loved::set(set, on, &name, now_secs()) {
-            return Err("that set isn't loved here".into());
-        }
+        loved::set(set, on, &name, now_secs(), version)?;
         self.scores.lock().unwrap().count_pp();
-        println!(
-            "set {set} {} by {name}",
-            if on { "loved" } else { "unloved" }
-        );
-        Ok(if on {
-            format!("Loved set {set}: its plays give pp now")
-        } else {
-            format!("Set {set} isn't loved here any more")
+        let what = match version {
+            Some(v) => format!("[{v}] of set {set}"),
+            None => format!("set {set}"),
+        };
+        println!("{what} {} by {name}", if on { "loved" } else { "unloved" });
+        Ok(match (on, version) {
+            (true, _) => format!("Loved {what}: its plays give pp now"),
+            (false, Some(_)) => format!("{what} isn't loved here any more"),
+            (false, None) => format!("Set {set} isn't loved here any more"),
         })
     }
 

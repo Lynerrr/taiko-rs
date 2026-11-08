@@ -402,7 +402,18 @@ type SetCheck = (u32, Receiver<Result<(bool, Vec<PathBuf>), String>>);
 /// An online leaderboard, or why there isn't one.
 type Board = Result<Vec<online::OnlineScore>, String>;
 type BoardFetch = ((u64, bool), Receiver<Board>);
-type LovedCall = (Receiver<Result<online::Reply, String>>, Option<(u32, bool)>);
+type LovedCall = (Receiver<Result<online::Reply, String>>, LovedAsk);
+
+/// What a call about the server's loved maps asked.
+#[derive(Clone, Debug, PartialEq)]
+enum LovedAsk {
+    /// The loved sets and their difficulties.
+    Maps,
+    /// Just the sets (a server from before single difficulties were loved).
+    Sets,
+    /// A nominator loves a set (true) or takes it back, or just its difficulty named.
+    Change(u32, bool, Option<String>),
+}
 /// Custom sets known: map folder -> set number, and the numbers the server has approved.
 type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
 
@@ -534,6 +545,8 @@ struct State {
     universe_setup: Option<multiverse::Setup>,
     shapeshift_setup: Option<shapeshift::Setup>,
     random_setup: Option<String>,
+    /// The name being typed for a new mod preset (S or "+ Save" in the mod select).
+    preset_naming: Option<String>,
     tact_setup: Option<tact::Setup>,
     od_setup: Option<od_override::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
@@ -1422,6 +1435,92 @@ fn submit_score(
     rx
 }
 
+/// Seconds the FAILED sign shows before a Sudden Death / Perfect fail starts the map over.
+const FAIL_RESTART_LINGER: f64 = 0.6;
+
+/// Whether a play that just ended starts over instead of showing results: one of the player's own
+/// (not a replay) failed by Sudden Death / Perfect, with `Config::fail_restart` on.
+fn fail_restarts(cfg: &Config, game: &Game) -> bool {
+    cfg.fail_restart && game.failed_early() && game.replay.is_none()
+}
+
+/// The mod preset (0-8) a digit key 1-9 (top row or keypad) picks in the mod select.
+fn preset_key(code: KeyCode) -> Option<usize> {
+    use KeyCode::*;
+    [
+        (Digit1, Numpad1),
+        (Digit2, Numpad2),
+        (Digit3, Numpad3),
+        (Digit4, Numpad4),
+        (Digit5, Numpad5),
+        (Digit6, Numpad6),
+        (Digit7, Numpad7),
+        (Digit8, Numpad8),
+        (Digit9, Numpad9),
+    ]
+    .iter()
+    .position(|&(a, b)| code == a || code == b)
+}
+
+/// Over the mod select: the name a new mod preset gets, being typed.
+fn draw_preset_naming(c: &mut Canvas, name: &str) {
+    c.hits.clear();
+    let w = c.width;
+    c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
+    let bw = (w - 32.0).min(460.0);
+    let (bx, inner) = ((w - bw) / 2.0, bw - 32.0);
+    c.round_rect(
+        [bx, 140.0],
+        [bw, 164.0],
+        10.0,
+        rgba(0x15151d, 0.98),
+        rgba(accent(), 0.8),
+        1.5,
+    );
+    c.text_centered(
+        w / 2.0,
+        156.0,
+        14.0,
+        rgba(0xffffff, 1.0),
+        &Canvas::fit(14.0, inner, "Name this preset"),
+    );
+    let typed = format!("{name}_");
+    let size = Canvas::fit_size(12.0, 7.0, inner, &typed);
+    let typed = Canvas::fit(size, inner, &typed);
+    c.text_centered(w / 2.0, 196.0, size, rgba(0xffffff, 1.0), &typed);
+    c.text_centered(
+        w / 2.0,
+        230.0,
+        7.0,
+        rgba(0x9a9ab0, 1.0),
+        &Canvas::fit(
+            7.0,
+            inner,
+            "It keeps the mods on now and the speed: 1-9 or a click puts them back.",
+        ),
+    );
+    c.button(
+        w / 2.0 - 100.0,
+        264.0,
+        90.0,
+        24.0,
+        "Save",
+        9.0,
+        render::Hit::Key(KeyCode::Enter),
+        true,
+    );
+    c.button(
+        w / 2.0 + 10.0,
+        264.0,
+        90.0,
+        24.0,
+        "Cancel",
+        9.0,
+        render::Hit::Key(KeyCode::Escape),
+        false,
+    );
+}
+
 /// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
 fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
     let part = from
@@ -1440,13 +1539,13 @@ fn map_gives_pp(
     e: &Entry,
     set_status: &std::collections::HashMap<u32, Option<String>>,
     db_status: &std::collections::HashMap<PathBuf, u8>,
-    server_loved: &std::collections::HashSet<u32>,
+    server_loved: &ui::ServerLoved,
 ) -> Option<bool> {
     let Some(set) = e.set_id() else {
         return Some(false);
     };
-    // Loved on the online server: it gives pp there.
-    if server_loved.contains(&set) {
+    // Loved on the online server (the set, or this difficulty): it gives pp there.
+    if ui::loved_here(server_loved, e) {
         return Some(true);
     }
     if let Some(Some(s)) = set_status
@@ -4315,6 +4414,7 @@ impl State {
             Item::DrumMenus => on(c.drum_menus),
             Item::MapSkins => on(c.map_skins),
             Item::HideGreat => on(c.hide_great),
+            Item::FailRestart => on(c.fail_restart),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
             Item::CrashReports => on(c.send_crash_reports),
@@ -4633,6 +4733,7 @@ impl State {
             }
             Item::MapSkins => self.cfg.map_skins = !self.cfg.map_skins,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
+            Item::FailRestart => self.cfg.fail_restart = !self.cfg.fail_restart,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
             Item::CrashReports => {
@@ -8190,9 +8291,15 @@ impl State {
             // Right-clicking a mod makes it a favourite (or not any more).
             if pressed && self.customization_tab().is_none() {
                 let (vx, vy) = self.mouse_virtual();
-                if let Some(render::Hit::ModToggle(i)) = self.hit_at(vx, vy) {
-                    self.mod_select = Some(i);
-                    self.toggle_favourite(mods::ALL[i]);
+                match self.hit_at(vx, vy) {
+                    Some(render::Hit::ModToggle(i)) => {
+                        self.mod_select = Some(i);
+                        self.toggle_favourite(mods::ALL[i]);
+                    }
+                    Some(render::Hit::ModPreset(k)) if self.preset_naming.is_none() => {
+                        self.remove_mod_preset(k)
+                    }
+                    _ => {}
                 }
             }
             return;
@@ -9780,23 +9887,25 @@ impl State {
         });
     }
 
-    /// Asks the online server which map sets are loved there, or (`change`) loves one or takes
-    /// it back, in the background.
-    fn call_loved(&mut self, change: Option<(u32, bool)>) {
-        let request = match change {
-            Some((set, loved)) => online::Request::SetLoved {
+    /// Asks the online server which map sets (and difficulties) are loved there, or loves one
+    /// or takes it back, in the background.
+    fn call_loved(&mut self, ask: LovedAsk) {
+        let request = match &ask {
+            LovedAsk::Change(set, loved, version) => online::Request::SetLoved {
                 token: self.cfg.online_token.clone(),
-                set,
-                loved,
+                set: *set,
+                loved: *loved,
+                version: version.clone(),
             },
-            None => online::Request::LovedSets,
+            LovedAsk::Maps => online::Request::LovedMaps,
+            LovedAsk::Sets => online::Request::LovedSets,
         };
         let (tx, rx) = mpsc::channel();
         let server = self.cfg.online_server.clone();
         std::thread::spawn(move || {
             let _ = tx.send(online::call(&server, request));
         });
-        self.loved_call = Some((rx, change));
+        self.loved_call = Some((rx, ask));
     }
 
     /// Which map folders of the library were sent to (or came from) the custom maps, and which
@@ -9858,30 +9967,51 @@ impl State {
     fn poll_loved(&mut self) {
         if !self.loved_asked && self.loved_call.is_none() {
             self.loved_asked = true;
-            self.call_loved(None);
+            self.call_loved(LovedAsk::Maps);
         }
-        let Some((rx, change)) = &self.loved_call else {
+        let Some((rx, _)) = &self.loved_call else {
             return;
         };
         let Ok(result) = rx.try_recv() else { return };
-        let change = *change;
-        self.loved_call = None;
-        match (result, change) {
-            (Ok(online::Reply::LovedSets(sets)), _) => {
-                self.select.server_loved = sets.into_iter().collect();
-                if !self.select.filter.is_empty() {
-                    self.select.refilter(&self.library);
-                }
-                if let Some((set, loved)) = change {
-                    self.toast(if loved {
-                        format!("loved set {set} on taiko.rs: its plays give pp now")
-                    } else {
-                        format!("set {set} isn't loved on taiko.rs any more")
-                    });
-                }
+        let Some((_, ask)) = self.loved_call.take() else {
+            return;
+        };
+        let loved = match (result, &ask) {
+            (Ok(online::Reply::LovedMaps(maps)), _) => Some(maps.into_iter().collect()),
+            // Just the sets: the whole of each (the server doesn't love single difficulties yet).
+            (Ok(online::Reply::LovedSets(sets)), LovedAsk::Maps | LovedAsk::Sets) => {
+                Some(sets.into_iter().map(|s| (s, Vec::new())).collect())
             }
-            (Err(e), Some(_)) => self.toast(format!("couldn't: {e}")),
-            _ => {}
+            (Ok(online::Reply::LovedSets(_)), LovedAsk::Change(set, on, version)) => {
+                let what = match version {
+                    Some(v) => format!("[{v}] of set {set}"),
+                    None => format!("set {set}"),
+                };
+                self.toast(if *on {
+                    format!("loved {what} on taiko.rs: its plays give pp now")
+                } else {
+                    format!("{what} isn't loved on taiko.rs any more")
+                });
+                // Which difficulties, as it stands now.
+                self.call_loved(LovedAsk::Maps);
+                None
+            }
+            (Err(e), LovedAsk::Change(..)) => {
+                self.toast(format!("couldn't: {e}"));
+                None
+            }
+            // A server from before `LovedMaps`: the sets alone.
+            (Err(_), LovedAsk::Maps) => {
+                self.call_loved(LovedAsk::Sets);
+                None
+            }
+            _ => None,
+        };
+        if let Some(loved) = loved {
+            self.select.server_loved = loved;
+            if !self.select.filter.is_empty() {
+                self.select.refilter(&self.library);
+            }
         }
     }
 
@@ -10430,6 +10560,8 @@ impl State {
                 self.mods_changed();
             }
             KeyCode::KeyF => self.toggle_favourite(mods::ALL[cur]),
+            KeyCode::KeyS => self.start_preset_naming(),
+            _ if preset_key(code).is_some() => self.apply_mod_preset(preset_key(code).unwrap_or(0)),
             KeyCode::KeyC | KeyCode::KeyM => match mods::customizable(self.cfg.mods).first() {
                 Some(&m) => self.open_customization(m),
                 None => self.toast(
@@ -10439,6 +10571,89 @@ impl State {
             },
             KeyCode::Escape | KeyCode::F1 | KeyCode::Tab => self.mod_select = None,
             _ => {}
+        }
+    }
+
+    /// Starts naming a new preset of the mods on now and the speed (S / "+ Save").
+    fn start_preset_naming(&mut self) {
+        if self.cfg.mod_presets.len() >= mods::MAX_PRESETS {
+            self.toast(format!(
+                "{} presets at most: right-click one to remove it",
+                mods::MAX_PRESETS
+            ));
+            return;
+        }
+        self.preset_naming = Some(mods::Preset::auto_name(self.cfg.mods, self.cfg.rate));
+    }
+
+    /// Keys while a new preset is being named: Enter keeps it, Esc doesn't.
+    fn preset_naming_key(&mut self, code: KeyCode, text: Option<&str>) {
+        let Some(name) = &mut self.preset_naming else {
+            return;
+        };
+        match code {
+            KeyCode::Escape | KeyCode::F1 => self.preset_naming = None,
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                self.preset_naming = None;
+                if self.cfg.mod_presets.len() < mods::MAX_PRESETS {
+                    self.cfg.mod_presets.push(mods::Preset {
+                        name: name.clone(),
+                        mods: self.cfg.mods,
+                        rate: self.cfg.rate,
+                    });
+                    self.cfg.save();
+                    self.toast(format!(
+                        "preset {} saved: {name}",
+                        self.cfg.mod_presets.len()
+                    ));
+                }
+            }
+            KeyCode::Backspace => {
+                name.pop();
+            }
+            KeyCode::Delete => name.clear(),
+            KeyCode::KeyA if self.modifiers_ctrl => name.clear(),
+            _ => {
+                if let Some(text) = text {
+                    let room = 40usize.saturating_sub(name.chars().count());
+                    name.extend(text.chars().filter(|c| !c.is_control()).take(room));
+                }
+            }
+        }
+    }
+
+    /// Puts on preset `k`'s mods and speed. In a lobby a guest keeps the host's speed, and in
+    /// Defense the host picks everything.
+    fn apply_mod_preset(&mut self, k: usize) {
+        let Some(p) = self.cfg.mod_presets.get(k).cloned() else {
+            return;
+        };
+        let guest =
+            matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host());
+        if guest && self.lobby_defense().is_some() {
+            self.toast(tr!("in Defense the host picks the mods").into());
+            return;
+        }
+        if guest {
+            self.cfg.mods = self.cfg.mods.shared().plus(p.mods.free());
+        } else {
+            self.cfg.mods = p.mods;
+            self.cfg.rate = p.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
+        }
+        self.mods_changed();
+        self.toast(format!("preset {}: {}", k + 1, p.name));
+    }
+
+    /// Takes preset `k` away (right-click on it).
+    fn remove_mod_preset(&mut self, k: usize) {
+        if k < self.cfg.mod_presets.len() {
+            let p = self.cfg.mod_presets.remove(k);
+            self.cfg.save();
+            self.toast(format!("preset removed: {}", p.name));
         }
     }
 
@@ -10608,6 +10823,7 @@ impl State {
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
+            || self.preset_naming.is_some()
             || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
@@ -10635,6 +10851,7 @@ impl State {
                 .dropdown
                 .as_ref()
                 .is_some_and(|d| d.editing.is_some())
+            || self.preset_naming.is_some()
             || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
             || self
                 .universe_setup
@@ -10964,7 +11181,7 @@ impl State {
         let Some(set) = e.set_id().filter(|_| !edited) else {
             return Some(("NOT SUBMITTED", 0x8a8aa0));
         };
-        if self.select.server_loved.contains(&set) {
+        if ui::loved_here(&self.select.server_loved, e) {
             return Some(("LOVED HERE", 0xff66aa));
         }
         if let Some(Some(s)) = self.set_status.get(&set) {
@@ -13364,6 +13581,10 @@ impl State {
             self.customization_key(code, text, repeat);
             return;
         }
+        if self.mod_select.is_some() && self.preset_naming.is_some() {
+            self.preset_naming_key(code, text);
+            return;
+        }
         if self.mod_select.is_some() {
             if !repeat
                 || matches!(
@@ -14123,6 +14344,7 @@ impl State {
         let mut editor_reload: Option<(usize, f64)> = None;
         let mut editor_test: Option<(usize, Option<f64>)> = None;
         let mut test_over = false;
+        let mut fail_restart = false;
         let mut editor_folder: Option<PathBuf> = None;
         let mut editor_renamed: Option<(PathBuf, PathBuf)> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
@@ -14710,6 +14932,9 @@ impl State {
                                 if mods.has(mods::Mod::Autoplay) {
                                     game.banner = Some("AUTOPLAY".into());
                                 }
+                                if self.cfg.fail_restart {
+                                    game.fail_linger = FAIL_RESTART_LINGER;
+                                }
                             }
                         }
                         next = Some(Scene::Play {
@@ -14806,6 +15031,9 @@ impl State {
                 if done && self.editor_back.is_some() {
                     // A test play has no results: back to the editor.
                     test_over = true;
+                } else if done && fail_restarts(&self.cfg, game) {
+                    // Failed plays aren't kept anyway: straight into the next try.
+                    fail_restart = true;
                 } else if done {
                     let title = results_title(&game.map.meta, *from);
                     let failed = game.failed();
@@ -15812,9 +16040,14 @@ impl State {
                     canvas,
                     self.shown_mods(),
                     self.cfg.favourite_mods,
+                    &self.cfg.mod_presets,
+                    self.cfg.rate,
                     cur,
                     seed,
                 );
+            }
+            if let Some(name) = &self.preset_naming {
+                draw_preset_naming(canvas, name);
             }
             if let Some(input) = &self.random_setup {
                 canvas.hits.clear();
@@ -15947,6 +16180,10 @@ impl State {
         }
         if test_over {
             self.back_to_editor();
+        }
+        if fail_restart {
+            self.stop_audio();
+            self.restart_map();
         }
         if let Some((entry, speed)) = editor_reload {
             let (rx, rate) = self.spawn_track_loader(entry, speed);
@@ -17354,6 +17591,8 @@ impl State {
                 self.mod_select = Some(i);
                 self.toggle_mod(mods::ALL[i]);
             }
+            Hit::ModPreset(k) => self.apply_mod_preset(k),
+            Hit::ModPresetSave => self.start_preset_naming(),
             Hit::UniverseCell(row, col) => {
                 self.universe_setup = Some(multiverse::Setup::new(row, col));
                 let dir = if self.modifiers_shift { -1 } else { 1 };
@@ -17397,13 +17636,22 @@ impl State {
                     .menu_items(&self.library)
                     .get(k)
                     .map(|(_, a)| *a);
-                if let Some(ui::MenuAction::Love(set, loved)) = action {
+                if let Some(ui::MenuAction::Love(set, loved, one)) = action {
+                    let version = self
+                        .select
+                        .menu_map()
+                        .filter(|_| one)
+                        .map(|i| self.library[i].meta.version.clone());
                     self.select.menu = None;
                     self.toast(format!(
-                        "{} set {set} on taiko.rs...",
-                        if loved { "loving" } else { "unloving" }
+                        "{} {} on taiko.rs...",
+                        if loved { "loving" } else { "unloving" },
+                        match &version {
+                            Some(v) => format!("[{v}]"),
+                            None => format!("set {set}"),
+                        }
                     ));
-                    self.call_loved(Some((set, loved)));
+                    self.call_loved(LovedAsk::Change(set, loved, version));
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
                         self.update_set(i);
@@ -18861,6 +19109,7 @@ impl State {
             universe_setup: None,
             shapeshift_setup: None,
             random_setup: None,
+            preset_naming: None,
             tact_setup: None,
             od_setup: None,
             leaderboard: Vec::new(),

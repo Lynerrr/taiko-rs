@@ -1586,7 +1586,7 @@ impl View {
                 c,
                 self.layout.preview,
                 &[
-                    "drag a point: move it",
+                    "drag a point: move it (Shift: straight)",
                     "double click: add one",
                     "right click: take it away",
                 ],
@@ -1660,11 +1660,18 @@ impl View {
         }
     }
 
-    pub(super) fn path_drag(&mut self, x: f32, y: f32) {
+    /// Moves the point being dragged; with Shift held it lines up with a neighbour (the point
+    /// before it, or the one after: the drum for the last), level or plumb, whichever is closer.
+    pub(super) fn path_drag(&mut self, x: f32, y: f32, keys: Keys) {
         let Drag::PathPoint { group, point } = self.drag else {
             return;
         };
-        let p = self.path_point_at(x, y);
+        let mut p = self.path_point_at(x, y);
+        if keys.shift
+            && let Some(path) = self.ed.path_of(group)
+        {
+            p = straightened(p, &path.points, point);
+        }
         if self.ed.edit_path(group, true, |path| {
             if let Some(q) = path.points.get_mut(point) {
                 *q = p;
@@ -1694,5 +1701,42 @@ impl View {
             self.mark_stale();
         }
         true
+    }
+}
+
+/// `p` for point `i` of a path of `points` (playfield units, the drum at 0, 0), moved onto the
+/// level or plumb line through a neighbour, the one it is nearest: the point before it, or the one
+/// after (the drum, after the last).
+fn straightened(p: [f64; 2], points: &[[f64; 2]], i: usize) -> [f64; 2] {
+    let before = i.checked_sub(1).and_then(|j| points.get(j));
+    let after = points.get(i + 1).copied().unwrap_or([0.0, 0.0]);
+    before
+        .into_iter()
+        .copied()
+        .chain([after])
+        .flat_map(|n| [[p[0], n[1]], [n[0], p[1]]])
+        .min_by(|a, b| {
+            let d = |q: &[f64; 2]| (q[0] - p[0]).abs() + (q[1] - p[1]).abs();
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap_or(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::straightened;
+
+    #[test]
+    fn shift_lines_a_path_point_up_with_its_nearest_neighbour() {
+        let pts = [[300.0, -100.0], [120.0, -40.0], [50.0, -10.0]];
+        // The middle point near level with the one before: it goes level with it.
+        assert_eq!(straightened([200.0, -95.0], &pts, 1), [200.0, -100.0]);
+        // Near plumb under the one after: it goes plumb.
+        assert_eq!(straightened([53.0, -70.0], &pts, 1), [50.0, -70.0]);
+        // The last point lines up with the drum.
+        assert_eq!(straightened([90.0, 4.0], &pts, 2), [90.0, 0.0]);
+        assert_eq!(straightened([-3.0, 80.0], &pts, 2), [0.0, 80.0]);
+        // The first has only the one after it.
+        assert_eq!(straightened([310.0, -38.0], &pts, 0), [310.0, -40.0]);
     }
 }
