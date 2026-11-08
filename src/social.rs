@@ -368,10 +368,14 @@ impl Social {
                     rows.push(Row::Lobby);
                 }
                 rows.extend((0..self.requests.len()).map(Row::Request));
-                // Online first, each part in the server's order.
-                let (online, offline): (Vec<usize>, Vec<usize>) =
-                    (0..self.friends.len()).partition(|&i| self.friends[i].activity.is_some());
-                rows.extend(online.into_iter().chain(offline).map(Row::Friend));
+                // Unread messages first, then online, each part in the server's order.
+                let mut friends: Vec<usize> = (0..self.friends.len()).collect();
+                friends.sort_by_key(|&i| {
+                    let f = &self.friends[i];
+                    let unread = self.unread.get(&key(&f.name)).is_some_and(|&n| n > 0);
+                    (!unread, f.activity.is_none())
+                });
+                rows.extend(friends.into_iter().map(Row::Friend));
                 rows
             }
             Tab::Players => {
@@ -469,8 +473,10 @@ impl Social {
             .filter(|(_, tags)| !tags.is_empty())
             .map(|(name, tags)| (key(&name), tags))
             .collect();
+        GROUPS.with_borrow_mut(|all| all.clone_from(&self.groups));
     }
 
+    #[cfg(test)]
     /// The tags of `name`'s groups (none for most).
     pub fn tags_of(&self, name: &str) -> &[String] {
         self.groups.get(&key(name)).map_or(&[], Vec::as_slice)
@@ -669,12 +675,23 @@ impl Social {
         }
     }
 
+    /// One more unread message from `name`: they move up the list, the cursor staying put.
+    pub fn add_unread(&mut self, name: &str, in_lobby: bool) {
+        let selected = self.selected_name(in_lobby);
+        *self.unread.entry(key(name)).or_default() += 1;
+        self.reselect(selected, in_lobby);
+    }
+
     /// Marks what's on screen as read.
     pub fn mark_read(&mut self, in_lobby: bool) {
         match self.row(in_lobby) {
             Row::Friend(i) if self.in_conversation(in_lobby) => {
                 if let Some(f) = self.friends.get(i) {
-                    self.unread.remove(&key(&f.name));
+                    let name = key(&f.name);
+                    if self.unread.remove(&name).is_some() {
+                        // Read, it drops back among the rest: the conversation stays open.
+                        self.reselect(Some(name), in_lobby);
+                    }
                 }
             }
             Row::Global => self.global_unread = 0,
@@ -831,15 +848,80 @@ fn shimmer_secs() -> f32 {
 }
 
 /// A group member's name, letter by letter in the shimmer's colours.
-fn shimmer_name(c: &mut Canvas, x: f32, y: f32, name: &str, colours: (u32, u32), a: f32) {
+#[allow(clippy::too_many_arguments)]
+fn shimmer_name(
+    c: &mut Canvas,
+    x: f32,
+    y: f32,
+    size: f32,
+    name: &str,
+    colours: (u32, u32),
+    a: f32,
+) {
     let secs = shimmer_secs();
     let n = name.chars().count();
     let mut buf = [0u8; 4];
     let mut cx = x;
     for (i, ch) in name.chars().enumerate() {
         let colour = shimmer(colours, i, n, secs);
-        cx += c.text(cx, y, CHAT_SIZE, rgba(colour, a), ch.encode_utf8(&mut buf));
+        cx += c.text(cx, y, size, rgba(colour, a), ch.encode_utf8(&mut buf));
     }
+}
+
+thread_local! {
+    /// `Social::groups` for every screen that shows a name, not only the panel (they're all
+    /// drawn on the thread that hears from the server).
+    static GROUPS: std::cell::RefCell<HashMap<String, Vec<String>>> = Default::default();
+}
+
+/// The tags of `name`'s groups (none for most), from the last list the server sent.
+pub fn group_tags(name: &str) -> Vec<String> {
+    GROUPS.with_borrow(|g| g.get(&key(name)).cloned().unwrap_or_default())
+}
+
+/// How wide `styled_name` draws `name` at `size` given all the room it wants.
+pub fn styled_name_width(name: &str, size: f32) -> f32 {
+    let k = size / CHAT_SIZE;
+    group_tags(name)
+        .iter()
+        .map(|t| tag_width(t, size) + 3.0 * k)
+        .sum::<f32>()
+        + Canvas::text_width(size, name)
+}
+
+/// A player's name as chat shows it, on any screen: their groups' tags before it and the name
+/// shimmering in the first group's colours, or plain in `colour`; all of it within `max_w`.
+/// Returns how wide it came out.
+#[allow(clippy::too_many_arguments)]
+pub fn styled_name(
+    c: &mut Canvas,
+    x: f32,
+    y: f32,
+    size: f32,
+    name: &str,
+    colour: [f32; 4],
+    max_w: f32,
+) -> f32 {
+    let tags = group_tags(name);
+    let a = colour[3];
+    let right = x + max_w;
+    let mut nx = x;
+    // Tags while the name keeps some room; then the name, cut to what's left.
+    for tag in &tags {
+        if nx + tag_width(tag, size) > right - 40.0 * size / CHAT_SIZE {
+            break;
+        }
+        nx += group_tag(c, nx, y, size, tag, a) + 3.0 * size / CHAT_SIZE;
+    }
+    // A hair of slack: room measured with `styled_name_width` must not cut the name.
+    let shown = Canvas::fit(size, right - nx + 0.01, name);
+    match tags.first() {
+        Some(tag) => shimmer_name(c, nx, y, size, &shown, group_colours(tag), a),
+        None => {
+            c.text(nx, y, size, colour, &shown);
+        }
+    }
+    nx + Canvas::text_width(size, &shown) - x
 }
 
 const TAG_SIZE: f32 = 5.5;
@@ -853,26 +935,31 @@ fn tag_label(tag: &str) -> &str {
     }
 }
 
-fn tag_width(tag: &str) -> f32 {
-    Canvas::text_width(TAG_SIZE, tag_label(tag)) + 6.0
+/// A tag's width beside a name of `size`.
+fn tag_width(tag: &str, size: f32) -> f32 {
+    let k = size / CHAT_SIZE;
+    Canvas::text_width(TAG_SIZE * k, tag_label(tag)) + 6.0 * k
 }
 
-/// A group's tag, a small pill at `x` on a name row; returns its width.
-fn group_tag(c: &mut Canvas, x: f32, y: f32, tag: &str, a: f32) -> f32 {
-    const SIZE: f32 = TAG_SIZE;
+/// A group's tag, a small pill at `x` level with a name of `size` drawn at `y`; returns its
+/// width.
+fn group_tag(c: &mut Canvas, x: f32, y: f32, size: f32, tag: &str, a: f32) -> f32 {
+    let k = size / CHAT_SIZE;
+    let small = TAG_SIZE * k;
     let (colour, light) = group_colours(tag);
-    let w = tag_width(tag);
-    let h = Canvas::text_height(SIZE) + 3.0;
-    let top = y + 1.0 + (Canvas::text_height(CHAT_SIZE) - h) / 2.0;
+    let w = tag_width(tag, size);
+    let h = Canvas::text_height(small) + 3.0 * k;
+    let top = y + (Canvas::text_height(size) - h) / 2.0;
     c.round_rect(
         [x, top],
         [w, h],
-        2.0,
+        2.0 * k,
         rgba(colour, 0.22 * a),
         rgba(colour, 0.85 * a),
         1.0,
     );
-    c.text(x + 3.0, top + 1.5, SIZE, rgba(light, a), tag_label(tag));
+    let label = tag_label(tag);
+    c.text(x + 3.0 * k, top + 1.5 * k, small, rgba(light, a), label);
     w
 }
 
@@ -1187,13 +1274,8 @@ pub fn draw(
                         a,
                     );
                     let tx = tx + 24.0;
-                    c.text(
-                        tx,
-                        hy + 6.0,
-                        8.0,
-                        rgba(0xffffff, a),
-                        &Canvas::fit(8.0, bx - tx - 4.0, &f.name),
-                    );
+                    let white = rgba(0xffffff, a);
+                    styled_name(c, tx, hy + 6.0, 8.0, &f.name, white, bx - tx - 4.0);
                     let what = f
                         .activity
                         .as_ref()
@@ -1725,12 +1807,14 @@ fn draw_rows(
                     badge_after(c, bx - w, ry + bh / 2.0, unread, a);
                     bx -= w + 4.0;
                 }
-                c.text(
+                styled_name(
+                    c,
                     inner + 31.0,
                     ry + crate::mobile::pick(5.0, 9.0),
                     8.0,
+                    &f.name,
                     rgba(if online { 0xffffff } else { SOFT_TEXT }, a),
-                    &Canvas::fit(8.0, bx - inner - 34.0, &f.name),
+                    bx - inner - 34.0,
                 );
                 c.text(
                     inner + 31.0,
@@ -1834,12 +1918,14 @@ fn draw_rows(
                         Standing::Stranger => right,
                     }
                 } - 4.0;
-                c.text(
+                styled_name(
+                    c,
                     inner + 31.0,
                     ry + crate::mobile::pick(5.0, 9.0),
                     8.0,
+                    &p.name,
                     rgba(0xffffff, a),
-                    &Canvas::fit(8.0, bx - inner - 34.0, &p.name),
+                    bx - inner - 34.0,
                 );
                 c.text(
                     inner + 31.0,
@@ -2200,25 +2286,19 @@ fn chat_lines(
                     row.colour,
                     a,
                 );
-                let mut nx = inner + 3.0 + MESSAGE_INDENT;
-                let right = inner + iw;
-                let tags = s.tags_of(&row.text);
-                // Tags while the name keeps some room; then the name, cut to what's left.
-                for tag in tags {
-                    if nx + tag_width(tag) > right - 40.0 {
-                        break;
-                    }
-                    nx += group_tag(c, nx, ly, tag, a) + 3.0;
-                }
-                let name = Canvas::fit(CHAT_SIZE, right - nx, &row.text);
-                match tags.first() {
-                    Some(tag) => shimmer_name(c, nx, ly + 1.0, &name, group_colours(tag), a),
-                    None => {
-                        c.text(nx, ly + 1.0, CHAT_SIZE, rgba(row.colour, a), &name);
-                    }
-                }
+                let nx = inner + 3.0 + MESSAGE_INDENT;
+                let colour = rgba(row.colour, a);
+                let name_w = styled_name(
+                    c,
+                    nx,
+                    ly + 1.0,
+                    CHAT_SIZE,
+                    &row.text,
+                    colour,
+                    inner + iw - nx,
+                );
                 if let Some(at) = at {
-                    let after = nx + Canvas::text_width(CHAT_SIZE, &name) + 5.0;
+                    let after = nx + name_w + 5.0;
                     let when = ago(at, now);
                     if after + Canvas::text_width(6.0, &when) < inner + iw {
                         c.text(after, ly + 2.0, 6.0, rgba(0x55556a, a), &when);
@@ -2712,6 +2792,33 @@ mod tests {
     }
 
     #[test]
+    fn every_screen_sees_the_groups_and_draws_the_tags() {
+        let mut s = Social::default();
+        s.set_groups(vec![("Styled-Test".into(), vec!["DEV".into()])]);
+        assert_eq!(group_tags("STYLED-TEST"), ["DEV"]);
+        let plain = Canvas::text_width(8.0, "Styled-Test");
+        assert!(
+            styled_name_width("styled-test", 8.0) > plain,
+            "the tag comes before it"
+        );
+        let mut c = Canvas::default();
+        let drawn = styled_name(
+            &mut c,
+            0.0,
+            0.0,
+            8.0,
+            "Styled-Test",
+            rgba(0xffffff, 1.0),
+            500.0,
+        );
+        assert!((drawn - styled_name_width("Styled-Test", 8.0)).abs() < 0.5);
+        assert_eq!(
+            styled_name_width("a-stranger", 8.0),
+            Canvas::text_width(8.0, "a-stranger")
+        );
+    }
+
+    #[test]
     fn groups_come_from_the_server_whole_and_by_any_case() {
         let mut s = Social::default();
         let tags = |t: &[&str]| t.iter().map(|t| t.to_string()).collect::<Vec<_>>();
@@ -2858,6 +2965,28 @@ mod tests {
         );
         assert!(!s.in_conversation(false));
         assert!(s.cursor < s.rows(false).len());
+    }
+
+    #[test]
+    fn unread_friends_come_first_and_the_cursor_stays_put() {
+        let mut s = Social {
+            friends: vec![friend("ann", true), friend("cid", false)],
+            ..Social::default()
+        };
+        s.cursor = 1; // ann
+        s.add_unread("CID", false);
+        assert_eq!(
+            s.rows(false),
+            vec![Row::AddFriend, Row::Friend(1), Row::Friend(0)],
+            "an unread message beats being online"
+        );
+        assert_eq!(s.row(false), Row::Friend(0), "still on ann");
+        // Reading cid's drops them back, the conversation still theirs.
+        s.cursor = 1;
+        s.open_conversation();
+        s.mark_read(false);
+        assert_eq!(s.row(false), Row::Friend(1));
+        assert!(s.in_conversation(false));
     }
 
     #[test]

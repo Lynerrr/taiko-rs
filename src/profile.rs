@@ -192,12 +192,14 @@ impl View {
         // Their picture, left of the name and the medals line.
         c.avatar(&p.name, px + 30.0, py + 25.0, 14.0, accent(), 1.0);
         let hx = px + 30.0;
-        c.text(
+        crate::social::styled_name(
+            c,
             hx + crate::mobile::pick(16.0, 20.0),
             py + 12.0,
             14.0,
+            &p.name,
             rgba(0xffffff, 1.0),
-            &Canvas::fit(14.0, pw - 30.0 - stats_w - 48.0, &p.name),
+            pw - 30.0 - stats_w - 48.0,
         );
         c.text_right(
             px + pw - 16.0,
