@@ -2870,6 +2870,9 @@ pub enum Hit {
     SendShot,
     /// Song select's heart on the song it's showing.
     SelectLike,
+    /// The song preview's autoplay box, seek graph and play button. It only marks the preview as
+    /// the topmost thing there, so whatever is drawn over it takes the click instead.
+    Preview,
     /// A phone's speed panel: opens it, closes it, moves the speed by hundredths or sets it, flips
     /// keeping the pitch, moves the pitch by semitones.
     RateOpen,

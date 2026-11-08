@@ -106,6 +106,8 @@ hit    24,278   444x34   SongHeader(5)
 hit    24,312   444x34   SongHeader(6)
 hit     4,86     20x354  SongScrollbar
 hit   701,101    16x13   SelectLike
+hit   490,183   330x61   Preview
+hit   488,250   334x44   Preview
 hit   709,64    102x20   BoardPage
 hit   480,414   350x22   Key(Enter)
 hit   472,221     8x48   SplitList

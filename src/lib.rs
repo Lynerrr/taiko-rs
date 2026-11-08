@@ -8406,7 +8406,7 @@ impl State {
         }
         if matches!(self.scene, Scene::Preview { .. }) {
             let (vx, vy) = self.mouse_virtual();
-            if self.preview.time_at(vx, vy).is_some() {
+            if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() {
                 self.preview
                     .seek_by(notches as f64 * 5000.0, self.audio.as_ref());
                 return;
@@ -8457,9 +8457,12 @@ impl State {
             return;
         }
         match &self.scene {
-            Scene::Select if self.preview.time_at(vx, vy).is_some() => self
-                .preview
-                .seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
+            Scene::Select
+                if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() =>
+            {
+                self.preview
+                    .seek_by(notches as f64 * 5000.0, self.audio.as_ref())
+            }
             Scene::Select if self.select.picker.is_some() => {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self
@@ -8468,9 +8471,12 @@ impl State {
                     .map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
             Scene::Select => self.select.scroll_by(-notches, &self.library),
-            Scene::Download if self.preview.time_at(vx, vy).is_some() => self
-                .preview
-                .seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
+            Scene::Download
+                if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() =>
+            {
+                self.preview
+                    .seek_by(notches as f64 * 5000.0, self.audio.as_ref())
+            }
             Scene::Download => self.browse.scroll_by(notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
@@ -8824,9 +8830,10 @@ impl State {
                 return CursorIcon::Pointer;
             }
             let on_box = matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy);
-            if self.preview.time_at(vx, vy).is_some()
-                || self.preview.play_button_at(vx, vy)
-                || on_box
+            if self.preview_on_top(vx, vy)
+                && (self.preview.time_at(vx, vy).is_some()
+                    || self.preview.play_button_at(vx, vy)
+                    || on_box)
             {
                 self.hover = None;
                 return CursorIcon::Pointer;
@@ -9185,19 +9192,19 @@ impl State {
         ) {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
-                if self.preview.play_button_at(vx, vy) {
+                if !self.preview_on_top(vx, vy) {
+                    // Something's drawn over the preview here: it takes the click below.
+                } else if self.preview.play_button_at(vx, vy) {
                     if matches!(self.scene, Scene::Preview { .. }) {
                         self.preview_button();
                     } else if !self.picking_lobby_map {
                         self.play_from_marker();
                     }
                     return;
-                }
-                if matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy) {
+                } else if matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy) {
                     self.open_preview();
                     return;
-                }
-                if let Some(t) = self.preview.time_at(vx, vy) {
+                } else if let Some(t) = self.preview.time_at(vx, vy) {
                     self.preview.seek(t, self.audio.as_ref());
                     self.scrubbing = Some((Instant::now(), t));
                     return;
@@ -18234,6 +18241,17 @@ impl State {
     }
 
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
+    /// Whether the song preview is the topmost thing at a point, so it takes the pointer there.
+    /// Anything drawn over it (the friends panel, a drop-down, the changelog) gets it instead.
+    fn preview_on_top(&self, x: f32, y: f32) -> bool {
+        // The mod select and both drop-downs take every click while open; the download one is
+        // drawn before the preview, so its click-away area is under it.
+        self.mod_select.is_none()
+            && self.settings_ui.dropdown.is_none()
+            && !(matches!(self.scene, Scene::Download) && self.browse.menu.is_some())
+            && matches!(self.hit_at(x, y), Some(render::Hit::Preview))
+    }
+
     fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
         if mobile::active() {
             return mobile::hit_near(&self.hits, x, y);
@@ -18535,7 +18553,7 @@ impl State {
                 // Logging in is in the multiplayer tab.
                 None => self.goto_tab(2),
             },
-            Hit::Overlay => {}
+            Hit::Overlay | Hit::Preview => {}
             // Dragged (`mouse_button`).
             Hit::SplitList => {}
             Hit::ScoreVideo(k) => {
