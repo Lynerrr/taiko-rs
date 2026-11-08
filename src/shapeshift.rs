@@ -295,8 +295,14 @@ impl Setup {
         outline: impl Fn(usize) -> Vec<(f32, f32)>,
     ) {
         let w = c.width;
-        c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.6));
-        let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
+        c.rect(
+            0.0,
+            0.0,
+            w,
+            480.0,
+            rgba(0x000000, crate::mobile::pick(0.6, 0.97)),
+        );
+        let (px, py, pw, ph) = crate::mobile::setup_rect(w);
         c.round_rect(
             [px, py],
             [pw, ph],
@@ -322,17 +328,17 @@ impl Setup {
             py + 16.0,
             6.0,
             rgba(0x6f6f86, 1.0),
-            &Canvas::fit(6.0, pw - title_w - 42.0, hint),
+            &crate::mobile::key_hint(6.0, pw - title_w - 42.0, hint),
         );
         self.draw(c, cfg, px, py + 40.0, pw, outline);
-        let (by, bw) = (py + ph - 26.0, 56.0);
+        let (by, bw, bh, size) = crate::mobile::setup_button(py + ph);
         c.button(
             px + pw - bw - 12.0,
             by,
             bw,
-            16.0,
+            bh,
             tr!("Back", "戻る", "Назад"),
-            7.0,
+            size,
             Hit::Key(KeyCode::Escape),
             true,
         );
@@ -340,9 +346,9 @@ impl Setup {
             px + pw - 2.0 * bw - 18.0,
             by,
             bw,
-            16.0,
+            bh,
             tr!("Defaults", "初期設定", "Сброс"),
-            7.0,
+            size,
             Hit::Key(KeyCode::KeyD),
             false,
         );
@@ -360,11 +366,15 @@ impl Setup {
         outline: impl Fn(usize) -> Vec<(f32, f32)>,
     ) {
         let x0 = px + 16.0;
-        let label_w = 70.0;
+        let label_w = crate::mobile::pick(70.0, 100.0);
         let mut hovered = None;
         let mut y = py;
         for row in 0..ROWS {
-            let h = if row == SHAPES_ROW { 76.0 } else { 24.0 };
+            let h = if row == SHAPES_ROW {
+                76.0
+            } else {
+                crate::mobile::pick(24.0, 42.0)
+            };
             let name = [
                 tr!("EVERY", "間隔", "КАЖДЫЕ"),
                 tr!("MORPH", "変形", "ПЕРЕХОД"),
@@ -377,7 +387,7 @@ impl Setup {
             let cw = ((room - 6.0 * (n as f32 - 1.0)) / n as f32).min(if row == SHAPES_ROW {
                 110.0
             } else {
-                90.0
+                crate::mobile::pick(90.0, 130.0)
             });
             for col in 0..n {
                 let cx = x0 + label_w + col as f32 * (cw + 6.0);
@@ -464,18 +474,18 @@ impl Setup {
             c.button(
                 bx,
                 y,
-                70.0,
-                16.0,
+                crate::mobile::pick(70.0, 120.0),
+                crate::mobile::pick(16.0, 36.0),
                 tr!("< earlier", "< 前へ", "< раньше"),
                 7.0,
                 Hit::ShapeshiftMove(-1),
                 false,
             );
             c.button(
-                bx + 76.0,
+                bx + crate::mobile::pick(76.0, 128.0),
                 y,
-                70.0,
-                16.0,
+                crate::mobile::pick(70.0, 120.0),
+                crate::mobile::pick(16.0, 36.0),
                 tr!("later >", "後へ >", "позже >"),
                 7.0,
                 Hit::ShapeshiftMove(1),

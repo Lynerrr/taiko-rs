@@ -2374,18 +2374,25 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
     assert!(s.mp.as_ref().unwrap().chat_input.is_none());
     assert!(matches!(s.scene, Scene::Lobby));
 
-    // Enter sends and closes.
+    // Enter sends.
     key(&mut s, KeyCode::KeyT, Some("t"));
     key(&mut s, KeyCode::KeyO, Some("o"));
     key(&mut s, KeyCode::Backspace, None);
     key(&mut s, KeyCode::KeyK, Some("k"));
     assert_eq!(s.mp.as_ref().unwrap().chat_input.as_deref(), Some("k"));
     key(&mut s, KeyCode::Enter, None);
-    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
+    assert_eq!(
+        s.mp.as_ref().unwrap().chat_input.as_deref(),
+        Some(""),
+        "sent, and the box stays open for the next line"
+    );
     assert!(
         matches!(s.scene, Scene::Lobby),
         "Enter didn't start a match"
     );
+    // Enter on an empty line puts it away.
+    key(&mut s, KeyCode::Enter, None);
+    assert!(s.mp.as_ref().unwrap().chat_input.is_none());
 
     // A click on the line focuses it; a click elsewhere puts it away.
     s.click(render::Hit::LobbyChat, None);

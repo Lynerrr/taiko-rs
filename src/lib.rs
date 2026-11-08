@@ -53,6 +53,7 @@ mod medals;
 mod media;
 mod menu;
 mod menu_notes;
+mod mobile;
 mod mods;
 mod multiplayer;
 mod multiverse;
@@ -776,6 +777,26 @@ struct State {
     /// The window's own size, and where the game is in it with Letterbox on.
     real_window: (f32, f32),
     letterbox: Option<[u32; 4]>,
+    /// The phone interface's own state.
+    mob: mobile::Ui,
+    /// Android: the app is in the background.
+    backgrounded: bool,
+    /// Android: what the activity was last told about keeping the music alive.
+    #[cfg(target_os = "android")]
+    music_service: bool,
+    /// Android: the screen may turn upright now (the player's up).
+    #[cfg(target_os = "android")]
+    may_turn: bool,
+    /// Android: what the media controls were last told: the song, paused and its length; where
+    /// it was then, and when.
+    #[cfg(target_os = "android")]
+    media_sent: Option<((PathBuf, bool, i64), f64, Instant)>,
+    /// The screen's rounded corners and camera: how far in from the sides and from the top and
+    /// bottom the interface stays, in pixels. None: right to the edges.
+    safe_insets: Option<[u32; 2]>,
+    /// When the phone was last asked for them.
+    #[cfg(target_os = "android")]
+    safe_asked: Option<Instant>,
     /// Shapes of this frame to clip to the playfield area.
     frame_clip: Option<(std::ops::Range<usize>, Area)>,
     /// Song select preview: background, preview music, autoplay preview.
@@ -1043,71 +1064,81 @@ fn score_video_width() -> f32 {
     Canvas::text_width(6.0, score_video_label()) + 12.0
 }
 
-/// The leaderboard's LOCAL / ONLINE tabs, and the map's website while that keeps clear of the
-/// rows' video buttons under it (ending at `right`); returns how wide they are.
-fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: f32) -> f32 {
+/// Where a leaderboard's rows start under its buttons.
+const BOARD_HEAD: f32 = 28.0;
+
+/// The leaderboard's Local / Online buttons from `x`, and the way back to the preview and the
+/// map's website ending at `right`;
+/// returns the free span between them, for a hint.
+fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: f32) -> [f32; 2] {
     let mut tx = x;
     for (label, on) in [
-        (tr!("LOCAL", "ローカル", "ЛОКАЛЬНО"), false),
-        (tr!("ONLINE", "オンライン", "ОНЛАЙН"), true),
+        (tr!("Local", "ローカル", "Локально"), false),
+        (tr!("Online", "オンライン", "Онлайн"), true),
     ] {
-        let tw = Canvas::text_width(7.0, label) + 10.0;
-        let lit = on == online;
-        let h = Canvas::text_height(7.0) + 3.0;
-        c.round_rect(
-            [tx, y - 1.5],
-            [tw, h],
-            3.0,
-            rgba(
-                if lit { accent() } else { 0x1d1d27 },
-                if lit { 0.9 } else { 1.0 },
-            ),
-            rgba(if lit { accent() } else { 0x3a3a4e }, 1.0),
-            1.0,
-        );
-        c.text(
-            tx + 5.0,
-            y + 1.5,
-            7.0,
-            rgba(if lit { 0xffffff } else { 0x8a8aa0 }, 1.0),
+        let tw = Canvas::text_width(7.0, label) + 24.0;
+        c.button(
+            tx,
+            y,
+            tw,
+            20.0,
             label,
+            7.0,
+            render::Hit::BoardTab(on),
+            on == online,
         );
-        c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
         tx += tw + 6.0;
     }
     // With Relax on, these are its scores, which count apart.
     if relax {
         let label = "RELAX";
-        let tw = Canvas::text_width(7.0, label) + 10.0;
-        let h = Canvas::text_height(7.0) + 3.0;
+        let tw = Canvas::text_width(7.0, label) + 14.0;
         c.round_rect(
-            [tx, y - 1.5],
-            [tw, h],
-            3.0,
+            [tx, y],
+            [tw, 20.0],
+            5.0,
             rgba(0xFFD34D, 0.15),
             rgba(0xFFD34D, 0.9),
             1.0,
         );
-        c.text(tx + 5.0, y + 1.5, 7.0, rgba(0xFFD34D, 1.0), label);
+        c.text_centered(tx + tw / 2.0, y + 10.0, 7.0, rgba(0xFFD34D, 1.0), label);
         tx += tw + 6.0;
     }
-    let label = tr!("WEBSITE", "ウェブ", "САЙТ");
-    let tw = Canvas::text_width(7.0, label) + 10.0;
-    let h = Canvas::text_height(7.0) + 3.0;
-    if tx + tw + 4.0 > right - score_video_width() {
-        return tx - x - 6.0;
-    }
-    c.round_rect(
-        [tx, y - 1.5],
-        [tw, h],
-        3.0,
-        rgba(0x1d1d27, 1.0),
-        rgba(0x3a3a4e, 1.0),
-        1.0,
+    // Back to the preview at the far right, the website left of it.
+    let back = tr!("< Preview", "< プレビュー", "< Превью");
+    let bw = Canvas::text_width(7.0, back) + 24.0;
+    c.button(
+        right - bw,
+        y,
+        bw,
+        20.0,
+        back,
+        7.0,
+        render::Hit::BoardPage,
+        true,
     );
-    c.text(tx + 5.0, y + 1.5, 7.0, rgba(0x8a8aa0, 1.0), label);
-    c.hit(tx, y - 1.5, tw, h, render::Hit::BoardWebsite);
-    tx + tw - x
+    let right = right - bw - 6.0;
+    let label = tr!("Website", "ウェブ", "Сайт");
+    let tw = Canvas::text_width(7.0, label) + 24.0;
+    c.button(
+        right - tw,
+        y,
+        tw,
+        20.0,
+        label,
+        7.0,
+        render::Hit::BoardWebsite,
+        false,
+    );
+    [tx + 4.0, right - tw - 10.0]
+}
+
+/// A leaderboard's message in place of its rows, centred under its buttons.
+fn board_note(c: &mut Canvas, x: f32, y: f32, w: f32, note: &str) {
+    for (k, line) in mobile::wrap(7.0, w - 16.0, note, 3).iter().enumerate() {
+        let ly = y + BOARD_HEAD + 14.0 + k as f32 * 14.0;
+        c.text_centered(x + w / 2.0, ly, 7.0, rgba(0x9a9ab0, 1.0), line);
+    }
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
@@ -1122,8 +1153,7 @@ fn draw_online_leaderboard(
     first: usize,
     relax: bool,
 ) {
-    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true, relax, x + w);
-    let at = x + 4.0 + tabs_w + 10.0;
+    let [free, free_end] = board_tabs(c, x, y, true, relax, x + w);
     let note = match board {
         None => Some(tr!("loading...", "読み込み中...", "загрузка...").to_string()),
         Some(Err(e)) => Some(
@@ -1140,13 +1170,7 @@ fn draw_online_leaderboard(
         Some(Ok(_)) => None,
     };
     if let Some(note) = note {
-        c.text(
-            at,
-            y + 2.0,
-            7.0,
-            rgba(0x6f6f86, 1.0),
-            &Canvas::fit(7.0, x + w - 4.0 - at, &note),
-        );
+        board_note(c, x, y, w, &note);
         return;
     }
     let Some(Ok(rows)) = board else { return };
@@ -1156,73 +1180,167 @@ fn draw_online_leaderboard(
         "клик: итоги и повтор"
     );
     c.text_right(
-        x + w - 4.0,
-        y + 2.0,
+        free_end,
+        y + 7.0,
         6.0,
         rgba(0x6f6f86, 1.0),
-        &Canvas::fit_hints(6.0, w - 20.0 - tabs_w, hint),
+        &Canvas::fit_hints(6.0, free_end - free, hint),
     );
     let shown = rows.len().saturating_sub(first).min(fits);
-    board_scrollbar(c, x + w + 5.0, y + 14.0, shown.max(1), first, rows.len());
+    board_scrollbar(
+        c,
+        x + w + 5.0,
+        y + BOARD_HEAD,
+        shown.max(1),
+        first,
+        rows.len(),
+    );
     for (k, r) in rows.iter().skip(first).take(fits).enumerate() {
-        let ry = y + 14.0 + k as f32 * 18.0;
-        let mine = r.player.eq_ignore_ascii_case(me);
-        let hover = c.hovered(x, ry, w, 16.0);
-        let bg = if hover {
-            0x262634
-        } else if mine {
-            0x23232f
-        } else {
-            0x15151d
+        let line = BoardLine {
+            place: first + k + 1,
+            player: &r.player,
+            score: r.score,
+            accuracy: r.accuracy,
+            combo: r.max_combo,
+            pp: r.pp,
+            rate: r.rate,
+            mods: r.mods.concat(),
+            miss: r.miss,
+            date: r.date,
+            mine: r.player.eq_ignore_ascii_case(me),
         };
-        c.round_rect(
-            [x, ry],
-            [w, 16.0],
-            5.0,
-            rgba(bg, 0.9),
-            rgba(if mine { accent() } else { 0x2a2a38 }, 1.0),
-            1.0,
+        let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
+        board_row(c, x, ry, w, &line, render::Hit::OnlineScoreRow(k), None);
+    }
+}
+
+/// A leaderboard row's height, the gap under it included.
+const BOARD_ROW: f32 = 34.0;
+
+/// What a leaderboard row shows, local or online.
+struct BoardLine<'a> {
+    place: usize,
+    player: &'a str,
+    score: u64,
+    accuracy: f64,
+    combo: u32,
+    pp: Option<f64>,
+    rate: f64,
+    mods: String,
+    miss: u32,
+    date: u64,
+    mine: bool,
+}
+
+/// One play on a leaderboard, a card at `ry`: its place, the player's picture, then their name
+/// (as chat shows it) over how it went, the score and when on the right. `video`: the local
+/// board's export button, at the far right.
+#[allow(clippy::too_many_arguments)]
+fn board_row(
+    c: &mut Canvas,
+    x: f32,
+    ry: f32,
+    w: f32,
+    l: &BoardLine,
+    hit: render::Hit,
+    video: Option<render::Hit>,
+) {
+    let h = BOARD_ROW - 4.0;
+    let hover = c.hovered(x, ry, w, h);
+    let bg = if hover {
+        0x262634
+    } else if l.mine {
+        0x23232f
+    } else {
+        0x15151d
+    };
+    // The podium in gold, silver and bronze.
+    let medal = match l.place {
+        1 => Some(0xFFD34D),
+        2 => Some(0xC8D2E6),
+        3 => Some(0xE0995E),
+        _ => None,
+    };
+    let edge = if l.mine {
+        accent()
+    } else {
+        medal.unwrap_or(0x2a2a38)
+    };
+    let edge_a = if l.mine || medal.is_none() { 1.0 } else { 0.45 };
+    c.round_rect(
+        [x, ry],
+        [w, h],
+        7.0,
+        rgba(bg, 0.92),
+        rgba(edge, edge_a),
+        1.0,
+    );
+    c.hit(x, ry, w, h, hit);
+    let mid = ry + h / 2.0;
+    let place = format!("#{}", l.place);
+    let place_colour = medal.unwrap_or(0x9a9ab0);
+    c.text_centered(x + 16.0, mid, 8.0, rgba(place_colour, 1.0), &place);
+    c.avatar(l.player, x + 42.0, mid, 10.0, accent(), 1.0);
+    let tx = x + 58.0;
+    let mut right = x + w - 8.0;
+    if let Some(video) = video {
+        let bw = score_video_width();
+        right -= bw;
+        c.button(
+            right,
+            mid - 7.0,
+            bw,
+            14.0,
+            score_video_label(),
+            6.0,
+            video,
+            false,
         );
-        c.hit(x, ry, w, 16.0, render::Hit::OnlineScoreRow(k));
-        let rate = if (r.rate - 1.0).abs() > 1e-6 {
-            format!("  {:.2}x", r.rate)
-        } else {
-            String::new()
-        };
-        let mods = if r.mods.is_empty() {
-            String::new()
-        } else {
-            format!("  +{}", r.mods.concat())
-        };
-        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!(
-            "#{}  {}  {:08}  {:.2}%{pp}  {}x",
-            first + k + 1,
-            r.player,
-            r.score,
-            r.accuracy * 100.0,
-            r.max_combo
-        );
-        let room = w - 16.0;
-        let right = Canvas::fit(
-            6.5,
-            room - Canvas::text_width(6.5, &core) - 12.0,
-            &misses_and_age(r.miss, r.date),
-        );
-        let left_room = room
-            - if right.is_empty() {
-                0.0
-            } else {
-                Canvas::text_width(6.5, &right) + 8.0
-            };
-        c.text(
-            x + 8.0,
-            ry + 5.0,
-            6.5,
-            rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0),
-            &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")),
-        );
-        c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+        right -= 10.0;
+    }
+    let (top, under) = (ry + 5.0, ry + 18.0);
+    // Top line: the player, the score at the right.
+    let score = format!("{:08}", l.score);
+    let score_w = Canvas::text_width(8.0, &score);
+    c.text_right(right, top, 8.0, rgba(0xffffff, 1.0), &score);
+    let white = rgba(0xffffff, 1.0);
+    social::styled_name(
+        c,
+        tx,
+        top,
+        8.0,
+        l.player,
+        white,
+        right - score_w - 10.0 - tx,
+    );
+    // Under it: how it went, and misses and age at the right.
+    let when = misses_and_age(l.miss, l.date);
+    let when_w = Canvas::text_width(6.5, &when);
+    c.text_right(right, under, 6.5, rgba(0x6f6f86, 1.0), &when);
+    let mut parts = vec![
+        (format!("{:.2}%", l.accuracy * 100.0), 0xdedeea),
+        (format!("{}x", l.combo), 0x9a9ab0),
+    ];
+    if let Some(pp) = l.pp {
+        parts.push((format!("{pp:.0}pp"), 0xff8ad8));
+    }
+    if (l.rate - 1.0).abs() > 1e-6 {
+        parts.push((format!("{:.2}x", l.rate), 0x4fb4ff));
+    }
+    if !l.mods.is_empty() {
+        parts.push((format!("+{}", l.mods), 0xFFC66B));
+    }
+    let end = right - when_w - 10.0;
+    let mut px = tx;
+    for (text, colour) in parts {
+        let shown = Canvas::fit(6.5, end - px, &text);
+        if shown.is_empty() {
+            break;
+        }
+        px += c.text(px, under, 6.5, rgba(colour, 1.0), &shown) + 8.0;
+        if shown != text {
+            break;
+        }
     }
 }
 
@@ -1245,106 +1363,51 @@ fn draw_leaderboard(
     total: usize,
     relax: bool,
 ) {
-    let label_w = board_tabs(c, x + 4.0, y + 1.0, false, relax, x + w);
+    let [free, free_end] = board_tabs(c, x, y, false, relax, x + w);
     if rows.is_empty() {
-        let at = x + 4.0 + label_w + 14.0;
         let none = tr!(
-            "none yet - finish a play to set one",
+            "No plays yet: finish one to set a score.",
             "まだありません - プレイを終えると記録されます",
             "пока нет - доиграйте карту"
         );
-        c.text(
-            at,
-            y + 2.0,
-            7.0,
-            rgba(0x6f6f86, 1.0),
-            &Canvas::fit(7.0, x + w - 4.0 - at, none),
-        );
+        board_note(c, x, y, w, none);
         return;
     }
-    let room = w - 20.0 - label_w;
+    let room = free_end - free;
     let hint = tr!(
         "click: results and replay   video: export it",
         "クリック: リザルトとリプレイ   動画: 書き出し",
         "клик: итоги и повтор   видео: экспорт"
     );
     c.text_right(
-        x + w - 4.0,
-        y + 2.0,
+        free_end,
+        y + 7.0,
         6.0,
         rgba(0x6f6f86, 1.0),
         &Canvas::fit_hints(6.0, room, hint),
     );
     for (k, r) in rows.iter().enumerate() {
-        let ry = y + 14.0 + k as f32 * 18.0;
-        let hover = c.hovered(x, ry, w, 16.0);
-        c.round_rect(
-            [x, ry],
-            [w, 16.0],
-            5.0,
-            rgba(if hover { 0x262634 } else { 0x15151d }, 0.9),
-            rgba(0x2a2a38, 1.0),
-            1.0,
-        );
-        c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
-        let rate = if (r.rate - 1.0).abs() > 1e-6 {
-            format!("  {:.2}x", r.rate)
-        } else {
-            String::new()
+        let line = BoardLine {
+            place: first + k + 1,
+            player: &r.player,
+            score: r.score,
+            accuracy: r.accuracy,
+            combo: r.max_combo,
+            pp: r.pp,
+            rate: r.rate,
+            mods: r.mods.clone(),
+            miss: r.miss,
+            date: r.date,
+            mine: false,
         };
-        let mods = if r.mods.is_empty() {
-            String::new()
-        } else {
-            format!("  +{}", r.mods)
-        };
-        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!(
-            "#{}  {:08}  {:.2}%{pp}  {}x",
-            first + k + 1,
-            r.score,
-            r.accuracy * 100.0,
-            r.max_combo
-        );
-        // The video button sits on top of the row (drawn after it, so it wins the click).
-        let video = score_video_label();
-        let bw = score_video_width();
-        let bx = x + w - bw - 3.0;
-        // Room goes to the score first, then the player and age on the right, then rate and mods.
-        let room = bx - 6.0 - (x + 8.0);
-        let right = Canvas::fit(
-            6.5,
-            room - Canvas::text_width(6.5, &core) - 12.0,
-            &format!("{}  {}", r.player, misses_and_age(r.miss, r.date)),
-        );
-        let left_room = room
-            - if right.is_empty() {
-                0.0
-            } else {
-                Canvas::text_width(6.5, &right) + 8.0
-            };
-        c.text(
-            x + 8.0,
-            ry + 5.0,
-            6.5,
-            rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0),
-            &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")),
-        );
-        c.button(
-            bx,
-            ry + 2.0,
-            bw,
-            12.0,
-            video,
-            6.0,
-            render::Hit::ScoreVideo(k),
-            false,
-        );
-        c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+        let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
+        let video = Some(render::Hit::ScoreVideo(k));
+        board_row(c, x, ry, w, &line, render::Hit::ScoreRow(k), video);
     }
     board_scrollbar(
         c,
         x + w + 5.0,
-        y + 14.0,
+        y + BOARD_HEAD,
         rows.len().max(1),
         first,
         total.max(rows.len()),
@@ -1398,7 +1461,7 @@ fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, t
     if total <= shown || shown == 0 {
         return;
     }
-    let h = shown as f32 * 18.0 - 2.0;
+    let h = shown as f32 * BOARD_ROW - 4.0;
     let thumb = (h * shown as f32 / total as f32).max(10.0);
     let at = (h - thumb) * first as f32 / (total - shown) as f32;
     c.round_rect(
@@ -1978,6 +2041,26 @@ fn draw_preview_chrome(
     );
     c.text(ax + 16.0, by + 4.5, 7.0, rgba(0x0c1a28, 1.0), badge);
 
+    // A phone's bar: the way back, the map and its stars.
+    if mobile::active() {
+        let back = if lobby {
+            tr!("< LOBBY", "< ロビー", "< ЛОББИ")
+        } else {
+            tr!("< BACK", "< 戻る", "< НАЗАД")
+        };
+        settings::back_button(c, 0.0, back, render::Hit::Key(KeyCode::Escape));
+        let pill = stars::draw_pill(c, c.width, 14.0, 12.0, stars);
+        let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
+        let room = c.width - 112.0 - pill - 12.0;
+        c.text(
+            112.0,
+            16.0,
+            12.0,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(12.0, room, &title),
+        );
+        return;
+    }
     c.round_rect(
         [24.0, 10.0],
         [c.width - 48.0, 34.0],
@@ -3637,7 +3720,8 @@ impl State {
     /// Music and hitsound volume as played now: lower while another window has focus.
     fn heard_volumes(&self) -> (f32, f32) {
         let (music, fx) = self.cfg.volumes();
-        let left = if self.focused {
+        // A phone's other apps aren't beside it: the music plays on at its own volume.
+        let left = if self.focused || mobile::active() {
             1.0
         } else {
             self.cfg.unfocused_volume
@@ -3645,14 +3729,23 @@ impl State {
         (music * left, fx * left)
     }
 
-    /// Android: the app went to the background (or came back). The music holds meanwhile; a
-    /// song already paused itself when focus went, and stays paused until you resume it.
+    /// Whether the music may carry on with the app in the background: anywhere but a song.
+    fn music_goes_on(&self) -> bool {
+        !self.in_song() && !matches!(self.scene, Scene::Loading { .. })
+    }
+
+    /// Android: the app went to the background (or came back). The menus' music and the player
+    /// play on (the render thread keeps them going, `background_tick`); a song holds, having
+    /// already paused itself when focus went, and stays paused until you resume it.
     fn set_background(&mut self, background: bool) {
+        self.backgrounded = background;
         let Some(a) = &self.audio else { return };
         let game_paused = matches!(&self.scene, Scene::Play { game, .. } if game.paused.is_some());
         if background {
-            a.set_paused(true);
-        } else if !game_paused {
+            if !self.music_goes_on() {
+                a.set_paused(true);
+            }
+        } else if !game_paused && !self.music_paused {
             a.set_paused(false);
         }
     }
@@ -3792,7 +3885,7 @@ impl State {
         }
         self.guide_binding = None;
         let closing = action == guide::Action::Close
-            || (action == guide::Action::Next && page + 1 == guide::PAGES);
+            || (action == guide::Action::Next && page + 1 == guide::pages());
         match action {
             // A new player doesn't leave without the page that says to calibrate.
             _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => {
@@ -3800,7 +3893,7 @@ impl State {
             }
             guide::Action::Bind(slot) => self.guide_binding = Some(slot),
             guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
-            guide::Action::Next if page + 1 < guide::PAGES => self.guide = Some(page + 1),
+            guide::Action::Next if page + 1 < guide::pages() => self.guide = Some(page + 1),
             guide::Action::Next | guide::Action::Close => self.guide = None,
             guide::Action::Page(i) => self.guide = Some(i),
             guide::Action::Calibrate => {
@@ -4282,12 +4375,13 @@ impl State {
     fn sync_letterbox(&mut self) -> Option<[u32; 4]> {
         let (w, h) = self.real_window;
         let on = self.cfg.letterbox && self.fullscreen;
-        self.letterbox = layout::letterbox(
+        let safe = self.safe_area();
+        self.letterbox = safe.or(layout::letterbox(
             (w as u32, h as u32),
             self.cfg.letterbox_size,
             self.cfg.letterbox_pos,
         )
-        .filter(|_| on);
+        .filter(|_| on));
         let (gw, gh) = self
             .letterbox
             .map_or((w, h), |[_, _, gw, gh]| (gw as f32, gh as f32));
@@ -4295,7 +4389,28 @@ impl State {
             (self.window_w, self.window_h) = (gw, gh);
             self.refresh_presets();
         }
-        self.letterbox
+        self.letterbox.filter(|_| safe.is_none())
+    }
+
+    /// The part of the screen clear of its rounded corners and camera (x, y, w, h in pixels, all
+    /// even). The same on both sides, so turning the phone over moves nothing. To the game's
+    /// input it's a letterbox; the renderer draws the background past it (`Renderer::safe`).
+    fn safe_area(&mut self) -> Option<[u32; 4]> {
+        #[cfg(target_os = "android")]
+        if self
+            .safe_asked
+            .is_none_or(|at| at.elapsed() > Duration::from_millis(500))
+        {
+            // Asked again and again: turning the phone upright changes them.
+            self.safe_asked = Some(Instant::now());
+            if let Some(insets) = android::safe_insets() {
+                self.safe_insets = Some(insets);
+            }
+        }
+        let [side, edge] = self.safe_insets?;
+        let (w, h) = (self.real_window.0 as u32, self.real_window.1 as u32);
+        let (x, y) = (side.next_multiple_of(2), edge.next_multiple_of(2));
+        (w > 2 * x + 320 && h > 2 * y + 240).then(|| [x, y, (w - 2 * x) & !1, (h - 2 * y) & !1])
     }
 
     /// A point of the window as the game sees it: from the game's own corner.
@@ -6021,6 +6136,7 @@ impl State {
             Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download
         );
         if menus
+            && !self.mobile_bar()
             && self.splash.is_none()
             && self.changelog.is_none()
             && self.player.is_none()
@@ -6033,26 +6149,33 @@ impl State {
                 update::Status::Downloading => Canvas::text_width(7.0, &updating_badge(1.0)) + 20.0,
                 _ => 0.0,
             };
+            // Tall enough for a thumb on a phone.
+            let (chip_y, chip_h, chip_pad) = if mobile::active() {
+                (0.0, 34.0, 28.0)
+            } else {
+                (2.0, 14.0, 14.0)
+            };
+            let chip_text = chip_y + (chip_h - 7.0) / 2.0 + 1.0;
             let label = tr!("what's new", "更新内容", "что нового");
-            let w = Canvas::text_width(7.0, label) + 14.0;
+            let w = Canvas::text_width(7.0, label) + chip_pad;
             let x = c.width - 8.0 - badge - w;
-            let hover = c.hovered(x, 2.0, w, 14.0);
+            let hover = c.hovered(x, chip_y, w, chip_h);
             c.round_rect(
-                [x, 2.0],
-                [w, 14.0],
+                [x, chip_y],
+                [w, chip_h],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
                 rgba(0x3a3a4e, 1.0),
                 1.0,
             );
             c.text(
-                x + 7.0,
-                5.5,
+                x + chip_pad / 2.0,
+                chip_text,
                 7.0,
                 rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 label,
             );
-            c.hit(x, 2.0, w, 14.0, render::Hit::Changelog);
+            c.hit(x, chip_y, w, chip_h, render::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
             // With Relax on, how they stand on its boards.
             let relax = self.cfg.mods.relax();
@@ -6078,12 +6201,13 @@ impl State {
             } else {
                 0.0
             };
-            let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
+            let name_w = social::styled_name_width(&name, 7.0);
+            let aw = name_w + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
-            let hover = c.hovered(ax, 2.0, aw, 14.0);
+            let hover = c.hovered(ax, chip_y, aw, chip_h);
             c.round_rect(
-                [ax, 2.0],
-                [aw, 14.0],
+                [ax, chip_y],
+                [aw, chip_h],
                 4.0,
                 rgba(if hover { 0x2a2a38 } else { 0x1d1d27 }, 0.95),
                 rgba(
@@ -6097,11 +6221,18 @@ impl State {
                 1.0,
             );
             if pic > 0.0 {
-                c.avatar(&name, ax + 9.0, 9.0, 4.5, accent(), 1.0);
+                c.avatar(&name, ax + 9.0, chip_y + chip_h / 2.0, 4.5, accent(), 1.0);
             }
-            let nw = c.text(ax + 7.0 + pic, 5.5, 7.0, rgba(0xffffff, 1.0), &name);
-            c.text(ax + 7.0 + pic + nw, 5.5, 7.0, rgba(0xff8ad8, 1.0), &rest);
-            c.hit(ax, 2.0, aw, 14.0, render::Hit::Account);
+            let white = rgba(0xffffff, 1.0);
+            let nw = social::styled_name(c, ax + 7.0 + pic, chip_text, 7.0, &name, white, name_w);
+            c.text(
+                ax + 7.0 + pic + nw,
+                chip_text,
+                7.0,
+                rgba(0xff8ad8, 1.0),
+                &rest,
+            );
+            c.hit(ax, chip_y, aw, chip_h, render::Hit::Account);
         }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => update_badge(&commit),
@@ -8248,6 +8379,22 @@ impl State {
     ) {
         self.idle.input(at);
         self.touch_used = true;
+        if self.mobile_touch(id, phase, x, y, at, window) {
+            return;
+        }
+        if phase == TouchPhase::Started
+            && self.touch_drums()
+            && mobile::on_pause_button(self.mouse_at(x, y), self.window_width())
+        {
+            // Calibrating, it finishes with the hits so far; the back gesture cancels.
+            let code = if matches!(self.scene, Scene::Calibrate { .. }) {
+                KeyCode::Enter
+            } else {
+                KeyCode::Escape
+            };
+            self.key(code, false, None, at, window);
+            return;
+        }
         if phase == TouchPhase::Started && self.touch_drums() {
             let col = (x / self.window_w.max(1.0) as f64 * 4.0)
                 .floor()
@@ -8277,8 +8424,20 @@ impl State {
         }
     }
 
+    /// The window's pixels `x`, `y` in virtual units.
+    fn mouse_at(&self, x: f64, y: f64) -> (f32, f32) {
+        let k = render::VIRTUAL_HEIGHT / self.window_h.max(1.0);
+        (x as f32 * k, y as f32 * k)
+    }
+
+    /// The canvas's width in virtual units.
+    fn window_width(&self) -> f32 {
+        render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0)
+    }
+
     /// The touch columns along the bottom of the screen during play, each flashing when hit.
     fn draw_touch_zones(&self, c: &mut Canvas, now: Instant) {
+        mobile::draw_pause_button(c, matches!(self.scene, Scene::Calibrate { .. }));
         let col_w = c.width / 4.0;
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
@@ -9184,7 +9343,8 @@ impl State {
             KeyCode::Escape => s.chat_input = None,
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let mut line = typed.trim().to_string();
-                s.chat_input = None;
+                // A line sent leaves the box open for the next; Enter on an empty one puts it away.
+                s.chat_input = (!line.is_empty()).then(String::new);
                 s.chat_caret = 0;
                 // `/np`: the map on screen, with its osu! link.
                 if line.eq_ignore_ascii_case("/np") {
@@ -11357,6 +11517,57 @@ impl State {
         }
     }
 
+    /// Android: tells the system's media controls what's playing, when that changes or the song
+    /// isn't where they'd think it is by now.
+    #[cfg(target_os = "android")]
+    fn tell_media_controls(&mut self, now: Instant) {
+        let Some(e) = self.preview_target().and_then(|i| self.library.get(i)) else {
+            return;
+        };
+        // Only the song's own music says where it is: just picked, the last one's still going.
+        if !self.preview.plays(e) {
+            return;
+        }
+        let paused = self.music_paused;
+        let speed = self.preview_rate().0;
+        let sent = self.media_sent.as_ref();
+        // Paused, the music has no clock: it's where it was last told.
+        let (at, length) = match self.preview.music_times(self.audio.as_ref(), now) {
+            Some(times) => times,
+            None => match sent {
+                Some(((path, _, length), at, _)) if *path == e.path => (*at, *length as f64),
+                _ => return,
+            },
+        };
+        let key = (e.path.clone(), paused, length as i64);
+        // Where the controls think it is by now, their bar running at the music's speed.
+        let expected = sent.map_or(at, |(_, sent_at, when)| {
+            let gone = now.saturating_duration_since(*when).as_secs_f64() * 1000.0;
+            sent_at + if paused { 0.0 } else { gone * speed }
+        });
+        let same = sent.is_some_and(|sent| sent.0 == key);
+        if same && (at - expected).abs() < 700.0 {
+            return;
+        }
+        let art = e
+            .meta
+            .background
+            .as_ref()
+            .and_then(|b| Some(e.path.parent()?.join(b)))
+            .filter(|p| p.is_file());
+        android::now_playing(&android::NowPlaying {
+            title: &e.meta.title,
+            artist: &e.meta.artist,
+            detail: &e.meta.version,
+            art: art.as_deref().and_then(|p| p.to_str()).unwrap_or_default(),
+            length_ms: length as i64,
+            at_ms: at as i64,
+            speed: speed as f32,
+            paused,
+        });
+        self.media_sent = Some((key, at, now));
+    }
+
     /// Android: what the on-screen keyboard typed, as presses of those keys.
     #[cfg(target_os = "android")]
     fn soft_keyboard(&mut self, typed: android::Typed, window: Option<&Window>) {
@@ -11398,6 +11609,9 @@ impl State {
             .filter(|_| matches!(self.scene, Scene::Settings { .. }))
         {
             return Some((e.item.label().into(), e.text.clone()));
+        }
+        if let Some(seed) = &self.random_setup {
+            return Some(("Random seed".into(), seed.clone()));
         }
         if let Some(t) = self.universe_setup.as_ref().and_then(|u| u.typing.as_ref()) {
             return Some(match t {
@@ -12682,7 +12896,7 @@ impl State {
                     a.sfx_at(audio::Sfx::Message, 1.0);
                 }
                 if !mine && fresh && !viewing {
-                    *self.social.unread.entry(key(&other)).or_default() += 1;
+                    self.social.add_unread(&other, self.mp.is_some());
                     if self.cfg.notify_messages {
                         self.social.notify(
                             line.from.clone(),
@@ -13604,6 +13818,13 @@ impl State {
         at: Instant,
         window: Option<&Window>,
     ) {
+        // Back first takes the upright player's list away.
+        if code == KeyCode::Escape
+            && let Some(p) = self.player.as_mut().filter(|p| p.list_open)
+        {
+            p.list_open = false;
+            return;
+        }
         // A key that wakes the idle screen does nothing else.
         if self.idle.input(at) {
             return;
@@ -14564,6 +14785,8 @@ impl State {
         canvas.picture_slots = self.pictures.slots();
         canvas.mouse = self.mouse_virtual();
         canvas.dt_ms = (dt as f32).clamp(0.0, 100.0);
+        self.mob.begin_frame();
+        self.mobile_long_press(now);
         self.glitch_between_menus(canvas, now);
         let idle_allowed = self.idle_allowed();
         self.idle
@@ -14584,7 +14807,37 @@ impl State {
         }
         self.frame_clip = None;
         #[cfg(target_os = "android")]
-        self.update_keyboard();
+        {
+            self.update_keyboard();
+            // A service keeps the music alive with the screen off; it starts on leaving the app.
+            // Once out of the app it stays while paused: its controls are the way back.
+            let wanted = self.music_goes_on() && (!self.music_paused || self.backgrounded);
+            if wanted != self.music_service {
+                self.music_service = wanted;
+                android::keep_music(wanted);
+            }
+            for (what, ms) in android::take_media() {
+                match what {
+                    0 => self.set_music_paused(!self.music_paused),
+                    1 => self.music_step(1),
+                    2 => self.music_step(-1),
+                    _ => {
+                        self.preview.seek_music(ms as f64, self.audio.as_ref());
+                        // The controls already show it there.
+                        if let Some(sent) = &mut self.media_sent {
+                            (sent.1, sent.2) = (ms as f64, now);
+                        }
+                    }
+                }
+            }
+            self.tell_media_controls(now);
+            // Only the player turns upright.
+            let upright = self.player.is_some();
+            if upright != self.may_turn {
+                self.may_turn = upright;
+                android::allow_portrait(upright);
+            }
+        }
         self.poll_scan();
         self.poll_folder_pick();
         self.poll_data_move();
@@ -15052,17 +15305,34 @@ impl State {
                 self.select.scrubbing =
                     (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
                 self.select.list_share = self.cfg.song_list_share;
-                self.select.draw(
-                    canvas,
-                    &self.library,
-                    dt,
-                    &self.status,
-                    &|i| stars.get(i, rate),
-                    &|e| scores::best_grade(plays, e.hash()),
-                );
+                self.select.banner = self.pick_to_edit || self.picking_lobby_map;
+                let phone = mobile::active();
+                if phone {
+                    self.draw_mobile_select(canvas);
+                } else {
+                    self.select.draw(
+                        canvas,
+                        &self.library,
+                        dt,
+                        &self.status,
+                        &|i| stars.get(i, rate),
+                        &|e| scores::best_grade(plays, e.hash()),
+                    );
+                }
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
-                let x = 24.0 + lw + 12.0;
-                let pw = canvas.width - x - 24.0;
+                // The panel beside the list: from `x`, `pw` wide, `panel_top` down to `panel_end`.
+                let [x, panel_top, pw, panel_end] = if phone {
+                    self.mobile_select_panel(canvas.width)
+                } else {
+                    let x = 24.0 + lw + 12.0;
+                    // Level with the list's frame (the Legacy layout keeps its own).
+                    let [top, end] = if self.select.legacy {
+                        [54.0, 436.0]
+                    } else {
+                        self.select.frame_span()
+                    };
+                    [x, top, canvas.width - x - 24.0, end]
+                };
                 self.board_rect = None;
                 // Always at full size (no longer dragged smaller).
                 self.preview.size = preview::PREVIEW_SIZE.1;
@@ -15076,33 +15346,73 @@ impl State {
                     ),
                     None => None,
                 };
-                self.leaderboard.clear();
-                if pw > 160.0 {
+                if phone {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
-                    // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
-                    let panel_h = 436.0 - 54.0 - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
                     let liked = self
                         .preview_target()
                         .and_then(|i| self.library.get(i))
                         .map(|e| self.select.is_liked(e));
-                    if let Some(clip) = self.preview.draw_panel(
-                        canvas,
-                        &self.library,
-                        x,
-                        54.0,
-                        pw,
-                        panel_h,
-                        self.cfg.scroll_speed,
-                        selected_stars,
-                        Some(("Play from", "Shift+Enter")),
-                        status,
-                        liked,
-                    ) {
-                        self.frame_clip = Some(clip);
+                    let rect = [x, panel_top, pw, panel_end];
+                    self.draw_mobile_panels(canvas, rect, selected_stars, status, liked);
+                } else {
+                    self.leaderboard.clear();
+                }
+                if pw > 160.0 && !phone {
+                    let status = self.select.selected().and_then(|i| self.map_status(i));
+                    let liked = self
+                        .preview_target()
+                        .and_then(|i| self.library.get(i))
+                        .map(|e| self.select.is_liked(e));
+                    // Two pages side by side, as on a phone: the preview, and the leaderboard
+                    // the button slides to.
+                    let t = self.mob.slide_board(canvas.dt_ms);
+                    let step = pw + 24.0;
+                    // The page buttons sit under both pages, in what's left below the preview.
+                    const PAGE_BUTTON_H: f32 = 22.0;
+                    let panel_h = panel_end - panel_top - PAGE_BUTTON_H - 8.0;
+                    let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
+                    if t < 1.0 {
+                        let start = canvas.shapes.len();
+                        if let Some(clip) = self.preview.draw_panel(
+                            canvas,
+                            &self.library,
+                            x - t * step,
+                            panel_top,
+                            pw,
+                            panel_h,
+                            self.cfg.scroll_speed,
+                            selected_stars,
+                            Some(("Play from", "Shift+Enter")),
+                            status,
+                            liked,
+                        ) {
+                            self.frame_clip = Some(clip);
+                        }
+                        // The way to the leaderboard, under the preview at its right (over its
+                        // foot when the preview takes the whole height).
+                        let label = tr!("Leaderboard >", "ランキング >", "Рейтинг >");
+                        let bw = Canvas::text_width(8.0, label) + 28.0;
+                        let by = (self.preview.panel_bottom + 6.0)
+                            .min(panel_top + panel_h - PAGE_BUTTON_H);
+                        let bx = x - t * step + pw - bw;
+                        let hit = render::Hit::BoardPage;
+                        canvas.button(bx, by, bw, PAGE_BUTTON_H, label, 8.0, hit, false);
+                        canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
+                    } else {
+                        self.preview.hide_panel();
                     }
-                    if let Some(i) = self.select.selected() {
-                        let top = self.preview.panel_bottom + 8.0;
-                        let fits = ((436.0 - top - 16.0) / 18.0).floor().max(0.0) as usize;
+                    let board_start = canvas.shapes.len();
+                    let page_x = x + (1.0 - t) * step;
+                    if t > 0.0 {
+                        style::panel(canvas, page_x, panel_top, pw, panel_h);
+                    }
+                    // Inside the frame, with room right of the rows for their scroll bar.
+                    let (panel_x, panel_w) = (x, pw);
+                    let (x, pw) = (page_x + 10.0, pw - 28.0);
+                    if let Some(i) = self.select.selected().filter(|_| t > 0.0) {
+                        let top = panel_top + 10.0;
+                        let room = panel_end - 10.0 - top - BOARD_HEAD;
+                        let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
                             let relax = self.cfg.mods.relax();
@@ -15110,7 +15420,8 @@ impl State {
                                 self.board_for = (hash, self.board_online, relax);
                                 self.board_scroll = 0;
                             }
-                            self.board_rect = Some([x, top + 12.0, pw, fits as f32 * 18.0]);
+                            self.board_rect =
+                                Some([x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW]);
                             if self.board_online {
                                 let board = self.online_board(hash, relax).cloned();
                                 let total = board
@@ -15161,16 +15472,56 @@ impl State {
                             }
                         }
                     }
+                    canvas.clip_since(board_start, clip[0], clip[1], clip[2], clip[3]);
+                    let play = if self.picking_lobby_map {
+                        tr!("Pick", "選ぶ", "Выбрать")
+                    } else if self.pick_to_edit {
+                        tr!("Edit", "編集", "Править")
+                    } else {
+                        tr!("Play", "プレイ", "Играть")
+                    };
+                    let mods = &self.select.mods_label;
+                    let mods_label = if mods.is_empty() {
+                        tr!("Mods", "Mod", "Моды").to_string()
+                    } else {
+                        format!("{}: {mods}", tr!("Mods", "Mod", "Моды"))
+                    };
+                    let random = tr!("Random", "ランダム", "Случайная");
+                    // (label, hit, lit, share of the width). The Legacy layout has Mods on top.
+                    let mut buttons = vec![
+                        (
+                            mods_label.as_str(),
+                            render::Hit::ModsButton,
+                            !mods.is_empty(),
+                            1.0,
+                        ),
+                        (random, render::Hit::Key(KeyCode::F2), false, 1.0),
+                        (play, render::Hit::Key(KeyCode::Enter), true, 1.3),
+                    ];
+                    if self.select.legacy {
+                        buttons.drain(..2);
+                    }
+                    let total: f32 = buttons.iter().map(|b| b.3).sum();
+                    let unit = (panel_w - 8.0 * (buttons.len() as f32 - 1.0)) / total;
+                    let (mut bx, by) = (panel_x, panel_end - PAGE_BUTTON_H);
+                    for (label, hit, lit, share) in buttons {
+                        let bw = unit * share;
+                        let label = Canvas::fit(8.0, bw - 12.0, label);
+                        canvas.button(bx, by, bw, PAGE_BUTTON_H, &label, 8.0, hit, lit);
+                        bx += bw + 8.0;
+                    }
                     // The song list's right edge: the gap between the list's box (`ui`, ending
                     // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
                     let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
-                    draw_divider(
-                        canvas,
-                        [24.0 + lw + 4.0, 54.0, 8.0, 382.0],
-                        true,
-                        dragging,
-                        render::Hit::SplitList,
-                    );
+                    if !phone {
+                        draw_divider(
+                            canvas,
+                            [24.0 + lw + 4.0, panel_top, 8.0, panel_end - panel_top],
+                            true,
+                            dragging,
+                            render::Hit::SplitList,
+                        );
+                    }
                 }
                 let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
                 if let Some(g) = self
@@ -15179,7 +15530,7 @@ impl State {
                     .filter(|_| self.picking_lobby_map && guessing)
                 {
                     mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
-                } else if self.pick_to_edit {
+                } else if self.pick_to_edit && !phone {
                     let w = canvas.width;
                     canvas.round_rect(
                         [24.0, 438.0],
@@ -15200,7 +15551,7 @@ impl State {
                             "Choose a map to edit: Enter opens it in the editor, Esc cancels",
                         ),
                     );
-                } else if self.picking_lobby_map {
+                } else if self.picking_lobby_map && !phone {
                     let w = canvas.width;
                     canvas.round_rect(
                         [24.0, 438.0],
@@ -15607,17 +15958,24 @@ impl State {
                 let dir = self.songs_dir.display().to_string();
                 let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
                 self.preview.size = preview::PREVIEW_SIZE.1;
-                let custom = &self.select.custom_folder;
-                let is_installed = |set: &download::SetInfo| match set.custom {
-                    Some(_) => custom.values().any(|&id| id == set.id),
-                    None => installed.contains(&set.id),
-                };
-                self.browse
-                    .draw(canvas, &self.downloads, &is_installed, &dir, lw);
+                let phone = mobile::active();
+                if phone {
+                    let custom: std::collections::HashSet<u32> =
+                        self.select.custom_folder.values().copied().collect();
+                    self.draw_mobile_download(canvas, &installed, &custom);
+                } else {
+                    let custom = &self.select.custom_folder;
+                    let is_installed = |set: &download::SetInfo| match set.custom {
+                        Some(_) => custom.values().any(|&id| id == set.id),
+                        None => installed.contains(&set.id),
+                    };
+                    self.browse
+                        .draw(canvas, &self.downloads, &is_installed, &dir, lw);
+                }
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
                 let x = 24.0 + lw + 12.0;
-                let pw = canvas.width - x - 24.0;
+                let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
                 let stars = self.browse.selected_stars();
                 if pw > 160.0 && self.browse.selected().is_some() {
                     match self.preview.draw_panel(
@@ -15689,13 +16047,19 @@ impl State {
                             [x + 12.0, y + 10.0, w - 24.0, 34.0],
                             button,
                         );
+                        // A thumb's over the timeline on a phone, where its times don't run into it.
+                        let [bx, by, bw, bh] = if mobile::active() {
+                            [x + w - 130.0, y - 50.0, 130.0, 44.0]
+                        } else {
+                            [x + 12.0, y + 54.0, pause_width(), 16.0]
+                        };
                         canvas.button(
-                            x + 12.0,
-                            y + 54.0,
-                            pause_width(),
-                            16.0,
+                            bx,
+                            by,
+                            bw,
+                            bh,
                             pause_label(self.preview.held),
-                            7.0,
+                            mobile::pick(7.0, 12.0),
                             render::Hit::Key(KeyCode::Space),
                             false,
                         );
@@ -16228,45 +16592,50 @@ impl State {
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 self.settings_ui.krokodil = self.is_krokodil();
-                settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
-                let searching = !self.settings_ui.search.is_empty();
-                let footer = if self
-                    .settings_ui
-                    .editing
-                    .as_ref()
-                    .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
-                {
-                    "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
-                } else if self.settings_ui.editing.is_some() {
-                    "type a value   Enter set   Esc cancel".to_string()
+                if mobile::active() {
+                    self.draw_mobile_settings(canvas);
+                    self.draw_mobile_choices(canvas);
                 } else {
-                    let enter = match self.settings_ui.item().kind() {
-                        Kind::List => "Enter list",
-                        Kind::Value => "Enter type a value",
-                        Kind::Toggle => "Enter toggle",
-                        Kind::Key => "Enter rebind",
-                        Kind::Action => "Enter go",
-                    };
-                    let back = if searching {
-                        "Esc clear the search"
-                    } else if from_game {
-                        "Esc back to pause menu"
+                    settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
+                    let searching = !self.settings_ui.search.is_empty();
+                    let footer = if self
+                        .settings_ui
+                        .editing
+                        .as_ref()
+                        .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
+                    {
+                        "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
+                    } else if self.settings_ui.editing.is_some() {
+                        "type a value   Enter set   Esc cancel".to_string()
                     } else {
-                        "Esc or Tab back"
+                        let enter = match self.settings_ui.item().kind() {
+                            Kind::List => "Enter list",
+                            Kind::Value => "Enter type a value",
+                            Kind::Toggle => "Enter toggle",
+                            Kind::Key => "Enter rebind",
+                            Kind::Action => "Enter go",
+                        };
+                        let back = if searching {
+                            "Esc clear the search"
+                        } else if from_game {
+                            "Esc back to pause menu"
+                        } else {
+                            "Esc or Tab back"
+                        };
+                        format!(
+                            "Type to search   Up/Down select   Left/Right change   {enter}   {back}"
+                        )
                     };
-                    format!(
-                        "Type to search   Up/Down select   Left/Right change   {enter}   {back}"
-                    )
-                };
-                let this = &*self;
-                this.settings_ui.draw(
-                    canvas,
-                    &|item| this.setting_value(item),
-                    &|item| this.setting_control(item),
-                    &footer,
-                );
-                if let Some(p) = &self.settings_ui.choices {
-                    p.draw(canvas);
+                    let this = &*self;
+                    this.settings_ui.draw(
+                        canvas,
+                        &|item| this.setting_value(item),
+                        &|item| this.setting_control(item),
+                        &footer,
+                    );
+                    if let Some(p) = &self.settings_ui.choices {
+                        p.draw(canvas);
+                    }
                 }
             }
             Scene::LayoutEdit { .. } => {
@@ -16306,7 +16675,11 @@ impl State {
                     rgba(0xffffff, 1.0),
                     &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())),
                 );
-                let help = "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done";
+                let help = if mobile::active() {
+                    "Back when done"
+                } else {
+                    "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done"
+                };
                 let size = Canvas::fit_size(7.0, 5.5, room, help);
                 canvas.text_centered(
                     w / 2.0,
@@ -16365,6 +16738,7 @@ impl State {
             self.draw_touch_zones(canvas, now);
         }
         if self.cfg.show_playfield_size
+            && !mobile::active()
             && matches!(
                 self.scene,
                 Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
@@ -16377,6 +16751,7 @@ impl State {
         } else {
             self.readout_rect = None;
         }
+        self.draw_mobile_rate(canvas);
         if let Some(cur) = self.mod_select {
             let seed = if matches!(self.scene, Scene::Lobby) {
                 self.mp
@@ -16387,15 +16762,19 @@ impl State {
             } else {
                 self.cfg.random_seed
             };
-            ui::draw_mod_select(
-                canvas,
-                self.shown_mods(),
-                self.cfg.favourite_mods,
-                &self.cfg.mod_presets,
-                self.cfg.rate,
-                cur,
-                seed,
-            );
+            if mobile::active() {
+                self.draw_mobile_mods(canvas, self.shown_mods());
+            } else {
+                ui::draw_mod_select(
+                    canvas,
+                    self.shown_mods(),
+                    self.cfg.favourite_mods,
+                    &self.cfg.mod_presets,
+                    self.cfg.rate,
+                    cur,
+                    seed,
+                );
+            }
             if let Some(name) = &self.preset_naming {
                 draw_preset_naming(canvas, name);
             }
@@ -16403,6 +16782,7 @@ impl State {
                 canvas.hits.clear();
                 let w = canvas.width;
                 canvas.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
+                let phone = mobile::active();
                 canvas.text_centered(w / 2.0, 160.0, 14.0, rgba(0xffffff, 1.0), "Random seed");
                 canvas.text_centered(
                     w / 2.0,
@@ -16418,33 +16798,70 @@ impl State {
                     rgba(0x9a9ab0, 1.0),
                     "Same map + same seed = same colours. Retries keep the seed.",
                 );
-                canvas.text_centered(
-                    w / 2.0,
-                    250.0,
-                    7.0,
-                    rgba(0x9a9ab0, 1.0),
-                    "Delete clears   R new seed   Ctrl+C / Ctrl+V copy / paste",
-                );
-                canvas.button(
-                    w / 2.0 - 100.0,
-                    280.0,
-                    90.0,
-                    24.0,
-                    "Apply",
-                    9.0,
-                    render::Hit::Key(KeyCode::Enter),
-                    true,
-                );
-                canvas.button(
-                    w / 2.0 + 10.0,
-                    280.0,
-                    90.0,
-                    24.0,
-                    "Cancel",
-                    9.0,
-                    render::Hit::Key(KeyCode::Escape),
-                    false,
-                );
+                if phone {
+                    // Tapping the number brings up the keyboard.
+                    canvas.hit(w / 2.0 - 220.0, 188.0, 440.0, 36.0, render::Hit::TextField);
+                    let (bw, bh, by) = (150.0, 46.0, 280.0);
+                    let key = render::Hit::Key;
+                    canvas.button(
+                        w / 2.0 - 235.0,
+                        by,
+                        bw,
+                        bh,
+                        "Apply",
+                        12.0,
+                        key(KeyCode::Enter),
+                        true,
+                    );
+                    canvas.button(
+                        w / 2.0 - 75.0,
+                        by,
+                        bw,
+                        bh,
+                        "New seed",
+                        12.0,
+                        key(KeyCode::KeyR),
+                        false,
+                    );
+                    canvas.button(
+                        w / 2.0 + 85.0,
+                        by,
+                        bw,
+                        bh,
+                        "Cancel",
+                        12.0,
+                        key(KeyCode::Escape),
+                        false,
+                    );
+                } else {
+                    canvas.text_centered(
+                        w / 2.0,
+                        250.0,
+                        7.0,
+                        rgba(0x9a9ab0, 1.0),
+                        "Delete clears   R new seed   Ctrl+C / Ctrl+V copy / paste",
+                    );
+                    canvas.button(
+                        w / 2.0 - 100.0,
+                        280.0,
+                        90.0,
+                        24.0,
+                        "Apply",
+                        9.0,
+                        render::Hit::Key(KeyCode::Enter),
+                        true,
+                    );
+                    canvas.button(
+                        w / 2.0 + 10.0,
+                        280.0,
+                        90.0,
+                        24.0,
+                        "Cancel",
+                        9.0,
+                        render::Hit::Key(KeyCode::Escape),
+                        false,
+                    );
+                }
             }
             if let Some(setup) = &self.universe_setup {
                 setup.draw(
@@ -16553,7 +16970,7 @@ impl State {
                 rgba(0x121219, 0.85 * (1.0 - fade)),
             );
         }
-        if self.cfg.show_fps {
+        if self.cfg.show_fps && !self.mobile_bar() {
             let mode = match self.present {
                 PresentChoice::Fifo => "vsync".to_string(),
                 p if self.cfg.fps_cap > 0 => format!("{} cap {}", p.name(), self.cfg.fps_cap),
@@ -17640,6 +18057,9 @@ impl State {
 
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
     fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
+        if mobile::active() {
+            return mobile::hit_near(&self.hits, x, y);
+        }
         self.hits
             .iter()
             .rev()
@@ -17918,6 +18338,18 @@ impl State {
                 }
             }
             Hit::BoardTab(online) => self.board_online = online,
+            Hit::BoardPage => self.mob.flip_board(),
+            Hit::RateOpen
+            | Hit::RateClose
+            | Hit::RateStep(_)
+            | Hit::RateSet(_)
+            | Hit::RateKeepPitch
+            | Hit::PitchStep(_) => self.mobile_rate(hit),
+            Hit::PlayerList => {
+                if let Some(p) = &mut self.player {
+                    p.list_open = !p.list_open;
+                }
+            }
             Hit::BoardWebsite => self.open_map_website(),
             Hit::Changelog => self.changelog = Some(changelog::View::recent(false)),
             Hit::Account => match self.mp_menu.account.clone() {
@@ -18472,6 +18904,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             size,
             atlas,
             letterbox,
+            safe,
             pixel_scale,
             avatar_uploads,
             picture_uploads,
@@ -18493,6 +18926,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let surface = s.surface_swap.take();
             let size = s.want_size.take();
             let letterbox = s.sync_letterbox();
+            let safe = s.safe_area();
             if matches!(s.scene, Scene::Play { .. })
                 && let Some(sm) = &mut s.smooth
             {
@@ -18506,6 +18940,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 size,
                 s.sprites_upload.take(),
                 letterbox,
+                safe,
                 if s.cfg.half_resolution { 2 } else { 1 },
                 s.avatars.take_uploads(),
                 s.pictures.take_uploads(),
@@ -18519,6 +18954,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             renderer.resize(w, h);
         }
         renderer.letterbox = letterbox;
+        renderer.safe = safe;
         if requested_present != Some(wanted) {
             renderer.set_present(wanted);
             requested_present = Some(wanted);
@@ -18542,7 +18978,20 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
 
         let t0 = timing.then(Instant::now);
         let Some(frame) = renderer.acquire() else {
-            std::thread::sleep(Duration::from_millis(2));
+            // In the background nothing is drawn, but the music is still looked after: the next
+            // song of the player comes from the frame. A few times a second is plenty.
+            let mut s = lock(&state);
+            if s.backgrounded {
+                if s.music_goes_on() {
+                    s.build_frame(&mut canvas, Instant::now(), renderer.virtual_width());
+                }
+                drop(s);
+                // Often enough that the media controls' presses feel immediate.
+                std::thread::sleep(Duration::from_millis(60));
+            } else {
+                drop(s);
+                std::thread::sleep(Duration::from_millis(2));
+            }
             continue;
         };
         let acquired = Instant::now();
@@ -18614,11 +19063,18 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             let mut s = lock(&state);
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
+            render::set_text_bias(renderer.text_bias());
             render::set_frame_time(Some(now));
             s.frame_acquired = Some(acquired);
             s.pace_shift_ms = pace_shift_ms;
             s.seen_refresh_ms = pacer.refresh_ms();
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            if let Some([x, y, _, h]) = safe {
+                // The margins in the interface's units.
+                let (side, edge) = (x as f32, y as f32);
+                let k = render::VIRTUAL_HEIGHT / h.max(1) as f32;
+                canvas.bleed([side * k, edge * k, side * k, edge * k]);
+            }
             render::set_frame_time(None);
             render::set_text_grid(None);
             if canvas.audit {
@@ -19615,6 +20071,17 @@ impl State {
             window_h: 720.0,
             real_window: (1280.0, 720.0),
             letterbox: None,
+            mob: mobile::Ui::default(),
+            backgrounded: false,
+            #[cfg(target_os = "android")]
+            music_service: false,
+            #[cfg(target_os = "android")]
+            may_turn: false,
+            #[cfg(target_os = "android")]
+            media_sent: None,
+            safe_insets: None,
+            #[cfg(target_os = "android")]
+            safe_asked: None,
             frame_clip: None,
             guides: Vec::new(),
             hud_edit: None,

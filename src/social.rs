@@ -269,9 +269,17 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 /// How long the overlay takes to slide in or out (ms).
 pub const SLIDE_MS: f32 = 240.0;
 /// How far the panel and the tab run on past the edge that cuts them off, to hide their corners.
-const EDGE_BLEED: f32 = 12.0;
+fn edge_bleed() -> f32 {
+    // On a phone it reaches past the safe area to the screen's edge.
+    crate::mobile::pick(12.0, 60.0)
+}
 /// The tab on the right edge of the screen that pulls the overlay out, and rides on it.
-const TAB_W: f32 = 17.0;
+/// The tab's width: a thumb's on a phone.
+fn tab_w() -> f32 {
+    crate::mobile::pick(17.0, 30.0)
+}
+/// What screens keep clear on a phone's right edge for the tab.
+pub const TAB_ROOM: f32 = 34.0;
 pub const TAB_MIDDLE: f32 = 240.0;
 /// The main menu's panel reaches the sides at that height: under it.
 pub const TAB_MENU_MIDDLE: f32 = 352.0;
@@ -360,10 +368,14 @@ impl Social {
                     rows.push(Row::Lobby);
                 }
                 rows.extend((0..self.requests.len()).map(Row::Request));
-                // Online first, each part in the server's order.
-                let (online, offline): (Vec<usize>, Vec<usize>) =
-                    (0..self.friends.len()).partition(|&i| self.friends[i].activity.is_some());
-                rows.extend(online.into_iter().chain(offline).map(Row::Friend));
+                // Unread messages first, then online, each part in the server's order.
+                let mut friends: Vec<usize> = (0..self.friends.len()).collect();
+                friends.sort_by_key(|&i| {
+                    let f = &self.friends[i];
+                    let unread = self.unread.get(&key(&f.name)).is_some_and(|&n| n > 0);
+                    (!unread, f.activity.is_none())
+                });
+                rows.extend(friends.into_iter().map(Row::Friend));
                 rows
             }
             Tab::Players => {
@@ -461,8 +473,10 @@ impl Social {
             .filter(|(_, tags)| !tags.is_empty())
             .map(|(name, tags)| (key(&name), tags))
             .collect();
+        GROUPS.with_borrow_mut(|all| all.clone_from(&self.groups));
     }
 
+    #[cfg(test)]
     /// The tags of `name`'s groups (none for most).
     pub fn tags_of(&self, name: &str) -> &[String] {
         self.groups.get(&key(name)).map_or(&[], Vec::as_slice)
@@ -661,12 +675,23 @@ impl Social {
         }
     }
 
+    /// One more unread message from `name`: they move up the list, the cursor staying put.
+    pub fn add_unread(&mut self, name: &str, in_lobby: bool) {
+        let selected = self.selected_name(in_lobby);
+        *self.unread.entry(key(name)).or_default() += 1;
+        self.reselect(selected, in_lobby);
+    }
+
     /// Marks what's on screen as read.
     pub fn mark_read(&mut self, in_lobby: bool) {
         match self.row(in_lobby) {
             Row::Friend(i) if self.in_conversation(in_lobby) => {
                 if let Some(f) = self.friends.get(i) {
-                    self.unread.remove(&key(&f.name));
+                    let name = key(&f.name);
+                    if self.unread.remove(&name).is_some() {
+                        // Read, it drops back among the rest: the conversation stays open.
+                        self.reselect(Some(name), in_lobby);
+                    }
                 }
             }
             Row::Global => self.global_unread = 0,
@@ -685,7 +710,10 @@ impl Social {
     }
 }
 
-const PANEL_W: f32 = 290.0;
+/// The panel's width: wider on a phone, where the text is.
+fn panel_w() -> f32 {
+    crate::mobile::pick(290.0, 460.0)
+}
 const GREEN: u32 = 0x86E05A;
 /// The banner of a line from the server that isn't about a medal.
 const SERVER_COLOUR: u32 = 0xFFB84D;
@@ -703,19 +731,21 @@ const LINE: u32 = 0x262634;
 const DIM_TEXT: u32 = 0x6f6f86;
 const SOFT_TEXT: u32 = 0x9a9ab0;
 /// The header strip's height (the tabs).
-const HEADER_H: f32 = 26.0;
+fn header_h() -> f32 {
+    crate::mobile::pick(26.0, 44.0)
+}
 /// The hint line's band at the bottom.
 const FOOTER_H: f32 = 20.0;
 
 /// Characters per chat message row (drawn at `CHAT_SIZE` under the name, in the panel's
 /// padding).
 pub fn chat_width() -> usize {
-    ((PANEL_W - 16.0 - 8.0 - MESSAGE_INDENT) / Canvas::char_width(CHAT_SIZE)) as usize
+    ((panel_w() - 16.0 - 8.0 - MESSAGE_INDENT) / Canvas::char_width(CHAT_SIZE)) as usize
 }
 
 /// Characters per row of the server's lines (smaller, on a banner the panel's width).
 fn banner_width() -> usize {
-    ((PANEL_W - 16.0 - 10.0) / Canvas::char_width(6.5)) as usize
+    ((panel_w() - 16.0 - 10.0) / Canvas::char_width(6.5)) as usize
 }
 
 /// The dot's colour for what someone is doing (None: offline).
@@ -818,15 +848,80 @@ fn shimmer_secs() -> f32 {
 }
 
 /// A group member's name, letter by letter in the shimmer's colours.
-fn shimmer_name(c: &mut Canvas, x: f32, y: f32, name: &str, colours: (u32, u32), a: f32) {
+#[allow(clippy::too_many_arguments)]
+fn shimmer_name(
+    c: &mut Canvas,
+    x: f32,
+    y: f32,
+    size: f32,
+    name: &str,
+    colours: (u32, u32),
+    a: f32,
+) {
     let secs = shimmer_secs();
     let n = name.chars().count();
     let mut buf = [0u8; 4];
     let mut cx = x;
     for (i, ch) in name.chars().enumerate() {
         let colour = shimmer(colours, i, n, secs);
-        cx += c.text(cx, y, CHAT_SIZE, rgba(colour, a), ch.encode_utf8(&mut buf));
+        cx += c.text(cx, y, size, rgba(colour, a), ch.encode_utf8(&mut buf));
     }
+}
+
+thread_local! {
+    /// `Social::groups` for every screen that shows a name, not only the panel (they're all
+    /// drawn on the thread that hears from the server).
+    static GROUPS: std::cell::RefCell<HashMap<String, Vec<String>>> = Default::default();
+}
+
+/// The tags of `name`'s groups (none for most), from the last list the server sent.
+pub fn group_tags(name: &str) -> Vec<String> {
+    GROUPS.with_borrow(|g| g.get(&key(name)).cloned().unwrap_or_default())
+}
+
+/// How wide `styled_name` draws `name` at `size` given all the room it wants.
+pub fn styled_name_width(name: &str, size: f32) -> f32 {
+    let k = size / CHAT_SIZE;
+    group_tags(name)
+        .iter()
+        .map(|t| tag_width(t, size) + 3.0 * k)
+        .sum::<f32>()
+        + Canvas::text_width(size, name)
+}
+
+/// A player's name as chat shows it, on any screen: their groups' tags before it and the name
+/// shimmering in the first group's colours, or plain in `colour`; all of it within `max_w`.
+/// Returns how wide it came out.
+#[allow(clippy::too_many_arguments)]
+pub fn styled_name(
+    c: &mut Canvas,
+    x: f32,
+    y: f32,
+    size: f32,
+    name: &str,
+    colour: [f32; 4],
+    max_w: f32,
+) -> f32 {
+    let tags = group_tags(name);
+    let a = colour[3];
+    let right = x + max_w;
+    let mut nx = x;
+    // Tags while the name keeps some room; then the name, cut to what's left.
+    for tag in &tags {
+        if nx + tag_width(tag, size) > right - 40.0 * size / CHAT_SIZE {
+            break;
+        }
+        nx += group_tag(c, nx, y, size, tag, a) + 3.0 * size / CHAT_SIZE;
+    }
+    // A hair of slack: room measured with `styled_name_width` must not cut the name.
+    let shown = Canvas::fit(size, right - nx + 0.01, name);
+    match tags.first() {
+        Some(tag) => shimmer_name(c, nx, y, size, &shown, group_colours(tag), a),
+        None => {
+            c.text(nx, y, size, colour, &shown);
+        }
+    }
+    nx + Canvas::text_width(size, &shown) - x
 }
 
 const TAG_SIZE: f32 = 5.5;
@@ -840,26 +935,31 @@ fn tag_label(tag: &str) -> &str {
     }
 }
 
-fn tag_width(tag: &str) -> f32 {
-    Canvas::text_width(TAG_SIZE, tag_label(tag)) + 6.0
+/// A tag's width beside a name of `size`.
+fn tag_width(tag: &str, size: f32) -> f32 {
+    let k = size / CHAT_SIZE;
+    Canvas::text_width(TAG_SIZE * k, tag_label(tag)) + 6.0 * k
 }
 
-/// A group's tag, a small pill at `x` on a name row; returns its width.
-fn group_tag(c: &mut Canvas, x: f32, y: f32, tag: &str, a: f32) -> f32 {
-    const SIZE: f32 = TAG_SIZE;
+/// A group's tag, a small pill at `x` level with a name of `size` drawn at `y`; returns its
+/// width.
+fn group_tag(c: &mut Canvas, x: f32, y: f32, size: f32, tag: &str, a: f32) -> f32 {
+    let k = size / CHAT_SIZE;
+    let small = TAG_SIZE * k;
     let (colour, light) = group_colours(tag);
-    let w = tag_width(tag);
-    let h = Canvas::text_height(SIZE) + 3.0;
-    let top = y + 1.0 + (Canvas::text_height(CHAT_SIZE) - h) / 2.0;
+    let w = tag_width(tag, size);
+    let h = Canvas::text_height(small) + 3.0 * k;
+    let top = y + (Canvas::text_height(size) - h) / 2.0;
     c.round_rect(
         [x, top],
         [w, h],
-        2.0,
+        2.0 * k,
         rgba(colour, 0.22 * a),
         rgba(colour, 0.85 * a),
         1.0,
     );
-    c.text(x + 3.0, top + 1.5, SIZE, rgba(light, a), tag_label(tag));
+    let label = tag_label(tag);
+    c.text(x + 3.0 * k, top + 1.5 * k, small, rgba(light, a), label);
     w
 }
 
@@ -897,7 +997,7 @@ pub fn draw(
             .unwrap_or(1.0),
     };
     let [left, y, _, h] = panel_rect(c.width);
-    let x = left + (1.0 - slide) * PANEL_W;
+    let x = left + (1.0 - slide) * panel_w();
     let a = 1.0;
     if dim {
         c.rect(
@@ -916,7 +1016,7 @@ pub fn draw(
         let d = 2.0 * (i + 1) as f32;
         c.round_rect(
             [x - d, y - d + 2.0],
-            [PANEL_W + EDGE_BLEED + 2.0 * d, h + 2.0 * d],
+            [panel_w() + edge_bleed() + 2.0 * d, h + 2.0 * d],
             8.0 + d,
             rgba(0x000000, alpha * a),
             rgba(0, 0.0),
@@ -925,7 +1025,7 @@ pub fn draw(
     }
     c.round_rect(
         [x, y],
-        [PANEL_W + EDGE_BLEED, h],
+        [panel_w() + edge_bleed(), h],
         8.0,
         rgba(PANEL_BG, if solid { 1.0 } else { 0.97 } * a),
         rgba(0x34344a, a),
@@ -933,7 +1033,7 @@ pub fn draw(
     );
     c.round_rect(
         [x + 1.0, y + 1.0],
-        [PANEL_W + EDGE_BLEED, HEADER_H],
+        [panel_w() + edge_bleed(), header_h()],
         7.0,
         rgba(HEADER_BG, a),
         rgba(0, 0.0),
@@ -941,25 +1041,31 @@ pub fn draw(
     );
     c.rect(
         x + 1.0,
-        y + HEADER_H - 6.0,
-        PANEL_W + EDGE_BLEED,
+        y + header_h() - 6.0,
+        panel_w() + edge_bleed(),
         7.0,
         rgba(HEADER_BG, a),
     );
     c.rect(
         x + 1.0,
-        y + HEADER_H + 1.0,
-        PANEL_W + EDGE_BLEED,
+        y + header_h() + 1.0,
+        panel_w() + edge_bleed(),
         1.0,
         rgba(LINE, a),
     );
-    c.hit(x, y, PANEL_W, h, Hit::SocialPanel);
+    c.hit(x, y, panel_w(), h, Hit::SocialPanel);
     let inner = x + 8.0;
-    let iw = PANEL_W - 16.0;
+    let iw = panel_w() - 16.0;
     let footer = |c: &mut Canvas, hints: &str| {
-        c.rect(x + 1.0, y + h - FOOTER_H, PANEL_W - 2.0, 1.0, rgba(LINE, a));
+        c.rect(
+            x + 1.0,
+            y + h - FOOTER_H,
+            panel_w() - 2.0,
+            1.0,
+            rgba(LINE, a),
+        );
         c.text_centered(
-            x + PANEL_W / 2.0,
+            x + panel_w() / 2.0,
             y + h - FOOTER_H + 6.5,
             6.5,
             rgba(DIM_TEXT, a),
@@ -968,24 +1074,24 @@ pub fn draw(
     };
     if !logged_in {
         c.text(x + 12.0, y + 9.5, 8.5, rgba(accent(), a), "FRIENDS");
-        c.text_right(x + PANEL_W - 12.0, y + 10.0, 7.0, rgba(DIM_TEXT, a), "F9");
+        c.text_right(x + panel_w() - 12.0, y + 10.0, 7.0, rgba(DIM_TEXT, a), "F9");
         c.text(
             inner + 4.0,
-            y + HEADER_H + 14.0,
+            y + header_h() + 14.0,
             7.5,
             rgba(0xdedeea, a),
             "Not logged in",
         );
         c.text(
             inner + 4.0,
-            y + HEADER_H + 28.0,
+            y + header_h() + 28.0,
             7.0,
             rgba(SOFT_TEXT, a),
             "Log in under MULTIPLAYER > ONLINE",
         );
         c.text(
             inner + 4.0,
-            y + HEADER_H + 40.0,
+            y + header_h() + 40.0,
             7.0,
             rgba(SOFT_TEXT, a),
             "to add friends and chat.",
@@ -1016,7 +1122,7 @@ pub fn draw(
     };
     let (size, gap) = [(8.0, 16.0), (8.0, 10.0), (7.0, 8.0), (6.0, 6.0)]
         .into_iter()
-        .find(|&(size, gap)| row_w(size, gap) <= PANEL_W - 24.0)
+        .find(|&(size, gap)| row_w(size, gap) <= panel_w() - 24.0)
         .unwrap_or((6.0, 4.0));
     let mut tx = x + 12.0;
     for &tab in tabs {
@@ -1027,7 +1133,7 @@ pub fn draw(
             tx - gap / 3.0,
             y + 2.0,
             tw + gap * 2.0 / 3.0,
-            HEADER_H - 2.0,
+            header_h() - 2.0,
         );
         c.text(
             tx,
@@ -1047,7 +1153,7 @@ pub fn draw(
         );
         if sel {
             c.round_rect(
-                [tx - 1.0, y + HEADER_H - 2.5],
+                [tx - 1.0, y + header_h() - 2.5],
                 [tw + 2.0, 2.5],
                 1.0,
                 rgba(accent(), a),
@@ -1065,13 +1171,13 @@ pub fn draw(
             tx - gap / 3.0,
             y + 2.0,
             tw + gap * 2.0 / 3.0 + bw,
-            HEADER_H - 2.0,
+            header_h() - 2.0,
             Hit::SocialTab(tab),
         );
         tx += tw + gap + bw;
     }
     if s.connected && s.players.is_some() {
-        let right = x + PANEL_W - 12.0;
+        let right = x + panel_w() - 12.0;
         // What fits after the tabs (and their badges): "1234 online", "1234" or nothing.
         let room = right - (tx - gap + 14.0) - 10.0;
         let label = [
@@ -1086,7 +1192,7 @@ pub fn draw(
             c.circle(dot, y + 14.0, 2.5, rgba(GREEN, a), rgba(0x000000, 0.0), 0.0);
         }
     }
-    let body = y + HEADER_H + 2.0;
+    let body = y + header_h() + 2.0;
     if !s.connected {
         c.text(
             inner + 4.0,
@@ -1101,7 +1207,7 @@ pub fn draw(
     let cursor = s.cursor.min(rows.len() - 1);
     let selected = rows[cursor];
     let bottom = y + h - FOOTER_H;
-    let input_y = bottom - 24.0;
+    let input_y = bottom - crate::mobile::pick(24.0, 46.0);
     let width = chat_width();
     let list_top = body + 6.0 + if s.connected { 0.0 } else { 14.0 };
     let me = s.me.as_deref().map(key);
@@ -1168,13 +1274,8 @@ pub fn draw(
                         a,
                     );
                     let tx = tx + 24.0;
-                    c.text(
-                        tx,
-                        hy + 6.0,
-                        8.0,
-                        rgba(0xffffff, a),
-                        &Canvas::fit(8.0, bx - tx - 4.0, &f.name),
-                    );
+                    let white = rgba(0xffffff, a);
+                    styled_name(c, tx, hy + 6.0, 8.0, &f.name, white, bx - tx - 4.0);
                     let what = f
                         .activity
                         .as_ref()
@@ -1234,7 +1335,7 @@ pub fn draw(
             let top = hy + head_h + 8.0;
             if lines.is_empty() {
                 c.text_centered(
-                    x + PANEL_W / 2.0,
+                    x + panel_w() / 2.0,
                     top + 10.0,
                     7.0,
                     rgba(DIM_TEXT, a),
@@ -1274,7 +1375,7 @@ pub fn draw(
             if !s.sent.is_empty() && ry + 12.0 < bottom {
                 c.text(
                     inner + 4.0,
-                    ry + 5.0,
+                    ry + crate::mobile::pick(5.0, 9.0),
                     6.5,
                     rgba(DIM_TEXT, a),
                     &Canvas::fit(
@@ -1351,7 +1452,7 @@ pub fn draw(
                     "this server has no global chat yet"
                 };
                 c.text_centered(
-                    x + PANEL_W / 2.0,
+                    x + panel_w() / 2.0,
                     list_top + 10.0,
                     7.0,
                     rgba(DIM_TEXT, a),
@@ -1455,7 +1556,7 @@ pub fn draw(
             // The latest admin actions under the list, as many as fit (newest first).
             if let Some(o) = s.overview.as_ref().filter(|o| !o.log.is_empty()) {
                 let lh = Canvas::text_height(6.0) + 3.0;
-                let fit = ((bottom - 4.0 - ry - 4.0 - HEADING_H) / lh)
+                let fit = ((bottom - 4.0 - ry - 4.0 - heading_h()) / lh)
                     .floor()
                     .max(0.0) as usize;
                 if fit > 0 {
@@ -1463,7 +1564,7 @@ pub fn draw(
                     for (k, l) in o.log.iter().rev().take(fit).enumerate() {
                         c.text(
                             inner + 3.0,
-                            ry + 4.0 + HEADING_H + k as f32 * lh,
+                            ry + 4.0 + heading_h() + k as f32 * lh,
                             6.0,
                             rgba(DIM_TEXT, a),
                             &Canvas::fit(6.0, iw - 6.0, l),
@@ -1517,7 +1618,9 @@ fn heading(s: &Social, rows: &[Row], i: usize) -> Option<(&'static str, usize)> 
     ))
 }
 
-const HEADING_H: f32 = 13.0;
+fn heading_h() -> f32 {
+    crate::mobile::pick(13.0, 24.0)
+}
 
 /// The rows of a list from `top`, scrolled so the cursor stays visible; returns where they end.
 #[allow(clippy::too_many_arguments)]
@@ -1538,12 +1641,12 @@ fn draw_rows(
             rows[i],
             Row::Friend(_) | Row::Player(_) | Row::AdminPlayer(_) | Row::AdminRoom(_)
         ) {
-            30.0
+            crate::mobile::pick(30.0, 56.0)
         } else {
-            24.0
+            crate::mobile::pick(24.0, 48.0)
         };
         base + if heading(s, rows, i).is_some() {
-            HEADING_H
+            heading_h()
         } else {
             0.0
         }
@@ -1560,11 +1663,11 @@ fn draw_rows(
         }
         if let Some((label, n)) = heading(s, rows, i) {
             section(c, inner, iw, ry, label, n, a);
-            ry += HEADING_H;
+            ry += heading_h();
         }
         let rh = rh
             - if heading(s, rows, i).is_some() {
-                HEADING_H
+                heading_h()
             } else {
                 0.0
             };
@@ -1603,7 +1706,7 @@ fn draw_rows(
         }
         c.hit(inner, ry, iw, bh, Hit::SocialRow(i));
         let ty = ry + bh / 2.0 - 3.5;
-        let by = ry + (bh - 12.0) / 2.0;
+        let by = ry + (bh - button_h()) / 2.0;
         match *r {
             Row::AddFriend => {
                 // While typing, the end of the name stays in view.
@@ -1704,16 +1807,18 @@ fn draw_rows(
                     badge_after(c, bx - w, ry + bh / 2.0, unread, a);
                     bx -= w + 4.0;
                 }
-                c.text(
+                styled_name(
+                    c,
                     inner + 31.0,
-                    ry + 5.0,
+                    ry + crate::mobile::pick(5.0, 9.0),
                     8.0,
+                    &f.name,
                     rgba(if online { 0xffffff } else { SOFT_TEXT }, a),
-                    &Canvas::fit(8.0, bx - inner - 34.0, &f.name),
+                    bx - inner - 34.0,
                 );
                 c.text(
                     inner + 31.0,
-                    ry + 16.0,
+                    ry + crate::mobile::pick(16.0, 29.0),
                     6.5,
                     rgba(if online { SOFT_TEXT } else { DIM_TEXT }, a),
                     &Canvas::fit(6.5, bx - inner - 34.0, &what),
@@ -1813,16 +1918,18 @@ fn draw_rows(
                         Standing::Stranger => right,
                     }
                 } - 4.0;
-                c.text(
+                styled_name(
+                    c,
                     inner + 31.0,
-                    ry + 5.0,
+                    ry + crate::mobile::pick(5.0, 9.0),
                     8.0,
+                    &p.name,
                     rgba(0xffffff, a),
-                    &Canvas::fit(8.0, bx - inner - 34.0, &p.name),
+                    bx - inner - 34.0,
                 );
                 c.text(
                     inner + 31.0,
-                    ry + 16.0,
+                    ry + crate::mobile::pick(16.0, 29.0),
                     6.5,
                     rgba(SOFT_TEXT, a),
                     &Canvas::fit(6.5, bx - inner - 34.0, &p.activity.describe()),
@@ -1902,14 +2009,14 @@ fn draw_rows(
                     .unwrap_or_default();
                 c.text(
                     inner + 31.0,
-                    ry + 5.0,
+                    ry + crate::mobile::pick(5.0, 9.0),
                     8.0,
                     rgba(0xffffff, a),
                     &Canvas::fit(8.0, bx - inner - 34.0, &name),
                 );
                 c.text(
                     inner + 31.0,
-                    ry + 16.0,
+                    ry + crate::mobile::pick(16.0, 29.0),
                     6.5,
                     rgba(SOFT_TEXT, a),
                     &Canvas::fit(6.5, bx - inner - 34.0, &what),
@@ -1954,14 +2061,14 @@ fn draw_rows(
                 let what = format!("{}  {} in it  {state}", r.host, r.players);
                 c.text(
                     inner + 31.0,
-                    ry + 5.0,
+                    ry + crate::mobile::pick(5.0, 9.0),
                     8.0,
                     rgba(0xffffff, a),
                     &Canvas::fit(8.0, bx - inner - 34.0, &r.title),
                 );
                 c.text(
                     inner + 31.0,
-                    ry + 16.0,
+                    ry + crate::mobile::pick(16.0, 29.0),
                     6.5,
                     rgba(SOFT_TEXT, a),
                     &Canvas::fit(6.5, bx - inner - 34.0, &what),
@@ -2162,7 +2269,7 @@ fn chat_lines(
     let end = rows.len() - back;
     let shown = &rows[end - fitting(end)..end];
     let mut ly = input_y - 6.0 - shown.iter().map(ChatRow::height).sum::<f32>();
-    let iw = PANEL_W - 16.0;
+    let iw = panel_w() - 16.0;
     for (k, row) in shown.iter().enumerate() {
         // The first row shown keeps no gap above it.
         if k > 0 {
@@ -2179,25 +2286,19 @@ fn chat_lines(
                     row.colour,
                     a,
                 );
-                let mut nx = inner + 3.0 + MESSAGE_INDENT;
-                let right = inner + iw;
-                let tags = s.tags_of(&row.text);
-                // Tags while the name keeps some room; then the name, cut to what's left.
-                for tag in tags {
-                    if nx + tag_width(tag) > right - 40.0 {
-                        break;
-                    }
-                    nx += group_tag(c, nx, ly, tag, a) + 3.0;
-                }
-                let name = Canvas::fit(CHAT_SIZE, right - nx, &row.text);
-                match tags.first() {
-                    Some(tag) => shimmer_name(c, nx, ly + 1.0, &name, group_colours(tag), a),
-                    None => {
-                        c.text(nx, ly + 1.0, CHAT_SIZE, rgba(row.colour, a), &name);
-                    }
-                }
+                let nx = inner + 3.0 + MESSAGE_INDENT;
+                let colour = rgba(row.colour, a);
+                let name_w = styled_name(
+                    c,
+                    nx,
+                    ly + 1.0,
+                    CHAT_SIZE,
+                    &row.text,
+                    colour,
+                    inner + iw - nx,
+                );
                 if let Some(at) = at {
-                    let after = nx + Canvas::text_width(CHAT_SIZE, &name) + 5.0;
+                    let after = nx + name_w + 5.0;
                     let when = ago(at, now);
                     if after + Canvas::text_width(6.0, &when) < inner + iw {
                         c.text(after, ly + 2.0, 6.0, rgba(0x55556a, a), &when);
@@ -2291,9 +2392,10 @@ pub fn map_set_in(text: &str) -> Option<u32> {
 /// The message box at `input_y`.
 fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hint: &str, a: f32) {
     let typing = !s.input.is_empty();
+    let h = crate::mobile::pick(18.0, 40.0);
     c.round_rect(
         [inner, input_y],
-        [iw, 18.0],
+        [iw, h],
         6.0,
         rgba(ROW_BG, a),
         rgba(if typing { accent() } else { 0x34344a }, a),
@@ -2302,21 +2404,30 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
     let text = if typing {
         format!("{}_", s.input)
     } else {
-        hint.to_string()
+        // A phone's keyboard has its own button to send.
+        let cut = hint.split(", Enter").next().unwrap_or(hint);
+        (if crate::mobile::active() { cut } else { hint }).to_string()
     };
     let shown = Canvas::fit_end(7.0, iw - 14.0, &text);
     c.text(
         inner + 7.0,
-        input_y + 5.5,
+        input_y + (h - 7.0) / 2.0,
         7.0,
         rgba(if typing { 0xffffff } else { 0x5a5a70 }, a),
         &shown,
     );
-    c.hit(inner, input_y, iw, 18.0, Hit::TextField);
+    c.hit(inner, input_y, iw, h, Hit::TextField);
     // The last F12's, on its way to whoever this is with.
     if s.shot_ready && !typing {
         let label = tr!("Send screenshot", "スクショを送信", "Отправить скриншот");
-        button(c, inner + iw - 3.0, input_y + 3.0, label, Hit::SendShot, a);
+        button(
+            c,
+            inner + iw - 3.0,
+            input_y + (h - button_h()) / 2.0,
+            label,
+            Hit::SendShot,
+            a,
+        );
     }
 }
 
@@ -2336,21 +2447,28 @@ fn tag(c: &mut Canvas, right: f32, y: f32, label: &str, a: f32) -> f32 {
     x
 }
 
+/// The height of a row's buttons.
+fn button_h() -> f32 {
+    crate::mobile::pick(12.0, 36.0)
+}
+
 /// A small button ending at `right`; returns its left edge.
 fn button(c: &mut Canvas, right: f32, y: f32, label: &str, hit: Hit, a: f32) -> f32 {
-    let w = Canvas::text_width(6.0, label) + 12.0;
+    let h = button_h();
+    let w = Canvas::text_width(6.0, label) + crate::mobile::pick(12.0, 18.0);
     let x = right - w;
-    let hover = c.hovered(x, y, w, 12.0);
+    let hover = c.hovered(x, y, w, h);
     c.round_rect(
         [x, y],
-        [w, 12.0],
+        [w, h],
         3.5,
         rgba(if hover { accent() } else { 0x2a2a3c }, a),
         rgba(if hover { accent() } else { 0x3e3e54 }, a),
         1.0,
     );
-    c.text(x + 6.0, y + 3.0, 6.0, rgba(0xffffff, a), label);
-    c.hit(x, y, w, 12.0, hit);
+    let pad = (w - Canvas::text_width(6.0, label)) / 2.0;
+    c.text(x + pad, y + (h - 6.0) / 2.0, 6.0, rgba(0xffffff, a), label);
+    c.hit(x, y, w, h, hit);
     x
 }
 
@@ -2409,7 +2527,7 @@ pub fn draw_notes(c: &mut Canvas, s: &Social, editor: bool) {
     } else {
         c.width
     };
-    let mut x = right - TAB_W - w - 8.0;
+    let mut x = right - tab_w() - w - 8.0;
     let mut y = if s.open { 30.0 } else { 58.0 };
     if editor {
         // No tab here: over the preview at the left, clear of the menus, modes and inspector.
@@ -2484,7 +2602,10 @@ pub fn draw_editor_chip(c: &mut Canvas, s: &Social, x: f32, lobby_unread: usize)
 
 /// The overlay panel's rectangle (for clicks): x, y, w, h.
 pub fn panel_rect(width: f32) -> [f32; 4] {
-    [width - PANEL_W, 24.0, PANEL_W, 480.0 - 30.0]
+    if crate::mobile::active() {
+        return [width - panel_w(), 0.0, panel_w(), 480.0];
+    }
+    [width - panel_w(), 24.0, panel_w(), 480.0 - 30.0]
 }
 
 /// The tab that opens the overlay (menus, when logged in), at the edge of the screen.
@@ -2506,26 +2627,28 @@ fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: u
     let online = s
         .players
         .as_ref()
-        .filter(|_| s.connected)
+        .filter(|_| s.connected && !crate::mobile::active())
         .map(|_| format!("{} online   ", s.online_total));
     let online_w = online
         .as_deref()
         .map_or(0.0, |t| Canvas::text_width(TAB_TEXT, t) + 9.0);
     let reading = Canvas::text_width(TAB_TEXT, &label) + online_w;
     let len = TAB_PAD + TAB_KEY_ROW + reading + TAB_PAD;
-    let (x, y) = (right - TAB_W, middle - len / 2.0);
-    let hover = c.hovered(x, y, TAB_W, len);
+    let (x, y) = (right - tab_w(), middle - len / 2.0);
+    let hover = c.hovered(x, y, tab_w(), len);
     c.round_rect(
         [x, y],
-        [TAB_W + EDGE_BLEED, len],
+        [tab_w() + edge_bleed(), len],
         6.0,
         rgba(if hover { 0x2b2b3d } else { 0x15151d }, 0.92),
         rgba(0x3a3a4e, 1.0),
         1.0,
     );
-    let cx = x + TAB_W / 2.0;
+    let cx = x + tab_w() / 2.0;
     let colour = rgba(0xc8c8d8, 1.0);
-    c.text_centered(cx, y + TAB_PAD, TAB_TEXT, colour, "F9");
+    if !crate::mobile::active() {
+        c.text_centered(cx, y + TAB_PAD, TAB_TEXT, colour, "F9");
+    }
     // Laid out along a line from (0, 0), then stood up to read from the bottom.
     let start = c.shapes.len();
     let mut along = 0.0;
@@ -2537,7 +2660,7 @@ fn draw_tab(c: &mut Canvas, s: &Social, right: f32, middle: f32, lobby_unread: u
     c.text(along, -TAB_TEXT / 2.0, TAB_TEXT, colour, &label);
     let dest = [cx, y + len - TAB_PAD];
     c.rotate_since(start, [0.0, 0.0], -std::f32::consts::FRAC_PI_2, 1.0, dest);
-    c.hit(x, y, TAB_W, len, Hit::SocialToggle);
+    c.hit(x, y, tab_w(), len, Hit::SocialToggle);
     badge(c, x + 3.0, y + 1.0, unread, 1.0);
 }
 
@@ -2665,6 +2788,33 @@ mod tests {
         assert!(
             matches!(person[0].kind, ChatKind::Name { .. })
                 && matches!(person[1].kind, ChatKind::Text { .. })
+        );
+    }
+
+    #[test]
+    fn every_screen_sees_the_groups_and_draws_the_tags() {
+        let mut s = Social::default();
+        s.set_groups(vec![("Styled-Test".into(), vec!["DEV".into()])]);
+        assert_eq!(group_tags("STYLED-TEST"), ["DEV"]);
+        let plain = Canvas::text_width(8.0, "Styled-Test");
+        assert!(
+            styled_name_width("styled-test", 8.0) > plain,
+            "the tag comes before it"
+        );
+        let mut c = Canvas::default();
+        let drawn = styled_name(
+            &mut c,
+            0.0,
+            0.0,
+            8.0,
+            "Styled-Test",
+            rgba(0xffffff, 1.0),
+            500.0,
+        );
+        assert!((drawn - styled_name_width("Styled-Test", 8.0)).abs() < 0.5);
+        assert_eq!(
+            styled_name_width("a-stranger", 8.0),
+            Canvas::text_width(8.0, "a-stranger")
         );
     }
 
@@ -2815,6 +2965,28 @@ mod tests {
         );
         assert!(!s.in_conversation(false));
         assert!(s.cursor < s.rows(false).len());
+    }
+
+    #[test]
+    fn unread_friends_come_first_and_the_cursor_stays_put() {
+        let mut s = Social {
+            friends: vec![friend("ann", true), friend("cid", false)],
+            ..Social::default()
+        };
+        s.cursor = 1; // ann
+        s.add_unread("CID", false);
+        assert_eq!(
+            s.rows(false),
+            vec![Row::AddFriend, Row::Friend(1), Row::Friend(0)],
+            "an unread message beats being online"
+        );
+        assert_eq!(s.row(false), Row::Friend(0), "still on ann");
+        // Reading cid's drops them back, the conversation still theirs.
+        s.cursor = 1;
+        s.open_conversation();
+        s.mark_read(false);
+        assert_eq!(s.row(false), Row::Friend(1));
+        assert!(s.in_conversation(false));
     }
 
     #[test]

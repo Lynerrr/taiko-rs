@@ -73,7 +73,12 @@ impl View {
     pub fn draw(&self, c: &mut Canvas) {
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.72));
-        let (px, py, pw, ph) = (16.0, 44.0, w - 32.0, 410.0);
+        let phone = crate::mobile::active();
+        let (px, py, pw, ph) = if phone {
+            (0.0, 0.0, w, 480.0)
+        } else {
+            (16.0, 44.0, w - 32.0, 410.0)
+        };
         c.round_rect(
             [px, py],
             [pw, ph],
@@ -82,25 +87,30 @@ impl View {
             rgba(accent(), 0.8),
             1.5,
         );
-        let (by, bw) = (py + ph - 26.0, 56.0);
+        let (by, bw, bh) = if phone {
+            (py + ph - 46.0, 120.0, 40.0)
+        } else {
+            (py + ph - 26.0, 56.0, 16.0)
+        };
+        let size = crate::mobile::pick(7.0, 12.0);
         c.button(
             px + pw - bw - 12.0,
             by,
             bw,
-            16.0,
+            bh,
             tr!("Back", "戻る", "Назад"),
-            7.0,
+            size,
             Hit::Key(KeyCode::Escape),
             true,
         );
-        let browser_w = 84.0;
+        let browser_w = crate::mobile::pick(84.0, 200.0);
         c.button(
             px + pw - bw * 2.0 - browser_w - 24.0,
             by,
             browser_w,
-            16.0,
+            bh,
             tr!("Open in browser", "ブラウザで開く", "В браузере"),
-            7.0,
+            size,
             Hit::Key(KeyCode::KeyB),
             false,
         );
@@ -109,9 +119,9 @@ impl View {
                 px + pw - bw * 2.0 - 18.0,
                 by,
                 bw,
-                16.0,
+                bh,
                 tr!("Medals", "メダル", "Медали"),
-                7.0,
+                size,
                 Hit::Key(KeyCode::KeyM),
                 false,
             );
@@ -182,12 +192,14 @@ impl View {
         // Their picture, left of the name and the medals line.
         c.avatar(&p.name, px + 30.0, py + 25.0, 14.0, accent(), 1.0);
         let hx = px + 30.0;
-        c.text(
-            hx + 16.0,
+        crate::social::styled_name(
+            c,
+            hx + crate::mobile::pick(16.0, 20.0),
             py + 12.0,
             14.0,
+            &p.name,
             rgba(0xffffff, 1.0),
-            &Canvas::fit(14.0, pw - 30.0 - stats_w - 48.0, &p.name),
+            pw - 30.0 - stats_w - 48.0,
         );
         c.text_right(
             px + pw - 16.0,
@@ -204,8 +216,8 @@ impl View {
             line += online::said(dan);
         }
         c.text(
-            hx + 16.0,
-            py + 31.0,
+            hx + crate::mobile::pick(16.0, 20.0),
+            py + crate::mobile::pick(31.0, 34.0),
             7.0,
             rgba(0xFFD34D, 1.0),
             &Canvas::fit(7.0, pw * 0.5 - 30.0, &line),
@@ -274,15 +286,15 @@ impl View {
 
 /// Plays as two-line rows: the map, then accuracy, combo, mods and rate; pp on the right.
 fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bottom: f32) {
-    const ROW: f32 = 26.0;
+    let row = crate::mobile::pick(26.0, 46.0);
     for (i, r) in rows.iter().enumerate() {
-        let y = top + i as f32 * ROW;
-        if y + ROW - 3.0 > bottom {
+        let y = top + i as f32 * row;
+        if y + row - 3.0 > bottom {
             break;
         }
         c.round_rect(
             [x, y],
-            [w, ROW - 3.0],
+            [w, row - 3.0],
             5.0,
             rgba(0x1d1d27, 1.0),
             rgba(0x2a2a38, 1.0),
@@ -292,11 +304,17 @@ fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bo
             r.pp.map(|p| format!("{p:.0}pp"))
                 .unwrap_or_else(|| "-".into());
         let pp_w = Canvas::text_width(8.0, &pp);
-        c.text_right(x + w - 8.0, y + 7.0, 8.0, rgba(0xff8ad8, 1.0), &pp);
+        c.text_right(
+            x + w - 8.0,
+            y + crate::mobile::pick(7.0, 15.0),
+            8.0,
+            rgba(0xff8ad8, 1.0),
+            &pp,
+        );
         let room = w - pp_w - 22.0;
         c.text(
             x + 8.0,
-            y + 3.5,
+            y + crate::mobile::pick(3.5, 6.0),
             7.0,
             rgba(0xffffff, 1.0),
             &Canvas::fit(7.0, room, &r.map),
@@ -324,7 +342,7 @@ fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bo
         );
         c.text(
             x + 8.0,
-            y + 13.5,
+            y + crate::mobile::pick(13.5, 24.0),
             6.0,
             rgba(0x9a9ab0, 1.0),
             &Canvas::fit(6.0, room, &line),

@@ -378,6 +378,14 @@ pub fn group_heading(item: Item) -> Option<&'static str> {
     })
 }
 
+/// A line of the settings list.
+#[derive(Clone, Copy, Debug)]
+pub enum Listed {
+    Heading(&'static str),
+    /// A row: index into `ITEMS`.
+    Row(usize),
+}
+
 /// How a row shows its value, besides as text.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Control {
@@ -2092,6 +2100,27 @@ impl SettingsUi {
             .unwrap_or(0)
     }
 
+    /// What's listed for `section`, for a screen with its own row sizes.
+    pub fn listed(&self, section: usize) -> Vec<Listed> {
+        self.lines(section)
+            .0
+            .into_iter()
+            .map(|line| match line {
+                Line::Group(name, _) => Listed::Heading(name),
+                Line::Row(i, _) => Listed::Row(i),
+            })
+            .collect()
+    }
+
+    /// Where the bars of the rows are, for `level_at`.
+    pub fn set_track(&self, left: f32, w: f32) {
+        self.track.set((left, w));
+    }
+
+    pub fn track_rect(&self) -> (f32, f32) {
+        self.track.get()
+    }
+
     /// What's listed, in order: the section's rows under their groups' headings, or the
     /// search's results.
     fn lines(&self, section: usize) -> (Vec<Line>, f32) {
@@ -2722,6 +2751,10 @@ pub fn brand(c: &mut Canvas) -> f32 {
 
 /// The way back, as a button: what Esc does here.
 pub fn back_button(c: &mut Canvas, y: f32, label: &str, hit: Hit) -> f32 {
+    if crate::mobile::active() {
+        c.button(0.0, 0.0, 96.0, 46.0, label, 12.0, hit, false);
+        return 72.0;
+    }
     let w = Canvas::text_width(8.0, label) + 20.0;
     c.button(24.0, y, w, 20.0, label, 8.0, hit, false);
     w
@@ -2742,11 +2775,14 @@ fn header(c: &mut Canvas, active: usize, right_text: &str) {
         tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
     ][active.min(3)];
     let x = 24.0 + w + 12.0;
-    let used = crate::style::title(c, x, 24.0, 13.0, accent(), title);
-    let right = c.width - 24.0;
+    let phone = crate::mobile::active();
+    let (title_y, title_size) = if phone { (14.0, 18.0) } else { (24.0, 13.0) };
+    let used = crate::style::title(c, x, title_y, title_size, accent(), title);
+    let right = c.width - crate::mobile::pick(24.0, 0.0);
     let room = right - (x + used + 16.0);
     if Canvas::text_width(8.0, right_text) <= room {
-        c.text_right(right, 28.0, 8.0, rgba(0x9a9ab0, 1.0), right_text);
+        let y = crate::mobile::pick(28.0, 16.0);
+        c.text_right(right, y, 8.0, rgba(0x9a9ab0, 1.0), right_text);
     } else {
         c.text(
             x,
