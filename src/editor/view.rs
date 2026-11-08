@@ -194,6 +194,10 @@ enum Drag {
     Move {
         anchor: u64,
         grab: f64,
+        /// A click (no drag) on the one fake picked in a stack picks the next one in it.
+        cycle: bool,
+        /// Where it was pressed (map ms).
+        down_t: f64,
     },
     Resize {
         id: u64,
@@ -1623,13 +1627,13 @@ impl View {
         };
         let gimmick = self.ed.gimmick();
         // How many fakes share each millisecond in sight, for the count over a stack.
-        let mut stacks: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+        let mut stacks: std::collections::HashMap<i64, Vec<u64>> = std::collections::HashMap::new();
         for o in objs[first..]
             .iter()
             .take_while(|o| o.time <= to + 40.0 * self.ms_per_px)
             .filter(|o| o.fake)
         {
-            *stacks.entry(o.time as i64).or_default() += 1;
+            stacks.entry(o.time as i64).or_default().push(o.id);
         }
         let mut counted: std::collections::HashSet<i64> = std::collections::HashSet::new();
         for o in &objs[first..] {
@@ -1690,18 +1694,18 @@ impl View {
                     c.circle(ox, cy, r, rgba(col, 0.25), outline, lw);
                     c.ring(ox, cy, r - 1.5, rgba(col, 1.0), 1.5);
                     c.text_centered(ox, cy - 2.5, 5.0, rgba(0xffffff, 0.9), "F");
+                    // Which one of the stack is picked (2/3), else how many it has (x3).
                     let key = o.time as i64;
-                    if let Some(&n) = stacks.get(&key)
-                        && n > 1
+                    if let Some(list) = stacks.get(&key)
+                        && list.len() > 1
                         && counted.insert(key)
                     {
-                        c.text(
-                            ox + r + 1.0,
-                            cy - r - 1.0,
-                            5.0,
-                            rgba(0xe0c8ff, 1.0),
-                            &format!("x{n}"),
-                        );
+                        let picked = list.iter().position(|id| self.ed.selection.contains(id));
+                        let label = match picked {
+                            Some(i) => format!("{}/{}", i + 1, list.len()),
+                            None => format!("x{}", list.len()),
+                        };
+                        c.text(ox + r + 1.0, cy - r - 1.0, 5.0, rgba(0xe0c8ff, 1.0), &label);
                     }
                 }
                 _ => {
@@ -2039,10 +2043,12 @@ impl View {
         top + (bottom - top) / 2.0
     }
 
-    /// The fakes' row along the bottom of the lane (its top and bottom), in a map that can have
+    /// The fakes' row along the bottom of the lane (its top and bottom), in a `.tko` map with
     /// fakes.
     fn fake_row(&self) -> Option<(f32, f32)> {
-        if !self.ed.is_tko() {
+        // Only once the map has fakes (the first ones are made on Motion > Fakes), so a map
+        // without any keeps the whole lane for its notes.
+        if !self.ed.is_tko() || !self.ed.chart.objects.iter().any(|o| o.fake) {
             return None;
         }
         let [_, y, _, h] = self.layout.timeline;
@@ -2258,7 +2264,7 @@ impl View {
                     add: keys.shift,
                 };
             }
-            Drag::Move { anchor, grab } => {
+            Drag::Move { anchor, grab, .. } => {
                 let Some(now) = self.ed.chart.object(anchor).map(|o| o.time) else {
                     return;
                 };
@@ -2524,11 +2530,22 @@ impl View {
     /// Selects the note under a press and starts dragging it; a second press on it soon after
     /// puts the playhead there instead.
     fn grab_object(&mut self, id: u64, t: f64, keys: Keys) {
+        // In a stack of fakes with one of them picked, the press is on that one (the pointer
+        // can't tell them apart): a click goes on to the next, a drag takes the picked one.
+        let stack = self.fake_stack(id);
+        let picked_in_stack = match self.ed.selection.iter().collect::<Vec<_>>()[..] {
+            [only] if stack.contains(only) => Some(*only),
+            _ => None,
+        };
+        let id = picked_in_stack.unwrap_or(id);
         let Some(o) = self.ed.chart.object(id).cloned() else {
             return;
         };
         let now = Instant::now();
-        if let Some((at, last)) = self.last_click
+        // A second click on a stack goes to the next fake, never seeks.
+        let cycle = stack.len() > 1 && !keys.shift && picked_in_stack.is_some();
+        if stack.len() < 2
+            && let Some((at, last)) = self.last_click
             && last == id
             && now.duration_since(at).as_millis() < 400
         {
@@ -2547,7 +2564,42 @@ impl View {
         self.drag = Drag::Move {
             anchor: id,
             grab: t - o.time,
+            cycle,
+            down_t: t,
         };
+    }
+
+    /// The fakes stacked on `id`'s millisecond, in the chart's order, when `id` is a fake (else
+    /// none).
+    fn fake_stack(&self, id: u64) -> Vec<u64> {
+        let Some(o) = self.ed.chart.object(id).filter(|o| o.fake) else {
+            return Vec::new();
+        };
+        let objs = &self.ed.chart.objects;
+        let from = objs.partition_point(|q| q.time < o.time);
+        objs[from..]
+            .iter()
+            .take_while(|q| q.time == o.time)
+            .filter(|q| q.fake)
+            .map(|q| q.id)
+            .collect()
+    }
+
+    /// Picks the fake after `id` in its stack (round), saying which it is.
+    fn pick_next_in_stack(&mut self, id: u64) {
+        let stack = self.fake_stack(id);
+        let Some(i) = stack.iter().position(|x| *x == id) else {
+            return;
+        };
+        let next = stack[(i + 1) % stack.len()];
+        self.ed.selection = [next].into();
+        let at = self.ed.chart.object(next).map_or(0.0, |o| o.time);
+        self.status = format!(
+            "fake {} of {} at {}: click again for the next",
+            (i + 1) % stack.len() + 1,
+            stack.len(),
+            fmt_time(at)
+        );
     }
 
     fn timeline_down(&mut self, x: f32, y: f32, keys: Keys) {
@@ -2772,6 +2824,15 @@ impl View {
             } => self.strip_box_up(from, to, y0, y, moved, add),
             Drag::Brush { t0, v0, t1, v1 } => self.brush_up(t0, v0, t1, v1),
             Drag::Handle { .. } => self.handle_up(),
+            Drag::Move {
+                anchor,
+                cycle: true,
+                down_t,
+                ..
+            } if (self.x_of(down_t) - x).abs() < 3.0 => {
+                self.ed.end_drag();
+                self.pick_next_in_stack(anchor);
+            }
             Drag::Move { .. } | Drag::Resize { .. } | Drag::Key { .. } => {
                 self.k_frozen = None;
                 self.ed.end_drag();
@@ -7913,12 +7974,16 @@ mod tests {
         let mut v = view();
         v.ed.chart.gimmick = Some(Default::default());
         v.ed.tool = Tool::Note;
+        // No fakes yet: the lane is all the notes'.
+        assert!(v.fake_row().is_none());
+        // The first fake (made on Motion > Fakes) brings the row.
+        v.ed.place_note(1000.0, false, true).unwrap();
         draw(&mut v);
         let (ft, fb) = v.fake_row().unwrap();
         let fy = (ft + fb) / 2.0;
         assert!(v.lane_cy() < ft, "the notes keep the lane above the fakes");
-        // Three clicks on the first note's millisecond: three fakes on it, the note stays one.
-        for _ in 0..3 {
+        // Two more clicks on the first note's millisecond: three fakes on it, the note stays one.
+        for _ in 0..2 {
             click_t(&mut v, 1000.0, fy);
         }
         let at = |v: &View, fake: bool| {
@@ -7943,6 +8008,24 @@ mod tests {
         v.mouse_up(b, fy, ctrl());
         assert_eq!(v.ed.selection.len(), 3);
         assert!(v.ed.selected().iter().all(|o| o.fake));
+        // With Select, a click picks one fake of the stack, and each click after it the next.
+        v.ed.tool = Tool::Select;
+        v.ed.select_none();
+        let stack: Vec<u64> =
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.fake && o.time == 1000.0)
+                .map(|o| o.id)
+                .collect();
+        click_t(&mut v, 1000.0, fy);
+        let first = *v.ed.selection.first().unwrap();
+        assert_eq!(v.ed.selection.len(), 1);
+        let at = stack.iter().position(|id| *id == first).unwrap();
+        click_t(&mut v, 1000.0, fy);
+        assert_eq!(v.ed.selection, [stack[(at + 1) % 3]].into(), "{}", v.status);
+        click_t(&mut v, 1000.0, fy);
+        assert_eq!(v.ed.selection, [stack[(at + 2) % 3]].into());
         // Drumrolls don't go in the fakes' row.
         v.ed.tool = Tool::Roll;
         let n = v.ed.chart.objects.len();

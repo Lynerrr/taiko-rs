@@ -44,6 +44,8 @@ impl Editor {
             .map(|o| {
                 let mut o = o.clone();
                 o.fake = on;
+                // A note goes by its time; a new fake too, until it is given a group.
+                o.group = None;
                 o
             })
             .collect();
@@ -108,6 +110,12 @@ impl Editor {
             }
             let mut f = HitObject::hit(t, o.taiko() == Taiko::Kat, o.big());
             f.fake = true;
+            // A copy of a fake with a group of its own goes in that group the same way.
+            if o.fake && o.group.is_some() {
+                f.group = o.group;
+                made.push(f);
+                continue;
+            }
             made.push(f);
             if let Some(gr) = gimmick.as_mut().and_then(|g| {
                 g.groups
