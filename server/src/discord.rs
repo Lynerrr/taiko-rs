@@ -1716,6 +1716,42 @@ fn crash_channel(bot: &Bot) -> Result<String, String> {
     Ok(id)
 }
 
+/// A play waiting for an admin (`scores::HeldPlay`) in the channel named by DIR/discord-score-review
+/// (made by hand, for admins only: the bot doesn't make it, so players don't see the queue).
+pub fn held_play(player: &str, h: &crate::scores::HeldPlay) {
+    let Some(bot) = BOT.get() else { return };
+    let Some(channel) = std::fs::read_to_string(bot.dir.join("discord-score-review"))
+        .ok()
+        .map(|c| c.trim().to_string())
+        .filter(|c| snowflake(c).is_ok())
+    else {
+        eprintln!(
+            "discord: no score review channel (discord-score-review) for score {}",
+            h.id
+        );
+        return;
+    };
+    let stars = h.stars.map_or("?".to_string(), |s| format!("{s:.2}"));
+    let body = json!({
+        "embeds": [{
+            "title": format!("Score {} waits for an admin", h.id),
+            "url": format!("https://rstaiko.auneu.space/s/{}", h.id),
+            "description": format!(
+                "**{}** on {}\n{}: {:.0} pp sent at {stars} stars.\nSet its pp on the score page to let it count, or delete it.",
+                player.replace(['*', '_', '`', '~', '|'], ""),
+                h.map.replace(['*', '_', '`', '~', '|'], ""),
+                h.why,
+                h.pp,
+            ),
+            "color": 0xFFD34D,
+        }],
+        "allowed_mentions": { "parse": [] },
+    });
+    if let Err(e) = bot.post(&format!("{API}/channels/{channel}/messages"), &body) {
+        eprintln!("discord: score review post: {e}");
+    }
+}
+
 fn changelog(bot: Arc<Bot>) {
     let Some(channel) = std::fs::read_to_string(bot.dir.join("discord-changelog"))
         .ok()

@@ -26,6 +26,32 @@ const MAX_REPLAY_BYTES: u64 = 10 << 30;
 const PROFILE_PLAYS: usize = 20;
 /// Most played maps a profile lists.
 const PROFILE_MAPS: usize = 6;
+/// How young an account is "new" for `NEW_ACCOUNT_TOP`.
+const NEW_ACCOUNT_SECS: u64 = 24 * 3600;
+/// A new account's play worth as much as the best this many plays on the boards waits for an
+/// admin (`Stored::held`).
+const NEW_ACCOUNT_TOP: usize = 50;
+
+/// Whether `pp` is more than a play at `stars` can honestly be worth. osu!taiko pp grows about
+/// as stars^2.25; every play on the server sits under 60 times that (the most, 55, by a play from
+/// before stacked mods had a ceiling), plus 200 for short easy maps' accuracy share. A stopgap
+/// while the server takes pp from the game: past it, a play waits for an admin.
+fn implausible_pp(pp: Option<f64>, stars: Option<f64>) -> bool {
+    pp.is_some_and(|pp| pp > 200.0 + 60.0 * stars.unwrap_or(1.0).max(1.0).powf(2.25))
+}
+
+/// Where a play sent in went: its place on the map (if it's its player's best there), and its
+/// player's pp total and rank.
+pub type Placed = (Option<u32>, f64, Option<u32>);
+
+/// A play an admin has to look at before it counts (`Scores::submit_from`).
+pub struct HeldPlay {
+    pub id: u64,
+    pub pp: f64,
+    pub stars: Option<f64>,
+    pub map: String,
+    pub why: &'static str,
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Stored {
@@ -43,9 +69,19 @@ struct Stored {
     /// the latest plays (Claude's showpiece, `/api/claude/score`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     hidden: bool,
+    /// Waits for an admin (a new account's top play): off the boards and worth nothing until an
+    /// admin sets its pp (`set_pp`), as are plays with `implausible_pp`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    held: bool,
 }
 
 impl Stored {
+    /// Whether it waits for an admin's pp: held, or worth more than its stars give. Not the
+    /// server's own hidden plays (`Scores::add_hidden`).
+    fn waits(&self) -> bool {
+        !self.hidden && (self.held || implausible_pp(self.sent_pp, self.score.stars))
+    }
+
     /// A Relax play: it's on boards of its own, and counts for nothing on the usual ones.
     fn relax(&self) -> bool {
         self.score.mods.iter().any(|m| m == "RX")
@@ -184,7 +220,8 @@ fn check(play: &ScoreSubmit) -> Result<(), &'static str> {
         && (1..=100_000).contains(&hits)
         && play.max_combo as u64 <= hits
         && (0.25..=4.0).contains(&play.map.rate)
-        // No upper limit on pp for now (tests need it); just a real, non-negative number.
+        // A real, non-negative number; more than the stars give is taken but waits for an admin
+        // (`implausible_pp`).
         && play.pp.is_none_or(|pp| pp.is_finite() && pp >= 0.0)
         && play.inputs.len() <= MAX_INPUTS
         && play.score <= MAX_SCORE
@@ -315,6 +352,10 @@ impl Scores {
         scores.reindex();
         scores.count_pp();
         scores.settle_medals();
+        let waiting = scores.waiting_ids();
+        if !waiting.is_empty() {
+            println!("{} plays wait for an admin: {waiting:?}", waiting.len());
+        }
         scores
     }
 
@@ -335,7 +376,7 @@ impl Scores {
         let mut plays: Vec<&Stored> = self
             .stored_of(player)
             .into_iter()
-            .filter(|s| !s.hidden && !s.relax())
+            .filter(|s| !s.hidden && !s.relax() && !self.waiting(s))
             .collect();
         plays.sort_by_key(|s| (s.score.date, s.id));
         plays
@@ -348,7 +389,7 @@ impl Scores {
         Rivals::of(
             self.all
                 .iter()
-                .filter(|s| !s.hidden && !s.relax())
+                .filter(|s| !s.hidden && !s.relax() && !self.waiting(s))
                 .map(|s| (s.player.as_str(), Play::of(&s.score, self.gives(s)))),
         )
     }
@@ -409,7 +450,36 @@ impl Scores {
 
     /// Whether a play is on its player's profile only.
     fn off_boards(&self, s: &Stored) -> bool {
-        s.hidden || self.banned.contains(&s.player)
+        s.hidden || self.banned.contains(&s.player) || self.waiting(s)
+    }
+
+    /// Whether a play waits for an admin: held or worth more than it can be, and no pp set.
+    fn waiting(&self, s: &Stored) -> bool {
+        s.waits() && !self.overrides.contains_key(&s.id)
+    }
+
+    /// The ids of the plays waiting for an admin (`waiting`), oldest first.
+    fn waiting_ids(&self) -> Vec<u64> {
+        self.all
+            .iter()
+            .filter(|s| self.waiting(s))
+            .map(|s| s.id)
+            .collect()
+    }
+
+    /// The pp a play needs to be among the best `NEW_ACCOUNT_TOP` on the boards (0: fewer).
+    fn top_pp_floor(&self) -> f64 {
+        let mut pp: Vec<f64> = self
+            .all
+            .iter()
+            .filter(|s| !self.off_boards(s))
+            .filter_map(|s| s.score.pp)
+            .collect();
+        if pp.len() < NEW_ACCOUNT_TOP {
+            return 0.0;
+        }
+        let (_, floor, _) = pp.select_nth_unstable_by(NEW_ACCOUNT_TOP - 1, |a, b| b.total_cmp(a));
+        *floor
     }
 
     /// Adds `all[i]` to the indexes and its map's row.
@@ -579,11 +649,12 @@ impl Scores {
                 && s.md5
                     .as_deref()
                     .is_none_or(|m| (self.official)(s.score.set_id, m));
+            let waits = s.waits();
             let pp = self
                 .overrides
                 .get(&s.id)
                 .copied()
-                .or(s.sent_pp)
+                .or(s.sent_pp.filter(|_| !waits))
                 .filter(|_| gives);
             if pp != s.score.pp {
                 s.score.pp = pp;
@@ -615,6 +686,8 @@ impl Scores {
             save_json(file, &self.overrides)?;
         }
         self.count_pp();
+        // A play waiting for an admin goes on the boards with its pp set, and back off without.
+        self.reindex();
         Ok(())
     }
 
@@ -729,13 +802,29 @@ impl Scores {
 
     /// Takes a play by `player` (lowercased key, `name` as written). Returns its place on the map
     /// (if it's their best there), and their pp total and rank.
+    #[cfg(test)]
     pub fn submit(
+        &mut self,
+        player: &str,
+        name: &str,
+        play: ScoreSubmit,
+        now: u64,
+    ) -> Result<Placed, String> {
+        self.submit_from(player, name, play, now, None)
+            .map(|(placed, _)| placed)
+    }
+
+    /// `submit`, for an account made at unix second `created` (None: not known): a new account's
+    /// play among the best on the boards, and any play worth more than it can be, wait for an
+    /// admin, and are handed back to tell them.
+    pub fn submit_from(
         &mut self,
         player: &str,
         name: &str,
         mut play: ScoreSubmit,
         now: u64,
-    ) -> Result<(Option<u32>, f64, Option<u32>), String> {
+        created: Option<u64>,
+    ) -> Result<(Placed, Option<HeldPlay>), String> {
         check(&play)?;
         // Older games work these out on the whole map.
         if play.pp_version < online::NOTE_MODS_VERSION
@@ -761,7 +850,7 @@ impl Scores {
         let label = online::clean_text(&format!("{} - {} [{}]", m.artist, m.title, m.version), 160);
         let id = self.next_id;
         self.next_id += 1;
-        let stored = Stored {
+        let mut stored = Stored {
             id,
             player: player.to_string(),
             score: OnlineScore {
@@ -801,7 +890,37 @@ impl Scores {
                 .as_deref()
                 .map(|m| online::clean_text(m, 32).to_ascii_lowercase()),
             hidden: false,
+            held: false,
         };
+        let map = stored.score.map_hash;
+        let gives = (self.gives_pp)(
+            stored.score.set_id,
+            map,
+            crate::loved::version_of(&stored.score.map),
+        ) != Some(false)
+            && stored
+                .md5
+                .as_deref()
+                .is_none_or(|m| (self.official)(stored.score.set_id, m));
+        let new_account = created.is_some_and(|c| now.saturating_sub(c) < NEW_ACCOUNT_SECS);
+        let why = match stored.sent_pp {
+            Some(_) if !gives => None,
+            Some(_) if implausible_pp(stored.sent_pp, stored.score.stars) => {
+                Some("more pp than its stars can give")
+            }
+            Some(pp) if new_account && !stored.relax() && pp >= self.top_pp_floor() => {
+                Some("a new account's top play")
+            }
+            _ => None,
+        };
+        stored.held = why == Some("a new account's top play");
+        let held = why.map(|why| HeldPlay {
+            id,
+            pp: stored.sent_pp.unwrap_or(0.0),
+            stars: stored.score.stars,
+            map: stored.score.map.clone(),
+            why,
+        });
         if let Some(dir) = &self.replays {
             let timing = play.timing.clone().map(|t| online::PlayTiming {
                 os: online::clean_text(&t.os, 16),
@@ -830,18 +949,9 @@ impl Scores {
         if let Some(ms) = play.play_ms {
             self.count_play(player, ms, false);
         }
-        let map = stored.score.map_hash;
-        let gives = (self.gives_pp)(
-            stored.score.set_id,
-            map,
-            crate::loved::version_of(&stored.score.map),
-        ) != Some(false)
-            && stored
-                .md5
-                .as_deref()
-                .is_none_or(|m| (self.official)(stored.score.set_id, m));
+        let waits = held.is_some();
         self.all.push(stored);
-        if let Some(s) = self.all.last_mut().filter(|_| !gives) {
+        if let Some(s) = self.all.last_mut().filter(|_| !gives || waits) {
             s.score.pp = None;
         }
         self.index(self.all.len() - 1);
@@ -855,7 +965,7 @@ impl Scores {
         } else {
             self.standing(player)
         };
-        Ok((map_rank, pp, rank))
+        Ok(((map_rank, pp, rank), held))
     }
 
     /// Adds a play to DIR/scores.jsonl.
@@ -927,6 +1037,7 @@ impl Scores {
             sent_pp: Some(pp),
             md5: None,
             hidden: true,
+            held: false,
         };
         self.save(&stored)?;
         self.all.push(stored);
@@ -2070,6 +2181,83 @@ pub(crate) mod tests {
         s.set_banned("a", false);
         assert_eq!(names(&s), ["A", "B"]);
         assert_eq!(s.map_scores(7)[0].player, "A");
+    }
+
+    #[test]
+    fn more_pp_than_the_stars_give_waits_for_an_admin() {
+        let mut s = Scores::load(None);
+        s.submit("b", "B", play(7, 400, 300.0), 1).unwrap();
+        let mut forged = play(7, 500, 2.2e16);
+        forged.stars = Some(7.17);
+        let ((rank, pp, _), held) = s.submit_from("a", "A", forged, 2, Some(0)).unwrap();
+        let held = held.expect("held");
+        assert_eq!(
+            (rank, pp, held.why),
+            (None, 0.0, "more pp than its stars can give")
+        );
+        assert_eq!(s.map_scores(7).len(), 1);
+        assert_eq!(s.rankings(10).len(), 1);
+        assert_eq!(s.profile("a", "A", 0).recent[0].pp, None);
+        // An admin lets it count by setting its pp, and takes it back off by clearing it.
+        s.set_pp(held.id, Some(400.0)).unwrap();
+        assert_eq!(s.map_scores(7)[0].player, "A");
+        assert_eq!(s.standing("a").0, 400.0);
+        s.set_pp(held.id, None).unwrap();
+        assert_eq!((s.map_scores(7).len(), s.standing("a").0), (1, 0.0));
+        // Honest pp at the stars sent stays.
+        let mut fine = play(8, 500, 2400.0);
+        fine.stars = Some(5.0);
+        assert!(s.submit_from("c", "C", fine, 3, None).unwrap().1.is_none());
+    }
+
+    #[test]
+    fn a_new_accounts_top_play_waits_and_stays_waiting_after_a_restart() {
+        let dir = std::env::temp_dir().join(format!("taiko-server-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let day = NEW_ACCOUNT_SECS;
+        let mut s = Scores::load(Some(dir.clone()));
+        // Fewer plays on the boards than NEW_ACCOUNT_TOP: any play with pp is a top one.
+        let (_, held) = s
+            .submit_from("new", "New", play(7, 500, 300.0), day, Some(day - 60))
+            .unwrap();
+        assert_eq!(held.map(|h| h.why), Some("a new account's top play"));
+        // A day old account, and one not known, go on as before.
+        let (_, held) = s
+            .submit_from("old", "Old", play(7, 400, 300.0), 2 * day, Some(day - 60))
+            .unwrap();
+        assert!(held.is_none());
+        assert!(
+            s.submit_from("x", "X", play(7, 300, 300.0), 2 * day, None)
+                .unwrap()
+                .1
+                .is_none()
+        );
+        let names = |s: &Scores| {
+            s.map_scores(7)
+                .iter()
+                .map(|r| r.player.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&s), ["Old", "X"]);
+        let s = Scores::load(Some(dir.clone()));
+        assert_eq!(names(&s), ["Old", "X"]);
+        assert_eq!(s.standing("new").0, 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pp_past_the_stars_is_told_from_honest_pp() {
+        // The worst honest plays on the server, and forged ones.
+        assert!(!implausible_pp(Some(17620.0), Some(12.96)));
+        assert!(!implausible_pp(Some(134.0), Some(1.27)));
+        assert!(!implausible_pp(Some(2960.0), Some(7.41)));
+        assert!(!implausible_pp(Some(70.0), Some(0.92)));
+        assert!(!implausible_pp(None, Some(5.0)));
+        assert!(implausible_pp(Some(18460.0), Some(4.47)));
+        assert!(implausible_pp(Some(2.2e16), Some(7.17)));
+        assert!(implausible_pp(Some(100_000.0), Some(5.22)));
+        assert!(implausible_pp(Some(5000.0), None));
     }
 
     #[test]

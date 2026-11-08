@@ -1059,14 +1059,29 @@ fn handle(state: &State, stream: TcpStream, slot: Slot, ip: IpAddr) {
             // Whether the map gives pp, so the total sent back is right.
             covers::learn(play.map.set_id);
             let relax = play.map.mods.iter().any(|m| m == "RX");
+            let created = state
+                .accounts
+                .lock()
+                .unwrap()
+                .users
+                .get(&key)
+                .map(|u| u.created);
             let mut scores = state.scores.lock().unwrap();
-            match scores.submit(&key, &name, *play, now_secs()) {
-                Ok((map_rank, pp, rank)) => {
+            match scores.submit_from(&key, &name, *play, now_secs(), created) {
+                Ok(((map_rank, pp, rank), held)) => {
                     let medals = scores.medals_after(&key, now_secs());
                     let announcement = scores.medals.announcement(&medals);
                     drop(scores);
                     if let Some(a) = announcement {
                         state.announce_medal(&name, &a);
+                    }
+                    if let Some(h) = held {
+                        println!(
+                            "score {} by {name} waits for an admin: {} ({:.0} pp sent)",
+                            h.id, h.why, h.pp
+                        );
+                        let name = name.clone();
+                        std::thread::spawn(move || discord::held_play(&name, &h));
                     }
                     println!(
                         "score by {name} on {map}: #{map_rank:?}, {pp:.0} pp total, {} medals",
@@ -1253,6 +1268,9 @@ fn create_account(
         if !mail::valid_email(&email) {
             return Reply::Error("that email doesn't look right".into());
         }
+        if mail::disposable(&email) {
+            return Reply::Error(THROWAWAY_MAIL.into());
+        }
         if state.email_owner(&email).is_some() {
             return Reply::Error("that email is already used by an account".into());
         }
@@ -1436,6 +1454,9 @@ fn link_email(state: &State, ip: IpAddr, token: &str, email: &str, code: Option<
     let email = mail::normal(email);
     if !mail::valid_email(&email) {
         return Reply::Error("that email doesn't look right".into());
+    }
+    if mail::disposable(&email) {
+        return Reply::Error(THROWAWAY_MAIL.into());
     }
     if state.email_owner(&email).is_some_and(|owner| owner != key) {
         return Reply::Error("that email is already used by another account".into());
@@ -2808,6 +2829,9 @@ fn main() {
     }
 }
 
+/// What registering or linking a throwaway email says.
+const THROWAWAY_MAIL: &str = "throwaway email services aren't taken: use your own email";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2848,6 +2872,18 @@ mod tests {
         };
         let pass = Some("secret1");
         assert!(err(register(&state, ip, "newbie", pass, None, None)).contains("email"));
+        assert_eq!(
+            err(register(
+                &state,
+                ip,
+                "newbie",
+                pass,
+                Some("a@Digeros.com"),
+                None
+            )),
+            THROWAWAY_MAIL
+        );
+        assert!(mail::next().is_none(), "no code goes to a throwaway email");
         assert!(
             matches!(register(&state, ip, "newbie", pass, Some("New@Mail.ru"), None), Reply::CodeSent(to) if to == "n**@mail.ru")
         );
@@ -3061,11 +3097,16 @@ mod tests {
         // The change went to everyone online.
         let sent = lines(&rx);
         assert!(
-            sent.iter().any(|l| l.contains("Groups") && l.contains("semfi")),
+            sent.iter()
+                .any(|l| l.contains("Groups") && l.contains("semfi")),
             "{sent:?}"
         );
         state.set_two_hundred("auneu", "semfi", false).unwrap();
-        assert!(lines(&rx).iter().any(|l| l.contains("Groups") && !l.contains("semfi")));
+        assert!(
+            lines(&rx)
+                .iter()
+                .any(|l| l.contains("Groups") && !l.contains("semfi"))
+        );
     }
 
     #[test]
