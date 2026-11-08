@@ -2,7 +2,7 @@
 //! ones, and download them into the Songs folder.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use crate::download::{self, Category, Diff, Job, SetInfo, SortKey};
@@ -13,6 +13,31 @@ use crate::render::{Canvas, Hit, accent, approach, rgba};
 const TYPE_DELAY: Duration = Duration::from_millis(450);
 /// Fetch the selected set's preview once the selection rests this long.
 const PREVIEW_DELAY: Duration = Duration::from_millis(250);
+/// A result card's height, with the gap under it.
+const ROW: f32 = 50.0;
+/// Where the result list starts, under the search box and the filter row.
+const LIST_TOP: f32 = 110.0;
+/// Where it ends at the most (the hints go under it).
+const LIST_BOTTOM: f32 = 436.0;
+/// Covers fetched at once.
+const COVER_FETCHES: usize = 4;
+/// Downloads the panel under the list shows at once.
+const PANEL_ROWS: usize = 3;
+
+/// The filter row's drop-down lists.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Menu {
+    Status,
+    Sort,
+}
+
+/// A result's cover in `download::covers_dir`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Cover {
+    Fetching,
+    Ready,
+    Missing,
+}
 
 /// (custom set, set id, beatmap id) of a previewed difficulty: a custom set's numbers are the
 /// website's, and its difficulties are numbered by their place in it.
@@ -76,10 +101,24 @@ pub struct Browse {
     failed: HashSet<DiffKey>,
     /// Star ratings of custom difficulties, worked out from their previews (the website has none).
     rated: HashMap<DiffKey, f32>,
+    /// The drop-down list that is open.
+    pub menu: Option<Menu>,
+    /// Where the list scrolls to: kept on the selection unless the wheel moved it (`follow`).
+    scroll_target: f32,
+    follow: bool,
+    /// The list was scrolled near its end last frame (more results get fetched then).
+    near_end: bool,
+    /// Covers by `download::cover_name`, and the fetches coming back.
+    covers: HashMap<String, Cover>,
+    cover_tx: Sender<(String, bool)>,
+    cover_rx: Receiver<(String, bool)>,
+    /// Downloads that failed (the set and why), for the panel's Retry.
+    pub failed_jobs: Vec<(SetInfo, String)>,
 }
 
 impl Default for Browse {
     fn default() -> Browse {
+        let (cover_tx, cover_rx) = mpsc::channel();
         Browse {
             query: String::new(),
             category: Category::HasLeaderboard,
@@ -103,11 +142,19 @@ impl Default for Browse {
             fetching: None,
             failed: HashSet::new(),
             rated: HashMap::new(),
+            menu: None,
+            scroll_target: 0.0,
+            follow: true,
+            near_end: false,
+            covers: HashMap::new(),
+            cover_tx,
+            cover_rx,
+            failed_jobs: Vec::new(),
         }
     }
 }
 
-/// What a result row shows on its right.
+/// What a result card shows on its right.
 pub enum RowState {
     Installed,
     Downloading(Option<f32>),
@@ -165,7 +212,7 @@ impl Browse {
         if self.more
             && self.search.is_none()
             && self.edited.is_none()
-            && self.cursor + 10 >= self.results.len()
+            && (self.cursor + 10 >= self.results.len() || self.near_end)
             && let Some(query) = self.searched.clone()
         {
             self.fetch(query, self.page + 1);
@@ -209,7 +256,19 @@ impl Browse {
         self.search_now();
     }
 
+    /// Opens drop-down `m`, or closes it if it's open.
+    pub fn toggle_menu(&mut self, m: Menu) {
+        self.menu = if self.menu == Some(m) { None } else { Some(m) };
+    }
+
+    /// Flips the order's direction.
+    pub fn flip_sort(&mut self) {
+        self.desc = !self.desc;
+        self.search_now();
+    }
+
     pub fn set_category(&mut self, c: Category) {
+        self.menu = None;
         if c != self.category {
             self.category = c;
             self.search_now();
@@ -218,6 +277,7 @@ impl Browse {
 
     /// Picks an order; picking the current one again flips its direction.
     pub fn set_sort(&mut self, s: SortKey) {
+        self.menu = None;
         if s == self.sort {
             self.desc = !self.desc;
         } else {
@@ -358,6 +418,7 @@ impl Browse {
                 self.search = None;
                 match result {
                     Ok((sets, more)) if page == 0 => {
+                        (self.scroll_target, self.follow) = (0.0, true);
                         self.status = if sets.is_empty() {
                             "no taiko maps found".into()
                         } else {
@@ -384,6 +445,41 @@ impl Browse {
             }
         }
         self.load_more_near_end();
+        while let Ok((name, ok)) = self.cover_rx.try_recv() {
+            self.covers
+                .insert(name, if ok { Cover::Ready } else { Cover::Missing });
+        }
+    }
+
+    /// Asks for a result's cover, unless it's here, on its way or missing, or enough are.
+    fn want_cover(&mut self, set: &SetInfo) {
+        let name = download::cover_name(set);
+        if self.covers.contains_key(&name) {
+            return;
+        }
+        if download::covers_dir().join(&name).is_file() {
+            self.covers.insert(name, Cover::Ready);
+            return;
+        }
+        let fetching = self
+            .covers
+            .values()
+            .filter(|c| **c == Cover::Fetching)
+            .count();
+        if fetching >= COVER_FETCHES {
+            return;
+        }
+        self.covers.insert(name.clone(), Cover::Fetching);
+        let (tx, set) = (self.cover_tx.clone(), set.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send((name, download::fetch_cover(&set).is_ok()));
+        });
+    }
+
+    /// The mouse wheel: scrolls the list without moving the selection.
+    pub fn scroll_by(&mut self, notches: i32) {
+        self.follow = false;
+        self.scroll_target -= notches as f32 * ROW * 1.5;
     }
 
     pub fn type_text(&mut self, text: &str) {
@@ -406,6 +502,7 @@ impl Browse {
     }
 
     pub fn move_by(&mut self, n: i32) {
+        self.follow = true;
         let last = self.results.len().saturating_sub(1) as i32;
         self.cursor = (self.cursor as i32 + n).clamp(0, last.max(0)) as usize;
     }
@@ -535,100 +632,106 @@ impl Browse {
             );
         }
         let col = col_all;
-        // Website-style filters: status category, then order (click the active one to flip it).
-        let chip = |c: &mut Canvas, x: f32, y: f32, label: &str, on: bool, hit: Hit| -> f32 {
-            let w = Canvas::text_width(6.0, label) + 8.0;
-            let hover = !on && c.hovered(x, y, w, 15.0);
-            let bg = if on {
-                accent()
-            } else if hover {
-                0x34344a
-            } else {
-                0x23232f
-            };
+
+        // The filter row: status and order as drop-downs, the order's direction, the count.
+        let fy = 84.0;
+        let status_x = x0;
+        let status_w = dropdown(
+            c,
+            status_x,
+            fy,
+            "STATUS",
+            self.category.name(),
+            Hit::DlMenu(0),
+            self.menu == Some(Menu::Status),
+        );
+        let sort_x = status_x + status_w + 6.0;
+        let sort_name = |key: SortKey| match source {
+            Source::Osu => key.name(),
+            Source::Ours => key.name_for_ours(),
+        };
+        let sort_w = dropdown(
+            c,
+            sort_x,
+            fy,
+            "SORT",
+            sort_name(self.sort),
+            Hit::DlMenu(1),
+            self.menu == Some(Menu::Sort),
+        );
+        let mut right_of_filters = sort_x + sort_w;
+        if self.sort != SortKey::Relevance {
+            let (dx, dw) = (right_of_filters + 4.0, 20.0);
+            let hover = c.hovered(dx, fy, dw, 20.0);
             c.round_rect(
-                [x, y],
-                [w, 15.0],
+                [dx, fy],
+                [dw, 20.0],
                 5.0,
-                rgba(bg, 1.0),
-                rgba(if on { accent() } else { 0x3a3a4e }, 1.0),
+                rgba(if hover { 0x34344a } else { 0x23232f }, 0.95),
+                rgba(0x3a3a4e, 1.0),
                 1.0,
             );
-            c.text(
-                x + 4.0,
-                y + 4.5,
-                6.0,
-                rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0),
-                label,
+            chevron(
+                c,
+                dx + dw / 2.0,
+                fy + 10.0,
+                3.5,
+                self.desc,
+                rgba(0xc8c8d8, 1.0),
             );
-            c.hit(x, y, w, 15.0, hit);
-            w + 6.0
-        };
-        // Each group on its own line, wrapping onto more when the column is narrow; the list
-        // starts under them.
-        let mut y = 84.0;
-        let group = |c: &mut Canvas, y: &mut f32, title: &str, chips: Vec<(String, bool, Hit)>| {
-            c.text(x0, *y + 4.0, 6.0, rgba(0x8a8aa0, 1.0), title);
-            let mut x = x0 + 32.0;
-            for (label, on, hit) in chips {
-                if x > x0 + 32.0 && x + Canvas::text_width(6.0, &label) + 8.0 > x0 + col {
-                    x = x0 + 32.0;
-                    *y += 19.0;
-                }
-                x += chip(c, x, *y, &label, on, hit);
+            c.hit(dx, fy, dw, 20.0, Hit::DlSortDir);
+            right_of_filters = dx + dw;
+        }
+        if !self.results.is_empty() {
+            let n = self.results.len();
+            let count = format!(
+                "{n}{} map{}",
+                if self.more { "+" } else { "" },
+                if n == 1 { "" } else { "s" }
+            );
+            if right_of_filters + Canvas::text_width(7.0, &count) + 12.0 < x0 + col {
+                c.text_right(x0 + col - 4.0, fy + 7.0, 7.0, rgba(0x8a8aa0, 1.0), &count);
             }
-            *y += 20.0;
-        };
-        let cats = self
-            .categories()
-            .iter()
-            .enumerate()
-            .map(|(i, cat)| {
-                (
-                    cat.name().to_string(),
-                    *cat == self.category,
-                    Hit::DlCategory(i),
-                )
-            })
-            .collect();
-        group(c, &mut y, "STATUS", cats);
-        let sorts = self
-            .sorts()
-            .iter()
-            .enumerate()
-            .map(|(i, key)| {
-                let on = *key == self.sort;
-                let name = match source {
-                    Source::Osu => key.name(),
-                    Source::Ours => key.name_for_ours(),
-                };
-                let label = if on && *key != SortKey::Relevance {
-                    format!("{name} {}", if self.desc { "v" } else { "^" })
-                } else {
-                    name.to_string()
-                };
-                (label, on, Hit::DlSort(i))
-            })
-            .collect();
-        group(c, &mut y, "SORT", sorts);
+        }
 
-        const ROW: f32 = 40.0;
-        let (top, bottom) = (y + 2.0, 436.0);
+        // The downloads panel under the list, when something is downloading or failed.
+        let shown_jobs = jobs.len().min(PANEL_ROWS);
+        let shown_failed = self.failed_jobs.len().min(PANEL_ROWS - shown_jobs);
+        let panel_rows = shown_jobs + shown_failed;
+        let panel_h = if panel_rows > 0 {
+            18.0 + panel_rows as f32 * 18.0
+        } else {
+            0.0
+        };
+        let (top, bottom) = (LIST_TOP, LIST_BOTTOM - panel_h);
         let view = bottom - top;
         // A last row says whether more are coming.
         let rows = self.results.len() + usize::from(!self.results.is_empty());
-        let target =
-            (self.cursor as f32 * ROW - view * 0.4).clamp(0.0, (rows as f32 * ROW - view).max(0.0));
-        approach(&mut self.scroll, target, c.dt_ms, 50.0);
+        let max_scroll = (rows as f32 * ROW - view).max(0.0);
+        if self.follow {
+            // Just far enough to keep the selection in view.
+            let sel = self.cursor as f32 * ROW;
+            if sel < self.scroll_target {
+                self.scroll_target = sel;
+            } else if sel + ROW > self.scroll_target + view {
+                self.scroll_target = sel + ROW - view;
+            }
+        }
+        self.scroll_target = self.scroll_target.clamp(0.0, max_scroll);
+        approach(&mut self.scroll, self.scroll_target, c.dt_ms, 50.0);
+        self.near_end = self.scroll_target + view >= rows as f32 * ROW - 3.0 * ROW;
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
+        let mut covers_wanted = Vec::new();
+        let action_w = if col < 420.0 { 64.0 } else { 84.0 };
         for (i, set) in self.results.iter().enumerate() {
             let y = top + i as f32 * ROW - self.scroll;
             if y + ROW < top || y > bottom {
                 continue;
             }
+            let card_h = ROW - 4.0;
             let selected = i == self.cursor;
-            let hover = !selected && c.hovered(x0, y, col, ROW - 4.0);
+            let hover = !selected && c.hovered(x0, y, col, card_h);
             let bg = if selected {
                 0x2b2b3d
             } else if hover {
@@ -638,16 +741,50 @@ impl Browse {
             };
             c.round_rect(
                 [x0, y],
-                [col, ROW - 4.0],
+                [col, card_h],
                 7.0,
                 rgba(bg, 0.95),
                 rgba(0x2a2a38, 1.0),
                 1.0,
             );
             if selected {
-                crate::style::selector(c, "download", [x0 - 3.0, y - 3.0, col + 6.0, ROW + 2.0]);
+                crate::style::selector(c, "download", [x0 - 3.0, y - 3.0, col + 6.0, card_h + 6.0]);
             }
-            c.hit(x0, y, col, ROW, Hit::DlRow(i));
+            c.hit(x0, y, col, card_h, Hit::DlRow(i));
+
+            // The cover, cut to a square on the left.
+            let th = card_h - 8.0;
+            let (tx, ty) = (x0 + 4.0, y + 4.0);
+            let name = download::cover_name(set);
+            let drawn = self.covers.get(&name) == Some(&Cover::Ready) && {
+                let start = c.shapes.len();
+                let file = format!("{}{name}", crate::pictures::COVER_PREFIX);
+                let ok = c.picture(&file, tx + th / 2.0, ty + th / 2.0, th, 0.0, [1.0; 4]);
+                c.clip_since(start, tx, ty, th, th);
+                ok
+            };
+            if !drawn {
+                c.round_rect(
+                    [tx, ty],
+                    [th, th],
+                    5.0,
+                    rgba(0x15151d, 1.0),
+                    rgba(0x2a2a38, 1.0),
+                    1.0,
+                );
+                let tag = if set.custom.is_some() { "rs" } else { "osu" };
+                c.text_centered(
+                    tx + th / 2.0,
+                    ty + th / 2.0 - 3.0,
+                    6.0,
+                    rgba(0x4a4a5e, 1.0),
+                    tag,
+                );
+            }
+            if !self.covers.contains_key(&name) {
+                covers_wanted.push(i);
+            }
+
             let state = if installed(set) {
                 RowState::Installed
             } else if let Some(job) = jobs.iter().find(|j| j.set.same(set)) {
@@ -655,99 +792,115 @@ impl Browse {
             } else {
                 RowState::Available
             };
-            // Right side: star range and the download state / button.
-            let right = x0 + col - 10.0;
-            let action_w = if col < 420.0 { 64.0 } else { 92.0 };
+            let right = x0 + col - 8.0;
+            let (bx, by, bh) = (right - action_w, y + (card_h - 20.0) / 2.0, 20.0);
             match state {
                 RowState::Installed => {
-                    c.text_right(right, y + 13.0, 8.0, rgba(0x86E05A, 1.0), "installed")
-                }
-                RowState::Downloading(f) => {
-                    let (bx, by, bw) = (right - action_w, y + 11.0, action_w);
-                    c.round_rect(
-                        [bx, by],
-                        [bw, 12.0],
-                        4.0,
-                        rgba(0x15151d, 1.0),
-                        rgba(0x3a3a4e, 1.0),
-                        1.0,
+                    c.button(bx, by, action_w, bh, "Play", 8.0, Hit::DlPlay(i), selected);
+                    c.text_centered(
+                        bx + action_w / 2.0,
+                        by + bh + 2.0,
+                        5.0,
+                        rgba(0x86E05A, 1.0),
+                        "installed",
                     );
-                    if let Some(f) = f {
-                        c.round_rect(
-                            [bx + 1.0, by + 1.0],
-                            [(bw - 2.0) * f.clamp(0.0, 1.0), 10.0],
-                            3.0,
-                            rgba(0x438EAD, 1.0),
-                            rgba(0, 0.0),
-                            0.0,
-                        );
-                    }
-                    let label = f
-                        .map(|f| format!("{:.0}%", f * 100.0))
-                        .unwrap_or_else(|| "starting...".into());
-                    c.text_centered(bx + bw / 2.0, by + 3.0, 6.0, rgba(0xffffff, 1.0), &label);
                 }
+                RowState::Downloading(f) => progress(c, bx, by + 4.0, action_w, f),
                 RowState::Available => c.button(
-                    right - action_w,
-                    y + 8.0,
+                    bx,
+                    by,
                     action_w,
-                    20.0,
+                    bh,
                     "Download",
                     8.0,
                     Hit::DlGet(i),
                     selected,
                 ),
             }
-            let lo = set.diffs.first().map(|d| d.stars).unwrap_or(0.0);
-            let hi = set.diffs.last().map(|d| d.stars).unwrap_or(0.0);
-            let pill_right = right - action_w - 10.0;
-            // The website doesn't rate custom maps: their status takes the star pill's place.
-            let pill = match &set.custom {
-                Some(custom) => badge(c, pill_right, y + 10.0, custom.approved),
-                None => crate::stars::draw_pill(c, pill_right, y + 13.0, 7.0, Some(hi)),
-            };
-            // The low end of the star range only when the title keeps room.
-            let range = if (hi - lo).abs() < 0.05 || col < 420.0 || set.custom.is_some() {
-                String::new()
-            } else {
-                format!("{lo:.2} -")
-            };
-            c.text_right(
-                pill_right - pill - 4.0,
-                y + 13.0,
-                7.0,
-                rgba(0x8a8aa0, 1.0),
-                &range,
-            );
-            let text_room =
-                pill_right - pill - Canvas::text_width(7.0, &range) - 16.0 - (x0 + 12.0);
+
+            // Title, artist and mapper, then the status, the difficulties and the stars.
+            let tx2 = tx + th + 8.0;
+            let room = bx - 8.0 - tx2;
             c.text(
-                x0 + 12.0,
-                y + 7.0,
+                tx2,
+                y + 4.0,
                 9.0,
                 rgba(0xffffff, 1.0),
-                &Canvas::fit(9.0, text_room, &format!("{} - {}", set.artist, set.title)),
+                &Canvas::fit(9.0, room, &set.title),
             );
-            let n = set.diffs.len();
-            let diffs = format!("{n} taiko diff{}", if n == 1 { "" } else { "s" });
-            let sub = match &set.custom {
-                Some(custom) => format!(
-                    "mapped by {}  |  {n} diff{}  |  {} download{}  |  {:.1} MB",
-                    set.creator,
-                    if n == 1 { "" } else { "s" },
-                    set.play_count,
-                    if set.play_count == 1 { "" } else { "s" },
-                    custom.bytes as f64 / (1 << 20) as f64,
-                ),
-                None => format!("mapped by {}  |  {}  |  {diffs}", set.creator, set.status),
-            };
+            let by_line = format!("{}  |  mapped by {}", set.artist, set.creator);
             c.text(
-                x0 + 12.0,
-                y + 22.0,
+                tx2,
+                y + 18.0,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
-                &Canvas::fit(7.0, text_room, &sub),
+                &Canvas::fit(7.0, room, &by_line),
             );
+            let ly = y + 30.0;
+            let (label, color) = status_look(set);
+            let mut lx = tx2 + pill(c, tx2, ly, label, color) + 6.0;
+            let chosen = selected.then(|| {
+                self.diff_choice
+                    .get(&set.id)
+                    .copied()
+                    .unwrap_or(set.diffs.len().saturating_sub(1))
+            });
+            const DOTS: usize = 10;
+            for (k, d) in set.diffs.iter().enumerate().take(DOTS) {
+                if lx + 8.0 > tx2 + room {
+                    break;
+                }
+                let stars = match set.custom {
+                    Some(_) => self.rated.get(&(true, set.id, d.id)).copied(),
+                    None => Some(d.stars),
+                };
+                let fill = stars
+                    .filter(|s| *s > 0.0)
+                    .map_or(0x5a5a70, crate::stars::color);
+                let ring = if chosen == Some(k) {
+                    rgba(0xffffff, 1.0)
+                } else {
+                    rgba(0, 0.0)
+                };
+                c.circle(lx + 3.5, ly + 5.0, 3.5, rgba(fill, 1.0), ring, 1.2);
+                lx += 9.0;
+            }
+            if set.diffs.len() > DOTS && lx + 20.0 < tx2 + room {
+                lx += c.text(
+                    lx,
+                    ly + 2.0,
+                    6.0,
+                    rgba(0x8a8aa0, 1.0),
+                    &format!("+{}", set.diffs.len() - DOTS),
+                ) + 4.0;
+            }
+            let extra = match &set.custom {
+                Some(custom) => format!(
+                    "{} download{}  |  {:.1} MB",
+                    set.play_count,
+                    if set.play_count == 1 { "" } else { "s" },
+                    custom.bytes as f64 / (1 << 20) as f64
+                ),
+                None => {
+                    let lo = set.diffs.first().map_or(0.0, |d| d.stars);
+                    let hi = set.diffs.last().map_or(0.0, |d| d.stars);
+                    if (hi - lo).abs() < 0.05 {
+                        format!("{hi:.2}")
+                    } else {
+                        format!("{lo:.2} - {hi:.2}")
+                    }
+                }
+            };
+            let extra_room = tx2 + room - lx - 4.0;
+            if extra_room > 30.0 {
+                c.text(
+                    lx + 4.0,
+                    ly + 2.0,
+                    6.0,
+                    rgba(0x8a8aa0, 1.0),
+                    &Canvas::fit(6.0, extra_room, &extra),
+                );
+            }
         }
         if !self.results.is_empty() {
             let y = top + self.results.len() as f32 * ROW - self.scroll;
@@ -784,6 +937,11 @@ impl Browse {
             let (y0, y1) = (y.max(top - 2.0), (*y + *hh).min(bottom + 2.0));
             (*y, *hh) = (y0, (y1 - y0).max(0.0));
         }
+        for i in covers_wanted {
+            if let Some(set) = self.results.get(i).cloned() {
+                self.want_cover(&set);
+            }
+        }
         if self.results.is_empty() || !self.status.is_empty() {
             let msg = if self.status.is_empty() {
                 "no results"
@@ -795,20 +953,87 @@ impl Browse {
                 if self.results.is_empty() {
                     220.0
                 } else {
-                    440.0
+                    bottom - 12.0
                 },
                 9.0,
                 rgba(0xc8c8d8, 1.0),
                 &Canvas::fit(9.0, col, msg),
             );
         }
+
+        // The downloads panel: progress and Cancel, or why one failed and Retry.
+        if panel_rows > 0 {
+            let py = bottom + 4.0;
+            c.round_rect(
+                [x0, py],
+                [col, panel_h - 4.0],
+                7.0,
+                rgba(0x15151d, 0.95),
+                rgba(0x2a2a38, 1.0),
+                1.0,
+            );
+            let more = jobs.len() + self.failed_jobs.len() - panel_rows;
+            let title = if more > 0 {
+                format!("DOWNLOADS  (+{more} more)")
+            } else {
+                "DOWNLOADS".to_string()
+            };
+            c.text(x0 + 8.0, py + 5.0, 6.0, rgba(0x8a8aa0, 1.0), &title);
+            let mut ry = py + 15.0;
+            let name_of = |s: &SetInfo| {
+                if s.artist.is_empty() {
+                    s.title.clone()
+                } else {
+                    format!("{} - {}", s.artist, s.title)
+                }
+            };
+            for (k, job) in jobs.iter().enumerate().take(shown_jobs) {
+                let bar_w = (col * 0.3).min(110.0);
+                let bar_x = x0 + col - 8.0 - 16.0 - 6.0 - bar_w;
+                c.text(
+                    x0 + 8.0,
+                    ry + 4.0,
+                    7.0,
+                    rgba(0xc8c8d8, 1.0),
+                    &Canvas::fit(7.0, bar_x - x0 - 16.0, &name_of(&job.set)),
+                );
+                progress(c, bar_x, ry + 2.0, bar_w, job.fraction());
+                close_button(c, x0 + col - 8.0 - 16.0, ry, Hit::DlCancel(k));
+                ry += 18.0;
+            }
+            for (k, (set, why)) in self.failed_jobs.iter().enumerate().take(shown_failed) {
+                let retry_w = 44.0;
+                let retry_x = x0 + col - 8.0 - 16.0 - 6.0 - retry_w;
+                let name = format!("failed: {}  ({why})", name_of(set));
+                c.text(
+                    x0 + 8.0,
+                    ry + 4.0,
+                    7.0,
+                    rgba(0xFF6B6B, 1.0),
+                    &Canvas::fit(7.0, retry_x - x0 - 16.0, &name),
+                );
+                c.button(
+                    retry_x,
+                    ry,
+                    retry_w,
+                    15.0,
+                    "Retry",
+                    7.0,
+                    Hit::DlRetry(k),
+                    false,
+                );
+                close_button(c, x0 + col - 8.0 - 16.0, ry, Hit::DlDismiss(k));
+                ry += 18.0;
+            }
+        }
+
         let active = jobs.len();
         let footer = if active > 0 {
             format!("{active} downloading  |  saving to {songs_dir}")
         } else {
             format!("saving to {songs_dir}")
         };
-        let hints = "Up/Down select   Left/Right difficulty   Enter download   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs   Esc clear / back";
+        let hints = "Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs   Esc back";
         c.text(
             24.0,
             452.0,
@@ -823,27 +1048,180 @@ impl Browse {
             rgba(0x55556a, 1.0),
             &Canvas::fit(7.0, w - 48.0, &footer),
         );
+
+        // An open drop-down goes over everything; a click anywhere else closes it.
+        if let Some(menu) = self.menu {
+            c.hit(0.0, 0.0, w, 480.0, Hit::DlMenuClose);
+            let (mx, items): (f32, Vec<(String, bool, Hit)>) = match menu {
+                Menu::Status => (
+                    status_x,
+                    self.categories()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, k)| {
+                            (
+                                k.name().to_string(),
+                                *k == self.category,
+                                Hit::DlCategory(i),
+                            )
+                        })
+                        .collect(),
+                ),
+                Menu::Sort => (
+                    sort_x,
+                    self.sorts()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, k)| (sort_name(*k).to_string(), *k == self.sort, Hit::DlSort(i)))
+                        .collect(),
+                ),
+            };
+            let mw = items
+                .iter()
+                .map(|(l, _, _)| Canvas::text_width(8.0, l))
+                .fold(90.0_f32, f32::max)
+                + 24.0;
+            let my = fy + 24.0;
+            let mh = items.len() as f32 * 18.0 + 6.0;
+            c.round_rect(
+                [mx, my],
+                [mw, mh],
+                7.0,
+                rgba(0x1b1b25, 0.98),
+                rgba(0x4a4a60, 1.0),
+                1.0,
+            );
+            for (k, (label, on, hit)) in items.iter().enumerate() {
+                let ry = my + 3.0 + k as f32 * 18.0;
+                let hover = c.hovered(mx + 3.0, ry, mw - 6.0, 18.0);
+                if *on || hover {
+                    c.round_rect(
+                        [mx + 3.0, ry],
+                        [mw - 6.0, 18.0],
+                        5.0,
+                        rgba(
+                            if *on { accent() } else { 0x34344a },
+                            if *on { 0.9 } else { 1.0 },
+                        ),
+                        rgba(0, 0.0),
+                        0.0,
+                    );
+                }
+                c.text(mx + 10.0, ry + 5.5, 8.0, rgba(0xffffff, 1.0), label);
+                c.hit(mx + 3.0, ry, mw - 6.0, 18.0, *hit);
+            }
+        }
     }
 }
 
-/// A custom set's status, right-aligned at `right`: green when approved (it gives pp). Returns
-/// its width.
-fn badge(c: &mut Canvas, right: f32, y: f32, approved: bool) -> f32 {
-    let (label, color) = if approved {
-        ("approved", 0x86E05A)
-    } else {
-        ("custom", 0xB28CFF)
-    };
-    let w = Canvas::text_width(6.0, label) + 10.0;
+/// A drop-down button of the filter row: a small `title`, then the `value` and a chevron.
+/// Returns its width.
+fn dropdown(c: &mut Canvas, x: f32, y: f32, title: &str, value: &str, hit: Hit, open: bool) -> f32 {
+    let w = Canvas::text_width(6.0, title) + Canvas::text_width(8.0, value) + 32.0;
+    let hover = c.hovered(x, y, w, 20.0);
     c.round_rect(
-        [right - w, y],
-        [w, 14.0],
+        [x, y],
+        [w, 20.0],
         5.0,
-        rgba(color, 0.18),
-        rgba(color, 0.9),
+        rgba(if open || hover { 0x34344a } else { 0x23232f }, 0.95),
+        rgba(if open { accent() } else { 0x3a3a4e }, 1.0),
         1.0,
     );
-    c.text(right - w + 5.0, y + 4.0, 6.0, rgba(color, 1.0), label);
+    let tx = x + 8.0 + c.text(x + 8.0, y + 7.0, 6.0, rgba(0x8a8aa0, 1.0), title) + 6.0;
+    c.text(tx, y + 6.0, 8.0, rgba(0xffffff, 1.0), value);
+    chevron(c, x + w - 10.0, y + 10.0, 3.0, !open, rgba(0xc8c8d8, 1.0));
+    c.hit(x, y, w, 20.0, hit);
+    w
+}
+
+/// A small chevron centred on (`x`, `y`), `r` from its tip to its arms: pointing down, or up.
+fn chevron(c: &mut Canvas, x: f32, y: f32, r: f32, down: bool, color: [f32; 4]) {
+    let dy = if down { -r * 0.25 } else { r * 0.25 };
+    for side in [-1.0_f32, 1.0] {
+        let angle = side * if down { -0.785 } else { 0.785 };
+        c.shapes.push(crate::render::Shape {
+            center: [x + side * r * 0.5, y + dy],
+            half: [r * 0.72, 0.6],
+            fill: color,
+            border: color,
+            params: [0.6, 0.0, 0.0, 0.0],
+            angle,
+        });
+    }
+}
+
+/// A progress bar `w` wide at (`x`, `y`) with the percentage on it ("starting..." until the
+/// size is known).
+fn progress(c: &mut Canvas, x: f32, y: f32, w: f32, f: Option<f32>) {
+    c.round_rect(
+        [x, y],
+        [w, 12.0],
+        4.0,
+        rgba(0x15151d, 1.0),
+        rgba(0x3a3a4e, 1.0),
+        1.0,
+    );
+    if let Some(f) = f {
+        c.round_rect(
+            [x + 1.0, y + 1.0],
+            [(w - 2.0) * f.clamp(0.0, 1.0), 10.0],
+            3.0,
+            rgba(0x438EAD, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
+    }
+    let label = f
+        .map(|f| format!("{:.0}%", f * 100.0))
+        .unwrap_or_else(|| "starting...".into());
+    c.text_centered(x + w / 2.0, y + 3.0, 6.0, rgba(0xffffff, 1.0), &label);
+}
+
+/// A small square button with an x, 16 wide at (`x`, `y`).
+fn close_button(c: &mut Canvas, x: f32, y: f32, hit: Hit) {
+    let hover = c.hovered(x, y, 16.0, 15.0);
+    c.round_rect(
+        [x, y],
+        [16.0, 15.0],
+        4.0,
+        rgba(if hover { 0x4a2a30 } else { 0x23232f }, 1.0),
+        rgba(0x3a3a4e, 1.0),
+        1.0,
+    );
+    c.text_centered(x + 8.0, y + 4.5, 7.0, rgba(0xc8c8d8, 1.0), "x");
+    c.hit(x, y, 16.0, 15.0, hit);
+}
+
+/// A set's status as a word and a colour: osu!'s, or the website's for a custom set.
+fn status_look(set: &SetInfo) -> (&'static str, u32) {
+    match &set.custom {
+        Some(c) if c.approved => ("approved", 0x86E05A),
+        Some(_) => ("custom", 0xB28CFF),
+        None => match set.status.as_str() {
+            "ranked" => ("ranked", 0x66CCFF),
+            "approved" => ("approved", 0x66CCFF),
+            "qualified" => ("qualified", 0x7FE0C8),
+            "loved" => ("loved", 0xFF66AA),
+            "pending" => ("pending", 0xFFD966),
+            "wip" => ("wip", 0xFFB366),
+            "graveyard" => ("graveyard", 0x8a8aa0),
+            _ => ("unknown", 0x8a8aa0),
+        },
+    }
+}
+
+/// A status pill at (`x`, `y`), 10 tall. Returns its width.
+fn pill(c: &mut Canvas, x: f32, y: f32, label: &str, color: u32) -> f32 {
+    let w = Canvas::text_width(5.5, label) + 8.0;
+    c.round_rect(
+        [x, y],
+        [w, 10.0],
+        4.0,
+        rgba(color, 0.16),
+        rgba(color, 0.85),
+        1.0,
+    );
+    c.text(x + 4.0, y + 2.5, 5.5, rgba(color, 1.0), label);
     w
 }
 
