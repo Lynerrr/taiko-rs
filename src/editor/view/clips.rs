@@ -33,6 +33,8 @@ const STRIP_Y: f32 = 11.0;
 const STRIP_H: f32 = 10.0;
 /// Where the rows start, under the title and the motion strip.
 const ROWS_TOP: f32 = STRIP_Y + STRIP_H + 1.0;
+/// How far in from the rows' right edge the wheel scrolls them without Shift (their scrollbar).
+const SCROLLBAR_GRIP: f32 = 8.0;
 /// How close (units) to a block's end a press resizes it.
 const EDGE: f32 = 4.0;
 const DIM: u32 = 0x9a9ab0;
@@ -1863,22 +1865,25 @@ impl View {
         }
     }
 
-    /// The wheel over the clip rows scrolls them when there are more than fit. False when it
-    /// isn't theirs.
+    /// Shift+wheel over the clip rows, or the wheel over their scrollbar, scrolls them when there
+    /// are more than fit; the plain wheel over them moves through the song, as over the notes.
+    /// False when it isn't theirs.
     pub(super) fn wheel_clip_rows(&mut self, notches: i32, keys: Keys) -> bool {
         let (mx, my) = self.mouse;
+        let [gx, gy, gw, _] = self.layout.graph;
         let max = self.clip_row_count().saturating_sub(ROWS);
+        let on_bar = mx >= gx + gw - SCROLLBAR_GRIP;
         if !self.clip_mode()
             || keys.ctrl
             || keys.alt
             || max == 0
+            || !(keys.shift || on_bar)
             || !inside(self.layout.graph, mx, my)
-            || my < self.layout.graph[1] + ROWS_TOP
+            || my < gy + ROWS_TOP
         {
             return false;
         }
-        let per = if keys.shift { ROWS as i32 } else { 1 };
-        self.fx_top = (self.fx_top as i32 - notches * per).clamp(0, max as i32) as u8;
+        self.fx_top = (self.fx_top as i32 - notches).clamp(0, max as i32) as u8;
         true
     }
 
@@ -2137,7 +2142,7 @@ impl View {
         };
         let rows = if count > ROWS {
             format!(
-                "   rows {}-{} of {count}, the wheel scrolls",
+                "   rows {}-{} of {count}, Shift+wheel scrolls",
                 self.fx_top + 1,
                 self.fx_top + ROWS
             )

@@ -2059,9 +2059,17 @@ impl View {
             .last_tick
             .replace(now)
             .map_or(0.0, |p| now.duration_since(p).as_secs_f64().min(0.1));
+        // The effect rows sit in the graph's place: a block dragged, resized, drawn or boxed
+        // past their edge scrolls them too.
         let graph = matches!(
             self.drag,
-            Drag::GBox { .. } | Drag::Lines { .. } | Drag::Brush { .. }
+            Drag::GBox { .. }
+                | Drag::Lines { .. }
+                | Drag::Brush { .. }
+                | Drag::FxNew { .. }
+                | Drag::FxMove { .. }
+                | Drag::FxEdge { .. }
+                | Drag::FxBox { .. }
         );
         if dt == 0.0
             || !(graph
@@ -5923,13 +5931,51 @@ mod tests {
         assert!(made.lane >= ROWS);
         assert!(v.fx_top > 0, "scrolled to show it");
         draw(&mut v);
-        // The wheel over the rows scrolls them.
+        // Shift+wheel over the rows scrolls them, and so does the wheel over their scrollbar.
         let [x, y, w, h] = v.layout.graph;
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
         v.mouse = (x + w / 2.0, y + h - 5.0);
-        v.wheel(10, Keys::default());
+        v.wheel(10, shift);
         assert_eq!(v.fx_top, 0);
-        v.wheel(-1, Keys::default());
+        v.wheel(-1, shift);
         assert_eq!(v.fx_top, 1);
+        v.mouse = (x + w - 2.0, y + h - 5.0);
+        v.wheel(1, Keys::default());
+        assert_eq!(v.fx_top, 0);
+        // The plain wheel over them moves through the song, as on the notes.
+        v.mouse = (x + w / 2.0, y + h - 5.0);
+        let t = v.seek_to.unwrap_or(v.ed.time);
+        v.wheel(-2, Keys::default());
+        assert_eq!(v.fx_top, 0);
+        assert!(
+            v.seek_to.unwrap_or(v.ed.time) > t,
+            "the wheel moved the time"
+        );
+    }
+
+    #[test]
+    fn a_block_end_dragged_past_the_edge_scrolls_the_rows() {
+        let mut v = clips_view();
+        clip_on(&mut v, 0, 1000.0, 2000.0);
+        draw(&mut v);
+        let id = v.ed.clips()[0].id;
+        let y = v.row_y(0) + v.row_h() / 2.0;
+        v.mouse_down(v.x_of(2000.0) - 1.0, y, Keys::default(), None);
+        assert!(matches!(v.drag, Drag::FxEdge { end: true, .. }));
+        let [x, _, w, _] = v.layout.graph;
+        let edge = x + w - 2.0;
+        v.mouse_move(edge, y, Keys::default());
+        let seen = (v.view_start, v.ed.clip(id).unwrap().end);
+        let t0 = Instant::now();
+        for i in 0..40 {
+            v.update(t0 + std::time::Duration::from_millis(50 * i), None);
+        }
+        assert!(v.view_start > seen.0, "the view scrolled");
+        assert!(v.ed.clip(id).unwrap().end > seen.1, "the end kept going");
+        v.mouse_up(edge, y, Keys::default());
     }
 
     #[test]
