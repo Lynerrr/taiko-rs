@@ -846,6 +846,14 @@ fn pointer_wake_px(window_h: f32) -> f64 {
     (window_h as f64 * 0.01).max(6.0)
 }
 
+/// Whether a key press belongs to the input method (Japanese, Chinese, Korean typing) rather than
+/// the game: while a word is being composed (`preedit` shows it), Enter takes the word, Tab and the
+/// arrows go through its suggestions, Backspace and Esc edit or drop it. Windows marks such keys
+/// `Process` even when the word was just taken and `preedit` already cleared.
+fn ime_has_key(logical: &Key, preedit: &str) -> bool {
+    *logical == Key::Named(NamedKey::Process) || !preedit.is_empty()
+}
+
 fn fmt_time(ms: f64) -> String {
     let s = (ms / 1000.0).max(0.0) as u64;
     format!("{}:{:02}", s / 60, s % 60)
@@ -18476,6 +18484,9 @@ impl App {
                 if !s.focused || (s.modifiers_alt && code == KeyCode::Tab) {
                     return;
                 }
+                if ime_has_key(&event.logical_key, &s.ime_preedit) {
+                    return;
+                }
                 s.key(
                     code,
                     event.repeat,
@@ -18588,6 +18599,9 @@ impl App {
                 let s = &mut *guard;
                 s.focused = false;
                 s.apply_volume();
+                // A word left half composed is dropped with the focus: kept, it would hold every
+                // key for the input method (`ime_has_key`) after coming back.
+                s.ime_preedit.clear();
                 // The release may happen in another window.
                 s.retry_hold = None;
                 // The release may happen in another window.
@@ -19910,6 +19924,25 @@ mod drawing_hook_tests {
             )
             .contains("DX12")
         );
+    }
+}
+
+#[cfg(test)]
+mod ime_key_tests {
+    use super::*;
+
+    #[test]
+    fn keys_go_to_the_input_method_while_a_word_is_composed() {
+        let enter = Key::Named(NamedKey::Enter);
+        let tab = Key::Named(NamedKey::Tab);
+        // Nothing composed: Enter and Tab are the game's (next field, submit).
+        assert!(!ime_has_key(&enter, ""));
+        assert!(!ime_has_key(&tab, ""));
+        // A word on its way: Enter takes it and Tab picks a suggestion, in the input method.
+        assert!(ime_has_key(&enter, "にほ"));
+        assert!(ime_has_key(&tab, "にほ"));
+        // Windows says so itself, also for the Enter that has just taken the word.
+        assert!(ime_has_key(&Key::Named(NamedKey::Process), ""));
     }
 }
 

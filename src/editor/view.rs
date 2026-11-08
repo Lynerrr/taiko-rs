@@ -618,6 +618,35 @@ fn inside(r: [f32; 4], x: f32, y: f32) -> bool {
     x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]
 }
 
+/// The tips `parts` as lines that fit in `max_w` at `size`: as many tips to a line as fit, three
+/// spaces apart, so a narrow preview breaks them between tips instead of cutting them short.
+fn hint_lines(size: f32, max_w: f32, parts: &[&str]) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for part in parts {
+        match lines.last_mut() {
+            Some(line) if Canvas::text_width(size, &format!("{line}   {part}")) <= max_w => {
+                line.push_str("   ");
+                line.push_str(part);
+            }
+            _ => lines.push(Canvas::fit(size, max_w, part)),
+        }
+    }
+    lines
+}
+
+/// Tips along the bottom of the preview `r`, broken into lines that fit (see `hint_lines`).
+fn draw_preview_hint(c: &mut Canvas, r: [f32; 4], parts: &[&str]) {
+    const SIZE: f32 = 5.5;
+    let [fx, fy, fw, fh] = r;
+    let lines = hint_lines(SIZE, fw - 8.0, parts);
+    let step = Canvas::text_height(SIZE) + 2.0;
+    let mut y = fy + fh - 9.0 - step * lines.len().saturating_sub(1) as f32;
+    for line in &lines {
+        c.text(fx + 4.0, y, SIZE, rgba(0xffffff, 0.8), line);
+        y += step;
+    }
+}
+
 impl View {
     pub fn open(path: std::path::PathBuf, entry: usize) -> Result<View, String> {
         let ed = Editor::open(path)?;
@@ -5041,6 +5070,82 @@ mod tests {
     }
 
     const PATHS0: [f64; 2] = crate::editor::motion::PATHS[0].1[0];
+
+    #[test]
+    fn a_path_point_dragged_off_the_preview_can_be_picked_up_again() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        draw(&mut v);
+        let ids: Vec<u64> = v.ed.chart.objects.iter().take(4).map(|o| o.id).collect();
+        v.ed.selection = ids.into_iter().collect();
+        draw(&mut v);
+        press(&mut v, Btn::M(MAct::UseSelection));
+        let g = v.m_group.unwrap();
+        let points = |v: &View| v.ed.path_of(g).unwrap().points.clone();
+        // Dragged past the preview's right edge, the point goes off screen (a path may come in
+        // from there)...
+        let [fx, fy, fw, fh] = v.layout.preview;
+        let (hx, hy) = v.path_handles()[0];
+        v.mouse_down(hx, hy, Keys::default(), None);
+        v.mouse_move(fx + fw + 40.0, hy, Keys::default());
+        v.mouse_up(fx + fw + 40.0, hy, Keys::default());
+        draw(&mut v);
+        let (ox, _) = v.path_handles()[0];
+        assert!(
+            ox > fx + fw,
+            "the point is off the preview: {ox} > {}",
+            fx + fw
+        );
+        // ...and its handle waits on the edge, where a press takes it and brings it back in.
+        let (ex, ey) = v.handle_spots()[0];
+        assert!(inside(v.layout.preview, ex, ey));
+        assert!(ex > fx + fw - 8.0, "on the right edge: {ex}");
+        let (bx, by) = (fx + fw / 2.0, fy + fh / 2.0);
+        v.mouse_down(ex, ey, Keys::default(), None);
+        v.mouse_move(bx, by, Keys::default());
+        v.mouse_up(bx, by, Keys::default());
+        let (nx, ny) = v.path_handles()[0];
+        assert!(
+            (nx - bx).abs() <= 1.0 && (ny - by).abs() <= 1.0,
+            "{nx}, {ny}"
+        );
+        assert_ne!(points(&v)[0], PATHS0);
+        // A point off the preview can be right clicked away on its edge too.
+        let n = points(&v).len();
+        let (dx, dy) = v.drum_in_preview();
+        let (mx, my) = ((nx + dx) / 2.0, (ny + dy) / 2.0 + 15.0);
+        click(&mut v, mx, my);
+        click(&mut v, mx, my);
+        assert_eq!(points(&v).len(), n + 1);
+        let (ax, ay) = v.path_handles()[1];
+        v.mouse_down(ax, ay, Keys::default(), None);
+        v.mouse_move(fx - 60.0, ay, Keys::default());
+        v.mouse_up(fx - 60.0, ay, Keys::default());
+        let (sx, sy) = v.handle_spots()[1];
+        v.right_click(sx, sy);
+        assert_eq!(points(&v).len(), n);
+    }
+
+    #[test]
+    fn a_long_preview_hint_breaks_between_tips_instead_of_being_cut() {
+        let parts = [
+            "drag a point: move it",
+            "double click: add one",
+            "right click: take it away",
+        ];
+        let one = parts.join("   ");
+        let wide = Canvas::text_width(5.5, &one);
+        assert_eq!(hint_lines(5.5, wide, &parts), vec![one.clone()]);
+        let lines = hint_lines(5.5, wide * 0.7, &parts);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines.join("   "), one, "every tip whole, none cut");
+        assert!(
+            lines
+                .iter()
+                .all(|l| Canvas::text_width(5.5, l) <= wide * 0.7)
+        );
+    }
 
     #[test]
     fn on_the_motion_page_key_1_picks_notes_and_a_path_goes_on_what_is_picked() {
