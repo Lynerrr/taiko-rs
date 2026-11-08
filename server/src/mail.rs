@@ -118,6 +118,38 @@ pub fn valid_email(email: &str) -> bool {
         && !domain.contains('@')
 }
 
+/// Throwaway mail services (one domain a line, `#` comments).
+const DISPOSABLE: &str = include_str!("disposable_email_domains.txt");
+
+/// Whether `email` is at a throwaway mail service (or a subdomain of one): the list built in, and
+/// DIR/blocked-email-domains.txt for more without a new build.
+pub fn disposable(email: &str) -> bool {
+    let extra = MAIL
+        .get()
+        .and_then(|m| std::fs::read_to_string(m.dir.join("blocked-email-domains.txt")).ok())
+        .unwrap_or_default();
+    disposable_in(email, &[DISPOSABLE, &extra])
+}
+
+fn disposable_in(email: &str, lists: &[&str]) -> bool {
+    let Some((_, domain)) = email.rsplit_once('@') else {
+        return false;
+    };
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    lists
+        .iter()
+        .flat_map(|l| l.lines())
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .any(|d| {
+            let d = d.to_ascii_lowercase();
+            domain == d
+                || domain
+                    .strip_suffix(d.as_str())
+                    .is_some_and(|rest| rest.ends_with('.'))
+        })
+}
+
 /// The same email however it was typed: trimmed, lowercase.
 pub fn normal(email: &str) -> String {
     email.trim().to_ascii_lowercase()
@@ -447,6 +479,30 @@ pub fn init_for_tests(dir: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn throwaway_mail_is_known_by_its_domain_and_subdomains() {
+        for bad in [
+            "a@digeros.com",
+            "a@INBOXORIGIN.com",
+            "a@x.digeros.com",
+            "a@extra.example",
+        ] {
+            assert!(
+                disposable_in(bad, &[DISPOSABLE, "# more\nextra.example\n"]),
+                "{bad}"
+            );
+        }
+        for good in [
+            "a@gmail.com",
+            "a@mail.ru",
+            "a@yandex.ru",
+            "a@notdigeros.com",
+            "a@vk.com",
+        ] {
+            assert!(!disposable_in(good, &[DISPOSABLE, ""]), "{good}");
+        }
+    }
 
     #[test]
     fn emails_are_checked_and_masked() {
