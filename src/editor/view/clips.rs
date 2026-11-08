@@ -1963,7 +1963,7 @@ impl View {
         for (t, kind) in self.grid() {
             if kind == 2 {
                 c.rect(
-                    self.x_of(t),
+                    self.x_of(t) - 0.5,
                     y + ROWS_TOP,
                     1.0,
                     h - ROWS_TOP - 1.0,
