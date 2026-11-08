@@ -2,45 +2,71 @@
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
-static HIDE_GREAT: AtomicBool = AtomicBool::new(true);
-static HIT_FLASH: AtomicBool = AtomicBool::new(true);
-static BLACK_LANE: AtomicBool = AtomicBool::new(false);
-static TRUE_NOTES: AtomicBool = AtomicBool::new(false);
-
-/// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
-/// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
-pub fn set_hide_great(on: bool) {
-    HIDE_GREAT.store(on, Ordering::Relaxed);
+/// How the playfield is drawn: the settings that change it, apart from the skin.
+///
+/// Like `render::Theme`: the thread building a frame draws with the look it started the frame
+/// with (`set_frame_look`, from `build_frame`); other threads see the configured note colours
+/// (`multiverse::set_note_colours`) and the defaults.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    /// GREAT hits without their splash (no flash on the hit target, no "GREAT"), like osu! skins
+    /// with an empty taiko-hit300: only OKs and misses stand out (Settings -> Playfield).
+    pub hide_great: bool,
+    /// The coloured flash on the hit target as a note is hit (Settings -> Skin): off, OKs don't
+    /// light it up either.
+    pub hit_flash: bool,
+    /// The lane the notes scroll on, and the drum's panel beside it, drawn pure black (Settings ->
+    /// View): no kiai or Party tint, no skin's lane picture.
+    pub black_lane: bool,
+    /// .tko notes drawn as what they are, whatever colour or size their map makes them show as
+    /// (Settings -> Gameplay).
+    pub true_notes: bool,
+    /// The note colours of plays without Multiverse (Settings > Skin).
+    pub note_colours: multiverse::Colours,
 }
 
-/// The coloured flash on the hit target as a note is hit (Settings -> Skin): off, OKs don't
-/// light it up either.
-pub fn set_hit_flash(on: bool) {
-    HIT_FLASH.store(on, Ordering::Relaxed);
+impl Default for Look {
+    fn default() -> Look {
+        Look {
+            hide_great: true,
+            hit_flash: true,
+            black_lane: false,
+            true_notes: false,
+            note_colours: multiverse::Colours::CLASSIC,
+        }
+    }
 }
 
-/// The lane the notes scroll on, and the drum's panel beside it, drawn pure black (Settings ->
-/// View): no kiai or Party tint, no skin's lane picture.
-pub fn set_black_lane(on: bool) {
-    BLACK_LANE.store(on, Ordering::Relaxed);
+thread_local! {
+    /// The look of the frame this thread is building (`set_frame_look`).
+    static FRAME_LOOK: std::cell::Cell<Option<Look>> = const { std::cell::Cell::new(None) };
 }
 
-/// .tko notes drawn as what they are, whatever colour or size their map makes them show as
-/// (Settings -> Gameplay).
-pub fn set_true_notes(on: bool) {
-    TRUE_NOTES.store(on, Ordering::Relaxed);
+/// This thread draws the playfield with `look` from now on (`None`: the configured note colours
+/// and the defaults).
+pub fn set_frame_look(look: Option<Look>) {
+    FRAME_LOOK.with(|l| l.set(look));
+}
+
+/// What this thread draws the playfield with.
+pub fn playfield_look() -> Look {
+    FRAME_LOOK
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(|| Look {
+            note_colours: multiverse::configured_note_colours(),
+            ..Look::default()
+        })
 }
 
 fn black_lane() -> bool {
-    BLACK_LANE.load(Ordering::Relaxed)
+    playfield_look().black_lane
 }
 
 /// Whether `j` gets its flash and label.
 fn splashes(j: Judge) -> bool {
-    !(j == Judge::Great && HIDE_GREAT.load(Ordering::Relaxed))
+    !(j == Judge::Great && playfield_look().hide_great)
 }
 
 use crate::audio::{Engine, Sfx, Track};
@@ -4474,7 +4500,7 @@ impl Game {
                 mix(uni.idle(), uni.kat(), look.colour),
             )
         };
-        let true_notes = TRUE_NOTES.load(Ordering::Relaxed);
+        let true_notes = playfield_look().true_notes;
         let draw_hit = |c: &mut Canvas,
                         s: f32,
                         n: &beatmap::Note,
@@ -4797,7 +4823,7 @@ impl Game {
             .filter(|_| !self.hidden.has(Part::Judgements))
         {
             let a = (1.0 - (t - at) / 220.0).clamp(0.0, 1.0) as f32;
-            if a > 0.0 && j != Judge::Miss && splashes(j) && HIT_FLASH.load(Ordering::Relaxed) {
+            if a > 0.0 && j != Judge::Miss && splashes(j) && playfield_look().hit_flash {
                 c.glow(HIT_X, LANE_Y, NOTE_R + 2.0, 26.0, rgba(j.color(), 0.55 * a));
             }
         }
@@ -7998,12 +8024,7 @@ mod tests {
 
     #[test]
     fn block_culling_preserves_the_original_draw_for_every_mod() {
-        // The accent and the note colours are process-wide, and other tests (building frames from
-        // their own configs) set them while these draws are compared.
-        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
-        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
-        crate::render::set_animations(false);
-        crate::render::set_frame_time(Some(Instant::now()));
+        draw_with_defaults();
         let mut map = beatmap::calibration_map(500.0, 0, 64);
         let template = map.notes[0].clone();
         map.notes = (0..2048)
@@ -10423,10 +10444,7 @@ mod tests {
 
     #[test]
     fn every_mod_a_defense_team_can_have_plays_the_same_notes_for_both_players() {
-        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
-        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
-        crate::render::set_animations(false);
-        crate::render::set_frame_time(Some(Instant::now()));
+        draw_with_defaults();
         let mut bad: Vec<String> = Vec::new();
         for m in crate::mods::ALL.into_iter().filter(|m| m.defense_ok()) {
             let mods = Mods::parse(m.acronym());
@@ -11134,10 +11152,14 @@ mod tests {
         g
     }
 
-    fn pin_drawing_globals() {
-        crate::render::pin_accent_for_this_thread(Some(crate::render::DEFAULT_ACCENT));
-        multiverse::pin_note_colours_for_this_thread(Some(multiverse::Colours::CLASSIC));
-        crate::render::set_animations(false);
+    /// These draws are compared: the default theme and look, without animations, whatever
+    /// other tests' frames are drawn with.
+    fn draw_with_defaults() {
+        crate::render::set_frame_theme(Some(crate::render::Theme {
+            animations: false,
+            ..crate::render::Theme::default()
+        }));
+        set_frame_look(Some(Look::default()));
         crate::render::set_frame_time(Some(Instant::now()));
     }
 
@@ -11151,7 +11173,7 @@ mod tests {
 
     #[test]
     fn a_tko_map_without_a_gimmick_draws_exactly_like_its_osu() {
-        pin_drawing_globals();
+        draw_with_defaults();
         for mods in [Mods::NONE, Mods::parse("TC"), Mods::parse("WV")] {
             let mut plain = tko_game(None, mods);
             let mut empty = tko_game(Some(Default::default()), mods);
@@ -11166,7 +11188,7 @@ mod tests {
 
     #[test]
     fn a_gimmick_changes_what_is_drawn() {
-        pin_drawing_globals();
+        draw_with_defaults();
         let mut plain = tko_game(None, Mods::NONE);
         let mut moved = tko_game(Some(some_gimmick()), Mods::NONE);
         assert!(frame_bytes(&mut plain, 9000.0) != frame_bytes(&mut moved, 9000.0));
@@ -11179,7 +11201,7 @@ mod tests {
     #[test]
     fn a_maps_text_and_pictures_are_drawn_while_their_clips_last() {
         use crate::tko::clips::{Clip, Show, Target};
-        pin_drawing_globals();
+        draw_with_defaults();
         let mut g = crate::tko::gimmick::Gimmick::default();
         let mut text = Clip::new(Target::Layer, 2000.0, 6000.0);
         text.layer.as_deref_mut().unwrap().show = Show::Text {
@@ -11230,7 +11252,7 @@ mod tests {
     /// judgements, score and combo, with or without it.
     #[test]
     fn a_gimmick_never_changes_judging() {
-        pin_drawing_globals();
+        draw_with_defaults();
         let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
             let mut g = tko_game(gimmick, Mods::NONE);
             let mut t = -2000.0;
@@ -11264,7 +11286,7 @@ mod tests {
     fn notes_on_an_approach_path_look_different_and_are_judged_the_same() {
         use crate::tko::gimmick::Group;
         use crate::tko::path::NotePath;
-        pin_drawing_globals();
+        draw_with_defaults();
         let mut gm = crate::tko::gimmick::Gimmick::default();
         gm.groups.push(Group {
             notes: (0..64)
@@ -11375,7 +11397,7 @@ mod tests {
 
     #[test]
     fn screen_effects_add_to_the_picture_and_never_change_judging() {
-        pin_drawing_globals();
+        draw_with_defaults();
         let count = |g: &mut Game, t: f64| {
             g.time = t;
             let mut c = Canvas::default();
@@ -11476,7 +11498,7 @@ mod tests {
 
     #[test]
     fn a_node_graph_moves_the_field_on_hits_and_never_changes_judging() {
-        pin_drawing_globals();
+        draw_with_defaults();
         let run = |gimmick: Option<crate::tko::gimmick::Gimmick>| {
             let mut g = tko_game(gimmick, Mods::NONE);
             let mut frames = Vec::new();
@@ -11514,7 +11536,7 @@ mod tests {
     fn a_hidden_group_is_not_drawn_but_the_notes_stay_hittable() {
         use crate::tko::gimmick::{Gimmick, Group, NoteProp};
         use crate::tko::track::{Ease, Key};
-        pin_drawing_globals();
+        draw_with_defaults();
         let mut g = Gimmick::default();
         g.groups.push(Group {
             // The chart's own times: the game's clock is `OSU_TIMING_MS` ahead of them.

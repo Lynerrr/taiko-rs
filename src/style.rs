@@ -4,7 +4,6 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::hit::Canvas;
 use crate::render::{self, pixel_size, rgba, snap_to_grid};
@@ -16,25 +15,14 @@ const GLITCH_CYAN: u32 = 0x2a9fb5;
 pub const PANEL: u32 = 0x15151d;
 pub const PANEL_EDGE: u32 = 0x3a3a4e;
 
-/// What's left of the music's beat (1 on it, falling to 0) and how far into a kiai (0 to 1), set
-/// once a frame.
-static PULSE: AtomicU32 = AtomicU32::new(0);
-static KIAI: AtomicU32 = AtomicU32::new(0);
-
 /// Once a frame: where the music is in its beat (`phase` 0 to 1, None: nothing playing) and
-/// whether it's in a kiai.
+/// whether it's in a kiai (the frame's `render::Theme`).
 pub fn set_beat(phase: Option<f32>, kiai: bool) {
-    let pulse = pulse_at(phase.filter(|_| render::animations()));
-    PULSE.store(pulse.to_bits(), Ordering::Relaxed);
-    KIAI.store(
-        if kiai && render::animations() {
-            1.0f32
-        } else {
-            0.0
-        }
-        .to_bits(),
-        Ordering::Relaxed,
-    );
+    let on = render::animations();
+    render::edit_frame_theme(|t| {
+        t.pulse = pulse_at(phase.filter(|_| on));
+        t.kiai = if kiai && on { 1.0 } else { 0.0 };
+    });
 }
 
 /// The beat's light at `phase` (0 on the beat to 1), none without one.
@@ -45,12 +33,14 @@ fn pulse_at(phase: Option<f32>) -> f32 {
         .map_or(0.0, |p| (1.0 - p.clamp(0.0, 1.0)).powi(3))
 }
 
+/// What's left of the music's beat: 1 on it, falling to 0.
 pub fn pulse() -> f32 {
-    f32::from_bits(PULSE.load(Ordering::Relaxed))
+    render::theme().pulse
 }
 
+/// How far into a kiai: 0 to 1.
 pub fn kiai() -> f32 {
-    f32::from_bits(KIAI.load(Ordering::Relaxed))
+    render::theme().kiai
 }
 
 /// A dark panel with the main menu's rounded edge.

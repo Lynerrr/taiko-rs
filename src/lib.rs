@@ -14874,7 +14874,23 @@ impl State {
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
-        render::set_legacy_menu(!self.cfg.main_menu);
+        // What this frame is drawn with; the beat carries on from the last frame until
+        // `style::set_beat` below.
+        let last = render::theme();
+        render::set_frame_theme(Some(render::Theme {
+            accent: self.cfg.accent,
+            animations: self.cfg.animations,
+            legacy_menu: !self.cfg.main_menu,
+            pulse: last.pulse,
+            kiai: last.kiai,
+        }));
+        game::set_frame_look(Some(game::Look {
+            hide_great: self.cfg.hide_great,
+            hit_flash: self.cfg.hit_flash,
+            black_lane: self.cfg.black_lane,
+            true_notes: self.cfg.true_notes,
+            note_colours: self.cfg.note_colours,
+        }));
         self.select.legacy = !self.cfg.main_menu;
         self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
         self.select.covered = self.customization_tab().is_some();
@@ -14935,12 +14951,9 @@ impl State {
         let idle_allowed = self.idle_allowed();
         self.idle
             .update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
+        // For threads not building frames: the window thread draws the pointer in the accent.
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
-        game::set_hide_great(self.cfg.hide_great);
-        game::set_hit_flash(self.cfg.hit_flash);
-        game::set_black_lane(self.cfg.black_lane);
-        game::set_true_notes(self.cfg.true_notes);
         tko::runtime::set_calm(self.cfg.calm_maps);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);

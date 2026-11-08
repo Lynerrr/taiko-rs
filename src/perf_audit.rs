@@ -105,7 +105,10 @@ fn offset_hint_history() {
 #[test]
 #[ignore = "opt-in performance audit; run with the perf-audit profile"]
 fn rare_slow_note() {
-    render::set_animations(false);
+    render::set_frame_theme(Some(render::Theme {
+        animations: false,
+        ..render::Theme::default()
+    }));
     for n in [2_000, 10_000] {
         for (slow, mods) in [(false, ""), (true, ""), (false, "MV"), (true, "MV")] {
             let mut game = game(n, slow, mods);
@@ -144,7 +147,10 @@ fn library(size: usize) -> Vec<Entry> {
 #[test]
 #[ignore = "opt-in performance audit; run with the perf-audit profile"]
 fn library_draw_and_filter() {
-    render::set_animations(false);
+    render::set_frame_theme(Some(render::Theme {
+        animations: false,
+        ..render::Theme::default()
+    }));
     for size in [100, 10_000, 50_000] {
         let library = library(size);
         let mut select = Select::new(&library);
@@ -406,7 +412,10 @@ fn stream(notes: usize, spacing: f64) -> beatmap::Beatmap {
 #[ignore = "opt-in performance audit; run with the perf-audit profile"]
 fn dense_playfield() {
     // About 33 and 67 notes a second: far more on screen than `rare_slow_note`'s 10.
-    render::set_animations(false);
+    render::set_frame_theme(Some(render::Theme {
+        animations: false,
+        ..render::Theme::default()
+    }));
     let track = Arc::new(audio::Track {
         samples: Vec::new(),
         rate: 1.0,
