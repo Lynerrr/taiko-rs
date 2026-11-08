@@ -598,7 +598,11 @@ spins so frames stay evenly spaced.
 | `src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
 | `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, built-in hitsounds |
 | `src/clock.rs` | audio-slaved smooth game clock |
-| `src/game.rs` | judging, scoring, HP, playfield drawing (and what the mods do to them) |
+| `src/game.rs` | the play: judging, scoring, HP, autoplay, Defense (and what the mods do to them) |
+| `src/game/setup.rs` | a map made ready to play: the mods' changes to notes and speeds, Multiverse focus, Roulette |
+| `src/game/rails.rs` | the rails mods' lane shapes and the path along one |
+| `src/game/field.rs` | drawing the playfield: lane, notes, drum, judgements, the mods' looks |
+| `src/game/hud_draw.rs` | drawing the HUD parts (score, combo, HP, accuracy, hit error) and the pause menu |
 | `src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |
 | `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |
 | `src/ui.rs` | song select and results screens |

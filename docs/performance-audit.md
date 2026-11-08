@@ -107,7 +107,7 @@ version/coalesce background queries for large libraries while keeping the old vi
 
 ### A4: one global minimum velocity expands every field's scan
 
-[`Game::draw_field`](../src/game.rs#L2707) derives lookahead from the minimum velocity anywhere
+[`Game::draw_field`](../src/game/field.rs#L382) derives lookahead from the minimum velocity anywhere
 in the map. One note at velocity `1e-5` near the end of a 10,000-note, 100 ms-spaced map widens
 the scan of mostly ordinary offscreen notes. Plain drawing grows from **1.94 to 201.75 us**,
 while emitted shape count changes only from **59 to 61**. Multiverse grows from **16.80 to
