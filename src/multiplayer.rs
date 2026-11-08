@@ -1541,17 +1541,20 @@ pub fn draw_lobby(
                 name_end -= Canvas::text_width(7.0, st) + 8.0;
             }
         }
-        let mut name = p.name.clone();
+        let ny = y + crate::mobile::pick(5.0, 6.0);
+        let room = name_end - x - 12.0;
+        let white = rgba(0xffffff, 1.0);
+        let nw = crate::social::styled_name(c, x + 8.0, ny, 8.0, &p.name, white, room);
         if p.host {
-            name.push_str(tr!("  (host)"));
+            let host = tr!("  (host)");
+            c.text(
+                x + 8.0 + nw,
+                ny,
+                8.0,
+                white,
+                &Canvas::fit(8.0, room - nw, host),
+            );
         }
-        c.text(
-            x + 8.0,
-            y + crate::mobile::pick(5.0, 6.0),
-            8.0,
-            rgba(0xffffff, 1.0),
-            &Canvas::fit(8.0, name_end - x - 12.0, &name),
-        );
         let mods = if p.mods.is_empty() {
             String::new()
         } else {
@@ -1744,13 +1747,12 @@ pub fn draw_lobby(
             .skip(s.chat.len().saturating_sub(lines))
             .enumerate()
         {
-            c.text(
-                rx + 14.0,
-                cy + 26.0 + k as f32 * line_h,
-                6.5,
-                rgba(0xdedeea, 1.0),
-                &Canvas::fit(6.5, rw - 28.0, &format!("{from}: {text}")),
-            );
+            // The name as chat shows it everywhere (tags and shimmer), then what they said.
+            let (ly, colour) = (cy + 26.0 + k as f32 * line_h, rgba(0xdedeea, 1.0));
+            let (x0, room) = (rx + 14.0, rw - 28.0);
+            let nw = crate::social::styled_name(c, x0, ly, 6.5, from, colour, room * 0.6);
+            let said = Canvas::fit(6.5, room - nw, &format!(": {text}"));
+            c.text(x0 + nw, ly, 6.5, colour, &said);
         }
     }
 

@@ -1049,68 +1049,78 @@ fn score_video_width() -> f32 {
     Canvas::text_width(6.0, score_video_label()) + 12.0
 }
 
-/// The leaderboard's LOCAL / ONLINE tabs, and the map's website while that keeps clear of the
-/// rows' video buttons under it (ending at `right`); returns how wide they are.
-fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: f32) -> f32 {
+/// Where a leaderboard's rows start under its buttons.
+const BOARD_HEAD: f32 = 28.0;
+
+/// The leaderboard's Local / Online buttons from `x`, and the way back to the preview and the
+/// map's website ending at `right`;
+/// returns the free span between them, for a hint.
+fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: f32) -> [f32; 2] {
     let mut tx = x;
-    for (label, on) in [(tr!("LOCAL"), false), (tr!("ONLINE"), true)] {
-        let tw = Canvas::text_width(7.0, label) + 10.0;
-        let lit = on == online;
-        let h = Canvas::text_height(7.0) + 3.0;
-        c.round_rect(
-            [tx, y - 1.5],
-            [tw, h],
-            3.0,
-            rgba(
-                if lit { accent() } else { 0x1d1d27 },
-                if lit { 0.9 } else { 1.0 },
-            ),
-            rgba(if lit { accent() } else { 0x3a3a4e }, 1.0),
-            1.0,
-        );
-        c.text(
-            tx + 5.0,
-            y + 1.5,
-            7.0,
-            rgba(if lit { 0xffffff } else { 0x8a8aa0 }, 1.0),
+    for (label, on) in [(tr!("Local"), false), (tr!("Online"), true)] {
+        let tw = Canvas::text_width(7.0, label) + 24.0;
+        c.button(
+            tx,
+            y,
+            tw,
+            20.0,
             label,
+            7.0,
+            render::Hit::BoardTab(on),
+            on == online,
         );
-        c.hit(tx, y - 1.5, tw, h, render::Hit::BoardTab(on));
         tx += tw + 6.0;
     }
     // With Relax on, these are its scores, which count apart.
     if relax {
         let label = "RELAX";
-        let tw = Canvas::text_width(7.0, label) + 10.0;
-        let h = Canvas::text_height(7.0) + 3.0;
+        let tw = Canvas::text_width(7.0, label) + 14.0;
         c.round_rect(
-            [tx, y - 1.5],
-            [tw, h],
-            3.0,
+            [tx, y],
+            [tw, 20.0],
+            5.0,
             rgba(0xFFD34D, 0.15),
             rgba(0xFFD34D, 0.9),
             1.0,
         );
-        c.text(tx + 5.0, y + 1.5, 7.0, rgba(0xFFD34D, 1.0), label);
+        c.text_centered(tx + tw / 2.0, y + 10.0, 7.0, rgba(0xFFD34D, 1.0), label);
         tx += tw + 6.0;
     }
-    let label = tr!("WEBSITE");
-    let tw = Canvas::text_width(7.0, label) + 10.0;
-    let h = Canvas::text_height(7.0) + 3.0;
-    if tx + tw + 4.0 > right - score_video_width() {
-        return tx - x - 6.0;
-    }
-    c.round_rect(
-        [tx, y - 1.5],
-        [tw, h],
-        3.0,
-        rgba(0x1d1d27, 1.0),
-        rgba(0x3a3a4e, 1.0),
-        1.0,
+    // Back to the preview at the far right, the website left of it.
+    let back = tr!("< Preview");
+    let bw = Canvas::text_width(7.0, back) + 24.0;
+    c.button(
+        right - bw,
+        y,
+        bw,
+        20.0,
+        back,
+        7.0,
+        render::Hit::BoardPage,
+        true,
     );
-    c.text(tx + 5.0, y + 1.5, 7.0, rgba(0x8a8aa0, 1.0), label);
-    c.hit(tx, y - 1.5, tw, h, render::Hit::BoardWebsite);
-    tx + tw - x
+    let right = right - bw - 6.0;
+    let label = tr!("Website");
+    let tw = Canvas::text_width(7.0, label) + 24.0;
+    c.button(
+        right - tw,
+        y,
+        tw,
+        20.0,
+        label,
+        7.0,
+        render::Hit::BoardWebsite,
+        false,
+    );
+    [tx + 4.0, right - tw - 10.0]
+}
+
+/// A leaderboard's message in place of its rows, centred under its buttons.
+fn board_note(c: &mut Canvas, x: f32, y: f32, w: f32, note: &str) {
+    for (k, line) in mobile::wrap(7.0, w - 16.0, note, 3).iter().enumerate() {
+        let ly = y + BOARD_HEAD + 14.0 + k as f32 * 14.0;
+        c.text_centered(x + w / 2.0, ly, 7.0, rgba(0x9a9ab0, 1.0), line);
+    }
 }
 
 /// The server's scores for the selected map: each player's best (`board` None while loading).
@@ -1125,8 +1135,7 @@ fn draw_online_leaderboard(
     first: usize,
     relax: bool,
 ) {
-    let tabs_w = board_tabs(c, x + 4.0, y + 1.0, true, relax, x + w);
-    let at = x + 4.0 + tabs_w + 10.0;
+    let [free, free_end] = board_tabs(c, x, y, true, relax, x + w);
     let note = match board {
         None => Some(tr!("loading...").to_string()),
         Some(Err(e)) => Some(tr!("can't reach the server: {e}"; e)),
@@ -1136,85 +1145,173 @@ fn draw_online_leaderboard(
         Some(Ok(_)) => None,
     };
     if let Some(note) = note {
-        c.text(
-            at,
-            y + 2.0,
-            7.0,
-            rgba(0x6f6f86, 1.0),
-            &Canvas::fit(7.0, x + w - 4.0 - at, &note),
-        );
+        board_note(c, x, y, w, &note);
         return;
     }
     let Some(Ok(rows)) = board else { return };
     let hint = tr!("click: results and replay");
     c.text_right(
-        x + w - 4.0,
-        y + 2.0,
+        free_end,
+        y + 7.0,
         6.0,
         rgba(0x6f6f86, 1.0),
-        &Canvas::fit_hints(6.0, w - 20.0 - tabs_w, hint),
+        &Canvas::fit_hints(6.0, free_end - free, hint),
     );
     let shown = rows.len().saturating_sub(first).min(fits);
-    board_scrollbar(c, x + w + 5.0, y + 14.0, shown.max(1), first, rows.len());
+    board_scrollbar(
+        c,
+        x + w + 5.0,
+        y + BOARD_HEAD,
+        shown.max(1),
+        first,
+        rows.len(),
+    );
     for (k, r) in rows.iter().skip(first).take(fits).enumerate() {
-        let ry = y + 14.0 + k as f32 * 18.0;
-        let mine = r.player.eq_ignore_ascii_case(me);
-        let hover = c.hovered(x, ry, w, 16.0);
-        let bg = if hover {
-            0x262634
-        } else if mine {
-            0x23232f
-        } else {
-            0x15151d
+        let line = BoardLine {
+            place: first + k + 1,
+            player: &r.player,
+            score: r.score,
+            accuracy: r.accuracy,
+            combo: r.max_combo,
+            pp: r.pp,
+            rate: r.rate,
+            mods: r.mods.concat(),
+            miss: r.miss,
+            date: r.date,
+            mine: r.player.eq_ignore_ascii_case(me),
         };
-        c.round_rect(
-            [x, ry],
-            [w, 16.0],
-            5.0,
-            rgba(bg, 0.9),
-            rgba(if mine { accent() } else { 0x2a2a38 }, 1.0),
-            1.0,
+        let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
+        board_row(c, x, ry, w, &line, render::Hit::OnlineScoreRow(k), None);
+    }
+}
+
+/// A leaderboard row's height, the gap under it included.
+const BOARD_ROW: f32 = 34.0;
+
+/// What a leaderboard row shows, local or online.
+struct BoardLine<'a> {
+    place: usize,
+    player: &'a str,
+    score: u64,
+    accuracy: f64,
+    combo: u32,
+    pp: Option<f64>,
+    rate: f64,
+    mods: String,
+    miss: u32,
+    date: u64,
+    mine: bool,
+}
+
+/// One play on a leaderboard, a card at `ry`: its place, the player's picture, then their name
+/// (as chat shows it) over how it went, the score and when on the right. `video`: the local
+/// board's export button, at the far right.
+#[allow(clippy::too_many_arguments)]
+fn board_row(
+    c: &mut Canvas,
+    x: f32,
+    ry: f32,
+    w: f32,
+    l: &BoardLine,
+    hit: render::Hit,
+    video: Option<render::Hit>,
+) {
+    let h = BOARD_ROW - 4.0;
+    let hover = c.hovered(x, ry, w, h);
+    let bg = if hover {
+        0x262634
+    } else if l.mine {
+        0x23232f
+    } else {
+        0x15151d
+    };
+    // The podium in gold, silver and bronze.
+    let medal = match l.place {
+        1 => Some(0xFFD34D),
+        2 => Some(0xC8D2E6),
+        3 => Some(0xE0995E),
+        _ => None,
+    };
+    let edge = if l.mine {
+        accent()
+    } else {
+        medal.unwrap_or(0x2a2a38)
+    };
+    let edge_a = if l.mine || medal.is_none() { 1.0 } else { 0.45 };
+    c.round_rect(
+        [x, ry],
+        [w, h],
+        7.0,
+        rgba(bg, 0.92),
+        rgba(edge, edge_a),
+        1.0,
+    );
+    c.hit(x, ry, w, h, hit);
+    let mid = ry + h / 2.0;
+    let place = format!("#{}", l.place);
+    let place_colour = medal.unwrap_or(0x9a9ab0);
+    c.text_centered(x + 16.0, mid, 8.0, rgba(place_colour, 1.0), &place);
+    c.avatar(l.player, x + 42.0, mid, 10.0, accent(), 1.0);
+    let tx = x + 58.0;
+    let mut right = x + w - 8.0;
+    if let Some(video) = video {
+        let bw = score_video_width();
+        right -= bw;
+        c.button(
+            right,
+            mid - 7.0,
+            bw,
+            14.0,
+            score_video_label(),
+            6.0,
+            video,
+            false,
         );
-        c.hit(x, ry, w, 16.0, render::Hit::OnlineScoreRow(k));
-        let rate = if (r.rate - 1.0).abs() > 1e-6 {
-            format!("  {:.2}x", r.rate)
-        } else {
-            String::new()
-        };
-        let mods = if r.mods.is_empty() {
-            String::new()
-        } else {
-            format!("  +{}", r.mods.concat())
-        };
-        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!(
-            "#{}  {}  {:08}  {:.2}%{pp}  {}x",
-            first + k + 1,
-            r.player,
-            r.score,
-            r.accuracy * 100.0,
-            r.max_combo
-        );
-        let room = w - 16.0;
-        let right = Canvas::fit(
-            6.5,
-            room - Canvas::text_width(6.5, &core) - 12.0,
-            &misses_and_age(r.miss, r.date),
-        );
-        let left_room = room
-            - if right.is_empty() {
-                0.0
-            } else {
-                Canvas::text_width(6.5, &right) + 8.0
-            };
-        c.text(
-            x + 8.0,
-            ry + 5.0,
-            6.5,
-            rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0),
-            &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")),
-        );
-        c.text_right(x + w - 8.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+        right -= 10.0;
+    }
+    let (top, under) = (ry + 5.0, ry + 18.0);
+    // Top line: the player, the score at the right.
+    let score = format!("{:08}", l.score);
+    let score_w = Canvas::text_width(8.0, &score);
+    c.text_right(right, top, 8.0, rgba(0xffffff, 1.0), &score);
+    let white = rgba(0xffffff, 1.0);
+    social::styled_name(
+        c,
+        tx,
+        top,
+        8.0,
+        l.player,
+        white,
+        right - score_w - 10.0 - tx,
+    );
+    // Under it: how it went, and misses and age at the right.
+    let when = misses_and_age(l.miss, l.date);
+    let when_w = Canvas::text_width(6.5, &when);
+    c.text_right(right, under, 6.5, rgba(0x6f6f86, 1.0), &when);
+    let mut parts = vec![
+        (format!("{:.2}%", l.accuracy * 100.0), 0xdedeea),
+        (format!("{}x", l.combo), 0x9a9ab0),
+    ];
+    if let Some(pp) = l.pp {
+        parts.push((format!("{pp:.0}pp"), 0xff8ad8));
+    }
+    if (l.rate - 1.0).abs() > 1e-6 {
+        parts.push((format!("{:.2}x", l.rate), 0x4fb4ff));
+    }
+    if !l.mods.is_empty() {
+        parts.push((format!("+{}", l.mods), 0xFFC66B));
+    }
+    let end = right - when_w - 10.0;
+    let mut px = tx;
+    for (text, colour) in parts {
+        let shown = Canvas::fit(6.5, end - px, &text);
+        if shown.is_empty() {
+            break;
+        }
+        px += c.text(px, under, 6.5, rgba(colour, 1.0), &shown) + 8.0;
+        if shown != text {
+            break;
+        }
     }
 }
 
@@ -1237,98 +1334,43 @@ fn draw_leaderboard(
     total: usize,
     relax: bool,
 ) {
-    let label_w = board_tabs(c, x + 4.0, y + 1.0, false, relax, x + w);
+    let [free, free_end] = board_tabs(c, x, y, false, relax, x + w);
     if rows.is_empty() {
-        let at = x + 4.0 + label_w + 14.0;
-        let none = tr!("none yet - finish a play to set one");
-        c.text(
-            at,
-            y + 2.0,
-            7.0,
-            rgba(0x6f6f86, 1.0),
-            &Canvas::fit(7.0, x + w - 4.0 - at, none),
-        );
+        let none = tr!("No plays yet: finish one to set a score.");
+        board_note(c, x, y, w, none);
         return;
     }
-    let room = w - 20.0 - label_w;
+    let room = free_end - free;
     let hint = tr!("click: results and replay   video: export it");
     c.text_right(
-        x + w - 4.0,
-        y + 2.0,
+        free_end,
+        y + 7.0,
         6.0,
         rgba(0x6f6f86, 1.0),
         &Canvas::fit_hints(6.0, room, hint),
     );
     for (k, r) in rows.iter().enumerate() {
-        let ry = y + 14.0 + k as f32 * 18.0;
-        let hover = c.hovered(x, ry, w, 16.0);
-        c.round_rect(
-            [x, ry],
-            [w, 16.0],
-            5.0,
-            rgba(if hover { 0x262634 } else { 0x15151d }, 0.9),
-            rgba(0x2a2a38, 1.0),
-            1.0,
-        );
-        c.hit(x, ry, w, 16.0, render::Hit::ScoreRow(k));
-        let rate = if (r.rate - 1.0).abs() > 1e-6 {
-            format!("  {:.2}x", r.rate)
-        } else {
-            String::new()
+        let line = BoardLine {
+            place: first + k + 1,
+            player: &r.player,
+            score: r.score,
+            accuracy: r.accuracy,
+            combo: r.max_combo,
+            pp: r.pp,
+            rate: r.rate,
+            mods: r.mods.clone(),
+            miss: r.miss,
+            date: r.date,
+            mine: false,
         };
-        let mods = if r.mods.is_empty() {
-            String::new()
-        } else {
-            format!("  +{}", r.mods)
-        };
-        let pp = r.pp.map(|p| format!("  {p:.0}pp")).unwrap_or_default();
-        let core = format!(
-            "#{}  {:08}  {:.2}%{pp}  {}x",
-            first + k + 1,
-            r.score,
-            r.accuracy * 100.0,
-            r.max_combo
-        );
-        // The video button sits on top of the row (drawn after it, so it wins the click).
-        let video = score_video_label();
-        let bw = score_video_width();
-        let bx = x + w - bw - 3.0;
-        // Room goes to the score first, then the player and age on the right, then rate and mods.
-        let room = bx - 6.0 - (x + 8.0);
-        let right = Canvas::fit(
-            6.5,
-            room - Canvas::text_width(6.5, &core) - 12.0,
-            &format!("{}  {}", r.player, misses_and_age(r.miss, r.date)),
-        );
-        let left_room = room
-            - if right.is_empty() {
-                0.0
-            } else {
-                Canvas::text_width(6.5, &right) + 8.0
-            };
-        c.text(
-            x + 8.0,
-            ry + 5.0,
-            6.5,
-            rgba(if first + k == 0 { 0xFFD34D } else { 0xffffff }, 1.0),
-            &Canvas::fit(6.5, left_room, &format!("{core}{rate}{mods}")),
-        );
-        c.button(
-            bx,
-            ry + 2.0,
-            bw,
-            12.0,
-            video,
-            6.0,
-            render::Hit::ScoreVideo(k),
-            false,
-        );
-        c.text_right(bx - 6.0, ry + 5.0, 6.5, rgba(0x9a9ab0, 1.0), &right);
+        let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
+        let video = Some(render::Hit::ScoreVideo(k));
+        board_row(c, x, ry, w, &line, render::Hit::ScoreRow(k), video);
     }
     board_scrollbar(
         c,
         x + w + 5.0,
-        y + 14.0,
+        y + BOARD_HEAD,
         rows.len().max(1),
         first,
         total.max(rows.len()),
@@ -1382,7 +1424,7 @@ fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, t
     if total <= shown || shown == 0 {
         return;
     }
-    let h = shown as f32 * 18.0 - 2.0;
+    let h = shown as f32 * BOARD_ROW - 4.0;
     let thumb = (h * shown as f32 / total as f32).max(10.0);
     let at = (h - thumb) * first as f32 / (total - shown) as f32;
     c.round_rect(
@@ -5844,7 +5886,8 @@ impl State {
             } else {
                 0.0
             };
-            let aw = Canvas::text_width(7.0, &name) + Canvas::text_width(7.0, &rest) + 14.0 + pic;
+            let name_w = social::styled_name_width(&name, 7.0);
+            let aw = name_w + Canvas::text_width(7.0, &rest) + 14.0 + pic;
             let ax = x - 6.0 - aw;
             let hover = c.hovered(ax, chip_y, aw, chip_h);
             c.round_rect(
@@ -5865,7 +5908,8 @@ impl State {
             if pic > 0.0 {
                 c.avatar(&name, ax + 9.0, chip_y + chip_h / 2.0, 4.5, accent(), 1.0);
             }
-            let nw = c.text(ax + 7.0 + pic, chip_text, 7.0, rgba(0xffffff, 1.0), &name);
+            let white = rgba(0xffffff, 1.0);
+            let nw = social::styled_name(c, ax + 7.0 + pic, chip_text, 7.0, &name, white, name_w);
             c.text(
                 ax + 7.0 + pic + nw,
                 chip_text,
@@ -8880,7 +8924,8 @@ impl State {
             KeyCode::Escape => s.chat_input = None,
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 let mut line = typed.trim().to_string();
-                s.chat_input = None;
+                // A line sent leaves the box open for the next; Enter on an empty one puts it away.
+                s.chat_input = (!line.is_empty()).then(String::new);
                 s.chat_caret = 0;
                 // `/np`: the map on screen, with its osu! link.
                 if line.eq_ignore_ascii_case("/np") {
@@ -12302,7 +12347,7 @@ impl State {
                     a.sfx_at(audio::Sfx::Message, 1.0);
                 }
                 if !mine && fresh && !viewing {
-                    *self.social.unread.entry(key(&other)).or_default() += 1;
+                    self.social.add_unread(&other, self.mp.is_some());
                     if self.cfg.notify_messages {
                         self.social.notify(
                             line.from.clone(),
@@ -14678,6 +14723,7 @@ impl State {
                 self.select.scrubbing =
                     (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
                 self.select.list_share = self.cfg.song_list_share;
+                self.select.banner = self.pick_to_edit || self.picking_lobby_map;
                 let phone = mobile::active();
                 if phone {
                     self.draw_mobile_select(canvas);
@@ -14697,7 +14743,13 @@ impl State {
                     self.mobile_select_panel(canvas.width)
                 } else {
                     let x = 24.0 + lw + 12.0;
-                    [x, 54.0, canvas.width - x - 24.0, 436.0]
+                    // Level with the list's frame (the Legacy layout keeps its own).
+                    let [top, end] = if self.select.legacy {
+                        [54.0, 436.0]
+                    } else {
+                        self.select.frame_span()
+                    };
+                    [x, top, canvas.width - x - 24.0, end]
                 };
                 self.board_rect = None;
                 // Always at full size (no longer dragged smaller).
@@ -14725,30 +14777,60 @@ impl State {
                 }
                 if pw > 160.0 && !phone {
                     let status = self.select.selected().and_then(|i| self.map_status(i));
-                    // No taller than leaves the leaderboard three rows (its tabs, rows and gaps).
-                    let panel_h = panel_end - panel_top - 8.0 - (16.0 + 3.0 * 18.0 + 14.0);
                     let liked = self
                         .preview_target()
                         .and_then(|i| self.library.get(i))
                         .map(|e| self.select.is_liked(e));
-                    if let Some(clip) = self.preview.draw_panel(
-                        canvas,
-                        &self.library,
-                        x,
-                        panel_top,
-                        pw,
-                        panel_h,
-                        self.cfg.scroll_speed,
-                        selected_stars,
-                        Some(("Play from", "Shift+Enter")),
-                        status,
-                        liked,
-                    ) {
-                        self.frame_clip = Some(clip);
+                    // Two pages side by side, as on a phone: the preview, and the leaderboard
+                    // the button slides to.
+                    let t = self.mob.slide_board(canvas.dt_ms);
+                    let step = pw + 24.0;
+                    // The page buttons sit under both pages, in what's left below the preview.
+                    const PAGE_BUTTON_H: f32 = 22.0;
+                    let panel_h = panel_end - panel_top - PAGE_BUTTON_H - 8.0;
+                    let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
+                    if t < 1.0 {
+                        let start = canvas.shapes.len();
+                        if let Some(clip) = self.preview.draw_panel(
+                            canvas,
+                            &self.library,
+                            x - t * step,
+                            panel_top,
+                            pw,
+                            panel_h,
+                            self.cfg.scroll_speed,
+                            selected_stars,
+                            Some(("Play from", "Shift+Enter")),
+                            status,
+                            liked,
+                        ) {
+                            self.frame_clip = Some(clip);
+                        }
+                        // The way to the leaderboard, under the preview at its right (over its
+                        // foot when the preview takes the whole height).
+                        let label = tr!("Leaderboard >");
+                        let bw = Canvas::text_width(8.0, label) + 28.0;
+                        let by = (self.preview.panel_bottom + 6.0)
+                            .min(panel_top + panel_h - PAGE_BUTTON_H);
+                        let bx = x - t * step + pw - bw;
+                        let hit = render::Hit::BoardPage;
+                        canvas.button(bx, by, bw, PAGE_BUTTON_H, label, 8.0, hit, false);
+                        canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
+                    } else {
+                        self.preview.hide_panel();
                     }
-                    if let Some(i) = self.select.selected() {
-                        let top = self.preview.panel_bottom + 8.0;
-                        let fits = ((panel_end - top - 16.0) / 18.0).floor().max(0.0) as usize;
+                    let board_start = canvas.shapes.len();
+                    let page_x = x + (1.0 - t) * step;
+                    if t > 0.0 {
+                        style::panel(canvas, page_x, panel_top, pw, panel_h);
+                    }
+                    // Inside the frame, with room right of the rows for their scroll bar.
+                    let (panel_x, panel_w) = (x, pw);
+                    let (x, pw) = (page_x + 10.0, pw - 28.0);
+                    if let Some(i) = self.select.selected().filter(|_| t > 0.0) {
+                        let top = panel_top + 10.0;
+                        let room = panel_end - 10.0 - top - BOARD_HEAD;
+                        let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
                         if fits > 0 {
                             let hash = self.library[i].hash();
                             let relax = self.cfg.mods.relax();
@@ -14756,7 +14838,8 @@ impl State {
                                 self.board_for = (hash, self.board_online, relax);
                                 self.board_scroll = 0;
                             }
-                            self.board_rect = Some([x, top + 12.0, pw, fits as f32 * 18.0]);
+                            self.board_rect =
+                                Some([x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW]);
                             if self.board_online {
                                 let board = self.online_board(hash, relax).cloned();
                                 let total = board
@@ -14807,13 +14890,51 @@ impl State {
                             }
                         }
                     }
+                    canvas.clip_since(board_start, clip[0], clip[1], clip[2], clip[3]);
+                    let play = if self.picking_lobby_map {
+                        tr!("Pick")
+                    } else if self.pick_to_edit {
+                        tr!("Edit")
+                    } else {
+                        tr!("Play")
+                    };
+                    let mods = &self.select.mods_label;
+                    let mods_label = if mods.is_empty() {
+                        tr!("Mods").to_string()
+                    } else {
+                        format!("{}: {mods}", tr!("Mods"))
+                    };
+                    let random = tr!("Random");
+                    // (label, hit, lit, share of the width). The Legacy layout has Mods on top.
+                    let mut buttons = vec![
+                        (
+                            mods_label.as_str(),
+                            render::Hit::ModsButton,
+                            !mods.is_empty(),
+                            1.0,
+                        ),
+                        (random, render::Hit::Key(KeyCode::F2), false, 1.0),
+                        (play, render::Hit::Key(KeyCode::Enter), true, 1.3),
+                    ];
+                    if self.select.legacy {
+                        buttons.drain(..2);
+                    }
+                    let total: f32 = buttons.iter().map(|b| b.3).sum();
+                    let unit = (panel_w - 8.0 * (buttons.len() as f32 - 1.0)) / total;
+                    let (mut bx, by) = (panel_x, panel_end - PAGE_BUTTON_H);
+                    for (label, hit, lit, share) in buttons {
+                        let bw = unit * share;
+                        let label = Canvas::fit(8.0, bw - 12.0, label);
+                        canvas.button(bx, by, bw, PAGE_BUTTON_H, &label, 8.0, hit, lit);
+                        bx += bw + 8.0;
+                    }
                     // The song list's right edge: the gap between the list's box (`ui`, ending
                     // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
                     let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
                     if !phone {
                         draw_divider(
                             canvas,
-                            [24.0 + lw + 4.0, 54.0, 8.0, 382.0],
+                            [24.0 + lw + 4.0, panel_top, 8.0, panel_end - panel_top],
                             true,
                             dragging,
                             render::Hit::SplitList,

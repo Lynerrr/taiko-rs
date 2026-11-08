@@ -52,6 +52,7 @@ fn is_button(hit: Hit) -> bool {
             | Hit::SortList
             | Hit::CollectionPick
             | Hit::ModsButton
+            | Hit::BoardPage
             | Hit::Key(KeyCode::F2)
             | Hit::Tab(_)
     )
