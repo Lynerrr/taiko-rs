@@ -2793,6 +2793,10 @@ pub enum Hit {
     UpdateSet(usize),
     /// A mod in the mod select (index into `mods::ALL`) / the song select's Mods button.
     ModToggle(usize),
+    /// A mod preset in the mod select (index into `Config::mod_presets`): applies it.
+    ModPreset(usize),
+    /// The mod select's "+ Save": keeps the mods on now (and the speed) as a preset.
+    ModPresetSave,
     ModsButton,
     SettingRow(usize),
     /// The `<` (-1) / `>` (+1) of the selected settings row.
