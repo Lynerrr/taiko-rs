@@ -1,7 +1,7 @@
-//! Download tab: search the osu! mirrors for taiko sets and download them into the Songs folder.
+//! Download tab: search the osu! mirrors for taiko sets, or the taiko.rs website for its custom
+//! ones, and download them into the Songs folder.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -14,14 +14,41 @@ const TYPE_DELAY: Duration = Duration::from_millis(450);
 /// Fetch the selected set's preview once the selection rests this long.
 const PREVIEW_DELAY: Duration = Duration::from_millis(250);
 
-/// (set id, beatmap id) of a previewed difficulty.
-type DiffKey = (u32, u32);
+/// (custom set, set id, beatmap id) of a previewed difficulty: a custom set's numbers are the
+/// website's, and its difficulties are numbered by their place in it.
+type DiffKey = (bool, u32, u32);
+
+/// A fetched preview: its difficulties (one from osu!, the whole set from the website), with
+/// the star rating worked out here for those the website doesn't rate.
+type Fetched = Result<Vec<(DiffKey, Entry, Option<f32>)>, String>;
+
+/// Where the tab looks for maps.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Source {
+    /// osu!'s maps, from the mirrors.
+    Osu,
+    /// The taiko.rs website's custom maps.
+    Ours,
+}
+
+impl Source {
+    pub const ALL: [Source; 2] = [Source::Osu, Source::Ours];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Source::Osu => "osu!",
+            Source::Ours => "taiko.rs",
+        }
+    }
+}
 
 type SearchPage = Result<(Vec<SetInfo>, bool), String>;
 
 pub struct Browse {
     pub query: String,
     pub category: Category,
+    /// The category the other source had, for switching back to it.
+    other_category: Category,
     pub sort: SortKey,
     pub desc: bool,
     pub results: Vec<SetInfo>,
@@ -45,8 +72,10 @@ pub struct Browse {
     /// Chosen difficulty per set (default: the hardest).
     diff_choice: HashMap<u32, usize>,
     wanted: Option<(DiffKey, Instant)>,
-    fetching: Option<(DiffKey, Receiver<Result<PathBuf, String>>)>,
+    fetching: Option<(DiffKey, Receiver<Fetched>)>,
     failed: HashSet<DiffKey>,
+    /// Star ratings of custom difficulties, worked out from their previews (the website has none).
+    rated: HashMap<DiffKey, f32>,
 }
 
 impl Default for Browse {
@@ -54,6 +83,7 @@ impl Default for Browse {
         Browse {
             query: String::new(),
             category: Category::HasLeaderboard,
+            other_category: Category::CustomApproved,
             sort: SortKey::Relevance,
             desc: true,
             results: Vec::new(),
@@ -72,6 +102,7 @@ impl Default for Browse {
             wanted: None,
             fetching: None,
             failed: HashSet::new(),
+            rated: HashMap::new(),
         }
     }
 }
@@ -90,10 +121,11 @@ impl Browse {
         self.searched = Some(query.clone());
         self.edited = None;
         self.status = if query.is_empty() {
-            format!(
-                "loading {} taiko maps...",
-                self.category.name().to_lowercase()
-            )
+            let what = self.category.name().to_lowercase();
+            match self.source() {
+                Source::Osu => format!("loading {what} taiko maps..."),
+                Source::Ours => format!("loading {what} maps from taiko.rs..."),
+            }
         } else {
             format!("searching \"{query}\"...")
         };
@@ -105,7 +137,14 @@ impl Browse {
         let (tx, rx) = mpsc::channel();
         let (category, sort, desc) = (self.category, self.sort, self.desc);
         std::thread::spawn(move || {
-            let _ = tx.send(download::search(&query, category, sort, desc, page));
+            let found = if category.is_ours() {
+                // The website lists them all at once.
+                crate::custom::search(&query, category == Category::CustomApproved, sort, desc)
+                    .map(|sets| (sets, false))
+            } else {
+                download::search(&query, category, sort, desc, page)
+            };
+            let _ = tx.send(found);
         });
         self.search = Some((page, rx));
     }
@@ -120,6 +159,43 @@ impl Browse {
         {
             self.fetch(query, self.page + 1);
         }
+    }
+
+    pub fn source(&self) -> Source {
+        if self.category.is_ours() {
+            Source::Ours
+        } else {
+            Source::Osu
+        }
+    }
+
+    /// The categories of the current source.
+    pub fn categories(&self) -> &'static [Category] {
+        match self.source() {
+            Source::Osu => &Category::ALL,
+            Source::Ours => &Category::OURS,
+        }
+    }
+
+    /// The orders the current source can list in.
+    pub fn sorts(&self) -> &'static [SortKey] {
+        match self.source() {
+            Source::Osu => &SortKey::ALL,
+            Source::Ours => &SortKey::OURS,
+        }
+    }
+
+    /// Switches to the osu! mirrors or the taiko.rs website, in the category it had last.
+    pub fn set_source(&mut self, source: Source) {
+        if source == self.source() {
+            return;
+        }
+        std::mem::swap(&mut self.category, &mut self.other_category);
+        if !self.sorts().contains(&self.sort) {
+            self.sort = SortKey::Relevance;
+            self.desc = true;
+        }
+        self.search_now();
     }
 
     pub fn set_category(&mut self, c: Category) {
@@ -141,13 +217,13 @@ impl Browse {
     }
 
     pub fn step_category(&mut self, dir: i32) {
-        let all = Category::ALL;
+        let all = self.categories();
         let i = all.iter().position(|&c| c == self.category).unwrap_or(0) as i32;
         self.set_category(all[(i + dir).rem_euclid(all.len() as i32) as usize]);
     }
 
     pub fn step_sort(&mut self, dir: i32) {
-        let all = SortKey::ALL;
+        let all = self.sorts();
         let i = all.iter().position(|&s| s == self.sort).unwrap_or(0) as i32;
         let next = all[(i + dir).rem_euclid(all.len() as i32) as usize];
         self.sort = next;
@@ -185,6 +261,16 @@ impl Browse {
             .insert(id, (cur + dir).rem_euclid(n as i32) as usize);
     }
 
+    /// The selected difficulty's star rating: a custom one's once its preview came.
+    pub fn selected_stars(&self) -> Option<f32> {
+        let set = self.selected()?;
+        let d = self.selected_diff()?;
+        match set.custom {
+            Some(_) => self.rated.get(&(true, set.id, d.id)).copied(),
+            None => Some(d.stars),
+        }
+    }
+
     /// Fetches the preview for the selection once it rests (one fetch at a time).
     fn poll_preview(&mut self, now: Instant) {
         if let Some((key, rx)) = &self.fetching
@@ -192,13 +278,21 @@ impl Browse {
         {
             let key = *key;
             self.fetching = None;
-            match result
-                .map_err(|e| e.to_string())
-                .and_then(|osu| make_entry(&osu).ok_or_else(|| "unreadable difficulty".into()))
-            {
-                Ok(entry) => {
-                    self.remote.push(entry);
-                    self.remote_keys.push(key);
+            match result {
+                Ok(entries) => {
+                    for (k, entry, stars) in entries {
+                        if let Some(stars) = stars {
+                            self.rated.insert(k, stars);
+                        }
+                        if !self.remote_keys.contains(&k) {
+                            self.remote.push(entry);
+                            self.remote_keys.push(k);
+                        }
+                    }
+                    // A difficulty the set turned out not to have isn't asked for again.
+                    if !self.remote_keys.contains(&key) {
+                        self.failed.insert(key);
+                    }
                 }
                 Err(e) => {
                     self.failed.insert(key);
@@ -209,7 +303,7 @@ impl Browse {
         let want = self
             .selected()
             .zip(self.selected_diff())
-            .map(|(s, d)| (s.id, d.id));
+            .map(|(s, d)| (s.custom.is_some(), s.id, d.id));
         if want != self.wanted.map(|w| w.0) {
             self.wanted = want.map(|k| (k, now));
         }
@@ -221,10 +315,20 @@ impl Browse {
         let due = now - since >= PREVIEW_DELAY;
         // A fetch for another selection is abandoned (its files stay cached for later).
         let busy = self.fetching.as_ref().is_some_and(|(k, _)| *k == key);
-        if self.shown.is_none() && due && !busy && !self.failed.contains(&key) && key.1 != 0 {
+        if self.shown.is_none() && due && !busy && !self.failed.contains(&key) && key.2 != 0 {
             let (tx, rx) = mpsc::channel();
+            let set = self.selected().cloned();
             std::thread::spawn(move || {
-                let _ = tx.send(download::fetch_preview(key.0, key.1));
+                let result = match set.filter(|s| s.custom.is_some()) {
+                    Some(set) => {
+                        crate::custom::fetch_preview(&set).map(|dir| custom_entries(&set, &dir))
+                    }
+                    None => download::fetch_preview(key.1, key.2).and_then(|osu| {
+                        let entry = make_entry(&osu).ok_or("unreadable difficulty")?;
+                        Ok(vec![(key, entry, None)])
+                    }),
+                };
+                let _ = tx.send(result);
             });
             self.fetching = Some((key, rx));
         }
@@ -305,14 +409,71 @@ impl Browse {
         &mut self,
         c: &mut Canvas,
         jobs: &[Job],
-        installed: &HashSet<u32>,
+        installed: &dyn Fn(&SetInfo) -> bool,
         songs_dir: &str,
         col: f32,
     ) {
         let w = c.width;
         let x0 = 24.0;
-        crate::settings::tab_bar(c, 3, "maps from catboy.best / osu.direct");
+        let source = self.source();
+        crate::settings::tab_bar(
+            c,
+            3,
+            match source {
+                Source::Osu => "maps from catboy.best / osu.direct",
+                Source::Ours => "custom maps from the taiko.rs website",
+            },
+        );
         let busy = self.search.as_ref().is_some_and(|s| s.0 == 0) || self.edited.is_some();
+        // Right of the search box: where to look, osu! or taiko.rs.
+        let seg_w = Source::ALL
+            .iter()
+            .map(|s| Canvas::text_width(8.0, s.name()) + 16.0)
+            .sum::<f32>();
+        let field = col - seg_w - 8.0;
+        let mut sx = x0 + field + 8.0;
+        c.round_rect(
+            [sx, 54.0],
+            [seg_w, 24.0],
+            6.0,
+            rgba(0x23232f, 0.95),
+            rgba(0x3a3a4e, 1.0),
+            1.0,
+        );
+        for (i, s) in Source::ALL.iter().enumerate() {
+            let w = Canvas::text_width(8.0, s.name()) + 16.0;
+            let on = *s == source;
+            if on {
+                c.round_rect(
+                    [sx + 2.0, 56.0],
+                    [w - 4.0, 20.0],
+                    5.0,
+                    rgba(accent(), 1.0),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            } else if c.hovered(sx, 54.0, w, 24.0) {
+                c.round_rect(
+                    [sx + 2.0, 56.0],
+                    [w - 4.0, 20.0],
+                    5.0,
+                    rgba(0x34344a, 1.0),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            }
+            c.text_centered(
+                sx + w / 2.0,
+                62.0,
+                8.0,
+                rgba(if on { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                s.name(),
+            );
+            c.hit(sx, 54.0, w, 24.0, Hit::DlSource(i));
+            sx += w;
+        }
+        let col_all = col;
+        let col = field;
         c.round_rect(
             [x0, 54.0],
             [col, 24.0],
@@ -330,7 +491,11 @@ impl Browse {
                 0.0
             };
         let text = if self.query.is_empty() {
-            Canvas::fit(10.0, room, "type to search (artist, title, mapper)...")
+            let hint = match source {
+                Source::Osu => "search artist, title, mapper...",
+                Source::Ours => "search song, mapper, sender...",
+            };
+            Canvas::fit(10.0, room, hint)
         } else {
             Canvas::fit_end(10.0, room, &format!("{}_", self.query))
         };
@@ -358,6 +523,7 @@ impl Browse {
                 "searching...",
             );
         }
+        let col = col_all;
         // Website-style filters: status category, then order (click the active one to flip it).
         let chip = |c: &mut Canvas, x: f32, y: f32, label: &str, on: bool, hit: Hit| -> f32 {
             let w = Canvas::text_width(6.0, label) + 8.0;
@@ -402,7 +568,8 @@ impl Browse {
             }
             *y += 20.0;
         };
-        let cats = Category::ALL
+        let cats = self
+            .categories()
             .iter()
             .enumerate()
             .map(|(i, cat)| {
@@ -414,15 +581,20 @@ impl Browse {
             })
             .collect();
         group(c, &mut y, "STATUS", cats);
-        let sorts = SortKey::ALL
+        let sorts = self
+            .sorts()
             .iter()
             .enumerate()
             .map(|(i, key)| {
                 let on = *key == self.sort;
+                let name = match source {
+                    Source::Osu => key.name(),
+                    Source::Ours => key.name_for_ours(),
+                };
                 let label = if on && *key != SortKey::Relevance {
-                    format!("{} {}", key.name(), if self.desc { "v" } else { "^" })
+                    format!("{name} {}", if self.desc { "v" } else { "^" })
                 } else {
-                    key.name().to_string()
+                    name.to_string()
                 };
                 (label, on, Hit::DlSort(i))
             })
@@ -465,9 +637,9 @@ impl Browse {
                 crate::style::selector(c, "download", [x0 - 3.0, y - 3.0, col + 6.0, ROW + 2.0]);
             }
             c.hit(x0, y, col, ROW, Hit::DlRow(i));
-            let state = if installed.contains(&set.id) {
+            let state = if installed(set) {
                 RowState::Installed
-            } else if let Some(job) = jobs.iter().find(|j| j.set.id == set.id) {
+            } else if let Some(job) = jobs.iter().find(|j| j.set.same(set)) {
                 RowState::Downloading(job.fraction())
             } else {
                 RowState::Available
@@ -518,9 +690,13 @@ impl Browse {
             let lo = set.diffs.first().map(|d| d.stars).unwrap_or(0.0);
             let hi = set.diffs.last().map(|d| d.stars).unwrap_or(0.0);
             let pill_right = right - action_w - 10.0;
-            let pill = crate::stars::draw_pill(c, pill_right, y + 13.0, 7.0, Some(hi));
+            // The website doesn't rate custom maps: their status takes the star pill's place.
+            let pill = match &set.custom {
+                Some(custom) => badge(c, pill_right, y + 10.0, custom.approved),
+                None => crate::stars::draw_pill(c, pill_right, y + 13.0, 7.0, Some(hi)),
+            };
             // The low end of the star range only when the title keeps room.
-            let range = if (hi - lo).abs() < 0.05 || col < 420.0 {
+            let range = if (hi - lo).abs() < 0.05 || col < 420.0 || set.custom.is_some() {
                 String::new()
             } else {
                 format!("{lo:.2} -")
@@ -542,12 +718,18 @@ impl Browse {
                 &Canvas::fit(9.0, text_room, &format!("{} - {}", set.artist, set.title)),
             );
             let n = set.diffs.len();
-            let sub = format!(
-                "mapped by {}  |  {}  |  {n} taiko diff{}",
-                set.creator,
-                set.status,
-                if n == 1 { "" } else { "s" }
-            );
+            let diffs = format!("{n} taiko diff{}", if n == 1 { "" } else { "s" });
+            let sub = match &set.custom {
+                Some(custom) => format!(
+                    "mapped by {}  |  {n} diff{}  |  {} download{}  |  {:.1} MB",
+                    set.creator,
+                    if n == 1 { "" } else { "s" },
+                    set.play_count,
+                    if set.play_count == 1 { "" } else { "s" },
+                    custom.bytes as f64 / (1 << 20) as f64,
+                ),
+                None => format!("mapped by {}  |  {}  |  {diffs}", set.creator, set.status),
+            };
             c.text(
                 x0 + 12.0,
                 y + 22.0,
@@ -561,6 +743,11 @@ impl Browse {
             let n = self.results.len();
             let end = if self.search.is_some() {
                 "loading more...".to_string()
+            } else if source == Source::Ours {
+                format!(
+                    "{n} map{}  |  yours: editor > File > Upload",
+                    if n == 1 { "" } else { "s" }
+                )
             } else if self.more {
                 format!("{n} maps so far: scroll on for more")
             } else {
@@ -610,7 +797,7 @@ impl Browse {
         } else {
             format!("saving to {songs_dir}")
         };
-        let hints = "Up/Down select   Left/Right difficulty   Enter download   Ctrl+Left/Right status   Ctrl+Up/Down sort   Esc clear / back";
+        let hints = "Up/Down select   Left/Right difficulty   Enter download   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs   Esc clear / back";
         c.text(
             24.0,
             452.0,
@@ -626,6 +813,44 @@ impl Browse {
             &Canvas::fit(7.0, w - 48.0, &footer),
         );
     }
+}
+
+/// A custom set's status, right-aligned at `right`: green when approved (it gives pp). Returns
+/// its width.
+fn badge(c: &mut Canvas, right: f32, y: f32, approved: bool) -> f32 {
+    let (label, color) = if approved {
+        ("approved", 0x86E05A)
+    } else {
+        ("custom", 0xB28CFF)
+    };
+    let w = Canvas::text_width(6.0, label) + 10.0;
+    c.round_rect(
+        [right - w, y],
+        [w, 14.0],
+        5.0,
+        rgba(color, 0.18),
+        rgba(color, 0.9),
+        1.0,
+    );
+    c.text(right - w + 5.0, y + 4.0, 6.0, rgba(color, 1.0), label);
+    w
+}
+
+/// The library entries of a custom set's preview, keyed by the difficulties the website lists
+/// (matched by name: the archive's files are named by the mapper).
+fn custom_entries(set: &SetInfo, dir: &std::path::Path) -> Vec<(DiffKey, Entry, Option<f32>)> {
+    crate::library::scan(
+        &[dir.to_path_buf()],
+        &std::sync::atomic::AtomicUsize::new(0),
+        &mut |_| {},
+    )
+    .into_iter()
+    .filter_map(|e| {
+        let d = set.diffs.iter().find(|d| d.version == e.meta.version)?;
+        let stars = crate::stars::star_rating(&e.path, 1.0).map(|s| s as f32);
+        Some(((true, set.id, d.id), e, stars))
+    })
+    .collect()
 }
 
 /// A library entry for a fetched preview: its `.osu`, with the music clip and cover next to it.
