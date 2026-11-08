@@ -377,8 +377,7 @@ const LIST_ANIM_MS: f32 = 200.0;
 /// and without.
 const LIST_TOP_LEGACY: f32 = 86.0;
 const LIST_TOP: f32 = 52.0;
-/// The song list's share of the width: least, most and usual (dragging its edge).
-pub const LIST_SHARE: (f32, f32, f32) = (0.3, 0.7, 0.52);
+pub use crate::config::LIST_SHARE;
 /// The narrowest the song list and the panel beside it get (virtual units).
 const LIST_MIN: f32 = 260.0;
 const PANEL_MIN: f32 = 220.0;

@@ -1308,8 +1308,7 @@ impl Preview {
     }
 }
 
-/// How big the autoplay preview gets: smallest and full (dragging the panel's bottom edge).
-pub const PREVIEW_SIZE: (f32, f32) = (0.4, 1.0);
+pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;

@@ -144,6 +144,41 @@ impl ScreenshotTo {
     }
 }
 
+/// The song list's share of the width: least, most and usual (dragging its edge).
+pub const LIST_SHARE: (f32, f32, f32) = (0.3, 0.7, 0.52);
+
+/// How big the autoplay preview gets: smallest and full (dragging the panel's bottom edge).
+pub const PREVIEW_SIZE: (f32, f32) = (0.4, 1.0);
+
+/// How a replay video is exported (`video::Settings`; its methods are there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoSettings {
+    pub size: usize,
+    pub fps: usize,
+    pub quality: usize,
+    /// The size aimed under with the "target size" quality (MB, 1 MB = 1,000,000 bytes).
+    pub target_mb: f64,
+    pub speed: usize,
+    pub blur: usize,
+    pub hud: bool,
+    pub hitsounds: bool,
+}
+
+impl Default for VideoSettings {
+    fn default() -> VideoSettings {
+        VideoSettings {
+            size: 1,
+            fps: 1,
+            quality: 1,
+            target_mb: 10.0,
+            speed: 0,
+            blur: 0,
+            hud: true,
+            hitsounds: true,
+        }
+    }
+}
+
 pub struct Config {
     /// Columns of the touch drum, left to right.
     pub touch_layout: TouchLayout,
@@ -340,8 +375,8 @@ pub struct Config {
     /// there was a config to read (not the first start).
     pub last_build: String,
     pub existed: bool,
-    /// Song select's layout: the share of the width the song list takes (`ui::LIST_SHARE`), and
-    /// how big the autoplay preview is (`preview::PREVIEW_SIZE`; smaller leaves the leaderboard
+    /// Song select's layout: the share of the width the song list takes (`LIST_SHARE`), and
+    /// how big the autoplay preview is (`PREVIEW_SIZE`; smaller leaves the leaderboard
     /// more room).
     pub song_list_share: f32,
     pub song_preview_size: f32,
@@ -379,7 +414,7 @@ pub struct Config {
     /// Note colours without Multiverse.
     pub note_colours: crate::multiverse::Colours,
     /// How replay videos are exported.
-    pub video: crate::video::Settings,
+    pub video: VideoSettings,
     pub songs: Vec<PathBuf>,
 }
 
@@ -532,8 +567,8 @@ impl Default for Config {
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             hotkeys: crate::keys::Bindings::default(),
-            song_list_share: crate::ui::LIST_SHARE.2,
-            song_preview_size: crate::preview::PREVIEW_SIZE.1,
+            song_list_share: LIST_SHARE.2,
+            song_preview_size: PREVIEW_SIZE.1,
             last_build: String::new(),
             existed: false,
             show_playfield_size: true,
@@ -1247,7 +1282,7 @@ impl Config {
                 }
                 "last_build" => cfg.last_build = v.to_string(),
                 "song_list_share" => {
-                    let (min, max, _) = crate::ui::LIST_SHARE;
+                    let (min, max, _) = LIST_SHARE;
                     cfg.song_list_share = v
                         .parse::<f32>()
                         .ok()
@@ -1255,7 +1290,7 @@ impl Config {
                         .map_or(cfg.song_list_share, |f| f.clamp(min, max));
                 }
                 "song_preview_size" => {
-                    let (min, max) = crate::preview::PREVIEW_SIZE;
+                    let (min, max) = PREVIEW_SIZE;
                     cfg.song_preview_size = v
                         .parse::<f32>()
                         .ok()

@@ -3175,7 +3175,7 @@ impl State {
         }
         let sr = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
         // The hitsounds as they were judged, and the music, for the cut.
-        let mut sim = video::replay_game(map, track, &ed.replay);
+        let mut sim = scores::replay_game(map, track, &ed.replay);
         sim.sfx_log = Some(Vec::new());
         sim.set_time(ed.end);
         let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds {
@@ -3228,7 +3228,7 @@ impl State {
         };
         match video::start_encoder(&ffmpeg, job) {
             Ok(encoder) => {
-                let mut game = Box::new(video::replay_game(map, track, &ed.replay));
+                let mut game = Box::new(scores::replay_game(map, track, &ed.replay));
                 game.set_time(ed.start);
                 self.export = Some(video::Export {
                     game,
