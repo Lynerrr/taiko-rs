@@ -12,5 +12,6 @@ mod flows;
 mod formats;
 mod gameplay;
 mod network;
+mod pointer;
 mod scoring;
 mod screens;

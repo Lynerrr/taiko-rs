@@ -8785,8 +8785,11 @@ impl State {
             self.guides = guides;
             return grip.cursor();
         }
+        // The preview's own areas go to its check below: a hand only where they take a click.
         if self.scrubbing.is_none()
-            && let Some(hit) = self.hit_at(vx, vy)
+            && let Some(hit) = self
+                .hit_at(vx, vy)
+                .filter(|h| !matches!(h, render::Hit::Preview))
         {
             if let (render::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
                 game.paused = Some(i);
