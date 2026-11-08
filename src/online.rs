@@ -119,13 +119,19 @@ pub enum Request {
         token: String,
         maps: Vec<(u32, u32)>,
     },
-    /// The map sets loved on the server (`Reply::LovedSets`): they give pp there.
+    /// The map sets loved on the server (`Reply::LovedSets`): they give pp there. Builds that
+    /// know of single loved difficulties ask `LovedMaps`.
     LovedSets,
-    /// A loved nominator loves a map set on the server, or takes it back (`Reply::LovedSets`).
+    /// The map sets loved on the server and which of their difficulties (`Reply::LovedMaps`).
+    LovedMaps,
+    /// A loved nominator loves a map set on the server, or takes it back (`Reply::LovedSets`):
+    /// the whole set, or just its difficulty `version` (servers from before ignore it).
     SetLoved {
         token: String,
         set: u32,
         loved: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
     },
     /// A play that isn't on the leaderboards (failed, quit, restarted, from a start point, in
     /// a lobby): it counts in the profile's play count, and `ms` of playing in its play time
@@ -1075,6 +1081,9 @@ pub enum Reply {
     EmailLinked(String),
     /// The map sets loved on the server.
     LovedSets(Vec<u32>),
+    /// The map sets loved on the server, each with the difficulties loved (names; none: the
+    /// whole set).
+    LovedMaps(Vec<(u32, Vec<String>)>),
     /// (set ID, status on osu!) of the sets asked about that the server knows ("ranked",
     /// "loved", "graveyard"..., "missing" when osu! doesn't have it).
     SetStatuses(Vec<(u32, String)>),

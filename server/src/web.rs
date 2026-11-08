@@ -1431,7 +1431,7 @@ fn post(state: &State, req: &Req, segs: &[&str]) -> Reply {
                 "/loved".into()
             };
             let msg = state
-                .love(&key, set, req.field("on") != "0")
+                .love(&key, set, req.field("on") != "0", None)
                 .unwrap_or_else(|e| e);
             Reply::see_other(format!("{back}?msg={}", encode(&msg)))
         }
