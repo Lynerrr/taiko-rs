@@ -617,11 +617,16 @@ fn kind(json: &str) -> String {
     }
 }
 
-/// The kinds in order, repeats of one kind in a row (Live, Inputs) shown once.
+/// The kinds in order, repeats of one kind in a row shown once. Live and Inputs are left out:
+/// the client batches them on a real-time timer (every 100 ms), so how many go out during a
+/// test depends on how fast the machine runs it.
 fn kinds(msgs: &[String]) -> Vec<String> {
     let mut v: Vec<String> = Vec::new();
     for m in msgs {
         let k = kind(m);
+        if k == "Live" || k == "Inputs" {
+            continue;
+        }
         if v.last() != Some(&k) {
             v.push(k);
         }

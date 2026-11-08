@@ -345,6 +345,7 @@ fn changed_config() -> Config {
         online_server: "example.org:7800".into(),
         idle_minutes: 5,
         random_seed: 5,
+        mp_name: "tester".into(),
         ..Config::default()
     }
 }
@@ -368,11 +369,12 @@ fn the_config_file_reads_back_what_was_saved() {
 #[cfg(target_os = "linux")]
 #[test]
 fn the_default_config_file_stays_the_same() {
-    // The Random seed is drawn from the clock for every new config.
+    // The Random seed is drawn from the clock for every new config, and the multiplayer name is
+    // the system's user name.
     let text: String = Config::default()
         .to_text()
         .lines()
-        .filter(|l| !l.starts_with("random_seed"))
+        .filter(|l| !l.starts_with("random_seed") && !l.starts_with("mp_name"))
         .map(|l| format!("{l}\n"))
         .collect();
     assert_snapshot("formats-default-config", &text);

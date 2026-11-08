@@ -126,7 +126,7 @@ notify_messages = true
 notify_mentions = true
 notify_requests = true
 # multiplayer
-mp_name = builder
+mp_name = tester
 mp_port = 7777
 mp_address =
 # online server (accounts, lobbies) and your saved login there
