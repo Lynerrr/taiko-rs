@@ -1479,6 +1479,8 @@ pub struct Custom {
     /// Played on top of don / kat for big notes.
     pub finish: Option<Vec<f32>>,
     pub combobreak: Option<Vec<f32>>,
+    /// Overtime's scream (`overtime.wav`, from the skin of its own part).
+    pub scream: Option<Vec<f32>>,
 }
 
 /// The built-in hitsounds (`assets/hitsounds`, from the quassbot v2 skin).
@@ -1567,6 +1569,9 @@ pub fn hitsound_set(rate: u32, custom: Custom) -> Sounds {
     }
     if let Some(combo) = custom.combobreak {
         sounds[Sfx::ComboBreak as usize] = combo.into();
+    }
+    if let Some(scream) = custom.scream {
+        sounds[Sfx::Scream as usize] = scream.into();
     }
     sounds
 }
