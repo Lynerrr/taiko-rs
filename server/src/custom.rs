@@ -251,6 +251,11 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected, String> {
             .enclosed_name()
             .ok_or("the archive has a bad file path")?;
         let name = path.to_string_lossy().replace('\\', "/");
+        // Windows reads these differently from how they look: "x.exe:y.png" writes x.exe (an
+        // NTFS stream), and "x.exe." is saved as x.exe.
+        if name.contains(':') || name.split('/').any(|part| part.ends_with(['.', ' '])) {
+            return Err(format!("{name}: files like this can't be sent"));
+        }
         let ext = extension(&name);
         if !(AUDIO.contains(&ext.as_str())
             || IMAGES.contains(&ext.as_str())
@@ -263,6 +268,21 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspected, String> {
     }
     if unpacked > MAX_UNPACKED {
         return Err("the archive unpacks to too much".into());
+    }
+    // The sizes above are what the archive claims: a zip bomb lies about them, and every
+    // player who downloads the set would unpack it. Count what really comes out.
+    let mut left = MAX_UNPACKED;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        let got = std::io::copy(&mut entry.by_ref().take(left + 1), &mut std::io::sink())
+            .map_err(|_| "the archive is damaged".to_string())?;
+        if got > left {
+            return Err("the archive unpacks to too much".into());
+        }
+        left -= got;
     }
     let mut diffs: Vec<Diff> = Vec::new();
     let (mut artist, mut title, mut creator) = (String::new(), String::new(), String::new());
@@ -818,6 +838,18 @@ mod tests {
         );
         // A path out of the folder.
         assert!(say(&[("../evil.osu", m("Oni", 20, 1)), ("audio.mp3", vec![1])]).contains("path"));
+        // Names Windows would save as a program.
+        for name in ["x.exe:y.png", "x.exe.", "x.exe ", "sb./a.png"] {
+            assert!(
+                say(&[
+                    ("a.osu", m("Oni", 20, 1)),
+                    ("audio.mp3", vec![1]),
+                    (name, vec![1])
+                ])
+                .contains("can't be sent"),
+                "{name}"
+            );
+        }
     }
 
     #[test]

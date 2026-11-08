@@ -461,10 +461,15 @@ pub fn is_rsz(path: &Path) -> bool {
         .is_some_and(|x| x.eq_ignore_ascii_case("rsz"))
 }
 
+/// Where `.osz` and `.rsz` files opened in place (not imported) are unpacked: a folder per archive.
+pub fn extracted_dir() -> PathBuf {
+    cache_dir().join("osz")
+}
+
 /// Extracts an `.osz` (or `.rsz`) once into the cache and returns the folder.
 fn extract_osz(path: &Path) -> Result<PathBuf, String> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("map");
-    let dest = cache_dir().join("osz").join(stem);
+    let dest = extracted_dir().join(stem);
     if dest.is_dir() {
         return Ok(dest);
     }
