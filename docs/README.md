@@ -449,6 +449,15 @@ so a custom set is never taken for the osu! set with the same number. The set ca
 website's `taiko-rs.custom` file, so song select shows it as CUSTOM or CUSTOM APPROVED at once and
 the tab says *installed* for it from then on.
 
+*Loved here* lists the osu! sets that taiko.rs's loved nominators have loved
+([the loved page](https://rstaiko.auneu.space/loved)): they give pp on taiko.rs whatever their
+status on osu!. The server says which sets they are; their details come from the osu! mirrors, one
+set at a time under the mirrors' rate limits, so the first load takes a while and the list fills
+in as it goes (the count above it says how far). Each set's details are kept in the cache folder
+(`loved-sets/`) for a week, so later loads only ask for newly loved sets. These are ordinary osu!
+sets: the osu! orders, preview and download all work as on the osu! side, and an osu! search tags
+any set loved here with *loved here*.
+
 ## Multiplayer
 
 The **MULTIPLAYER** tab has two columns: **ONLINE** (lobbies on the taiko.rs server, no open

@@ -10039,7 +10039,7 @@ impl State {
         let Some((_, ask)) = self.loved_call.take() else {
             return;
         };
-        let loved = match (result, &ask) {
+        let loved: Option<ui::ServerLoved> = match (result, &ask) {
             (Ok(online::Reply::LovedMaps(maps)), _) => Some(maps.into_iter().collect()),
             // Just the sets: the whole of each (the server doesn't love single difficulties yet).
             (Ok(online::Reply::LovedSets(sets)), LovedAsk::Maps | LovedAsk::Sets) => {
@@ -10071,6 +10071,7 @@ impl State {
             _ => None,
         };
         if let Some(loved) = loved {
+            self.browse.set_loved_here(loved.keys().copied());
             self.select.server_loved = loved;
             if !self.select.filter.is_empty() {
                 self.select.refilter(&self.library);
