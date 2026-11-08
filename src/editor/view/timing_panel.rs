@@ -122,8 +122,25 @@ impl View {
         let col = if two { (w - 16.0) / 2.0 } else { w };
         let (lx, rx) = (x, if two { x + col + 16.0 } else { x });
 
-        // Position: where the line sits, and moving it along the grid.
-        let mut ly = self.heading_note(c, lx, y, col, "Position", "notes stay put");
+        // Position: where the line sits, and moving it along the grid. The toggle on its heading
+        // says whether the notes go with it.
+        let follow = self.ed.follow_timing;
+        let mut ly = self.heading(c, lx, y, col, "Position");
+        let label = "Notes follow";
+        let tw = look::width(Look::Toggle, label);
+        let r = [lx + col - tw, y - 3.0, tw, 12.0];
+        self.styled(c, r, label, Btn::C(Cmd::FollowTiming), follow, Look::Toggle);
+        self.tips.push((r, Cmd::FollowTiming.tip()));
+        let notes = if follow {
+            "Its notes and green lines move with it."
+        } else {
+            "The notes stay where they are."
+        };
+        let bar_back =
+            format!("Move the line one bar (its meter's worth of beats) earlier. {notes}");
+        let bar_on = format!("Move the line one bar later. {notes}");
+        let beat_back = format!("Move the line one beat earlier. {notes}");
+        let beat_on = format!("Move the line one beat later. {notes}");
         self.number(
             c,
             lx,
@@ -153,26 +170,10 @@ impl View {
             ly,
             "Move",
             &[
-                (
-                    "-1 bar",
-                    TAct::Bars(-1),
-                    "Move the line one bar (its meter's worth of beats) earlier. The notes stay where they are.",
-                ),
-                (
-                    "+1 bar",
-                    TAct::Bars(1),
-                    "Move the line one bar later. The notes stay where they are.",
-                ),
-                (
-                    "-1 beat",
-                    TAct::Beats(-1),
-                    "Move the line one beat earlier. The notes stay where they are.",
-                ),
-                (
-                    "+1 beat",
-                    TAct::Beats(1),
-                    "Move the line one beat later. The notes stay where they are.",
-                ),
+                ("-1 bar", TAct::Bars(-1), bar_back.as_str()),
+                ("+1 bar", TAct::Bars(1), bar_on.as_str()),
+                ("-1 beat", TAct::Beats(-1), beat_back.as_str()),
+                ("+1 beat", TAct::Beats(1), beat_on.as_str()),
             ],
         );
         ly += ROW + 3.0;

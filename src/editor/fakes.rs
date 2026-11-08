@@ -26,7 +26,19 @@ impl Editor {
             return Err("select dons or kats first".into());
         }
         let on = !notes.iter().all(|o| o.fake);
-        let before: Vec<HitObject> = notes.into_iter().filter(|o| o.fake != on).collect();
+        // A fake becomes a note only where no note is (one note to a millisecond; of fakes
+        // stacked on one, the first).
+        let mut made_real: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let before: Vec<HitObject> = notes
+            .into_iter()
+            .filter(|o| o.fake != on)
+            .filter(|o| {
+                on || (!self.occupied(o.time, false, |_| false) && made_real.insert(o.time as i64))
+            })
+            .collect();
+        if before.is_empty() {
+            return Err("there are notes where those fakes are already".into());
+        }
         let after: Vec<HitObject> = before
             .iter()
             .map(|o| {
@@ -90,8 +102,8 @@ impl Editor {
         let mut gimmick = self.chart.gimmick.clone();
         for o in &notes {
             let t = (o.time + beats * self.beat_at(o.time)).round();
-            let taken = |q: &HitObject| (q.time - t).abs() < 1.0;
-            if t < 0.0 || self.chart.objects.iter().any(taken) || made.iter().any(taken) {
+            // A copy goes on no note (it would only hide behind it); fakes stack freely.
+            if t < 0.0 || self.occupied(t, false, |_| false) {
                 continue;
             }
             let mut f = HitObject::hit(t, o.taiko() == Taiko::Kat, o.big());
@@ -263,6 +275,72 @@ mod tests {
         // Without notes there is nothing to show it on.
         let mut empty = tko();
         assert!(empty.motion_example(20_000.0).is_err());
+    }
+
+    #[test]
+    fn any_number_of_fakes_stack_on_one_millisecond_and_on_a_note() {
+        let mut e = tko();
+        let note = e.chart.objects[0].time;
+        // Five fakes on the first note's millisecond, all kept; a second note there is refused.
+        for k in 0..5 {
+            assert!(e.place_note(note, k % 2 == 1, true).is_some());
+        }
+        assert!(e.place_note(note, false, false).is_none());
+        let on_it = |e: &Editor| e.chart.objects.iter().filter(|o| o.time == note).count();
+        assert_eq!(on_it(&e), 6);
+        // Saved and read back, every one of them is still there.
+        let back = Chart::parse_tko(&e.chart.to_text()).unwrap();
+        assert_eq!(back.objects.iter().filter(|o| o.time == note).count(), 6);
+        // Fakes dragged elsewhere and back onto the stack go; the note never onto another note.
+        let fakes: Vec<u64> = e
+            .chart
+            .objects
+            .iter()
+            .filter(|o| o.fake)
+            .map(|o| o.id)
+            .collect();
+        e.selection = fakes[..2].iter().copied().collect();
+        assert!(e.move_selected(30.0, false));
+        assert!(e.move_selected(-30.0, false));
+        assert_eq!(on_it(&e), 6);
+        let second = e
+            .chart
+            .objects
+            .iter()
+            .find(|o| !o.fake && o.time > note)
+            .unwrap()
+            .clone();
+        e.selection = [second.id].into();
+        assert!(!e.move_selected(note - second.time, false));
+        // Fakes made notes: only one may stand where no note is.
+        assert!(e.place_note(note + 7.0, false, true).is_some());
+        assert!(e.place_note(note + 7.0, true, true).is_some());
+        e.selection = e
+            .chart
+            .objects
+            .iter()
+            .filter(|o| o.time == note + 7.0)
+            .map(|o| o.id)
+            .collect();
+        assert_eq!(e.toggle_fake().unwrap(), (1, false));
+    }
+
+    #[test]
+    fn a_fake_leaving_a_notes_millisecond_leaves_the_note_in_its_group() {
+        let mut e = tko();
+        let note = e.chart.objects[0].time;
+        e.edit_gimmick(false, |g| {
+            g.groups.push(crate::tko::gimmick::Group {
+                notes: vec![note],
+                ..Default::default()
+            })
+        });
+        let fake = e.place_note(note, false, true).unwrap();
+        e.selection = [fake].into();
+        assert!(e.move_selected(40.0, false));
+        let g = &e.gimmick().unwrap().groups[0];
+        // The note keeps its group, and the fake that was in it by its time goes on in it.
+        assert_eq!(g.notes, vec![note, note + 40.0]);
     }
 
     #[test]

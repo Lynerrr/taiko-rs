@@ -777,9 +777,9 @@ impl Gimmick {
         super::clips::sanitize(&mut self.clips);
         super::scroll::sanitize(&mut self.scroll);
         self.fakes.retain(|f| f.t.is_finite());
+        // No dedup: any number of fakes may be stacked on one millisecond on purpose.
         self.fakes
             .sort_by(|a, b| a.t.total_cmp(&b.t).then(a.kat.cmp(&b.kat)));
-        self.fakes.dedup_by(|b, a| a.t == b.t && a.kat == b.kat);
         self.fakes.truncate(MAX_FAKES);
         // A clip on a group of notes that isn't there moves nothing (a copy's clip holds which
         // copy in the same place).

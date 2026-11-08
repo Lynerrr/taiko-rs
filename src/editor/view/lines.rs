@@ -136,10 +136,16 @@ impl View {
         let Some(&(_, t0, v0)) = self.line_origin.iter().find(|o| o.0 == anchor) else {
             return;
         };
-        let want_t = self.ed.snapped(self.t_at(x));
+        // On the grid, or to the millisecond with Shift (as notes); Ctrl keeps the time and
+        // changes only the value.
+        let want_t = if keys.shift {
+            self.t_at(x).round()
+        } else {
+            self.ed.snapped(self.t_at(x))
+        };
         let range = self.graph_range();
         let want = self.y_val(y, range).max(0.01);
-        let dt = if keys.shift { 0.0 } else { want_t - t0 };
+        let dt = if keys.ctrl { 0.0 } else { want_t - t0 };
         let volume = self.svt.volume_view;
         // Speeds scale together (Alt: add the same amount instead), volumes shift together.
         let k = want / v0.max(1e-9);
