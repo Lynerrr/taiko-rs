@@ -98,6 +98,8 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::DeleteLine),
             Do(Cmd::TimingList),
             Do(Cmd::Metronome),
+            Do(Cmd::FollowTiming),
+            Do(Cmd::SnapToGrid),
             Do(Cmd::PrevLine),
             Do(Cmd::NextLine),
             Sep,

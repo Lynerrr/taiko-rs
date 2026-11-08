@@ -114,6 +114,10 @@ pub enum Cmd {
     TimingList,
     /// Clicks on every beat of the red lines while the song plays.
     Metronome,
+    /// A red line's new time or BPM carries its notes along (stable's checkbox).
+    FollowTiming,
+    /// Opens the window that snaps the notes back onto the grid.
+    SnapToGrid,
     // The editor itself.
     Mode(Mode),
     Tour,
@@ -187,6 +191,8 @@ impl Cmd {
             Cmd::DeleteLine => "Delete timing line",
             Cmd::TimingList => "Timing window (all lines, their fields, the SV tool)",
             Cmd::Metronome => "Metronome on / off",
+            Cmd::FollowTiming => "Notes follow BPM / offset changes on / off",
+            Cmd::SnapToGrid => "Snap notes to the grid...",
             Cmd::Mode(m) => m.name(),
             Cmd::Tour => "Take the tour",
             Cmd::Manual => "Manual",
@@ -270,6 +276,12 @@ impl Cmd {
             Cmd::TimingList => "Every red and green line in a table.",
             Cmd::Metronome => {
                 "While the song plays, clicks on every beat of the red lines (a higher click on each bar's first beat), following BPM and meter changes and the playback speed."
+            }
+            Cmd::FollowTiming => {
+                "With it on, changing a red line's time or BPM (typed, stepped or dragged) moves the notes and green lines of its section with it, so each keeps its place in the beat, like stable's \"Move already placed notes when changing the offset/BPM\". Off, the notes stay where they are."
+            }
+            Cmd::SnapToGrid => {
+                "Puts notes that are a little off back on the grid, like Mapping Tools' Map Cleaner, with the divisions, the reach and the part of the map you pick, and shows what it would do first."
             }
             Cmd::Mode(m) => m.about(),
             Cmd::Tour => "A short walk through the editor.",

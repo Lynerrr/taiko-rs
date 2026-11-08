@@ -70,6 +70,7 @@ pub(super) fn look_of(b: Btn) -> Look {
         Btn::Fx(a) => fx_look(a),
         Btn::M(a) => motion_look(a),
         Btn::Snap(a) => super::snap::look(a),
+        Btn::Rs(a) => super::resnap::look(a),
         Btn::K(a) => match a {
             KAct::Target(_) | KAct::Tab(_) => Look::Segment,
             KAct::Group(_) | KAct::Prop(_) => Look::Chip,

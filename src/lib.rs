@@ -2713,6 +2713,7 @@ impl State {
                 let (rx, rate) = self.spawn_track_loader(entry, 1.0);
                 view.set_track_loader(rx, rate);
                 view.left_pan = self.cfg.editor_left_pan;
+                view.ed.follow_timing = self.cfg.editor_follow_timing;
                 view.set_snap_presets(&self.cfg.editor_snap_presets, &self.cfg.editor_snap_active);
                 // `TAIKO_EDIT_AT=<ms>`: starts with the playhead there (headless screenshots).
                 if let Some(at) = std::env::var("TAIKO_EDIT_AT")
@@ -15890,6 +15891,10 @@ impl State {
                 }
                 if view.left_pan != self.cfg.editor_left_pan {
                     self.cfg.editor_left_pan = view.left_pan;
+                    self.cfg.save();
+                }
+                if view.ed.follow_timing != self.cfg.editor_follow_timing {
+                    self.cfg.editor_follow_timing = view.ed.follow_timing;
                     self.cfg.save();
                 }
                 if view.snap_dirty {

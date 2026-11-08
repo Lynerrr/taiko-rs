@@ -37,9 +37,11 @@ mod menu;
 mod motion;
 mod nodes;
 mod panel;
+mod resnap;
 mod run;
 mod setup;
 mod snap;
+mod strip;
 mod timing_panel;
 mod timing_win;
 mod upload;
@@ -55,6 +57,7 @@ use lines::TAct;
 use look::Look;
 use nodes::NAct;
 use panel::{GFlag, GParam};
+use strip::STRIP;
 
 pub type TrackResult = Result<Arc<Track>, String>;
 
@@ -110,6 +113,8 @@ impl Field {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Btn {
     Resnap,
+    /// A control of Timing > Snap notes to the grid.
+    Rs(resnap::RsAct),
     AddRed,
     AddGreen,
     Kiai,
@@ -166,6 +171,24 @@ enum Drag {
         /// The pointer has left the press by more than a click's worth.
         moved: bool,
         /// Shift: keep what was selected.
+        add: bool,
+        /// Where the press was: the box covers the rows (notes, fakes) between it and the pointer.
+        y0: f32,
+    },
+    /// Timing lines picked in the strip, dragged by `anchor` (`grab` ms into it).
+    StripLines {
+        anchor: u64,
+        grab: f64,
+        down_x: f32,
+        moved: bool,
+    },
+    /// A box over the strip of timing lines, in map ms, from a press at `y0`.
+    StripBox {
+        from: f64,
+        to: f64,
+        y0: f32,
+        down_x: f32,
+        moved: bool,
         add: bool,
     },
     Move {
@@ -287,6 +310,10 @@ const NOTE_R: f32 = 12.0;
 /// How far from the end of a roll or swell its tail can be grabbed, in pixels.
 const TAIL_GRAB: f32 = 7.0;
 const BIG_R: f32 = 16.0;
+/// How tall the fakes' row along the bottom of the lane is (`.tko` maps).
+const FAKE_ROW: f32 = 22.0;
+/// How big a fake is drawn in its row, against a note.
+const FAKE_SCALE: f32 = 0.6;
 const DON: u32 = 0xEB452C;
 const KAT: u32 = 0x438EAD;
 const ROLL: u32 = 0xFCB806;
@@ -380,6 +407,8 @@ enum Modal {
     Manual,
     /// File > Song setup.
     Setup,
+    /// Timing > Snap notes to the grid.
+    Resnap,
 }
 
 pub struct View {
@@ -580,6 +609,18 @@ pub struct View {
     status_at: Instant,
     /// Where the open sheet or list sits, so a click outside it can close it.
     overlay_rect: [f32; 4],
+    /// Timing > Snap notes to the grid: its options, and what they would do (worked out for a
+    /// chart revision, options and selection).
+    rs_opts: crate::editor::resnap::SnapOpts,
+    #[allow(clippy::type_complexity)]
+    rs_plan: Option<(
+        (
+            u64,
+            crate::editor::resnap::SnapOpts,
+            std::collections::BTreeSet<u64>,
+        ),
+        crate::editor::resnap::SnapPlan,
+    )>,
     /// Timing lines selected besides `sel_line` (see `selected_lines`).
     sel_extra: std::collections::BTreeSet<u64>,
     /// What the selected lines were (id, time, velocity) when a drag of them began.
@@ -766,6 +807,8 @@ impl View {
             status_seen: String::new(),
             status_at: Instant::now(),
             overlay_rect: [0.0; 4],
+            rs_opts: Default::default(),
+            rs_plan: None,
             sel_extra: Default::default(),
             line_origin: Vec::new(),
             g_frozen: None,
@@ -1417,8 +1460,9 @@ impl View {
         );
         let start = c.shapes.len();
         let (from, to) = (self.view_start, self.view_end());
-        let lane_top = y + RULER + 16.0;
-        let cy = lane_top + (y + h - lane_top) / 2.0;
+        let lane_top = y + RULER + STRIP;
+        let cy = self.lane_cy();
+        let fcy = self.fake_cy();
         // The music under the notes (song time is chart time plus osu!'s offset).
         if let (Some(wave), true) = (&self.wave, self.wave_on) {
             wave.draw(
@@ -1428,6 +1472,13 @@ impl View {
                 to + OSU_TIMING_MS,
                 0.55,
             );
+        }
+        // The fakes' row: fakes stack here, by themselves or on a note's millisecond, instead of
+        // over the notes.
+        if let Some((ft, fb)) = self.fake_row() {
+            c.rect(x + 1.0, ft, w - 2.0, fb - ft, rgba(0x1c1428, 0.55));
+            c.rect(x + 1.0, ft, w - 2.0, 1.0, rgba(0x8a5cc4, 0.45));
+            c.text(x + 4.0, ft + 2.0, 5.0, rgba(0xb48ae0, 0.75), "FAKES");
         }
         // The ruler.
         c.rect(x + 1.0, y + 1.0, w - 2.0, RULER - 1.0, rgba(0x1a1a26, 1.0));
@@ -1495,29 +1546,7 @@ impl View {
             lt += label_every;
         }
         // Timing lines, in a strip of their own under the ruler.
-        c.rect(x + 1.0, y + RULER, w - 2.0, 16.0, rgba(0x14141c, 0.9));
-        let first = pts.partition_point(|p| p.time < from - 2000.0);
-        // Once, not per line: each call looks every selected line up in the whole chart.
-        let picked: std::collections::HashSet<u64> = self.selected_lines().into_iter().collect();
-        for p in pts[first..].iter().take_while(|p| p.time <= to + 2000.0) {
-            let lx = self.x_of(p.time);
-            let selected = picked.contains(&p.id);
-            let col = if p.is_red() { RED_LINE } else { GREEN_LINE };
-            c.rect(
-                lx - if selected { 1.0 } else { 0.5 },
-                y + RULER + 1.0,
-                if selected { 2.0 } else { 1.0 },
-                14.0,
-                rgba(if selected { 0xffffff } else { col }, 1.0),
-            );
-            if lx > x && lx < x + w - 40.0 && self.ms_per_px < 12.0 {
-                let label = match p.bpm() {
-                    Some(b) => format!("{b:.1} BPM"),
-                    None => format!("x{:.2}", p.sv()),
-                };
-                c.text(lx + 3.0, y + RULER + 5.0, 5.5, rgba(col, 1.0), &label);
-            }
-        }
+        self.draw_strip(c);
         // Bookmarks.
         for b in &self.ed.bookmarks {
             if *b < from || *b > to {
@@ -1577,8 +1606,12 @@ impl View {
                 to,
                 moved: true,
                 add,
+                y0,
                 ..
-            } => Some((from.min(to), from.max(to), add)),
+            } => {
+                let (real, fake) = self.box_kinds(y0, self.mouse.1);
+                Some((from.min(to), from.max(to), add, real, fake))
+            }
             _ => None,
         };
         let tail_hot = match self.drag {
@@ -1589,6 +1622,16 @@ impl View {
             _ => None,
         };
         let gimmick = self.ed.gimmick();
+        // How many fakes share each millisecond in sight, for the count over a stack.
+        let mut stacks: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+        for o in objs[first..]
+            .iter()
+            .take_while(|o| o.time <= to + 40.0 * self.ms_per_px)
+            .filter(|o| o.fake)
+        {
+            *stacks.entry(o.time as i64).or_default() += 1;
+        }
+        let mut counted: std::collections::HashSet<i64> = std::collections::HashSet::new();
         for o in &objs[first..] {
             if o.time > to + 40.0 * self.ms_per_px {
                 break;
@@ -1599,12 +1642,14 @@ impl View {
             }
             let (ox, ex) = (self.x_of(o.time), self.x_of(end));
             let selected = match boxed {
-                Some((a, b, add)) => {
-                    (o.time >= a && o.time <= b) || (add && self.ed.selection.contains(&o.id))
+                Some((a, b, add, real, fake)) => {
+                    (o.time >= a && o.time <= b && if o.fake { fake } else { real })
+                        || (add && self.ed.selection.contains(&o.id))
                 }
                 None => self.ed.selection.contains(&o.id),
             };
-            let r = if o.big() { BIG_R } else { NOTE_R };
+            let cy = if o.fake { fcy } else { cy };
+            let r = self.radius_of(o);
             let outline = if selected {
                 rgba(0xffffff, 1.0)
             } else if hovered == Some(o.id) {
@@ -1640,11 +1685,24 @@ impl View {
                     c.rect(ex - w / 2.0, cy - r * 0.8, w, r * 1.6, rgba(col, a));
                 }
                 _ if o.fake => {
-                    // A fake: hollow, in its colour, with an F in it.
+                    // A fake: hollow, in its colour, with an F in it; a stack shows its count.
                     let col = if o.taiko() == Taiko::Kat { KAT } else { DON };
                     c.circle(ox, cy, r, rgba(col, 0.25), outline, lw);
-                    c.ring(ox, cy, r - 1.5, rgba(col, 1.0), 2.0);
-                    c.text_centered(ox, cy - 3.5, 7.0, rgba(0xffffff, 0.9), "F");
+                    c.ring(ox, cy, r - 1.5, rgba(col, 1.0), 1.5);
+                    c.text_centered(ox, cy - 2.5, 5.0, rgba(0xffffff, 0.9), "F");
+                    let key = o.time as i64;
+                    if let Some(&n) = stacks.get(&key)
+                        && n > 1
+                        && counted.insert(key)
+                    {
+                        c.text(
+                            ox + r + 1.0,
+                            cy - r - 1.0,
+                            5.0,
+                            rgba(0xe0c8ff, 1.0),
+                            &format!("x{n}"),
+                        );
+                    }
                 }
                 _ => {
                     let col = if o.taiko() == Taiko::Kat { KAT } else { DON };
@@ -1665,7 +1723,8 @@ impl View {
         }
         // The ghost of what a click would place.
         let (mx, my) = self.mouse;
-        let in_lane = inside(self.layout.timeline, mx, my) && my > y + RULER + 16.0;
+        let in_lane = inside(self.layout.timeline, mx, my) && my > y + RULER + STRIP;
+        let fake_ghost = self.in_fake_row(my);
         if in_lane
             && self.playing.is_none()
             && tail_hot.is_none()
@@ -1676,6 +1735,11 @@ impl View {
             match self.ed.tool {
                 Tool::Note => {
                     let r = if self.ed.big { BIG_R } else { NOTE_R };
+                    let (cy, r) = if fake_ghost {
+                        (fcy, r * FAKE_SCALE)
+                    } else {
+                        (cy, r)
+                    };
                     c.rect(
                         gx - 0.5,
                         lane_top,
@@ -1691,6 +1755,9 @@ impl View {
                         rgba(0xffffff, 0.6),
                         1.0,
                     );
+                    if fake_ghost {
+                        c.text_centered(gx, cy - 2.5, 5.0, rgba(0xffffff, 0.8), "F");
+                    }
                     c.text(
                         gx + r + 3.0,
                         cy - r - 8.0,
@@ -1699,7 +1766,7 @@ impl View {
                         &fmt_time(at),
                     );
                 }
-                Tool::Roll | Tool::Swell => {
+                Tool::Roll | Tool::Swell if !fake_ghost => {
                     c.rect(
                         gx - 0.5,
                         lane_top,
@@ -1715,28 +1782,28 @@ impl View {
                         &fmt_time(at),
                     );
                 }
-                Tool::Select => {}
+                Tool::Roll | Tool::Swell | Tool::Select => {}
             }
         }
         if let Drag::Box {
             from,
             to,
             moved: true,
+            y0,
             ..
         } = self.drag
         {
             let (xa, xb) = (self.x_of(from), self.x_of(to));
             let (a, b) = (xa.min(xb).max(x), xa.max(xb).min(x + w));
-            c.rect(
-                a,
-                lane_top,
-                b - a,
-                y + h - lane_top - 1.0,
-                rgba(accent(), 0.18),
-            );
+            // The rows it covers: the notes', the fakes' or both.
+            let (real, fake) = self.box_kinds(y0, self.mouse.1);
+            let split = self.fake_row().map_or(y + h - 1.0, |r| r.0);
+            let top = if real { lane_top } else { split };
+            let bottom = if fake { y + h - 1.0 } else { split };
+            c.rect(a, top, b - a, bottom - top, rgba(accent(), 0.18));
             c.round_rect(
-                [a, lane_top],
-                [b - a, y + h - lane_top - 1.0],
+                [a, top],
+                [b - a, bottom - top],
                 0.0,
                 rgba(0, 0.0),
                 rgba(accent(), 0.8),
@@ -1967,8 +2034,44 @@ impl View {
     /// The middle of the notes' lane.
     fn lane_cy(&self) -> f32 {
         let [_, y, _, h] = self.layout.timeline;
-        let top = y + RULER + 16.0;
-        top + (y + h - top) / 2.0
+        let top = y + RULER + STRIP;
+        let bottom = self.fake_row().map_or(y + h, |r| r.0);
+        top + (bottom - top) / 2.0
+    }
+
+    /// The fakes' row along the bottom of the lane (its top and bottom), in a map that can have
+    /// fakes.
+    fn fake_row(&self) -> Option<(f32, f32)> {
+        if !self.ed.is_tko() {
+            return None;
+        }
+        let [_, y, _, h] = self.layout.timeline;
+        Some((y + h - 1.0 - FAKE_ROW, y + h - 1.0))
+    }
+
+    /// The middle of the fakes' row (of the lane, in a map without one).
+    fn fake_cy(&self) -> f32 {
+        self.fake_row()
+            .map_or_else(|| self.lane_cy(), |(a, b)| (a + b) / 2.0)
+    }
+
+    fn in_fake_row(&self, y: f32) -> bool {
+        self.fake_row().is_some_and(|(a, b)| y >= a && y <= b)
+    }
+
+    /// How big `o` is drawn.
+    fn radius_of(&self, o: &HitObject) -> f32 {
+        let r = if o.big() { BIG_R } else { NOTE_R };
+        if o.fake { r * FAKE_SCALE } else { r }
+    }
+
+    /// Which kinds a box over the lane from `y0` to `y1` takes: (notes, fakes), by the rows it
+    /// covers.
+    fn box_kinds(&self, y0: f32, y1: f32) -> (bool, bool) {
+        match self.fake_row() {
+            None => (true, true),
+            Some((top, _)) => (y0.min(y1) < top, y0.max(y1) >= top),
+        }
     }
 
     /// The roll or swell whose tail (the right end of its body) is under the pointer: the end
@@ -1986,6 +2089,9 @@ impl View {
         for o in &self.ed.chart.objects[first..] {
             if o.time > t1 {
                 break;
+            }
+            if o.fake {
+                continue;
             }
             let end = self.ed.end_of(o);
             let (ox, ex) = (self.x_of(o.time), self.x_of(end));
@@ -2020,7 +2126,7 @@ impl View {
     /// The note under the pointer: its head by the circle drawn, a roll or swell also along its
     /// body. Anywhere else in the lane is empty, which is what lets a box start between notes.
     fn object_at_point(&self, x: f32, y: f32) -> Option<u64> {
-        let cy = self.lane_cy();
+        let (lane, fakes) = (self.lane_cy(), self.fake_cy());
         let (t0, t1) = (self.t_at(x - 20.0), self.t_at(x + 20.0));
         let first = self
             .ed
@@ -2033,7 +2139,8 @@ impl View {
                 break;
             }
             let end = self.ed.end_of(o);
-            let r = if o.big() { BIG_R } else { NOTE_R } + 2.0;
+            let r = self.radius_of(o) + 2.0;
+            let cy = if o.fake { fakes } else { lane };
             let (ox, ex) = (self.x_of(o.time), self.x_of(end));
             let (dx, dy) = (x - ox, y - cy);
             let key = if dx * dx + dy * dy <= r * r {
@@ -2076,6 +2183,8 @@ impl View {
                 || matches!(
                     self.drag,
                     Drag::Box { .. }
+                        | Drag::StripLines { .. }
+                        | Drag::StripBox { .. }
                         | Drag::Move { .. }
                         | Drag::Resize { .. }
                         | Drag::Place { .. }
@@ -2108,18 +2217,6 @@ impl View {
         self.mouse_move(mx, my, self.held);
     }
 
-    fn line_near(&self, x: f32) -> Option<u64> {
-        let t = self.t_at(x);
-        let slack = 4.0 * self.ms_per_px;
-        self.ed
-            .chart
-            .timing
-            .iter()
-            .filter(|p| (p.time - t).abs() <= slack)
-            .min_by(|a, b| (a.time - t).total_cmp(&(b.time - t)).then(a.id.cmp(&b.id)))
-            .map(|p| p.id)
-    }
-
     pub fn mouse_move(&mut self, x: f32, y: f32, keys: Keys) {
         if (x - self.mouse.0).abs() + (y - self.mouse.1).abs() > 0.5 {
             self.moved_at = Instant::now();
@@ -2146,12 +2243,14 @@ impl View {
                 from,
                 down_x,
                 moved,
+                y0,
                 ..
             } => {
                 let to = self.t_at(x);
                 self.drag = Drag::Box {
                     from,
                     to,
+                    y0,
                     down_x,
                     moved: moved
                         || (x - down_x).abs() >= 3.0
@@ -2175,6 +2274,25 @@ impl View {
                 }
             }
             Drag::Place { .. } => {}
+            Drag::StripLines { .. } => self.strip_drag(x, keys),
+            Drag::StripBox {
+                from,
+                y0,
+                down_x,
+                moved,
+                add,
+                ..
+            } => {
+                let to = self.t_at(x);
+                self.drag = Drag::StripBox {
+                    from,
+                    to,
+                    y0,
+                    down_x,
+                    moved: moved || (x - down_x).abs() >= 3.0,
+                    add,
+                };
+            }
             Drag::Lines { anchor } => self.line_drag(anchor, x, y, keys),
             Drag::GBox { from, .. } => self.drag = Drag::GBox { from, to: (x, y) },
             Drag::Brush { .. } => self.brush_move(x, y, keys),
@@ -2211,9 +2329,14 @@ impl View {
         use winit::window::CursorIcon as I;
         let (x, y) = self.mouse;
         match self.drag {
-            Drag::Move { .. } | Drag::Slide { .. } | Drag::Node { .. } | Drag::Pan { .. } => {
+            Drag::Move { .. }
+            | Drag::StripLines { .. }
+            | Drag::Slide { .. }
+            | Drag::Node { .. }
+            | Drag::Pan { .. } => {
                 return I::Grabbing;
             }
+            Drag::StripBox { .. } => return I::Crosshair,
             Drag::Resize { .. } | Drag::Scrub | Drag::Overview | Drag::FxEdge { .. } => {
                 return I::EwResize;
             }
@@ -2252,8 +2375,15 @@ impl View {
         }
         let tl = self.layout.timeline;
         if inside(tl, x, y) {
-            if y < tl[1] + RULER + 16.0 {
+            if y < tl[1] + RULER {
                 return I::EwResize;
+            }
+            if y < tl[1] + RULER + STRIP {
+                return if self.strip_line_at(x, y).is_some() {
+                    I::Grab
+                } else {
+                    I::Default
+                };
             }
             if self.mode != Mode::Effects && self.tail_at(x, y).is_some() {
                 return I::EwResize;
@@ -2423,22 +2553,14 @@ impl View {
     fn timeline_down(&mut self, x: f32, y: f32, keys: Keys) {
         let tl = self.layout.timeline;
         let t = self.t_at(x);
-        let strip = y < tl[1] + RULER + 16.0;
+        let strip = y < tl[1] + RULER + STRIP;
         if y < tl[1] + RULER {
             self.drag = Drag::Scrub;
             self.set_time(t);
             return;
         }
         if strip {
-            // The strip of timing lines: pick one, or else it moves the playhead like the ruler.
-            if let Some(id) = self.line_near(x) {
-                self.select_line(Some(id));
-                self.ed.select_none();
-            } else {
-                self.drag = Drag::Scrub;
-                self.set_time(t);
-            }
-            return;
+            return self.strip_down(x, y, keys);
         }
         // The tail of a roll or swell stretches it, whatever the tool and selection are.
         if !keys.ctrl
@@ -2461,6 +2583,7 @@ impl View {
                 down_x: x,
                 moved: false,
                 add: keys.shift,
+                y0: y,
             };
             return;
         }
@@ -2472,6 +2595,27 @@ impl View {
             self.ed.tool
         };
         match tool {
+            // In the fakes' row every click of the Note tool places one more, on a stack too: as
+            // many fakes to a millisecond as wanted (the Select tool picks and drags them).
+            Tool::Note if self.in_fake_row(y) => {
+                let at = self.grid_or_free(t, keys);
+                if self.ed.place_note(at, self.ed.kat, true).is_some() {
+                    self.select_line(None);
+                    self.mark_stale();
+                    let n = self
+                        .ed
+                        .chart
+                        .objects
+                        .iter()
+                        .filter(|o| o.fake && o.time == at)
+                        .count();
+                    if n > 1 {
+                        self.status = format!("{n} fakes at {}", fmt_time(at));
+                    }
+                } else {
+                    self.status = "fakes can't go before 0:00.000".into();
+                }
+            }
             Tool::Select | Tool::Note => {
                 if let Some(id) = self.object_at_point(x, y) {
                     // The Note tool paints a placed note with the colour of the one in hand.
@@ -2498,6 +2642,7 @@ impl View {
                         down_x: x,
                         moved: false,
                         add: keys.shift,
+                        y0: y,
                     };
                 } else {
                     let at = self.grid_or_free(t, keys);
@@ -2510,6 +2655,11 @@ impl View {
                         self.status = format!("there is already a note at {}", fmt_time(at));
                     }
                 }
+            }
+            Tool::Roll | Tool::Swell if self.in_fake_row(y) => {
+                self.status =
+                    "only dons and kats can be fakes: place them in this row with the Note tool"
+                        .into();
             }
             Tool::Roll | Tool::Swell => {
                 let at = self.grid_or_free(t, keys);
@@ -2563,10 +2713,12 @@ impl View {
         self.mouse = (x, y);
         let drag = std::mem::replace(&mut self.drag, Drag::None);
         match drag {
-            Drag::Box { from, moved, .. } => {
+            Drag::Box {
+                from, moved, y0, ..
+            } => {
                 if !moved {
                     // Only Ctrl starts a box on a note: Ctrl+click toggles that note.
-                    if let Some(id) = self.object_at_point(self.x_of(from), self.lane_cy()) {
+                    if let Some(id) = self.object_at_point(self.x_of(from), y0) {
                         self.ed.toggle(id);
                     } else {
                         self.ed.select_none();
@@ -2574,7 +2726,9 @@ impl View {
                         self.set_time(t);
                     }
                 } else {
-                    self.ed.select_range(from, self.t_at(x), keys.shift);
+                    let (real, fake) = self.box_kinds(y0, y);
+                    self.ed
+                        .select_range_of(from, self.t_at(x), keys.shift, real, fake);
                 }
             }
             Drag::Place {
@@ -2607,6 +2761,15 @@ impl View {
                 }
             }
             Drag::GBox { from, .. } => self.line_box_up(from, x, y, keys),
+            Drag::StripLines { moved, .. } => self.strip_lines_up(moved),
+            Drag::StripBox {
+                from,
+                to,
+                y0,
+                moved,
+                add,
+                ..
+            } => self.strip_box_up(from, to, y0, y, moved, add),
             Drag::Brush { t0, v0, t1, v1 } => self.brush_up(t0, v0, t1, v1),
             Drag::Handle { .. } => self.handle_up(),
             Drag::Move { .. } | Drag::Resize { .. } | Drag::Key { .. } => {
@@ -3038,6 +3201,7 @@ impl View {
                 self.tw_filter = f;
                 self.tw_scroll = 0;
             }
+            Btn::Rs(a) => self.press_resnap(a),
             Btn::Resnap => {
                 let n = self.ed.resnap_selected();
                 self.status = format!("resnapped {n}");
@@ -3324,6 +3488,14 @@ impl View {
                 KeyCode::End => self.manual_scroll(i32::MAX / 2),
                 _ => {}
             }
+            return KeyResult::Handled;
+        }
+        // The snap window snaps on Enter.
+        if self.modal == Some(Modal::Resnap)
+            && !repeat
+            && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+        {
+            self.apply_resnap();
             return KeyResult::Handled;
         }
         // Song setup takes back, redoes and saves its changes where they are made.
@@ -7591,5 +7763,208 @@ mod tests {
         let x = v.x_of(60_000.0);
         click(&mut v, x, y);
         assert!(v.ed.selection.is_empty());
+    }
+
+    // ---- the strip of timing lines, the fakes' row, notes following, snapping ----
+
+    /// Heights in the strip's red row and green row.
+    fn strip_ys(v: &View) -> (f32, f32) {
+        let top = v.layout.timeline[1] + RULER;
+        (top + 2.0, top + STRIP - 2.0)
+    }
+
+    fn line_at(v: &View, t: f64, red: bool) -> Option<u64> {
+        v.ed.chart
+            .timing
+            .iter()
+            .find(|p| p.time == t && p.is_red() == red)
+            .map(|p| p.id)
+    }
+
+    fn shift() -> Keys {
+        Keys {
+            shift: true,
+            ..Keys::default()
+        }
+    }
+
+    #[test]
+    fn red_and_green_lines_at_one_moment_have_rows_of_their_own() {
+        let mut v = view();
+        v.ed.add_red(4000.0, 150.0).unwrap();
+        draw(&mut v);
+        let (red_y, green_y) = strip_ys(&v);
+        let x = v.x_of(4000.0);
+        assert_eq!(v.strip_line_at(x, red_y), line_at(&v, 4000.0, true));
+        assert_eq!(v.strip_line_at(x, green_y), line_at(&v, 4000.0, false));
+        click(&mut v, x, green_y);
+        assert_eq!(
+            v.selected_lines(),
+            vec![line_at(&v, 4000.0, false).unwrap()]
+        );
+    }
+
+    #[test]
+    fn a_green_line_drags_along_the_grid_and_freely_with_shift() {
+        let mut v = view();
+        v.ed.snap = 4;
+        draw(&mut v);
+        let (_, gy) = strip_ys(&v);
+        let id = line_at(&v, 4000.0, false).unwrap();
+        // On the grid: 1/4 of a 500 ms beat.
+        let (a, b) = (v.x_of(4000.0), v.x_of(4260.0));
+        v.mouse_down(a, gy, Keys::default(), None);
+        v.mouse_move(b, gy, Keys::default());
+        v.mouse_up(b, gy, Keys::default());
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().time, 4250.0);
+        // With Shift held it goes to the millisecond, like a note.
+        let (a, b) = (v.x_of(4250.0), v.x_of(4497.0));
+        v.mouse_down(a, gy, Keys::default(), None);
+        v.mouse_move(b, gy, shift());
+        v.mouse_up(b, gy, shift());
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().time, 4497.0);
+        // Each drag is one undo; its SV is untouched.
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().time, 4250.0);
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().sv(), 2.0);
+    }
+
+    #[test]
+    fn a_box_over_the_strip_picks_the_lines_of_its_rows_and_they_drag_together() {
+        let mut v = view();
+        v.ed.add_green(1000.0, 1.5).unwrap();
+        v.ed.add_green(2000.0, 0.5).unwrap();
+        v.ed.add_red(3000.0, 120.0).unwrap();
+        draw(&mut v);
+        let (ry, gy) = strip_ys(&v);
+        let (a, b) = (v.x_of(500.0), v.x_of(3500.0));
+        // Over the green row only: the two green lines, not the red one.
+        v.mouse_down(a, gy, Keys::default(), None);
+        v.mouse_move(b, gy, Keys::default());
+        v.mouse_up(b, gy, Keys::default());
+        let mut got = v.selected_lines();
+        got.sort_unstable();
+        let mut want = vec![
+            line_at(&v, 1000.0, false).unwrap(),
+            line_at(&v, 2000.0, false).unwrap(),
+        ];
+        want.sort_unstable();
+        assert_eq!(got, want);
+        // Both move with the one dragged.
+        let (from, to) = (v.x_of(1000.0), v.x_of(1250.0));
+        v.mouse_down(from, gy, Keys::default(), None);
+        v.mouse_move(to, gy, Keys::default());
+        v.mouse_up(to, gy, Keys::default());
+        assert!(line_at(&v, 1250.0, false).is_some());
+        assert!(line_at(&v, 2250.0, false).is_some());
+        // From the red row down to the green one: the red line too.
+        v.mouse_down(a, ry, Keys::default(), None);
+        v.mouse_move(b, gy, Keys::default());
+        v.mouse_up(b, gy, Keys::default());
+        assert_eq!(v.selected_lines().len(), 3);
+        // A click on empty strip moves the playhead.
+        let x = v.x_of(5500.0);
+        click(&mut v, x, gy);
+        assert!((v.ed.time - 5500.0).abs() <= v.ms_per_px);
+    }
+
+    #[test]
+    fn a_red_line_dragged_with_notes_follow_takes_its_notes_along() {
+        let mut v = view();
+        press(&mut v, Btn::C(Cmd::FollowTiming));
+        assert!(v.ed.follow_timing);
+        v.ed.add_red(3000.0, 120.0).unwrap();
+        v.ed.place_hit(3500.0, false).unwrap();
+        // Close in: a move under 3 px is a click's wobble and leaves the line be.
+        v.ms_per_px = 1.0;
+        v.view_start = 2800.0;
+        draw(&mut v);
+        let (ry, _) = strip_ys(&v);
+        // Shift: to the millisecond (17 ms later); the note keeps its beat after the line.
+        let (a, b) = (v.x_of(3000.0), v.x_of(3017.0));
+        v.mouse_down(a, ry, Keys::default(), None);
+        v.mouse_move(b, ry, shift());
+        v.mouse_up(b, ry, shift());
+        assert!(line_at(&v, 3017.0, true).is_some());
+        assert!(v.ed.chart.objects.iter().any(|o| o.time == 3517.0));
+        // The notes before it are another line's.
+        assert!(v.ed.chart.objects.iter().any(|o| o.time == 1000.0));
+        // The panel's nudge does the same, and off again the notes stay.
+        press(&mut v, Btn::T(TAct::Ms(10)));
+        assert!(v.ed.chart.objects.iter().any(|o| o.time == 3527.0));
+        press(&mut v, Btn::C(Cmd::FollowTiming));
+        press(&mut v, Btn::T(TAct::Ms(10)));
+        assert!(v.ed.chart.objects.iter().any(|o| o.time == 3527.0));
+        assert!(line_at(&v, 3037.0, true).is_some());
+    }
+
+    #[test]
+    fn fakes_have_their_own_row_and_stack_without_limit() {
+        let mut v = view();
+        v.ed.chart.gimmick = Some(Default::default());
+        v.ed.tool = Tool::Note;
+        draw(&mut v);
+        let (ft, fb) = v.fake_row().unwrap();
+        let fy = (ft + fb) / 2.0;
+        assert!(v.lane_cy() < ft, "the notes keep the lane above the fakes");
+        // Three clicks on the first note's millisecond: three fakes on it, the note stays one.
+        for _ in 0..3 {
+            click_t(&mut v, 1000.0, fy);
+        }
+        let at = |v: &View, fake: bool| {
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.time == 1000.0 && o.fake == fake)
+                .count()
+        };
+        assert_eq!((at(&v, true), at(&v, false)), (3, 1));
+        draw(&mut v);
+        // A box over the notes' row takes notes, one over the fakes' row the fakes.
+        let (a, b) = (v.x_of(900.0), v.x_of(1100.0));
+        let ly = v.lane_cy();
+        v.mouse_down(a, ly, ctrl(), None);
+        v.mouse_move(b, ly, ctrl());
+        v.mouse_up(b, ly, ctrl());
+        assert!(v.ed.selected().iter().all(|o| !o.fake));
+        assert_eq!(v.ed.selection.len(), 1);
+        v.mouse_down(a, fy, ctrl(), None);
+        v.mouse_move(b, fy, ctrl());
+        v.mouse_up(b, fy, ctrl());
+        assert_eq!(v.ed.selection.len(), 3);
+        assert!(v.ed.selected().iter().all(|o| o.fake));
+        // Drumrolls don't go in the fakes' row.
+        v.ed.tool = Tool::Roll;
+        let n = v.ed.chart.objects.len();
+        click_t(&mut v, 6000.0, fy);
+        assert_eq!(v.ed.chart.objects.len(), n);
+        // A plain .osu has no fakes' row.
+        let w = view();
+        assert!(w.fake_row().is_none());
+    }
+
+    #[test]
+    fn snap_to_grid_shows_what_it_would_do_and_enter_does_it_in_one_undo() {
+        let mut v = view();
+        let id = v.ed.chart.objects[0].id;
+        v.ed.chart.object_mut(id).unwrap().time = 1002.0;
+        v.run(Cmd::SnapToGrid, None);
+        assert_eq!(v.modal, Some(Modal::Resnap));
+        draw(&mut v);
+        let plan = v.resnap_plan();
+        assert_eq!((plan.moved, plan.largest), (1, 2.0));
+        // Unticking every division leaves nothing to snap to.
+        let keep = v.rs_opts.divisors.clone();
+        for d in keep.clone() {
+            press(&mut v, Btn::Rs(super::resnap::RsAct::Div(d)));
+        }
+        assert!(v.resnap_plan().is_empty());
+        press(&mut v, Btn::Rs(super::resnap::RsAct::Default));
+        assert_eq!(v.rs_opts.divisors, keep);
+        key(&mut v, KeyCode::Enter);
+        assert_eq!(v.modal, None);
+        assert_eq!(v.ed.chart.object(id).unwrap().time, 1000.0);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.chart.object(id).unwrap().time, 1002.0);
     }
 }
