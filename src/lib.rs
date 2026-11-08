@@ -18037,6 +18037,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     let mut last_sample: Option<Instant> = None;
     let mut requested_present: Option<PresentChoice> = None;
     let mut pacer = clock::VsyncPacer::default();
+    let mut frame_rate = clock::FrameRate::default();
     // TAIKO_NO_PACE=1: draw notes for when each image was handed out, as before (to compare).
     let pace = std::env::var_os("TAIKO_NO_PACE").is_none();
     let mut waits = (0.0, 0.0, 0.0);
@@ -18379,6 +18380,11 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                     Err(e) => eprintln!("screenshot failed: {e}"),
                 }
             }
+        }
+
+        // After the present: changing the swapchain needs no image held.
+        if let Some(fast) = frame_rate.frame(acquired, present != PresentChoice::Fifo) {
+            renderer.set_fast_frames(fast);
         }
 
         if present != PresentChoice::Fifo && cap > 0 {
