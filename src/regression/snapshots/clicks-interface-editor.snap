@@ -1,0 +1,58 @@
+screen hud-edit: HudEdit, 57 areas
+HudPanel @103,239 -> HudEdit
+HudButton(SwapSide) @180,29 -> HudEdit +"<" -">"
+HudRow(0) @103,47 -> HudEdit
+HudToggle(0) @23,47 -> HudEdit -"01234560" -"Score  -  Screen / Screen"
+HudRow(1) @103,61 -> HudEdit +"Accuracy  -  Screen / Screen" -"Score  -  Screen / Screen"
+HudToggle(1) @23,61 -> HudEdit -"97.36%" -"Score  -  Screen / Screen"
+HudRow(2) @103,75 -> HudEdit +"pp counter  -  Screen / Screen" -"Score  -  Screen / Screen"
+HudToggle(2) @23,75 -> HudEdit -"312pp" -"Score  -  Screen / Screen"
+HudRow(3) @103,89 -> HudEdit +"Combo (on the drum)  -  Drum / Drum" +"X: Drum centre" +"Y: Drum centre" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudToggle(3) @23,89 -> HudEdit +"X: Drum centre" +"Y: Drum centre" -"321" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudRow(4) @103,103 -> HudEdit +"Progress bar  -  Screen / Screen" +"X: Screen left" +"no text to colour" -"Score  -  Screen / Screen" -"X: Screen right"
+HudToggle(4) @23,103 -> HudEdit +"X: Screen left" +"no text to colour" -"Score  -  Screen / Screen" -"X: Screen right"
+HudRow(5) @103,117 -> HudEdit +"Health bar  -  Screen / Screen" +"no text to colour" -"Score  -  Screen / Screen"
+HudToggle(5) @23,117 -> HudEdit +"no text to colour" -"Score  -  Screen / Screen"
+HudRow(6) @103,131 -> HudEdit +"Mods  -  Screen / Screen" -"Score  -  Screen / Screen"
+HudToggle(6) @23,131 -> HudEdit -"HD" -"Score  -  Screen / Screen"
+HudRow(7) @103,145 -> HudEdit +"Hit error bar  -  Screen / Screen" +"X: Screen centre" +"no text to colour" -"Score  -  Screen / Screen" -"X: Screen right"
+HudToggle(7) @23,145 -> HudEdit +"X: Screen centre" +"no text to colour" -"Score  -  Screen / Screen" -"X: Screen right"
+HudRow(8) @103,159 -> HudEdit +"Offset suggestion  -  Screen / Screen" +"X: Screen centre" -"Score  -  Screen / Screen" -"X: Screen right"
+HudToggle(8) @23,159 -> HudEdit +"X: Screen centre" -"Score  -  Screen / Screen" -"X: Screen right" -"offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)"
+HudRow(9) @103,173 -> HudEdit +"GREAT / OK / MISS  -  Hit point / Lane" +"X: Hit point centre" +"Y: Lane top" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudToggle(9) @23,173 -> HudEdit +"X: Hit point centre" +"Y: Lane top" -"GREAT" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudRow(10) @103,187 -> HudEdit +"X: Lane right" +"Y: Lane bottom" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudToggle(10) @23,187 -> HudEdit +"UR 96.53" +"UR counter  -  Lane / Lane" +"X: Lane right" +"Y: Lane bottom" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudRow(11) @103,201 -> HudEdit +"100" +"300" +"MISS" +"Titles" +"X: Lane left" +"Y: Lane bottom" -"Clean" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudToggle(11) @23,201 -> HudEdit +"100" +"300" +"37" +"4" +"812" +"Hit counter (300 / 100 / MISS)  -  Lane / Lane" +4 more -"Clean" -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudRow(12) @103,215 -> HudEdit +"Match scoreboard  -  Screen / Screen" +"X: Screen left" +"no text to colour" -"Score  -  Screen / Screen" -"X: Screen right"
+HudToggle(12) @23,215 -> HudEdit +"X: Screen left" +"no text to colour" -"Match scoreboard" -"Score  -  Screen / Screen" -"X: Screen right"
+HudRow(13) @103,229 -> HudEdit +"Spectators  -  Screen / Screen" +"X: Screen left" +"no text to colour" -"Score  -  Screen / Screen" -"X: Screen right"
+HudToggle(13) @23,229 -> HudEdit +"X: Screen left" +"no text to colour" -"Score  -  Screen / Screen" -"Spectators" -"X: Screen right"
+HudButton(AttachX) @103,247 -> HudEdit +"Score  -  Playfield / Screen" +"X: Playfield right" -"Score  -  Screen / Screen" -"X: Screen right"
+HudButton(AttachY) @103,264 -> HudEdit +"Score  -  Screen / Playfield" +"Y: Playfield top" -"Score  -  Screen / Screen" -"Y: Screen top"
+HudButton(Smaller) @24,281 -> HudEdit +"91%" -"100%"
+HudButton(Bigger) @88,281 -> HudEdit +"110%" -"100%"
+HudColour(None) @22,297 -> HudEdit
+HudColour(Some(16777215)) @36,297 -> HudEdit
+HudColour(Some(13158616)) @51,297 -> HudEdit
+HudColour(Some(7303046)) @65,297 -> HudEdit
+HudColour(Some(15418668)) @80,297 -> HudEdit
+HudColour(Some(16751164)) @94,297 -> HudEdit
+HudColour(Some(16765773)) @109,297 -> HudEdit
+HudColour(Some(8839258)) @123,297 -> HudEdit
+HudColour(Some(5227511)) @138,297 -> HudEdit
+HudColour(Some(5930495)) @152,297 -> HudEdit
+HudColour(Some(13073919)) @167,297 -> HudEdit
+HudColour(Some(16747224)) @181,297 -> HudEdit
+HudPreset(0) @103,325 -> HudEdit
+HudPreset(1) @103,339 -> HudEdit +"100" +"300" +"37" +"4" +"812" +"MISS" +1 more
+HudPreset(2) @103,353 -> HudEdit +"100" +"300" +"37" +"4" +"812" +"MISS" +1 more
+HudPreset(3) @103,367 -> HudEdit +"100" +"300" +"37" +"4" +"812" +"MISS" +4 more -"Score  -  Screen / Screen" -"X: Screen right" -"Y: Screen top"
+HudPreset(4) @103,381 -> HudEdit -"01234560" -"312pp" -"97.36%" -"HD" -"Score  -  Screen / Screen" -"offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)"
+HudButton(SavePreset) @44,398 -> HudEdit +"Layout 1" -"Delete" -"New" -"Save"
+HudButton(NewPreset) @103,398 -> HudEdit +"Layout 1" -"Delete" -"New" -"Save"
+HudButton(Copy) @59,415 -> HudEdit [toast "can't reach the clipboard"]
+HudButton(Paste) @148,415 -> HudEdit [toast "no layout on the clipboard"]
+HudButton(ResetAll) @148,432 -> HudEdit
+HudButton(Done) @103,450 -> Select +"." +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +43 more -"+" -"-" -"01234560" -"100%" -"312pp" -"321" -39 more

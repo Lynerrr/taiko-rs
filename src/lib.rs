@@ -59,6 +59,7 @@ mod multiplayer;
 mod multiverse;
 mod net;
 mod od_override;
+mod offline;
 mod online;
 mod osudb;
 #[cfg(test)]
@@ -1977,7 +1978,7 @@ fn map_url(hash: u64) -> String {
 }
 
 fn open_url(url: &str) -> bool {
-    if cfg!(target_os = "android") {
+    if cfg!(target_os = "android") || !offline::may_spawn() {
         return false;
     }
     #[cfg(windows)]
@@ -2011,7 +2012,7 @@ fn open_url(url: &str) -> bool {
         result as usize > 32
     }
     #[cfg(not(windows))]
-    std::process::Command::new("xdg-open")
+    offline::command("xdg-open")
         .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

@@ -1,0 +1,17 @@
+screen medals: Select, 16 areas
+Tab(0) @217,31 -> Select
+Tab(1) @295,31 -> Select
+Tab(2) @396,31 -> Select
+Tab(3) @498,31 -> Select
+ModsButton @446,66 -> Select
+SortList @372,66 -> Select
+TextField @172,66 -> Select
+SongHeader(0) @246,103 -> Select
+SongRow(0) @256,131 -> Select
+SelectLike @709,108 -> Select
+BoardPage @760,74 -> Select
+Key(Enter) @655,425 -> Select
+SplitList @476,245 -> Select
+Key(Escape) @797,448 -> Select -"Back" -"MEDALS" -"can't reach the server: it's restarting or down. Try again in a minute"
+Changelog @808,9 -> Select
+Account @740,9 -> Select

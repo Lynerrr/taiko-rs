@@ -26,6 +26,26 @@ The `Release build` workflow runs on pushes to the main/dev branches and manual 
 not on pull requests. Production release optimization, desktop packaging, and installer
 checks happen there, so PRs do not repeat the same tests/builds in two workflows.
 
+## Perf gate
+
+The `Perf gate` workflow (`.github/workflows/perf-gate.yml`) runs on pull requests that touch
+the client. It builds the pull request's base and head with the `perf-audit` profile, runs the
+[performance audit](performance-audit.md) three times for each, in turns on the same runner, and
+compares them with `.github/scripts/perf-gate.py`:
+
+- A case's value is the lowest p50 of its three runs: noise only ever adds time. On identical
+  builds this stays within 5 %, where a single run or the median of three can be 10–20 % off.
+- A case fails when head is more than 10 % **and** more than 2 µs slower than base. Cases that
+  time other threads, locks or the disk (`mutex/`, `skin/async/worker-completion`,
+  `hash/first/`, `game/prepare/`) are reported but never fail.
+- Cases only the head has are listed as new; changed counts (shapes drawn) are listed too.
+- The table lands in the job summary, and the raw logs in the `perf-logs` artifact.
+
+A slowdown that is meant (explained in the pull request) is accepted with the
+`perf-regression-ok` label; re-run the job after adding it. To try the comparison locally, save
+the audit's output from each build and run
+`python3 .github/scripts/perf-gate.py --base base-*.log --head head-*.log`.
+
 ## Require checks before merging
 
 After the first workflow run, add **Pre-merge checks** as a required status check in

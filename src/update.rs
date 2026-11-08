@@ -277,7 +277,7 @@ pub fn cleanup() {
 /// Starts the (new) binary with the same arguments. The caller then quits.
 pub fn restart() -> Result<(), String> {
     let exe = exe_path()?;
-    std::process::Command::new(&exe)
+    crate::offline::command(&exe)
         .args(std::env::args_os().skip(1))
         .spawn()
         .map_err(|e| format!("restart: {e}"))?;
@@ -293,6 +293,7 @@ fn agent() -> ureq::Agent {
 
 /// A GitHub API call about the repository (`path` after `repos/<repo>/`): the JSON it returns.
 pub fn api_get(path: &str) -> Result<String, String> {
+    crate::offline::internet()?;
     let url = format!("https://api.github.com/repos/{REPO}/{path}");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
@@ -315,6 +316,7 @@ pub fn api_get(path: &str) -> Result<String, String> {
 /// which goes through a different GitHub front end and still works when the first one answers
 /// 504 (as it did for hours on 2026-11-08).
 fn release(channel: Channel) -> Result<(String, Vec<String>, u64), String> {
+    crate::offline::internet()?;
     #[derive(serde::Deserialize)]
     struct Asset {
         name: String,

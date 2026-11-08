@@ -195,6 +195,7 @@ pub struct Sent {
 
 /// Sends a packed set with the game's `token`: a new set, or a new version of `id`.
 pub fn upload(token: &str, id: Option<u32>, osz: &[u8]) -> Result<Sent, String> {
+    crate::offline::internet()?;
     let url = match id {
         Some(id) => format!("{WEBSITE}/custom/upload?id={id}"),
         None => format!("{WEBSITE}/custom/upload"),
@@ -234,6 +235,7 @@ pub fn search(
     desc: bool,
 ) -> Result<Vec<SetInfo>, String> {
     use crate::download::SortKey;
+    crate::offline::internet()?;
     let mut reply = ureq::get(format!("{WEBSITE}/api/custom"))
         .query("q", query.trim())
         .config()
@@ -374,6 +376,7 @@ pub fn fetch_preview(set: &SetInfo) -> Result<PathBuf, String> {
 
 /// Which of these custom sets the website has approved; None when it can't be asked.
 pub fn approved_of(ids: &[u32]) -> Option<Vec<u32>> {
+    crate::offline::internet().ok()?;
     let list: Vec<String> = ids.iter().map(u32::to_string).collect();
     let mut reply = ureq::get(format!("{WEBSITE}/api/custom?ids={}", list.join(",")))
         .config()
