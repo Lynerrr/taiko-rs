@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -59,6 +59,10 @@ pub enum Category {
     Wip,
     Graveyard,
     Any,
+    /// Custom sets on the taiko.rs website that give pp.
+    CustomApproved,
+    /// Every custom set on the taiko.rs website.
+    Custom,
 }
 
 impl Category {
@@ -73,6 +77,14 @@ impl Category {
         Category::Any,
     ];
 
+    /// The categories of the taiko.rs website's own maps.
+    pub const OURS: [Category; 2] = [Category::CustomApproved, Category::Custom];
+
+    /// Whether this lists the taiko.rs website's maps, not the osu! mirrors'.
+    pub fn is_ours(self) -> bool {
+        Category::OURS.contains(&self)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Category::HasLeaderboard => "Has leaderboard",
@@ -83,6 +95,8 @@ impl Category {
             Category::Wip => "WIP",
             Category::Graveyard => "Graveyard",
             Category::Any => "Any",
+            Category::CustomApproved => "Custom approved",
+            Category::Custom => "All custom",
         }
     }
 
@@ -96,7 +110,7 @@ impl Category {
             Category::Pending => &[0],
             Category::Wip => &[-1],
             Category::Graveyard => &[-2],
-            Category::Any => &[],
+            Category::Any | Category::CustomApproved | Category::Custom => &[],
         }
     }
 }
@@ -126,6 +140,24 @@ impl SortKey {
         SortKey::Plays,
         SortKey::Favourites,
     ];
+
+    /// The orders the taiko.rs website's maps can be listed in.
+    pub const OURS: [SortKey; 5] = [
+        SortKey::Relevance,
+        SortKey::Title,
+        SortKey::Artist,
+        SortKey::Ranked,
+        SortKey::Plays,
+    ];
+
+    /// What it's called for the taiko.rs website's maps (sent, not ranked; downloaded, not played).
+    pub fn name_for_ours(self) -> &'static str {
+        match self {
+            SortKey::Ranked => "Updated",
+            SortKey::Plays => "Downloads",
+            key => key.name(),
+        }
+    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -158,8 +190,9 @@ impl SortKey {
     }
 }
 
-/// A beatmap set found on a mirror (only its taiko difficulties are kept).
-#[derive(Clone, Debug)]
+/// A beatmap set found on a mirror (only its taiko difficulties are kept), or a custom set on
+/// the taiko.rs website (`custom` is then set and `id` is the website's number, not osu!'s).
+#[derive(Clone, Debug, Default)]
 pub struct SetInfo {
     pub id: u32,
     pub artist: String,
@@ -173,6 +206,25 @@ pub struct SetInfo {
     pub rating: f32,
     /// ISO 8601, empty if never ranked.
     pub ranked_date: String,
+    /// What the website says of a custom set (None: an osu! set).
+    pub custom: Option<CustomSet>,
+}
+
+/// A custom set on the taiko.rs website (`server/src/custom.rs`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CustomSet {
+    /// Every difficulty of it is approved (it gives pp).
+    pub approved: bool,
+    /// Its upload count: a new version replaces the old on the website.
+    pub version: u32,
+    /// The archive's size.
+    pub bytes: u64,
+    /// Seconds since 1970 of its last upload.
+    pub updated: u64,
+    /// A difficulty of it is a `.tko` (plays only in taiko.rs).
+    pub tko: bool,
+    /// The website has its background (`/c/<id>/bg`), for the download tab's cover.
+    pub background: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,9 +240,21 @@ pub struct Diff {
 pub const CLIP_PREFIX: &str = "taiko-rs-preview-clip";
 
 impl SetInfo {
-    /// Folder name like osu! uses: "123456 Artist - Title", made safe for any filesystem.
+    /// Whether `other` is the same set: the website's custom numbers aren't osu!'s.
+    pub fn same(&self, other: &SetInfo) -> bool {
+        self.id == other.id && self.custom.is_some() == other.custom.is_some()
+    }
+
+    /// Whether this is osu! set `id` (never a custom set).
+    pub fn is_osu_set(&self, id: Option<u32>) -> bool {
+        self.custom.is_none() && Some(self.id) == id
+    }
+
+    /// Folder name like osu! uses: "123456 Artist - Title", made safe for any filesystem. A
+    /// custom set's is "c12 Artist - Title", which no osu! set number is read from.
     pub fn folder_name(&self) -> String {
-        let raw = format!("{} {} - {}", self.id, self.artist, self.title);
+        let prefix = if self.custom.is_some() { "c" } else { "" };
+        let raw = format!("{prefix}{} {} - {}", self.id, self.artist, self.title);
         let clean: String = raw
             .chars()
             .map(|c| {
@@ -284,6 +348,7 @@ fn parse_sets(json: &str) -> Result<(Vec<SetInfo>, usize), String> {
                 favourite_count: s.favourite_count,
                 rating: s.rating,
                 ranked_date: s.ranked_date.unwrap_or_default(),
+                custom: None,
             })
         })
         .collect();
@@ -433,7 +498,7 @@ pub fn search(
 }
 
 /// Orders merged results (and does the sorts no mirror can do).
-fn sort_sets(sets: &mut [SetInfo], sort: SortKey, desc: bool) {
+pub fn sort_sets(sets: &mut [SetInfo], sort: SortKey, desc: bool) {
     use std::cmp::Ordering;
     let hardest = |s: &SetInfo| s.diffs.last().map(|d| d.stars).unwrap_or(0.0);
     let order = |a: &SetInfo, b: &SetInfo| -> Ordering {
@@ -442,6 +507,11 @@ fn sort_sets(sets: &mut [SetInfo], sort: SortKey, desc: bool) {
             SortKey::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
             SortKey::Artist => a.artist.to_lowercase().cmp(&b.artist.to_lowercase()),
             SortKey::Difficulty => hardest(a).total_cmp(&hardest(b)),
+            // Custom sets: by when they were last sent.
+            SortKey::Ranked if a.custom.is_some() && b.custom.is_some() => {
+                let at = |s: &SetInfo| s.custom.as_ref().map_or(0, |c| c.updated);
+                at(a).cmp(&at(b))
+            }
             // Unranked sets have no date: they go last either way.
             SortKey::Ranked => match (a.ranked_date.is_empty(), b.ranked_date.is_empty()) {
                 (false, false) => a.ranked_date.cmp(&b.ranked_date),
@@ -468,7 +538,12 @@ pub struct Job {
     pub maps: Vec<u64>,
     /// A newer version of a set that's already here (see [`start_update`]).
     pub update: bool,
+    /// Set to stop the download: it then ends with [`CANCELLED`].
+    pub cancel: Arc<AtomicBool>,
 }
+
+/// What a download stopped by [`Job::cancel`] ends with.
+pub const CANCELLED: &str = "cancelled";
 
 impl Job {
     pub fn fraction(&self) -> Option<f32> {
@@ -484,9 +559,29 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     let done = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(0));
     let (d, t) = (done.clone(), total.clone());
-    let (id, name) = (set.id, set.folder_name());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let name = set.folder_name();
+    // A custom set the preview fetched already is unpacked from there.
+    let cached = set
+        .custom
+        .is_some()
+        .then(|| crate::custom::cached_archive(&set));
+    let sources = match &set.custom {
+        Some(_) => vec![("taiko.rs", crate::custom::download_url(set.id))],
+        None => mirror_sources(set.id),
+    };
     std::thread::spawn(move || {
-        let _ = tx.send(fetch(id, &name, &songs, &d, &t));
+        let result = match cached.flatten() {
+            Some(archive) => std::fs::create_dir_all(&songs)
+                .map_err(|e| format!("{}: {e}", songs.display()))
+                .and_then(|()| {
+                    let dest = songs.join(&name);
+                    extract(&archive, &dest).map(|()| dest)
+                }),
+            None => fetch(&sources, &name, &songs, &d, &t, &stop),
+        };
+        let _ = tx.send(result);
     });
     Job {
         set,
@@ -495,6 +590,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
         rx,
         maps: Vec::new(),
         update: false,
+        cancel,
     }
 }
 
@@ -515,6 +611,8 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
     let done = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(0));
     let (d, t) = (done.clone(), total.clone());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
     let id = set.id;
     std::thread::spawn(move || {
         let result = (|| {
@@ -533,7 +631,9 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
                 })
                 .map(|m| m.path)
                 .collect();
-            replacing(&replaced, || fetch(id, &name, songs, &d, &t))
+            replacing(&replaced, || {
+                fetch(&mirror_sources(id), &name, songs, &d, &t, &stop)
+            })
         })();
         let _ = tx.send(result);
     });
@@ -544,6 +644,7 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
         rx,
         maps: Vec::new(),
         update: true,
+        cancel,
     }
 }
 
@@ -707,34 +808,52 @@ pub fn md5_hex(data: &[u8]) -> String {
 /// moment and catboy.best rate-limits (425), and the next try usually works.
 const ROUNDS: u64 = 3;
 
+/// Where the mirrors give osu! set `id`.
+fn mirror_sources(id: u32) -> Vec<(&'static str, String)> {
+    MIRRORS
+        .iter()
+        .map(|m| (m.name, format!("{}{id}", m.download)))
+        .collect()
+}
+
+/// Downloads the archive from the first of `sources` (name, URL) that has it and unpacks it
+/// into `songs`/`name`.
 fn fetch(
-    id: u32,
+    sources: &[(&str, String)],
     name: &str,
     songs: &Path,
     done: &AtomicU64,
     total: &AtomicU64,
+    cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(songs).map_err(|e| format!("{}: {e}", songs.display()))?;
     let dest = songs.join(name);
     let archive = songs.join(format!("{name}.osz.part"));
-    let mut errors: [Option<String>; MIRRORS.len()] = Default::default();
+    let mut errors: Vec<Option<String>> = vec![None; sources.len()];
     // A mirror that doesn't have the set (404) isn't asked again.
-    let mut gone = [false; MIRRORS.len()];
+    let mut gone = vec![false; sources.len()];
     for round in 0..ROUNDS {
         if gone.iter().all(|&g| g) {
             break;
         }
         if round > 0 {
             // osu.direct's 503s ask for up to 30 s.
-            std::thread::sleep(Duration::from_secs(5 * round));
+            let until = std::time::Instant::now() + Duration::from_secs(5 * round);
+            while std::time::Instant::now() < until && !cancel.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
-        for (k, m) in MIRRORS.iter().enumerate() {
+        for (k, (_, url)) in sources.iter().enumerate() {
             if gone[k] {
                 continue;
             }
             done.store(0, Ordering::Relaxed);
             total.store(0, Ordering::Relaxed);
-            match download_to(&format!("{}{id}", m.download), &archive, done, total) {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = std::fs::remove_file(&archive);
+                return Err(CANCELLED.into());
+            }
+            match download_to(url, &archive, done, total, cancel) {
                 Ok(()) => {
                     let result = extract(&archive, &dest);
                     let _ = std::fs::remove_file(&archive);
@@ -750,20 +869,24 @@ fn fetch(
             }
         }
     }
-    Err(MIRRORS
+    if cancel.load(Ordering::Relaxed) {
+        return Err(CANCELLED.into());
+    }
+    Err(sources
         .iter()
         .zip(errors)
-        .filter_map(|(m, e)| Some(format!("{}: {}", m.name, e?)))
+        .filter_map(|((source, _), e)| Some(format!("{source}: {}", e?)))
         .collect::<Vec<_>>()
         .join("; "))
 }
 
 /// Errors say whether trying again later could help (not for a set the mirror doesn't have).
-fn download_to(
+pub(crate) fn download_to(
     url: &str,
     path: &Path,
     done: &AtomicU64,
     total: &AtomicU64,
+    cancel: &AtomicBool,
 ) -> Result<(), (String, bool)> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(15)))
@@ -800,6 +923,9 @@ fn download_to(
     let mut file = std::fs::File::create(path).map_err(|e| (e.to_string(), false))?;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err((CANCELLED.into(), false));
+        }
         // A dropped transfer is worth another try.
         let n = reader.read(&mut buf).map_err(|e| (e.to_string(), true))?;
         if n == 0 {
@@ -984,6 +1110,7 @@ pub fn receive(
             rx,
             maps: Vec::new(),
             update: false,
+            cancel: Arc::default(),
         },
         feed,
     )
@@ -1018,6 +1145,7 @@ pub fn import(
         favourite_count: 0,
         rating: 0.0,
         ranked_date: String::new(),
+        custom: None,
     };
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -1039,6 +1167,7 @@ pub fn import(
         rx,
         maps,
         update: false,
+        cancel: Arc::default(),
     }
 }
 
@@ -1279,6 +1408,55 @@ pub fn fetch_preview(set: u32, beatmap: u32) -> Result<PathBuf, String> {
     Ok(osu)
 }
 
+/// Where the download tab keeps its result covers (`pictures.rs` reads them from there).
+pub fn covers_dir() -> PathBuf {
+    crate::config::cache_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
+        .join("covers")
+}
+
+/// A set's cover file in [`covers_dir`]: "o<id>.img" for osu!'s sets, "c<id>-v<n>.img" for the
+/// website's custom ones (a new upload may bring a new background).
+pub fn cover_name(set: &SetInfo) -> String {
+    match &set.custom {
+        Some(c) => format!("c{}-v{}.img", set.id, c.version),
+        None => format!("o{}.img", set.id),
+    }
+}
+
+/// Fetches a set's cover into [`covers_dir`] (osu!'s square list cover, or a custom set's
+/// background from the website). Err when it has none or it couldn't be fetched.
+pub fn fetch_cover(set: &SetInfo) -> Result<(), String> {
+    let url = match &set.custom {
+        Some(c) if c.background => format!("{}/c/{}/bg", crate::online::WEBSITE, set.id),
+        Some(_) => return Err("no background".into()),
+        None => format!(
+            "https://assets.ppy.sh/beatmaps/{}/covers/list@2x.jpg",
+            set.id
+        ),
+    };
+    let dir = covers_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
+        .into();
+    let bytes = agent
+        .get(&url)
+        .header("User-Agent", USER_AGENT)
+        .call()
+        .map_err(|e| e.to_string())?
+        .body_mut()
+        .with_config()
+        .limit(8 << 20)
+        .read_to_vec()
+        .map_err(|e| e.to_string())?;
+    let file = dir.join(cover_name(set));
+    let part = file.with_extension("part");
+    std::fs::write(&part, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&part, &file).map_err(|e| e.to_string())
+}
+
 /// The clip file in a preview folder.
 pub fn clip_in(dir: &Path) -> Option<String> {
     std::fs::read_dir(dir)
@@ -1363,6 +1541,21 @@ mod tests {
             b"mine"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cancelled_download_stops_before_asking_anyone_and_says_so() {
+        let songs = std::env::temp_dir().join(format!("taiko-rs-cancel-{}", std::process::id()));
+        let (done, total) = Default::default();
+        let cancel = AtomicBool::new(true);
+        // Nothing listens there: asking would fail with another error, not "cancelled".
+        let sources = [("nowhere", "http://127.0.0.1:9/set".to_string())];
+        let started = std::time::Instant::now();
+        let got = fetch(&sources, "1 A - T", &songs, &done, &total, &cancel);
+        assert_eq!(got, Err(CANCELLED.to_string()));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!songs.join("1 A - T").exists());
+        let _ = std::fs::remove_dir_all(&songs);
     }
 
     #[test]

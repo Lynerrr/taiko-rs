@@ -369,7 +369,7 @@ fn map_download(downloads: &[download::Job], m: &net::MapInfo) -> Option<Option<
     downloads
         .iter()
         .find(|j| {
-            Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
+            j.set.is_osu_set(m.set_id) || (j.set.title == m.title && j.set.artist == m.artist)
         })
         .map(download::Job::fraction)
 }
@@ -3238,7 +3238,7 @@ impl State {
                     && !self
                         .downloads
                         .iter()
-                        .any(|j| Some(j.set.id) == score.set_id)
+                        .any(|j| j.set.is_osu_set(score.set_id))
                 {
                     self.score_link = None;
                 }
@@ -3267,6 +3267,7 @@ impl State {
                     favourite_count: 0,
                     rating: 0.0,
                     ranked_date: String::new(),
+                    custom: None,
                 });
                 if let Some(l) = &mut self.score_link {
                     l.downloading = Some(Instant::now());
@@ -6005,6 +6006,16 @@ impl State {
     // ponytail: multiplayer and spectating draw a map's text but not its pictures.
     fn picture_dir(&self) -> Option<PathBuf> {
         let entry = match &self.scene {
+            // A custom map's preview may show its own pictures (the results' covers come from
+            // their own folder, `pictures::COVER_PREFIX`).
+            Scene::Download => {
+                return self
+                    .browse
+                    .shown
+                    .and_then(|i| self.browse.remote.get(i))
+                    .and_then(|e| e.path.parent())
+                    .map(Path::to_path_buf);
+            }
             Scene::Editor(view) => return view.ed.path.parent().map(Path::to_path_buf),
             Scene::Play { entry, .. } => *entry,
             Scene::Settings { prev } => match **prev {
@@ -7862,7 +7873,7 @@ impl State {
             Scene::Download if self.preview.time_at(vx, vy).is_some() => self
                 .preview
                 .seek_by(notches as f64 * 5000.0, self.audio.as_ref()),
-            Scene::Download => self.browse.move_by(-notches),
+            Scene::Download => self.browse.scroll_by(notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
                     dd.wheel(notches);
@@ -11128,6 +11139,7 @@ impl State {
                 favourite_count: 0,
                 rating: 0.0,
                 ranked_date: String::new(),
+                custom: None,
             }),
         }
     }
@@ -15245,16 +15257,23 @@ impl State {
                 self.preview.size = preview::PREVIEW_SIZE.1;
                 let phone = mobile::active();
                 if phone {
-                    self.draw_mobile_download(canvas, &installed);
+                    let custom: std::collections::HashSet<u32> =
+                        self.select.custom_folder.values().copied().collect();
+                    self.draw_mobile_download(canvas, &installed, &custom);
                 } else {
+                    let custom = &self.select.custom_folder;
+                    let is_installed = |set: &download::SetInfo| match set.custom {
+                        Some(_) => custom.values().any(|&id| id == set.id),
+                        None => installed.contains(&set.id),
+                    };
                     self.browse
-                        .draw(canvas, &self.downloads, &installed, &dir, lw);
+                        .draw(canvas, &self.downloads, &is_installed, &dir, lw);
                 }
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
                 let x = 24.0 + lw + 12.0;
                 let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
-                let stars = self.browse.selected_diff().map(|d| d.stars);
+                let stars = self.browse.selected_stars();
                 if pw > 160.0 && self.browse.selected().is_some() {
                     match self.preview.draw_panel(
                         canvas,
@@ -16482,18 +16501,51 @@ impl State {
 
     /// Downloads a set unless it's already here or on its way.
     fn start_download(&mut self, set: download::SetInfo) {
-        if self.installed_sets().contains(&set.id) {
+        let here = match set.custom {
+            Some(_) => self.select.custom_folder.values().any(|&id| id == set.id),
+            None => self.installed_sets().contains(&set.id),
+        };
+        if here {
             self.toast(format!(
                 "{} - {} is already in your songs",
                 set.artist, set.title
             ));
             return;
         }
-        if self.downloads.iter().any(|j| j.set.id == set.id) {
+        if self.downloads.iter().any(|j| j.set.same(&set)) {
             return;
         }
+        self.browse.failed_jobs.retain(|(s, _)| !s.same(&set));
         let dir = self.songs_dir.clone();
         self.downloads.push(download::start(set, dir));
+    }
+
+    /// Download tab: goes to song select on an installed result's maps.
+    fn play_downloaded(&mut self, set: &download::SetInfo) {
+        let custom_folders: Vec<&Path> = match set.custom {
+            Some(_) => self
+                .select
+                .custom_folder
+                .iter()
+                .filter(|(_, id)| **id == set.id)
+                .map(|(dir, _)| dir.as_path())
+                .collect(),
+            None => Vec::new(),
+        };
+        let maps = main_maps(self.library.iter().filter(|e| match set.custom {
+            Some(_) => e.path.parent().is_some_and(|d| custom_folders.contains(&d)),
+            None => e.set_id() == Some(set.id),
+        }));
+        if maps.is_empty() {
+            self.toast(format!(
+                "{} - {} isn't in your songs",
+                set.artist, set.title
+            ));
+            return;
+        }
+        self.browse.menu = None;
+        self.scene = Scene::Select;
+        self.reveal_maps(maps);
     }
 
     /// Lobby: fetch the map we don't have (by its set ID, else by searching for it).
@@ -16524,6 +16576,7 @@ impl State {
                 favourite_count: 0,
                 rating: 0.0,
                 ranked_date: String::new(),
+                custom: None,
             }),
             None => {
                 let (tx, rx) = mpsc::channel();
@@ -16634,6 +16687,7 @@ impl State {
                 favourite_count: 0,
                 rating: 0.0,
                 ranked_date: String::new(),
+                custom: None,
             };
             let (job, feed) = download::receive(
                 set,
@@ -16937,9 +16991,23 @@ impl State {
             match result {
                 Ok(folder) if update => self.add_updated(&set, &folder),
                 Ok(folder) => self.add_downloaded(&set, &folder),
+                Err(e) if e == download::CANCELLED => {
+                    if update {
+                        self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
+                    }
+                    self.toast(format!(
+                        "stopped downloading {} - {}",
+                        set.artist, set.title
+                    ));
+                }
                 Err(e) => {
                     if update {
                         self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
+                    } else if !set.diffs.is_empty() || set.custom.is_some() {
+                        // A search result: the download tab offers to try it again.
+                        let short: String = e.chars().take(60).collect();
+                        self.browse.failed_jobs.retain(|(s, _)| !s.same(&set));
+                        self.browse.failed_jobs.push((set.clone(), short));
                     }
                     eprintln!("download {} failed: {e}", set.id);
                     self.toast(format!(
@@ -17067,7 +17135,7 @@ impl State {
             self.toast("this map has no osu! set ID to update it by".into());
             return;
         };
-        if self.downloads.iter().any(|j| j.set.id == id) {
+        if self.downloads.iter().any(|j| j.set.is_osu_set(Some(id))) {
             return;
         }
         // Which of these are the set's own is asked of osu! on the download's thread.
@@ -17097,6 +17165,7 @@ impl State {
             favourite_count: 0,
             rating: 0.0,
             ranked_date: String::new(),
+            custom: None,
         };
         self.toast(format!("updating {} - {}...", set.artist, set.title));
         self.select.updates.insert(id, ui::SetUpdate::Updating);
@@ -17175,7 +17244,21 @@ impl State {
         };
         let n = fresh.len();
         self.append_maps(fresh);
-        self.installed_sets().insert(set.id);
+        match &set.custom {
+            // Song select knows it as the website's set, approved or not, straight away.
+            Some(custom) => {
+                self.select
+                    .custom_folder
+                    .insert(folder.to_path_buf(), set.id);
+                if custom.approved {
+                    self.select.custom_approved.insert(set.id);
+                }
+                self.select.refilter(&self.library);
+            }
+            None => {
+                self.installed_sets().insert(set.id);
+            }
+        }
         eprintln!(
             "downloaded set {} into {} ({n} maps)",
             set.id,
@@ -17230,6 +17313,13 @@ impl State {
             KeyCode::ArrowUp | KeyCode::ArrowDown if self.modifiers_ctrl => self
                 .browse
                 .step_sort(if code == KeyCode::ArrowDown { 1 } else { -1 }),
+            KeyCode::Tab if self.modifiers_ctrl => {
+                let next = match self.browse.source() {
+                    browse::Source::Osu => browse::Source::Ours,
+                    browse::Source::Ours => browse::Source::Osu,
+                };
+                self.browse.set_source(next);
+            }
             KeyCode::ArrowUp => self.browse.move_by(-1),
             KeyCode::ArrowDown => self.browse.move_by(1),
             KeyCode::ArrowLeft => self.browse.cycle_diff(-1),
@@ -17238,9 +17328,18 @@ impl State {
             KeyCode::PageDown => self.browse.move_by(8),
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 if let Some(set) = self.browse.selected().cloned() {
-                    self.start_download(set);
+                    let here = match set.custom {
+                        Some(_) => self.select.custom_folder.values().any(|&id| id == set.id),
+                        None => self.installed_sets().contains(&set.id),
+                    };
+                    if here {
+                        self.play_downloaded(&set);
+                    } else {
+                        self.start_download(set);
+                    }
                 }
             }
+            KeyCode::Escape if self.browse.menu.is_some() => self.browse.menu = None,
             KeyCode::Backspace if self.modifiers_ctrl => self.browse.clear(),
             KeyCode::Backspace => self.browse.backspace(),
             KeyCode::Escape if !self.browse.query.is_empty() => self.browse.clear(),
@@ -17563,8 +17662,43 @@ impl State {
                     self.open_video_editor(&file);
                 }
             }
-            Hit::DlCategory(i) => self.browse.set_category(download::Category::ALL[i]),
-            Hit::DlSort(i) => self.browse.set_sort(download::SortKey::ALL[i]),
+            Hit::DlSource(i) => self.browse.set_source(browse::Source::ALL[i]),
+            Hit::DlMenu(0) => self.browse.toggle_menu(browse::Menu::Status),
+            Hit::DlMenu(_) => self.browse.toggle_menu(browse::Menu::Sort),
+            Hit::DlMenuClose => self.browse.menu = None,
+            Hit::DlSortDir => self.browse.flip_sort(),
+            Hit::DlPlay(i) => {
+                self.browse.cursor = i;
+                if let Some(set) = self.browse.selected().cloned() {
+                    self.play_downloaded(&set);
+                }
+            }
+            Hit::DlCancel(i) => {
+                if let Some(job) = self.downloads.get(i) {
+                    job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            Hit::DlRetry(i) => {
+                if i < self.browse.failed_jobs.len() {
+                    let (set, _) = self.browse.failed_jobs.remove(i);
+                    self.start_download(set);
+                }
+            }
+            Hit::DlDismiss(i) => {
+                if i < self.browse.failed_jobs.len() {
+                    self.browse.failed_jobs.remove(i);
+                }
+            }
+            Hit::DlCategory(i) => {
+                if let Some(&c) = self.browse.categories().get(i) {
+                    self.browse.set_category(c);
+                }
+            }
+            Hit::DlSort(i) => {
+                if let Some(&s) = self.browse.sorts().get(i) {
+                    self.browse.set_sort(s);
+                }
+            }
             Hit::SettingsSection(i) => {
                 self.settings_ui.binding = None;
                 self.settings_ui.clear_search();
@@ -17577,6 +17711,10 @@ impl State {
             Hit::SongsFolder => self.browse_songs_folder(),
             // Taken when pressed (`mouse_button`).
             Hit::SongScrollbar => {}
+            Hit::DlRow(i) if self.browse.menu.is_some() => {
+                let _ = i;
+                self.browse.menu = None;
+            }
             Hit::DlRow(i) if i == self.browse.cursor => {
                 self.download_key(KeyCode::Enter, None, window)
             }

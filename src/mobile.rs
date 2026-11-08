@@ -14,7 +14,7 @@ use winit::window::Window;
 use crate::config::RATE_RANGE;
 use crate::render::{Canvas, Hit, HitBox, VIRTUAL_HEIGHT, accent, approach, rgba};
 use crate::settings::{self, Control, ITEMS, Kind, SECTIONS};
-use crate::{Scene, State, download, mods, stars};
+use crate::{Scene, State, mods, stars};
 
 /// The song list's width on a `w` wide screen.
 pub fn select_list_w(w: f32) -> f32 {
@@ -1721,12 +1721,13 @@ impl State {
         &mut self,
         c: &mut Canvas,
         installed: &std::collections::HashSet<u32>,
+        custom: &std::collections::HashSet<u32>,
     ) {
-        use download::{Category, SortKey};
+        use crate::browse::Source;
         let (w, dt) = (c.width - self.tab_room(), c.dt_ms);
         let x = back_button(c, tr!("< BACK"), Hit::Key(KeyCode::Escape));
-        let (status_w, sort_w) = (192.0, 180.0);
-        let search_w = w - x - status_w - sort_w - 16.0;
+        let (source_w, status_w, sort_w) = (120.0, 192.0, 180.0);
+        let search_w = w - x - source_w - status_w - sort_w - 24.0;
         let query = self.browse.query.clone();
         search_box(
             c,
@@ -1737,13 +1738,33 @@ impl State {
             false,
             Hit::TextField,
         );
-        let at = Category::ALL
+        // osu! or taiko.rs: a tap switches.
+        let source = self.browse.source();
+        let other = match source {
+            Source::Osu => Source::Ours,
+            Source::Ours => Source::Osu,
+        };
+        let other_at = Source::ALL.iter().position(|&s| s == other).unwrap_or(0);
+        c.button(
+            x + search_w + 8.0,
+            0.0,
+            source_w,
+            BAR_H - 2.0,
+            source.name(),
+            SMALL,
+            Hit::DlSource(other_at),
+            true,
+        );
+        // Status and order step through the source's own (the hits index `categories` and
+        // `sorts`).
+        let cats = self.browse.categories();
+        let at = cats
             .iter()
             .position(|&k| k == self.browse.category)
             .unwrap_or(0);
-        let next = (at + 1) % Category::ALL.len();
-        let sx = x + search_w + 8.0;
-        let label = Category::ALL[at].name();
+        let next = (at + 1) % cats.len();
+        let sx = x + search_w + 8.0 + source_w + 8.0;
+        let label = cats[at].name();
         c.button(
             sx,
             0.0,
@@ -1754,12 +1775,16 @@ impl State {
             Hit::DlCategory(next),
             false,
         );
-        let at = SortKey::ALL
+        let sorts = self.browse.sorts();
+        let at = sorts
             .iter()
             .position(|&k| k == self.browse.sort)
             .unwrap_or(0);
-        let next = (at + 1) % SortKey::ALL.len();
-        let sort = SortKey::ALL[at].name();
+        let next = (at + 1) % sorts.len();
+        let sort = match source {
+            Source::Osu => sorts[at].name(),
+            Source::Ours => sorts[at].name_for_ours(),
+        };
         let label = tr!("Sort: {sort}"; sort);
         let hit = Hit::DlSort(next);
         c.button(
@@ -1817,9 +1842,13 @@ impl State {
             c.hit(0.0, top, w, bottom - top, Hit::DlRow(i));
             // The state on the right, under the thumb.
             let (aw, ax) = (132.0, w - 132.0 - 10.0);
-            let job = self.downloads.iter().find(|j| j.set.id == set.id);
+            let job = self.downloads.iter().find(|j| j.set.same(set));
             let ty = y + (ROW_H - GAP - SMALL) / 2.0;
-            if installed.contains(&set.id) {
+            let here = match set.custom {
+                Some(_) => custom.contains(&set.id),
+                None => installed.contains(&set.id),
+            };
+            if here {
                 c.text_centered(
                     ax + aw / 2.0,
                     ty,
@@ -1844,8 +1873,25 @@ impl State {
                     on,
                 );
             }
-            let hi = set.diffs.last().map(|d| d.stars);
-            let pill = stars::draw_pill(c, ax - 12.0, ty, SMALL, hi);
+            // Custom sets aren't rated by the website: their status goes there.
+            let hi = set
+                .diffs
+                .last()
+                .map(|d| d.stars)
+                .filter(|_| set.custom.is_none());
+            let pill = match &set.custom {
+                Some(cs) => {
+                    let (label, colour) = if cs.approved {
+                        (tr!("Approved"), 0x86E05A)
+                    } else {
+                        (tr!("Custom"), 0xB28CFF)
+                    };
+                    let lw = Canvas::text_width(SMALL, label);
+                    c.text(ax - 12.0 - lw, ty, SMALL, rgba(colour, 1.0), label);
+                    lw
+                }
+                None => stars::draw_pill(c, ax - 12.0, ty, SMALL, hi),
+            };
             let room = ax - pill - 40.0;
             let title = Canvas::fit(MEDIUM, room, &set.title);
             c.text(14.0, y + 12.0, MEDIUM, rgba(0xffffff, 1.0), &title);

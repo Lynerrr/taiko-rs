@@ -310,12 +310,14 @@ fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
             favourite_count: 0,
             rating: 0.0,
             ranked_date: String::new(),
+            custom: None,
         },
         done: Arc::new(AtomicU64::new(25)),
         total: Arc::new(AtomicU64::new(100)),
         rx,
         maps: Vec::new(),
         update: false,
+        cancel: Arc::default(),
     });
     let mut v = WatchView::new("bob".into());
     v.play = Some(play);

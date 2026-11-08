@@ -6,6 +6,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::download::{CustomSet, Diff, SetInfo};
 use crate::online::WEBSITE;
 
 /// The file in a map's folder that keeps its number on the server.
@@ -216,6 +217,159 @@ pub fn upload(token: &str, id: Option<u32>, osz: &[u8]) -> Result<Sent, String> 
         return Err(text);
     }
     answer(&text)
+}
+
+/// Where the website gives a custom set's archive (with its sidecar in it, so the folder it
+/// unpacks to is known as that set).
+pub fn download_url(id: u32) -> String {
+    format!("{WEBSITE}/c/{id}/download")
+}
+
+/// The custom sets on the website matching `query` (song, mapper or sender), approved ones only
+/// if `approved`, in `sort` order (newest first for relevance without search text).
+pub fn search(
+    query: &str,
+    approved: bool,
+    sort: crate::download::SortKey,
+    desc: bool,
+) -> Result<Vec<SetInfo>, String> {
+    use crate::download::SortKey;
+    let mut reply = ureq::get(format!("{WEBSITE}/api/custom"))
+        .query("q", query.trim())
+        .config()
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
+        .call()
+        .map_err(|e| e.to_string())?;
+    let text = reply
+        .body_mut()
+        .with_config()
+        .limit(16 << 20)
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    let mut sets = parse_list(&text)?;
+    sets.retain(|s| !approved || s.custom.as_ref().is_some_and(|c| c.approved));
+    let (sort, desc) = if sort == SortKey::Relevance && query.trim().is_empty() {
+        (SortKey::Ranked, true)
+    } else {
+        (sort, desc)
+    };
+    crate::download::sort_sets(&mut sets, sort, desc);
+    Ok(sets)
+}
+
+/// The sets of an `/api/custom` answer. A difficulty's number is its place in the set, from 1.
+fn parse_list(text: &str) -> Result<Vec<SetInfo>, String> {
+    #[derive(serde::Deserialize)]
+    struct ApiDiff {
+        #[serde(default)]
+        version: String,
+        #[serde(default)]
+        tko: bool,
+    }
+    #[derive(serde::Deserialize)]
+    struct ApiSet {
+        id: u32,
+        #[serde(default)]
+        artist: String,
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        creator: String,
+        #[serde(default)]
+        diffs: Vec<ApiDiff>,
+        #[serde(default)]
+        updated: u64,
+        #[serde(default)]
+        version: u32,
+        #[serde(default)]
+        downloads: u64,
+        #[serde(default)]
+        bytes: u64,
+        #[serde(default)]
+        approved: bool,
+        #[serde(default)]
+        background: bool,
+    }
+    let sets: Vec<ApiSet> =
+        serde_json::from_str(text).map_err(|e| format!("unexpected reply: {e}"))?;
+    Ok(sets
+        .into_iter()
+        .filter(|s| !s.diffs.is_empty())
+        .map(|s| SetInfo {
+            id: s.id,
+            artist: s.artist,
+            title: s.title,
+            creator: s.creator,
+            status: if s.approved {
+                "custom approved"
+            } else {
+                "custom"
+            }
+            .into(),
+            diffs: s
+                .diffs
+                .iter()
+                .zip(1..)
+                .map(|(d, id)| Diff {
+                    id,
+                    version: d.version.clone(),
+                    stars: 0.0,
+                })
+                .collect(),
+            play_count: s.downloads,
+            custom: Some(CustomSet {
+                approved: s.approved,
+                version: s.version,
+                bytes: s.bytes,
+                updated: s.updated,
+                tko: s.diffs.iter().any(|d| d.tko),
+                background: s.background,
+            }),
+            ..SetInfo::default()
+        })
+        .collect())
+}
+
+/// Where a custom set's preview is kept: its archive, and what it unpacks to.
+fn preview_dir(set: &SetInfo) -> PathBuf {
+    let version = set.custom.as_ref().map_or(0, |c| c.version);
+    crate::config::cache_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
+        .join("previews")
+        .join(format!("c{}-v{version}", set.id))
+}
+
+/// The archive a preview of this version of the set already fetched, if there is one: the
+/// download takes it instead of asking the website again.
+pub fn cached_archive(set: &SetInfo) -> Option<PathBuf> {
+    let file = preview_dir(set).join("set.osz");
+    file.is_file().then_some(file)
+}
+
+/// Fetches a custom set for the download tab's preview: the website has no single difficulty
+/// to give, so the whole archive comes (custom sets are small) and is unpacked into the cache.
+/// Returns the folder its maps are in.
+pub fn fetch_preview(set: &SetInfo) -> Result<PathBuf, String> {
+    let dir = preview_dir(set);
+    let maps = dir.join("maps");
+    if maps.is_dir() {
+        return Ok(maps);
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let archive = dir.join("set.osz");
+    if !archive.is_file() {
+        let part = dir.join("set.osz.part");
+        let (done, total, cancel) = Default::default();
+        crate::download::download_to(&download_url(set.id), &part, &done, &total, &cancel)
+            .map_err(|(e, _)| e)?;
+        std::fs::rename(&part, &archive).map_err(|e| e.to_string())?;
+    }
+    let unpacking = dir.join("maps.part");
+    let _ = std::fs::remove_dir_all(&unpacking);
+    crate::download::unpack(&archive, &unpacking)?;
+    std::fs::rename(&unpacking, &maps).map_err(|e| e.to_string())?;
+    Ok(maps)
 }
 
 /// Which of these custom sets the website has approved; None when it can't be asked.
@@ -445,5 +599,60 @@ mod tests {
         assert!(!empty.join("Exports").exists());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn the_websites_list_becomes_custom_sets_that_no_osu_set_is_taken_for() {
+        let text = r#"[
+            {"id": 4, "artist": "A", "title": "T/x", "creator": "M", "owner": "M",
+             "diffs": [{"version": "Oni", "hash": "1", "tko": false, "approved": true},
+                       {"version": "Oni (fx)", "hash": "2", "tko": true, "approved": true}],
+             "updated": 20, "version": 3, "downloads": 7, "bytes": 1048576,
+             "background": true, "approved": true},
+            {"id": 9, "artist": "B", "title": "U", "creator": "N", "diffs": [], "approved": false},
+            {"id": 5, "artist": "C", "title": "V", "creator": "N",
+             "diffs": [{"version": "Muzukashii"}], "updated": 30}
+        ]"#;
+        let sets = parse_list(text).unwrap();
+        // A set with no difficulty has nothing to play.
+        assert_eq!(sets.iter().map(|s| s.id).collect::<Vec<_>>(), [4, 5]);
+        let a = &sets[0];
+        let custom = a.custom.as_ref().unwrap();
+        assert!(custom.approved && custom.tko);
+        assert_eq!(
+            (custom.version, custom.bytes, a.play_count),
+            (3, 1 << 20, 7)
+        );
+        assert_eq!(a.diffs.iter().map(|d| d.id).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(a.diffs[1].version, "Oni (fx)");
+        assert!(!sets[1].custom.as_ref().unwrap().approved);
+        // Its folder isn't read as osu! set 4, and it isn't the same set as osu!'s 4.
+        let folder = a.folder_name();
+        assert_eq!(folder, "c4 A - T_x");
+        assert_eq!(crate::download::set_id_of_folder(Path::new(&folder)), None);
+        let osu = SetInfo {
+            id: 4,
+            ..SetInfo::default()
+        };
+        assert!(!a.same(&osu) && a.same(&a.clone()));
+        assert!(osu.is_osu_set(Some(4)) && !a.is_osu_set(Some(4)));
+    }
+
+    #[test]
+    fn custom_sets_list_newest_first_without_search_text() {
+        use crate::download::{SortKey, sort_sets};
+        let mut sets = parse_list(
+            r#"[{"id": 1, "title": "b", "diffs": [{"version": "x"}], "updated": 10, "downloads": 5},
+                {"id": 2, "title": "a", "diffs": [{"version": "x"}], "updated": 30, "downloads": 1},
+                {"id": 3, "title": "c", "diffs": [{"version": "x"}], "updated": 20, "downloads": 9}]"#,
+        )
+        .unwrap();
+        let ids = |s: &[SetInfo]| s.iter().map(|s| s.id).collect::<Vec<_>>();
+        sort_sets(&mut sets, SortKey::Ranked, true);
+        assert_eq!(ids(&sets), [2, 3, 1]);
+        sort_sets(&mut sets, SortKey::Plays, true);
+        assert_eq!(ids(&sets), [3, 1, 2]);
+        sort_sets(&mut sets, SortKey::Title, false);
+        assert_eq!(ids(&sets), [2, 1, 3]);
     }
 }
