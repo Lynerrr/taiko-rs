@@ -261,10 +261,15 @@ public class MusicService extends Service {
         return getResources().getIdentifier(name, "drawable", MusicService.class.getPackage().getName());
     }
 
-    /** Swiped out of the recent apps: the game is going, and its music with it. */
+    /**
+     * Swiped out of the recent apps: the game is going, and its music with it. The process goes
+     * too: kept for the music, it would be reused by the next launch, where the game can't start.
+     */
     @Override
     public void onTaskRemoved(Intent root) {
+        stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
+        android.os.Process.killProcess(android.os.Process.myPid());
     }
 
     @Override

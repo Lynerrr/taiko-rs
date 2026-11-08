@@ -165,6 +165,22 @@ public class TaikoActivity extends NativeActivity {
         stopService(new Intent(this, MusicService.class));
     }
 
+    /**
+     * The game closed (its Exit, or swiped out of the recent apps): the music stops with it, and
+     * so does the process, before NativeActivity's own onDestroy, which waits for the game's loop
+     * to end and never sees it (the system gave up after a timeout, leaving a stuck process the
+     * next launch reused: the game never came up). Settings are saved as they change.
+     */
+    @Override
+    protected void onDestroy() {
+        stopService(new Intent(this, MusicService.class));
+        running = null;
+        if (isFinishing()) {
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }
+        super.onDestroy();
+    }
+
     /** Full screen, over the camera's cutout too: the game keeps clear of it ({@link #safeInsets}). */
     private void goFullScreen() {
         if (Build.VERSION.SDK_INT >= 28) {
