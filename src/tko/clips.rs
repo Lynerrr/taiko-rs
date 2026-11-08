@@ -320,7 +320,7 @@ impl Layer {
                 *text = clean;
             }
             Show::Picture { file } => {
-                if !crate::pictures::safe_name(file) {
+                if !safe_name(file) {
                     return false;
                 }
             }
@@ -657,6 +657,15 @@ pub fn beat_moments(
         t += (every * beat(t)).max(1.0);
     }
     out
+}
+
+/// A file name a map may give for a picture: inside its folder, nothing climbing out of it.
+pub fn safe_name(name: &str) -> bool {
+    let p = std::path::Path::new(name);
+    !name.is_empty()
+        && !p.is_absolute()
+        && p.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 #[cfg(test)]

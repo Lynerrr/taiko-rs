@@ -48,7 +48,7 @@ pub fn replay(inputs: Vec<(f64, u8)>, mods: &[&str], version: u32) -> Replay {
 
 /// Plays `r` through `map` in `step` ms frames, as the results screen and video export do.
 pub fn play_replay(map: &Beatmap, r: &Replay, step: f64) -> Game {
-    let mut g = crate::video::replay_game(map, &silent_track(r.rate), r);
+    let mut g = crate::scores::replay_game(map, &silent_track(r.rate), r);
     let end = g.end_time() + 2000.0;
     let mut t = g.time;
     while t < end {
@@ -403,7 +403,7 @@ fn practice_from_the_middle_counts_only_what_is_left() {
         &[],
         scores::new_version(),
     );
-    let mut g = crate::video::replay_game(&map, &silent_track(1.0), &r);
+    let mut g = crate::scores::replay_game(&map, &silent_track(1.0), &r);
     g.skip_to(from);
     let end = g.end_time() + 2000.0;
     let mut t = g.time;

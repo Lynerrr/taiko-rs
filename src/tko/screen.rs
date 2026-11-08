@@ -10,7 +10,7 @@
 //! (a glitch's slices and the washes are in screen space).
 
 use super::runtime::{FieldFx, hash01};
-use crate::hit::Canvas;
+use crate::render::Canvas;
 use crate::render::{Shape, VIRTUAL_HEIGHT, rgba, rotate_shapes};
 
 /// Trail copies at most.
@@ -57,7 +57,7 @@ fn cut_into(fx: &FieldFx) -> usize {
 
 /// Cuts what was drawn since `start` into upright pieces across the screen, each pushed up or
 /// down and apart: the whole is hidden and each piece is a copy of it shown through its strip.
-fn slice(c: &mut Canvas, start: usize, fx: &FieldFx) {
+fn slice<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx) {
     let n = cut_into(fx);
     let end = c.shapes.len();
     if n < 2 || start >= end || (end - start) * n > MAX_EXTRA_SHAPES {
@@ -119,7 +119,7 @@ impl Unmove {
 /// Their lanes go behind everything of the playfield; the rest of them (notes, drum, hit target)
 /// over its lane but under its own notes, so a copy that overlaps the lane (one swaying to the
 /// side) still shows on it instead of hiding under it.
-pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2], unmove: Unmove) {
+pub fn copies<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, centre: [f32; 2], unmove: Unmove) {
     let end = c.shapes.len();
     if start >= end || fx.copies.iter().all(|k| k.show < 0.01) {
         return;
@@ -174,7 +174,7 @@ pub fn copies(c: &mut Canvas, start: usize, fx: &FieldFx, centre: [f32; 2], unmo
 
 /// Black behind the playfield, over what was drawn before it (the background): call before the
 /// playfield draws.
-pub fn backdrop(c: &mut Canvas, fx: &FieldFx) {
+pub fn backdrop<H>(c: &mut Canvas<H>, fx: &FieldFx) {
     let a = fx.backdrop.clamp(0.0, 1.0);
     if a >= 0.01 {
         c.rect(
@@ -213,7 +213,7 @@ fn light(shapes: &mut [Shape], rgb: [f32; 3], strength: f32) {
 
 /// Puts `shapes` into the canvas at `at`, after what is there before it; what lay at or beyond it
 /// keeps its place in the order and its clips, hit areas and opaque mark follow.
-fn insert_at(c: &mut Canvas, at: usize, shapes: Vec<Shape>) {
+fn insert_at<H>(c: &mut Canvas<H>, at: usize, shapes: Vec<Shape>) {
     let n = shapes.len();
     if n == 0 {
         return;
@@ -241,7 +241,7 @@ fn insert_at(c: &mut Canvas, at: usize, shapes: Vec<Shape>) {
 
 /// Stretching, trails, kaleidoscope and colour fringes of the shapes drawn since `start`, before
 /// the playfield is rotated and zoomed about `pivot` (the hit target).
-pub fn local(c: &mut Canvas, start: usize, fx: &FieldFx, pivot: [f32; 2]) {
+pub fn local<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, pivot: [f32; 2]) {
     if start >= c.shapes.len() || !has_local(fx) {
         return;
     }
@@ -343,7 +343,7 @@ pub fn hue_rgb(hue: f32) -> [f32; 3] {
 /// Tears, washes, vignette and flash over the shapes drawn since `start`, once the playfield is
 /// where it ends up. `t` is the game's clock, which picks what a glitch looks like (with the
 /// graph's seed, so a replay shows the same).
-pub fn screen(c: &mut Canvas, start: usize, fx: &FieldFx, t: f64) {
+pub fn screen<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, t: f64) {
     if !has_screen(fx) {
         return;
     }
@@ -454,7 +454,7 @@ mod tests {
     use super::*;
 
     /// A canvas 640 wide holding a lane and `notes` notes, as the playfield draws them.
-    fn field(notes: usize) -> Canvas {
+    fn field(notes: usize) -> Canvas<()> {
         let mut c = Canvas {
             width: 640.0,
             ..Canvas::default()
@@ -844,7 +844,7 @@ mod tests {
             c.shapes[n - 1].params[2] < -0.5,
             "a flash still shows on black"
         );
-        let mut c = Canvas {
+        let mut c = Canvas::<()> {
             width: 640.0,
             ..Canvas::default()
         };
