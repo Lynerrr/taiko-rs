@@ -17659,9 +17659,10 @@ impl State {
     /// Whether the song preview is the topmost thing at a point, so it takes the pointer there.
     /// Anything drawn over it (the friends panel, a drop-down, the changelog) gets it instead.
     fn preview_on_top(&self, x: f32, y: f32) -> bool {
-        // Both drop-downs take every click while open; the download one is drawn before the
-        // preview, so its click-away area is under it.
-        self.settings_ui.dropdown.is_none()
+        // The mod select and both drop-downs take every click while open; the download one is
+        // drawn before the preview, so its click-away area is under it.
+        self.mod_select.is_none()
+            && self.settings_ui.dropdown.is_none()
             && !(matches!(self.scene, Scene::Download) && self.browse.menu.is_some())
             && matches!(self.hit_at(x, y), Some(render::Hit::Preview))
     }
