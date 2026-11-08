@@ -810,6 +810,8 @@ struct State {
     /// dragging along it last seeked.
     replay_bar: Option<[f32; 4]>,
     replay_scrub: Option<Instant>,
+    /// How far the replay's seek bar has grown towards its hovered height (0 to 1).
+    replay_bar_grow: f32,
     /// The last F12's picture: width, height and RGB, for `/shot`.
     last_shot: Option<Arc<(u32, u32, Vec<u8>)>>,
     /// A screenshot on its way to the server, and who it's for.
@@ -903,9 +905,17 @@ fn pause_width() -> f32 {
         + 12.0
 }
 
-/// Replays: a timeline along the bottom of the screen to click or drag through. Returns the
-/// bar's rect (virtual units) for `replay_seek_at`.
-fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool, speed: f64) -> [f32; 4] {
+/// Replays: a timeline along the bottom of the screen to click or drag through, over the
+/// map's difficulty with the replay's misses marked. Returns the bar's rect (virtual units) for
+/// `replay_seek_at`.
+/// `grow`: how far it has grown towards its hovered height (0 to 1), kept between frames.
+fn draw_replay_bar(
+    c: &mut Canvas,
+    game: &Game,
+    active: bool,
+    speed: f64,
+    grow: &mut f32,
+) -> [f32; 4] {
     let w = c.width;
     let (start, end) = game.span();
     let label = format!("{} / {}", fmt_time(game.time), fmt_time(end));
@@ -935,29 +945,82 @@ fn draw_replay_bar(c: &mut Canvas, game: &Game, active: bool, speed: f64) -> [f3
     // Sized for the longest label so the bar doesn't twitch as the time changes.
     let lw = Canvas::text_width(7.0, &format!("{} / {}", fmt_time(end), fmt_time(end)));
     let (x, bw) = (left + lw + 10.0, w - 18.0 - (left + lw + 10.0));
-    let rect = [x, y - 7.0, bw, 14.0];
-    let hover = active || c.hovered(rect[0] - 6.0, rect[1], rect[2] + 12.0, rect[3]);
-    let f = ((game.time - start) / (end - start).max(1.0)).clamp(0.0, 1.0) as f32;
-    let th = if hover { 4.0 } else { 2.0 };
+    // The strip: difficulty bars standing on `base`, misses over them. Hovered or dragged, it
+    // grows upwards to show more.
+    let base = y + 1.0;
+    let hover_at = |gh: f32| [x, base - gh, bw, gh + 2.0];
+    let now_rect = hover_at(17.0 + *grow * 13.0);
+    let hover = active
+        || c.hovered(
+            now_rect[0] - 6.0,
+            now_rect[1],
+            now_rect[2] + 12.0,
+            now_rect[3],
+        );
+    render::approach(grow, if hover { 1.0 } else { 0.0 }, c.dt_ms, 60.0);
+    let gh = 17.0 + *grow * 13.0;
+    let rect = hover_at(gh);
+    let top = base - gh;
+    let span = (end - start).max(1.0);
+    let x_of = |t: f64| x + (((t - start) / span).clamp(0.0, 1.0) as f32) * bw;
+    let f = ((game.time - start) / span).clamp(0.0, 1.0) as f32;
     c.text(left, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
+    c.round_rect(
+        [x - 2.0, top - 2.0],
+        [bw + 4.0, gh + 4.0],
+        4.0,
+        rgba(0x0c0c12, 0.8),
+        rgba(0x2a2a38, 1.0),
+        1.0,
+    );
+    if let Some((graph, misses)) = &game.replay_timeline {
+        // Kiai tinted, as on song select's graph.
+        for &(s, e) in &graph.kiai {
+            let (kx0, kx1) = (x_of(s), x_of(e));
+            c.rect(kx0, top, (kx1 - kx0).max(1.0), gh, rgba(0xff8a3d, 0.12));
+        }
+        let (bx0, bx1) = (
+            x_of(graph.peaks_start),
+            x_of(graph.peaks_start + graph.peaks.len() as f64 * graph.section),
+        );
+        let n = (((bx1 - bx0) / 2.5) as usize).max(1);
+        let bar_w = (bx1 - bx0) / n as f32;
+        let now_x = x + bw * f;
+        for (i, v) in graph.bins(n).into_iter().enumerate() {
+            let bh = 1.0 + v * (gh - 3.0);
+            let bx = bx0 + i as f32 * bar_w;
+            let played = bx + bar_w / 2.0 <= now_x;
+            let colour = rgba(preview::strain_colour(v), if played { 1.0 } else { 0.55 });
+            c.rect(bx, base - 1.0 - bh, (bar_w - 0.5).max(0.5), bh, colour);
+        }
+        // Each miss: a glowing dot on the strip's top edge and a fine line down to the bars;
+        // the ones still ahead are dimmed, like the bars.
+        const MISS: u32 = 0xff4d6a;
+        for &t in misses {
+            let mx = x_of(t);
+            let a = if mx <= now_x { 1.0 } else { 0.5 };
+            c.rect(mx - 0.5, top + 2.0, 1.0, gh - 3.0, rgba(MISS, 0.35 * a));
+            c.circle(mx, top - 1.0, 4.0, rgba(MISS, 0.18 * a), rgba(0, 0.0), 0.0);
+            c.circle(
+                mx,
+                top - 1.0,
+                2.0,
+                rgba(MISS, a),
+                rgba(0xffffff, 0.8 * a),
+                0.75,
+            );
+        }
+    }
     c.text(
         x,
-        y + 9.0,
+        y + 10.0,
         6.0,
         rgba(0x6f6f86, 1.0),
         tr!("Left/Right or drag: seek   Space: pause   Up/Down: speed"),
     );
-    c.rect(x, y - th / 2.0, bw, th, rgba(0x2a2a38, 1.0));
-    c.rect(x, y - th / 2.0, bw * f, th, rgba(accent(), 1.0));
-    let k = if hover { 5.0 } else { 3.5 };
-    c.round_rect(
-        [x + bw * f - k, y - k],
-        [k * 2.0, k * 2.0],
-        1.0,
-        rgba(0xffffff, 1.0),
-        rgba(accent(), 1.0),
-        1.5,
-    );
+    // The playhead: a white line a little taller than the strip.
+    let hx = x + bw * f;
+    c.rect(hx - 0.75, top - 2.0, 1.5, gh + 4.0, rgba(0xffffff, 0.95));
     rect
 }
 
@@ -14884,6 +14947,11 @@ impl State {
                     let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
                     if t < 1.0 {
                         let start = canvas.shapes.len();
+                        // The way to the leaderboard is where the way back is on the board (its
+                        // header's top right), so the mouse stays put going back and forth.
+                        let label = tr!("Leaderboard >");
+                        let bw = Canvas::text_width(7.0, label) + 24.0;
+                        self.preview.title_room = bw + 10.0;
                         if let Some(clip) = self.preview.draw_panel(
                             canvas,
                             &self.library,
@@ -14899,15 +14967,12 @@ impl State {
                         ) {
                             self.frame_clip = Some(clip);
                         }
-                        // The way to the leaderboard, under the preview at its right (over its
-                        // foot when the preview takes the whole height).
-                        let label = tr!("Leaderboard >");
-                        let bw = Canvas::text_width(8.0, label) + 28.0;
-                        let by = (self.preview.panel_bottom + 6.0)
-                            .min(panel_top + panel_h - PAGE_BUTTON_H);
-                        let bx = x - t * step + pw - bw;
+                        self.preview.title_room = 0.0;
+                        // As the board's back button: 10 in from the frame, then the rows' scroll
+                        // bar room (`board_tabs`, inside `pw - 28`).
+                        let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
                         let hit = render::Hit::BoardPage;
-                        canvas.button(bx, by, bw, PAGE_BUTTON_H, label, 8.0, hit, false);
+                        canvas.button(bx, by, bw, 20.0, label, 7.0, hit, false);
                         canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
                     } else {
                         self.preview.hide_panel();
@@ -15248,11 +15313,16 @@ impl State {
                     });
                 }
                 if game.replay.is_some() && game.paused.is_none() {
+                    if game.replay_timeline.is_none() {
+                        let misses = game.replay_misses();
+                        game.replay_timeline = Some((difficulty::analyze(&game.map), misses));
+                    }
                     self.replay_bar = Some(draw_replay_bar(
                         canvas,
                         game,
                         self.replay_scrub.is_some(),
                         self.replay_speed_wanted,
+                        &mut self.replay_bar_grow,
                     ));
                 }
                 if let Some(plan) = &mut self.shots
@@ -16452,14 +16522,17 @@ impl State {
                 self.preview.invalidate_audio();
             } else if matches!(s, Scene::Results { .. } | Scene::Select) {
                 self.stop_audio();
-                if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
-                    eprintln!(
-                        "--- smoothness ({}) ---\n{}",
-                        self.present.name(),
-                        sm.report()
-                    );
-                    *sm = debug::Smoothness::default();
-                }
+            }
+            // TAIKO_STATS: the play's smoothness, whether the music plays on at the results or not.
+            if matches!(s, Scene::Results { .. } | Scene::Select)
+                && let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene)
+            {
+                eprintln!(
+                    "--- smoothness ({}) ---\n{}",
+                    self.present.name(),
+                    sm.report()
+                );
+                *sm = debug::Smoothness::default();
             }
             if let (Scene::Results { results, .. }, Scene::Play { .. }) = (&s, &self.scene) {
                 let st = &results.stats;
@@ -18404,6 +18477,9 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
     // The waits are only measured for the profile and the smoothness report: reading the clock
     // can cost microseconds a time (HPET).
     let timing = profile || std::env::var_os("TAIKO_STATS").is_some();
+    // TAIKO_HITCH: every frame over 10 ms, split into where its time went.
+    let hitch = std::env::var_os("TAIKO_HITCH").is_some();
+    let mut h_end = Instant::now();
     let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) =
         (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
     let (mut prof_acquire, mut prof_acquire_max) = (0.0f64, 0.0f64);
@@ -18496,6 +18572,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             }
         }
 
+        let h_top = Instant::now();
         let t0 = timing.then(Instant::now);
         let Some(frame) = renderer.acquire() else {
             // In the background nothing is drawn, but the music is still looked after: the next
@@ -18579,8 +18656,12 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
                 break;
             }
         }
+        let h_lock = Instant::now();
+        let h_build;
+        let h_built;
         let (capture, clip, backdrop, background) = {
             let mut s = lock(&state);
+            h_build = Instant::now();
             // Video export frames above are drawn without the grid; the screen's frame with it.
             render::set_text_grid(renderer.text_grid());
             render::set_text_bias(renderer.text_bias());
@@ -18589,6 +18670,7 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             s.pace_shift_ms = pace_shift_ms;
             s.seen_refresh_ms = pacer.refresh_ms();
             let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
+            h_built = Instant::now();
             if let Some([x, y, _, h]) = safe {
                 // The margins in the interface's units.
                 let (side, edge) = (x as f32, y as f32);
@@ -18763,6 +18845,24 @@ fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoo
             }
         }
 
+        if hitch {
+            let ms = |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f64() * 1000.0;
+            let done = Instant::now();
+            if ms(h_end, done) > 10.0 {
+                eprintln!(
+                    "hitch {:.1} ms: sleep/loop {:.1} acquire {:.1} export {:.1} lock {:.1} build {:.1} after-build {:.1} submit {:.1}",
+                    ms(h_end, done),
+                    ms(h_end, h_top),
+                    ms(h_top, acquired),
+                    ms(acquired, h_lock),
+                    ms(h_lock, h_build),
+                    ms(h_build, h_built),
+                    ms(h_built, t1.unwrap_or(done)),
+                    ms(t1.unwrap_or(done), done)
+                );
+            }
+            h_end = done;
+        }
         if present != PresentChoice::Fifo && cap > 0 {
             // Fixed grid so frames are evenly spaced; resync if we fell behind.
             let period = Duration::from_secs_f64(1.0 / cap as f64);
@@ -19610,6 +19710,7 @@ impl State {
             readout_rect: None,
             replay_bar: None,
             replay_scrub: None,
+            replay_bar_grow: 0.0,
             mouse_moved_at: Instant::now(),
             mouse_moved_from: (0.0, 0.0),
             preview: preview::Preview::default(),
