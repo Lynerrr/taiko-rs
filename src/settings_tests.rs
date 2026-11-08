@@ -1536,7 +1536,7 @@ fn sets_loved_on_the_server_count_as_loved() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.library[0].meta.set_id = Some(2275915);
     s.set_status.insert(2275915, Some("graveyard".into()));
-    s.select.server_loved.insert(2275915);
+    s.select.server_loved.insert(2275915, Vec::new());
     assert_eq!(s.map_status(0).map(|x| x.0), Some("LOVED HERE"));
     assert_eq!(
         map_gives_pp(
@@ -1568,11 +1568,59 @@ fn sets_loved_on_the_server_count_as_loved() {
             .any(|(_, a)| matches!(a, ui::MenuAction::Love(..)))
     );
     s.select.nominator = true;
+    let items = |s: &State| s.select.menu_items(&s.library);
+    assert!(items(&s).iter().any(
+        |(l, a)| l == "Unlove on taiko.rs" && *a == ui::MenuAction::Love(2275915, false, false)
+    ));
+    // Just some difficulties loved: the others give no pp, and each can be loved alone.
+    let version = s.library[0].meta.version.clone();
+    let other = |s: &State| {
+        (0..s.library.len()).find(|&i| {
+            s.library[i].set_id() == Some(2275915) && s.library[i].meta.version != version
+        })
+    };
+    if other(&s).is_none() {
+        s.library[1].meta.set_id = Some(2275915);
+    }
+    let j = other(&s).expect("another difficulty of the set");
+    s.select
+        .server_loved
+        .insert(2275915, vec![format!(" {} ", version.to_uppercase())]);
+    let gives = |s: &State, i: usize| {
+        map_gives_pp(
+            &s.library[i],
+            &s.set_status,
+            &s.db_status,
+            &s.select.server_loved,
+        )
+    };
+    assert_eq!(gives(&s, 0), Some(true));
+    assert_eq!(
+        gives(&s, j),
+        Some(false),
+        "graveyard, and not the one loved"
+    );
+    assert_eq!(s.map_status(0).map(|x| x.0), Some("LOVED HERE"));
+    assert_ne!(s.map_status(j).map(|x| x.0), Some("LOVED HERE"));
+    let menu = items(&s);
+    assert!(menu.iter().any(
+        |(l, a)| l.starts_with("Unlove [") && *a == ui::MenuAction::Love(2275915, false, true)
+    ));
     assert!(
-        s.select
-            .menu_items(&s.library)
-            .iter()
-            .any(|(l, a)| l == "Unlove on taiko.rs" && *a == ui::MenuAction::Love(2275915, false))
+        menu.iter()
+            .any(|(l, a)| l == "Love the whole set on taiko.rs"
+                && *a == ui::MenuAction::Love(2275915, true, false))
+    );
+    s.select.server_loved.clear();
+    let menu = items(&s);
+    assert!(
+        menu.iter().any(
+            |(l, a)| l.starts_with("Love [") && *a == ui::MenuAction::Love(2275915, true, true)
+        )
+    );
+    assert!(
+        menu.iter()
+            .any(|(_, a)| *a == ui::MenuAction::Love(2275915, true, false))
     );
 }
 
@@ -2779,4 +2827,49 @@ fn the_offset_scale_setting_switches_the_number_not_the_timing() {
     s.refresh_play_offset();
     assert_eq!(s.setting_value(Item::Offset), "+11 ms");
     assert_eq!(s.play_offset, before - 1.0);
+}
+
+/// A server from before single loved difficulties doesn't know `LovedMaps`: the game asks for the
+/// sets instead, and takes each as loved whole; a newer one says which difficulties.
+#[test]
+fn loved_difficulties_come_from_the_server_and_an_older_one_gives_whole_sets() {
+    use std::io::{BufRead, Write};
+    for old in [true, false] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = std::io::BufReader::new(stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).is_err() {
+                    continue;
+                }
+                let reply = match serde_json::from_str::<online::Envelope>(&line) {
+                    Ok(e) if matches!(e.request, online::Request::LovedSets) => {
+                        online::Reply::LovedSets(vec![5])
+                    }
+                    Ok(e) if matches!(e.request, online::Request::LovedMaps) && !old => {
+                        online::Reply::LovedMaps(vec![(5, vec!["Oni".into()])])
+                    }
+                    _ => online::Reply::Error("bad request".into()),
+                };
+                let mut out = serde_json::to_string(&reply).unwrap();
+                out.push('\n');
+                let _ = reader.get_mut().write_all(out.as_bytes());
+            }
+        });
+        let mut s = layout_tests::state();
+        s.cfg.online_server = server;
+        let until = Instant::now() + Duration::from_secs(10);
+        while s.select.server_loved.is_empty() && Instant::now() < until {
+            s.poll_loved();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let want: Vec<String> = if old { vec![] } else { vec!["Oni".into()] };
+        assert_eq!(
+            s.select.server_loved.get(&5),
+            Some(&want),
+            "old server: {old}"
+        );
+    }
 }

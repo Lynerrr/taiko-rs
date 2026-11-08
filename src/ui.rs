@@ -196,7 +196,7 @@ pub struct Select {
     /// search's `status=` filter.
     pub status: std::collections::HashMap<std::path::PathBuf, u8>,
     /// Map sets loved on the online server (they give pp there, whatever osu! says).
-    pub server_loved: std::collections::HashSet<u32>,
+    pub server_loved: ServerLoved,
     /// Map folders sent to (or downloaded from) taiko.rs custom maps: their set number there.
     pub custom_folder: std::collections::HashMap<std::path::PathBuf, u32>,
     /// Custom sets the server has approved.
@@ -440,7 +440,7 @@ impl Select {
             info: None,
             played: std::collections::HashMap::new(),
             status: std::collections::HashMap::new(),
-            server_loved: std::collections::HashSet::new(),
+            server_loved: ServerLoved::new(),
             custom_folder: std::collections::HashMap::new(),
             custom_approved: std::collections::HashSet::new(),
             nominator: false,
@@ -634,7 +634,7 @@ impl Select {
             };
         }
         match e.set_id() {
-            Some(set) if self.server_loved.contains(&set) => crate::search::LOVED,
+            Some(_) if loved_here(&self.server_loved, e) => crate::search::LOVED,
             set => self
                 .status
                 .get(&e.path)
@@ -1524,16 +1524,29 @@ impl Select {
             MenuAction::HideSong,
         ));
         if let Some(set) = library[i].set_id().filter(|_| self.nominator) {
-            let loved = self.server_loved.contains(&set);
-            items.push((
-                if loved {
-                    "Unlove on taiko.rs"
-                } else {
-                    "Love on taiko.rs (gives pp)"
-                }
-                .to_string(),
-                MenuAction::Love(set, !loved),
-            ));
+            let version = &library[i].meta.version;
+            match self.server_loved.get(&set) {
+                Some(versions) if versions.is_empty() => items.push((
+                    "Unlove on taiko.rs".into(),
+                    MenuAction::Love(set, false, false),
+                )),
+                Some(versions) if !m.header && covers(versions, version) => items.push((
+                    fit(format!("Unlove [{version}] on taiko.rs")),
+                    MenuAction::Love(set, false, true),
+                )),
+                _ if !m.header => items.push((
+                    fit(format!("Love [{version}] on taiko.rs (gives pp)")),
+                    MenuAction::Love(set, true, true),
+                )),
+                _ => {}
+            }
+            // The whole set: every difficulty, its rate edits too.
+            if self.server_loved.get(&set).is_none_or(|v| !v.is_empty()) {
+                items.push((
+                    "Love the whole set on taiko.rs".into(),
+                    MenuAction::Love(set, true, false),
+                ));
+            }
         }
         if let Some(id) = library[i].set_id() {
             let label = match self.updates.get(&id) {
@@ -3028,8 +3041,9 @@ pub struct SongMenu {
 pub enum MenuAction {
     HideDifficulty,
     HideSong,
-    /// Loved nominators: love the map set on the online server (false: take it back).
-    Love(u32, bool),
+    /// Loved nominators: love the map set on the online server (false: take it back), just the
+    /// menu's difficulty when the last is true.
+    Love(u32, bool, bool),
     /// Download the song's set again, its newest version (replacing its difficulties).
     UpdateSong,
     /// Like the song, or not any more.
@@ -3040,6 +3054,24 @@ pub enum MenuAction {
     Edit,
     /// Start a new, empty difficulty from this one's timing and music.
     NewDifficulty,
+}
+
+/// The map sets loved on the online server, each with the difficulties loved (none: all of them).
+pub type ServerLoved = std::collections::HashMap<u32, Vec<String>>;
+
+/// Whether `versions` (a set's in `ServerLoved`) take in difficulty `version`.
+pub fn covers(versions: &[String], version: &str) -> bool {
+    versions.is_empty()
+        || versions
+            .iter()
+            .any(|v| v.trim().eq_ignore_ascii_case(version.trim()))
+}
+
+/// Whether map `e` is loved on the online server: its set, or this difficulty of it.
+pub fn loved_here(loved: &ServerLoved, e: &Entry) -> bool {
+    e.set_id()
+        .and_then(|set| loved.get(&set))
+        .is_some_and(|v| covers(v, &e.meta.version))
 }
 
 /// The name a map's folder goes by in `map_skins_off`: the same wherever the Songs folder is.
