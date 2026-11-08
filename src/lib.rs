@@ -8793,8 +8793,15 @@ impl State {
                                 | H::Key(_)
                         )
                     )
+                } else if self.preset_naming.is_some() {
+                    // Naming a preset: Enter keeps it, Esc doesn't, clicks change nothing.
+                    false
                 } else {
-                    matches!(hit, Some(render::Hit::ModToggle(_) | render::Hit::Key(_)))
+                    use render::Hit as H;
+                    matches!(
+                        hit,
+                        Some(H::ModToggle(_) | H::ModPreset(_) | H::ModPresetSave | H::Key(_))
+                    )
                 };
                 if let Some(hit) = hit.filter(|_| ours) {
                     self.click(hit, window);

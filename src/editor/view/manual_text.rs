@@ -173,7 +173,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - Drag a block to move it (also to another row), drag its ends to make it longer or shorter (a short block's ends stick out a little), right click deletes it. Blocks never sit on top of each other: one dropped or moved over another goes to the nearest free row there, and an end stops at the next block.
 - Drag over empty rows to pick every block in the box; Shift or Ctrl+click adds or takes one away. Blocks picked move together, Ctrl+D copies them after themselves, Delete removes them.
 - As in Ableton: Ctrl+drag (or Ctrl+Shift+drag) a block to drag a copy of it (of all picked, when it is one of them). Ctrl+C or Ctrl+X keeps the blocks picked, Ctrl+V lays them at the playhead and moves the playhead to their end, so pasting again lays them one after another. They paste into another map too. Ctrl+A picks every block.
-- There is always a free row at the bottom; when the rows don't fit, the wheel over them scrolls.
+- There is always a free row at the bottom; when the rows don't fit, Shift+wheel over them (or the wheel over their scrollbar) scrolls them. The plain wheel over the rows moves through the song, as over the notes, and a block dragged or resized past the edge scrolls the view along.
 
 # Changing one
 - Click a block: its settings replace the shelf. Click what it moves for a menu of everything, in columns: Playfield (zoom, turn, shake...), Look, Echoes & cuts, Lane (spiral, zigzag, loop...), Notes (move, size, hide, swirl, stretch, tint) and Copies. < and > step through them. The amount keeps its size when you switch.
@@ -533,7 +533,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Блок тащится мышью (и на другую дорожку), за края — длиннее или короче (у короткого блока края чуть выступают), правый клик удаляет. Блоки не ложатся друг на друга: брошенный или сдвинутый на другой уходит на ближайшую свободную там дорожку, а край останавливается у соседнего блока.
 - Протяните рамку по пустым дорожкам, чтобы выбрать все блоки в ней; Shift или Ctrl+клик добавляет или убирает один. Выбранные двигаются вместе, Ctrl+D копирует их следом, Delete удаляет.
 - Как в Ableton: Ctrl+перетаскивание (или Ctrl+Shift) тащит копию блока (всех выбранных, если он среди них). Ctrl+C или Ctrl+X запоминает выбранные блоки, Ctrl+V кладёт их от плейхеда и переносит плейхед на их конец, так что следующая вставка ляжет сразу за ними. Вставлять можно и в другую карту. Ctrl+A выбирает все блоки.
-- Внизу всегда есть свободная дорожка; когда дорожки не влезают, колесо над ними прокручивает.
+- Внизу всегда есть свободная дорожка; когда дорожки не влезают, их прокручивает Shift+колесо над ними (или колесо над их полосой прокрутки). Обычное колесо над дорожками двигает по песне, как над нотами, а блок, который тянут или растягивают за край, двигает вид следом.
 
 # Как изменить
 - Нажмите на блок: вместо полки появятся его настройки. Нажмите на то, что он двигает, — откроется меню со всем по колонкам: Playfield (зум, поворот, тряска...), Look, Echoes & cuts, Lane (спираль, зигзаг, петля...), Notes (сдвиг, размер, скрыть, закрутить, растянуть, оттенок) и Copies. < и > листают по одному. Amount при смене сохраняет свою величину.
