@@ -62,6 +62,8 @@ hit    24,54    296x24   TextField
 hit    24,86    444x34   SongHeader(0)
 hit    44,120   424x22   SongRow(0)
 hit   701,101    16x13   SelectLike
+hit   490,183   330x61   Preview
+hit   488,250   334x44   Preview
 hit   735,64     76x20   BoardPage
 hit   480,414   350x22   Key(Enter)
 hit   472,221     8x48   SplitList
