@@ -449,7 +449,7 @@ impl Home {
     }
 
     fn apply_analysis(&mut self, a: &tempo::Analysis) {
-        self.bpm = (a.bpm * 1000.0).round() / 1000.0;
+        self.bpm = super::timing::whole_bpm_if_near((a.bpm * 1000.0).round() / 1000.0);
         self.offset = NewMap::chart_time(a.offset_ms).round();
         self.analysis = Some(a.clone());
     }
@@ -704,7 +704,10 @@ impl Home {
                 }
             }
             Act::Bpm(thousandths) => {
-                self.set_bpm(self.bpm + thousandths as f64 / 1000.0, audio);
+                self.set_bpm(
+                    super::timing::stepped_bpm(self.bpm, thousandths as f64 / 1000.0),
+                    audio,
+                );
             }
             Act::Offset(ms) => {
                 self.offset += ms as f64;
@@ -2144,8 +2147,15 @@ mod tests {
         h.offset = 100.0;
         h.click(Act::Bpm(10), 0.0, None);
         assert_eq!(h.bpm, 150.01);
+        // A step off its grid goes to the grid's next mark first.
         h.click(Act::Bpm(-1000), 0.0, None);
-        assert_eq!(h.bpm, 149.01);
+        assert_eq!(h.bpm, 150.0);
+        h.click(Act::Bpm(-1000), 0.0, None);
+        assert_eq!(h.bpm, 149.0);
+        h.bpm = 173.998;
+        h.click(Act::Bpm(10), 0.0, None);
+        assert_eq!(h.bpm, 174.0, "a detected 173.998 reaches 174 with +0.01");
+        h.bpm = 149.01;
         h.click(Act::Double, 0.0, None);
         assert_eq!(h.bpm, 298.02);
         h.click(Act::Half, 0.0, None);

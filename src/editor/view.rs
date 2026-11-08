@@ -1033,6 +1033,11 @@ impl View {
         self.layout.timeline[0] + ((t - self.view_start) / self.ms_per_px) as f32
     }
 
+    /// Where a note at `t` is drawn: on its grid line, not the floored millisecond the file keeps.
+    fn note_x(&self, t: f64) -> f32 {
+        self.x_of(timing::shown_time(&self.ed.chart.timing, t))
+    }
+
     fn t_at(&self, x: f32) -> f64 {
         self.view_start + (x - self.layout.timeline[0]) as f64 * self.ms_per_px
     }
@@ -1532,7 +1537,8 @@ impl View {
                 1 => (0.32, y + RULER - 4.0),
                 _ => (0.13, lane_top),
             };
-            c.rect(gx, top, 1.0, y + h - top - 1.0, rgba(0xffffff, alpha));
+            // Centred on its time, as the notes are: from `gx` it sat half a pixel right of them.
+            c.rect(gx - 0.5, top, 1.0, y + h - top - 1.0, rgba(0xffffff, alpha));
         }
         // Ruler labels.
         let label_every = {
@@ -1644,7 +1650,7 @@ impl View {
             if end < from - 20.0 * self.ms_per_px {
                 continue;
             }
-            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let (ox, ex) = (self.note_x(o.time), self.note_x(end));
             let selected = match boxed {
                 Some((a, b, add, real, fake)) => {
                     (o.time >= a && o.time <= b && if o.fake { fake } else { real })
@@ -1735,7 +1741,7 @@ impl View {
             && matches!(self.drag, Drag::None | Drag::Place { .. })
         {
             let at = self.ed.snapped(self.t_at(mx));
-            let gx = self.x_of(at);
+            let gx = self.note_x(at);
             match self.ed.tool {
                 Tool::Note => {
                     let r = if self.ed.big { BIG_R } else { NOTE_R };
@@ -2100,7 +2106,7 @@ impl View {
                 continue;
             }
             let end = self.ed.end_of(o);
-            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let (ox, ex) = (self.note_x(o.time), self.note_x(end));
             let r = if o.big() { BIG_R } else { NOTE_R };
             let d = (x - ex).abs();
             // From a little inside the end to the right edge of the rounded cap drawn there.
@@ -2122,7 +2128,7 @@ impl View {
                 .ed
                 .chart
                 .object(h)
-                .is_some_and(|o| (self.x_of(o.time) - x).abs() <= NOTE_R)
+                .is_some_and(|o| (self.note_x(o.time) - x).abs() <= NOTE_R)
         {
             return None;
         }
@@ -2147,7 +2153,7 @@ impl View {
             let end = self.ed.end_of(o);
             let r = self.radius_of(o) + 2.0;
             let cy = if o.fake { fakes } else { lane };
-            let (ox, ex) = (self.x_of(o.time), self.x_of(end));
+            let (ox, ex) = (self.note_x(o.time), self.note_x(end));
             let (dx, dy) = (x - ox, y - cy);
             let key = if dx * dx + dy * dy <= r * r {
                 Some((0, dx * dx + dy * dy))
@@ -3051,6 +3057,8 @@ impl View {
 
     /// Saves, noting a rename of the file for the game. The status line when it went through.
     fn save_file(&mut self) -> Result<String, String> {
+        // What is still being typed counts, as a click elsewhere would have taken it.
+        self.commit_typing();
         let was = self.ed.path.clone();
         let kept = self.ed.save()?;
         let file = self
@@ -3135,7 +3143,7 @@ impl View {
             |p| match f {
                 Field::Bpm => {
                     if let Some(bpm) = p.bpm() {
-                        p.beat_length = 60_000.0 / (bpm + dir * k).max(1.0);
+                        p.beat_length = 60_000.0 / timing::stepped_bpm(bpm, dir * k).max(1.0);
                     }
                 }
                 Field::Sv => {
@@ -3396,6 +3404,12 @@ impl View {
         audio: Option<&Engine>,
     ) -> KeyResult {
         self.land_seek();
+        // Ctrl+S while a number is typed saves that number too: before, the key was eaten and
+        // the next Esc threw the typing away, so a typed BPM never reached the file.
+        if code == KeyCode::KeyS && keys.ctrl && (self.typing.is_some() || self.n_typing.is_some())
+        {
+            self.commit_typing();
+        }
         if let Some((i, text)) = &mut self.n_typing {
             match code {
                 KeyCode::Enter | KeyCode::NumpadEnter => {
@@ -7649,6 +7663,59 @@ mod tests {
         v.select_line(Some(green));
         press(&mut v, Btn::T(TAct::Bars(1)));
         assert_eq!(v.ed.chart.timing_point(green).unwrap().time, 4000.0);
+    }
+
+    #[test]
+    fn a_typed_bpm_reaches_the_file_on_ctrl_s_and_on_save_and_exit() {
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        let type_bpm = |v: &mut View, digits: &[KeyCode]| {
+            v.run(Cmd::Mode(Mode::Timing), None);
+            let id = red_id(v);
+            v.select_line(Some(id));
+            v.press(Btn::Edit(Field::Bpm), Keys::default(), None);
+            for k in digits {
+                v.key(*k, false, Keys::default(), None);
+            }
+            id
+        };
+        let saved_bpm = |v: &View| {
+            let again = View::open(v.ed.path.clone(), 0).unwrap();
+            let id = red_id(&again);
+            again.ed.chart.timing_point(id).unwrap().bpm().unwrap()
+        };
+        let digits = [KeyCode::Digit1, KeyCode::Digit7, KeyCode::Digit4];
+        // Ctrl+S in the middle of typing takes the number and saves it.
+        let mut v = view();
+        let id = type_bpm(&mut v, &digits);
+        v.key(KeyCode::KeyS, false, ctrl, None);
+        assert!(v.typing.is_none());
+        assert_eq!(v.ed.chart.timing_point(id).unwrap().bpm(), Some(174.0));
+        assert!(!v.ed.modified(), "{}", v.status);
+        assert_eq!(saved_bpm(&v), 174.0);
+        // Leaving with a number typed asks about it, and Save and exit writes it.
+        let mut v = view();
+        type_bpm(&mut v, &digits);
+        v.run(Cmd::Leave, None);
+        assert_eq!(v.modal, Some(Modal::Leave));
+        v.run(Cmd::LeaveSave, None);
+        assert!(v.exit);
+        assert_eq!(saved_bpm(&v), 174.0);
+        // The step buttons reach a whole BPM from a detected one a hair off it.
+        let mut v = view();
+        let id = type_bpm(&mut v, &[KeyCode::Digit1, KeyCode::Digit7, KeyCode::Digit3]);
+        v.key(KeyCode::Period, false, Keys::default(), None);
+        for _ in 0..2 {
+            v.key(KeyCode::Digit9, false, Keys::default(), None);
+        }
+        v.key(KeyCode::Digit8, false, Keys::default(), None);
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        let bpm = |v: &View| v.ed.chart.timing_point(id).unwrap().bpm().unwrap();
+        assert!((bpm(&v) - 173.998).abs() < 1e-9, "{} {}", bpm(&v), v.status);
+        press(&mut v, Btn::T(TAct::Bpm(1)));
+        assert!((bpm(&v) - 174.0).abs() < 1e-9, "{}", bpm(&v));
     }
 
     #[test]

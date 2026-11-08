@@ -129,6 +129,49 @@ pub fn grid_lines(
     out
 }
 
+/// Where a note stored at the whole millisecond `t` is drawn: on the grid tick it was snapped
+/// from. The file holds whole ms (placing floors the tick, other editors may round it), so a
+/// snapped note sat up to a millisecond off its line, pixels off when zoomed in. A tick less than
+/// a millisecond away counts, coarser grids first; a note near no tick is drawn where it is.
+pub fn shown_time(points: &[TimingPoint], t: f64) -> f64 {
+    [1, 2, 3, 4, 6, 8, 12, 16]
+        .into_iter()
+        .map(|d| snap_time(points, t, d))
+        .find(|s| (s - t).abs() < 1.0)
+        .unwrap_or(t)
+}
+
+/// `bpm` stepped by `step` (+1, -0.01, ...) onto the step's own grid, in thousandths: a BPM off
+/// that grid goes to the next mark in the step's direction first, so 173.998 and +0.01 make 174
+/// (not 174.008), and a detected tempo a hair off a whole number can be fixed with the buttons.
+pub fn stepped_bpm(bpm: f64, step: f64) -> f64 {
+    let size = step.abs();
+    if size <= 0.0 || !bpm.is_finite() {
+        return bpm;
+    }
+    let k = bpm / size;
+    let near = k.round();
+    let marks = if (k - near).abs() < 1e-6 {
+        near + step.signum()
+    } else if step > 0.0 {
+        k.ceil()
+    } else {
+        k.floor()
+    };
+    (marks * size * 1000.0).round() / 1000.0
+}
+
+/// A detected tempo within a hair of a whole number is taken as that number: songs are made at
+/// whole BPMs, and 173.998 instead of 174 only puts the grid off over a long song.
+pub fn whole_bpm_if_near(bpm: f64) -> f64 {
+    let whole = bpm.round();
+    if (bpm - whole).abs() <= 0.02 {
+        whole
+    } else {
+        bpm
+    }
+}
+
 /// The red line `by_beats` beats (of its own length) away from `p`, as a time: moved by whole
 /// bars or beats, in whole milliseconds the way the editor commits a time.
 pub fn moved_by_beats(p: &TimingPoint, by_beats: f64) -> f64 {
@@ -312,5 +355,35 @@ mod tests {
         assert_eq!(moved_by_beats(&line, 1.0), 1333.0);
         assert_eq!(moved_by_beats(&line, -3.0), 0.0);
         assert_eq!(moved_by_beats(&line, -6.0), -1000.0, "past zero is allowed");
+    }
+
+    #[test]
+    fn bpm_steps_land_on_their_own_grid() {
+        assert_eq!(stepped_bpm(173.998, 0.01), 174.0);
+        assert_eq!(stepped_bpm(173.998, -0.01), 173.99);
+        assert_eq!(stepped_bpm(173.998, 1.0), 174.0);
+        assert_eq!(stepped_bpm(173.998, -1.0), 173.0);
+        assert_eq!(stepped_bpm(174.0, 0.01), 174.01);
+        assert_eq!(stepped_bpm(120.0, 1.0), 121.0);
+        assert_eq!(stepped_bpm(121.0, -0.01), 120.99);
+        assert_eq!(stepped_bpm(150.0, 0.001), 150.001);
+        assert_eq!(whole_bpm_if_near(173.998), 174.0);
+        assert_eq!(whole_bpm_if_near(174.5), 174.5);
+        assert_eq!(whole_bpm_if_near(173.95), 173.95);
+    }
+
+    #[test]
+    fn a_floored_note_is_drawn_on_the_tick_it_was_snapped_from() {
+        let p = vec![TimingPoint::red(0.0, 174.0)];
+        let step = 60_000.0 / 174.0 / 4.0;
+        for k in 1..40 {
+            let tick = k as f64 * step;
+            let stored = snapped_ms(&p, tick, 4) as f64;
+            assert!((shown_time(&p, stored) - tick).abs() < 1e-6, "tick {k}");
+        }
+        // Rounded the other way (by another editor) it is still drawn on its tick.
+        assert!((shown_time(&p, (3.0 * step).round()) - 3.0 * step).abs() < 1e-6);
+        // A note off the grid stays where it is.
+        assert_eq!(shown_time(&p, 40.0), 40.0);
     }
 }
