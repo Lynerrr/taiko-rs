@@ -517,7 +517,10 @@ pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
                 .find(|&&b| {
                     let sh = &c.shapes[b];
                     let visible = sh.fill[3] > 0.1 || (sh.border[3] > 0.1 && sh.params[1] > 0.0);
-                    visible && contains(bounds(b), x, mid_y)
+                    // A box cut away there by its clip (a list row scrolled half out) isn't
+                    // under the text.
+                    let shown_there = clip_of(b).is_none_or(|cl| contains(cl, x, mid_y));
+                    visible && shown_there && contains(bounds(b), x, mid_y)
                 });
             if let Some(&b) = holder
                 && !inside(seen, bounds(b))

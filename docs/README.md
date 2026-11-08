@@ -412,17 +412,23 @@ hit, like in osu!, times the hitsound volume setting.
 The **DOWNLOAD** tab (or Ctrl+D on song select) searches the public osu! mirrors
 [osu.direct](https://osu.direct) and [catboy.best](https://catboy.best) (the second is tried when
 the first fails) for taiko maps (sets with taiko difficulties; only those are shown): type an
-artist, title or mapper. Like the osu! website, a **status** row picks *Has leaderboard* (ranked,
-approved, qualified and loved; the default), *Ranked*, *Qualified*, *Loved*, *Pending*, *WIP*,
-*Graveyard* or *Any*, and a **sort** row orders by relevance, title, artist, difficulty, ranked
-date, rating, plays or favourites (click the active one to flip the direction; Ctrl+Left/Right and
-Ctrl+Up/Down step through them). With no text, newest ranked first. Each result shows its mapper,
-status, number of taiko difficulties and star range. Enter, or the *Download* button, fetches the `.osz` with a progress bar and unpacks it into
-your Songs folder as `<set id> <artist> - <title>/` (the first folder being scanned, else
+artist, title or mapper. Like the osu! website, the **Status** drop-down under the search box picks
+*Has leaderboard* (ranked, approved, qualified and loved; the default), *Ranked*, *Qualified*,
+*Loved*, *Pending*, *WIP*, *Graveyard* or *Any*, and **Sort** orders by relevance, title, artist,
+difficulty, ranked date, rating, plays or favourites; the arrow next to it flips the direction
+(Ctrl+Left/Right and Ctrl+Up/Down step through them too). With no text, newest ranked first.
+
+Each result is a card: the set's cover, its title, artist and mapper, its status, a dot per taiko
+difficulty in its star colour (the previewed one ringed) and the star range. The wheel scrolls the
+list without moving the selection; more results load as you get near the end. Enter, or the
+*Download* button, fetches the `.osz` with a progress bar and unpacks it into your Songs folder as
+`<set id> <artist> - <title>/` (the first folder being scanned, else
 `~/.local/share/taiko-rs/Songs` / `%APPDATA%\taiko-rs\Songs`, which is scanned at startup). The set
-shows up in the song list right away and is selected; sets you already have say *installed*. A
-mirror that's busy (osu.direct's passing 503s, catboy.best's rate limit) is asked again a few
-seconds later, up to three times; one that doesn't have the set (404) isn't.
+shows up in the song list right away; a set you have shows *Play* instead, which (like Enter) goes
+to it in song select. While anything downloads, a **Downloads** panel under the list shows each
+one's progress with an *x* to stop it; a download that failed stays there with why, *Retry* and
+an *x* to forget it. A mirror that's busy (osu.direct's passing 503s, catboy.best's rate limit) is
+asked again a few seconds later, up to three times; one that doesn't have the set (404) isn't.
 
 Before downloading, the selected result is previewed on the right like in song select: its cover
 as the background, details, star rating, difficulty timeline and the autoplay, with osu!'s ~10 s

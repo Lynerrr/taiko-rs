@@ -288,6 +288,8 @@ fn parse_list(text: &str) -> Result<Vec<SetInfo>, String> {
         bytes: u64,
         #[serde(default)]
         approved: bool,
+        #[serde(default)]
+        background: bool,
     }
     let sets: Vec<ApiSet> =
         serde_json::from_str(text).map_err(|e| format!("unexpected reply: {e}"))?;
@@ -322,6 +324,7 @@ fn parse_list(text: &str) -> Result<Vec<SetInfo>, String> {
                 bytes: s.bytes,
                 updated: s.updated,
                 tko: s.diffs.iter().any(|d| d.tko),
+                background: s.background,
             }),
             ..SetInfo::default()
         })
@@ -357,8 +360,8 @@ pub fn fetch_preview(set: &SetInfo) -> Result<PathBuf, String> {
     let archive = dir.join("set.osz");
     if !archive.is_file() {
         let part = dir.join("set.osz.part");
-        let (done, total) = Default::default();
-        crate::download::download_to(&download_url(set.id), &part, &done, &total)
+        let (done, total, cancel) = Default::default();
+        crate::download::download_to(&download_url(set.id), &part, &done, &total, &cancel)
             .map_err(|(e, _)| e)?;
         std::fs::rename(&part, &archive).map_err(|e| e.to_string())?;
     }
