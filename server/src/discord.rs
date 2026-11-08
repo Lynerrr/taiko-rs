@@ -489,21 +489,34 @@ impl Bot {
                             .into(),
                     );
                 };
-                // A set id or osu! link, else the map last shown here.
-                let set = set_of(&cmd.rest).or_else(|| {
-                    let hash = map.filter(|_| cmd.rest.trim().is_empty())?;
+                // A set id or osu! link, else the map last shown here; and the difficulties in
+                // [brackets], else the whole set.
+                let (rest, versions) = versions_of(&cmd.rest);
+                let set = set_of(&rest).or_else(|| {
+                    let hash = map.filter(|_| rest.trim().is_empty())?;
                     self.state.scores.lock().unwrap().map(hash)?.set_id
                 });
                 let Some(set) = set else {
                     return text(format!(
-                        "`>{} 123456` with a map set id or its osu! link, or after a play of it here.",
+                        "`>{} 123456` with a map set id or its osu! link, or after a play of it here; `[Inner Oni]` after it for just that difficulty.",
                         cmd.word
                     ));
                 };
-                text(match self.state.love(&key, set, on) {
-                    Ok(done) => format!("{done}. <https://osu.ppy.sh/beatmapsets/{set}>"),
-                    Err(e) => format!("Couldn't: {e}."),
-                })
+                let (mut lines, mut any) = (Vec::new(), false);
+                for version in versions_or_set(&versions) {
+                    lines.push(match self.state.love(&key, set, on, version) {
+                        Ok(done) => {
+                            any = true;
+                            format!("{}.", clean(&done))
+                        }
+                        Err(e) => format!("Couldn't: {}.", clean(&e)),
+                    });
+                }
+                let mut out = lines.join("\n");
+                if any {
+                    out += &format!(" <https://osu.ppy.sh/beatmapsets/{set}>");
+                }
+                text(out)
             }
             "nominator" | "unnominator" => {
                 let Some(key) = self.verified.lock().unwrap().get(author).cloned() else {
@@ -1271,6 +1284,36 @@ pub(crate) fn parts(text: &str, max: usize) -> Vec<String> {
     out
 }
 
+/// A command's difficulty names in [brackets] (at most 10), and the rest of it without them.
+fn versions_of(arg: &str) -> (String, Vec<String>) {
+    let (mut rest, mut versions) = (String::new(), Vec::new());
+    let mut left = arg;
+    while let Some((before, after)) = left.split_once('[') {
+        rest.push_str(before);
+        let Some((name, next)) = after.split_once(']') else {
+            rest.push('[');
+            left = after;
+            continue;
+        };
+        let name = name.trim();
+        if !name.is_empty() && versions.len() < 10 {
+            versions.push(name.to_string());
+        }
+        left = next;
+    }
+    rest.push_str(left);
+    (rest, versions)
+}
+
+/// Each difficulty to love or unlove, or (None) the whole set when none was named.
+fn versions_or_set(versions: &[String]) -> Vec<Option<&str>> {
+    if versions.is_empty() {
+        vec![None]
+    } else {
+        versions.iter().map(|v| Some(v.as_str())).collect()
+    }
+}
+
 /// A map set from a command: its id, or an osu! link with it in.
 fn set_of(arg: &str) -> Option<u32> {
     let arg = arg.trim().trim_matches(['<', '>']);
@@ -1293,7 +1336,7 @@ fn help() -> Value {
         "`>osu` your profile",
         "`>lb` the leaderboard of the last map shown here",
         "`>ranking` the top players",
-        "`>love 123456` loved nominators: love a map set (id or osu! link; none: the last map shown) so it gives pp here; `>unlove` takes it back",
+        "`>love 123456` loved nominators: love a map set (id or osu! link; none: the last map shown) so it gives pp here, or `>love 123456 [Inner Oni]` just that difficulty; `>unlove` takes it back",
         "`>verify CODE` prove your account (the code is on your profile page) to use `>love`",
     ];
     json!({
@@ -2113,6 +2156,19 @@ mod tests {
         );
         assert!(!b.state.is_nominator("ryuji"));
         assert!(says(&answer(&b, ">love", "1", None).0).contains("with a map set id"));
+        // Difficulties in [brackets], one answer line each.
+        assert_eq!(
+            versions_of(" https://osu.ppy.sh/beatmapsets/123 [Inner Oni] [ Oni ] []"),
+            (
+                " https://osu.ppy.sh/beatmapsets/123   ".to_string(),
+                vec!["Inner Oni".to_string(), "Oni".to_string()]
+            )
+        );
+        assert_eq!(versions_of("123 [open"), ("123 [open".to_string(), vec![]));
+        assert_eq!(
+            says(&answer(&b, ">unlove 123 [Oni] [Inner Oni]", "1", None).0),
+            "Couldn't: that set isn't loved here.\nCouldn't: that set isn't loved here."
+        );
         let saved = std::fs::read_to_string(b.dir.join("discord-verified.json")).unwrap();
         assert!(
             saved.contains(r#""1":"lynerrr""#) && saved.contains(r#""2":"ryuji""#),

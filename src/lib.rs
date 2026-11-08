@@ -408,7 +408,18 @@ type SetCheck = (u32, Receiver<Result<(bool, Vec<PathBuf>), String>>);
 /// An online leaderboard, or why there isn't one.
 type Board = Result<Vec<online::OnlineScore>, String>;
 type BoardFetch = ((u64, bool), Receiver<Board>);
-type LovedCall = (Receiver<Result<online::Reply, String>>, Option<(u32, bool)>);
+type LovedCall = (Receiver<Result<online::Reply, String>>, LovedAsk);
+
+/// What a call about the server's loved maps asked.
+#[derive(Clone, Debug, PartialEq)]
+enum LovedAsk {
+    /// The loved sets and their difficulties.
+    Maps,
+    /// Just the sets (a server from before single difficulties were loved).
+    Sets,
+    /// A nominator loves a set (true) or takes it back, or just its difficulty named.
+    Change(u32, bool, Option<String>),
+}
 /// Custom sets known: map folder -> set number, and the numbers the server has approved.
 type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
 
@@ -1544,13 +1555,13 @@ fn map_gives_pp(
     e: &Entry,
     set_status: &std::collections::HashMap<u32, Option<String>>,
     db_status: &std::collections::HashMap<PathBuf, u8>,
-    server_loved: &std::collections::HashSet<u32>,
+    server_loved: &ui::ServerLoved,
 ) -> Option<bool> {
     let Some(set) = e.set_id() else {
         return Some(false);
     };
-    // Loved on the online server: it gives pp there.
-    if server_loved.contains(&set) {
+    // Loved on the online server (the set, or this difficulty): it gives pp there.
+    if ui::loved_here(server_loved, e) {
         return Some(true);
     }
     if let Some(Some(s)) = set_status
@@ -10272,23 +10283,25 @@ impl State {
         });
     }
 
-    /// Asks the online server which map sets are loved there, or (`change`) loves one or takes
-    /// it back, in the background.
-    fn call_loved(&mut self, change: Option<(u32, bool)>) {
-        let request = match change {
-            Some((set, loved)) => online::Request::SetLoved {
+    /// Asks the online server which map sets (and difficulties) are loved there, or loves one
+    /// or takes it back, in the background.
+    fn call_loved(&mut self, ask: LovedAsk) {
+        let request = match &ask {
+            LovedAsk::Change(set, loved, version) => online::Request::SetLoved {
                 token: self.cfg.online_token.clone(),
-                set,
-                loved,
+                set: *set,
+                loved: *loved,
+                version: version.clone(),
             },
-            None => online::Request::LovedSets,
+            LovedAsk::Maps => online::Request::LovedMaps,
+            LovedAsk::Sets => online::Request::LovedSets,
         };
         let (tx, rx) = mpsc::channel();
         let server = self.cfg.online_server.clone();
         std::thread::spawn(move || {
             let _ = tx.send(online::call(&server, request));
         });
-        self.loved_call = Some((rx, change));
+        self.loved_call = Some((rx, ask));
     }
 
     /// Which map folders of the library were sent to (or came from) the custom maps, and which
@@ -10350,30 +10363,51 @@ impl State {
     fn poll_loved(&mut self) {
         if !self.loved_asked && self.loved_call.is_none() {
             self.loved_asked = true;
-            self.call_loved(None);
+            self.call_loved(LovedAsk::Maps);
         }
-        let Some((rx, change)) = &self.loved_call else {
+        let Some((rx, _)) = &self.loved_call else {
             return;
         };
         let Ok(result) = rx.try_recv() else { return };
-        let change = *change;
-        self.loved_call = None;
-        match (result, change) {
-            (Ok(online::Reply::LovedSets(sets)), _) => {
-                self.select.server_loved = sets.into_iter().collect();
-                if !self.select.filter.is_empty() {
-                    self.select.refilter(&self.library);
-                }
-                if let Some((set, loved)) = change {
-                    self.toast(if loved {
-                        format!("loved set {set} on taiko.rs: its plays give pp now")
-                    } else {
-                        format!("set {set} isn't loved on taiko.rs any more")
-                    });
-                }
+        let Some((_, ask)) = self.loved_call.take() else {
+            return;
+        };
+        let loved = match (result, &ask) {
+            (Ok(online::Reply::LovedMaps(maps)), _) => Some(maps.into_iter().collect()),
+            // Just the sets: the whole of each (the server doesn't love single difficulties yet).
+            (Ok(online::Reply::LovedSets(sets)), LovedAsk::Maps | LovedAsk::Sets) => {
+                Some(sets.into_iter().map(|s| (s, Vec::new())).collect())
             }
-            (Err(e), Some(_)) => self.toast(format!("couldn't: {e}")),
-            _ => {}
+            (Ok(online::Reply::LovedSets(_)), LovedAsk::Change(set, on, version)) => {
+                let what = match version {
+                    Some(v) => format!("[{v}] of set {set}"),
+                    None => format!("set {set}"),
+                };
+                self.toast(if *on {
+                    format!("loved {what} on taiko.rs: its plays give pp now")
+                } else {
+                    format!("{what} isn't loved on taiko.rs any more")
+                });
+                // Which difficulties, as it stands now.
+                self.call_loved(LovedAsk::Maps);
+                None
+            }
+            (Err(e), LovedAsk::Change(..)) => {
+                self.toast(format!("couldn't: {e}"));
+                None
+            }
+            // A server from before `LovedMaps`: the sets alone.
+            (Err(_), LovedAsk::Maps) => {
+                self.call_loved(LovedAsk::Sets);
+                None
+            }
+            _ => None,
+        };
+        if let Some(loved) = loved {
+            self.select.server_loved = loved;
+            if !self.select.filter.is_empty() {
+                self.select.refilter(&self.library);
+            }
         }
     }
 
@@ -11523,7 +11557,7 @@ impl State {
         let Some(set) = e.set_id().filter(|_| !edited) else {
             return Some(("NOT SUBMITTED", 0x8a8aa0));
         };
-        if self.select.server_loved.contains(&set) {
+        if ui::loved_here(&self.select.server_loved, e) {
             return Some(("LOVED HERE", 0xff66aa));
         }
         if let Some(Some(s)) = self.set_status.get(&set) {
@@ -17875,13 +17909,22 @@ impl State {
                     .menu_items(&self.library)
                     .get(k)
                     .map(|(_, a)| *a);
-                if let Some(ui::MenuAction::Love(set, loved)) = action {
+                if let Some(ui::MenuAction::Love(set, loved, one)) = action {
+                    let version = self
+                        .select
+                        .menu_map()
+                        .filter(|_| one)
+                        .map(|i| self.library[i].meta.version.clone());
                     self.select.menu = None;
                     self.toast(format!(
-                        "{} set {set} on taiko.rs...",
-                        if loved { "loving" } else { "unloving" }
+                        "{} {} on taiko.rs...",
+                        if loved { "loving" } else { "unloving" },
+                        match &version {
+                            Some(v) => format!("[{v}]"),
+                            None => format!("set {set}"),
+                        }
                     ));
-                    self.call_loved(Some((set, loved)));
+                    self.call_loved(LovedAsk::Change(set, loved, version));
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
                         self.update_set(i);
