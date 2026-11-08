@@ -271,7 +271,15 @@ impl View {
 
     fn draw_question(&mut self, c: &mut Canvas) {
         self.scrim(c);
-        let (w, h) = (330.0, 100.0);
+        let choices = [
+            ("Save and exit", Cmd::LeaveSave, true),
+            ("Exit without saving", Cmd::LeaveDiscard, false),
+            ("Keep editing", Cmd::Stay, false),
+        ];
+        let widths = choices.map(|(label, _, _)| Canvas::text_width(7.0, label) + 14.0);
+        // As wide as its buttons need: a fixed width let the last one stick out of the box.
+        let row: f32 = widths.iter().sum::<f32>() + 6.0 * (widths.len() - 1) as f32;
+        let (w, h) = ((row + 28.0).max(330.0), 100.0);
         let (x, y) = ((c.width - w) / 2.0, 170.0);
         c.round_rect(
             [x, y],
@@ -296,12 +304,7 @@ impl View {
             &Canvas::fit(7.0, w - 28.0, "This map has changes that aren't saved yet."),
         );
         let mut bx = x + 14.0;
-        for (label, cmd, on) in [
-            ("Save and exit", Cmd::LeaveSave, true),
-            ("Exit without saving", Cmd::LeaveDiscard, false),
-            ("Keep editing", Cmd::Stay, false),
-        ] {
-            let bw = Canvas::text_width(7.0, label) + 14.0;
+        for ((label, cmd, on), bw) in choices.into_iter().zip(widths) {
             self.button(c, [bx, y + 66.0, bw, 20.0], label, Btn::C(cmd), on);
             bx += bw + 6.0;
         }
