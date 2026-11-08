@@ -840,6 +840,7 @@ fn assert_every_screen_fits() {
             favourite_count: 12_345,
             rating: 9.5,
             ranked_date: "2024-01-01T00:00:00Z".into(),
+            custom: None,
         })
         .collect();
     s.browse.query = "a long search query typed into the download tab".into();
