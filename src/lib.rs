@@ -15257,7 +15257,9 @@ impl State {
                 self.preview.size = preview::PREVIEW_SIZE.1;
                 let phone = mobile::active();
                 if phone {
-                    self.draw_mobile_download(canvas, &installed);
+                    let custom: std::collections::HashSet<u32> =
+                        self.select.custom_folder.values().copied().collect();
+                    self.draw_mobile_download(canvas, &installed, &custom);
                 } else {
                     let custom = &self.select.custom_folder;
                     let is_installed = |set: &download::SetInfo| match set.custom {

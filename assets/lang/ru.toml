@@ -629,6 +629,8 @@
 "Installed" = "Установлено"
 "Starting" = "Начинаем"
 "Get" = "Скачать"
+"Approved" = "Одобрена"
+"Custom" = "Кастом"
 
 # src/multiplayer.rs
 "THE TEAM FELL  ({leaked} notes got through)" = "КОМАНДА ПАЛА  (прорвалось {leaked})"

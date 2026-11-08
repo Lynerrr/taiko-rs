@@ -629,6 +629,8 @@
 "Installed" = "インストール済み"
 "Starting" = "開始中"
 "Get" = "入手"
+"Approved" = "承認済み"
+"Custom" = "カスタム"
 
 # src/multiplayer.rs
 "THE TEAM FELL  ({leaked} notes got through)" = "チーム敗北  ({leaked}ノーツ突破)"
