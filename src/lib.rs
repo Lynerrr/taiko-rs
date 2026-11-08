@@ -369,7 +369,7 @@ fn map_download(downloads: &[download::Job], m: &net::MapInfo) -> Option<Option<
     downloads
         .iter()
         .find(|j| {
-            Some(j.set.id) == m.set_id || (j.set.title == m.title && j.set.artist == m.artist)
+            j.set.is_osu_set(m.set_id) || (j.set.title == m.title && j.set.artist == m.artist)
         })
         .map(download::Job::fraction)
 }
@@ -3238,7 +3238,7 @@ impl State {
                     && !self
                         .downloads
                         .iter()
-                        .any(|j| Some(j.set.id) == score.set_id)
+                        .any(|j| j.set.is_osu_set(score.set_id))
                 {
                     self.score_link = None;
                 }
@@ -3267,6 +3267,7 @@ impl State {
                     favourite_count: 0,
                     rating: 0.0,
                     ranked_date: String::new(),
+                    custom: None,
                 });
                 if let Some(l) = &mut self.score_link {
                     l.downloading = Some(Instant::now());
@@ -11128,6 +11129,7 @@ impl State {
                 favourite_count: 0,
                 rating: 0.0,
                 ranked_date: String::new(),
+                custom: None,
             }),
         }
     }
@@ -15247,14 +15249,19 @@ impl State {
                 if phone {
                     self.draw_mobile_download(canvas, &installed);
                 } else {
+                    let custom = &self.select.custom_folder;
+                    let is_installed = |set: &download::SetInfo| match set.custom {
+                        Some(_) => custom.values().any(|&id| id == set.id),
+                        None => installed.contains(&set.id),
+                    };
                     self.browse
-                        .draw(canvas, &self.downloads, &installed, &dir, lw);
+                        .draw(canvas, &self.downloads, &is_installed, &dir, lw);
                 }
                 self.installed_sets = Some(installed);
                 // The selected set's preview, like song select's.
                 let x = 24.0 + lw + 12.0;
                 let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
-                let stars = self.browse.selected_diff().map(|d| d.stars);
+                let stars = self.browse.selected_stars();
                 if pw > 160.0 && self.browse.selected().is_some() {
                     match self.preview.draw_panel(
                         canvas,
@@ -16482,14 +16489,18 @@ impl State {
 
     /// Downloads a set unless it's already here or on its way.
     fn start_download(&mut self, set: download::SetInfo) {
-        if self.installed_sets().contains(&set.id) {
+        let here = match set.custom {
+            Some(_) => self.select.custom_folder.values().any(|&id| id == set.id),
+            None => self.installed_sets().contains(&set.id),
+        };
+        if here {
             self.toast(format!(
                 "{} - {} is already in your songs",
                 set.artist, set.title
             ));
             return;
         }
-        if self.downloads.iter().any(|j| j.set.id == set.id) {
+        if self.downloads.iter().any(|j| j.set.same(&set)) {
             return;
         }
         let dir = self.songs_dir.clone();
@@ -16524,6 +16535,7 @@ impl State {
                 favourite_count: 0,
                 rating: 0.0,
                 ranked_date: String::new(),
+                custom: None,
             }),
             None => {
                 let (tx, rx) = mpsc::channel();
@@ -16634,6 +16646,7 @@ impl State {
                 favourite_count: 0,
                 rating: 0.0,
                 ranked_date: String::new(),
+                custom: None,
             };
             let (job, feed) = download::receive(
                 set,
@@ -17067,7 +17080,7 @@ impl State {
             self.toast("this map has no osu! set ID to update it by".into());
             return;
         };
-        if self.downloads.iter().any(|j| j.set.id == id) {
+        if self.downloads.iter().any(|j| j.set.is_osu_set(Some(id))) {
             return;
         }
         // Which of these are the set's own is asked of osu! on the download's thread.
@@ -17097,6 +17110,7 @@ impl State {
             favourite_count: 0,
             rating: 0.0,
             ranked_date: String::new(),
+            custom: None,
         };
         self.toast(format!("updating {} - {}...", set.artist, set.title));
         self.select.updates.insert(id, ui::SetUpdate::Updating);
@@ -17175,7 +17189,21 @@ impl State {
         };
         let n = fresh.len();
         self.append_maps(fresh);
-        self.installed_sets().insert(set.id);
+        match &set.custom {
+            // Song select knows it as the website's set, approved or not, straight away.
+            Some(custom) => {
+                self.select
+                    .custom_folder
+                    .insert(folder.to_path_buf(), set.id);
+                if custom.approved {
+                    self.select.custom_approved.insert(set.id);
+                }
+                self.select.refilter(&self.library);
+            }
+            None => {
+                self.installed_sets().insert(set.id);
+            }
+        }
         eprintln!(
             "downloaded set {} into {} ({n} maps)",
             set.id,
@@ -17230,6 +17258,13 @@ impl State {
             KeyCode::ArrowUp | KeyCode::ArrowDown if self.modifiers_ctrl => self
                 .browse
                 .step_sort(if code == KeyCode::ArrowDown { 1 } else { -1 }),
+            KeyCode::Tab if self.modifiers_ctrl => {
+                let next = match self.browse.source() {
+                    browse::Source::Osu => browse::Source::Ours,
+                    browse::Source::Ours => browse::Source::Osu,
+                };
+                self.browse.set_source(next);
+            }
             KeyCode::ArrowUp => self.browse.move_by(-1),
             KeyCode::ArrowDown => self.browse.move_by(1),
             KeyCode::ArrowLeft => self.browse.cycle_diff(-1),
@@ -17563,8 +17598,17 @@ impl State {
                     self.open_video_editor(&file);
                 }
             }
-            Hit::DlCategory(i) => self.browse.set_category(download::Category::ALL[i]),
-            Hit::DlSort(i) => self.browse.set_sort(download::SortKey::ALL[i]),
+            Hit::DlSource(i) => self.browse.set_source(browse::Source::ALL[i]),
+            Hit::DlCategory(i) => {
+                if let Some(&c) = self.browse.categories().get(i) {
+                    self.browse.set_category(c);
+                }
+            }
+            Hit::DlSort(i) => {
+                if let Some(&s) = self.browse.sorts().get(i) {
+                    self.browse.set_sort(s);
+                }
+            }
             Hit::SettingsSection(i) => {
                 self.settings_ui.binding = None;
                 self.settings_ui.clear_search();

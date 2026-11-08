@@ -430,6 +430,19 @@ music clip from the preview point (so the autoplay is in sync there). Left/Right
 the set's taiko difficulties (the hardest is shown first). Only that difficulty's `.osu`, the clip
 and the cover are fetched, and cached.
 
+### taiko.rs custom maps
+
+The **osu! / taiko.rs** switch right of the search box (Ctrl+Tab) lists the custom maps sent to the
+[taiko.rs website](https://rstaiko.auneu.space/custom) from the editor instead: *Custom approved*
+(they give pp) or *All custom*, ordered by relevance (newest first with no text), title, artist,
+last update or downloads. Search matches the song, the mapper or who sent it. Each row says
+whether the set is approved, with its difficulties, downloads and size. The preview fetches the
+whole set from the website (custom sets have no single difficulty to fetch) and works out its
+star rating here; *Download* then unpacks that same archive into `c<number> <artist> - <title>/`,
+so a custom set is never taken for the osu! set with the same number. The set carries the
+website's `taiko-rs.custom` file, so song select shows it as CUSTOM or CUSTOM APPROVED at once and
+the tab says *installed* for it from then on.
+
 ## Multiplayer
 
 The **MULTIPLAYER** tab has two columns: **ONLINE** (lobbies on the taiko.rs server, no open
@@ -586,5 +599,5 @@ spins so frames stay evenly spaced.
 | `src/preview.rs` | song select preview: music, autoplay, background, difficulty timeline |
 | `src/discord.rs` | Discord Rich Presence over the local IPC socket / pipe |
 | `src/download.rs` | mirror search and `.osz` downloads (osu.direct, catboy.best) |
-| `src/browse.rs` | the Download tab |
+| `src/browse.rs` | the Download tab (osu! mirrors, or the taiko.rs website's custom maps) |
 | `vendor/cpal` | cpal 0.18.2 with one fix: WASAPI counted the stream latency twice in its playback timestamps (Windows players needed a much lower offset) |

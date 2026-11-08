@@ -2931,6 +2931,8 @@ pub enum Hit {
     /// The update badge: install the new build.
     Update,
     /// Download tab status category / sort chips.
+    /// The download tab's source: osu! or taiko.rs (`browse::Source::ALL`).
+    DlSource(usize),
     DlCategory(usize),
     DlSort(usize),
     /// A row of the song select leaderboard (opens its results) / its video button, and a row
