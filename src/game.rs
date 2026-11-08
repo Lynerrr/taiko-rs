@@ -7166,6 +7166,30 @@ fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
         1.0
     };
     c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(0x050000, 0.92 * flicker));
+    // A skin's own scare (its picture, or its animation's frame now) lunges in the same way,
+    // filling the screen's height once it's in.
+    let layout = c.skin_layout;
+    if layout.overtime_frames > 0 {
+        let frame = if layout.overtime_frame_ms > 0.0 {
+            (p * SCARE_MS as f32 / layout.overtime_frame_ms) as usize % layout.overtime_frames
+        } else {
+            0
+        };
+        let sprite = Sprite::ALL[Sprite::Overtime0 as usize + frame];
+        if let Some([aw, ah]) = c.sprite_size(sprite) {
+            let hh = VIRTUAL_HEIGHT / 2.0 * k / 1.3;
+            let hw = hh * aw / ah.max(1e-3);
+            c.sprite_box(
+                sprite,
+                w / 2.0 + sx,
+                VIRTUAL_HEIGHT / 2.0 + sy,
+                hw,
+                hh,
+                rgba(WHITE, flicker),
+            );
+        }
+        return;
+    }
     let (fur, dark, snout) = (0x5a3418, 0x3a2010, 0xb98552);
     // Ears, head, hat.
     for side in [-1.0, 1.0] {
@@ -10797,6 +10821,36 @@ mod tests {
         let miss = *g.misses.back().unwrap();
         assert!(out(&g, miss - 1.0) > 10.0);
         assert_eq!(out(&g, miss + CRUMBLE_MEND_MS), 0.0);
+    }
+
+    #[test]
+    fn a_skins_overtime_frames_play_through_the_scare_instead_of_the_bear() {
+        use crate::render::SPRITE_BASE;
+        let drawn = |c: &Canvas| -> Vec<usize> {
+            c.shapes
+                .iter()
+                .filter(|s| s.params[3] >= SPRITE_BASE)
+                .map(|s| (s.params[3] - SPRITE_BASE) as usize)
+                .collect()
+        };
+        let mut c = Canvas::default();
+        draw_scare(&mut c, 0.5, 0.0);
+        assert!(
+            drawn(&c).is_empty() && c.shapes.len() > 10,
+            "the built-in bear"
+        );
+        let mut c = Canvas::default();
+        c.skin_layout.overtime_frames = 3;
+        c.skin_layout.overtime_frame_ms = 100.0;
+        for i in 0..3 {
+            c.sprites[Sprite::Overtime0 as usize + i] = Some([4.0, 3.0]);
+        }
+        // 0.5 of 900 ms in: frame 4 of a 100 ms loop of three, the second.
+        draw_scare(&mut c, 0.5, 0.0);
+        assert_eq!(drawn(&c), vec![Sprite::Overtime1 as usize]);
+        assert_eq!(c.shapes.len(), 2, "the backdrop and the picture");
+        let pic = &c.shapes[1];
+        assert!((pic.half[0] / pic.half[1] - 4.0 / 3.0).abs() < 1e-3);
     }
 
     #[test]

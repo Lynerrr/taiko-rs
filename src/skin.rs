@@ -214,9 +214,11 @@ pub enum Part {
     Combo,
     Health,
     Hitsounds,
+    /// Overtime's scare: its picture (or animation) and its scream.
+    Overtime,
 }
 
-pub const PARTS: usize = 11;
+pub const PARTS: usize = 12;
 
 impl Part {
     pub const ALL: [Part; PARTS] = [
@@ -231,6 +233,7 @@ impl Part {
         Part::Combo,
         Part::Health,
         Part::Hitsounds,
+        Part::Overtime,
     ];
 
     /// Its name in the config.
@@ -247,6 +250,7 @@ impl Part {
             Part::Combo => "combo",
             Part::Health => "health",
             Part::Hitsounds => "hitsounds",
+            Part::Overtime => "overtime",
         }
     }
 
@@ -263,6 +267,7 @@ impl Part {
             Part::Combo => "Combo",
             Part::Health => "Health bar",
             Part::Hitsounds => "Hitsounds",
+            Part::Overtime => "Overtime scare",
         }
     }
 
@@ -270,7 +275,10 @@ impl Part {
     /// skin picked, the interface built-in.
     pub fn default_source(self) -> Source {
         match self {
-            Part::Notes | Part::Rolls | Part::Swells | Part::Hitsounds => Source::Main,
+            // A skin made for it brings its own scare.
+            Part::Notes | Part::Rolls | Part::Swells | Part::Hitsounds | Part::Overtime => {
+                Source::Main
+            }
             _ => Source::BuiltIn,
         }
     }
@@ -311,6 +319,10 @@ impl Part {
             ],
             Part::Health => &[HealthBg, HealthFill],
             Part::Hitsounds => &[],
+            Part::Overtime => &[
+                Overtime0, Overtime1, Overtime2, Overtime3, Overtime4, Overtime5, Overtime6,
+                Overtime7,
+            ],
         }
     }
 }
@@ -428,6 +440,15 @@ fn image_names(sprite: Sprite, ini: &Ini) -> Vec<String> {
         return fixed.iter().map(|s| s.to_string()).collect();
     }
     let i = sprite as usize;
+    if i >= Overtime0 as usize {
+        // Frames come from `overtime_frames`; the names here say a map folder has them.
+        let n = i - Overtime0 as usize;
+        return if n == 0 {
+            vec!["overtime-0".into(), "overtime".into()]
+        } else {
+            vec![format!("overtime-{n}")]
+        };
+    }
     let glyph = if (Score0 as usize..=Score9 as usize).contains(&i) {
         format!("{}-{}", ini.score_prefix, i - Score0 as usize)
     } else if (Combo0 as usize..=Combo9 as usize).contains(&i) {
@@ -454,6 +475,111 @@ impl Loaded {
     }
 }
 
+/// `img` premultiplied (so filtering doesn't darken its edges) and no bigger than `max` px on its
+/// longest side, with its size in SD px over 128 (osu! draws a 128 px circle image at the note's
+/// size; `hd`: an `@2x` image, twice as big as it's drawn).
+fn prepared(mut img: image::RgbaImage, hd: bool, max: u32) -> (image::RgbaImage, [f32; 2]) {
+    let sd = if hd { 2.0 } else { 1.0 };
+    let size = [
+        img.width() as f32 / sd / 128.0,
+        img.height() as f32 / sd / 128.0,
+    ];
+    for px in img.pixels_mut() {
+        let a = px[3] as u32;
+        for c in &mut px.0[..3] {
+            *c = ((*c as u32 * a + 127) / 255) as u8;
+        }
+    }
+    let scale = (max as f32 / img.width().max(img.height()) as f32).min(1.0);
+    if scale < 1.0 {
+        let (w, h) = (
+            ((img.width() as f32 * scale).round() as u32).max(1),
+            ((img.height() as f32 * scale).round() as u32).max(1),
+        );
+        img = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
+    }
+    (img, size)
+}
+
+/// How long each frame of an `overtime-N.png` animation shows (ms), osu!'s default of 60 fps
+/// being too quick to see a scare's frames by.
+const OVERTIME_PNG_FRAME_MS: f32 = 100.0;
+
+/// A skin's Overtime scare: `overtime-0.png`, `overtime-1.png`... (an animation), else
+/// `overtime.png`, else the frames of `overtime.gif`; at most `OVERTIME_FRAMES`, spread over the
+/// whole animation when it has more. Each with whether it's `@2x`, and how long each frame shows
+/// (ms).
+fn overtime_frames(files: &Files) -> (Vec<(image::RgbaImage, bool)>, f32) {
+    let open = |(path, hd): (&Path, bool)| match image::open(path) {
+        Ok(i) => Some((i.to_rgba8(), hd)),
+        Err(e) => {
+            eprintln!("skin: {}: {e}", path.display());
+            None
+        }
+    };
+    let numbered: Vec<(&Path, bool)> = (0..)
+        .map_while(|i| files.image(&[format!("overtime-{i}")]))
+        .take(256)
+        .collect();
+    if !numbered.is_empty() {
+        let picked = spread(numbered.len(), crate::render::OVERTIME_FRAMES);
+        let ms = OVERTIME_PNG_FRAME_MS * numbered.len() as f32 / picked.len() as f32;
+        return (
+            picked.iter().filter_map(|&i| open(numbered[i])).collect(),
+            ms,
+        );
+    }
+    if let Some(one) = files.image(&["overtime"]).and_then(open) {
+        return (vec![one], 0.0);
+    }
+    let Some(path) = files.0.get("overtime.gif") else {
+        return (Vec::new(), 0.0);
+    };
+    match gif_frames(path) {
+        Ok((frames, total_ms)) if !frames.is_empty() => {
+            let picked = spread(frames.len(), crate::render::OVERTIME_FRAMES);
+            let ms = total_ms / picked.len() as f32;
+            let mut frames: Vec<Option<image::RgbaImage>> = frames.into_iter().map(Some).collect();
+            let out = picked
+                .iter()
+                .filter_map(|&i| frames[i].take().map(|f| (f, false)))
+                .collect();
+            (out, ms)
+        }
+        Ok(_) => (Vec::new(), 0.0),
+        Err(e) => {
+            eprintln!("skin: {}: {e}", path.display());
+            (Vec::new(), 0.0)
+        }
+    }
+}
+
+/// `want` indices (or all `n` if fewer) spread evenly over 0..`n`.
+fn spread(n: usize, want: usize) -> Vec<usize> {
+    let k = n.min(want);
+    (0..k).map(|i| i * n / k).collect()
+}
+
+/// A GIF's frames, whole (each drawn over the ones before as the GIF says), and its length (ms).
+/// Frames past `MAX_GIF_FRAMES` are left out.
+fn gif_frames(path: &Path) -> Result<(Vec<image::RgbaImage>, f32), String> {
+    use image::AnimationDecoder;
+    const MAX_GIF_FRAMES: usize = 256;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let decoder = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(file))
+        .map_err(|e| e.to_string())?;
+    let (mut frames, mut total) = (Vec::new(), 0.0);
+    for frame in decoder.into_frames().take(MAX_GIF_FRAMES) {
+        let frame = frame.map_err(|e| e.to_string())?;
+        let (num, den) = frame.delay().numer_denom_ms();
+        // Browsers show a 0 or 10 ms frame for 100 ms.
+        let ms = num as f32 / den.max(1) as f32;
+        total += if ms <= 10.0 { 100.0 } else { ms };
+        frames.push(frame.into_buffer());
+    }
+    Ok((frames, total))
+}
+
 /// The largest an image is kept (longest side, px): nothing is drawn bigger than that.
 fn max_size(sprite: Sprite) -> u32 {
     use Sprite::*;
@@ -477,41 +603,36 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         let Some(skin) = from[sprite as usize] else {
             continue;
         };
+        if Part::Overtime.sprites().contains(&sprite) {
+            continue;
+        }
         let Some((path, hd)) = skin.files.image(&image_names(sprite, &skin.ini)) else {
             continue;
         };
-        let mut img = match image::open(path) {
+        let img = match image::open(path) {
             Ok(i) => i.to_rgba8(),
             Err(e) => {
                 eprintln!("skin: {}: {e}", path.display());
                 continue;
             }
         };
-        // Sizes in SD px over 128: osu! draws a 128 px circle image at the note's size.
-        let sd = if hd { 2.0 } else { 1.0 };
-        let size = [
-            img.width() as f32 / sd / 128.0,
-            img.height() as f32 / sd / 128.0,
-        ];
-        for px in img.pixels_mut() {
-            let a = px[3] as u32;
-            for c in &mut px.0[..3] {
-                *c = ((*c as u32 * a + 127) / 255) as u8;
-            }
-        }
-        let scale = (max_size(sprite) as f32 / img.width().max(img.height()) as f32).min(1.0);
-        if scale < 1.0 {
-            let (w, h) = (
-                ((img.width() as f32 * scale).round() as u32).max(1),
-                ((img.height() as f32 * scale).round() as u32).max(1),
-            );
-            img = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
-        }
+        let (mut img, size) = prepared(img, hd, max_size(sprite));
         // The drum's other half is the mirror image of the one the skin has.
         if matches!(sprite, Sprite::DrumInnerFlipped | Sprite::DrumOuterFlipped) {
             image::imageops::flip_horizontal_in_place(&mut img);
         }
         images.push((sprite, img, size));
+    }
+    let mut overtime_frame_ms = 0.0;
+    if let Some(skin) = from[Sprite::Overtime0 as usize] {
+        let (frames, frame_ms) = overtime_frames(&skin.files);
+        overtime_frame_ms = frame_ms;
+        // One picture gets more room than each frame of an animation.
+        let max = if frames.len() > 1 { 384 } else { 640 };
+        for (i, (img, hd)) in frames.into_iter().enumerate() {
+            let (img, size) = prepared(img, hd, max);
+            images.push((Sprite::ALL[Sprite::Overtime0 as usize + i], img, size));
+        }
     }
     let has = |images: &[(Sprite, image::RgbaImage, [f32; 2])], s: Sprite| {
         images.iter().any(|(i, _, _)| *i == s)
@@ -537,6 +658,12 @@ fn atlas(from: &[Option<&Loaded>; SPRITES]) -> Atlas {
         score_overlap: layout(Part::Score).map_or(0.0, |i| i.score_overlap),
         combo_overlap: layout(Part::Combo).map_or(0.0, |i| i.combo_overlap),
         legacy_drum: layout(Part::Drum).is_some_and(|i| i.legacy_drum),
+        overtime_frames: Part::Overtime
+            .sprites()
+            .iter()
+            .take_while(|&&s| has(&images, s))
+            .count(),
+        overtime_frame_ms,
     };
     if images.is_empty() {
         return Atlas {
@@ -781,10 +908,13 @@ pub fn load(main: &str, parts: &Sources, rate: Option<u32>, map_dir: Option<&Pat
             .image(&image_names(Sprite::SpinnerWarning, &m.ini))
             .is_some()
     });
-    let hitsounds = match (rate, skin_of(Part::Hitsounds)) {
+    let mut hitsounds = match (rate, skin_of(Part::Hitsounds)) {
         (Some(rate), Some(skin)) => hitsounds_of(&skin.files, rate),
         _ => audio::Custom::default(),
     };
+    if let (Some(rate), Some(skin)) = (rate, skin_of(Part::Overtime)) {
+        hitsounds.scream = scream_of(&skin.files, rate);
+    }
     Skin {
         hitsounds,
         images: atlas(&from),
@@ -795,11 +925,15 @@ pub fn load(main: &str, parts: &Sources, rate: Option<u32>, map_dir: Option<&Pat
 /// Just the hitsounds of `load` (for the video export's audio).
 pub fn hitsounds(main: &str, parts: &Sources, rate: u32) -> audio::Custom {
     let mut only = Sources(std::array::from_fn(|_| Source::BuiltIn));
-    only.set(Part::Hitsounds, parts.get(Part::Hitsounds).clone());
+    for part in [Part::Hitsounds, Part::Overtime] {
+        only.set(part, parts.get(part).clone());
+    }
     let (skins, of_part) = read_skins(main, &only);
-    of_part[Part::Hitsounds as usize].map_or_else(audio::Custom::default, |i| {
+    let mut out = of_part[Part::Hitsounds as usize].map_or_else(audio::Custom::default, |i| {
         hitsounds_of(&skins[i].files, rate)
-    })
+    });
+    out.scream = of_part[Part::Overtime as usize].and_then(|i| scream_of(&skins[i].files, rate));
+    out
 }
 
 fn hitsounds_of(files: &Files, rate: u32) -> audio::Custom {
@@ -817,7 +951,18 @@ fn hitsounds_of(files: &Files, rate: u32) -> audio::Custom {
         combobreak: files
             .sound(&["combobreak"])
             .and_then(|p| decode_sound(p, rate)),
+        scream: None,
     }
+}
+
+/// A skin's Overtime scream (`overtime.wav` / `.ogg` / `.mp3`), cut at `MAX_SCREAM_S`.
+fn scream_of(files: &Files, rate: u32) -> Option<Vec<f32>> {
+    const MAX_SCREAM_S: u32 = 5;
+    let mut s = files
+        .sound(&["overtime"])
+        .and_then(|p| decode_sound(p, rate))?;
+    s.truncate((rate * MAX_SCREAM_S) as usize);
+    Some(s)
 }
 
 /// A hitsound as mono samples. Skins mute a sound with a tiny empty file; one that fails to
@@ -907,6 +1052,92 @@ mod tests {
     fn atlas_of(dir: &std::path::Path) -> Atlas {
         let skin = Loaded::read(dir);
         super::atlas(&[Some(&skin); SPRITES])
+    }
+
+    #[test]
+    fn overtime_takes_a_skins_picture_animation_or_gif_and_its_scream() {
+        use crate::render::OVERTIME_FRAMES;
+        let dir = std::env::temp_dir().join(format!("taiko-rs-overtime-{}", std::process::id()));
+        let fresh = || {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+        };
+        let png = |name: &str, w: u32, h: u32| {
+            image::RgbaImage::from_pixel(w, h, image::Rgba([200, 0, 0, 255]))
+                .save(dir.join(name))
+                .unwrap()
+        };
+        // No scare of its own: the built-in bear.
+        fresh();
+        png("taikohitcircle.png", 128, 128);
+        assert_eq!(atlas_of(&dir).layout.overtime_frames, 0);
+        // One picture, kept at its shape (and no bigger than 640 px).
+        png("Overtime.png", 1600, 900);
+        let a = atlas_of(&dir);
+        assert_eq!(a.layout.overtime_frames, 1);
+        let (uv, size) = a.sprites[Sprite::Overtime0 as usize].unwrap();
+        assert!((size[0] / size[1] - 16.0 / 9.0).abs() < 0.01);
+        assert!((uv[2] * a.width as f32 - 640.0).abs() < 1.0);
+        // Numbered frames win over it: twelve of them, eight kept, each showing longer.
+        for i in 0..12 {
+            png(&format!("overtime-{i}.png"), 64, 64);
+        }
+        let a = atlas_of(&dir);
+        assert_eq!(a.layout.overtime_frames, OVERTIME_FRAMES);
+        assert_eq!(a.layout.overtime_frame_ms, 150.0);
+        // A GIF: its frames and their timing.
+        fresh();
+        {
+            use image::codecs::gif::GifEncoder;
+            let file = std::fs::File::create(dir.join("overtime.gif")).unwrap();
+            let mut gif = GifEncoder::new(file);
+            let frames = (0..3u8).map(|i| {
+                image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(40, 30, image::Rgba([i * 80, 0, 0, 255])),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(200, 1),
+                )
+            });
+            gif.encode_frames(frames).unwrap();
+        }
+        let a = atlas_of(&dir);
+        assert_eq!(a.layout.overtime_frames, 3);
+        assert!((a.layout.overtime_frame_ms - 200.0).abs() < 1.0);
+        // Its scream, cut at five seconds.
+        let rate: u32 = 8000;
+        let mut wav = Vec::new();
+        {
+            let samples = 6 * rate;
+            let data = samples * 2;
+            wav.extend(b"RIFF");
+            wav.extend((36 + data).to_le_bytes());
+            wav.extend(b"WAVEfmt ");
+            wav.extend(16u32.to_le_bytes());
+            wav.extend(1u16.to_le_bytes());
+            wav.extend(1u16.to_le_bytes());
+            wav.extend(rate.to_le_bytes());
+            wav.extend((rate * 2).to_le_bytes());
+            wav.extend(2u16.to_le_bytes());
+            wav.extend(16u16.to_le_bytes());
+            wav.extend(b"data");
+            wav.extend(data.to_le_bytes());
+            for i in 0..samples {
+                wav.extend((((i % 50) as i16 - 25) * 800).to_le_bytes());
+            }
+        }
+        std::fs::write(dir.join("overtime.wav"), wav).unwrap();
+        let files = Loaded::read(&dir).files;
+        let scream = super::scream_of(&files, rate).expect("the skin's scream");
+        assert_eq!(scream.len(), 5 * rate as usize);
+        assert!(
+            super::scream_of(
+                &Loaded::read(&std::env::temp_dir().join("nope")).files,
+                rate
+            )
+            .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
