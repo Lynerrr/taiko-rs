@@ -65,13 +65,22 @@ fn black_lane() -> bool {
 }
 
 use crate::beatmap::{self, Beatmap, Kind};
-use crate::calibrate;
-use crate::clock::GameClock;
 use crate::mods::{Mod, Mods, Speed};
 use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
-use crate::shapeshift;
 use crate::tko::runtime::NoteFx;
+use taiko_logic::calibrate;
+use taiko_logic::clock::GameClock;
+use taiko_logic::shapeshift;
+
+/// Where a play's diagnostic lines go: the client's audio log, once it's open (`log_to`).
+static LOG: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+/// Sends the plays' diagnostic lines (one at the end of each play) to `sink`. The first sink
+/// handed over stays; until then the lines aren't even written.
+pub fn log_to(sink: fn(&str)) {
+    let _ = LOG.set(sink);
+}
 
 /// The song a play keeps time to: how long it is and how fast it was made to play. The client's
 /// `audio::Track` is one; the sound it's handed to (`Audio::play`) takes it back as its own.
@@ -222,6 +231,9 @@ impl Drop for Game {
     /// by thirds of the hits (a clock drifting mid-song shows as thirds that differ).
     fn drop(&mut self) {
         let s = &self.stats;
+        let Some(log) = LOG.get() else {
+            return;
+        };
         if self.replay.is_some() || s.errors.len() < 30 {
             return;
         }
@@ -235,7 +247,7 @@ impl Drop for Game {
         let robust = |part: &[f64]| calibrate::estimate(part, 0.0).map_or(f64::NAN, |e| e.error_ms);
         let third = |k: usize| robust(&wanted[k * wanted.len() / 3..(k + 1) * wanted.len() / 3]);
         let (sum, frames, most) = self.clock_vs_audio;
-        crate::audiolog::line(&format!(
+        log(&format!(
             "end {} - {} [{}] hits={} mean_error={:.1} wanted={:.1} thirds={:.1}/{:.1}/{:.1} ur={:.0} played_s={:.0} clock_vs_audio={:.3}/{:.1}",
             self.map.meta.artist,
             self.map.meta.title,
@@ -431,8 +443,8 @@ pub struct Game {
     pub raw_time: f64,
     /// How autoplay hits (Settings → Gameplay), and the keys that gives each note (by note index,
     /// empty for all but dons and kats), worked out once for those settings.
-    pub autoplay_style: crate::autoplay::Settings,
-    auto_plan: Option<(crate::autoplay::Settings, Vec<Vec<usize>>)>,
+    pub autoplay_style: taiko_logic::autoplay::Settings,
+    auto_plan: Option<(taiko_logic::autoplay::Settings, Vec<Vec<usize>>)>,
     /// Autoplay sounds already handed to the audio engine ahead of their hit: (note, key slot or
     /// roll tick). The hit itself then stays quiet.
     auto_sched: BTreeSet<(usize, usize)>,
@@ -538,7 +550,7 @@ pub struct Game {
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     shapeshift: shapeshift::Config,
     /// Tact: how often notes move.
-    tact: crate::tact::Step,
+    tact: taiko_logic::tact::Step,
     shape_order: Vec<u8>,
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
@@ -1030,7 +1042,7 @@ impl Game {
             last_audio_ms: None,
             clock_vs_audio: (0.0, 0, 0.0),
             raw_time: track_start,
-            autoplay_style: crate::autoplay::Settings::default(),
+            autoplay_style: taiko_logic::autoplay::Settings::default(),
             auto_plan: None,
             auto_sched: BTreeSet::new(),
             paused: None,
@@ -1081,7 +1093,7 @@ impl Game {
             scares,
             next_scare: 0,
             shapeshift,
-            tact: crate::tact::get(),
+            tact: taiko_logic::tact::get(),
             shape_order,
             universes: None,
             defense: None,
@@ -1520,10 +1532,11 @@ impl Game {
                 })
                 .collect();
             let mut plan = vec![Vec::new(); self.map.notes.len()];
-            for (&i, keys) in
-                hits.iter()
-                    .zip(crate::autoplay::note_keys(&notes, self.main_beat, style))
-            {
+            for (&i, keys) in hits.iter().zip(taiko_logic::autoplay::note_keys(
+                &notes,
+                self.main_beat,
+                style,
+            )) {
                 plan[i] = keys;
             }
             self.auto_plan = Some((style, plan));
@@ -1567,7 +1580,8 @@ impl Game {
                     let spacing = self.map.notes[i].tick_spacing;
                     let k = ((t - time) / spacing).floor().max(0.0) as usize;
                     if self.state[i].ticks.get(k).is_some_and(|hit| !hit) {
-                        let key = crate::autoplay::roll_key(k, self.autoplay_style.left_handed);
+                        let key =
+                            taiko_logic::autoplay::roll_key(k, self.autoplay_style.left_handed);
                         self.auto_hit(key, time + k as f64 * spacing, audio, (i, k));
                     }
                 }
@@ -1643,7 +1657,8 @@ impl Game {
                             break;
                         }
                         if self.auto_sched.insert((i, k)) {
-                            let key = crate::autoplay::roll_key(k, self.autoplay_style.left_handed);
+                            let key =
+                                taiko_logic::autoplay::roll_key(k, self.autoplay_style.left_handed);
                             let sfx = if key == 0 || key == 3 {
                                 Sound::Kat
                             } else {

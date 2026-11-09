@@ -61,6 +61,8 @@ pub fn start() -> bool {
         crate::update::BUILD_CHANNEL.name()
     );
     *log = Some((file, Instant::now()));
+    // Each play writes its line at its end.
+    crate::game::log_to(line);
     true
 }
 
