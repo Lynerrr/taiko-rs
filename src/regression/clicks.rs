@@ -115,10 +115,18 @@ fn clicks(tag: &str, open: fn(&mut State, &mut Instant)) -> String {
         click_at(&mut s, &mut now, x, y);
         now += Duration::from_millis(16);
         frame(&mut s, now);
-        let toast = s.toast.as_ref().map(|t| t.text.clone());
+        let mut toast = s.toast.as_ref().map(|t| t.text.clone());
         let quit = s.quit || s.quit_asked;
         s.toast = None;
-        let after = settled_texts(&mut s, &mut now);
+        let mut after = settled_texts(&mut s, &mut now);
+        // Background work (a folder dialog that tests refuse) can answer with a toast only while
+        // the screen settles, on a slow runner: it's the same toast, not a text the click showed.
+        if toast.is_none()
+            && let Some(late) = s.toast.as_ref().map(|t| t.text.trim().to_string())
+        {
+            after.retain(|t| *t != late);
+            toast = Some(late);
+        }
         let mut line = format!(
             "{name} @{},{} -> {}",
             x.round() as i32,
