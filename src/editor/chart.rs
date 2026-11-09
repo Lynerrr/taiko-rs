@@ -1238,7 +1238,7 @@ pub(crate) mod tests {
         c.insert_object(HitObject::roll(5000.0, 140.0, false));
         c.insert_object(HitObject::swell(7000.0, 8000.0));
         let out = c.to_text();
-        let map = crate::beatmap::tests::parse(&out);
+        let map = crate::beatmap::parse_raw(&out);
         let kinds: Vec<_> = map.notes.iter().map(|n| n.kind).collect();
         use crate::beatmap::Kind::*;
         assert!(kinds.contains(&Roll) && kinds.contains(&Swell));
@@ -1345,8 +1345,8 @@ pub(crate) mod tests {
             }
             // The game reads the edit: one note more, the others where they were.
             let (a, b) = (
-                crate::beatmap::tests::parse(&text),
-                crate::beatmap::tests::parse(&edited),
+                crate::beatmap::parse_raw(&text),
+                crate::beatmap::parse_raw(&edited),
             );
             if a.meta.format_version >= 5 && !a.notes.is_empty() {
                 assert_eq!(b.notes.len(), a.notes.len() + 1, "{name}");

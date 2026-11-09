@@ -1,4 +1,4 @@
-"""Builds misaki.bin, the Japanese part of the 5x7 font (src/font.rs), from Misaki Gothic 2nd
+"""Builds misaki.bin, the Japanese part of the 5x7 font (crates/taiko-logic/src/font.rs), from Misaki Gothic 2nd
 (https://littlelimit.net/misaki.htm, free to use, change and pass on; see THIRD-PARTY.md):
 
     python3 misaki.py misaki_gothic_2nd.bdf misaki.bin
@@ -12,7 +12,7 @@ the descender row and the spacing column are left out.
 import struct
 import sys
 
-# Already drawn by src/font.rs: ASCII, Cyrillic, and marks shown as their ASCII look-alikes.
+# Already drawn by crates/taiko-logic/src/font.rs: ASCII, Cyrillic, and marks shown as their ASCII look-alikes.
 OWN = set(range(0x80)) | set(range(0x410, 0x450)) | {0x401, 0x451, 0xA0} | set(map(ord, '«»“”„‘’–—−…№'))
 
 

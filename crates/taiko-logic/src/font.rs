@@ -171,7 +171,7 @@ const CYRILLIC: [[u8; 5]; 66] = [
 
 /// Japanese, and whatever else Misaki Gothic 2nd has that the glyphs above don't: 12 bytes each,
 /// in codepoint order (see assets/font/misaki.py): the codepoint, the width, 7 columns.
-static MISAKI: &[u8] = include_bytes!("../assets/font/misaki.bin");
+static MISAKI: &[u8] = include_bytes!("../../../assets/font/misaki.bin");
 const MISAKI_GLYPHS: usize = MISAKI.len() / 12;
 const MISAKI_BASE: usize = 95 + 66;
 

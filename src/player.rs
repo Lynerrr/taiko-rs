@@ -104,6 +104,26 @@ pub enum Control {
     PlayMap,
 }
 
+/// A genre's name in the player's language (the logic names them in English).
+fn genre_name(i: usize) -> &'static str {
+    match GENRES[i].name {
+        "Electronic" => tr!("Electronic", "エレクトロニック", "Электроника"),
+        "Hardcore" => tr!("Hardcore", "ハードコア", "Хардкор"),
+        "Trance" => tr!("Trance", "トランス", "Транс"),
+        "Techno & House" => tr!("Techno & House", "テクノ / ハウス", "Техно и хаус"),
+        "Pop" => tr!("Pop", "ポップ", "Поп"),
+        "Rock" => tr!("Rock", "ロック", "Рок"),
+        "Metal" => tr!("Metal", "メタル", "Метал"),
+        "Hip Hop" => tr!("Hip Hop", "ヒップホップ", "Хип-хоп"),
+        "Anime" => tr!("Anime", "アニメ", "Аниме"),
+        "Game music" => tr!("Game music", "ゲーム音楽", "Музыка из игр"),
+        "Classical" => tr!("Classical", "クラシック", "Классика"),
+        "Chiptune" => tr!("Chiptune", "チップチューン", "Чиптюн"),
+        // Names that read the same in every language.
+        name => name,
+    }
+}
+
 /// What a speed mod does to the music.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Speed {
@@ -833,7 +853,7 @@ impl Player {
         match folder {
             Folder::All => tr!("All songs", "すべての曲", "Все песни"),
             Folder::Favourites => tr!("Favourites", "お気に入り", "Любимые"),
-            Folder::Genre(i) => (GENRES[i].name)(),
+            Folder::Genre(i) => genre_name(i),
             Folder::Other => tr!("No genre", "ジャンルなし", "Без жанра"),
         }
     }
@@ -1444,6 +1464,26 @@ fn slice_at(angle: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn genre_folders_are_named_in_the_player_s_language() {
+        // The logic names the genres in English; the folders say them in the player's language.
+        let at = |name: &str| GENRES.iter().position(|g| g.name == name).unwrap();
+        crate::lang::set(crate::lang::Lang::Ru);
+        assert_eq!(genre_name(at("Electronic")), "Электроника");
+        assert_eq!(genre_name(at("Game music")), "Музыка из игр");
+        assert_eq!(
+            genre_name(at("Touhou")),
+            "Touhou",
+            "a name that reads the same"
+        );
+        crate::lang::set(crate::lang::Lang::Ja);
+        assert_eq!(genre_name(at("Pop")), "ポップ");
+        crate::lang::set(crate::lang::Lang::En);
+        for (i, g) in GENRES.iter().enumerate() {
+            assert_eq!(genre_name(i), g.name);
+        }
+    }
 
     fn tone(hz: f32, rate: u32) -> Spectrum {
         let mut sp = Spectrum::default();

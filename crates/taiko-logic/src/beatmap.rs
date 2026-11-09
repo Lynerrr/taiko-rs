@@ -361,6 +361,23 @@ pub fn from_text(text: &str) -> Result<Beatmap, String> {
     Ok(map)
 }
 
+/// The chart in `text` converted as it's written: no checks, no gimmick, and not moved to where
+/// osu! plays its music (`from_text` does all that). For tests and tools.
+pub fn parse_raw(text: &str) -> Beatmap {
+    let (meta, body) = parse_sections(text, false);
+    let mut map = Beatmap {
+        meta,
+        notes: Vec::new(),
+        barlines: Vec::new(),
+        control_points: Vec::new(),
+        first_velocity: 0.0,
+        gimmick: None,
+        fakes: Vec::new(),
+    };
+    convert(&mut map, body);
+    map
+}
+
 impl Beatmap {
     /// A map song select shows no playfield preview of: rolls or swells it made endless
     /// (`playable_length` cut them to the longest), or more notes than any real map. Its preview
@@ -907,18 +924,7 @@ SliderTickRate:1
 ";
 
     pub(crate) fn parse(text: &str) -> Beatmap {
-        let (meta, body) = parse_sections(text, false);
-        let mut map = Beatmap {
-            meta,
-            notes: Vec::new(),
-            barlines: Vec::new(),
-            control_points: Vec::new(),
-            first_velocity: 0.0,
-            gimmick: None,
-            fakes: Vec::new(),
-        };
-        convert(&mut map, body);
-        map
+        parse_raw(text)
     }
 
     #[test]
@@ -967,15 +973,7 @@ SliderTickRate:1
             "song select shows it no playfield"
         );
         assert!(!parse(MAP).too_wild_to_preview());
-        let _ = crate::game::Game::new(
-            map,
-            std::sync::Arc::new(crate::audio::Track {
-                samples: Vec::new(),
-                rate: 1.0,
-                stream: None,
-            }),
-            None,
-        );
+        // And a game to preview: the client's beatmap_tests.
     }
 
     #[test]

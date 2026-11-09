@@ -6,13 +6,18 @@
 //! the crate's dependencies keep it that way.
 
 pub mod autoplay;
+pub mod beatmap;
 pub mod calibrate;
 pub mod clock;
 pub mod defense;
+pub mod difficulty;
+pub mod font;
+pub mod genres;
 pub mod mods;
 pub mod od_override;
 pub mod shapeshift;
 pub mod tact;
+pub mod tko;
 
 #[cfg(test)]
 mod tests {

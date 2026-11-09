@@ -8,20 +8,13 @@
 //! notes. It never changes when a note is hit or how it is judged, so scores, pp and replays of a
 //! `.tko` map are as fair as those of its `.osu`.
 
-pub mod clips;
-pub mod format;
-pub mod gimmick;
-pub mod graph;
-pub mod path;
+// The model, its file format and the runtime are the game's (taiko-logic); drawing them is the
+// client's.
+pub use taiko_logic::tko::{
+    TKO_VERSION, clips, format, gimmick, graph, path, runtime, scroll, track,
+};
 pub mod recipes;
-pub mod runtime;
 pub mod screen;
-pub mod scroll;
-pub mod track;
-
-/// The newest format this build reads and writes. Raising it needs a migration in
-/// `format::MIGRATIONS` and a fixture of the old format in its tests.
-pub const TKO_VERSION: u32 = 4;
 
 #[cfg(test)]
 mod tests {

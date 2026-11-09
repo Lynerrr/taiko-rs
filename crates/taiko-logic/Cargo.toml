@@ -9,6 +9,5 @@ publish = false
 [dependencies]
 # Defense's rules and acts go over the network as they are.
 serde = { version = "1.0.229", features = ["derive"] }
-
-[dev-dependencies]
+# A .tko map's [Gimmick] section is a line of JSON.
 serde_json = "1.0.154"

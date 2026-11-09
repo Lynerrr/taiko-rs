@@ -13,7 +13,7 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 
 HERE = pathlib.Path(__file__).resolve().parent
-SOURCE = HERE.parent.parent / "src" / "font.rs"
+SOURCE = HERE.parent.parent / "crates" / "taiko-logic" / "src" / "font.rs"
 PX = 125
 ADVANCE = 6 * PX
 
