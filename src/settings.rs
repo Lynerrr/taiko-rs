@@ -2178,7 +2178,7 @@ impl SettingsUi {
             side_w + 12.0,
             SECTIONS.len() as f32 * PITCH + 4.0,
         );
-        let colours = crate::multiverse::note_colours();
+        let colours = crate::game::note_colours();
         for (i, (id, _)) in SECTIONS.iter().enumerate() {
             let name = section_name(i);
             let found = self.results.iter().filter(|&&r| ITEMS[r].0 == *id).count();

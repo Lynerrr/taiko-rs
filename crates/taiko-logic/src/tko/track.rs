@@ -52,6 +52,7 @@ impl Ease {
         Ease::BounceOut,
     ];
 
+    #[inline]
     pub fn label(self) -> &'static str {
         match self {
             Ease::Linear => "linear",
@@ -72,6 +73,7 @@ impl Ease {
         }
     }
 
+    #[inline]
     pub fn next(self) -> Ease {
         let at = Ease::ALL.iter().position(|e| *e == self).unwrap_or(0);
         Ease::ALL[(at + 1) % Ease::ALL.len()]
@@ -155,6 +157,7 @@ pub struct Track {
 }
 
 impl Track {
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
@@ -181,6 +184,7 @@ impl Track {
     }
 
     /// Adds a key, or replaces the one at the same time. Returns its index.
+    #[inline]
     pub fn set(&mut self, key: Key) -> usize {
         match self.keys.binary_search_by(|k| k.t.total_cmp(&key.t)) {
             Ok(i) => {

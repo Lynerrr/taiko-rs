@@ -14,8 +14,12 @@ pub mod difficulty;
 pub mod font;
 pub mod genres;
 pub mod mods;
+pub mod multiverse;
 pub mod od_override;
+pub mod pp;
 pub mod shapeshift;
+pub mod sim;
+pub mod stars;
 pub mod tact;
 pub mod tko;
 

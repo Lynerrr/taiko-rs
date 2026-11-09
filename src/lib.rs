@@ -63,7 +63,8 @@ use taiko_logic::mods;
 #[cfg(test)]
 mod mods_tests;
 mod multiplayer;
-mod multiverse;
+use mod_setup::multiverse::LookText as _;
+use taiko_logic::multiverse;
 mod net;
 use taiko_logic::od_override;
 mod offline;
@@ -74,7 +75,9 @@ mod perf_audit;
 mod pictures;
 mod player;
 mod playlist;
-mod pp;
+use taiko_logic::pp;
+#[cfg(test)]
+mod pp_tests;
 mod preview;
 mod profile;
 mod recalc;
@@ -95,7 +98,7 @@ mod shots;
 mod skin;
 mod social;
 mod splash;
-mod stars;
+use taiko_logic::stars;
 mod stream;
 mod style;
 use taiko_logic::tact;
@@ -5535,12 +5538,12 @@ impl State {
                 let own = c.note_colours.custom;
                 let custom = format!(
                     "{}  #{:06x} / #{:06x}",
-                    multiverse::palette_label(multiverse::CUSTOM),
+                    mod_setup::multiverse::palette_label(multiverse::CUSTOM),
                     own[0],
                     own[1]
                 );
                 let names = (0..multiverse::PALETTES.len())
-                    .map(|i| multiverse::palette_label(i).to_string())
+                    .map(|i| mod_setup::multiverse::palette_label(i).to_string())
                     .chain(std::iter::once(custom))
                     .collect();
                 (
@@ -8596,7 +8599,7 @@ impl State {
         let col_w = c.width / 4.0;
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
-            let colours = multiverse::note_colours();
+            let colours = crate::game::note_colours();
             let color = if key == 0 || key == 3 {
                 colours.kat()
             } else {
@@ -13924,7 +13927,7 @@ impl State {
         );
         let gap = 12.0;
         let button = (bw - 36.0 - gap) / 2.0;
-        let colours = multiverse::note_colours();
+        let colours = crate::game::note_colours();
         let options = [
             (
                 x + 18.0,

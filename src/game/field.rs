@@ -372,7 +372,7 @@ impl Play {
             self.draw_multiverse(c, scroll_speed);
         } else {
             let uni = Universe {
-                colours: multiverse::note_colours(),
+                colours: crate::game::note_colours(),
                 ..Universe::CLASSIC
             };
             self.draw_field(c, scroll_speed, Focus::FULL, &uni, self.game.mods);
@@ -3229,7 +3229,7 @@ pub fn draw_preview(c: &mut Canvas) {
         rgba(WHITE, 1.0),
         NOTE_R * 0.1,
     );
-    let colours = multiverse::note_colours();
+    let colours = crate::game::note_colours();
     for (dx, col, big) in [
         (400.0, colours.don(), true),
         (260.0, colours.kat(), false),
@@ -3330,17 +3330,6 @@ pub(super) const FOCUS_COL: u32 = 0xbfe9ff;
 
 /// Multiverse: how long (ms) the burst lasts as a playfield takes the focus.
 pub(super) const FOCUS_BURST_MS: f64 = 600.0;
-
-/// Multiverse: the focus moving to another playfield.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct FocusSwitch {
-    /// The bar it lands on (map ms).
-    pub(super) at: f64,
-    /// The playfield that gets it.
-    pub(super) field: usize,
-    /// The beat length there.
-    pub(super) beat: f64,
-}
 
 /// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
 /// exactly as long as in osu!. Stable scrolls notes at their velocity across a 480-tall gamefield

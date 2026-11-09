@@ -64,6 +64,7 @@ pub enum Notes {
 impl Notes {
     pub const ALL: [Notes; 4] = [Notes::All, Notes::Dons, Notes::Kats, Notes::Big];
 
+    #[inline]
     pub fn label(self) -> &'static str {
         match self {
             Notes::All => "all notes",
@@ -91,6 +92,7 @@ pub enum Motion {
 impl Motion {
     pub const ALL: [Motion; 3] = [Motion::Kick, Motion::Swing, Motion::Step];
 
+    #[inline]
     pub fn label(self) -> &'static str {
         match self {
             Motion::Kick => "kick",
@@ -147,6 +149,7 @@ impl CopyProp {
         CopyProp::LaneFade,
     ];
 
+    #[inline]
     pub fn name(self) -> &'static str {
         match self {
             CopyProp::Show => "show",
@@ -175,6 +178,7 @@ impl CopyProp {
         }
     }
 
+    #[inline]
     pub fn about(self) -> &'static str {
         match self {
             CopyProp::Show => {
@@ -431,6 +435,7 @@ impl Clip {
         }
     }
 
+    #[inline]
     pub fn target(&self) -> Option<Target> {
         if self.what == "layer" {
             return self.layer.is_some().then_some(Target::Layer);

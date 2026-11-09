@@ -3421,6 +3421,7 @@ dependencies = [
 name = "taiko-logic"
 version = "0.1.0"
 dependencies = [
+ "rosu-pp",
  "serde",
  "serde_json",
 ]
