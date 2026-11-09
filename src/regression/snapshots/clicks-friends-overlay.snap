@@ -1,0 +1,14 @@
+screen social: Select, 13 areas
+Tab(0) @217,31 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+Tab(1) @295,31 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+Tab(2) @396,31 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+Tab(3) @498,31 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+ModsButton @446,66 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+SortList @372,66 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+TextField @172,66 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+SongHeader(0) @246,103 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+SongRow(0) @256,131 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+SocialPanel @709,108 -> Select
+SplitList @476,245 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+Changelog @808,9 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."
+Account @740,9 -> Select -"F9" -"F9 or Esc close" -"FRIENDS" -"Log in under MULTIPLAYER > ONLINE" -"Not logged in" -"to add friends and chat."

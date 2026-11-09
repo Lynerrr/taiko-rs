@@ -1,0 +1,12 @@
+screen multiplayer: MpMenu, 11 areas
+Tab(0) @217,31 -> Select +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +"3.08" +29 more -"127.0.0.1:9   no connection" -"An account plays online: lobbies, friends, leaderboards." -"CREATE ACCOUNT" -"FORGOT PASSWORD?" -"LOG IN" -"Name or email" -5 more
+Tab(1) @295,31 -> Settings +"<  none found, Enter to pick  >" +"AUDIO" +"Clipboard" +"GAMEPLAY" +"Game data folder" +"Hidden maps" +29 more -"127.0.0.1:9   no connection" -"An account plays online: lobbies, friends, leaderboards." -"CREATE ACCOUNT" -"FORGOT PASSWORD?" -"LOG IN" -"Name or email" -5 more
+Tab(2) @396,31 -> MpMenu
+Tab(3) @498,31 -> Download +"Has leaderboard" +"Relevance" +"SORT" +"STATUS" +"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" +"maps from catboy.best / osu.direct" +5 more -"127.0.0.1:9   no connection" -"An account plays online: lobbies, friends, leaderboards." -"CREATE ACCOUNT" -"FORGOT PASSWORD?" -"LOG IN" -"Name or email" -5 more
+MpRow(0) @427,99 -> MpMenu
+MpRow(1) @427,137 -> MpMenu
+MpRow(2) @427,175 -> MpMenu +"type your name (or the account's email)"
+MpRow(3) @320,210 -> MpMenu +"3-16 letters, digits, _ or -_" +"6 characters or more" +"BACK" +"Email" +"NEW ACCOUNT" +"Name" +4 more -"An account plays online: lobbies, friends, leaderboards." -"CREATE ACCOUNT" -"FORGOT PASSWORD?" -"LOG IN" -"Name or email" -"No account yet? CREATE ACCOUNT takes a minute." -2 more
+MpRow(4) @534,210 -> MpMenu +"BACK" +"FORGOT PASSWORD" +"SEND CODE" +"Type your name or email, then SEND CODE:" +"it goes to the account's email." -"An account plays online: lobbies, friends, leaderboards." -"CREATE ACCOUNT" -"FORGOT PASSWORD?" -"LOG IN" -"No account yet? CREATE ACCOUNT takes a minute." -"ONLINE ACCOUNT" -1 more
+Changelog @808,9 -> MpMenu +"Close" +"Up/Down, wheel: scroll   Esc: close" +"What's new" +"blocked in tests: no programs, no internet" -"log in" -"what's new"
+Account @740,9 -> MpMenu

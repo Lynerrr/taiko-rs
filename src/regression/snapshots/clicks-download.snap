@@ -1,0 +1,12 @@
+screen download: Download, 11 areas
+Tab(0) @217,31 -> Select +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +"3.08" +29 more -"Has leaderboard" -"Relevance" -"SORT" -"STATUS" -"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" -"maps from catboy.best / osu.direct" -5 more
+Tab(1) @295,31 -> Settings +"<  none found, Enter to pick  >" +"AUDIO" +"Clipboard" +"GAMEPLAY" +"Game data folder" +"Hidden maps" +29 more -"Has leaderboard" -"Relevance" -"SORT" -"STATUS" -"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" -"maps from catboy.best / osu.direct" -5 more
+Tab(2) @396,31 -> MpMenu +"127.0.0.1:9   no connection" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +"Name or email" +5 more -"Has leaderboard" -"Relevance" -"SORT" -"STATUS" -"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" -"maps from catboy.best / osu.direct" -5 more
+Tab(3) @498,31 -> Download
+DlSource(0) @375,66 -> Download
+DlSource(1) @432,66 -> Download +"Custom approved" +"custom maps from the taiko.rs website" +"search failed: blocked in tests: no programs, no internet" +"search song, mapper, sender..." -"Has leaderboard" -"maps from catboy.best / osu.direct" -"search artist, title, mapper..." -"search failed: blocked in tests: no programs, no inter..."
+TextField @185,66 -> Download
+DlMenu(0) @107,94 -> Download +"Any" +"Graveyard" +"Has leaderboard" +"Loved" +"Pending" +"Qualified" +2 more
+DlMenu(1) @253,94 -> Download +"Artist" +"Difficulty" +"Favourites" +"Plays" +"Ranked" +"Rating" +2 more
+Changelog @808,9 -> Download +"Close" +"Up/Down, wheel: scroll   Esc: close" +"What's new" +"blocked in tests: no programs, no internet" -"log in" -"what's new"
+Account @740,9 -> MpMenu +"127.0.0.1:9   no connection" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +"Name or email" +5 more -"Has leaderboard" -"Relevance" -"SORT" -"STATUS" -"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" -"maps from catboy.best / osu.direct" -5 more

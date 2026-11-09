@@ -1,0 +1,6 @@
+screen pause: Play, 5 areas
+PauseItem(0) @427,188 -> Play -"Continue" -"PAUSED" -"Playfield size" -"Quit to song select" -"Regression - basics" -"Retry" -3 more
+PauseItem(1) @427,224 -> Play -"Continue" -"PAUSED" -"Playfield size" -"Quit to song select" -"Regression - basics" -"Retry" -3 more
+PauseItem(2) @427,260 -> Play +"+ Add size" +"+ Save current 1920x1080" +"Playfield preset" +"S save current   A add   E edit   Del delete   Shift+Up/Down move" +"Saved" +"Up/Down or mouse choose   Enter/click apply   Esc close" +2 more
+PauseItem(3) @427,296 -> Settings +"." +"<  none found, Enter to pick  >" +"AUDIO" +"Clipboard" +"DOWNLOAD" +"GAMEPLAY" +45 more -"00000000" -"0pp" -"100.00%" -"1920x1080 (full screen)" -"Continue" -"PAUSED" -7 more
+PauseItem(4) @427,332 -> Select +"." +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +44 more -"00000000" -"0pp" -"100.00%" -"1920x1080 (full screen)" -"Continue" -"PAUSED" -7 more
