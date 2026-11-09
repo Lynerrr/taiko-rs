@@ -274,7 +274,7 @@ impl SpectateView {
             self.games[0].1.skip_target() - SPECTATE_DELAY.as_secs_f64() * 1000.0 * self.rate;
         if self.games[0].1.time < target {
             for (_, g) in &mut self.games {
-                g.seek(target, audio, offset);
+                g.seek(target, audio.map(|a| a as &dyn game::Audio), offset);
             }
         }
     }
@@ -2467,6 +2467,12 @@ fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Scanned>, Arc<AtomicUsize>) {
     (rx, found)
 }
 
+/// The sound, as plays take it (borrowing only the `audio` field, so a play in the scene can be
+/// borrowed beside it).
+fn sound(audio: &Option<Engine>) -> Option<&dyn game::Audio> {
+    audio.as_ref().map(|a| a as &dyn game::Audio)
+}
+
 impl State {
     fn toast(&mut self, text: String) {
         self.toast = Some(Toast {
@@ -4093,7 +4099,7 @@ impl State {
             return;
         }
         match &mut self.scene {
-            Scene::Play { game, .. } => game.pause(self.audio.as_ref()),
+            Scene::Play { game, .. } => game.pause(sound(&self.audio)),
             Scene::Select
             | Scene::Download
             | Scene::MpMenu
@@ -7300,7 +7306,7 @@ impl State {
             track.samples.iter_mut().for_each(|s| *s = 0.0);
         }
         let track = Arc::new(track);
-        let mut game = Play::new(Game::new(map, track, self.audio.as_ref()));
+        let mut game = Play::new(Game::new(map, track, sound(&self.audio)));
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.mute_hits = true;
         game.view.show_hp = false;
@@ -7395,7 +7401,7 @@ impl State {
                     game.press(
                         calibrate::centre_key(k),
                         at,
-                        self.audio.as_ref(),
+                        sound(&self.audio),
                         self.play_offset,
                     );
                 }
@@ -7636,7 +7642,7 @@ impl State {
             match rx.try_recv() {
                 Ok(Ok((track, speed))) => {
                     let rate = game.rate * speed;
-                    game.change_speed(track, rate, self.audio.as_ref(), self.play_offset);
+                    game.change_speed(track, rate, sound(&self.audio), self.play_offset);
                     self.replay_speed = speed;
                     self.replay_speed_rx = None;
                 }
@@ -7744,9 +7750,9 @@ impl State {
             // Wrapping: Up from Continue is Quit, so pause, Up, Enter leaves at once.
             KeyCode::ArrowUp => game.paused = Some((cursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS),
             KeyCode::ArrowDown => game.paused = Some((cursor + 1) % PAUSE_ITEMS),
-            KeyCode::Escape => game.resume_after(delay, self.audio.as_ref()),
+            KeyCode::Escape => game.resume_after(delay, sound(&self.audio)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
-                0 => game.resume_after(delay, self.audio.as_ref()),
+                0 => game.resume_after(delay, sound(&self.audio)),
                 1 => {
                     let (e, f) = (*entry, *from);
                     self.retry_from(e, f);
@@ -7906,7 +7912,7 @@ impl State {
         };
         let (start, end) = game.span();
         let t = start + ((vx - x) / w.max(1.0)).clamp(0.0, 1.0) as f64 * (end - start);
-        game.seek(t, self.audio.as_ref(), self.play_offset);
+        game.seek(t, sound(&self.audio), self.play_offset);
         true
     }
 
@@ -9219,7 +9225,7 @@ impl State {
                 // Clicking the resolution readout opens the preset list; single-player pauses
                 // first (a multiplayer match keeps running).
                 if let Scene::Play { game, .. } | Scene::Calibrate { game, .. } = &mut self.scene {
-                    game.pause(self.audio.as_ref());
+                    game.pause(sound(&self.audio));
                 }
                 self.open_dropdown();
                 return;
@@ -9523,7 +9529,7 @@ impl State {
             && let Some(k) = self.cfg.keys.iter().position(|&k| k == code)
         {
             if !repeat && game.replay.is_none() {
-                game.press(k, at, self.audio.as_ref(), self.play_offset);
+                game.press(k, at, sound(&self.audio), self.play_offset);
             }
             return;
         }
@@ -13302,7 +13308,7 @@ impl State {
                         .unwrap_or_default();
                     let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
                     let mut g =
-                        Play::new(Game::with_seed(map, track, self.audio.as_ref(), mods, seed));
+                        Play::new(Game::with_seed(map, track, sound(&self.audio), mods, seed));
                     g.live_pp = v.entry.and_then(|i| {
                         pp::Live::start(
                             self.library[i].path.clone(),
@@ -13321,7 +13327,7 @@ impl State {
                     g.view.banner = Some(format!("WATCHING  -  {}", v.player));
                     let target = v.their_time() - WATCH_DELAY_MS * rate;
                     if target > g.time {
-                        g.seek(target, self.audio.as_ref(), self.play_offset);
+                        g.seek(target, sound(&self.audio), self.play_offset);
                     }
                     v.game = Some(Box::new(g));
                 }
@@ -13347,18 +13353,18 @@ impl State {
                     || heard.elapsed()
                         > Duration::from_millis((WATCH_DELAY_MS * 2.0 + 4000.0) as u64);
                 if v.held {
-                    g.resume(self.audio.as_ref());
+                    g.resume(sound(&self.audio));
                     v.held = false;
                 }
             } else if !v.held && g.time > target + 250.0 {
-                g.pause(self.audio.as_ref());
+                g.pause(sound(&self.audio));
                 v.held = true;
             } else if v.held && target >= g.time {
-                g.resume(self.audio.as_ref());
+                g.resume(sound(&self.audio));
                 v.held = false;
             } else if !v.held && g.time < target - 4000.0 * rate {
                 // Far behind (they skipped the intro, or we stalled): jump to them.
-                g.seek(target, self.audio.as_ref(), self.play_offset);
+                g.seek(target, sound(&self.audio), self.play_offset);
             }
         }
         if over {
@@ -13602,7 +13608,7 @@ impl State {
                     s.skip_votes = None;
                 }
                 if let Scene::MpPlay { game, .. } = &mut self.scene {
-                    game.skip(self.audio.as_ref(), self.play_offset);
+                    game.skip(sound(&self.audio), self.play_offset);
                 }
             }
             ServerMsg::MapFile(part) => self.receive_map_part(part),
@@ -14634,7 +14640,7 @@ impl State {
             }
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat && game.replay.is_none() {
-                    game.press(k, at, self.audio.as_ref(), self.play_offset);
+                    game.press(k, at, sound(&self.audio), self.play_offset);
                 }
                 return;
             }
@@ -14654,7 +14660,7 @@ impl State {
                     } else {
                         -step
                     };
-                game.seek(t, self.audio.as_ref(), self.play_offset);
+                game.seek(t, sound(&self.audio), self.play_offset);
                 return;
             }
         }
@@ -14818,10 +14824,10 @@ impl State {
                 KeyCode::Tab => self.toggle_map_info(),
                 // After the last note there's nothing left to pause: straight to the results.
                 KeyCode::Escape if game.skip_outro() => {}
-                KeyCode::Escape => game.pause(self.audio.as_ref()),
-                KeyCode::Space if game.replay.is_some() => game.toggle_held(self.audio.as_ref()),
+                KeyCode::Escape => game.pause(sound(&self.audio)),
+                KeyCode::Space if game.replay.is_some() => game.toggle_held(sound(&self.audio)),
                 KeyCode::Space => {
-                    game.skip(self.audio.as_ref(), self.play_offset);
+                    game.skip(sound(&self.audio), self.play_offset);
                 }
                 KeyCode::Backquote => self.hold_retry(),
                 KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
@@ -15790,7 +15796,7 @@ impl State {
                         let mut game = Play::new(Game::with_half(
                             map,
                             track,
-                            self.audio.as_ref(),
+                            sound(&self.audio),
                             mods,
                             seed,
                             half,
@@ -15805,9 +15811,9 @@ impl State {
                             half,
                         );
                         if let Some(t) = *from {
-                            game.start_from(t, self.audio.as_ref(), self.play_offset);
+                            game.start_from(t, sound(&self.audio), self.play_offset);
                         } else if *retry {
-                            game.skip(self.audio.as_ref(), self.play_offset);
+                            game.skip(sound(&self.audio), self.play_offset);
                         }
                         match self.pending_replay.take() {
                             Some(r) => {
@@ -15854,10 +15860,10 @@ impl State {
                 }
             }
             Scene::Play { game, entry, from } => {
-                let done = game.update(now, self.audio.as_ref(), self.play_offset);
+                let done = game.update(now, sound(&self.audio), self.play_offset);
                 if (self.auto || game.mods.has(mods::Mod::Autoplay)) && game.replay.is_none() {
                     game.autoplay_style = self.cfg.autoplay;
-                    game.autoplay(self.audio.as_ref());
+                    game.autoplay(sound(&self.audio));
                 }
                 if let Some(sm) = &mut self.smooth {
                     if game.paused.is_some() {
@@ -16318,7 +16324,7 @@ impl State {
                         mods.toggle(mods::Mod::Maze);
                     }
                     let mut game =
-                        Play::new(Game::with_seed(map, track, self.audio.as_ref(), mods, seed));
+                        Play::new(Game::with_seed(map, track, sound(&self.audio), mods, seed));
                     if let (Some(d), Some(s)) = (defense, &self.mp) {
                         let (team, me) = multiplayer::defense_team(s);
                         game.set_defense(team, me, d);
@@ -16338,7 +16344,7 @@ impl State {
                         use_mod_settings(&mut game, m);
                     }
                     if let Some(t) = *from {
-                        game.start_from(t, self.audio.as_ref(), self.play_offset);
+                        game.start_from(t, sound(&self.audio), self.play_offset);
                     }
                     game.record = true;
                     if let Some(s) = &mut self.mp {
@@ -16356,10 +16362,10 @@ impl State {
                 }
             }
             Scene::MpPlay { game, .. } => {
-                let done = game.update(now, self.audio.as_ref(), self.play_offset);
+                let done = game.update(now, sound(&self.audio), self.play_offset);
                 if self.auto || game.mods.has(mods::Mod::Autoplay) {
                     game.autoplay_style = self.cfg.autoplay;
-                    game.autoplay(self.audio.as_ref());
+                    game.autoplay(sound(&self.audio));
                 }
                 game.view.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
                 game.view.offset_key = self
@@ -16535,7 +16541,7 @@ impl State {
                     g.view.hidden = hidden;
                     g.view.hud = self.cfg.hud;
                     g.view.hud_area = self.cfg.playfield_area;
-                    g.update(now, self.audio.as_ref(), self.play_offset);
+                    g.update(now, sound(&self.audio), self.play_offset);
                 }
                 // Defense: the team's lives and gold, as the room has them.
                 if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
@@ -16593,7 +16599,7 @@ impl State {
                         g.view.hud_area = self.cfg.playfield_area;
                         g.view.hud = self.cfg.hud;
                         g.view.hud_area = self.cfg.playfield_area;
-                        g.update(now, self.audio.as_ref(), self.play_offset);
+                        g.update(now, sound(&self.audio), self.play_offset);
                         draw_game_area(
                             canvas,
                             &self.cfg,
@@ -16742,12 +16748,12 @@ impl State {
                 None => next = Some(Scene::MpMenu),
             },
             Scene::Calibrate { game, vsync, .. } => {
-                if game.update(now, self.audio.as_ref(), self.play_offset) {
+                if game.update(now, sound(&self.audio), self.play_offset) {
                     finish_calibration = true;
                 }
                 if self.auto {
                     game.autoplay_style = self.cfg.autoplay;
-                    game.autoplay(self.audio.as_ref());
+                    game.autoplay(sound(&self.audio));
                 }
                 if *vsync {
                     game.set_visual_offset(visual_offset);
@@ -19702,7 +19708,7 @@ impl App {
                 // Alt is released in the other window; don't keep it "held" here.
                 s.modifiers_alt = false;
                 if let (Scene::Play { game, .. }, false) = (&mut s.scene, s.auto) {
-                    game.pause(s.audio.as_ref());
+                    game.pause(sound(&s.audio));
                 }
             }
             _ => {}

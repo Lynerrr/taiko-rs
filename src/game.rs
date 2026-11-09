@@ -64,7 +64,7 @@ fn black_lane() -> bool {
     playfield_look().black_lane
 }
 
-use crate::audio::{Engine, Sfx, Track};
+use crate::audio::{Sfx, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
@@ -73,6 +73,23 @@ use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
 use crate::shapeshift;
 use crate::tko::runtime::NoteFx;
+
+/// What the play needs from the sound: its song played from a point, paused and moved, how far it
+/// has got, and hitsounds now or at a point of the song. The client's `audio::Engine` is one; a
+/// play without sound (a replay worked out for its results) has none.
+pub trait Audio {
+    /// The output's sample rate.
+    fn rate(&self) -> u32;
+    fn play(&self, track: Arc<Track>, start_ms: f64);
+    fn seek(&self, ms: f64);
+    fn set_paused(&self, paused: bool);
+    fn sfx_at(&self, s: Sfx, volume: f32);
+    fn sfx_at_song(&self, s: Sfx, volume: f32, song_ms: f64);
+    /// Output and input latency, ms.
+    fn latencies_ms(&self) -> (f64, f64);
+    /// Where the song has got at `now`, ms.
+    fn position_ms(&self, now: Instant) -> Option<f64>;
+}
 
 mod field;
 mod hud_draw;
@@ -816,12 +833,17 @@ pub(crate) fn random_don(time: f64, seed: u64) -> bool {
 }
 
 impl Game {
-    pub fn new(map: Beatmap, track: Arc<Track>, audio: Option<&Engine>) -> Game {
+    pub fn new(map: Beatmap, track: Arc<Track>, audio: Option<&dyn Audio>) -> Game {
         Game::with_mods(map, track, audio, Mods::NONE)
     }
 
     /// A play with `mods` (the track is already at their speed, see `audio::change_speed`).
-    pub fn with_mods(map: Beatmap, track: Arc<Track>, audio: Option<&Engine>, mods: Mods) -> Game {
+    pub fn with_mods(
+        map: Beatmap,
+        track: Arc<Track>,
+        audio: Option<&dyn Audio>,
+        mods: Mods,
+    ) -> Game {
         Game::with_seed(map, track, audio, mods, 0)
     }
 
@@ -829,7 +851,7 @@ impl Game {
     pub fn with_seed(
         map: Beatmap,
         track: Arc<Track>,
-        audio: Option<&Engine>,
+        audio: Option<&dyn Audio>,
         mods: Mods,
         seed: u64,
     ) -> Game {
@@ -840,7 +862,7 @@ impl Game {
     pub fn with_half(
         mut map: Beatmap,
         track: Arc<Track>,
-        audio: Option<&Engine>,
+        audio: Option<&dyn Audio>,
         mods: Mods,
         seed: u64,
         half: crate::mods::HalfRule,
@@ -878,7 +900,7 @@ impl Game {
         let rate = track.rate.clamp(0.25, 4.0);
         let speed = Speed::for_play(mods, rate, first_note, end_time);
         let track_ms = audio
-            .map(|a| track.frames() as f64 / a.rate as f64 * 1000.0)
+            .map(|a| track.frames() as f64 / a.rate() as f64 * 1000.0)
             .unwrap_or(f64::INFINITY);
         // The pre-roll is in map time; the track plays `rate` map-ms per ms.
         let track_start = speed.track(start);
@@ -1380,7 +1402,7 @@ impl Game {
     }
 
     /// Advances the clock. Returns true once the map is over.
-    pub fn update(&mut self, now: Instant, audio: Option<&Engine>, offset: f64) -> bool {
+    pub fn update(&mut self, now: Instant, audio: Option<&dyn Audio>, offset: f64) -> bool {
         self.offset = offset;
         let playing = self.paused.is_none() && self.resuming.is_none() && self.failed.is_none();
         if let Some(at) = self.played_at.filter(|_| playing) {
@@ -1487,7 +1509,7 @@ impl Game {
     }
 
     /// Autoplay: hits every object exactly on time, with the hands its playstyle says.
-    pub fn autoplay(&mut self, audio: Option<&Engine>) {
+    pub fn autoplay(&mut self, audio: Option<&dyn Audio>) {
         let t = self.time;
         let running =
             self.paused.is_none() && self.resuming.is_none() && !self.held && self.failed.is_none();
@@ -1633,7 +1655,7 @@ impl Game {
 
     /// `id`: the note and key slot (or roll tick) this press is, to tell whether its sound went
     /// to the engine ahead of time.
-    fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&Engine>, id: (usize, usize)) {
+    fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>, id: (usize, usize)) {
         if self.record || self.log_inputs {
             self.inputs.push((t, key as u8));
         }
@@ -1651,7 +1673,7 @@ impl Game {
     }
 
     /// Plays (and logs) the combo break sound when a miss just broke a long combo.
-    fn play_combo_break(&mut self, audio: Option<&Engine>) {
+    fn play_combo_break(&mut self, audio: Option<&dyn Audio>) {
         let Some(t) = self.combo_break.take() else {
             return;
         };
@@ -1664,7 +1686,7 @@ impl Game {
     }
 
     /// Overtime: screams for each scare whose time has come (and logs it).
-    fn play_scares(&mut self, audio: Option<&Engine>) {
+    fn play_scares(&mut self, audio: Option<&dyn Audio>) {
         while let Some(&at) = self
             .scares
             .get(self.next_scare)
@@ -1685,7 +1707,7 @@ impl Game {
     }
 
     /// Stops a replay where it is, or sets it going again.
-    pub fn toggle_held(&mut self, audio: Option<&Engine>) {
+    pub fn toggle_held(&mut self, audio: Option<&dyn Audio>) {
         self.held = !self.held;
         self.drop_scheduled();
         if let Some(a) = audio {
@@ -1704,13 +1726,13 @@ impl Game {
         &mut self,
         track: Arc<Track>,
         rate: f64,
-        audio: Option<&Engine>,
+        audio: Option<&dyn Audio>,
         offset: f64,
     ) {
         self.speed = Speed::constant(rate);
         let target = self.speed.track(self.time) + offset;
         if let Some(a) = audio {
-            self.track_ms = track.frames() as f64 / a.rate as f64 * 1000.0;
+            self.track_ms = track.frames() as f64 / a.rate() as f64 * 1000.0;
             a.play(track.clone(), target);
             a.set_paused(self.held || self.paused.is_some());
         }
@@ -1720,7 +1742,7 @@ impl Game {
         self.raw_time = target;
     }
 
-    pub fn pause(&mut self, audio: Option<&Engine>) {
+    pub fn pause(&mut self, audio: Option<&dyn Audio>) {
         self.drop_scheduled();
         // Pausing again (e.g. losing focus) during the resume countdown shows the menu again.
         self.cancel_resume();
@@ -1735,7 +1757,7 @@ impl Game {
         }
     }
 
-    pub fn resume(&mut self, audio: Option<&Engine>) {
+    pub fn resume(&mut self, audio: Option<&dyn Audio>) {
         self.drop_scheduled();
         self.resuming = None;
         if self.paused.take().is_some()
@@ -1747,7 +1769,7 @@ impl Game {
 
     /// Leaves the pause menu: unpauses after `delay` (a countdown over the frozen playfield), or
     /// at once with no delay.
-    pub fn resume_after(&mut self, delay: std::time::Duration, audio: Option<&Engine>) {
+    pub fn resume_after(&mut self, delay: std::time::Duration, audio: Option<&dyn Audio>) {
         if delay.is_zero() {
             self.resume(audio);
         } else if self.paused.is_some() {
@@ -1840,7 +1862,7 @@ impl Game {
 
     /// Starts play at map time `t` instead of the beginning: the music starts two seconds
     /// before it, and everything that ends earlier counts as not played (no score, no misses).
-    pub fn start_from(&mut self, t: f64, audio: Option<&Engine>, offset: f64) {
+    pub fn start_from(&mut self, t: f64, audio: Option<&dyn Audio>, offset: f64) {
         let start = self.speed.map(self.speed.track(t) - 2000.0).max(self.time);
         let target = self.speed.track(start) + offset;
         self.hp_exempt = true;
@@ -1856,7 +1878,7 @@ impl Game {
 
     /// Replays: jumps to map time `t`, backwards or forwards. Everything before `t` is judged
     /// again, silently, from the recorded presses, and the music carries on from there.
-    pub fn seek(&mut self, t: f64, audio: Option<&Engine>, offset: f64) {
+    pub fn seek(&mut self, t: f64, audio: Option<&dyn Audio>, offset: f64) {
         let t = t.clamp(self.start, self.end_time);
         if t < self.time {
             self.rewind();
@@ -1930,7 +1952,7 @@ impl Game {
     }
 
     /// Skips the intro; true when it did.
-    pub fn skip(&mut self, audio: Option<&Engine>, offset: f64) -> bool {
+    pub fn skip(&mut self, audio: Option<&dyn Audio>, offset: f64) -> bool {
         let skipped = self.can_skip();
         if skipped {
             let target = self.speed.track(self.skip_target()) + offset;
@@ -2115,14 +2137,14 @@ impl Game {
     }
 
     /// Handles a drum key (0 = left rim, 1 = left centre, 2 = right centre, 3 = right rim).
-    pub fn press(&mut self, key: usize, at: Instant, audio: Option<&Engine>, offset: f64) {
+    pub fn press(&mut self, key: usize, at: Instant, audio: Option<&dyn Audio>, offset: f64) {
         let t = self.speed.map(self.clock.at(at) - offset);
         self.offset = offset;
         self.press_time(key, t, audio);
     }
 
     /// A live press at map time `t`.
-    fn press_time(&mut self, key: usize, t: f64, audio: Option<&Engine>) {
+    fn press_time(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>) {
         if self.failed.is_some() {
             return;
         }
@@ -2160,7 +2182,7 @@ impl Game {
     }
 
     /// A press judged at map time `t` (live, or from a replay); the sound it makes.
-    fn press_at(&mut self, key: usize, t: f64, audio: Option<&Engine>) -> Sfx {
+    fn press_at(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>) -> Sfx {
         let kat = if self.mods.has(Mod::Relax) {
             self.relax_colour(t, key == 0 || key == 3)
         } else {
@@ -2205,7 +2227,7 @@ impl Game {
 
     /// Replays: the recorded presses up to now, before anything expires, so each is judged
     /// exactly as it was.
-    fn feed_replay(&mut self, audio: Option<&Engine>) {
+    fn feed_replay(&mut self, audio: Option<&dyn Audio>) {
         let Some((inputs, mut next)) = self.replay.take() else {
             return;
         };

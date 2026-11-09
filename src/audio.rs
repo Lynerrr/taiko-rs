@@ -725,6 +725,40 @@ impl Limiter {
     }
 }
 
+impl crate::game::Audio for Engine {
+    fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    fn play(&self, track: Arc<Track>, start_ms: f64) {
+        Engine::play(self, track, start_ms);
+    }
+
+    fn seek(&self, ms: f64) {
+        Engine::seek(self, ms);
+    }
+
+    fn set_paused(&self, paused: bool) {
+        Engine::set_paused(self, paused);
+    }
+
+    fn sfx_at(&self, s: Sfx, volume: f32) {
+        Engine::sfx_at(self, s, volume);
+    }
+
+    fn sfx_at_song(&self, s: Sfx, volume: f32, song_ms: f64) {
+        Engine::sfx_at_song(self, s, volume, song_ms);
+    }
+
+    fn latencies_ms(&self) -> (f64, f64) {
+        Engine::latencies_ms(self)
+    }
+
+    fn position_ms(&self, now: Instant) -> Option<f64> {
+        Engine::position_ms(self, now)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
