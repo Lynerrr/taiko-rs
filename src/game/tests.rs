@@ -38,7 +38,7 @@ fn part_under_the_lane(m: Option<Mod>, t: f64) -> (hud::Placed, [f32; 4]) {
         stream: None,
     });
     let mut g = Game::with_seed(map, track, None, mods, 42);
-    g.hidden = hud::Parts::NONE;
+    g.view.hidden = hud::Parts::NONE;
     g.time = t;
     let mut c = Canvas::default();
     c.clear(853.3);
@@ -88,8 +88,8 @@ fn parts_pushed_against_the_edge_by_a_lane_give_way_to_each_other() {
                 .is_some_and(|s| s.y.target == hud::Target::Lane)
         })
         .expect("the lane preset");
-    g.hud = lane.1;
-    g.hidden = lane.1.off;
+    g.view.hud = lane.1;
+    g.view.hidden = lane.1.off;
     g.live_pp_value = Some(100.0);
     g.time = 3000.0;
     let mut c = Canvas::default();
@@ -126,8 +126,8 @@ fn parts_side_by_side_on_a_lane_that_only_moved_stay_side_by_side() {
     let mods = Mods::parse(Mod::Zigzag.acronym());
     let mut g = Game::with_seed(map, track, None, mods, 42);
     let (_, lane) = hud::builtin_presets().swap_remove(3);
-    g.hud = lane;
-    g.hidden = lane.off;
+    g.view.hud = lane;
+    g.view.hidden = lane.off;
     g.live_pp_value = Some(100.0);
     g.time = 3000.0;
     let mut c = Canvas::default();
@@ -243,7 +243,7 @@ fn block_culling_preserves_the_original_draw_for_every_mod() {
         optimized.universes = Some(multiverse::classic());
         reference.universes = Some(multiverse::classic());
         // One special block disables the new bounds, reproducing the original scan.
-        reference.note_blocks = vec![NoteBlock {
+        reference.view.note_blocks = vec![NoteBlock {
             range: 0..reference.map.notes.len(),
             min_velocity: 1e-6,
             last_end: f64::INFINITY,
@@ -763,7 +763,7 @@ fn visual_offset_moves_the_lane_not_the_judging() {
             }),
             None,
         );
-        g.visual_offset = 30.0;
+        g.view.visual_offset = 30.0;
         g.set_time(2000.0);
         // Real milliseconds: at 1.5x, 30 ms of song is 45 ms of map.
         assert!(
@@ -773,7 +773,7 @@ fn visual_offset_moves_the_lane_not_the_judging() {
         );
     }
     let mut g = modded("");
-    g.visual_offset = 30.0;
+    g.view.visual_offset = 30.0;
     play_all(&mut g, 0.0);
     assert!(g.stats.great == 64 && g.stats.mean_error().abs() < 1e-9);
 }
@@ -1951,7 +1951,7 @@ fn a_barline_slower_than_every_note_sizes_the_lookahead() {
         }),
         None,
     );
-    assert_eq!(g.min_velocity, slow);
+    assert_eq!(g.view.min_velocity, slow);
 
     // A fake slider at SV 0.02 (120 BPM): ~0.008, under the old 0.01 floor, so it was looked
     // for only once it was already well onto the lane.
@@ -1968,7 +1968,7 @@ fn a_barline_slower_than_every_note_sizes_the_lookahead() {
         None,
     );
     assert!(crawl < 0.01);
-    assert_eq!(g.min_velocity, crawl);
+    assert_eq!(g.view.min_velocity, crawl);
 }
 
 #[test]
@@ -2123,9 +2123,9 @@ fn baked_speeds_bend_the_maps_own() {
     // Roulette changes every 4 bars, and never to the same speed.
     let g = kiai_game("RL");
     assert!(
-        g.sections.len() > 2
-            && g.sections[0].1 == 1.0
-            && g.sections.windows(2).all(|p| p[0].1 != p[1].1)
+        g.view.sections.len() > 2
+            && g.view.sections[0].1 == 1.0
+            && g.view.sections.windows(2).all(|p| p[0].1 != p[1].1)
     );
     // Even: evenly spaced notes keep their speed.
     assert_eq!(v("EV"), plain);
@@ -2197,7 +2197,7 @@ fn a_crawling_note_at_the_end_of_the_map_is_looked_for_from_the_start() {
         },
         1.0,
     );
-    assert!(g.visible.contains(&last));
+    assert!(g.view.visible.contains(&last));
 }
 
 #[test]
@@ -2215,7 +2215,7 @@ fn a_faster_universe_shows_its_notes_further_out() {
             ..Default::default()
         };
         g.draw_field(&mut c, 1.0, Focus::FULL, &uni);
-        far.push(g.visible.len());
+        far.push(g.view.visible.len());
     }
     // Faster notes cross the lane sooner: fewer of the map's are on it at once.
     assert!(far[1] < far[0], "notes on the lane at 1x and 1.5x: {far:?}");
@@ -2225,18 +2225,18 @@ fn a_faster_universe_shows_its_notes_further_out() {
 fn multiverse_calls_the_next_playfield_and_moves_the_focus_on_bars() {
     let g = kiai_game("MV");
     // 2 s bars, kiai from 8 s: every 2 bars before it, every bar in it.
-    let times: Vec<f64> = g.focus_switches.iter().map(|s| s.at).collect();
+    let times: Vec<f64> = g.view.focus_switches.iter().map(|s| s.at).collect();
     let want: Vec<f64> = std::iter::once(4000.0)
         .chain((4..16).map(|i| i as f64 * 2000.0))
         .collect();
     assert_eq!(times, want);
     let mut focus = FIRST_FOCUS;
-    for s in &g.focus_switches {
+    for s in &g.view.focus_switches {
         // Well above or below, so neither hides the other.
         assert!(s.field < FIELD_COUNT && (parked(s.field).1 - parked(focus).1).abs() >= 80.0);
         focus = s.field;
     }
-    let next = g.focus_switches[0].field;
+    let next = g.view.focus_switches[0].field;
     let other = (0..FIELD_COUNT)
         .find(|&f| f != next && f != FIRST_FOCUS)
         .unwrap();
@@ -2386,7 +2386,7 @@ fn mod_shots() {
         shields: 0,
         tower_buys: 2,
     });
-    g.banner = Some("WATCHING  -  quassbottle".into());
+    g.view.banner = Some("WATCHING  -  quassbottle".into());
     let mut c = Canvas::default();
     for lang in [crate::lang::Lang::En, crate::lang::Lang::Ru] {
         crate::lang::set(lang);
@@ -3170,9 +3170,9 @@ fn snaps_and_liar() {
     assert_eq!(&snaps[24..27], &[1, 3, 3]);
     assert_eq!(&snaps[48..51], &[1, 6, 3]);
     // A 1/3 pretends to be the 1/4 next to it; 1/4s and notes on the beat tell the truth.
-    assert_eq!(g.lies[25], 3000.0);
-    assert_eq!(g.lies[1], g.map.notes[1].time);
-    assert_eq!(g.lies[24], g.map.notes[24].time);
+    assert_eq!(g.view.lies[25], 3000.0);
+    assert_eq!(g.view.lies[1], g.map.notes[1].time);
+    assert_eq!(g.view.lies[24], g.map.notes[24].time);
     // Snap Speed: triplets slower, 1/6s faster.
     let v = rhythm_game("SR")
         .map
@@ -3197,6 +3197,7 @@ fn snaps_and_liar() {
 fn decoys_get_into_streams_but_never_twice_running() {
     let g = rhythm_game("DY");
     let in_stream: Vec<f64> = g
+        .view
         .decoys
         .iter()
         .map(|n| n.time)
@@ -3210,7 +3211,13 @@ fn decoys_get_into_streams_but_never_twice_running() {
         in_stream.windows(2).all(|p| p[1] - p[0] > 100.0),
         "{in_stream:?}"
     );
-    assert!(g.decoys.iter().filter(|n| n.time > 6720.0).all(|n| !n.big));
+    assert!(
+        g.view
+            .decoys
+            .iter()
+            .filter(|n| n.time > 6720.0)
+            .all(|n| !n.big)
+    );
 }
 
 #[test]

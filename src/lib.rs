@@ -3269,11 +3269,11 @@ impl State {
         }
         let tx = ex.encoder.tx.clone()?;
         let (w, h) = ex.size;
-        ex.game.kiai_effects = kiai;
+        ex.game.view.kiai_effects = kiai;
         let t = ex.game.speed().map(ex.view_time());
         ex.game.set_time(t);
-        ex.game.hud = self.cfg.hud;
-        ex.game.hidden = self.cfg.hud.off;
+        ex.game.view.hud = self.cfg.hud;
+        ex.game.view.hidden = self.cfg.hud.off;
         c.clear(render::VIRTUAL_HEIGHT * w as f32 / h as f32);
         ex.game.draw_playfield(c, scroll);
         if ex.settings.hud {
@@ -3701,7 +3701,7 @@ impl State {
         };
         self.test_auto = !self.test_auto;
         game.mods = Self::test_mods(self.test_auto);
-        game.banner = Some(Self::test_banner(self.test_auto));
+        game.view.banner = Some(Self::test_banner(self.test_auto));
     }
 
     /// Back to the editor a test play came from, as it was left.
@@ -7302,7 +7302,7 @@ impl State {
         let mut game = Game::new(map, track, self.audio.as_ref());
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.mute_hits = true;
-        game.show_hp = false;
+        game.view.show_hp = false;
         self.scene = Scene::Calibrate {
             game: Box::new(game),
             back: Box::new(back),
@@ -13313,8 +13313,8 @@ impl State {
                         use_mod_settings(&mut g, &p.map);
                     }
                     g.replay = Some((std::mem::take(&mut v.inputs), 0));
-                    g.watched = true;
-                    g.banner = Some(format!("WATCHING  -  {}", v.player));
+                    g.view.watched = true;
+                    g.view.banner = Some(format!("WATCHING  -  {}", v.player));
                     let target = v.their_time() - WATCH_DELAY_MS * rate;
                     if target > g.time {
                         g.seek(target, self.audio.as_ref(), self.play_offset);
@@ -14004,7 +14004,7 @@ impl State {
         // Tab in the editor's test play is autoplay, as in osu!'s, whatever the map info key is.
         if code == KeyCode::Tab
             && !(self.modifiers_shift || self.modifiers_ctrl || self.modifiers_alt)
-            && matches!(&self.scene, Scene::Play { game, .. } if game.test_play && game.paused.is_none())
+            && matches!(&self.scene, Scene::Play { game, .. } if game.view.test_play && game.paused.is_none())
         {
             if !repeat {
                 self.toggle_test_auto();
@@ -15805,14 +15805,14 @@ impl State {
                                 game.set_window_rule(r.window_rule());
                                 game.scroll_speed = r.scroll_speed;
                                 game.replay_of = Some(r.player.clone());
-                                game.banner = Some(format!("REPLAY  -  {}", r.player));
+                                game.view.banner = Some(format!("REPLAY  -  {}", r.player));
                                 game.replay = Some((r.inputs, 0));
                             }
                             // A test play from the editor keeps nothing.
                             None if self.editor_back.is_some() => {
                                 game.record = false;
-                                game.test_play = true;
-                                game.banner = Some(Self::test_banner(self.test_auto));
+                                game.view.test_play = true;
+                                game.view.banner = Some(Self::test_banner(self.test_auto));
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
                             None => {
@@ -15821,7 +15821,7 @@ impl State {
                                     && from.is_none()
                                     && !mods.unranked();
                                 if mods.has(mods::Mod::Autoplay) {
-                                    game.banner = Some("AUTOPLAY".into());
+                                    game.view.banner = Some("AUTOPLAY".into());
                                 }
                                 if self.cfg.fail_restart {
                                     game.fail_linger = FAIL_RESTART_LINGER;
@@ -15871,17 +15871,17 @@ impl State {
                     }
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
-                game.show_offset_hint =
+                game.view.show_offset_hint =
                     self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
-                game.offset_key = self
+                game.view.offset_key = self
                     .cfg
                     .hotkeys
                     .get(keys::Hotkey::ApplyOffset)
                     .map(keys::Chord::name);
-                game.kiai_effects = self.cfg.kiai_effects;
-                game.hidden = hidden;
-                game.hud = self.cfg.hud;
-                game.hud_area = self.cfg.playfield_area;
+                game.view.kiai_effects = self.cfg.kiai_effects;
+                game.view.hidden = hidden;
+                game.view.hud = self.cfg.hud;
+                game.view.hud_area = self.cfg.playfield_area;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 draw_game_area(
@@ -16187,7 +16187,7 @@ impl State {
                         let see_through = self.bg_brightness > 0.0;
                         let kiai = self.cfg.kiai_effects;
                         if let Some(game) = self.preview.game_for(&self.library, i) {
-                            game.kiai_effects = kiai;
+                            game.view.kiai_effects = kiai;
                             draw_game_area(
                                 canvas,
                                 &self.cfg,
@@ -16350,16 +16350,16 @@ impl State {
                     game.autoplay_style = self.cfg.autoplay;
                     game.autoplay(self.audio.as_ref());
                 }
-                game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
-                game.offset_key = self
+                game.view.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
+                game.view.offset_key = self
                     .cfg
                     .hotkeys
                     .get(keys::Hotkey::ApplyOffset)
                     .map(keys::Chord::name);
-                game.kiai_effects = self.cfg.kiai_effects;
-                game.hidden = hidden;
-                game.hud = self.cfg.hud;
-                game.hud_area = self.cfg.playfield_area;
+                game.view.kiai_effects = self.cfg.kiai_effects;
+                game.view.hidden = hidden;
+                game.view.hud = self.cfg.hud;
+                game.view.hud_area = self.cfg.playfield_area;
                 game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
                 game.set_visual_offset(visual_offset);
                 if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
@@ -16496,12 +16496,12 @@ impl State {
                         }
                         let inputs = v.pending.remove(id).unwrap_or_default();
                         g.replay = Some((inputs, 0));
-                        g.banner = Some(format!(
+                        g.view.banner = Some(format!(
                             "SPECTATING  -  {name}  ({}/{})",
                             k + 1,
                             v.players.len()
                         ));
-                        g.watched = true;
+                        g.view.watched = true;
                         v.games.push((*id, Box::new(g)));
                     }
                     // Players may have skipped the intro before the view was ready.
@@ -16520,10 +16520,10 @@ impl State {
                 for (k, (_, g)) in v.games.iter_mut().enumerate() {
                     // Only the player watched (or the first one) is heard.
                     g.mute_hits = v.focus.unwrap_or(0) != k;
-                    g.kiai_effects = self.cfg.kiai_effects;
-                    g.hidden = hidden;
-                    g.hud = self.cfg.hud;
-                    g.hud_area = self.cfg.playfield_area;
+                    g.view.kiai_effects = self.cfg.kiai_effects;
+                    g.view.hidden = hidden;
+                    g.view.hud = self.cfg.hud;
+                    g.view.hud_area = self.cfg.playfield_area;
                     g.update(now, self.audio.as_ref(), self.play_offset);
                 }
                 // Defense: the team's lives and gold, as the room has them.
@@ -16576,12 +16576,12 @@ impl State {
                 let scroll = self.cfg.scroll_speed;
                 match &mut v.game {
                     Some(g) => {
-                        g.kiai_effects = self.cfg.kiai_effects;
-                        g.hidden = hidden;
-                        g.hud = self.cfg.hud;
-                        g.hud_area = self.cfg.playfield_area;
-                        g.hud = self.cfg.hud;
-                        g.hud_area = self.cfg.playfield_area;
+                        g.view.kiai_effects = self.cfg.kiai_effects;
+                        g.view.hidden = hidden;
+                        g.view.hud = self.cfg.hud;
+                        g.view.hud_area = self.cfg.playfield_area;
+                        g.view.hud = self.cfg.hud;
+                        g.view.hud_area = self.cfg.playfield_area;
                         g.update(now, self.audio.as_ref(), self.play_offset);
                         draw_game_area(
                             canvas,
@@ -16714,9 +16714,9 @@ impl State {
                 }
                 let progress = self.export.as_ref().map(|ex| ex.progress());
                 if let Some(g) = &mut ed.game {
-                    g.kiai_effects = self.cfg.kiai_effects;
-                    g.hud = self.cfg.hud;
-                    g.hidden = self.cfg.hud.off;
+                    g.view.kiai_effects = self.cfg.kiai_effects;
+                    g.view.hud = self.cfg.hud;
+                    g.view.hidden = self.cfg.hud.off;
                 }
                 ed.draw(
                     canvas,
@@ -16829,9 +16829,9 @@ impl State {
                 let sample = self
                     .hud_sample
                     .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
-                sample.hud = self.cfg.hud;
-                sample.hud_area = self.cfg.playfield_area;
-                sample.hidden = self.cfg.hud.off;
+                sample.view.hud = self.cfg.hud;
+                sample.view.hud_area = self.cfg.playfield_area;
+                sample.view.hidden = self.cfg.hud.off;
                 sample.draw_parts(canvas);
                 let area = self.cfg.playfield_area;
                 layout::draw_frame(canvas, area, true);
@@ -16880,9 +16880,9 @@ impl State {
                 let sample = self
                     .hud_sample
                     .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
-                sample.hud = self.cfg.hud;
-                sample.hud_area = self.cfg.playfield_area;
-                sample.hidden = self.cfg.hud.off;
+                sample.view.hud = self.cfg.hud;
+                sample.view.hud_area = self.cfg.playfield_area;
+                sample.view.hidden = self.cfg.hud.off;
                 sample.draw_stand_ins(canvas);
                 sample.draw_parts(canvas);
                 layout::draw_frame(canvas, self.cfg.playfield_area, self.grip.is_some());
