@@ -40,7 +40,9 @@ compares them with `.github/scripts/perf-gate.py`:
   then +1 % on a re-run of the same code. A pull request that slows nothing pays no extra time.
 - A case fails when head is more than 10 % **and** more than 2 µs slower than base. Cases that
   time other threads, locks or the disk (`mutex/`, `skin/async/worker-completion`,
-  `hash/first/`, `game/prepare/`) are reported but never fail.
+  `hash/first/`, `game/prepare/`) are reported but never fail, and so is
+  `select/title-sort/50000`: its ~20 ms of allocations swing 10–30 % on runners, and
+  `select/title-sort/10000` gates the same sort.
 - Cases only the head has are listed as new; changed counts (shapes drawn) are listed too.
 - The table lands in the job summary, and the raw logs in the `perf-logs` artifact.
 
