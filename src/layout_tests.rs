@@ -1169,7 +1169,7 @@ fn assert_every_screen_fits() {
 
     let mut map = beatmap::calibration_map(500.0, 4, 64);
     map.meta = entry(0, 0, true).meta;
-    let game = Game::with_mods(
+    let game = Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1178,7 +1178,7 @@ fn assert_every_screen_fits() {
         }),
         None,
         s.cfg.mods,
-    );
+    ));
     s.scene = Scene::Play {
         game: Box::new(game),
         entry: 0,
@@ -1537,13 +1537,13 @@ fn watching_everyone_shows_where_each_player_plays() {
         .map(|i| (i, format!("player {i}")))
         .collect();
     for &w in widths() {
-        let mut games: Vec<(u32, Box<Game>)> = mods
+        let mut games: Vec<(u32, Box<Play>)> = mods
             .iter()
             .enumerate()
             .map(|(i, mods)| {
                 let mut map = beatmap::calibration_map(500.0, 4, 64);
                 map.meta = entry(0, 0, false).meta;
-                let mut g = Game::with_mods(
+                let mut g = Play::new(Game::with_mods(
                     map,
                     Arc::new(Track {
                         samples: Vec::new(),
@@ -1552,7 +1552,7 @@ fn watching_everyone_shows_where_each_player_plays() {
                     }),
                     None,
                     Mods::parse(mods),
-                );
+                ));
                 g.set_time(9000.0);
                 (i as u32, Box::new(g))
             })

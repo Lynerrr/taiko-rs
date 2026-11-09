@@ -5,7 +5,7 @@
 use winit::keyboard::KeyCode;
 
 use crate::config::Config;
-use crate::game::Game;
+use crate::game::Play;
 use crate::hit::{Canvas, Hit};
 use crate::hud::{self, Frames, Layout, MAX_SCALE, MIN_SCALE, Part, Place, Placed, Snapping};
 use crate::layout::{Area, Guide};
@@ -526,7 +526,7 @@ impl Editor {
     }
 
     /// Over the parts `game` has just drawn: their outlines and the panel.
-    pub fn draw(&mut self, c: &mut Canvas, cfg: &Config, game: &Game) {
+    pub fn draw(&mut self, c: &mut Canvas, cfg: &Config, game: &Play) {
         self.frames = Frames::new(c.width, cfg.playfield_area);
         for (i, part) in Part::PLACED.into_iter().enumerate() {
             let (place, size, at) = game.part_box(c, part);
@@ -1021,16 +1021,16 @@ fn button(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, on: bool, b: Butt
 mod tests {
     use super::*;
 
-    fn setup() -> (Editor, Config, Game, Canvas) {
+    fn setup() -> (Editor, Config, Play, Canvas) {
         let cfg = Config::default();
         let mut c = Canvas::default();
         c.clear(853.3);
         let ed = Editor::new(&cfg);
-        (ed, cfg, Game::hud_sample(), c)
+        (ed, cfg, Play::hud_sample(), c)
     }
 
     /// A frame of the editor, as the game draws it.
-    fn frame(ed: &mut Editor, cfg: &Config, g: &mut Game, c: &mut Canvas) {
+    fn frame(ed: &mut Editor, cfg: &Config, g: &mut Play, c: &mut Canvas) {
         c.clear(853.3);
         g.view.hud = cfg.hud;
         g.view.hud_area = cfg.playfield_area;
@@ -1118,7 +1118,7 @@ mod tests {
 
     /// What the counter draws with `set` done to a fresh layout: its texts and their colours.
     fn counter_texts(set: impl Fn(&mut hud::Counter)) -> Vec<(String, [f32; 4])> {
-        let mut g = Game::hud_sample();
+        let mut g = Play::hud_sample();
         let mut l = Layout::default();
         l.off = hud::Parts::NONE;
         set(&mut l.counter);
@@ -1322,8 +1322,8 @@ mod tests {
 
     #[test]
     fn the_counters_show_only_once_added_and_a_hidden_interface_hides_them() {
-        let mut g = Game::hud_sample();
-        let draw = |g: &Game| {
+        let mut g = Play::hud_sample();
+        let draw = |g: &Play| {
             let mut c = Canvas::default();
             c.clear(853.3);
             g.draw_parts(&mut c);
@@ -1337,7 +1337,7 @@ mod tests {
 
     #[test]
     fn the_interface_stays_put_until_the_player_moves_it() {
-        let g = Game::hud_sample();
+        let g = Play::hud_sample();
         let mut c = Canvas::default();
         c.clear(853.3);
         let at = |p: Part| g.part_box(&c, p).2;

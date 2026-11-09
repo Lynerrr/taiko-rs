@@ -14,6 +14,10 @@ fn the_play_itself_reaches_for_nothing_that_draws() {
         );
     }
     assert!(!sim.contains("Canvas"), "game.rs draws");
+    // What drawing keeps is held next to the play (`Play`), not in it.
+    for held in ["View::", ": View", ".view."] {
+        assert!(!sim.contains(held), "game.rs holds drawing state ({held})");
+    }
 }
 use crate::hit::Canvas;
 use crate::hud::{self, Part};
@@ -55,7 +59,7 @@ fn part_under_the_lane(m: Option<Mod>, t: f64) -> (hud::Placed, [f32; 4]) {
         rate: 1.0,
         stream: None,
     });
-    let mut g = Game::with_seed(map, track, None, mods, 42);
+    let mut g = Play::new(Game::with_seed(map, track, None, mods, 42));
     g.view.hidden = hud::Parts::NONE;
     g.time = t;
     let mut c = Canvas::default();
@@ -98,7 +102,7 @@ fn parts_pushed_against_the_edge_by_a_lane_give_way_to_each_other() {
         stream: None,
     });
     let mods = Mods::parse(Mod::Loop.acronym());
-    let mut g = Game::with_seed(map, track, None, mods, 42);
+    let mut g = Play::new(Game::with_seed(map, track, None, mods, 42));
     let lane = hud::builtin_presets()
         .into_iter()
         .find(|p| {
@@ -142,7 +146,7 @@ fn parts_side_by_side_on_a_lane_that_only_moved_stay_side_by_side() {
         stream: None,
     });
     let mods = Mods::parse(Mod::Zigzag.acronym());
-    let mut g = Game::with_seed(map, track, None, mods, 42);
+    let mut g = Play::new(Game::with_seed(map, track, None, mods, 42));
     let (_, lane) = hud::builtin_presets().swap_remove(3);
     g.view.hud = lane;
     g.view.hidden = lane.off;
@@ -192,7 +196,7 @@ fn a_morphing_lane_carries_the_parts_along_without_a_jump() {
         stream: None,
     });
     let mods = Mods::parse(Mod::Shapeshift.acronym());
-    let mut g = Game::with_seed(map, track, None, mods, 42);
+    let mut g = Play::new(Game::with_seed(map, track, None, mods, 42));
     let setup = "every=4 order=fixed shapes=spiral,loop,elbow,-zigzag,-uturn,-straight";
     g.use_mod_settings(None, Some(shapeshift::Config::parse(setup)));
     let (mut c, mut last, mut moved) = (Canvas::default(), None, 0.0f32);
@@ -254,8 +258,8 @@ fn block_culling_preserves_the_original_draw_for_every_mod() {
             rate: 1.0,
             stream: None,
         });
-        let mut optimized = Game::with_seed(map.clone(), track.clone(), None, mods, 42);
-        let mut reference = Game::with_seed(map.clone(), track, None, mods, 42);
+        let mut optimized = Play::new(Game::with_seed(map.clone(), track.clone(), None, mods, 42));
+        let mut reference = Play::new(Game::with_seed(map.clone(), track, None, mods, 42));
         // Multiverse's universes are process-wide too: its own for each, not whatever
         // another test has just set.
         optimized.universes = Some(multiverse::classic());
@@ -287,9 +291,9 @@ fn block_culling_preserves_the_original_draw_for_every_mod() {
     }
 }
 
-fn game() -> Game {
+fn game() -> Play {
     let map = beatmap::calibration_map(500.0, 0, 64);
-    Game::new(
+    Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -297,12 +301,12 @@ fn game() -> Game {
             stream: None,
         }),
         None,
-    )
+    ))
 }
 
 /// A map of `rolls` drumrolls with ticks a hair apart, on screen together: the kind of gimmick
 /// that once asked the graphics card for more shapes in a frame than it can hold.
-fn map_of_dense_rolls(rolls: usize) -> Game {
+fn map_of_dense_rolls(rolls: usize) -> Play {
     let mut map = beatmap::calibration_map(500.0, 0, 64);
     let template = map.notes[0].clone();
     map.notes = (0..rolls)
@@ -320,7 +324,7 @@ fn map_of_dense_rolls(rolls: usize) -> Game {
         rate: 1.0,
         stream: None,
     });
-    Game::new(map, track, None)
+    Play::new(Game::new(map, track, None))
 }
 
 #[test]
@@ -342,7 +346,7 @@ fn roll_bodies_stacked_on_a_bent_lane_dont_flood_the_frame() {
         rate: 1.0,
         stream: None,
     });
-    let mut g = Game::with_seed(map, track, None, Mods::parse("MZ"), 42);
+    let mut g = Play::new(Game::with_seed(map, track, None, Mods::parse("MZ"), 42));
     g.time = 1990.0;
     let mut c = Canvas::default();
     c.clear(853.3);
@@ -404,9 +408,9 @@ fn drawing_multiverse_leaves_the_play_s_mods_alone() {
     assert!(!c.shapes.is_empty());
 }
 
-fn modded(mods: &str) -> Game {
+fn modded(mods: &str) -> Play {
     let map = beatmap::calibration_map(500.0, 0, 64);
-    Game::with_mods(
+    Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -415,13 +419,13 @@ fn modded(mods: &str) -> Game {
         }),
         None,
         Mods::parse(mods),
-    )
+    ))
 }
 
 #[test]
 fn random_colours_each_play_its_own_way_and_replays_the_same() {
     let colours = |seed: u64| {
-        let g = Game::with_seed(
+        let g = Play::new(Game::with_seed(
             beatmap::calibration_map(500.0, 0, 64),
             Arc::new(Track {
                 samples: Vec::new(),
@@ -431,7 +435,7 @@ fn random_colours_each_play_its_own_way_and_replays_the_same() {
             None,
             Mods::parse("RD"),
             seed,
-        );
+        ));
         g.map
             .notes
             .iter()
@@ -459,7 +463,7 @@ fn random_colours_each_play_its_own_way_and_replays_the_same() {
 }
 
 /// Hits every note `err` ms off (centre key, so dons), then lets the map end.
-fn play_all(g: &mut Game, err: f64) {
+fn play_all(g: &mut Play, err: f64) {
     let times: Vec<f64> = g.map.notes.iter().map(|n| n.time).collect();
     for t in times {
         g.press_at(1, t + err, None);
@@ -595,7 +599,7 @@ fn alternate_lets_either_hand_follow_finishers_drumrolls_and_swells() {
         },
         at(6500.0),
     ];
-    let mut g = Game::with_mods(
+    let mut g = Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -604,7 +608,7 @@ fn alternate_lets_either_hand_follow_finishers_drumrolls_and_swells() {
         }),
         None,
         Mods::parse("AL"),
-    );
+    ));
     let (l, r) = (1, 2); // left and right centre
     g.press_time(l, 0.0, None);
     g.press_time(r, 500.0, None);
@@ -635,7 +639,7 @@ fn alternate_lets_either_hand_follow_finishers_drumrolls_and_swells() {
     assert_eq!((s.great, s.ok, s.miss), (8, 0, 0), "every don hit");
     assert_eq!((s.roll_ticks, s.swells), (9, 1));
     // Without the finisher, drumroll and swell rule, the same hand twice is still out.
-    let mut g = Game::with_mods(
+    let mut g = Play::new(Game::with_mods(
         beatmap::calibration_map(500.0, 0, 4),
         Arc::new(Track {
             samples: Vec::new(),
@@ -644,7 +648,7 @@ fn alternate_lets_either_hand_follow_finishers_drumrolls_and_swells() {
         }),
         None,
         Mods::parse("AL"),
-    );
+    ));
     g.press_time(l, 0.0, None);
     g.press_time(l, 500.0, None);
     g.set_time(9000.0);
@@ -790,7 +794,7 @@ fn multiverse_breathes_without_a_jump_on_the_beat() {
 fn visual_offset_moves_the_lane_not_the_judging() {
     for rate in [1.0, 1.5] {
         let map = beatmap::calibration_map(500.0, 0, 64);
-        let mut g = Game::new(
+        let mut g = Play::new(Game::new(
             map,
             Arc::new(Track {
                 samples: Vec::new(),
@@ -798,7 +802,7 @@ fn visual_offset_moves_the_lane_not_the_judging() {
                 stream: None,
             }),
             None,
-        );
+        ));
         g.view.visual_offset = 30.0;
         g.set_time(2000.0);
         // Real milliseconds: at 1.5x, 30 ms of song is 45 ms of map.
@@ -816,7 +820,7 @@ fn visual_offset_moves_the_lane_not_the_judging() {
 
 #[test]
 fn a_paused_lane_holds_still_however_the_vsync_lead_moves() {
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         beatmap::calibration_map(500.0, 0, 64),
         Arc::new(Track {
             samples: Vec::new(),
@@ -824,7 +828,7 @@ fn a_paused_lane_holds_still_however_the_vsync_lead_moves() {
             stream: None,
         }),
         None,
-    );
+    ));
     g.set_visual_offset(30.0);
     g.set_time(2000.0);
     g.pause(None);
@@ -845,11 +849,11 @@ fn hp_passes_a_clean_play_and_fails_an_empty_one() {
     assert!(g.hp >= 0.99 && !g.failed());
     // Nothing hit: HP never fills.
     let mut g = modded("");
-    g.set_time(g.end_time + 2000.0);
+    g.game.set_time(g.game.end_time + 2000.0);
     assert!(g.stats.miss == 64 && g.failed());
     // No Fail passes anyway.
     let mut g = modded("NF");
-    g.set_time(g.end_time + 2000.0);
+    g.game.set_time(g.game.end_time + 2000.0);
     assert!(!g.failed());
 }
 
@@ -859,7 +863,7 @@ fn sudden_death_and_perfect_fail_early() {
     let first = g.map.notes[0].time;
     g.press_at(1, first + 80.0, None); // an OK: fine for SD
     assert!(!g.failed_early());
-    g.set_time(g.map.notes[2].time + 500.0); // lets a note pass
+    g.game.set_time(g.game.map.notes[2].time + 500.0); // lets a note pass
     assert!(g.failed_early());
     // Nothing after the failing miss counts.
     assert_eq!(g.stats.miss, 1);
@@ -872,14 +876,14 @@ fn sudden_death_and_perfect_fail_early() {
 fn note_and_judging_mods() {
     // Great or Nothing: an OK is a miss.
     let mut g = modded("GN");
-    g.press_at(1, g.map.notes[0].time + 80.0, None);
+    g.game.press_at(1, g.game.map.notes[0].time + 80.0, None);
     assert_eq!((g.stats.ok, g.stats.miss), (0, 1));
     // Swap turns the dons into kats; Half leaves notes a beat apart alone.
     assert!(modded("SW").map.notes.iter().all(|n| n.kind == Kind::Kat));
     assert_eq!(modded("HA").map.notes.len(), 64);
     assert!(modded("AB").map.notes.iter().all(|n| n.big));
     // Random: a mix, the same every time.
-    let kinds = |g: &Game| g.map.notes.iter().map(|n| n.kind).collect::<Vec<_>>();
+    let kinds = |g: &Play| g.map.notes.iter().map(|n| n.kind).collect::<Vec<_>>();
     let r = kinds(&modded("RD"));
     assert!(r.contains(&Kind::Don) && r.contains(&Kind::Kat) && r == kinds(&modded("RD")));
     // Relax: rim keys on dons still hit.
@@ -919,7 +923,7 @@ fn a_clean_play_is_a_million_and_mods_go_above_or_below_it() {
     }
     assert_eq!(g.stats.score, 1_000_000);
     // Rolls and swells aren't part of it.
-    g.set_time(g.end_time + 2000.0);
+    g.game.set_time(g.game.end_time + 2000.0);
     assert_eq!(g.stats.score, 1_000_000);
     let mut hard = modded("HD,HR");
     play_all(&mut hard, 0.0);
@@ -955,7 +959,7 @@ fn wind_up_maps_song_time_to_faster_map_time() {
     assert_eq!(g.stats.great, 64);
 }
 
-fn hits(g: &mut Game, errors: &[f64], offset: f64) {
+fn hits(g: &mut Play, errors: &[f64], offset: f64) {
     g.stats.errors.extend_from_slice(errors);
     g.stats
         .error_offsets
@@ -1154,7 +1158,7 @@ fn version_1_replays_keep_their_mash_setting() {
 }
 
 /// A stream of alternating dons and kats, `spacing` ms apart, at OD 5.
-fn stream(spacing: f64) -> Game {
+fn stream(spacing: f64) -> Play {
     let notes = (0..24)
         .map(|k| beatmap::Note {
             time: 2000.0 + k as f64 * spacing,
@@ -1174,7 +1178,7 @@ fn stream(spacing: f64) -> Game {
     let mut map = beatmap::calibration_map(500.0, 4, 1);
     map.notes = notes;
     map.meta.od = 5.0;
-    Game::with_mods(
+    Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1183,14 +1187,15 @@ fn stream(spacing: f64) -> Game {
         }),
         None,
         Mods::NONE,
-    )
+    ))
 }
 
-fn play(g: &mut Game, presses: &[(f64, bool)]) {
+fn play(g: &mut Play, presses: &[(f64, bool)]) {
     for &(t, kat) in presses {
         g.judge_press(if kat { 0 } else { 1 }, kat, t);
     }
-    g.set_time(g.map.notes.last().unwrap().time + 1000.0);
+    g.game
+        .set_time(g.game.map.notes.last().unwrap().time + 1000.0);
 }
 
 #[test]
@@ -1264,7 +1269,11 @@ fn mashing_is_still_punished() {
     // A right colour too early, with nothing else near, misses like osu!.
     let mut g = stream(200.0);
     let t0 = g.map.notes[0].time;
-    g.judge_press(1, false, t0 - (g.windows.ok + g.windows.miss) / 2.0);
+    g.game.judge_press(
+        1,
+        false,
+        t0 - (g.game.windows.ok + g.game.windows.miss) / 2.0,
+    );
     assert_eq!(g.state[0].judged, Some(Judge::Miss));
 }
 
@@ -1342,7 +1351,7 @@ fn applying_mid_song_does_not_double_count() {
     assert!(!h.significant);
 }
 /// The calibration map with a kiai from 8 s, for the mods that wait for one.
-fn kiai_game(mods: &str) -> Game {
+fn kiai_game(mods: &str) -> Play {
     let mut map = beatmap::calibration_map(500.0, 0, 64);
     let cp = map.control_points[0];
     map.control_points.push(beatmap::ControlPoint {
@@ -1350,7 +1359,7 @@ fn kiai_game(mods: &str) -> Game {
         kiai: true,
         ..cp
     });
-    Game::with_mods(
+    Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1359,7 +1368,7 @@ fn kiai_game(mods: &str) -> Game {
         }),
         None,
         Mods::parse(mods),
-    )
+    ))
 }
 
 #[test]
@@ -1389,7 +1398,7 @@ fn in_kiai_each_fake_slider_under_a_note_adds_its_own_flash() {
             });
         }
         map.notes.sort_by(|a, b| a.time.total_cmp(&b.time));
-        let mut g = Game::new(
+        let mut g = Play::new(Game::new(
             map,
             Arc::new(Track {
                 samples: Vec::new(),
@@ -1397,7 +1406,7 @@ fn in_kiai_each_fake_slider_under_a_note_adds_its_own_flash() {
                 stream: None,
             }),
             None,
-        );
+        ));
         g.time = at;
         let mut c = Canvas::default();
         c.clear(853.3);
@@ -1429,7 +1438,7 @@ fn the_kiai_flash_is_stables_three_quarter_beat_on_the_first_red_lines_beats() {
             kiai: true,
             ..cp
         });
-        Game::new(
+        Play::new(Game::new(
             map,
             Arc::new(Track {
                 samples: Vec::new(),
@@ -1437,11 +1446,11 @@ fn the_kiai_flash_is_stables_three_quarter_beat_on_the_first_red_lines_beats() {
                 stream: None,
             }),
             None,
-        )
+        ))
     };
     let inf = f64::INFINITY;
     // An object at `t` itself, so always within reach.
-    let at = |g: &Game, t: f64, end: f64| g.kiai_flash(t, t, end);
+    let at = |g: &Play, t: f64, end: f64| g.kiai_flash(t, t, end);
     // Kiai 8100..8700, off the beat: nothing until the red line's beat at 8500.
     let g = game(&[(8100.0, true), (8700.0, false)]);
     assert_eq!(at(&g, 8100.0, inf), 0.0);
@@ -1510,7 +1519,7 @@ fn a_note_before_a_nan_slider_cannot_be_hit() {
     let mut map = beatmap::calibration_map(500.0, 0, 64);
     map.notes[4].unhittable = true;
     let t = map.notes[4].time;
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1518,7 +1527,7 @@ fn a_note_before_a_nan_slider_cannot_be_hit() {
             stream: None,
         }),
         None,
-    );
+    ));
     g.press_at(1, t, None);
     g.press_at(1, t + 500.0, None);
     // The four before it went unpressed; it isn't a fifth miss.
@@ -1535,7 +1544,7 @@ fn a_note_before_a_nan_slider_cannot_be_hit() {
     // Nor under autoplay.
     let mut map = beatmap::calibration_map(500.0, 0, 64);
     map.notes[4].unhittable = true;
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1543,11 +1552,11 @@ fn a_note_before_a_nan_slider_cannot_be_hit() {
             stream: None,
         }),
         None,
-    );
+    ));
     for k in 0..800 {
         g.time = k as f64 * 10.0;
         g.autoplay(None);
-        g.expire(g.time);
+        g.game.expire(g.game.time);
     }
     assert_eq!((g.state[4].judged, g.stats.miss), (None, 0));
     assert_eq!(g.state[5].judged, Some(Judge::Great));
@@ -1561,7 +1570,7 @@ fn autoplay_leaves_a_sub_ms_fake_slider_alone() {
         let n = &mut map.notes[i];
         (n.kind, n.end_time, n.tick_spacing, n.tiny) = (Kind::Roll, n.time + len, 125.0, true);
     }
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1569,11 +1578,11 @@ fn autoplay_leaves_a_sub_ms_fake_slider_alone() {
             stream: None,
         }),
         None,
-    );
+    ));
     for k in 0..800 {
         g.time = k as f64 * 10.0;
         g.autoplay(None);
-        g.expire(g.time);
+        g.game.expire(g.game.time);
     }
     for i in [4, 5] {
         assert!(
@@ -1584,8 +1593,8 @@ fn autoplay_leaves_a_sub_ms_fake_slider_alone() {
     assert_eq!((g.state[6].judged, g.stats.miss), (Some(Judge::Great), 0));
 }
 
-fn quiet_game(osu: &str) -> Game {
-    Game::new(
+fn quiet_game(osu: &str) -> Play {
+    Play::new(Game::new(
         beatmap::tests::parse(osu),
         Arc::new(Track {
             samples: Vec::new(),
@@ -1593,7 +1602,7 @@ fn quiet_game(osu: &str) -> Game {
             stream: None,
         }),
         None,
-    )
+    ))
 }
 
 #[test]
@@ -1675,7 +1684,7 @@ fn autoplay_never_misses_over_a_negative_fake_slider() {
     // A -50 fake slider (a zero-length roll, as parsed) 50 ms before a kat.
     let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,1450,2,0,L|356:192,1,-50\n256,192,1500,1,2,0:0:0:0:\n256,192,2000,1,0,0:0:0:0:\n";
     let map = beatmap::tests::parse(osu);
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1683,11 +1692,11 @@ fn autoplay_never_misses_over_a_negative_fake_slider() {
             stream: None,
         }),
         None,
-    );
+    ));
     for k in 0..300 {
         g.time = k as f64 * 10.0;
         g.autoplay(None);
-        g.expire(g.time);
+        g.game.expire(g.game.time);
     }
     assert_eq!(g.stats.miss, 0);
 }
@@ -1695,7 +1704,7 @@ fn autoplay_never_misses_over_a_negative_fake_slider() {
 /// The playfield of `map` drawn at map time `t`, with a skin's `sliderscorepoint` (so ticks
 /// are sprites, tinted as the game tints them).
 fn drawn(map: beatmap::Beatmap, t: f64) -> Canvas {
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1703,7 +1712,7 @@ fn drawn(map: beatmap::Beatmap, t: f64) -> Canvas {
             stream: None,
         }),
         None,
-    );
+    ));
     g.set_time(t);
     let mut c = Canvas {
         width: 853.3,
@@ -1841,7 +1850,7 @@ fn notes_under_a_swell_still_take_their_hits() {
         ..map.notes[0].clone()
     };
     map.notes.insert(4, swell);
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1849,7 +1858,7 @@ fn notes_under_a_swell_still_take_their_hits() {
             stream: None,
         }),
         None,
-    );
+    ));
     for t in [2000.0, 2500.0, 3000.0, 3500.0, 4000.0] {
         g.press_at(1, t, None);
     }
@@ -1883,7 +1892,7 @@ fn autoplay_hits_the_notes_under_a_swell_and_spins_it_between() {
         ..map.notes[0].clone()
     };
     map.notes.insert(4, swell);
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1891,7 +1900,7 @@ fn autoplay_hits_the_notes_under_a_swell_and_spins_it_between() {
             stream: None,
         }),
         None,
-    );
+    ));
     let mut t = 1800.0;
     while t < 4300.0 {
         g.time = t;
@@ -1928,7 +1937,7 @@ fn a_roll_over_notes_is_played_as_the_notes() {
         ..map.notes[0].clone()
     };
     map.notes.insert(4, roll);
-    let under = |g: &Game| -> Vec<Option<Judge>> {
+    let under = |g: &Play| -> Vec<Option<Judge>> {
         (0..g.map.notes.len())
             .filter(|&i| {
                 matches!(g.map.notes[i].kind, Kind::Don | Kind::Kat)
@@ -1938,7 +1947,7 @@ fn a_roll_over_notes_is_played_as_the_notes() {
             .collect()
     };
     // Autoplay: every note Great, no tick taken.
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map.clone(),
         Arc::new(Track {
             samples: Vec::new(),
@@ -1946,7 +1955,7 @@ fn a_roll_over_notes_is_played_as_the_notes() {
             stream: None,
         }),
         None,
-    );
+    ));
     let mut t = 1800.0;
     while t < 4300.0 {
         g.time = t;
@@ -1956,7 +1965,7 @@ fn a_roll_over_notes_is_played_as_the_notes() {
     assert_eq!(under(&g), vec![Some(Judge::Great); 5]);
     assert_eq!(g.stats.roll_ticks, 0);
     // A player: a press on the kat inside the roll is the kat's, not a tick.
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1964,7 +1973,7 @@ fn a_roll_over_notes_is_played_as_the_notes() {
             stream: None,
         }),
         None,
-    );
+    ));
     g.press_at(0, 3000.0, None);
     assert_eq!(g.state[kat + 1].judged, Some(Judge::Great));
 }
@@ -1978,7 +1987,7 @@ fn a_barline_slower_than_every_note_sizes_the_lookahead() {
         time: 40_000.0,
         velocity: slow,
     });
-    let g = Game::new(
+    let g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1986,7 +1995,7 @@ fn a_barline_slower_than_every_note_sizes_the_lookahead() {
             stream: None,
         }),
         None,
-    );
+    ));
     assert_eq!(g.view.min_velocity, slow);
 
     // A fake slider at SV 0.02 (120 BPM): ~0.008, under the old 0.01 floor, so it was looked
@@ -1994,7 +2003,7 @@ fn a_barline_slower_than_every_note_sizes_the_lookahead() {
     let mut map = beatmap::calibration_map(500.0, 0, 64);
     let crawl = map.notes[0].velocity * 0.02;
     map.notes[10].velocity = crawl;
-    let g = Game::new(
+    let g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2002,7 +2011,7 @@ fn a_barline_slower_than_every_note_sizes_the_lookahead() {
             stream: None,
         }),
         None,
-    );
+    ));
     assert!(crawl < 0.01);
     assert_eq!(g.view.min_velocity, crawl);
 }
@@ -2035,7 +2044,7 @@ fn echo_shows_the_next_bar_in_colour_and_the_lane_in_grey() {
             n.kind = Kind::Kat;
         }
     }
-    let mut g = Game::with_mods(
+    let mut g = Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2044,7 +2053,7 @@ fn echo_shows_the_next_bar_in_colour_and_the_lane_in_grey() {
         }),
         None,
         Mods::parse("EC"),
-    );
+    ));
     // Bars are 2 s: in the one from 2 s, the one from 4 s shows; before the first barline,
     // the first bar.
     assert_eq!(
@@ -2113,7 +2122,7 @@ fn every_mod_draws_a_sane_playfield_and_judges_the_same() {
         let mut c = Canvas::default();
         for k in 0..400 {
             g.time = -2000.0 + k as f64 * 87.3;
-            g.press_at(k % 4, g.time, None);
+            g.game.press_at(k % 4, g.game.time, None);
             c.clear(853.3);
             g.draw_playfield(&mut c, 1.0);
             for sh in &c.shapes {
@@ -2216,7 +2225,7 @@ fn a_crawling_note_at_the_end_of_the_map_is_looked_for_from_the_start() {
     map.notes[last].time = 600_000.0;
     map.notes[last].end_time = 600_000.0;
     map.notes[last].velocity = 1e-4;
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2224,7 +2233,7 @@ fn a_crawling_note_at_the_end_of_the_map_is_looked_for_from_the_start() {
             stream: None,
         }),
         None,
-    );
+    ));
     g.set_time(1000.0);
     g.draw_playfield(
         &mut Canvas {
@@ -2369,7 +2378,7 @@ fn mod_shots() {
             n.kind = Kind::Kat;
         }
     }
-    let mut g = Game::with_mods(
+    let mut g = Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2378,7 +2387,7 @@ fn mod_shots() {
         }),
         None,
         Mods::parse("MZ"),
-    );
+    ));
     g.set_defense(
         vec![(1, "auneu".into()), (2, "you".into()), (3, "quass".into())],
         1,
@@ -2546,7 +2555,7 @@ fn defense_takes_turns_by_bars_and_fails_the_team_when_the_lives_run_out() {
     // A don every 500 ms, a bar every 2 s: with 4-bar turns, notes 0-15 are the first
     // player's and 16-31 ours.
     let map = beatmap::calibration_map(500.0, 0, 64);
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2554,7 +2563,7 @@ fn defense_takes_turns_by_bars_and_fails_the_team_when_the_lives_run_out() {
             stream: None,
         }),
         None,
-    );
+    ));
     g.set_defense(
         vec![(3, "a".into()), (7, "b".into())],
         1,
@@ -2575,7 +2584,7 @@ fn defense_takes_turns_by_bars_and_fails_the_team_when_the_lives_run_out() {
     g.press_at(1, 8000.0, None);
     assert_eq!(g.state[16].judged, Some(Judge::Great));
     // Two of ours get through: misses, which the room turns into lives.
-    g.expire(9000.0 + g.windows.ok + 1.0);
+    g.game.expire(9000.0 + g.game.windows.ok + 1.0);
     assert_eq!(g.stats.miss, 2);
     // HP isn't what fails it: the team's lives are, as the room counts them.
     assert!(!g.failed());
@@ -2596,9 +2605,9 @@ fn defense_takes_turns_by_bars_and_fails_the_team_when_the_lives_run_out() {
 
 /// A Defense game of the calibration map (a don every 500 ms, a bar every 2 s), 4-bar turns,
 /// with us second of `team`.
-fn defense_game(team: usize) -> Game {
+fn defense_game(team: usize) -> Play {
     let map = beatmap::calibration_map(500.0, 0, 64);
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2606,7 +2615,7 @@ fn defense_game(team: usize) -> Game {
             stream: None,
         }),
         None,
-    );
+    ));
     let team = (0..team as u32).map(|k| (k + 1, format!("p{k}"))).collect();
     g.set_defense(
         team,
@@ -2622,14 +2631,14 @@ fn defense_game(team: usize) -> Game {
 
 /// A Defense team of two playing one mod: everyone gets the host's mods, so both games have
 /// to agree on the notes and whose they are, and between them take every one.
-fn defense_with(mods: Mods, me: usize) -> Game {
+fn defense_with(mods: Mods, me: usize) -> Play {
     let map = beatmap::calibration_map(500.0, 0, 64);
     let track = Arc::new(Track {
         samples: Vec::new(),
         rate: 1.0,
         stream: None,
     });
-    let mut g = Game::with_seed(map, track, None, mods, 7);
+    let mut g = Play::new(Game::with_seed(map, track, None, mods, 7));
     g.set_defense(
         vec![(1, "a".into()), (2, "b".into())],
         me,
@@ -2803,7 +2812,7 @@ fn tag_ins_run_out_for_the_map() {
     // Three players, 4-bar turns, one tag-in each: p2 takes over p0's first turn, but not
     // its next one (bars 12-15).
     let map = beatmap::calibration_map(500.0, 0, 64);
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2811,7 +2820,7 @@ fn tag_ins_run_out_for_the_map() {
             stream: None,
         }),
         None,
-    );
+    ));
     let team = (0..3u32).map(|k| (k + 1, format!("p{k}"))).collect();
     g.set_defense(
         team,
@@ -2837,7 +2846,7 @@ fn tag_ins_run_out_for_the_map() {
     assert!(!g.can_tag_in(48_500.0));
     // With none allowed, nobody tags in at all.
     let map = beatmap::calibration_map(500.0, 0, 64);
-    let mut g = Game::new(
+    let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2845,7 +2854,7 @@ fn tag_ins_run_out_for_the_map() {
             stream: None,
         }),
         None,
-    );
+    ));
     let team = (0..2u32).map(|k| (k + 1, format!("p{k}"))).collect();
     g.set_defense(
         team,
@@ -3107,7 +3116,7 @@ fn crumble_grows_with_the_combo_and_a_miss_puts_it_back() {
     let high = *g.crumbs.last().unwrap();
     assert!(high.len > low.len && high.shift.abs() > low.shift.abs() && high.life > low.life);
     // A miss snaps the pieces still out back into line.
-    let out = |g: &Game, t: f64| g.crumbs_at(t, 700.0).map(|c| c.2.abs()).fold(0.0, f32::max);
+    let out = |g: &Play, t: f64| g.crumbs_at(t, 700.0).map(|c| c.2.abs()).fold(0.0, f32::max);
     g.set_time(times[3] + 200.0);
     assert_eq!(g.stats.miss, 2);
     let miss = *g.misses.back().unwrap();
@@ -3155,7 +3164,7 @@ fn overtime_screams_once_per_scare() {
     for k in 0..200 {
         g.set_time(at - 1000.0 + k as f64 * 10.0);
     }
-    let screams = |g: &Game| {
+    let screams = |g: &Play| {
         g.sfx_log
             .as_ref()
             .unwrap()
@@ -3171,7 +3180,7 @@ fn overtime_screams_once_per_scare() {
     assert_eq!(screams(&g), 0);
 }
 /// 1/4s from 0 ms, triplets from 2880 ms and 1/6s from 6720 ms, at 125 BPM.
-fn rhythm_game(mods: &str) -> Game {
+fn rhythm_game(mods: &str) -> Play {
     let mut map = beatmap::calibration_map(480.0, 0, 64);
     for (k, n) in map.notes.iter_mut().enumerate() {
         n.time = match k {
@@ -3181,7 +3190,7 @@ fn rhythm_game(mods: &str) -> Game {
         };
         n.end_time = n.time;
     }
-    Game::with_mods(
+    Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -3190,7 +3199,7 @@ fn rhythm_game(mods: &str) -> Game {
         }),
         None,
         Mods::parse(mods),
-    )
+    ))
 }
 
 #[test]
@@ -3263,7 +3272,7 @@ fn a_tiny_positive_roll_is_gone_at_the_drum() {
     let map = beatmap::tests::parse(osu);
     assert!(map.notes[0].tiny && map.notes[0].fake_len == 0.0);
     let shapes = |map: beatmap::Beatmap, t: f64| {
-        let mut g = Game::new(
+        let mut g = Play::new(Game::new(
             map,
             Arc::new(Track {
                 samples: Vec::new(),
@@ -3271,7 +3280,7 @@ fn a_tiny_positive_roll_is_gone_at_the_drum() {
                 stream: None,
             }),
             None,
-        );
+        ));
         g.time = t;
         let mut c = Canvas::default();
         c.clear(853.3);
@@ -3314,7 +3323,7 @@ fn a_new_speed_carries_on_from_the_same_place_in_the_map() {
             stream: None,
         })
     };
-    let mut g = Game::new(map, track(1.0), None);
+    let mut g = Play::new(Game::new(map, track(1.0), None));
     g.seek(4000.0, None, 0.0);
     g.held = true;
     g.change_speed(track(2.0), 2.0, None, 0.0);
@@ -3329,7 +3338,7 @@ fn a_new_speed_carries_on_from_the_same_place_in_the_map() {
 
 /// A calibration map with a `.tko` gimmick: rotation and scroll on the field, and the notes at
 /// `grouped` hidden and shrunk.
-fn tko_game(gimmick: Option<crate::tko::gimmick::Gimmick>, mods: Mods) -> Game {
+fn tko_game(gimmick: Option<crate::tko::gimmick::Gimmick>, mods: Mods) -> Play {
     let mut map = beatmap::calibration_map(500.0, 0, 64);
     map.gimmick = gimmick.map(Arc::new);
     let track = Arc::new(Track {
@@ -3337,7 +3346,7 @@ fn tko_game(gimmick: Option<crate::tko::gimmick::Gimmick>, mods: Mods) -> Game {
         rate: 1.0,
         stream: None,
     });
-    Game::with_seed(map, track, None, mods, 42)
+    Play::new(Game::with_seed(map, track, None, mods, 42))
 }
 
 fn some_gimmick() -> crate::tko::gimmick::Gimmick {
@@ -3383,7 +3392,7 @@ fn draw_with_defaults() {
     crate::render::set_frame_time(Some(Instant::now()));
 }
 
-fn frame_bytes(g: &mut Game, time: f64) -> Vec<u8> {
+fn frame_bytes(g: &mut Play, time: f64) -> Vec<u8> {
     g.time = time;
     let mut c = Canvas::default();
     c.clear(853.3);
@@ -3438,7 +3447,7 @@ fn a_maps_text_and_pictures_are_drawn_while_their_clips_last() {
     g.clips = vec![text, pic];
     let mut with = tko_game(Some(g), Mods::NONE);
     let mut plain = tko_game(None, Mods::NONE);
-    let draw = |game: &mut Game, t: f64, loaded: bool| {
+    let draw = |game: &mut Play, t: f64, loaded: bool| {
         game.time = t;
         let mut c = Canvas::default();
         c.clear(853.3);
@@ -3617,7 +3626,7 @@ fn effects_gimmick() -> crate::tko::gimmick::Gimmick {
 #[test]
 fn screen_effects_add_to_the_picture_and_never_change_judging() {
     draw_with_defaults();
-    let count = |g: &mut Game, t: f64| {
+    let count = |g: &mut Play, t: f64| {
         g.time = t;
         let mut c = Canvas::default();
         c.clear(853.3);
@@ -3782,7 +3791,7 @@ fn a_hidden_group_is_not_drawn_but_the_notes_stay_hittable() {
     for t in (0..40_000).step_by(5) {
         hidden.time = t as f64 - 2000.0;
         hidden.autoplay(None);
-        hidden.expire(hidden.time);
+        hidden.game.expire(hidden.game.time);
     }
     assert!(hidden.stats.great > 30 && hidden.stats.miss == 0);
 }

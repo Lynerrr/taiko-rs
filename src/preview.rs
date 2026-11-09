@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::audio::{self, Engine, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::difficulty::{self, Graph};
-use crate::game::{self, Game};
+use crate::game::{self, Game, Play};
 use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
@@ -141,7 +141,7 @@ pub struct Preview {
     shown_for: Option<usize>,
     /// The entry whose autoplay has been ready: its music played.
     ready_for: Option<usize>,
-    game: Option<Game>,
+    game: Option<Play>,
     last_time: f64,
     bg_path: Option<PathBuf>,
     /// New background for the renderer: `Some(None)` clears it.
@@ -889,7 +889,7 @@ impl Preview {
     }
 
     /// The autoplay preview of library entry `i`, once it is ready.
-    pub fn game_for(&mut self, library: &[Entry], i: usize) -> Option<&mut Game> {
+    pub fn game_for(&mut self, library: &[Entry], i: usize) -> Option<&mut Play> {
         let ready = self.ready(library, i);
         self.game.as_mut().filter(|_| ready)
     }
@@ -1512,7 +1512,7 @@ fn draw_play_button(
     Some([bx, y, bw, bh])
 }
 
-fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
+fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
     // No samples: the preview only borrows the music's clock; `rate` maps it to map time.
     let mut g = Game::new(
         map.clone(),
@@ -1524,7 +1524,7 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
         None,
     );
     g.mute_hits = true;
-    g
+    Play::new(g)
 }
 
 #[cfg(test)]

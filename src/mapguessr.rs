@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::audio::Track;
 use crate::beatmap::{self, Beatmap};
-use crate::game::Game;
+use crate::game::{Game, Play};
 use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::multiplayer::Session;
@@ -66,7 +66,7 @@ pub struct Round {
     from: f64,
     load: Option<Receiver<Result<Beatmap, String>>>,
     map: Option<Beatmap>,
-    pub game: Option<Game>,
+    pub game: Option<Play>,
     /// Where the pattern starts (map ms).
     start: f64,
     /// When the pattern last moved on.
@@ -89,7 +89,7 @@ impl Round {
         g.mute_hits = true;
         g.skip_to(self.start - 50.0);
         g.start_from(self.start, None, 0.0);
-        self.game = Some(g);
+        self.game = Some(Play::new(g));
         self.ticked = None;
     }
 
@@ -102,7 +102,10 @@ impl Round {
         {
             self.new_game();
         }
-        let Some(g) = &mut self.game else { return };
+        // The play alone: moving it on draws nothing.
+        let Some(g) = self.game.as_mut().map(|p| &mut p.game) else {
+            return;
+        };
         let mut at = self.ticked.filter(|&t| t < now).unwrap_or(now);
         if now - at > CATCH_UP {
             g.skip_to(g.time + (now - at).as_secs_f64() * 1000.0 - 100.0);
@@ -270,7 +273,7 @@ fn load(path: PathBuf) -> Receiver<Result<Beatmap, String>> {
 }
 
 /// The lane of `game`, fitted into the box at (x, y, w, h).
-pub fn draw_pattern(c: &mut Canvas, game: &mut Game, [x, y, w, h]: [f32; 4], scroll_speed: f64) {
+pub fn draw_pattern(c: &mut Canvas, game: &mut Play, [x, y, w, h]: [f32; 4], scroll_speed: f64) {
     let (band_top, band_h) = crate::game::lane_band();
     let k = (w / 640.0).min(h / band_h);
     let full_w = c.width;

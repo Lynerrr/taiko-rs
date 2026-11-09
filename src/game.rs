@@ -503,9 +503,6 @@ pub struct Game {
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
     universes: Option<[Universe; multiverse::COUNT]>,
-    /// What only drawing the play needs: the HUD's layout, what's on screen, the mods' looks
-    /// (`field::View`).
-    pub view: View,
 }
 
 /// Overtime: how long (ms) he stays on screen.
@@ -912,13 +909,6 @@ impl Game {
         // sized from this.
         // Floored only against 0: SV 0.02 at 120 BPM is already under 0.01, and a fake slider
         // in it is on screen ~40 s ahead, and nothing caps the lookahead (the whole map can be).
-        let min_velocity = map
-            .notes
-            .iter()
-            .map(|n| n.velocity)
-            .chain(map.barlines.iter().map(|b| b.velocity))
-            .fold(f64::INFINITY, f64::min)
-            .max(1e-6);
         let main_beat = {
             let cps = &map.control_points;
             let mut spans: Vec<(f64, f64)> = Vec::new();
@@ -955,35 +945,7 @@ impl Game {
             }
             was_kiai = cp.kiai;
         }
-        let sections = if mods.has(Mod::Roulette) {
-            roulette_sections(&map)
-                .into_iter()
-                .zip(map.barlines.iter().step_by(4))
-                .map(|((t, k), b)| (t, k, b.velocity))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let decoys = if mods.has(Mod::Decoy) {
-            decoys(&map)
-        } else {
-            Vec::new()
-        };
         let flows = flows(&map);
-        let decoy_flows = decoys
-            .iter()
-            .map(|d| {
-                map.notes
-                    .partition_point(|n| n.time < d.time)
-                    .checked_sub(1)
-                    .map_or(1, |i| flows[i])
-            })
-            .collect();
-        let lies = if mods.has(Mod::Liar) {
-            lies(&map)
-        } else {
-            Vec::new()
-        };
         // Overtime: once, plus once more per 75 s of map, anywhere from 8 s in to 4 s before the end.
         let scares = if mods.has(Mod::Overtime) {
             let span = (end_time - first_note - 12_000.0).max(0.0);
@@ -996,18 +958,8 @@ impl Game {
         } else {
             Vec::new()
         };
-        let min_velocity = decoys
-            .iter()
-            .map(|n| n.velocity)
-            .fold(min_velocity, f64::min);
-        let focus_switches = if mods.has(Mod::Multiverse) {
-            focus_switches(&map)
-        } else {
-            Vec::new()
-        };
         let shapeshift = shapeshift::get();
         let shape_order = shape_order(&map, mods, shapeshift);
-        let note_blocks = NoteBlock::index(&map.notes);
         Game {
             seed,
             half,
@@ -1088,22 +1040,7 @@ impl Game {
             shape_order,
             universes: None,
             defense: None,
-            view: View::new(
-                min_velocity,
-                note_blocks,
-                sections,
-                decoys,
-                decoy_flows,
-                lies,
-                focus_switches,
-            ),
         }
-    }
-
-    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas it was drawn
-    /// on), for views that show only that (spectating everyone at once).
-    pub fn play_zone(&self) -> Option<[f32; 4]> {
-        self.view.zone
     }
 
     /// Plays with someone else's mod settings (a lobby host's): Multiverse's universes and
