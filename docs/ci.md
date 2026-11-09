@@ -35,6 +35,9 @@ compares them with `.github/scripts/perf-gate.py`:
 
 - A case's value is the lowest p50 of its three runs: noise only ever adds time. On identical
   builds this stays within 5 %, where a single run or the median of three can be 10–20 % off.
+- When a case looks slower, two more rounds run (head first this time) and the five runs of each
+  side decide. A runner's noise can last several rounds: `frame/select` once read +24 % and
+  then +1 % on a re-run of the same code. A pull request that slows nothing pays no extra time.
 - A case fails when head is more than 10 % **and** more than 2 µs slower than base. Cases that
   time other threads, locks or the disk (`mutex/`, `skin/async/worker-completion`,
   `hash/first/`, `game/prepare/`) are reported but never fail.

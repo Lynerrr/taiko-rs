@@ -69,10 +69,27 @@ jobs:
             $AUDIT > "perf-logs/head-$round.log" 2>&1
           done
 
+      # A runner's noise can last for several rounds (a frame case once read +24 % and then +1 %
+      # on a re-run of the same code). A slowdown has to hold over two more rounds, head first,
+      # to fail: the lowest p50 of all five is compared.
       - name: Compare
+        id: compare
+        continue-on-error: true
         env:
           WAIVED: ${{ contains(github.event.pull_request.labels.*.name, 'perf-regression-ok') }}
         run: python3 .github/scripts/perf-gate.py --base perf-logs/base-*.log --head perf-logs/head-*.log
+
+      - name: Confirm a slowdown with two more rounds
+        if: steps.compare.outcome == 'failure'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          WAIVED: ${{ contains(github.event.pull_request.labels.*.name, 'perf-regression-ok') }}
+        run: |
+          for round in 4 5; do
+            $AUDIT > "perf-logs/head-$round.log" 2>&1
+            (cd "$RUNNER_TEMP/base" && $AUDIT) > "perf-logs/base-$round.log" 2>&1 || true
+          done
+          python3 .github/scripts/perf-gate.py --base perf-logs/base-*.log --head perf-logs/head-*.log
 
       - name: Upload the audit logs
         if: always()
