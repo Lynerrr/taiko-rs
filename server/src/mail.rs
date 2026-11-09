@@ -265,8 +265,8 @@ fn letter(from: &str, to: &str, subject: &str, text: &str, html: &str) -> String
     )
 }
 
-/// The game's 5x7 font (`src/font.rs`) for the characters the HTML letter draws: five columns,
-/// the lowest bit the top row.
+/// The game's 5x7 font (`crates/taiko-logic/src/font.rs`) for the characters the HTML letter
+/// draws: five columns, the lowest bit the top row.
 fn glyph(c: char) -> [u8; 5] {
     match c {
         '0' => [0x3E, 0x51, 0x49, 0x45, 0x3E],

@@ -1,7 +1,7 @@
 //! A score's card: the picture under the Discord bot's plays and in a score link's preview.
 //! Grade, pp, accuracy, the hit counts and the mods, big enough to read at a glance, in the
-//! game's own 5x7 font (`src/font.rs`) and the website's colours. Drawn at even font scales so
-//! Discord halving it keeps every font pixel square.
+//! game's own 5x7 font (`crates/taiko-logic/src/font.rs`) and the website's colours. Drawn at
+//! even font scales so Discord halving it keeps every font pixel square.
 
 use crate::online::OnlineScore;
 

@@ -23,9 +23,8 @@ mod covers;
 mod crashes;
 mod custom;
 mod discord;
-#[allow(dead_code)]
-#[path = "../../src/font.rs"]
-mod font;
+// The game's 5x7 font, for the score cards, the letters and the room code's names.
+use taiko_logic::font;
 mod loved;
 mod mail;
 mod medal_list;

@@ -3,7 +3,8 @@
 //! be in several.
 
 pub struct Genre {
-    pub name: fn() -> &'static str,
+    /// In English: the client words it in the player's language (`player::genre_name`).
+    pub name: &'static str,
     /// The folder's colour.
     pub colour: u32,
     /// Single words, or several in a row.
@@ -12,7 +13,7 @@ pub struct Genre {
 
 pub const GENRES: [Genre; 17] = [
     Genre {
-        name: || tr!("Electronic", "エレクトロニック", "Электроника"),
+        name: "Electronic",
         colour: 0x4fb4ff,
         words: &[
             "electronic",
@@ -25,7 +26,7 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || tr!("Hardcore", "ハードコア", "Хардкор"),
+        name: "Hardcore",
         colour: 0xeb452c,
         words: &[
             "hardcore",
@@ -40,12 +41,12 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || "Breakcore",
+        name: "Breakcore",
         colour: 0xc77dff,
         words: &["breakcore", "mashcore", "dariacore", "breakbeat"],
     },
     Genre {
-        name: || "Drum & Bass",
+        name: "Drum & Bass",
         colour: 0xffd34d,
         words: &[
             "dnb",
@@ -62,7 +63,7 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || "Dubstep",
+        name: "Dubstep",
         colour: 0x86e05a,
         words: &[
             "dubstep",
@@ -75,57 +76,57 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || tr!("Trance", "トランス", "Транс"),
+        name: "Trance",
         colour: 0x5ee6c8,
         words: &["trance", "psytrance", "psy-trance", "goa"],
     },
     Genre {
-        name: || tr!("Techno & House", "テクノ / ハウス", "Техно и хаус"),
+        name: "Techno & House",
         colour: 0xff8a3d,
         words: &["techno", "house", "eurobeat", "garage", "disco"],
     },
     Genre {
-        name: || tr!("Pop", "ポップ", "Поп"),
+        name: "Pop",
         colour: 0xff5fa2,
         words: &["pop", "j-pop", "jpop", "k-pop", "kpop", "denpa"],
     },
     Genre {
-        name: || tr!("Rock", "ロック", "Рок"),
+        name: "Rock",
         colour: 0xd9654b,
         words: &["rock", "j-rock", "jrock", "punk", "grunge", "emo"],
     },
     Genre {
-        name: || tr!("Metal", "メタル", "Метал"),
+        name: "Metal",
         colour: 0x8a8aa0,
         words: &["metal", "metalcore", "deathcore", "djent", "thrash"],
     },
     Genre {
-        name: || tr!("Hip Hop", "ヒップホップ", "Хип-хоп"),
+        name: "Hip Hop",
         colour: 0xe0a458,
         words: &["hip-hop", "hiphop", "rap", "hip hop", "lofi", "lo-fi"],
     },
     Genre {
-        name: || tr!("Anime", "アニメ", "Аниме"),
+        name: "Anime",
         colour: 0xff7eb6,
         words: &["anime", "tv size", "tv-size", "アニメ"],
     },
     Genre {
-        name: || tr!("Game music", "ゲーム音楽", "Музыка из игр"),
+        name: "Game music",
         colour: 0x7bd88f,
         words: &["vgm", "videogame", "video game", "game soundtrack", "ost"],
     },
     Genre {
-        name: || "Touhou",
+        name: "Touhou",
         colour: 0xf25c78,
         words: &["touhou", "東方", "東方project", "zun"],
     },
     Genre {
-        name: || "Vocaloid",
+        name: "Vocaloid",
         colour: 0x39c5bb,
         words: &["vocaloid", "miku", "初音ミク", "utau", "ボーカロイド"],
     },
     Genre {
-        name: || tr!("Classical", "クラシック", "Классика"),
+        name: "Classical",
         colour: 0xc9b37e,
         words: &[
             "classical",
@@ -136,7 +137,7 @@ pub const GENRES: [Genre; 17] = [
         ],
     },
     Genre {
-        name: || tr!("Chiptune", "チップチューン", "Чиптюн"),
+        name: "Chiptune",
         colour: 0x9fe870,
         words: &["chiptune", "chip", "8bit", "8-bit", "bitpop"],
     },
@@ -166,13 +167,12 @@ mod tests {
             .iter()
             .enumerate()
             .filter(|(i, _)| bits >> i & 1 != 0)
-            .map(|(_, g)| (g.name)())
+            .map(|(_, g)| g.name)
             .collect()
     }
 
     #[test]
     fn genres_come_from_whole_words_and_phrases_in_any_case() {
-        crate::lang::set(crate::lang::Lang::En);
         assert_eq!(named(of("Japanese J-POP featured artist")), ["Pop"]);
         assert_eq!(
             named(of("electronic dnb neurofunk")),

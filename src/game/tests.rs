@@ -1647,7 +1647,7 @@ fn autoplay_leaves_a_sub_ms_fake_slider_alone() {
 
 fn quiet_game(osu: &str) -> Play {
     Play::new(Game::new(
-        beatmap::tests::parse(osu),
+        beatmap::parse_raw(osu),
         Arc::new(Track {
             samples: Vec::new(),
             rate: 1.0,
@@ -1735,7 +1735,7 @@ fn autoplay_sounds_follow_the_speed_and_start_again_after_a_seek() {
 fn autoplay_never_misses_over_a_negative_fake_slider() {
     // A -50 fake slider (a zero-length roll, as parsed) 50 ms before a kat.
     let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,1450,2,0,L|356:192,1,-50\n256,192,1500,1,2,0:0:0:0:\n256,192,2000,1,0,0:0:0:0:\n";
-    let map = beatmap::tests::parse(osu);
+    let map = beatmap::parse_raw(osu);
     let mut g = Play::new(Game::new(
         map,
         Arc::new(Track {
@@ -1835,7 +1835,7 @@ fn roll_ticks_stay_on_the_body_in_sliderscorepoints_own_colour() {
 /// A map: `first` SV from the start, a 333 ms beat, SV `later` from 2000 on, a swell at 4000.
 fn swell_map(first: f64, later: f64) -> beatmap::Beatmap {
     let sv = |x: f64| -100.0 / x;
-    beatmap::tests::parse(&format!(
+    beatmap::parse_raw(&format!(
         "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,333.333333333333,4,1,0,100,1,0\n0,{},4,1,0,100,0,0\n2000,{},4,1,0,100,0,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,3000,1,0,0:0:0:0:\n256,192,4000,12,0,6000,0:0:0:0:\n",
         sv(first),
         sv(later)
@@ -3321,7 +3321,7 @@ fn decoys_get_into_streams_but_never_twice_running() {
 fn a_tiny_positive_roll_is_gone_at_the_drum() {
     // Lunatic Rough Party!!'s first object: drawn just before 1000, not after.
     let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n136,208,1000,6,2,L|224:200,1,0.0001\n";
-    let map = beatmap::tests::parse(osu);
+    let map = beatmap::parse_raw(osu);
     assert!(map.notes[0].tiny && map.notes[0].fake_len == 0.0);
     let shapes = |map: beatmap::Beatmap, t: f64| {
         let mut g = Play::new(Game::new(
@@ -3341,7 +3341,7 @@ fn a_tiny_positive_roll_is_gone_at_the_drum() {
     };
     let none = |t| {
         shapes(
-            beatmap::tests::parse(&osu.replace("136,208,1000,6,2,L|224:200,1,0.0001\n", "")),
+            beatmap::parse_raw(&osu.replace("136,208,1000,6,2,L|224:200,1,0.0001\n", "")),
             t,
         )
     };
@@ -3353,7 +3353,7 @@ fn a_tiny_positive_roll_is_gone_at_the_drum() {
 fn a_fake_slider_stops_200_of_length_after_its_cap_lands() {
     // 120 BPM, SM 1.4, 3x: -200 is 238 ms of cap ahead of its head at 2000, -100 half that.
     let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n0,-33.3333333333333,4,1,0,100,0,0\n\n[HitObjects]\n256,192,2000,2,0,L|356:192,1,-200\n256,192,5000,2,0,L|356:192,1,-100\n";
-    let map = beatmap::tests::parse(osu);
+    let map = beatmap::parse_raw(osu);
     let (long, short) = (&map.notes[0], &map.notes[1]);
     assert!((long.fake_len - 238.095).abs() < 0.01);
     // -200's cap lands at ~1762 and it stops 238 ms on: at its head's time, its body's

@@ -1032,11 +1032,11 @@ mod tests {
         }
         // And the game agrees: it reads the saved chart back with the same end.
         let id = e.place_roll(5000.0, 6000.0).unwrap();
-        let map = crate::beatmap::tests::parse(&e.chart.to_text());
+        let map = crate::beatmap::parse_raw(&e.chart.to_text());
         let roll = map.notes.iter().find(|n| n.time == 5000.0).unwrap();
         assert_eq!(roll.end_time, 6000.0);
         assert!(e.set_end(id, 6400.0, false));
-        let map = crate::beatmap::tests::parse(&e.chart.to_text());
+        let map = crate::beatmap::parse_raw(&e.chart.to_text());
         assert_eq!(
             map.notes
                 .iter()

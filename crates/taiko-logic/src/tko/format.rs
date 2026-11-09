@@ -227,8 +227,9 @@ mod tests {
     use crate::tko::gimmick::{FieldProp, Group, NoteProp};
     use crate::tko::track::{Ease, Key};
 
+    /// The editor's test chart (`editor::chart::tests::MAP` in the client).
     fn chart() -> &'static str {
-        crate::editor::chart::tests::MAP
+        "osu file format v14\r\n\r\n[General]\r\nAudioFilename: audio.mp3\r\nMode: 1\r\n\r\n[Metadata]\r\nTitle:Test\r\nVersion:Oni\r\n\r\n[Difficulty]\r\nOverallDifficulty:5\r\nSliderMultiplier:1.4\r\nSliderTickRate:1\r\n\r\n[Events]\r\n//Background and Video events\r\n0,0,\"bg.png\",0,0\r\n\r\n[TimingPoints]\r\n0,500,4,1,0,100,1,0\r\n4000,-50,4,1,0,100,0,1\r\n\r\n[HitObjects]\r\n256,192,1000,1,0,0:0:0:0:\r\n256,192,1500,1,2,0:0:0:0:\r\n256,192,2000,1,12,0:0:0:0:\r\n256,192,2500,2,0,L|356:192,1,70\r\n256,192,9000,12,0,11000,0:0:0:0:\r\n"
     }
 
     fn gimmick() -> Gimmick {
