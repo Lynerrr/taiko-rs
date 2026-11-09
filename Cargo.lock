@@ -3420,6 +3420,10 @@ dependencies = [
 [[package]]
 name = "taiko-logic"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "taiko-rs"

@@ -65,12 +65,12 @@ fn black_lane() -> bool {
 }
 
 use crate::beatmap::{self, Beatmap, Kind};
-use crate::mods::{Mod, Mods, Speed};
 use crate::multiverse::{self, Shape as NoteShape, Universe};
-use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
 use crate::tko::runtime::NoteFx;
 use taiko_logic::calibrate;
 use taiko_logic::clock::GameClock;
+use taiko_logic::defense::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
+use taiko_logic::mods::{Mod, Mods, Speed};
 use taiko_logic::shapeshift;
 
 /// Where a play's diagnostic lines go: the client's audio log, once it's open (`log_to`).
@@ -408,7 +408,7 @@ pub struct Game {
     /// 0 is the one per map from before seeds.
     pub seed: u64,
     /// Which notes Half took off.
-    pub half: crate::mods::HalfRule,
+    pub half: taiko_logic::mods::HalfRule,
     pub map: Beatmap,
     clock: GameClock,
     state: Vec<NoteState>,
@@ -908,7 +908,7 @@ impl Game {
         audio: Option<&dyn Audio>,
         mods: Mods,
         seed: u64,
-        half: crate::mods::HalfRule,
+        half: taiko_logic::mods::HalfRule,
     ) -> Game {
         apply_to_map(&mut map, mods, seed, half);
         let tko = map.gimmick.clone().map(|g| {

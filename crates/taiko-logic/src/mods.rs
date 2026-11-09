@@ -869,7 +869,7 @@ impl Mods {
     /// others are each player's own), in Defense all of them but the ones a team can't have,
     /// for everyone, so the whole team plays the same notes. With the Maze lane on, Maze is one
     /// of them and any other rail it clashes with is dropped.
-    pub fn lobby(self, defense: Option<crate::net::Defense>) -> Mods {
+    pub fn lobby(self, defense: Option<crate::defense::Defense>) -> Mods {
         let Some(d) = defense else {
             return self.shared();
         };
@@ -1319,10 +1319,7 @@ mod tests {
             [true, false, true, false, true]
         );
         assert_eq!(HalfRule::of_pp_version(1), HalfRule::EveryOther);
-        assert_eq!(
-            HalfRule::of_pp_version(crate::online::PP_VERSION),
-            HalfRule::OnTheBeat
-        );
+        // That the server's pp version cuts on the beat: the client's mods_tests.
     }
 
     #[test]
@@ -1424,12 +1421,7 @@ mod tests {
                     c.acronym()
                 );
             }
-            // The mod select's description line at 5:4 (600 wide).
-            assert!(
-                crate::hit::Canvas::text_width(7.0, m.description()) <= 600.0 - 64.0,
-                "{}",
-                m.name()
-            );
+            // That its description fits the mod select: the client's mods_tests.
         }
     }
 
@@ -1547,7 +1539,9 @@ mod tests {
             })
             .collect();
         let text = serde_json::to_string_pretty(&groups).unwrap() + "\n";
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("server/site/mods.json");
+        // The crate sits in crates/taiko-logic; the site is the repository's.
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server/site/mods.json");
         // Line endings aside: a Windows checkout may have turned them into CRLF.
         if std::fs::read_to_string(&path)
             .ok()
@@ -1565,7 +1559,7 @@ mod tests {
 
     #[test]
     fn a_lobby_plays_the_hosts_speed_and_in_defense_all_of_their_mods_but_banned_ones() {
-        use crate::net::Defense;
+        use crate::defense::Defense;
         let host = Mods::parse("DT,HD,HR,AT,SD,ZZ");
         assert_eq!(host.lobby(None), Mods::parse("DT"), "ordinary: the speed's");
         let lane = host.lobby(Some(Defense::DEFAULT));

@@ -56,7 +56,9 @@ mod menu;
 mod menu_notes;
 mod mobile;
 mod mod_setup;
-mod mods;
+use taiko_logic::mods;
+#[cfg(test)]
+mod mods_tests;
 mod multiplayer;
 mod multiverse;
 mod net;
@@ -125,6 +127,7 @@ use hit::Canvas;
 use layout::{Area, Grip};
 use library::Entry;
 use mods::Mods;
+use net::ItemText;
 use render::{PresentChoice, Renderer, accent, rgba, themed};
 use settings::{Choices, Dropdown, Edit, Item, Kind, PresetAction, SettingsUi};
 use ui::{Results, Select, SelectAction};

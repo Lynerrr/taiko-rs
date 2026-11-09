@@ -1,6 +1,7 @@
 use super::hud_draw::HP_BAR_Y;
 use super::*;
 use crate::audio::Track;
+use crate::net::ItemText;
 
 #[test]
 fn the_play_itself_reaches_for_nothing_that_draws() {
@@ -3861,6 +3862,8 @@ fn the_play_takes_its_rules_from_taiko_logic() {
         "tact",
         "audiolog",
         "lang",
+        "mods",
+        "net",
     ] {
         assert!(
             !sim.contains(&format!("crate::{module}")),
