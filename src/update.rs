@@ -26,8 +26,10 @@ const REPO: &str = match option_env!("GITHUB_REPOSITORY") {
     Some(r) => r,
     None => "Lynerrr/taiko-rs",
 };
-/// The channel this binary was built for (`TAIKO_CHANNEL` in CI).
+/// The channel this binary was built for (`TAIKO_CHANNEL` in CI). Tests always see Stable, so
+/// what they draw doesn't depend on which channel's release job runs them.
 pub const BUILD_CHANNEL: Channel = match option_env!("TAIKO_CHANNEL") {
+    _ if cfg!(test) => Channel::Stable,
     // (`str` can't be matched in a const.)
     Some(c) if matches!(c.as_bytes(), [b'd', b'e', b'v']) => Channel::Dev,
     _ => Channel::Stable,
@@ -522,7 +524,15 @@ fn swap(exe: &Path, new: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Channel, Ordering, Status, Updater, first_working};
+    use super::{BUILD_CHANNEL, Channel, Ordering, Status, Updater, first_working};
+
+    #[test]
+    fn tests_see_a_stable_build_whatever_channel_ci_builds() {
+        // The dev release job builds with TAIKO_CHANNEL=dev; the settings goldens show the
+        // channel, so they would differ there.
+        assert_eq!(BUILD_CHANNEL, Channel::Stable);
+        assert_eq!(Updater::new(false).channel(), Channel::Stable);
+    }
 
     /// An updater whose check at launch is under way, whatever this build is.
     fn launching() -> Updater {
