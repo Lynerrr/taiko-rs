@@ -10,15 +10,31 @@ use std::path::PathBuf;
 
 /// Writes `chart` into a folder of its own (stars and pp read map files).
 pub fn chart_file(chart: &maps::Chart) -> PathBuf {
+    // A folder per call: tests running side by side write the same chart, and one rewriting
+    // (truncating) the file while another reads it gave that one an empty map.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "taiko-rs-regression-{}-{}",
+        "taiko-rs-regression-{}-{}-{}",
         chart.name,
-        std::process::id()
+        std::process::id(),
+        CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{}.osu", chart.name));
     std::fs::write(&path, chart.text()).unwrap();
     path
+}
+
+#[test]
+fn a_chart_written_again_leaves_the_earlier_file_alone() {
+    // Two tests reading the same chart at once each keep their own whole file.
+    let chart = maps::rolls_and_swells();
+    let first = chart_file(&chart);
+    let second = chart_file(&chart);
+    assert_ne!(first, second);
+    std::fs::write(&second, "").unwrap();
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), chart.text());
+    assert!(stars::star_rating(&first, 1.0).is_some_and(|s| s > 0.0));
 }
 
 fn opt(v: Option<f64>, places: usize) -> String {
