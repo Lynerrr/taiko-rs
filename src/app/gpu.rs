@@ -19,7 +19,7 @@ pub fn graphics_backends(api: &str) -> wgpu::Backends {
 }
 
 #[cfg(windows)]
-pub(crate) fn auto_backends() -> wgpu::Backends {
+pub(super) fn auto_backends() -> wgpu::Backends {
     // DXGI lists the cards without touching their Vulkan drivers.
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::DX12,
@@ -37,7 +37,7 @@ pub(crate) fn auto_backends() -> wgpu::Backends {
 }
 
 #[cfg(not(windows))]
-pub(crate) fn auto_backends() -> wgpu::Backends {
+pub(super) fn auto_backends() -> wgpu::Backends {
     wgpu::Backends::all()
 }
 
@@ -100,7 +100,7 @@ pub(crate) mod gpu_start {
 /// sometimes crash there, as (module, what it is). OBS's game capture crashed a game drawing
 /// with Vulkan: graphics-hook64.dll, hooked into the present, made a D3D11 device for its shared
 /// texture and dxcore.dll read 0xffffffffffffffff.
-pub(crate) const DRAWING_HOOKS: [(&str, &str); 4] = [
+pub(super) const DRAWING_HOOKS: [(&str, &str); 4] = [
     ("graphics-hook64.dll", "OBS's game capture"),
     ("gameoverlayrenderer64.dll", "the Steam overlay"),
     ("discordhook64.dll", "the Discord overlay"),
@@ -109,7 +109,7 @@ pub(crate) const DRAWING_HOOKS: [(&str, &str); 4] = [
 
 /// The first of `DRAWING_HOOKS` in a crash's `frames:` line.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn drawing_hook(frames: &str) -> Option<(&'static str, &'static str)> {
+pub(super) fn drawing_hook(frames: &str) -> Option<(&'static str, &'static str)> {
     let frames = frames.to_ascii_lowercase();
     frames.split_whitespace().find_map(|f| {
         DRAWING_HOOKS
@@ -121,7 +121,7 @@ pub(crate) fn drawing_hook(frames: &str) -> Option<(&'static str, &'static str)>
 
 /// What the crash window says to do about a crash in `who`.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn drawing_hook_advice(who: &str, dll: &str, to_dx12: bool, vulkan: bool) -> String {
+pub(super) fn drawing_hook_advice(who: &str, dll: &str, to_dx12: bool, vulkan: bool) -> String {
     let mut out = format!(
         "It crashed inside {who} ({dll}), which hooks into the game's drawing, not in the game's own code."
     );
@@ -143,10 +143,10 @@ pub(crate) fn drawing_hook_advice(who: &str, dll: &str, to_dx12: bool, vulkan: b
 /// Drawing with Vulkan because `graphics_api` is "auto": a crash in a hook then moves the next
 /// start to DX12.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) static VULKAN_ON_AUTO: AtomicBool = AtomicBool::new(false);
+pub(super) static VULKAN_ON_AUTO: AtomicBool = AtomicBool::new(false);
 /// Drawing with Vulkan at all (for the crash window's advice).
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) static VULKAN: AtomicBool = AtomicBool::new(false);
+pub(super) static VULKAN: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 mod drawing_hook_tests {
