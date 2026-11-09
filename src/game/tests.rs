@@ -390,6 +390,53 @@ fn the_outro_can_be_skipped_only_once_every_note_is_judged() {
     assert!(g.skip_outro());
 }
 
+/// A sound that only writes down what the play asked of it.
+#[derive(Default)]
+struct Heard(std::cell::RefCell<Vec<String>>);
+
+impl Audio for Heard {
+    fn rate(&self) -> u32 {
+        48_000
+    }
+    fn play(&self, _: Arc<Track>, start_ms: f64) {
+        self.0.borrow_mut().push(format!("play {start_ms}"));
+    }
+    fn seek(&self, ms: f64) {
+        self.0.borrow_mut().push(format!("seek {ms}"));
+    }
+    fn set_paused(&self, paused: bool) {
+        self.0.borrow_mut().push(format!("paused {paused}"));
+    }
+    fn sfx_at(&self, s: Sfx, _: f32) {
+        self.0.borrow_mut().push(format!("sfx {s:?}"));
+    }
+    fn sfx_at_song(&self, s: Sfx, _: f32, _: f64) {
+        self.0.borrow_mut().push(format!("sfx {s:?}"));
+    }
+    fn latencies_ms(&self) -> (f64, f64) {
+        (0.0, 0.0)
+    }
+    fn position_ms(&self, _: Instant) -> Option<f64> {
+        None
+    }
+}
+
+#[test]
+fn the_play_reaches_its_sound_through_the_audio_port() {
+    // Any sound will do (the client's is audio::Engine): pausing and going on reach it, once.
+    let heard = Heard::default();
+    let mut g = modded("");
+    g.pause(Some(&heard));
+    g.pause(Some(&heard));
+    g.resume(Some(&heard));
+    assert_eq!(*heard.0.borrow(), ["paused true", "paused false"]);
+    let sim = include_str!("../game.rs");
+    assert!(
+        !sim.contains("&Engine"),
+        "game.rs takes the client's sound engine itself"
+    );
+}
+
 #[test]
 fn drawing_multiverse_leaves_the_play_s_mods_alone() {
     // Each universe is drawn with its own mods on top of the play's, passed to the drawing, not
