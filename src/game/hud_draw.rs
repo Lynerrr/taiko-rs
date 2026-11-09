@@ -9,7 +9,7 @@ impl Game {
     pub fn draw_hud(&self, c: &mut Canvas) {
         let t = self.time;
         let w = c.width;
-        if let Some(text) = &self.banner {
+        if let Some(text) = &self.view.banner {
             let tw = Canvas::text_width(9.0, text);
             // Defense has its lives panel up there: the banner goes under it.
             let by = if self.defense.is_some() { 90.0 } else { 14.0 };
@@ -36,7 +36,7 @@ impl Game {
             draw_scare(c, ((t - at) / SCARE_MS) as f32, t);
         }
 
-        if self.can_skip() && self.paused.is_none() && !self.mute_hits && !self.watched {
+        if self.can_skip() && self.paused.is_none() && !self.mute_hits && !self.view.watched {
             c.text_centered(
                 w / 2.0,
                 330.0,
@@ -94,7 +94,7 @@ impl Game {
                     "приготовьтесь   (Esc: назад в меню)"
                 ),
             );
-        } else if let Some(cursor) = self.paused.filter(|_| !self.watched) {
+        } else if let Some(cursor) = self.paused.filter(|_| !self.view.watched) {
             // The main menu's look: one panel, the options as notes on it (don and kat in turn),
             // the chosen one bigger and lit, the selector sliding between them.
             let t = progress(self.paused_at, 180.0);
@@ -152,7 +152,7 @@ impl Game {
             c.fade_since(start, t, 1.0);
             let colours = crate::multiverse::note_colours();
             let (rx, rw) = (px + 12.0, pw - 24.0);
-            let test = self.test_play;
+            let test = self.view.test_play;
             let items = (0..PAUSE_ITEMS).map(|i| match i {
                 4 if test => tr!("Back to the editor", "エディターに戻る", "Назад в редактор"),
                 _ => pause_item(i),
@@ -244,13 +244,13 @@ impl Game {
     /// The part's place: where the player put it, or else where it goes to begin with.
     pub(super) fn part_place(&self, c: &Canvas, part: Part) -> hud::Place {
         use hud::{Place, Target, axis, on_screen};
-        self.hud.place(part).unwrap_or_else(|| match part {
+        self.view.hud.place(part).unwrap_or_else(|| match part {
             Part::Score => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 18.0)),
             Part::Accuracy => Place::new(on_screen(1.0, -18.0), on_screen(0.0, 50.0)),
             // On the accuracy's line, left of it.
             Part::Pp => {
-                let accuracy_here =
-                    !self.hidden.has(Part::Accuracy) && self.hud.place(Part::Accuracy).is_none();
+                let accuracy_here = !self.view.hidden.has(Part::Accuracy)
+                    && self.view.hud.place(Part::Accuracy).is_none();
                 let acc_w = if accuracy_here {
                     score_width(c, 14.0, &self.accuracy_text()) + 14.0
                 } else {
@@ -293,23 +293,23 @@ impl Game {
 
     /// `boxes` at map time `t`, eased from where they were.
     pub(super) fn ease_field_boxes(&mut self, boxes: hud::FieldBoxes, t: f64) {
-        let k = ease_step(t - self.field_at);
+        let k = ease_step(t - self.view.field_at);
         let mix = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * k);
-        self.field_boxes = Some(self.field_boxes.map_or(boxes, |o| hud::FieldBoxes {
+        self.view.field_boxes = Some(self.view.field_boxes.map_or(boxes, |o| hud::FieldBoxes {
             lane: mix(o.lane, boxes.lane),
             drum: mix(o.drum, boxes.drum),
             hit: mix(o.hit, boxes.hit),
         }));
-        self.field_at = t;
+        self.view.field_at = t;
     }
 
     /// The lane's top and bottom on the screen in the columns from `x0` to `x1`, if it's there.
     pub(super) fn lane_column(&self, x0: f32, x1: f32, c: &Canvas) -> Option<(f32, f32)> {
-        let area = self.hud_area;
+        let area = self.view.hud_area;
         let (k, ox, oy) = (area.h, area.x * c.width, area.y * VIRTUAL_HEIGHT);
-        let half = self.lane_half * k;
+        let half = self.view.lane_half * k;
         let (mut top, mut bottom) = (f32::MAX, f32::MIN);
-        for &(x, y) in &self.lane_path {
+        for &(x, y) in &self.view.lane_path {
             let (x, y) = (ox + x * k, oy + y * k);
             if x + half >= x0 && x - half <= x1 {
                 (top, bottom) = (top.min(y - half), bottom.max(y + half));
@@ -323,10 +323,10 @@ impl Game {
     pub(super) fn settle_parts(&self, c: &Canvas) {
         let mut settled = [None; Part::ALL.len()];
         let now = self.time;
-        if !self.lane_path.is_empty() {
+        if !self.view.lane_path.is_empty() {
             let drawn = |p: Part| {
-                !self.hidden.has(p)
-                    && (self.hud.place(p).is_some()
+                !self.view.hidden.has(p)
+                    && (self.view.hud.place(p).is_some()
                         || !matches!(
                             p,
                             Part::Combo | Part::Judgements | Part::Scoreboard | Part::Spectators
@@ -377,19 +377,20 @@ impl Game {
                     }
                 }
             }
-            let before = self.settled.get();
+            let before = self.view.settled.get();
             for (part, b, ..) in boxes.into_iter().filter(|b| b.2) {
                 let i = hud::Layout::index(part);
                 let y = before[i].map_or(b.y, |(y, at)| y + (b.y - y) * ease_step(now - at));
                 settled[i] = Some((y, now));
             }
         }
-        self.settled.set(settled);
+        self.view.settled.set(settled);
     }
 
     /// Where the parts can be attached to now.
     pub(super) fn frames(&self, c: &Canvas) -> hud::Frames {
-        hud::Frames::new(c.width, self.hud_area).with_field(self.hud_area, self.field_boxes)
+        hud::Frames::new(c.width, self.view.hud_area)
+            .with_field(self.view.hud_area, self.view.field_boxes)
     }
 
     /// How big a part at `place` is in its own units.
@@ -413,7 +414,7 @@ impl Game {
             Part::Judgements => [80.0, 22.0],
             Part::Ur => [Canvas::text_width(UR_SIZE, "UR 999.99"), 12.0],
             Part::Counts => {
-                let on = self.hud.counter;
+                let on = self.view.hud.counter;
                 let n = [on.great, on.ok, on.miss].iter().filter(|&&c| c).count() as f32;
                 let cells = n * count_cell(on.titles) + (n - 1.0).max(0.0) * COUNT_GAP;
                 [cells.max(COUNT_GAP * 2.0), 10.0]
@@ -429,7 +430,7 @@ impl Game {
         let place = self.part_place(c, part);
         let size = self.part_size(c, part, &place);
         let frames = self.frames(c);
-        let moved = self.hud.place(part).is_some();
+        let moved = self.view.hud.place(part).is_some();
         (place, size, frames.resolve(&place, size, moved))
     }
 
@@ -464,7 +465,7 @@ impl Game {
     }
 
     pub(super) fn settled_top(&self, part: Part) -> Option<f32> {
-        self.settled.get()[hud::Layout::index(part)].map(|(y, _)| y)
+        self.view.settled.get()[hud::Layout::index(part)].map(|(y, _)| y)
     }
 
     pub(super) fn accuracy_text(&self) -> String {
@@ -483,10 +484,10 @@ impl Game {
     pub fn draw_parts(&self, c: &mut Canvas) {
         self.settle_parts(c);
         let t = self.time;
-        let shown = |p: Part| !self.hidden.has(p);
+        let shown = |p: Part| !self.view.hidden.has(p);
         // Over the lane unless moved: the playfield draws those itself.
-        let off_the_lane = |p: Part| self.hud_sample || self.hud.place(p).is_some();
-        let chosen = |p: Part| self.hud.colour(p);
+        let off_the_lane = |p: Part| self.view.hud_sample || self.view.hud.place(p).is_some();
+        let chosen = |p: Part| self.view.hud.colour(p);
 
         // Defense is a team's: one player's score says nothing, the team panel does.
         if shown(Part::Score) && self.defense.is_none() {
@@ -518,7 +519,7 @@ impl Game {
             });
         }
         if shown(Part::Progress) {
-            let done = if self.hud_sample {
+            let done = if self.view.hud_sample {
                 0.4
             } else {
                 self.progress() as f32
@@ -529,7 +530,7 @@ impl Game {
         }
         // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
         // by the team's lives instead (its panel).
-        if self.show_hp && shown(Part::Health) && self.defense.is_none() {
+        if self.view.show_hp && shown(Part::Health) && self.defense.is_none() {
             self.in_place(c, Part::Health, |c, [hw, _], _| self.draw_health(c, hw));
         }
         if !self.mods.is_empty() && shown(Part::Mods) {
@@ -546,7 +547,7 @@ impl Game {
             });
         }
         if shown(Part::OffsetHint) {
-            let hint = if self.hud_sample {
+            let hint = if self.view.hud_sample {
                 Some((
                     tr!(
                         "offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)",
@@ -577,7 +578,7 @@ impl Game {
         if shown(Part::Counts) {
             let st = &self.stats;
             let picked = chosen(Part::Counts);
-            let on = self.hud.counter;
+            let on = self.view.hud.counter;
             let titles = on.titles;
             let cells = [
                 (on.great, "300", st.great, Judge::Great),
@@ -617,7 +618,7 @@ impl Game {
                         let size = if s.len() > 3 { 12.0 } else { 16.0 };
                         let y = (h - size) / 2.0;
                         // Dark on the drum, where the stand-in play shows it.
-                        let on_drum = self.hud.place(Part::Combo).is_none();
+                        let on_drum = self.view.hud.place(Part::Combo).is_none();
                         let col = chosen(Part::Combo).unwrap_or(if on_drum {
                             0x1d1d26
                         } else {
@@ -629,7 +630,7 @@ impl Game {
             });
         }
         if shown(Part::Judgements) && off_the_lane(Part::Judgements) {
-            let judged = if self.hud_sample {
+            let judged = if self.view.hud_sample {
                 Some((Judge::Great, 1.0))
             } else {
                 self.last_judge
@@ -665,7 +666,7 @@ impl Game {
     /// spot, and never appear together in a play: their names are kept apart here.
     pub fn draw_stand_ins(&self, c: &mut Canvas) {
         for (part, y) in [(Part::Scoreboard, 124.0), (Part::Spectators, 6.0)] {
-            if !self.hidden.has(part) {
+            if !self.view.hidden.has(part) {
                 self.in_place(c, part, |c, [w, h], _| {
                     c.round_rect(
                         [0.0, 0.0],
@@ -802,7 +803,7 @@ impl Game {
 
     /// The offset advice's line and colour, once it has something to say.
     pub(super) fn offset_hint_text(&self) -> Option<(String, [f32; 4])> {
-        if !self.show_offset_hint {
+        if !self.view.show_offset_hint {
             return None;
         }
         let h = self.offset_suggestion(self.offset)?;
@@ -825,7 +826,7 @@ impl Game {
             } else {
                 tr!("early", "早い", "рано")
             };
-            let apply = self.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
+            let apply = self.view.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
             let text = tr!(
                 "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
                 "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
@@ -852,14 +853,14 @@ impl Game {
         });
         let map = beatmap::calibration_map(500.0, 0, 64);
         let mut g = Game::with_mods(map, track, None, Mods::parse("HD"));
-        g.hud_sample = true;
+        g.view.hud_sample = true;
         g.stats.score = 1_234_560;
         (g.stats.great, g.stats.ok, g.stats.miss) = (812, 37, 4);
         g.stats.combo = 321;
         g.stats.errors = (0..20).map(|i| (i % 7) as f64 * 5.0 - 15.0).collect();
         g.live_pp_value = Some(312.0);
         g.hp = 0.8;
-        g.show_hp = true;
+        g.view.show_hp = true;
         g.recent_errors = g
             .stats
             .errors

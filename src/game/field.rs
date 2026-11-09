@@ -2,6 +2,65 @@
 
 use super::*;
 
+/// What only drawing a play needs, apart from the play itself (`Game`): the HUD's layout and
+/// what it hides, the playfield's boxes and path as last drawn, the notes on screen, and what the
+/// visual mods worked out from the map. A headless play (a replay simulated for its results)
+/// never reads it.
+pub struct View {
+    pub(super) min_velocity: f64,
+    pub(super) note_blocks: Vec<NoteBlock>,
+    pub(super) visible: Vec<usize>,
+    /// Draw the HP bar (not in calibration).
+    pub show_hp: bool,
+    /// Show the live offset suggestion under the hit error meter.
+    pub show_offset_hint: bool,
+    /// The key that applies it, if it has one.
+    pub offset_key: Option<String>,
+    /// Kiai time tints the lane and pulses the hit target.
+    pub kiai_effects: bool,
+    /// Interface parts hidden (the interface toggle).
+    pub hidden: crate::hud::Parts,
+    /// Where the interface's parts go, and the playfield area they may be attached to.
+    pub hud: crate::hud::Layout,
+    pub hud_area: crate::layout::Area,
+    /// A stand-in play for the interface editor: every part shows, with made-up numbers.
+    pub(super) hud_sample: bool,
+    /// Where mods have the lane this frame, for the parts attached to it.
+    pub(super) field_boxes: Option<hud::FieldBoxes>,
+    /// The lane's middle on the screen, in the playfield's units, while mods bend or move it, and
+    /// how far its edges are from that.
+    pub(super) lane_path: Vec<(f32, f32)>,
+    pub(super) lane_half: f32,
+    /// When `field_boxes` last moved, to ease it.
+    pub(super) field_at: f64,
+    /// Parts mods have moved off their places: their top and when it was worked out.
+    pub(super) settled: std::cell::Cell<[Option<(f32, f64)>; Part::ALL.len()]>,
+    /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
+    /// when the frame reaches the screen. Judging stays on the audio clock.
+    pub visual_offset: f64,
+    /// Someone else's play being watched: no pause menu (it holds while they pause) and no
+    /// skip prompt (it follows their skips).
+    pub watched: bool,
+    /// Text shown at the top ("REPLAY - x", "SPECTATING - x").
+    pub banner: Option<String>,
+    /// A test play from the map editor: leaving goes back to it.
+    pub test_play: bool,
+    /// Roulette: where each 4-bar section starts (map ms), its speed, and the velocity its
+    /// marker scrolls at.
+    pub(super) sections: Vec<(f64, f64, f64)>,
+    /// Decoy: the fake notes (never judged).
+    pub(super) decoys: Vec<beatmap::Note>,
+    /// Decoy: the rhythm each fake note pretends to be part of (the note before it's).
+    pub(super) decoy_flows: Vec<u8>,
+    /// Liar: the map time each note is drawn at far off (its own, or a 1/4's for a triplet).
+    pub(super) lies: Vec<f64>,
+    /// Multiverse: where the focus moves to another playfield.
+    pub(super) focus_switches: Vec<FocusSwitch>,
+    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas): the lane,
+    /// wherever the mods took it; with Multiverse, the playfield in focus.
+    pub(super) zone: Option<[f32; 4]>,
+}
+
 /// A rect `len` long and `thick` across, centred on (`x`, `y`) and turned to heading `a`.
 pub(super) fn lane_rect(
     c: &mut Canvas,
@@ -209,7 +268,7 @@ impl Game {
     /// beat. Over the last three quarters of a beat the focus slides across.
     pub(super) fn multiverse_at(&self, t: f64) -> [Focus; FIELD_COUNT] {
         let mut out = [Focus::default(); FIELD_COUNT];
-        let sw = &self.focus_switches;
+        let sw = &self.view.focus_switches;
         let i = sw.partition_point(|s| s.at <= t);
         let now = i.checked_sub(1).map_or(FIRST_FOCUS, |i| sw[i].field);
         out[now].focus = 1.0;
@@ -294,7 +353,7 @@ impl Game {
             self.draw_field(c, scroll_speed, l, &universes[i]);
             self.mods = base;
             c.width = w;
-            let field_zone = self.zone.take();
+            let field_zone = self.view.zone.take();
             // Out of focus it circles its home, each its own way round and at its own pace,
             // leaning and rocking. Called or in focus it parks where it fits on screen, holds
             // still and breathes with the beat.
@@ -335,10 +394,10 @@ impl Game {
                 zone.1 += l.focus;
             }
         }
-        self.zone = (zone.1 > 0.0).then(|| zone.0.map(|v| v / zone.1));
+        self.view.zone = (zone.1 > 0.0).then(|| zone.0.map(|v| v / zone.1));
         // Multiverse: on the playfield in focus, as big as it is.
-        self.lane_path.clear();
-        let focus = self.zone.map(|z| {
+        self.view.lane_path.clear();
+        let focus = self.view.zone.map(|z| {
             let (_, band_h) = lane_band();
             let k = z[3] / band_h;
             let mid = z[1] + z[3] / 2.0;
@@ -413,7 +472,7 @@ impl Game {
         // Beats since the red line, for the mods that move with the beat.
         let beats = ((vt - cp.beat_origin) / cp.beat_length) as f32;
         let pulse = (1.0 - beat_phase).powi(3);
-        let kiai = cp.kiai && self.kiai_effects;
+        let kiai = cp.kiai && self.view.kiai_effects;
         let in_kiai = cp.kiai;
         // Radar: where the beam is (see `radar_sweep`), and how long it takes to cross the lane.
         let radar = mods.has(Mod::Radar);
@@ -507,7 +566,8 @@ impl Game {
             // and let the lane's ends hide the rest.
             SHARED_LOOKAHEAD_MS
         } else {
-            (lane_len + BIG_R) as f64 / (self.min_velocity * scroll.speed * scroll.min_factor())
+            (lane_len + BIG_R) as f64
+                / (self.view.min_velocity * scroll.speed * scroll.min_factor())
                 + warp.abs()
         };
 
@@ -516,9 +576,12 @@ impl Game {
             .map
             .notes
             .partition_point(|n| n.time < vt.min(t) - lookahead.max(20_000.0));
-        self.visible.clear();
-        let first_block = self.note_blocks.partition_point(|b| b.range.end <= start);
-        for block in &self.note_blocks[first_block..] {
+        self.view.visible.clear();
+        let first_block = self
+            .view
+            .note_blocks
+            .partition_point(|b| b.range.end <= start);
+        for block in &self.view.note_blocks[first_block..] {
             if self.map.notes[block.range.start].time - vt > lookahead {
                 break;
             }
@@ -540,7 +603,7 @@ impl Game {
                 if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
                     continue;
                 }
-                self.visible.push(i);
+                self.view.visible.push(i);
             }
         }
         // Distance along the lane of note `i`. Liar: far off, a triplet sits where a 1/4 would,
@@ -548,7 +611,7 @@ impl Game {
         let note_s = |i: usize| -> f32 {
             let n = &self.map.notes[i];
             let s = s_of(n.time, n.velocity);
-            match self.lies.get(i) {
+            match self.view.lies.get(i) {
                 Some(&lie) if lie != n.time => {
                     let fake = s_of(lie, n.velocity);
                     s + (fake - s) * smooth(0.3, 0.55, (s / lane_len) as f64) as f32
@@ -560,7 +623,7 @@ impl Game {
         let mut shatter = self.shatter_at(vt);
         if mods.has(Mod::Shatter) {
             let mut on = [[0u32; 2]; 4];
-            for &i in &self.visible {
+            for &i in &self.view.visible {
                 let s = note_s(i);
                 if matches!(self.map.notes[i].kind, Kind::Don | Kind::Kat)
                     && s > 0.0
@@ -908,8 +971,8 @@ impl Game {
             }
         }
         // Roulette: where the speed changes, and to what.
-        let first_section = self.sections.partition_point(|s| s.0 < vt - 3000.0);
-        for &(time, k, vel) in &self.sections[first_section..] {
+        let first_section = self.view.sections.partition_point(|s| s.0 < vt - 3000.0);
+        for &(time, k, vel) in &self.view.sections[first_section..] {
             if time - vt > lookahead {
                 break;
             }
@@ -963,7 +1026,7 @@ impl Game {
         }
         if let Some((j, at)) = self
             .last_judge
-            .filter(|_| !self.hidden.has(Part::Judgements))
+            .filter(|_| !self.view.hidden.has(Part::Judgements))
         {
             let a = (1.0 - (t - at) / 220.0).clamp(0.0, 1.0) as f32;
             if a > 0.0 && j != Judge::Miss && splashes(j) && playfield_look().hit_flash {
@@ -972,8 +1035,8 @@ impl Game {
         }
 
         // Decoys, under the real notes: gone before they'd have to be hit.
-        let first = self.decoys.partition_point(|n| n.time < vt);
-        for (k, n) in self.decoys.iter().enumerate().skip(first) {
+        let first = self.view.decoys.partition_point(|n| n.time < vt);
+        for (k, n) in self.view.decoys.iter().enumerate().skip(first) {
             if n.time - vt > lookahead {
                 break;
             }
@@ -989,7 +1052,7 @@ impl Game {
                     s,
                     n,
                     k,
-                    self.decoy_flows[k],
+                    self.view.decoy_flows[k],
                     if n.kind == Kind::Don { don } else { kat },
                     a,
                     NoteFx::default(),
@@ -1181,7 +1244,7 @@ impl Game {
                 }
             }
         }
-        let mut order = self.visible.clone();
+        let mut order = self.view.visible.clone();
         order.sort_by(|&a, &b| {
             let (na, nb) = (&self.map.notes[a], &self.map.notes[b]);
             nb.time
@@ -1198,7 +1261,8 @@ impl Game {
                     let col = if n.kind == Kind::Don { don } else { kat };
                     match st.judged {
                         // Hit: the note flies up out of the drum (unless the interface toggle hides it).
-                        Some(Judge::Great | Judge::Ok) if self.hidden.has(Part::HitAnimation) => {}
+                        Some(Judge::Great | Judge::Ok)
+                            if self.view.hidden.has(Part::HitAnimation) => {}
                         Some(Judge::Great)
                             if self.defense.as_ref().is_some_and(|d| d.shot[i].is_some()) => {}
                         Some(Judge::Great | Judge::Ok) => {
@@ -1604,8 +1668,8 @@ impl Game {
         // Kiai: every head on screen takes its own flash on the beat, in its own colour
         // brightened, added over everything drawn, so a pile of fake sliders under one note (a
         // "shiny") lights it brighter the deeper it is. Stable's `UpdateKiai`; see `kiai_flash`.
-        if self.kiai_effects {
-            for &i in &self.visible {
+        if self.view.kiai_effects {
+            for &i in &self.view.visible {
                 let n = &self.map.notes[i];
                 let r = if n.big { BIG_R } else { NOTE_R };
                 let sprite = if n.big {
@@ -1757,8 +1821,8 @@ impl Game {
         }
         // Moved off the drum, it's drawn with the rest of the interface.
         if self.stats.combo >= 2
-            && !self.hidden.has(Part::Combo)
-            && self.hud.place(Part::Combo).is_none()
+            && !self.view.hidden.has(Part::Combo)
+            && self.view.hud.place(Part::Combo).is_none()
         {
             let s = self.stats.combo.to_string();
             let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
@@ -1767,13 +1831,13 @@ impl Game {
                     drum_x,
                     combo_y(skin_size),
                     skin_size,
-                    rgba(self.hud.colour(Part::Combo).unwrap_or(WHITE), 1.0),
+                    rgba(self.view.hud.colour(Part::Combo).unwrap_or(WHITE), 1.0),
                     Upright::Number(Font::Combo, s),
                 ));
             } else {
                 let size = if s.len() > 3 { 12.0 } else { 16.0 };
                 let col = if crossfire { 0xe8e8f0 } else { 0x1d1d26 };
-                let col = self.hud.colour(Part::Combo).unwrap_or(col);
+                let col = self.view.hud.colour(Part::Combo).unwrap_or(col);
                 texts.push((drum_x, combo_y(size), size, rgba(col, 1.0), s));
             }
         }
@@ -1781,8 +1845,8 @@ impl Game {
         // Judgement text.
         if let Some((j, at)) = self.last_judge.filter(|&(j, _)| {
             splashes(j)
-                && !self.hidden.has(Part::Judgements)
-                && self.hud.place(Part::Judgements).is_none()
+                && !self.view.hidden.has(Part::Judgements)
+                && self.view.hud.place(Part::Judgements).is_none()
         }) {
             let age = (t - at) as f32;
             if age < 450.0 {
@@ -1806,7 +1870,7 @@ impl Game {
                         HIT_X + drum,
                         LANE_Y - h / 2.0 - age * 0.02,
                         h,
-                        rgba(self.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
+                        rgba(self.view.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
                         Upright::Image(sprite),
                     ));
                 } else {
@@ -1814,7 +1878,10 @@ impl Game {
                         HIT_X + drum,
                         lane_top - 30.0 - age * 0.02,
                         15.0,
-                        rgba(self.hud.colour(Part::Judgements).unwrap_or(j.color()), a),
+                        rgba(
+                            self.view.hud.colour(Part::Judgements).unwrap_or(j.color()),
+                            a,
+                        ),
                         j.label().to_string(),
                     ));
                 }
@@ -1947,8 +2014,8 @@ impl Game {
         self.ease_field_boxes(boxes, t);
         // A lane that's where it always is has nothing to go by.
         let plain = geo.rail.is_none() && !mania && !crossfire;
-        self.lane_path = if plain { Vec::new() } else { path };
-        self.lane_half = half;
+        self.view.lane_path = if plain { Vec::new() } else { path };
+        self.view.lane_half = half;
         let dest = [dest[0] + dx, dest[1] + dy];
         // Notes drawn over every effect leave a hole where they were (nothing moves in the
         // list, which clips count by), and come back on top once the effects are on.
@@ -1985,7 +2052,7 @@ impl Game {
         }
         let [x0, y0, x1, y1] = local_zone;
         let (x0, x1) = (flip_x(x0).min(flip_x(x1)), flip_x(x0).max(flip_x(x1)));
-        self.zone = Some(turned_box(
+        self.view.zone = Some(turned_box(
             [x0, y0, x1 - x0, y1 - y0],
             pivot,
             angle,
@@ -2171,17 +2238,17 @@ impl Game {
     /// and on a frozen clock that shook the stopped lane.
     pub fn set_visual_offset(&mut self, ms: f64) {
         if self.paused.is_none() {
-            self.visual_offset = ms;
+            self.view.visual_offset = ms;
         }
     }
 
     /// Map time the lane is drawn at: `time`, `visual_offset` real ms ahead.
     pub(super) fn visual_time(&self) -> f64 {
-        if self.visual_offset == 0.0 {
+        if self.view.visual_offset == 0.0 {
             self.time
         } else {
             self.speed
-                .map(self.raw_time - self.offset + self.visual_offset)
+                .map(self.raw_time - self.offset + self.view.visual_offset)
         }
     }
 
