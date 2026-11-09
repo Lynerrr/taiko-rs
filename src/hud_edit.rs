@@ -1032,9 +1032,9 @@ mod tests {
     /// A frame of the editor, as the game draws it.
     fn frame(ed: &mut Editor, cfg: &Config, g: &mut Game, c: &mut Canvas) {
         c.clear(853.3);
-        g.hud = cfg.hud;
-        g.hud_area = cfg.playfield_area;
-        g.hidden = cfg.hud.off;
+        g.view.hud = cfg.hud;
+        g.view.hud_area = cfg.playfield_area;
+        g.view.hidden = cfg.hud.off;
         g.draw_parts(c);
         ed.draw(c, cfg, g);
     }
@@ -1122,8 +1122,8 @@ mod tests {
         let mut l = Layout::default();
         l.off = hud::Parts::NONE;
         set(&mut l.counter);
-        g.hud = l;
-        g.hidden = {
+        g.view.hud = l;
+        g.view.hidden = {
             let mut hidden = hud::Parts::ALL;
             hidden.toggle(Part::Counts);
             hidden
@@ -1329,9 +1329,9 @@ mod tests {
             g.draw_parts(&mut c);
             c.shapes.len()
         };
-        g.hidden = Layout::default().off;
+        g.view.hidden = Layout::default().off;
         let without = draw(&g);
-        g.hidden = hud::Parts::NONE;
+        g.view.hidden = hud::Parts::NONE;
         assert!(draw(&g) > without);
     }
 

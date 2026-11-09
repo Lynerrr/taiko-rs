@@ -1276,7 +1276,7 @@ impl Preview {
         let full_w = c.width;
         let start = c.shapes.len();
         c.width = lane_w;
-        game.kiai_effects = self.kiai_effects;
+        game.view.kiai_effects = self.kiai_effects;
         game.draw_playfield(c, scroll_speed);
         let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);

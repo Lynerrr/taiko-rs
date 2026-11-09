@@ -71,8 +71,13 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
         assert_eq!(game.map.notes.len(), 2, "the map as the editor has it");
         assert!(!game.record, "nothing is kept");
         assert!(game.mods.has(mods::Mod::NoFail));
-        assert!(game.banner.as_deref().is_some_and(|b| b.contains("TEST")));
-        assert!(game.test_play);
+        assert!(
+            game.view
+                .banner
+                .as_deref()
+                .is_some_and(|b| b.contains("TEST"))
+        );
+        assert!(game.view.test_play);
     }
     // A retry plays the editor's map again.
     s.restart_map();
@@ -147,11 +152,14 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
             unreachable!()
         };
         assert!(!game.record, "nothing is kept");
-        assert!(game.test_play);
+        assert!(game.view.test_play);
         let auto = game.mods.has(mods::Mod::Autoplay);
         assert_eq!(game.mods.has(mods::Mod::NoFail), !auto);
         assert_eq!(
-            game.banner.as_deref().is_some_and(|b| b.contains("AUTO")),
+            game.view
+                .banner
+                .as_deref()
+                .is_some_and(|b| b.contains("AUTO")),
             auto
         );
         auto

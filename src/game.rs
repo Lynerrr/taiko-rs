@@ -426,11 +426,8 @@ pub struct Game {
     last_judge: Option<(Judge, f64)>,
     recent_errors: VecDeque<(f64, f64, Judge)>,
     strong: Option<StrongPending>,
-    min_velocity: f64,
-    note_blocks: Vec<NoteBlock>,
     /// The beat length covering the most map time: what pop-up fake sliders fade in by.
     main_beat: f64,
-    visible: Vec<usize>,
     /// The client gimmick of a `.tko` map: visual motion only, never read by judging.
     tko: Option<crate::tko::runtime::Runtime>,
     /// Raw audio position seen by the last update, for diagnostics.
@@ -461,36 +458,8 @@ pub struct Game {
     /// The scroll speed setting this play is at: fixed when it starts (it counts for pp), and
     /// a replay's own.
     pub scroll_speed: f64,
-    /// Draw the HP bar (not in calibration).
-    pub show_hp: bool,
     /// Calibration: play no hitsounds on presses.
     pub mute_hits: bool,
-    /// Show the live offset suggestion under the hit error meter.
-    pub show_offset_hint: bool,
-    /// The key that applies it, if it has one.
-    pub offset_key: Option<String>,
-    /// Kiai time tints the lane and pulses the hit target.
-    pub kiai_effects: bool,
-    /// Interface parts hidden (the interface toggle).
-    pub hidden: crate::hud::Parts,
-    /// Where the interface's parts go, and the playfield area they may be attached to.
-    pub hud: crate::hud::Layout,
-    pub hud_area: crate::layout::Area,
-    /// A stand-in play for the interface editor: every part shows, with made-up numbers.
-    hud_sample: bool,
-    /// Where mods have the lane this frame, for the parts attached to it.
-    field_boxes: Option<hud::FieldBoxes>,
-    /// The lane's middle on the screen, in the playfield's units, while mods bend or move it, and
-    /// how far its edges are from that.
-    lane_path: Vec<(f32, f32)>,
-    lane_half: f32,
-    /// When `field_boxes` last moved, to ease it.
-    field_at: f64,
-    /// Parts mods have moved off their places: their top and when it was worked out.
-    settled: std::cell::Cell<[Option<(f32, f64)>; Part::ALL.len()]>,
-    /// Display latency to make up for (real ms): the lane is drawn as it will be this much later,
-    /// when the frame reaches the screen. Judging stays on the audio clock.
-    pub visual_offset: f64,
     /// How presses that don't make a hit are judged.
     pub mash: Mash,
     pub scoring: Scoring,
@@ -507,9 +476,6 @@ pub struct Game {
     pub log_inputs: bool,
     /// A replay stopped where it is, with no pause menu (`toggle_held`).
     pub held: bool,
-    /// Someone else's play being watched: no pause menu (it holds while they pause) and no
-    /// skip prompt (it follows their skips).
-    pub watched: bool,
     pub inputs: Vec<(f64, u8)>,
     /// Playing a replay back: its presses and the next one due; and whose it is.
     pub replay: Option<(Vec<(f64, u8)>, usize)>,
@@ -517,10 +483,6 @@ pub struct Game {
     /// The pp counter: works out the play's pp so far (`pp::Live`), and its latest answer.
     pub live_pp: Option<crate::pp::Live>,
     live_pp_value: Option<f64>,
-    /// Text shown at the top ("REPLAY - x", "SPECTATING - x").
-    pub banner: Option<String>,
-    /// A test play from the map editor: leaving goes back to it.
-    pub test_play: bool,
     /// When set, every hitsound played is logged (map time, sound, volume), e.g. for video audio.
     pub sfx_log: Option<Vec<(f64, Sfx, f32)>>,
     /// A miss broke a combo of 20 or more at this map time: the combo break sound is due.
@@ -575,22 +537,11 @@ pub struct Game {
     pub replay_timeline: Option<(crate::difficulty::Graph, Vec<f64>)>,
     /// Drop / Barrel Roll: where each kiai starts (map ms) and the beat length there.
     kiai_starts: Vec<(f64, f64)>,
-    /// Roulette: where each 4-bar section starts (map ms), its speed, and the velocity its
-    /// marker scrolls at.
-    sections: Vec<(f64, f64, f64)>,
-    /// Decoy: the fake notes (never judged).
-    decoys: Vec<beatmap::Note>,
     /// Each note's rhythm: the stream it's part of (see `flows`).
     flows: Vec<u8>,
-    /// Decoy: the rhythm each fake note pretends to be part of (the note before it's).
-    decoy_flows: Vec<u8>,
-    /// Liar: the map time each note is drawn at far off (its own, or a 1/4's for a triplet).
-    lies: Vec<f64>,
     /// Overtime: when (map ms) he shows up, and the next one due.
     scares: Vec<f64>,
     next_scare: usize,
-    /// Multiverse: where the focus moves to another playfield.
-    focus_switches: Vec<FocusSwitch>,
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     shapeshift: shapeshift::Config,
     /// Tact: how often notes move.
@@ -599,9 +550,9 @@ pub struct Game {
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
     universes: Option<[Universe; multiverse::COUNT]>,
-    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas): the lane,
-    /// wherever the mods took it; with Multiverse, the playfield in focus.
-    zone: Option<[f32; 4]>,
+    /// What only drawing the play needs: the HUD's layout, what's on screen, the mods' looks
+    /// (`field::View`).
+    pub view: View,
 }
 
 /// Decoy: how opaque the fake notes are next to real ones.
@@ -1301,10 +1252,7 @@ impl Game {
             last_judge: None,
             recent_errors: VecDeque::new(),
             strong: None,
-            min_velocity,
-            note_blocks,
             main_beat,
-            visible: Vec::new(),
             tko,
             last_audio_ms: None,
             clock_vs_audio: (0.0, 0, 0.0),
@@ -1319,21 +1267,7 @@ impl Game {
             played_at: None,
             last_frame_time: f64::NEG_INFINITY,
             scroll_speed: 1.0,
-            show_hp: true,
             mute_hits: false,
-            show_offset_hint: false,
-            offset_key: None,
-            kiai_effects: true,
-            hidden: crate::hud::Layout::default().off,
-            hud: crate::hud::Layout::default(),
-            hud_area: crate::layout::Area::FULL,
-            hud_sample: false,
-            field_boxes: None,
-            lane_path: Vec::new(),
-            lane_half: 0.0,
-            field_at: 0.0,
-            settled: std::cell::Cell::new([None; Part::ALL.len()]),
-            visual_offset: 0.0,
             mash: Mash::Nearest,
             scoring: Scoring::Standard,
             score_basis: None,
@@ -1342,14 +1276,11 @@ impl Game {
             record: false,
             log_inputs: false,
             held: false,
-            watched: false,
             inputs: Vec::new(),
             replay: None,
             replay_of: None,
             live_pp: None,
             live_pp_value: None,
-            banner: None,
-            test_play: false,
             sfx_log: None,
             combo_break: None,
             ur_scaled_hint: true,
@@ -1373,27 +1304,49 @@ impl Game {
             misses: VecDeque::new(),
             replay_timeline: None,
             kiai_starts,
-            sections,
-            decoys,
             flows,
-            decoy_flows,
-            lies,
             scares,
             next_scare: 0,
-            focus_switches,
             shapeshift,
             tact: crate::tact::get(),
             shape_order,
             universes: None,
-            zone: None,
             defense: None,
+            view: View {
+                min_velocity,
+                note_blocks,
+                visible: Vec::new(),
+                show_hp: true,
+                show_offset_hint: false,
+                offset_key: None,
+                kiai_effects: true,
+                hidden: crate::hud::Layout::default().off,
+                hud: crate::hud::Layout::default(),
+                hud_area: crate::layout::Area::FULL,
+                hud_sample: false,
+                field_boxes: None,
+                lane_path: Vec::new(),
+                lane_half: 0.0,
+                field_at: 0.0,
+                settled: std::cell::Cell::new([None; Part::ALL.len()]),
+                visual_offset: 0.0,
+                watched: false,
+                banner: None,
+                test_play: false,
+                sections,
+                decoys,
+                decoy_flows,
+                lies,
+                focus_switches,
+                zone: None,
+            },
         }
     }
 
     /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas it was drawn
     /// on), for views that show only that (spectating everyone at once).
     pub fn play_zone(&self) -> Option<[f32; 4]> {
-        self.zone
+        self.view.zone
     }
 
     /// Plays with someone else's mod settings (a lobby host's): Multiverse's universes and
