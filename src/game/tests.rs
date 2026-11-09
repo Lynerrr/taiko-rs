@@ -386,6 +386,24 @@ fn the_outro_can_be_skipped_only_once_every_note_is_judged() {
     assert!(g.skip_outro());
 }
 
+#[test]
+fn drawing_multiverse_leaves_the_play_s_mods_alone() {
+    // Each universe is drawn with its own mods on top of the play's, passed to the drawing, not
+    // set on the play (which judging reads).
+    draw_with_defaults();
+    let mut g = modded("MV");
+    g.use_mod_settings(Some(multiverse::defaults()), None);
+    g.set_time(3000.0);
+    let before = g.mods;
+    let mut c = Canvas {
+        width: 853.3,
+        ..Default::default()
+    };
+    g.draw_playfield(&mut c, 1.0);
+    assert_eq!(g.mods, before);
+    assert!(!c.shapes.is_empty());
+}
+
 fn modded(mods: &str) -> Game {
     let map = beatmap::calibration_map(500.0, 0, 64);
     Game::with_mods(
@@ -2154,10 +2172,10 @@ fn drop_freezes_far_notes_and_releases_them_by_the_kiai() {
     let g = kiai_game("DR");
     let cp = g.map.control_points[0];
     // Held from two beats before (8000 - 1000) for a beat and a half, back to 0 at the kiai.
-    assert_eq!(g.extra_warp(6900.0, &cp), 0.0);
-    assert!((g.extra_warp(7500.0, &cp) - 500.0).abs() < 1e-9);
-    assert!(g.extra_warp(7999.0, &cp) < 1.0);
-    assert_eq!(g.extra_warp(8100.0, &cp), 0.0);
+    assert_eq!(g.extra_warp(6900.0, &cp, g.mods), 0.0);
+    assert!((g.extra_warp(7500.0, &cp, g.mods) - 500.0).abs() < 1e-9);
+    assert!(g.extra_warp(7999.0, &cp, g.mods) < 1.0);
+    assert_eq!(g.extra_warp(8100.0, &cp, g.mods), 0.0);
 }
 
 #[test]
@@ -2232,7 +2250,7 @@ fn a_faster_universe_shows_its_notes_further_out() {
             width: 853.3,
             ..Default::default()
         };
-        g.draw_field(&mut c, 1.0, Focus::FULL, &uni);
+        g.draw_field(&mut c, 1.0, Focus::FULL, &uni, g.mods);
         far.push(g.view.visible.len());
     }
     // Faster notes cross the lane sooner: fewer of the map's are on it at once.
@@ -2985,7 +3003,7 @@ fn rails_bend_the_lane_without_speeding_notes_up() {
         for mods in ["ZZ", "UT", "SI", "LP", "EB", "SS"] {
             let g = kiai_game(mods);
             for t in [0.0, 20_000.0, 50_000.0] {
-                let (rail, len, _, zoom) = g.rail_at(t, w, None);
+                let (rail, len, _, zoom) = g.rail_at(t, w, None, g.mods);
                 assert!(zoom <= 1.0);
                 assert_eq!(lane_stretch(rail.is_some(), len, w), 1.0, "{mods} at {w}");
             }
@@ -2999,20 +3017,20 @@ fn rails_bend_the_lane_without_speeding_notes_up() {
 fn a_tko_lane_clip_bends_the_lane_over_the_players_own_and_keeps_note_speed() {
     let w = 853.3;
     let plain = game();
-    assert!(plain.rail_at(0.0, w, None).0.is_none());
+    assert!(plain.rail_at(0.0, w, None, plain.mods).0.is_none());
     for k in 0..LANE_SHAPES_OF_CLIPS.len() {
         for u in [0.25, 0.5, 1.0] {
-            let (rail, len, _, zoom) = plain.rail_at(0.0, w, Some((k, u)));
+            let (rail, len, _, zoom) = plain.rail_at(0.0, w, Some((k, u)), plain.mods);
             assert!(rail.is_some() && zoom <= 1.0 + 1e-6);
             assert_eq!(lane_stretch(true, len, w), 1.0, "shape {k} at {u}");
         }
     }
     // The map's spiral goes before the player's zigzag.
     let zz = kiai_game("ZZ");
-    let theirs = zz.rail_at(0.0, w, None).1;
-    let map = zz.rail_at(0.0, w, Some((2, 1.0))).1;
+    let theirs = zz.rail_at(0.0, w, None, zz.mods).1;
+    let map = zz.rail_at(0.0, w, Some((2, 1.0)), zz.mods).1;
     assert_ne!(theirs, map);
-    assert_eq!(map, plain.rail_at(0.0, w, Some((2, 1.0))).1);
+    assert_eq!(map, plain.rail_at(0.0, w, Some((2, 1.0)), plain.mods).1);
 }
 
 #[test]
