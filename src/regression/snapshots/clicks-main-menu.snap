@@ -11,5 +11,5 @@ Music(Prev) @273,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In son
 Music(Toggle) @303,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
 Music(Next) @333,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
 Music(Open) @363,449 -> Select +"+ on a song adds it" +"0:00" +"1 songs" +"< menu" +"All songs" +"D K song   F J pause   L love   Tab folders" +9 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -15 more
-Changelog @808,9 -> Select +"Close" +"Running 1s   In songs 0s" +"Up/Down, wheel: scroll   Esc: close" +"What's new" +"a local build: the latest changes" +"blocked in tests: no programs, no internet" -"Running 0s   In songs 0s" -"log in" -"what's new"
+Changelog @808,9 -> Select +"Close" +"Running 1s   In songs 0s" +"Up/Down, wheel: scroll   Esc: close" +"What's new" +"blocked in tests: no programs, no internet" -"Running 0s   In songs 0s" -"log in" -"what's new"
 Account @740,9 -> MpMenu +"127.0.0.1:9   no connection" +"< BACK" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +6 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -13 more
