@@ -32,4 +32,31 @@ mod tests {
             assert!(file.contains(piece), "`{piece}` isn't in app/{home}");
         }
     }
+
+    /// What only the shell uses is the shell's own: the rest of the game can't reach the loop,
+    /// the app's window state or the crash window.
+    #[test]
+    fn the_shell_keeps_its_loop_and_crash_window_to_itself() {
+        for (file, pieces) in [
+            (
+                include_str!("run_loop.rs"),
+                &["struct App {", "fn render_loop(", "fn sleep_until("][..],
+            ),
+            (
+                include_str!("crash.rs"),
+                &["fn log_crashes(", "fn crash_report(", "fn crash_box("][..],
+            ),
+            (
+                include_str!("gpu.rs"),
+                &["fn drawing_hook(", "static VULKAN:"][..],
+            ),
+        ] {
+            for piece in pieces {
+                assert!(
+                    file.contains(&format!("pub(super) {piece}")),
+                    "`{piece}` is open to more than app/"
+                );
+            }
+        }
+    }
 }

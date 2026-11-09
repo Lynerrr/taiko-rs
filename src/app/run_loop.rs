@@ -12,7 +12,7 @@ use super::shell::whats_new;
 /// Puts an F12 screenshot on the clipboard, saves it as the next free `taiko-rs-N.png` in the
 /// Screenshots folder, or both (`cfg.screenshot_to`), off the render thread (the encoding takes
 /// a moment), and says where it went.
-pub(crate) fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
+pub(super) fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
     let state = state.clone();
     {
         let mut s = lock(&state);
@@ -71,7 +71,7 @@ pub(crate) fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
 }
 
 /// Sleeps until `deadline` with sub-100µs precision: coarse sleep, then spin the last stretch.
-pub(crate) fn sleep_until(deadline: Instant) {
+pub(super) fn sleep_until(deadline: Instant) {
     const SPIN: Duration = Duration::from_micros(500);
     loop {
         let now = Instant::now();
@@ -118,7 +118,7 @@ pub(crate) enum FileDrag {
     Drop(Vec<PathBuf>),
 }
 
-pub(crate) fn render_loop(
+pub(super) fn render_loop(
     state: Arc<Mutex<State>>,
     mut renderer: Renderer,
     proxy: EventLoopProxy<UserEvent>,
@@ -541,23 +541,23 @@ pub(crate) fn render_loop(
     let _ = proxy.send_event(UserEvent::Stopped);
 }
 
-pub(crate) struct App {
-    pub(crate) state: Arc<Mutex<State>>,
+pub(super) struct App {
+    pub(super) state: Arc<Mutex<State>>,
     /// Last cursor icon set, so it is only changed when the hover target changes.
-    pub(crate) cursor: CursorIcon,
+    pub(super) cursor: CursorIcon,
     /// The pixel pointer (None if the platform refused it: the system one is used).
-    pub(crate) cursors: Option<cursor::Cursors>,
+    pub(super) cursors: Option<cursor::Cursors>,
     /// The accent `cursors` were made in.
-    pub(crate) cursor_accent: u32,
-    pub(crate) cursor_hidden: bool,
-    pub(crate) window: Option<Arc<Window>>,
+    pub(super) cursor_accent: u32,
+    pub(super) cursor_hidden: bool,
+    pub(super) window: Option<Arc<Window>>,
     /// The window takes input methods (Japanese, ...): only while text is being typed, so a
     /// song's keys never wait on one.
-    pub(crate) ime: bool,
+    pub(super) ime: bool,
     /// Kept to make a surface for each new window (Android, after coming back from the background).
-    pub(crate) instance: Option<wgpu::Instance>,
-    pub(crate) render_thread: Option<JoinHandle<()>>,
-    pub(crate) proxy: EventLoopProxy<UserEvent>,
+    pub(super) instance: Option<wgpu::Instance>,
+    pub(super) render_thread: Option<JoinHandle<()>>,
+    pub(super) proxy: EventLoopProxy<UserEvent>,
 }
 
 impl App {

@@ -8,7 +8,7 @@ use super::run_loop::App;
 
 /// Starts loading update notes in the background, and notes this build as started.
 /// The caller keeps the view pending until a nonempty list of changes is available.
-pub(crate) fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
+pub(super) fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
     let build = update::BUILD?;
     if cfg.last_build == build {
         return None;

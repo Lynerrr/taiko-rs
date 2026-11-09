@@ -5,13 +5,13 @@
 use crate::*;
 
 /// The latest crash's report, kept until the next start has offered to copy it.
-pub(crate) const CRASH_REPORT: &str = "crash-report.txt";
+pub(super) const CRASH_REPORT: &str = "crash-report.txt";
 
 /// A crash leaves `crash.log` next to the scores (release builds on Windows have no console to
 /// print it to), and the report on its own for the next start to offer (`crash_report`). On
 /// Windows the report also goes on the clipboard and a message box says to send it in, since
 /// the game just vanishes otherwise.
-pub(crate) fn log_crashes() {
+pub(super) fn log_crashes() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let at = std::time::SystemTime::now()
@@ -287,7 +287,7 @@ pub(crate) mod native_crashes {
 
 /// A message box (Windows), there even without a window of the game's.
 #[cfg(windows)]
-pub(crate) fn crash_box(text: &str) {
+pub(super) fn crash_box(text: &str) {
     #[link(name = "user32")]
     unsafe extern "system" {
         fn MessageBoxW(
@@ -322,13 +322,13 @@ pub(crate) static SEND_CRASH_REPORTS: AtomicBool = AtomicBool::new(true);
 
 /// What the game is running on (the graphics card and API), for crash reports: set once the
 /// graphics have started.
-pub(crate) static CRASH_CONTEXT: OnceLock<String> = OnceLock::new();
+pub(super) static CRASH_CONTEXT: OnceLock<String> = OnceLock::new();
 
 /// The screen (and map and mods) when it crashed: set as screens change, never under the
 /// state's lock (the crashing thread may hold that one).
 pub(crate) static CRASH_SCENE: Mutex<String> = Mutex::new(String::new());
 
-pub(crate) fn crash_context() -> String {
+pub(super) fn crash_context() -> String {
     let mut out = CRASH_CONTEXT
         .get()
         .map(|c| format!("{c}\n"))
@@ -345,7 +345,7 @@ pub(crate) fn crash_context() -> String {
 /// The crash window's words on what happens to the report: `otherwise` is how to send it in
 /// by hand, when the game doesn't.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub(crate) fn crash_box_words(otherwise: &str) -> String {
+pub(super) fn crash_box_words(otherwise: &str) -> String {
     if SEND_CRASH_REPORTS.load(Ordering::Relaxed) {
         "The next start sends the crash report to the developers by itself, so it can be fixed (Settings > Online > Send crash reports turns that off).".into()
     } else {
@@ -390,7 +390,7 @@ pub(crate) fn send_crash_report(server: &str, report: &str) -> bool {
 }
 
 /// The report of a crash last time that hasn't been offered yet (and forgets it).
-pub(crate) fn crash_report() -> Option<String> {
+pub(super) fn crash_report() -> Option<String> {
     let file = config::data_dir()?.join(CRASH_REPORT);
     let text = std::fs::read_to_string(&file).ok()?;
     let _ = std::fs::remove_file(&file);
