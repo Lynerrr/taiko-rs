@@ -24,7 +24,11 @@ TIMING = re.compile(r'AUDIT (\S+): p50_us=([0-9.]+) p95_us=([0-9.]+)')
 COUNT = re.compile(r'AUDIT (\S+): ([0-9]+)\s*$')
 
 # Timings of other threads, locks and the file system: too noisy on shared runners to gate on.
-NOISY = ('skin/async/worker-completion', 'mutex/', 'hash/first/', 'game/prepare/')
+# Sorting 50,000 titles moves ~20 ms of allocations: on runners it read +12 % and +30 % (over
+# five rounds) on code that doesn't touch it, and the same on a re-run; the 10,000 case gates the
+# same sort.
+NOISY = ('skin/async/worker-completion', 'mutex/', 'hash/first/', 'game/prepare/',
+         'select/title-sort/50000')
 
 
 def load(paths):
