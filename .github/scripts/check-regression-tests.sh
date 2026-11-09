@@ -12,7 +12,7 @@ changed=$(git diff --name-only "$range")
 # Client code: the game's sources and what is built into it. The server, docs, CI and the
 # platform packaging (android/, windows/, macos/) are not.
 client=$(printf '%s\n' "$changed" |
-    grep -E '^(src/|assets/|vendor/|build\.rs$|Cargo\.toml$)' |
+    grep -E '^(src/|crates/|assets/|vendor/|build\.rs$|Cargo\.toml$)' |
     grep -vE '^src/regression/|_tests?\.rs$' || true)
 
 if [ -z "$client" ]; then
@@ -21,16 +21,16 @@ if [ -z "$client" ]; then
 fi
 
 # Tests: the regression suite (code or golden files), test modules, or new #[test]s anywhere
-# in the client.
+# in the client and its crates.
 tests=$(printf '%s\n' "$changed" | grep -E '^src/regression/|_tests?\.rs$' || true)
-added=$(git diff --unified=0 "$range" -- src | grep -cE '^\+.*#\[(test|tokio::test)\]' || true)
+added=$(git diff --unified=0 "$range" -- src crates | grep -cE '^\+.*#\[(test|tokio::test)\]' || true)
 
 echo "Client files changed:"
 printf '  %s\n' $client
 if [ -n "$tests" ] || [ "${added:-0}" -gt 0 ]; then
     echo "Tests changed with them:"
     [ -n "$tests" ] && printf '  %s\n' $tests
-    [ "${added:-0}" -gt 0 ] && echo "  $added new #[test] function(s) in src/"
+    [ "${added:-0}" -gt 0 ] && echo "  $added new #[test] function(s) in src/ or crates/"
     exit 0
 fi
 

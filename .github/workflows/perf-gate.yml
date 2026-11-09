@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "src/**"
+      - "crates/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "build.rs"

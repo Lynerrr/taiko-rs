@@ -3418,6 +3418,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "taiko-logic"
+version = "0.1.0"
+
+[[package]]
 name = "taiko-rs"
 version = "0.1.0"
 dependencies = [
@@ -3437,6 +3441,7 @@ dependencies = [
  "serde_json",
  "souvlaki",
  "symphonia",
+ "taiko-logic",
  "ureq",
  "wayland-backend",
  "wayland-client",

@@ -14,6 +14,8 @@ rosu-pp = "4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 symphonia = { version = "0.6", features = ["mp3", "ogg", "vorbis", "wav", "pcm", "flac"] }
+# The game's rules, apart from the client (crates/taiko-logic).
+taiko-logic = { path = "crates/taiko-logic" }
 ureq = "3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 wgpu = "30"
@@ -46,6 +48,13 @@ libc = "0.2"
 jni = "0.22"
 # AAudio's low-latency mode (and a real-time audio thread); without it hitsounds lag by tens of ms.
 cpal = { version = "0.18", features = ["realtime"] }
+
+# The client and the crates split out of it build, lint and test together: plain `cargo test`
+# covers them all. The server and the patched vendor crates stay crates of their own.
+[workspace]
+members = ["crates/taiko-logic"]
+default-members = [".", "crates/taiko-logic"]
+exclude = ["server", "vendor"]
 
 [features]
 default = ["pipewire"]

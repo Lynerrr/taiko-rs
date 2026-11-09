@@ -5,6 +5,18 @@ use crate::render::{accent, rgba};
 use crate::tact::*;
 use winit::keyboard::KeyCode;
 
+/// Step `i`'s name.
+fn step_name(i: usize) -> &'static str {
+    match i {
+        0 => tr!("2 bars", "2小節", "2 такта"),
+        1 => tr!("1 bar", "1小節", "1 такт"),
+        2 => tr!("1/2 bar", "1/2小節", "1/2 такта"),
+        3 => tr!("1 beat", "1拍", "1 доля"),
+        4 => tr!("1/2 beat", "1/2拍", "1/2 доли"),
+        _ => tr!("1/4 beat", "1/4拍", "1/4 доли"),
+    }
+}
+
 /// The Tact setup (a tab of the mod customization): one row of steps.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Setup {

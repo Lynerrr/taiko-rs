@@ -85,7 +85,7 @@ for abi in $abis; do
         x86) triple=i686-linux-android ;;
         *) echo "unknown ABI $abi" >&2; exit 1 ;;
     esac
-    cargo ndk -t "$abi" -P "$min_sdk" rustc --lib --profile "$profile" --locked --crate-type cdylib
+    cargo ndk -t "$abi" -P "$min_sdk" rustc -p taiko-rs --lib --profile "$profile" --locked --crate-type cdylib
     mkdir -p "$stage/lib/$abi"
     "$strip" -o "$stage/lib/$abi/libtaiko_rs.so" "target/$triple/$profile/libtaiko_rs.so"
 done
