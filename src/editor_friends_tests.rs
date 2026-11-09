@@ -43,7 +43,10 @@ fn the_editor_scenes_have_no_edge_tab() {
 
 #[test]
 fn the_chip_sits_in_the_menu_bar_clear_of_the_title_and_toggles_the_panel() {
-    crate::render::set_animations(false);
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
     let mut s = editing();
     let [x, y, w, h] = toggle_rect(&mut s).expect("a chip to click");
     assert!(y + h <= 14.0, "inside the menu bar");
@@ -61,7 +64,10 @@ fn the_chip_sits_in_the_menu_bar_clear_of_the_title_and_toggles_the_panel() {
 
 #[test]
 fn the_open_panel_leaves_editor_keys_alone_until_a_field_is_clicked() {
-    crate::render::set_animations(false);
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
     let mut s = editing();
     s.open_social();
     assert!(!s.social_keys());
@@ -84,7 +90,10 @@ fn the_open_panel_leaves_editor_keys_alone_until_a_field_is_clicked() {
 
 #[test]
 fn elsewhere_the_open_panel_takes_the_keyboard_at_once() {
-    crate::render::set_animations(false);
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
     let mut s = crate::layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
     s.scene = Scene::Select;
