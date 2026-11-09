@@ -2,6 +2,24 @@ use super::hud_draw::HP_BAR_Y;
 use super::*;
 
 #[test]
+fn the_play_itself_reaches_for_nothing_that_draws() {
+    // game.rs is the simulation (judging, scoring, HP, replays); drawing lives in game/field.rs and
+    // game/hud_draw.rs. Keeping the drawing layers out of it is what lets it become taiko-logic.
+    let sim = include_str!("../game.rs");
+    for layer in ["render", "hit", "hud", "layout", "style", "skin", "medals"] {
+        assert!(
+            !sim.contains(&format!("crate::{layer}::"))
+                && !sim.contains(&format!("crate::{layer};")),
+            "game.rs names crate::{layer}"
+        );
+    }
+    assert!(!sim.contains("Canvas"), "game.rs draws");
+}
+use crate::hit::Canvas;
+use crate::hud::{self, Part};
+use crate::render::{Shape, Sprite, VIRTUAL_HEIGHT, rgba};
+
+#[test]
 fn lifted_shapes_leave_a_hole_where_they_were_and_nothing_moves() {
     let mut c = Canvas::default();
     for x in [10.0, 20.0, 30.0, 40.0] {
