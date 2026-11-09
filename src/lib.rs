@@ -55,6 +55,7 @@ mod media;
 mod menu;
 mod menu_notes;
 mod mobile;
+mod mod_setup;
 mod mods;
 mod multiplayer;
 mod multiverse;
@@ -554,15 +555,15 @@ struct State {
     mod_select: Option<usize>,
     /// The mod customization over the mod select: the Multiverse tab or the Shapeshift tab (at
     /// most one is open).
-    universe_setup: Option<multiverse::Setup>,
-    shapeshift_setup: Option<shapeshift::Setup>,
+    universe_setup: Option<mod_setup::multiverse::Setup>,
+    shapeshift_setup: Option<mod_setup::shapeshift::Setup>,
     random_setup: Option<String>,
     /// The name being typed for a new mod preset (S or "+ Save" in the mod select).
     preset_naming: Option<String>,
     /// The mod preset a right-click asked to delete, waiting for a yes.
     preset_deleting: Option<usize>,
-    tact_setup: Option<tact::Setup>,
-    od_setup: Option<od_override::Setup>,
+    tact_setup: Option<mod_setup::tact::Setup>,
+    od_setup: Option<mod_setup::od_override::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
     /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
@@ -2183,7 +2184,7 @@ fn draw_preview_chrome(
             tr!("< BACK", "< 戻る", "< НАЗАД")
         };
         settings::back_button(c, 0.0, back, hit::Hit::Key(KeyCode::Escape));
-        let pill = stars::draw_pill(c, c.width, 14.0, 12.0, stars);
+        let pill = crate::style::star_pill(c, c.width, 14.0, 12.0, stars);
         let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
         let room = c.width - 112.0 - pill - 12.0;
         c.text(
@@ -2214,7 +2215,7 @@ fn draw_preview_chrome(
         1.0,
     );
     c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), tag);
-    let pill = stars::draw_pill(c, c.width - 36.0, 22.0, 8.0, stars);
+    let pill = crate::style::star_pill(c, c.width - 36.0, 22.0, 8.0, stars);
     let back = if lobby {
         tr!("Lobby  (Esc)", "ロビー  (Esc)", "Лобби  (Esc)")
     } else {
@@ -11429,11 +11430,13 @@ impl State {
             return;
         }
         self.random_setup = (m == mods::Mod::Random).then(|| self.cfg.random_seed.to_string());
-        self.universe_setup =
-            (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
-        self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
-        self.tact_setup = (m == mods::Mod::Tact).then(|| tact::Setup::new(self.cfg.tact));
-        self.od_setup = (m == mods::Mod::OdOverride).then_some(od_override::Setup);
+        self.universe_setup = (m == mods::Mod::Multiverse)
+            .then(|| mod_setup::multiverse::Setup::new(game::FIRST_FOCUS, 0));
+        self.shapeshift_setup =
+            (m == mods::Mod::Shapeshift).then(mod_setup::shapeshift::Setup::default);
+        self.tact_setup =
+            (m == mods::Mod::Tact).then(|| mod_setup::tact::Setup::new(self.cfg.tact));
+        self.od_setup = (m == mods::Mod::OdOverride).then_some(mod_setup::od_override::Setup);
     }
 
     /// The mod customization's open tab.
@@ -18639,14 +18642,14 @@ impl State {
             Hit::ModPreset(k) => self.apply_mod_preset(k),
             Hit::ModPresetSave => self.start_preset_naming(),
             Hit::UniverseCell(row, col) => {
-                self.universe_setup = Some(multiverse::Setup::new(row, col));
+                self.universe_setup = Some(mod_setup::multiverse::Setup::new(row, col));
                 let dir = if self.modifiers_shift { -1 } else { 1 };
-                multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
+                mod_setup::multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
                 self.universe_action(multiverse::Action::Changed);
             }
             Hit::ShapeshiftCell(row, col) => {
-                self.shapeshift_setup = Some(shapeshift::Setup { row, col });
-                shapeshift::Setup::pick(&mut self.cfg.shapeshift, row, col);
+                self.shapeshift_setup = Some(mod_setup::shapeshift::Setup { row, col });
+                mod_setup::shapeshift::Setup::pick(&mut self.cfg.shapeshift, row, col);
                 self.shapeshift_changed();
             }
             Hit::ShapeshiftMove(dir) => {
@@ -18657,7 +18660,7 @@ impl State {
                 }
             }
             Hit::TactCell(col) => {
-                self.tact_setup = Some(tact::Setup::new(col));
+                self.tact_setup = Some(mod_setup::tact::Setup::new(col));
                 self.tact_changed(col);
             }
             Hit::CustomTab(i) => {
@@ -18666,12 +18669,16 @@ impl State {
                 }
             }
             Hit::UniversePreset(i) => {
-                let action =
-                    multiverse::Setup::load(&mut self.cfg.universes, &self.cfg.universe_presets, i);
+                let action = mod_setup::multiverse::Setup::load(
+                    &mut self.cfg.universes,
+                    &self.cfg.universe_presets,
+                    i,
+                );
                 self.universe_action(action);
             }
             Hit::UniversePresetDelete(i) => {
-                let action = multiverse::Setup::delete(&mut self.cfg.universe_presets, i);
+                let action =
+                    mod_setup::multiverse::Setup::delete(&mut self.cfg.universe_presets, i);
                 self.universe_action(action);
             }
             Hit::UpdateSet(i) => self.update_set(i),

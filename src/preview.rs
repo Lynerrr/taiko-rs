@@ -1198,7 +1198,7 @@ impl Preview {
             &mapper,
         );
         cy += 13.0 + 6.0;
-        crate::stars::draw_pill(c, x + w - 14.0, cy + 3.0, 9.0, stars);
+        crate::style::star_pill(c, x + w - 14.0, cy + 3.0, 9.0, stars);
         for line in &version {
             c.text(lx, cy + 3.0, 9.0, rgba(accent(), 1.0), line);
             cy += body_step;

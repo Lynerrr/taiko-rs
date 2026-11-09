@@ -15,7 +15,7 @@ use crate::config::RATE_RANGE;
 use crate::hit::{Canvas, Hit, HitBox};
 use crate::render::{VIRTUAL_HEIGHT, accent, approach, rgba};
 use crate::settings::{self, Control, ITEMS, Kind, SECTIONS};
-use crate::{Scene, State, mods, stars};
+use crate::{Scene, State, mods};
 
 /// The song list's width on a `w` wide screen.
 pub fn select_list_w(w: f32) -> f32 {
@@ -1231,7 +1231,7 @@ impl State {
                 }
                 let found = self.stars.get(i, rate);
                 let py = dy + (DIFF_H - SMALL - 6.0) / 2.0;
-                let pill = stars::draw_pill(c, dx + dw - 10.0, py, SMALL, found);
+                let pill = crate::style::star_pill(c, dx + dw - 10.0, py, SMALL, found);
                 let name = &self.library[i].meta.version;
                 let name = Canvas::fit(MEDIUM, dw - pill - 34.0, name);
                 let ny = dy + (DIFF_H - MEDIUM) / 2.0;
@@ -1850,7 +1850,7 @@ impl State {
                     c.text(ax - 12.0 - lw, ty, SMALL, rgba(colour, 1.0), label);
                     lw
                 }
-                None => stars::draw_pill(c, ax - 12.0, ty, SMALL, hi),
+                None => crate::style::star_pill(c, ax - 12.0, ty, SMALL, hi),
             };
             let room = ax - pill - 40.0;
             let title = Canvas::fit(MEDIUM, room, &set.title);

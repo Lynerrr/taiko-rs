@@ -545,10 +545,10 @@ fn assert_every_screen_fits() {
     s.open_customization(mods::Mod::Shapeshift);
     check(&mut s, "shapeshift setup", &mut out);
     s.cfg.shapeshift.shapes[2].1 = false;
-    s.shapeshift_setup = Some(shapeshift::Setup { row: 3, col: 4 });
+    s.shapeshift_setup = Some(crate::mod_setup::shapeshift::Setup { row: 3, col: 4 });
     check(&mut s, "shapeshift setup, shapes row", &mut out);
     s.shapeshift_setup = None;
-    s.universe_setup = Some(multiverse::Setup::new(3, 7));
+    s.universe_setup = Some(crate::mod_setup::multiverse::Setup::new(3, 7));
     check(&mut s, "multiverse setup", &mut out);
     // Presets with long names (more than fit), one of them the universes now, and own colours
     // being typed.
@@ -566,11 +566,11 @@ fn assert_every_screen_fits() {
     })
     .collect();
     s.cfg.universes = s.cfg.universe_presets[1].universes;
-    s.universe_setup = Some(multiverse::Setup {
+    s.universe_setup = Some(crate::mod_setup::multiverse::Setup {
         typing: Some(multiverse::Typing::Colours(
             "#ff4020 #40a0ff and some more".into(),
         )),
-        ..multiverse::Setup::new(2, 0)
+        ..crate::mod_setup::multiverse::Setup::new(2, 0)
     });
     check(&mut s, "multiverse setup presets", &mut out);
     s.universe_setup = None;

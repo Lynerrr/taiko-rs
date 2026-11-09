@@ -2308,7 +2308,7 @@ impl Select {
                             .copied()
                             .filter(|v| v.is_finite())
                             .map(|v| v as f32);
-                        crate::stars::draw_pill(c, 24.0 + lw - 12.0, diffs_y - 1.0, 8.0, sorted_by);
+                        crate::style::star_pill(c, 24.0 + lw - 12.0, diffs_y - 1.0, 8.0, sorted_by);
                     } else {
                         c.text_right(
                             24.0 + lw - 12.0,
@@ -2378,7 +2378,7 @@ impl Select {
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = if a > 0.6 {
-                        crate::stars::draw_pill(
+                        crate::style::star_pill(
                             c,
                             24.0 + lw - 10.0,
                             y + 6.0,
@@ -3772,7 +3772,7 @@ impl Results {
             1.0,
         );
         c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
-        crate::stars::draw_pill(c, x + pw - 14.0, y + 9.0, 8.0, Some(b.stars as f32));
+        crate::style::star_pill(c, x + pw - 14.0, y + 9.0, 8.0, Some(b.stars as f32));
         // Two columns: the pp and its parts, then what could have been and the total.
         let col_w = (pw - 48.0) / 2.0;
         let (lx, rx) = (x + 16.0, x + 32.0 + col_w);

@@ -822,7 +822,7 @@ impl Game {
             let r = base_r * size;
             let first = c.shapes.len();
             if uni.shape != NoteShape::Round || !skin_note(c, x, y, r, big, col, a) {
-                multiverse::note(c, uni.shape, x, y, r, col, a);
+                shaped_note(c, uni.shape, x, y, r, col, a);
             }
             let (sx, sy) = (squish * fx.stretch_x, fx.stretch_y / squish);
             if sx != 1.0 || sy != 1.0 {
@@ -1861,7 +1861,7 @@ impl Game {
             let y = LANE_Y - 80.0 * p * (2.0 - p);
             let r = if big { BIG_R } else { NOTE_R } * (1.0 + 0.15 * p);
             if uni.shape != NoteShape::Round {
-                multiverse::note(c, uni.shape, HIT_X, y, r, col, 1.0 - p);
+                shaped_note(c, uni.shape, HIT_X, y, r, col, 1.0 - p);
             } else if !skin_note(c, HIT_X, y, r, big, col, 1.0 - p) {
                 c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
             }
@@ -3600,5 +3600,61 @@ impl Game {
             0.0
         };
         out.max(into) as f32
+    }
+}
+
+/// A don or kat `r` across in `shape`. Round is the usual note (skins draw their own).
+pub fn shaped_note(c: &mut Canvas, shape: NoteShape, x: f32, y: f32, r: f32, col: u32, a: f32) {
+    let (fill, white) = (rgba(col, a), rgba(0xffffff, a));
+    match shape {
+        NoteShape::Round => {
+            c.circle(
+                x,
+                y,
+                r + 2.0,
+                rgba(0x000000, 0.35 * a),
+                rgba(0x000000, 0.0),
+                0.0,
+            );
+            c.circle(x, y, r, fill, white, r * 0.1);
+        }
+        NoteShape::Square => {
+            let h = r * 0.9;
+            c.round_rect(
+                [x - h, y - h],
+                [2.0 * h, 2.0 * h],
+                r * 0.28,
+                fill,
+                white,
+                r * 0.1,
+            );
+        }
+        NoteShape::Diamond => {
+            let first = c.shapes.len();
+            let h = r * 0.82;
+            c.round_rect(
+                [x - h, y - h],
+                [2.0 * h, 2.0 * h],
+                r * 0.18,
+                fill,
+                white,
+                r * 0.1,
+            );
+            c.rotate_since(first, [x, y], std::f32::consts::FRAC_PI_4, 1.0, [x, y]);
+        }
+        NoteShape::Ring => {
+            c.circle(x, y, r, rgba(col, 0.22 * a), fill, r * 0.32);
+            c.ring(x, y, r * 0.62, rgba(0xffffff, 0.8 * a), r * 0.07);
+        }
+        NoteShape::Pill => {
+            c.capsule(
+                [x - r * 0.45, x + r * 0.45],
+                y,
+                r * 0.78,
+                fill,
+                white,
+                r * 0.1,
+            );
+        }
     }
 }

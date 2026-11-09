@@ -1502,7 +1502,7 @@ pub fn draw_lobby(
         Some(m) => {
             let stats = m.stats.as_ref();
             let stars = stats.and_then(|st| (st.stars >= 0.0).then_some(st.stars));
-            let pill = crate::stars::draw_pill(c, lx + lw - 14.0, top + 12.0, 9.0, stars);
+            let pill = crate::style::star_pill(c, lx + lw - 14.0, top + 12.0, 9.0, stars);
             c.text(
                 ix,
                 top + 11.0,

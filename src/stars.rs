@@ -9,9 +9,6 @@ use rosu_pp::model::mode::GameMode;
 use rosu_pp::taiko::Taiko;
 use rosu_pp::{Beatmap, Difficulty};
 
-use crate::hit::Canvas;
-use crate::render::rgba;
-
 /// Section length of lazer's strain skills (in rate-adjusted time).
 const SECTION_MS: f64 = 400.0;
 
@@ -371,49 +368,6 @@ pub fn color(stars: f32) -> u32 {
         }
     }
     STOPS[10].1
-}
-
-/// A small star-rating pill ("4.82") in the spectrum colour, right-aligned at `right`.
-/// Returns its width. `None` draws a placeholder while it is being calculated.
-pub fn draw_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f32>) -> f32 {
-    let text = stars
-        .map(|s| format!("{s:.2}"))
-        .unwrap_or_else(|| "...".into());
-    let tw = Canvas::text_width(size, &text);
-    let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
-    let x = right - w;
-    let (bg, fg) = match stars {
-        Some(s) => {
-            let col = color(s);
-            // Dark text on the light end of the spectrum, light text on the dark end.
-            let luma = 0.299 * (col >> 16 & 0xff) as f32
-                + 0.587 * (col >> 8 & 0xff) as f32
-                + 0.114 * (col & 0xff) as f32;
-            (col, if luma > 140.0 { 0x15151d } else { 0xffffff })
-        }
-        None => (0x2a2a38, 0x8a8aa0),
-    };
-    c.round_rect(
-        [x, y - 3.0],
-        [w, h],
-        h / 2.0,
-        rgba(bg, 1.0),
-        rgba(bg, 1.0),
-        0.0,
-    );
-    // A small diamond stands in for the star glyph the pixel font doesn't have.
-    let d = size * 0.32;
-    let (dx, dy) = (x + size * 0.6 + 2.0, y - 3.0 + h / 2.0);
-    c.round_rect(
-        [dx - d, dy - d],
-        [d * 2.0, d * 2.0],
-        d * 0.4,
-        rgba(fg, 1.0),
-        rgba(fg, 1.0),
-        0.0,
-    );
-    c.text(x + size * 1.3 + 4.0, y, size, rgba(fg, 1.0), &text);
-    w
 }
 
 #[cfg(test)]

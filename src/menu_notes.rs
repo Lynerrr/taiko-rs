@@ -266,7 +266,7 @@ pub fn draw(c: &mut Canvas, view: &View, clock: f32, kiai: f32, kick: f32, shift
                 universe.don()
             };
             let r = route.r * if note.big { 1.45 } else { 1.0 } + kick * 1.5;
-            multiverse::note(c, universe.shape, x, y, r, col, route.alpha * bright * ends);
+            crate::game::shaped_note(c, universe.shape, x, y, r, col, route.alpha * bright * ends);
         }
     }
 }

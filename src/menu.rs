@@ -988,7 +988,7 @@ impl Menu {
             let r = if note.big { big_r } else { small_r };
             let col = if note.kat { kat } else { don };
             if !crate::game::skin_note(c, x, lane_mid(), r, note.big, col, fade) {
-                crate::multiverse::note(
+                crate::game::shaped_note(
                     c,
                     crate::multiverse::Shape::Round,
                     x,
