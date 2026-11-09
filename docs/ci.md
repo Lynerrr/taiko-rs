@@ -18,6 +18,12 @@ three steps. `cargo build --all-targets` compiles the application and test binar
 Clippy then analyzes the source, and `cargo test --all-targets` executes the already-built
 test binaries. Clippy still needs its own compiler analysis; it cannot lint an executable.
 
+The client is a Cargo workspace: the game (`.`) and the crates split out of it
+(`crates/taiko-logic`, the rules with no window, GPU, sound or network). Both are default
+members, so these plain commands build, lint and test all of them. Commands that need a single
+package, such as the APK's `cargo rustc`, name the game with `-p taiko-rs`. The server and the
+patched `vendor/` crates are excluded from the workspace.
+
 The CI profile keeps debug assertions and unwinding enabled, omits debug symbols and
 incremental data, and optimizes dependencies. Using the same panic strategy for application
 and test targets avoids building dependencies again for tests.

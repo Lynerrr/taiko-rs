@@ -14,9 +14,15 @@ mod tests {
         // move to taiko-logic; their panels are drawn here.
         let logic = [
             ("multiverse", include_str!("multiverse.rs")),
-            ("od_override", include_str!("od_override.rs")),
-            ("shapeshift", include_str!("shapeshift.rs")),
-            ("tact", include_str!("tact.rs")),
+            (
+                "od_override",
+                include_str!("../crates/taiko-logic/src/od_override.rs"),
+            ),
+            (
+                "shapeshift",
+                include_str!("../crates/taiko-logic/src/shapeshift.rs"),
+            ),
+            ("tact", include_str!("../crates/taiko-logic/src/tact.rs")),
             ("stars", include_str!("stars.rs")),
         ];
         for (name, src) in logic {

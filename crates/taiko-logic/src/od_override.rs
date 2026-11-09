@@ -7,8 +7,8 @@ pub const MIN: f64 = 0.0;
 pub const MAX: f64 = 20.0;
 pub const DEFAULT: f64 = 10.0;
 /// What Left and Right change it by, and with Shift.
-pub(crate) const STEP: f64 = 0.5;
-pub(crate) const FINE_STEP: f64 = 0.1;
+pub const STEP: f64 = 0.5;
+pub const FINE_STEP: f64 = 0.1;
 
 /// Within the range, in tenths (so steps don't drift); `DEFAULT` for what isn't a number.
 pub fn clamped(od: f64) -> f64 {

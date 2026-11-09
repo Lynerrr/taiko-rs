@@ -27,18 +27,6 @@ pub const STEPS: [(&str, Step); 6] = [
 /// One bar, at first.
 pub const DEFAULT: usize = 1;
 
-/// Step `i`'s name.
-pub fn step_name(i: usize) -> &'static str {
-    match i {
-        0 => tr!("2 bars", "2小節", "2 такта"),
-        1 => tr!("1 bar", "1小節", "1 такт"),
-        2 => tr!("1/2 bar", "1/2小節", "1/2 такта"),
-        3 => tr!("1 beat", "1拍", "1 доля"),
-        4 => tr!("1/2 beat", "1/2拍", "1/2 доли"),
-        _ => tr!("1/4 beat", "1/4拍", "1/4 доли"),
-    }
-}
-
 /// The step index config.txt's `tact` names (the default for anything else).
 pub fn parse(s: &str) -> usize {
     STEPS

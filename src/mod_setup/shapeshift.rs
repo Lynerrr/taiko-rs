@@ -5,6 +5,29 @@ use crate::render::{accent, rgba};
 use crate::shapeshift::*;
 use winit::keyboard::KeyCode;
 
+/// Shape `i`'s name, by the index `game::SHAPESHIFT` uses.
+fn shape_name(i: usize) -> &'static str {
+    match i {
+        0 => tr!("Zigzag", "ジグザグ", "Зигзаг"),
+        1 => tr!("U-Turn", "Uターン", "Разворот"),
+        2 => tr!("Spiral", "らせん", "Спираль"),
+        3 => tr!("Loop", "ループ", "Петля"),
+        4 => tr!("Elbow", "L字", "Колено"),
+        6 => tr!("Meadow", "草原", "Луг"),
+        _ => tr!("Straight", "まっすぐ", "Прямая"),
+    }
+}
+
+/// Morph `i`'s name, by its index in `MORPH`.
+fn morph_name(i: usize) -> &'static str {
+    match i {
+        0 => tr!("1/2 bar", "1/2小節", "1/2 такта"),
+        1 => tr!("1 bar", "1小節", "1 такт"),
+        2 => tr!("2 bars", "2小節", "2 такта"),
+        _ => tr!("4 bars", "4小節", "4 такта"),
+    }
+}
+
 /// The rows of the setup.
 pub(crate) const ROWS: usize = 4;
 
