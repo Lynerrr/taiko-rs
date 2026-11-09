@@ -7,3 +7,8 @@ publish = false
 # The game's rules with nothing of the client around them: no window, GPU, sound or network.
 # Keep it that way (`tests::the_logic_needs_no_window_gpu_sound_or_network`).
 [dependencies]
+# Defense's rules and acts go over the network as they are.
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.154"

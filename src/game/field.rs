@@ -4,6 +4,7 @@ use super::*;
 use crate::hit::Canvas;
 use crate::hud::{self, Part};
 use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
+use crate::net::ItemText;
 use crate::render::{Font, Shape, Sprite, VIRTUAL_HEIGHT, rgba};
 
 /// What only drawing a play needs, apart from the play itself (`Game`): the HUD's layout and

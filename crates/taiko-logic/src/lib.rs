@@ -1,6 +1,5 @@
 //! The game's rules, apart from the client that shows and plays them: the autoplay's hands, the
-//! calibration's math, the clock a play keeps, and the setups of the mods that change a play's
-//! notes.
+//! calibration's math, the clock a play keeps, the mods and their setups, and Defense's rules.
 //!
 //! The client (`taiko-rs`) re-exports each module under its old name, so `crate::tact` and the
 //! rest still mean the same thing there. Nothing here draws, plays sound or opens a socket, and
@@ -9,6 +8,8 @@
 pub mod autoplay;
 pub mod calibrate;
 pub mod clock;
+pub mod defense;
+pub mod mods;
 pub mod od_override;
 pub mod shapeshift;
 pub mod tact;
