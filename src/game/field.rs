@@ -1,6 +1,10 @@
 //! Drawing the playfield: lane, notes, drum, judgements and the mods' looks.
 
 use super::*;
+use crate::hit::Canvas;
+use crate::hud::{self, Part};
+use crate::medals::{SPLIT_CYAN, SPLIT_RED, TEAR_CYAN, TEAR_RED};
+use crate::render::{Font, Shape, Sprite, VIRTUAL_HEIGHT, rgba};
 
 /// What only drawing a play needs, apart from the play itself (`Game`): the HUD's layout and
 /// what it hides, the playfield's boxes and path as last drawn, the notes on screen, and what the
@@ -59,6 +63,49 @@ pub struct View {
     /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas): the lane,
     /// wherever the mods took it; with Multiverse, the playfield in focus.
     pub(super) zone: Option<[f32; 4]>,
+}
+
+impl View {
+    /// A play's drawing state at its start: the default HUD, and what the visual mods worked out
+    /// from the map (`Game::with_half`).
+    pub(super) fn new(
+        min_velocity: f64,
+        note_blocks: Vec<NoteBlock>,
+        sections: Vec<(f64, f64, f64)>,
+        decoys: Vec<beatmap::Note>,
+        decoy_flows: Vec<u8>,
+        lies: Vec<f64>,
+        focus_switches: Vec<FocusSwitch>,
+    ) -> View {
+        View {
+            min_velocity,
+            note_blocks,
+            visible: Vec::new(),
+            show_hp: true,
+            show_offset_hint: false,
+            offset_key: None,
+            kiai_effects: true,
+            hidden: hud::Layout::default().off,
+            hud: hud::Layout::default(),
+            hud_area: crate::layout::Area::FULL,
+            hud_sample: false,
+            field_boxes: None,
+            lane_path: Vec::new(),
+            lane_half: 0.0,
+            field_at: 0.0,
+            settled: std::cell::Cell::new([None; Part::ALL.len()]),
+            visual_offset: 0.0,
+            watched: false,
+            banner: None,
+            test_play: false,
+            sections,
+            decoys,
+            decoy_flows,
+            lies,
+            focus_switches,
+            zone: None,
+        }
+    }
 }
 
 /// A rect `len` long and `thick` across, centred on (`x`, `y`) and turned to heading `a`.
@@ -3084,4 +3131,474 @@ pub(super) fn tko_moved(fx: &NoteFx, x: f32, y: f32, (hx, hy): (f32, f32)) -> (f
         (x, y) = (HIT_X + ox * co - oy * s, LANE_Y + ox * s + oy * co);
     }
     (x, y)
+}
+
+/// Whether `j` gets its flash and label.
+pub(super) fn splashes(j: Judge) -> bool {
+    !(j == Judge::Great && playfield_look().hide_great)
+}
+
+/// The drum on the left: lazer's input drum (180 of a 768-tall screen, in our 480 units).
+pub const PANEL_W: f32 = 112.5;
+
+/// A spinner being hit: its circle over the drum (a skin's 128 px spinner image at this radius).
+pub(super) const SPIN_R: f32 = 50.0;
+
+pub(super) const HIT_ANIM_MS: f64 = 160.0;
+
+/// A fake slider fades out over this once its cap reaches the drum, and stops scrolling after this
+/// much more of slider length (owner's stable test map, 2026-10-28: -200 at 3x stops 238 ms on).
+/// ponytail: the fade is only known to be 238..714 ms; measure it if a map looks off.
+pub(super) const FAKE_FADE_MS: f64 = 500.0;
+
+pub(super) const FAKE_FREEZE_LENGTH: f64 = 200.0;
+
+/// The kiai beat flash on each note at its start: stable's `UpdateKiai` (ppy/osu#26990).
+pub(super) const KIAI_FLASH_ALPHA: f32 = 0.3;
+
+/// How far ahead of the beat, in first-red-line beats, objects take its flash: stable lit ~22
+/// notes 250 ms apart at 30 BPM, short of the screen (owner, 2026-10-28).
+/// ponytail: one measurement; stable's spawn window may also scale with SliderMultiplier (1.4
+/// there). Re-measure at another BPM or multiplier if a map looks off.
+pub(super) const KIAI_FLASH_REACH: f64 = 2.625;
+
+pub(super) const ROLL: u32 = 0xFCB806;
+
+pub(super) const SWELL: u32 = 0xF39A2B;
+
+pub(super) const WHITE: u32 = 0xFFFFFF;
+
+/// Colorless: dons and kats alike.
+pub(super) const GREY: u32 = 0x8c8ca6;
+
+/// Decoy: how opaque the fake notes are next to real ones.
+pub(super) const DECOY_ALPHA: f32 = 0.6;
+
+/// Multiverse: how far (virtual units) a playfield out of focus circles from its home, across
+/// and up and down.
+pub(super) const ORBIT: (f32, f32) = (46.0, 28.0);
+
+/// Multiverse: a playfield's size out of focus and in it.
+pub(super) const FIELD_ZOOM: (f32, f32) = (0.36, 0.6);
+
+/// Multiverse: the colour of the focus (its halo, frame and burst).
+pub(super) const FOCUS_COL: u32 = 0xbfe9ff;
+
+/// Multiverse: how long (ms) the burst lasts as a playfield takes the focus.
+pub(super) const FOCUS_BURST_MS: f64 = 600.0;
+
+/// Multiverse: the focus moving to another playfield.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FocusSwitch {
+    /// The bar it lands on (map ms).
+    pub(super) at: f64,
+    /// The playfield that gets it.
+    pub(super) field: usize,
+    /// The beat length there.
+    pub(super) beat: f64,
+}
+
+/// osu!px per ms -> virtual units per ms at scroll speed 1.0, so that a note stays on screen
+/// exactly as long as in osu!. Stable scrolls notes at their velocity across a 480-tall gamefield
+/// (the same units as ours) from its right edge to the hit target at x = 160; lazer copies that as
+/// a time range, with the aspect ratio clamped to 5:4..16:9. Our hit target is osu!'s too, so this
+/// is 1.0 except outside that aspect range, where the lane is longer or shorter than osu!'s.
+pub(super) fn osu_speed_scale(w: f32) -> f64 {
+    let aspect = (w / VIRTUAL_HEIGHT).clamp(5.0 / 4.0, 16.0 / 9.0) as f64;
+    (w - HIT_X).max(1.0) as f64 / (aspect * VIRTUAL_HEIGHT as f64 - 160.0)
+}
+
+/// How much faster than on a plain lane notes go along a lane `len` long on a canvas `w` wide.
+/// Rails only bend the lane: notes go along it as they would along a plain one, as many to a
+/// stretch of lane, so a long rail (a spiral, a loop) shows more of the map ahead rather than
+/// rushing it in. A playfield shrunk to fit the shape is the same picture, smaller: speeding
+/// notes up to make up for it spread them out and rushed them along the rail. Mania's and Spin's
+/// shorter lanes keep notes on them for the usual time.
+pub(super) fn lane_stretch(rail: bool, len: f32, w: f32) -> f64 {
+    if rail {
+        1.0
+    } else {
+        (len / (w - HIT_X)) as f64
+    }
+}
+
+/// How far ahead (ms) notes are looked for under a shared scroll, which may hold far notes near.
+pub(super) const SHARED_LOOKAHEAD_MS: f64 = 30_000.0;
+
+/// Pulse / Stutter's time shift of far notes at map time `t` (see `Scroll::warp`): Pulse makes
+/// them jump forward on each beat, Stutter hold, then catch up.
+pub(super) fn beat_warp(mods: Mods, cp: &beatmap::ControlPoint, t: f64) -> f64 {
+    let p = cp.beat_phase(t);
+    if mods.has(Mod::Pulse) {
+        cp.beat_length * ((1.0 - (1.0 - p).powi(3)) - p)
+    } else if mods.has(Mod::Stutter) {
+        let x = ((p - 0.5) / 0.5).clamp(0.0, 1.0);
+        cp.beat_length * (x * x * (3.0 - 2.0 * x) - p)
+    } else {
+        0.0
+    }
+}
+
+/// Multiverse's breath, 0 to 1 over a beat `beat_ms` long at `phase`: it swells over the first
+/// 90 ms (less of a fast beat) and eases out by the next, so no frame jumps on the beat.
+pub(super) fn breath(phase: f64, beat_ms: f64) -> f32 {
+    let rise = (90.0 / beat_ms.max(1.0)).min(0.4);
+    if phase < rise {
+        smooth(0.0, rise, phase) as f32
+    } else {
+        (1.0 - smooth(rise, 1.0, phase)) as f32
+    }
+}
+
+/// Radar's beam.
+pub(super) const RADAR_COL: u32 = 0x5ef0a0;
+
+/// Radar: where the beam is, 0 at the drum to 1 at the lane's end, `beats` since the red line.
+/// It leaves the drum every `RADAR_BEATS` beats.
+pub(super) fn radar_sweep(beats: f32, kiai: bool) -> f32 {
+    (beats / if kiai { RADAR_BEATS.1 } else { RADAR_BEATS.0 }).rem_euclid(1.0)
+}
+
+/// Radar: how lit that note is: fully as the beam passes, gone by the next one (and unseen till
+/// it first passes them); always fully by the drum.
+pub(super) fn radar_light(s: f32, u: f32, len: f32, sweep: f32) -> f32 {
+    let near = smooth((RADAR_NEAR + 50.0) as f64, RADAR_NEAR as f64, s as f64) as f32;
+    let lit = radar_age(s, u, len, sweep).map_or(0.0, |a| (1.0 - a).max(0.0).powf(1.5));
+    lit.max(near)
+}
+
+/// Echo: where its bar sits, under the lane.
+pub(super) const ECHO_Y: f32 = LANE_Y + LANE_H / 2.0 + 50.0;
+
+/// Echo: how long a note rings once the cursor reaches it.
+pub(super) const ECHO_RING_MS: f32 = 300.0;
+
+/// Defense's glitches: a steady pseudo-random 0-1 for `a`, `b`, `k` (the medal screens' way:
+/// time goes in 40 ms steps, so things jump rather than slide).
+pub(super) fn glitch_hash(a: u32, b: u32, k: u32) -> f32 {
+    let mut h =
+        a.wrapping_mul(0x9E37_79B1) ^ b.wrapping_mul(0x85EB_CA77) ^ k.wrapping_mul(0xC2B2_AE3D);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 12;
+    (h & 0xFFFF) as f32 / 65535.0
+}
+
+/// How long a glitch from something the team did (or a life lost) lasts.
+pub(super) const GLITCH_MS: f64 = 260.0;
+
+/// Defense: how long a banner saying what the team just did stays up.
+pub(super) const CALLOUT_MS: f64 = 3200.0;
+
+pub fn team_colour(k: usize) -> u32 {
+    TEAM_COLOURS[k % TEAM_COLOURS.len()]
+}
+
+/// How many of those there are on a lane `lane_len` long, past both ends.
+pub(super) fn body_cells(lane_len: f32) -> usize {
+    ((lane_len + HIT_X + 2.0 * BIG_R) / BODY_CELL).max(0.0) as usize + 2
+}
+
+/// The closest two roll ticks are drawn (lane units): they're 8 across.
+pub(super) const TICK_GAP: f32 = 2.0;
+
+/// Portal: notes reaching `entry` (distance along the lane) come out at `exit` and cover the
+/// rest of the way in the time left. Returns where a note `s` along is drawn and how big
+/// (shrinking into the entry, growing out of the exit).
+pub(super) fn through_portal(s: f32, (entry, exit): (f32, f32)) -> (f32, f32) {
+    if s <= 0.0 {
+        (s, 1.0)
+    } else if s >= entry {
+        (s, ((s - entry) / 25.0).clamp(0.15, 1.0))
+    } else {
+        let s = s * exit / entry;
+        (s, ((exit - s) / 25.0).clamp(0.15, 1.0))
+    }
+}
+
+/// Mania: how much of the lane stands above the drum (virtual units).
+pub(super) const MANIA_LANE: f32 = 340.0;
+
+/// Spin: how long the lane is as it turns about the middle of the screen.
+pub(super) const SPIN_LANE: f32 = 300.0;
+
+/// Radar: notes this close to the drum are always fully lit.
+pub(super) const RADAR_NEAR: f32 = 100.0;
+
+/// Radar: how many beats the beam takes to cross the lane, and in kiai.
+pub(super) const RADAR_BEATS: (f32, f32) = (2.0, 1.0);
+
+/// Radar: how far a note `s` along a lane `len` long that comes `u` closer every sweep is from
+/// the beam's last pass (0) to its next (1), the beam at `sweep`. None if the note wasn't on
+/// screen yet when the beam last went by.
+pub(super) fn radar_age(s: f32, u: f32, len: f32, sweep: f32) -> Option<f32> {
+    let b = sweep * len;
+    // How far the beam has gone since; the note came closer meanwhile, as the beam and the note
+    // close in on each other at `len + u` a sweep.
+    let back = if s <= b { b - s } else { b + len - s };
+    let u = u.max(0.0);
+    (s + u * back / (len + u) <= len).then_some(back / len)
+}
+
+/// Defense: the player on turn sees the drum end of the maze this big (the overview's
+/// `RailShape::zoom` the rest of the time), with the drum this far down.
+pub(super) const FOCUS_ZOOM: f32 = 0.9;
+
+pub(super) const FOCUS_DROP: f32 = 50.0;
+
+/// Defense: how long a slow lasts (the lane fades to half speed and back over `SLOW_FADE_MS`
+/// at each end).
+pub(super) const SLOW_MS: f64 = 6000.0;
+
+pub(super) const SLOW_FADE_MS: f64 = 400.0;
+
+/// Defense: the team's colours, in turn order.
+pub const TEAM_COLOURS: [u32; 8] = [
+    0x4fb4ff, 0xFFD34D, 0xc77dff, 0x86E05A, 0xff5fa2, 0xFF8A3D, 0x5ee6c8, 0xEB452C,
+];
+
+/// How much of a bent lane (units) counts as one stretch of it for roll bodies stacked there.
+pub(super) const BODY_CELL: f32 = 6.0;
+
+impl Game {
+    /// Defense: the slows' speed factor at map time `t` (1, or down to a half).
+    pub(super) fn slow_factor(&self, t: f64) -> f64 {
+        let Some(d) = &self.defense else { return 1.0 };
+        let k = d
+            .slows
+            .iter()
+            .map(|&at| ((t - at).min(at + SLOW_MS - t) / SLOW_FADE_MS).clamp(0.0, 1.0))
+            .fold(0.0, f64::max);
+        1.0 - 0.5 * k
+    }
+
+    /// Panic / Mercy's speed factor at map time `t`: each recent miss fades in over 250 ms and
+    /// out over its span.
+    pub(super) fn miss_factor(&self, t: f64) -> f64 {
+        let weight = |span: f64| -> f64 {
+            self.misses
+                .iter()
+                .map(|&at| t - at)
+                .filter(|age| (0.0..span).contains(age))
+                .map(|age| (age / 250.0).min(1.0) * (1.0 - age / span))
+                .sum()
+        };
+        if self.mods.has(Mod::Panic) {
+            (1.0 + 0.15 * weight(4000.0)).min(2.0)
+        } else if self.mods.has(Mod::Mercy) {
+            1.0 / (1.0 + 0.25 * weight(3000.0)).min(2.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Tact: the map time notes are drawn at for map time `t`: a crawl through its step, then a
+    /// rush to the step's end (`tact::shown_time`).
+    pub(super) fn tact_time(&self, t: f64) -> f64 {
+        let bars = &self.map.barlines;
+        crate::tact::shown_time(t, |x| {
+            let cp = beatmap::control_point_at(&self.map.control_points, x);
+            let bar = bar_at(bars, x, cp.beat_length * 4.0);
+            crate::tact::step_start(
+                self.tact,
+                x,
+                bar,
+                |i| bars.get(i).map_or(x, |b| b.time),
+                (cp.beat_origin, cp.beat_length),
+            )
+        })
+    }
+
+    /// The warp (see `Scroll::warp`) of Drop, Lag Spike and Moonwalk at map time `t`.
+    pub(super) fn extra_warp(&self, t: f64, cp: &beatmap::ControlPoint) -> f64 {
+        let mods = self.mods;
+        let mut warp = 0.0;
+        if mods.has(Mod::Drop) {
+            // Two beats before a kiai: held still for one and a half, then a rush to catch up.
+            let i = self.kiai_starts.partition_point(|&(k, _)| k <= t);
+            if let Some(&(k, b)) = self.kiai_starts.get(i) {
+                let s = t - (k - 2.0 * b);
+                if s >= 0.0 {
+                    warp += if s < 1.5 * b {
+                        s
+                    } else {
+                        1.5 * b * (1.0 - smooth(0.0, 1.0, (s - 1.5 * b) / (0.5 * b)))
+                    };
+                }
+            }
+        }
+        if mods.has(Mod::LagSpike) {
+            // In 40% of 1.5 s slots, one freeze of 150-370 ms, then a jump to where notes should be.
+            let slot = (t / 1500.0).floor();
+            if hash01(slot * 1.37 + 0.31) < 0.4 {
+                let at = slot * 1500.0 + 200.0 + 900.0 * hash01(slot * 2.11 + 0.17);
+                let len = 150.0 + 220.0 * hash01(slot * 3.7 + 0.53);
+                if (at..at + len).contains(&t) {
+                    warp += t - at;
+                }
+            }
+        }
+        if mods.has(Mod::Moonwalk) {
+            // The first eighth of a bar the notes back away, the rest of it they make up for it.
+            if let Some((_, start, len)) = bar_at(&self.map.barlines, t, cp.beat_length * 4.0) {
+                let back = 0.125 * len;
+                let s = t - start;
+                warp -= if s < back {
+                    2.0 * s
+                } else {
+                    2.0 * back * (1.0 - (s - back) / (len - back)).max(0.0)
+                };
+            }
+        }
+        warp
+    }
+
+    /// The lane's shape at map time `t` on a canvas `w` wide: rail (rails mods, Shapeshift
+    /// morphing from one to the next, or a .tko map's lane clip, `lane`: a `SHAPESHIFT` shape and
+    /// how far into it, which goes before the player's mods), length, and how far the playfield
+    /// moves down and shrinks for it.
+    pub(super) fn rail_at(
+        &self,
+        t: f64,
+        w: f32,
+        lane: Option<(usize, f32)>,
+    ) -> (Option<Rail>, f32, f32, f32) {
+        if let Some((k, u)) = lane {
+            let shape = LANE_SHAPES_OF_CLIPS[k % LANE_SHAPES_OF_CLIPS.len()];
+            return morph_rail(RailShape::Straight, shape, u.clamp(0.0, 1.0), w);
+        }
+        let mods = self.mods;
+        if let Some(shape) = RailShape::of(mods) {
+            let (mut drop, mut zoom) = (shape.drop(), shape.zoom(w));
+            // Defense: the player on turn sees the drum end of the maze up close.
+            let f = self.defense_focus(t);
+            if f > 0.0 {
+                drop += (FOCUS_DROP - drop) * f;
+                zoom += (FOCUS_ZOOM.max(zoom) - zoom) * f;
+            }
+            return (
+                Some(Rail::build(|s| shape.bend(s), shape.length(w))),
+                shape.length(w),
+                drop,
+                zoom,
+            );
+        }
+        if !mods.has(Mod::Shapeshift) {
+            let len = if mods.has(Mod::Mania) {
+                MANIA_LANE
+            } else if mods.has(Mod::Crossfire) {
+                // From the drum in the middle to either edge.
+                w / 2.0
+            } else if mods.has(Mod::Spin) {
+                SPIN_LANE
+            } else {
+                w - HIT_X
+            };
+            return (None, len, 0.0, 1.0);
+        }
+        // A shape every so many bars (the player's setup), in the map's order; the first bars of
+        // each morph into it from the last.
+        let bars = &self.map.barlines;
+        let (every, morph) = (self.shapeshift.bars(), self.shapeshift.morph_bars());
+        let shape = |section: usize| {
+            self.shape_order
+                .get(section)
+                .map_or(RailShape::Straight, |&k| {
+                    SHAPESHIFT[k as usize % SHAPESHIFT.len()]
+                })
+        };
+        let (from, to, u) = match bar_at(bars, t, 2000.0) {
+            None => (RailShape::Straight, RailShape::Straight, 1.0),
+            Some((i, ..)) => {
+                let section = i / every;
+                let prev = if section == 0 {
+                    RailShape::Straight
+                } else {
+                    shape(section - 1)
+                };
+                let first = section * every;
+                let start = bars[first].time;
+                // The morph ends part way into a bar (half a bar), or on a barline.
+                let whole = morph.floor() as usize;
+                let at = |k: usize| bars.get(first + k).map(|b| b.time);
+                let base = at(whole).unwrap_or(start + 2000.0 * whole as f64);
+                let bar_len = at(whole + 1).map_or(2000.0, |next| next - base);
+                let end = base + (morph - whole as f64) * bar_len;
+                (
+                    prev,
+                    shape(section),
+                    ((t - start) / (end - start).max(1.0)).clamp(0.0, 1.0) as f32,
+                )
+            }
+        };
+        morph_rail(from, to, u, w)
+    }
+
+    /// Shatter's sideways shift of each quarter of the lane at map time `t`: apart on even bars
+    /// (each piece its own way), back in line on odd ones, sliding over the first quarter-bar.
+    pub(super) fn shatter_at(&self, t: f64) -> [f32; 4] {
+        let mut out = [0.0; 4];
+        if !self.mods.has(Mod::Shatter) {
+            return out;
+        }
+        let Some((i, start, len)) = bar_at(&self.map.barlines, t, 2000.0) else {
+            return out;
+        };
+        let target = |bar: usize, k: usize| -> f32 {
+            if bar % 2 == 1 {
+                return 0.0;
+            }
+            let h = hash01(bar as f64 * 7.1 + k as f64 * 1.7) as f32 * 2.0 - 1.0;
+            h.signum() * (20.0 + 30.0 * h.abs())
+        };
+        let m = smooth(0.0, 0.25, (t - start) / len) as f32;
+        for (k, d) in out.iter_mut().enumerate().skip(1) {
+            let prev = if i == 0 { 0.0 } else { target(i - 1, k) };
+            *d = prev + (target(i, k) - prev) * m;
+        }
+        out
+    }
+
+    /// Portal's entry and exit (distances along a lane `len` long) at map time `t`: a new pair
+    /// every 8 bars.
+    pub(super) fn portal_at(&self, t: f64, len: f32) -> Option<(f32, f32)> {
+        if !self.mods.has(Mod::Portal) {
+            return None;
+        }
+        let section = bar_at(&self.map.barlines, t, 2000.0).map_or(0, |(i, ..)| i / 8) as f64;
+        let entry = len * (0.5 + 0.3 * hash01(section * 1.3 + 0.2) as f32);
+        let mut exit = len * (0.15 + 0.5 * hash01(section * 2.9 + 0.6) as f32);
+        if (entry - exit).abs() < 0.15 * len {
+            exit = entry * 0.45;
+        }
+        Some((entry, exit))
+    }
+
+    /// Defense: how far the camera is zoomed in on the drum at map time `t`: all the way on our
+    /// turn, easing in over the second half of the bar before it and out over the first half
+    /// of the bar after.
+    pub(super) fn defense_focus(&self, t: f64) -> f32 {
+        let Some(d) = &self.defense else { return 0.0 };
+        let bar = self.bar_at(t);
+        let mine = |b: usize| self.turn_of_bar(b) == d.me;
+        if mine(bar) {
+            return 1.0;
+        }
+        let bars = &self.map.barlines;
+        let (Some(start), Some(next)) = (bars.get(bar), bars.get(bar + 1)) else {
+            return 0.0;
+        };
+        let u = ((t - start.time) / (next.time - start.time).max(1.0)).clamp(0.0, 1.0);
+        let out = if bar > 0 && mine(bar - 1) {
+            1.0 - smooth(0.0, 0.5, u)
+        } else {
+            0.0
+        };
+        let into = if mine(bar + 1) {
+            smooth(0.5, 1.0, u)
+        } else {
+            0.0
+        };
+        out.max(into) as f32
+    }
 }

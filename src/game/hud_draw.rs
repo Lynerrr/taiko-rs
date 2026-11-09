@@ -2,6 +2,9 @@
 //! pause menu, each part where the player put it (`crate::hud`).
 
 use super::*;
+use crate::hit::{Canvas, Hit};
+use crate::hud::{self, Part};
+use crate::render::{Font, Sprite, VIRTUAL_HEIGHT, accent, progress, rgba};
 
 impl Game {
     /// The interface's parts where the player put them (see `hud`), then the skip hint and the
@@ -933,3 +936,18 @@ pub(super) fn ease_step(dt: f64) -> f32 {
 }
 /// Units per SD px of osu!'s interface images: its screen is 768 px tall.
 pub(super) const HUD_PX: f32 = VIRTUAL_HEIGHT / 768.0;
+
+/// Pause menu item `i`'s name.
+pub(super) fn pause_item(i: usize) -> &'static str {
+    match i {
+        0 => tr!("Continue", "続ける", "Продолжить"),
+        1 => tr!("Retry", "やり直す", "Заново"),
+        2 => tr!(
+            "Playfield size",
+            "プレイフィールドのサイズ",
+            "Размер игрового поля"
+        ),
+        3 => tr!("Settings", "設定", "Настройки"),
+        _ => tr!("Quit to song select", "選曲に戻る", "Выйти к выбору песни"),
+    }
+}
