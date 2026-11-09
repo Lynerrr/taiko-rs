@@ -183,6 +183,7 @@ pub const COUNT: usize = MISAKI_BASE + MISAKI_GLYPHS;
 pub const ATLAS_COLS: usize = 128;
 pub const CELL_W: usize = 8;
 
+#[inline]
 fn misaki(k: usize) -> (u32, &'static [u8]) {
     let g = &MISAKI[k * 12..k * 12 + 12];
     (
@@ -193,6 +194,7 @@ fn misaki(k: usize) -> (u32, &'static [u8]) {
 
 /// The glyph `c` draws as, numbered 0..COUNT: printable ASCII from 0, Cyrillic from 95, then
 /// Misaki's.
+#[inline]
 pub fn index(c: char) -> usize {
     let i = c as u32;
     match c {
@@ -224,10 +226,12 @@ pub fn index(c: char) -> usize {
 }
 
 /// `c`'s columns: 5 (7 for Japanese, 3 for halfwidth kana).
+#[inline]
 pub fn glyph(c: char) -> &'static [u8] {
     by_index(index(c))
 }
 
+#[inline]
 fn by_index(i: usize) -> &'static [u8] {
     if i < 95 {
         &GLYPHS[i]
@@ -239,6 +243,7 @@ fn by_index(i: usize) -> &'static [u8] {
 }
 
 /// How many columns glyph `i` (`index`) is: it advances one more, the gap.
+#[inline]
 pub fn columns(i: usize) -> usize {
     if i < MISAKI_BASE {
         5
@@ -248,6 +253,7 @@ pub fn columns(i: usize) -> usize {
 }
 
 /// How far `c` advances the text, in font pixels (6, or 8 for Japanese).
+#[inline]
 pub fn advance(c: char) -> usize {
     columns(index(c)) + 1
 }
@@ -272,6 +278,7 @@ pub fn atlas() -> (u32, u32, Vec<u8>) {
 }
 
 /// The font has a real glyph for `c` (anything else draws as `?`).
+#[inline]
 pub fn drawable(c: char) -> bool {
     c == '?' || index(c) != index('?')
 }
