@@ -730,10 +730,18 @@ pub struct DefenseRun {
     shot: Vec<Option<u8>>,
     /// Map times slows were bought at.
     slows: Vec<f64>,
-    /// What the team did lately: (map time, who, what, what it does).
-    pub feed: Vec<(f64, usize, String, String)>,
+    /// What the team did lately: (map time, who, what).
+    pub feed: Vec<(f64, usize, Done)>,
     /// When the team last lost a life (map time).
     lost_at: f64,
+}
+
+/// Defense: something a player of the team did, for the drawing to put in words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Done {
+    Bought(DefenseItem),
+    /// Took over the rest of a turn.
+    TaggedIn,
 }
 
 /// Defense: a tower on a corner of the maze near the drum (`s` along the lane, in the middle of
@@ -1277,7 +1285,7 @@ impl Game {
             return;
         };
         let bars = self.defense.as_ref().map_or(1, |d| d.bars.max(1) as usize);
-        let (at, what, about) = match act {
+        let (at, done) = match act {
             DefenseAct::Buy { item, at, .. } => {
                 match item {
                     DefenseItem::Slow => {
@@ -1322,7 +1330,7 @@ impl Game {
                     }
                     DefenseItem::Shield | DefenseItem::Heal => {}
                 }
-                (at, item.name().to_string(), item.about().to_string())
+                (at, Done::Bought(item))
             }
             DefenseAct::TagIn { at } => {
                 let (bar, from_bar) = (self.bar_at(at), self.bar_at(at + TAG_LEAD_MS) + 1);
@@ -1337,20 +1345,11 @@ impl Game {
                 }
                 d.tags.push((turn, from_bar, who));
                 self.refresh_defense();
-                (
-                    at,
-                    tr!("tagged in", "交代", "перехватил ход").to_string(),
-                    tr!(
-                        "took over the rest of this turn",
-                        "このターンの残りを引き継いだ",
-                        "забрал остаток этого хода"
-                    )
-                    .to_string(),
-                )
+                (at, Done::TaggedIn)
             }
         };
         if let Some(d) = &mut self.defense {
-            d.feed.push((at, who, what, about));
+            d.feed.push((at, who, done));
             if d.feed.len() > 4 {
                 d.feed.remove(0);
             }

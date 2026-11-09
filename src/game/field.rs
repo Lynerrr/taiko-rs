@@ -2443,7 +2443,7 @@ impl Play {
             }
         }
         // The team just did something: tears run across the screen in the logo's colours.
-        if let Some(&(at, who, _, _)) = d
+        if let Some(&(at, who, _)) = d
             .feed
             .last()
             .filter(|e| (0.0..GLITCH_MS).contains(&(t - e.0)))
@@ -2563,9 +2563,10 @@ impl Play {
             .feed
             .last()
             .filter(|e| (0.0..CALLOUT_MS).contains(&(t - e.0)))
-            .map(|(at, who, what, about)| {
-                let name = d.team.get(*who).map_or("?", |p| p.1.as_str());
-                (*at, format!("{name}: {what} - {about}"), team_colour(*who))
+            .map(|&(at, who, done)| {
+                let name = d.team.get(who).map_or("?", |p| p.1.as_str());
+                let (what, about) = said(done);
+                (at, format!("{name}: {what} - {about}"), team_colour(who))
             });
         if let Some((at, text, col)) = callout {
             let k = (1.0 - ((t - at) / CALLOUT_MS) as f32 * 0.6)
@@ -2657,20 +2658,36 @@ impl Play {
             &tr!("T tag in ({left} left)", "T 交代 (残り{left})", "T перехват (осталось {left})";),
         );
         y += 12.0;
-        for (at, who, what, _) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {
-            let name = d.team.get(*who).map_or("?", |p| p.1.as_str());
+        for &(at, who, done) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {
+            let name = d.team.get(who).map_or("?", |p| p.1.as_str());
+            let what = said(done).0;
             let fade = (1.0 - ((t - at) / 5000.0) as f32).clamp(0.0, 1.0);
             c.text(
                 x,
                 y,
                 6.5,
-                rgba(team_colour(*who), fade),
+                rgba(team_colour(who), fade),
                 &Canvas::fit(6.5, 184.0, &format!("{name}: {what}")),
             );
             y += 10.0;
         }
     }
 }
+/// Defense: what a player did, in words, and what it does.
+pub(super) fn said(done: Done) -> (&'static str, &'static str) {
+    match done {
+        Done::Bought(item) => (item.name(), item.about()),
+        Done::TaggedIn => (
+            tr!("tagged in", "交代", "перехватил ход"),
+            tr!(
+                "took over the rest of this turn",
+                "このターンの残りを引き継いだ",
+                "забрал остаток этого хода"
+            ),
+        ),
+    }
+}
+
 pub(super) fn draw_scare(c: &mut Canvas, p: f32, t: f64) {
     let w = c.width;
     let start = c.shapes.len();
