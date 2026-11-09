@@ -258,13 +258,25 @@ pub const ALL: [Mod; 79] = [
 ];
 
 /// Each mod's place in `ALL`, by the mod's discriminant: `Mod::bit` without a search.
+///
+/// The build fails if a mod is missing from `ALL` (it would have no bit of its own) or listed
+/// there twice (saved bits would move).
 const BIT_INDEX: [u8; ALL.len()] = {
-    let mut index = [0; ALL.len()];
-    // Backwards, so a mod listed twice would keep its first place, as a search would.
-    let mut i = ALL.len();
-    while i > 0 {
-        i -= 1;
-        index[ALL[i] as usize] = i as u8;
+    const UNSET: u8 = u8::MAX;
+    let mut index = [UNSET; ALL.len()];
+    let mut i = 0;
+    while i < ALL.len() {
+        let mod_ = ALL[i] as usize;
+        // As many places as `ALL` is long: a mod left out of it lands past the end here, or
+        // leaves a place unset below.
+        assert!(index[mod_] == UNSET, "a mod is in ALL twice");
+        index[mod_] = i as u8;
+        i += 1;
+    }
+    let mut i = 0;
+    while i < index.len() {
+        assert!(index[i] != UNSET, "a mod is missing from ALL");
+        i += 1;
     }
     index
 };
@@ -362,7 +374,6 @@ pub fn customizable(mods: Mods) -> Vec<Mod> {
 }
 
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
-#[inline]
 pub fn step(index: usize, dx: i32, dy: i32) -> usize {
     let m = ALL[index.min(ALL.len() - 1)];
     let (col, row) = GROUPS
@@ -943,7 +954,6 @@ impl Mods {
     }
 
     /// From "HD,HR" (unknown acronyms are skipped, conflicts resolved in order).
-    #[inline]
     pub fn parse(s: &str) -> Mods {
         let mut out = Mods::NONE;
         for m in s.split([',', ' ']).filter_map(Mod::from_acronym) {
@@ -972,7 +982,6 @@ impl Mods {
         Mods::parse(&list.join(","))
     }
 
-    #[inline]
     pub fn list(self) -> Vec<String> {
         self.iter().map(|m| m.acronym().to_string()).collect()
     }
@@ -1037,7 +1046,6 @@ impl Mods {
     }
 
     /// "HDHR", or "" without mods.
-    #[inline]
     pub fn label(self) -> String {
         self.iter().map(|m| m.acronym()).collect()
     }
@@ -1237,7 +1245,6 @@ impl Preset {
     }
 
     /// The config's "1.2|HD,HR|name" (the name last: it may hold anything).
-    #[inline]
     pub fn parse(s: &str) -> Option<Preset> {
         let mut f = s.splitn(3, '|');
         let rate: f64 = f.next()?.trim().parse().ok()?;

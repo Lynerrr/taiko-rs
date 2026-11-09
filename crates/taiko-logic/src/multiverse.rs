@@ -25,23 +25,6 @@ pub const PALETTES: [(&str, u32, u32); 10] = [
     ("swapped", 0x2f6f96, 0xff7a5c),
 ];
 
-/// Palette `i`'s name as shown (`CUSTOM`: the player's own colours).
-pub fn palette_label(i: usize) -> &'static str {
-    match i {
-        0 => tr!("classic", "クラシック", "классика"),
-        1 => tr!("neon", "ネオン", "неон"),
-        2 => tr!("sunset", "夕焼け", "закат"),
-        3 => tr!("ice", "氷", "лёд"),
-        4 => tr!("forest", "森", "лес"),
-        5 => tr!("candy", "キャンディ", "конфеты"),
-        6 => tr!("ember", "残り火", "угли"),
-        7 => tr!("mono", "モノクロ", "моно"),
-        8 => tr!("toxic", "毒々しい", "токсик"),
-        9 => tr!("swapped", "入れ替え", "наоборот"),
-        _ => tr!("custom", "自分の色", "свои"),
-    }
-}
-
 /// `Colours::palette` for the player's own colours (after the palettes).
 pub const CUSTOM: usize = PALETTES.len();
 
@@ -76,12 +59,6 @@ impl Colours {
     #[inline]
     pub fn name(self) -> &'static str {
         PALETTES.get(self.palette).map_or("custom", |p| p.0)
-    }
-
-    /// Its name as shown (`name` is the config's).
-    #[inline]
-    pub fn label(self) -> &'static str {
-        palette_label(self.palette)
     }
 
     /// Dons and kats alike, out of focus: grey with a hint of the colours (but not which is
@@ -196,18 +173,6 @@ impl Shape {
             Shape::Diamond => "diamond",
             Shape::Ring => "ring",
             Shape::Pill => "pill",
-        }
-    }
-
-    /// Its name as shown (`name` is the config's).
-    #[inline]
-    pub fn label(self) -> &'static str {
-        match self {
-            Shape::Round => tr!("round", "丸", "круг"),
-            Shape::Square => tr!("square", "四角", "квадрат"),
-            Shape::Diamond => tr!("diamond", "ひし形", "ромб"),
-            Shape::Ring => tr!("ring", "輪", "кольцо"),
-            Shape::Pill => tr!("pill", "カプセル", "капсула"),
         }
     }
 }
@@ -437,22 +402,20 @@ pub fn clean_name(s: &str) -> String {
         .collect()
 }
 
-/// Every preset in the order the setup lists them: the built-in ones, then the player's.
-pub fn presets(own: &[Preset]) -> Vec<(String, [Universe; COUNT])> {
-    let builtin = [
-        (
-            tr!("defaults", "初期設定", "исходные").to_string(),
-            defaults(),
-        ),
-        (
-            tr!("classic", "クラシック", "классика").to_string(),
-            classic(),
-        ),
-    ];
-    builtin
-        .into_iter()
-        .chain(own.iter().map(|p| (p.name.clone(), p.universes)))
-        .collect()
+/// Every preset in the order the setup lists them: the built-in ones (named `builtin`: what
+/// they are called is up to whoever shows them), then the player's.
+pub fn presets(
+    own: &[Preset],
+    builtin: [&str; BUILTIN_PRESETS],
+) -> Vec<(String, [Universe; COUNT])> {
+    let [first, second] = builtin;
+    [
+        (first.to_string(), defaults()),
+        (second.to_string(), classic()),
+    ]
+    .into_iter()
+    .chain(own.iter().map(|p| (p.name.clone(), p.universes)))
+    .collect()
 }
 pub const BUILTIN_PRESETS: usize = 2;
 

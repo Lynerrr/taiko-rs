@@ -5,9 +5,6 @@
 //! rest still mean the same thing there. Nothing here draws, plays sound or opens a socket, and
 //! the crate's dependencies keep it that way.
 
-// First, so `tr!` is there for every module after it.
-#[macro_use]
-pub mod lang;
 pub mod autoplay;
 pub mod beatmap;
 pub mod calibrate;

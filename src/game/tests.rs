@@ -3864,6 +3864,9 @@ fn the_play_takes_its_rules_from_taiko_logic() {
     // Words are the drawing's: the play keeps what happened, in no language.
     let sim = include_str!("../../crates/taiko-logic/src/sim.rs");
     assert!(!sim.contains("tr!("), "the play puts something in words");
+    // Nor does the rest of the crate: `tr!` and the language are the client's (`src/lang.rs`).
+    let logic = include_str!("../../crates/taiko-logic/src/lib.rs");
+    assert!(!logic.contains("mod lang"), "taiko-logic has a language");
 }
 
 thread_local! {

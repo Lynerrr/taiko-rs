@@ -15,6 +15,5 @@ serde_json = "1.0.154"
 rosu-pp = "4"
 
 [features]
-# For the tests of the crates using this one: its test helpers, and a language per thread as its
-# own tests have.
+# For the tests of the crates using this one: the helpers its own tests have.
 testing = []

@@ -1,10 +1,9 @@
 //! The game. Desktop builds start it from `main.rs` (`desktop_main`); Android loads this crate
 //! as a library and starts it from `android_main`.
 
-// `tr!`, for every module.
+// First, so `tr!` is there for every module after it.
 #[macro_use]
-extern crate taiko_logic;
-use taiko_logic::lang;
+mod lang;
 mod admin;
 #[cfg(target_os = "android")]
 mod android;
@@ -64,6 +63,7 @@ use taiko_logic::mods;
 #[cfg(test)]
 mod mods_tests;
 mod multiplayer;
+use mod_setup::multiverse::LookText as _;
 use taiko_logic::multiverse;
 mod net;
 use taiko_logic::od_override;
@@ -5538,12 +5538,12 @@ impl State {
                 let own = c.note_colours.custom;
                 let custom = format!(
                     "{}  #{:06x} / #{:06x}",
-                    multiverse::palette_label(multiverse::CUSTOM),
+                    mod_setup::multiverse::palette_label(multiverse::CUSTOM),
                     own[0],
                     own[1]
                 );
                 let names = (0..multiverse::PALETTES.len())
-                    .map(|i| multiverse::palette_label(i).to_string())
+                    .map(|i| mod_setup::multiverse::palette_label(i).to_string())
                     .chain(std::iter::once(custom))
                     .collect();
                 (

@@ -11,8 +11,9 @@
 
 // The game's `tr!`, for the text in its files below (the server always speaks English).
 #[macro_use]
-extern crate taiko_logic;
-use taiko_logic::lang;
+#[allow(dead_code)]
+#[path = "../../src/lang.rs"]
+mod lang;
 mod admin;
 mod avatars;
 mod card;

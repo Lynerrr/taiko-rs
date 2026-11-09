@@ -14,7 +14,7 @@ use crate::multiverse::{self, Universe};
 use crate::shapeshift;
 
 /// Where a play's diagnostic lines go: the client's audio log, once it's open (`log_to`).
-pub static LOG: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+static LOG: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
 
 /// Sends the plays' diagnostic lines (one at the end of each play) to `sink`. The first sink
 /// handed over stays; until then the lines aren't even written.
@@ -336,7 +336,6 @@ pub struct NoteBlock {
 }
 
 impl NoteBlock {
-    #[inline]
     pub fn index(notes: &[beatmap::Note]) -> Vec<Self> {
         notes
             .chunks(128)

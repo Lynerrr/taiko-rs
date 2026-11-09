@@ -8,6 +8,58 @@ use winit::keyboard::KeyCode;
 /// The columns of the setup: colours, shape, speed, then one per mod.
 pub(crate) const COLUMNS: usize = 3 + MODS.len();
 
+/// Palette `i`'s name as shown (`CUSTOM`: the player's own colours).
+pub(crate) fn palette_label(i: usize) -> &'static str {
+    match i {
+        0 => tr!("classic", "クラシック", "классика"),
+        1 => tr!("neon", "ネオン", "неон"),
+        2 => tr!("sunset", "夕焼け", "закат"),
+        3 => tr!("ice", "氷", "лёд"),
+        4 => tr!("forest", "森", "лес"),
+        5 => tr!("candy", "キャンディ", "конфеты"),
+        6 => tr!("ember", "残り火", "угли"),
+        7 => tr!("mono", "モノクロ", "моно"),
+        8 => tr!("toxic", "毒々しい", "токсик"),
+        9 => tr!("swapped", "入れ替え", "наоборот"),
+        _ => tr!("custom", "自分の色", "свои"),
+    }
+}
+
+/// A look's name as shown, in the player's language (its `name` is the config's): the words are
+/// the client's, taiko-logic keeps the looks in no language.
+pub(crate) trait LookText {
+    fn label(self) -> &'static str;
+}
+
+impl LookText for Colours {
+    fn label(self) -> &'static str {
+        palette_label(self.palette)
+    }
+}
+
+impl LookText for Shape {
+    fn label(self) -> &'static str {
+        match self {
+            Shape::Round => tr!("round", "丸", "круг"),
+            Shape::Square => tr!("square", "四角", "квадрат"),
+            Shape::Diamond => tr!("diamond", "ひし形", "ромб"),
+            Shape::Ring => tr!("ring", "輪", "кольцо"),
+            Shape::Pill => tr!("pill", "カプセル", "капсула"),
+        }
+    }
+}
+
+/// Every preset in the order the setup lists them: the built-in ones, then the player's.
+pub(crate) fn presets(own: &[Preset]) -> Vec<(String, [Universe; COUNT])> {
+    crate::multiverse::presets(
+        own,
+        [
+            tr!("defaults", "初期設定", "исходные"),
+            tr!("classic", "クラシック", "классика"),
+        ],
+    )
+}
+
 /// The Multiverse setup (M in the mod select): a row per universe, a column per setting, and
 /// the presets.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

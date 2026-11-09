@@ -47,11 +47,10 @@ impl Lang {
     }
 }
 
-// The render thread draws what the main thread set; tests each draw in their own language (this
-// crate's, and those of the crates that turn on `testing` for their tests).
-#[cfg(not(any(test, feature = "testing")))]
+// The render thread draws what the main thread set; tests each draw in their own language.
+#[cfg(not(test))]
 static CURRENT: AtomicU8 = AtomicU8::new(0);
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 thread_local! {
     static CURRENT: AtomicU8 = const { AtomicU8::new(0) };
 }
@@ -74,18 +73,18 @@ pub fn current() -> Lang {
     if let Some(lang) = BORROWED.with(std::cell::Cell::get) {
         return lang;
     }
-    #[cfg(not(any(test, feature = "testing")))]
+    #[cfg(not(test))]
     let i = CURRENT.load(Ordering::Relaxed);
-    #[cfg(any(test, feature = "testing"))]
+    #[cfg(test)]
     let i = CURRENT.with(|c| c.load(Ordering::Relaxed));
     Lang::ALL[i as usize % 3]
 }
 
 pub fn set(lang: Lang) {
     let i = Lang::ALL.iter().position(|&l| l == lang).unwrap_or(0) as u8;
-    #[cfg(not(any(test, feature = "testing")))]
+    #[cfg(not(test))]
     CURRENT.store(i, Ordering::Relaxed);
-    #[cfg(any(test, feature = "testing"))]
+    #[cfg(test)]
     CURRENT.with(|c| c.store(i, Ordering::Relaxed));
 }
 
@@ -116,7 +115,6 @@ pub const fn has_brace(s: &str) -> bool {
 /// Text in the current language: `tr!(english, japanese, russian)`, or with `format!`
 /// arguments after a `;` (each translation must use them all; just `;` formats in captured
 /// variables).
-#[macro_export]
 macro_rules! tr {
     ($en:literal, $ja:literal, $ru:literal $(,)?) => {{
         const {
