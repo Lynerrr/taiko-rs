@@ -116,7 +116,7 @@ pub(crate) fn results_job(
 }
 
 /// Gets an online score's replay from the server and keeps it as a replay file of our own.
-pub(crate) fn fetch_replay(
+fn fetch_replay(
     server: &str,
     score: &online::OnlineScore,
     map_path: &std::path::Path,

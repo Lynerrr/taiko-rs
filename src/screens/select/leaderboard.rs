@@ -4,12 +4,12 @@
 #[allow(unused_imports)]
 use crate::*;
 
-pub(crate) fn score_video_label() -> &'static str {
+fn score_video_label() -> &'static str {
     tr!("video", "動画", "видео")
 }
 
 /// How wide a leaderboard row's video button is.
-pub(crate) fn score_video_width() -> f32 {
+fn score_video_width() -> f32 {
     Canvas::text_width(6.0, score_video_label()) + 12.0
 }
 
@@ -19,14 +19,7 @@ pub(crate) const BOARD_HEAD: f32 = 28.0;
 /// The leaderboard's Local / Online buttons from `x`, and the way back to the preview and the
 /// map's website ending at `right`;
 /// returns the free span between them, for a hint.
-pub(crate) fn board_tabs(
-    c: &mut Canvas,
-    x: f32,
-    y: f32,
-    online: bool,
-    relax: bool,
-    right: f32,
-) -> [f32; 2] {
+fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: f32) -> [f32; 2] {
     let mut tx = x;
     for (label, on) in [
         (tr!("Local", "ローカル", "Локально"), false),
@@ -90,7 +83,7 @@ pub(crate) fn board_tabs(
 }
 
 /// A leaderboard's message in place of its rows, centred under its buttons.
-pub(crate) fn board_note(c: &mut Canvas, x: f32, y: f32, w: f32, note: &str) {
+fn board_note(c: &mut Canvas, x: f32, y: f32, w: f32, note: &str) {
     for (k, line) in mobile::wrap(7.0, w - 16.0, note, 3).iter().enumerate() {
         let ly = y + BOARD_HEAD + 14.0 + k as f32 * 14.0;
         c.text_centered(x + w / 2.0, ly, 7.0, rgba(0x9a9ab0, 1.0), line);
@@ -174,7 +167,7 @@ pub(crate) fn draw_online_leaderboard(
 pub(crate) const BOARD_ROW: f32 = 34.0;
 
 /// What a leaderboard row shows, local or online.
-pub(crate) struct BoardLine<'a> {
+struct BoardLine<'a> {
     place: usize,
     player: &'a str,
     score: u64,
@@ -192,7 +185,7 @@ pub(crate) struct BoardLine<'a> {
 /// (as chat shows it) over how it went, the score and when on the right. `video`: the local
 /// board's export button, at the far right.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn board_row(
+fn board_row(
     c: &mut Canvas,
     x: f32,
     ry: f32,
@@ -413,14 +406,7 @@ pub(crate) fn draw_divider(
 }
 
 /// A leaderboard's scroll bar right of its rows, when there are more than the `shown`.
-pub(crate) fn board_scrollbar(
-    c: &mut Canvas,
-    x: f32,
-    y: f32,
-    shown: usize,
-    first: usize,
-    total: usize,
-) {
+fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, total: usize) {
     if total <= shown || shown == 0 {
         return;
     }
