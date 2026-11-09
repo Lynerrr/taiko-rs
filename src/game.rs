@@ -64,7 +64,7 @@ fn black_lane() -> bool {
     playfield_look().black_lane
 }
 
-use crate::audio::{Sfx, Track};
+use crate::audio::Track;
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
@@ -73,6 +73,19 @@ use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
 use crate::shapeshift;
 use crate::tko::runtime::NoteFx;
+
+/// The sounds a play makes: the drum's, a broken combo, Overtime's scream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sound {
+    Don,
+    Kat,
+    BigDon,
+    BigKat,
+    /// A combo of 20 or more broken by a miss.
+    ComboBreak,
+    /// Overtime's jumpscare.
+    Scream,
+}
 
 /// What the play needs from the sound: its song played from a point, paused and moved, how far it
 /// has got, and hitsounds now or at a point of the song. The client's `audio::Engine` is one; a
@@ -83,8 +96,8 @@ pub trait Audio {
     fn play(&self, track: Arc<Track>, start_ms: f64);
     fn seek(&self, ms: f64);
     fn set_paused(&self, paused: bool);
-    fn sfx_at(&self, s: Sfx, volume: f32);
-    fn sfx_at_song(&self, s: Sfx, volume: f32, song_ms: f64);
+    fn sfx_at(&self, s: Sound, volume: f32);
+    fn sfx_at_song(&self, s: Sound, volume: f32, song_ms: f64);
     /// Output and input latency, ms.
     fn latencies_ms(&self) -> (f64, f64);
     /// Where the song has got at `now`, ms.
@@ -454,7 +467,7 @@ pub struct Game {
     pub live_pp: Option<crate::pp::Live>,
     live_pp_value: Option<f64>,
     /// When set, every hitsound played is logged (map time, sound, volume), e.g. for video audio.
-    pub sfx_log: Option<Vec<(f64, Sfx, f32)>>,
+    pub sfx_log: Option<Vec<(f64, Sound, f32)>>,
     /// A miss broke a combo of 20 or more at this map time: the combo break sound is due.
     combo_break: Option<f64>,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
@@ -1572,7 +1585,7 @@ impl Game {
     /// Autoplay sounds to start ahead of their hits: every hit within `lead` ms of song time of
     /// the clock, once, as (song ms to start at, sound, volume). Swell presses are decided on the
     /// fly and aren't planned. Judging is untouched: each hit still lands at its note's time.
-    fn plan_auto_sounds(&mut self, lead: f64) -> Vec<(f64, Sfx, f32)> {
+    fn plan_auto_sounds(&mut self, lead: f64) -> Vec<(f64, Sound, f32)> {
         let mut out = Vec::new();
         let horizon = self.speed.track(self.time) + lead;
         self.auto_sched.retain(|&(i, _)| i >= self.cursor);
@@ -1593,10 +1606,10 @@ impl Game {
                         // The second hand's press of a big note is the finisher (`judge_press`).
                         let finisher = big && j > 0 && (keys[j - 1] < 2) != (key < 2);
                         let sfx = match (kind == Kind::Kat, finisher) {
-                            (false, false) => Sfx::Don,
-                            (false, true) => Sfx::BigDon,
-                            (true, false) => Sfx::Kat,
-                            (true, true) => Sfx::BigKat,
+                            (false, false) => Sound::Don,
+                            (false, true) => Sound::BigDon,
+                            (true, false) => Sound::Kat,
+                            (true, true) => Sound::BigKat,
                         };
                         out.push((
                             self.speed.track(time) + self.offset + self.latency,
@@ -1622,9 +1635,9 @@ impl Game {
                         if self.auto_sched.insert((i, k)) {
                             let key = crate::autoplay::roll_key(k, self.autoplay_style.left_handed);
                             let sfx = if key == 0 || key == 3 {
-                                Sfx::Kat
+                                Sound::Kat
                             } else {
-                                Sfx::Don
+                                Sound::Don
                             };
                             let song_ms = self.speed.track(at) + self.offset + self.latency;
                             out.push((song_ms, sfx, self.volume_at(at)));
@@ -1678,10 +1691,10 @@ impl Game {
             return;
         };
         if let Some(log) = &mut self.sfx_log {
-            log.push((t, Sfx::ComboBreak, COMBO_BREAK_GAIN));
+            log.push((t, Sound::ComboBreak, COMBO_BREAK_GAIN));
         }
         if let Some(a) = audio.filter(|_| !self.mute_hits) {
-            a.sfx_at(Sfx::ComboBreak, COMBO_BREAK_GAIN);
+            a.sfx_at(Sound::ComboBreak, COMBO_BREAK_GAIN);
         }
     }
 
@@ -1698,10 +1711,10 @@ impl Game {
                 continue;
             }
             if let Some(log) = &mut self.sfx_log {
-                log.push((at, Sfx::Scream, 1.0));
+                log.push((at, Sound::Scream, 1.0));
             }
             if let Some(a) = audio.filter(|_| !self.mute_hits) {
-                a.sfx_at(Sfx::Scream, 1.0);
+                a.sfx_at(Sound::Scream, 1.0);
             }
         }
     }
@@ -2170,7 +2183,7 @@ impl Game {
         let sfx = self.press_at(key, t, audio);
         if alternate {
             let hit = self.stats.great + self.stats.ok > hits;
-            let finisher = hit && matches!(sfx, Sfx::BigDon | Sfx::BigKat);
+            let finisher = hit && matches!(sfx, Sound::BigDon | Sound::BigKat);
             // A finisher counts as two notes, so either hand may hit next; after a drumroll or
             // a swell, either hand may until one hits a note.
             self.last_hand = if free_run || finisher || (self.last_hand.is_none() && !hit) {
@@ -2182,7 +2195,7 @@ impl Game {
     }
 
     /// A press judged at map time `t` (live, or from a replay); the sound it makes.
-    fn press_at(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>) -> Sfx {
+    fn press_at(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>) -> Sound {
         let kat = if self.mods.has(Mod::Relax) {
             self.relax_colour(t, key == 0 || key == 3)
         } else {
@@ -2264,9 +2277,9 @@ impl Game {
         }
     }
 
-    fn judge_press(&mut self, key: usize, kat: bool, t: f64) -> Sfx {
-        let normal = if kat { Sfx::Kat } else { Sfx::Don };
-        let big = if kat { Sfx::BigKat } else { Sfx::BigDon };
+    fn judge_press(&mut self, key: usize, kat: bool, t: f64) -> Sound {
+        let normal = if kat { Sound::Kat } else { Sound::Don };
+        let big = if kat { Sound::BigKat } else { Sound::BigDon };
         self.expire(t);
 
         if let Some(s) = &self.strong {

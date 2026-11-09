@@ -71,6 +71,20 @@ impl Sfx {
     }
 }
 
+impl From<crate::game::Sound> for Sfx {
+    fn from(s: crate::game::Sound) -> Sfx {
+        use crate::game::Sound;
+        match s {
+            Sound::Don => Sfx::Don,
+            Sound::Kat => Sfx::Kat,
+            Sound::BigDon => Sfx::BigDon,
+            Sound::BigKat => Sfx::BigKat,
+            Sound::ComboBreak => Sfx::ComboBreak,
+            Sound::Scream => Sfx::Scream,
+        }
+    }
+}
+
 /// One sound per `Sfx`.
 pub type Sounds = [Arc<[f32]>; 12];
 
@@ -742,12 +756,12 @@ impl crate::game::Audio for Engine {
         Engine::set_paused(self, paused);
     }
 
-    fn sfx_at(&self, s: Sfx, volume: f32) {
-        Engine::sfx_at(self, s, volume);
+    fn sfx_at(&self, s: crate::game::Sound, volume: f32) {
+        Engine::sfx_at(self, s.into(), volume);
     }
 
-    fn sfx_at_song(&self, s: Sfx, volume: f32, song_ms: f64) {
-        Engine::sfx_at_song(self, s, volume, song_ms);
+    fn sfx_at_song(&self, s: crate::game::Sound, volume: f32, song_ms: f64) {
+        Engine::sfx_at_song(self, s.into(), volume, song_ms);
     }
 
     fn latencies_ms(&self) -> (f64, f64) {
@@ -762,6 +776,21 @@ impl crate::game::Audio for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_sound_of_a_play_is_the_hitsound_of_its_name() {
+        use crate::game::Sound;
+        for s in [
+            Sound::Don,
+            Sound::Kat,
+            Sound::BigDon,
+            Sound::BigKat,
+            Sound::ComboBreak,
+            Sound::Scream,
+        ] {
+            assert_eq!(format!("{:?}", Sfx::from(s)), format!("{s:?}"));
+        }
+    }
 
     #[test]
     fn cached_sounds_share_samples_but_custom_hits_keep_their_mix() {

@@ -407,10 +407,10 @@ impl Audio for Heard {
     fn set_paused(&self, paused: bool) {
         self.0.borrow_mut().push(format!("paused {paused}"));
     }
-    fn sfx_at(&self, s: Sfx, _: f32) {
+    fn sfx_at(&self, s: Sound, _: f32) {
         self.0.borrow_mut().push(format!("sfx {s:?}"));
     }
-    fn sfx_at_song(&self, s: Sfx, _: f32, _: f64) {
+    fn sfx_at_song(&self, s: Sound, _: f32, _: f64) {
         self.0.borrow_mut().push(format!("sfx {s:?}"));
     }
     fn latencies_ms(&self) -> (f64, f64) {
@@ -435,6 +435,7 @@ fn the_play_reaches_its_sound_through_the_audio_port() {
         !sim.contains("&Engine"),
         "game.rs takes the client's sound engine itself"
     );
+    assert!(!sim.contains("Sfx"), "game.rs names the client's sounds");
 }
 
 #[test]
@@ -1162,13 +1163,13 @@ fn a_long_combo_broken_plays_the_combo_break_once() {
     let log = g.sfx_log.take().unwrap();
     let breaks: Vec<f64> = log
         .iter()
-        .filter(|e| matches!(e.1, Sfx::ComboBreak))
+        .filter(|e| matches!(e.1, Sound::ComboBreak))
         .map(|e| e.0)
         .collect();
     assert_eq!(breaks.len(), 1, "{breaks:?}");
     assert!(
         log.iter()
-            .filter(|e| !matches!(e.1, Sfx::ComboBreak))
+            .filter(|e| !matches!(e.1, Sound::ComboBreak))
             .all(|e| e.2 == 1.0)
     );
 }
@@ -1664,14 +1665,14 @@ fn autoplay_hands_each_sound_over_once_at_its_notes_place_in_the_song() {
     g.time = 850.0;
     let got = g.plan_auto_sounds(200.0);
     assert_eq!(got.len(), 1);
-    assert_eq!((got[0].0, got[0].1), (1030.0, Sfx::Don));
+    assert_eq!((got[0].0, got[0].1), (1030.0, Sound::Don));
     // Not twice, however often it is asked.
     assert!(g.plan_auto_sounds(200.0).is_empty());
     g.time = 1400.0;
     let got = g.plan_auto_sounds(200.0);
     assert_eq!(
         got.iter().map(|g| (g.0, g.1)).collect::<Vec<_>>(),
-        [(1530.0, Sfx::Kat)]
+        [(1530.0, Sound::Kat)]
     );
     // The hit finds its sound already sent and leaves it be.
     g.time = 1000.0;
@@ -1682,8 +1683,8 @@ fn autoplay_hands_each_sound_over_once_at_its_notes_place_in_the_song() {
     g.time = 1900.0;
     let got = g.plan_auto_sounds(200.0);
     assert!(!got.is_empty() && got.iter().all(|s| s.0 == 2030.0));
-    assert_eq!(got[0].1, Sfx::Don);
-    assert!(got[1..].iter().all(|s| s.1 == Sfx::BigDon));
+    assert_eq!(got[0].1, Sound::Don);
+    assert!(got[1..].iter().all(|s| s.1 == Sound::BigDon));
     // Roll ticks, each at its own place.
     g.time = 2900.0;
     let ticks = g.plan_auto_sounds(600.0);
@@ -3216,7 +3217,7 @@ fn overtime_screams_once_per_scare() {
             .as_ref()
             .unwrap()
             .iter()
-            .filter(|e| matches!(e.1, Sfx::Scream))
+            .filter(|e| matches!(e.1, Sound::Scream))
             .count()
     };
     assert_eq!(screams(&g), 1);
