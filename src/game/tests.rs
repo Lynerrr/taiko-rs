@@ -3846,3 +3846,52 @@ fn a_hidden_group_is_not_drawn_but_the_notes_stay_hittable() {
     }
     assert!(hidden.stats.great > 30 && hidden.stats.miss == 0);
 }
+
+#[test]
+fn the_play_takes_its_rules_from_taiko_logic() {
+    // What already moved to taiko-logic game.rs takes from there, and the client's audio log it
+    // only reaches through the sink it's handed (`log_to`): nothing of it holds the play back.
+    let sim = include_str!("../game.rs");
+    for module in [
+        "autoplay",
+        "calibrate",
+        "clock",
+        "od_override",
+        "shapeshift",
+        "tact",
+        "audiolog",
+    ] {
+        assert!(
+            !sim.contains(&format!("crate::{module}")),
+            "game.rs names crate::{module}"
+        );
+    }
+}
+
+thread_local! {
+    static LOGGED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn record(line: &str) {
+    LOGGED.with(|l| l.borrow_mut().push(line.to_owned()));
+}
+
+#[test]
+fn a_play_s_end_goes_to_the_log_it_was_handed() {
+    // The client hands over its audio log (`audiolog::start`); a play's line goes wherever it's
+    // told. Here: 40 hits 12 ms late under a -2 ms offset wanted an offset of 10 ms.
+    log_to(record);
+    let mut p = game();
+    p.stats.errors = vec![12.0; 40];
+    p.stats.error_offsets = vec![-2.0; 40];
+    drop(p);
+    let logged = LOGGED.with(|l| l.take());
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert!(
+        logged[0].starts_with("end ")
+            && logged[0].contains(" hits=40 ")
+            && logged[0].contains(" wanted=10.0 "),
+        "{}",
+        logged[0]
+    );
+}
