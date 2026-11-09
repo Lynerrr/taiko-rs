@@ -12,7 +12,7 @@ use rosu_pp::{Beatmap, Difficulty};
 /// Section length of lazer's strain skills (in rate-adjusted time).
 const SECTION_MS: f64 = 400.0;
 
-pub(crate) fn load(path: &Path) -> Option<Beatmap> {
+pub fn load(path: &Path) -> Option<Beatmap> {
     let mut map = Beatmap::from_path(path).ok()?;
     drop_tiny_sliders(&mut map);
     calculable(&map).then_some(map)
@@ -48,7 +48,7 @@ const MAX_TAIKO_OBJECTS: usize = 200_000;
 
 /// Whether a map can be rated: maps built to break calculators (absurd density, length or
 /// object count) are skipped, as osu! would time out.
-pub(crate) fn calculable(map: &Beatmap) -> bool {
+pub fn calculable(map: &Beatmap) -> bool {
     use rosu_pp::model::beatmap::TooSuspicious;
     match map.check_suspicion() {
         Ok(()) => true,
@@ -81,7 +81,7 @@ fn reasonable_taiko(times: &[f64]) -> bool {
 /// The map at `path` as a play with `mods` has it: Half takes notes off (by `half`), Swap and
 /// Random change their colours (like `game::apply_to_map`), and pp and star ratings go by what's
 /// left. `seed`: Random's colouring (`Game::seed`).
-pub(crate) fn load_played(
+pub fn load_played(
     path: &Path,
     mods: crate::mods::Mods,
     seed: u64,
@@ -128,7 +128,7 @@ pub(crate) fn load_played(
             }
             let kat = (bits & RIM != 0) != swap;
             let kat = if random {
-                !crate::game::random_don(object.start_time, seed)
+                !crate::sim::random_don(object.start_time, seed)
             } else {
                 kat
             };

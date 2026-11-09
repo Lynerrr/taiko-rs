@@ -595,13 +595,15 @@ spins so frames stay evenly spaced.
 
 | File | |
 | --- | --- |
-| `crates/taiko-logic` | the game's rules without the client: maps, mods, Defense, tko's model and runtime, the font, autoplay, the clock (the client re-exports each module under its old name) |
+| `crates/taiko-logic` | the game's rules without the client: maps, mods, the play itself, star ratings and pp, Defense, tko's model and runtime, the font, autoplay, the clock (the client re-exports each module under its old name) |
 | `crates/taiko-logic/src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
 | `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, built-in hitsounds |
 | `crates/taiko-logic/src/clock.rs` | audio-slaved smooth game clock |
-| `src/game.rs` | the play: judging, scoring, HP, autoplay, Defense (and what the mods do to them) |
-| `src/game/setup.rs` | a map made ready to play: the mods' changes to notes and speeds, Multiverse focus, Roulette |
-| `src/game/rails.rs` | the rails mods' lane shapes and the path along one |
+| `crates/taiko-logic/src/sim.rs` | the play: judging, scoring, HP, autoplay, Defense (and what the mods do to them) |
+| `crates/taiko-logic/src/sim/setup.rs` | a map made ready to play: the mods' changes to notes and speeds, Multiverse focus, Roulette |
+| `crates/taiko-logic/src/sim/rails.rs` | the rails mods' lane shapes and the path along one |
+| `crates/taiko-logic/src/stars.rs`, `pp.rs` | star ratings and pp (rosu-pp), with the mods' own factors |
+| `src/game.rs` | the play as the client shows it: re-exports `taiko_logic::sim`, keeps the frame's look and note colours |
 | `src/game/field.rs` | drawing the playfield: lane, notes, drum, judgements, the mods' looks |
 | `src/game/hud_draw.rs` | drawing the HUD parts (score, combo, HP, accuracy, hit error) and the pause menu |
 | `crates/taiko-logic/src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |

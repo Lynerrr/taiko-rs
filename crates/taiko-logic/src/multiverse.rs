@@ -13,7 +13,7 @@ pub const COUNT: usize = 8;
 /// Note colours: (name, don, kat). Dons are always the darker of the two, as in the classic
 /// colours, so they tell apart by brightness too.
 pub const PALETTES: [(&str, u32, u32); 10] = [
-    ("classic", crate::game::DON, crate::game::KAT),
+    ("classic", crate::sim::DON, crate::sim::KAT),
     ("neon", 0xff3fb4, 0x2fe0ff),
     ("sunset", 0xd9541a, 0xa98bff),
     ("ice", 0x2f5fd0, 0x9fe8ff),
@@ -24,23 +24,6 @@ pub const PALETTES: [(&str, u32, u32); 10] = [
     ("toxic", 0xc04dff, 0xb8ff3a),
     ("swapped", 0x2f6f96, 0xff7a5c),
 ];
-
-/// Palette `i`'s name as shown (`CUSTOM`: the player's own colours).
-pub fn palette_label(i: usize) -> &'static str {
-    match i {
-        0 => tr!("classic", "クラシック", "классика"),
-        1 => tr!("neon", "ネオン", "неон"),
-        2 => tr!("sunset", "夕焼け", "закат"),
-        3 => tr!("ice", "氷", "лёд"),
-        4 => tr!("forest", "森", "лес"),
-        5 => tr!("candy", "キャンディ", "конфеты"),
-        6 => tr!("ember", "残り火", "угли"),
-        7 => tr!("mono", "モノクロ", "моно"),
-        8 => tr!("toxic", "毒々しい", "токсик"),
-        9 => tr!("swapped", "入れ替え", "наоборот"),
-        _ => tr!("custom", "自分の色", "свои"),
-    }
-}
 
 /// `Colours::palette` for the player's own colours (after the palettes).
 pub const CUSTOM: usize = PALETTES.len();
@@ -60,37 +43,37 @@ pub struct Colours {
 impl Colours {
     pub const CLASSIC: Colours = Colours {
         palette: 0,
-        custom: [crate::game::DON, crate::game::KAT],
+        custom: [crate::sim::DON, crate::sim::KAT],
     };
 
+    #[inline]
     pub fn don(self) -> u32 {
         PALETTES.get(self.palette).map_or(self.custom[0], |p| p.1)
     }
 
+    #[inline]
     pub fn kat(self) -> u32 {
         PALETTES.get(self.palette).map_or(self.custom[1], |p| p.2)
     }
 
+    #[inline]
     pub fn name(self) -> &'static str {
         PALETTES.get(self.palette).map_or("custom", |p| p.0)
     }
 
-    /// Its name as shown (`name` is the config's).
-    pub fn label(self) -> &'static str {
-        palette_label(self.palette)
-    }
-
     /// Dons and kats alike, out of focus: grey with a hint of the colours (but not which is
     /// which).
+    #[inline]
     pub fn idle(self) -> u32 {
         if self.palette == 0 {
             GREY
         } else {
-            crate::game::mix(GREY, crate::game::mix(self.don(), self.kat(), 0.5), 0.35)
+            crate::sim::mix(GREY, crate::sim::mix(self.don(), self.kat(), 0.5), 0.35)
         }
     }
 
     /// The next (`dir` 1) or previous palette; the player's own come after the last.
+    #[inline]
     pub fn step(self, dir: i32) -> Colours {
         Colours {
             palette: (self.palette as i32 + dir).rem_euclid(CUSTOM as i32 + 1) as usize,
@@ -134,6 +117,7 @@ impl Colours {
     }
 
     /// `format`'s form (the config's `note_colours`).
+    #[inline]
     pub fn parse(s: &str) -> Colours {
         let mut out = Colours::CLASSIC;
         for word in s.split_whitespace() {
@@ -181,6 +165,7 @@ impl Shape {
         Shape::Pill,
     ];
 
+    #[inline]
     pub fn name(self) -> &'static str {
         match self {
             Shape::Round => "round",
@@ -188,17 +173,6 @@ impl Shape {
             Shape::Diamond => "diamond",
             Shape::Ring => "ring",
             Shape::Pill => "pill",
-        }
-    }
-
-    /// Its name as shown (`name` is the config's).
-    pub fn label(self) -> &'static str {
-        match self {
-            Shape::Round => tr!("round", "丸", "круг"),
-            Shape::Square => tr!("square", "四角", "квадрат"),
-            Shape::Diamond => tr!("diamond", "ひし形", "ромб"),
-            Shape::Ring => tr!("ring", "輪", "кольцо"),
-            Shape::Pill => tr!("pill", "カプセル", "капсула"),
         }
     }
 }
@@ -239,18 +213,22 @@ impl Universe {
         mods: Mods::NONE,
     };
 
+    #[inline]
     pub fn don(&self) -> u32 {
         self.colours.don()
     }
 
+    #[inline]
     pub fn kat(&self) -> u32 {
         self.colours.kat()
     }
 
+    #[inline]
     pub fn idle(&self) -> u32 {
         self.colours.idle()
     }
 
+    #[inline]
     pub fn speed(&self) -> f64 {
         SPEEDS[self.speed]
     }
@@ -378,6 +356,7 @@ pub fn format(all: &[Universe; COUNT]) -> String {
         .join("; ")
 }
 
+#[inline]
 pub fn parse(s: &str) -> [Universe; COUNT] {
     let parts: Vec<&str> = s.split(';').collect();
     let base = defaults();
@@ -401,6 +380,7 @@ impl Preset {
         format!("{}: {}", self.name, format(&self.universes))
     }
 
+    #[inline]
     pub fn parse(s: &str) -> Option<Preset> {
         let (name, rest) = s.split_once(':')?;
         let name = clean_name(name);
@@ -412,7 +392,7 @@ impl Preset {
 }
 
 /// A preset name as typed, without what the config uses to separate things.
-pub(crate) fn clean_name(s: &str) -> String {
+pub fn clean_name(s: &str) -> String {
     s.chars()
         .filter(|c| !c.is_control() && !matches!(c, ':' | ';'))
         .collect::<String>()
@@ -422,33 +402,33 @@ pub(crate) fn clean_name(s: &str) -> String {
         .collect()
 }
 
-/// Every preset in the order the setup lists them: the built-in ones, then the player's.
-pub(crate) fn presets(own: &[Preset]) -> Vec<(String, [Universe; COUNT])> {
-    let builtin = [
-        (
-            tr!("defaults", "初期設定", "исходные").to_string(),
-            defaults(),
-        ),
-        (
-            tr!("classic", "クラシック", "классика").to_string(),
-            classic(),
-        ),
-    ];
-    builtin
-        .into_iter()
-        .chain(own.iter().map(|p| (p.name.clone(), p.universes)))
-        .collect()
+/// Every preset in the order the setup lists them: the built-in ones (named `builtin`: what
+/// they are called is up to whoever shows them), then the player's.
+pub fn presets(
+    own: &[Preset],
+    builtin: [&str; BUILTIN_PRESETS],
+) -> Vec<(String, [Universe; COUNT])> {
+    let [first, second] = builtin;
+    [
+        (first.to_string(), defaults()),
+        (second.to_string(), classic()),
+    ]
+    .into_iter()
+    .chain(own.iter().map(|p| (p.name.clone(), p.universes)))
+    .collect()
 }
-pub(crate) const BUILTIN_PRESETS: usize = 2;
+pub const BUILTIN_PRESETS: usize = 2;
 
 static CURRENT: RwLock<[Universe; COUNT]> = RwLock::new([Universe::CLASSIC; COUNT]);
 static NOTE_COLOURS: RwLock<Colours> = RwLock::new(Colours::CLASSIC);
 
 /// The universes Multiverse plays are drawn with (from the config).
+#[inline]
 pub fn set(all: [Universe; COUNT]) {
     *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = all;
 }
 
+#[inline]
 pub fn get() -> [Universe; COUNT] {
     *CURRENT.read().unwrap_or_else(|e| e.into_inner())
 }
@@ -461,11 +441,6 @@ pub fn set_note_colours(colours: Colours) {
 
 pub fn configured_note_colours() -> Colours {
     *NOTE_COLOURS.read().unwrap_or_else(|e| e.into_inner())
-}
-
-/// The note colours of plays without Multiverse, as this thread draws them (`game::playfield_look`).
-pub fn note_colours() -> Colours {
-    crate::game::playfield_look().note_colours
 }
 
 /// Text being typed in the setup.
@@ -489,36 +464,6 @@ pub enum Action {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_frame_s_note_colours_hold_while_another_thread_sets_them() {
-        let mine = Colours {
-            palette: 0,
-            custom: [0x112233, 0x445566],
-        };
-        crate::game::set_frame_look(Some(crate::game::Look {
-            note_colours: mine,
-            ..crate::game::Look::default()
-        }));
-        std::thread::spawn(|| {
-            for i in 0..1000 {
-                set_note_colours(Colours {
-                    palette: 0,
-                    custom: [i, i],
-                });
-            }
-        })
-        .join()
-        .unwrap();
-        assert_eq!(note_colours(), mine);
-        crate::game::set_frame_look(None);
-        assert_ne!(
-            note_colours(),
-            mine,
-            "without a frame: the configured colours"
-        );
-        set_note_colours(Colours::CLASSIC);
-    }
 
     #[test]
     fn dons_are_darker_than_kats_in_every_palette() {

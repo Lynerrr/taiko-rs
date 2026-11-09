@@ -2257,7 +2257,7 @@ impl Select {
                     // A note for the song, as on the main menu: a don for taiko maps, a kat for
                     // converts; the open song's bigger and lit.
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
-                    let colours = crate::multiverse::note_colours();
+                    let colours = crate::game::note_colours();
                     let tag = if any_taiko {
                         colours.don()
                     } else {

@@ -1,4 +1,4 @@
-"""Builds taiko5x7.woff2, the website's font, from the game's own 5x7 LCD font (src/font.rs).
+"""Builds taiko5x7.woff2, the website's font, from the game's own 5x7 LCD font (crates/taiko-logic/src/font.rs).
 
     python3 server/site/build_font.py
 

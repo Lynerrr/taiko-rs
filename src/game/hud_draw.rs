@@ -162,7 +162,7 @@ impl Play {
             );
             c.rect(px + 14.0, py + 78.0, pw - 28.0, 1.0, rgba(0x2a2a38, 1.0));
             c.fade_since(start, t, 1.0);
-            let colours = crate::multiverse::note_colours();
+            let colours = crate::game::note_colours();
             let (rx, rw) = (px + 12.0, pw - 24.0);
             let test = self.view.test_play;
             let items = (0..PAUSE_ITEMS).map(|i| match i {

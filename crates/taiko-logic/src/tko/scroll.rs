@@ -63,11 +63,13 @@ impl ScrollTable {
     }
 
     /// The speed at chart time `t`.
+    #[inline]
     pub fn speed(&self, t: f64) -> f64 {
         self.speeds.value(t, 1.0)
     }
 
     /// How far the song has scrolled by chart time `t`, in ms at speed 1.
+    #[inline]
     pub fn x(&self, t: f64) -> f64 {
         let keys = &self.speeds.keys;
         let (t0, _) = self.at[0];

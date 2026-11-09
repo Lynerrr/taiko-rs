@@ -125,12 +125,14 @@ impl PathTable {
         Some(PathTable { pts, cum })
     }
 
+    #[inline]
     pub fn len(&self) -> f32 {
         self.cum.last().copied().unwrap_or(0.0)
     }
 
     /// The point `d` along the path from its start; before the start and past the drum it goes
     /// on straight the way the path heads there.
+    #[inline]
     pub fn at(&self, d: f32) -> [f32; 2] {
         let n = self.pts.len();
         let along = |a: [f32; 2], b: [f32; 2], over: f32| {
@@ -153,6 +155,7 @@ impl PathTable {
     }
 
     /// Where a note `s` along a lane `lane` long sits on the path, from the drum.
+    #[inline]
     pub fn place(&self, path: &NotePath, s: f32, lane: f32) -> [f32; 2] {
         let lane = lane.max(1.0);
         let u = s / lane;

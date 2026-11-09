@@ -1051,7 +1051,7 @@ fn draw_touch(c: &mut Canvas, i: usize, hold: Option<u32>, cfg: &Config) {
     let mut row = y + 52.0;
     if i == 0 {
         // The columns, as they come out.
-        let colours = crate::multiverse::note_colours();
+        let colours = crate::game::note_colours();
         let (bx, bw, bh) = (x + 20.0, w - 40.0, 96.0);
         let col_w = bw / 4.0;
         for (k, key) in cfg.touch_layout.keys().into_iter().enumerate() {

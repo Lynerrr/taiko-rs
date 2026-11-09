@@ -13,7 +13,10 @@ mod tests {
         // The settings and what the mods do with them stay free of the drawing layers, so they can
         // move to taiko-logic; their panels are drawn here.
         let logic = [
-            ("multiverse", include_str!("multiverse.rs")),
+            (
+                "multiverse",
+                include_str!("../crates/taiko-logic/src/multiverse.rs"),
+            ),
             (
                 "od_override",
                 include_str!("../crates/taiko-logic/src/od_override.rs"),
@@ -23,7 +26,7 @@ mod tests {
                 include_str!("../crates/taiko-logic/src/shapeshift.rs"),
             ),
             ("tact", include_str!("../crates/taiko-logic/src/tact.rs")),
-            ("stars", include_str!("stars.rs")),
+            ("stars", include_str!("../crates/taiko-logic/src/stars.rs")),
         ];
         for (name, src) in logic {
             for layer in ["hit", "render", "mobile", "social", "style", "mod_setup"] {

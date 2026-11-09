@@ -191,6 +191,7 @@ impl Default for NoteFx {
 
 impl NoteFx {
     /// Tells a lie about its colour or size that still shows.
+    #[inline]
     pub fn lies(&self) -> bool {
         (self.lie_kat.is_some() || self.lie_big.is_some()) && self.truth < 1.0
     }
@@ -272,6 +273,7 @@ fn mix(mut z: u64) -> u64 {
 }
 
 /// A number in 0..1 from a seed and two keys: the graph's only source of randomness.
+#[inline]
 pub fn hash01(seed: u64, a: u64, b: u64) -> f64 {
     let h = mix(seed ^ mix(a ^ mix(b.wrapping_add(0x51))));
     (h >> 11) as f64 / (1u64 << 53) as f64
@@ -405,7 +407,8 @@ fn note_slot(p: NoteProp) -> usize {
 impl Runtime {
     /// `note_times`: the map's notes, in order, on the game's clock, which is `shift` ms ahead of
     /// the chart's. Without beat sections the graph's beat and kiai events never fire.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
+    #[inline]
     pub fn new(
         gimmick: Arc<Gimmick>,
         note_times: impl Iterator<Item = f64>,
@@ -529,7 +532,7 @@ impl Runtime {
         rt
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn gimmick(&self) -> &Gimmick {
         &self.gimmick
     }
@@ -863,6 +866,7 @@ impl Runtime {
     }
 
     /// The layer clips on screen at `t`, in the order they're drawn (by start), with how each is.
+    #[inline]
     pub fn layers(&self, t: f64) -> Vec<(&crate::tko::clips::Layer, crate::tko::clips::LayerAt)> {
         self.gimmick
             .clips
@@ -1173,6 +1177,7 @@ impl Runtime {
             .map(|m| t - self.shift - m)
     }
 
+    #[inline]
     pub fn field(&self, t: f64) -> FieldFx {
         self.field_with(t, CALM.load(Ordering::Relaxed))
     }
@@ -1259,6 +1264,7 @@ impl Runtime {
 
     /// Where note `i`, `s` along a lane `lane` long, sits on its group's path at game time `t`:
     /// from the drum, and how far it is off the lane onto the path. None off any path.
+    #[inline]
     pub fn note_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
         self.path_of(self.group_of(i)?, t, s, lane)
     }
@@ -1286,11 +1292,13 @@ impl Runtime {
 
     /// The shared scroll and how far the game's clock is ahead of the chart's, to place notes
     /// with while the runtime is busy elsewhere.
+    #[inline]
     pub fn shared_scroll(&self) -> Option<(Arc<ScrollTable>, f64)> {
         Some((self.scroll.clone()?, self.shift))
     }
 
     /// The paths drawn for the player at game time `t`, with how far notes are on each.
+    #[inline]
     pub fn shown_paths(&self, t: f64) -> impl Iterator<Item = (&PathTable, f32)> {
         let t = t - self.shift;
         self.gimmick
@@ -1306,6 +1314,7 @@ impl Runtime {
 
     /// What note `i` is doing at game time `t`; nothing for a note in no group while no clip
     /// moves all the notes.
+    #[inline]
     pub fn note(&self, i: usize, t: f64) -> Option<NoteFx> {
         let n = self.notes.get(i)?;
         let gi = self.group_of(i);
@@ -1337,6 +1346,7 @@ impl Runtime {
     }
 
     /// What fake note `i` is doing at game time `t`, like `note`.
+    #[inline]
     pub fn fake(&self, i: usize, t: f64) -> Option<NoteFx> {
         let f = self.gimmick.fakes.get(i)?;
         let gi = self.fake_group_of(i);
@@ -1375,6 +1385,7 @@ impl Runtime {
     }
 
     /// Where fake note `i` sits on its group's path, like `note_path`.
+    #[inline]
     pub fn fake_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
         self.path_of(self.fake_group_of(i)?, t, s, lane)
     }

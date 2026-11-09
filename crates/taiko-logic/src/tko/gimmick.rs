@@ -85,6 +85,7 @@ pub enum PropGroup {
 impl PropGroup {
     pub const ALL: [PropGroup; 3] = [PropGroup::Move, PropGroup::Look, PropGroup::Clones];
 
+    #[inline]
     pub fn label(self) -> &'static str {
         match self {
             PropGroup::Move => "Move",
@@ -374,6 +375,7 @@ impl NoteProp {
         NoteProp::TintHue,
     ];
 
+    #[inline]
     pub fn name(self) -> &'static str {
         match self {
             NoteProp::Dx => "dx",
@@ -390,6 +392,7 @@ impl NoteProp {
     }
 
     /// One line on what it does, for tooltips.
+    #[inline]
     pub fn about(self) -> &'static str {
         match self {
             NoteProp::Dx => "Slides the notes of the group sideways on screen.",
@@ -648,6 +651,7 @@ pub struct FakeNote {
 }
 
 impl Gimmick {
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.field.values().all(Track::is_empty)
             && self.groups.iter().all(|g| {
