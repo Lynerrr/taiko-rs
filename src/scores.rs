@@ -307,6 +307,28 @@ impl Replay {
     }
 }
 
+/// A replay game with no audio, at its start.
+pub fn replay_game(
+    map: &crate::beatmap::Beatmap,
+    track: &std::sync::Arc<crate::audio::Track>,
+    r: &Replay,
+) -> crate::game::Game {
+    let mut g = crate::game::Game::with_half(
+        map.clone(),
+        track.clone(),
+        None,
+        crate::mods::Mods::from_list(&r.mods),
+        r.seed,
+        r.half_rule(),
+    );
+    g.replay = Some((r.inputs.clone(), 0));
+    g.mash = r.mash();
+    g.scoring = r.scoring();
+    g.set_window_rule(r.window_rule());
+    g.mute_hits = true;
+    g
+}
+
 /// Plays a replay through its map, silently, for everything the results screen shows that the
 /// replay doesn't keep (hit errors, drumrolls, big notes) and the hit windows. None if the map
 /// can't be read.
@@ -317,7 +339,7 @@ pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crat
         rate: r.rate,
         stream: None,
     });
-    let mut g = crate::video::replay_game(&map, &track, r);
+    let mut g = replay_game(&map, &track, r);
     // Frame by frame, as it was played.
     let end = g.end_time() + 2000.0;
     let mut t = g.time;

@@ -47,34 +47,8 @@ pub const SPEEDS: [(&str, &str); 3] = [
 /// Motion blur: (name, frames blended into each, the share of the frame time they span).
 pub const BLURS: [(&str, usize, f64); 3] = [("off", 1, 0.0), ("light", 4, 0.5), ("strong", 8, 1.0)];
 
-/// How a video is exported (all remembered in the config).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Settings {
-    pub size: usize,
-    pub fps: usize,
-    pub quality: usize,
-    /// The size aimed under with the "target size" quality (MB, 1 MB = 1,000,000 bytes).
-    pub target_mb: f64,
-    pub speed: usize,
-    pub blur: usize,
-    pub hud: bool,
-    pub hitsounds: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Settings {
-        Settings {
-            size: 1,
-            fps: 1,
-            quality: 1,
-            target_mb: 10.0,
-            speed: 0,
-            blur: 0,
-            hud: true,
-            hitsounds: true,
-        }
-    }
-}
+/// The export settings (kept in the config).
+pub use crate::config::VideoSettings as Settings;
 
 impl Settings {
     /// The x264 CRF, or None when aiming at a file size.
@@ -198,23 +172,7 @@ pub fn crop_presets() -> [(&'static str, Area); 4] {
 /// Virtual width of a 16:9 frame (the playfield is laid out in 480-unit-tall space).
 pub const FRAME_VW: f32 = VIRTUAL_HEIGHT * 16.0 / 9.0;
 
-/// A replay game with no audio, at its start.
-pub fn replay_game(map: &Beatmap, track: &Arc<Track>, r: &Replay) -> Game {
-    let mut g = Game::with_half(
-        map.clone(),
-        track.clone(),
-        None,
-        crate::mods::Mods::from_list(&r.mods),
-        r.seed,
-        r.half_rule(),
-    );
-    g.replay = Some((r.inputs.clone(), 0));
-    g.mash = r.mash();
-    g.scoring = r.scoring();
-    g.set_window_rule(r.window_rule());
-    g.mute_hits = true;
-    g
-}
+use crate::scores::replay_game;
 
 pub struct Editor {
     pub replay: Replay,
