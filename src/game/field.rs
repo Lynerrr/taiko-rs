@@ -276,7 +276,7 @@ impl Game {
                 colours: multiverse::note_colours(),
                 ..Universe::CLASSIC
             };
-            self.draw_field(c, scroll_speed, Focus::FULL, &uni);
+            self.draw_field(c, scroll_speed, Focus::FULL, &uni, self.mods);
         }
         self.draw_layers(c, false);
     }
@@ -396,9 +396,13 @@ impl Game {
             // Drawn at its size in focus, so it reaches as far ahead in time whatever its zoom,
             // with its universe's mods on top of the play's for just as long.
             c.width = inner;
-            self.mods = base.plus(universes[i].mods);
-            self.draw_field(c, scroll_speed, l, &universes[i]);
-            self.mods = base;
+            self.draw_field(
+                c,
+                scroll_speed,
+                l,
+                &universes[i],
+                base.plus(universes[i].mods),
+            );
             c.width = w;
             let field_zone = self.view.zone.take();
             // Out of focus it circles its home, each its own way round and at its own pace,
@@ -491,6 +495,7 @@ impl Game {
         scroll_speed: f64,
         look: Focus,
         uni: &Universe,
+        mods: Mods,
     ) {
         use std::f32::consts::{PI, TAU};
         // Notes, barlines and the beat pulse are drawn at `vt`, where they'll be once the frame is
@@ -499,7 +504,6 @@ impl Game {
         let vt = self.visual_time();
         let w = c.width;
         let start_shape = c.shapes.len();
-        let mods = self.mods;
         let party = mods.has(Mod::Party);
         // Crossfire: the drum in the middle, kats coming from the left (laid out here the other
         // way along the lane from it), dons from the right.
@@ -539,7 +543,7 @@ impl Game {
         } else {
             0.0
         };
-        let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp) + tact;
+        let warp = beat_warp(mods, cp, vt) + self.extra_warp(vt, cp, mods) + tact;
         // A .tko map's playfield motion: what is drawn, never when a note is hit.
         let tko_fx = self
             .tko
@@ -552,7 +556,7 @@ impl Game {
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).
         let lane = (tko_fx.lane_shape > 0 && tko_fx.lane_bend > 0.001)
             .then(|| (tko_fx.lane_shape as usize - 1, tko_fx.lane_bend));
-        let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w, lane);
+        let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w, lane, mods);
         // A .tko map's moving drum: the hit target slides along a straight lane and everything
         // on the lane goes with it, so notes still meet it on time.
         let drum = if rail.is_none() {
@@ -582,7 +586,7 @@ impl Game {
                 band_top + band_h,
             ],
         };
-        let portal = self.portal_at(vt, lane_len);
+        let portal = self.portal_at(vt, lane_len, mods);
         let scroll =
             Scroll {
                 t: vt,
@@ -594,7 +598,7 @@ impl Game {
                 lane: lane_len as f64,
                 mods,
                 warp,
-                live: self.miss_factor(t) * self.slow_factor(t) * tko_fx.scroll,
+                live: self.miss_factor(t, mods) * self.slow_factor(t) * tko_fx.scroll,
                 shared: self.tko.as_ref().and_then(|rt| rt.shared_scroll()).map(
                     |(table, shift)| {
                         let now = table.x(vt - shift);
@@ -667,7 +671,7 @@ impl Game {
             }
         };
         // Shatter: pieces of the lane with streams on them slide further.
-        let mut shatter = self.shatter_at(vt);
+        let mut shatter = self.shatter_at(vt, mods);
         if mods.has(Mod::Shatter) {
             let mut on = [[0u32; 2]; 4];
             for &i in &self.view.visible {
@@ -1629,7 +1633,7 @@ impl Game {
                     }
                     if vt < n.time {
                         let s = s_of(n.time, n.velocity);
-                        let preempt = stable_preempt(self.map.first_velocity * self.mods.scroll());
+                        let preempt = stable_preempt(self.map.first_velocity * mods.scroll());
                         let a = note_alpha(s)
                             * radar_lit(s, n.time, n.velocity)
                             * swell_fade(preempt, n.time - vt);
@@ -3374,7 +3378,7 @@ impl Game {
 
     /// Panic / Mercy's speed factor at map time `t`: each recent miss fades in over 250 ms and
     /// out over its span.
-    pub(super) fn miss_factor(&self, t: f64) -> f64 {
+    pub(super) fn miss_factor(&self, t: f64, mods: Mods) -> f64 {
         let weight = |span: f64| -> f64 {
             self.misses
                 .iter()
@@ -3383,9 +3387,9 @@ impl Game {
                 .map(|age| (age / 250.0).min(1.0) * (1.0 - age / span))
                 .sum()
         };
-        if self.mods.has(Mod::Panic) {
+        if mods.has(Mod::Panic) {
             (1.0 + 0.15 * weight(4000.0)).min(2.0)
-        } else if self.mods.has(Mod::Mercy) {
+        } else if mods.has(Mod::Mercy) {
             1.0 / (1.0 + 0.25 * weight(3000.0)).min(2.0)
         } else {
             1.0
@@ -3410,8 +3414,7 @@ impl Game {
     }
 
     /// The warp (see `Scroll::warp`) of Drop, Lag Spike and Moonwalk at map time `t`.
-    pub(super) fn extra_warp(&self, t: f64, cp: &beatmap::ControlPoint) -> f64 {
-        let mods = self.mods;
+    pub(super) fn extra_warp(&self, t: f64, cp: &beatmap::ControlPoint, mods: Mods) -> f64 {
         let mut warp = 0.0;
         if mods.has(Mod::Drop) {
             // Two beats before a kiai: held still for one and a half, then a rush to catch up.
@@ -3462,12 +3465,12 @@ impl Game {
         t: f64,
         w: f32,
         lane: Option<(usize, f32)>,
+        mods: Mods,
     ) -> (Option<Rail>, f32, f32, f32) {
         if let Some((k, u)) = lane {
             let shape = LANE_SHAPES_OF_CLIPS[k % LANE_SHAPES_OF_CLIPS.len()];
             return morph_rail(RailShape::Straight, shape, u.clamp(0.0, 1.0), w);
         }
-        let mods = self.mods;
         if let Some(shape) = RailShape::of(mods) {
             let (mut drop, mut zoom) = (shape.drop(), shape.zoom(w));
             // Defense: the player on turn sees the drum end of the maze up close.
@@ -3536,9 +3539,9 @@ impl Game {
 
     /// Shatter's sideways shift of each quarter of the lane at map time `t`: apart on even bars
     /// (each piece its own way), back in line on odd ones, sliding over the first quarter-bar.
-    pub(super) fn shatter_at(&self, t: f64) -> [f32; 4] {
+    pub(super) fn shatter_at(&self, t: f64, mods: Mods) -> [f32; 4] {
         let mut out = [0.0; 4];
-        if !self.mods.has(Mod::Shatter) {
+        if !mods.has(Mod::Shatter) {
             return out;
         }
         let Some((i, start, len)) = bar_at(&self.map.barlines, t, 2000.0) else {
@@ -3561,8 +3564,8 @@ impl Game {
 
     /// Portal's entry and exit (distances along a lane `len` long) at map time `t`: a new pair
     /// every 8 bars.
-    pub(super) fn portal_at(&self, t: f64, len: f32) -> Option<(f32, f32)> {
-        if !self.mods.has(Mod::Portal) {
+    pub(super) fn portal_at(&self, t: f64, len: f32, mods: Mods) -> Option<(f32, f32)> {
+        if !mods.has(Mod::Portal) {
             return None;
         }
         let section = bar_at(&self.map.barlines, t, 2000.0).map_or(0, |(i, ..)| i / 8) as f64;
