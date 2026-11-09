@@ -4,9 +4,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use crate::game::{Game, Stats};
+use crate::hit::{Canvas, Hit};
 use crate::net::{self, Client, Final, Live, MapInfo, PlayerInfo, Server, Status};
 use crate::online;
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 use winit::keyboard::KeyCode;
 
 pub struct Session {

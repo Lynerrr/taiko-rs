@@ -412,7 +412,7 @@ pub fn unlock_from_env() -> Vec<crate::online::MedalNote> {
 
 /// Text that doesn't fit, as readable lines: off screen, sticking out of the rounded box it sits
 /// in, cut off by a clip, or drawn over other text. The canvas must have been drawn with `audit`.
-pub fn layout_problems(c: &crate::render::Canvas) -> Vec<String> {
+pub fn layout_problems(c: &crate::hit::Canvas) -> Vec<String> {
     type Rect = [f32; 4]; // x0, y0, x1, y1
     const EPS: f32 = 0.6;
     let bounds = |i: usize| -> Rect {
@@ -586,10 +586,10 @@ fn gap_y_of(a: &[f32; 4], b: &[f32; 4]) -> f32 {
 /// `hits`: the frame's (a built frame hands them over to the state). None: the tab isn't there.
 #[cfg(test)]
 pub fn edge_tab_problems(
-    c: &crate::render::Canvas,
-    hits: &[crate::render::HitBox],
+    c: &crate::hit::Canvas,
+    hits: &[crate::hit::HitBox],
 ) -> Option<Vec<String>> {
-    use crate::render::Hit;
+    use crate::hit::Hit;
     let tab = hits.iter().find(|h| h.hit == Hit::SocialToggle)?;
     if hits.iter().any(|h| h.hit == Hit::SocialPanel) {
         return Some(Vec::new());
@@ -648,10 +648,10 @@ pub fn edge_tab_problems(
 /// Buttons (a clickable rect with a rounded box of the same size) that touch each other, and
 /// buttons rounded into pills. Lists of rows (same x and width, no border) are left alone, and so
 /// are round icon buttons (as wide as tall).
-fn button_problems(c: &crate::render::Canvas) -> Vec<String> {
+fn button_problems(c: &crate::hit::Canvas) -> Vec<String> {
     const GAP: f32 = 3.5;
     // (box rect x0 y0 x1 y1, hit, bordered, label)
-    let mut buttons: Vec<([f32; 4], crate::render::Hit, bool)> = Vec::new();
+    let mut buttons: Vec<([f32; 4], crate::hit::Hit, bool)> = Vec::new();
     let mut out = Vec::new();
     for h in &c.hits {
         let [hx, hy, hw, hh] = h.rect;
@@ -723,7 +723,7 @@ fn button_problems(c: &crate::render::Canvas) -> Vec<String> {
     let panel = c
         .hits
         .iter()
-        .find(|h| h.hit == crate::render::Hit::SocialPanel)
+        .find(|h| h.hit == crate::hit::Hit::SocialPanel)
         .map(|h| {
             let [x, y, w, hh] = h.rect;
             [x, y, x + w, y + hh]
@@ -779,7 +779,7 @@ fn button_problems(c: &crate::render::Canvas) -> Vec<String> {
 /// Draws a canvas on the CPU into an RGB image `scale` pixels per virtual unit: boxes, circles
 /// and text, no glows or skin images. For looking at test frames without a window.
 #[cfg(test)]
-pub fn rasterize(c: &crate::render::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
+pub fn rasterize(c: &crate::hit::Canvas, scale: f32) -> (u32, u32, Vec<u8>) {
     let (w, h) = (
         (c.width * scale).round() as u32,
         (crate::render::VIRTUAL_HEIGHT * scale).round() as u32,

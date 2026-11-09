@@ -13,7 +13,8 @@ use std::collections::HashSet;
 use super::{Drag, GREEN_LINE, Keys, RED_LINE, RULER, View};
 use crate::editor::chart::TimingPoint;
 use crate::editor::timing;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 /// How tall the strip is: two rows.
 pub(super) const STRIP: f32 = 18.0;

@@ -7,8 +7,9 @@ use std::sync::RwLock;
 
 use winit::keyboard::KeyCode;
 
+use crate::hit::{Canvas, Hit};
 use crate::mods::{Mod, Mods};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 
 /// How many universes (playfields) there are.
 pub const COUNT: usize = 8;

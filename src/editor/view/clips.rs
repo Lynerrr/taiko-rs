@@ -16,7 +16,8 @@ use crate::editor::clips::{
     PRESETS, Shelf, amount_step, describe, listed, rescale_amount, target_about, target_colour,
     target_columns, target_label, targets, trim,
 };
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 use crate::tko::clips::{Clip, LANES, Layer, MAX_SPIN, Motion, Notes, Pose, Show, Target, When};
 use crate::tko::track::Ease;
 

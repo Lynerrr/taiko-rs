@@ -8,9 +8,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use crate::beatmap::{self, Kind};
+use crate::hit::Canvas;
 use crate::library::Entry;
 use crate::multiverse;
-use crate::render::{self, Canvas, rgba};
+use crate::render::{self, rgba};
 use crate::stars::Stars;
 
 /// A note as the background needs it.

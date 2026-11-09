@@ -4,8 +4,9 @@
 
 use std::time::{Duration, Instant};
 
+use crate::hit::Canvas;
 use crate::player;
-use crate::render::{Canvas, rgba};
+use crate::render::rgba;
 
 /// The choices for how long until it shows (minutes; 0 is never).
 pub const MINUTES: [u32; 5] = [0, 1, 2, 5, 10];

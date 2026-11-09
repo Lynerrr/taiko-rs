@@ -6,8 +6,9 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::hit::{Canvas, Hit};
 use crate::online::{self, Activity, ChatLine, Friend, OnlinePlayer};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 
 /// The overlay's tabs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

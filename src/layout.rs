@@ -6,7 +6,8 @@
 
 use winit::window::CursorIcon;
 
-use crate::render::{Canvas, VIRTUAL_HEIGHT, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 
 /// Smallest area, as a fraction of the screen in each direction.
 const MIN_SIZE: f32 = 0.2;

@@ -3,7 +3,7 @@
 //! back as the texts and clickable areas drawn.
 
 use super::maps::Chart;
-use crate::render::Canvas;
+use crate::hit::Canvas;
 use crate::*;
 use std::fmt::Write as _;
 

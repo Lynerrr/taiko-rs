@@ -6,7 +6,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use crate::render::{self, Canvas, pixel_size, rgba, snap_to_grid};
+use crate::hit::Canvas;
+use crate::render::{self, pixel_size, rgba, snap_to_grid};
 
 const GOLD: u32 = 0xFFD34D;
 const GLITCH_RED: u32 = 0x9f2137;

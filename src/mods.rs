@@ -1426,7 +1426,7 @@ mod tests {
             }
             // The mod select's description line at 5:4 (600 wide).
             assert!(
-                crate::render::Canvas::text_width(7.0, m.description()) <= 600.0 - 64.0,
+                crate::hit::Canvas::text_width(7.0, m.description()) <= 600.0 - 64.0,
                 "{}",
                 m.name()
             );

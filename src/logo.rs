@@ -3,7 +3,7 @@
 
 use std::sync::OnceLock;
 
-use crate::render::Canvas;
+use crate::hit::Canvas;
 
 const ICON_32: &[u8] = include_bytes!("../assets/icon-32.png");
 const ICON_64: &[u8] = include_bytes!("../assets/icon-64.png");

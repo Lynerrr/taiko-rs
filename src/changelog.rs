@@ -6,7 +6,8 @@ use std::sync::mpsc::{self, Receiver};
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{accent, rgba};
 
 /// One change: when and its player-facing notes (including legacy history).
 #[derive(Clone, Debug, PartialEq)]

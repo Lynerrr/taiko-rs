@@ -4,9 +4,10 @@
 
 use crate::config::{Config, interface_key_name, key_name};
 use crate::game::{DON, KAT};
+use crate::hit::{Canvas, Hit};
 use crate::keys::Hotkey;
 use crate::menu::{self, Item};
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, pixel_size, rgba, snap_to_grid};
+use crate::render::{VIRTUAL_HEIGHT, accent, pixel_size, rgba, snap_to_grid};
 
 pub const PAGES: usize = 7;
 /// How many pages this build's guide has: a phone's is its own, shorter one.

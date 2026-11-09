@@ -6,9 +6,10 @@ use winit::keyboard::KeyCode;
 
 use crate::config::Config;
 use crate::game::Game;
+use crate::hit::{Canvas, Hit};
 use crate::hud::{self, Frames, Layout, MAX_SCALE, MIN_SCALE, Part, Place, Placed, Snapping};
 use crate::layout::{Area, Guide};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 use crate::settings;
 
 fn panel_w() -> f32 {

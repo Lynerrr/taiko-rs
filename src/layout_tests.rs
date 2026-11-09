@@ -1867,7 +1867,7 @@ fn the_sort_button_lists_the_sorts() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
     let before = s.select.sort;
-    s.click(render::Hit::SortList, None);
+    s.click(crate::hit::Hit::SortList, None);
     assert_eq!(s.select.sort, before, "the button only opens the list");
     assert_eq!(s.select.picker_len(), ui::SortMode::ALL.len());
     let mut problems = Vec::new();
@@ -1879,7 +1879,7 @@ fn the_sort_button_lists_the_sorts() {
         .iter()
         .position(|&m| m == ui::SortMode::Added)
         .unwrap();
-    s.click(render::Hit::PickRow(row), None);
+    s.click(crate::hit::Hit::PickRow(row), None);
     assert_eq!(s.select.sort, ui::SortMode::Added);
     assert_eq!(s.select.picker, None);
     assert_eq!(s.cfg.sort, "date added");
@@ -2395,15 +2395,15 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
     assert!(s.mp.as_ref().unwrap().chat_input.is_none());
 
     // A click on the line focuses it; a click elsewhere puts it away.
-    s.click(render::Hit::LobbyChat, None);
+    s.click(crate::hit::Hit::LobbyChat, None);
     assert!(s.mp.as_ref().unwrap().chat_input.is_some());
-    s.click(render::Hit::ListBack, None);
+    s.click(crate::hit::Hit::ListBack, None);
     assert!(s.mp.as_ref().unwrap().chat_input.is_none());
 }
 
 #[test]
 fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
-    use crate::render::Hit;
+    use crate::hit::Hit;
     let audit = |draw: &dyn Fn(&mut Canvas)| {
         let mut c = Canvas {
             audit: true,
@@ -2567,10 +2567,10 @@ fn mod_presets_are_saved_named_applied_and_removed() {
     let at = s
         .hits
         .iter()
-        .find(|h| h.hit == render::Hit::ModPreset(0))
+        .find(|h| h.hit == crate::hit::Hit::ModPreset(0))
         .map(|h| h.rect)
         .expect("preset 1 is drawn");
-    s.click(render::Hit::ModPreset(0), None);
+    s.click(crate::hit::Hit::ModPreset(0), None);
     assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"));
     assert!(at[2] > 0.0);
     s.remove_mod_preset(0);
@@ -2583,7 +2583,7 @@ fn mod_presets_are_saved_and_applied_with_the_mouse() {
     s.play_when_scanned = false;
     s.open_mod_select();
     s.cfg.mods = mods::Mods::parse("HD,PF");
-    let click = |s: &mut State, hit: render::Hit| {
+    let click = |s: &mut State, hit: crate::hit::Hit| {
         s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
         let r = s
             .hits
@@ -2601,25 +2601,25 @@ fn mod_presets_are_saved_and_applied_with_the_mouse() {
         s.mouse_button(true, None);
         s.mouse_button(false, None);
     };
-    click(&mut s, render::Hit::ModPresetSave);
+    click(&mut s, crate::hit::Hit::ModPresetSave);
     assert!(s.preset_naming.is_some(), "+ Save starts naming a preset");
     // The naming window's Cancel and Save take the mouse.
-    click(&mut s, render::Hit::Key(KeyCode::Escape));
+    click(&mut s, crate::hit::Hit::Key(KeyCode::Escape));
     assert!(s.preset_naming.is_none() && s.mod_select.is_some());
     assert!(s.cfg.mod_presets.is_empty(), "Cancel saves nothing");
-    click(&mut s, render::Hit::ModPresetSave);
-    click(&mut s, render::Hit::Key(KeyCode::Enter));
+    click(&mut s, crate::hit::Hit::ModPresetSave);
+    click(&mut s, crate::hit::Hit::Key(KeyCode::Enter));
     assert!(s.preset_naming.is_none());
     assert_eq!(s.cfg.mod_presets.len(), 1, "Save keeps it");
     // A click elsewhere while naming does nothing (no mod toggles under the window).
-    click(&mut s, render::Hit::ModPresetSave);
+    click(&mut s, crate::hit::Hit::ModPresetSave);
     s.mouse = (5.0, 5.0);
     s.mouse_button(true, None);
     s.mouse_button(false, None);
     assert!(s.preset_naming.is_some());
     s.key_inner(KeyCode::Escape, false, None, Instant::now(), None);
     s.cfg.mods = mods::Mods::NONE;
-    click(&mut s, render::Hit::ModPreset(0));
+    click(&mut s, crate::hit::Hit::ModPreset(0));
     assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"), "a click applies it");
     assert!(s.mod_select.is_some());
 }
@@ -2634,7 +2634,7 @@ fn deleting_a_mod_preset_asks_first() {
         mods: mods::Mods::parse("HD,PF"),
         rate: 1.0,
     }];
-    let point_at = |s: &mut State, hit: render::Hit| {
+    let point_at = |s: &mut State, hit: crate::hit::Hit| {
         s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
         let r = s
             .hits
@@ -2650,25 +2650,25 @@ fn deleting_a_mod_preset_asks_first() {
         );
     };
     // A right-click asks; Keep (a click) leaves it.
-    point_at(&mut s, render::Hit::ModPreset(0));
+    point_at(&mut s, crate::hit::Hit::ModPreset(0));
     s.right_button(true);
     s.right_button(false);
     assert_eq!(s.preset_deleting, Some(0));
     assert_eq!(s.cfg.mod_presets.len(), 1, "nothing goes before the yes");
-    point_at(&mut s, render::Hit::Key(KeyCode::Escape));
+    point_at(&mut s, crate::hit::Hit::Key(KeyCode::Escape));
     s.mouse_button(true, None);
     s.mouse_button(false, None);
     assert_eq!(s.preset_deleting, None);
     assert_eq!(s.cfg.mod_presets.len(), 1);
     // Keys while asking go to the question, not the mod select (1 would apply the preset).
-    point_at(&mut s, render::Hit::ModPreset(0));
+    point_at(&mut s, crate::hit::Hit::ModPreset(0));
     s.right_button(true);
     s.right_button(false);
     s.cfg.mods = mods::Mods::NONE;
     s.key_inner(KeyCode::Digit1, false, None, Instant::now(), None);
     assert_eq!(s.cfg.mods, mods::Mods::NONE);
     // Delete (a click) deletes it.
-    point_at(&mut s, render::Hit::Key(KeyCode::Enter));
+    point_at(&mut s, crate::hit::Hit::Key(KeyCode::Enter));
     s.mouse_button(true, None);
     s.mouse_button(false, None);
     assert!(s.cfg.mod_presets.is_empty());

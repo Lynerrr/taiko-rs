@@ -3,7 +3,8 @@
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 
 /// Where song select's selector is.
 #[derive(Clone, Copy, Debug, PartialEq)]
