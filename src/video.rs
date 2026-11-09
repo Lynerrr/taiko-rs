@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use crate::audio::{self, Sfx, Sounds, Track};
 use crate::beatmap::Beatmap;
-use crate::game::{self, Game};
+use crate::game::{self, Play};
 use crate::hit::{Canvas, Hit};
 use crate::layout::{Area, Grip};
 use crate::mods::Speed;
@@ -179,7 +179,7 @@ pub struct Editor {
     pub rx: Option<Receiver<Loaded>>,
     pub map: Option<(Beatmap, Arc<Track>)>,
     /// The frame shown: the replay at `cursor`.
-    pub game: Option<Box<Game>>,
+    pub game: Option<Box<Play>>,
     pub cursor: f64,
     /// Timeline range and the part exported (map ms).
     pub first: f64,
@@ -257,7 +257,7 @@ impl Editor {
         let t = t.clamp(self.first, self.last);
         let behind = self.game.as_ref().is_none_or(|g| t < g.time);
         if behind {
-            self.game = Some(Box::new(replay_game(map, track, &self.replay)));
+            self.game = Some(Box::new(Play::new(replay_game(map, track, &self.replay))));
         }
         if let Some(g) = &mut self.game {
             g.set_time(t);
@@ -947,7 +947,7 @@ impl Passes<'_> {
 
 /// An export in progress: the replay stepped one frame at a time.
 pub struct Export {
-    pub game: Box<Game>,
+    pub game: Box<Play>,
     /// Song ms of the next frame, and song ms per frame (map time is `game.speed().map(t)`).
     pub t: f64,
     pub step: f64,
@@ -1168,7 +1168,7 @@ mod tests {
             ..Default::default()
         };
         let mut ex = Export {
-            game: Box::new(replay_game(&map, &track, &replay)),
+            game: Box::new(Play::new(replay_game(&map, &track, &replay))),
             t: 1000.0,
             step: 1000.0 / 60.0,
             t0: 1000.0,

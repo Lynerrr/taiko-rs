@@ -120,7 +120,7 @@ use winit::window::{Fullscreen, Window, WindowId};
 use audio::{Engine, Track};
 use beatmap::Beatmap;
 use config::{Config, FPS_CAPS, RATE_RANGE};
-use game::{Game, PAUSE_ITEMS};
+use game::{Game, PAUSE_ITEMS, Play};
 use hit::Canvas;
 use layout::{Area, Grip};
 use library::Entry;
@@ -144,7 +144,7 @@ enum Scene {
         retry: bool,
     },
     Play {
-        game: Box<Game>,
+        game: Box<Play>,
         entry: usize,
         from: Option<f64>,
     },
@@ -160,7 +160,7 @@ enum Scene {
     /// Offset calibration run; `back` is where to return (the settings tab).
     /// Offset calibration (by ear), or with `vsync` the vsync compensation's (by sight).
     Calibrate {
-        game: Box<Game>,
+        game: Box<Play>,
         back: Box<Scene>,
         vsync: bool,
     },
@@ -195,7 +195,7 @@ enum Scene {
         from: Option<f64>,
     },
     MpPlay {
-        game: Box<Game>,
+        game: Box<Play>,
         quit_armed: Option<Instant>,
     },
     /// Watching the match in progress.
@@ -243,7 +243,7 @@ struct SpectateView {
     map: net::MapInfo,
     players: Vec<(u32, String)>,
     /// One game per player, fed with their presses.
-    games: Vec<(u32, Box<Game>)>,
+    games: Vec<(u32, Box<Play>)>,
     /// The player shown, or None for everyone at once.
     focus: Option<usize>,
     /// Presses that arrived before the games existed.
@@ -289,7 +289,7 @@ struct WatchView {
     play: Option<online::SoloPlay>,
     entry: Option<usize>,
     rx: Option<Receiver<Loaded>>,
-    game: Option<Box<Game>>,
+    game: Option<Box<Play>>,
     /// Presses that arrived before the game existed.
     inputs: Vec<(f64, u8)>,
     /// Their map time when last heard, when that was, and whether they're paused.
@@ -841,7 +841,7 @@ struct State {
     /// The interface editor, while it's open.
     hud_edit: Option<hud_edit::Editor>,
     /// The made-up play the editors show the interface with.
-    hud_sample: Option<Box<game::Game>>,
+    hud_sample: Option<Box<game::Play>>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
     resolutions: Vec<(u32, u32)>,
     monitor_modes: Vec<(u32, u32)>,
@@ -1047,7 +1047,7 @@ fn draw_replay_bar(
 /// strip shows between frames; `dt` is the time since the last one (s).
 fn draw_spectate_all(
     c: &mut Canvas,
-    games: &mut [(u32, Box<Game>)],
+    games: &mut [(u32, Box<Play>)],
     players: &[(u32, String)],
     scroll: f64,
     zones: &mut Vec<[f32; 4]>,
@@ -3229,7 +3229,7 @@ impl State {
         };
         match video::start_encoder(&ffmpeg, job) {
             Ok(encoder) => {
-                let mut game = Box::new(scores::replay_game(map, track, &ed.replay));
+                let mut game = Box::new(Play::new(scores::replay_game(map, track, &ed.replay)));
                 game.set_time(ed.start);
                 self.export = Some(video::Export {
                     game,
@@ -7300,7 +7300,7 @@ impl State {
             track.samples.iter_mut().for_each(|s| *s = 0.0);
         }
         let track = Arc::new(track);
-        let mut game = Game::new(map, track, self.audio.as_ref());
+        let mut game = Play::new(Game::new(map, track, self.audio.as_ref()));
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.mute_hits = true;
         game.view.show_hp = false;
@@ -13230,7 +13230,7 @@ impl State {
             self.stream = None;
             return;
         };
-        let id = &**game as *const Game as usize;
+        let id = &**game as *const Play as usize;
         if self.stream.map(|s| s.0) != Some(id) {
             if self.stream.is_some() {
                 conn.send(online::Up::PlayEnd);
@@ -13301,7 +13301,8 @@ impl State {
                         .map(|p| Mods::from_list(&p.map.mods))
                         .unwrap_or_default();
                     let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
-                    let mut g = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
+                    let mut g =
+                        Play::new(Game::with_seed(map, track, self.audio.as_ref(), mods, seed));
                     g.live_pp = v.entry.and_then(|i| {
                         pp::Live::start(
                             self.library[i].path.clone(),
@@ -15786,8 +15787,14 @@ impl State {
                             .pending_replay
                             .as_ref()
                             .map_or(Default::default(), |r| r.half_rule());
-                        let mut game =
-                            Game::with_half(map, track, self.audio.as_ref(), mods, seed, half);
+                        let mut game = Play::new(Game::with_half(
+                            map,
+                            track,
+                            self.audio.as_ref(),
+                            mods,
+                            seed,
+                            half,
+                        ));
                         game.scroll_speed = self.cfg.scroll_speed;
                         game.live_pp = pp::Live::start(
                             self.library[*entry].path.clone(),
@@ -16310,7 +16317,8 @@ impl State {
                     if defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                         mods.toggle(mods::Mod::Maze);
                     }
-                    let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
+                    let mut game =
+                        Play::new(Game::with_seed(map, track, self.audio.as_ref(), mods, seed));
                     if let (Some(d), Some(s)) = (defense, &self.mp) {
                         let (team, me) = multiplayer::defense_team(s);
                         game.set_defense(team, me, d);
@@ -16478,13 +16486,13 @@ impl State {
                         if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                             mods.toggle(mods::Mod::Maze);
                         }
-                        let mut g = Game::with_seed(
+                        let mut g = Play::new(Game::with_seed(
                             map.clone(),
                             track.clone(),
                             None,
                             mods,
                             v.map.seed.unwrap_or(0),
-                        );
+                        ));
                         use_mod_settings(&mut g, &v.map);
                         // Defense: each player's game takes only their turns' notes, as theirs did
                         // (the team in the order the players have it: by id).
@@ -16831,7 +16839,7 @@ impl State {
                 );
                 let sample = self
                     .hud_sample
-                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
+                    .get_or_insert_with(|| Box::new(game::Play::hud_sample()));
                 sample.view.hud = self.cfg.hud;
                 sample.view.hud_area = self.cfg.playfield_area;
                 sample.view.hidden = self.cfg.hud.off;
@@ -16882,7 +16890,7 @@ impl State {
                 );
                 let sample = self
                     .hud_sample
-                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
+                    .get_or_insert_with(|| Box::new(game::Play::hud_sample()));
                 sample.view.hud = self.cfg.hud;
                 sample.view.hud_area = self.cfg.playfield_area;
                 sample.view.hidden = self.cfg.hud.off;

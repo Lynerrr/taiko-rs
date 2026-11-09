@@ -641,7 +641,7 @@ fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
         rate: 1.0,
         stream: None,
     });
-    v.game = Some(Box::new(Game::new(map, track, None)));
+    v.game = Some(Box::new(Play::new(Game::new(map, track, None))));
     v.clock = (30_000.0, Instant::now(), false);
     s.scene = Scene::Watch(Box::new(v));
 
@@ -681,7 +681,7 @@ fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
 fn a_spectator_sees_the_last_seconds_before_the_results() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    let view = |games: Vec<(u32, Box<Game>)>| {
+    let view = |games: Vec<(u32, Box<Play>)>| {
         Scene::Spectate(Box::new(SpectateView {
             rx: None,
             loaded: None,
@@ -708,7 +708,7 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
             rate: 1.0,
             stream: None,
         });
-        Box::new(Game::new(map, track, None))
+        Box::new(Play::new(Game::new(map, track, None)))
     };
     s.mp = Some(layout_tests::session(false));
     // Joined late, nothing on screen yet: straight to the results.
@@ -1319,7 +1319,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
     s.play_when_scanned = false;
     let map = beatmap::calibration_map(500.0, 4, 64);
     s.scene = Scene::Play {
-        game: Box::new(Game::new(
+        game: Box::new(Play::new(Game::new(
             map,
             Arc::new(Track {
                 samples: Vec::new(),
@@ -1327,7 +1327,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
                 stream: None,
             }),
             None,
-        )),
+        ))),
         entry: 0,
         from: None,
     };
@@ -1370,7 +1370,7 @@ fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
     s.settings_ui.editing = None;
     let map = beatmap::calibration_map(500.0, 4, 64);
     s.scene = Scene::Play {
-        game: Box::new(Game::new(
+        game: Box::new(Play::new(Game::new(
             map,
             Arc::new(Track {
                 samples: Vec::new(),
@@ -1378,7 +1378,7 @@ fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
                 stream: None,
             }),
             None,
-        )),
+        ))),
         entry: 0,
         from: None,
     };
@@ -1506,7 +1506,7 @@ fn scroll_speed_changes_between_songs_only() {
     assert!(faster > start, "song select changes it");
     // In a song (and its pause menu's settings) it stays, and the play keeps its own.
     let map = beatmap::calibration_map(500.0, 4, 64);
-    let mut game = Game::new(
+    let mut game = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1514,7 +1514,7 @@ fn scroll_speed_changes_between_songs_only() {
             stream: None,
         }),
         None,
-    );
+    ));
     game.scroll_speed = faster;
     s.scene = Scene::Play {
         game: Box::new(game),
@@ -1637,7 +1637,7 @@ fn hotkeys_can_be_moved_and_removed() {
         .set(keys::Hotkey::Pause, Some(keys::Chord::plain(KeyCode::KeyP)));
     let map = beatmap::calibration_map(500.0, 4, 64);
     s.scene = Scene::Play {
-        game: Box::new(Game::new(
+        game: Box::new(Play::new(Game::new(
             map,
             Arc::new(Track {
                 samples: Vec::new(),
@@ -1645,7 +1645,7 @@ fn hotkeys_can_be_moved_and_removed() {
                 stream: None,
             }),
             None,
-        )),
+        ))),
         entry: 0,
         from: None,
     };
@@ -2459,7 +2459,7 @@ fn in_a_song(paused: bool) -> State {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.play_when_scanned = false;
     let map = beatmap::calibration_map(500.0, 4, 64);
-    let mut game = Game::new(
+    let mut game = Play::new(Game::new(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -2467,7 +2467,7 @@ fn in_a_song(paused: bool) -> State {
             stream: None,
         }),
         None,
-    );
+    ));
     if paused {
         game.paused = Some(0);
     }

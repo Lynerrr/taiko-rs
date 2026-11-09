@@ -18,7 +18,7 @@ use super::timing;
 use super::tools::{GimmickTool, Target};
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, OSU_TIMING_MS};
-use crate::game::Game;
+use crate::game::{Game, Play};
 use crate::hit::Canvas;
 use crate::render::{accent, rgba};
 use crate::video::FRAME_VW;
@@ -446,7 +446,7 @@ pub struct View {
     renamed: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// An export on its way: the file it wrote.
     export_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
-    game: Option<Box<Game>>,
+    game: Option<Box<Play>>,
     game_err: Option<String>,
     /// The chart changed at this moment and the preview hasn't caught up.
     stale: Option<Instant>,
@@ -1230,7 +1230,7 @@ impl View {
                 });
                 let mut g = Game::new(map, track, None);
                 g.mute_hits = true;
-                self.game = Some(Box::new(g));
+                self.game = Some(Box::new(Play::new(g)));
                 self.game_err = None;
                 self.shown = f64::NAN;
             }
@@ -1252,7 +1252,7 @@ impl View {
                 // Notes already played stay played going forwards only: a seek back starts over.
                 let map = g.map.clone();
                 let track = g.track.clone();
-                **g = Game::new(map, track, None);
+                **g = Play::new(Game::new(map, track, None));
                 g.mute_hits = true;
             }
             g.skip_to(t - 50.0);

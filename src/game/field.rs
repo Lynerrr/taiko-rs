@@ -108,6 +108,104 @@ impl View {
     }
 }
 
+impl View {
+    /// A play's drawing state at its start: the default HUD, and what the visual mods work out
+    /// from its map (decoys, lies, Roulette's sections, Multiverse's focus switches).
+    pub(super) fn for_play(g: &Game) -> View {
+        let (map, mods) = (&g.map, g.mods);
+        // Floored only against 0: SV 0.02 at 120 BPM is already under 0.01, and a fake slider
+        // in it is on screen ~40 s ahead, and nothing caps the lookahead (the whole map can be).
+        let min_velocity = map
+            .notes
+            .iter()
+            .map(|n| n.velocity)
+            .chain(map.barlines.iter().map(|b| b.velocity))
+            .fold(f64::INFINITY, f64::min)
+            .max(1e-6);
+        let sections = if mods.has(Mod::Roulette) {
+            roulette_sections(map)
+                .into_iter()
+                .zip(map.barlines.iter().step_by(4))
+                .map(|((t, k), b)| (t, k, b.velocity))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let decoys = if mods.has(Mod::Decoy) {
+            decoys(map)
+        } else {
+            Vec::new()
+        };
+        let decoy_flows = decoys
+            .iter()
+            .map(|d| {
+                map.notes
+                    .partition_point(|n| n.time < d.time)
+                    .checked_sub(1)
+                    .map_or(1, |i| g.flows[i])
+            })
+            .collect();
+        let lies = if mods.has(Mod::Liar) {
+            lies(map)
+        } else {
+            Vec::new()
+        };
+        let min_velocity = decoys
+            .iter()
+            .map(|n| n.velocity)
+            .fold(min_velocity, f64::min);
+        let focus_switches = if mods.has(Mod::Multiverse) {
+            focus_switches(map)
+        } else {
+            Vec::new()
+        };
+        let note_blocks = NoteBlock::index(&map.notes);
+        View::new(
+            min_velocity,
+            note_blocks,
+            sections,
+            decoys,
+            decoy_flows,
+            lies,
+            focus_switches,
+        )
+    }
+}
+
+/// A play as the client shows it: the play itself and what drawing it keeps. Reads and changes of
+/// the play go straight through (`Deref`).
+pub struct Play {
+    pub game: Game,
+    pub view: View,
+}
+
+impl Play {
+    /// Where the playfield in play was drawn last frame (x, y, w, h on the canvas it was drawn
+    /// on), for views that show only that (spectating everyone at once).
+    pub fn play_zone(&self) -> Option<[f32; 4]> {
+        self.view.zone
+    }
+
+    pub fn new(game: Game) -> Play {
+        let view = View::for_play(&game);
+        Play { game, view }
+    }
+}
+
+impl std::ops::Deref for Play {
+    type Target = Game;
+
+    fn deref(&self) -> &Game {
+        &self.game
+    }
+}
+
+impl std::ops::DerefMut for Play {
+    fn deref_mut(&mut self) -> &mut Game {
+        &mut self.game
+    }
+}
+
 /// A rect `len` long and `thick` across, centred on (`x`, `y`) and turned to heading `a`.
 pub(super) fn lane_rect(
     c: &mut Canvas,
@@ -257,26 +355,26 @@ pub(super) fn hue(h: f64) -> u32 {
     };
     r << 16 | g << 8 | b
 }
-impl Game {
+impl Play {
     /// Lane, barlines, notes, drum, combo and judgements, laid out as if `c` were the window (the
     /// caller maps it into the playfield area). The scroll and visual mods apply here; Multiverse
     /// draws it three times over.
     pub fn draw_playfield(&mut self, c: &mut Canvas, scroll_speed: f64) {
         // A .tko map's dark backdrop goes under everything of the playfield, its pictures too.
         let vt = self.visual_time();
-        if let Some(r) = self.tko.as_mut() {
+        if let Some(r) = self.game.tko.as_mut() {
             r.prepare(vt);
             crate::tko::screen::backdrop(c, &r.field(vt));
         }
         self.draw_layers(c, true);
-        if self.mods.has(Mod::Multiverse) {
+        if self.game.mods.has(Mod::Multiverse) {
             self.draw_multiverse(c, scroll_speed);
         } else {
             let uni = Universe {
                 colours: multiverse::note_colours(),
                 ..Universe::CLASSIC
             };
-            self.draw_field(c, scroll_speed, Focus::FULL, &uni, self.mods);
+            self.draw_field(c, scroll_speed, Focus::FULL, &uni, self.game.mods);
         }
         self.draw_layers(c, false);
     }
@@ -284,7 +382,9 @@ impl Game {
     /// A `.tko` map's text and pictures: those under the lane (`behind`) or those over it.
     pub(super) fn draw_layers(&self, c: &mut Canvas, behind: bool) {
         use crate::tko::clips::Show;
-        let Some(r) = self.tko.as_ref() else { return };
+        let Some(r) = self.game.tko.as_ref() else {
+            return;
+        };
         for (l, at) in r.layers(self.visual_time()) {
             let p = at.pose;
             if l.behind != behind || p.alpha < 0.002 {
@@ -372,21 +472,21 @@ impl Game {
         let w = c.width;
         let inner = FIELD_W * w / FIELD_ZOOM.1;
         let looks = self.multiverse_at(t);
-        let cp = beatmap::control_point_at(&self.map.control_points, t);
+        let cp = beatmap::control_point_at(&self.game.map.control_points, t);
         let pulse = breath(cp.beat_phase(t), cp.beat_length);
         // Out of focus first, then the one it's heading for, then the one in focus on top.
         let mut order: [usize; FIELD_COUNT] = std::array::from_fn(|f| f);
         let rank = |f: usize| 2.0 * looks[f].focus + looks[f].aim;
         order.sort_by(|&a, &b| rank(a).total_cmp(&rank(b)));
         // Where each drum ends up on screen, for the sparks.
-        let drum_x = if self.mods.has(Mod::Mirror) {
+        let drum_x = if self.game.mods.has(Mod::Mirror) {
             inner - HIT_X
         } else {
             HIT_X
         };
         let mut drums = [(0.0f32, 0.0f32); FIELD_COUNT];
-        let universes = self.universes.unwrap_or_else(multiverse::get);
-        let base = self.mods;
+        let universes = self.game.universes.unwrap_or_else(multiverse::get);
+        let base = self.game.mods;
         // The zone in play, summed weighted by focus, and the weights.
         let mut zone = ([0.0f32; 4], 0.0f32);
         for i in order {
@@ -465,7 +565,7 @@ impl Game {
             }
         });
         if let Some(boxes) = focus {
-            self.ease_field_boxes(boxes, self.time);
+            self.ease_field_boxes(boxes, self.game.time);
         }
         // The sparks: from the drum in focus to the drum of the one it's heading for.
         let to = (0..FIELD_COUNT).find(|&f| looks[f].aim > 0.0);
@@ -500,7 +600,7 @@ impl Game {
         use std::f32::consts::{PI, TAU};
         // Notes, barlines and the beat pulse are drawn at `vt`, where they'll be once the frame is
         // on screen; animations of what already happened (hits, presses) run on `t`.
-        let t = self.time;
+        let t = self.game.time;
         let vt = self.visual_time();
         let w = c.width;
         let start_shape = c.shapes.len();
@@ -518,7 +618,7 @@ impl Game {
         // Multiverse: a window, not the whole screen. Nothing may stick out of it.
         let boxed = mods.has(Mod::Multiverse);
         let lane_top = LANE_Y - LANE_H / 2.0;
-        let cp = beatmap::control_point_at(&self.map.control_points, vt);
+        let cp = beatmap::control_point_at(&self.game.map.control_points, vt);
         let beat_phase = cp.beat_phase(vt) as f32;
         // Beats since the red line, for the mods that move with the beat.
         let beats = ((vt - cp.beat_origin) / cp.beat_length) as f32;
@@ -587,25 +687,27 @@ impl Game {
             ],
         };
         let portal = self.portal_at(vt, lane_len, mods);
-        let scroll =
-            Scroll {
-                t: vt,
-                speed: osu_speed_scale(w)
-                    * scroll_speed
-                    * uni.speed()
-                    * mods.scroll()
-                    * lane_stretch(rail.is_some(), lane_len, w),
-                lane: lane_len as f64,
-                mods,
-                warp,
-                live: self.miss_factor(t, mods) * self.slow_factor(t) * tko_fx.scroll,
-                shared: self.tko.as_ref().and_then(|rt| rt.shared_scroll()).map(
-                    |(table, shift)| {
-                        let now = table.x(vt - shift);
-                        (table, shift, now)
-                    },
-                ),
-            };
+        let scroll = Scroll {
+            t: vt,
+            speed: osu_speed_scale(w)
+                * scroll_speed
+                * uni.speed()
+                * mods.scroll()
+                * lane_stretch(rail.is_some(), lane_len, w),
+            lane: lane_len as f64,
+            mods,
+            warp,
+            live: self.miss_factor(t, mods) * self.slow_factor(t) * tko_fx.scroll,
+            shared: self
+                .game
+                .tko
+                .as_ref()
+                .and_then(|rt| rt.shared_scroll())
+                .map(|(table, shift)| {
+                    let now = table.x(vt - shift);
+                    (table, shift, now)
+                }),
+        };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
         // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
@@ -633,21 +735,21 @@ impl Game {
             .note_blocks
             .partition_point(|b| b.range.end <= start);
         for block in &self.view.note_blocks[first_block..] {
-            if self.map.notes[block.range.start].time - vt > lookahead {
+            if self.game.map.notes[block.range.start].time - vt > lookahead {
                 break;
             }
             if block.regular && !mods.has(Mod::Liar) && scroll.shared.is_none() {
                 let reach = (lane_len + BIG_R) as f64
                     / (block.min_velocity * scroll.speed * scroll.min_factor())
                     + warp.abs();
-                if self.map.notes[block.range.start].time - vt.max(t) > reach
+                if self.game.map.notes[block.range.start].time - vt.max(t) > reach
                     || block.last_end < vt.min(t) - 3000.0
                 {
                     continue;
                 }
             }
             for i in start.max(block.range.start)..block.range.end {
-                let n = &self.map.notes[i];
+                let n = &self.game.map.notes[i];
                 if n.time - vt > lookahead {
                     break;
                 }
@@ -660,7 +762,7 @@ impl Game {
         // Distance along the lane of note `i`. Liar: far off, a triplet sits where a 1/4 would,
         // sliding to its real place on the way in.
         let note_s = |i: usize| -> f32 {
-            let n = &self.map.notes[i];
+            let n = &self.game.map.notes[i];
             let s = s_of(n.time, n.velocity);
             match self.view.lies.get(i) {
                 Some(&lie) if lie != n.time => {
@@ -676,13 +778,13 @@ impl Game {
             let mut on = [[0u32; 2]; 4];
             for &i in &self.view.visible {
                 let s = note_s(i);
-                if matches!(self.map.notes[i].kind, Kind::Don | Kind::Kat)
+                if matches!(self.game.map.notes[i].kind, Kind::Don | Kind::Kat)
                     && s > 0.0
                     && s < lane_len
                 {
                     let piece = &mut on[((s / lane_len * 4.0) as usize).min(3)];
                     piece[0] += 1;
-                    piece[1] += (self.flows[i] >= 3) as u32;
+                    piece[1] += (self.game.flows[i] >= 3) as u32;
                 }
             }
             for (d, [all, streams]) in shatter.iter_mut().zip(on) {
@@ -693,7 +795,7 @@ impl Game {
             rail,
             len: lane_len,
             shatter,
-            cracks: self.cracks_at(t, lane_len),
+            cracks: self.game.cracks_at(t, lane_len),
         };
         let bent = geo.bent() || portal.is_some();
         // The stretches of a bent lane a solid roll body lies on already.
@@ -714,7 +816,7 @@ impl Game {
             }
         };
         // How visible an approaching note `s` along the lane is under the visual mods.
-        let memory_over = mods.has(Mod::Memory) && vt > self.first_note + 15_000.0;
+        let memory_over = mods.has(Mod::Memory) && vt > self.game.first_note + 15_000.0;
         let note_alpha = |s: f32| -> f32 {
             let u = s / lane_len;
             let mut a = fade_in(s);
@@ -944,7 +1046,7 @@ impl Game {
             }
         }
         // Crumble: crumbs fly off the edge each piece moves out to and fall away.
-        for cr in &self.crumbs {
+        for cr in &self.game.crumbs {
             let age = ((t - cr.at) / 1000.0) as f32;
             if !(0.0..0.7).contains(&age) {
                 continue;
@@ -989,7 +1091,7 @@ impl Game {
             .map
             .barlines
             .partition_point(|b| b.time < vt - lookahead);
-        let bars = &self.map.barlines[first_bar..];
+        let bars = &self.game.map.barlines[first_bar..];
         for b in bars {
             if b.time - vt > lookahead {
                 break;
@@ -1114,7 +1216,7 @@ impl Game {
         // Defense: the towers beside the maze, glitched pixel blocks in their builder's colour:
         // red and cyan copies slip out from under them, the core flickers, and a shot tears
         // them apart for a moment. Dim once their notes are gone by.
-        if let Some(d) = &self.defense {
+        if let Some(d) = &self.game.defense {
             let bucket = (vt / 40.0).floor() as u32;
             for (k, tw) in d.towers.iter().enumerate() {
                 let (x, y, _, size) = place(tw.s, tw.side);
@@ -1224,8 +1326,8 @@ impl Game {
         let map_spinner = crate::skin::map_has_spinner_warning();
         let over =
             |n: &beatmap::Note| n.kind == Kind::Roll || (map_spinner && n.kind == Kind::Swell);
-        let main_beat = self.main_beat;
-        let sm = self.map.meta.slider_multiplier;
+        let main_beat = self.game.main_beat;
+        let sm = self.game.map.meta.slider_multiplier;
         let popup = |n: &beatmap::Note| {
             popup(
                 n,
@@ -1234,12 +1336,12 @@ impl Game {
                 scroll.speed,
                 main_beat,
                 sm,
-                beatmap::control_point_at(&self.map.control_points, n.time).sv,
+                beatmap::control_point_at(&self.game.map.control_points, n.time).sv,
             )
         };
         // .tko approach paths the map shows the player: faint dots from where notes come in to
         // the drum.
-        if let Some(rt) = &self.tko {
+        if let Some(rt) = &self.game.tko {
             let (hx, hy, _, _) = place(0.0, 0.0);
             for (table, w) in rt.shown_paths(vt) {
                 let mut d = 0.0;
@@ -1260,13 +1362,13 @@ impl Game {
         // A .tko map's fake notes, under the real ones: drawn like them, never judged, gone when
         // they reach the drum.
         let fakes_on: Vec<usize> = {
-            let f = &self.map.fakes;
+            let f = &self.game.map.fakes;
             let from = f.partition_point(|n| n.time <= vt);
             let to = f.partition_point(|n| n.time <= vt + lookahead);
             (from..to).collect()
         };
         for &k in fakes_on.iter().rev() {
-            let n = &self.map.fakes[k];
+            let n = &self.game.map.fakes[k];
             let r = if n.big { BIG_R } else { NOTE_R };
             let s = s_of(n.time, n.velocity);
             if !on_lane(s, r) {
@@ -1297,15 +1399,15 @@ impl Game {
         }
         let mut order = self.view.visible.clone();
         order.sort_by(|&a, &b| {
-            let (na, nb) = (&self.map.notes[a], &self.map.notes[b]);
+            let (na, nb) = (&self.game.map.notes[a], &self.game.map.notes[b]);
             nb.time
                 .total_cmp(&na.time)
                 .then(over(na).cmp(&over(nb)))
                 .then(b.cmp(&a))
         });
         for i in order {
-            let n = &self.map.notes[i];
-            let st = &self.state[i];
+            let n = &self.game.map.notes[i];
+            let st = &self.game.state[i];
             let r = if n.big { BIG_R } else { NOTE_R };
             match n.kind {
                 Kind::Don | Kind::Kat => {
@@ -1315,7 +1417,11 @@ impl Game {
                         Some(Judge::Great | Judge::Ok)
                             if self.view.hidden.has(Part::HitAnimation) => {}
                         Some(Judge::Great)
-                            if self.defense.as_ref().is_some_and(|d| d.shot[i].is_some()) => {}
+                            if self
+                                .game
+                                .defense
+                                .as_ref()
+                                .is_some_and(|d| d.shot[i].is_some()) => {}
                         Some(Judge::Great | Judge::Ok) => {
                             let p = ((t - st.judged_at) / HIT_ANIM_MS).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
@@ -1334,7 +1440,7 @@ impl Game {
                             if theirs.is_some() && s < 0.0 {
                                 continue;
                             }
-                            if let Some(d) = &self.defense {
+                            if let Some(d) = &self.game.defense {
                                 // Taken by a tower: gone past it, with a shot and a burst just after.
                                 let bucket = (vt / 40.0).floor() as u32;
                                 if let Some(tw) = d.shot[i].and_then(|k| d.towers.get(k as usize))
@@ -1403,10 +1509,18 @@ impl Game {
                                 if a > 0.01 && !nfx.hidden {
                                     let a = if theirs.is_some() { 0.3 * a } else { a };
                                     if over_panel(&nfx) {
-                                        on_path.push((s, false, i, self.flows[i], col, a, nfx));
+                                        on_path.push((
+                                            s,
+                                            false,
+                                            i,
+                                            self.game.flows[i],
+                                            col,
+                                            a,
+                                            nfx,
+                                        ));
                                     } else {
                                         let from = c.shapes.len();
-                                        draw_hit(c, s, n, i, self.flows[i], col, a, nfx);
+                                        draw_hit(c, s, n, i, self.game.flows[i], col, a, nfx);
                                         if nfx.above {
                                             above_shapes.push(from..c.shapes.len());
                                         }
@@ -1633,7 +1747,7 @@ impl Game {
                     }
                     if vt < n.time {
                         let s = s_of(n.time, n.velocity);
-                        let preempt = stable_preempt(self.map.first_velocity * mods.scroll());
+                        let preempt = stable_preempt(self.game.map.first_velocity * mods.scroll());
                         let a = note_alpha(s)
                             * radar_lit(s, n.time, n.velocity)
                             * swell_fade(preempt, n.time - vt);
@@ -1721,7 +1835,7 @@ impl Game {
         // "shiny") lights it brighter the deeper it is. Stable's `UpdateKiai`; see `kiai_flash`.
         if self.view.kiai_effects {
             for &i in &self.view.visible {
-                let n = &self.map.notes[i];
+                let n = &self.game.map.notes[i];
                 let r = if n.big { BIG_R } else { NOTE_R };
                 let sprite = if n.big {
                     Sprite::BigCircle
@@ -1731,9 +1845,9 @@ impl Game {
                 // A .tko note's motion moves (or hides) its flash with it.
                 let mut fx = NoteFx::default();
                 let (s, col, a) = match n.kind {
-                    Kind::Don | Kind::Kat if self.state[i].judged.is_none() => {
+                    Kind::Don | Kind::Kat if self.game.state[i].judged.is_none() => {
                         let s = note_s(i);
-                        if let Some(rt) = &self.tko {
+                        if let Some(rt) = &self.game.tko {
                             fx = rt.note(i, vt).unwrap_or_default();
                             fx.path = rt.note_path(i, vt, s, lane_len);
                         }
@@ -1772,11 +1886,11 @@ impl Game {
             }
             // Fakes flash like the notes they pass for.
             for &k in &fakes_on {
-                let n = &self.map.fakes[k];
+                let n = &self.game.map.fakes[k];
                 let r = if n.big { BIG_R } else { NOTE_R };
                 let s = s_of(n.time, n.velocity);
                 let mut fx = NoteFx::default();
-                if let Some(rt) = &self.tko {
+                if let Some(rt) = &self.game.tko {
                     fx = rt.fake(k, vt).unwrap_or_default();
                     fx.path = rt.fake_path(k, vt, s, lane_len);
                 }
@@ -1809,7 +1923,7 @@ impl Game {
         }
 
         // Flashlight / Spotlight / Blackout: dark everywhere but a circle around the drum.
-        let fl_combo = match self.stats.combo {
+        let fl_combo = match self.game.stats.combo {
             0..100 => 1.0,
             100..200 => 0.9,
             _ => 0.8,
@@ -1826,7 +1940,7 @@ impl Game {
         // Drum panel on top so passed notes slide underneath it.
         let flash = |at: f64| ((1.0 - (t - at) / 130.0).clamp(0.0, 1.0) * 0.95) as f32;
         let drum_x = if crossfire {
-            for (k, f) in self.presses.map(flash).into_iter().enumerate() {
+            for (k, f) in self.game.presses.map(flash).into_iter().enumerate() {
                 if f > 0.0 {
                     let col = if k == 0 || k == 3 {
                         uni.kat()
@@ -1838,14 +1952,14 @@ impl Game {
             }
             HIT_X
         } else {
-            draw_drum(c, self.presses.map(flash), uni.don(), uni.kat())
+            draw_drum(c, self.game.presses.map(flash), uni.don(), uni.kat())
         };
         // Back to front, as they were met.
         for (s, fake, k, flow, col, a, nfx) in on_path {
             let n = if fake {
-                &self.map.fakes[k]
+                &self.game.map.fakes[k]
             } else {
-                &self.map.notes[k]
+                &self.game.map.notes[k]
             };
             let from = c.shapes.len();
             draw_hit(c, s, n, k, flow, col, a, nfx);
@@ -1871,11 +1985,11 @@ impl Game {
             }
         }
         // Moved off the drum, it's drawn with the rest of the interface.
-        if self.stats.combo >= 2
+        if self.game.stats.combo >= 2
             && !self.view.hidden.has(Part::Combo)
             && self.view.hud.place(Part::Combo).is_none()
         {
-            let s = self.stats.combo.to_string();
+            let s = self.game.stats.combo.to_string();
             let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
             if c.number_width(Font::Combo, skin_size, &s).is_some() {
                 upright.push((
@@ -1894,7 +2008,7 @@ impl Game {
         }
 
         // Judgement text.
-        if let Some((j, at)) = self.last_judge.filter(|&(j, _)| {
+        if let Some((j, at)) = self.game.last_judge.filter(|&(j, _)| {
             splashes(j)
                 && !self.view.hidden.has(Part::Judgements)
                 && self.view.hud.place(Part::Judgements).is_none()
@@ -1987,7 +2101,7 @@ impl Game {
             c.mirror_since(start_shape, w);
         }
         let fx = if mods.has(Mod::FlipFlop) {
-            flip_flop(&self.map.barlines, vt)
+            flip_flop(&self.game.map.barlines, vt)
         } else {
             1.0
         } * (std::f32::consts::PI * tko_fx.flip.clamp(0.0, 1.0)).cos();
@@ -2003,7 +2117,7 @@ impl Game {
             // Sways, nods on the beat, shakes after big hits, pulses and glitches.
             dy += 14.0 * (t / 650.0).sin() as f32 + 10.0 * pulse;
             dx += 6.0 * (t / 1100.0).cos() as f32;
-            let age = (t - self.quake_at) as f32;
+            let age = (t - self.game.quake_at) as f32;
             if (0.0..260.0).contains(&age) {
                 let amp = 7.0 * (1.0 - age / 260.0);
                 dx += amp * (age * 0.9).sin();
@@ -2023,8 +2137,8 @@ impl Game {
             angle += TAU * (vt / 24_000.0).rem_euclid(1.0) as f32;
         }
         if mods.has(Mod::BarrelRoll) {
-            let i = self.kiai_starts.partition_point(|&(k, _)| k <= vt);
-            if let Some(&(k, b)) = i.checked_sub(1).and_then(|i| self.kiai_starts.get(i))
+            let i = self.game.kiai_starts.partition_point(|&(k, _)| k <= vt);
+            if let Some(&(k, b)) = i.checked_sub(1).and_then(|i| self.game.kiai_starts.get(i))
                 && vt - k < 2.0 * b
             {
                 angle += TAU * smooth(0.0, 2.0 * b, vt - k) as f32;
@@ -2175,8 +2289,9 @@ impl Game {
     /// Echo: the bar map time `t` is in and the one after it (start, length each). Before the
     /// first barline, the bar leading up to it.
     pub(super) fn echo_bars(&self, t: f64) -> Option<[(f64, f64); 2]> {
-        let bars = &self.map.barlines;
-        let fallback = 4.0 * beatmap::control_point_at(&self.map.control_points, t).beat_length;
+        let bars = &self.game.map.barlines;
+        let fallback =
+            4.0 * beatmap::control_point_at(&self.game.map.control_points, t).beat_length;
         let len_of = |i: usize| {
             bars.get(i + 1)
                 .map_or(fallback, |b| b.time - bars[i].time)
@@ -2219,7 +2334,7 @@ impl Game {
         for x in [x0, x1] {
             c.rect(x - 0.75, ECHO_Y - 5.0, 1.5, 10.0, line);
         }
-        let notes = &self.map.notes;
+        let notes = &self.game.map.notes;
         let from = notes.partition_point(|n| n.time < next - 1.0);
         for n in notes[from..]
             .iter()
@@ -2268,12 +2383,12 @@ impl Game {
     /// source, 2026-10-28), and only objects starting within `KIAI_FLASH_REACH` of its beats
     /// ahead take it: a 2222 BPM first line lights only what's at the drum.
     pub(super) fn kiai_flash(&self, t: f64, start: f64, end: f64) -> f32 {
-        let Some(first) = self.map.control_points.first() else {
+        let Some(first) = self.game.map.control_points.first() else {
             return 0.0;
         };
         let beat = first.beat_origin
             + ((t - first.beat_origin) / first.beat_length).floor() * first.beat_length;
-        if !beatmap::control_point_at(&self.map.control_points, beat).kiai
+        if !beatmap::control_point_at(&self.game.map.control_points, beat).kiai
             || start - beat > KIAI_FLASH_REACH * first.beat_length
         {
             return 0.0;
@@ -2288,7 +2403,7 @@ impl Game {
     /// Sets `visual_offset`, except while paused: the vsync lead in it moves a little every frame,
     /// and on a frozen clock that shook the stopped lane.
     pub fn set_visual_offset(&mut self, ms: f64) {
-        if self.paused.is_none() {
+        if self.game.paused.is_none() {
             self.view.visual_offset = ms;
         }
     }
@@ -2296,10 +2411,11 @@ impl Game {
     /// Map time the lane is drawn at: `time`, `visual_offset` real ms ahead.
     pub(super) fn visual_time(&self) -> f64 {
         if self.view.visual_offset == 0.0 {
-            self.time
+            self.game.time
         } else {
-            self.speed
-                .map(self.raw_time - self.offset + self.view.visual_offset)
+            self.game
+                .speed
+                .map(self.game.raw_time - self.game.offset + self.view.visual_offset)
         }
     }
 
@@ -2307,9 +2423,11 @@ impl Game {
     /// is; under the drum the gold, the shop (keys 1-4), tag-in and spotting, and what the team
     /// did lately.
     pub(super) fn draw_defense(&self, c: &mut Canvas, t: f64, w: f32) {
-        let (Some(d), Some(left), Some((turn, wait))) =
-            (&self.defense, self.lives_left(), self.defense_turn_at(t))
-        else {
+        let (Some(d), Some(left), Some((turn, wait))) = (
+            &self.game.defense,
+            self.game.lives_left(),
+            self.game.defense_turn_at(t),
+        ) else {
             return;
         };
         let st = d.state.unwrap_or_default();
@@ -2515,7 +2633,7 @@ impl Game {
             let (cx, cy) = (x + (k % 2) as f32 * 94.0, y + (k / 2) as f32 * 11.0);
             let price = item.price(&st);
             let tower = matches!(item, DefenseItem::DonTower | DefenseItem::KatTower);
-            let can = st.gold >= price && !(tower && self.tower_active(t));
+            let can = st.gold >= price && !(tower && self.game.tower_active(t));
             c.text(
                 cx,
                 cy,
@@ -2525,8 +2643,12 @@ impl Game {
             );
         }
         y += 34.0;
-        let tag = if self.can_tag_in(t) { WHITE } else { 0x55556a };
-        let left = self.tag_ins_left();
+        let tag = if self.game.can_tag_in(t) {
+            WHITE
+        } else {
+            0x55556a
+        };
+        let left = self.game.tag_ins_left();
         c.text(
             x,
             y,
@@ -3364,10 +3486,12 @@ pub const TEAM_COLOURS: [u32; 8] = [
 /// How much of a bent lane (units) counts as one stretch of it for roll bodies stacked there.
 pub(super) const BODY_CELL: f32 = 6.0;
 
-impl Game {
+impl Play {
     /// Defense: the slows' speed factor at map time `t` (1, or down to a half).
     pub(super) fn slow_factor(&self, t: f64) -> f64 {
-        let Some(d) = &self.defense else { return 1.0 };
+        let Some(d) = &self.game.defense else {
+            return 1.0;
+        };
         let k = d
             .slows
             .iter()
@@ -3380,7 +3504,8 @@ impl Game {
     /// out over its span.
     pub(super) fn miss_factor(&self, t: f64, mods: Mods) -> f64 {
         let weight = |span: f64| -> f64 {
-            self.misses
+            self.game
+                .misses
                 .iter()
                 .map(|&at| t - at)
                 .filter(|age| (0.0..span).contains(age))
@@ -3399,12 +3524,12 @@ impl Game {
     /// Tact: the map time notes are drawn at for map time `t`: a crawl through its step, then a
     /// rush to the step's end (`tact::shown_time`).
     pub(super) fn tact_time(&self, t: f64) -> f64 {
-        let bars = &self.map.barlines;
+        let bars = &self.game.map.barlines;
         crate::tact::shown_time(t, |x| {
-            let cp = beatmap::control_point_at(&self.map.control_points, x);
+            let cp = beatmap::control_point_at(&self.game.map.control_points, x);
             let bar = bar_at(bars, x, cp.beat_length * 4.0);
             crate::tact::step_start(
-                self.tact,
+                self.game.tact,
                 x,
                 bar,
                 |i| bars.get(i).map_or(x, |b| b.time),
@@ -3418,8 +3543,8 @@ impl Game {
         let mut warp = 0.0;
         if mods.has(Mod::Drop) {
             // Two beats before a kiai: held still for one and a half, then a rush to catch up.
-            let i = self.kiai_starts.partition_point(|&(k, _)| k <= t);
-            if let Some(&(k, b)) = self.kiai_starts.get(i) {
+            let i = self.game.kiai_starts.partition_point(|&(k, _)| k <= t);
+            if let Some(&(k, b)) = self.game.kiai_starts.get(i) {
                 let s = t - (k - 2.0 * b);
                 if s >= 0.0 {
                     warp += if s < 1.5 * b {
@@ -3443,7 +3568,8 @@ impl Game {
         }
         if mods.has(Mod::Moonwalk) {
             // The first eighth of a bar the notes back away, the rest of it they make up for it.
-            if let Some((_, start, len)) = bar_at(&self.map.barlines, t, cp.beat_length * 4.0) {
+            if let Some((_, start, len)) = bar_at(&self.game.map.barlines, t, cp.beat_length * 4.0)
+            {
                 let back = 0.125 * len;
                 let s = t - start;
                 warp -= if s < back {
@@ -3501,10 +3627,14 @@ impl Game {
         }
         // A shape every so many bars (the player's setup), in the map's order; the first bars of
         // each morph into it from the last.
-        let bars = &self.map.barlines;
-        let (every, morph) = (self.shapeshift.bars(), self.shapeshift.morph_bars());
+        let bars = &self.game.map.barlines;
+        let (every, morph) = (
+            self.game.shapeshift.bars(),
+            self.game.shapeshift.morph_bars(),
+        );
         let shape = |section: usize| {
-            self.shape_order
+            self.game
+                .shape_order
                 .get(section)
                 .map_or(RailShape::Straight, |&k| {
                     SHAPESHIFT[k as usize % SHAPESHIFT.len()]
@@ -3544,7 +3674,7 @@ impl Game {
         if !mods.has(Mod::Shatter) {
             return out;
         }
-        let Some((i, start, len)) = bar_at(&self.map.barlines, t, 2000.0) else {
+        let Some((i, start, len)) = bar_at(&self.game.map.barlines, t, 2000.0) else {
             return out;
         };
         let target = |bar: usize, k: usize| -> f32 {
@@ -3568,7 +3698,7 @@ impl Game {
         if !mods.has(Mod::Portal) {
             return None;
         }
-        let section = bar_at(&self.map.barlines, t, 2000.0).map_or(0, |(i, ..)| i / 8) as f64;
+        let section = bar_at(&self.game.map.barlines, t, 2000.0).map_or(0, |(i, ..)| i / 8) as f64;
         let entry = len * (0.5 + 0.3 * hash01(section * 1.3 + 0.2) as f32);
         let mut exit = len * (0.15 + 0.5 * hash01(section * 2.9 + 0.6) as f32);
         if (entry - exit).abs() < 0.15 * len {
@@ -3581,13 +3711,15 @@ impl Game {
     /// turn, easing in over the second half of the bar before it and out over the first half
     /// of the bar after.
     pub(super) fn defense_focus(&self, t: f64) -> f32 {
-        let Some(d) = &self.defense else { return 0.0 };
-        let bar = self.bar_at(t);
-        let mine = |b: usize| self.turn_of_bar(b) == d.me;
+        let Some(d) = &self.game.defense else {
+            return 0.0;
+        };
+        let bar = self.game.bar_at(t);
+        let mine = |b: usize| self.game.turn_of_bar(b) == d.me;
         if mine(bar) {
             return 1.0;
         }
-        let bars = &self.map.barlines;
+        let bars = &self.game.map.barlines;
         let (Some(start), Some(next)) = (bars.get(bar), bars.get(bar + 1)) else {
             return 0.0;
         };

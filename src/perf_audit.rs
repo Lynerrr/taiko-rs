@@ -46,8 +46,8 @@ fn map(notes: usize, slow: bool) -> beatmap::Beatmap {
     map
 }
 
-fn game(notes: usize, slow: bool, mods: &str) -> Game {
-    Game::with_mods(
+fn game(notes: usize, slow: bool, mods: &str) -> Play {
+    Play::new(Game::with_mods(
         map(notes, slow),
         Arc::new(audio::Track {
             samples: Vec::new(),
@@ -56,7 +56,7 @@ fn game(notes: usize, slow: bool, mods: &str) -> Game {
         }),
         None,
         Mods::parse(mods),
-    )
+    ))
 }
 
 #[test]
@@ -310,7 +310,7 @@ fn game_preparation_and_expiry() {
         for _ in 0..21 {
             let map = template.clone();
             let at = Instant::now();
-            let game = Game::with_mods(map, track.clone(), None, Mods::NONE);
+            let game = Play::new(Game::with_mods(map, track.clone(), None, Mods::NONE));
             samples.push(at.elapsed().as_secs_f64() * 1e6);
             black_box(game);
         }
@@ -330,7 +330,7 @@ fn game_preparation_and_expiry() {
                     },
                 );
             }
-            let mut game = Game::with_mods(map, track.clone(), None, Mods::parse("NF"));
+            let mut game = Play::new(Game::with_mods(map, track.clone(), None, Mods::parse("NF")));
             let time = 2000.0 + n as f64 * 50.0;
             game.set_time(time);
             let missed = game.stats.miss;
@@ -423,12 +423,12 @@ fn dense_playfield() {
     });
     for spacing in [30.0, 15.0] {
         for mods in ["", "HD", "HR,DT", "MV"] {
-            let mut game = Game::with_mods(
+            let mut game = Play::new(Game::with_mods(
                 stream(4_000, spacing),
                 track.clone(),
                 None,
                 Mods::parse(mods),
-            );
+            ));
             game.time = 2000.0 + 1000.0 * spacing;
             let mut canvas = Canvas::default();
             measure(&format!("draw/dense/{spacing}ms/mods={mods}"), 10, || {
