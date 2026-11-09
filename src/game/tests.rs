@@ -3860,12 +3860,15 @@ fn the_play_takes_its_rules_from_taiko_logic() {
         "shapeshift",
         "tact",
         "audiolog",
+        "lang",
     ] {
         assert!(
             !sim.contains(&format!("crate::{module}")),
             "game.rs names crate::{module}"
         );
     }
+    // Words are the drawing's: the play keeps what happened, in no language.
+    assert!(!sim.contains("tr!("), "game.rs puts something in words");
 }
 
 thread_local! {
@@ -3894,4 +3897,44 @@ fn a_play_s_end_goes_to_the_log_it_was_handed() {
         "{}",
         logged[0]
     );
+}
+
+#[test]
+fn the_team_s_feed_keeps_what_was_done_and_the_drawing_says_it() {
+    // The play keeps the act; the words come when it's drawn, in the language drawn in.
+    let mut g = Play::new(Game::with_mods(
+        beatmap::calibration_map(500.0, 0, 64),
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+        Mods::parse("MZ"),
+    ));
+    g.set_defense(
+        vec![(1, "auneu".into()), (2, "you".into())],
+        1,
+        Defense::DEFAULT,
+    );
+    g.defense_act(
+        2,
+        DefenseAct::Buy {
+            item: DefenseItem::Slow,
+            at: 2000.0,
+            until: 0.0,
+        },
+    );
+    let feed = &g.defense.as_ref().unwrap().feed;
+    assert_eq!(feed, &[(2000.0, 1, Done::Bought(DefenseItem::Slow))]);
+    crate::lang::set(crate::lang::Lang::En);
+    assert_eq!(
+        super::field::said(feed[0].2),
+        (DefenseItem::Slow.name(), DefenseItem::Slow.about())
+    );
+    assert_eq!(super::field::said(Done::TaggedIn).0, "tagged in");
+    crate::lang::set(crate::lang::Lang::Ru);
+    assert_eq!(super::field::said(feed[0].2).0, "Замедление");
+    assert_eq!(super::field::said(Done::TaggedIn).0, "перехватил ход");
+    crate::lang::set(crate::lang::Lang::En);
 }
