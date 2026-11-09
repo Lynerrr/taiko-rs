@@ -46,6 +46,7 @@ impl Category {
         Category::Action,
     ];
 
+    #[inline]
     pub fn label(self) -> &'static str {
         match self {
             Category::Event => "Events",
@@ -87,6 +88,7 @@ pub enum Target {
 }
 
 impl Target {
+    #[inline]
     pub fn label(self) -> String {
         match self {
             Target::Field(p) => format!("field {}", p.name()),
@@ -144,6 +146,7 @@ macro_rules! kinds {
         impl Kind {
             pub const ALL: &'static [Kind] = &[$(Kind::$v),*];
 
+            #[inline]
             pub fn label(self) -> &'static str {
                 match self { $(Kind::$v => $name),* }
             }
@@ -398,6 +401,7 @@ pub struct Node {
 }
 
 impl Node {
+    #[inline]
     pub fn new(id: u32, kind: Kind, x: f32, y: f32) -> Node {
         let mut n = Node {
             id,
@@ -440,6 +444,7 @@ pub struct Graph {
 }
 
 impl Graph {
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }

@@ -1,9 +1,10 @@
 //! The game. Desktop builds start it from `main.rs` (`desktop_main`); Android loads this crate
 //! as a library and starts it from `android_main`.
 
-// First, so `tr!` is there for every module after it.
+// `tr!`, for every module.
 #[macro_use]
-mod lang;
+extern crate taiko_logic;
+use taiko_logic::lang;
 mod admin;
 #[cfg(target_os = "android")]
 mod android;
@@ -63,7 +64,7 @@ use taiko_logic::mods;
 #[cfg(test)]
 mod mods_tests;
 mod multiplayer;
-mod multiverse;
+use taiko_logic::multiverse;
 mod net;
 use taiko_logic::od_override;
 mod offline;
@@ -74,7 +75,9 @@ mod perf_audit;
 mod pictures;
 mod player;
 mod playlist;
-mod pp;
+use taiko_logic::pp;
+#[cfg(test)]
+mod pp_tests;
 mod preview;
 mod profile;
 mod recalc;
@@ -95,7 +98,7 @@ mod shots;
 mod skin;
 mod social;
 mod splash;
-mod stars;
+use taiko_logic::stars;
 mod stream;
 mod style;
 use taiko_logic::tact;
@@ -8596,7 +8599,7 @@ impl State {
         let col_w = c.width / 4.0;
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
-            let colours = multiverse::note_colours();
+            let colours = crate::game::note_colours();
             let color = if key == 0 || key == 3 {
                 colours.kat()
             } else {
@@ -13924,7 +13927,7 @@ impl State {
         );
         let gap = 12.0;
         let button = (bw - 36.0 - gap) / 2.0;
-        let colours = multiverse::note_colours();
+        let colours = crate::game::note_colours();
         let options = [
             (
                 x + 18.0,

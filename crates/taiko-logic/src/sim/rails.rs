@@ -5,14 +5,15 @@ use super::*;
 /// Rails: the lane bent into a curve. Distances along it (`s`) count from the hit target; it
 /// leaves the hit target heading right, so the drum stays where it is, and behind the hit
 /// target it runs straight on to the left.
-pub(super) struct Rail {
+pub struct Rail {
     /// Position and heading (radians, anticlockwise from right) every `RAIL_STEP` from s = 0.
-    pub(super) pts: Vec<(f32, f32, f32)>,
+    pub pts: Vec<(f32, f32, f32)>,
 }
-pub(super) const RAIL_STEP: f32 = 4.0;
+pub const RAIL_STEP: f32 = 4.0;
 impl Rail {
     /// From its curvature (radians per unit) along the way, `len` long.
-    pub(super) fn build(bend: impl Fn(f32) -> f32, len: f32) -> Rail {
+    #[inline]
+    pub fn build(bend: impl Fn(f32) -> f32, len: f32) -> Rail {
         let n = (len / RAIL_STEP).ceil() as usize + 2;
         let mut pts = Vec::with_capacity(n);
         let (mut x, mut y, mut a) = (HIT_X, LANE_Y, 0.0f32);
@@ -28,7 +29,8 @@ impl Rail {
     }
 
     /// Point and heading `s` along.
-    pub(super) fn at(&self, s: f32) -> (f32, f32, f32) {
+    #[inline]
+    pub fn at(&self, s: f32) -> (f32, f32, f32) {
         if s <= 0.0 {
             return (HIT_X + s, LANE_Y, 0.0);
         }
@@ -46,7 +48,7 @@ impl Rail {
 }
 /// The lane shapes of the rails mods.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum RailShape {
+pub enum RailShape {
     Straight,
     Zigzag,
     UTurn,
@@ -61,9 +63,9 @@ pub(super) enum RailShape {
 /// leaves `MAZE_EXIT` off the right of the screen. From the drum: a long straight (read like
 /// an ordinary lane, nothing beside it), then up and down the columns on the right (below the
 /// top row past the fifth: the score, accuracy and HP are over it) and out to the right.
-pub(super) const MAZE_CELL: f32 = 160.0;
-pub(super) const MAZE_R: f32 = 80.0;
-pub(super) const MAZE: [(f32, f32); 10] = [
+pub const MAZE_CELL: f32 = 160.0;
+pub const MAZE_R: f32 = 80.0;
+pub const MAZE: [(f32, f32); 10] = [
     (4.0, 1.0),
     (2.0, -1.0),
     (1.0, -1.0),
@@ -75,24 +77,24 @@ pub(super) const MAZE: [(f32, f32); 10] = [
     (1.0, 1.0),
     (3.0, -1.0),
 ];
-pub(super) const MAZE_EXIT: f32 = 500.0;
+pub const MAZE_EXIT: f32 = 500.0;
 /// Maze: the straight before each corner of `MAZE` (the corners take `MAZE_R` off each end).
-pub(super) fn maze_straight(k: usize) -> f32 {
+pub fn maze_straight(k: usize) -> f32 {
     MAZE[k].0 * MAZE_CELL - if k == 0 { MAZE_R } else { 2.0 * MAZE_R }
 }
 /// Loop: how far from the hit target it starts, its radius, and the angle the lane into it comes
 /// up at (short of a full turn by that). Full size on a 16:9 screen, with the lane coming in right
 /// of the hit error meter.
-pub(super) const LOOP_AT: f32 = 390.0;
-pub(super) const LOOP_R: f32 = 110.0;
-pub(super) const LOOP_EXIT: f32 = 0.6;
-pub(super) const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
+pub const LOOP_AT: f32 = 390.0;
+pub const LOOP_R: f32 = 110.0;
+pub const LOOP_EXIT: f32 = 0.6;
+pub const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
 /// Meadow: square-cornered runs that cross back over themselves, as a straight run then a
 /// quarter turn (1 left, -1 right, 0 none) each. Traced from a tower-defence track, with the first
 /// run long enough that the loops below the lane clear the drum. Both loops' holes are the same
 /// size (runs 2 and 4, 1 and 5 alike), and the lanes stacked under the drum's have the same gaps
 /// between them (but for the corners' 2.6-unit rounding: runs are whole steps).
-pub(super) const MEADOW: [(f32, f32); 12] = [
+pub const MEADOW: [(f32, f32); 12] = [
     (516.0, 1.0),
     (68.0, 1.0),
     (96.0, 1.0),
@@ -109,17 +111,17 @@ pub(super) const MEADOW: [(f32, f32); 12] = [
 /// Meadow: how long each corner is. A whole number of `RAIL_STEP`s, like every run, so each turns
 /// exactly a quarter (the rail samples its curvature a step at a time) and the runs stay square.
 /// Its radius, about 71, is over half the lane, or the inside of a corner would fold over.
-pub(super) const MEADOW_TURN: f32 = 28.0 * RAIL_STEP;
+pub const MEADOW_TURN: f32 = 28.0 * RAIL_STEP;
 /// Meadow: how far right it reaches (lane edge included), how much it shrinks besides to fit the
 /// screen's height (clear of the hit error meter but for the lane out), and how far down the
 /// playfield moves.
-pub(super) const MEADOW_RIGHT: f32 = 1163.0;
-pub(super) const MEADOW_TALL: f32 = 0.53;
-pub(super) const MEADOW_DROP: f32 = 28.0;
+pub const MEADOW_RIGHT: f32 = 1163.0;
+pub const MEADOW_TALL: f32 = 0.53;
+pub const MEADOW_DROP: f32 = 28.0;
 /// The bent shapes are laid out from a lane at 160: this takes them back up there from `LANE_Y`.
-pub(super) const RAIL_LIFT: f32 = LANE_Y - 160.0;
+pub const RAIL_LIFT: f32 = LANE_Y - 160.0;
 /// Shapeshift's shapes, by the index `shapeshift::SHAPES` names them with.
-pub(super) const SHAPESHIFT: [RailShape; 7] = [
+pub const SHAPESHIFT: [RailShape; 7] = [
     RailShape::Zigzag,
     RailShape::UTurn,
     RailShape::Spiral,
@@ -141,7 +143,7 @@ pub fn rail_outline(k: usize) -> Vec<(f32, f32)> {
         .collect()
 }
 /// The lane shapes a .tko map's lane clips name (`tko::clips::LANE_SHAPES`), in that order.
-pub(super) const LANE_SHAPES_OF_CLIPS: [RailShape; 6] = [
+pub const LANE_SHAPES_OF_CLIPS: [RailShape; 6] = [
     RailShape::Zigzag,
     RailShape::UTurn,
     RailShape::Spiral,
@@ -151,12 +153,7 @@ pub(super) const LANE_SHAPES_OF_CLIPS: [RailShape; 6] = [
 ];
 /// The lane `u` (0..1) of the way from shape `from` to `to` on a canvas `w` wide: rail, length,
 /// and how far the playfield moves down and shrinks for it.
-pub(super) fn morph_rail(
-    from: RailShape,
-    to: RailShape,
-    u: f32,
-    w: f32,
-) -> (Option<Rail>, f32, f32, f32) {
+pub fn morph_rail(from: RailShape, to: RailShape, u: f32, w: f32) -> (Option<Rail>, f32, f32, f32) {
     let ease = |x: f32| smooth(0.0, 1.0, x as f64) as f32;
     // The Loop can't be bent into or out of: half way its lane would swing round across the
     // drum and the HUD. So the other shape straightens out over the first half of the morph and
@@ -200,7 +197,8 @@ pub(super) fn morph_rail(
     )
 }
 impl RailShape {
-    pub(super) fn of(mods: Mods) -> Option<RailShape> {
+    #[inline]
+    pub fn of(mods: Mods) -> Option<RailShape> {
         [
             (Mod::Zigzag, RailShape::Zigzag),
             (Mod::UTurn, RailShape::UTurn),
@@ -215,7 +213,7 @@ impl RailShape {
     }
 
     /// Curvature (radians per unit, anticlockwise) `s` along the lane.
-    pub(super) fn bend(self, s: f32) -> f32 {
+    pub fn bend(self, s: f32) -> f32 {
         use std::f32::consts::PI;
         // Turning by `angle` over `len` units from `at`.
         let turn = |at: f32, len: f32, angle: f32| {
@@ -289,7 +287,8 @@ impl RailShape {
     }
 
     /// How long the lane is on a canvas `w` wide.
-    pub(super) fn length(self, w: f32) -> f32 {
+    #[inline]
+    pub fn length(self, w: f32) -> f32 {
         use std::f32::consts::PI;
         match self {
             RailShape::Straight => w - HIT_X,
@@ -317,7 +316,8 @@ impl RailShape {
     }
 
     /// How far down the playfield moves to keep the shape on screen.
-    pub(super) fn drop(self) -> f32 {
+    #[inline]
+    pub fn drop(self) -> f32 {
         match self {
             RailShape::Straight => 0.0,
             RailShape::Zigzag => 35.0 - RAIL_LIFT,
@@ -333,7 +333,8 @@ impl RailShape {
 
     /// How much the playfield shrinks to fit the shape on a canvas `w` wide: the Spiral is
     /// tall, and narrow playfields squeeze the rest about the hit target.
-    pub(super) fn zoom(self, w: f32) -> f32 {
+    #[inline]
+    pub fn zoom(self, w: f32) -> f32 {
         // How far right the shape reaches, lane edge included.
         let right = match self {
             RailShape::Straight | RailShape::Zigzag => return 1.0,

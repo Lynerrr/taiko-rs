@@ -94,6 +94,7 @@ impl ControlPoint {
     /// How far into the current beat map time `t` is, 0..1. Counted from the red line: green
     /// lines often sit mid-beat, and restarting the beat at them made the beat-driven mods
     /// (Pulse, Stutter, Zoom...) twitch on SV-heavy maps.
+    #[inline]
     pub fn beat_phase(&self, t: f64) -> f64 {
         ((t - self.beat_origin) / self.beat_length).rem_euclid(1.0)
     }
@@ -172,6 +173,7 @@ pub fn difficulty_range(d: f64, min: f64, mid: f64, max: f64) -> f64 {
 /// The OD a map plays like at `rate` (1.5 for DT): the great window shrinks with the speed, as
 /// it is timed in the song, and this is the OD whose window is that wide in real time. Above 10
 /// when faster, below the map's when slower, as osu! shows it.
+#[inline]
 pub fn od_at_rate(od: f64, rate: f64) -> f64 {
     od_of_great(great_ms(od) / rate.max(0.01))
 }
@@ -221,6 +223,16 @@ fn od_of_great(great: f64) -> f64 {
     } else {
         WINDOW_BEND_OD + (at_bend / great).ln() * at_bend / 3.0
     }
+}
+
+/// FNV-1a over the `.osu` file: identifies a difficulty across machines.
+pub fn map_hash(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }
 
 fn kv(line: &str) -> Option<(&str, &str)> {
@@ -572,6 +584,7 @@ fn build_control_points(raw: &mut [RawTimingPoint]) -> Vec<ControlPoint> {
     out
 }
 
+#[inline]
 pub fn control_point_at(points: &[ControlPoint], time: f64) -> &ControlPoint {
     let idx = points.partition_point(|p| p.time <= time);
     &points[idx.saturating_sub(1)]

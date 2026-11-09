@@ -32,7 +32,7 @@ pub struct Play {
 /// The mods pp is worked out with: osu!'s that change the formula (`FORMULA`), and a scroll
 /// speed other than the usual as lazer's Difficulty Adjust. At the usual speed, osu!'s plain mod
 /// bits (the same numbers either way).
-pub(crate) fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mods::GameMods {
+pub fn formula_mods(mods: Mods, scroll_speed: f64) -> rosu_pp::model::mods::GameMods {
     let bits: u32 = FORMULA.iter().filter(|f| mods.has(f.0)).map(|f| f.1).sum();
     if !scroll_speed.is_finite() || scroll_speed <= 0.0 || (scroll_speed - 1.0).abs() < 1e-6 {
         return bits.into();
@@ -83,7 +83,7 @@ const NEUTRAL: [Mod; 8] = [
 
 /// The most a play's other mods can add to its pp: stacked up, a map learned by heart came to
 /// five times what it's worth.
-const MAX_CUSTOM_FACTOR: f64 = 1.5;
+pub const MAX_CUSTOM_FACTOR: f64 = 1.5;
 
 /// What the play's other mods (taiko.rs's own, and osu!'s that pp doesn't know) do to its pp:
 /// their score multipliers, up to `MAX_CUSTOM_FACTOR`.
@@ -373,7 +373,7 @@ impl Live {
     }
 
     /// Whether the pp returned is for the counts last handed over.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn is_current(&self) -> bool {
         self.pp.is_some_and(|(c, _)| c == self.sent)
     }
@@ -403,19 +403,6 @@ mod tests {
             Mod::NoFinishers.multiplier(),
             "only adding has a ceiling"
         );
-    }
-
-    #[test]
-    fn the_servers_list_of_mods_without_a_factor_is_right() {
-        for code in crate::online::NO_FACTOR_MODS {
-            assert_eq!(custom_factor(Mods::parse(code)), 1.0, "{code}");
-        }
-        let most = crate::mods::ALL
-            .iter()
-            .filter(|m| !crate::online::NO_FACTOR_MODS.contains(&m.acronym()))
-            .map(|m| m.multiplier())
-            .fold(0.0, f64::max);
-        assert!(most.powi(crate::online::MODS_BELOW_CAP as i32) < MAX_CUSTOM_FACTOR);
     }
 
     #[test]
@@ -452,13 +439,9 @@ mod tests {
         let b = breakdown(&path, &play).unwrap();
         assert_eq!(b.max_combo, 400);
         // The game plays the same notes.
-        let game = crate::game::Game::with_mods(
+        let game = crate::sim::Game::with_mods(
             crate::beatmap::load(&path).unwrap(),
-            std::sync::Arc::new(crate::audio::Track {
-                samples: Vec::new(),
-                rate: 1.0,
-                stream: None,
-            }),
+            std::sync::Arc::new(crate::sim::Silence),
             None,
             half,
         );

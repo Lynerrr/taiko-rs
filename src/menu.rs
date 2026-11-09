@@ -927,7 +927,7 @@ impl Menu {
         let small_r = big_r * song_note_r() / song_big_r();
         let start = c.shapes.len();
         let fade = song.fade() * SONG_ALPHA;
-        let colours = crate::multiverse::note_colours();
+        let colours = crate::game::note_colours();
         let (don, kat) = (colours.don(), colours.kat());
         // The target, as in a song: the skin's, or rings.
         let big = c.sprite(

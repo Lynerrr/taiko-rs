@@ -1150,7 +1150,7 @@ impl State {
             Some(o) => ((scroll / SONG_H) as usize).min(o),
             None => (scroll / SONG_H) as usize,
         };
-        let colours = crate::multiverse::note_colours();
+        let colours = crate::game::note_colours();
         for (g, range) in groups.iter().enumerate().skip(first) {
             let sy = y + song_top(g) - scroll;
             if sy > y + h {

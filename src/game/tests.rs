@@ -2,12 +2,15 @@ use super::hud_draw::HP_BAR_Y;
 use super::*;
 use crate::audio::Track;
 use crate::net::ItemText;
+use taiko_logic::defense::{Defense, DefenseAct, TeamState};
+use taiko_logic::mods::Speed;
+use taiko_logic::shapeshift;
 
 #[test]
 fn the_play_itself_reaches_for_nothing_that_draws() {
     // game.rs is the simulation (judging, scoring, HP, replays); drawing lives in game/field.rs and
     // game/hud_draw.rs. Keeping the drawing layers out of it is what lets it become taiko-logic.
-    let sim = include_str!("../game.rs");
+    let sim = include_str!("../../crates/taiko-logic/src/sim.rs");
     for layer in [
         "render", "hit", "hud", "layout", "style", "skin", "medals", "audio",
     ] {
@@ -434,7 +437,7 @@ fn the_play_reaches_its_sound_through_the_audio_port() {
     g.pause(Some(&heard));
     g.resume(Some(&heard));
     assert_eq!(*heard.0.borrow(), ["paused true", "paused false"]);
-    let sim = include_str!("../game.rs");
+    let sim = include_str!("../../crates/taiko-logic/src/sim.rs");
     assert!(
         !sim.contains("&Engine"),
         "game.rs takes the client's sound engine itself"
@@ -3850,28 +3853,17 @@ fn a_hidden_group_is_not_drawn_but_the_notes_stay_hittable() {
 
 #[test]
 fn the_play_takes_its_rules_from_taiko_logic() {
-    // What already moved to taiko-logic game.rs takes from there, and the client's audio log it
-    // only reaches through the sink it's handed (`log_to`): nothing of it holds the play back.
-    let sim = include_str!("../game.rs");
-    for module in [
-        "autoplay",
-        "calibrate",
-        "clock",
-        "od_override",
-        "shapeshift",
-        "tact",
-        "audiolog",
-        "lang",
-        "mods",
-        "net",
-    ] {
-        assert!(
-            !sim.contains(&format!("crate::{module}")),
-            "game.rs names crate::{module}"
-        );
+    // The play is taiko-logic's (`taiko_logic::sim`), which can't name anything of the client:
+    // Cargo keeps the window, the GPU, the sound and the network out of it. This module only draws
+    // it, and keeps no play of its own.
+    let client = include_str!("../game.rs");
+    assert!(client.contains("pub use taiko_logic::sim::*;"));
+    for own in ["struct Game", "struct Stats", "fn judge", "impl Game"] {
+        assert!(!client.contains(own), "the client's game module has {own}");
     }
     // Words are the drawing's: the play keeps what happened, in no language.
-    assert!(!sim.contains("tr!("), "game.rs puts something in words");
+    let sim = include_str!("../../crates/taiko-logic/src/sim.rs");
+    assert!(!sim.contains("tr!("), "the play puts something in words");
 }
 
 thread_local! {
@@ -3940,4 +3932,34 @@ fn the_team_s_feed_keeps_what_was_done_and_the_drawing_says_it() {
     assert_eq!(super::field::said(feed[0].2).0, "Замедление");
     assert_eq!(super::field::said(Done::TaggedIn).0, "перехватил ход");
     crate::lang::set(crate::lang::Lang::En);
+}
+
+#[test]
+fn a_frame_s_note_colours_hold_while_another_thread_sets_them() {
+    let mine = multiverse::Colours {
+        palette: 0,
+        custom: [0x112233, 0x445566],
+    };
+    set_frame_look(Some(Look {
+        note_colours: mine,
+        ..Look::default()
+    }));
+    std::thread::spawn(|| {
+        for i in 0..1000 {
+            multiverse::set_note_colours(multiverse::Colours {
+                palette: 0,
+                custom: [i, i],
+            });
+        }
+    })
+    .join()
+    .unwrap();
+    assert_eq!(note_colours(), mine);
+    set_frame_look(None);
+    assert_ne!(
+        note_colours(),
+        mine,
+        "without a frame: the configured colours"
+    );
+    multiverse::set_note_colours(multiverse::Colours::CLASSIC);
 }

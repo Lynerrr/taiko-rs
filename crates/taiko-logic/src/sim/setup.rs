@@ -3,9 +3,21 @@
 
 use super::*;
 
+/// Multiverse: the focus moving to another playfield.
+#[derive(Clone, Copy, Debug)]
+pub struct FocusSwitch {
+    /// The bar it lands on (map ms).
+    pub at: f64,
+    /// The playfield that gets it.
+    pub field: usize,
+    /// The beat length there.
+    pub beat: f64,
+}
+
 /// Roulette's 4-bar sections: where each starts (map ms) and its speed. The first is 1x; no
 /// two in a row are alike.
-pub(super) fn roulette_sections(map: &Beatmap) -> Vec<(f64, f64)> {
+#[inline]
+pub fn roulette_sections(map: &Beatmap) -> Vec<(f64, f64)> {
     const SPEEDS: [f64; 5] = [0.5, 0.75, 1.0, 1.5, 2.0];
     let mut out: Vec<(f64, f64)> = Vec::new();
     for b in map.barlines.iter().step_by(4) {
@@ -23,7 +35,8 @@ pub(super) fn roulette_sections(map: &Beatmap) -> Vec<(f64, f64)> {
 /// Multiverse: where the focus moves to another playfield. Every 2 bars, every bar in kiai
 /// time, from the first note to the last, to one that parks well above or below the one that
 /// has it, so the one in focus never hides the one that's called.
-pub(super) fn focus_switches(map: &Beatmap) -> Vec<FocusSwitch> {
+#[inline]
+pub fn focus_switches(map: &Beatmap) -> Vec<FocusSwitch> {
     let first = map.notes.first().map_or(0.0, |n| n.time);
     let last = map
         .notes
@@ -50,7 +63,7 @@ pub(super) fn focus_switches(map: &Beatmap) -> Vec<FocusSwitch> {
     out
 }
 /// The speed most notes have: Constant Speed's, and what Anti-SV / Hyper SV bend around.
-pub(super) fn main_velocity(map: &Beatmap) -> f64 {
+pub fn main_velocity(map: &Beatmap) -> f64 {
     // Counted to 4 decimals; the first exact velocity of the most common one is the answer.
     let mut counts: std::collections::HashMap<i64, (usize, f64)> = std::collections::HashMap::new();
     for n in &map.notes {
@@ -68,7 +81,7 @@ pub(super) fn main_velocity(map: &Beatmap) -> f64 {
 }
 /// The scroll speed mods that only depend on the map change the notes' (and barlines') own
 /// velocities, so drawing needs nothing more for them.
-pub(super) fn bake_speeds(map: &mut Beatmap, mods: Mods) {
+pub fn bake_speeds(map: &mut Beatmap, mods: Mods) {
     let main = main_velocity(map);
     let first = map.notes.first().map(|n| n.time).unwrap_or(0.0);
     let end = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
@@ -167,7 +180,7 @@ pub(super) fn bake_speeds(map: &mut Beatmap, mods: Mods) {
     }
 }
 /// Decoy's fake notes: in about half the gaps between notes, one halfway, of a random colour.
-pub(super) fn decoys(map: &Beatmap) -> Vec<beatmap::Note> {
+pub fn decoys(map: &Beatmap) -> Vec<beatmap::Note> {
     let hits: Vec<&beatmap::Note> = map
         .notes
         .iter()
@@ -208,7 +221,7 @@ pub(super) fn decoys(map: &Beatmap) -> Vec<beatmap::Note> {
 }
 /// The rhythm of a note at map time `t`: the smallest of 1, 2, 3, 4, 6, 8, 12 and 16 whose 1/n
 /// beat grid (from its red line) it sits on, within 3 ms; 0 when on none.
-pub(super) fn snap_of(cps: &[beatmap::ControlPoint], t: f64) -> u8 {
+pub fn snap_of(cps: &[beatmap::ControlPoint], t: f64) -> u8 {
     let cp = beatmap::control_point_at(cps, t);
     let beats = (t - cp.beat_origin) / cp.beat_length;
     [1u8, 2, 3, 4, 6, 8, 12, 16]
@@ -222,7 +235,7 @@ pub(super) fn snap_of(cps: &[beatmap::ControlPoint], t: f64) -> u8 {
 /// The rhythm each note is part of: how far it is from its nearest neighbour, as the 1/n of a
 /// beat that gap is closest to (1, 2, 3, 4, 6, 8, 12 or 16). Every note of a 1/4 stream gets 4,
 /// of a triplet run 3, a lone note 1 or 2. 0 for rolls and swells.
-pub(super) fn flows(map: &Beatmap) -> Vec<u8> {
+pub fn flows(map: &Beatmap) -> Vec<u8> {
     let hits: Vec<usize> = (0..map.notes.len())
         .filter(|&i| matches!(map.notes[i].kind, Kind::Don | Kind::Kat))
         .collect();
@@ -248,7 +261,8 @@ pub(super) fn flows(map: &Beatmap) -> Vec<u8> {
 }
 /// Liar's far-off times: each triplet note (1/3, 1/6, 1/12) moved to the nearest 1/4 (1/8,
 /// 1/16) of the beat, unless a real note is already there; other notes keep their own.
-pub(super) fn lies(map: &Beatmap) -> Vec<f64> {
+#[inline]
+pub fn lies(map: &Beatmap) -> Vec<f64> {
     let hit_at = |t: f64| {
         let i = map.notes.partition_point(|n| n.time < t - 5.0);
         map.notes[i..]
@@ -272,7 +286,8 @@ pub(super) fn lies(map: &Beatmap) -> Vec<f64> {
         .collect()
 }
 /// A repeatable pseudo-random 0-1 for a map time (SV Chaos, Random).
-pub(super) fn hash01(t: f64) -> f64 {
+#[inline]
+pub fn hash01(t: f64) -> f64 {
     let mut x = (t * 16.0).round() as i64 as u64 ^ 0x9e37_79b9_7f4a_7c15;
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -280,13 +295,13 @@ pub(super) fn hash01(t: f64) -> f64 {
     (x >> 11) as f64 / (1u64 << 53) as f64
 }
 /// Shapeshift: the shape of each section, by `setup`.
-pub(super) fn shape_order(map: &Beatmap, mods: Mods, setup: shapeshift::Config) -> Vec<u8> {
+pub fn shape_order(map: &Beatmap, mods: Mods, setup: shapeshift::Config) -> Vec<u8> {
     if !mods.has(Mod::Shapeshift) {
         return Vec::new();
     }
     // Each map its own shuffle, the same every time it's played.
     let m = &map.meta;
-    let seed = crate::net::map_hash(
+    let seed = crate::beatmap::map_hash(
         format!("{}\n{}\n{}\n{}", m.artist, m.title, m.creator, m.version).as_bytes(),
     );
     setup.sequence(map.barlines.len() / setup.bars() + 1, seed)
@@ -305,7 +320,7 @@ pub fn speed_for(map: &Beatmap, mods: Mods, rate: f64) -> Speed {
 }
 /// Changes the notes themselves for the mods that do (before anything is judged).
 /// `stars::load_played` does the same to the map pp and star ratings are worked out on.
-pub(super) fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64, half: crate::mods::HalfRule) {
+pub fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64, half: crate::mods::HalfRule) {
     let hit = |n: &beatmap::Note| matches!(n.kind, Kind::Don | Kind::Kat);
     if mods.has(Mod::Half) {
         let points = &map.control_points;

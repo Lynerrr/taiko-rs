@@ -26,7 +26,7 @@ pub struct Graph {
 }
 
 impl Graph {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn section_ms(&self) -> f64 {
         SECTION_MS
     }

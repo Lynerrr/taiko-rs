@@ -257,6 +257,18 @@ pub const ALL: [Mod; 79] = [
     OdOverride,
 ];
 
+/// Each mod's place in `ALL`, by the mod's discriminant: `Mod::bit` without a search.
+const BIT_INDEX: [u8; ALL.len()] = {
+    let mut index = [0; ALL.len()];
+    // Backwards, so a mod listed twice would keep its first place, as a search would.
+    let mut i = ALL.len();
+    while i > 0 {
+        i -= 1;
+        index[ALL[i] as usize] = i as u8;
+    }
+    index
+};
+
 /// Mod select columns: (title, accent colour, mods).
 pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
     (
@@ -350,6 +362,7 @@ pub fn customizable(mods: Mods) -> Vec<Mod> {
 }
 
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
+#[inline]
 pub fn step(index: usize, dx: i32, dy: i32) -> usize {
     let m = ALL[index.min(ALL.len() - 1)];
     let (col, row) = GROUPS
@@ -803,8 +816,11 @@ impl Mod {
             .any(|g| g.2.contains(&self))
     }
 
+    /// The mod's bit in `Mods`: its place in `ALL`. Looked up in a table made at compile time,
+    /// since the drawing asks `Mods::has` many times a frame.
+    #[inline]
     fn bit(self) -> u128 {
-        1 << ALL.iter().position(|&m| m == self).unwrap_or(0)
+        1 << BIT_INDEX[self as usize]
     }
 
     pub fn from_acronym(s: &str) -> Option<Mod> {
@@ -881,14 +897,17 @@ impl Mods {
         out
     }
 
+    #[inline]
     pub fn has(self, m: Mod) -> bool {
         self.0 & m.bit() != 0
     }
 
+    #[inline]
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
 
+    #[inline]
     pub fn iter(self) -> impl Iterator<Item = Mod> {
         ALL.into_iter().filter(move |&m| self.has(m))
     }
@@ -912,6 +931,7 @@ impl Mods {
 
     /// `self` with `extra`'s mods added, but not those that clash with one of `self`'s (a
     /// Multiverse universe's mods on top of the play's).
+    #[inline]
     pub fn plus(self, extra: Mods) -> Mods {
         let mut out = self;
         for m in extra.iter() {
@@ -923,6 +943,7 @@ impl Mods {
     }
 
     /// From "HD,HR" (unknown acronyms are skipped, conflicts resolved in order).
+    #[inline]
     pub fn parse(s: &str) -> Mods {
         let mut out = Mods::NONE;
         for m in s.split([',', ' ']).filter_map(Mod::from_acronym) {
@@ -951,6 +972,7 @@ impl Mods {
         Mods::parse(&list.join(","))
     }
 
+    #[inline]
     pub fn list(self) -> Vec<String> {
         self.iter().map(|m| m.acronym().to_string()).collect()
     }
@@ -1015,6 +1037,7 @@ impl Mods {
     }
 
     /// "HDHR", or "" without mods.
+    #[inline]
     pub fn label(self) -> String {
         self.iter().map(|m| m.acronym()).collect()
     }
@@ -1039,6 +1062,7 @@ impl Mods {
     }
 
     /// The speed a play runs at, from the selected speed (`rate`, `keep_pitch`) and the mods.
+    #[inline]
     pub fn speed(self, rate: f64, keep_pitch: bool) -> (f64, bool) {
         self.rate_override().unwrap_or((rate, keep_pitch))
     }
@@ -1055,6 +1079,7 @@ impl Mods {
     }
 
     /// OD after EZ / HR / Precise, or the one picked for OD Override instead of all of them.
+    #[inline]
     pub fn od(self, od: f64) -> f64 {
         if self.has(OdOverride) {
             return crate::od_override::get();
@@ -1084,6 +1109,7 @@ impl Mods {
     }
 
     /// Scroll speed factor of EZ / HR (osu!lazer's taiko slider multipliers).
+    #[inline]
     pub fn scroll(self) -> f64 {
         if self.has(Easy) {
             0.8
@@ -1129,6 +1155,7 @@ impl Speed {
     }
 
     /// For a play of `mods` at base `rate` whose notes run from `first` to `last` (map ms).
+    #[inline]
     pub fn for_play(mods: Mods, rate: f64, first: f64, last: f64) -> Speed {
         match mods.wind() {
             Some(f) if last > first => Speed {
@@ -1172,6 +1199,7 @@ impl Speed {
     }
 
     /// Map ms at song ms `t` (the inverse of `track`).
+    #[inline]
     pub fn map(&self, t: f64) -> f64 {
         let t0 = self.m0 / self.r0;
         if self.is_constant() || t <= t0 {
@@ -1209,6 +1237,7 @@ impl Preset {
     }
 
     /// The config's "1.2|HD,HR|name" (the name last: it may hold anything).
+    #[inline]
     pub fn parse(s: &str) -> Option<Preset> {
         let mut f = s.splitn(3, '|');
         let rate: f64 = f.next()?.trim().parse().ok()?;
@@ -1240,6 +1269,20 @@ impl Preset {
 
 #[cfg(test)]
 mod tests {
+    /// A mod's bit is its place in `ALL` (saved presets and scores keep these bits), and every
+    /// mod has a bit of its own.
+    #[test]
+    fn each_mod_s_bit_is_its_place_in_the_list() {
+        use super::{ALL, Mods};
+        let mut seen = 0u128;
+        for (i, &m) in ALL.iter().enumerate() {
+            assert_eq!(m.bit(), 1 << i, "{m:?}");
+            assert_eq!(seen & m.bit(), 0, "{m:?} shares a bit");
+            seen |= m.bit();
+            assert!(Mods::default().flip(m).has(m), "{m:?}");
+        }
+    }
+
     #[test]
     fn presets_keep_their_mods_speed_and_name_through_the_config() {
         use super::{Mods, Preset};
