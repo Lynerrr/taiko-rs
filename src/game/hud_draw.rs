@@ -2,6 +2,7 @@
 //! pause menu, each part where the player put it (`crate::hud`).
 
 use super::*;
+use crate::audio::Track;
 use crate::hit::{Canvas, Hit};
 use crate::hud::{self, Part};
 use crate::render::{Font, Sprite, VIRTUAL_HEIGHT, accent, progress, rgba};

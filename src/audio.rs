@@ -739,13 +739,30 @@ impl Limiter {
     }
 }
 
+impl crate::game::Song for Track {
+    fn frames(&self) -> usize {
+        Track::frames(self)
+    }
+
+    fn rate(&self) -> f64 {
+        self.rate
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+}
+
 impl crate::game::Audio for Engine {
     fn rate(&self) -> u32 {
         self.rate
     }
 
-    fn play(&self, track: Arc<Track>, start_ms: f64) {
-        Engine::play(self, track, start_ms);
+    fn play(&self, song: Arc<dyn crate::game::Song>, start_ms: f64) {
+        // The client's plays keep time to its own tracks.
+        if let Ok(track) = song.into_any().downcast::<Track>() {
+            Engine::play(self, track, start_ms);
+        }
     }
 
     fn seek(&self, ms: f64) {
@@ -776,6 +793,21 @@ impl crate::game::Audio for Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_track_is_a_song_that_comes_back_as_itself() {
+        use crate::game::Song;
+        let track = Arc::new(Track {
+            samples: vec![0.0; 2 * 4800],
+            rate: 1.5,
+            stream: None,
+        });
+        let song: Arc<dyn Song> = track.clone();
+        assert_eq!(song.frames(), 4800);
+        assert_eq!(song.rate(), 1.5);
+        let back = song.into_any().downcast::<Track>().expect("the same track");
+        assert!(Arc::ptr_eq(&back, &track));
+    }
 
     #[test]
     fn each_sound_of_a_play_is_the_hitsound_of_its_name() {

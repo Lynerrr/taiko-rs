@@ -15974,7 +15974,10 @@ impl State {
                         } else {
                             game.track_at(game.end_time()) * 0.4
                         };
-                        results.music = Some((game.track.clone(), again.max(0.0)));
+                        results.music = game::Song::into_any(game.track.clone())
+                            .downcast::<audio::Track>()
+                            .ok()
+                            .map(|t| (t, again.max(0.0)));
                     }
                     let e = &self.library[*entry];
                     let play = pp::Play {

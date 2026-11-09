@@ -1,12 +1,15 @@
 use super::hud_draw::HP_BAR_Y;
 use super::*;
+use crate::audio::Track;
 
 #[test]
 fn the_play_itself_reaches_for_nothing_that_draws() {
     // game.rs is the simulation (judging, scoring, HP, replays); drawing lives in game/field.rs and
     // game/hud_draw.rs. Keeping the drawing layers out of it is what lets it become taiko-logic.
     let sim = include_str!("../game.rs");
-    for layer in ["render", "hit", "hud", "layout", "style", "skin", "medals"] {
+    for layer in [
+        "render", "hit", "hud", "layout", "style", "skin", "medals", "audio",
+    ] {
         assert!(
             !sim.contains(&format!("crate::{layer}::"))
                 && !sim.contains(&format!("crate::{layer};")),
@@ -398,7 +401,7 @@ impl Audio for Heard {
     fn rate(&self) -> u32 {
         48_000
     }
-    fn play(&self, _: Arc<Track>, start_ms: f64) {
+    fn play(&self, _: Arc<dyn Song>, start_ms: f64) {
         self.0.borrow_mut().push(format!("play {start_ms}"));
     }
     fn seek(&self, ms: f64) {

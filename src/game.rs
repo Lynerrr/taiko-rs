@@ -64,7 +64,6 @@ fn black_lane() -> bool {
     playfield_look().black_lane
 }
 
-use crate::audio::Track;
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::calibrate;
 use crate::clock::GameClock;
@@ -73,6 +72,17 @@ use crate::multiverse::{self, Shape as NoteShape, Universe};
 use crate::net::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
 use crate::shapeshift;
 use crate::tko::runtime::NoteFx;
+
+/// The song a play keeps time to: how long it is and how fast it was made to play. The client's
+/// `audio::Track` is one; the sound it's handed to (`Audio::play`) takes it back as its own.
+pub trait Song: Send + Sync {
+    /// Its length in frames at the output's rate.
+    fn frames(&self) -> usize;
+    /// The rate it was made to play at (1.0 = the map's own speed).
+    fn rate(&self) -> f64;
+    /// Itself, for the sound to find its own kind of song in.
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync>;
+}
 
 /// The sounds a play makes: the drum's, a broken combo, Overtime's scream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -93,7 +103,7 @@ pub enum Sound {
 pub trait Audio {
     /// The output's sample rate.
     fn rate(&self) -> u32;
-    fn play(&self, track: Arc<Track>, start_ms: f64);
+    fn play(&self, track: Arc<dyn Song>, start_ms: f64);
     fn seek(&self, ms: f64);
     fn set_paused(&self, paused: bool);
     fn sfx_at(&self, s: Sound, volume: f32);
@@ -400,7 +410,7 @@ pub struct Game {
     end_time: f64,
     track_ms: f64,
     /// The song as it plays (the results screen plays it on).
-    pub track: Arc<Track>,
+    pub track: Arc<dyn Song>,
     /// The player asked for the results as soon as the last note was judged.
     outro_skipped: bool,
     first_note: f64,
@@ -846,14 +856,14 @@ pub(crate) fn random_don(time: f64, seed: u64) -> bool {
 }
 
 impl Game {
-    pub fn new(map: Beatmap, track: Arc<Track>, audio: Option<&dyn Audio>) -> Game {
+    pub fn new(map: Beatmap, track: Arc<dyn Song>, audio: Option<&dyn Audio>) -> Game {
         Game::with_mods(map, track, audio, Mods::NONE)
     }
 
     /// A play with `mods` (the track is already at their speed, see `audio::change_speed`).
     pub fn with_mods(
         map: Beatmap,
-        track: Arc<Track>,
+        track: Arc<dyn Song>,
         audio: Option<&dyn Audio>,
         mods: Mods,
     ) -> Game {
@@ -863,7 +873,7 @@ impl Game {
     /// The same, with Random colouring the notes by `seed` (see `Game::seed`).
     pub fn with_seed(
         map: Beatmap,
-        track: Arc<Track>,
+        track: Arc<dyn Song>,
         audio: Option<&dyn Audio>,
         mods: Mods,
         seed: u64,
@@ -874,7 +884,7 @@ impl Game {
     /// The same, with Half taking off the notes it did then (a replay's).
     pub fn with_half(
         mut map: Beatmap,
-        track: Arc<Track>,
+        track: Arc<dyn Song>,
         audio: Option<&dyn Audio>,
         mods: Mods,
         seed: u64,
@@ -910,7 +920,7 @@ impl Game {
         let first_note = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let end_time = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
         let start = beatmap::play_start(first_note, map.meta.audio_lead_in);
-        let rate = track.rate.clamp(0.25, 4.0);
+        let rate = track.rate().clamp(0.25, 4.0);
         let speed = Speed::for_play(mods, rate, first_note, end_time);
         let track_ms = audio
             .map(|a| track.frames() as f64 / a.rate() as f64 * 1000.0)
@@ -1737,7 +1747,7 @@ impl Game {
     /// so this changes how fast it goes by and nothing else.
     pub fn change_speed(
         &mut self,
-        track: Arc<Track>,
+        track: Arc<dyn Song>,
         rate: f64,
         audio: Option<&dyn Audio>,
         offset: f64,
