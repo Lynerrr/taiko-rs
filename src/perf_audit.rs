@@ -2,6 +2,7 @@
 //! wall-clock thresholds; correctness assertions check the compared offset estimates.
 
 use super::*;
+use crate::app::run_loop::lock;
 use std::hint::black_box;
 
 fn report(name: &str, mut samples: Vec<f64>) {

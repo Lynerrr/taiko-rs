@@ -150,7 +150,7 @@ possible (rate, mods, seed, Half rule and scroll speed all matter).
 
 ### A7: swapchain reconfiguration may wait for the GPU while input is locked out
 
-At the start of [`render_loop`](../src/lib.rs#L10163), the `State` guard remains alive during
+At the start of [`render_loop`](../src/app/run_loop.rs#L121), the `State` guard remains alive during
 `renderer.resize`, `set_surface` and `set_present`. They reach `Surface::configure`, whose
 [wgpu 30 contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Surface.html#method.configure) says
 reconfiguration waits for GPU idle. This is a demonstrated blocking dependency; its duration
