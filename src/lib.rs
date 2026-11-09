@@ -3186,7 +3186,12 @@ impl State {
         sim.sfx_log = Some(Vec::new());
         sim.set_time(ed.end);
         let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds {
-            sim.sfx_log.take().unwrap_or_default()
+            sim.sfx_log
+                .take()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(t, s, v)| (t, s.into(), v))
+                .collect()
         } else {
             Vec::new()
         };
