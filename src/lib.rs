@@ -211,11 +211,6 @@ enum Scene {
         back: Box<Scene>,
         vsync: bool,
     },
-    CalibrateDone {
-        estimate: calibrate::Estimate,
-        back: Box<Scene>,
-        vsync: bool,
-    },
     /// Full-screen editor for the playfield area, opened from settings.
     LayoutEdit {
         back: Box<Scene>,
@@ -256,6 +251,8 @@ enum Scene {
     /// The editor's front door: a new map from a song, or one to go on with.
     EditorHome(Box<editor::home::Home>),
     MpResults,
+    /// A screen that lives outside lib.rs (`screens::screen`).
+    Other(Box<dyn screens::screen::Screen>),
 }
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
@@ -5330,10 +5327,11 @@ impl State {
                 tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
                 String::new(),
             ),
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => (
+            Scene::Calibrate { .. } => (
                 tr!("Calibrating", "調整中", "Калибровка").into(),
                 String::new(),
             ),
+            Scene::Other(s) => (s.presence(), String::new()),
             _ => (
                 tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(),
                 self.select
@@ -5661,12 +5659,6 @@ impl State {
         }
     }
 
-    /// Offset calibration, or again the kind just finished (Retry).
-    fn start_calibration(&mut self) {
-        let vsync = matches!(self.scene, Scene::CalibrateDone { vsync: true, .. });
-        self.start_calibration_as(vsync);
-    }
-
     /// Offset calibration, or with `vsync` the vsync compensation's: the same notes, in vsync and
     /// with no sound, hit by sight.
     fn start_calibration_as(&mut self, vsync: bool) {
@@ -5681,11 +5673,8 @@ impl State {
             );
             return;
         }
-        let back = match std::mem::replace(&mut self.scene, Scene::Select) {
-            // Retrying from the result screen returns to wherever calibration was started from.
-            Scene::CalibrateDone { back, .. } => *back,
-            other => other,
-        };
+        // Retrying from the result screen, it has put back where calibration was started from.
+        let back = std::mem::replace(&mut self.scene, Scene::Select);
         let beat_ms = 60000.0 / self.cfg.calibration_bpm;
         let beats = calibrate::total_beats(beat_ms);
         let map = beatmap::calibration_map(beat_ms, calibrate::COUNT_IN_BEATS, beats);
@@ -5736,11 +5725,7 @@ impl State {
         }
         match found {
             Some(estimate) if estimate.hits >= 4 => {
-                self.scene = Scene::CalibrateDone {
-                    estimate,
-                    back,
-                    vsync,
-                }
+                self.scene = screens::calibrate_done::CalibrateDone::scene(estimate, back, vsync)
             }
             _ => {
                 self.scene = *back;
@@ -5756,27 +5741,28 @@ impl State {
         }
     }
 
+    /// Leaves calibrating (or its result, taking its suggestion with `apply`) for where it was
+    /// started from.
     fn leave_calibration(&mut self, apply: bool) {
-        self.stop_audio();
         match std::mem::replace(&mut self.scene, Scene::Select) {
-            Scene::Calibrate { back, .. } => self.scene = *back,
-            Scene::CalibrateDone {
-                estimate,
-                back,
-                vsync,
-            } => {
-                if apply && vsync {
-                    self.cfg.vsync_tune_ms = estimate.suggested_offset.clamp(-200.0, 200.0);
-                    self.cfg.save();
-                    self.toast(tr!("vsync compensation fine tune set to {:+.0} ms", "垂直同期の補正の微調整を{:+.0} msにしました", "точная компенсация vsync: {:+.0} мс"; self.cfg.vsync_tune_ms));
-                } else if apply {
-                    self.cfg.set_shown_offset(estimate.suggested_offset);
-                    self.cfg.save();
-                    self.toast(tr!("offset set to {:+.0} ms", "オフセットを{:+.0} msにしました", "смещение: {:+.0} мс"; estimate.suggested_offset));
-                }
+            Scene::Calibrate { back, .. } => {
+                self.stop_audio();
                 self.scene = *back;
             }
-            other => self.scene = other,
+            other @ Scene::Other(_) if other.screen().is_some_and(|s| s.calibrating()) => {
+                // The result screen leaves on its own keys.
+                self.scene = other;
+                let key = if apply {
+                    KeyCode::Enter
+                } else {
+                    KeyCode::Escape
+                };
+                self.screen_key(key, false, None);
+            }
+            other => {
+                self.stop_audio();
+                self.scene = other;
+            }
         }
     }
 
@@ -5810,29 +5796,6 @@ impl State {
                 KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
                 _ => {}
             }
-            return;
-        }
-        if repeat {
-            return;
-        }
-        match code {
-            KeyCode::Enter | KeyCode::NumpadEnter => self.leave_calibration(true),
-            KeyCode::Escape => self.leave_calibration(false),
-            KeyCode::KeyR => self.start_calibration(),
-            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
-                let step = if code == KeyCode::ArrowRight {
-                    5.0
-                } else {
-                    -5.0
-                };
-                let (lo, hi) = calibrate::BPM_RANGE;
-                self.cfg.calibration_bpm = (self.cfg.calibration_bpm + step).clamp(lo, hi);
-                self.cfg.save();
-            }
-            KeyCode::F11 => self.toggle_fullscreen(window),
-            KeyCode::F12 => self.screenshot_due = true,
-            KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
-            _ => {}
         }
     }
 
@@ -8731,7 +8694,8 @@ impl State {
             }
             Scene::Results { .. } => "results",
             Scene::Settings { .. } => "settings",
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => "calibration",
+            Scene::Calibrate { .. } => "calibration",
+            Scene::Other(s) => s.activity(),
             Scene::LayoutEdit { .. } => "layout editor",
             Scene::HudEdit { .. } => "interface editor",
             Scene::Preview { .. } => "map preview",
@@ -12264,10 +12228,10 @@ impl State {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
         }
-        if matches!(
-            self.scene,
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. }
-        ) {
+        if self.screen_key(code, repeat, window) {
+            return;
+        }
+        if matches!(self.scene, Scene::Calibrate { .. }) {
             self.calibration_key(code, repeat, at, window);
             return;
         }
@@ -12584,7 +12548,7 @@ impl State {
                 }
             }
             Scene::Calibrate { .. }
-            | Scene::CalibrateDone { .. }
+            | Scene::Other(_)
             | Scene::LayoutEdit { .. }
             | Scene::HudEdit { .. }
             | Scene::Preview { .. }
@@ -12877,10 +12841,8 @@ impl State {
                         0.5
                     }
                 }
-                Scene::Calibrate { .. }
-                | Scene::CalibrateDone { .. }
-                | Scene::LayoutEdit { .. }
-                | Scene::HudEdit { .. } => 0.0,
+                Scene::Calibrate { .. } | Scene::LayoutEdit { .. } | Scene::HudEdit { .. } => 0.0,
+                Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
                 _ => 0.35,
             };
             self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
@@ -13106,10 +13068,8 @@ impl State {
         }
         // Back from calibrating: on with the guide.
         if self.guide.after.is_some()
-            && !matches!(
-                self.scene,
-                Scene::Calibrate { .. } | Scene::CalibrateDone { .. }
-            )
+            && !matches!(self.scene, Scene::Calibrate { .. })
+            && !self.scene.screen().is_some_and(|s| s.calibrating())
         {
             self.guide.page = self.guide.after.take();
         }
@@ -14556,16 +14516,7 @@ impl State {
                     calibrate::draw_by_ear(canvas, game);
                 }
             }
-            Scene::CalibrateDone {
-                estimate, vsync, ..
-            } => {
-                let current = if *vsync {
-                    self.cfg.vsync_tune_ms
-                } else {
-                    self.cfg.shown_offset()
-                };
-                calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
-            }
+            Scene::Other(_) => self.draw_screen(canvas),
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 self.settings_ui.krokodil = self.is_krokodil();

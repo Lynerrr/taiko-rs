@@ -293,7 +293,7 @@ pub fn scene_name(s: &State) -> &'static str {
         Scene::Results { .. } => "Results",
         Scene::Settings { .. } => "Settings",
         Scene::Calibrate { .. } => "Calibrate",
-        Scene::CalibrateDone { .. } => "CalibrateDone",
+        Scene::Other(s) => s.name(),
         Scene::LayoutEdit { .. } => "LayoutEdit",
         Scene::HudEdit { .. } => "HudEdit",
         Scene::Preview { .. } => "Preview",

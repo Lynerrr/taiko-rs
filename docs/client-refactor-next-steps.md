@@ -103,6 +103,12 @@ the left button and drawing each walk their list of layers; a layer says whether
 input, and none names `Scene`. The guide's fields are one `guide::Tour`; the other overlays
 already were one field each (`social`, `volume`, `idle`, `unlock`, `profile`, `medals`, ...).
 
+S5 is `src/screens/screen.rs` and `src/screens/calibrate_done.rs`: a screen outside lib.rs is a
+`Screen` trait object behind `Scene::Other`. While it takes a key it is taken out of
+`State::scene`, so it gets the whole `&mut State`, and answers `Next::Stay` (put it back) or
+`Next::Left` (it has set the scene that follows). Each screen moved in S6 is added to `MOVED` in
+`screen.rs`'s `moved_screens_stay_out_of_lib` test.
+
 After S3 and S4 a screen's move in S6 is its own state, its drawing and its input, and nothing
 else: no job plumbing and no overlay checks travel with it.
 
