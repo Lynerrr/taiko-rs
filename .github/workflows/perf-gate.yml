@@ -52,12 +52,19 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: git worktree add --detach "$RUNNER_TEMP/base" "${BASE_SHA:-HEAD~1}"
 
-      # One target folder for both: the dependencies build once, only the game builds twice.
+      # A target folder each: in a shared one cargo took the base's build of the game for the
+      # head's (its dep-info names the files it read, and the base's were as new as ever), so
+      # the gate measured the base against itself. The base's folder starts as a copy of the
+      # cached one without the workspace's own crates, so only the dependencies are reused.
       - name: Build base and head
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          BASE_TARGET: ${{ runner.temp }}/base-target
         run: |
-          (cd "$RUNNER_TEMP/base" && cargo test --profile perf-audit --locked --lib --no-run)
+          mkdir -p target
+          cp -a target "$BASE_TARGET"
+          (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo clean --profile perf-audit -p taiko-rs -p taiko-logic)
+          (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo test --profile perf-audit --locked --lib --no-run)
           cargo test --profile perf-audit --locked --lib --no-run
 
       - name: Run the audit, base and head in turns
@@ -66,7 +73,7 @@ jobs:
         run: |
           mkdir -p perf-logs
           for round in 1 2 3; do
-            (cd "$RUNNER_TEMP/base" && $AUDIT) > "perf-logs/base-$round.log" 2>&1 || true
+            (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$RUNNER_TEMP/base-target" $AUDIT) > "perf-logs/base-$round.log" 2>&1 || true
             $AUDIT > "perf-logs/head-$round.log" 2>&1
           done
 
@@ -88,7 +95,7 @@ jobs:
         run: |
           for round in 4 5; do
             $AUDIT > "perf-logs/head-$round.log" 2>&1
-            (cd "$RUNNER_TEMP/base" && $AUDIT) > "perf-logs/base-$round.log" 2>&1 || true
+            (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$RUNNER_TEMP/base-target" $AUDIT) > "perf-logs/base-$round.log" 2>&1 || true
           done
           python3 .github/scripts/perf-gate.py --base perf-logs/base-*.log --head perf-logs/head-*.log
 
