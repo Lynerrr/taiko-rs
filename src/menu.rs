@@ -303,7 +303,7 @@ impl Item {
     fn about(self, maps: usize) -> String {
         match self {
             Item::Play => {
-                tr!("{maps} maps in your library", "ライブラリに{maps}譜面", "{maps} карт в библиотеке";)
+                tr!("{maps} maps in your library", "ライブラリに{maps}譜面", "{maps} карт в библиотеке"; [] [maps])
             }
             Item::Multiplayer => tr!(
                 "Play with friends and everyone else",
@@ -1325,8 +1325,7 @@ fn draw_session(c: &mut Canvas, (running, playing): (f64, f64)) {
     let text = tr!(
         "Running {running}   In songs {playing}",
         "起動 {running}   プレイ {playing}",
-        "Запущено {running}   В песнях {playing}";
-    );
+        "Запущено {running}   В песнях {playing}"; [] [running, playing]);
     let (w, h) = (Canvas::text_width(7.0, &text), Canvas::text_height(7.0));
     c.round_rect(
         [18.0, 47.5],

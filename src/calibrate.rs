@@ -81,9 +81,9 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
     let hits = game.stats().errors.len();
     if hitting {
         let count = if hits < MIN_HITS {
-            tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}";)
+            tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}"; [] [hits, MIN_HITS])
         } else {
-            tr!("{hits} hits", "{hits} 打", "ударов: {hits}";)
+            tr!("{hits} hits", "{hits} 打", "ударов: {hits}"; [] [hits])
         };
         line(c, 262.0, 10.0, rgba(0xFFD34D, 1.0), &count);
     }

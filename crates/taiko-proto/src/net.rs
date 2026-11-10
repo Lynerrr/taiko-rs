@@ -157,7 +157,7 @@ impl DefenseOption {
             DefenseOption::Lives => d.lives.to_string(),
             DefenseOption::Bars => {
                 let bars = d.bars;
-                tr!("{bars} bars", "{bars}小節", "{bars} тактов";)
+                tr!("{bars} bars", "{bars}小節", "{bars} тактов"; [] [bars])
             }
             DefenseOption::TagIns if d.tag_ins == 0 => on(false),
             DefenseOption::TagIns => d.tag_ins.to_string(),
@@ -405,7 +405,7 @@ impl MapInfo {
             .from
             .map(|t| {
                 let (m, s) = ((t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60);
-                tr!("  from {m}:{s:02}", "  {m}:{s:02}から", "  с {m}:{s:02}";)
+                tr!("  from {m}:{s:02}", "  {m}:{s:02}から", "  с {m}:{s:02}"; [] [m, s])
             })
             .unwrap_or_default();
         let mods = if self.mods.is_empty() {
@@ -417,7 +417,7 @@ impl MapInfo {
             .defense
             .map(|d| {
                 let (lives, bars) = (d.lives, d.bars);
-                tr!("  DEFENSE {lives} lives, {bars} bars a turn", "  ディフェンス ライフ{lives} {bars}小節交代", "  ОБОРОНА {lives} жизней, ход {bars} тактов";)
+                tr!("  DEFENSE {lives} lives, {bars} bars a turn", "  ディフェンス ライフ{lives} {bars}小節交代", "  ОБОРОНА {lives} жизней, ход {bars} тактов"; [] [lives, bars])
             })
             .unwrap_or_default();
         format!(
@@ -957,7 +957,7 @@ pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     if listeners.is_empty() {
         let e = last_err.map(|e| e.to_string()).unwrap_or_default();
         return Err(
-            tr!("can't listen on port {port}: {e}", "ポート{port}で待ち受けできません: {e}", "не удаётся слушать порт {port}: {e}";),
+            tr!("can't listen on port {port}: {e}", "ポート{port}で待ち受けできません: {e}", "не удаётся слушать порт {port}: {e}"; [] [port, e]),
         );
     }
     for l in &listeners {
@@ -2070,9 +2070,9 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     };
     with_port
         .to_socket_addrs()
-        .map_err(|e| tr!("can't resolve {addr}: {e}", "{addr}が見つかりません: {e}", "не удаётся найти {addr}: {e}";))?
+        .map_err(|e| tr!("can't resolve {addr}: {e}", "{addr}が見つかりません: {e}", "не удаётся найти {addr}: {e}"; [] [addr, e]))?
         .next()
-        .ok_or_else(|| tr!("can't resolve {addr}", "{addr}が見つかりません", "не удаётся найти {addr}";))
+        .ok_or_else(|| tr!("can't resolve {addr}", "{addr}が見つかりません", "не удаётся найти {addr}"; [] [addr]))
 }
 
 impl Client {
@@ -2088,7 +2088,7 @@ impl Client {
         password: Option<String>,
     ) -> Result<Client, String> {
         let sa = resolve(addr)?;
-        let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| tr!("can't connect to {sa}: {e}", "{sa}に接続できません: {e}", "не удаётся подключиться к {sa}: {e}";))?;
+        let stream = TcpStream::connect_timeout(&sa, Duration::from_secs(5)).map_err(|e| tr!("can't connect to {sa}: {e}", "{sa}に接続できません: {e}", "не удаётся подключиться к {sa}: {e}"; [] [sa, e]))?;
         Client::over(BufReader::new(stream), name, host_token, password)
     }
 

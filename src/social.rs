@@ -191,8 +191,8 @@ pub fn draw_spectators(c: &mut Canvas, names: &[&str]) {
     let n = names.len();
     let (x, y0, h) = (18.0, 282.0, 14.0);
     let more = n.saturating_sub(SPECTATORS_LISTED);
-    let title = tr!("Spectators ({n})", "観戦者 ({n})", "Зрители ({n})";);
-    let rest = (more > 0).then(|| tr!("and {more} more", "他{more}人", "и ещё {more}";));
+    let title = tr!("Spectators ({n})", "観戦者 ({n})", "Зрители ({n})"; [] [n]);
+    let rest = (more > 0).then(|| tr!("and {more} more", "他{more}人", "и ещё {more}"; [] [more]));
     let listed = &names[..n.min(SPECTATORS_LISTED)];
     let lines = 1 + listed.len() + usize::from(rest.is_some());
     let longest = listed

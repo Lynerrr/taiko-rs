@@ -29,7 +29,7 @@ impl Screen for Watch {
         let v = &self.view;
         let who = &v.player;
         Some((
-            tr!("Watching {who}", "{who}を観戦中", "Смотрит {who}";),
+            tr!("Watching {who}", "{who}を観戦中", "Смотрит {who}"; [] [who]),
             v.play.as_ref().map(|p| p.map.label()).unwrap_or_default(),
         ))
     }

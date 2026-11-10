@@ -176,9 +176,9 @@ impl View {
         let hours = p.play_ms as f64 / 3_600_000.0;
         let minutes = hours * 60.0;
         let time = if hours >= 1.0 {
-            tr!("{hours:.0}h played   ", "{hours:.0}時間プレイ   ", "{hours:.0} ч в игре   ";)
+            tr!("{hours:.0}h played   ", "{hours:.0}時間プレイ   ", "{hours:.0} ч в игре   "; [] [hours])
         } else if p.play_ms > 0 {
-            tr!("{minutes:.0}m played   ", "{minutes:.0}分プレイ   ", "{minutes:.0} мин в игре   ";)
+            tr!("{minutes:.0}m played   ", "{minutes:.0}分プレイ   ", "{minutes:.0} мин в игре   "; [] [minutes])
         } else {
             String::new()
         };
@@ -187,8 +187,7 @@ impl View {
         let stats = tr!(
             "{rank}   {pp:.0} pp   {plays} plays   {time}joined {joined} ago",
             "{rank}   {pp:.0} pp   {plays}プレイ   {time}{joined}前に登録",
-            "{rank}   {pp:.0} pp   {plays} {plays_ru}   {time}с нами {joined}";
-        );
+            "{rank}   {pp:.0} pp   {plays} {plays_ru}   {time}с нами {joined}"; [] [rank, pp, plays, time, joined]);
         let stats_w = Canvas::text_width(8.0, &stats).min(pw * 0.6);
         // Their picture, left of the name and the medals line.
         c.avatar(&p.name, px + 30.0, py + 25.0, 14.0, accent(), 1.0);
@@ -211,7 +210,7 @@ impl View {
         );
         // Their medals: how many, their dan and their rarest.
         let (earned, total) = (p.medals.earned, p.medals.total);
-        let mut line = tr!("MEDALS  {earned} of {total}", "メダル  {total}個中{earned}個", "МЕДАЛИ  {earned} из {total}";);
+        let mut line = tr!("MEDALS  {earned} of {total}", "メダル  {total}個中{earned}個", "МЕДАЛИ  {earned} из {total}"; [] [earned, total]);
         if let Some(dan) = &p.medals.dan {
             line += "   ";
             line += online::said(dan);
@@ -241,8 +240,7 @@ impl View {
                     &tr!(
                         "RELAX  {place}{rx_pp:.0} pp   {rx_plays} plays",
                         "RELAX  {place}{rx_pp:.0} pp   {rx_plays}プレイ",
-                        "RELAX  {place}{rx_pp:.0} pp   игр: {rx_plays}";
-                    ),
+                        "RELAX  {place}{rx_pp:.0} pp   игр: {rx_plays}"; [] [place, rx_pp, rx_plays]),
                 ),
             );
         }
@@ -339,8 +337,7 @@ fn score_rows(c: &mut Canvas, rows: &[OnlineScore], x: f32, top: f32, w: f32, bo
         let line = tr!(
             "{acc:.2}%  {combo}x  {miss} miss{mods}{rate}  {age}",
             "{acc:.2}%  {combo}x  ミス{miss}{mods}{rate}  {age}",
-            "{acc:.2}%  {combo}x  {miss} мимо{mods}{rate}  {age}";
-        );
+            "{acc:.2}%  {combo}x  {miss} мимо{mods}{rate}  {age}"; [] [acc, combo, miss, mods, rate, age]);
         c.text(
             x + 8.0,
             y + crate::mobile::pick(13.5, 24.0),

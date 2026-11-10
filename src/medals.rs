@@ -347,7 +347,7 @@ impl View {
         let (earned, total) = (v.earned, v.medals.len());
         let stats = match &self.name {
             Some(name) => {
-                tr!("{name}: {earned} of {total}", "{name}: {total}個中{earned}個", "{name}: {earned} из {total}";)
+                tr!("{name}: {earned} of {total}", "{name}: {total}個中{earned}個", "{name}: {earned} из {total}"; [] [name, earned, total])
             }
             None => tr!(
                 "Log in to earn them",
@@ -625,7 +625,7 @@ fn in_collection(m: &crate::mods::Mod) -> bool {
 fn tiles(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32) {
     let have = v.collection.len();
     let size = v.collection_size;
-    c.text(x, top, 7.0, rgba(0xFFD34D, 1.0), &tr!("COLLECTION  {have} of {size}", "コレクション  {size}個中{have}個", "КОЛЛЕКЦИЯ  {have} из {size}";));
+    c.text(x, top, 7.0, rgba(0xFFD34D, 1.0), &tr!("COLLECTION  {have} of {size}", "コレクション  {size}個中{have}個", "КОЛЛЕКЦИЯ  {have} из {size}"; [] [have, size]));
     c.text_right(
         x + w,
         top,

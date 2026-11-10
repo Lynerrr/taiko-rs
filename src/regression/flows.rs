@@ -317,3 +317,18 @@ fn the_top_tabs_lead_to_every_part_of_the_game() {
     }
     assert_snapshot("flows-top-tabs", &log);
 }
+
+#[test]
+fn selecting_simplified_chinese_localizes_settings_and_formatted_text() {
+    let (mut s, _songs, now) = client("simplified-chinese", vec![maps::basics()]);
+    s.cfg.language = crate::lang::Lang::ZhCn;
+    s.open_settings();
+    let canvas = frame(&mut s, now);
+    assert!(canvas.texts.iter().any(|(_, text)| text == "设置"));
+    let n = 2;
+    let name = "Don";
+    assert_eq!(
+        tr!("{n} local plays now show as {name}", "{n} 曲: {name}", "{n} игры: {name}"; [] [n, name]),
+        "2 条本地成绩现已显示为 Don"
+    );
+}

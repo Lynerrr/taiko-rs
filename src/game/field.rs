@@ -2509,7 +2509,7 @@ impl Play {
             y0 + 18.0,
             7.0,
             rgba(fill, 1.0),
-            &tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}";),
+            &tr!("LIVES {left}/{lives}", "ライフ {left}/{lives}", "ЖИЗНИ {left}/{lives}"; [] [left, lives]),
         );
         if st.shield > 0 {
             let shield = st.shield;
@@ -2518,7 +2518,7 @@ impl Play {
                 y0 + 18.0,
                 7.0,
                 rgba(SPLIT_CYAN, 1.0),
-                &tr!("+{shield} shield", "+{shield}シールド", "+{shield} щит";),
+                &tr!("+{shield} shield", "+{shield}シールド", "+{shield} щит"; [] [shield]),
             );
         }
         let (turn_text, col) = if wait == 0 {
@@ -2530,7 +2530,7 @@ impl Play {
             let name = d.team.get(turn).map_or("?", |p| p.1.as_str());
             let name = Canvas::fit(7.0, 110.0, name);
             (
-                tr!("{name}  (you in {wait})", "{name}  (あと{wait}小節)", "{name}  (ты через {wait})";),
+                tr!("{name}  (you in {wait})", "{name}  (あと{wait}小節)", "{name}  (ты через {wait})"; [] [name, wait]),
                 team_colour(turn),
             )
         };
@@ -2587,7 +2587,7 @@ impl Play {
             y,
             7.0,
             rgba(0xFFD34D, 1.0),
-            &tr!("GOLD {gold}", "ゴールド {gold}", "ЗОЛОТО {gold}";),
+            &tr!("GOLD {gold}", "ゴールド {gold}", "ЗОЛОТО {gold}"; [] [gold]),
         );
         c.text_right(
             x + 184.0,
@@ -2639,7 +2639,7 @@ impl Play {
             y,
             6.5,
             rgba(tag, 1.0),
-            &tr!("T tag in ({left} left)", "T 交代 (残り{left})", "T перехват (осталось {left})";),
+            &tr!("T tag in ({left} left)", "T 交代 (残り{left})", "T перехват (осталось {left})"; [] [left]),
         );
         y += 12.0;
         for &(at, who, done) in d.feed.iter().rev().filter(|e| t - e.0 < 5000.0).take(2) {

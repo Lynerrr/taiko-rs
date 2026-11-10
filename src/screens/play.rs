@@ -280,7 +280,7 @@ impl Screen for PlayScreen {
         let game = state.play.as_deref()?;
         let label = state.library.get(self.entry)?.label();
         let doing = if let Some(who) = game.replay_of() {
-            tr!("Watching {who}'s replay", "{who}のリプレイを観戦中", "Смотрит повтор {who}";)
+            tr!("Watching {who}'s replay", "{who}のリプレイを観戦中", "Смотрит повтор {who}"; [] [who])
         } else if game.paused().is_some() {
             tr!("Paused", "ポーズ中", "Пауза").into()
         } else {
@@ -294,7 +294,7 @@ impl Screen for PlayScreen {
             } else {
                 String::new()
             };
-            tr!("Playing{stars}{rate}", "プレイ中{stars}{rate}", "Играет{stars}{rate}";)
+            tr!("Playing{stars}{rate}", "プレイ中{stars}{rate}", "Играет{stars}{rate}"; [] [stars, rate])
         };
         Some((label, doing))
     }

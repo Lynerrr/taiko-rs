@@ -94,7 +94,7 @@ impl Screen for Spectate {
             .and_then(|(id, _)| v.players.iter().find(|p| p.0 == *id))
             .map(|p| p.1.clone());
         let doing = match who {
-            Some(w) => tr!("Spectating {w}", "{w}を観戦中", "Наблюдает за {w}";),
+            Some(w) => tr!("Spectating {w}", "{w}を観戦中", "Наблюдает за {w}"; [] [w]),
             None => tr!("Spectating everyone", "全員を観戦中", "Наблюдает за всеми").into(),
         };
         Some((label, doing))

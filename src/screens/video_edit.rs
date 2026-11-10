@@ -123,7 +123,7 @@ impl State {
         let r = match scores::load_replay(file) {
             Ok(r) => r,
             Err(e) => {
-                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}";));
+                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}"; [] [e]));
                 return;
             }
         };
@@ -138,7 +138,7 @@ impl State {
             });
         let Some(entry) = entry else {
             let map = &r.map_label;
-            self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен";));
+            self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен"; [] [map]));
             return;
         };
         self.stop_audio();

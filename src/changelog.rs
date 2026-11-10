@@ -167,10 +167,10 @@ impl View {
         );
         let about = match (self.after_update, crate::update::BUILD) {
             (true, Some(b)) => {
-                tr!("updated to {}", "{}に更新しました", "обновлено до {}"; crate::update::short(b))
+                tr!("updated to {}", "{}に更新しました", "обновлено до {}"; [crate::update::short(b)] [])
             }
             (false, Some(b)) => {
-                tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; crate::update::short(b))
+                tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; [crate::update::short(b)] [])
             }
             (_, None) => tr!(
                 "a local build: the latest changes",

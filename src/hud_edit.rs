@@ -344,10 +344,10 @@ impl Editor {
     fn start_naming(&mut self, cfg: &Config) {
         let mut n = cfg.hud_presets.len() + 1;
         let taken = |name: &str| cfg.hud_presets.iter().any(|p| p.0 == name);
-        let mut name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}";);
+        let mut name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}"; [] [n]);
         while taken(&name) {
             n += 1;
-            name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}";);
+            name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}"; [] [n]);
         }
         let caret = name.len();
         self.naming = Some((name, caret));
@@ -395,7 +395,7 @@ impl Editor {
                     cfg.save();
                     let name = cfg.hud_presets[i].0.clone();
                     return Outcome::Toast(
-                        tr!("saved {name}", "{name}を保存しました", "сохранено: {name}";),
+                        tr!("saved {name}", "{name}を保存しました", "сохранено: {name}"; [] [name]),
                     );
                 }
                 None => self.start_naming(cfg),
@@ -409,7 +409,7 @@ impl Editor {
                     self.preset_scroll = self.preset_scroll.min(last);
                     cfg.save();
                     return Outcome::Toast(
-                        tr!("deleted {name}", "{name}を削除しました", "удалено: {name}";),
+                        tr!("deleted {name}", "{name}を削除しました", "удалено: {name}"; [] [name]),
                     );
                 }
             }

@@ -6,7 +6,7 @@ use crate::*;
 /// The maps being analysed, top right: how far it's got. In a song it waits, and this isn't shown.
 pub(crate) fn draw_analysis(c: &mut Canvas, done: usize, total: usize) {
     const BAR: f32 = 54.0;
-    let text = tr!("analysing maps {done} / {total}", "譜面を分析中 {done} / {total}", "анализ карт {done} / {total}";);
+    let text = tr!("analysing maps {done} / {total}", "譜面を分析中 {done} / {total}", "анализ карт {done} / {total}"; [] [done, total]);
     let text = Canvas::fit(6.0, (c.width - BAR - 64.0).max(40.0), &text);
     let tw = Canvas::text_width(6.0, &text);
     let w = tw + BAR + 20.0;

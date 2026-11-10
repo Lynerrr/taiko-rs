@@ -419,23 +419,7 @@ fn panel(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32) {
 
 /// `text` broken into lines `w` wide, `lines` at most.
 pub(crate) fn wrap(size: f32, w: f32, text: &str, lines: usize) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        let next = if line.is_empty() {
-            word.to_string()
-        } else {
-            format!("{line} {word}")
-        };
-        if Canvas::text_width(size, &next) <= w || line.is_empty() {
-            line = next;
-        } else {
-            out.push(std::mem::replace(&mut line, word.to_string()));
-        }
-    }
-    if !line.is_empty() {
-        out.push(line);
-    }
+    let mut out = Canvas::wrap_words(size, w, text);
     if out.len() > lines {
         let rest = out[lines - 1..].join(" ");
         out.truncate(lines - 1);

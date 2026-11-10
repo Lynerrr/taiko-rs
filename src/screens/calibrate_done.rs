@@ -34,11 +34,11 @@ impl CalibrateDone {
         if apply && vsync {
             state.cfg.vsync_tune_ms = estimate.suggested_offset.clamp(-200.0, 200.0);
             state.cfg.save();
-            state.toast(tr!("vsync compensation fine tune set to {:+.0} ms", "垂直同期の補正の微調整を{:+.0} msにしました", "точная компенсация vsync: {:+.0} мс"; state.cfg.vsync_tune_ms));
+            state.toast(tr!("vsync compensation fine tune set to {:+.0} ms", "垂直同期の補正の微調整を{:+.0} msにしました", "точная компенсация vsync: {:+.0} мс"; [state.cfg.vsync_tune_ms] []));
         } else if apply {
             state.cfg.set_shown_offset(estimate.suggested_offset);
             state.cfg.save();
-            state.toast(tr!("offset set to {:+.0} ms", "オフセットを{:+.0} msにしました", "смещение: {:+.0} мс"; estimate.suggested_offset));
+            state.toast(tr!("offset set to {:+.0} ms", "オフセットを{:+.0} msにしました", "смещение: {:+.0} мс"; [estimate.suggested_offset] []));
         }
         state.scene = *back;
     }

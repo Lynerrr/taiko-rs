@@ -256,7 +256,7 @@ impl Screen for Lobby {
                     .find(|&n| n as usize >= s.players.len())
                     .unwrap_or(s.slots);
                 s.client.send(net::ClientMsg::SetSlots(next));
-                state.toast(tr!("the lobby takes {next} players", "ロビーの定員: {next}人", "лобби на {next} игроков";));
+                state.toast(tr!("the lobby takes {next} players", "ロビーの定員: {next}人", "лобби на {next} игроков"; [] [next]));
             }
             KeyCode::F1 => state.open_mod_select(),
             KeyCode::KeyS

@@ -14,6 +14,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # The game's 5x7 font (`net` and `online` measure names with it).
 taiko-logic = { path = "../taiko-logic" }
 
+[build-dependencies]
+toml = { version = "1", optional = true }
+
 [features]
+client-catalog = ["dep:toml"]
 # For the tests of the crates using this one: each test thread keeps its own language.
 testing = []

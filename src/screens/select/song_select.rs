@@ -215,7 +215,7 @@ impl Screen for SongSelect {
                 let engine = state.audio.as_ref();
                 let sounding =
                     !paused && state.preview.sounding(engine, now, &mut p.spectrum.samples);
-                let hint = tr!("{a} {b} song   {d} {e} pause   L love   Tab folders", "{a} {b} 曲   {d} {e} ポーズ   L お気に入り   Tab フォルダ", "{a} {b} трек   {d} {e} пауза   L любимое   Tab папки";);
+                let hint = tr!("{a} {b} song   {d} {e} pause   L love   Tab folders", "{a} {b} 曲   {d} {e} ポーズ   L お気に入り   Tab フォルダ", "{a} {b} трек   {d} {e} пауза   L любимое   Tab папки"; [] [a, b, d, e]);
                 let volume = state.cfg.music_volume;
                 let frame = player::Frame {
                     song: song.as_deref().unwrap_or_default(),

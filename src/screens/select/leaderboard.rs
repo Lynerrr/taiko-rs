@@ -106,7 +106,7 @@ pub(crate) fn draw_online_leaderboard(
     let note = match board {
         None => Some(tr!("loading...", "読み込み中...", "загрузка...").to_string()),
         Some(Err(e)) => Some(
-            tr!("can't reach the server: {e}", "サーバーに届きません: {e}", "сервер недоступен: {e}";),
+            tr!("can't reach the server: {e}", "サーバーに届きません: {e}", "сервер недоступен: {e}"; [] [e]),
         ),
         Some(Ok(rows)) if rows.is_empty() => Some(
             tr!(
@@ -296,7 +296,7 @@ fn board_row(
 /// A leaderboard row's "3 miss  2d".
 pub(crate) fn misses_and_age(miss: u32, date: u64) -> String {
     let age = scores::age(date);
-    tr!("{miss} miss  {age}", "ミス{miss}  {age}", "{miss} мимо  {age}";)
+    tr!("{miss} miss  {age}", "ミス{miss}  {age}", "{miss} мимо  {age}"; [] [miss, age])
 }
 
 /// Local scores for the selected map, under the song select panel: `rows` from place `first`

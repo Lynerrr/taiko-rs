@@ -1096,7 +1096,7 @@ impl Player {
             top + rows() as f32 * row_h() + 9.0,
             text_size,
             rgba(0x9a9ab0, 1.0),
-            &tr!("{count} songs", "{count}曲", "{count} песен";),
+            &tr!("{count} songs", "{count}曲", "{count} песен"; [] [count]),
         );
     }
 

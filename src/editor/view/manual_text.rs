@@ -2,6 +2,8 @@
 //! lines: `# ` a heading, `- ` a bullet, `> ` a tip, an empty line a gap, anything else a
 //! paragraph. `{recipes}` stands for the list of node recipes, written from `tko::recipes`.
 
+use std::sync::OnceLock;
+
 use crate::lang::{self, Lang};
 
 pub struct Chapter {
@@ -22,13 +24,43 @@ pub enum TryIt {
     MotionShowcase,
 }
 
-fn ru() -> bool {
-    lang::current() == Lang::Ru
-}
-
 /// The chapters in the current language.
 pub fn chapters() -> &'static [Chapter] {
-    if ru() { &RU } else { &EN }
+    match lang::current() {
+        Lang::Ru => &RU,
+        Lang::ZhCn => ZH.get_or_init(chinese_chapters),
+        Lang::En | Lang::Ja => &EN,
+    }
+}
+
+static ZH: OnceLock<Vec<Chapter>> = OnceLock::new();
+const ZH_TEXT: &str = include_str!("../../../assets/lang/manual/zh-CN.txt");
+
+fn chinese_chapters() -> Vec<Chapter> {
+    ZH_TEXT
+        .split("\n=== ")
+        .skip(1)
+        .zip(EN.iter())
+        .map(|(chapter, original)| {
+            let (title, mut body) = chapter.split_once('\n').expect("manual chapter body");
+            let try_it = original.try_it.map(|(_, action)| {
+                let (label, rest) = body.split_once('\n').expect("manual chapter button");
+                body = rest;
+                (
+                    label
+                        .strip_prefix("try: ")
+                        .expect("manual try label")
+                        .trim_end(),
+                    action,
+                )
+            });
+            Chapter {
+                title: title.trim_end(),
+                body,
+                try_it,
+            }
+        })
+        .collect()
 }
 
 pub const COUNT: usize = 12;
@@ -758,3 +790,25 @@ File > Upload отправляет сохранённую карту на taiko.
 ",
     },
 ];
+
+#[cfg(test)]
+mod chinese_tests {
+    use super::*;
+
+    #[test]
+    fn the_chinese_manual_keeps_each_chapter_and_button() {
+        let chapters = lang::with(Lang::ZhCn, chapters);
+        assert_eq!(chapters.len(), COUNT);
+        for (localized, original) in chapters.iter().zip(&EN) {
+            assert_ne!(localized.title, original.title);
+            assert_eq!(
+                localized.try_it.map(|(_, action)| action),
+                original.try_it.map(|(_, action)| action)
+            );
+            assert_eq!(
+                localized.body.contains("{recipes}"),
+                original.body.contains("{recipes}")
+            );
+        }
+    }
+}
