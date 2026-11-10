@@ -1,0 +1,11 @@
+text   17,17   < BACK
+text  116,17   Search maps
+text  598,17   osu!
+text  706,17   Has leaderboard
+text  900,17   Sort: Relevance
+text  348,138  Search for a song, artist or mapper.
+hit     0,0      96x46   Key(Escape)
+hit   104,0     447x46   TextField
+hit   559,0     120x46   DlSource(1)
+hit   687,0     192x46   DlCategory(1)
+hit   887,0     180x46   DlSort(1)

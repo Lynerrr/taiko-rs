@@ -93,7 +93,33 @@ pub fn hit_near(hits: &[HitBox], x: f32, y: f32) -> Option<Hit> {
 
 /// Whether this build has the phone's interface.
 pub fn active() -> bool {
-    cfg!(target_os = "android")
+    cfg!(target_os = "android") || phone_for_tests::on()
+}
+
+/// Tests draw the phone's interface on other systems too: switched on per thread, so tests
+/// running beside them keep the monitor's. Not compiled into the game.
+#[cfg(test)]
+pub mod phone_for_tests {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn set(on: bool) {
+        ON.with(|o| o.set(on));
+    }
+
+    pub fn on() -> bool {
+        ON.with(Cell::get)
+    }
+}
+
+#[cfg(not(test))]
+mod phone_for_tests {
+    pub const fn on() -> bool {
+        false
+    }
 }
 
 /// Text sizes. At half resolution these are whole font pixels: 2 and 3 of them.
