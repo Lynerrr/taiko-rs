@@ -595,7 +595,7 @@ fn a_screenshot_opens_over_everything_and_any_click_or_key_closes_it() {
     s.play_when_scanned = false;
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = Scene::Select;
-    s.shot_view = Some(ShotView { rx: None });
+    s.shot_view = Some(ShotView { rx: Job::idle() });
     let mut c = Canvas::default();
     s.build_frame(&mut c, Instant::now(), 853.3);
     assert!(s.hits.is_empty(), "nothing behind it can be clicked");
@@ -603,7 +603,7 @@ fn a_screenshot_opens_over_everything_and_any_click_or_key_closes_it() {
     s.mouse_button(true, None);
     assert!(s.shot_view.is_none());
 
-    s.shot_view = Some(ShotView { rx: None });
+    s.shot_view = Some(ShotView { rx: Job::idle() });
     s.key_inner(
         winit::keyboard::KeyCode::Escape,
         false,
@@ -683,7 +683,7 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     let view = |games: Vec<(u32, Box<Play>)>| {
         Scene::Spectate(Box::new(SpectateView {
-            rx: None,
+            rx: Job::idle(),
             loaded: None,
             start: Instant::now(),
             from: None,
