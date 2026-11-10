@@ -64,7 +64,7 @@ use taiko_logic::mods;
 mod mods_tests;
 mod multiplayer;
 use mod_setup::multiverse::LookText as _;
-use taiko_logic::multiverse;
+mod multiverse;
 mod net;
 use taiko_logic::od_override;
 mod offline;

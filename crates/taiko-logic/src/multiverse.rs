@@ -3,8 +3,6 @@
 //! along with presets of whole setups. They only change how a playfield is drawn: every universe
 //! plays the same map, judged the same. Also the note colours of a play without Multiverse.
 
-use std::sync::RwLock;
-
 use crate::mods::{Mod, Mods};
 
 /// How many universes (playfields) there are.
@@ -418,30 +416,6 @@ pub fn presets(
     .collect()
 }
 pub const BUILTIN_PRESETS: usize = 2;
-
-static CURRENT: RwLock<[Universe; COUNT]> = RwLock::new([Universe::CLASSIC; COUNT]);
-static NOTE_COLOURS: RwLock<Colours> = RwLock::new(Colours::CLASSIC);
-
-/// The universes Multiverse plays are drawn with (from the config).
-#[inline]
-pub fn set(all: [Universe; COUNT]) {
-    *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = all;
-}
-
-#[inline]
-pub fn get() -> [Universe; COUNT] {
-    *CURRENT.read().unwrap_or_else(|e| e.into_inner())
-}
-
-/// The configured note colours of plays without Multiverse (Settings > Skin), for threads not
-/// building a frame (`game::Look`).
-pub fn set_note_colours(colours: Colours) {
-    *NOTE_COLOURS.write().unwrap_or_else(|e| e.into_inner()) = colours;
-}
-
-pub fn configured_note_colours() -> Colours {
-    *NOTE_COLOURS.read().unwrap_or_else(|e| e.into_inner())
-}
 
 /// Text being typed in the setup.
 #[derive(Clone, Debug, PartialEq, Eq)]
