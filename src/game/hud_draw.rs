@@ -865,21 +865,7 @@ impl Play {
             rate: 1.0,
             stream: None,
         });
-        let map = beatmap::calibration_map(500.0, 0, 64);
-        let mut g = Game::with_mods(map, track, None, Mods::parse("HD"));
-        g.stats.score = 1_234_560;
-        (g.stats.great, g.stats.ok, g.stats.miss) = (812, 37, 4);
-        g.stats.combo = 321;
-        g.stats.errors = (0..20).map(|i| (i % 7) as f64 * 5.0 - 15.0).collect();
-        g.live_pp_value = Some(312.0);
-        g.hp = 0.8;
-        g.recent_errors = g
-            .stats
-            .errors
-            .iter()
-            .map(|&e| (e, g.time, Judge::Great))
-            .collect();
-        let mut p = Play::new(g);
+        let mut p = Play::new(Game::sample(track));
         p.view.hud_sample = true;
         p.view.show_hp = true;
         p

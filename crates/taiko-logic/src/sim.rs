@@ -136,12 +136,12 @@ impl Judge {
 
 #[derive(Default, Clone)]
 pub struct NoteState {
-    pub judged: Option<Judge>,
-    pub judged_at: f64,
-    pub hits: u32,
-    pub finished: bool,
-    pub(crate) last_was_kat: Option<bool>,
-    pub ticks: Vec<bool>,
+    judged: Option<Judge>,
+    judged_at: f64,
+    hits: u32,
+    finished: bool,
+    last_was_kat: Option<bool>,
+    ticks: Vec<bool>,
 }
 
 #[derive(Clone, Default)]
@@ -372,155 +372,155 @@ impl NoteBlock {
 pub struct Game {
     /// Random's configured colouring, kept with the replay so it plays back the same;
     /// 0 is the one per map from before seeds.
-    pub seed: u64,
+    seed: u64,
     /// Which notes Half took off.
-    pub half: crate::mods::HalfRule,
-    pub map: Beatmap,
-    pub(crate) clock: GameClock,
-    pub state: Vec<NoteState>,
-    pub(crate) cursor: usize,
-    pub stats: Stats,
-    pub windows: Windows,
+    half: crate::mods::HalfRule,
+    map: Beatmap,
+    clock: GameClock,
+    state: Vec<NoteState>,
+    cursor: usize,
+    stats: Stats,
+    windows: Windows,
     /// Gameplay time (ms) of the current frame.
-    pub time: f64,
+    time: f64,
     /// Map time play starts at (before the first note, or the lead-in).
-    pub(crate) start: f64,
-    pub end_time: f64,
-    pub(crate) track_ms: f64,
+    start: f64,
+    end_time: f64,
+    track_ms: f64,
     /// The song as it plays (the results screen plays it on).
-    pub track: Arc<dyn Song>,
+    track: Arc<dyn Song>,
     /// The player asked for the results as soon as the last note was judged.
-    pub(crate) outro_skipped: bool,
-    pub first_note: f64,
+    outro_skipped: bool,
+    first_note: f64,
     /// Game time of the last press per key: left rim, left centre, right centre, right rim.
-    pub presses: [f64; 4],
-    pub last_judge: Option<(Judge, f64)>,
-    pub recent_errors: VecDeque<(f64, f64, Judge)>,
-    pub(crate) strong: Option<StrongPending>,
+    presses: [f64; 4],
+    last_judge: Option<(Judge, f64)>,
+    recent_errors: VecDeque<(f64, f64, Judge)>,
+    strong: Option<StrongPending>,
     /// The beat length covering the most map time: what pop-up fake sliders fade in by.
-    pub main_beat: f64,
+    main_beat: f64,
     /// The client gimmick of a `.tko` map: visual motion only, never read by judging.
-    pub tko: Option<crate::tko::runtime::Runtime>,
+    tko: Option<crate::tko::runtime::Runtime>,
     /// Raw audio position seen by the last update, for diagnostics.
-    pub last_audio_ms: Option<f64>,
+    last_audio_ms: Option<f64>,
     /// Over the frames with an audio position: how far the clock was from it (sum, frames, most
     /// either way).
-    pub(crate) clock_vs_audio: (f64, u64, f64),
-    pub raw_time: f64,
+    clock_vs_audio: (f64, u64, f64),
+    raw_time: f64,
     /// How autoplay hits (Settings → Gameplay), and the keys that gives each note (by note index,
     /// empty for all but dons and kats), worked out once for those settings.
-    pub autoplay_style: crate::autoplay::Settings,
-    pub(crate) auto_plan: Option<(crate::autoplay::Settings, Vec<Vec<usize>>)>,
+    autoplay_style: crate::autoplay::Settings,
+    auto_plan: Option<(crate::autoplay::Settings, Vec<Vec<usize>>)>,
     /// Autoplay sounds already handed to the audio engine ahead of their hit: (note, key slot or
     /// roll tick). The hit itself then stays quiet.
-    pub auto_sched: BTreeSet<(usize, usize)>,
+    auto_sched: BTreeSet<(usize, usize)>,
     /// Pause menu cursor while paused.
-    pub paused: Option<usize>,
-    pub paused_at: Instant,
+    paused: Option<usize>,
+    paused_at: Instant,
     /// Counting down to unpause: (started, ends). The menu is hidden meanwhile.
-    pub resuming: Option<(Instant, Instant)>,
+    resuming: Option<(Instant, Instant)>,
     /// Real milliseconds spent playing (not paused, nor counting down to resume, nor failed),
     /// for the profile's play time; and the frame they were last counted at.
-    pub played_ms: f64,
-    pub(crate) played_at: Option<Instant>,
+    played_ms: f64,
+    played_at: Option<Instant>,
     /// The map time of the frame before this one: a frame only lets notes go up to there (see
     /// `update`).
-    pub(crate) last_frame_time: f64,
+    last_frame_time: f64,
     /// The scroll speed setting this play is at: fixed when it starts (it counts for pp), and
     /// a replay's own.
-    pub scroll_speed: f64,
+    scroll_speed: f64,
     /// Calibration: play no hitsounds on presses.
-    pub mute_hits: bool,
+    mute_hits: bool,
     /// How presses that don't make a hit are judged.
-    pub mash: Mash,
-    pub scoring: Scoring,
+    mash: Mash,
+    scoring: Scoring,
     /// Standard scoring: the combo points a clean play of the part played gives, and how many
     /// notes it has. Worked out at the first hit (after the part skipped is known).
-    pub(crate) score_basis: Option<(f64, u32)>,
+    score_basis: Option<(f64, u32)>,
     /// Standard scoring: the combo points made so far.
-    pub(crate) combo_points: f64,
+    combo_points: f64,
     /// Presses let off as extra hits since a note was last judged (`judge_nearest`).
-    pub(crate) extra_taps: u32,
+    extra_taps: u32,
     /// Record presses (map time judged at, key) for a replay.
-    pub record: bool,
+    record: bool,
     /// Also keep `inputs` without saving a replay (a solo play streamed to watching friends).
-    pub log_inputs: bool,
+    log_inputs: bool,
     /// A replay stopped where it is, with no pause menu (`toggle_held`).
-    pub held: bool,
-    pub inputs: Vec<(f64, u8)>,
+    held: bool,
+    inputs: Vec<(f64, u8)>,
     /// Playing a replay back: its presses and the next one due; and whose it is.
-    pub replay: Option<(Vec<(f64, u8)>, usize)>,
-    pub replay_of: Option<String>,
+    replay: Option<(Vec<(f64, u8)>, usize)>,
+    replay_of: Option<String>,
     /// The pp counter: works out the play's pp so far (`pp::Live`), and its latest answer.
-    pub live_pp: Option<crate::pp::Live>,
-    pub live_pp_value: Option<f64>,
+    live_pp: Option<crate::pp::Live>,
+    live_pp_value: Option<f64>,
     /// When set, every hitsound played is logged (map time, sound, volume), e.g. for video audio.
-    pub sfx_log: Option<Vec<(f64, Sound, f32)>>,
+    sfx_log: Option<Vec<(f64, Sound, f32)>>,
     /// A miss broke a combo of 20 or more at this map time: the combo break sound is due.
-    pub(crate) combo_break: Option<f64>,
+    combo_break: Option<f64>,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
-    pub ur_scaled_hint: bool,
+    ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
-    pub offset: f64,
+    offset: f64,
     /// The global offset as the player has it, on their scale (`Config::shown_offset`); set by
     /// the app every frame, for the advice to be given in it.
-    pub shown_offset: f64,
+    shown_offset: f64,
     /// The output latency (ms) the play offset was worked out with (`Config::offset_latency_ms`);
     /// set by the app every frame. Autoplay hitsounds go this much later in the song than the
     /// clock's note time, so that they sound with the music as in osu!.
-    pub latency: f64,
+    latency: f64,
     /// Speed modifier: map milliseconds per real millisecond (1.5 = DT). Taken from the track,
     /// which was prepared at this rate. The game clock runs in track time; map time is
     /// `speed.map(track - offset)`, so the offset stays in real milliseconds.
-    pub rate: f64,
+    rate: f64,
     /// Map time ↔ song time: `rate` throughout, or ramping from it (Wind Up / Down).
-    pub speed: Speed,
+    speed: Speed,
     /// Defense: our turns at the notes and the team's lives (None: playing alone).
-    pub defense: Option<DefenseRun>,
-    pub mods: Mods,
-    pub(crate) score_mult: f64,
+    defense: Option<DefenseRun>,
+    mods: Mods,
+    score_mult: f64,
     /// HP (0-1), like osu!lazer's taiko: starts empty, hits fill it, misses drain it, and the
     /// play fails if it's under half at the end.
-    pub hp: f64,
+    hp: f64,
     /// HP per GREAT / OK (×3.0 / ×1.1 of this) and per miss.
-    pub(crate) hp_hit: f64,
-    pub(crate) hp_miss: f64,
+    hp_hit: f64,
+    hp_miss: f64,
     /// Started mid-map (a start point): too few notes to judge HP by, so only SD/PF fail.
-    pub(crate) hp_exempt: bool,
+    hp_exempt: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
-    pub failed: Option<(f64, Instant)>,
+    failed: Option<(f64, Instant)>,
     /// Seconds the FAILED sign stays before the play ends (shorter when it starts over by itself).
-    pub fail_linger: f64,
+    fail_linger: f64,
     /// Alternate: the hand of the last accepted press (true = left) and when; None while either
     /// hand may hit (after a finisher, a drumroll or a swell, until a press hits a note).
-    pub(crate) last_hand: Option<(bool, f64)>,
+    last_hand: Option<(bool, f64)>,
     /// Party: map time of the last big hit (the lane shakes).
-    pub quake_at: f64,
+    quake_at: f64,
     /// Cracked: the misses that cracked the lane (map time) and how many notes had been hit
     /// then (it mends over the next 50).
-    pub(crate) cracks: Vec<(f64, u32)>,
+    cracks: Vec<(f64, u32)>,
     /// Crumble: the pieces of the lane hits have knocked out, until they settle back.
-    pub crumbs: Vec<Crumb>,
+    crumbs: Vec<Crumb>,
     /// Panic / Mercy: map times of the latest misses.
-    pub misses: VecDeque<f64>,
+    misses: VecDeque<f64>,
     /// Replays: the seek bar's difficulty graph and the map time of every miss, worked out the
     /// first time the bar is drawn.
-    pub replay_timeline: Option<(crate::difficulty::Graph, Vec<f64>)>,
+    replay_timeline: Option<(crate::difficulty::Graph, Vec<f64>)>,
     /// Drop / Barrel Roll: where each kiai starts (map ms) and the beat length there.
-    pub kiai_starts: Vec<(f64, f64)>,
+    kiai_starts: Vec<(f64, f64)>,
     /// Each note's rhythm: the stream it's part of (see `flows`).
-    pub flows: Vec<u8>,
+    flows: Vec<u8>,
     /// Overtime: when (map ms) he shows up, and the next one due.
-    pub scares: Vec<f64>,
-    pub(crate) next_scare: usize,
+    scares: Vec<f64>,
+    next_scare: usize,
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
-    pub shapeshift: shapeshift::Config,
+    shapeshift: shapeshift::Config,
     /// Tact: how often notes move.
-    pub tact: crate::tact::Step,
-    pub shape_order: Vec<u8>,
+    tact: crate::tact::Step,
+    shape_order: Vec<u8>,
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
-    pub universes: Option<[Universe; multiverse::COUNT]>,
+    universes: Option<[Universe; multiverse::COUNT]>,
 }
 
 /// Overtime: how long (ms) he stays on screen.
@@ -694,7 +694,7 @@ pub struct DefenseRun {
     /// The room's numbers for the team (None until they first come).
     pub state: Option<TeamState>,
     /// Turns someone else took over: (turn, from bar, who).
-    pub tags: Vec<(usize, usize, usize)>,
+    pub(crate) tags: Vec<(usize, usize, usize)>,
     pub towers: Vec<Tower>,
     /// Per note: the tower that takes it.
     pub shot: Vec<Option<u8>>,
@@ -717,14 +717,14 @@ pub enum Done {
 /// Defense: a tower on a corner of the maze near the drum (`s` along the lane, in the middle of
 /// the turn), shooting down every note of one colour due between `from` and `to`.
 pub struct Tower {
-    pub s: f32,
-    pub side: f32,
-    pub who: usize,
-    pub kat: bool,
-    pub from: f64,
-    pub to: f64,
+    s: f32,
+    side: f32,
+    who: usize,
+    kat: bool,
+    from: f64,
+    to: f64,
     /// The notes it takes.
-    pub notes: Vec<usize>,
+    notes: Vec<usize>,
 }
 
 /// Defense: where the towers stand: beside the Maze's long straight into the drum (this far
@@ -747,32 +747,32 @@ pub(crate) const MAX_ROLL_TICKS: usize = 360_000;
 #[derive(Clone, Copy, Debug)]
 pub struct Crumb {
     /// Map time of the hit.
-    pub at: f64,
+    at: f64,
     /// How long it stays out (ms).
-    pub life: f64,
+    life: f64,
     /// 1 for a 1/1 note at 200 combo; smaller for faster rhythms and lower combos.
-    pub size: f32,
+    size: f32,
     /// Where it starts, as a part of the lane's length, and how long it is (px).
-    pub start: f32,
-    pub len: f32,
+    start: f32,
+    len: f32,
     /// Sideways shift at its furthest.
-    pub shift: f32,
+    shift: f32,
 }
 
 /// Crumble: pieces only break off this part of the lane (as parts of its length), so notes
 /// reach the drum where they're expected.
-pub const CRUMBLE_SPAN: (f32, f32) = (0.25, 0.92);
+pub(crate) const CRUMBLE_SPAN: (f32, f32) = (0.25, 0.92);
 /// Crumble: the most the knocked-out pieces at one spot add up to sideways.
-pub const CRUMBLE_MAX_SHIFT: f32 = 55.0;
+pub(crate) const CRUMBLE_MAX_SHIFT: f32 = 55.0;
 /// Crumble: how hard a hit knocks the lane apart at `combo`: a quarter as hard as at 200 combo
 /// to begin with, then on up to 1.4x by 400.
-pub fn crumble_power(combo: u32) -> f32 {
+pub(crate) fn crumble_power(combo: u32) -> f32 {
     let c = combo as f32;
     0.25 + 0.75 * (c / 200.0).min(1.0) + 0.4 * ((c - 200.0) / 200.0).clamp(0.0, 1.0)
 }
 
 /// How long (ms) Crumble's pieces take to snap back into line after a miss.
-pub const CRUMBLE_MEND_MS: f64 = 250.0;
+pub(crate) const CRUMBLE_MEND_MS: f64 = 250.0;
 
 /// Where things on the lane go this frame: the rail, and how Shatter and Cracked knock pieces
 /// of it sideways. `s` is the distance ahead of the hit target.
@@ -793,7 +793,7 @@ impl LaneGeo {
         self.rail.is_some() || self.shatter.iter().any(|&d| d != 0.0) || !self.cracks.is_empty()
     }
 
-    pub fn shift(&self, s: f32) -> f32 {
+    pub(crate) fn shift(&self, s: f32) -> f32 {
         let mut d = 0.0;
         if s > 0.0 {
             d += self.shatter[((s / self.len * 4.0) as usize).min(3)];
@@ -1658,7 +1658,7 @@ impl Game {
 
     /// Forgets the autoplay sounds handed to the audio engine (it drops them when the song moves
     /// or pauses), so that they are planned again.
-    pub fn drop_scheduled(&mut self) {
+    pub(crate) fn drop_scheduled(&mut self) {
         self.auto_sched.clear();
     }
 
@@ -2173,7 +2173,7 @@ impl Game {
     }
 
     /// A live press at map time `t`.
-    pub fn press_time(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>) {
+    pub(crate) fn press_time(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>) {
         if self.failed.is_some() {
             return;
         }
@@ -2256,7 +2256,7 @@ impl Game {
 
     /// Replays: the recorded presses up to now, before anything expires, so each is judged
     /// exactly as it was.
-    pub fn feed_replay(&mut self, audio: Option<&dyn Audio>) {
+    pub(crate) fn feed_replay(&mut self, audio: Option<&dyn Audio>) {
         let Some((inputs, mut next)) = self.replay.take() else {
             return;
         };
@@ -2293,7 +2293,7 @@ impl Game {
         }
     }
 
-    pub fn judge_press(&mut self, key: usize, kat: bool, t: f64) -> Sound {
+    pub(crate) fn judge_press(&mut self, key: usize, kat: bool, t: f64) -> Sound {
         let normal = if kat { Sound::Kat } else { Sound::Don };
         let big = if kat { Sound::BigKat } else { Sound::BigDon };
         self.expire(t);
@@ -2559,7 +2559,11 @@ impl Game {
     /// Crumble's knocked-out pieces at map time `t` on a lane `len` long, like `cracks_at`'s:
     /// each snaps out and holds, then settles back over the rest of its life, or all at once
     /// when a miss breaks the combo.
-    pub fn crumbs_at(&self, t: f64, len: f32) -> impl Iterator<Item = (f32, f32, f32, f32)> + '_ {
+    pub(crate) fn crumbs_at(
+        &self,
+        t: f64,
+        len: f32,
+    ) -> impl Iterator<Item = (f32, f32, f32, f32)> + '_ {
         let miss = self.misses.iter().rev().copied().find(|&m| m <= t);
         self.crumbs
             .iter()

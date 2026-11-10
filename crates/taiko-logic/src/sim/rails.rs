@@ -94,7 +94,7 @@ pub const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
 /// run long enough that the loops below the lane clear the drum. Both loops' holes are the same
 /// size (runs 2 and 4, 1 and 5 alike), and the lanes stacked under the drum's have the same gaps
 /// between them (but for the corners' 2.6-unit rounding: runs are whole steps).
-pub const MEADOW: [(f32, f32); 12] = [
+pub(crate) const MEADOW: [(f32, f32); 12] = [
     (516.0, 1.0),
     (68.0, 1.0),
     (96.0, 1.0),
@@ -111,7 +111,7 @@ pub const MEADOW: [(f32, f32); 12] = [
 /// Meadow: how long each corner is. A whole number of `RAIL_STEP`s, like every run, so each turns
 /// exactly a quarter (the rail samples its curvature a step at a time) and the runs stay square.
 /// Its radius, about 71, is over half the lane, or the inside of a corner would fold over.
-pub const MEADOW_TURN: f32 = 28.0 * RAIL_STEP;
+pub(crate) const MEADOW_TURN: f32 = 28.0 * RAIL_STEP;
 /// Meadow: how far right it reaches (lane edge included), how much it shrinks besides to fit the
 /// screen's height (clear of the hit error meter but for the lane out), and how far down the
 /// playfield moves.

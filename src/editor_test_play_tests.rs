@@ -68,9 +68,9 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
             unreachable!()
         };
         assert_eq!(*from, Some(1500.0), "from the playhead");
-        assert_eq!(game.map.notes.len(), 2, "the map as the editor has it");
-        assert!(!game.record, "nothing is kept");
-        assert!(game.mods.has(mods::Mod::NoFail));
+        assert_eq!(game.map().notes.len(), 2, "the map as the editor has it");
+        assert!(!game.record(), "nothing is kept");
+        assert!(game.mods().has(mods::Mod::NoFail));
         assert!(
             game.view
                 .banner
@@ -151,10 +151,10 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
         let Scene::Play { game, .. } = &s.scene else {
             unreachable!()
         };
-        assert!(!game.record, "nothing is kept");
+        assert!(!game.record(), "nothing is kept");
         assert!(game.view.test_play);
-        let auto = game.mods.has(mods::Mod::Autoplay);
-        assert_eq!(game.mods.has(mods::Mod::NoFail), !auto);
+        let auto = game.mods().has(mods::Mod::Autoplay);
+        assert_eq!(game.mods().has(mods::Mod::NoFail), !auto);
         assert_eq!(
             game.view
                 .banner

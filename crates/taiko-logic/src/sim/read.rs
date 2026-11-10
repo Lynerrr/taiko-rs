@@ -1,11 +1,12 @@
-//! What the play shows: read-only access for whoever draws it (the client's playfield and HUD).
+//! What the play shows: read-only access for whoever draws it (the client's playfield and HUD),
+//! to the play and to the parts it hands out (notes' states, Defense's towers, the crumbs).
 //! Small and called every frame across the crate line, so each is `#[inline]`.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::{Crumb, DefenseRun, Game, Judge, NoteState, Song, Sound, Stats, Windows};
+use super::{Crumb, DefenseRun, Game, Judge, NoteState, Song, Sound, Stats, Tower, Windows};
 use crate::beatmap::Beatmap;
 use crate::difficulty::Graph;
 use crate::mods::{HalfRule, Mods};
@@ -256,8 +257,113 @@ impl Game {
         self.last_audio_ms
     }
 
+    /// How long a failed play lingers before it ends (ms).
+    #[inline]
+    pub fn fail_linger(&self) -> f64 {
+        self.fail_linger
+    }
+
     #[inline]
     pub fn half(&self) -> HalfRule {
         self.half
+    }
+}
+
+impl NoteState {
+    #[inline]
+    pub fn judged(&self) -> Option<Judge> {
+        self.judged
+    }
+
+    /// Map time of the judgement.
+    #[inline]
+    pub fn judged_at(&self) -> f64 {
+        self.judged_at
+    }
+
+    #[inline]
+    pub fn hits(&self) -> u32 {
+        self.hits
+    }
+
+    #[inline]
+    pub fn finished(&self) -> bool {
+        self.finished
+    }
+
+    /// A roll's ticks: whether each was hit.
+    #[inline]
+    pub fn ticks(&self) -> &[bool] {
+        &self.ticks
+    }
+}
+
+impl Tower {
+    #[inline]
+    pub fn s(&self) -> f32 {
+        self.s
+    }
+
+    #[inline]
+    pub fn side(&self) -> f32 {
+        self.side
+    }
+
+    #[inline]
+    pub fn who(&self) -> usize {
+        self.who
+    }
+
+    #[inline]
+    pub fn kat(&self) -> bool {
+        self.kat
+    }
+
+    #[inline]
+    pub fn from(&self) -> f64 {
+        self.from
+    }
+
+    #[inline]
+    pub fn to(&self) -> f64 {
+        self.to
+    }
+
+    /// The notes it takes.
+    #[inline]
+    pub fn notes(&self) -> &[usize] {
+        &self.notes
+    }
+}
+
+impl Crumb {
+    /// Map time of the hit.
+    #[inline]
+    pub fn at(&self) -> f64 {
+        self.at
+    }
+
+    /// 1 for a 1/1 note at 200 combo; smaller for faster rhythms and lower combos.
+    #[inline]
+    pub fn size(&self) -> f32 {
+        self.size
+    }
+
+    /// Where it starts, as a part of the lane's length.
+    #[inline]
+    pub fn start(&self) -> f32 {
+        self.start
+    }
+
+    /// How long it is (px).
+    #[inline]
+    pub fn length(&self) -> f32 {
+        self.len
+    }
+
+    /// Sideways shift at its furthest.
+    #[inline]
+    pub fn shift(&self) -> f32 {
+        self.shift
     }
 }

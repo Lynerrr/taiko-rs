@@ -97,7 +97,7 @@ fn pp_for_plays() {
             let list = mods.list();
             let refs: Vec<&str> = list.iter().map(String::as_str).collect();
             let g = play(&map, player, &refs);
-            let s = &g.stats;
+            let s = g.stats();
             let p = pp::Play {
                 great: s.great,
                 ok: s.ok,
@@ -215,11 +215,11 @@ fn the_results_of_a_saved_replay_are_worked_out_again_the_same() {
     r.map_path = path.to_string_lossy().into_owned();
     let live = super::gameplay::play_replay(&map, &r, 8.0);
     let (stats, windows) = crate::scores::simulate(&path, &r).expect("the map reads");
-    assert_eq!(stats.great, live.stats.great);
-    assert_eq!(stats.ok, live.stats.ok);
-    assert_eq!(stats.miss, live.stats.miss);
-    assert_eq!(stats.score, live.stats.score);
-    assert_eq!(stats.roll_ticks, live.stats.roll_ticks);
-    assert!((windows.great - live.windows.great).abs() < 1e-9);
+    assert_eq!(stats.great, live.stats().great);
+    assert_eq!(stats.ok, live.stats().ok);
+    assert_eq!(stats.miss, live.stats().miss);
+    assert_eq!(stats.score, live.stats().score);
+    assert_eq!(stats.roll_ticks, live.stats().roll_ticks);
+    assert!((windows.great - live.windows().great).abs() < 1e-9);
     assert_snapshot("scoring-simulated-replay", &summary(&live));
 }

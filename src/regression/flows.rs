@@ -77,7 +77,7 @@ fn line(st: &game::Stats) -> String {
 fn a_map_is_played_with_the_keyboard_from_song_select_to_the_results_and_back() {
     let (mut s, _songs, mut now) = client("journey", vec![maps::rolls_and_swells()]);
     start_selected(&mut s, &mut now);
-    let map = harness::game(&s).unwrap().map.clone();
+    let map = harness::game(&s).unwrap().map().clone();
     play_out(&mut s, &mut now, &maps::presses(&map, Player::Perfect));
     assert!(
         wait_for(&mut s, &mut now, |s| scene_name(s) == "Results"),
@@ -116,7 +116,11 @@ fn keyboard_play_judges_like_the_replay_of_it() {
         play_out(&mut s, &mut now, &presses);
         assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Results"));
         let live = results_stats(&s);
-        assert_eq!(line(&live), line(&replayed.stats), "{name}: live vs replay");
+        assert_eq!(
+            line(&live),
+            line(replayed.stats()),
+            "{name}: live vs replay"
+        );
     }
 }
 
@@ -129,13 +133,13 @@ fn pausing_resuming_retrying_and_quitting() {
     // Escape pauses: the menu shows and the clock stops.
     press(&mut s, KeyCode::Escape, now);
     let c = frame(&mut s, now);
-    let paused = harness::game(&s).unwrap().paused;
+    let paused = harness::game(&s).unwrap().paused();
     let _ = writeln!(log, "after Escape: {} paused {:?}", scene_name(&s), paused);
     assert!(paused.is_some(), "Escape pauses");
-    let t = harness::game(&s).unwrap().time;
+    let t = harness::game(&s).unwrap().time();
     run_until(&mut s, &mut now, FRAME, 200, |_| false);
     assert_eq!(
-        harness::game(&s).unwrap().time,
+        harness::game(&s).unwrap().time(),
         t,
         "paused, the map time stands still"
     );
@@ -143,17 +147,17 @@ fn pausing_resuming_retrying_and_quitting() {
     // Escape again resumes (after a countdown).
     press(&mut s, KeyCode::Escape, now);
     run_until(&mut s, &mut now, FRAME, 2000, |s| {
-        harness::game(s).is_some_and(|g| g.paused.is_none() && g.resuming.is_none())
+        harness::game(s).is_some_and(|g| g.paused().is_none() && g.resuming().is_none())
     });
     let g = harness::game(&s).unwrap();
     let _ = writeln!(
         log,
         "after the second Escape: paused {:?} resuming {}",
-        g.paused,
-        g.resuming.is_some()
+        g.paused(),
+        g.resuming().is_some()
     );
     run_until(&mut s, &mut now, FRAME, 100, |_| false);
-    assert!(harness::game(&s).unwrap().time > t, "playing again");
+    assert!(harness::game(&s).unwrap().time() > t, "playing again");
     // Retry from the pause menu: the map starts over.
     press(&mut s, KeyCode::Escape, now);
     press(&mut s, KeyCode::ArrowDown, now);
@@ -162,7 +166,7 @@ fn pausing_resuming_retrying_and_quitting() {
     assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
     let restarted = harness::game(&s).unwrap();
     assert_eq!(
-        restarted.stats.great + restarted.stats.miss,
+        restarted.stats().great + restarted.stats().miss,
         0,
         "a fresh play"
     );
@@ -201,7 +205,7 @@ fn a_failed_play_ends_on_the_results_as_failed() {
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     start_selected(&mut s, &mut now);
-    let map = harness::game(&s).unwrap().map.clone();
+    let map = harness::game(&s).unwrap().map().clone();
     play_out(&mut s, &mut now, &maps::presses(&map, Player::Skips(10)));
     let failed_early = scene_name(&s);
     let _ = wait_for(&mut s, &mut now, |s| scene_name(s) != "Play");
