@@ -3,6 +3,7 @@
 pub(crate) mod crash;
 pub(crate) mod gpu;
 pub(crate) mod input;
+pub(crate) mod overlays;
 pub(crate) mod run_loop;
 pub(crate) mod shell;
 
