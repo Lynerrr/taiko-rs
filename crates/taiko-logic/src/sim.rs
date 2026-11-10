@@ -81,6 +81,7 @@ pub trait Audio {
 }
 
 mod rails;
+mod read;
 mod setup;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
