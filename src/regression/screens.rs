@@ -89,7 +89,8 @@ fn multiplayer_menu_download_and_editor_home() {
     // The download tab without asking the mirrors (nothing searched yet).
     s.scene = Scene::Download;
     assert_snapshot("screen-download", &shot(&mut s, &mut now));
-    s.scene = Scene::EditorHome(Box::new(editor::home::Home::new(&[], "tester")));
+    s.scene =
+        crate::screens::editor_home::EditorHome::scene(editor::home::Home::new(&[], "tester"));
     assert_snapshot("screen-editor-home", &shot(&mut s, &mut now));
     s.scene = Scene::Select;
     s.open_hud_editor();

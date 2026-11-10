@@ -1,7 +1,7 @@
 //! The offset calibration's result: what was measured, the offset it suggests, and keys to
 //! take it (Enter), leave it (Esc), go again (R) or change the click's tempo (Left/Right).
 
-use super::screen::Screen;
+use super::screen::{Key, Screen};
 use crate::*;
 
 /// The result of a calibration run.
@@ -82,14 +82,13 @@ impl Screen for CalibrateDone {
         true
     }
 
-    fn key(
-        &mut self,
-        state: &mut State,
-        code: KeyCode,
-        repeat: bool,
-        _text: Option<&str>,
-        window: Option<&Window>,
-    ) {
+    fn key(&mut self, state: &mut State, key: Key) {
+        let Key {
+            code,
+            repeat,
+            window,
+            ..
+        } = key;
         if repeat {
             return;
         }
@@ -119,7 +118,7 @@ impl Screen for CalibrateDone {
         }
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
         let current = if self.vsync {
             state.cfg.vsync_tune_ms
         } else {

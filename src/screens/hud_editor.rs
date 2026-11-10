@@ -1,7 +1,7 @@
 //! The interface editor: where each part of the play's interface goes, its size, colour and
 //! presets, on a made-up play (`State::hud_sample`), opened from settings.
 
-use super::screen::Screen;
+use super::screen::{Key, Screen};
 use crate::*;
 
 /// The interface editor up.
@@ -85,14 +85,8 @@ impl Screen for HudEdit {
         self.ed.naming()
     }
 
-    fn key(
-        &mut self,
-        state: &mut State,
-        code: KeyCode,
-        _repeat: bool,
-        text: Option<&str>,
-        _window: Option<&Window>,
-    ) {
+    fn key(&mut self, state: &mut State, key: Key) {
+        let Key { code, text, .. } = key;
         let mods = (state.modifiers_shift, state.modifiers_ctrl);
         match self.ed.key(code, text, mods, &mut state.cfg) {
             hud_edit::Outcome::Nothing => {}
@@ -106,7 +100,7 @@ impl Screen for HudEdit {
         }
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
         draw_game_area(
             canvas,
             &state.cfg,

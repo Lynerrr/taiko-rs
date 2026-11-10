@@ -11,6 +11,18 @@ use std::any::Any;
 
 use crate::*;
 
+/// A key pressed, as a screen gets it.
+#[derive(Clone, Copy)]
+pub(crate) struct Key<'a> {
+    pub(crate) code: KeyCode,
+    pub(crate) repeat: bool,
+    /// The text it types, if any.
+    pub(crate) text: Option<&'a str>,
+    /// When it was pressed.
+    pub(crate) at: Instant,
+    pub(crate) window: Option<&'a Window>,
+}
+
 pub(crate) trait Screen: Any + Send {
     /// Its name, as the tests call it (`regression::harness::scene_name`).
     #[cfg(test)]
@@ -51,6 +63,23 @@ pub(crate) trait Screen: Any + Send {
     fn wheel_scales_area(&self) -> bool {
         false
     }
+    /// It is the map editor or part of it: the friends chip replaces the edge tab, and the
+    /// gameplay preset keys are its own.
+    fn editor(&self) -> bool {
+        false
+    }
+    /// In the editors' top bar, how far from the right edge the friends chip starts.
+    fn chip_from_right(&self) -> Option<f32> {
+        None
+    }
+    /// What friends see the player doing on it, when not the usual for where they are.
+    fn friends_activity(&self) -> Option<online::Activity> {
+        None
+    }
+    /// It takes every key as it is: no hotkeys on it.
+    fn takes_every_key(&self) -> bool {
+        false
+    }
     /// It covers the screen where the friends tab would go (F9 still opens the panel).
     fn covers_social_tab(&self) -> bool {
         false
@@ -64,15 +93,8 @@ pub(crate) trait Screen: Any + Send {
     fn loading(&self) -> bool {
         false
     }
-    /// A key, the text it types (if any), with the app it runs in.
-    fn key(
-        &mut self,
-        state: &mut State,
-        code: KeyCode,
-        repeat: bool,
-        text: Option<&str>,
-        window: Option<&Window>,
-    );
+    /// A key, with the app it runs in.
+    fn key(&mut self, state: &mut State, key: Key);
     /// The pointer moved to (`x`, `y`) in window pixels; Some: it took the move, and the cursor
     /// to show.
     fn pointer_moved(&mut self, _state: &mut State, _x: f64, _y: f64) -> Option<CursorIcon> {
@@ -82,9 +104,9 @@ pub(crate) trait Screen: Any + Send {
     fn mouse_button(&mut self, _state: &mut State, _pressed: bool) -> bool {
         false
     }
-    /// Its frame: brings it up to date and draws it over the background. Some: the scene to go
-    /// to once the frame is drawn.
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas) -> Option<Scene>;
+    /// Its frame at `now`: brings it up to date and draws it over the background. Some: the
+    /// scene to go to once the frame is drawn.
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, now: Instant) -> Option<Scene>;
 }
 
 /// Holds a screen's place while the screen handles something, answering as it would.
@@ -103,6 +125,10 @@ struct Shadow {
     wheel_scales_area: bool,
     covers_social_tab: bool,
     typing: bool,
+    editor: bool,
+    chip_from_right: Option<f32>,
+    friends_activity: Option<online::Activity>,
+    takes_every_key: bool,
     #[cfg(test)]
     loading: bool,
 }
@@ -124,6 +150,10 @@ impl Shadow {
             wheel_scales_area: screen.wheel_scales_area(),
             covers_social_tab: screen.covers_social_tab(),
             typing: screen.typing(),
+            editor: screen.editor(),
+            chip_from_right: screen.chip_from_right(),
+            friends_activity: screen.friends_activity(),
+            takes_every_key: screen.takes_every_key(),
             #[cfg(test)]
             loading: screen.loading(),
         }
@@ -171,13 +201,25 @@ impl Screen for Shadow {
     fn typing(&self) -> bool {
         self.typing
     }
+    fn editor(&self) -> bool {
+        self.editor
+    }
+    fn chip_from_right(&self) -> Option<f32> {
+        self.chip_from_right
+    }
+    fn friends_activity(&self) -> Option<online::Activity> {
+        self.friends_activity.clone()
+    }
+    fn takes_every_key(&self) -> bool {
+        self.takes_every_key
+    }
     #[cfg(test)]
     fn loading(&self) -> bool {
         self.loading
     }
     // The screen itself has the input and the frame (`State::with_screen`).
-    fn key(&mut self, _: &mut State, _: KeyCode, _: bool, _: Option<&str>, _: Option<&Window>) {}
-    fn draw(&mut self, _: &mut State, _: &mut Canvas) -> Option<Scene> {
+    fn key(&mut self, _: &mut State, _: Key) {}
+    fn draw(&mut self, _: &mut State, _: &mut Canvas, _: Instant) -> Option<Scene> {
         None
     }
 }
@@ -232,20 +274,14 @@ impl State {
     }
 
     /// Gives a key to the screen up when it is one outside lib.rs; false when it isn't.
-    pub(crate) fn screen_key(
-        &mut self,
-        code: KeyCode,
-        repeat: bool,
-        text: Option<&str>,
-        window: Option<&Window>,
-    ) -> bool {
-        self.with_screen(|s, state| s.key(state, code, repeat, text, window))
-            .is_some()
+    pub(crate) fn screen_key(&mut self, key: Key) -> bool {
+        self.with_screen(|s, state| s.key(state, key)).is_some()
     }
 
     /// The frame of the screen up when it is one outside lib.rs; Some: the scene to go to.
-    pub(crate) fn draw_screen(&mut self, canvas: &mut Canvas) -> Option<Scene> {
-        self.with_screen(|s, state| s.draw(state, canvas)).flatten()
+    pub(crate) fn draw_screen(&mut self, canvas: &mut Canvas, now: Instant) -> Option<Scene> {
+        self.with_screen(|s, state| s.draw(state, canvas, now))
+            .flatten()
     }
 }
 
@@ -254,7 +290,13 @@ mod tests {
     /// The screens moved out of lib.rs stay out: no `Scene` variant of their own, no state of
     /// theirs in lib.rs.
     /// Every screen moved out so far.
-    const MOVED: &[&str] = &["CalibrateDone", "VideoEdit", "LayoutEdit", "HudEdit"];
+    const MOVED: &[&str] = &[
+        "CalibrateDone",
+        "VideoEdit",
+        "LayoutEdit",
+        "HudEdit",
+        "EditorHome",
+    ];
 
     #[test]
     fn moved_screens_stay_out_of_lib() {

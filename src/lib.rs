@@ -153,6 +153,7 @@ use library::{
     Scanned, download_dir, find_map, find_score_map, load_plays, main_maps, song_inputs, start_scan,
 };
 use multiplayer::{lobby_seed, map_info, mod_settings, use_mod_settings};
+use screens::editor_home::EditorHome;
 use screens::hud_editor::HudEdit;
 use screens::menu::{update_badge, updating_badge};
 use screens::play::{
@@ -239,8 +240,6 @@ enum Scene {
     Watch(Box<WatchView>),
     /// The map editor, editing one difficulty.
     Editor(Box<editor::view::View>),
-    /// The editor's front door: a new map from a song, or one to go on with.
-    EditorHome(Box<editor::home::Home>),
     MpResults,
     /// A screen that lives outside lib.rs (`screens::screen`).
     Other(Box<dyn screens::screen::Screen>),
@@ -1141,65 +1140,6 @@ impl State {
         self.start_loading_from(entry, None);
     }
 
-    /// The editor's front door: make a map from a song, or go on with one.
-    fn open_editor_home(&mut self) {
-        self.stop_audio();
-        let creator = self.mp_menu.account.clone().unwrap_or_default();
-        self.scene = Scene::EditorHome(Box::new(editor::home::Home::new(
-            &self.cfg.editor_recent,
-            &creator,
-        )));
-    }
-
-    /// What the front door asked for.
-    fn home_out(&mut self, out: editor::home::Out) {
-        use editor::home::Out;
-        match out {
-            Out::None => {}
-            Out::Toast(text) => self.toast(text),
-            Out::Leave => self.show_select(),
-            Out::PickInLibrary => {
-                self.pick_to_edit = true;
-                self.main_menu = None;
-                self.scene = Scene::Select;
-            }
-            Out::Open(path) => match self.entry_for(&path) {
-                Some(entry) => self.open_editor_at(path, entry),
-                None => self.toast(format!("can't open {}", path.display())),
-            },
-            Out::Tour => {
-                let recent = self.cfg.editor_recent.first().map(PathBuf::from);
-                match recent
-                    .filter(|p| p.is_file())
-                    .and_then(|p| Some((self.entry_for(&p)?, p)))
-                {
-                    Some((entry, path)) => {
-                        self.open_editor_at(path, entry);
-                        if let Scene::Editor(view) = &mut self.scene {
-                            view.start_tour();
-                        }
-                    }
-                    None => self.toast(
-                        "make a map first (drop a song on this screen), then take the tour".into(),
-                    ),
-                }
-            }
-            Out::Create(plan) => {
-                let _ = std::fs::create_dir_all(&self.songs_dir);
-                match editor::new_map::create(&plan, &self.songs_dir) {
-                    Ok(file) => match self.entry_for(&file) {
-                        Some(entry) => {
-                            self.toast(format!("made {}", plan.title));
-                            self.open_editor_at(file, entry);
-                        }
-                        None => self.toast("the map was made but can't be opened".into()),
-                    },
-                    Err(e) => self.toast(format!("can't make the map: {e}")),
-                }
-            }
-        }
-    }
-
     /// Maps dropped into (or taken out of) the folder of the map being edited: new ones join the
     /// library, rewritten ones are read again in place (indices stay valid), removed ones leave
     /// the list.
@@ -1295,23 +1235,6 @@ impl State {
         let start = self.library.len();
         self.append_maps(vec![library::Entry::new(path.to_path_buf(), meta)]);
         (self.library.len() > start).then_some(start)
-    }
-
-    fn home_key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant) {
-        let typing = matches!(&self.scene, Scene::EditorHome(h) if h.needs_text());
-        let movement = matches!(
-            code,
-            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End
-        );
-        if repeat && !typing && !movement {
-            return;
-        }
-        let (ctrl, shift) = (self.modifiers_ctrl, self.modifiers_shift);
-        let out = match &mut self.scene {
-            Scene::EditorHome(h) => h.key(code, text, ctrl, shift, at, self.audio.as_ref()),
-            _ => return,
-        };
-        self.home_out(out);
     }
 
     /// Opens the map editor on library entry `entry`.
@@ -4668,10 +4591,10 @@ impl State {
                         view.drop_picture(&path);
                         continue;
                     }
-                    if matches!(self.scene, Scene::EditorHome(_)) {
+                    if self.scene.screen_mut::<EditorHome>().is_some() {
                         let rate = self.audio.as_ref().map(|a| a.rate);
-                        let out = match &mut self.scene {
-                            Scene::EditorHome(home) => home.dropped(path, rate),
+                        let out = match self.scene.screen_mut::<EditorHome>() {
+                            Some(h) => h.home.dropped(path, rate),
                             _ => editor::home::Out::None,
                         };
                         self.home_out(out);
@@ -4685,8 +4608,8 @@ impl State {
                     {
                         self.open_editor_home();
                         let rate = self.audio.as_ref().map(|a| a.rate);
-                        if let Scene::EditorHome(home) = &mut self.scene {
-                            home.dropped(path, rate);
+                        if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                            h.home.dropped(path, rate);
                         }
                         continue;
                     }
@@ -4971,10 +4894,6 @@ impl State {
             Scene::Editor(view) => (
                 tr!("Mapping", "マッピング中", "Делает карту").into(),
                 view.label(),
-            ),
-            Scene::EditorHome(_) => (
-                tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),
-                String::new(),
             ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
@@ -5447,7 +5366,13 @@ impl State {
                 } else {
                     KeyCode::Escape
                 };
-                self.screen_key(key, false, None, None);
+                self.screen_key(screens::screen::Key {
+                    code: key,
+                    repeat: false,
+                    text: None,
+                    at: Instant::now(),
+                    window: None,
+                });
             }
             other => {
                 self.stop_audio();
@@ -6317,11 +6242,11 @@ impl State {
             }
             return;
         }
-        if matches!(self.scene, Scene::EditorHome(_)) && !self.social.open {
+        if self.scene.screen_mut::<EditorHome>().is_some() && !self.social.open {
             let x = self.mouse_virtual().0;
             let keys = self.editor_keys();
-            if let Scene::EditorHome(home) = &mut self.scene {
-                home.wheel(notches, x, keys.ctrl || keys.alt);
+            if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                h.home.wheel(notches, x, keys.ctrl || keys.alt);
             }
             return;
         }
@@ -6639,10 +6564,10 @@ impl State {
             }
             return CursorIcon::Default;
         }
-        if let Scene::EditorHome(home) = &mut self.scene
-            && home.dragging()
+        if let Some(h) = self.scene.screen_mut::<EditorHome>()
+            && h.home.dragging()
         {
-            home.mouse_move(vx);
+            h.home.mouse_move(vx);
             return CursorIcon::Grabbing;
         }
         if let Some(cursor) = self
@@ -6911,12 +6836,12 @@ impl State {
             return;
         }
         if !pressed
-            && let Scene::EditorHome(home) = &mut self.scene
-            && home.dragging()
+            && let Some(h) = self.scene.screen_mut::<EditorHome>()
+            && h.home.dragging()
         {
             let vx = self.mouse_virtual().0;
-            if let Scene::EditorHome(home) = &mut self.scene {
-                home.release(vx, self.audio.as_ref());
+            if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                h.home.release(vx, self.audio.as_ref());
             }
             return;
         }
@@ -8260,7 +8185,6 @@ impl State {
             Scene::Spectate(_) => "spectating",
             Scene::Watch(_) => "watching a friend",
             Scene::Editor(_) => "map editor",
-            Scene::EditorHome(_) => "map editor menu",
         };
         let map = self
             .offset_entry()
@@ -9358,7 +9282,7 @@ impl State {
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
         self.social_keys()
-            || matches!(&self.scene, Scene::EditorHome(h) if h.needs_text())
+            || self.scene.screen().is_some_and(|s| s.typing())
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
@@ -10029,7 +9953,7 @@ impl State {
     /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
     /// open panel leaves the keys to the editor until one of its fields is clicked.
     fn in_editor(&self) -> bool {
-        matches!(self.scene, Scene::Editor(_) | Scene::EditorHome(_))
+        matches!(self.scene, Scene::Editor(_)) || self.scene.screen().is_some_and(|s| s.editor())
     }
 
     /// Where the friends overlay's chip goes in the editors' top bar (its left edge), on a
@@ -10037,7 +9961,7 @@ impl State {
     fn editor_chip_x(&self, width: f32) -> Option<f32> {
         match &self.scene {
             Scene::Editor(_) => Some(editor::view::View::menu_end() + 6.0),
-            Scene::EditorHome(_) => Some(width - 100.0),
+            Scene::Other(s) => s.chip_from_right().map(|right| width - right),
             _ => None,
         }
     }
@@ -10602,12 +10526,14 @@ impl State {
                 .map(|m| m.label())
                 .unwrap_or_default()
         };
+        if let Some(activity) = self.scene.screen().and_then(|s| s.friends_activity()) {
+            return activity;
+        }
         match &self.scene {
             // The editor and its test plays (`editor_back` holds the editor while one runs)
             // count as editing: a test play is the mapper checking their own work, there's
             // nothing to watch, and flipping to "playing" would offer friends a Watch button.
             Scene::Editor(view) => Activity::Editing { map: view.label() },
-            Scene::EditorHome(_) => Activity::Editing { map: String::new() },
             Scene::Loading { .. } | Scene::Play { .. } if self.editor_back.is_some() => {
                 Activity::Editing {
                     map: self
@@ -11648,7 +11574,7 @@ impl State {
     /// a search.
     fn hotkey_place(&self, code: KeyCode) -> Option<keys::Place> {
         let busy = self.splash.is_some()
-            || matches!(self.scene, Scene::EditorHome(_))
+            || self.scene.screen().is_some_and(|s| s.takes_every_key())
             || self.profile.is_some()
             || self.medals.is_some()
             || self.unlock.showing()
@@ -11766,15 +11692,22 @@ impl State {
         if !repeat
             && !matches!(
                 self.scene,
-                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_) | Scene::EditorHome(_)
+                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_)
             )
+            && !self.scene.screen().is_some_and(|s| s.editor())
             && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
         {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
         }
-        if self.screen_key(code, repeat, text, window) {
+        if self.screen_key(screens::screen::Key {
+            code,
+            repeat,
+            text,
+            at,
+            window,
+        }) {
             return;
         }
         if matches!(self.scene, Scene::Calibrate { .. }) {
@@ -11829,10 +11762,6 @@ impl State {
                 return;
             }
             self.editor_key(code, repeat, window);
-            return;
-        }
-        if matches!(self.scene, Scene::EditorHome(_)) {
-            self.home_key(code, repeat, text, at);
             return;
         }
         if matches!(self.scene, Scene::Watch(_)) && code == KeyCode::Escape {
@@ -12090,8 +12019,7 @@ impl State {
             | Scene::MpResults
             | Scene::Spectate(_)
             | Scene::Watch(_)
-            | Scene::Editor(_)
-            | Scene::EditorHome(_) => {}
+            | Scene::Editor(_) => {}
             Scene::Play { game, .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -12480,11 +12408,11 @@ impl State {
                 let (song, page) = spec.split_once('|').unwrap_or((&spec, ""));
                 self.open_editor_home();
                 let rate = self.audio.as_ref().map(|a| a.rate);
-                if let Scene::EditorHome(home) = &mut self.scene {
+                if let Some(h) = self.scene.screen_mut::<EditorHome>() {
                     if !song.is_empty() {
-                        home.dropped(PathBuf::from(song), rate);
+                        h.home.dropped(PathBuf::from(song), rate);
                     }
-                    home.debug_page(page);
+                    h.home.debug_page(page);
                 }
             }
         }
@@ -13973,13 +13901,6 @@ impl State {
                     next = Some(Scene::Select);
                 }
             }
-            Scene::EditorHome(home) => {
-                let out = home.update(now, self.audio.as_ref());
-                home.draw(canvas);
-                if !matches!(out, editor::home::Out::None) {
-                    home_out = Some(out);
-                }
-            }
             Scene::MpResults => match &self.mp {
                 Some(s) => multiplayer::draw_results(canvas, s),
                 None => next = Some(Scene::MpMenu),
@@ -14012,8 +13933,12 @@ impl State {
                 }
             }
             Scene::Other(_) => {
-                if let Some(s) = self.draw_screen(canvas) {
+                if let Some(s) = self.draw_screen(canvas, now) {
                     next = Some(s);
+                }
+                // The front door's frame may ask for something, done once the frame is drawn.
+                if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                    home_out = h.out.take();
                 }
             }
             Scene::Settings { prev } => {
@@ -15503,8 +15428,8 @@ impl State {
             Hit::Guide(action) => self.guide_action(action),
             Hit::EditorHome(act) => {
                 let x = self.mouse_virtual().0;
-                let out = match &mut self.scene {
-                    Scene::EditorHome(home) => home.click(act, x, self.audio.as_ref()),
+                let out = match self.scene.screen_mut::<EditorHome>() {
+                    Some(h) => h.home.click(act, x, self.audio.as_ref()),
                     _ => editor::home::Out::None,
                 };
                 self.home_out(out);
