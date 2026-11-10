@@ -7,15 +7,6 @@
 use super::path::PathTable;
 use super::scroll::ScrollTable;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static CALM: AtomicBool = AtomicBool::new(false);
-
-/// Maps' playfield effects toned down (Settings -> Gameplay, Reduce map effects): see
-/// `FieldProp::calm`.
-pub fn set_calm(on: bool) {
-    CALM.store(on, Ordering::Relaxed);
-}
 
 use std::collections::HashMap;
 
@@ -1177,9 +1168,10 @@ impl Runtime {
             .map(|m| t - self.shift - m)
     }
 
+    /// `field_with`, not toned down.
     #[inline]
     pub fn field(&self, t: f64) -> FieldFx {
-        self.field_with(t, CALM.load(Ordering::Relaxed))
+        self.field_with(t, false)
     }
 
     /// `field`, toned down if `calm` (see `FieldProp::calm`).

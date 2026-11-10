@@ -85,7 +85,8 @@ impl Round {
                 stream: None,
             }),
             None,
-        );
+        )
+        .with_settings(&crate::game::settings());
         g.set_mute_hits(true);
         g.skip_to(self.start - 50.0);
         g.start_from(self.start, None, 0.0);

@@ -13,15 +13,6 @@ use crate::mods::{Mod, Mods, Speed};
 use crate::multiverse::{self, Universe};
 use crate::shapeshift;
 
-/// Where a play's diagnostic lines go: the client's audio log, once it's open (`log_to`).
-static LOG: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
-
-/// Sends the plays' diagnostic lines (one at the end of each play) to `sink`. The first sink
-/// handed over stays; until then the lines aren't even written.
-pub fn log_to(sink: fn(&str)) {
-    let _ = LOG.set(sink);
-}
-
 /// The song a play keeps time to: how long it is and how fast it was made to play. The client's
 /// `audio::Track` is one; the sound it's handed to (`Audio::play`) takes it back as its own.
 pub trait Song: Send + Sync {
@@ -196,7 +187,7 @@ impl Drop for Game {
     /// by thirds of the hits (a clock drifting mid-song shows as thirds that differ).
     fn drop(&mut self) {
         let s = &self.stats;
-        let Some(log) = LOG.get() else {
+        let Some(log) = self.log else {
             return;
         };
         if self.replay.is_some() || s.errors.len() < 30 {
@@ -369,6 +360,29 @@ impl NoteBlock {
     }
 }
 
+/// The player's settings a play is made with (`Game::with_settings`), from the client's
+/// config: the crate keeps no process-wide settings.
+#[derive(Clone, Copy, Debug)]
+pub struct Settings {
+    pub shapeshift: shapeshift::Config,
+    pub tact: crate::tact::Step,
+    pub od_override: f64,
+    /// Where the play's diagnostic line goes at its end (the client's audio log); None: it
+    /// isn't even written.
+    pub log: Option<fn(&str)>,
+}
+
+impl Default for Settings {
+    fn default() -> Settings {
+        Settings {
+            shapeshift: shapeshift::Config::default(),
+            tact: crate::tact::step(crate::tact::DEFAULT),
+            od_override: crate::od_override::DEFAULT,
+            log: None,
+        }
+    }
+}
+
 pub struct Game {
     /// Random's configured colouring, kept with the replay so it plays back the same;
     /// 0 is the one per map from before seeds.
@@ -517,6 +531,10 @@ pub struct Game {
     shapeshift: shapeshift::Config,
     /// Tact: how often notes move.
     tact: crate::tact::Step,
+    /// The OD OD Override plays at (`Settings::od_override`).
+    od_override: f64,
+    /// Where the play's diagnostic line goes (`Settings::log`).
+    log: Option<fn(&str)>,
     shape_order: Vec<u8>,
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
@@ -999,7 +1017,7 @@ impl Game {
         } else {
             Vec::new()
         };
-        let shapeshift = shapeshift::get();
+        let shapeshift = shapeshift::Config::default();
         let shape_order = shape_order(&map, mods, shapeshift);
         Game {
             seed,
@@ -1077,11 +1095,26 @@ impl Game {
             scares,
             next_scare: 0,
             shapeshift,
-            tact: crate::tact::get(),
+            tact: crate::tact::step(crate::tact::DEFAULT),
+            od_override: crate::od_override::DEFAULT,
+            log: None,
             shape_order,
             universes: None,
             defense: None,
         }
+    }
+
+    /// Plays with the player's own settings: what Shapeshift and Tact play with and the OD
+    /// OD Override picks (`Settings`). Right after the play is made, before anything else
+    /// changes it.
+    pub fn with_settings(mut self, s: &Settings) -> Game {
+        self.shapeshift = s.shapeshift;
+        self.shape_order = shape_order(&self.map, self.mods, s.shapeshift);
+        self.tact = s.tact;
+        self.od_override = s.od_override;
+        self.log = s.log;
+        self.windows = Windows::new(self.mods.od_with(self.map.meta.od, s.od_override));
+        self
     }
 
     /// Plays with someone else's mod settings (a lobby host's): Multiverse's universes and
@@ -2232,7 +2265,8 @@ impl Game {
 
     /// Judges with the hit windows `rule` makes (a replay's own, see `Replay::window_rule`).
     pub fn set_window_rule(&mut self, rule: WindowRule) {
-        self.windows = Windows::with_rule(self.mods.od(self.map.meta.od), rule);
+        self.windows =
+            Windows::with_rule(self.mods.od_with(self.map.meta.od, self.od_override), rule);
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses

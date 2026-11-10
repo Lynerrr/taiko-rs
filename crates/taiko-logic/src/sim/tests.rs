@@ -1285,10 +1285,12 @@ fn record(line: &str) {
 
 #[test]
 fn a_play_s_end_goes_to_the_log_it_was_handed() {
-    // The client hands over its audio log (`audiolog::start`); a play's line goes wherever it's
+    // The client hands over its audio log (`Settings::log`); a play's line goes wherever it's
     // told. Here: 40 hits 12 ms late under a -2 ms offset wanted an offset of 10 ms.
-    log_to(record);
-    let mut p = game();
+    let mut p = game().with_settings(&Settings {
+        log: Some(record),
+        ..Settings::default()
+    });
     p.stats.errors = vec![12.0; 40];
     p.stats.error_offsets = vec![-2.0; 40];
     drop(p);

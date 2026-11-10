@@ -61,9 +61,13 @@ pub fn start() -> bool {
         crate::update::BUILD_CHANNEL.name()
     );
     *log = Some((file, Instant::now()));
-    // Each play writes its line at its end.
-    crate::game::log_to(line);
     true
+}
+
+/// Where plays write their line at their end (`Settings::log`): the log, once it's open.
+pub fn sink() -> Option<fn(&str)> {
+    let open = LOG.lock().is_ok_and(|log| log.is_some());
+    open.then_some(line as fn(&str))
 }
 
 /// A line, stamped with the seconds since the game started. Nothing if the log isn't open.
