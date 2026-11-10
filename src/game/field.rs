@@ -1046,24 +1046,24 @@ impl Play {
         }
         // Crumble: crumbs fly off the edge each piece moves out to and fall away.
         for cr in self.game.crumbs() {
-            let age = ((t - cr.at) / 1000.0) as f32;
+            let age = ((t - cr.at()) / 1000.0) as f32;
             if !(0.0..0.7).contains(&age) {
                 continue;
             }
-            for k in 0..1 + (4.0 * cr.size).round() as usize {
-                let h = |j: f64| hash01(cr.at + k as f64 * 5.3 + j) as f32;
-                let s = cr.start * lane_len + cr.len * h(0.1);
-                let (x, y, a) = geo.at(s, cr.shift.signum() * (LANE_H / 2.0 + 3.0));
+            for k in 0..1 + (4.0 * cr.size()).round() as usize {
+                let h = |j: f64| hash01(cr.at() + k as f64 * 5.3 + j) as f32;
+                let s = cr.start() * lane_len + cr.length() * h(0.1);
+                let (x, y, a) = geo.at(s, cr.shift().signum() * (LANE_H / 2.0 + 3.0));
                 let (vx, vy) = (
                     (h(0.2) * 2.0 - 1.0) * 70.0,
-                    cr.shift.signum() * (30.0 + 60.0 * h(0.3)),
+                    cr.shift().signum() * (30.0 + 60.0 * h(0.3)),
                 );
                 let p = (
                     x + vx * age,
                     y + vy * age + 700.0 * age * age,
                     a + (h(0.4) * 2.0 - 1.0) * 8.0 * age,
                 );
-                let side = 3.0 + 6.0 * cr.size * h(0.5);
+                let side = 3.0 + 6.0 * cr.size() * h(0.5);
                 let col = tint(edge_col, WHITE, 0.3);
                 lane_rect(
                     c,
@@ -1218,24 +1218,24 @@ impl Play {
         if let Some(d) = self.game.defense() {
             let bucket = (vt / 40.0).floor() as u32;
             for (k, tw) in d.towers.iter().enumerate() {
-                let (x, y, _, size) = place(tw.s, tw.side);
+                let (x, y, _, size) = place(tw.s(), tw.side());
                 // Built: it glitches in over a few steps; done: it crumbles out over a second.
-                let since = (vt - (tw.from - TOWER_LEAD_MS)) as f32;
-                let left = (1.0 - ((vt - tw.to) / 1000.0) as f32).clamp(0.0, 1.0);
+                let since = (vt - (tw.from() - TOWER_LEAD_MS)) as f32;
+                let left = (1.0 - ((vt - tw.to()) / 1000.0) as f32).clamp(0.0, 1.0);
                 if since < 0.0 || left <= 0.0 {
                     continue;
                 }
-                let col = team_colour(tw.who);
-                let shoots = if tw.kat { KAT } else { DON };
-                let busy = vt < tw.to;
+                let col = team_colour(tw.who());
+                let shoots = if tw.kat() { KAT } else { DON };
+                let busy = vt < tw.to();
                 let a = (since / 200.0).min(1.0) * if busy { 1.0 } else { 0.5 * left };
                 // How hard it's firing: one of its notes just went past it.
                 let fire = tw
-                    .notes
+                    .notes()
                     .iter()
                     .map(|&i| note_s(i))
-                    .filter(|&s| s <= tw.s && s > tw.s - 45.0)
-                    .map(|s| 1.0 - (tw.s - s) / 45.0)
+                    .filter(|&s| s <= tw.s() && s > tw.s() - 45.0)
+                    .map(|s| 1.0 - (tw.s() - s) / 45.0)
                     .fold(0.0, f32::max);
                 let h = |j: u32| glitch_hash(k as u32, bucket, j);
                 let jit = if h(1) < 0.2 + 0.7 * fire {
@@ -1404,14 +1404,14 @@ impl Play {
             match n.kind {
                 Kind::Don | Kind::Kat => {
                     let col = if n.kind == Kind::Don { don } else { kat };
-                    match st.judged {
+                    match st.judged() {
                         // Hit: the note flies up out of the drum (unless the interface toggle hides it).
                         Some(Judge::Great | Judge::Ok)
                             if self.view.hidden.has(Part::HitAnimation) => {}
                         Some(Judge::Great)
                             if self.game.defense().is_some_and(|d| d.shot[i].is_some()) => {}
                         Some(Judge::Great | Judge::Ok) => {
-                            let p = ((t - st.judged_at) / HIT_ANIM_MS).clamp(0.0, 1.0) as f32;
+                            let p = ((t - st.judged_at()) / HIT_ANIM_MS).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
                                 flying.push((p, n.big, col));
                             }
@@ -1431,21 +1431,21 @@ impl Play {
                                 // Taken by a tower: gone past it, with a shot and a burst just after.
                                 let bucket = (vt / 40.0).floor() as u32;
                                 if let Some(tw) = d.shot[i].and_then(|k| d.towers.get(k as usize))
-                                    && s <= tw.s
+                                    && s <= tw.s()
                                 {
                                     // Shot: a stepped pixel beam from the tower, and the note
                                     // breaks into pixels flying apart.
-                                    let k = (tw.s - s) / 45.0;
+                                    let k = (tw.s() - s) / 45.0;
                                     if k < 1.0 {
                                         let (x, y, _, size) = place(s, 0.0);
-                                        let (tx, ty, _, _) = place(tw.s, tw.side);
+                                        let (tx, ty, _, _) = place(tw.s(), tw.side());
                                         let fade = 1.0 - k;
                                         for j in 0..7u32 {
                                             let u = j as f32 / 6.0;
                                             let wob = (glitch_hash(i as u32, bucket, j) - 0.5)
                                                 * 6.0
                                                 * size;
-                                            let pc = [SPLIT_RED, SPLIT_CYAN, team_colour(tw.who)]
+                                            let pc = [SPLIT_RED, SPLIT_CYAN, team_colour(tw.who())]
                                                 [j as usize % 3];
                                             c.rect(
                                                 tx + (x - tx) * u - 1.5 * size,
@@ -1687,7 +1687,7 @@ impl Play {
                     // Ticks too close to tell apart are one: a gimmick roll can have hundreds of
                     // thousands on screen, more than a frame can hold.
                     let mut drawn_at = None;
-                    for (k, hit) in st.ticks.iter().enumerate() {
+                    for (k, hit) in st.ticks().iter().enumerate() {
                         let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
                         let apart = drawn_at.is_none_or(|at| ts - at >= TICK_GAP);
                         if !hit && ts > s0 && ts <= s1 && ts < lane_len && apart {
@@ -1711,9 +1711,9 @@ impl Play {
                     }
                 }
                 Kind::Swell => {
-                    if st.finished {
-                        if st.judged == Some(Judge::Great) {
-                            let p = ((t - st.judged_at) / 300.0).clamp(0.0, 1.0) as f32;
+                    if st.finished() {
+                        if st.judged() == Some(Judge::Great) {
+                            let p = ((t - st.judged_at()) / 300.0).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
                                 c.ring(
                                     HIT_X,
@@ -1774,7 +1774,7 @@ impl Play {
                             SPIN_R * (1.0 + 1.5 * left),
                             rgba(WHITE, 1.0),
                         );
-                        let left = n.required_hits.saturating_sub(st.hits);
+                        let left = n.required_hits.saturating_sub(st.hits());
                         texts.push((
                             HIT_X,
                             LANE_Y - 12.0,
@@ -1783,7 +1783,7 @@ impl Play {
                             left.to_string(),
                         ));
                     } else {
-                        let progress = st.hits as f32 / n.required_hits.max(1) as f32;
+                        let progress = st.hits() as f32 / n.required_hits.max(1) as f32;
                         c.circle(
                             HIT_X,
                             LANE_Y,
@@ -1799,7 +1799,7 @@ impl Play {
                             rgba(SWELL, 0.6),
                             3.0,
                         );
-                        let left = n.required_hits.saturating_sub(st.hits);
+                        let left = n.required_hits.saturating_sub(st.hits());
                         texts.push((
                             HIT_X,
                             LANE_Y - 12.0,
@@ -1827,7 +1827,7 @@ impl Play {
                 // A .tko note's motion moves (or hides) its flash with it.
                 let mut fx = NoteFx::default();
                 let (s, col, a) = match n.kind {
-                    Kind::Don | Kind::Kat if self.game.state()[i].judged.is_none() => {
+                    Kind::Don | Kind::Kat if self.game.state()[i].judged().is_none() => {
                         let s = note_s(i);
                         if let Some(rt) = self.game.tko() {
                             fx = rt.note(i, vt).unwrap_or_default();

@@ -68,7 +68,7 @@ fn part_under_the_lane(m: Option<Mod>, t: f64) -> (hud::Placed, [f32; 4]) {
     });
     let mut g = Play::new(Game::with_seed(map, track, None, mods, 42));
     g.view.hidden = hud::Parts::NONE;
-    g.time = t;
+    g.put_at(t);
     let mut c = Canvas::default();
     c.clear(853.3);
     g.draw_playfield(&mut c, 1.0);
@@ -119,8 +119,8 @@ fn parts_pushed_against_the_edge_by_a_lane_give_way_to_each_other() {
         .expect("the lane preset");
     g.view.hud = lane.1;
     g.view.hidden = lane.1.off;
-    g.live_pp_value = Some(100.0);
-    g.time = 3000.0;
+    g.set_live_pp_value(Some(100.0));
+    g.put_at(3000.0);
     let mut c = Canvas::default();
     c.clear(853.3);
     g.draw_playfield(&mut c, 1.0);
@@ -157,8 +157,8 @@ fn parts_side_by_side_on_a_lane_that_only_moved_stay_side_by_side() {
     let (_, lane) = hud::builtin_presets().swap_remove(3);
     g.view.hud = lane;
     g.view.hidden = lane.off;
-    g.live_pp_value = Some(100.0);
-    g.time = 3000.0;
+    g.set_live_pp_value(Some(100.0));
+    g.put_at(3000.0);
     let mut c = Canvas::default();
     c.clear(853.3);
     g.draw_playfield(&mut c, 1.0);
@@ -209,7 +209,7 @@ fn a_morphing_lane_carries_the_parts_along_without_a_jump() {
     let (mut c, mut last, mut moved) = (Canvas::default(), None, 0.0f32);
     let (mut worst, mut at) = (0.0f32, 0.0);
     for i in 0..4000 {
-        g.time = 2000.0 + i as f64 * 16.0;
+        g.put_at(2000.0 + i as f64 * 16.0);
         c.clear(853.3);
         g.draw_playfield(&mut c, 1.0);
         g.draw_parts(&mut c);
@@ -223,7 +223,7 @@ fn a_morphing_lane_carries_the_parts_along_without_a_jump() {
                 .fold(0.0, f32::max);
             moved += step;
             if step > worst {
-                (worst, at) = (step, g.time);
+                (worst, at) = (step, g.time());
             }
         }
         last = Some(lane);
@@ -269,18 +269,18 @@ fn block_culling_preserves_the_original_draw_for_every_mod() {
         let mut reference = Play::new(Game::with_seed(map.clone(), track, None, mods, 42));
         // Multiverse's universes are process-wide too: its own for each, not whatever
         // another test has just set.
-        optimized.universes = Some(multiverse::classic());
-        reference.universes = Some(multiverse::classic());
+        optimized.use_mod_settings(Some(multiverse::classic()), None);
+        reference.use_mod_settings(Some(multiverse::classic()), None);
         // One special block disables the new bounds, reproducing the original scan.
         reference.view.note_blocks = vec![NoteBlock {
-            range: 0..reference.map.notes.len(),
+            range: 0..reference.map().notes.len(),
             min_velocity: 1e-6,
             last_end: f64::INFINITY,
             regular: false,
         }];
         for time in [0.0, 3000.0, 55_555.0, 190_000.0, 210_000.0] {
-            optimized.time = time;
-            reference.time = time;
+            optimized.put_at(time);
+            reference.put_at(time);
             let mut a = Canvas::default();
             let mut b = Canvas::default();
             a.clear(853.3);
@@ -345,7 +345,7 @@ fn roll_bodies_stacked_on_a_bent_lane_dont_flood_the_frame() {
         stream: None,
     });
     let mut g = Play::new(Game::with_seed(map, track, None, Mods::parse("MZ"), 42));
-    g.time = 1990.0;
+    g.put_at(1990.0);
     let mut c = Canvas::default();
     c.clear(853.3);
     g.draw_playfield(&mut c, 1.0);
@@ -355,7 +355,7 @@ fn roll_bodies_stacked_on_a_bent_lane_dont_flood_the_frame() {
 #[test]
 fn ticks_too_close_to_tell_apart_dont_flood_the_frame() {
     let mut g = map_of_dense_rolls(8);
-    g.time = 1990.0;
+    g.put_at(1990.0);
     let mut c = Canvas::default();
     c.clear(853.3);
     g.draw_playfield(&mut c, 1.0);
@@ -434,13 +434,13 @@ fn drawing_multiverse_leaves_the_play_s_mods_alone() {
     let mut g = modded("MV");
     g.use_mod_settings(Some(multiverse::defaults()), None);
     g.set_time(3000.0);
-    let before = g.mods;
+    let before = g.mods();
     let mut c = Canvas {
         width: 853.3,
         ..Default::default()
     };
     g.draw_playfield(&mut c, 1.0);
-    assert_eq!(g.mods, before);
+    assert_eq!(g.mods(), before);
     assert!(!c.shapes.is_empty());
 }
 
@@ -608,7 +608,7 @@ fn visual_offset_moves_the_lane_not_the_judging() {
     let mut g = modded("");
     g.view.visual_offset = 30.0;
     play_all(&mut g, 0.0);
-    assert!(g.stats.great == 64 && g.stats.mean_error().abs() < 1e-9);
+    assert!(g.stats().great == 64 && g.stats().mean_error().abs() < 1e-9);
 }
 
 #[test]
@@ -676,7 +676,7 @@ fn in_kiai_each_fake_slider_under_a_note_adds_its_own_flash() {
             }),
             None,
         ));
-        g.time = at;
+        g.put_at(at);
         let mut c = Canvas::default();
         c.clear(853.3);
         g.draw_playfield(&mut c, 1.0);
@@ -793,9 +793,9 @@ fn autoplay_sounds_are_heard_with_the_music_at_the_osu_note_time() {
     // the clock's offset is -23 - 30, and the sound goes to song position 1000 all the same.
     let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Difficulty]\nSliderMultiplier:1.4\nOverallDifficulty:5\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1023,1,0,0:0:0:0:\n";
     let mut g = quiet_game(osu);
-    g.latency = 30.0;
-    g.offset = crate::config::play_offset_of(0.0, 30.0);
-    g.time = 950.0;
+    g.set_latency(30.0);
+    g.set_offset(crate::config::play_offset_of(0.0, 30.0));
+    g.put_at(950.0);
     let got = g.plan_auto_sounds(30.0 + AUTO_SOUND_LEAD_MS);
     assert_eq!(got.len(), 1);
     assert!((got[0].0 - 1000.0).abs() < 1e-9, "{}", got[0].0);
@@ -1025,7 +1025,7 @@ fn echo_shows_the_next_bar_in_colour_and_the_lane_in_grey() {
         g.echo_bars(-500.0),
         Some([(-2000.0, 2000.0), (0.0, 2000.0)])
     );
-    g.time = 2500.0;
+    g.put_at(2500.0);
     let mut c = Canvas::default();
     c.clear(853.3);
     g.draw_playfield(&mut c, 1.0);
@@ -1063,8 +1063,8 @@ fn every_mod_draws_a_sane_playfield_and_judges_the_same() {
         let mut g = kiai_game(mods);
         let mut c = Canvas::default();
         for k in 0..400 {
-            g.time = -2000.0 + k as f64 * 87.3;
-            g.game.press_at(k % 4, g.game.time, None);
+            g.put_at(-2000.0 + k as f64 * 87.3);
+            g.game.press_at(k % 4, g.game.time(), None);
             c.clear(853.3);
             g.draw_playfield(&mut c, 1.0);
             for sh in &c.shapes {
@@ -1072,7 +1072,7 @@ fn every_mod_draws_a_sane_playfield_and_judges_the_same() {
                 assert!(
                     v.iter().all(|x| x.is_finite()),
                     "{mods} at {}: {v:?}",
-                    g.time
+                    g.time()
                 );
             }
         }
@@ -1082,7 +1082,7 @@ fn every_mod_draws_a_sane_playfield_and_judges_the_same() {
         }
         let mut g = kiai_game(mods);
         play_all(&mut g, 0.0);
-        assert_eq!(g.stats.great, 64, "{mods}");
+        assert_eq!(g.stats().great, 64, "{mods}");
     }
 }
 
@@ -1090,7 +1090,7 @@ fn every_mod_draws_a_sane_playfield_and_judges_the_same() {
 fn baked_speeds_bend_the_maps_own() {
     let v = |mods: &str| {
         kiai_game(mods)
-            .map
+            .map()
             .notes
             .iter()
             .map(|n| n.velocity)
@@ -1121,18 +1121,18 @@ fn baked_speeds_bend_the_maps_own() {
 #[test]
 fn drop_freezes_far_notes_and_releases_them_by_the_kiai() {
     let g = kiai_game("DR");
-    let cp = g.map.control_points[0];
+    let cp = g.map().control_points[0];
     // Held from two beats before (8000 - 1000) for a beat and a half, back to 0 at the kiai.
-    assert_eq!(g.extra_warp(6900.0, &cp, g.mods), 0.0);
-    assert!((g.extra_warp(7500.0, &cp, g.mods) - 500.0).abs() < 1e-9);
-    assert!(g.extra_warp(7999.0, &cp, g.mods) < 1.0);
-    assert_eq!(g.extra_warp(8100.0, &cp, g.mods), 0.0);
+    assert_eq!(g.extra_warp(6900.0, &cp, g.mods()), 0.0);
+    assert!((g.extra_warp(7500.0, &cp, g.mods()) - 500.0).abs() < 1e-9);
+    assert!(g.extra_warp(7999.0, &cp, g.mods()) < 1.0);
+    assert_eq!(g.extra_warp(8100.0, &cp, g.mods()), 0.0);
 }
 
 #[test]
 fn flip_flop_turns_over_every_8_bars() {
     let g = kiai_game("FF");
-    let bars = &g.map.barlines;
+    let bars = &g.map().barlines;
     assert_eq!(flip_flop(bars, bars[3].time), 1.0);
     assert_eq!(flip_flop(bars, bars[9].time), -1.0);
     assert!(flip_flop(bars, bars[8].time + 175.0).abs() < 1e-3);
@@ -1149,7 +1149,7 @@ fn multiverse_universes_draw_with_their_own_mods_only_while_drawn() {
             ..Default::default()
         };
         g.draw_playfield(&mut c, 1.0);
-        assert_eq!(g.mods, Mods::parse("MV,HD"));
+        assert_eq!(g.mods(), Mods::parse("MV,HD"));
         assert!(!c.shapes.is_empty());
     }
     // Sudden in a universe would hide every note with the play's Hidden: it's left out.
@@ -1201,7 +1201,7 @@ fn a_faster_universe_shows_its_notes_further_out() {
             width: 853.3,
             ..Default::default()
         };
-        g.draw_field(&mut c, 1.0, Focus::FULL, &uni, g.mods);
+        g.draw_field(&mut c, 1.0, Focus::FULL, &uni, g.mods());
         far.push(g.view.visible.len());
     }
     // Faster notes cross the lane sooner: fewer of the map's are on it at once.
@@ -1267,7 +1267,7 @@ fn mod_shots() {
         for t in [5000.0, 5200.0, 7400.0, 8300.0, 18_100.0] {
             g.set_time(t - 400.0);
             g.press_at(1, t - 400.0, None);
-            g.time = t;
+            g.put_at(t);
             c.clear(853.3);
             g.draw_playfield(&mut c, 1.0);
             let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
@@ -1280,7 +1280,7 @@ fn mod_shots() {
             for t in [2000.0, 5600.0, 7400.0] {
                 // Every note so far hit on time (Crumble breaks the lane by them).
                 let times: Vec<f64> = g
-                    .map
+                    .map()
                     .notes
                     .iter()
                     .map(|n| n.time)
@@ -1289,7 +1289,7 @@ fn mod_shots() {
                 for n in times {
                     g.press_at(1, n, None);
                 }
-                g.time = t;
+                g.put_at(t);
                 c.clear(853.3);
                 g.draw_playfield(&mut c, 1.0);
                 let (w, h, rgb) = crate::debug::rasterize(&c, 1.0);
@@ -1302,8 +1302,8 @@ fn mod_shots() {
                 .unwrap();
             }
         }
-        if let Some(&at) = g.scares.first() {
-            g.time = at + 300.0;
+        if let Some(&at) = g.scares().first() {
+            g.put_at(at + 300.0);
             c.clear(853.3);
             g.draw_playfield(&mut c, 1.0);
             g.draw_hud(&mut c);
@@ -1380,7 +1380,7 @@ fn mod_shots() {
         for t in [3200.0, 4700.0, 6500.0, 11_200.0] {
             g.set_time(t - 400.0);
             g.press_at(1, t - 400.0, None);
-            g.time = t;
+            g.put_at(t);
             c.clear(853.3);
             g.draw_playfield(&mut c, 1.0);
             g.draw_hud(&mut c);
@@ -1517,26 +1517,26 @@ fn every_mod_a_defense_team_can_have_plays_the_same_notes_for_both_players() {
     for m in crate::mods::ALL.into_iter().filter(|m| m.defense_ok()) {
         let mods = Mods::parse(m.acronym());
         let (mut a, mut b) = (defense_with(mods, 0), defense_with(mods, 1));
-        let same = a.map.notes.len() == b.map.notes.len()
-            && a.map
+        let same = a.map().notes.len() == b.map().notes.len()
+            && a.map()
                 .notes
                 .iter()
-                .zip(&b.map.notes)
+                .zip(&b.map().notes)
                 .all(|(x, y)| x.time == y.time && x.kind == y.kind);
         if !same {
             bad.push(format!("{}: the notes differ", m.acronym()));
             continue;
         }
-        let (da, db) = (a.defense.as_ref().unwrap(), b.defense.as_ref().unwrap());
+        let (da, db) = (a.defense().unwrap(), b.defense().unwrap());
         if da.owner != db.owner {
             bad.push(format!("{}: the turns differ", m.acronym()));
         }
         // Between them they take every note that can be hit, once.
-        for i in 0..a.map.notes.len() {
-            if !matches!(a.map.notes[i].kind, Kind::Don | Kind::Kat) || da.map_unhittable[i] {
+        for i in 0..a.map().notes.len() {
+            if !matches!(a.map().notes[i].kind, Kind::Don | Kind::Kat) || da.map_unhittable[i] {
                 continue;
             }
-            let (ha, hb) = (!a.map.notes[i].unhittable, !b.map.notes[i].unhittable);
+            let (ha, hb) = (!a.map().notes[i].unhittable, !b.map().notes[i].unhittable);
             let shot = da.shot[i].is_some();
             if shot && (ha || hb) || !shot && ha == hb {
                 bad.push(format!("{}: note {i} is taken by {ha} {hb}", m.acronym()));
@@ -1547,7 +1547,7 @@ fn every_mod_a_defense_team_can_have_plays_the_same_notes_for_both_players() {
         for g in [&mut a, &mut b] {
             let mut t = -2000.0;
             while t < 34_000.0 {
-                g.time = t;
+                g.put_at(t);
                 g.autoplay(None);
                 g.expire(t);
                 if (t as i64) % 4000 == 0 {
@@ -1558,19 +1558,19 @@ fn every_mod_a_defense_team_can_have_plays_the_same_notes_for_both_players() {
                 }
                 t += 20.0;
             }
-            if g.stats.miss > 0 {
+            if g.stats().miss > 0 {
                 bad.push(format!(
                     "{}: {} misses under autoplay",
                     m.acronym(),
-                    g.stats.miss
+                    g.stats().miss
                 ));
                 break;
             }
-            if g.stats.great + g.stats.ok < 8 {
+            if g.stats().great + g.stats().ok < 8 {
                 bad.push(format!(
                     "{}: only {} hits under autoplay",
                     m.acronym(),
-                    g.stats.great + g.stats.ok
+                    g.stats().great + g.stats().ok
                 ));
                 break;
             }
@@ -1665,7 +1665,7 @@ fn rails_bend_the_lane_without_speeding_notes_up() {
         for mods in ["ZZ", "UT", "SI", "LP", "EB", "SS"] {
             let g = kiai_game(mods);
             for t in [0.0, 20_000.0, 50_000.0] {
-                let (rail, len, _, zoom) = g.rail_at(t, w, None, g.mods);
+                let (rail, len, _, zoom) = g.rail_at(t, w, None, g.mods());
                 assert!(zoom <= 1.0);
                 assert_eq!(lane_stretch(rail.is_some(), len, w), 1.0, "{mods} at {w}");
             }
@@ -1679,20 +1679,20 @@ fn rails_bend_the_lane_without_speeding_notes_up() {
 fn a_tko_lane_clip_bends_the_lane_over_the_players_own_and_keeps_note_speed() {
     let w = 853.3;
     let plain = game();
-    assert!(plain.rail_at(0.0, w, None, plain.mods).0.is_none());
+    assert!(plain.rail_at(0.0, w, None, plain.mods()).0.is_none());
     for k in 0..LANE_SHAPES_OF_CLIPS.len() {
         for u in [0.25, 0.5, 1.0] {
-            let (rail, len, _, zoom) = plain.rail_at(0.0, w, Some((k, u)), plain.mods);
+            let (rail, len, _, zoom) = plain.rail_at(0.0, w, Some((k, u)), plain.mods());
             assert!(rail.is_some() && zoom <= 1.0 + 1e-6);
             assert_eq!(lane_stretch(true, len, w), 1.0, "shape {k} at {u}");
         }
     }
     // The map's spiral goes before the player's zigzag.
     let zz = kiai_game("ZZ");
-    let theirs = zz.rail_at(0.0, w, None, zz.mods).1;
-    let map = zz.rail_at(0.0, w, Some((2, 1.0)), zz.mods).1;
+    let theirs = zz.rail_at(0.0, w, None, zz.mods()).1;
+    let map = zz.rail_at(0.0, w, Some((2, 1.0)), zz.mods()).1;
     assert_ne!(theirs, map);
-    assert_eq!(map, plain.rail_at(0.0, w, Some((2, 1.0)), plain.mods).1);
+    assert_eq!(map, plain.rail_at(0.0, w, Some((2, 1.0)), plain.mods()).1);
 }
 
 #[test]
@@ -1764,21 +1764,21 @@ fn rhythm_game(mods: &str) -> Play {
 fn snaps_and_liar() {
     let g = rhythm_game("LI");
     let snaps: Vec<u8> = g
-        .map
+        .map()
         .notes
         .iter()
-        .map(|n| snap_of(&g.map.control_points, n.time))
+        .map(|n| snap_of(&g.map().control_points, n.time))
         .collect();
     assert_eq!(&snaps[..4], &[1, 4, 2, 4]);
     assert_eq!(&snaps[24..27], &[1, 3, 3]);
     assert_eq!(&snaps[48..51], &[1, 6, 3]);
     // A 1/3 pretends to be the 1/4 next to it; 1/4s and notes on the beat tell the truth.
     assert_eq!(g.view.lies[25], 3000.0);
-    assert_eq!(g.view.lies[1], g.map.notes[1].time);
-    assert_eq!(g.view.lies[24], g.map.notes[24].time);
+    assert_eq!(g.view.lies[1], g.map().notes[1].time);
+    assert_eq!(g.view.lies[24], g.map().notes[24].time);
     // Snap Speed: triplets slower, 1/6s faster.
     let v = rhythm_game("SR")
-        .map
+        .map()
         .notes
         .iter()
         .map(|n| n.velocity)
@@ -1786,11 +1786,11 @@ fn snaps_and_liar() {
     assert!(v[25] < v[1] && v[49] > v[1] && v[0] == v[1] && v[26] == v[25]);
     assert_eq!(
         (
-            g.flows[0],
-            g.flows[2],
-            g.flows[25],
-            g.flows[26],
-            g.flows[50]
+            g.flows()[0],
+            g.flows()[2],
+            g.flows()[25],
+            g.flows()[26],
+            g.flows()[50]
         ),
         (4, 4, 3, 3, 6)
     );
@@ -1839,7 +1839,7 @@ fn a_tiny_positive_roll_is_gone_at_the_drum() {
             }),
             None,
         ));
-        g.time = t;
+        g.put_at(t);
         let mut c = Canvas::default();
         c.clear(853.3);
         g.draw_playfield(&mut c, 1.0);
@@ -1883,15 +1883,16 @@ fn a_new_speed_carries_on_from_the_same_place_in_the_map() {
     };
     let mut g = Play::new(Game::new(map, track(1.0), None));
     g.seek(4000.0, None, 0.0);
-    g.held = true;
+    g.set_held(true);
     g.change_speed(track(2.0), 2.0, None, 0.0);
     assert_eq!(
-        g.raw_time, 2000.0,
+        g.raw_time(),
+        2000.0,
         "the track's own time, at twice the speed"
     );
     g.update(Instant::now(), None, 0.0);
-    assert_eq!(g.time, 4000.0);
-    assert_eq!(g.rate, 1.0, "what the play was, for its results");
+    assert_eq!(g.time(), 4000.0);
+    assert_eq!(g.rate(), 1.0, "what the play was, for its results");
 }
 
 /// A calibration map with a `.tko` gimmick: rotation and scroll on the field, and the notes at
@@ -1951,7 +1952,7 @@ fn draw_with_defaults() {
 }
 
 fn frame_bytes(g: &mut Play, time: f64) -> Vec<u8> {
-    g.time = time;
+    g.put_at(time);
     let mut c = Canvas::default();
     c.clear(853.3);
     g.draw_playfield(&mut c, 1.0);
@@ -2006,7 +2007,7 @@ fn a_maps_text_and_pictures_are_drawn_while_their_clips_last() {
     let mut with = tko_game(Some(g), Mods::NONE);
     let mut plain = tko_game(None, Mods::NONE);
     let draw = |game: &mut Play, t: f64, loaded: bool| {
-        game.time = t;
+        game.put_at(t);
         let mut c = Canvas::default();
         c.clear(853.3);
         if loaded {
@@ -2044,7 +2045,7 @@ fn a_gimmick_never_changes_judging() {
         let mut g = tko_game(gimmick, Mods::NONE);
         let mut t = -2000.0;
         while t < 34_000.0 {
-            g.time = t;
+            g.put_at(t);
             g.autoplay(None);
             g.expire(t);
             if (t as i64) % 2000 == 0 {
@@ -2055,13 +2056,13 @@ fn a_gimmick_never_changes_judging() {
             t += 5.0;
         }
         (
-            g.stats.great,
-            g.stats.ok,
-            g.stats.miss,
-            g.stats.combo,
-            g.stats.max_combo,
-            g.stats.score,
-            g.stats.errors.clone(),
+            g.stats().great,
+            g.stats().ok,
+            g.stats().miss,
+            g.stats().combo,
+            g.stats().max_combo,
+            g.stats().score,
+            g.stats().errors.clone(),
         )
     };
     let plain = run(None);
@@ -2093,7 +2094,7 @@ fn notes_on_an_approach_path_look_different_and_are_judged_the_same() {
         let mut g = tko_game(gimmick, Mods::NONE);
         let mut t = -2000.0;
         while t < 20_000.0 {
-            g.time = t;
+            g.put_at(t);
             g.autoplay(None);
             g.expire(t);
             if (t as i64) % 1000 == 0 {
@@ -2103,7 +2104,12 @@ fn notes_on_an_approach_path_look_different_and_are_judged_the_same() {
             }
             t += 5.0;
         }
-        (g.stats.great, g.stats.ok, g.stats.miss, g.stats.score)
+        (
+            g.stats().great,
+            g.stats().ok,
+            g.stats().miss,
+            g.stats().score,
+        )
     };
     let base = run(None);
     assert!(base.0 > 30);
@@ -2185,7 +2191,7 @@ fn effects_gimmick() -> crate::tko::gimmick::Gimmick {
 fn screen_effects_add_to_the_picture_and_never_change_judging() {
     draw_with_defaults();
     let count = |g: &mut Play, t: f64| {
-        g.time = t;
+        g.put_at(t);
         let mut c = Canvas::default();
         c.clear(853.3);
         g.draw_playfield(&mut c, 1.0);
@@ -2205,7 +2211,7 @@ fn screen_effects_add_to_the_picture_and_never_change_judging() {
         let mut g = tko_game(gimmick, Mods::NONE);
         let mut t = -2000.0;
         while t < 20_000.0 {
-            g.time = t;
+            g.put_at(t);
             g.autoplay(None);
             g.expire(t);
             if (t as i64) % 2000 == 0 {
@@ -2214,11 +2220,11 @@ fn screen_effects_add_to_the_picture_and_never_change_judging() {
             t += 5.0;
         }
         (
-            g.stats.great,
-            g.stats.ok,
-            g.stats.miss,
-            g.stats.combo,
-            g.stats.score,
+            g.stats().great,
+            g.stats().ok,
+            g.stats().miss,
+            g.stats().combo,
+            g.stats().score,
         )
     };
     let base = run(None);
@@ -2290,7 +2296,7 @@ fn a_node_graph_moves_the_field_on_hits_and_never_changes_judging() {
         let mut frames = Vec::new();
         let mut t = -2000.0;
         while t < 34_000.0 {
-            g.time = t;
+            g.put_at(t);
             g.autoplay(None);
             g.expire(t);
             if (t as i64) % 1000 == 0 {
@@ -2299,13 +2305,13 @@ fn a_node_graph_moves_the_field_on_hits_and_never_changes_judging() {
             t += 5.0;
         }
         let judged = (
-            g.stats.great,
-            g.stats.ok,
-            g.stats.miss,
-            g.stats.combo,
-            g.stats.max_combo,
-            g.stats.score,
-            g.stats.errors.clone(),
+            g.stats().great,
+            g.stats().ok,
+            g.stats().miss,
+            g.stats().combo,
+            g.stats().max_combo,
+            g.stats().score,
+            g.stats().errors.clone(),
         );
         (judged, frames)
     };
@@ -2345,13 +2351,13 @@ fn a_hidden_group_is_not_drawn_but_the_notes_stay_hittable() {
     let a = frame_bytes(&mut plain, 3000.0).len();
     let b = frame_bytes(&mut hidden, 3000.0).len();
     assert!(b < a, "the notes are not drawn: {b} vs {a}");
-    hidden.time = 20_000.0;
+    hidden.put_at(20_000.0);
     for t in (0..40_000).step_by(5) {
-        hidden.time = t as f64 - 2000.0;
+        hidden.put_at(t as f64 - 2000.0);
         hidden.autoplay(None);
-        hidden.game.expire(hidden.game.time);
+        hidden.game.expire(hidden.game.time());
     }
-    assert!(hidden.stats.great > 30 && hidden.stats.miss == 0);
+    assert!(hidden.stats().great > 30 && hidden.stats().miss == 0);
 }
 
 #[test]
@@ -2398,7 +2404,7 @@ fn the_team_s_feed_keeps_what_was_done_and_the_drawing_says_it() {
             until: 0.0,
         },
     );
-    let feed = &g.defense.as_ref().unwrap().feed;
+    let feed = &g.defense().unwrap().feed;
     assert_eq!(feed, &[(2000.0, 1, Done::Bought(DefenseItem::Slow))]);
     crate::lang::set(crate::lang::Lang::En);
     assert_eq!(

@@ -462,7 +462,7 @@ mod tests {
             None,
             half,
         );
-        assert_eq!(game.map.notes.len(), 400);
+        assert_eq!(game.map().notes.len(), 400);
         assert!((b.stars - cut).abs() < 1e-9);
         assert!(
             (b.pp - b.if_ss).abs() < 1e-6,

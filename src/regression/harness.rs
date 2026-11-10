@@ -323,8 +323,8 @@ pub fn game(s: &State) -> Option<&Game> {
 /// (no audio: the game's clock runs on the frames' instants, at the play's speed).
 pub fn instant_of(s: &State, at: Instant, t: f64) -> Instant {
     let g = game(s).expect("a game in progress");
-    let rate = g.speed().rate_at(g.time).max(0.01);
-    let ms = (t - g.time) / rate;
+    let rate = g.speed().rate_at(g.time()).max(0.01);
+    let ms = (t - g.time()) / rate;
     if ms >= 0.0 {
         at + Duration::from_secs_f64(ms / 1000.0)
     } else {

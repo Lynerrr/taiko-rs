@@ -2,13 +2,36 @@
 //! replay it plays back, and the pause menu's cursor. Nothing here judges, scores or moves time:
 //! that is the play's own (`press`, `update`, `seek`...).
 
-use super::{Game, Mash, Scoring, Sound};
+use std::sync::Arc;
+
+use super::{Game, Judge, Mash, Scoring, Song, Sound};
 use crate::autoplay;
+use crate::beatmap;
 use crate::difficulty::Graph;
 use crate::mods::Mods;
 use crate::pp;
 
 impl Game {
+    /// A made-up play for the interface editor to show the parts with: a calibration map with
+    /// HD, mid-way through a good run (score, combo, judgements, hit errors, live pp, HP).
+    pub fn sample(track: Arc<dyn Song>) -> Game {
+        let map = beatmap::calibration_map(500.0, 0, 64);
+        let mut g = Game::with_mods(map, track, None, Mods::parse("HD"));
+        g.stats.score = 1_234_560;
+        (g.stats.great, g.stats.ok, g.stats.miss) = (812, 37, 4);
+        g.stats.combo = 321;
+        g.stats.errors = (0..20).map(|i| (i % 7) as f64 * 5.0 - 15.0).collect();
+        g.live_pp_value = Some(312.0);
+        g.hp = 0.8;
+        g.recent_errors = g
+            .stats
+            .errors
+            .iter()
+            .map(|&e| (e, g.time, Judge::Great))
+            .collect();
+        g
+    }
+
     /// No hitsounds (previews, the editor's test play, the field being watched in Multiverse).
     pub fn set_mute_hits(&mut self, mute: bool) {
         self.mute_hits = mute;

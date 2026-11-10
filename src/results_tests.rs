@@ -401,14 +401,14 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
             panic!("the play never started");
         };
         assert_eq!(
-            game.fail_linger,
+            game.fail_linger(),
             if restart { FAIL_RESTART_LINGER } else { 1.6 }
         );
         // Three notes go by unhit: the first miss fails the play.
-        let t = game.map.notes[2].time + 500.0;
+        let t = game.map().notes[2].time + 500.0;
         game.set_time(t);
         assert!(game.failed_early());
-        game.fail_linger = 0.0;
+        game.set_fail_linger(0.0);
         while matches!(s.scene, Scene::Play { .. }) && Instant::now() < until {
             frame(&mut s);
             std::thread::sleep(Duration::from_millis(2));

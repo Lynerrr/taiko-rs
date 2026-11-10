@@ -656,12 +656,12 @@ mod tests {
         r.advance(t0 + Duration::from_millis(11_300));
         let game = r.game.as_ref().unwrap();
         assert!(
-            game.time > r.start + 5000.0,
+            game.time() > r.start + 5000.0,
             "it moved on: {} from {}",
-            game.time,
+            game.time(),
             r.start
         );
-        assert_eq!(game.stats.miss, 0);
-        assert!(game.stats.great > 30, "{}", game.stats.great);
+        assert_eq!(game.stats().miss, 0);
+        assert!(game.stats().great > 30, "{}", game.stats().great);
     }
 }

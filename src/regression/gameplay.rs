@@ -50,7 +50,7 @@ pub fn replay(inputs: Vec<(f64, u8)>, mods: &[&str], version: u32) -> Replay {
 pub fn play_replay(map: &Beatmap, r: &Replay, step: f64) -> Game {
     let mut g = crate::scores::replay_game(map, &silent_track(r.rate), r);
     let end = g.end_time() + 2000.0;
-    let mut t = g.time;
+    let mut t = g.time();
     while t < end {
         t = (t + step).min(end);
         g.set_time(t);
@@ -65,7 +65,7 @@ pub fn play(map: &Beatmap, player: Player, mods: &[&str]) -> Game {
 
 /// One line of results: everything the results screen and the score submission use.
 pub fn summary(g: &Game) -> String {
-    let s = &g.stats;
+    let s = g.stats();
     format!(
         "great {} ok {} miss {} | combo {} max {} | score {} | rolls {} swells {} strong {} | \
          acc {} | err {} ur {} | hp {} | failed {}",
@@ -81,7 +81,7 @@ pub fn summary(g: &Game) -> String {
         num(s.accuracy() * 100.0, 4),
         num(s.mean_error(), 2),
         num(s.unstable_rate(), 2),
-        num(g.hp, 4),
+        num(g.hp(), 4),
         g.failed(),
     )
 }
@@ -201,7 +201,7 @@ fn sudden_death_and_perfect_fail_on_the_first_mistake_and_no_fail_never_fails() 
         assert_eq!(g.failed(), fails, "{mods:?}");
         if fails {
             assert!(g.failed_early(), "{mods:?} stops the play early");
-            assert_eq!(g.stats.miss, 1, "{mods:?} stops at the first miss");
+            assert_eq!(g.stats().miss, 1, "{mods:?} stops at the first miss");
         }
     }
     // Perfect also fails on an OK, Sudden Death doesn't.
@@ -335,7 +335,7 @@ fn judge_one(od: f64, offset: f64) -> Option<Judge> {
     let map = chart.beatmap();
     let t = map.notes[0].time + offset;
     let g = play_replay(&map, &replay(vec![(t, 1)], &[], scores::new_version()), 8.0);
-    let s = &g.stats;
+    let s = g.stats();
     match (s.great, s.ok, s.miss) {
         (1, 0, 0) => Some(Judge::Great),
         (0, 1, 0) => Some(Judge::Ok),
@@ -378,16 +378,16 @@ fn autoplay_hits_everything() {
     for chart in maps::all() {
         let map = chart.beatmap();
         let mut g = Game::with_mods(map, silent_track(1.0), None, Mods::parse("AT"));
-        g.mute_hits = true;
+        g.set_mute_hits(true);
         let end = g.end_time() + 2000.0;
-        let mut t = g.time;
+        let mut t = g.time();
         while t < end {
             t = (t + 8.0).min(end);
             g.set_time(t);
             g.autoplay(None);
         }
-        assert_eq!(g.stats.miss, 0, "{}", chart.name);
-        assert_eq!(g.stats.ok, 0, "{}", chart.name);
+        assert_eq!(g.stats().miss, 0, "{}", chart.name);
+        assert_eq!(g.stats().ok, 0, "{}", chart.name);
         assert!(!g.failed(), "{}", chart.name);
         let _ = writeln!(out, "{:<18} {}", chart.name, summary(&g));
     }
@@ -406,14 +406,14 @@ fn practice_from_the_middle_counts_only_what_is_left() {
     let mut g = crate::scores::replay_game(&map, &silent_track(1.0), &r);
     g.skip_to(from);
     let end = g.end_time() + 2000.0;
-    let mut t = g.time;
+    let mut t = g.time();
     while t < end {
         t = (t + 8.0).min(end);
         g.set_time(t);
     }
-    let judged = g.stats.great + g.stats.ok + g.stats.miss;
+    let judged = g.stats().great + g.stats().ok + g.stats().miss;
     assert_eq!(judged, 32, "the notes before the start point aren't played");
-    assert_eq!(g.stats.miss, 0);
+    assert_eq!(g.stats().miss, 0);
     assert_snapshot("gameplay-practice-from-middle", &summary(&g));
 }
 

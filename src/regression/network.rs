@@ -773,7 +773,7 @@ fn a_guest_plays_a_whole_match() {
     );
     let _ = writeln!(log, "start: {}", scene_name(&s));
     // Play it with the keyboard.
-    let beatmap = harness::game(&s).unwrap().map.clone();
+    let beatmap = harness::game(&s).unwrap().map().clone();
     let presses = maps::presses(&beatmap, Player::Perfect);
     let keys = s.cfg.keys;
     let mut next = 0;

@@ -65,14 +65,15 @@ fn game(notes: usize, slow: bool, mods: &str) -> Play {
 fn offset_hint_history() {
     for n in [200usize, 10_000, 100_000] {
         let mut full = game(64, false, "");
-        full.stats.errors = (0..n).map(|i| 8.0 + (i % 41) as f64 - 20.0).collect();
-        full.stats.error_offsets = (0..n).map(|i| (i % 5) as f64).collect();
+        full.stats_mut().errors = (0..n).map(|i| 8.0 + (i % 41) as f64 - 20.0).collect();
+        full.stats_mut().error_offsets = (0..n).map(|i| (i % 5) as f64).collect();
         let mut tail = game(64, false, "");
-        tail.stats.errors = full.stats.errors[n.saturating_sub(200)..].to_vec();
-        tail.stats.error_offsets = full.stats.error_offsets[n.saturating_sub(200)..].to_vec();
+        tail.stats_mut().errors = full.stats().errors[n.saturating_sub(200)..].to_vec();
+        tail.stats_mut().error_offsets =
+            full.stats().error_offsets[n.saturating_sub(200)..].to_vec();
         for scaled in [false, true] {
-            full.ur_scaled_hint = scaled;
-            tail.ur_scaled_hint = scaled;
+            full.set_ur_scaled_hint(scaled);
+            tail.set_ur_scaled_hint(scaled);
             let a = full.offset_suggestion(3.0).unwrap();
             let b = tail.offset_suggestion(3.0).unwrap();
             assert_eq!(
@@ -113,7 +114,7 @@ fn rare_slow_note() {
     for n in [2_000, 10_000] {
         for (slow, mods) in [(false, ""), (true, ""), (false, "MV"), (true, "MV")] {
             let mut game = game(n, slow, mods);
-            game.time = 3000.0;
+            game.put_at(3000.0);
             let mut canvas = Canvas::default();
             measure(&format!("draw/{n}/slow={slow}/mods={mods}"), 10, || {
                 canvas.clear(853.3);
@@ -334,7 +335,7 @@ fn game_preparation_and_expiry() {
             let mut game = Play::new(Game::with_mods(map, track.clone(), None, Mods::parse("NF")));
             let time = 2000.0 + n as f64 * 50.0;
             game.set_time(time);
-            let missed = game.stats.miss;
+            let missed = game.stats().miss;
             measure(
                 &format!("game/expiry/{n}/long-roll={long_roll}"),
                 100,
@@ -342,7 +343,7 @@ fn game_preparation_and_expiry() {
                     game.set_time(black_box(time));
                 },
             );
-            assert_eq!(game.stats.miss, missed);
+            assert_eq!(game.stats().miss, missed);
         }
     }
 }
@@ -430,7 +431,7 @@ fn dense_playfield() {
                 None,
                 Mods::parse(mods),
             ));
-            game.time = 2000.0 + 1000.0 * spacing;
+            game.put_at(2000.0 + 1000.0 * spacing);
             let mut canvas = Canvas::default();
             measure(&format!("draw/dense/{spacing}ms/mods={mods}"), 10, || {
                 canvas.clear(853.3);
@@ -535,7 +536,7 @@ fn drum_press_in_play() {
     press(&mut s, KeyCode::Enter, now);
     assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
     let keys = s.cfg.keys;
-    let map = harness::game(&s).unwrap().map.clone();
+    let map = harness::game(&s).unwrap().map().clone();
     let presses = maps::presses(&map, Player::Perfect);
     let mut samples = Vec::new();
     for &(t, k) in presses.iter().take(3 + 201) {
@@ -548,7 +549,7 @@ fn drum_press_in_play() {
         s.key(keys[k as usize], false, None, at, None);
         samples.push(started.elapsed().as_secs_f64() * 1e6);
     }
-    let stats = &harness::game(&s).expect("still playing").stats;
+    let stats = &harness::game(&s).expect("still playing").stats();
     assert!(
         stats.great + stats.ok >= 170,
         "the presses were judged as hits: {} great, {} ok, {} miss",

@@ -60,3 +60,35 @@ pub fn defense_game(team: usize) -> Game {
     );
     g
 }
+
+/// What only tests set on a play directly: a moment to look at, a score, a state picked by hand.
+impl Game {
+    /// Puts the play at map time `t` (ms) without playing anything up to it (`set_time` does).
+    pub fn put_at(&mut self, t: f64) {
+        self.time = t;
+    }
+
+    pub fn stats_mut(&mut self) -> &mut Stats {
+        &mut self.stats
+    }
+
+    pub fn set_live_pp_value(&mut self, pp: Option<f64>) {
+        self.live_pp_value = pp;
+    }
+
+    pub fn set_offset(&mut self, offset: f64) {
+        self.offset = offset;
+    }
+
+    pub fn set_held(&mut self, held: bool) {
+        self.held = held;
+    }
+
+    pub fn set_played_ms(&mut self, ms: f64) {
+        self.played_ms = ms;
+    }
+
+    pub fn set_paused(&mut self, paused: Option<usize>) {
+        self.paused = paused;
+    }
+}

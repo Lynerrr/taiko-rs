@@ -117,12 +117,12 @@ fn playing_paused_and_the_results() {
     press(&mut s, KeyCode::Enter, now);
     assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
     // Halfway through, every note so far hit.
-    let map = harness::game(&s).unwrap().map.clone();
+    let map = harness::game(&s).unwrap().map().clone();
     let presses = maps::presses(&map, Player::Jitter(30.0));
     let half = map.notes[map.notes.len() / 2].time;
     let keys = s.cfg.keys;
     let mut next = 0;
-    while harness::game(&s).is_some_and(|g| g.time < half) {
+    while harness::game(&s).is_some_and(|g| g.time() < half) {
         let horizon = now + Duration::from_millis(4);
         while let Some(&(t, k)) = presses.get(next) {
             let at = instant_of(&s, now, t);
