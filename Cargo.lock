@@ -3427,6 +3427,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "taiko-proto"
+version = "0.1.0"
+dependencies = [
+ "rustls",
+ "serde",
+ "serde_json",
+ "taiko-logic",
+]
+
+[[package]]
 name = "taiko-rs"
 version = "0.1.0"
 dependencies = [
@@ -3441,12 +3451,12 @@ dependencies = [
  "libc",
  "pollster 1.0.1",
  "rosu-pp",
- "rustls",
  "serde",
  "serde_json",
  "souvlaki",
  "symphonia",
  "taiko-logic",
+ "taiko-proto",
  "ureq",
  "wayland-backend",
  "wayland-client",

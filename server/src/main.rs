@@ -1,6 +1,6 @@
 //! taiko.rs online server: accounts (used by multiplayer for now) and lobbies hosted here, so
-//! players don't need an open port. Rooms run the game's own room code (`src/net.rs`); the
-//! protocol in front of them is `src/online.rs`.
+//! players don't need an open port. Rooms run the game's own room code (`taiko_proto::net`);
+//! the protocol in front of them is `taiko_proto::online`.
 //!
 //!   taiko-server [--port 7800] [--data DIR] [--http-port 8080 [--behind-proxy]]
 //!
@@ -9,16 +9,11 @@
 //!
 //! Accounts and sessions live in DIR/accounts.json (passwords as argon2 hashes).
 
-// The game's `tr!`, for the text in its files below (the server always speaks English).
-#[macro_use]
-#[allow(dead_code)]
-#[path = "../../src/lang.rs"]
-mod lang;
+// What it speaks with the game (crates/taiko-proto).
+use taiko_proto::{changelog_entry, net, online, tls};
 mod admin;
 mod avatars;
 mod card;
-#[path = "../../src/changelog_entry.rs"]
-mod changelog_entry;
 mod covers;
 mod crashes;
 mod custom;
@@ -29,18 +24,10 @@ mod loved;
 mod mail;
 mod medal_list;
 mod medals;
-#[allow(dead_code)]
-#[path = "../../src/net.rs"]
-mod net;
-#[allow(dead_code)]
-#[path = "../../src/online.rs"]
-mod online;
 mod osustatus;
 mod pages;
 mod scores;
 mod shots;
-#[path = "../../src/tls.rs"]
-mod tls;
 mod web;
 
 use std::collections::{HashMap, VecDeque};

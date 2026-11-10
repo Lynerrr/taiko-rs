@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL: u32 = 7;
-#[cfg_attr(not(test), allow(dead_code))]
 pub const DEFAULT_PORT: u16 = 7777;
 /// Countdown between everyone having loaded and the song starting.
 const START_LEAD_MS: f64 = 3000.0;
@@ -914,7 +913,6 @@ fn clean_name(name: &str) -> String {
 // Host side
 
 /// A running room. Dropping it closes the room and disconnects everyone.
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct Server {
     stop: Arc<AtomicBool>,
     pub token: u64,
@@ -939,7 +937,6 @@ enum Event {
 }
 
 /// `mapguessr`: the room plays mapguessr instead of matches.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn host(port: u16, mapguessr: bool) -> Result<Server, String> {
     // Listen on IPv6 and IPv4. On Linux the `::` socket is dual-stack, so the IPv4 bind just
     // fails as "in use"; on Windows `::` is IPv6-only and both are needed, or IPv4 friends
@@ -1033,21 +1030,16 @@ pub struct Summary {
     pub host: String,
     pub map: Option<String>,
     pub in_match: bool,
-    #[allow(dead_code)] // read by the online server (server/)
     pub mapguessr: bool,
     /// It needs a password, and how many players it takes.
-    #[allow(dead_code)] // read by the online server (server/)
     pub locked: bool,
-    #[allow(dead_code)] // read by the online server (server/)
     pub slots: u32,
     /// Its map is played as Defense (co-op).
-    #[allow(dead_code)] // read by the online server (server/)
     pub defense: bool,
 }
 
 /// A room run by the online server: connections are handed to it after their own handshake
 /// there (account, which room). Dropping it closes the room.
-#[allow(dead_code)] // used by the online server (server/)
 pub struct Room {
     events: Sender<Event>,
     stop: Arc<AtomicBool>,
@@ -1069,12 +1061,10 @@ pub type MatchHook = Box<dyn Fn(&[PlayerInfo]) + Send + Sync>;
 /// Told the results of every match a room here finishes (the online server keeps count).
 static MATCH_OVER: std::sync::OnceLock<MatchHook> = std::sync::OnceLock::new();
 
-#[allow(dead_code)] // used by the online server (server/)
 pub fn on_match(hook: MatchHook) {
     let _ = MATCH_OVER.set(hook);
 }
 
-#[allow(dead_code)] // used by the online server (server/)
 pub fn open_room(mapguessr: bool, settings: RoomSettings) -> Room {
     let stop = Arc::new(AtomicBool::new(false));
     let token = new_token();
@@ -1099,7 +1089,6 @@ pub fn open_room(mapguessr: bool, settings: RoomSettings) -> Room {
     }
 }
 
-#[allow(dead_code)] // used by the online server (server/)
 impl Room {
     /// Hands over a connection (its reader may already hold buffered input). `name` replaces
     /// the one the client sends in Hello.
@@ -2065,7 +2054,6 @@ impl Drop for Client {
 }
 
 /// Accepts `host`, `host:port`, `[v6]:port`; the port defaults to 7777.
-#[cfg_attr(not(test), allow(dead_code))]
 fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
     let addr = addr.trim();
     let with_port = if addr.parse::<std::net::SocketAddr>().is_ok() {
@@ -2088,13 +2076,11 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
 }
 
 impl Client {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
         Client::connect_with(addr, name, host_token, None)
     }
 
     /// `connect`, giving the lobby's password.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn connect_with(
         addr: &str,
         name: &str,

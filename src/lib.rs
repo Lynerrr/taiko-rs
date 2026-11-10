@@ -3,7 +3,8 @@
 
 // First, so `tr!` is there for every module after it.
 #[macro_use]
-mod lang;
+extern crate taiko_proto;
+use taiko_proto::lang;
 mod admin;
 #[cfg(target_os = "android")]
 mod android;
@@ -18,7 +19,7 @@ mod beatmap_tests;
 mod browse;
 mod calibrate;
 mod changelog;
-mod changelog_entry;
+use taiko_proto::changelog_entry;
 mod clipboard;
 use taiko_logic::clock;
 mod config;
@@ -65,10 +66,10 @@ mod mods_tests;
 mod multiplayer;
 use mod_setup::multiverse::LookText as _;
 mod multiverse;
-mod net;
+use taiko_proto::net;
 mod od_override;
 mod offline;
-mod online;
+use taiko_proto::online;
 mod osudb;
 #[cfg(test)]
 mod perf_audit;
@@ -106,7 +107,6 @@ mod style;
 mod tact;
 #[doc(hidden)]
 pub mod tko;
-mod tls;
 mod ui;
 mod update;
 mod video;

@@ -537,8 +537,8 @@ Everything typed can be Cyrillic, except account names (Latin letters, digits, `
 ### Running the online server
 
 `server/` is a separate small crate (`taiko-server`): accounts (argon2 password hashes, session
-tokens) in `DATA/accounts.json`, and lobbies that run the game's own room code (`src/net.rs`).
-Its protocol is `src/online.rs`: one JSON request line and one reply per connection; after
+tokens) in `DATA/accounts.json`, and lobbies that run the game's own room code (`taiko_proto::net`).
+Its protocol is `taiko_proto::online`: one JSON request line and one reply per connection; after
 `Joined` the same connection speaks the room protocol.
 
 ```sh
@@ -611,9 +611,10 @@ spins so frames stay evenly spaced.
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
 | `src/calibrate.rs` | offset calibration: overlay and result screen (the estimate: `taiko_logic::calibrate`) |
-| `src/net.rs` | multiplayer protocol, room server, client with clock sync |
+| `crates/taiko-proto` | what the game and the server both speak: `net`, `online`, `tls`, `lang` (`tr!`), `changelog_entry` (the client and the server re-export each module under its old name) |
+| `crates/taiko-proto/src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
-| `src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
+| `crates/taiko-proto/src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
 | `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
 | `src/library.rs` | Songs folder / `.osz` and `.rsz` scanning |
 | `src/logo.rs` | the logo: window icon, top bar |

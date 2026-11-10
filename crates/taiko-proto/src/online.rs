@@ -263,20 +263,16 @@ pub struct ScoreSubmit {
 /// stacked mods add has a ceiling.
 pub const PP_VERSION: u32 = 3;
 /// From this one on, `NOTE_MODS` were worked out right.
-#[allow(dead_code)] // used by the server
 pub const NOTE_MODS_VERSION: u32 = 2;
 /// Mods that add nothing to pp by their multiplier: osu!'s the formula knows, and those that only
 /// change the speed or the notes.
-#[allow(dead_code)] // used by the server
 pub const NO_FACTOR_MODS: [&str; 12] = [
     "EZ", "HD", "HR", "FL", "NF", "SD", "PF", "DT", "NC", "HT", "DC", "HA",
 ];
 /// How many other mods can't reach the ceiling whatever they are.
-#[allow(dead_code)] // used by the server
 pub const MODS_BELOW_CAP: usize = 3;
 
 /// Whether a play from a game before the ceiling could have gone past it.
-#[allow(dead_code)] // used by the server
 pub fn past_the_cap(mods: &[String]) -> bool {
     mods.iter()
         .filter(|m| !NO_FACTOR_MODS.contains(&m.as_str()))
@@ -285,7 +281,6 @@ pub fn past_the_cap(mods: &[String]) -> bool {
 }
 
 /// The mods that change the notes: older games' pp of plays with them are wrong.
-#[allow(dead_code)] // used by the online server (server/)
 pub const NOTE_MODS: [&str; 3] = ["HA", "SW", "RD"];
 
 /// A score on a leaderboard or a profile.
@@ -344,7 +339,6 @@ pub struct OnlineReplay {
 }
 
 impl OnlineScore {
-    #[allow(dead_code)] // used by the online server (server/)
     pub fn grade(&self) -> &'static str {
         grade(self.great, self.ok, self.miss, self.accuracy)
     }
@@ -423,7 +417,6 @@ pub struct Stats {
 }
 
 /// osu!'s level for a total score, with the part of the way to the next.
-#[allow(dead_code)] // used by the online server (server/)
 pub fn level(total_score: u64) -> f64 {
     let needed = |n: f64| -> f64 {
         if n <= 100.0 {
@@ -442,12 +435,10 @@ pub fn level(total_score: u64) -> f64 {
 }
 
 /// Leaderboard rows a map's scores reply holds at most.
-#[allow(dead_code)] // used by the online server (server/)
 pub const MAP_SCORES: usize = 50;
 
 /// A player's pp total from their pp on each map (best per map): highest first, each counting
 /// 5% less than the one before, like osu!.
-#[allow(dead_code)] // used by the online server (server/)
 pub fn weighted_pp(mut best: Vec<f64>) -> f64 {
     best.sort_by(|a, b| b.total_cmp(a));
     // A fold from 0: `sum` of no floats is -0.0, which a new player's profile showed as "-0pp".
@@ -580,7 +571,6 @@ pub const SERVER_NAME: &str = "taiko.rs";
 pub type Said = [String; 3];
 
 /// The side of `text` for the language the game is in.
-#[allow(dead_code)] // used by the game
 pub fn said(text: &Said) -> &str {
     match crate::lang::current() {
         crate::lang::Lang::En => &text[0],
@@ -632,7 +622,6 @@ pub struct ChatMedal {
 
 impl ChatLine {
     /// What the line says, in the game's language.
-    #[allow(dead_code)] // used by the game
     pub fn shown(&self) -> String {
         let Some(m) = &self.medal else {
             return self.text.clone();
@@ -1177,7 +1166,6 @@ pub fn clean_text(text: &str, max: usize) -> String {
 }
 
 /// A lobby title, at most 32 characters.
-#[allow(dead_code)] // used by the online server (server/)
 /// `mapguessr`: the default title says it's a mapguessr lobby.
 pub fn clean_title(title: &str, owner: &str, mapguessr: bool) -> String {
     let t = clean_text(title, 32);
@@ -1361,7 +1349,6 @@ pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpS
 }
 
 /// What the social connection reports to the game.
-#[allow(dead_code)] // the game's side (the server only shares the protocol)
 pub enum SocialEvent {
     /// (Re)connected as this account: resend what we're doing.
     Connected(String),
@@ -1373,14 +1360,12 @@ pub enum SocialEvent {
 
 /// The game's social connection (friends, chat, watching). It reconnects by itself while the
 /// server is away; dropping it disconnects.
-#[allow(dead_code)]
 pub struct Social {
     tx: std::sync::mpsc::Sender<Up>,
     rx: std::sync::mpsc::Receiver<SocialEvent>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-#[allow(dead_code)]
 impl Social {
     pub fn start(server: String, token: String) -> Social {
         use std::sync::atomic::Ordering;
