@@ -129,7 +129,7 @@ pub fn start_host(port: u16, name: String, mapguessr: bool) -> Connecting {
 }
 
 pub fn live_from(game: &Game) -> Live {
-    let s = &game.stats;
+    let s = game.stats();
     Live {
         score: s.score,
         combo: s.combo,

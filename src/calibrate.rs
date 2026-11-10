@@ -37,14 +37,14 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
             "КАЛИБРОВКА СМЕЩЕНИЯ"
         ),
     );
-    let first = game.map.notes.first().map_or(0.0, |n| n.time);
+    let first = game.map().notes.first().map_or(0.0, |n| n.time);
     let beat = game
-        .map
+        .map()
         .control_points
         .first()
         .map_or(500.0, |p| p.beat_length);
     // Between two clicks, so the words changing isn't a beat to follow.
-    let hitting = game.time >= first - beat / 2.0;
+    let hitting = game.time() >= first - beat / 2.0;
     let headline = if hitting {
         tr!(
             "Hit on every click",
@@ -78,7 +78,7 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
             )
         },
     );
-    let hits = game.stats.errors.len();
+    let hits = game.stats().errors.len();
     if hitting {
         let count = if hits < MIN_HITS {
             tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}";)
@@ -116,7 +116,7 @@ pub fn draw_by_sight(c: &mut Canvas, game: &Game, current_offset: f64) {
     let w = c.width;
     let line = "Hit any drum key as notes reach the drum, by sight (no sound)";
     let what = "fine tune";
-    let status = match estimate(&game.stats.errors, current_offset) {
+    let status = match estimate(&game.stats().errors, current_offset) {
         Some(e) => {
             let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
             format!(

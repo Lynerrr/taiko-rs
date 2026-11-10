@@ -699,7 +699,7 @@ impl Preview {
                     } else {
                         fresh.update(now, Some(engine), offset);
                     }
-                    self.last_time = fresh.time;
+                    self.last_time = fresh.time();
                     self.game = Some(fresh);
                 }
                 self.pending_seek = None;
@@ -725,8 +725,8 @@ impl Preview {
             }
         }
         game.update(now, Some(engine), offset);
-        self.last_time = game.time;
-        game.autoplay_style = self.autoplay;
+        self.last_time = game.time();
+        game.set_autoplay_style(self.autoplay);
         game.autoplay(None);
     }
 
@@ -848,7 +848,7 @@ impl Preview {
     pub fn seek_by(&mut self, delta_ms: f64, engine: Option<&Engine>) {
         let now = self
             .pending_seek
-            .or_else(|| self.game.as_ref().map(|g| g.time));
+            .or_else(|| self.game.as_ref().map(|g| g.time()));
         if let Some(t) = now {
             self.seek(t + delta_ms, engine);
         }
@@ -915,7 +915,7 @@ impl Preview {
             c,
             graph,
             rect,
-            self.pending_seek.unwrap_or(game.time),
+            self.pending_seek.unwrap_or(game.time()),
             e.meta.preview_time,
             marker,
         );
@@ -1523,7 +1523,7 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
         }),
         None,
     );
-    g.mute_hits = true;
+    g.set_mute_hits(true);
     Play::new(g)
 }
 

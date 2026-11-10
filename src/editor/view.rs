@@ -1229,7 +1229,7 @@ impl View {
                     })
                 });
                 let mut g = Game::new(map, track, None);
-                g.mute_hits = true;
+                g.set_mute_hits(true);
                 self.game = Some(Box::new(Play::new(g)));
                 self.game_err = None;
                 self.shown = f64::NAN;
@@ -1250,14 +1250,14 @@ impl View {
         if let Some(g) = &mut self.game {
             if backwards && !self.shown.is_nan() {
                 // Notes already played stay played going forwards only: a seek back starts over.
-                let map = g.map.clone();
-                let track = g.track.clone();
+                let map = g.map().clone();
+                let track = g.track().clone();
                 **g = Play::new(Game::new(map, track, None));
-                g.mute_hits = true;
+                g.set_mute_hits(true);
             }
             g.skip_to(t - 50.0);
             g.set_time(t);
-            g.autoplay_style = autoplay;
+            g.set_autoplay_style(autoplay);
             g.autoplay(None);
         }
         self.shown = t;

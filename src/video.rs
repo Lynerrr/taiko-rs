@@ -231,7 +231,7 @@ impl Editor {
             match self.rx.poll_ended() {
                 Some(Some(Ok((map, track)))) => {
                     let g = replay_game(&map, &track, &self.replay);
-                    self.first = g.time;
+                    self.first = g.time();
                     self.last = g.end_time() + 1500.0;
                     self.start = self.first;
                     self.end = self.last;
@@ -255,7 +255,7 @@ impl Editor {
             return;
         };
         let t = t.clamp(self.first, self.last);
-        let behind = self.game.as_ref().is_none_or(|g| t < g.time);
+        let behind = self.game.as_ref().is_none_or(|g| t < g.time());
         if behind {
             self.game = Some(Box::new(Play::new(replay_game(map, track, &self.replay))));
         }

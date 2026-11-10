@@ -321,11 +321,11 @@ pub fn replay_game(
         r.seed,
         r.half_rule(),
     );
-    g.replay = Some((r.inputs.clone(), 0));
-    g.mash = r.mash();
-    g.scoring = r.scoring();
+    g.set_replay(Some((r.inputs.clone(), 0)));
+    g.set_mash(r.mash());
+    g.set_scoring(r.scoring());
     g.set_window_rule(r.window_rule());
-    g.mute_hits = true;
+    g.set_mute_hits(true);
     g
 }
 
@@ -342,12 +342,12 @@ pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crat
     let mut g = replay_game(&map, &track, r);
     // Frame by frame, as it was played.
     let end = g.end_time() + 2000.0;
-    let mut t = g.time;
+    let mut t = g.time();
     while t < end {
         t = (t + 8.0).min(end);
         g.set_time(t);
     }
-    Some((g.stats.clone(), g.windows))
+    Some((g.stats().clone(), g.windows()))
 }
 
 /// Where online replays are kept once fetched (outside the score index; in the temporary
