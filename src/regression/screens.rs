@@ -135,6 +135,8 @@ fn playing_paused_and_the_results() {
         now = horizon;
         frame(&mut s, now);
     }
+    // The pp counter's answer for the notes so far, worked out on its own thread.
+    wait_idle(&mut s, now);
     let c = frame(&mut s, now);
     assert_snapshot("screen-play", &screen(&c, VOLATILE));
     press(&mut s, KeyCode::Escape, now);

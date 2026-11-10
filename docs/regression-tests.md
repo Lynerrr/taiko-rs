@@ -84,7 +84,10 @@ Golden files must never depend on time, the machine or the order tests run in:
 - Use `harness::config()`, which turns off update checks, crash reports, Discord, sound and
   animations, points the online server at nothing and fixes the Random seed.
 - Use `harness::ready` / `harness::settle` before reading a screen, so the client's background
-  work (stars, BPM, pp) is finished.
+  work (stars, BPM, pp, the preview) is finished. They draw frames in made-up time, and while
+  anything in `State::busy` is on its way that time stands still, so a slow machine sees the
+  same frames as a fast one. New background work goes into `State::busy` (or `State::is_due`
+  when frames, not a thread, finish it); `harness::wait_idle` waits for it without moving time.
 - `harness::state_with` pins the drawing switches that other tests running in parallel change
   (animations, accent, note colours).
 - Round floats with `snapshot::num` (other systems' maths libraries differ in the last bits).

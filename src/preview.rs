@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::audio::{self, Engine, Track};
@@ -14,6 +14,7 @@ use crate::game::{self, Game, Play};
 use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
+use crate::services::jobs::Job;
 
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.
@@ -113,7 +114,7 @@ pub struct Preview {
     changed_at: Option<Instant>,
     last_change: Option<Instant>,
     requested: Option<usize>,
-    map_rx: Option<Receiver<LoadedMap>>,
+    map_rx: Job<LoadedMap>,
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
     requested_pitch: f64,
@@ -121,8 +122,8 @@ pub struct Preview {
     pub held: bool,
     /// After a speed change: map time to continue the music from once the new track is ready.
     resume_at: Option<f64>,
-    bg_rx: Option<Receiver<(PathBuf, Option<Image>)>>,
-    audio_rx: Option<Receiver<Decoded>>,
+    bg_rx: Job<(PathBuf, Option<Image>)>,
+    audio_rx: Job<Decoded>,
     map: Option<(usize, Beatmap, Details, Graph)>,
     /// Waiting for the music to reach a seek target before rebuilding the autoplay preview.
     pending_seek: Option<f64>,
@@ -295,8 +296,22 @@ impl Preview {
         self.requested = None;
         self.map = None;
         self.game = None;
-        self.map_rx = None;
+        self.map_rx.cancel();
         self.pending_seek = None;
+    }
+
+    /// Whether no thread works for it: the map, background and music asked for are in (or
+    /// failed).
+    #[cfg(test)]
+    pub fn is_idle(&self) -> bool {
+        self.map_rx.is_idle() && self.bg_rx.is_idle() && self.audio_rx.is_idle()
+    }
+
+    /// Whether a newer selection is waiting out its debounce: frames to come, not a thread,
+    /// will start its loads.
+    #[cfg(test)]
+    pub fn is_due(&self) -> bool {
+        self.seen != self.requested
     }
 
     /// Something else (gameplay, calibration) took over the audio engine.
@@ -321,7 +336,7 @@ impl Preview {
             .is_some_and(|s| s.track.frames() > LONG_FRAMES);
         if long {
             self.call_off_music();
-            self.audio_rx = None;
+            self.audio_rx.cancel();
             self.audio = None;
             self.requested = None;
         }
@@ -359,12 +374,10 @@ impl Preview {
         self.bg_path = path.clone();
         match path {
             Some(p) => {
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
+                self.bg_rx = Job::spawn(move || {
                     let img = load_image(&p);
-                    let _ = tx.send((p, img));
+                    (p, img)
                 });
-                self.bg_rx = Some(rx);
             }
             None => {
                 self.bg_upload = Some(None);
@@ -439,8 +452,7 @@ impl Preview {
             if let Some(i) = self.seen.filter(|&i| i < library.len()) {
                 let e = &library[i];
                 let path = e.path.clone();
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
+                self.map_rx = Job::spawn(move || {
                     let map = beatmap::load(&path);
                     let first = map
                         .as_ref()
@@ -453,9 +465,8 @@ impl Preview {
                     })
                     .ok()
                     .flatten();
-                    let _ = tx.send((i, map, curve));
+                    (i, map, curve)
                 });
-                self.map_rx = Some(rx);
                 if !self.own_background {
                     self.show_background_for(e);
                 }
@@ -544,47 +555,36 @@ impl Preview {
                         }
                         let _ = tx.send((song, track));
                     });
-                    self.audio_rx = Some(rx);
+                    self.audio_rx = Job::from_receiver(rx);
                 }
             }
         }
 
-        if let Some(rx) = &self.map_rx
-            && let Ok((i, result, curve)) = rx.try_recv()
+        if let Some((i, result, curve)) = self.map_rx.poll()
+            && Some(i) == self.requested
+            && let Ok(map) = result
         {
-            self.map_rx = None;
-            if Some(i) == self.requested
-                && let Ok(map) = result
-            {
-                let details = Details::of(&map);
-                let mut graph = difficulty::analyze(&map);
-                if let Some(curve) = curve {
-                    graph.use_curve(curve);
-                }
-                // The details and the music, but no playfield for a map gone wild.
-                self.game = (!map.too_wild_to_preview())
-                    .then(|| new_preview_game(&map, self.requested_rate.0));
-                self.last_time = f64::NEG_INFINITY;
-                self.map = Some((i, map, details, graph));
+            let details = Details::of(&map);
+            let mut graph = difficulty::analyze(&map);
+            if let Some(curve) = curve {
+                graph.use_curve(curve);
             }
+            // The details and the music, but no playfield for a map gone wild.
+            self.game =
+                (!map.too_wild_to_preview()).then(|| new_preview_game(&map, self.requested_rate.0));
+            self.last_time = f64::NEG_INFINITY;
+            self.map = Some((i, map, details, graph));
         }
-        if let Some(rx) = &self.bg_rx
-            && let Ok((path, img)) = rx.try_recv()
+        if let Some((path, img)) = self.bg_rx.poll()
+            && Some(&path) == self.bg_path.as_ref()
         {
-            self.bg_rx = None;
-            if Some(&path) == self.bg_path.as_ref() {
-                self.has_background = img.is_some();
-                self.bg_upload = Some(img);
-            }
+            self.has_background = img.is_some();
+            self.bg_upload = Some(img);
         }
-        let decoded: Vec<Decoded> = self
-            .audio_rx
-            .as_ref()
-            .map(|rx| rx.try_iter().collect())
-            .unwrap_or_default();
+        let decoded: Vec<Decoded> = self.audio_rx.poll_all();
         for (path, result) in decoded {
             if !matches!(result, Some((_, _, false))) {
-                self.audio_rx = None; // the full song (or a failure) is the last message
+                self.audio_rx.cancel(); // the full song (or a failure) is the last message
             }
             let wanted = self.requested.and_then(|i| library.get(i));
             let (Some((track, base, full)), Some(engine), Some(e)) =
@@ -643,7 +643,7 @@ impl Preview {
         if let Some(song) = &self.audio {
             let end_ms = song.end_ms(engine.rate);
             // A seek past the quick part waits, silent, for the full song; it's not the end.
-            let ended = self.audio_rx.is_none()
+            let ended = self.audio_rx.is_idle()
                 && played_long_enough(self.song_since, now, end_ms)
                 && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
             // There the next song takes over; if none does, this one goes round again.

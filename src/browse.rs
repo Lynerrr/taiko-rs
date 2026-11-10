@@ -172,6 +172,15 @@ pub enum RowState {
 }
 
 impl Browse {
+    /// Whether a search, a previewed difficulty, a cover or the loved list is on its way.
+    #[cfg(test)]
+    pub fn is_busy(&self) -> bool {
+        self.search.is_some()
+            || self.fetching.is_some()
+            || self.loved_progress.is_some()
+            || self.covers.values().any(|c| matches!(c, Cover::Fetching))
+    }
+
     /// Starts a search for the current query, category and order now.
     pub fn search_now(&mut self) {
         let query = self.query.trim().to_string();

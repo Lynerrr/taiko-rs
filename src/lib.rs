@@ -16098,6 +16098,74 @@ impl State {
         Some((download_text(done), done))
     }
 
+    /// What frames to come will do (not a thread): a preview waiting out its debounce, a
+    /// resume countdown running out.
+    #[cfg(test)]
+    fn is_due(&self) -> bool {
+        // The resume countdown ends at a wall-clock time (`Sim::resume_after`) that frames
+        // reach as their time goes on.
+        let resuming = matches!(&self.scene,
+            Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. }
+                if game.resuming.is_some());
+        self.preview.is_due() || resuming
+    }
+
+    /// The background work still on its way, by name; empty when no thread works for the
+    /// client. The regression harness waits for this instead of watching frames for changes.
+    #[cfg(test)]
+    fn busy(&self) -> Vec<&'static str> {
+        let info_pending = self.select.info.as_ref().is_some_and(|i| {
+            let i = i.lock().unwrap();
+            i.len() < self.library.len() || i.iter().any(Option::is_none)
+        });
+        let map_loading = match &self.scene {
+            Scene::Loading { rx, .. } | Scene::MpWait { rx, .. } => rx.is_busy(),
+            Scene::Spectate(v) => v.rx.is_busy(),
+            Scene::Watch(v) => v.rx.is_busy(),
+            Scene::VideoEdit(e) => e.rx.is_busy(),
+            _ => false,
+        };
+        let live_pp = matches!(&self.scene,
+            Scene::Play { game, .. } | Scene::MpPlay { game, .. }
+                if game.live_pp.as_ref().is_some_and(|l| l.is_busy()));
+        [
+            ("the library scan", self.scan.is_some()),
+            ("the maps' analysis", info_pending),
+            ("the song preview", !self.preview.is_idle()),
+            ("a map loading", map_loading),
+            ("a leaderboard", self.board_fetch.is_some()),
+            ("a set's update check", self.set_check.is_some()),
+            ("the loved list", self.loved_call.is_some()),
+            ("the custom maps' call", self.custom_call.is_busy()),
+            ("osu!.db", self.osudb_rx.is_busy()),
+            ("the pp backfill", self.pp_backfill.is_busy()),
+            ("the player's profile", self.me_fetch.is_busy()),
+            ("a score's submit", !self.submits.is_empty()),
+            ("the lobby map's lookup", self.lobby_lookup.is_busy()),
+            ("the folder dialog", self.folder_pick.is_busy()),
+            ("the data move", self.data_move.is_some()),
+            (
+                "a screenshot",
+                self.shot_upload.is_some()
+                    || self.shot_view.as_ref().is_some_and(|v| v.rx.is_busy()),
+            ),
+            (
+                "a score link",
+                self.score_link.as_ref().is_some_and(|l| l.fetch.is_busy()),
+            ),
+            ("the replay's music", self.replay_speed_rx.is_busy()),
+            ("the live pp", live_pp),
+            ("the download browser", self.browse.is_busy()),
+            (
+                "the account server",
+                self.mp_menu.account_request.is_some() || self.mp_menu.rooms_request.is_some(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, busy)| busy.then_some(name))
+        .collect()
+    }
+
     /// Scores saved before pp get theirs worked out in the background, once, and the index is
     /// written again with them.
     fn poll_pp_backfill(&mut self) {
