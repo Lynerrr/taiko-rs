@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
+use crate::net;
+
 /// Mirrors want clients to identify themselves.
 const USER_AGENT: &str = concat!(
     "taiko-rs/",
@@ -1728,6 +1730,27 @@ pub fn set_id_of_folder(path: &Path) -> Option<u32> {
     (!digits.is_empty() && name[digits.len()..].starts_with(' '))
         .then(|| digits.parse().ok())
         .flatten()
+}
+
+/// How far along the download of the set `m` is from is, if there's one (None inside: it's going,
+/// its size not known yet).
+pub(crate) fn map_download(downloads: &[Job], m: &net::MapInfo) -> Option<Option<f32>> {
+    downloads
+        .iter()
+        .find(|j| {
+            j.set.is_osu_set(m.set_id) || (j.set.title == m.title && j.set.artist == m.artist)
+        })
+        .map(Job::fraction)
+}
+
+pub(crate) fn download_text(done: Option<f32>) -> String {
+    match done {
+        Some(f) => {
+            let percent = f * 100.0;
+            tr!("downloading {percent:.0}%", "ダウンロード中 {percent:.0}%", "скачивание {percent:.0}%";)
+        }
+        None => tr!("downloading...", "ダウンロード中...", "скачивание...").into(),
+    }
 }
 
 #[cfg(test)]

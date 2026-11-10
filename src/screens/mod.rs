@@ -7,9 +7,22 @@ pub(crate) mod results;
 pub(crate) mod select;
 pub(crate) mod settings;
 
+use crate::Scene;
+
 pub(crate) fn fmt_time(ms: f64) -> String {
     let s = (ms / 1000.0).max(0.0) as u64;
     format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// Whether `scene` shows its own map's background, which the song select's preview leaves be.
+pub(crate) fn shows_own_background(scene: &Scene) -> bool {
+    match scene {
+        Scene::Editor(_) | Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } => {
+            true
+        }
+        Scene::Settings { prev } => shows_own_background(prev),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

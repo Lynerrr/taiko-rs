@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, OutputCallbackInfo, SizedSample, StreamConfig};
 
+use crate::game;
+
 /// Interleaved stereo samples at the device sample rate.
 pub struct Track {
     pub samples: Vec<f32>,
@@ -788,6 +790,12 @@ impl crate::game::Audio for Engine {
     fn position_ms(&self, now: Instant) -> Option<f64> {
         Engine::position_ms(self, now)
     }
+}
+
+/// The sound, as plays take it (borrowing only the `audio` field, so a play in the scene can be
+/// borrowed beside it).
+pub(crate) fn sound(audio: &Option<Engine>) -> Option<&dyn game::Audio> {
+    audio.as_ref().map(|a| a as &dyn game::Audio)
 }
 
 #[cfg(test)]

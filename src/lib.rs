@@ -143,9 +143,17 @@ use winit::window::CursorIcon;
 
 use app::crash::{CRASH_SCENE, SEND_CRASH_REPORTS};
 pub use app::gpu::graphics_backends;
+use app::input::{ime_has_key, pointer_wake_px};
 use app::run_loop::{FileDrag, UserEvent};
 pub use app::shell::{desktop_main, recalc_pp};
-use screens::fmt_time;
+use audio::sound;
+use config::fresh_seed;
+use download::{download_text, map_download};
+use layout::draw_game_area;
+use library::{
+    Scanned, download_dir, find_map, find_score_map, load_plays, main_maps, song_inputs, start_scan,
+};
+use multiplayer::{lobby_seed, map_info, mod_settings, use_mod_settings};
 use screens::menu::{update_badge, updating_badge};
 use screens::play::{
     FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
@@ -162,6 +170,7 @@ use screens::settings::{
     browse_text, built_in_text, enter_to_start, none_text, off_text, offset_scale_name, on_text,
     parse_number, picking_text, scroll_in_select, short_path, size_char, type_path,
 };
+use screens::{fmt_time, shows_own_background};
 #[cfg(not(windows))]
 use services::system::file_uri;
 use services::system::{map_url, open_url, profile_url};
@@ -410,27 +419,6 @@ impl WatchView {
             .into(),
             (Some(_), Some(_)) => tr!("loading...", "読み込み中...", "загрузка...").into(),
         }
-    }
-}
-
-/// How far along the download of the set `m` is from is, if there's one (None inside: it's going,
-/// its size not known yet).
-fn map_download(downloads: &[download::Job], m: &net::MapInfo) -> Option<Option<f32>> {
-    downloads
-        .iter()
-        .find(|j| {
-            j.set.is_osu_set(m.set_id) || (j.set.title == m.title && j.set.artist == m.artist)
-        })
-        .map(download::Job::fraction)
-}
-
-fn download_text(done: Option<f32>) -> String {
-    match done {
-        Some(f) => {
-            let percent = f * 100.0;
-            tr!("downloading {percent:.0}%", "ダウンロード中 {percent:.0}%", "скачивание {percent:.0}%";)
-        }
-        None => tr!("downloading...", "ダウンロード中...", "скачивание...").into(),
     }
 }
 
@@ -890,27 +878,6 @@ struct State {
     window_resized_at: Option<Instant>,
 }
 
-/// Draws gameplay (via `f`) into the playfield area, records the shapes to clip, and shows the
-/// area's frame while it's being dragged or an edge is hovered.
-fn draw_game_area(
-    canvas: &mut Canvas,
-    cfg: &Config,
-    clip: &mut Option<(std::ops::Range<usize>, Area)>,
-    grip: &Option<(Grip, (f64, f64), Area)>,
-    hover: &Option<Grip>,
-    see_through: bool,
-    f: impl FnOnce(&mut Canvas),
-) {
-    let area = cfg.playfield_area;
-    let (start, full) = layout::begin(canvas, area, see_through, cfg.bg_dim_black);
-    f(canvas);
-    let range = layout::end(canvas, area, start, full);
-    *clip = Some((range, area));
-    if grip.is_some() || matches!(hover, Some(Grip::Resize { .. })) {
-        layout::draw_frame(canvas, area, grip.is_some());
-    }
-}
-
 /// A press on a song list row (see `State::list_drag`).
 struct ListDrag {
     from_y: f32,
@@ -920,39 +887,6 @@ struct ListDrag {
 
 /// How far (virtual units) a held button must move before it counts as dragging, not a click.
 const DRAG_START: f32 = 5.0;
-
-/// How far (window pixels) a pointer that gameplay hid has to travel to show again: about 1% of
-/// the window's height, so desk vibration or a jittery sensor doesn't keep bringing it back.
-fn pointer_wake_px(window_h: f32) -> f64 {
-    (window_h as f64 * 0.01).max(6.0)
-}
-
-/// Whether a key press belongs to the input method (Japanese, Chinese, Korean typing) rather than
-/// the game: while a word is being composed (`preedit` shows it), Enter takes the word, Tab and the
-/// arrows go through its suggestions, Backspace and Esc edit or drop it. Windows marks such keys
-/// `Process` even when the word was just taken and `preedit` already cleared.
-fn ime_has_key(logical: &Key, preedit: &str) -> bool {
-    *logical == Key::Named(NamedKey::Process) || !preedit.is_empty()
-}
-
-/// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
-fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
-    let mut out = std::collections::HashMap::new();
-    let Some(text) =
-        config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
-    else {
-        return out;
-    };
-    for line in text.lines() {
-        if let Some((t, path)) = line.split_once('\t')
-            && let Ok(t) = t.parse::<u64>()
-        {
-            let slot = out.entry(PathBuf::from(path)).or_insert(0);
-            *slot = (*slot).max(t);
-        }
-    }
-    out
-}
 
 /// The game's data on its way to another folder: the result, bytes moved of all, and where to.
 struct DataMove {
@@ -974,90 +908,6 @@ struct ExportView {
     last: bool,
 }
 
-/// Where downloaded maps go: the first Songs folder being scanned, else taiko.rs's own (which
-/// is scanned at startup when it exists).
-fn download_dir(inputs: &[PathBuf]) -> PathBuf {
-    if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
-        return dir.clone();
-    }
-    config::own_dir("Songs").unwrap_or_else(|| PathBuf::from("Songs"))
-}
-
-/// Of a set's maps, the ones to show: its taiko difficulties, else (a set of converts) all.
-fn main_maps<'a>(maps: impl Iterator<Item = &'a Entry>) -> Vec<PathBuf> {
-    let maps: Vec<&Entry> = maps.collect();
-    let taiko = maps.iter().any(|e| e.meta.mode == 1);
-    maps.into_iter()
-        .filter(|e| !taiko || e.meta.mode == 1)
-        .map(|e| e.path.clone())
-        .collect()
-}
-
-/// How a map is named to other players (lobby map, a solo play friends watch), with our
-/// settings of the mods that have them.
-fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
-    let (multiverse, shapeshift) = mod_settings(mods);
-    net::MapInfo {
-        mods: mods.list(),
-        multiverse,
-        shapeshift,
-        seed: None,
-        defense: None,
-        stats: None,
-        hash: e.hash(),
-        artist: e.meta.artist.clone(),
-        title: e.meta.title.clone(),
-        version: e.meta.version.clone(),
-        rate,
-        from: None,
-        set_id: e.set_id(),
-    }
-}
-
-/// A new seed for Random's colouring (never 0, the one from before seeds).
-fn fresh_seed() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(1, |d| d.as_nanos() as u64)
-        .max(1)
-}
-
-/// The Random colouring a lobby map plays with: the one it has, else a new one. Every map
-/// carries one, Random being each player's own mod: whoever plays it gets the same colouring,
-/// and watching everyone shows each player's.
-fn lobby_seed(had: Option<u64>) -> Option<u64> {
-    Some(had.unwrap_or_else(fresh_seed))
-}
-
-/// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
-/// setup), as the config writes them: what a lobby we host plays with.
-fn mod_settings(mods: Mods) -> (Option<String>, Option<String>) {
-    let universes = mods
-        .has(mods::Mod::Multiverse)
-        .then(|| multiverse::format(&multiverse::get()));
-    let shapes = mods
-        .has(mods::Mod::Shapeshift)
-        .then(|| shapeshift::get().format());
-    (universes, shapes)
-}
-
-/// Plays `game` with the mod settings `map` carries (the lobby host's, or the friend's being
-/// watched) where it has them; ours otherwise. Our config and presets aren't touched.
-fn use_mod_settings(game: &mut Game, map: &net::MapInfo) {
-    game.use_mod_settings(
-        map.multiverse.as_deref().map(multiverse::parse),
-        map.shapeshift.as_deref().map(shapeshift::Config::parse),
-    );
-}
-
-/// The library entry for a map someone else named: the file's content hash identifies it (the
-/// title can differ, e.g. romanised on one side and Cyrillic on the other).
-fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
-    library
-        .iter()
-        .position(|e| e.meta.version == m.version && e.hash() == m.hash)
-}
-
 /// A score a `taiko-rs://` link asked for: being fetched from the server, then waiting for its
 /// map (the library scan, or a download) and for the player to be out of a song.
 struct ScoreLink {
@@ -1070,18 +920,6 @@ struct ScoreLink {
 /// How long a score link waits for its map's download.
 const SCORE_LINK_WAIT: Duration = Duration::from_secs(300);
 
-/// The map an online score was played on: only maps of its set or with its name are hashed
-/// (hashing reads the file).
-fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
-    library.iter().position(|e| {
-        let candidate = match (s.set_id, e.set_id()) {
-            (Some(a), Some(b)) => a == b,
-            _ => online::clean_text(&e.label(), 160) == s.map,
-        };
-        candidate && e.hash() == s.map_hash
-    })
-}
-
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 
 /// The smallest the window goes (logical pixels): smaller, the menus no longer fit.
@@ -1090,14 +928,6 @@ const MIN_WINDOW: (f64, f64) = (640.0, 360.0);
 /// Frames on their way to the screen with vsync (the swapchain's frame latency for it, see
 /// `Renderer::set_present`).
 const VSYNC_FRAMES: f64 = 2.0;
-
-/// What to scan without arguments: the Songs folder (picked in settings, else osu!'s), plus the
-/// config's extra `songs =` lines.
-fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
-    let mut inputs = library::song_dirs();
-    inputs.extend(cfg.songs.iter().cloned());
-    inputs
-}
 
 /// Who a screenshot is being sent to.
 enum ShotTo {
@@ -1109,44 +939,6 @@ enum ShotTo {
 /// A chat screenshot opened: being fetched until `rx` has gone.
 struct ShotView {
     rx: Option<Receiver<Result<shots::Pixels, String>>>,
-}
-
-/// What a library scan hands over: the list from the cache straight away, if there's one, then the
-/// list as it is on disk.
-enum Scanned {
-    Cached(Vec<Entry>),
-    Done(Vec<Entry>),
-}
-
-/// Scans `inputs` on a background thread so the window appears at once, even with a huge
-/// library.
-fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Scanned>, Arc<AtomicUsize>) {
-    let found = Arc::new(AtomicUsize::new(0));
-    let (tx, rx) = mpsc::channel();
-    let counter = found.clone();
-    std::thread::Builder::new()
-        .name("library".into())
-        .spawn(move || {
-            let started = Instant::now();
-            let early = tx.clone();
-            let library = library::scan(&inputs, &counter, &mut |cached| {
-                let _ = early.send(Scanned::Cached(cached));
-            });
-            eprintln!(
-                "scanned {} files in {:.0} ms",
-                counter.load(Ordering::Relaxed),
-                started.elapsed().as_secs_f64() * 1000.0
-            );
-            let _ = tx.send(Scanned::Done(library));
-        })
-        .expect("spawn library scan");
-    (rx, found)
-}
-
-/// The sound, as plays take it (borrowing only the `audio` field, so a play in the scene can be
-/// borrowed beside it).
-fn sound(audio: &Option<Engine>) -> Option<&dyn game::Audio> {
-    audio.as_ref().map(|a| a as &dyn game::Audio)
 }
 
 impl State {
@@ -17493,16 +17285,6 @@ const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
-/// Whether `scene` shows its own map's background, which the song select's preview leaves be.
-fn shows_own_background(scene: &Scene) -> bool {
-    match scene {
-        Scene::Editor(_) | Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } => {
-            true
-        }
-        Scene::Settings { prev } => shows_own_background(prev),
-        _ => false,
-    }
-}
 
 /// How long the quick retry key is held for the map to restart (ms).
 /// How long the exit question takes to slide in.
@@ -17515,38 +17297,3 @@ const REPLAY_SPEEDS: [f64; 7] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 /// The capture name of an F12 screenshot (scripted runs name theirs).
 const SCREENSHOT: &str = "screenshot";
-
-#[cfg(test)]
-mod ime_key_tests {
-    use super::*;
-
-    #[test]
-    fn keys_go_to_the_input_method_while_a_word_is_composed() {
-        let enter = Key::Named(NamedKey::Enter);
-        let tab = Key::Named(NamedKey::Tab);
-        // Nothing composed: Enter and Tab are the game's (next field, submit).
-        assert!(!ime_has_key(&enter, ""));
-        assert!(!ime_has_key(&tab, ""));
-        // A word on its way: Enter takes it and Tab picks a suggestion, in the input method.
-        assert!(ime_has_key(&enter, "にほ"));
-        assert!(ime_has_key(&tab, "にほ"));
-        // Windows says so itself, also for the Enter that has just taken the word.
-        assert!(ime_has_key(&Key::Named(NamedKey::Process), ""));
-    }
-}
-
-#[cfg(test)]
-mod pointer_wake_tests {
-    use super::*;
-
-    #[test]
-    fn a_hidden_pointer_needs_more_than_a_twitch_to_show() {
-        // 1080p: a few pixels of desk vibration stay under it, a real move gets past it.
-        let wake = pointer_wake_px(1080.0);
-        assert!(wake > 3.0f64.hypot(3.0));
-        assert!(wake < 20.0);
-        // Bigger windows need a bigger move, small ones still ignore single-pixel noise.
-        assert!(pointer_wake_px(2160.0) > wake);
-        assert!(pointer_wake_px(300.0) >= 6.0);
-    }
-}

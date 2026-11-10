@@ -5,6 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use crate::beatmap::{self, Meta};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
+use std::time::Instant;
+
+use crate::config::{self, Config};
+use crate::{net, online};
 
 pub struct Entry {
     pub path: PathBuf,
@@ -874,6 +880,104 @@ pub fn osz_news<'a>(
         fresh += usize::from(!here);
     }
     (fresh, home)
+}
+
+/// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
+pub(crate) fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
+    let mut out = std::collections::HashMap::new();
+    let Some(text) =
+        config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
+    else {
+        return out;
+    };
+    for line in text.lines() {
+        if let Some((t, path)) = line.split_once('\t')
+            && let Ok(t) = t.parse::<u64>()
+        {
+            let slot = out.entry(PathBuf::from(path)).or_insert(0);
+            *slot = (*slot).max(t);
+        }
+    }
+    out
+}
+
+/// Where downloaded maps go: the first Songs folder being scanned, else taiko.rs's own (which
+/// is scanned at startup when it exists).
+pub(crate) fn download_dir(inputs: &[PathBuf]) -> PathBuf {
+    if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
+        return dir.clone();
+    }
+    config::own_dir("Songs").unwrap_or_else(|| PathBuf::from("Songs"))
+}
+
+/// Of a set's maps, the ones to show: its taiko difficulties, else (a set of converts) all.
+pub(crate) fn main_maps<'a>(maps: impl Iterator<Item = &'a Entry>) -> Vec<PathBuf> {
+    let maps: Vec<&Entry> = maps.collect();
+    let taiko = maps.iter().any(|e| e.meta.mode == 1);
+    maps.into_iter()
+        .filter(|e| !taiko || e.meta.mode == 1)
+        .map(|e| e.path.clone())
+        .collect()
+}
+
+/// What to scan without arguments: the Songs folder (picked in settings, else osu!'s), plus the
+/// config's extra `songs =` lines.
+pub(crate) fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
+    let mut inputs = song_dirs();
+    inputs.extend(cfg.songs.iter().cloned());
+    inputs
+}
+
+/// What a library scan hands over: the list from the cache straight away, if there's one, then the
+/// list as it is on disk.
+pub(crate) enum Scanned {
+    Cached(Vec<Entry>),
+    Done(Vec<Entry>),
+}
+
+/// Scans `inputs` on a background thread so the window appears at once, even with a huge
+/// library.
+pub(crate) fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Scanned>, Arc<AtomicUsize>) {
+    let found = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = mpsc::channel();
+    let counter = found.clone();
+    std::thread::Builder::new()
+        .name("library".into())
+        .spawn(move || {
+            let started = Instant::now();
+            let early = tx.clone();
+            let library = scan(&inputs, &counter, &mut |cached| {
+                let _ = early.send(Scanned::Cached(cached));
+            });
+            eprintln!(
+                "scanned {} files in {:.0} ms",
+                counter.load(Ordering::Relaxed),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            let _ = tx.send(Scanned::Done(library));
+        })
+        .expect("spawn library scan");
+    (rx, found)
+}
+
+/// The library entry for a map someone else named: the file's content hash identifies it (the
+/// title can differ, e.g. romanised on one side and Cyrillic on the other).
+pub(crate) fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
+    library
+        .iter()
+        .position(|e| e.meta.version == m.version && e.hash() == m.hash)
+}
+
+/// The map an online score was played on: only maps of its set or with its name are hashed
+/// (hashing reads the file).
+pub(crate) fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
+    library.iter().position(|e| {
+        let candidate = match (s.set_id, e.set_id()) {
+            (Some(a), Some(b)) => a == b,
+            _ => online::clean_text(&e.label(), 160) == s.map,
+        };
+        candidate && e.hash() == s.map_hash
+    })
 }
 
 #[cfg(test)]
