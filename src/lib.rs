@@ -6760,30 +6760,7 @@ impl State {
             }
             return;
         }
-        // Alt anywhere; with the pointer moved onto one of the volume's notes, also without Alt.
-        if self.volume.hovering(Instant::now()) || self.modifiers_alt {
-            self.turn_volume(notches);
-            return;
-        }
-        if let Some(view) = &mut self.changelog {
-            view.scroll_by(-notches * 3);
-            return;
-        }
-        if let Some(view) = &mut self.medals {
-            view.wheel(notches);
-            return;
-        }
-        if self.social.open && !self.modifiers_alt {
-            let (vx, vy) = self.mouse_virtual();
-            let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
-            let [px, py, pw, ph] = social::panel_rect(width);
-            if vx >= px && vx <= px + pw && vy >= py && vy <= py + ph {
-                self.social.wheel(notches, self.mp.is_some());
-                return;
-            }
-        }
-        if let Some(cur) = self.mod_select.filter(|_| !self.modifiers_alt) {
-            self.mod_select = Some(mods::step(cur, 0, -notches));
+        if self.layers_wheel(&app::overlays::WHEEL_LAYERS, notches) {
             return;
         }
         if let Some(dd) = &mut self.settings_ui.dropdown {
