@@ -1,0 +1,816 @@
+at 500 ms, mods ["MV"]:
+  196 shapes
+  rect r0.0 b0.0 g0.0 at 258.4,62.5 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.010
+  rect r0.0 b0.0 g0.0 at 258.0,105.7 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.010
+  rect r0.0 b0.0 g0.0 at 258.2,84.1 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.010
+  rect r0.0 b0.0 g0.0 at 267.7,84.2 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.010
+  rect r16.6 b0.7 g0.0 at 116.1,82.7 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.010
+  rect r11.5 b0.9 g0.0 at 116.1,82.7 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.010
+  rect r2.0 b1.1 g0.0 at 436.6,85.9 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r2.0 b1.1 g0.0 at 412.6,85.6 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r2.0 b1.1 g0.0 at 388.5,85.4 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r2.0 b1.1 g0.0 at 364.2,85.2 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r2.0 b1.1 g0.0 at 340.1,84.9 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r2.0 b1.1 g0.0 at 316.1,84.7 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r2.0 b1.1 g0.0 at 291.7,84.5 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r2.0 b1.1 g0.0 at 267.7,84.2 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.795
+  rect r0.0 b0.0 g0.0 at 78.8,82.3 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.010
+  rect r16.6 b0.7 g0.0 at 78.8,82.3 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.010
+  rect r16.6 b0.0 g0.0 clip-left at 78.8,82.3 half 16.6,16.6 fill - border - angle 0.010
+  rect r16.6 b0.0 g0.0 clip-right at 78.8,82.3 half 16.6,16.6 fill - border - angle 0.010
+  rect r11.5 b0.7 g0.0 at 78.8,82.3 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.010
+  rect r11.5 b0.0 g0.0 clip-left at 78.8,82.3 half 11.5,11.5 fill - border - angle 0.010
+  rect r11.5 b0.0 g0.0 clip-right at 78.8,82.3 half 11.5,11.5 fill - border - angle 0.010
+  rect r1.4 b0.7 g0.0 at 258.2,84.1 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.010
+  rect r0.0 b0.0 g0.0 at 604.7,135.3 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.123
+  rect r0.0 b0.0 g0.0 at 599.4,178.1 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.123
+  rect r0.0 b0.0 g0.0 at 602.0,156.7 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.123
+  rect r0.0 b0.0 g0.0 at 649.1,162.5 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.123
+  rect r16.6 b0.7 g0.0 at 461.0,139.2 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.123
+  rect r11.5 b0.9 g0.0 at 461.0,139.2 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.123
+  rect r3.1 b1.1 g0.0 at 768.8,177.4 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.123
+  rect r3.1 b1.1 g0.0 at 738.9,173.7 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.123
+  rect r3.1 b1.1 g0.0 at 709.1,170.0 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.123
+  rect r3.1 b1.1 g0.0 at 678.9,166.2 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.123
+  rect r3.1 b1.1 g0.0 at 649.1,162.5 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.123
+  rect r0.0 b0.0 g0.0 at 424.0,134.6 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.123
+  rect r16.6 b0.7 g0.0 at 424.0,134.6 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.123
+  rect r16.6 b0.0 g0.0 clip-left at 424.0,134.6 half 16.6,16.6 fill - border - angle 0.123
+  rect r16.6 b0.0 g0.0 clip-right at 424.0,134.6 half 16.6,16.6 fill - border - angle 0.123
+  rect r11.5 b0.7 g0.0 at 424.0,134.6 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.123
+  rect r11.5 b0.0 g0.0 clip-left at 424.0,134.6 half 11.5,11.5 fill - border - angle 0.123
+  rect r11.5 b0.0 g0.0 clip-right at 424.0,134.6 half 11.5,11.5 fill - border - angle 0.123
+  rect r1.4 b0.7 g0.0 at 602.0,156.7 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.123
+  rect r0.0 b0.0 g0.0 at 314.4,108.7 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.021
+  rect r0.0 b0.0 g0.0 at 315.3,151.9 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.021
+  rect r0.0 b0.0 g0.0 at 314.9,130.3 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.021
+  rect r0.0 b0.0 g0.0 at 356.9,129.4 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle -0.021
+  rect r16.6 b0.7 g0.0 at 172.8,133.3 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.021
+  rect r11.5 b0.9 g0.0 at 172.8,133.3 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.021
+  rect r11.2 b3.6 g0.0 at 503.2,126.3 half 11.2,11.2 fill 0.37,0.44,0.56,0.05 border 0.37,0.44,0.56,0.24 angle -0.021
+  rect r6.9 b0.8 g0.0 at 503.2,126.3 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.19 angle -0.021
+  rect r11.2 b3.6 g0.0 at 484.1,126.8 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle -0.021
+  rect r6.9 b0.8 g0.0 at 484.1,126.8 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle -0.021
+  rect r11.2 b3.6 g0.0 at 462.3,127.2 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle -0.021
+  rect r6.9 b0.8 g0.0 at 462.3,127.2 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle -0.021
+  rect r11.2 b3.6 g0.0 at 438.6,127.7 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle -0.021
+  rect r6.9 b0.8 g0.0 at 438.6,127.7 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle -0.021
+  rect r11.2 b3.6 g0.0 at 413.0,128.3 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle -0.021
+  rect r6.9 b0.8 g0.0 at 413.0,128.3 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle -0.021
+  rect r11.2 b3.6 g0.0 at 385.4,128.8 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle -0.021
+  rect r6.9 b0.8 g0.0 at 385.4,128.8 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle -0.021
+  rect r11.2 b3.6 g0.0 at 356.9,129.4 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle -0.021
+  rect r6.9 b0.8 g0.0 at 356.9,129.4 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle -0.021
+  rect r0.0 b0.0 g0.0 at 135.5,134.1 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.021
+  rect r16.6 b0.7 g0.0 at 135.5,134.1 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.021
+  rect r16.6 b0.0 g0.0 clip-left at 135.5,134.1 half 16.6,16.6 fill - border - angle -0.021
+  rect r16.6 b0.0 g0.0 clip-right at 135.5,134.1 half 16.6,16.6 fill - border - angle -0.021
+  rect r11.5 b0.7 g0.0 at 135.5,134.1 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.021
+  rect r11.5 b0.0 g0.0 clip-left at 135.5,134.1 half 11.5,11.5 fill - border - angle -0.021
+  rect r11.5 b0.0 g0.0 clip-right at 135.5,134.1 half 11.5,11.5 fill - border - angle -0.021
+  rect r1.4 b0.7 g0.0 at 314.9,130.3 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.021
+  rect r0.0 b0.0 g0.0 at 631.2,158.4 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.014
+  rect r0.0 b0.0 g0.0 at 630.6,201.6 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.014
+  rect r0.0 b0.0 g0.0 at 630.9,180.0 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.014
+  rect r0.0 b0.0 g0.0 at 640.4,180.1 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.014
+  rect r16.6 b0.7 g0.0 at 488.8,178.0 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.014
+  rect r11.5 b0.9 g0.0 at 488.8,178.0 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.014
+  rect r8.7 b1.1 g0.0 at 809.5,173.2 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r8.7 b1.1 g0.0 at 785.4,172.3 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r8.7 b1.1 g0.0 at 761.3,174.6 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r8.7 b1.1 g0.0 at 736.9,179.3 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r8.7 b1.1 g0.0 at 712.8,184.6 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r8.7 b1.1 g0.0 at 688.7,188.9 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r8.7 b1.1 g0.0 at 664.3,190.5 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r8.7 b1.1 g0.0 at 640.2,188.9 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle 0.014
+  rect r0.0 b0.0 g0.0 at 451.5,177.4 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.014
+  rect r16.6 b0.7 g0.0 at 451.5,177.4 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.014
+  rect r16.6 b0.0 g0.0 clip-left at 451.5,177.4 half 16.6,16.6 fill - border - angle 0.014
+  rect r16.6 b0.0 g0.0 clip-right at 451.5,177.4 half 16.6,16.6 fill - border - angle 0.014
+  rect r11.5 b0.7 g0.0 at 451.5,177.4 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.014
+  rect r11.5 b0.0 g0.0 clip-left at 451.5,177.4 half 11.5,11.5 fill - border - angle 0.014
+  rect r11.5 b0.0 g0.0 clip-right at 451.5,177.4 half 11.5,11.5 fill - border - angle 0.014
+  rect r1.4 b0.7 g0.0 at 630.9,180.0 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.014
+  rect r0.0 b0.0 g0.0 at 475.0,298.5 half 201.5,0.7 fill 0.75,0.00,0.04,0.40 border 0.75,0.00,0.04,0.40 angle 0.027
+  rect r0.0 b0.0 g0.0 at 473.8,342.0 half 201.5,0.7 fill 0.75,0.00,0.04,0.40 border 0.75,0.00,0.04,0.40 angle 0.027
+  rect r0.0 b0.0 g0.0 at 474.4,320.3 half 201.5,21.4 fill 0.16,0.08,0.12,0.45 border 0.16,0.08,0.12,0.45 angle 0.027
+  rect r0.0 b0.0 g0.0 at 484.0,320.5 half 0.3,21.4 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.027
+  rect r16.7 b0.7 g0.0 at 331.1,316.4 half 16.7,16.7 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.027
+  rect r11.6 b0.9 g0.0 at 331.1,316.4 half 11.6,11.6 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.027
+  rect r12.0 b0.0 g0.0 at 654.4,325.1 half 12.0,12.1 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 654.4,325.1 half 11.2,11.4 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r12.0 b0.0 g0.0 at 630.2,324.4 half 12.1,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 630.2,324.4 half 11.4,11.2 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r12.0 b0.0 g0.0 at 605.9,323.8 half 12.0,12.1 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 605.9,323.8 half 11.2,11.4 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r12.0 b0.0 g0.0 at 581.3,323.1 half 12.1,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 581.3,323.1 half 11.4,11.2 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r12.0 b0.0 g0.0 at 557.1,322.5 half 12.0,12.1 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 557.1,322.5 half 11.2,11.4 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r12.0 b0.0 g0.0 at 532.8,321.8 half 12.1,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 532.8,321.8 half 11.4,11.2 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r12.0 b0.0 g0.0 at 508.2,321.2 half 12.0,12.1 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 508.2,321.2 half 11.2,11.4 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r12.0 b0.0 g0.0 at 484.0,320.5 half 12.1,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.027
+  rect r11.3 b1.1 g0.0 at 484.0,320.5 half 11.4,11.2 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.027
+  rect r0.0 b0.0 g0.0 at 293.4,315.4 half 20.4,21.4 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.027
+  rect r16.7 b0.7 g0.0 at 293.4,315.4 half 16.7,16.7 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.027
+  rect r16.7 b0.0 g0.0 clip-left at 293.4,315.4 half 16.7,16.7 fill - border - angle 0.027
+  rect r16.7 b0.0 g0.0 clip-right at 293.4,315.4 half 16.7,16.7 fill - border - angle 0.027
+  rect r11.6 b0.7 g0.0 at 293.4,315.4 half 11.6,11.6 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.027
+  rect r11.6 b0.0 g0.0 clip-left at 293.4,315.4 half 11.6,11.6 fill - border - angle 0.027
+  rect r11.6 b0.0 g0.0 clip-right at 293.4,315.4 half 11.6,11.6 fill - border - angle 0.027
+  rect r1.5 b0.7 g0.0 at 474.4,320.3 half 201.5,22.5 fill - border 0.17,0.17,0.23,0.45 angle 0.027
+  rect r0.0 b0.0 g0.0 at 277.5,293.5 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.042
+  rect r0.0 b0.0 g0.0 at 275.6,336.6 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.042
+  rect r0.0 b0.0 g0.0 at 276.6,315.0 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.042
+  rect r0.0 b0.0 g0.0 at 374.5,319.2 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.042
+  rect r16.6 b0.7 g0.0 at 134.6,309.1 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.042
+  rect r11.5 b0.9 g0.0 at 134.6,309.1 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.042
+  rect r2.0 b1.1 g0.0 at 461.7,322.9 half 9.2,9.2 fill 0.53,0.40,0.36,0.33 border 0.75,0.75,0.75,0.33 angle 0.828
+  rect r2.0 b1.1 g0.0 at 444.7,322.1 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.828
+  rect r2.0 b1.1 g0.0 at 424.6,321.3 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.828
+  rect r2.0 b1.1 g0.0 at 401.0,320.3 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.828
+  rect r2.0 b1.1 g0.0 at 374.5,319.2 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.828
+  rect r0.0 b0.0 g0.0 at 97.3,307.5 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.042
+  rect r16.6 b0.7 g0.0 at 97.3,307.5 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.042
+  rect r16.6 b0.0 g0.0 clip-left at 97.3,307.5 half 16.6,16.6 fill - border - angle 0.042
+  rect r16.6 b0.0 g0.0 clip-right at 97.3,307.5 half 16.6,16.6 fill - border - angle 0.042
+  rect r11.5 b0.7 g0.0 at 97.3,307.5 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.042
+  rect r11.5 b0.0 g0.0 clip-left at 97.3,307.5 half 11.5,11.5 fill - border - angle 0.042
+  rect r11.5 b0.0 g0.0 clip-right at 97.3,307.5 half 11.5,11.5 fill - border - angle 0.042
+  rect r1.4 b0.7 g0.0 at 276.6,315.0 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.042
+  rect r0.0 b0.0 g0.0 at 635.3,299.0 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.117
+  rect r0.0 b0.0 g0.0 at 640.4,341.9 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.117
+  rect r0.0 b0.0 g0.0 at 637.9,320.5 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.117
+  rect r0.0 b0.0 g0.0 at 647.3,319.4 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle -0.117
+  rect r16.6 b0.7 g0.0 at 496.8,337.0 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.117
+  rect r11.5 b0.9 g0.0 at 496.8,337.0 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.117
+  rect r3.1 b1.1 g0.0 at 815.1,299.6 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r3.1 b1.1 g0.0 at 791.2,302.4 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r3.1 b1.1 g0.0 at 767.3,305.3 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r3.1 b1.1 g0.0 at 743.1,308.1 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r3.1 b1.1 g0.0 at 719.3,310.9 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r3.1 b1.1 g0.0 at 695.4,313.7 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r3.1 b1.1 g0.0 at 671.2,316.5 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r3.1 b1.1 g0.0 at 647.3,319.4 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.117
+  rect r0.0 b0.0 g0.0 at 459.7,341.4 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.117
+  rect r16.6 b0.7 g0.0 at 459.7,341.4 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.117
+  rect r16.6 b0.0 g0.0 clip-left at 459.7,341.4 half 16.6,16.6 fill - border - angle -0.117
+  rect r16.6 b0.0 g0.0 clip-right at 459.7,341.4 half 16.6,16.6 fill - border - angle -0.117
+  rect r11.5 b0.7 g0.0 at 459.7,341.4 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.117
+  rect r11.5 b0.0 g0.0 clip-left at 459.7,341.4 half 11.5,11.5 fill - border - angle -0.117
+  rect r11.5 b0.0 g0.0 clip-right at 459.7,341.4 half 11.5,11.5 fill - border - angle -0.117
+  rect r1.4 b0.7 g0.0 at 637.9,320.5 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.117
+  rect r4.3 b3.6 g0.0 at 378.6,235.0 half 339.0,39.5 fill - border 0.75,0.91,1.00,0.20
+  rect r7.9 b3.6 g0.0 at 378.6,235.0 half 342.6,43.2 fill - border 0.75,0.91,1.00,0.11
+  rect r11.5 b3.6 g0.0 at 378.6,235.0 half 346.3,46.8 fill - border 0.75,0.91,1.00,0.05
+  rect r15.2 b3.6 g0.0 at 378.6,235.0 half 349.9,50.5 fill - border 0.75,0.91,1.00,0.02
+  rect r0.0 b0.0 g0.0 at 378.6,198.5 half 337.2,1.2 fill 0.23,0.23,0.31,1.00 border 0.23,0.23,0.31,1.00
+  rect r0.0 b0.0 g0.0 at 378.6,271.5 half 337.2,1.2 fill 0.23,0.23,0.31,1.00 border 0.23,0.23,0.31,1.00
+  rect r0.0 b0.0 g0.0 at 378.6,235.0 half 337.2,35.9 fill 0.13,0.13,0.17,1.00 border 0.13,0.13,0.17,1.00
+  rect r0.0 b0.0 g0.0 at 394.6,235.0 half 0.5,35.9 fill 1.00,1.00,1.00,0.28 border 1.00,1.00,1.00,0.28
+  rect r28.0 b1.2 g0.0 at 138.7,235.0 half 28.0,28.0 fill 1.00,1.00,1.00,0.03 border 1.00,1.00,1.00,0.12
+  rect r19.5 b1.5 g0.0 at 138.7,235.0 half 19.5,19.5 fill 1.00,1.00,1.00,0.06 border 1.00,1.00,1.00,0.40
+  rect r20.1 b0.0 g0.0 at 679.9,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 679.9,235.0 half 18.8,18.8 fill 0.92,0.27,0.17,1.00 border 1.00,1.00,1.00,1.00
+  rect r20.1 b0.0 g0.0 at 639.3,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 639.3,235.0 half 18.8,18.8 fill 0.92,0.27,0.17,1.00 border 1.00,1.00,1.00,1.00
+  rect r20.1 b0.0 g0.0 at 598.7,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 598.7,235.0 half 18.8,18.8 fill 0.26,0.56,0.68,1.00 border 1.00,1.00,1.00,1.00
+  rect r20.1 b0.0 g0.0 at 557.6,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 557.6,235.0 half 18.8,18.8 fill 0.26,0.56,0.68,1.00 border 1.00,1.00,1.00,1.00
+  rect r20.1 b0.0 g0.0 at 517.0,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 517.0,235.0 half 18.8,18.8 fill 0.26,0.56,0.68,1.00 border 1.00,1.00,1.00,1.00
+  rect r20.1 b0.0 g0.0 at 476.3,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 476.3,235.0 half 18.8,18.8 fill 0.92,0.27,0.17,1.00 border 1.00,1.00,1.00,1.00
+  rect r20.1 b0.0 g0.0 at 435.2,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 435.2,235.0 half 18.8,18.8 fill 0.92,0.27,0.17,1.00 border 1.00,1.00,1.00,1.00
+  rect r20.1 b0.0 g0.0 at 394.6,235.0 half 20.1,20.1 fill 0.00,0.00,0.00,0.35 border -
+  rect r18.8 b1.9 g0.0 at 394.6,235.0 half 18.8,18.8 fill 0.92,0.27,0.17,1.00 border 1.00,1.00,1.00,1.00
+  rect r0.0 b0.0 g0.0 at 75.6,235.0 half 34.2,35.9 fill 0.10,0.10,0.13,1.00 border 0.10,0.10,0.13,1.00
+  rect r28.0 b1.2 g0.0 at 75.6,235.0 half 28.0,28.0 fill 0.18,0.18,0.24,1.00 border 0.29,0.29,0.38,1.00
+  rect r28.0 b0.0 g0.0 clip-left at 75.6,235.0 half 28.0,28.0 fill - border -
+  rect r28.0 b0.0 g0.0 clip-right at 75.6,235.0 half 28.0,28.0 fill - border -
+  rect r19.5 b1.2 g0.0 at 75.6,235.0 half 19.5,19.5 fill 0.91,0.86,0.76,1.00 border 0.54,0.48,0.39,1.00
+  rect r19.5 b0.0 g0.0 clip-left at 75.6,235.0 half 19.5,19.5 fill - border -
+  rect r19.5 b0.0 g0.0 clip-right at 75.6,235.0 half 19.5,19.5 fill - border -
+  rect r2.4 b1.2 g0.0 at 378.6,235.0 half 337.2,37.7 fill - border 0.75,0.91,1.00,1.00
+at 4000 ms, mods ["MV"]:
+  272 shapes
+  rect r0.0 b0.0 g0.0 at 602.7,51.6 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.023
+  rect r0.0 b0.0 g0.0 at 603.7,94.8 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.023
+  rect r0.0 b0.0 g0.0 at 603.2,73.2 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.023
+  rect r16.6 b0.7 g0.0 at 461.2,76.5 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.023
+  rect r11.5 b0.9 g0.0 at 461.2,76.5 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.023
+  rect r3.1 b1.1 g0.0 at 771.2,69.4 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 741.1,70.1 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 711.1,70.7 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 680.6,71.4 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 650.6,72.1 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 620.5,72.8 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 590.1,73.5 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 560.0,74.2 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 530.0,74.9 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 499.6,75.6 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r3.1 b1.1 g0.0 at 469.5,76.3 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle -0.023
+  rect r0.0 b0.0 g0.0 at 423.8,77.4 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.023
+  rect r16.6 b0.7 g0.0 at 423.8,77.4 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.023
+  rect r16.6 b0.0 g0.0 clip-left at 423.8,77.4 half 16.6,16.6 fill - border - angle -0.023
+  rect r16.6 b0.0 g0.0 clip-right at 423.8,77.4 half 16.6,16.6 fill 0.50,0.41,0.75,0.31 border - angle -0.023
+  rect r11.5 b0.7 g0.0 at 423.8,77.4 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.023
+  rect r11.5 b0.0 g0.0 clip-left at 423.8,77.4 half 11.5,11.5 fill - border - angle -0.023
+  rect r11.5 b0.0 g0.0 clip-right at 423.8,77.4 half 11.5,11.5 fill - border - angle -0.023
+  rect r3.2 b1.2 g0.0 at 460.9,64.7 half 10.4,10.4 fill 0.47,0.38,0.46,0.35 border 0.75,0.75,0.75,0.35 angle -0.023
+  rect r1.4 b0.7 g0.0 at 603.2,73.2 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.023
+  char 119 at 420.9,77.4 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.023
+  char 122 at 425.9,77.3 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.023
+  rect r0.0 b0.0 g0.0 at 398.6,133.3 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.061
+  rect r0.0 b0.0 g0.0 at 396.0,176.4 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.061
+  rect r0.0 b0.0 g0.0 at 397.3,154.8 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.061
+  rect r16.6 b0.7 g0.0 at 255.5,146.2 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.061
+  rect r11.5 b0.9 g0.0 at 255.5,146.2 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.061
+  rect r11.2 b3.6 g0.0 at 585.5,166.3 half 11.2,11.2 fill 0.37,0.44,0.56,0.05 border 0.37,0.44,0.56,0.23 angle 0.061
+  rect r6.9 b0.8 g0.0 at 585.5,166.3 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.19 angle 0.061
+  rect r11.2 b3.6 g0.0 at 554.4,164.4 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 554.4,164.4 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 522.7,162.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 522.7,162.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 490.7,160.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 490.7,160.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 458.2,158.6 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 458.2,158.6 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 426.5,156.6 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 426.5,156.6 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 395.6,154.7 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 395.6,154.7 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 365.4,152.9 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 365.4,152.9 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 336.9,151.1 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 336.9,151.1 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 310.0,149.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 310.0,149.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 284.7,148.0 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 284.7,148.0 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r11.2 b3.6 g0.0 at 261.5,146.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.061
+  rect r6.9 b0.8 g0.0 at 261.5,146.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.061
+  rect r0.0 b0.0 g0.0 at 218.2,143.9 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.061
+  rect r16.6 b0.7 g0.0 at 218.2,143.9 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.061
+  rect r16.6 b0.0 g0.0 clip-left at 218.2,143.9 half 16.6,16.6 fill - border - angle 0.061
+  rect r16.6 b0.0 g0.0 clip-right at 218.2,143.9 half 16.6,16.6 fill 0.47,0.68,0.75,0.31 border - angle 0.061
+  rect r11.5 b0.7 g0.0 at 218.2,143.9 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.061
+  rect r11.5 b0.0 g0.0 clip-left at 218.2,143.9 half 11.5,11.5 fill - border - angle 0.061
+  rect r11.5 b0.0 g0.0 clip-right at 218.2,143.9 half 11.5,11.5 fill - border - angle 0.061
+  rect r11.5 b3.7 g0.0 at 256.2,134.4 half 11.5,11.5 fill 0.37,0.44,0.56,0.08 border 0.37,0.44,0.56,0.35 angle 0.061
+  rect r7.2 b0.8 g0.0 at 256.2,134.4 half 7.2,7.2 fill - border 0.75,0.75,0.75,0.28 angle 0.061
+  rect r1.4 b0.7 g0.0 at 397.3,154.8 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.061
+  char 119 at 215.3,143.7 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.061
+  char 122 at 220.3,144.0 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.061
+  rect r0.0 b0.0 g0.0 at 579.1,169.3 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.119
+  rect r0.0 b0.0 g0.0 at 584.2,212.2 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.119
+  rect r0.0 b0.0 g0.0 at 581.6,190.8 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.119
+  rect r0.0 b0.0 g0.0 at 735.0,172.4 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle -0.119
+  rect r16.6 b0.7 g0.0 at 440.6,207.7 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.119
+  rect r11.5 b0.9 g0.0 at 440.6,207.7 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.119
+  rect r8.7 b1.1 g0.0 at 757.8,160.5 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 734.2,165.8 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 710.8,173.1 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 687.3,181.3 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 663.9,188.3 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 640.2,193.0 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 615.9,194.7 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 591.6,193.9 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 567.1,191.6 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 542.3,189.7 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 518.2,190.7 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 494.7,196.2 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 470.9,202.7 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r8.7 b1.1 g0.0 at 447.2,206.9 half 13.7,8.7 fill 0.42,0.46,0.41,0.45 border 0.75,0.75,0.75,0.45 angle -0.119
+  rect r0.0 b0.0 g0.0 at 403.5,212.1 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.119
+  rect r16.6 b0.7 g0.0 at 403.5,212.1 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.119
+  rect r16.6 b0.0 g0.0 clip-left at 403.5,212.1 half 16.6,16.6 fill - border - angle -0.119
+  rect r16.6 b0.0 g0.0 clip-right at 403.5,212.1 half 16.6,16.6 fill 0.33,0.66,0.47,0.31 border - angle -0.119
+  rect r11.5 b0.7 g0.0 at 403.5,212.1 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.119
+  rect r11.5 b0.0 g0.0 clip-left at 403.5,212.1 half 11.5,11.5 fill - border - angle -0.119
+  rect r11.5 b0.0 g0.0 clip-right at 403.5,212.1 half 11.5,11.5 fill - border - angle -0.119
+  rect r9.0 b1.2 g0.0 at 439.2,195.9 half 14.2,9.0 fill 0.42,0.46,0.41,0.35 border 0.75,0.75,0.75,0.35 angle -0.119
+  rect r1.4 b0.7 g0.0 at 581.6,190.8 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.119
+  char 119 at 400.6,212.5 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.119
+  char 122 at 405.5,211.9 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.119
+  rect r0.0 b0.0 g0.0 at 203.9,233.0 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.023
+  rect r0.0 b0.0 g0.0 at 202.9,276.2 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.023
+  rect r0.0 b0.0 g0.0 at 203.4,254.6 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.023
+  rect r0.0 b0.0 g0.0 at 357.8,258.1 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.023
+  rect r16.6 b0.7 g0.0 at 61.4,251.3 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.023
+  rect r11.5 b0.9 g0.0 at 61.4,251.3 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.023
+  rect r11.9 b0.0 g0.0 at 381.9,258.7 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 381.9,258.7 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 357.8,258.1 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 357.8,258.1 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 333.8,257.6 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 333.8,257.6 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 309.4,257.0 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 309.4,257.0 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 285.4,256.5 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 285.4,256.5 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 261.3,255.9 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 261.3,255.9 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 237.0,255.3 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 237.0,255.3 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 212.9,254.8 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 212.9,254.8 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 188.9,254.2 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 188.9,254.2 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 164.5,253.7 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 164.5,253.7 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 140.5,253.1 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 140.5,253.1 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 116.4,252.6 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 116.4,252.6 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 92.1,252.0 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 92.1,252.0 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r11.9 b0.0 g0.0 at 68.1,251.5 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.023
+  rect r11.2 b1.1 g0.0 at 68.1,251.5 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle 0.023
+  rect r0.0 b0.0 g0.0 at 24.1,250.5 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.023
+  rect r16.6 b0.7 g0.0 at 24.1,250.5 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.023
+  rect r16.6 b0.0 g0.0 clip-left at 24.1,250.5 half 16.6,16.6 fill - border - angle 0.023
+  rect r16.6 b0.0 g0.0 clip-right at 24.1,250.5 half 16.6,16.6 fill 0.20,0.42,0.51,0.31 border - angle 0.023
+  rect r11.5 b0.7 g0.0 at 24.1,250.5 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.023
+  rect r11.5 b0.0 g0.0 clip-left at 24.1,250.5 half 11.5,11.5 fill - border - angle 0.023
+  rect r11.5 b0.0 g0.0 clip-right at 24.1,250.5 half 11.5,11.5 fill - border - angle 0.023
+  rect r11.5 b1.1 g0.0 at 61.7,239.5 half 11.5,11.5 fill 0.41,0.41,0.49,0.35 border 0.75,0.75,0.75,0.35 angle 0.023
+  rect r1.4 b0.7 g0.0 at 203.4,254.6 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.023
+  char 119 at 21.2,250.4 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.023
+  char 122 at 26.1,250.5 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.023
+  rect r0.0 b0.0 g0.0 at 531.0,272.4 half 199.7,0.7 fill 0.75,0.65,0.00,0.40 border 0.75,0.65,0.00,0.40 angle -0.001
+  rect r0.0 b0.0 g0.0 at 531.0,315.6 half 199.7,0.7 fill 0.75,0.65,0.00,0.40 border 0.75,0.65,0.00,0.40 angle -0.001
+  rect r0.0 b0.0 g0.0 at 531.0,294.0 half 199.7,21.2 fill 0.14,0.13,0.12,0.45 border 0.14,0.13,0.12,0.45 angle -0.001
+  rect r0.0 b0.0 g0.0 at 685.4,293.9 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle -0.001
+  rect r16.6 b0.7 g0.0 at 389.0,294.1 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.001
+  rect r11.5 b0.9 g0.0 at 389.0,294.1 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.001
+  rect r11.9 b0.0 g0.0 at 709.5,293.9 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 709.5,293.9 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 685.4,293.9 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 685.4,293.9 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 661.4,293.9 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 661.4,293.9 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 637.0,293.9 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 637.0,293.9 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 613.0,293.9 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 613.0,293.9 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 588.9,293.9 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 588.9,293.9 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 564.6,293.9 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 564.6,293.9 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 540.5,294.0 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 540.5,294.0 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 516.5,294.0 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 516.5,294.0 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 492.1,294.0 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 492.1,294.0 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 468.1,294.0 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 468.1,294.0 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 444.0,294.0 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 444.0,294.0 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 419.7,294.0 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 419.7,294.0 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r11.9 b0.0 g0.0 at 395.6,294.0 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.001
+  rect r11.2 b1.1 g0.0 at 395.6,294.0 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle -0.001
+  rect r0.0 b0.0 g0.0 at 351.6,294.1 half 20.3,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.001
+  rect r16.6 b0.7 g0.0 at 351.6,294.1 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.001
+  rect r16.6 b0.0 g0.0 clip-left at 351.6,294.1 half 16.6,16.6 fill - border - angle -0.001
+  rect r16.6 b0.0 g0.0 clip-right at 351.6,294.1 half 16.6,16.6 fill 0.28,0.62,0.49,0.31 border - angle -0.001
+  rect r11.5 b0.7 g0.0 at 351.6,294.1 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.001
+  rect r11.5 b0.0 g0.0 clip-left at 351.6,294.1 half 11.5,11.5 fill - border - angle -0.001
+  rect r11.5 b0.0 g0.0 clip-right at 351.6,294.1 half 11.5,11.5 fill - border - angle -0.001
+  rect r11.5 b1.1 g0.0 at 388.9,282.2 half 11.5,11.5 fill 0.45,0.44,0.48,0.35 border 0.75,0.75,0.75,0.35 angle -0.001
+  rect r1.4 b0.7 g0.0 at 531.0,294.0 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.001
+  char 119 at 348.7,294.1 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.001
+  char 122 at 353.7,294.1 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.001
+  rect r0.0 b0.0 g0.0 at 337.4,284.6 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.032
+  rect r0.0 b0.0 g0.0 at 338.8,327.8 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.032
+  rect r0.0 b0.0 g0.0 at 338.1,306.2 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.032
+  rect r16.6 b0.7 g0.0 at 196.1,310.8 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.032
+  rect r11.5 b0.9 g0.0 at 196.1,310.8 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.032
+  rect r2.0 b1.1 g0.0 at 523.2,300.2 half 9.2,9.2 fill 0.53,0.40,0.36,0.33 border 0.75,0.75,0.75,0.33 angle 0.753
+  rect r2.0 b1.1 g0.0 at 506.3,300.7 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 486.2,301.4 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 462.6,302.1 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 436.1,303.0 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 406.4,304.0 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 373.1,305.0 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 337.1,306.2 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 297.8,307.5 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 254.9,308.9 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r2.0 b1.1 g0.0 at 209.3,310.4 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.753
+  rect r0.0 b0.0 g0.0 at 158.7,312.0 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.032
+  rect r16.6 b0.7 g0.0 at 158.7,312.0 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.032
+  rect r16.6 b0.0 g0.0 clip-left at 158.7,312.0 half 16.6,16.6 fill - border - angle -0.032
+  rect r16.6 b0.0 g0.0 clip-right at 158.7,312.0 half 16.6,16.6 fill 0.75,0.52,0.14,0.31 border - angle -0.032
+  rect r11.5 b0.7 g0.0 at 158.7,312.0 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.032
+  rect r11.5 b0.0 g0.0 clip-left at 158.7,312.0 half 11.5,11.5 fill - border - angle -0.032
+  rect r11.5 b0.0 g0.0 clip-right at 158.7,312.0 half 11.5,11.5 fill - border - angle -0.032
+  rect r2.1 b1.2 g0.0 at 195.7,299.0 half 9.5,9.5 fill 0.53,0.40,0.36,0.35 border 0.75,0.75,0.75,0.35 angle 0.753
+  rect r1.4 b0.7 g0.0 at 338.1,306.2 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.032
+  char 119 at 155.9,312.1 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.032
+  char 122 at 160.8,311.9 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.032
+  rect r0.0 b0.0 g0.0 at 580.6,316.4 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.024
+  rect r0.0 b0.0 g0.0 at 581.6,359.6 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.024
+  rect r0.0 b0.0 g0.0 at 581.1,338.0 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.024
+  rect r0.0 b0.0 g0.0 at 735.5,334.3 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle -0.024
+  rect r16.6 b0.7 g0.0 at 439.1,341.4 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.024
+  rect r11.5 b0.9 g0.0 at 439.1,341.4 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.024
+  rect r3.1 b1.1 g0.0 at 469.8,340.7 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.024
+  rect r3.1 b1.1 g0.0 at 445.8,341.3 half 10.0,10.0 fill 0.44,0.44,0.50,0.45 border 0.75,0.75,0.75,0.45 angle -0.024
+  rect r0.0 b0.0 g0.0 at 401.7,342.3 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.024
+  rect r16.6 b0.7 g0.0 at 401.7,342.3 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.024
+  rect r16.6 b0.0 g0.0 clip-left at 401.7,342.3 half 16.6,16.6 fill - border - angle -0.024
+  rect r16.6 b0.0 g0.0 clip-right at 401.7,342.3 half 16.6,16.6 fill 0.71,0.71,0.71,0.31 border - angle -0.024
+  rect r11.5 b0.7 g0.0 at 401.7,342.3 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.024
+  rect r11.5 b0.0 g0.0 clip-left at 401.7,342.3 half 11.5,11.5 fill - border - angle -0.024
+  rect r11.5 b0.0 g0.0 clip-right at 401.7,342.3 half 11.5,11.5 fill - border - angle -0.024
+  rect r3.2 b1.2 g0.0 at 438.8,329.6 half 10.4,10.4 fill 0.44,0.44,0.50,0.35 border 0.75,0.75,0.75,0.35 angle -0.024
+  rect r1.4 b0.7 g0.0 at 581.1,338.0 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.024
+  char 119 at 398.9,342.4 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.024
+  char 122 at 403.8,342.3 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.024
+  rect r4.2 b3.6 g0.0 at 349.9,140.0 half 334.7,39.0 fill - border 0.75,0.91,1.00,0.18
+  rect r7.8 b3.6 g0.0 at 349.9,140.0 half 338.3,42.6 fill - border 0.75,0.91,1.00,0.10
+  rect r11.4 b3.6 g0.0 at 349.9,140.0 half 341.9,46.2 fill - border 0.75,0.91,1.00,0.05
+  rect r15.0 b3.6 g0.0 at 349.9,140.0 half 345.5,49.8 fill - border 0.75,0.91,1.00,0.02
+  rect r0.0 b0.0 g0.0 at 349.9,104.0 half 332.9,1.2 fill 0.23,0.23,0.31,1.00 border 0.23,0.23,0.31,1.00
+  rect r0.0 b0.0 g0.0 at 349.9,176.0 half 332.9,1.2 fill 0.23,0.23,0.31,1.00 border 0.23,0.23,0.31,1.00
+  rect r0.0 b0.0 g0.0 at 349.9,140.0 half 332.9,35.4 fill 0.13,0.13,0.17,1.00 border 0.13,0.13,0.17,1.00
+  rect r0.0 b0.0 g0.0 at 607.4,140.0 half 0.5,35.4 fill 1.00,1.00,1.00,0.28 border 1.00,1.00,1.00,0.28
+  rect r27.6 b1.2 g0.0 at 113.1,140.0 half 27.6,27.6 fill 1.00,1.00,1.00,0.03 border 1.00,1.00,1.00,0.12
+  rect r19.2 b1.5 g0.0 at 113.1,140.0 half 19.2,19.2 fill 1.00,1.00,1.00,0.06 border 1.00,1.00,1.00,0.40
+  rect r3.3 b1.9 g0.0 at 647.5,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 607.4,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 567.3,140.0 half 15.3,15.3 fill 0.18,0.88,1.00,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 526.7,140.0 half 15.3,15.3 fill 0.18,0.88,1.00,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 486.6,140.0 half 15.3,15.3 fill 0.18,0.88,1.00,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 446.5,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 405.9,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 365.8,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 325.7,140.0 half 15.3,15.3 fill 0.18,0.88,1.00,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 285.1,140.0 half 15.3,15.3 fill 0.18,0.88,1.00,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 245.0,140.0 half 15.3,15.3 fill 0.18,0.88,1.00,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 204.9,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 164.3,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r3.3 b1.9 g0.0 at 124.2,140.0 half 15.3,15.3 fill 1.00,0.25,0.71,1.00 border 1.00,1.00,1.00,1.00 angle 0.785
+  rect r0.0 b0.0 g0.0 at 50.8,140.0 half 33.8,35.4 fill 0.10,0.10,0.13,1.00 border 0.10,0.10,0.13,1.00
+  rect r27.6 b1.2 g0.0 at 50.8,140.0 half 27.6,27.6 fill 0.18,0.18,0.24,1.00 border 0.29,0.29,0.38,1.00
+  rect r27.6 b0.0 g0.0 clip-left at 50.8,140.0 half 27.6,27.6 fill - border -
+  rect r27.6 b0.0 g0.0 clip-right at 50.8,140.0 half 27.6,27.6 fill 0.18,0.88,1.00,0.68 border -
+  rect r19.2 b1.2 g0.0 at 50.8,140.0 half 19.2,19.2 fill 0.91,0.86,0.76,1.00 border 0.54,0.48,0.39,1.00
+  rect r19.2 b0.0 g0.0 clip-left at 50.8,140.0 half 19.2,19.2 fill - border -
+  rect r19.2 b0.0 g0.0 clip-right at 50.8,140.0 half 19.2,19.2 fill - border -
+  rect r3.5 b1.9 g0.0 at 113.1,120.3 half 15.8,15.8 fill 0.18,0.88,1.00,0.77 border 1.00,1.00,1.00,0.77 angle 0.785
+  rect r2.4 b1.2 g0.0 at 349.9,140.0 half 332.9,37.2 fill - border 0.75,0.91,1.00,1.00
+  rect r0.0 b0.0 g0.0 at 349.9,140.0 half 332.9,35.4 fill 1.00,1.00,1.00,0.01 border 1.00,1.00,1.00,0.01
+  rect r74.7 b3.5 g0.0 at 113.1,140.0 half 74.7,74.7 fill - border 0.75,0.91,1.00,0.21
+  char 119 at 46.0,140.0 half 3.4,4.8 fill 0.11,0.11,0.15,1.00 border 0.11,0.11,0.15,1.00
+  char 122 at 54.2,140.0 half 3.4,4.8 fill 0.11,0.11,0.15,1.00 border 0.11,0.11,0.15,1.00
+at 9000 ms, mods ["MV"]:
+  342 shapes
+  rect r0.0 b0.0 g0.0 at 206.4,74.6 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.005
+  rect r0.0 b0.0 g0.0 at 206.6,117.8 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.005
+  rect r0.0 b0.0 g0.0 at 206.5,96.2 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.005
+  rect r0.0 b0.0 g0.0 at 71.1,97.0 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle -0.005
+  rect r16.6 b0.7 g0.0 at 64.4,97.0 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.005
+  rect r11.5 b0.9 g0.0 at 64.4,97.0 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.005
+  rect r2.0 b1.1 g0.0 at 385.0,95.3 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 360.9,95.4 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 336.9,95.6 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 312.5,95.7 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 288.5,95.8 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 264.4,95.9 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 240.1,96.1 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 216.0,96.2 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 192.0,96.3 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 167.6,96.4 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 143.6,96.6 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 119.5,96.7 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 95.2,96.8 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r2.0 b1.1 g0.0 at 71.1,97.0 half 9.2,9.2 fill 0.42,0.41,0.54,0.45 border 0.75,0.75,0.75,0.45 angle 0.780
+  rect r0.0 b0.0 g0.0 at 27.1,97.2 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.005
+  rect r16.6 b0.7 g0.0 at 27.1,97.2 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.005
+  rect r16.6 b0.0 g0.0 clip-left at 27.1,97.2 half 16.6,16.6 fill - border - angle -0.005
+  rect r16.6 b0.0 g0.0 clip-right at 27.1,97.2 half 16.6,16.6 fill 0.14,0.66,0.75,0.26 border - angle -0.005
+  rect r11.5 b0.7 g0.0 at 27.1,97.2 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.005
+  rect r11.5 b0.0 g0.0 clip-left at 27.1,97.2 half 11.5,11.5 fill - border - angle -0.005
+  rect r11.5 b0.0 g0.0 clip-right at 27.1,97.2 half 11.5,11.5 fill - border - angle -0.005
+  rect r2.1 b1.2 g0.0 at 64.3,81.6 half 9.6,9.6 fill 0.42,0.41,0.54,0.31 border 0.75,0.75,0.75,0.31 angle 0.780
+  rect r2.3 b1.3 g0.0 at 64.3,68.5 half 10.4,10.4 fill 0.42,0.41,0.54,0.04 border 0.75,0.75,0.75,0.04 angle 0.780
+  rect r1.4 b0.7 g0.0 at 206.5,96.2 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.005
+  char 125 at 24.2,97.2 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.005
+  char 122 at 29.1,97.2 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.005
+  rect r0.0 b0.0 g0.0 at 611.3,135.0 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.129
+  rect r0.0 b0.0 g0.0 at 605.7,177.8 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.129
+  rect r0.0 b0.0 g0.0 at 608.5,156.4 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.129
+  rect r0.0 b0.0 g0.0 at 475.8,139.2 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.129
+  rect r16.6 b0.7 g0.0 at 467.6,138.2 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.129
+  rect r11.5 b0.9 g0.0 at 467.6,138.2 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.129
+  rect r3.1 b1.1 g0.0 at 775.1,178.0 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 745.3,174.1 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 715.5,170.2 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 685.3,166.3 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 655.5,162.5 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 625.7,158.6 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 595.5,154.7 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 565.7,150.9 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 535.8,147.0 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 505.7,143.1 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r3.1 b1.1 g0.0 at 475.8,139.2 half 10.0,10.0 fill 0.47,0.38,0.46,0.45 border 0.75,0.75,0.75,0.45 angle 0.129
+  rect r0.0 b0.0 g0.0 at 430.5,133.4 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.129
+  rect r16.6 b0.7 g0.0 at 430.5,133.4 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.129
+  rect r16.6 b0.0 g0.0 clip-left at 430.5,133.4 half 16.6,16.6 fill - border - angle 0.129
+  rect r16.6 b0.0 g0.0 clip-right at 430.5,133.4 half 16.6,16.6 fill 0.50,0.41,0.75,0.26 border - angle 0.129
+  rect r11.5 b0.7 g0.0 at 430.5,133.4 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.129
+  rect r11.5 b0.0 g0.0 clip-left at 430.5,133.4 half 11.5,11.5 fill - border - angle 0.129
+  rect r11.5 b0.0 g0.0 clip-right at 430.5,133.4 half 11.5,11.5 fill - border - angle 0.129
+  rect r3.3 b1.2 g0.0 at 469.6,122.9 half 10.5,10.5 fill 0.47,0.38,0.46,0.31 border 0.75,0.75,0.75,0.31 angle 0.129
+  rect r3.5 b1.3 g0.0 at 471.2,109.9 half 11.4,11.4 fill 0.47,0.38,0.46,0.04 border 0.75,0.75,0.75,0.04 angle 0.129
+  rect r1.4 b0.7 g0.0 at 608.5,156.4 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.129
+  char 125 at 427.7,133.0 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.129
+  char 122 at 432.6,133.6 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.129
+  rect r0.0 b0.0 g0.0 at 308.8,153.9 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.108
+  rect r0.0 b0.0 g0.0 at 304.2,196.8 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.108
+  rect r0.0 b0.0 g0.0 at 306.5,175.3 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.108
+  rect r0.0 b0.0 g0.0 at 173.3,160.9 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.108
+  rect r0.0 b0.0 g0.0 at 451.6,191.1 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.108
+  rect r16.6 b0.7 g0.0 at 165.3,160.0 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.108
+  rect r11.5 b0.9 g0.0 at 165.3,160.0 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.108
+  rect r11.2 b3.6 g0.0 at 493.0,195.6 half 11.2,11.2 fill 0.37,0.44,0.56,0.06 border 0.37,0.44,0.56,0.26 angle 0.108
+  rect r6.9 b0.8 g0.0 at 493.0,195.6 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.21 angle 0.108
+  rect r11.2 b3.6 g0.0 at 482.4,194.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 482.4,194.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 474.2,193.6 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 474.2,193.6 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 468.0,192.9 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 468.0,192.9 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 463.0,192.4 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 463.0,192.4 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 459.0,191.9 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 459.0,191.9 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 455.4,191.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 455.4,191.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 451.6,191.1 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 451.6,191.1 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 447.3,190.7 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 447.3,190.7 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 442.1,190.1 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 442.1,190.1 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 435.4,189.4 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 435.4,189.4 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 427.2,188.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 427.2,188.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 417.1,187.4 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 417.1,187.4 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 404.7,186.0 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 404.7,186.0 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 390.2,184.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 390.2,184.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 373.5,182.6 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 373.5,182.6 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 354.3,180.5 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 354.3,180.5 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 333.2,178.3 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 333.2,178.3 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 310.1,175.7 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 310.1,175.7 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 285.0,173.0 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 285.0,173.0 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 258.6,170.1 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 258.6,170.1 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 231.0,167.1 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 231.0,167.1 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 202.2,164.0 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 202.2,164.0 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r11.2 b3.6 g0.0 at 173.3,160.9 half 11.2,11.2 fill 0.37,0.44,0.56,0.10 border 0.37,0.44,0.56,0.45 angle 0.108
+  rect r6.9 b0.8 g0.0 at 173.3,160.9 half 6.9,6.9 fill - border 0.75,0.75,0.75,0.36 angle 0.108
+  rect r0.0 b0.0 g0.0 at 128.1,155.9 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.108
+  rect r16.6 b0.7 g0.0 at 128.1,155.9 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.108
+  rect r16.6 b0.0 g0.0 clip-left at 128.1,155.9 half 16.6,16.6 fill - border - angle 0.108
+  rect r16.6 b0.0 g0.0 clip-right at 128.1,155.9 half 16.6,16.6 fill 0.47,0.68,0.75,0.26 border - angle 0.108
+  rect r11.5 b0.7 g0.0 at 128.1,155.9 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.108
+  rect r11.5 b0.0 g0.0 clip-left at 128.1,155.9 half 11.5,11.5 fill - border - angle 0.108
+  rect r11.5 b0.0 g0.0 clip-right at 128.1,155.9 half 11.5,11.5 fill - border - angle 0.108
+  rect r11.7 b3.7 g0.0 at 166.9,144.7 half 11.7,11.7 fill 0.37,0.44,0.56,0.07 border 0.37,0.44,0.56,0.31 angle 0.108
+  rect r7.2 b0.8 g0.0 at 166.9,144.7 half 7.2,7.2 fill - border 0.75,0.75,0.75,0.25 angle 0.108
+  rect r12.7 b4.1 g0.0 at 168.4,131.6 half 12.7,12.7 fill 0.37,0.44,0.56,0.01 border 0.37,0.44,0.56,0.04 angle 0.108
+  rect r7.9 b0.9 g0.0 at 168.4,131.6 half 7.9,7.9 fill - border 0.75,0.75,0.75,0.04 angle 0.108
+  rect r1.4 b0.7 g0.0 at 306.5,175.3 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.108
+  char 125 at 125.3,155.6 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.108
+  char 122 at 130.2,156.2 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.108
+  rect r0.0 b0.0 g0.0 at 258.4,166.4 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.109
+  rect r0.0 b0.0 g0.0 at 263.1,209.3 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle -0.109
+  rect r0.0 b0.0 g0.0 at 260.7,187.9 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle -0.109
+  rect r0.0 b0.0 g0.0 at 126.1,202.6 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle -0.109
+  rect r16.6 b0.7 g0.0 at 119.5,203.4 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle -0.109
+  rect r11.5 b0.9 g0.0 at 119.5,203.4 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle -0.109
+  rect r11.9 b0.0 g0.0 at 438.1,168.4 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 438.1,168.4 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 414.2,171.0 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 414.2,171.0 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 390.3,173.6 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 390.3,173.6 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 366.1,176.3 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 366.1,176.3 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 342.2,178.9 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 342.2,178.9 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 318.3,181.5 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 318.3,181.5 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 294.1,184.2 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 294.1,184.2 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 270.2,186.8 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 270.2,186.8 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 246.3,189.5 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 246.3,189.5 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 222.1,192.1 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 222.1,192.1 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 198.1,194.7 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 198.1,194.7 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 174.2,197.4 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 174.2,197.4 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 150.0,200.0 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 150.0,200.0 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r11.9 b0.0 g0.0 at 126.1,202.6 half 11.9,11.9 fill 0.00,0.00,0.00,0.16 border - angle -0.109
+  rect r11.2 b1.1 g0.0 at 126.1,202.6 half 11.2,11.2 fill 0.41,0.41,0.49,0.45 border 0.75,0.75,0.75,0.45 angle -0.109
+  rect r0.0 b0.0 g0.0 at 82.4,207.5 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle -0.109
+  rect r16.6 b0.7 g0.0 at 82.4,207.5 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle -0.109
+  rect r16.6 b0.0 g0.0 clip-left at 82.4,207.5 half 16.6,16.6 fill - border - angle -0.109
+  rect r16.6 b0.0 g0.0 clip-right at 82.4,207.5 half 16.6,16.6 fill 0.20,0.42,0.51,0.26 border - angle -0.109
+  rect r11.5 b0.7 g0.0 at 82.4,207.5 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle -0.109
+  rect r11.5 b0.0 g0.0 clip-left at 82.4,207.5 half 11.5,11.5 fill - border - angle -0.109
+  rect r11.5 b0.0 g0.0 clip-right at 82.4,207.5 half 11.5,11.5 fill - border - angle -0.109
+  rect r11.7 b1.1 g0.0 at 117.8,188.1 half 11.7,11.7 fill 0.41,0.41,0.49,0.31 border 0.75,0.75,0.75,0.31 angle -0.109
+  rect r12.7 b1.1 g0.0 at 116.4,175.0 half 12.7,12.7 fill 0.41,0.41,0.49,0.04 border 0.75,0.75,0.75,0.04 angle -0.109
+  rect r1.4 b0.7 g0.0 at 260.7,187.9 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle -0.109
+  char 125 at 79.5,207.8 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.109
+  char 122 at 84.4,207.2 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle -0.109
+  rect r0.0 b0.0 g0.0 at 471.8,253.3 half 199.7,0.7 fill 0.75,0.10,0.00,0.40 border 0.75,0.10,0.00,0.40 angle 0.055
+  rect r0.0 b0.0 g0.0 at 469.4,296.5 half 199.7,0.7 fill 0.75,0.10,0.00,0.40 border 0.75,0.10,0.00,0.40 angle 0.055
+  rect r0.0 b0.0 g0.0 at 470.6,274.9 half 199.7,21.2 fill 0.14,0.09,0.12,0.45 border 0.14,0.09,0.12,0.45 angle 0.055
+  rect r0.0 b0.0 g0.0 at 335.4,267.5 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.055
+  rect r16.6 b0.7 g0.0 at 328.7,267.2 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.055
+  rect r11.5 b0.9 g0.0 at 328.7,267.2 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.055
+  rect r11.9 b0.0 g0.0 at 648.8,284.6 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 648.8,284.6 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 624.8,283.3 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 624.8,283.3 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 600.7,282.0 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 600.7,282.0 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 576.4,280.7 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 576.4,280.7 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 552.4,279.4 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 552.4,279.4 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 528.4,278.1 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 528.4,278.1 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 504.1,276.7 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 504.1,276.7 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 480.1,275.4 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 480.1,275.4 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 456.1,274.1 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 456.1,274.1 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 431.7,272.8 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 431.7,272.8 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 407.7,271.5 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 407.7,271.5 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 383.7,270.2 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 383.7,270.2 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 359.4,268.8 half 11.9,12.0 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 359.4,268.8 half 11.1,11.3 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r11.9 b0.0 g0.0 at 335.4,267.5 half 12.0,11.9 fill 0.00,0.00,0.00,0.16 border - angle 0.055
+  rect r11.2 b1.1 g0.0 at 335.4,267.5 half 11.3,11.1 fill 0.45,0.44,0.48,0.45 border 0.75,0.75,0.75,0.45 angle 0.055
+  rect r0.0 b0.0 g0.0 at 291.4,265.1 half 20.3,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.055
+  rect r16.6 b0.7 g0.0 at 291.4,265.1 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.055
+  rect r16.6 b0.0 g0.0 clip-left at 291.4,265.1 half 16.6,16.6 fill - border - angle 0.055
+  rect r16.6 b0.0 g0.0 clip-right at 291.4,265.1 half 16.6,16.6 fill 0.28,0.62,0.49,0.26 border - angle 0.055
+  rect r11.5 b0.7 g0.0 at 291.4,265.1 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.055
+  rect r11.5 b0.0 g0.0 clip-left at 291.4,265.1 half 11.5,11.5 fill - border - angle 0.055
+  rect r11.5 b0.0 g0.0 clip-right at 291.4,265.1 half 11.5,11.5 fill - border - angle 0.055
+  rect r11.7 b1.1 g0.0 at 329.6,251.8 half 11.7,11.7 fill 0.45,0.44,0.48,0.31 border 0.75,0.75,0.75,0.31 angle 0.055
+  rect r12.7 b1.1 g0.0 at 330.3,238.7 half 12.7,12.7 fill 0.45,0.44,0.48,0.04 border 0.75,0.75,0.75,0.04 angle 0.055
+  rect r1.4 b0.7 g0.0 at 470.6,274.9 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.055
+  char 125 at 288.5,265.0 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.055
+  char 122 at 293.5,265.2 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.055
+  rect r0.0 b0.0 g0.0 at 308.6,356.4 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.101
+  rect r0.0 b0.0 g0.0 at 304.2,399.3 half 199.7,0.7 fill 0.17,0.17,0.23,0.45 border 0.17,0.17,0.23,0.45 angle 0.101
+  rect r0.0 b0.0 g0.0 at 306.4,377.8 half 199.7,21.2 fill 0.09,0.09,0.13,0.45 border 0.09,0.09,0.13,0.45 angle 0.101
+  rect r0.0 b0.0 g0.0 at 178.2,364.9 half 0.3,21.2 fill 0.75,0.75,0.75,0.13 border 0.75,0.75,0.75,0.13 angle 0.101
+  rect r16.6 b0.7 g0.0 at 165.0,363.6 half 16.6,16.6 fill 0.75,0.75,0.75,0.01 border 0.75,0.75,0.75,0.05 angle 0.101
+  rect r11.5 b0.9 g0.0 at 165.0,363.6 half 11.5,11.5 fill 0.75,0.75,0.75,0.03 border 0.75,0.75,0.75,0.18 angle 0.101
+  rect r2.0 b1.1 g0.0 at 490.7,396.4 half 9.2,9.2 fill 0.53,0.40,0.36,0.33 border 0.75,0.75,0.75,0.33 angle 0.886
+  rect r2.0 b1.1 g0.0 at 473.9,394.7 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 453.8,392.7 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 430.3,390.4 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 404.0,387.7 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 374.4,384.7 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 341.3,381.4 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 305.4,377.7 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 266.3,373.8 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 223.6,369.5 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r2.0 b1.1 g0.0 at 178.2,364.9 half 9.2,9.2 fill 0.53,0.40,0.36,0.45 border 0.75,0.75,0.75,0.45 angle 0.886
+  rect r0.0 b0.0 g0.0 at 127.9,359.8 half 20.2,21.2 fill 0.07,0.07,0.10,0.45 border 0.07,0.07,0.10,0.45 angle 0.101
+  rect r16.6 b0.7 g0.0 at 127.9,359.8 half 16.6,16.6 fill 0.14,0.14,0.18,0.45 border 0.22,0.22,0.28,0.45 angle 0.101
+  rect r16.6 b0.0 g0.0 clip-left at 127.9,359.8 half 16.6,16.6 fill - border - angle 0.101
+  rect r16.6 b0.0 g0.0 clip-right at 127.9,359.8 half 16.6,16.6 fill 0.75,0.52,0.14,0.26 border - angle 0.101
+  rect r11.5 b0.7 g0.0 at 127.9,359.8 half 11.5,11.5 fill 0.69,0.65,0.57,0.45 border 0.41,0.36,0.29,0.45 angle 0.101
+  rect r11.5 b0.0 g0.0 clip-left at 127.9,359.8 half 11.5,11.5 fill - border - angle 0.101
+  rect r11.5 b0.0 g0.0 clip-right at 127.9,359.8 half 11.5,11.5 fill - border - angle 0.101
+  rect r2.1 b1.2 g0.0 at 166.6,348.3 half 9.6,9.6 fill 0.53,0.40,0.36,0.31 border 0.75,0.75,0.75,0.31 angle 0.886
+  rect r2.3 b1.3 g0.0 at 167.9,335.2 half 10.4,10.4 fill 0.53,0.40,0.36,0.04 border 0.75,0.75,0.75,0.04 angle 0.886
+  rect r1.4 b0.7 g0.0 at 306.4,377.8 half 199.7,22.3 fill - border 0.17,0.17,0.23,0.45 angle 0.101
+  char 125 at 125.0,359.6 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.101
+  char 122 at 129.9,360.0 half 2.1,2.9 fill 0.09,0.09,0.11,0.45 border 0.09,0.09,0.11,0.45 angle 0.101
+  rect r2.6 b2.2 g0.0 at 583.5,380.5 half 203.9,23.8 fill - border 0.57,0.69,0.76,0.00 angle -0.038
+  rect r4.8 b2.2 g0.0 at 583.5,380.5 half 206.1,26.0 fill - border 0.57,0.69,0.76,0.00 angle -0.038
+  rect r6.9 b2.2 g0.0 at 583.5,380.5 half 208.3,28.2 fill - border 0.57,0.69,0.76,0.00 angle -0.038
+  rect r9.1 b2.2 g0.0 at 583.5,380.5 half 210.5,30.4 fill - border 0.57,0.69,0.76,0.00 angle -0.038
+  rect r0.0 b0.0 g0.0 at 582.7,358.6 half 202.8,0.7 fill 0.17,0.17,0.23,0.46 border 0.17,0.17,0.23,0.46 angle -0.038
+  rect r0.0 b0.0 g0.0 at 584.4,402.4 half 202.8,0.7 fill 0.17,0.17,0.23,0.46 border 0.17,0.17,0.23,0.46 angle -0.038
+  rect r0.0 b0.0 g0.0 at 583.5,380.5 half 202.8,21.6 fill 0.09,0.09,0.13,0.46 border 0.09,0.09,0.13,0.46 angle -0.038
+  rect r0.0 b0.0 g0.0 at 446.1,385.7 half 0.3,21.6 fill 0.76,0.76,0.76,0.13 border 0.76,0.76,0.76,0.13 angle -0.038
+  rect r16.8 b0.7 g0.0 at 439.3,386.0 half 16.8,16.8 fill 0.76,0.76,0.76,0.01 border 0.76,0.76,0.76,0.06 angle -0.038
+  rect r11.7 b0.9 g0.0 at 439.3,386.0 half 11.7,11.7 fill 0.76,0.76,0.76,0.03 border 0.76,0.76,0.76,0.19 angle -0.038
+  rect r3.2 b1.1 g0.0 at 470.5,384.8 half 10.2,10.2 fill 0.44,0.44,0.50,0.46 border 0.76,0.76,0.76,0.46 angle -0.038
+  rect r3.2 b1.1 g0.0 at 446.1,385.7 half 10.2,10.2 fill 0.44,0.44,0.50,0.46 border 0.76,0.76,0.76,0.46 angle -0.038
+  rect r0.0 b0.0 g0.0 at 401.4,387.4 half 20.6,21.6 fill 0.07,0.07,0.10,0.46 border 0.07,0.07,0.10,0.46 angle -0.038
+  rect r16.8 b0.7 g0.0 at 401.4,387.4 half 16.8,16.8 fill 0.14,0.14,0.18,0.46 border 0.22,0.22,0.28,0.46 angle -0.038
+  rect r16.8 b0.0 g0.0 clip-left at 401.4,387.4 half 16.8,16.8 fill - border - angle -0.038
+  rect r16.8 b0.0 g0.0 clip-right at 401.4,387.4 half 16.8,16.8 fill 0.72,0.72,0.72,0.27 border - angle -0.038
+  rect r11.7 b0.7 g0.0 at 401.4,387.4 half 11.7,11.7 fill 0.69,0.65,0.58,0.46 border 0.41,0.36,0.29,0.46 angle -0.038
+  rect r11.7 b0.0 g0.0 clip-left at 401.4,387.4 half 11.7,11.7 fill - border - angle -0.038
+  rect r11.7 b0.0 g0.0 clip-right at 401.4,387.4 half 11.7,11.7 fill - border - angle -0.038
+  rect r3.3 b1.2 g0.0 at 438.7,370.3 half 10.7,10.7 fill 0.45,0.45,0.51,0.32 border 0.76,0.76,0.76,0.32 angle -0.038
+  rect r3.6 b1.3 g0.0 at 438.2,357.0 half 11.6,11.6 fill 0.45,0.45,0.51,0.05 border 0.76,0.76,0.76,0.05 angle -0.038
+  rect r1.5 b0.7 g0.0 at 583.5,380.5 half 202.8,22.7 fill - border 0.18,0.18,0.24,0.46 angle -0.038
+  char 125 at 398.5,387.5 half 2.1,2.9 fill 0.09,0.09,0.11,0.46 border 0.09,0.09,0.11,0.46 angle -0.038
+  char 122 at 403.5,387.3 half 2.1,2.9 fill 0.09,0.09,0.11,0.46 border 0.09,0.09,0.11,0.46 angle -0.038
+  rect r4.2 b3.6 g0.0 at 496.6,205.0 half 336.4,39.2 fill - border 0.74,0.91,0.99,0.17
+  rect r7.8 b3.6 g0.0 at 496.6,205.0 half 340.0,42.8 fill - border 0.74,0.91,0.99,0.09
+  rect r11.5 b3.6 g0.0 at 496.6,205.0 half 343.6,46.4 fill - border 0.74,0.91,0.99,0.05
+  rect r15.1 b3.6 g0.0 at 496.6,205.0 half 347.2,50.1 fill - border 0.74,0.91,0.99,0.02
+  rect r0.0 b0.0 g0.0 at 496.6,168.8 half 334.5,1.2 fill 0.23,0.23,0.30,0.99 border 0.23,0.23,0.30,0.99
+  rect r0.0 b0.0 g0.0 at 496.6,241.2 half 334.5,1.2 fill 0.23,0.23,0.30,0.99 border 0.23,0.23,0.30,0.99
+  rect r0.0 b0.0 g0.0 at 496.6,205.0 half 334.5,35.6 fill 0.12,0.12,0.17,0.99 border 0.12,0.12,0.17,0.99
+  rect r0.0 b0.0 g0.0 at 269.8,205.0 half 0.5,35.6 fill 0.99,0.99,0.99,0.28 border 0.99,0.99,0.99,0.28
+  rect r27.7 b1.2 g0.0 at 258.6,205.0 half 27.7,27.7 fill 0.99,0.99,0.99,0.03 border 0.99,0.99,0.99,0.12
+  rect r19.3 b1.5 g0.0 at 258.6,205.0 half 19.3,19.3 fill 0.99,0.99,0.99,0.06 border 0.99,0.99,0.99,0.40
+  rect r14.6 b1.9 g0.0 at 795.7,220.2 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 755.4,216.1 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 715.1,208.5 half 23.0,14.6 fill 0.43,0.87,0.62,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 674.3,199.7 half 23.0,14.6 fill 0.43,0.87,0.62,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 634.0,192.6 half 23.0,14.6 fill 0.43,0.87,0.62,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 593.7,189.6 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 552.9,191.5 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 512.6,197.8 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 472.3,206.4 half 23.0,14.6 fill 0.43,0.87,0.62,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 431.5,214.6 half 23.0,14.6 fill 0.43,0.87,0.62,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 391.2,217.7 half 23.0,14.6 fill 0.43,0.87,0.62,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 350.9,213.3 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 310.1,207.2 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r14.6 b1.9 g0.0 at 269.8,205.0 half 23.0,14.6 fill 0.72,0.56,0.11,0.99 border 0.99,0.99,0.99,0.99
+  rect r0.0 b0.0 g0.0 at 196.0,205.0 half 33.9,35.6 fill 0.10,0.10,0.13,0.99 border 0.10,0.10,0.13,0.99
+  rect r27.7 b1.2 g0.0 at 196.0,205.0 half 27.7,27.7 fill 0.18,0.18,0.24,0.99 border 0.29,0.29,0.37,0.99
+  rect r27.7 b0.0 g0.0 clip-left at 196.0,205.0 half 27.7,27.7 fill - border -
+  rect r27.7 b0.0 g0.0 clip-right at 196.0,205.0 half 27.7,27.7 fill 0.43,0.87,0.62,0.57 border -
+  rect r19.3 b1.2 g0.0 at 196.0,205.0 half 19.3,19.3 fill 0.91,0.86,0.76,0.99 border 0.54,0.48,0.39,0.99
+  rect r19.3 b0.0 g0.0 clip-left at 196.0,205.0 half 19.3,19.3 fill - border -
+  rect r19.3 b0.0 g0.0 clip-right at 196.0,205.0 half 19.3,19.3 fill - border -
+  rect r15.3 b2.0 g0.0 at 258.6,179.2 half 24.1,15.3 fill 0.43,0.87,0.62,0.67 border 0.99,0.99,0.99,0.67
+  rect r16.6 b2.1 g0.0 at 258.6,157.2 half 26.1,16.6 fill 0.43,0.87,0.62,0.10 border 0.99,0.99,0.99,0.10
+  rect r2.4 b1.2 g0.0 at 496.6,205.0 half 334.5,37.4 fill - border 0.73,0.89,0.98,0.99
+  rect r97.3 b2.1 g0.0 at 258.6,205.0 half 97.3,97.3 fill - border 0.74,0.91,0.99,0.01
+  char 125 at 191.2,205.0 half 3.4,4.8 fill 0.11,0.11,0.15,0.99 border 0.11,0.11,0.15,0.99
+  char 122 at 199.5,205.0 half 3.4,4.8 fill 0.11,0.11,0.15,0.99 border 0.11,0.11,0.15,0.99
+  rect r2.5 b0.0 g7.0 at 430.7,377.3 half 2.5,2.5 fill 0.75,0.91,1.00,0.00 border 0.75,0.91,1.00,0.00
+  rect r2.0 b0.0 g0.0 at 430.7,377.3 half 2.0,2.0 fill 1.00,1.00,1.00,0.01 border -
+  rect r2.5 b0.0 g7.0 at 418.7,365.3 half 2.5,2.5 fill 0.75,0.91,1.00,0.01 border 0.75,0.91,1.00,0.01
+  rect r2.0 b0.0 g0.0 at 418.7,365.3 half 2.0,2.0 fill 1.00,1.00,1.00,0.01 border -
+  rect r2.5 b0.0 g7.0 at 406.6,353.2 half 2.5,2.5 fill 0.75,0.91,1.00,0.01 border 0.75,0.91,1.00,0.01
+  rect r2.0 b0.0 g0.0 at 406.6,353.2 half 2.0,2.0 fill 1.00,1.00,1.00,0.02 border -
+  rect r2.5 b0.0 g7.0 at 394.6,341.2 half 2.5,2.5 fill 0.75,0.91,1.00,0.02 border 0.75,0.91,1.00,0.02
+  rect r2.0 b0.0 g0.0 at 394.6,341.2 half 2.0,2.0 fill 1.00,1.00,1.00,0.03 border -
+  rect r2.5 b0.0 g7.0 at 382.5,329.1 half 2.5,2.5 fill 0.75,0.91,1.00,0.03 border 0.75,0.91,1.00,0.03
+  rect r2.0 b0.0 g0.0 at 382.5,329.1 half 2.0,2.0 fill 1.00,1.00,1.00,0.04 border -
+  rect r2.5 b0.0 g7.0 at 370.5,317.0 half 2.5,2.5 fill 0.75,0.91,1.00,0.03 border 0.75,0.91,1.00,0.03
+  rect r2.0 b0.0 g0.0 at 370.5,317.0 half 2.0,2.0 fill 1.00,1.00,1.00,0.05 border -
+  rect r2.5 b0.0 g7.0 at 358.4,305.0 half 2.5,2.5 fill 0.75,0.91,1.00,0.04 border 0.75,0.91,1.00,0.04
+  rect r2.0 b0.0 g0.0 at 358.4,305.0 half 2.0,2.0 fill 1.00,1.00,1.00,0.06 border -
+  rect r2.5 b0.0 g7.0 at 346.4,292.9 half 2.5,2.5 fill 0.75,0.91,1.00,0.04 border 0.75,0.91,1.00,0.04
+  rect r2.0 b0.0 g0.0 at 346.4,292.9 half 2.0,2.0 fill 1.00,1.00,1.00,0.06 border -
+  rect r2.5 b0.0 g7.0 at 334.3,280.8 half 2.5,2.5 fill 0.75,0.91,1.00,0.04 border 0.75,0.91,1.00,0.04
+  rect r2.0 b0.0 g0.0 at 334.3,280.8 half 2.0,2.0 fill 1.00,1.00,1.00,0.06 border -
+  rect r2.5 b0.0 g7.0 at 322.3,268.8 half 2.5,2.5 fill 0.75,0.91,1.00,0.04 border 0.75,0.91,1.00,0.04
+  rect r2.0 b0.0 g0.0 at 322.3,268.8 half 2.0,2.0 fill 1.00,1.00,1.00,0.06 border -
+  rect r2.5 b0.0 g7.0 at 310.2,256.7 half 2.5,2.5 fill 0.75,0.91,1.00,0.03 border 0.75,0.91,1.00,0.03
+  rect r2.0 b0.0 g0.0 at 310.2,256.7 half 2.0,2.0 fill 1.00,1.00,1.00,0.06 border -
+  rect r2.5 b0.0 g7.0 at 298.2,244.6 half 2.5,2.5 fill 0.75,0.91,1.00,0.03 border 0.75,0.91,1.00,0.03
+  rect r2.0 b0.0 g0.0 at 298.2,244.6 half 2.0,2.0 fill 1.00,1.00,1.00,0.05 border -
+  rect r2.5 b0.0 g7.0 at 286.1,232.6 half 2.5,2.5 fill 0.75,0.91,1.00,0.02 border 0.75,0.91,1.00,0.02
+  rect r2.0 b0.0 g0.0 at 286.1,232.6 half 2.0,2.0 fill 1.00,1.00,1.00,0.04 border -
+  rect r2.5 b0.0 g7.0 at 274.1,220.5 half 2.5,2.5 fill 0.75,0.91,1.00,0.01 border 0.75,0.91,1.00,0.01
+  rect r2.0 b0.0 g0.0 at 274.1,220.5 half 2.0,2.0 fill 1.00,1.00,1.00,0.02 border -
+  rect r2.5 b0.0 g7.0 at 262.0,208.4 half 2.5,2.5 fill 0.75,0.91,1.00,0.00 border 0.75,0.91,1.00,0.00
+  rect r2.0 b0.0 g0.0 at 262.0,208.4 half 2.0,2.0 fill 1.00,1.00,1.00,0.01 border -
