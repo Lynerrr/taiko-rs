@@ -10,6 +10,21 @@ use crate::menu::{self, Item};
 use crate::render::{VIRTUAL_HEIGHT, accent, pixel_size, rgba, snap_to_grid};
 
 pub const PAGES: usize = 7;
+
+/// The guide as the player goes through it.
+#[derive(Debug, Default)]
+pub struct Tour {
+    /// The page up, if the guide is.
+    pub page: Option<usize>,
+    /// The drum (`Config::keys`) it is waiting for a new key for.
+    pub binding: Option<usize>,
+    /// The page to go back to once calibrating from it is done.
+    pub after: Option<usize>,
+    /// The page on screen and since when.
+    pub shown: Option<(usize, std::time::Instant)>,
+    /// The pages that were up for all of `app::overlays::GUIDE_HOLD`.
+    pub read: [bool; PAGES],
+}
 /// How many pages this build's guide has: a phone's is its own, shorter one.
 pub fn pages() -> usize {
     if crate::mobile::active() { 3 } else { PAGES }

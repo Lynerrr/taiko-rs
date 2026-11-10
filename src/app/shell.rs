@@ -184,7 +184,7 @@ pub(crate) fn run(
         auto,
     );
     state.main_menu = main_menu.then(menu::Menu::new);
-    state.guide = guide.then_some(0);
+    state.guide.page = guide.then_some(0);
     state.load_skin();
     if let Some(l) = link {
         state.open_link(l);
