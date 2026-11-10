@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::beatmap::Beatmap;
 use crate::mods::{HalfRule, Mods};
 use crate::pp;
-use crate::sim::{Game, Mash, Scoring, Song, Stats, WindowRule, Windows};
+use crate::sim::{Game, Mash, Scoring, Settings, Song, Stats, WindowRule, Windows};
 
 /// 5: judged with osu!'s hit windows, whole ms less a half (below: the OD's exact widths, see
 /// `WindowRule`). 4: Half by `HalfRule::OnTheBeat`. 3: scored with `Scoring::Standard` (below:
@@ -225,8 +225,8 @@ impl Replay {
     }
 }
 
-/// A replay game with no audio, at its start.
-pub fn replay_game(map: &Beatmap, track: Arc<dyn Song>, r: &Replay) -> Game {
+/// A replay game with no audio, at its start, with the player's `settings`.
+pub fn replay_game(map: &Beatmap, track: Arc<dyn Song>, r: &Replay, settings: &Settings) -> Game {
     let mut g = Game::with_half(
         map.clone(),
         track,
@@ -234,7 +234,8 @@ pub fn replay_game(map: &Beatmap, track: Arc<dyn Song>, r: &Replay) -> Game {
         Mods::from_list(&r.mods),
         r.seed,
         r.half_rule(),
-    );
+    )
+    .with_settings(settings);
     g.set_replay(Some((r.inputs.clone(), 0)));
     g.set_mash(r.mash());
     g.set_scoring(r.scoring());
@@ -261,9 +262,10 @@ impl Song for Silent {
 }
 
 /// Plays a replay through its map, silently, for everything the results screen shows that the
-/// replay doesn't keep (hit errors, drumrolls, big notes) and the hit windows.
-pub fn simulate(map: &Beatmap, r: &Replay) -> (Stats, Windows) {
-    let mut g = replay_game(map, Arc::new(Silent(r.rate)), r);
+/// replay doesn't keep (hit errors, drumrolls, big notes) and the hit windows, with the
+/// player's `settings`.
+pub fn simulate(map: &Beatmap, r: &Replay, settings: &Settings) -> (Stats, Windows) {
+    let mut g = replay_game(map, Arc::new(Silent(r.rate)), r, settings);
     // Frame by frame, as it was played.
     let end = g.end_time() + 2000.0;
     let mut t = g.time();
@@ -412,7 +414,7 @@ mod replay_tests {
         let (map, replay, played) = played(20.0);
         assert!(played.great > 0 && played.ok > 0 && played.miss > 0);
         let back = Replay::from_json(&replay.to_json().unwrap()).unwrap();
-        let (again, _) = simulate(&map, &back);
+        let (again, _) = simulate(&map, &back, &Settings::default());
         assert_eq!(
             (
                 again.great,

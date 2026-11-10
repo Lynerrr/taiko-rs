@@ -1053,7 +1053,10 @@ impl Preview {
                 "OD",
                 format!(
                     "{:.1}",
-                    crate::beatmap::od_at_rate(self.mods.od(e.meta.od), self.requested_rate.0)
+                    crate::beatmap::od_at_rate(
+                        self.mods.od_with(e.meta.od, crate::od_override::get()),
+                        self.requested_rate.0,
+                    )
                 ),
                 1.0,
             )],
@@ -1261,7 +1264,7 @@ impl Preview {
         }
         // What's over the panel goes last, on the way out with a lane or without.
         let tip = od_hovered.map(|at| {
-            let od = self.mods.od(e.meta.od);
+            let od = self.mods.od_with(e.meta.od, crate::od_override::get());
             (
                 at,
                 crate::game::Windows::new(od).at_rate(self.requested_rate.0),
@@ -1522,7 +1525,8 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
             stream: None,
         }),
         None,
-    );
+    )
+    .with_settings(&crate::game::settings());
     g.set_mute_hits(true);
     Play::new(g)
 }

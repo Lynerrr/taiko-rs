@@ -1086,11 +1086,18 @@ impl Mods {
         }
     }
 
-    /// OD after EZ / HR / Precise, or the one picked for OD Override instead of all of them.
+    /// OD after EZ / HR / Precise, or OD Override's default instead of all of them
+    /// (`od_with` for the one a player picked).
     #[inline]
     pub fn od(self, od: f64) -> f64 {
+        self.od_with(od, crate::od_override::DEFAULT)
+    }
+
+    /// OD after EZ / HR / Precise, or `override_od` for OD Override instead of all of them.
+    #[inline]
+    pub fn od_with(self, od: f64, override_od: f64) -> f64 {
         if self.has(OdOverride) {
-            return crate::od_override::get();
+            return crate::od_override::clamped(override_od);
         }
         let mut od = od;
         if self.has(Easy) {
@@ -1636,13 +1643,11 @@ mod tests {
 
     #[test]
     fn od_override_replaces_the_od_and_stays_out_of_lobbies() {
-        crate::od_override::set(17.5);
         let m = Mods::parse("OV");
-        assert_eq!(m.od(3.0), 17.5);
+        assert_eq!(m.od_with(3.0, 17.5), 17.5);
         // Over EZ, HR and Precise, and past the 10 they stop at.
-        assert_eq!(Mods::parse("OV,HR,PR").od(3.0), 17.5);
-        assert_eq!(Mods::parse("OV,EZ").od(3.0), 17.5);
-        crate::od_override::set(crate::od_override::DEFAULT);
+        assert_eq!(Mods::parse("OV,HR,PR").od_with(3.0, 17.5), 17.5);
+        assert_eq!(Mods::parse("OV,EZ").od_with(3.0, 17.5), 17.5);
         assert!(!m.free().has(Mod::OdOverride) && !m.shared().has(Mod::OdOverride));
         assert_eq!(Mods::parse("OV,HD").free(), Mods::parse("HD"));
         assert!(!Mod::OdOverride.defense_ok());

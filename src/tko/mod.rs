@@ -13,6 +13,19 @@
 pub use taiko_logic::tko::{
     TKO_VERSION, clips, format, gimmick, graph, path, runtime, scroll, track,
 };
+
+static CALM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Maps' playfield effects toned down (Settings -> Gameplay, Reduce map effects): see
+/// `FieldProp::calm`. The crate keeps no process-wide settings, so it is kept here.
+pub fn set_calm(on: bool) {
+    CALM.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether maps' playfield effects are toned down (`set_calm`).
+pub fn calm() -> bool {
+    CALM.load(std::sync::atomic::Ordering::Relaxed)
+}
 pub mod recipes;
 pub mod screen;
 

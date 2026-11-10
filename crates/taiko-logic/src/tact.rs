@@ -2,8 +2,6 @@
 //! evenly: over each step they crawl slowly, then rush to where they'd be at its end, so the
 //! lane moves in surges with the music. Judging is untouched: only where notes are drawn changes.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 /// A step: whole bars, or a part of a bar or of a beat.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Step {
@@ -39,15 +37,9 @@ pub fn format(i: usize) -> &'static str {
     STEPS[i.min(STEPS.len() - 1)].0
 }
 
-static CURRENT: AtomicUsize = AtomicUsize::new(DEFAULT);
-
-/// The step Tact plays with (from the config).
-pub fn set(i: usize) {
-    CURRENT.store(i.min(STEPS.len() - 1), Ordering::Relaxed);
-}
-
-pub fn get() -> Step {
-    STEPS[CURRENT.load(Ordering::Relaxed).min(STEPS.len() - 1)].1
+/// The step at index `i` of `STEPS` (config.txt's `tact`), the last one past the end.
+pub fn step(i: usize) -> Step {
+    STEPS[i.min(STEPS.len() - 1)].1
 }
 
 /// The map time the notes stand at for map time `t`: the start of the step `t` is in, never

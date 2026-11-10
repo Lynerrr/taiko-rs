@@ -66,7 +66,7 @@ mod multiplayer;
 use mod_setup::multiverse::LookText as _;
 mod multiverse;
 mod net;
-use taiko_logic::od_override;
+mod od_override;
 mod offline;
 mod online;
 mod osudb;
@@ -95,7 +95,7 @@ mod settings;
 mod settings_search;
 #[cfg(test)]
 mod settings_tests;
-use taiko_logic::shapeshift;
+mod shapeshift;
 mod shots;
 mod skin;
 mod social;
@@ -103,7 +103,7 @@ mod splash;
 mod stars;
 mod stream;
 mod style;
-use taiko_logic::tact;
+mod tact;
 #[doc(hidden)]
 pub mod tko;
 mod tls;
@@ -5696,7 +5696,9 @@ impl State {
             track.samples.iter_mut().for_each(|s| *s = 0.0);
         }
         let track = Arc::new(track);
-        let mut game = Play::new(Game::new(map, track, sound(&self.audio)));
+        let mut game = Play::new(
+            Game::new(map, track, sound(&self.audio)).with_settings(&crate::game::settings()),
+        );
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.set_mute_hits(true);
         game.view.show_hp = false;
@@ -11564,8 +11566,10 @@ impl State {
                         .map(|p| Mods::from_list(&p.map.mods))
                         .unwrap_or_default();
                     let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
-                    let mut g =
-                        Play::new(Game::with_seed(map, track, sound(&self.audio), mods, seed));
+                    let mut g = Play::new(
+                        Game::with_seed(map, track, sound(&self.audio), mods, seed)
+                            .with_settings(&crate::game::settings()),
+                    );
                     let live_pp = v.entry.and_then(|i| {
                         pp::Live::start(
                             self.library[i].path.clone(),
@@ -12750,7 +12754,7 @@ impl State {
         // For threads not building frames: the window thread draws the pointer in the accent.
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
-        tko::runtime::set_calm(self.cfg.calm_maps);
+        tko::set_calm(self.cfg.calm_maps);
         // Screen changes fade in.
         let kind = std::mem::discriminant(&self.scene);
         if self.scene_kind != Some(kind) {
@@ -13569,14 +13573,10 @@ impl State {
                             .pending_replay
                             .as_ref()
                             .map_or(Default::default(), |r| r.half_rule());
-                        let mut game = Play::new(Game::with_half(
-                            map,
-                            track,
-                            sound(&self.audio),
-                            mods,
-                            seed,
-                            half,
-                        ));
+                        let mut game = Play::new(
+                            Game::with_half(map, track, sound(&self.audio), mods, seed, half)
+                                .with_settings(&crate::game::settings()),
+                        );
                         game.set_scroll_speed(self.cfg.scroll_speed);
                         let live_pp = pp::Live::start(
                             self.library[*entry].path.clone(),
@@ -14103,8 +14103,10 @@ impl State {
                     if defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                         mods.toggle(mods::Mod::Maze);
                     }
-                    let mut game =
-                        Play::new(Game::with_seed(map, track, sound(&self.audio), mods, seed));
+                    let mut game = Play::new(
+                        Game::with_seed(map, track, sound(&self.audio), mods, seed)
+                            .with_settings(&crate::game::settings()),
+                    );
                     if let (Some(d), Some(s)) = (defense, &self.mp) {
                         let (team, me) = multiplayer::defense_team(s);
                         game.set_defense(team, me, d);
@@ -14269,13 +14271,16 @@ impl State {
                         if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
                             mods.toggle(mods::Mod::Maze);
                         }
-                        let mut g = Play::new(Game::with_seed(
-                            map.clone(),
-                            track.clone(),
-                            None,
-                            mods,
-                            v.map.seed.unwrap_or(0),
-                        ));
+                        let mut g = Play::new(
+                            Game::with_seed(
+                                map.clone(),
+                                track.clone(),
+                                None,
+                                mods,
+                                v.map.seed.unwrap_or(0),
+                            )
+                            .with_settings(&crate::game::settings()),
+                        );
                         use_mod_settings(&mut g, &v.map);
                         // Defense: each player's game takes only their turns' notes, as theirs did
                         // (the team in the order the players have it: by id).

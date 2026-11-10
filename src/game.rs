@@ -60,6 +60,16 @@ thread_local! {
     static FRAME_LOOK: std::cell::Cell<Option<Look>> = const { std::cell::Cell::new(None) };
 }
 
+/// The player's settings plays are made with (`Game::with_settings`), from the config.
+pub fn settings() -> Settings {
+    Settings {
+        shapeshift: crate::shapeshift::get(),
+        tact: crate::tact::get(),
+        od_override: crate::od_override::get(),
+        log: crate::audiolog::sink(),
+    }
+}
+
 /// This thread draws the playfield with `look` from now on (`None`: the configured note colours
 /// and the defaults).
 pub fn set_frame_look(look: Option<Look>) {

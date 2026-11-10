@@ -365,7 +365,7 @@ impl Play {
         let vt = self.visual_time();
         if let Some(r) = self.game.tko_mut() {
             r.prepare(vt);
-            crate::tko::screen::backdrop(c, &r.field(vt));
+            crate::tko::screen::backdrop(c, &r.field_with(vt, crate::tko::calm()));
         }
         self.draw_layers(c, true);
         if self.game.mods().has(Mod::Multiverse) {
@@ -650,7 +650,7 @@ impl Play {
             .tko_mut()
             .map(|r| {
                 r.prepare(vt);
-                r.field(vt)
+                r.field_with(vt, crate::tko::calm())
             })
             .unwrap_or_default();
         // The lane's shape, and how fast notes go along it (see `lane_stretch`).

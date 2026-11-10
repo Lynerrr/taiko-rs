@@ -117,7 +117,7 @@ pub fn replay_game(
     track: &std::sync::Arc<crate::audio::Track>,
     r: &Replay,
 ) -> crate::game::Game {
-    logic::replay_game(map, track.clone(), r)
+    logic::replay_game(map, track.clone(), r, &crate::game::settings())
 }
 
 /// Plays a replay through its map, silently, for everything the results screen shows that the
@@ -125,7 +125,7 @@ pub fn replay_game(
 /// can't be read.
 pub fn simulate(map_path: &Path, r: &Replay) -> Option<(crate::game::Stats, crate::game::Windows)> {
     let map = crate::beatmap::load(map_path).ok()?;
-    Some(logic::simulate(&map, r))
+    Some(logic::simulate(&map, r, &crate::game::settings()))
 }
 
 /// Where online replays are kept once fetched (outside the score index; in the temporary

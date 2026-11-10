@@ -1,8 +1,6 @@
 //! Shapeshift's setup: how often the lane takes another shape, how long it takes to morph into
 //! it, and the order the shapes come in (shuffled for each map, or the player's own).
 
-use std::sync::RwLock;
-
 pub const KEYS: [&str; 7] = [
     "zigzag", "uturn", "spiral", "loop", "elbow", "straight", "meadow",
 ];
@@ -164,30 +162,6 @@ fn mix(mut x: u64) -> u64 {
     x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     x ^ (x >> 31)
-}
-
-static CURRENT: RwLock<Config> = RwLock::new(Config {
-    every: 2,
-    morph: 2,
-    shuffle: true,
-    shapes: [
-        (0, true),
-        (1, true),
-        (2, true),
-        (3, true),
-        (4, true),
-        (5, true),
-        (6, true),
-    ],
-});
-
-/// The setup Shapeshift plays with (from the config).
-pub fn set(c: Config) {
-    *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = c;
-}
-
-pub fn get() -> Config {
-    *CURRENT.read().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]

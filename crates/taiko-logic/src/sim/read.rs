@@ -167,6 +167,11 @@ impl Game {
     }
 
     #[inline]
+    pub fn od_override(&self) -> f64 {
+        self.od_override
+    }
+
+    #[inline]
     pub fn tact(&self) -> tact::Step {
         self.tact
     }

@@ -1228,7 +1228,7 @@ impl View {
                         stream: None,
                     })
                 });
-                let mut g = Game::new(map, track, None);
+                let mut g = Game::new(map, track, None).with_settings(&crate::game::settings());
                 g.set_mute_hits(true);
                 self.game = Some(Box::new(Play::new(g)));
                 self.game_err = None;
@@ -1252,7 +1252,8 @@ impl View {
                 // Notes already played stay played going forwards only: a seek back starts over.
                 let map = g.map().clone();
                 let track = g.track().clone();
-                **g = Play::new(Game::new(map, track, None));
+                **g =
+                    Play::new(Game::new(map, track, None).with_settings(&crate::game::settings()));
                 g.set_mute_hits(true);
             }
             g.skip_to(t - 50.0);

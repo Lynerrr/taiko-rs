@@ -156,7 +156,10 @@ impl Play {
                         "[{}]  OD {:.1}{rate}",
                         m.version,
                         // As it plays: with EZ / HR / PR and at this speed.
-                        crate::beatmap::od_at_rate(self.game.mods().od(m.od), self.game.rate())
+                        crate::beatmap::od_at_rate(
+                            self.game.mods().od_with(m.od, self.game.od_override()),
+                            self.game.rate(),
+                        )
                     ),
                 ),
             );

@@ -1,8 +1,6 @@
 //! OD Override's setup: the OD a play uses, whatever the map says. It replaces the OD EZ, HR and
 //! Precise would give; the speed still shifts it, as the windows are timed in the song.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 pub const MIN: f64 = 0.0;
 pub const MAX: f64 = 20.0;
 pub const DEFAULT: f64 = 10.0;
@@ -22,17 +20,6 @@ pub fn clamped(od: f64) -> f64 {
 /// From config.txt.
 pub fn parse(s: &str) -> f64 {
     s.trim().parse().map_or(DEFAULT, clamped)
-}
-
-/// The OD played with, as bits (`f64::to_bits`). Set from the config, read when a play's built.
-static CURRENT: AtomicU64 = AtomicU64::new(DEFAULT.to_bits());
-
-pub fn set(od: f64) {
-    CURRENT.store(clamped(od).to_bits(), Ordering::Relaxed);
-}
-
-pub fn get() -> f64 {
-    f64::from_bits(CURRENT.load(Ordering::Relaxed))
 }
 
 #[cfg(test)]
