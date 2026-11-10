@@ -13,6 +13,7 @@ pub mod defense;
 pub mod difficulty;
 pub mod font;
 pub mod genres;
+pub mod library;
 pub mod mods;
 pub mod multiverse;
 pub mod od_override;
