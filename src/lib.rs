@@ -153,6 +153,7 @@ use library::{
     Scanned, download_dir, find_map, find_score_map, load_plays, main_maps, song_inputs, start_scan,
 };
 use multiplayer::{lobby_seed, map_info, mod_settings, use_mod_settings};
+use screens::hud_editor::HudEdit;
 use screens::menu::{update_badge, updating_badge};
 use screens::play::{
     FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
@@ -210,10 +211,6 @@ enum Scene {
         game: Box<Play>,
         back: Box<Scene>,
         vsync: bool,
-    },
-    /// The interface editor (see `State::hud_edit`), opened from settings.
-    HudEdit {
-        back: Box<Scene>,
     },
     /// The autoplay preview over the whole screen (in the playfield area, which can be moved
     /// and resized here), with the timeline. `back`: song select or the multiplayer lobby.
@@ -843,8 +840,6 @@ struct State {
     mouse_moved_from: (f64, f64),
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
-    /// The interface editor, while it's open.
-    hud_edit: Option<hud_edit::Editor>,
     /// The made-up play the editors show the interface with.
     hud_sample: Option<Box<game::Play>>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
@@ -5018,7 +5013,7 @@ impl State {
                 .into(),
                 String::new(),
             ),
-            Scene::Settings { .. } | Scene::HudEdit { .. } => (
+            Scene::Settings { .. } => (
                 tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
                 String::new(),
             ),
@@ -5452,7 +5447,7 @@ impl State {
                 } else {
                     KeyCode::Escape
                 };
-                self.screen_key(key, false, None);
+                self.screen_key(key, false, None, None);
             }
             other => {
                 self.stop_audio();
@@ -5990,42 +5985,8 @@ impl State {
             Scene::Play { .. }
                 | Scene::MpPlay { .. }
                 | Scene::Calibrate { .. }
-                | Scene::HudEdit { .. }
                 | Scene::Preview { .. }
         ) || self.scene.screen().is_some_and(|s| s.area_editable())
-    }
-
-    fn open_hud_editor(&mut self) {
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.hud_edit = Some(hud_edit::Editor::new(&self.cfg));
-        self.scene = Scene::HudEdit {
-            back: Box::new(back),
-        };
-    }
-
-    fn close_hud_editor(&mut self) {
-        self.cfg.save();
-        self.hud_edit = None;
-        self.hud_sample = None;
-        if let Scene::HudEdit { back } = std::mem::replace(&mut self.scene, Scene::Select) {
-            self.scene = *back;
-        }
-    }
-
-    fn hud_outcome(&mut self, outcome: hud_edit::Outcome) {
-        match outcome {
-            hud_edit::Outcome::Nothing => {}
-            hud_edit::Outcome::Toast(text) => self.toast(text),
-            hud_edit::Outcome::Close => self.close_hud_editor(),
-        }
-    }
-
-    fn hud_key(&mut self, code: KeyCode, text: Option<&str>) {
-        let mods = (self.modifiers_shift, self.modifiers_ctrl);
-        if let Some(ed) = &mut self.hud_edit {
-            let outcome = ed.key(code, text, mods, &mut self.cfg);
-            self.hud_outcome(outcome);
-        }
     }
 
     fn refresh_presets(&mut self) {
@@ -6380,15 +6341,13 @@ impl State {
             }
         }
         let (vx, vy) = self.mouse_virtual();
-        if let Some(ed) = &mut self.hud_edit
-            && matches!(self.scene, Scene::HudEdit { .. })
-            && ed.wheel(vx, vy, notches, &mut self.cfg)
+        if let Some(h) = self.scene.screen_mut::<HudEdit>()
+            && h.ed.wheel(vx, vy, notches, &mut self.cfg)
         {
             return;
         }
         if self.area_editable()
             && (self.cfg.wheel_resizes_playfield
-                || matches!(self.scene, Scene::HudEdit { .. })
                 || self.scene.screen().is_some_and(|s| s.wheel_scales_area()))
         {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
@@ -6713,7 +6672,12 @@ impl State {
             self.hover = None;
             return CursorIcon::Pointer;
         }
-        if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.dragging()) {
+        if let Some(ed) = self
+            .scene
+            .screen_mut::<HudEdit>()
+            .map(|h| &mut h.ed)
+            .filter(|ed| ed.dragging())
+        {
             ed.drag_to(vx, vy, self.modifiers_shift, &mut self.cfg);
             return CursorIcon::Move;
         }
@@ -7166,7 +7130,12 @@ impl State {
             if self.settings_ui.editing.take().is_some() {
                 return;
             }
-            if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.naming()) {
+            if let Some(ed) = self
+                .scene
+                .screen_mut::<HudEdit>()
+                .map(|h| &mut h.ed)
+                .filter(|ed| ed.naming())
+            {
                 ed.finish_naming(&mut self.cfg);
             }
             if let Some(hit) = hit {
@@ -7174,9 +7143,8 @@ impl State {
                 return;
             }
             let (vx, vy) = self.mouse_virtual();
-            if let Some(ed) = &mut self.hud_edit
-                && matches!(self.scene, Scene::HudEdit { .. })
-                && ed.press(vx, vy, &self.cfg)
+            if let Some(h) = self.scene.screen_mut::<HudEdit>()
+                && h.ed.press(vx, vy, &self.cfg)
             {
                 return;
             }
@@ -7189,9 +7157,9 @@ impl State {
                 }
             }
         } else if self
-            .hud_edit
-            .as_mut()
-            .is_some_and(|ed| ed.release(&self.cfg))
+            .scene
+            .screen_mut::<HudEdit>()
+            .is_some_and(|h| h.ed.release(&self.cfg))
         {
         } else if self.grip.take().is_some() {
             self.guides.clear();
@@ -8283,7 +8251,6 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
-            Scene::HudEdit { .. } => "interface editor",
             Scene::Preview { .. } => "map preview",
             Scene::Download => "downloads",
             Scene::MpMenu => "multiplayer menu",
@@ -9396,7 +9363,7 @@ impl State {
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
             || self.preset_naming.is_some()
-            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
+            || self.scene.screen().is_some_and(|s| s.typing())
             || self
                 .universe_setup
                 .as_ref()
@@ -9425,7 +9392,7 @@ impl State {
                 .is_some_and(|d| d.editing.is_some())
             || self.random_setup.is_some()
             || self.preset_naming.is_some()
-            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
+            || self.scene.screen().is_some_and(|s| s.typing())
             || self
                 .universe_setup
                 .as_ref()
@@ -10049,10 +10016,7 @@ impl State {
             || self.random_setup.is_some()
             || self.universe_setup.is_some()
             || self.select.menu.is_some()
-            || matches!(
-                self.scene,
-                Scene::Settings { .. } | Scene::HudEdit { .. } | Scene::Preview { .. }
-            )
+            || matches!(self.scene, Scene::Settings { .. } | Scene::Preview { .. })
             || self.scene.screen().is_some_and(|s| s.covers_social_tab());
         let middle = if self.on_menu() {
             social::TAB_MENU_MIDDLE
@@ -11810,15 +11774,11 @@ impl State {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
         }
-        if self.screen_key(code, repeat, window) {
+        if self.screen_key(code, repeat, text, window) {
             return;
         }
         if matches!(self.scene, Scene::Calibrate { .. }) {
             self.calibration_key(code, repeat, at, window);
-            return;
-        }
-        if matches!(self.scene, Scene::HudEdit { .. }) {
-            self.hud_key(code, text);
             return;
         }
         if matches!(self.scene, Scene::Preview { .. }) {
@@ -12121,11 +12081,8 @@ impl State {
                     self.settings_key(code, window);
                 }
             }
-            Scene::Calibrate { .. }
-            | Scene::Other(_)
-            | Scene::HudEdit { .. }
-            | Scene::Preview { .. }
-            | Scene::Download => {}
+            Scene::Calibrate { .. } | Scene::Other(_) | Scene::Preview { .. } | Scene::Download => {
+            }
             Scene::MpMenu
             | Scene::Lobby
             | Scene::MpWait { .. }
@@ -12413,7 +12370,7 @@ impl State {
                         0.5
                     }
                 }
-                Scene::Calibrate { .. } | Scene::HudEdit { .. } => 0.0,
+                Scene::Calibrate { .. } => 0.0,
                 Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
                 _ => 0.35,
             };
@@ -14108,30 +14065,6 @@ impl State {
                     }
                 }
             }
-            Scene::HudEdit { .. } => {
-                draw_game_area(
-                    canvas,
-                    &self.cfg,
-                    &mut self.frame_clip,
-                    &self.grip,
-                    &self.hover,
-                    false,
-                    game::draw_preview,
-                );
-                let sample = self
-                    .hud_sample
-                    .get_or_insert_with(|| Box::new(game::Play::hud_sample()));
-                sample.view.hud = self.cfg.hud;
-                sample.view.hud_area = self.cfg.playfield_area;
-                sample.view.hidden = self.cfg.hud.off;
-                sample.draw_stand_ins(canvas);
-                sample.draw_parts(canvas);
-                layout::draw_frame(canvas, self.cfg.playfield_area, self.grip.is_some());
-                if let Some(ed) = &mut self.hud_edit {
-                    ed.draw(canvas, &self.cfg, sample);
-                    layout::draw_guides(canvas, &ed.guides);
-                }
-            }
         }
         // A screen just opened comes up out of black, its background too.
         if let Some(ms) = &mut self.screen_fade {
@@ -15522,7 +15455,8 @@ impl State {
     }
 
     fn click(&mut self, hit: hit::Hit, window: Option<&Window>) {
-        if let Some(ed) = &mut self.hud_edit {
+        if let Some(h) = self.scene.screen_mut::<HudEdit>() {
+            let ed = &mut h.ed;
             match hit {
                 hit::Hit::HudPanel => return,
                 hit::Hit::HudRow(i) => return ed.select(i),

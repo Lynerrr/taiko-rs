@@ -60,7 +60,14 @@ impl Screen for LayoutEdit {
         true
     }
 
-    fn key(&mut self, state: &mut State, code: KeyCode, _repeat: bool, _window: Option<&Window>) {
+    fn key(
+        &mut self,
+        state: &mut State,
+        code: KeyCode,
+        _repeat: bool,
+        _text: Option<&str>,
+        _window: Option<&Window>,
+    ) {
         let a = state.cfg.playfield_area;
         let step = 0.01;
         // Arrows move; Shift+arrows resize from the bottom-right, like a window.

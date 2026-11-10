@@ -192,7 +192,14 @@ impl Screen for VideoEdit {
         self.ed.rx.is_busy()
     }
 
-    fn key(&mut self, state: &mut State, code: KeyCode, repeat: bool, window: Option<&Window>) {
+    fn key(
+        &mut self,
+        state: &mut State,
+        code: KeyCode,
+        repeat: bool,
+        _text: Option<&str>,
+        window: Option<&Window>,
+    ) {
         if state.export.is_some() {
             if code == KeyCode::Escape && !repeat {
                 // Ending ffmpeg's input (or stopping a pass) ends it early; the encoder removes
