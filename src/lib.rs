@@ -16150,6 +16150,11 @@ impl State {
             ),
             ("the replay's music", self.replay_speed_rx.is_busy()),
             ("the live pp", live_pp),
+            ("the download browser", self.browse.is_busy()),
+            (
+                "the account server",
+                self.mp_menu.account_request.is_some() || self.mp_menu.rooms_request.is_some(),
+            ),
         ]
         .into_iter()
         .filter_map(|(name, busy)| busy.then_some(name))
