@@ -92,10 +92,10 @@ pub const LANE_H: f32 = 118.0;
 pub const NOTE_R: f32 = 31.0;
 pub const BIG_R: f32 = 46.0;
 /// Second key of a big note must land within this window of the first.
-pub const STRONG_WINDOW: f64 = 30.0;
+pub(crate) const STRONG_WINDOW: f64 = 30.0;
 /// The combo break plays a little louder than a hitsound (about +1.6 dB): noticeable over the
 /// music without being jarring.
-pub const COMBO_BREAK_GAIN: f32 = 1.2;
+pub(crate) const COMBO_BREAK_GAIN: f32 = 1.2;
 
 pub const DON: u32 = 0xEB452C;
 pub const KAT: u32 = 0x438EAD;
@@ -134,7 +134,7 @@ pub struct NoteState {
     pub judged_at: f64,
     pub hits: u32,
     pub finished: bool,
-    pub last_was_kat: Option<bool>,
+    pub(crate) last_was_kat: Option<bool>,
     pub ticks: Vec<bool>,
 }
 
@@ -317,15 +317,15 @@ pub enum Scoring {
 }
 
 /// What a hit is worth in the combo part of `Scoring::Standard`: later hits in a combo more.
-pub fn combo_weight(combo: u32) -> f64 {
+pub(crate) fn combo_weight(combo: u32) -> f64 {
     (combo as f64 + 1.0).sqrt()
 }
 
-pub struct StrongPending {
-    pub note: usize,
-    pub kat: bool,
-    pub key: usize,
-    pub at: f64,
+pub(crate) struct StrongPending {
+    pub(crate) note: usize,
+    pub(crate) kat: bool,
+    pub(crate) key: usize,
+    pub(crate) at: f64,
 }
 
 pub struct NoteBlock {
@@ -370,27 +370,27 @@ pub struct Game {
     /// Which notes Half took off.
     pub half: crate::mods::HalfRule,
     pub map: Beatmap,
-    pub clock: GameClock,
+    pub(crate) clock: GameClock,
     pub state: Vec<NoteState>,
-    pub cursor: usize,
+    pub(crate) cursor: usize,
     pub stats: Stats,
     pub windows: Windows,
     /// Gameplay time (ms) of the current frame.
     pub time: f64,
     /// Map time play starts at (before the first note, or the lead-in).
-    pub start: f64,
+    pub(crate) start: f64,
     pub end_time: f64,
-    pub track_ms: f64,
+    pub(crate) track_ms: f64,
     /// The song as it plays (the results screen plays it on).
     pub track: Arc<dyn Song>,
     /// The player asked for the results as soon as the last note was judged.
-    pub outro_skipped: bool,
+    pub(crate) outro_skipped: bool,
     pub first_note: f64,
     /// Game time of the last press per key: left rim, left centre, right centre, right rim.
     pub presses: [f64; 4],
     pub last_judge: Option<(Judge, f64)>,
     pub recent_errors: VecDeque<(f64, f64, Judge)>,
-    pub strong: Option<StrongPending>,
+    pub(crate) strong: Option<StrongPending>,
     /// The beat length covering the most map time: what pop-up fake sliders fade in by.
     pub main_beat: f64,
     /// The client gimmick of a `.tko` map: visual motion only, never read by judging.
@@ -399,12 +399,12 @@ pub struct Game {
     pub last_audio_ms: Option<f64>,
     /// Over the frames with an audio position: how far the clock was from it (sum, frames, most
     /// either way).
-    pub clock_vs_audio: (f64, u64, f64),
+    pub(crate) clock_vs_audio: (f64, u64, f64),
     pub raw_time: f64,
     /// How autoplay hits (Settings → Gameplay), and the keys that gives each note (by note index,
     /// empty for all but dons and kats), worked out once for those settings.
     pub autoplay_style: crate::autoplay::Settings,
-    pub auto_plan: Option<(crate::autoplay::Settings, Vec<Vec<usize>>)>,
+    pub(crate) auto_plan: Option<(crate::autoplay::Settings, Vec<Vec<usize>>)>,
     /// Autoplay sounds already handed to the audio engine ahead of their hit: (note, key slot or
     /// roll tick). The hit itself then stays quiet.
     pub auto_sched: BTreeSet<(usize, usize)>,
@@ -416,10 +416,10 @@ pub struct Game {
     /// Real milliseconds spent playing (not paused, nor counting down to resume, nor failed),
     /// for the profile's play time; and the frame they were last counted at.
     pub played_ms: f64,
-    pub played_at: Option<Instant>,
+    pub(crate) played_at: Option<Instant>,
     /// The map time of the frame before this one: a frame only lets notes go up to there (see
     /// `update`).
-    pub last_frame_time: f64,
+    pub(crate) last_frame_time: f64,
     /// The scroll speed setting this play is at: fixed when it starts (it counts for pp), and
     /// a replay's own.
     pub scroll_speed: f64,
@@ -430,11 +430,11 @@ pub struct Game {
     pub scoring: Scoring,
     /// Standard scoring: the combo points a clean play of the part played gives, and how many
     /// notes it has. Worked out at the first hit (after the part skipped is known).
-    pub score_basis: Option<(f64, u32)>,
+    pub(crate) score_basis: Option<(f64, u32)>,
     /// Standard scoring: the combo points made so far.
-    pub combo_points: f64,
+    pub(crate) combo_points: f64,
     /// Presses let off as extra hits since a note was last judged (`judge_nearest`).
-    pub extra_taps: u32,
+    pub(crate) extra_taps: u32,
     /// Record presses (map time judged at, key) for a replay.
     pub record: bool,
     /// Also keep `inputs` without saving a replay (a solo play streamed to watching friends).
@@ -451,7 +451,7 @@ pub struct Game {
     /// When set, every hitsound played is logged (map time, sound, volume), e.g. for video audio.
     pub sfx_log: Option<Vec<(f64, Sound, f32)>>,
     /// A miss broke a combo of 20 or more at this map time: the combo break sound is due.
-    pub combo_break: Option<f64>,
+    pub(crate) combo_break: Option<f64>,
     /// Scale the suggestion to current UR; off = plain average of the last 40 hits.
     pub ur_scaled_hint: bool,
     /// Offset used for the current frame / last press.
@@ -472,27 +472,27 @@ pub struct Game {
     /// Defense: our turns at the notes and the team's lives (None: playing alone).
     pub defense: Option<DefenseRun>,
     pub mods: Mods,
-    pub score_mult: f64,
+    pub(crate) score_mult: f64,
     /// HP (0-1), like osu!lazer's taiko: starts empty, hits fill it, misses drain it, and the
     /// play fails if it's under half at the end.
     pub hp: f64,
     /// HP per GREAT / OK (×3.0 / ×1.1 of this) and per miss.
-    pub hp_hit: f64,
-    pub hp_miss: f64,
+    pub(crate) hp_hit: f64,
+    pub(crate) hp_miss: f64,
     /// Started mid-map (a start point): too few notes to judge HP by, so only SD/PF fail.
-    pub hp_exempt: bool,
+    pub(crate) hp_exempt: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
     pub failed: Option<(f64, Instant)>,
     /// Seconds the FAILED sign stays before the play ends (shorter when it starts over by itself).
     pub fail_linger: f64,
     /// Alternate: the hand of the last accepted press (true = left) and when; None while either
     /// hand may hit (after a finisher, a drumroll or a swell, until a press hits a note).
-    pub last_hand: Option<(bool, f64)>,
+    pub(crate) last_hand: Option<(bool, f64)>,
     /// Party: map time of the last big hit (the lane shakes).
     pub quake_at: f64,
     /// Cracked: the misses that cracked the lane (map time) and how many notes had been hit
     /// then (it mends over the next 50).
-    pub cracks: Vec<(f64, u32)>,
+    pub(crate) cracks: Vec<(f64, u32)>,
     /// Crumble: the pieces of the lane hits have knocked out, until they settle back.
     pub crumbs: Vec<Crumb>,
     /// Panic / Mercy: map times of the latest misses.
@@ -506,7 +506,7 @@ pub struct Game {
     pub flows: Vec<u8>,
     /// Overtime: when (map ms) he shows up, and the next one due.
     pub scares: Vec<f64>,
-    pub next_scare: usize,
+    pub(crate) next_scare: usize,
     /// Shapeshift: its setup and the shape of each section (index into `SHAPESHIFT`).
     pub shapeshift: shapeshift::Config,
     /// Tact: how often notes move.
@@ -596,7 +596,7 @@ pub struct Scroll {
 
 impl Scroll {
     /// Speed factor of a note at map time `time` from the scroll mods.
-    pub fn factor(&self, time: f64) -> f64 {
+    pub(crate) fn factor(&self, time: f64) -> f64 {
         let mut k = self.live;
         if self.mods.has(Mod::Wave) {
             k *= 1.0 + 0.35 * (std::f64::consts::TAU * time / 4000.0).sin();
@@ -678,7 +678,7 @@ pub struct DefenseRun {
     /// Which of them we are.
     pub me: usize,
     pub lives: u32,
-    pub bars: u32,
+    pub(crate) bars: u32,
     /// The host's rules (tag-ins each, the shop...).
     pub rules: Defense,
     /// Whose turn each note is (into `team`).
@@ -724,18 +724,18 @@ pub struct Tower {
 /// Defense: where the towers stand: beside the Maze's long straight into the drum (this far
 /// out along it), a don tower above the lane and a kat tower below, where the player on turn
 /// (zoomed in) sees them shoot.
-pub const DON_TOWER_S: f32 = 250.0;
-pub const KAT_TOWER_S: f32 = 470.0;
-pub const TOWER_SIDE: f32 = LANE_H / 2.0 + 24.0;
+pub(crate) const DON_TOWER_S: f32 = 250.0;
+pub(crate) const KAT_TOWER_S: f32 = 470.0;
+pub(crate) const TOWER_SIDE: f32 = LANE_H / 2.0 + 24.0;
 /// Defense: a tower starts shooting at the first barline this long after it's bought, so the
 /// notes it takes are still out on the lane before it.
 pub const TOWER_LEAD_MS: f64 = 1500.0;
 /// Defense: a tag-in takes over from the first barline this long after it (if that's still in
 /// the turn), so the player before isn't cut off in the middle of a note.
-pub const TAG_LEAD_MS: f64 = 1000.0;
+pub(crate) const TAG_LEAD_MS: f64 = 1000.0;
 
 /// Most ticks one roll keeps (`NoteState::ticks`).
-pub const MAX_ROLL_TICKS: usize = 360_000;
+pub(crate) const MAX_ROLL_TICKS: usize = 360_000;
 
 /// Crumble: a piece of the lane a hit knocked out of line.
 #[derive(Clone, Copy, Debug)]
@@ -834,7 +834,7 @@ pub fn parked(f: usize) -> (f32, f32) {
 }
 
 /// Whether Random makes the note at `time` a don.
-pub fn random_don(time: f64, seed: u64) -> bool {
+pub(crate) fn random_don(time: f64, seed: u64) -> bool {
     let salt = if seed == 0 {
         0.0
     } else {
@@ -1145,7 +1145,7 @@ impl Game {
 
     /// Defense: works out every note's owner again, and which ones take our presses: our own,
     /// unless a tower takes them.
-    pub fn refresh_defense(&mut self) {
+    pub(crate) fn refresh_defense(&mut self) {
         let owners: Vec<u8> = self
             .map
             .notes
@@ -1165,14 +1165,14 @@ impl Game {
 
     /// Defense: whether note `i` is ours to hit (always, playing alone).
     #[inline]
-    pub fn mine(&self, i: usize) -> bool {
+    pub(crate) fn mine(&self, i: usize) -> bool {
         self.defense
             .as_ref()
             .is_none_or(|d| d.owner[i] as usize == d.me)
     }
 
     /// Defense: a tower takes our note `i`, still to be judged: it counts as a GREAT for us.
-    pub fn tower_takes(&self, i: usize) -> bool {
+    pub(crate) fn tower_takes(&self, i: usize) -> bool {
         self.defense
             .as_ref()
             .is_some_and(|d| d.shot[i].is_some() && d.owner[i] as usize == d.me)
@@ -1370,7 +1370,7 @@ impl Game {
         self.failed.is_some()
     }
 
-    pub fn add_score(&mut self, base: f64) {
+    pub(crate) fn add_score(&mut self, base: f64) {
         if self.scoring == Scoring::Classic {
             self.stats.score += (base * self.score_mult) as u64;
         }
@@ -1378,7 +1378,7 @@ impl Game {
 
     /// Standard scoring after a hit or miss: the score of the play so far, mods included. `combo`
     /// is the combo the note was judged at.
-    pub fn rescore(&mut self, judge: Judge, combo: u32) {
+    pub(crate) fn rescore(&mut self, judge: Judge, combo: u32) {
         let (max_points, notes) = *self.score_basis.get_or_insert_with(|| {
             // Notes skipped by `skip_to` aren't part of the play.
             let n = self
@@ -1408,7 +1408,7 @@ impl Game {
         }
     }
 
-    pub fn fail(&mut self, t: f64) {
+    pub(crate) fn fail(&mut self, t: f64) {
         if self.failed.is_none() {
             self.failed = Some((t, Instant::now()));
         }
@@ -1490,7 +1490,7 @@ impl Game {
     /// The keys autoplay hits each note with (`autoplay::note_keys`), worked out again only when
     /// its settings change. Groups and rests are judged against the map's main beat: a gimmick's
     /// 60000 BPM line would make every gap a rest. Unhittable notes aren't played.
-    pub fn auto_keys(&mut self) -> &[Vec<usize>] {
+    pub(crate) fn auto_keys(&mut self) -> &[Vec<usize>] {
         let style = self.autoplay_style;
         if self.auto_plan.as_ref().is_none_or(|(s, _)| *s != style) {
             let hits: Vec<usize> = (0..self.map.notes.len())
@@ -1657,7 +1657,7 @@ impl Game {
     }
 
     /// Whether roll `i` has a hittable don/kat anywhere in its span.
-    pub fn roll_over_notes(&self, i: usize) -> bool {
+    pub(crate) fn roll_over_notes(&self, i: usize) -> bool {
         let notes = &self.map.notes;
         let n = &notes[i];
         notes[notes.partition_point(|m| m.time < n.time)..]
@@ -1668,7 +1668,13 @@ impl Game {
 
     /// `id`: the note and key slot (or roll tick) this press is, to tell whether its sound went
     /// to the engine ahead of time.
-    pub fn auto_hit(&mut self, key: usize, t: f64, audio: Option<&dyn Audio>, id: (usize, usize)) {
+    pub(crate) fn auto_hit(
+        &mut self,
+        key: usize,
+        t: f64,
+        audio: Option<&dyn Audio>,
+        id: (usize, usize),
+    ) {
         if self.record || self.log_inputs {
             self.inputs.push((t, key as u8));
         }
@@ -1681,12 +1687,12 @@ impl Game {
     }
 
     /// Hitsound volume at map time `t`: the timing point's, like osu!.
-    pub fn volume_at(&self, t: f64) -> f32 {
+    pub(crate) fn volume_at(&self, t: f64) -> f32 {
         beatmap::control_point_at(&self.map.control_points, t).volume
     }
 
     /// Plays (and logs) the combo break sound when a miss just broke a long combo.
-    pub fn play_combo_break(&mut self, audio: Option<&dyn Audio>) {
+    pub(crate) fn play_combo_break(&mut self, audio: Option<&dyn Audio>) {
         let Some(t) = self.combo_break.take() else {
             return;
         };
@@ -1699,7 +1705,7 @@ impl Game {
     }
 
     /// Overtime: screams for each scare whose time has come (and logs it).
-    pub fn play_scares(&mut self, audio: Option<&dyn Audio>) {
+    pub(crate) fn play_scares(&mut self, audio: Option<&dyn Audio>) {
         while let Some(&at) = self
             .scares
             .get(self.next_scare)
@@ -1910,7 +1916,7 @@ impl Game {
 
     /// Back to the state before the first note: nothing judged, no score, the replay from its
     /// first press.
-    pub fn rewind(&mut self) {
+    pub(crate) fn rewind(&mut self) {
         for st in &mut self.state {
             *st = NoteState {
                 ticks: vec![false; st.ticks.len()],
@@ -2051,7 +2057,7 @@ impl Game {
         }
     }
 
-    pub fn apply(&mut self, i: usize, judge: Judge, t: f64, error: Option<f64>) {
+    pub(crate) fn apply(&mut self, i: usize, judge: Judge, t: f64, error: Option<f64>) {
         // Great or Nothing: an OK is as good as a miss.
         let judge = if judge == Judge::Ok && self.mods.has(Mod::GreatOrNothing) {
             Judge::Miss
@@ -2260,7 +2266,7 @@ impl Game {
 
     /// Relax: the colour a press counts as, whatever key it was: the big note's second hit, the
     /// other colour in a swell, else the next note's.
-    pub fn relax_colour(&mut self, t: f64, pressed: bool) -> bool {
+    pub(crate) fn relax_colour(&mut self, t: f64, pressed: bool) -> bool {
         self.expire(t);
         if let Some(s) = self
             .strong
@@ -2372,7 +2378,7 @@ impl Game {
     }
 
     /// Great, OK or Miss for a press `err` ms off its note, whatever the colour.
-    pub fn timing(&self, err: f64) -> Judge {
+    pub(crate) fn timing(&self, err: f64) -> Judge {
         if err.abs() <= self.windows.great {
             Judge::Great
         } else if err.abs() <= self.windows.ok {
@@ -2395,7 +2401,7 @@ impl Game {
     ///
     /// osu! gives every press to the next note, so after one extra or skipped hit every press
     /// after it is a note off, and alternating colours turn the rest of a stream into misses.
-    pub fn judge_nearest(&mut self, i: usize, kat: bool, t: f64) -> Option<(usize, Judge)> {
+    pub(crate) fn judge_nearest(&mut self, i: usize, kat: bool, t: f64) -> Option<(usize, Judge)> {
         let notes = &self.map.notes;
         let colour = |k: usize| (notes[k].kind == Kind::Kat) == kat;
         let err = |k: usize| t - notes[k].time;
@@ -2423,7 +2429,7 @@ impl Game {
     }
 
     /// The first unjudged don/kat after note `i` whose miss window has opened.
-    pub fn next_unjudged(&self, i: usize, t: f64) -> Option<usize> {
+    pub(crate) fn next_unjudged(&self, i: usize, t: f64) -> Option<usize> {
         for k in i + 1..self.map.notes.len() {
             let n = &self.map.notes[k];
             if n.time - t > self.windows.miss {
@@ -2440,7 +2446,7 @@ impl Game {
     }
 
     /// The last judged don/kat before note `i`, if it was recent enough to matter.
-    pub fn prev_judged(&self, i: usize, t: f64) -> Option<usize> {
+    pub(crate) fn prev_judged(&self, i: usize, t: f64) -> Option<usize> {
         for k in (0..i).rev() {
             let n = &self.map.notes[k];
             if t - n.time > 2.0 * self.windows.miss {
@@ -2454,7 +2460,7 @@ impl Game {
     }
 
     /// First unjudged don/kat whose miss window has opened.
-    pub fn next_hittable(&self, t: f64) -> Option<usize> {
+    pub(crate) fn next_hittable(&self, t: f64) -> Option<usize> {
         for i in self.cursor..self.map.notes.len() {
             let n = &self.map.notes[i];
             if n.time - t > self.windows.miss {
@@ -2473,14 +2479,14 @@ impl Game {
 
     /// The next note, if a press at `t` (of colour `kat`, or either) would hit it: what a swell
     /// over it lets through.
-    pub fn note_under_swell(&self, t: f64, kat: Option<bool>) -> Option<usize> {
+    pub(crate) fn note_under_swell(&self, t: f64, kat: Option<bool>) -> Option<usize> {
         self.next_hittable(t).filter(|&i| {
             let n = &self.map.notes[i];
             kat.is_none_or(|k| (n.kind == Kind::Kat) == k) && self.timing(t - n.time) != Judge::Miss
         })
     }
 
-    pub fn find_active(&self, t: f64, kind: Kind) -> Option<usize> {
+    pub(crate) fn find_active(&self, t: f64, kind: Kind) -> Option<usize> {
         for i in self.cursor..self.map.notes.len() {
             let n = &self.map.notes[i];
             let slack = if kind == Kind::Roll {
@@ -2503,7 +2509,7 @@ impl Game {
     /// higher the combo, the bigger the piece, the further out and the longer it stays; it goes
     /// where it overlaps the pieces still out the least. A miss knocks nothing out: the combo is
     /// gone, and the pieces still out snap back (`crumbs_at`).
-    pub fn crumble(&mut self, i: usize, judge: Judge, t: f64) {
+    pub(crate) fn crumble(&mut self, i: usize, judge: Judge, t: f64) {
         if judge == Judge::Miss {
             return;
         }
