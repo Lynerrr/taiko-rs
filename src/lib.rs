@@ -89,6 +89,7 @@ mod results_tests;
 mod scores;
 mod screens;
 mod search;
+mod services;
 mod setstatus;
 mod settings;
 mod settings_search;
@@ -144,6 +145,8 @@ use app::crash::{CRASH_SCENE, SEND_CRASH_REPORTS};
 pub use app::gpu::graphics_backends;
 use app::run_loop::{FileDrag, UserEvent};
 pub use app::shell::{desktop_main, recalc_pp};
+use screens::fmt_time;
+use screens::menu::{update_badge, updating_badge};
 use screens::play::{
     FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
     pause_width,
@@ -155,6 +158,14 @@ use screens::select::leaderboard::{
 };
 use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
 use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};
+use screens::settings::{
+    browse_text, built_in_text, enter_to_start, none_text, off_text, offset_scale_name, on_text,
+    parse_number, picking_text, scroll_in_select, short_path, size_char, type_path,
+};
+#[cfg(not(windows))]
+use services::system::file_uri;
+use services::system::{map_url, open_url, profile_url};
+use video::no_ffmpeg;
 
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
 
@@ -924,146 +935,6 @@ fn ime_has_key(logical: &Key, preedit: &str) -> bool {
     *logical == Key::Named(NamedKey::Process) || !preedit.is_empty()
 }
 
-fn fmt_time(ms: f64) -> String {
-    let s = (ms / 1000.0).max(0.0) as u64;
-    format!("{}:{:02}", s / 60, s % 60)
-}
-
-/// Why there's no exporting videos.
-fn no_ffmpeg() -> String {
-    tr!(
-        "ffmpeg wasn't found: install it to export (Windows: winget install ffmpeg; Linux: your package manager)",
-        "ffmpegが見つかりません: 書き出すにはインストールしてください (Windows: winget install ffmpeg、Linux: パッケージマネージャー)",
-        "ffmpeg не найден: установите его для экспорта (Windows: winget install ffmpeg; Linux: менеджер пакетов)"
-    )
-    .into()
-}
-
-/// A setting that's on.
-fn on_text() -> &'static str {
-    tr!("on", "オン", "вкл")
-}
-
-fn off_text() -> &'static str {
-    tr!("off", "オフ", "выкл")
-}
-
-/// No key, no choice.
-fn none_text() -> &'static str {
-    tr!("none", "なし", "нет")
-}
-
-fn picking_text() -> &'static str {
-    tr!("picking...", "選択中...", "выбор...")
-}
-
-fn enter_to_start() -> &'static str {
-    tr!("Enter to start", "Enterで開始", "Enter — начать")
-}
-
-/// taiko.rs's own skin.
-fn built_in_text() -> &'static str {
-    tr!("built-in", "内蔵", "встроенный")
-}
-
-fn scroll_in_select() -> &'static str {
-    tr!(
-        "change the scroll speed in song select, not during a song",
-        "スクロール速度は曲中ではなく選曲画面で変えてください",
-        "меняйте скорость прокрутки в выборе песни, не в песне"
-    )
-}
-
-/// The list's choice to type a folder's path.
-fn type_path() -> String {
-    tr!("Type a path", "パスを入力", "Ввести путь").into()
-}
-
-/// The list's choice to pick a folder in the system's dialog.
-fn browse_text() -> String {
-    tr!("Browse...", "参照...", "Обзор...").into()
-}
-
-/// The badge for an update to install.
-fn update_badge(commit: &str) -> String {
-    let build = update::short(commit);
-    tr!("update {build}  Ctrl+U", "アップデート {build}  Ctrl+U", "обновить {build}  Ctrl+U";)
-}
-
-/// The badge while the update downloads (`p` 0..1).
-fn updating_badge(p: f32) -> String {
-    let p = p * 100.0;
-    tr!("updating {p:.0}%", "更新中 {p:.0}%", "обновление {p:.0}%";)
-}
-
-/// Opens a web page in the browser; false where that can't be done.
-/// Where a player's profile is on the website.
-fn profile_url(name: &str) -> String {
-    format!("{}/u/{name}", online::WEBSITE)
-}
-
-/// A map's page on the website, by its hash.
-fn map_url(hash: u64) -> String {
-    format!("{}/m/{hash:x}", online::WEBSITE)
-}
-
-fn open_url(url: &str) -> bool {
-    if cfg!(target_os = "android") || !offline::may_spawn() {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        #[link(name = "shell32")]
-        unsafe extern "system" {
-            fn ShellExecuteW(
-                hwnd: *mut std::ffi::c_void,
-                verb: *const u16,
-                file: *const u16,
-                parameters: *const u16,
-                directory: *const u16,
-                show: i32,
-            ) -> *mut std::ffi::c_void;
-        }
-        const SW_SHOWNORMAL: i32 = 1;
-        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let (verb, file) = (wide("open"), wide(url));
-        // SAFETY: both strings are nul-terminated and live through the call; the rest may be null.
-        let result = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                file.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        // Above 32 is success, the rest are error codes.
-        result as usize > 32
-    }
-    #[cfg(not(windows))]
-    offline::command("xdg-open")
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .is_ok()
-}
-
-/// `file://` URI for a local path.
-#[cfg(not(windows))]
-fn file_uri(path: &std::path::Path) -> String {
-    let mut uri = String::from("file://");
-    for b in path.to_string_lossy().bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
-            uri.push(b as char);
-        } else {
-            uri.push_str(&format!("%{b:02X}"));
-        }
-    }
-    uri
-}
-
 /// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
 fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
@@ -1081,18 +952,6 @@ fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
         }
     }
     out
-}
-
-/// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
-/// Only those few candidates are hashed, so this stays cheap with a huge library.
-/// A path for a settings row: its last two folders.
-fn short_path(dir: &std::path::Path) -> String {
-    let parts: Vec<_> = dir.components().collect();
-    if parts.len() <= 3 {
-        return dir.display().to_string();
-    }
-    let tail: PathBuf = parts[parts.len() - 2..].iter().collect();
-    format!("...{}{}", std::path::MAIN_SEPARATOR, tail.display())
 }
 
 /// The game's data on its way to another folder: the result, bytes moved of all, and where to.
@@ -1223,21 +1082,6 @@ fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
     })
 }
 
-/// A character typed into a playfield size: a digit, or `x` between width and height.
-fn size_char(code: KeyCode) -> Option<char> {
-    use KeyCode::*;
-    let digits = [
-        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
-    ];
-    let numpad = [
-        Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
-    ];
-    if let Some(d) = digits.iter().chain(numpad.iter()).position(|&k| k == code) {
-        return char::from_digit(d as u32 % 10, 10);
-    }
-    matches!(code, KeyX | Space | NumpadMultiply).then_some('x')
-}
-
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 
 /// The smallest the window goes (logical pixels): smaller, the menus no longer fit.
@@ -1246,21 +1090,6 @@ const MIN_WINDOW: (f64, f64) = (640.0, 360.0);
 /// Frames on their way to the screen with vsync (the swapchain's frame latency for it, see
 /// `Renderer::set_present`).
 const VSYNC_FRAMES: f64 = 2.0;
-
-/// A typed setting value as a number: units after it ("ms", "%", "x") are fine, a comma works
-/// as the decimal point, and "off" / "unlimited" are 0.
-fn parse_number(text: &str) -> Option<f64> {
-    let t = text.trim().to_ascii_lowercase();
-    if ["off", "unlimited", "none"].contains(&t.as_str()) {
-        return Some(0.0);
-    }
-    let num: String = t
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-'))
-        .map(|c| if c == ',' { '.' } else { c })
-        .collect();
-    num.parse().ok().filter(|n: &f64| n.is_finite())
-}
 
 /// What to scan without arguments: the Songs folder (picked in settings, else osu!'s), plus the
 /// config's extra `songs =` lines.
@@ -17719,13 +17548,5 @@ mod pointer_wake_tests {
         // Bigger windows need a bigger move, small ones still ignore single-pixel noise.
         assert!(pointer_wake_px(2160.0) > wake);
         assert!(pointer_wake_px(300.0) >= 6.0);
-    }
-}
-
-/// What the offset scale setting shows for `scale`.
-fn offset_scale_name(scale: config::OffsetScale) -> &'static str {
-    match scale {
-        config::OffsetScale::Osu => "osu!",
-        config::OffsetScale::Sound => tr!("By sound", "音基準", "По звуку"),
     }
 }
