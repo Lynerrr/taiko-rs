@@ -171,6 +171,7 @@ use screens::settings::{
     parse_number, picking_text, scroll_in_select, short_path, size_char, type_path,
 };
 use screens::{fmt_time, shows_own_background};
+use services::jobs::Job;
 #[cfg(not(windows))]
 use services::system::file_uri;
 use services::system::{map_url, open_url, profile_url};
@@ -545,7 +546,7 @@ struct State {
     /// Local scores (index of saved replays).
     scores: Vec<scores::ScoreRow>,
     /// Working out the pp of scores saved before pp (started once, on the first frame).
-    pp_backfill: Option<Receiver<Vec<(PathBuf, f64)>>>,
+    pp_backfill: Job<Vec<(PathBuf, f64)>>,
     pp_backfill_started: bool,
     /// Plays on their way to the online leaderboards.
     submits: Vec<Receiver<Result<online::Reply, String>>>,
@@ -555,7 +556,7 @@ struct State {
     /// The same on the Relax boards, which count apart.
     me_relax: Option<(f64, Option<u32>)>,
     me_for: String,
-    me_fetch: Option<Receiver<Result<online::Profile, String>>>,
+    me_fetch: Job<Result<online::Profile, String>>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
     /// A player's profile, over everything else.
@@ -645,7 +646,7 @@ struct State {
     mapinfo_sorted: bool,
     /// Folders being scanned (where osu!.db / collection.db are looked for).
     song_dirs: Vec<PathBuf>,
-    osudb_rx: Option<Receiver<Option<osudb::OsuDb>>>,
+    osudb_rx: Job<Option<osudb::OsuDb>>,
     /// Maps' status from osu!.db (by path), and sets' from the mirrors (by set id; None while
     /// asking or if they couldn't say).
     db_status: std::collections::HashMap<PathBuf, u8>,
@@ -667,7 +668,7 @@ struct State {
     loved_asked: bool,
     /// Asking the website which custom sets in the library are approved, and when it was last
     /// asked for this library (None: ask now).
-    custom_call: Option<Receiver<CustomKnown>>,
+    custom_call: Job<CustomKnown>,
     custom_asked: Option<Instant>,
     /// The folder of the map in the editor, looked at for maps dropped into it.
     folder_watch: Option<folder_watch::Watch>,
@@ -695,7 +696,7 @@ struct State {
     /// (the music takes a moment), and that music on its way.
     replay_speed: f64,
     replay_speed_wanted: f64,
-    replay_speed_rx: Option<Receiver<ReplayMusic>>,
+    replay_speed_rx: Job<ReplayMusic>,
     /// Song select's selector with the drum in menus (`drum_nav`), and the button rows it
     /// moves along, as drawn last.
     select_zone: drum_nav::Zone,
@@ -703,7 +704,7 @@ struct State {
     /// The selected set and since when: asked about once the selection rests.
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
-    lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
+    lobby_lookup: Job<Result<download::SetInfo, String>>,
     /// A score a `taiko-rs://` link asked for, until its results screen opens.
     score_link: Option<ScoreLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -789,7 +790,7 @@ struct State {
     scan_checking: bool,
     /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
     /// there is no dialog.
-    folder_pick: Option<Receiver<Result<Option<PathBuf>, String>>>,
+    folder_pick: Job<Result<Option<PathBuf>, String>>,
     /// What the folder dialog is for: the Songs folder or the game data folder.
     folder_pick_for: Item,
     /// The game's data being moved to another folder (`config::move_data`).
@@ -911,7 +912,7 @@ struct ExportView {
 /// A score a `taiko-rs://` link asked for: being fetched from the server, then waiting for its
 /// map (the library scan, or a download) and for the player to be out of a song.
 struct ScoreLink {
-    fetch: Option<Receiver<Result<online::OnlineScore, String>>>,
+    fetch: Job<Result<online::OnlineScore, String>>,
     score: Option<online::OnlineScore>,
     /// Its set is downloading, since then.
     downloading: Option<Instant>,
@@ -1894,9 +1895,8 @@ impl State {
         match link {
             link::Link::Score(id) => {
                 let server = self.cfg.online_server.clone();
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
-                    let got = match online::call(&server, online::Request::Score { id }) {
+                let fetch = Job::spawn(move || {
+                    match online::call(&server, online::Request::Score { id }) {
                         Ok(online::Reply::Score(s)) => Ok(*s),
                         Ok(_) => Err(crate::lang::odd_reply()),
                         Err(e) if e == "bad request" => Err(tr!(
@@ -1906,11 +1906,10 @@ impl State {
                         )
                         .to_string()),
                         Err(e) => Err(e),
-                    };
-                    let _ = tx.send(got);
+                    }
                 });
                 self.score_link = Some(ScoreLink {
-                    fetch: Some(rx),
+                    fetch,
                     score: None,
                     downloading: None,
                 });
@@ -1934,19 +1933,16 @@ impl State {
         let Some(l) = &mut self.score_link else {
             return;
         };
-        if let Some(rx) = &l.fetch {
-            match rx.try_recv() {
-                Ok(Ok(s)) => {
-                    l.score = Some(s);
-                    l.fetch = None;
-                }
-                Ok(Err(e)) => {
+        if l.fetch.is_busy() {
+            match l.fetch.poll_ended() {
+                Some(Some(Ok(s))) => l.score = Some(s),
+                Some(Some(Err(e))) => {
                     self.score_link = None;
                     self.toast(tr!("can't open that score: {e}", "そのスコアを開けません: {e}", "не удаётся открыть рекорд: {e}";));
                     return;
                 }
-                Err(mpsc::TryRecvError::Empty) => return,
-                Err(mpsc::TryRecvError::Disconnected) => {
+                None => return,
+                Some(None) => {
                     self.score_link = None;
                     return;
                 }
@@ -3189,12 +3185,12 @@ impl State {
             Item::SongHeadings => on(self.select.headings),
             Item::HiddenMaps => self.select.hidden.describe(),
             Item::SongsFolder
-                if self.folder_pick.is_some() && self.folder_pick_for == Item::SongsFolder =>
+                if self.folder_pick.is_busy() && self.folder_pick_for == Item::SongsFolder =>
             {
                 picking_text().into()
             }
             Item::DataFolder
-                if self.folder_pick.is_some() && self.folder_pick_for == Item::DataFolder =>
+                if self.folder_pick.is_busy() && self.folder_pick_for == Item::DataFolder =>
             {
                 picking_text().into()
             }
@@ -4479,7 +4475,7 @@ impl State {
     /// Opens the system's folder dialog for the Songs folder or the game data folder (on its
     /// own thread: it blocks). With no dialog to show, the path is typed in settings instead.
     fn browse_folder(&mut self, item: Item) {
-        if self.folder_pick.is_some() {
+        if self.folder_pick.is_busy() {
             return;
         }
         self.folder_pick_for = item;
@@ -4494,22 +4490,16 @@ impl State {
         let start = current
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
             .unwrap_or_default();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(library::pick_folder(&start));
-        });
-        self.folder_pick = Some(rx);
+        self.folder_pick = Job::spawn(move || library::pick_folder(&start));
         self.select.picking_folder = true;
     }
 
     fn poll_folder_pick(&mut self) {
-        let Some(rx) = &self.folder_pick else { return };
-        let picked = match rx.try_recv() {
-            Ok(picked) => picked,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Ok(None),
+        let picked = match self.folder_pick.poll_ended() {
+            Some(Some(picked)) => picked,
+            None => return,
+            Some(None) => Ok(None),
         };
-        self.folder_pick = None;
         self.select.picking_folder = false;
         let item = self.folder_pick_for;
         match picked {
@@ -6108,24 +6098,21 @@ impl State {
         let Scene::Play { game, entry, .. } = &mut self.scene else {
             self.replay_speed = 1.0;
             self.replay_speed_wanted = 1.0;
-            self.replay_speed_rx = None;
+            self.replay_speed_rx.cancel();
             return;
         };
-        if let Some(rx) = &self.replay_speed_rx {
-            match rx.try_recv() {
-                Ok(Ok((track, speed))) => {
+        if self.replay_speed_rx.is_busy() {
+            match self.replay_speed_rx.poll() {
+                Some(Ok((track, speed))) => {
                     let rate = game.rate * speed;
                     game.change_speed(track, rate, sound(&self.audio), self.play_offset);
                     self.replay_speed = speed;
-                    self.replay_speed_rx = None;
                 }
-                Ok(Err(e)) => {
+                Some(Err(e)) => {
                     self.replay_speed_wanted = self.replay_speed;
-                    self.replay_speed_rx = None;
                     self.status = format!("failed to change the speed: {e}");
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.replay_speed_rx = None,
+                None => {}
             }
             return;
         }
@@ -6139,8 +6126,7 @@ impl State {
         let rate = game.rate * speed;
         let keep_pitch = game.mods.speed(1.0, self.cfg.rate_keep_pitch).1;
         let path = preview::audio_path(&self.library[*entry]);
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        self.replay_speed_rx = Job::spawn(move || {
             let constant = mods::Speed::constant(rate);
             let track = stream::open(&path, sample_rate, constant, keep_pitch).and_then(|t| {
                 t.map_or_else(
@@ -6151,9 +6137,8 @@ impl State {
                     Ok,
                 )
             });
-            let _ = tx.send(track.map(|t| (t, speed)));
+            track.map(|t| (t, speed))
         });
-        self.replay_speed_rx = Some(rx);
     }
 
     /// Pauses the fullscreen preview, or sets it going again.
@@ -9104,7 +9089,7 @@ impl State {
                 && now.saturating_duration_since(t) >= CUSTOM_REFRESH
         });
         if due
-            && self.custom_call.is_none()
+            && self.custom_call.is_idle()
             && !self.library.is_empty()
             && self.cfg.online_server == online::DEFAULT_SERVER
         {
@@ -9116,31 +9101,25 @@ impl State {
                 .collect();
             folders.sort();
             folders.dedup();
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
+            self.custom_call = Job::spawn(move || {
                 let known: std::collections::HashMap<PathBuf, u32> = folders
                     .into_iter()
                     .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
                     .collect();
                 if known.is_empty() {
-                    let _ = tx.send((known, Vec::new()));
-                    return;
+                    return (known, Vec::new());
                 }
                 let mut ids: Vec<u32> = known.values().copied().collect();
                 ids.sort_unstable();
                 ids.dedup();
                 // A failed answer keeps them listed as custom, not approved.
                 let approved = custom::approved_of(&ids).unwrap_or_default();
-                let _ = tx.send((known, approved));
+                (known, approved)
             });
-            self.custom_call = Some(rx);
         }
-        let Some(rx) = &self.custom_call else { return };
-        match rx.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) => self.custom_call = None,
-            Ok((folders, approved)) => {
-                self.custom_call = None;
+        match self.custom_call.poll() {
+            None => {}
+            Some((folders, approved)) => {
                 self.select.custom_folder = folders;
                 self.select.custom_approved = approved.into_iter().collect();
                 if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
@@ -9480,11 +9459,7 @@ impl State {
         self.mapinfo = Some(info);
         self.mapinfo_sorted = false;
         let dirs = self.song_dirs.clone();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(dirs.iter().find_map(|d| osudb::load(d)));
-        });
-        self.osudb_rx = Some(rx);
+        self.osudb_rx = Job::spawn(move || dirs.iter().find_map(|d| osudb::load(d)));
         self.apply_cached_statuses();
         self.select.refilter(&self.library);
         // Start on a random song rather than the first one every time (not before a map given on
@@ -9524,10 +9499,7 @@ impl State {
     /// Folds osu!'s collections and play history in once read, and re-sorts when the
     /// difficulty analysis finishes.
     fn poll_sorting(&mut self) {
-        if let Some(rx) = &self.osudb_rx
-            && let Ok(db) = rx.try_recv()
-        {
-            self.osudb_rx = None;
+        if let Some(db) = self.osudb_rx.poll() {
             if let Some(db) = db {
                 self.apply_osu_db(db);
             }
@@ -15106,7 +15078,7 @@ impl State {
                             .filter(|_| v.fetching && v.entry.is_none())
                             .and_then(|p| map_download(&self.downloads, &p.map));
                         let looking =
-                            v.fetching && v.entry.is_none() && self.lobby_lookup.is_some();
+                            v.fetching && v.entry.is_none() && self.lobby_lookup.is_busy();
                         let text = got.map_or_else(|| v.status(), download_text);
                         let w = canvas.width;
                         canvas.text_centered(w / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), &text);
@@ -15935,7 +15907,7 @@ impl State {
         let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else {
             return;
         };
-        if self.mp.as_ref().is_some_and(|s| s.have_map) || self.lobby_lookup.is_some() {
+        if self.mp.as_ref().is_some_and(|s| s.have_map) || self.lobby_lookup.is_busy() {
             return;
         }
         self.fetch_map(m);
@@ -15943,7 +15915,7 @@ impl State {
 
     /// Downloads the set a map someone else has comes from (mirrors: by set id, else a search).
     fn fetch_map(&mut self, m: net::MapInfo) {
-        if self.lobby_lookup.is_some() {
+        if self.lobby_lookup.is_busy() {
             return;
         }
         match m.set_id {
@@ -15961,9 +15933,8 @@ impl State {
                 custom: None,
             }),
             None => {
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
-                    let found = download::search(
+                self.lobby_lookup = Job::spawn(move || {
+                    download::search(
                         &format!("{} {}", m.artist, m.title),
                         download::Category::Any,
                         download::SortKey::Relevance,
@@ -15977,10 +15948,8 @@ impl State {
                                     && s.diffs.iter().any(|d| d.version == m.version)
                             })
                             .ok_or_else(|| "not found on the mirrors".to_string())
-                    });
-                    let _ = tx.send(found);
+                    })
                 });
-                self.lobby_lookup = Some(rx);
                 self.toast("looking for the map on the mirrors...".into());
             }
         }
@@ -16136,7 +16105,7 @@ impl State {
     /// The lobby map's download progress for the lobby screen: what's going on, and how much of
     /// it is done once that's known.
     fn lobby_download_status(&self) -> Option<(String, Option<f32>)> {
-        if self.lobby_lookup.is_some() {
+        if self.lobby_lookup.is_busy() {
             return Some(("looking it up...".into(), None));
         }
         if self.host_map_asked {
@@ -16159,13 +16128,12 @@ impl State {
                 .map(|r| r.file.clone())
                 .collect();
             if !missing.is_empty() {
-                self.pp_backfill = Some(scores::backfill_pp(missing));
+                self.pp_backfill = Job::from_receiver(scores::backfill_pp(missing));
             }
         }
-        let Some(found) = self.pp_backfill.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+        let Some(found) = self.pp_backfill.poll() else {
             return;
         };
-        self.pp_backfill = None;
         if found.is_empty() {
             return;
         }
@@ -16278,26 +16246,22 @@ impl State {
             self.me_for = account.clone();
             self.me = None;
             self.me_relax = None;
-            self.me_fetch = None;
+            self.me_fetch.cancel();
             if !account.is_empty() {
-                let (server, (tx, rx)) = (self.cfg.online_server.clone(), mpsc::channel());
-                std::thread::spawn(move || {
-                    let result = online::call(&server, online::Request::Profile { name: account })
-                        .and_then(|r| match r {
+                let server = self.cfg.online_server.clone();
+                self.me_fetch = Job::spawn(move || {
+                    online::call(&server, online::Request::Profile { name: account }).and_then(
+                        |r| match r {
                             online::Reply::Profile(p) => Ok(*p),
                             _ => Err(crate::lang::odd_reply()),
-                        });
-                    let _ = tx.send(result);
+                        },
+                    )
                 });
-                self.me_fetch = Some(rx);
             }
         }
-        if let Some(Ok(result)) = self.me_fetch.as_ref().map(|rx| rx.try_recv()) {
-            self.me_fetch = None;
-            if let Ok(p) = result {
-                self.me = Some((p.pp + 0.0, p.rank));
-                self.me_relax = Some((p.relax.pp + 0.0, p.relax.rank));
-            }
+        if let Some(Ok(p)) = self.me_fetch.poll() {
+            self.me = Some((p.pp + 0.0, p.rank));
+            self.me_relax = Some((p.relax.pp + 0.0, p.relax.rank));
         }
     }
 
@@ -16343,19 +16307,10 @@ impl State {
                 self.import_osz(archive, &name, true);
             }
         }
-        if let Some(rx) = &self.lobby_lookup {
-            match rx.try_recv() {
-                Ok(Ok(set)) => {
-                    self.lobby_lookup = None;
-                    self.start_download(set);
-                }
-                Ok(Err(e)) => {
-                    self.lobby_lookup = None;
-                    self.toast(format!("download failed: {e}"));
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.lobby_lookup = None,
-            }
+        match self.lobby_lookup.poll() {
+            Some(Ok(set)) => self.start_download(set),
+            Some(Err(e)) => self.toast(format!("download failed: {e}")),
+            None => {}
         }
         let mut finished = Vec::new();
         self.downloads.retain(|job| match job.rx.try_recv() {
