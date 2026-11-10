@@ -276,6 +276,8 @@ pub struct Live {
     sent: Counts,
     /// The latest answer, and the counts it is for.
     pp: Option<(Counts, f64)>,
+    /// The thread is gone (the map didn't load): no answer is coming.
+    ended: bool,
 }
 
 /// GREATs, OKs, misses and the max combo.
@@ -356,6 +358,7 @@ impl Live {
             rx,
             sent: (u32::MAX, 0, 0, 0),
             pp: None,
+            ended: false,
         })
     }
 
@@ -366,8 +369,15 @@ impl Live {
             self.sent = counts;
             let _ = self.tx.send(counts);
         }
-        while let Ok(pp) = self.rx.try_recv() {
-            self.pp = Some(pp);
+        loop {
+            match self.rx.try_recv() {
+                Ok(pp) => self.pp = Some(pp),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.ended = true;
+                    break;
+                }
+            }
         }
         self.pp.map(|(_, pp)| pp)
     }
@@ -376,6 +386,13 @@ impl Live {
     #[cfg(any(test, feature = "testing"))]
     pub fn is_current(&self) -> bool {
         self.pp.is_some_and(|(c, _)| c == self.sent)
+    }
+
+    /// Whether an answer is still on its way: counts were handed over, the one returned isn't
+    /// for them yet and the thread still works.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn is_busy(&self) -> bool {
+        self.sent.0 != u32::MAX && !self.is_current() && !self.ended
     }
 }
 

@@ -16,15 +16,6 @@ fn client(tag: &str) -> (State, Songs, Instant) {
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     assert_eq!(scene_name(&s), "Select");
-    // The seek graph is drawn once the preview's map is read, on a thread of its own: `ready`
-    // waits for the screen's text, which the graph has none of.
-    let until = Instant::now() + Duration::from_secs(20);
-    while regions(&s.hits).len() < 2 {
-        assert!(Instant::now() < until, "the preview's map never loaded");
-        std::thread::sleep(Duration::from_millis(5));
-        now += Duration::from_millis(16);
-        frame(&mut s, now);
-    }
     (s, songs, now)
 }
 

@@ -72,6 +72,26 @@ impl<T> Job<T> {
         Some(ended)
     }
 
+    /// Every message sent so far, for work that sends several (a part, then the whole); the job
+    /// is idle once its thread has ended and they have all been taken.
+    pub(crate) fn poll_all(&mut self) -> Vec<T> {
+        let Some(rx) = &self.rx else {
+            return Vec::new();
+        };
+        let mut got = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(m) => got.push(m),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.rx = None;
+                    break;
+                }
+            }
+        }
+        got
+    }
+
     /// Stops waiting for the work: its result, if it still comes, is dropped.
     pub(crate) fn cancel(&mut self) {
         self.rx = None;
@@ -116,6 +136,21 @@ mod tests {
         drop(tx);
         assert_eq!(job.poll_ended(), Some(None));
         assert!(job.is_idle());
+    }
+
+    #[test]
+    fn a_job_that_sends_several_messages_is_busy_until_its_thread_ends() {
+        let (tx, rx) = mpsc::channel();
+        let mut job = Job::from_receiver(rx);
+        tx.send(1).unwrap();
+        tx.send(2).unwrap();
+        assert_eq!(job.poll_all(), vec![1, 2]);
+        assert!(job.is_busy(), "more may come");
+        tx.send(3).unwrap();
+        drop(tx);
+        assert_eq!(job.poll_all(), vec![3]);
+        assert!(job.is_idle());
+        assert!(job.poll_all().is_empty());
     }
 
     #[test]

@@ -78,28 +78,65 @@ pub fn ready(s: &mut State, now: &mut Instant) {
     settle(s, now);
 }
 
-/// Draws frames (in real time, for background threads) until the screen stops changing.
+/// Draws frames in made-up time until the screen holds still and nothing is due
+/// (`State::is_due`), so fades, eases and bobbing labels come to rest. Whenever the client's
+/// background work (`State::busy`) is on its way the made-up clock stands still until it is in,
+/// so what a test sees never depends on how fast the machine is. Fails, naming what, when work
+/// is still on its way after 20 seconds.
 pub fn settle(s: &mut State, now: &mut Instant) {
+    settle_on(s, now, WIDTH);
+}
+
+/// Draws frames at `now`, which only take results in, until no thread works for the client
+/// (`State::busy`). Fails, naming what, when work is still on its way after 20 seconds.
+pub fn wait_idle(s: &mut State, now: Instant) {
+    wait_idle_on(s, now, WIDTH);
+}
+
+fn wait_idle_on(s: &mut State, now: Instant, width: f32) {
+    let until = Instant::now() + Duration::from_secs(20);
+    loop {
+        let busy = s.busy();
+        if busy.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < until,
+            "still on its way after 20 s: {}",
+            busy.join(", ")
+        );
+        std::thread::sleep(Duration::from_millis(1));
+        frame_on(s, now, width);
+    }
+}
+
+/// `settle` on a window `width` units wide.
+pub fn settle_on(s: &mut State, now: &mut Instant, width: f32) {
+    wait_idle_on(s, *now, width);
     let until = Instant::now() + Duration::from_secs(20);
     let mut last = String::new();
     let mut same = 0;
-    while Instant::now() < until {
-        let info_done = s.select.info.as_ref().is_none_or(|i| {
-            let i = i.lock().unwrap();
-            i.len() >= s.library.len() && i.iter().all(Option::is_some)
-        });
+    loop {
         *now += Duration::from_millis(16);
-        let shown = screen(&frame(s, *now), &[]);
-        if shown == last && info_done {
+        let mut c = frame_on(s, *now, width);
+        if !s.busy().is_empty() {
+            wait_idle_on(s, *now, width);
+            c = frame_on(s, *now, width);
+        }
+        let shown = screen(&c, &[]);
+        if shown == last {
             same += 1;
-            if same >= 8 {
+            if same >= 8 && !s.is_due() {
                 return;
             }
         } else {
             same = 0;
             last = shown;
         }
-        std::thread::sleep(Duration::from_millis(15));
+        assert!(
+            Instant::now() < until,
+            "the screen never held still in 20 s"
+        );
     }
 }
 
@@ -132,11 +169,19 @@ pub fn state_with(cfg: Config, library: Vec<Entry>) -> State {
 
 /// Draws one frame at `now` and hands back what was drawn.
 pub fn frame(s: &mut State, now: Instant) -> Canvas {
+    frame_on(s, now, WIDTH)
+}
+
+/// One frame at `now` on a window `width` units wide.
+pub fn frame_on(s: &mut State, now: Instant, width: f32) -> Canvas {
     let mut c = Canvas {
         audit: true,
         ..Default::default()
     };
-    s.build_frame(&mut c, now, WIDTH);
+    // Animations read the frame's time, as the run loop sets it, not the wall clock.
+    crate::render::set_frame_time(Some(now));
+    s.build_frame(&mut c, now, width);
+    crate::render::set_frame_time(None);
     c
 }
 
