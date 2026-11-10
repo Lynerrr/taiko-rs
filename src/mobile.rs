@@ -530,19 +530,19 @@ impl State {
                         | Scene::Editor(_)
                         | Scene::EditorHome(_)
                         | Scene::Preview { .. }
-                        | Scene::VideoEdit(_)
-                ) || matches!(
-                    self.hit_at(vx, vy),
-                    Some(
-                        Hit::SettingLevel(_)
-                            | Hit::MusicBar
-                            | Hit::PlayerVolume
-                            | Hit::SongScrollbar
+                ) || self.scene.screen().is_some_and(|s| s.drags())
+                    || matches!(
+                        self.hit_at(vx, vy),
+                        Some(
+                            Hit::SettingLevel(_)
+                                | Hit::MusicBar
+                                | Hit::PlayerVolume
+                                | Hit::SongScrollbar
+                        )
                     )
-                ) || self
-                    .preview
-                    .graph_rect()
-                    .is_some_and(|[x, y, w, h]| vx >= x && vx <= x + w && vy >= y && vy <= y + h);
+                    || self.preview.graph_rect().is_some_and(|[x, y, w, h]| {
+                        vx >= x && vx <= x + w && vy >= y && vy <= y + h
+                    });
                 if dragged {
                     return false;
                 }

@@ -170,6 +170,7 @@ use screens::settings::{
     browse_text, built_in_text, enter_to_start, none_text, off_text, offset_scale_name, on_text,
     parse_number, picking_text, scroll_in_select, short_path, size_char, type_path,
 };
+use screens::video_edit::VideoEdit;
 use screens::{fmt_time, shows_own_background};
 use services::jobs::Job;
 #[cfg(not(windows))]
@@ -244,8 +245,6 @@ enum Scene {
     Spectate(Box<SpectateView>),
     /// Watching a friend's solo play.
     Watch(Box<WatchView>),
-    /// Turning a replay into a video: cut, crop, size, export.
-    VideoEdit(Box<video::Editor>),
     /// The map editor, editing one difficulty.
     Editor(Box<editor::view::View>),
     /// The editor's front door: a new map from a song, or one to go on with.
@@ -591,11 +590,8 @@ struct State {
     split_drag: Option<(hit::Hit, f32, f32)>,
     split_click: Option<(hit::Hit, Instant)>,
     online_leaderboard: Vec<online::OnlineScore>,
-    /// A video export in progress, and the editor's last message.
+    /// A video export in progress (`screens::video_edit`).
     export: Option<video::Export>,
-    video_status: String,
-    /// The video last exported from the open editor.
-    last_video: Option<PathBuf>,
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
     /// A newly loaded skin's note images, for the render thread to upload.
@@ -1155,41 +1151,6 @@ impl State {
         self.start_loading_from(entry, None);
     }
 
-    /// The video editor for a saved replay.
-    fn open_video_editor(&mut self, file: &std::path::Path) {
-        let r = match scores::load_replay(file) {
-            Ok(r) => r,
-            Err(e) => {
-                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}";));
-                return;
-            }
-        };
-        let entry = self
-            .library
-            .iter()
-            .position(|e| e.path.to_string_lossy() == r.map_path && e.hash() == r.map_hash)
-            .or_else(|| {
-                self.library
-                    .iter()
-                    .position(|e| e.label() == r.map_label && e.hash() == r.map_hash)
-            });
-        let Some(entry) = entry else {
-            let map = &r.map_label;
-            self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен";));
-            return;
-        };
-        self.stop_audio();
-        self.preview.show_background_for(&self.library[entry]);
-        let rx = self.load_whole(entry, r.rate, Mods::from_list(&r.mods));
-        self.video_status = if video::find_ffmpeg().is_some() {
-            String::new()
-        } else {
-            no_ffmpeg()
-        };
-        self.last_video = None;
-        self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx, self.cfg.video)));
-    }
-
     /// The editor's front door: make a map from a song, or go on with one.
     fn open_editor_home(&mut self) {
         self.stop_audio();
@@ -1463,258 +1424,6 @@ impl State {
             editor::view::KeyResult::Exit => self.show_select(),
             editor::view::KeyResult::Pass => {
                 self.handle_global_key(code, window);
-            }
-        }
-    }
-
-    fn video_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
-        if self.export.is_some() {
-            if code == KeyCode::Escape && !repeat {
-                // Ending ffmpeg's input (or stopping a pass) ends it early; the encoder removes
-                // what it made.
-                if let Some(ex) = self.export.take() {
-                    ex.encoder.cancel.store(true, Ordering::Relaxed);
-                }
-                self.video_status = tr!(
-                    "export cancelled",
-                    "書き出しを取り消しました",
-                    "экспорт отменён"
-                )
-                .into();
-            }
-            return;
-        }
-        let Scene::VideoEdit(ed) = &mut self.scene else {
-            return;
-        };
-        // Typing the target size takes the keys until Enter or Esc.
-        if let Some(text) = &mut ed.typing {
-            match code {
-                KeyCode::Enter | KeyCode::NumpadEnter => {
-                    match text
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|mb| mb.is_finite() && *mb >= 1.0)
-                    {
-                        Some(mb) => {
-                            ed.settings.target_mb = (mb.min(4000.0) * 10.0).round() / 10.0;
-                            ed.typing = None;
-                        }
-                        None => {
-                            self.video_status = tr!(
-                                "type a size of at least 1 MB, like 10 or 25",
-                                "1 MB以上のサイズを入力 (10や25など)",
-                                "введите размер от 1 МБ, например 10 или 25"
-                            )
-                            .into()
-                        }
-                    }
-                }
-                KeyCode::Escape => ed.typing = None,
-                KeyCode::Backspace => {
-                    text.pop();
-                }
-                KeyCode::KeyQ => {
-                    ed.typing = None;
-                    ed.settings.quality = 0;
-                }
-                _ => {
-                    let ch = match code {
-                        KeyCode::Period
-                        | KeyCode::Comma
-                        | KeyCode::NumpadDecimal
-                        | KeyCode::NumpadComma => Some('.'),
-                        _ => size_char(code).filter(|c| c.is_ascii_digit()),
-                    };
-                    if let Some(ch) = ch.filter(|_| text.len() < 6) {
-                        text.push(ch);
-                    }
-                }
-            }
-            if ed.typing.is_none() {
-                self.video_status.clear();
-            }
-            self.cfg.video = ed.settings;
-            self.cfg.save();
-            return;
-        }
-        let rate = ed.replay.rate;
-        let step = if self.modifiers_shift { 5000.0 } else { 1000.0 } * rate;
-        // Shift steps back through a setting's choices.
-        let dir = if self.modifiers_shift { -1 } else { 1 };
-        let cycle = |i: usize, n: usize| (i as i32 + dir).rem_euclid(n as i32) as usize;
-        let before = ed.settings;
-        match code {
-            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
-                let t = ed.cursor
-                    + if code == KeyCode::ArrowRight {
-                        step
-                    } else {
-                        -step
-                    };
-                ed.playing = None;
-                if let Some(a) = &self.audio {
-                    a.stop();
-                }
-                ed.seek(t);
-            }
-            _ if repeat => {}
-            KeyCode::Space => {
-                if ed.playing.take().is_some() {
-                    if let Some(a) = &self.audio {
-                        a.stop();
-                    }
-                } else if let (Some((_, track)), Some(a)) = (&ed.map, &self.audio) {
-                    let at = ed
-                        .game
-                        .as_ref()
-                        .map(|g| g.track_at(ed.cursor))
-                        .unwrap_or(ed.cursor / rate);
-                    a.play(track.clone(), at);
-                    ed.playing = Some((Instant::now(), ed.cursor));
-                }
-            }
-            KeyCode::KeyI if ed.cursor < ed.end => ed.start = ed.cursor,
-            KeyCode::KeyO if ed.cursor > ed.start => ed.end = ed.cursor,
-            KeyCode::KeyC => {
-                let presets = video::crop_presets();
-                let i = presets
-                    .iter()
-                    .position(|(n, _)| *n == ed.crop_name)
-                    .map(|i| i + 1)
-                    .unwrap_or(0)
-                    % presets.len();
-                (ed.crop_name, ed.crop) = presets[i];
-            }
-            KeyCode::KeyZ => ed.settings.size = cycle(ed.settings.size, video::SIZES.len()),
-            KeyCode::KeyF => ed.settings.fps = cycle(ed.settings.fps, video::FRAME_RATES.len()),
-            KeyCode::KeyB => ed.settings.blur = cycle(ed.settings.blur, video::BLURS.len()),
-            KeyCode::KeyQ => {
-                ed.settings.quality = cycle(ed.settings.quality, video::QUALITIES.len())
-            }
-            KeyCode::KeyT => {
-                // Aiming at a size, and typing it.
-                ed.settings.quality = video::QUALITIES.len() - 1;
-                ed.typing = Some(String::new());
-            }
-            KeyCode::KeyE => ed.settings.speed = cycle(ed.settings.speed, video::SPEEDS.len()),
-            KeyCode::KeyU => ed.settings.hud = !ed.settings.hud,
-            KeyCode::KeyH => ed.settings.hitsounds = !ed.settings.hitsounds,
-            KeyCode::Enter | KeyCode::NumpadEnter => self.start_export(),
-            KeyCode::KeyS => {
-                if let Some(path) = self.last_video.clone() {
-                    self.show_in_folder(&path);
-                }
-            }
-            KeyCode::Escape => {
-                self.show_select();
-            }
-            _ => {
-                self.handle_global_key(code, window);
-            }
-        }
-        // Remembered for the next video.
-        if let Scene::VideoEdit(ed) = &self.scene
-            && ed.settings != before
-        {
-            self.video_status.clear();
-            self.cfg.video = ed.settings;
-            self.cfg.save();
-        }
-    }
-
-    /// Starts rendering the editor's cut to an MP4.
-    fn start_export(&mut self) {
-        let Scene::VideoEdit(ed) = &mut self.scene else {
-            return;
-        };
-        let Some((map, track)) = &ed.map else { return };
-        let Some(ffmpeg) = video::find_ffmpeg() else {
-            self.video_status = no_ffmpeg();
-            return;
-        };
-        ed.playing = None;
-        if let Some(a) = &self.audio {
-            a.stop();
-        }
-        let sr = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
-        // The hitsounds as they were judged, and the music, for the cut.
-        let mut sim = scores::replay_game(map, track, &ed.replay);
-        sim.set_sfx_log(Some(Vec::new()));
-        sim.set_time(ed.end);
-        let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds {
-            sim.take_sfx_log()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(t, s, v)| (t, s.into(), v))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let sounds = audio::hitsound_set(
-            sr,
-            skin::hitsounds(&self.cfg.skin, &self.cfg.skin_parts, sr),
-        );
-        let (music, fx) = self.cfg.volumes();
-        let speed = sim.speed();
-        let samples = video::mix_audio(
-            track,
-            sr,
-            &speed,
-            ed.start,
-            ed.end,
-            music.max(0.05),
-            &sfx,
-            &sounds,
-            fx,
-        );
-        let Some(dir) = video::videos_dir() else {
-            return;
-        };
-        let _ = std::fs::create_dir_all(&dir);
-        let wav = dir.join(format!(".audio-{}.wav", std::process::id()));
-        if let Err(e) = video::write_wav(&wav, &samples, sr) {
-            self.video_status = format!("can't write the audio: {e}");
-            return;
-        }
-        let out = video::free_path(&dir, &video::file_name(&ed.replay));
-        let settings = ed.settings;
-        let size = video::SIZES[settings.size];
-        let fps = video::FRAME_RATES[settings.fps];
-        // Frames are evenly spaced in song time (what the video's audio follows).
-        let step = 1000.0 / fps as f64;
-        let (t0, t1) = (speed.track(ed.start), speed.track(ed.end));
-        let frames = ((t1 - t0) / step).ceil().max(1.0) as u64;
-        let job = video::Job {
-            size,
-            fps,
-            crop: ed.crop_px(),
-            settings,
-            seconds: frames as f64 / fps as f64,
-            wav: wav.clone(),
-            out: out.clone(),
-        };
-        match video::start_encoder(&ffmpeg, job) {
-            Ok(encoder) => {
-                let mut game = Box::new(Play::new(scores::replay_game(map, track, &ed.replay)));
-                game.set_time(ed.start);
-                self.export = Some(video::Export {
-                    game,
-                    t: t0,
-                    step,
-                    t0,
-                    sub: 0,
-                    settings,
-                    size,
-                    encoder,
-                    frame: 0,
-                    frames,
-                });
-                self.video_status = String::new();
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&wav);
-                self.video_status = e;
             }
         }
     }
@@ -5277,15 +4986,6 @@ impl State {
                 tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),
                 String::new(),
             ),
-            Scene::VideoEdit(ed) => (
-                tr!(
-                    "Making a replay video",
-                    "リプレイの動画を作成中",
-                    "Делает видео повтора"
-                )
-                .into(),
-                ed.replay.map_label.clone(),
-            ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
             Scene::MpMenu => (
@@ -5331,7 +5031,7 @@ impl State {
                 tr!("Calibrating", "調整中", "Калибровка").into(),
                 String::new(),
             ),
-            Scene::Other(s) => (s.presence(), String::new()),
+            Scene::Other(s) => s.presence(),
             _ => (
                 tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(),
                 self.select
@@ -7032,7 +6732,6 @@ impl State {
         }
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
-        let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
         if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
             let keys = self.editor_keys();
             if let Scene::Editor(view) = &mut self.scene {
@@ -7047,34 +6746,11 @@ impl State {
             home.mouse_move(vx);
             return CursorIcon::Grabbing;
         }
-        if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
-            if ed.scrubbing {
-                let t = ed.time_at(vx);
-                ed.seek(t);
-                return CursorIcon::Pointer;
-            }
-            if let Some((grip, (px, py), from)) = ed.grip {
-                let [_, _, fw, fh] = ed.frame_rect;
-                ed.crop = layout::drag(
-                    from,
-                    grip,
-                    ((x - px) / (fw as f64 * k)) as f32,
-                    ((y - py) / (fh as f64 * k)) as f32,
-                )
-                .clamped();
-                ed.crop_name = "custom";
-                return grip.cursor();
-            }
-            let [fx, fy, fw, fh] = ed.frame_rect;
-            if let Some(g) = layout::hit(
-                ed.crop,
-                x - fx as f64 * k,
-                y - fy as f64 * k,
-                fw as f64 * k,
-                fh as f64 * k,
-            ) {
-                return g.cursor();
-            }
+        if let Some(cursor) = self
+            .with_screen(|s, state| s.pointer_moved(state, x, y))
+            .flatten()
+        {
+            return cursor;
         }
         if let Some(dd) = &mut self.settings_ui.dropdown {
             if dd.drag_bar(vy) {
@@ -7373,37 +7049,8 @@ impl State {
             self.replay_seek_to_pointer(true);
             return;
         }
-        if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
-            let (vx, vy) = (
-                self.mouse.0 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0),
-                self.mouse.1 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0),
-            );
-            let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
-            if !pressed {
-                ed.scrubbing = false;
-                ed.grip = None;
-            } else if ed.in_timeline(vx, vy) {
-                ed.scrubbing = true;
-                ed.playing = None;
-                if let Some(a) = &self.audio {
-                    a.stop();
-                }
-                let t = ed.time_at(vx);
-                ed.seek(t);
-                return;
-            } else {
-                let [fx, fy, fw, fh] = ed.frame_rect;
-                if let Some(g) = layout::hit(
-                    ed.crop,
-                    self.mouse.0 - fx as f64 * k,
-                    self.mouse.1 - fy as f64 * k,
-                    fw as f64 * k,
-                    fh as f64 * k,
-                ) {
-                    ed.grip = Some((g, self.mouse, ed.crop));
-                    return;
-                }
-            }
+        if self.with_screen(|s, state| s.mouse_button(state, pressed)) == Some(true) {
+            return;
         }
         if self.on_menu() {
             let (vx, vy) = self.mouse_virtual();
@@ -8706,7 +8353,6 @@ impl State {
             Scene::MpResults => "multiplayer results",
             Scene::Spectate(_) => "spectating",
             Scene::Watch(_) => "watching a friend",
-            Scene::VideoEdit(_) => "video editor",
             Scene::Editor(_) => "map editor",
             Scene::EditorHome(_) => "map editor menu",
         };
@@ -10390,9 +10036,8 @@ impl State {
                 | Scene::Preview { .. }
                 | Scene::Spectate(_)
                 | Scene::Watch(_)
-                | Scene::VideoEdit(_)
                 | Scene::Editor(_)
-        )
+        ) || self.scene.screen().is_some_and(|s| s.dims_background())
     }
 
     /// What the window is cleared to under the background: black in a song when the background
@@ -12297,10 +11942,6 @@ impl State {
             self.home_key(code, repeat, text, at);
             return;
         }
-        if matches!(self.scene, Scene::VideoEdit(_)) {
-            self.video_key(code, repeat, window);
-            return;
-        }
         if matches!(self.scene, Scene::Watch(_)) && code == KeyCode::Escape {
             if !repeat {
                 self.stop_watching();
@@ -12560,7 +12201,6 @@ impl State {
             | Scene::MpResults
             | Scene::Spectate(_)
             | Scene::Watch(_)
-            | Scene::VideoEdit(_)
             | Scene::Editor(_)
             | Scene::EditorHome(_) => {}
             Scene::Play { game, .. } => match code {
@@ -12877,13 +12517,17 @@ impl State {
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    self.video_status = format!("saved \"{name}\" in the videos folder");
-                    self.last_video = Some(path);
+                    if let Some(v) = self.scene.screen_mut::<VideoEdit>() {
+                        v.status = format!("saved \"{name}\" in the videos folder");
+                        v.last_video = Some(path);
+                    }
                     self.toast("video saved".into());
                 }
                 Ok(Err(e)) => {
                     self.export = None;
-                    self.video_status = format!("export failed: {e}");
+                    if let Some(v) = self.scene.screen_mut::<VideoEdit>() {
+                        v.status = format!("export failed: {e}");
+                    }
                 }
                 Err(_) => {}
             }
@@ -13061,9 +12705,9 @@ impl State {
                 | Scene::Results { .. }
                 | Scene::Preview { .. }
                 | Scene::Watch(_)
-                | Scene::VideoEdit(_)
                 | Scene::Editor(_)
-        ) {
+        ) || self.scene.screen().is_some_and(|s| s.closes_main_menu())
+        {
             self.main_menu = None;
         }
         // Back from calibrating: on with the guide.
@@ -14447,44 +14091,6 @@ impl State {
                     home_out = Some(out);
                 }
             }
-            Scene::VideoEdit(ed) => {
-                match ed.poll() {
-                    Err(e) => {
-                        self.status = format!("can't open the replay: {e}");
-                        next = Some(Scene::Select);
-                    }
-                    Ok(_) => {
-                        if let Some((at, from)) = ed.playing {
-                            let elapsed = at.elapsed().as_secs_f64() * 1000.0;
-                            let t = match &ed.game {
-                                Some(g) => g.speed().map(g.track_at(from) + elapsed),
-                                None => from + elapsed * ed.replay.rate,
-                            };
-                            if t >= ed.end {
-                                ed.playing = None;
-                                if let Some(a) = &self.audio {
-                                    a.stop();
-                                }
-                            } else {
-                                ed.seek(t);
-                            }
-                        }
-                    }
-                }
-                let progress = self.export.as_ref().map(|ex| ex.progress());
-                if let Some(g) = &mut ed.game {
-                    g.view.kiai_effects = self.cfg.kiai_effects;
-                    g.view.hud = self.cfg.hud;
-                    g.view.hidden = self.cfg.hud.off;
-                }
-                ed.draw(
-                    canvas,
-                    self.cfg.scroll_speed,
-                    progress,
-                    &self.video_status,
-                    self.last_video.is_some(),
-                );
-            }
             Scene::MpResults => match &self.mp {
                 Some(s) => multiplayer::draw_results(canvas, s),
                 None => next = Some(Scene::MpMenu),
@@ -14516,7 +14122,11 @@ impl State {
                     calibrate::draw_by_ear(canvas, game);
                 }
             }
-            Scene::Other(_) => self.draw_screen(canvas),
+            Scene::Other(_) => {
+                if let Some(s) = self.draw_screen(canvas) {
+                    next = Some(s);
+                }
+            }
             Scene::Settings { prev } => {
                 let from_game = matches!(**prev, Scene::Play { .. });
                 self.settings_ui.krokodil = self.is_krokodil();
@@ -15352,7 +14962,7 @@ impl State {
             Scene::Loading { rx, .. } | Scene::MpWait { rx, .. } => rx.is_busy(),
             Scene::Spectate(v) => v.rx.is_busy(),
             Scene::Watch(v) => v.rx.is_busy(),
-            Scene::VideoEdit(e) => e.rx.is_busy(),
+            Scene::Other(s) => s.loading(),
             _ => false,
         };
         let live_pp = matches!(&self.scene,

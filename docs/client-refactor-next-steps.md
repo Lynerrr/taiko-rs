@@ -109,6 +109,15 @@ S5 is `src/screens/screen.rs` and `src/screens/calibrate_done.rs`: a screen outs
 `Next::Left` (it has set the scene that follows). Each screen moved in S6 is added to `MOVED` in
 `screen.rs`'s `moved_screens_stay_out_of_lib` test.
 
+S6 starts with `VideoEdit` (`src/screens/video_edit.rs`), not `Download`: the download tab is
+song select's list and preview showing remote maps, named next to `Select` in about 25 places,
+while the video editor was named in 14. It also replaced S5's stand-in while a screen handles
+input: the stand-in was `Scene::Select`, so code the screen calls (global keys, which check for
+song select's search) could see the wrong screen. A `Shadow` now holds the screen's place and
+answers every query of the `Screen` trait as the screen would, so each query a moved screen adds
+to the trait is added to `Shadow` as well. A screen leaves by putting another scene in its place.
+The video export stays `State::export`: the render thread draws it and it ends on its own.
+
 After S3 and S4 a screen's move in S6 is its own state, its drawing and its input, and nothing
 else: no job plumbing and no overlay checks travel with it.
 

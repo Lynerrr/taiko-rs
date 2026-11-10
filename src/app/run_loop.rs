@@ -1248,8 +1248,6 @@ impl State {
             split_click: None,
             online_leaderboard: Vec::new(),
             export: None,
-            video_status: String::new(),
-            last_video: None,
             bg_changed: None,
             sprites_upload: None,
             skin_loader: None,

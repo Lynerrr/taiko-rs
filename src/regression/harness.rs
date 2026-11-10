@@ -304,7 +304,6 @@ pub fn scene_name(s: &State) -> &'static str {
         Scene::MpPlay { .. } => "MpPlay",
         Scene::Spectate(_) => "Spectate",
         Scene::Watch(_) => "Watch",
-        Scene::VideoEdit(_) => "VideoEdit",
         Scene::Editor(_) => "Editor",
         Scene::EditorHome(_) => "EditorHome",
         Scene::MpResults => "MpResults",
