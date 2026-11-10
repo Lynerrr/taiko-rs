@@ -28,6 +28,7 @@ cargo test --locked --lib regression::gameplay
 | `network` | The wire format of every room, online and social message, messages from older servers, chat and name cleaning, JSON-line framing, and the client against a scripted room: hello and clock sync, a whole match as a guest, lobby events (missing map, chat, skip votes, typed chat, rejection) and a dropped connection |
 | `flows` | Whole journeys with the keyboard: song select to loading, a play with the drum keys, results and back. Also live play judged the same as its replay, pausing, resuming, retrying and quitting, a Sudden Death fail, walking through every settings section, song select navigation and search, and the top tabs |
 | `screens` | Every screen as drawn: the texts on it, where they are and what can be clicked. That covers song select, the main menu and each of its items, every settings section, multiplayer, download, the editor home, the interface and playfield editors, the guide pages, play, pause and results, plus the main screens in Japanese and Russian. Linux only |
+| `drawing` | What the playfield draws, shape by shape (kind, position, size, colours, in draw order, rounded): a dense stream before its first note, mid-stream with judgements showing and near its end, with no mods, Hidden, Hard Rock + Double Time and Multiverse. The screen goldens keep only texts and hit areas, so a note in the wrong place or colour shows up here |
 | `pointer` | The song preview and the pointer: its autoplay box and seek graph take clicks, the wheel and the hand cursor, but only where nothing is drawn over them (the guide, the friends panel, the mod select, a drop-down or any other overlay) |
 | `clicks` | What every click does: on song select, settings, multiplayer, download, the editor home, the interface and playfield editors, the guide, the main menu, the music player, the friends overlay, medals, results and pause, each clickable area is clicked in its middle on a fresh client, and the scene it leads to, any message, quitting and the texts that appear or go are kept. Linux only |
 
@@ -59,6 +60,8 @@ Every change to the client comes with regression tests for what it changes or ad
   and the mod table automatically, so bless and review its lines.
 - **A new screen or a changed one**: add a shot in `screens.rs` and, if keys or clicks lead to
   it, a journey in `flows.rs`.
+- **A change to how the playfield looks** (notes, lane, drum, judgements, a mod's look): add a
+  frame or a mod to `drawing.rs`.
 - **A change to what the pointer reaches** (clicks, the wheel, the cursor): add a case to
   `pointer.rs`.
 - **A new or changed message**: add it to the lists in `network.rs`. If old builds or servers
