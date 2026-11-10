@@ -1077,6 +1077,16 @@ pub fn free_path(dir: &Path, name: &str) -> PathBuf {
         .unwrap_or_else(|| dir.join(name))
 }
 
+/// Why there's no exporting videos.
+pub(crate) fn no_ffmpeg() -> String {
+    tr!(
+        "ffmpeg wasn't found: install it to export (Windows: winget install ffmpeg; Linux: your package manager)",
+        "ffmpegが見つかりません: 書き出すにはインストールしてください (Windows: winget install ffmpeg、Linux: パッケージマネージャー)",
+        "ffmpeg не найден: установите его для экспорта (Windows: winget install ffmpeg; Linux: менеджер пакетов)"
+    )
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

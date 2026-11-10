@@ -1,9 +1,16 @@
 //! The screens, each in its own module (docs/client-architecture.md, 4.5). For now they hold
 //! what lib.rs drew and did for each screen; the screens themselves follow (step 7).
 
+pub(crate) mod menu;
 pub(crate) mod play;
 pub(crate) mod results;
 pub(crate) mod select;
+pub(crate) mod settings;
+
+pub(crate) fn fmt_time(ms: f64) -> String {
+    let s = (ms / 1000.0).max(0.0) as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
 
 #[cfg(test)]
 mod tests {
