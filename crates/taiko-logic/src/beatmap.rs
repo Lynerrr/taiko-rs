@@ -260,9 +260,9 @@ fn number(v: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
-pub fn read_meta_file(path: &Path) -> Option<Meta> {
-    use std::io::BufRead;
-    let mut reader = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+/// The header of a map read from `reader`, which stops once past it (a library scan reads only
+/// the start of each file).
+pub fn read_meta_from(mut reader: impl std::io::BufRead) -> Option<Meta> {
     let mut text = String::new();
     let mut line = Vec::new();
     let mut background = None;
@@ -324,12 +324,13 @@ fn read_background(reader: &mut impl std::io::BufRead) -> Option<String> {
 /// offset calibrated on the click track fits real maps too.
 pub const OSU_TIMING_MS: f64 = 23.0;
 
-pub fn load(path: &Path) -> Result<Beatmap, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if is_tko(path) && crate::tko::format::version_of(&text).is_none() {
+/// A map file's text, converted for play; `tko`: the file is a `.tko` map, which must say its
+/// format version.
+pub fn load_text(text: &str, tko: bool) -> Result<Beatmap, String> {
+    if tko && crate::tko::format::version_of(text).is_none() {
         return Err(crate::tko::format::Error::MissingVersion.to_string());
     }
-    from_text(&text)
+    from_text(text)
 }
 
 /// Whether `path` is a `.tko` map.
@@ -943,12 +944,7 @@ SliderTickRate:1
     #[test]
     fn loaded_maps_move_to_where_osu_plays_their_music() {
         let text = "osu file format v14\n\n[General]\nAudioFilename: a.mp3\nMode: 1\n\n[Difficulty]\nOverallDifficulty:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n1000,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,1500,1,2,0:0:0:0:\n";
-        let dir = std::env::temp_dir().join(format!("taiko-rs-shift-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("map.osu");
-        std::fs::write(&path, text).unwrap();
-        let (file, raw) = (load(&path).unwrap(), parse(text));
-        let _ = std::fs::remove_dir_all(&dir);
+        let (file, raw) = (load_text(text, false).unwrap(), parse(text));
         for (a, b) in file.notes.iter().zip(&raw.notes) {
             assert_eq!(a.time, b.time + OSU_TIMING_MS);
         }

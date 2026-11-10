@@ -96,11 +96,11 @@ pub fn custom_factor(mods: Mods) -> f64 {
 }
 
 /// The pp of a play on the map at `path`. None for Autoplay, or a map that can't be read.
-pub fn play_pp(path: &Path, p: &Play) -> Option<f64> {
+pub fn play_pp(map: &[u8], p: &Play) -> Option<f64> {
     if p.mods.unranked() {
         return None;
     }
-    let map = crate::stars::load_played(path, p.mods, p.seed, p.half)?;
+    let map = crate::stars::load_played(map, p.mods, p.seed, p.half)?;
     let attrs = TaikoPerformance::new(&map)
         .mods(formula_mods(p.mods, p.scroll_speed))
         .clock_rate(p.rate)
@@ -132,11 +132,11 @@ pub struct Breakdown {
 }
 
 /// The breakdown of a play's pp (None where `play_pp` is None).
-pub fn breakdown(path: &Path, p: &Play) -> Option<Breakdown> {
+pub fn breakdown(map: &[u8], p: &Play) -> Option<Breakdown> {
     if p.mods.unranked() {
         return None;
     }
-    let map = crate::stars::load_played(path, p.mods, p.seed, p.half)?;
+    let map = crate::stars::load_played(map, p.mods, p.seed, p.half)?;
     let k = custom_factor(p.mods);
     let base = TaikoPerformance::new(&map)
         .mods(formula_mods(p.mods, p.scroll_speed))
@@ -183,11 +183,11 @@ pub const POTENTIAL: [f64; 3] = [100.0, 99.0, 98.0];
 
 /// What a full combo of the map at `path` gives at each of `POTENTIAL`'s accuracies, with
 /// `mods` at `rate` and `scroll_speed` (None where `play_pp` would be None).
-pub fn potential(path: &Path, rate: f64, mods: Mods, scroll_speed: f64) -> Option<[f64; 3]> {
+pub fn potential(map: &[u8], rate: f64, mods: Mods, scroll_speed: f64) -> Option<[f64; 3]> {
     if mods.unranked() {
         return None;
     }
-    let map = crate::stars::load_played(path, mods, 0, Default::default())?;
+    let map = crate::stars::load_played(map, mods, 0, Default::default())?;
     let base = TaikoPerformance::new(&map)
         .mods(formula_mods(mods, scroll_speed))
         .clock_rate(rate)
@@ -210,8 +210,9 @@ pub struct Potentials {
 /// The map, the speed (in hundredths), the mods and the scroll speed (in hundredths).
 type PotentialKey = (PathBuf, u32, String, u32);
 
-impl Default for Potentials {
-    fn default() -> Self {
+impl Potentials {
+    /// The worker reads the maps it is asked about with `read`.
+    pub fn new(read: crate::ReadFile) -> Self {
         let (tx, jobs) = mpsc::channel::<(PotentialKey, PathBuf)>();
         let (done, rx) = mpsc::channel();
         std::thread::Builder::new()
@@ -220,7 +221,8 @@ impl Default for Potentials {
                 for (key, path) in jobs {
                     let (rate, scroll) = (key.1 as f64 / 100.0, key.3 as f64 / 100.0);
                     let pp = std::panic::catch_unwind(|| {
-                        potential(&path, rate, Mods::parse_set(&key.2), scroll)
+                        read(&path)
+                            .and_then(|map| potential(&map, rate, Mods::parse_set(&key.2), scroll))
                     })
                     .ok()
                     .flatten();
@@ -284,9 +286,10 @@ pub struct Live {
 type Counts = (u32, u32, u32, u32);
 
 impl Live {
-    /// None for Autoplay (it gets no pp).
+    /// None for Autoplay (it gets no pp). Its thread reads the map at `path` with `read`.
     pub fn start(
         path: PathBuf,
+        read: crate::ReadFile,
         rate: f64,
         mods: Mods,
         scroll_speed: f64,
@@ -303,7 +306,9 @@ impl Live {
         std::thread::Builder::new()
             .name("live pp".into())
             .spawn(move || {
-                let Some(map) = crate::stars::load_played(&path, mods, seed, half_rule) else {
+                let Some(map) = read(&path)
+                    .and_then(|map| crate::stars::load_played(&map, mods, seed, half_rule))
+                else {
                     return;
                 };
                 let fresh = || {
@@ -439,8 +444,10 @@ mod tests {
         }
         std::fs::write(&path, text).unwrap();
         let (none, half) = (Mods::NONE, Mods::parse("HA"));
-        let full = crate::stars::star_rating_for(&path, 1.0, none, 1.0).unwrap();
-        let cut = crate::stars::star_rating_for(&path, 1.0, half, 1.0).unwrap();
+        let full =
+            crate::stars::star_rating_for(&std::fs::read(&path).unwrap(), 1.0, none, 1.0).unwrap();
+        let cut =
+            crate::stars::star_rating_for(&std::fs::read(&path).unwrap(), 1.0, half, 1.0).unwrap();
         assert!(cut < full * 0.8, "{cut} of {full}");
         let play = Play {
             great: 400,
@@ -453,11 +460,11 @@ mod tests {
             seed: 0,
             half: Default::default(),
         };
-        let b = breakdown(&path, &play).unwrap();
+        let b = breakdown(&std::fs::read(&path).unwrap(), &play).unwrap();
         assert_eq!(b.max_combo, 400);
         // The game plays the same notes.
         let game = crate::sim::Game::with_mods(
-            crate::beatmap::load(&path).unwrap(),
+            crate::beatmap::load_text(&std::fs::read_to_string(&path).unwrap(), false).unwrap(),
             std::sync::Arc::new(crate::sim::Silence),
             None,
             half,
@@ -470,7 +477,7 @@ mod tests {
         );
         assert!(
             b.pp < play_pp(
-                &path,
+                &std::fs::read(&path).unwrap(),
                 &Play {
                     great: 800,
                     max_combo: 800,
@@ -483,7 +490,7 @@ mod tests {
         // Colours count too, and Random goes by its seed.
         let random = |seed| {
             crate::stars::star_rating_played(
-                &path,
+                &std::fs::read(&path).unwrap(),
                 1.0,
                 Mods::parse("RD"),
                 1.0,
@@ -520,17 +527,20 @@ mod tests {
             seed: 0,
             half: Default::default(),
         };
-        let usual = play_pp(&path, &play("", 1.0)).unwrap();
-        let relax = play_pp(&path, &play("RX", 1.0)).unwrap();
+        let usual = play_pp(&std::fs::read(&path).unwrap(), &play("", 1.0)).unwrap();
+        let relax = play_pp(&std::fs::read(&path).unwrap(), &play("RX", 1.0)).unwrap();
         assert!(relax > 0.0 && relax < usual, "{relax} against {usual}");
         // At another scroll speed too (the mods go another way into the formula).
-        let slow = play_pp(&path, &play("RX", 0.8)).unwrap();
-        let usual_slow = play_pp(&path, &play("", 0.8)).unwrap();
+        let slow = play_pp(&std::fs::read(&path).unwrap(), &play("RX", 0.8)).unwrap();
+        let usual_slow = play_pp(&std::fs::read(&path).unwrap(), &play("", 0.8)).unwrap();
         assert!(
             slow > 0.0 && slow < usual_slow,
             "{slow} against {usual_slow}"
         );
-        assert_eq!(play_pp(&path, &play("AT", 1.0)), None);
+        assert_eq!(
+            play_pp(&std::fs::read(&path).unwrap(), &play("AT", 1.0)),
+            None
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -558,10 +568,10 @@ mod tests {
             seed: 0,
             half: Default::default(),
         };
-        let ss = play_pp(&path, &play).unwrap();
+        let ss = play_pp(&std::fs::read(&path).unwrap(), &play).unwrap();
         assert!(ss > 1.0, "{ss}");
         let worse = play_pp(
-            &path,
+            &std::fs::read(&path).unwrap(),
             &Play {
                 great: 360,
                 ok: 30,
@@ -574,7 +584,7 @@ mod tests {
         assert!(worse < ss);
         assert!(
             play_pp(
-                &path,
+                &std::fs::read(&path).unwrap(),
                 &Play {
                     mods: Mods::parse("HR"),
                     ..play
@@ -583,10 +593,10 @@ mod tests {
             .unwrap()
                 > ss
         );
-        assert!(play_pp(&path, &Play { rate: 1.5, ..play }).unwrap() > ss);
+        assert!(play_pp(&std::fs::read(&path).unwrap(), &Play { rate: 1.5, ..play }).unwrap() > ss);
         assert!(
             play_pp(
-                &path,
+                &std::fs::read(&path).unwrap(),
                 &Play {
                     mods: Mods::parse("AT"),
                     ..play
@@ -596,7 +606,7 @@ mod tests {
         );
 
         let b = breakdown(
-            &path,
+            &std::fs::read(&path).unwrap(),
             &Play {
                 great: 360,
                 ok: 30,
@@ -614,14 +624,24 @@ mod tests {
         assert!(b.difficulty > 0.0 && b.accuracy > 0.0 && b.max_combo == 400);
 
         // Before a play: SS, 99% and 98% full combos, the SS the same as the play's.
-        let [p100, p99, p98] = potential(&path, 1.0, Mods::NONE, 1.0).unwrap();
+        let [p100, p99, p98] =
+            potential(&std::fs::read(&path).unwrap(), 1.0, Mods::NONE, 1.0).unwrap();
         assert!(
             (p100 - ss).abs() < 1e-6 && p100 > p99 && p99 > p98,
             "{p100} {p99} {p98}"
         );
-        assert!(potential(&path, 1.5, Mods::parse("HR,DT"), 1.0).unwrap()[1] > p99);
-        assert!(potential(&path, 1.0, Mods::parse("AT"), 1.0).is_none());
-        let mut worker = Potentials::default();
+        assert!(
+            potential(
+                &std::fs::read(&path).unwrap(),
+                1.5,
+                Mods::parse("HR,DT"),
+                1.0
+            )
+            .unwrap()[1]
+                > p99
+        );
+        assert!(potential(&std::fs::read(&path).unwrap(), 1.0, Mods::parse("AT"), 1.0).is_none());
+        let mut worker = Potentials::new(|p| std::fs::read(p).ok());
         let got = (0..1000).find_map(|_| {
             std::thread::sleep(std::time::Duration::from_millis(5));
             worker.get(&path, 1.0, Mods::NONE, 1.0)
@@ -629,8 +649,16 @@ mod tests {
         assert_eq!(got, Some([p100, p99, p98]));
 
         // The live counter climbs as notes are hit and ends where the whole play's pp is.
-        let mut live =
-            Live::start(path.clone(), 1.0, Mods::NONE, 1.0, 0, Default::default()).unwrap();
+        let mut live = Live::start(
+            path.clone(),
+            |p| std::fs::read(p).ok(),
+            1.0,
+            Mods::NONE,
+            1.0,
+            0,
+            Default::default(),
+        )
+        .unwrap();
         let read = |live: &mut Live, n: u32| {
             for _ in 0..1000 {
                 let pp = live.update(n, 0, 0, n);
@@ -650,6 +678,7 @@ mod tests {
         assert!(
             Live::start(
                 path.clone(),
+                |p| std::fs::read(p).ok(),
                 1.0,
                 Mods::parse("AT"),
                 1.0,
@@ -665,9 +694,9 @@ mod tests {
             mods: Mods::parse("HR"),
             ..play
         };
-        let hr_pp = play_pp(&path, &hr).unwrap();
+        let hr_pp = play_pp(&std::fs::read(&path).unwrap(), &hr).unwrap();
         let hr_slow = play_pp(
-            &path,
+            &std::fs::read(&path).unwrap(),
             &Play {
                 scroll_speed: 0.5,
                 ..hr
@@ -677,7 +706,7 @@ mod tests {
         assert!(hr_slow < hr_pp, "{hr_slow} vs {hr_pp}");
         assert!(
             play_pp(
-                &path,
+                &std::fs::read(&path).unwrap(),
                 &Play {
                     scroll_speed: 1.5,
                     ..play
@@ -686,23 +715,25 @@ mod tests {
             .unwrap()
                 > ss
         );
-        let bits = TaikoPerformance::new(crate::stars::load(&path).unwrap())
-            .mods(16u32)
-            .n300(400)
-            .calculate()
-            .unwrap()
-            .pp;
+        let bits =
+            TaikoPerformance::new(crate::stars::load(&std::fs::read(&path).unwrap()).unwrap())
+                .mods(16u32)
+                .n300(400)
+                .calculate()
+                .unwrap()
+                .pp;
         assert!(
             (hr_pp - bits).abs() < 1e-9,
             "the usual speed changes nothing"
         );
         // The lazer form of HR at a scroll speed of exactly 1 is HR.
-        let lazer_one = TaikoPerformance::new(crate::stars::load(&path).unwrap())
-            .mods(formula_mods(Mods::parse("HR"), 1.0 + 1e-3))
-            .n300(400)
-            .calculate()
-            .unwrap()
-            .pp;
+        let lazer_one =
+            TaikoPerformance::new(crate::stars::load(&std::fs::read(&path).unwrap()).unwrap())
+                .mods(formula_mods(Mods::parse("HR"), 1.0 + 1e-3))
+                .n300(400)
+                .calculate()
+                .unwrap()
+                .pp;
         assert!(
             (lazer_one - bits).abs() / bits < 0.01,
             "{lazer_one} vs {bits}"

@@ -12,7 +12,7 @@ mod audio;
 mod audiolog;
 use taiko_logic::autoplay;
 mod avatars;
-use taiko_logic::beatmap;
+mod beatmap;
 #[cfg(test)]
 mod beatmap_tests;
 mod browse;
@@ -75,7 +75,7 @@ mod perf_audit;
 mod pictures;
 mod player;
 mod playlist;
-use taiko_logic::pp;
+mod pp;
 #[cfg(test)]
 mod pp_tests;
 mod preview;
@@ -100,7 +100,7 @@ mod shots;
 mod skin;
 mod social;
 mod splash;
-use taiko_logic::stars;
+mod stars;
 mod stream;
 mod style;
 use taiko_logic::tact;
@@ -11569,6 +11569,7 @@ impl State {
                     let live_pp = v.entry.and_then(|i| {
                         pp::Live::start(
                             self.library[i].path.clone(),
+                            stars::read,
                             g.rate(),
                             mods,
                             1.0,
@@ -13579,6 +13580,7 @@ impl State {
                         game.set_scroll_speed(self.cfg.scroll_speed);
                         let live_pp = pp::Live::start(
                             self.library[*entry].path.clone(),
+                            stars::read,
                             game.rate(),
                             mods,
                             game.scroll_speed(),
@@ -14111,6 +14113,7 @@ impl State {
                     if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
                         let live_pp = pp::Live::start(
                             self.library[i].path.clone(),
+                            stars::read,
                             game.rate(),
                             self.pending_mods,
                             game.scroll_speed(),

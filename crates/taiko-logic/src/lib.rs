@@ -3,7 +3,12 @@
 //!
 //! The client (`taiko-rs`) re-exports each module under its old name, so `crate::tact` and the
 //! rest still mean the same thing there. Nothing here draws, plays sound or opens a socket, and
-//! the crate's dependencies keep it that way.
+//! the crate's dependencies keep it that way. Nor does it read files: it takes a map's bytes,
+//! and its background workers read through the `ReadFile` the client hands them.
+
+/// Reads a whole file (None if it can't be read): how the crate's background workers get the
+/// maps they are given by path, without opening files themselves.
+pub type ReadFile = fn(&std::path::Path) -> Option<Vec<u8>>;
 
 pub mod autoplay;
 pub mod beatmap;
