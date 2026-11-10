@@ -3,11 +3,15 @@
 use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
+use crate::config::fresh_seed;
 use crate::game::{Game, Stats};
 use crate::hit::{Canvas, Hit};
+use crate::library::Entry;
+use crate::mods::{self, Mods};
 use crate::net::{self, Client, Final, Live, MapInfo, PlayerInfo, Server, Status};
 use crate::online;
 use crate::render::{accent, rgba};
+use crate::{multiverse, shapeshift};
 use winit::keyboard::KeyCode;
 
 pub struct Session {
@@ -2466,6 +2470,55 @@ pub fn draw_results(c: &mut Canvas, s: &Session) {
             Hit::Key(KeyCode::Escape),
             final_results.is_some(),
         )],
+    );
+}
+
+/// How a map is named to other players (lobby map, a solo play friends watch), with our
+/// settings of the mods that have them.
+pub(crate) fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
+    let (multiverse, shapeshift) = mod_settings(mods);
+    net::MapInfo {
+        mods: mods.list(),
+        multiverse,
+        shapeshift,
+        seed: None,
+        defense: None,
+        stats: None,
+        hash: e.hash(),
+        artist: e.meta.artist.clone(),
+        title: e.meta.title.clone(),
+        version: e.meta.version.clone(),
+        rate,
+        from: None,
+        set_id: e.set_id(),
+    }
+}
+
+/// The Random colouring a lobby map plays with: the one it has, else a new one. Every map
+/// carries one, Random being each player's own mod: whoever plays it gets the same colouring,
+/// and watching everyone shows each player's.
+pub(crate) fn lobby_seed(had: Option<u64>) -> Option<u64> {
+    Some(had.unwrap_or_else(fresh_seed))
+}
+
+/// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
+/// setup), as the config writes them: what a lobby we host plays with.
+pub(crate) fn mod_settings(mods: Mods) -> (Option<String>, Option<String>) {
+    let universes = mods
+        .has(mods::Mod::Multiverse)
+        .then(|| multiverse::format(&multiverse::get()));
+    let shapes = mods
+        .has(mods::Mod::Shapeshift)
+        .then(|| shapeshift::get().format());
+    (universes, shapes)
+}
+
+/// Plays `game` with the mod settings `map` carries (the lobby host's, or the friend's being
+/// watched) where it has them; ours otherwise. Our config and presets aren't touched.
+pub(crate) fn use_mod_settings(game: &mut Game, map: &net::MapInfo) {
+    game.use_mod_settings(
+        map.multiverse.as_deref().map(multiverse::parse),
+        map.shapeshift.as_deref().map(shapeshift::Config::parse),
     );
 }
 

@@ -581,7 +581,7 @@ impl Default for Config {
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
-            random_seed: crate::fresh_seed(),
+            random_seed: fresh_seed(),
             tact: crate::tact::DEFAULT,
             od_override: crate::od_override::DEFAULT,
             favourite_mods: crate::mods::Mods::NONE,
@@ -1916,6 +1916,14 @@ fn keep_unknown(out: &mut String, old: &str) {
         out.push_str("# from another version of the game, kept for it\n");
         out.push_str(&(kept.join("\n") + "\n"));
     }
+}
+
+/// A new seed for Random's colouring (never 0, the one from before seeds).
+pub(crate) fn fresh_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| d.as_nanos() as u64)
+        .max(1)
 }
 
 #[cfg(test)]

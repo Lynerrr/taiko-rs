@@ -6,6 +6,7 @@
 
 use winit::window::CursorIcon;
 
+use crate::config::Config;
 use crate::hit::Canvas;
 use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 
@@ -466,6 +467,27 @@ pub fn draw_frame(c: &mut Canvas, area: Area, strong: bool) {
             rgba(0xffffff, a),
             1.0,
         );
+    }
+}
+
+/// Draws gameplay (via `f`) into the playfield area, records the shapes to clip, and shows the
+/// area's frame while it's being dragged or an edge is hovered.
+pub(crate) fn draw_game_area(
+    canvas: &mut Canvas,
+    cfg: &Config,
+    clip: &mut Option<(std::ops::Range<usize>, Area)>,
+    grip: &Option<(Grip, (f64, f64), Area)>,
+    hover: &Option<Grip>,
+    see_through: bool,
+    f: impl FnOnce(&mut Canvas),
+) {
+    let area = cfg.playfield_area;
+    let (start, full) = begin(canvas, area, see_through, cfg.bg_dim_black);
+    f(canvas);
+    let range = end(canvas, area, start, full);
+    *clip = Some((range, area));
+    if grip.is_some() || matches!(hover, Some(Grip::Resize { .. })) {
+        draw_frame(canvas, area, grip.is_some());
     }
 }
 

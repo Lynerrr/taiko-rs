@@ -2,6 +2,7 @@
 
 pub(crate) mod crash;
 pub(crate) mod gpu;
+pub(crate) mod input;
 pub(crate) mod run_loop;
 pub(crate) mod shell;
 
@@ -31,6 +32,27 @@ mod tests {
             };
             assert!(file.contains(piece), "`{piece}` isn't in app/{home}");
         }
+    }
+
+    /// lib.rs is the game's state and its methods: every free function lives with the module it
+    /// serves (docs/client-refactor-next-steps.md, S2).
+    #[test]
+    fn lib_rs_has_no_free_functions() {
+        let free: Vec<&str> = include_str!("../lib.rs")
+            .lines()
+            .filter(|line| {
+                let item = ["pub(crate) ", "pub(super) ", "pub "]
+                    .iter()
+                    .find_map(|vis| line.strip_prefix(vis))
+                    .unwrap_or(line);
+                let item = ["const ", "unsafe "]
+                    .iter()
+                    .find_map(|q| item.strip_prefix(q))
+                    .unwrap_or(item);
+                item.starts_with("fn ")
+            })
+            .collect();
+        assert!(free.is_empty(), "free functions back in lib.rs: {free:?}");
     }
 
     /// What only the shell uses is the shell's own: the rest of the game can't reach the loop,
