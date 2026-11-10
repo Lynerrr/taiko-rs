@@ -18,3 +18,4 @@ mod phone;
 mod pointer;
 mod scoring;
 mod screens;
+mod select;
