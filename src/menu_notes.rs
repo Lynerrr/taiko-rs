@@ -382,7 +382,7 @@ mod tests {
             library[0].size > library[1].size,
             "the file size alone would pick the kantan"
         );
-        let (mut notes, mut stars) = (Notes::default(), Stars::default());
+        let (mut notes, mut stars) = (Notes::default(), Stars::new(crate::stars::read));
         for _ in 0..500 {
             stars.poll();
             notes.update(Some(0), &library, &mut stars, 1.0);

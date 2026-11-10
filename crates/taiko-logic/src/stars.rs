@@ -12,8 +12,10 @@ use rosu_pp::{Beatmap, Difficulty};
 /// Section length of lazer's strain skills (in rate-adjusted time).
 const SECTION_MS: f64 = 400.0;
 
-pub fn load(path: &Path) -> Option<Beatmap> {
-    let mut map = Beatmap::from_path(path).ok()?;
+/// A map's .osu (or .tko) bytes, ready for rosu-pp: tiny sliders dropped, None if it can't
+/// be rated.
+pub fn load(map: &[u8]) -> Option<Beatmap> {
+    let mut map = Beatmap::from_bytes(map).ok()?;
     drop_tiny_sliders(&mut map);
     calculable(&map).then_some(map)
 }
@@ -82,13 +84,13 @@ fn reasonable_taiko(times: &[f64]) -> bool {
 /// Random change their colours (like `game::apply_to_map`), and pp and star ratings go by what's
 /// left. `seed`: Random's colouring (`Game::seed`).
 pub fn load_played(
-    path: &Path,
+    map: &[u8],
     mods: crate::mods::Mods,
     seed: u64,
     half_rule: crate::mods::HalfRule,
 ) -> Option<Beatmap> {
     use crate::mods::Mod;
-    let mut map = load(path)?;
+    let mut map = load(map)?;
     let (half, swap, random) = (
         mods.has(Mod::Half),
         mods.has(Mod::Swap),
@@ -153,14 +155,14 @@ pub fn star_rating_text(text: &str) -> Option<f64> {
         .map(|a| a.stars)
 }
 
-pub fn star_rating(path: &Path, rate: f64) -> Option<f64> {
-    star_rating_with(path, rate, 0)
+pub fn star_rating(map: &[u8], rate: f64) -> Option<f64> {
+    star_rating_with(map, rate, 0)
 }
 
 /// With mods (osu!'s bits, `mod_bits`): osu!taiko's star rating counts Hard Rock and Easy (their
 /// scroll speed and hit windows) and Relax, besides the speed.
-pub fn star_rating_with(path: &Path, rate: f64, mods: u32) -> Option<f64> {
-    let map = load(path)?;
+pub fn star_rating_with(map: &[u8], rate: f64, mods: u32) -> Option<f64> {
+    let map = load(map)?;
     Difficulty::new()
         .mods(mods)
         .clock_rate(rate)
@@ -172,24 +174,24 @@ pub fn star_rating_with(path: &Path, rate: f64, mods: u32) -> Option<f64> {
 /// With mods and the scroll speed setting, the way pp counts them (`pp::formula_mods`: slower
 /// notes read easier, faster ones harder). Relax goes by its mod bits, scroll speed aside.
 pub fn star_rating_for(
-    path: &Path,
+    map: &[u8],
     rate: f64,
     mods: crate::mods::Mods,
     scroll_speed: f64,
 ) -> Option<f64> {
-    star_rating_played(path, rate, mods, scroll_speed, 0, Default::default())
+    star_rating_played(map, rate, mods, scroll_speed, 0, Default::default())
 }
 
 /// The same for a play, whose `seed` says how Random coloured it.
 pub fn star_rating_played(
-    path: &Path,
+    map: &[u8],
     rate: f64,
     mods: crate::mods::Mods,
     scroll_speed: f64,
     seed: u64,
     half_rule: crate::mods::HalfRule,
 ) -> Option<f64> {
-    let map = load_played(path, mods, seed, half_rule)?;
+    let map = load_played(map, mods, seed, half_rule)?;
     let difficulty = if mods.has(crate::mods::Mod::Relax) {
         Difficulty::new().mods(mod_bits(mods))
     } else {
@@ -229,8 +231,8 @@ fn note_bits(mods: crate::mods::Mods) -> u32 {
 
 /// Combined skill strain per section, the map time the first section starts at, and the
 /// section length in map time — for the song select difficulty graph.
-pub fn strain_curve(path: &Path, rate: f64, first_object_ms: f64) -> Option<(Vec<f64>, f64, f64)> {
-    let map = load(path)?;
+pub fn strain_curve(map: &[u8], rate: f64, first_object_ms: f64) -> Option<(Vec<f64>, f64, f64)> {
+    let map = load(map)?;
     let s = Difficulty::new()
         .clock_rate(rate)
         .strains_for_mode::<Taiko>(&map)
@@ -265,8 +267,9 @@ pub struct Stars {
     scroll_speed: f64,
 }
 
-impl Default for Stars {
-    fn default() -> Self {
+impl Stars {
+    /// The worker reads the maps it is asked about with `read`.
+    pub fn new(read: crate::ReadFile) -> Self {
         let (tx, jobs) = mpsc::channel::<(Key, PathBuf, f64, crate::mods::Mods, f64)>();
         let (done, rx) = mpsc::channel();
         std::thread::Builder::new()
@@ -274,7 +277,7 @@ impl Default for Stars {
             .spawn(move || {
                 for (key, path, rate, mods, scroll_speed) in jobs {
                     let stars = std::panic::catch_unwind(|| {
-                        star_rating_for(&path, rate, mods, scroll_speed)
+                        read(&path).and_then(|map| star_rating_for(&map, rate, mods, scroll_speed))
                     })
                     .ok()
                     .flatten()
@@ -386,17 +389,39 @@ mod tests {
         }
         let path = std::env::temp_dir().join(format!("taiko-rs-stars-{}.osu", std::process::id()));
         std::fs::write(&path, osu).unwrap();
-        let nomod = star_rating(&path, 1.0).unwrap();
-        let hr = star_rating_with(&path, 1.0, mod_bits(crate::mods::Mods::parse("HR"))).unwrap();
-        let ez = star_rating_with(&path, 1.0, mod_bits(crate::mods::Mods::parse("EZ"))).unwrap();
+        let nomod = star_rating(&std::fs::read(&path).unwrap(), 1.0).unwrap();
+        let hr = star_rating_with(
+            &std::fs::read(&path).unwrap(),
+            1.0,
+            mod_bits(crate::mods::Mods::parse("HR")),
+        )
+        .unwrap();
+        let ez = star_rating_with(
+            &std::fs::read(&path).unwrap(),
+            1.0,
+            mod_bits(crate::mods::Mods::parse("EZ")),
+        )
+        .unwrap();
         assert!(hr > nomod && ez < nomod, "nomod {nomod} HR {hr} EZ {ez}");
         // The scroll speed counts as pp has it: slower reads easier.
         let none = crate::mods::Mods::NONE;
-        let slow = star_rating_for(&path, 1.0, none, 0.5).unwrap();
+        let slow = star_rating_for(&std::fs::read(&path).unwrap(), 1.0, none, 0.5).unwrap();
         assert!(slow < nomod, "nomod {nomod} at 0.5x scroll {slow}");
-        assert!((star_rating_for(&path, 1.0, none, 1.0).unwrap() - nomod).abs() < 1e-9);
         assert!(
-            (star_rating_for(&path, 1.0, crate::mods::Mods::parse("HR"), 1.0).unwrap() - hr).abs()
+            (star_rating_for(&std::fs::read(&path).unwrap(), 1.0, none, 1.0).unwrap() - nomod)
+                .abs()
+                < 1e-9
+        );
+        assert!(
+            (star_rating_for(
+                &std::fs::read(&path).unwrap(),
+                1.0,
+                crate::mods::Mods::parse("HR"),
+                1.0
+            )
+            .unwrap()
+                - hr)
+                .abs()
                 < 1e-9
         );
         // Mods the rating doesn't count don't change it.
@@ -443,7 +468,7 @@ mod tests {
                 text.len()
             ));
             std::fs::write(&path, text).unwrap();
-            let stars = star_rating(&path, 1.0).unwrap();
+            let stars = star_rating(&std::fs::read(&path).unwrap(), 1.0).unwrap();
             let _ = std::fs::remove_file(&path);
             stars
         };
