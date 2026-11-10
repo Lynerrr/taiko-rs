@@ -87,10 +87,13 @@ incremental = false
 opt-level = 3
 
 # Reproducible CPU audits: optimized application code without release LTO's build cost.
+# One codegen unit, as the release has: with 16, a change anywhere in the game moved generic
+# code (the PNG decoder under `skin::load`) between units and made it 30-40 % slower or faster
+# on CI's runners, so the perf gate failed pure moves (#409, #414).
 [profile.perf-audit]
 inherits = "release"
 lto = "off"
-codegen-units = 16
+codegen-units = 1
 
 # Audio decoding is unbearably slow unoptimised; keep dependencies fast in debug builds too.
 [profile.dev.package."*"]
