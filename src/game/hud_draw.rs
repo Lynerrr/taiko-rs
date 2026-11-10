@@ -11,12 +11,12 @@ impl Play {
     /// The interface's parts where the player put them (see `hud`), then the skip hint and the
     /// pause menu (with the map's name), which stay at fixed screen positions.
     pub fn draw_hud(&self, c: &mut Canvas) {
-        let t = self.game.time;
+        let t = self.game.time();
         let w = c.width;
         if let Some(text) = &self.view.banner {
             let tw = Canvas::text_width(9.0, text);
             // Defense has its lives panel up there: the banner goes under it.
-            let by = if self.game.defense.is_some() {
+            let by = if self.game.defense().is_some() {
                 90.0
             } else {
                 14.0
@@ -37,7 +37,7 @@ impl Play {
         self.draw_parts(c);
         // Overtime: he's here, over everything but the pause menu.
         if let Some(&at) = self
-            .scares
+            .scares()
             .iter()
             .find(|&&at| (at..at + SCARE_MS).contains(&t))
         {
@@ -45,8 +45,8 @@ impl Play {
         }
 
         if self.game.can_skip()
-            && self.game.paused.is_none()
-            && !self.game.mute_hits
+            && self.game.paused().is_none()
+            && !self.game.mute_hits()
             && !self.view.watched
         {
             c.text_centered(
@@ -61,7 +61,7 @@ impl Play {
                 ),
             );
         }
-        if let (Some(_), Some((start, end))) = (self.game.paused, self.game.resuming) {
+        if let (Some(_), Some((start, end))) = (self.game.paused(), self.game.resuming()) {
             // Resume countdown: the playfield stays visible, lightly dimmed.
             let now = Instant::now();
             let left = end.saturating_duration_since(now).as_secs_f32();
@@ -106,10 +106,10 @@ impl Play {
                     "приготовьтесь   (Esc: назад в меню)"
                 ),
             );
-        } else if let Some(cursor) = self.game.paused.filter(|_| !self.view.watched) {
+        } else if let Some(cursor) = self.game.paused().filter(|_| !self.view.watched) {
             // The main menu's look: one panel, the options as notes on it (don and kat in turn),
             // the chosen one bigger and lit, the selector sliding between them.
-            let t = progress(self.game.paused_at, 180.0);
+            let t = progress(self.game.paused_at(), 180.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.78 * t));
             let rise = (1.0 - t) * 12.0;
             let phone = crate::mobile::active();
@@ -130,9 +130,9 @@ impl Play {
                 title,
             );
             // The map's name lives here rather than under the lane, where moved lanes ran into it.
-            let m = &self.game.map.meta;
-            let rate = if (self.game.rate - 1.0).abs() > 1e-6 {
-                format!("   {:.2}x", self.game.rate)
+            let m = &self.game.map().meta;
+            let rate = if (self.game.rate() - 1.0).abs() > 1e-6 {
+                format!("   {:.2}x", self.game.rate())
             } else {
                 String::new()
             };
@@ -156,7 +156,7 @@ impl Play {
                         "[{}]  OD {:.1}{rate}",
                         m.version,
                         // As it plays: with EZ / HR / PR and at this speed.
-                        crate::beatmap::od_at_rate(self.game.mods.od(m.od), self.game.rate)
+                        crate::beatmap::od_at_rate(self.game.mods().od(m.od), self.game.rate())
                     ),
                 ),
             );
@@ -172,7 +172,7 @@ impl Play {
             for (i, item) in items.enumerate() {
                 // Options slide up one after another.
                 let ti = progress(
-                    self.game.paused_at + std::time::Duration::from_millis(25 * i as u64),
+                    self.game.paused_at() + std::time::Duration::from_millis(25 * i as u64),
                     180.0,
                 );
                 let y = py + 88.0 + i as f32 * row_h + (1.0 - ti) * 18.0;
@@ -221,7 +221,7 @@ impl Play {
             }
             // Fades in once the options have slid past it.
             let th = progress(
-                self.game.paused_at + std::time::Duration::from_millis(220),
+                self.game.paused_at() + std::time::Duration::from_millis(220),
                 150.0,
             );
             let hint = tr!(
@@ -240,7 +240,7 @@ impl Play {
                 );
             }
         }
-        if let Some((_, at)) = self.game.failed {
+        if let Some((_, at)) = self.game.failed_at() {
             let p = progress(at, 400.0);
             c.rect(0.0, 0.0, w, 480.0, rgba(0x0b0b10, 0.6 * p));
             c.text_centered(
@@ -334,7 +334,7 @@ impl Play {
     /// what that puts on top of another part gives way, towards the middle of the screen.
     pub(super) fn settle_parts(&self, c: &Canvas) {
         let mut settled = [None; Part::ALL.len()];
-        let now = self.game.time;
+        let now = self.game.time();
         if !self.view.lane_path.is_empty() {
             let drawn = |p: Part| {
                 !self.view.hidden.has(p)
@@ -481,12 +481,12 @@ impl Play {
     }
 
     pub(super) fn accuracy_text(&self) -> String {
-        format!("{:.2}%", self.game.stats.accuracy() * 100.0)
+        format!("{:.2}%", self.game.stats().accuracy() * 100.0)
     }
 
     pub(super) fn mods_text(&self) -> String {
         self.game
-            .mods
+            .mods()
             .iter()
             .map(|m| m.acronym())
             .collect::<Vec<_>>()
@@ -496,15 +496,15 @@ impl Play {
     /// Everything the player can place.
     pub fn draw_parts(&self, c: &mut Canvas) {
         self.settle_parts(c);
-        let t = self.game.time;
+        let t = self.game.time();
         let shown = |p: Part| !self.view.hidden.has(p);
         // Over the lane unless moved: the playfield draws those itself.
         let off_the_lane = |p: Part| self.view.hud_sample || self.view.hud.place(p).is_some();
         let chosen = |p: Part| self.view.hud.colour(p);
 
         // Defense is a team's: one player's score says nothing, the team panel does.
-        if shown(Part::Score) && self.game.defense.is_none() {
-            let s = format!("{:08}", self.game.stats.score);
+        if shown(Part::Score) && self.game.defense().is_none() {
+            let s = format!("{:08}", self.game.stats().score);
             self.in_place(c, Part::Score, |c, [w, _], align| {
                 score_number(c, w, align, 24.0, (WHITE, chosen(Part::Score)), &s);
             });
@@ -516,8 +516,8 @@ impl Play {
             });
         }
         if let Some(pp) = self
-            .live_pp_value
-            .filter(|_| shown(Part::Pp) && self.game.defense.is_none())
+            .live_pp_value()
+            .filter(|_| shown(Part::Pp) && self.game.defense().is_none())
         {
             let s = format!("{pp:.0}pp");
             let pink = chosen(Part::Pp).unwrap_or(0xff8ad8);
@@ -543,10 +543,10 @@ impl Play {
         }
         // HP: has to be at least half full at the end (the mark), like osu!taiko. Defense goes
         // by the team's lives instead (its panel).
-        if self.view.show_hp && shown(Part::Health) && self.game.defense.is_none() {
+        if self.view.show_hp && shown(Part::Health) && self.game.defense().is_none() {
             self.in_place(c, Part::Health, |c, [hw, _], _| self.draw_health(c, hw));
         }
-        if !self.game.mods.is_empty() && shown(Part::Mods) {
+        if !self.game.mods().is_empty() && shown(Part::Mods) {
             let label = self.mods_text();
             self.in_place(c, Part::Mods, |c, [w, _], align| {
                 let x = (w - Canvas::text_width(9.0, &label)) * align;
@@ -581,7 +581,7 @@ impl Play {
             }
         }
         if shown(Part::Ur) {
-            let s = format!("UR {:.2}", self.game.stats.unstable_rate());
+            let s = format!("UR {:.2}", self.game.stats().unstable_rate());
             self.in_place(c, Part::Ur, |c, [w, _], align| {
                 let x = (w - Canvas::text_width(UR_SIZE, &s)) * align;
                 let col = chosen(Part::Ur).unwrap_or(0xc8c8d8);
@@ -589,7 +589,7 @@ impl Play {
             });
         }
         if shown(Part::Counts) {
-            let st = &self.game.stats;
+            let st = self.game.stats();
             let picked = chosen(Part::Counts);
             let on = self.view.hud.counter;
             let titles = on.titles;
@@ -616,8 +616,8 @@ impl Play {
                 }
             });
         }
-        if shown(Part::Combo) && off_the_lane(Part::Combo) && self.game.stats.combo >= 2 {
-            let s = self.game.stats.combo.to_string();
+        if shown(Part::Combo) && off_the_lane(Part::Combo) && self.game.stats().combo >= 2 {
+            let s = self.game.stats().combo.to_string();
             self.in_place(c, Part::Combo, |c, [w, h], _| {
                 let skin_size = if s.len() > 3 { 17.0 } else { 22.0 };
                 match c.number_width(Font::Combo, skin_size, &s) {
@@ -647,7 +647,7 @@ impl Play {
                 Some((Judge::Great, 1.0))
             } else {
                 self.game
-                    .last_judge
+                    .last_judge()
                     .filter(|&(j, _)| splashes(j))
                     .and_then(|(j, at)| {
                         let age = (t - at) as f32;
@@ -699,7 +699,7 @@ impl Play {
 
     /// The health bar in its own box, `hw` wide.
     pub(super) fn draw_health(&self, c: &mut Canvas, hw: f32) {
-        let hp = self.game.hp as f32;
+        let hp = self.game.hp() as f32;
         if let Some([[bg_w, bg_h], [fill_w, fill_h]]) = skin_health(c) {
             // The fill on it 5, 16 px in, cut off at the HP.
             c.sprite_box(
@@ -754,33 +754,33 @@ impl Play {
 
     /// The hit error meter around (`cx`, `my`).
     pub(super) fn draw_hit_error(&self, c: &mut Canvas, t: f64, cx: f32, my: f32) {
-        let scale = 150.0 / self.game.windows.miss as f32;
+        let scale = 150.0 / self.game.windows().miss as f32;
         let wnd = |ms: f64| ms as f32 * scale;
         c.round_rect(
-            [cx - wnd(self.game.windows.miss), my - 3.0],
-            [wnd(self.game.windows.miss) * 2.0, 6.0],
+            [cx - wnd(self.game.windows().miss), my - 3.0],
+            [wnd(self.game.windows().miss) * 2.0, 6.0],
             3.0,
             rgba(Judge::Miss.color(), 0.25),
             rgba(0, 0.0),
             0.0,
         );
         c.round_rect(
-            [cx - wnd(self.game.windows.ok), my - 3.0],
-            [wnd(self.game.windows.ok) * 2.0, 6.0],
+            [cx - wnd(self.game.windows().ok), my - 3.0],
+            [wnd(self.game.windows().ok) * 2.0, 6.0],
             3.0,
             rgba(Judge::Ok.color(), 0.4),
             rgba(0, 0.0),
             0.0,
         );
         c.round_rect(
-            [cx - wnd(self.game.windows.great), my - 3.0],
-            [wnd(self.game.windows.great) * 2.0, 6.0],
+            [cx - wnd(self.game.windows().great), my - 3.0],
+            [wnd(self.game.windows().great) * 2.0, 6.0],
             3.0,
             rgba(Judge::Great.color(), 0.6),
             rgba(0, 0.0),
             0.0,
         );
-        for &(err, at, j) in &self.game.recent_errors {
+        for &(err, at, j) in self.game.recent_errors() {
             let age = (t - at) as f32;
             if age < 4000.0 {
                 let a = 1.0 - age / 4000.0;
@@ -793,10 +793,10 @@ impl Play {
                 );
             }
         }
-        if !self.game.recent_errors.is_empty() {
-            let n = self.game.recent_errors.len().min(20);
+        if !self.game.recent_errors().is_empty() {
+            let n = self.game.recent_errors().len().min(20);
             let mean = self
-                .recent_errors
+                .recent_errors()
                 .iter()
                 .rev()
                 .take(n)
@@ -820,7 +820,7 @@ impl Play {
         if !self.view.show_offset_hint {
             return None;
         }
-        let h = self.game.offset_suggestion(self.game.offset)?;
+        let h = self.game.offset_suggestion(self.game.offset())?;
         let e = &h.estimate;
         let (hits, needed) = (e.hits, h.needed);
         let building = if hits < needed {
