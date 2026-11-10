@@ -95,6 +95,14 @@ L2 comes before L3 and L4 on purpose: every later move into the crate is cheaper
 | S5 | Step 7a: `Screen` trait, router, `Scene::Other(Box<dyn Screen>)`, and the first screen (`CalibrateDone`) | one screen lives fully outside `lib.rs`, with its fields |
 | S6.. | Step 7b: one screen per PR, simplest first: `Download`, `Settings`, `Profile`/`Medals`, `VideoEdit`, `Editor*`, `Watch`/`Spectate`, `Results`, multiplayer, `Select`, `Play` | per screen: its `Scene` arm, its `*_key`, `open_*` and `draw_*` methods and its `State` fields are gone from `lib.rs` |
 
+Track S progress: S1, S2 (#395, #396) and S3 (#397, #401, #403) are done. S4 is done as
+`src/app/overlays.rs` (#410, #411, #413, #414 and the PR that added this note): the overlays
+are a `Layer` enum, not trait objects, because what a layer does mostly acts on `State` (the
+guide calibrates, a profile opens medals, the clipboard types into the screen). Keys, the wheel,
+the left button and drawing each walk their list of layers; a layer says whether it took the
+input, and none names `Scene`. The guide's fields are one `guide::Tour`; the other overlays
+already were one field each (`social`, `volume`, `idle`, `unlock`, `profile`, `medals`, ...).
+
 After S3 and S4 a screen's move in S6 is its own state, its drawing and its input, and nothing
 else: no job plumbing and no overlay checks travel with it.
 
