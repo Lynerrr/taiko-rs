@@ -89,6 +89,8 @@ pub fn settle(s: &mut State, now: &mut Instant) {
 
 /// Draws frames at `now`, which only take results in, until no thread works for the client
 /// (`State::busy`). Fails, naming what, when work is still on its way after 20 seconds.
+/// (Used by the screen goldens, which run on Linux only.)
+#[cfg(target_os = "linux")]
 pub fn wait_idle(s: &mut State, now: Instant) {
     wait_idle_on(s, now, WIDTH);
 }
