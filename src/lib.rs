@@ -263,8 +263,6 @@ const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
-/// How long a new player stays on the guide's welcome and offset pages before moving on.
-const GUIDE_HOLD: Duration = Duration::from_secs(4);
 
 /// How far the player's arrow keys and wheel move the music.
 const MUSIC_SEEK_MS: f64 = 5000.0;
@@ -491,15 +489,8 @@ struct State {
     menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
     music_seeked: Option<Instant>,
-    /// The first steps guide is up, on this page.
-    guide: Option<usize>,
-    /// The drum (`Config::keys`) the guide is waiting for a new key for.
-    guide_binding: Option<usize>,
-    /// The page to go back to once calibrating from the guide is done.
-    guide_after: Option<usize>,
-    /// The page on screen and since when, and the pages that were up for all of `GUIDE_HOLD`.
-    guide_shown: Option<(usize, Instant)>,
-    guide_read: [bool; guide::PAGES],
+    /// The first steps guide: its page, if it's up, and what it waits for.
+    guide: guide::Tour,
     /// When "Reset map offsets" was pressed once, waiting for the second.
     reset_armed: Option<Instant>,
     /// The music player, instead of the main menu.
@@ -2470,67 +2461,6 @@ impl State {
         }
         self.cfg.keys[slot] = code;
         true
-    }
-
-    fn guide_action(&mut self, action: guide::Action) {
-        let Some(page) = self.guide else { return };
-        if self.guide_hold_left().is_some()
-            && matches!(
-                action,
-                guide::Action::Next | guide::Action::Close | guide::Action::Page(_)
-            )
-        {
-            return;
-        }
-        self.guide_binding = None;
-        let closing = action == guide::Action::Close
-            || (action == guide::Action::Next && page + 1 == guide::pages());
-        match action {
-            // A new player doesn't leave without the page that says to calibrate.
-            _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => {
-                self.guide = Some(guide::OFFSET_PAGE)
-            }
-            guide::Action::Bind(slot) => self.guide_binding = Some(slot),
-            guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
-            guide::Action::Next if page + 1 < guide::pages() => self.guide = Some(page + 1),
-            guide::Action::Next | guide::Action::Close => self.guide = None,
-            guide::Action::Page(i) => self.guide = Some(i),
-            guide::Action::Calibrate => {
-                self.guide = None;
-                self.guide_after = Some(page + 1);
-                self.start_calibration_as(false);
-            }
-        }
-        // Once closed, it doesn't come up by itself again.
-        if self.guide.is_none() && !self.cfg.guide_seen {
-            self.cfg.guide_seen = true;
-            self.cfg.save();
-        }
-    }
-
-    /// What's left of the time a new player stays on this page of the guide.
-    fn guide_hold_left(&self) -> Option<Duration> {
-        let page = self.guide.filter(|&p| {
-            !self.cfg.guide_seen && (p == 0 || p == guide::OFFSET_PAGE) && !self.guide_read[p]
-        })?;
-        let shown = self
-            .guide_shown
-            .filter(|s| s.0 == page)
-            .map_or(Duration::ZERO, |s| s.1.elapsed());
-        Some(GUIDE_HOLD.saturating_sub(shown)).filter(|left| !left.is_zero())
-    }
-
-    /// Times the page on screen: the clock starts once the splash is out of the way.
-    fn tick_guide(&mut self) {
-        let page = self.guide.filter(|_| self.splash.is_none());
-        if page != self.guide_shown.map(|s| s.0) {
-            self.guide_shown = page.map(|p| (p, Instant::now()));
-        }
-        if let Some((p, since)) = self.guide_shown
-            && since.elapsed() >= GUIDE_HOLD
-        {
-            self.guide_read[p] = true;
-        }
     }
 
     fn reset_is_armed(&self) -> bool {
@@ -4733,7 +4663,7 @@ impl State {
             && self.splash.is_none()
             && self.changelog.is_none()
             && self.player.is_none()
-            && self.guide.is_none()
+            && self.guide.page.is_none()
         {
             let badge = match self.updater.status() {
                 update::Status::Available { commit, .. } => {
@@ -5624,7 +5554,7 @@ impl State {
                 self.start_calibration_as(false)
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Guide => {
-                self.guide = Some(0)
+                self.guide.page = Some(0)
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
                 if item == Item::ResetMapOffsets =>
@@ -13530,13 +13460,13 @@ impl State {
             self.main_menu = None;
         }
         // Back from calibrating: on with the guide.
-        if self.guide_after.is_some()
+        if self.guide.after.is_some()
             && !matches!(
                 self.scene,
                 Scene::Calibrate { .. } | Scene::CalibrateDone { .. }
             )
         {
-            self.guide = self.guide_after.take();
+            self.guide.page = self.guide.after.take();
         }
         if !self.on_menu() {
             if let Some(m) = &mut self.main_menu {
@@ -15470,11 +15400,11 @@ impl State {
             }
             social::draw_notes(canvas, &self.social, self.in_editor());
         }
-        if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
+        if let Some(page) = self.guide.page.filter(|_| self.splash.is_none()) {
             let hold = self
                 .guide_hold_left()
                 .map(|left| left.as_secs_f32().ceil() as u32);
-            guide::draw(canvas, page, self.guide_binding, hold, &self.cfg);
+            guide::draw(canvas, page, self.guide.binding, hold, &self.cfg);
         }
         if let Some(p) = &self.profile {
             p.draw(canvas);
@@ -16097,8 +16027,8 @@ impl State {
         // a changelog the player has already opened manually, and the guide comes first: what's
         // new would cover it while its keys still went to the guide, closing it unseen.
         if !self.in_song()
-            && self.guide.is_none()
-            && self.guide_after.is_none()
+            && self.guide.page.is_none()
+            && self.guide.after.is_none()
             && let Some(view) = changelog::poll_automatic(&mut self.pending_changelog)
             && self.changelog.is_none()
         {

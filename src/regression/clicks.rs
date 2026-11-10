@@ -211,7 +211,7 @@ fn clicks_in_the_guide() {
         "clicks-guide",
         &clicks("guide", |s, _| {
             s.cfg.guide_seen = true;
-            s.guide = Some(0);
+            s.guide.page = Some(0);
         }),
     );
 }

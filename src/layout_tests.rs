@@ -359,14 +359,14 @@ fn assert_every_screen_fits() {
     s.main_menu = None;
     s.scene = Scene::Select;
     for page in 0..guide::PAGES {
-        s.guide = Some(page);
+        s.guide.page = Some(page);
         check(&mut s, &format!("guide page {page}"), &mut out);
     }
-    s.guide = Some(0);
-    s.guide_binding = Some(3);
+    s.guide.page = Some(0);
+    s.guide.binding = Some(3);
     check(&mut s, "guide waiting for a key", &mut out);
-    s.guide_binding = None;
-    s.guide = None;
+    s.guide.binding = None;
+    s.guide.page = None;
     s.select.collection = Some(0);
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);
@@ -2305,8 +2305,8 @@ fn update_notes_wait_for_the_guide_instead_of_covering_it() {
     )
     .unwrap();
     s.pending_changelog = Some(changelog::View::loaded(vec![change]));
-    s.guide = Some(guide::OFFSET_PAGE);
-    s.guide_read = [true; guide::PAGES];
+    s.guide.page = Some(guide::OFFSET_PAGE);
+    s.guide.read = [true; guide::PAGES];
     s.poll_changelog();
     assert!(
         s.changelog.is_none(),
@@ -2314,15 +2314,15 @@ fn update_notes_wait_for_the_guide_instead_of_covering_it() {
     );
     assert!(s.pending_changelog.is_some(), "the notes aren't lost");
 
-    s.guide = None;
-    s.guide_after = Some(guide::OFFSET_PAGE + 1);
+    s.guide.page = None;
+    s.guide.after = Some(guide::OFFSET_PAGE + 1);
     s.poll_changelog();
     assert!(
         s.changelog.is_none(),
         "calibrating from the guide isn't the end of it"
     );
 
-    s.guide_after = None;
+    s.guide.after = None;
     s.poll_changelog();
     assert!(s.changelog.is_some());
 }

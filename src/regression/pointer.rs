@@ -136,7 +136,7 @@ fn with_nothing_over_it_the_preview_takes_the_pointer() {
 #[test]
 fn the_guide_over_the_preview_takes_the_pointer() {
     let (mut s, _songs, mut now) = client("pointer-guide");
-    s.guide = Some(0);
+    s.guide.page = Some(0);
     let hits = next_frame(&mut s, &mut now).to_vec();
     let (bx, graph) = box_and_graph(&hits);
     for (name, rect) in [("box", bx), ("graph", graph)] {
@@ -148,7 +148,7 @@ fn the_guide_over_the_preview_takes_the_pointer() {
         assert!(s.scrubbing.is_none(), "{name}: no seek through the guide");
         s.mouse_button(false, None);
         assert_eq!(scene_name(&s), "Select", "{name}: no fullscreen preview");
-        assert_eq!(s.guide, Some(0), "{name}: the guide stays");
+        assert_eq!(s.guide.page, Some(0), "{name}: the guide stays");
     }
 }
 

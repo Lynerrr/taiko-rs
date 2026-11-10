@@ -127,7 +127,7 @@ impl State {
                 }
             }
             Layer::GuideBinding => {
-                let Some(slot) = self.guide_binding.filter(|_| self.guide.is_some()) else {
+                let Some(slot) = self.guide.binding.filter(|_| self.guide.page.is_some()) else {
                     return false;
                 };
                 let modifier = matches!(
@@ -144,13 +144,13 @@ impl State {
                 if repeat || modifier {
                     return true;
                 }
-                self.guide_binding = None;
+                self.guide.binding = None;
                 if code != KeyCode::Escape && self.bind_drum_key(slot, code) {
                     self.cfg.save();
                 }
             }
             Layer::Guide => {
-                if self.guide.is_none() {
+                if self.guide.page.is_none() {
                     return false;
                 }
                 match code {
@@ -162,11 +162,11 @@ impl State {
                         self.guide_action(guide::Action::Back)
                     }
                     KeyCode::Escape => self.guide_action(guide::Action::Close),
-                    KeyCode::KeyC if self.guide == Some(guide::OFFSET_PAGE) => {
+                    KeyCode::KeyC if self.guide.page == Some(guide::OFFSET_PAGE) => {
                         self.guide_action(guide::Action::Calibrate)
                     }
                     KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4
-                        if self.guide == Some(0) =>
+                        if self.guide.page == Some(0) =>
                     {
                         let slot = [
                             KeyCode::Digit1,
@@ -176,7 +176,7 @@ impl State {
                         ]
                         .iter()
                         .position(|&k| k == code);
-                        self.guide_binding = slot;
+                        self.guide.binding = slot;
                     }
                     _ => {}
                 }
@@ -391,6 +391,74 @@ impl State {
             return true;
         }
         false
+    }
+}
+
+/// How long a new player stays on the guide's welcome and offset pages before moving on.
+const GUIDE_HOLD: Duration = Duration::from_secs(4);
+
+/// The guide's own actions, wherever they come from (its keys, its buttons).
+impl State {
+    pub(crate) fn guide_action(&mut self, action: guide::Action) {
+        let Some(page) = self.guide.page else { return };
+        if self.guide_hold_left().is_some()
+            && matches!(
+                action,
+                guide::Action::Next | guide::Action::Close | guide::Action::Page(_)
+            )
+        {
+            return;
+        }
+        self.guide.binding = None;
+        let closing = action == guide::Action::Close
+            || (action == guide::Action::Next && page + 1 == guide::pages());
+        match action {
+            // A new player doesn't leave without the page that says to calibrate.
+            _ if closing && !self.cfg.guide_seen && !self.guide.read[guide::OFFSET_PAGE] => {
+                self.guide.page = Some(guide::OFFSET_PAGE)
+            }
+            guide::Action::Bind(slot) => self.guide.binding = Some(slot),
+            guide::Action::Back => self.guide.page = Some(page.saturating_sub(1)),
+            guide::Action::Next if page + 1 < guide::pages() => self.guide.page = Some(page + 1),
+            guide::Action::Next | guide::Action::Close => self.guide.page = None,
+            guide::Action::Page(i) => self.guide.page = Some(i),
+            guide::Action::Calibrate => {
+                self.guide.page = None;
+                self.guide.after = Some(page + 1);
+                self.start_calibration_as(false);
+            }
+        }
+        // Once closed, it doesn't come up by itself again.
+        if self.guide.page.is_none() && !self.cfg.guide_seen {
+            self.cfg.guide_seen = true;
+            self.cfg.save();
+        }
+    }
+
+    /// What's left of the time a new player stays on this page of the guide.
+    pub(crate) fn guide_hold_left(&self) -> Option<Duration> {
+        let page = self.guide.page.filter(|&p| {
+            !self.cfg.guide_seen && (p == 0 || p == guide::OFFSET_PAGE) && !self.guide.read[p]
+        })?;
+        let shown = self
+            .guide
+            .shown
+            .filter(|s| s.0 == page)
+            .map_or(Duration::ZERO, |s| s.1.elapsed());
+        Some(GUIDE_HOLD.saturating_sub(shown)).filter(|left| !left.is_zero())
+    }
+
+    /// Times the page on screen: the clock starts once the splash is out of the way.
+    pub(crate) fn tick_guide(&mut self) {
+        let page = self.guide.page.filter(|_| self.splash.is_none());
+        if page != self.guide.shown.map(|s| s.0) {
+            self.guide.shown = page.map(|p| (p, Instant::now()));
+        }
+        if let Some((p, since)) = self.guide.shown
+            && since.elapsed() >= GUIDE_HOLD
+        {
+            self.guide.read[p] = true;
+        }
     }
 }
 

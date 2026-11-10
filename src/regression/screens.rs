@@ -103,7 +103,7 @@ fn multiplayer_menu_download_and_editor_home() {
 fn guide_pages() {
     let (mut s, _songs, mut now) = client("screen-guide");
     for page in 0..guide::PAGES {
-        s.guide = Some(page);
+        s.guide.page = Some(page);
         assert_snapshot(&format!("screen-guide-{page}"), &shot(&mut s, &mut now));
     }
 }
