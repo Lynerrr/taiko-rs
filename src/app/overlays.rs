@@ -20,7 +20,8 @@ pub(crate) enum Layer {
     GuideBinding,
     /// The guide.
     Guide,
-    /// Alt+arrows for the volume, Ctrl+O for the settings.
+    /// The window's own: the volume (Alt+arrows, Alt+wheel, the wheel over its notes) and
+    /// Ctrl+O for the settings.
     WindowKeys,
     /// What's new.
     Changelog,
@@ -66,7 +67,68 @@ pub(crate) const OVER_SCREENS: [Layer; 14] = [
     Layer::ModSelect,
 ];
 
+/// The layers the wheel walks, top first, on every screen but the editor's (which take it
+/// before them, unless the friends overlay is open).
+pub(crate) const WHEEL_LAYERS: [Layer; 5] = [
+    Layer::WindowKeys,
+    Layer::Changelog,
+    Layer::Medals,
+    Layer::Social,
+    Layer::ModSelect,
+];
+
 impl State {
+    /// Walks `layers` top-down with the wheel turned `notches`; true when one took it.
+    pub(crate) fn layers_wheel(&mut self, layers: &[Layer], notches: i32) -> bool {
+        layers.iter().any(|&layer| self.layer_wheel(layer, notches))
+    }
+
+    /// Gives the wheel to `layer`; true when it took it.
+    fn layer_wheel(&mut self, layer: Layer, notches: i32) -> bool {
+        match layer {
+            // Alt anywhere; with the pointer moved onto one of the volume's notes, also
+            // without Alt.
+            Layer::WindowKeys => {
+                if !(self.volume.hovering(Instant::now()) || self.modifiers_alt) {
+                    return false;
+                }
+                self.turn_volume(notches);
+            }
+            Layer::Changelog => {
+                let Some(view) = &mut self.changelog else {
+                    return false;
+                };
+                view.scroll_by(-notches * 3);
+            }
+            Layer::Medals => {
+                let Some(view) = &mut self.medals else {
+                    return false;
+                };
+                view.wheel(notches);
+            }
+            Layer::Social => {
+                if !self.social.open || self.modifiers_alt {
+                    return false;
+                }
+                let (vx, vy) = self.mouse_virtual();
+                let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+                let [px, py, pw, ph] = social::panel_rect(width);
+                if !(vx >= px && vx <= px + pw && vy >= py && vy <= py + ph) {
+                    return false;
+                }
+                self.social.wheel(notches, self.mp.is_some());
+            }
+            Layer::ModSelect => {
+                let Some(cur) = self.mod_select.filter(|_| !self.modifiers_alt) else {
+                    return false;
+                };
+                self.mod_select = Some(mods::step(cur, 0, -notches));
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Walks `layers` top-down with a key; true when one took it.
     pub(crate) fn layers_key(
         &mut self,
