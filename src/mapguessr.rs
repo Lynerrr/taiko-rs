@@ -86,7 +86,7 @@ impl Round {
             }),
             None,
         );
-        g.mute_hits = true;
+        g.set_mute_hits(true);
         g.skip_to(self.start - 50.0);
         g.start_from(self.start, None, 0.0);
         self.game = Some(Play::new(g));
@@ -98,7 +98,7 @@ impl Round {
         if self
             .game
             .as_ref()
-            .is_some_and(|g| g.time > g.end_time() + 1500.0)
+            .is_some_and(|g| g.time() > g.end_time() + 1500.0)
         {
             self.new_game();
         }
@@ -108,7 +108,7 @@ impl Round {
         };
         let mut at = self.ticked.filter(|&t| t < now).unwrap_or(now);
         if now - at > CATCH_UP {
-            g.skip_to(g.time + (now - at).as_secs_f64() * 1000.0 - 100.0);
+            g.skip_to(g.time() + (now - at).as_secs_f64() * 1000.0 - 100.0);
             at = now - STEP;
         }
         loop {

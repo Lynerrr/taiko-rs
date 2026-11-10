@@ -80,6 +80,7 @@ pub trait Audio {
     fn position_ms(&self, now: Instant) -> Option<f64>;
 }
 
+mod control;
 mod rails;
 mod read;
 mod setup;

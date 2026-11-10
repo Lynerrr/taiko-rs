@@ -319,7 +319,7 @@ impl SpectateView {
         self.skip_done = true;
         let target =
             self.games[0].1.skip_target() - SPECTATE_DELAY.as_secs_f64() * 1000.0 * self.rate;
-        if self.games[0].1.time < target {
+        if self.games[0].1.time() < target {
             for (_, g) in &mut self.games {
                 g.seek(target, audio.map(|a| a as &dyn game::Audio), offset);
             }
@@ -1005,7 +1005,7 @@ impl State {
         if !self.focused && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > UNFOCUSED_FPS) {
             return UNFOCUSED_FPS;
         }
-        let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
+        let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused().is_some() && game.resuming().is_none());
         let screen = (self.refresh_hz.round() as u32).max(30);
         if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) {
             screen
@@ -1035,7 +1035,7 @@ impl State {
     fn player_plays(&self) -> bool {
         match &self.scene {
             Scene::Play { game, .. } => {
-                game.replay.is_none() && !self.auto && !game.mods.has(mods::Mod::Autoplay)
+                game.replay().is_none() && !self.auto && !game.mods().has(mods::Mod::Autoplay)
             }
             Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
             _ => false,
@@ -1652,11 +1652,10 @@ impl State {
         let sr = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
         // The hitsounds as they were judged, and the music, for the cut.
         let mut sim = scores::replay_game(map, track, &ed.replay);
-        sim.sfx_log = Some(Vec::new());
+        sim.set_sfx_log(Some(Vec::new()));
         sim.set_time(ed.end);
         let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds {
-            sim.sfx_log
-                .take()
+            sim.take_sfx_log()
                 .unwrap_or_default()
                 .into_iter()
                 .map(|(t, s, v)| (t, s.into(), v))
@@ -2176,7 +2175,7 @@ impl State {
             return;
         };
         self.test_auto = !self.test_auto;
-        game.mods = Self::test_mods(self.test_auto);
+        game.set_mods(Self::test_mods(self.test_auto));
         game.view.banner = Some(Self::test_banner(self.test_auto));
     }
 
@@ -2342,7 +2341,8 @@ impl State {
     fn set_background(&mut self, background: bool) {
         self.backgrounded = background;
         let Some(a) = &self.audio else { return };
-        let game_paused = matches!(&self.scene, Scene::Play { game, .. } if game.paused.is_some());
+        let game_paused =
+            matches!(&self.scene, Scene::Play { game, .. } if game.paused().is_some());
         if background {
             if !self.music_goes_on() {
                 a.set_paused(true);
@@ -2942,7 +2942,7 @@ impl State {
 
     /// A play (or calibration) is running, not paused.
     fn playing(&self) -> bool {
-        matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_none())
+        matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused().is_none())
     }
 
     /// Stars out the swear words already in the chats (the chat filter was just switched on).
@@ -5268,17 +5268,17 @@ impl State {
             ),
             Scene::Play { game, entry, .. } => {
                 let label = self.library.get(*entry)?.label();
-                let state = if let Some(who) = &game.replay_of {
+                let state = if let Some(who) = game.replay_of() {
                     tr!("Watching {who}'s replay", "{who}のリプレイを観戦中", "Смотрит повтор {who}";)
-                } else if game.paused.is_some() {
+                } else if game.paused().is_some() {
                     tr!("Paused", "ポーズ中", "Пауза").into()
                 } else {
                     let stars = self
                         .stars
-                        .get(*entry, game.rate)
+                        .get(*entry, game.rate())
                         .map(|s| format!("  {s:.2}*"))
                         .unwrap_or_default();
-                    let rate = rate_text(game.rate);
+                    let rate = rate_text(game.rate());
                     tr!("Playing{stars}{rate}", "プレイ中{stars}{rate}", "Играет{stars}{rate}";)
                 };
                 (label, state)
@@ -5768,7 +5768,7 @@ impl State {
         let track = Arc::new(track);
         let mut game = Play::new(Game::new(map, track, sound(&self.audio)));
         // Your own hitsounds would let you sync to yourself instead of to the click.
-        game.mute_hits = true;
+        game.set_mute_hits(true);
         game.view.show_hp = false;
         self.scene = Scene::Calibrate {
             game: Box::new(game),
@@ -5790,7 +5790,7 @@ impl State {
         } else {
             self.cfg.offset_ms
         };
-        let mut found = calibrate::estimate(&game.stats.errors, current);
+        let mut found = calibrate::estimate(&game.stats().errors, current);
         if let (Some(e), false) = (&mut found, vsync) {
             // The suggestion is in the global offset's own terms (osu!'s). Hitting late by e is
             // the clock's offset up by e, which is the osu! one down by e.
@@ -6036,8 +6036,8 @@ impl State {
         }
         self.preview.map_offset = offset;
         if let Scene::Play { game, .. } | Scene::MpPlay { game, .. } = &mut self.scene {
-            game.shown_offset = self.cfg.shown_offset();
-            game.latency = self.cfg.offset_latency_ms;
+            game.set_shown_offset(self.cfg.shown_offset());
+            game.set_latency(self.cfg.offset_latency_ms);
         }
     }
 
@@ -6101,7 +6101,7 @@ impl State {
         if self.replay_speed_rx.is_busy() {
             match self.replay_speed_rx.poll() {
                 Some(Ok((track, speed))) => {
-                    let rate = game.rate * speed;
+                    let rate = game.rate() * speed;
                     game.change_speed(track, rate, sound(&self.audio), self.play_offset);
                     self.replay_speed = speed;
                 }
@@ -6120,8 +6120,8 @@ impl State {
             return;
         };
         let speed = self.replay_speed_wanted;
-        let rate = game.rate * speed;
-        let keep_pitch = game.mods.speed(1.0, self.cfg.rate_keep_pitch).1;
+        let rate = game.rate() * speed;
+        let keep_pitch = game.mods().speed(1.0, self.cfg.rate_keep_pitch).1;
         let path = preview::audio_path(&self.library[*entry]);
         self.replay_speed_rx = Job::spawn(move || {
             let constant = mods::Speed::constant(rate);
@@ -6192,7 +6192,7 @@ impl State {
         let Scene::Play { game, entry, from } = &mut self.scene else {
             return;
         };
-        if game.resuming.is_some() {
+        if game.resuming().is_some() {
             // Counting down: Esc goes back to the menu, everything else waits.
             if code == KeyCode::Escape {
                 game.cancel_resume();
@@ -6200,11 +6200,11 @@ impl State {
             return;
         }
         let delay = Duration::from_millis(self.cfg.resume_delay_ms as u64);
-        let cursor = game.paused.unwrap_or(0);
+        let cursor = game.paused().unwrap_or(0);
         match code {
             // Wrapping: Up from Continue is Quit, so pause, Up, Enter leaves at once.
-            KeyCode::ArrowUp => game.paused = Some((cursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS),
-            KeyCode::ArrowDown => game.paused = Some((cursor + 1) % PAUSE_ITEMS),
+            KeyCode::ArrowUp => game.set_pause_cursor((cursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS),
+            KeyCode::ArrowDown => game.set_pause_cursor((cursor + 1) % PAUSE_ITEMS),
             KeyCode::Escape => game.resume_after(delay, sound(&self.audio)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
                 0 => game.resume_after(delay, sound(&self.audio)),
@@ -6377,7 +6377,7 @@ impl State {
         let playing = match &self.scene {
             Scene::Play { game, .. }
             | Scene::MpPlay { game, .. }
-            | Scene::Calibrate { game, .. } => game.paused.is_none(),
+            | Scene::Calibrate { game, .. } => game.paused().is_none(),
             // Watching: hidden unless the friends overlay is open (it needs the pointer).
             Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
             _ => false,
@@ -6953,8 +6953,8 @@ impl State {
     /// the first finger works as the mouse.
     fn touch_drums(&self) -> bool {
         match &self.scene {
-            Scene::Play { game, .. } => game.paused.is_none() && game.replay.is_none(),
-            Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused.is_none(),
+            Scene::Play { game, .. } => game.paused().is_none() && game.replay().is_none(),
+            Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused().is_none(),
             _ => false,
         }
     }
@@ -7248,7 +7248,7 @@ impl State {
                 .filter(|h| !matches!(h, hit::Hit::Preview))
         {
             if let (hit::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
-                game.paused = Some(i);
+                game.set_pause_cursor(i);
             }
             self.hover = None;
             return match hit {
@@ -7983,7 +7983,7 @@ impl State {
         if let Scene::MpPlay { game, .. } = &mut self.scene
             && let Some(k) = self.cfg.keys.iter().position(|&k| k == code)
         {
-            if !repeat && game.replay.is_none() {
+            if !repeat && game.replay().is_none() {
                 game.press(k, at, sound(&self.audio), self.play_offset);
             }
             return;
@@ -8315,9 +8315,9 @@ impl State {
                 | KeyCode::Digit4
                 | KeyCode::Digit5
                 | KeyCode::KeyT
-                    if game.defense.is_some() =>
+                    if game.defense().is_some() =>
                 {
-                    let t = game.time;
+                    let t = game.time();
                     let item = match code {
                         KeyCode::Digit1 => Some(net::DefenseItem::Slow),
                         KeyCode::Digit2 => Some(net::DefenseItem::Shield),
@@ -8328,7 +8328,7 @@ impl State {
                     };
                     let team = game.team_state().unwrap_or_default();
                     let can_tag = game.can_tag_in(t);
-                    let shop = game.defense.as_ref().is_some_and(|d| d.rules.shop);
+                    let shop = game.defense().is_some_and(|d| d.rules.shop);
                     let act = match (item, code) {
                         (Some(_), _) if !shop => {
                             self.toast("the host turned the shop off".into());
@@ -8384,7 +8384,7 @@ impl State {
                         if let Some(s) = &self.mp {
                             s.client
                                 .send(net::ClientMsg::Finished(multiplayer::final_from(
-                                    &game.stats,
+                                    game.stats(),
                                     true,
                                 )));
                         }
@@ -8908,7 +8908,7 @@ impl State {
             Scene::Select => "song select",
             Scene::Loading { .. } => "loading a map",
             Scene::Play { game, .. } => {
-                if game.replay.is_some() {
+                if game.replay().is_some() {
                     "watching a replay"
                 } else {
                     "playing"
@@ -8979,8 +8979,8 @@ impl State {
             }
         }
         let g = game_of(&self.scene)?;
-        (g.replay.is_none() && !self.auto && !g.mods.has(mods::Mod::Autoplay))
-            .then_some(g.played_ms)
+        (g.replay().is_none() && !self.auto && !g.mods().has(mods::Mod::Autoplay))
+            .then_some(g.played_ms())
     }
 
     /// The selected map's page on the website.
@@ -11282,7 +11282,7 @@ impl State {
                         .unwrap_or_default(),
                 }
             }
-            Scene::Play { game, entry, .. } if game.replay.is_none() => Activity::Playing {
+            Scene::Play { game, entry, .. } if game.replay().is_none() => Activity::Playing {
                 map: self
                     .library
                     .get(*entry)
@@ -11612,7 +11612,7 @@ impl State {
                         n.inputs.extend_from_slice(&inputs);
                     } else if v.ending.is_none() {
                         v.clock = (t, Instant::now(), paused);
-                        match v.game.as_mut().and_then(|g| g.replay.as_mut()) {
+                        match v.game.as_mut().and_then(|g| g.replay_mut().as_mut()) {
                             Some((list, _)) => list.extend_from_slice(&inputs),
                             None => v.inputs.extend_from_slice(&inputs),
                         }
@@ -11665,7 +11665,7 @@ impl State {
             .as_ref()
             // OD Override's value doesn't travel: a watcher would judge by their own.
             .filter(|_| {
-                connected && game.replay.is_none() && !game.mods.has(mods::Mod::OdOverride)
+                connected && game.replay().is_none() && !game.mods().has(mods::Mod::OdOverride)
             })
         else {
             self.stream = None;
@@ -11676,14 +11676,14 @@ impl State {
             if self.stream.is_some() {
                 conn.send(online::Up::PlayEnd);
             }
-            game.log_inputs = true;
+            game.set_log_inputs(true);
             let Some(e) = self.library.get(*entry) else {
                 return;
             };
             conn.send(online::Up::PlayStart(online::SoloPlay {
                 map: net::MapInfo {
-                    seed: (game.seed != 0).then_some(game.seed),
-                    ..map_info(e, game.rate, game.mods)
+                    seed: (game.seed() != 0).then_some(game.seed()),
+                    ..map_info(e, game.rate(), game.mods())
                 },
                 anti_mash: true,
             }));
@@ -11694,11 +11694,11 @@ impl State {
         };
         if last.elapsed() >= Duration::from_millis(100) {
             *last = Instant::now();
-            let inputs = game.inputs.get(*sent..).unwrap_or_default().to_vec();
-            *sent = game.inputs.len();
+            let inputs = game.inputs().get(*sent..).unwrap_or_default().to_vec();
+            *sent = game.inputs().len();
             conn.send(online::Up::PlayFrame {
-                t: game.time,
-                paused: game.paused.is_some() || game.resuming.is_some(),
+                t: game.time(),
+                paused: game.paused().is_some() || game.resuming().is_some(),
                 inputs,
             });
         }
@@ -11743,24 +11743,25 @@ impl State {
                     let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
                     let mut g =
                         Play::new(Game::with_seed(map, track, sound(&self.audio), mods, seed));
-                    g.live_pp = v.entry.and_then(|i| {
+                    let live_pp = v.entry.and_then(|i| {
                         pp::Live::start(
                             self.library[i].path.clone(),
-                            g.rate,
+                            g.rate(),
                             mods,
                             1.0,
                             seed,
                             Default::default(),
                         )
                     });
+                    g.set_live_pp(live_pp);
                     if let Some(p) = &v.play {
                         use_mod_settings(&mut g, &p.map);
                     }
-                    g.replay = Some((std::mem::take(&mut v.inputs), 0));
+                    g.set_replay(Some((std::mem::take(&mut v.inputs), 0)));
                     g.view.watched = true;
                     g.view.banner = Some(format!("WATCHING  -  {}", v.player));
                     let target = v.their_time() - WATCH_DELAY_MS * rate;
-                    if target > g.time {
+                    if target > g.time() {
                         g.seek(target, sound(&self.audio), self.play_offset);
                     }
                     v.game = Some(Box::new(g));
@@ -11779,20 +11780,20 @@ impl State {
         if let Some(g) = &mut v.game {
             if let Some((end, heard)) = v.ending {
                 // Their last note is on screen; or the view stalled / the map ended.
-                over = g.time >= end - 50.0
+                over = g.time() >= end - 50.0
                     || heard.elapsed()
                         > Duration::from_millis((WATCH_DELAY_MS * 2.0 + 4000.0) as u64);
                 if v.held {
                     g.resume(sound(&self.audio));
                     v.held = false;
                 }
-            } else if !v.held && g.time > target + 250.0 {
+            } else if !v.held && g.time() > target + 250.0 {
                 g.pause(sound(&self.audio));
                 v.held = true;
-            } else if v.held && target >= g.time {
+            } else if v.held && target >= g.time() {
                 g.resume(sound(&self.audio));
                 v.held = false;
-            } else if !v.held && g.time < target - 4000.0 * rate {
+            } else if !v.held && g.time() < target - 4000.0 * rate {
                 // Far behind (they skipped the intro, or we stalled): jump to them.
                 g.seek(target, sound(&self.audio), self.play_offset);
             }
@@ -11997,7 +11998,7 @@ impl State {
                 if let Scene::Spectate(v) = &mut self.scene {
                     match v.games.iter_mut().find(|(id, _)| *id == from) {
                         Some((_, g)) => {
-                            if let Some((list, _)) = &mut g.replay {
+                            if let Some((list, _)) = g.replay_mut() {
                                 list.extend_from_slice(&inputs);
                             }
                         }
@@ -12444,7 +12445,7 @@ impl State {
         // Tab in the editor's test play is autoplay, as in osu!'s, whatever the map info key is.
         if code == KeyCode::Tab
             && !(self.modifiers_shift || self.modifiers_ctrl || self.modifiers_alt)
-            && matches!(&self.scene, Scene::Play { game, .. } if game.view.test_play && game.paused.is_none())
+            && matches!(&self.scene, Scene::Play { game, .. } if game.view.test_play && game.paused().is_none())
         {
             if !repeat {
                 self.toggle_test_auto();
@@ -12503,7 +12504,7 @@ impl State {
         }
         let drum = self.cfg.keys.iter().position(|&k| k == code)?;
         let paused = matches!(&self.scene, Scene::Play { game, .. }
-            if game.paused.is_some() && game.resuming.is_none());
+            if game.paused().is_some() && game.resuming().is_none());
         let place = if self.select_open() && !self.select.searching {
             drum_nav::Place::Select(self.select_zone)
         } else if self.mod_select.is_some() || (paused && !self.social.open) {
@@ -12587,7 +12588,7 @@ impl State {
             Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => {
                 keys::Place::Select
             }
-            Scene::Play { game, .. } if game.paused.is_some() => keys::Place::Paused,
+            Scene::Play { game, .. } if game.paused().is_some() => keys::Place::Paused,
             Scene::Play { .. } => keys::Place::Play,
             Scene::Results { .. } => keys::Place::Results,
             _ => keys::Place::Other,
@@ -13059,7 +13060,7 @@ impl State {
             }
         }
         if let Scene::Play { game, .. } = &mut self.scene {
-            if game.paused.is_some() {
+            if game.paused().is_some() {
                 if !repeat
                     && !self.cfg.keys.contains(&code)
                     && !self.handle_global_key(code, window)
@@ -13069,22 +13070,22 @@ impl State {
                 return;
             }
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat && game.replay.is_none() {
+                if !repeat && game.replay().is_none() {
                     game.press(k, at, sound(&self.audio), self.play_offset);
                 }
                 return;
             }
-            if game.replay.is_some() && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+            if game.replay().is_some() && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
                 self.step_replay_speed(if code == KeyCode::ArrowUp { 1 } else { -1 });
                 return;
             }
-            if game.replay.is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+            if game.replay().is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
                 let step = if self.modifiers_shift {
                     15_000.0
                 } else {
                     5_000.0
                 };
-                let t = game.time
+                let t = game.time()
                     + if code == KeyCode::ArrowRight {
                         step
                     } else {
@@ -13255,7 +13256,7 @@ impl State {
                 // After the last note there's nothing left to pause: straight to the results.
                 KeyCode::Escape if game.skip_outro() => {}
                 KeyCode::Escape => game.pause(sound(&self.audio)),
-                KeyCode::Space if game.replay.is_some() => game.toggle_held(sound(&self.audio)),
+                KeyCode::Space if game.replay().is_some() => game.toggle_held(sound(&self.audio)),
                 KeyCode::Space => {
                     game.skip(sound(&self.audio), self.play_offset);
                 }
@@ -14231,15 +14232,16 @@ impl State {
                             seed,
                             half,
                         ));
-                        game.scroll_speed = self.cfg.scroll_speed;
-                        game.live_pp = pp::Live::start(
+                        game.set_scroll_speed(self.cfg.scroll_speed);
+                        let live_pp = pp::Live::start(
                             self.library[*entry].path.clone(),
-                            game.rate,
+                            game.rate(),
                             mods,
-                            game.scroll_speed,
-                            game.seed,
+                            game.scroll_speed(),
+                            game.seed(),
                             half,
                         );
+                        game.set_live_pp(live_pp);
                         if let Some(t) = *from {
                             game.start_from(t, sound(&self.audio), self.play_offset);
                         } else if *retry {
@@ -14247,30 +14249,31 @@ impl State {
                         }
                         match self.pending_replay.take() {
                             Some(r) => {
-                                game.mash = r.mash();
+                                game.set_mash(r.mash());
                                 game.set_window_rule(r.window_rule());
-                                game.scroll_speed = r.scroll_speed;
-                                game.replay_of = Some(r.player.clone());
+                                game.set_scroll_speed(r.scroll_speed);
+                                game.set_replay_of(Some(r.player.clone()));
                                 game.view.banner = Some(format!("REPLAY  -  {}", r.player));
-                                game.replay = Some((r.inputs, 0));
+                                game.set_replay(Some((r.inputs, 0)));
                             }
                             // A test play from the editor keeps nothing.
                             None if self.editor_back.is_some() => {
-                                game.record = false;
+                                game.set_record(false);
                                 game.view.test_play = true;
                                 game.view.banner = Some(Self::test_banner(self.test_auto));
                             }
                             // Full plays (not autoplay, not from a start point) are kept.
                             None => {
-                                game.record = (!self.auto
-                                    || std::env::var_os("TAIKO_RECORD_AUTO").is_some())
-                                    && from.is_none()
-                                    && !mods.unranked();
+                                game.set_record(
+                                    (!self.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some())
+                                        && from.is_none()
+                                        && !mods.unranked(),
+                                );
                                 if mods.has(mods::Mod::Autoplay) {
                                     game.view.banner = Some("AUTOPLAY".into());
                                 }
                                 if self.cfg.fail_restart {
-                                    game.fail_linger = FAIL_RESTART_LINGER;
+                                    game.set_fail_linger(FAIL_RESTART_LINGER);
                                 }
                             }
                         }
@@ -14291,12 +14294,12 @@ impl State {
             }
             Scene::Play { game, entry, from } => {
                 let done = game.update(now, sound(&self.audio), self.play_offset);
-                if (self.auto || game.mods.has(mods::Mod::Autoplay)) && game.replay.is_none() {
-                    game.autoplay_style = self.cfg.autoplay;
+                if (self.auto || game.mods().has(mods::Mod::Autoplay)) && game.replay().is_none() {
+                    game.set_autoplay_style(self.cfg.autoplay);
                     game.autoplay(sound(&self.audio));
                 }
                 if let Some(sm) = &mut self.smooth {
-                    if game.paused.is_some() {
+                    if game.paused().is_some() {
                         // A frozen clock isn't jitter; restart the frame-to-frame comparison on resume.
                         sm.break_sequence();
                     } else {
@@ -14309,16 +14312,16 @@ impl State {
                             * 1000.0;
                         sm.sample(
                             wall,
-                            game.raw_time,
-                            game.last_audio_ms,
+                            game.raw_time(),
+                            game.last_audio_ms(),
                             shown,
-                            game.raw_time + visual_offset,
+                            game.raw_time() + visual_offset,
                         );
                     }
                 }
                 // Offset advice is for live play (and its line would sit on the replay timeline).
                 game.view.show_offset_hint =
-                    self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
+                    self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay().is_none();
                 game.view.offset_key = self
                     .cfg
                     .hotkeys
@@ -14328,7 +14331,7 @@ impl State {
                 game.view.hidden = hidden;
                 game.view.hud = self.cfg.hud;
                 game.view.hud_area = self.cfg.playfield_area;
-                game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
+                game.set_ur_scaled_hint(self.cfg.offset_hint_ur_scaled);
                 game.set_visual_offset(visual_offset);
                 draw_game_area(
                     canvas,
@@ -14338,12 +14341,12 @@ impl State {
                     &self.hover,
                     self.bg_brightness > 0.0,
                     |c| {
-                        game.draw_playfield(c, game.scroll_speed);
+                        game.draw_playfield(c, game.scroll_speed());
                     },
                 );
                 game.draw_hud(canvas);
-                if game.replay.is_none()
-                    && game.paused.is_none()
+                if game.replay().is_none()
+                    && game.paused().is_none()
                     && !hidden.has(hud::Part::Spectators)
                 {
                     let names = self.social.spectators();
@@ -14351,10 +14354,11 @@ impl State {
                         social::draw_spectators(c, &names);
                     });
                 }
-                if game.replay.is_some() && game.paused.is_none() {
-                    if game.replay_timeline.is_none() {
+                if game.replay().is_some() && game.paused().is_none() {
+                    if game.replay_timeline().is_none() {
                         let misses = game.replay_misses();
-                        game.replay_timeline = Some((difficulty::analyze(&game.map), misses));
+                        let replay_timeline = Some((difficulty::analyze(game.map()), misses));
+                        game.set_replay_timeline(replay_timeline);
                     }
                     self.replay_bar = Some(draw_replay_bar(
                         canvas,
@@ -14365,7 +14369,7 @@ impl State {
                     ));
                 }
                 if let Some(plan) = &mut self.shots
-                    && plan.times.last().is_some_and(|&t| game.time >= t)
+                    && plan.times.last().is_some_and(|&t| game.time() >= t)
                 {
                     let t = plan.times.pop().unwrap();
                     capture = Some(format!("play-{t:.0}.png"));
@@ -14377,7 +14381,7 @@ impl State {
                     // Failed plays aren't kept anyway: straight into the next try.
                     fail_restart = true;
                 } else if done {
-                    let title = results_title(&game.map.meta, *from);
+                    let title = results_title(&game.map().meta, *from);
                     let failed = game.failed();
                     if game.failed_early() {
                         if let Some(a) = &self.audio {
@@ -14385,40 +14389,40 @@ impl State {
                         }
                         self.preview.invalidate_audio();
                     }
-                    let mut results = Results::new(title, game.stats.clone(), game.windows);
-                    results.set_mods(game.mods, game.rate);
-                    results.seed = Some(game.seed);
-                    results.watched = game.replay_of.clone();
+                    let mut results = Results::new(title, game.stats().clone(), game.windows());
+                    results.set_mods(game.mods(), game.rate());
+                    results.seed = Some(game.seed());
+                    results.watched = game.replay_of().clone();
                     results.failed = failed;
                     // The song plays on under the results (not after a fail that stopped it),
                     // from the preview point again once it ends.
                     if !game.failed_early() && self.audio.is_some() {
-                        let preview = game.map.meta.preview_time;
+                        let preview = game.map().meta.preview_time;
                         let again = if preview >= 0.0 {
                             game.track_at(preview)
                         } else {
                             game.track_at(game.end_time()) * 0.4
                         };
-                        results.music = game::Song::into_any(game.track.clone())
+                        results.music = game::Song::into_any(game.track().clone())
                             .downcast::<audio::Track>()
                             .ok()
                             .map(|t| (t, again.max(0.0)));
                     }
                     let e = &self.library[*entry];
                     let play = pp::Play {
-                        great: game.stats.great,
-                        ok: game.stats.ok,
-                        miss: game.stats.miss,
-                        max_combo: game.stats.max_combo,
-                        rate: game.rate,
-                        mods: game.mods,
-                        scroll_speed: game.scroll_speed,
-                        seed: game.seed,
-                        half: game.half,
+                        great: game.stats().great,
+                        ok: game.stats().ok,
+                        miss: game.stats().miss,
+                        max_combo: game.stats().max_combo,
+                        rate: game.rate(),
+                        mods: game.mods(),
+                        scroll_speed: game.scroll_speed(),
+                        seed: game.seed(),
+                        half: game.half(),
                     };
-                    results.no_pp = if game.mods.has(mods::Mod::OdOverride) {
+                    results.no_pp = if game.mods().has(mods::Mod::OdOverride) {
                         Some("OD Override gets no pp")
-                    } else if game.mods.unranked() {
+                    } else if game.mods().unranked() {
                         Some("Autoplay gets no pp")
                     } else if failed {
                         Some("failed plays get no pp")
@@ -14437,9 +14441,9 @@ impl State {
                         None
                     };
                     // Failed plays aren't kept, like osu!.
-                    if game.record && !failed {
+                    if game.record() && !failed {
                         let e = &self.library[*entry];
-                        let st = &game.stats;
+                        let st = game.stats();
                         let replay = scores::Replay {
                             version: scores::new_version(),
                             map_hash: e.hash(),
@@ -14450,11 +14454,11 @@ impl State {
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_secs())
                                 .unwrap_or(0),
-                            rate: game.rate,
+                            rate: game.rate(),
                             keep_pitch: self.cfg.rate_keep_pitch,
                             anti_mash: true,
-                            mods: game.mods.list(),
-                            scroll_speed: game.scroll_speed,
+                            mods: game.mods().list(),
+                            scroll_speed: game.scroll_speed(),
                             score: st.score,
                             accuracy: st.accuracy(),
                             max_combo: st.max_combo,
@@ -14462,8 +14466,8 @@ impl State {
                             ok: st.ok,
                             miss: st.miss,
                             ur: st.unstable_rate(),
-                            inputs: std::mem::take(&mut game.inputs),
-                            seed: game.seed,
+                            inputs: game.take_inputs(),
+                            seed: game.seed(),
                         };
                         let pp = pp::play_pp(&e.path, &replay.pp_play());
                         results.pp = pp.filter(|_| results.no_pp.is_none());
@@ -14473,9 +14477,9 @@ impl State {
                         // Whole plays go to the online leaderboards too, when logged in.
                         if from.is_none()
                             && !self.cfg.online_token.is_empty()
-                            && !game.mods.unranked()
+                            && !game.mods().unranked()
                         {
-                            let m = &game.map.meta;
+                            let m = &game.map().meta;
                             let play = online::ScoreSubmit {
                                 map: net::MapInfo {
                                     hash: replay.map_hash,
@@ -14503,11 +14507,11 @@ impl State {
                                 date: replay.date,
                                 replay_version: replay.version,
                                 inputs: replay.inputs.clone(),
-                                rolls: Some(game.stats.roll_ticks),
+                                rolls: Some(game.stats().roll_ticks),
                                 stars: None,
                                 pp_version: online::PP_VERSION,
                                 scroll_speed: Some(replay.scroll_speed),
-                                play_ms: Some(game.played_ms as u64),
+                                play_ms: Some(game.played_ms() as u64),
                                 md5: None,
                                 timing: {
                                     let (latency_ms, reported_latency_ms) = self
@@ -14536,7 +14540,7 @@ impl State {
                             self.playing = None;
                             results.total_due = true;
                             self.online_boards
-                                .remove(&(replay.map_hash, game.mods.relax()));
+                                .remove(&(replay.map_hash, game.mods().relax()));
                         }
                         match scores::save(&replay, pp) {
                             Ok(row) => {
@@ -14546,7 +14550,7 @@ impl State {
                                     &self.scores,
                                     replay.map_hash,
                                     usize::MAX,
-                                    game.mods.relax(),
+                                    game.mods().relax(),
                                 );
                                 let rank = all
                                     .iter()
@@ -14759,16 +14763,17 @@ impl State {
                         let (team, me) = multiplayer::defense_team(s);
                         game.set_defense(team, me, d);
                     }
-                    game.scroll_speed = self.cfg.scroll_speed;
+                    game.set_scroll_speed(self.cfg.scroll_speed);
                     if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                        game.live_pp = pp::Live::start(
+                        let live_pp = pp::Live::start(
                             self.library[i].path.clone(),
-                            game.rate,
+                            game.rate(),
                             self.pending_mods,
-                            game.scroll_speed,
-                            game.seed,
+                            game.scroll_speed(),
+                            game.seed(),
                             Default::default(),
                         );
+                        game.set_live_pp(live_pp);
                     }
                     if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
                         use_mod_settings(&mut game, m);
@@ -14776,7 +14781,7 @@ impl State {
                     if let Some(t) = *from {
                         game.start_from(t, sound(&self.audio), self.play_offset);
                     }
-                    game.record = true;
+                    game.set_record(true);
                     if let Some(s) = &mut self.mp {
                         s.inputs_sent = 0;
                         s.skip_asked = false;
@@ -14793,8 +14798,8 @@ impl State {
             }
             Scene::MpPlay { game, .. } => {
                 let done = game.update(now, sound(&self.audio), self.play_offset);
-                if self.auto || game.mods.has(mods::Mod::Autoplay) {
-                    game.autoplay_style = self.cfg.autoplay;
+                if self.auto || game.mods().has(mods::Mod::Autoplay) {
+                    game.set_autoplay_style(self.cfg.autoplay);
                     game.autoplay(sound(&self.audio));
                 }
                 game.view.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
@@ -14807,7 +14812,7 @@ impl State {
                 game.view.hidden = hidden;
                 game.view.hud = self.cfg.hud;
                 game.view.hud_area = self.cfg.playfield_area;
-                game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
+                game.set_ur_scaled_hint(self.cfg.offset_hint_ur_scaled);
                 game.set_visual_offset(visual_offset);
                 if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
                     game.set_team(team);
@@ -14822,7 +14827,7 @@ impl State {
                     &self.hover,
                     self.bg_brightness > 0.0,
                     |c| {
-                        game.draw_playfield(c, game.scroll_speed);
+                        game.draw_playfield(c, game.scroll_speed());
                     },
                 );
                 game.draw_hud(canvas);
@@ -14842,9 +14847,9 @@ impl State {
                     if s.last_live.elapsed() >= Duration::from_millis(100) {
                         s.last_live = now;
                         s.client.send(net::ClientMsg::Live(live));
-                        if game.inputs.len() > s.inputs_sent {
-                            let inputs = game.inputs[s.inputs_sent..].to_vec();
-                            s.inputs_sent = game.inputs.len();
+                        if game.inputs().len() > s.inputs_sent {
+                            let inputs = game.inputs()[s.inputs_sent..].to_vec();
+                            s.inputs_sent = game.inputs().len();
                             s.client.send(net::ClientMsg::Inputs {
                                 inputs,
                                 anti_mash: true,
@@ -14856,7 +14861,7 @@ impl State {
                         let failed = game.failed_early();
                         s.client
                             .send(net::ClientMsg::Finished(multiplayer::final_from(
-                                &game.stats,
+                                game.stats(),
                                 failed,
                             )));
                         if failed && let Some(a) = &self.audio {
@@ -14894,10 +14899,10 @@ impl State {
                     let probe = Game::with_mods(map.clone(), track.clone(), None, v.mods);
                     let first_ms = match v.from {
                         Some(t) => {
-                            (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time))
+                            (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time()))
                                 + self.play_offset
                         }
-                        None => probe.track_at(probe.time),
+                        None => probe.track_at(probe.time()),
                     };
                     let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
                     audio.play(track.clone(), first_ms + behind);
@@ -14937,7 +14942,7 @@ impl State {
                             g.skip_to(t);
                         }
                         let inputs = v.pending.remove(id).unwrap_or_default();
-                        g.replay = Some((inputs, 0));
+                        g.set_replay(Some((inputs, 0)));
                         g.view.banner = Some(format!(
                             "SPECTATING  -  {name}  ({}/{})",
                             k + 1,
@@ -14961,7 +14966,7 @@ impl State {
                 let scroll = self.cfg.scroll_speed;
                 for (k, (_, g)) in v.games.iter_mut().enumerate() {
                     // Only the player watched (or the first one) is heard.
-                    g.mute_hits = v.focus.unwrap_or(0) != k;
+                    g.set_mute_hits(v.focus.unwrap_or(0) != k);
                     g.view.kiai_effects = self.cfg.kiai_effects;
                     g.view.hidden = hidden;
                     g.view.hud = self.cfg.hud;
@@ -15177,7 +15182,7 @@ impl State {
                     finish_calibration = true;
                 }
                 if self.auto {
-                    game.autoplay_style = self.cfg.autoplay;
+                    game.set_autoplay_style(self.cfg.autoplay);
                     game.autoplay(sound(&self.audio));
                 }
                 if *vsync {
@@ -17197,7 +17202,7 @@ impl State {
             }
             Hit::PauseItem(i) => {
                 if let Scene::Play { game, .. } = &mut self.scene {
-                    game.paused = Some(i);
+                    game.set_pause_cursor(i);
                 }
                 self.pause_key(KeyCode::Enter);
             }

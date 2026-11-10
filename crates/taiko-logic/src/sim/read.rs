@@ -2,11 +2,13 @@
 //! Small and called every frame across the crate line, so each is `#[inline]`.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 
-use super::{Crumb, DefenseRun, Game, Judge, NoteState, Stats, Windows};
+use super::{Crumb, DefenseRun, Game, Judge, NoteState, Song, Sound, Stats, Windows};
 use crate::beatmap::Beatmap;
-use crate::mods::Mods;
+use crate::difficulty::Graph;
+use crate::mods::{HalfRule, Mods};
 use crate::multiverse::{self, Universe};
 use crate::shapeshift;
 use crate::tact;
@@ -187,5 +189,75 @@ impl Game {
     #[inline]
     pub fn failed_at(&self) -> Option<(f64, Instant)> {
         self.failed
+    }
+
+    /// The replay being played back and how far in (None: the player is playing).
+    #[inline]
+    pub fn replay(&self) -> &Option<(Vec<(f64, u8)>, usize)> {
+        &self.replay
+    }
+
+    /// Who played the replay being watched.
+    #[inline]
+    pub fn replay_of(&self) -> &Option<String> {
+        &self.replay_of
+    }
+
+    #[inline]
+    pub fn replay_timeline(&self) -> &Option<(Graph, Vec<f64>)> {
+        &self.replay_timeline
+    }
+
+    /// The presses kept so far (map time, key).
+    #[inline]
+    pub fn inputs(&self) -> &[(f64, u8)] {
+        &self.inputs
+    }
+
+    #[inline]
+    pub fn scroll_speed(&self) -> f64 {
+        self.scroll_speed
+    }
+
+    #[inline]
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    #[inline]
+    pub fn record(&self) -> bool {
+        self.record
+    }
+
+    #[inline]
+    pub fn track(&self) -> &Arc<dyn Song> {
+        &self.track
+    }
+
+    #[inline]
+    pub fn sfx_log(&self) -> &Option<Vec<(f64, Sound, f32)>> {
+        &self.sfx_log
+    }
+
+    /// How long the map has been played (ms), pauses left out.
+    #[inline]
+    pub fn played_ms(&self) -> f64 {
+        self.played_ms
+    }
+
+    /// A replay held still (watching).
+    #[inline]
+    pub fn held(&self) -> bool {
+        self.held
+    }
+
+    #[inline]
+    pub fn last_audio_ms(&self) -> Option<f64> {
+        self.last_audio_ms
+    }
+
+    #[inline]
+    pub fn half(&self) -> HalfRule {
+        self.half
     }
 }

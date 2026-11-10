@@ -32,12 +32,12 @@ pub(crate) fn draw_replay_bar(
 ) -> [f32; 4] {
     let w = c.width;
     let (start, end) = game.span();
-    let label = format!("{} / {}", fmt_time(game.time), fmt_time(end));
+    let label = format!("{} / {}", fmt_time(game.time()), fmt_time(end));
     let y = 456.0;
     // Its buttons, then the time and the timeline.
     let mut left = 18.0;
     for (text, bw, hit) in [
-        (pause_label(game.held), pause_width(), KeyCode::Space),
+        (pause_label(game.held()), pause_width(), KeyCode::Space),
         ("-", 20.0, KeyCode::ArrowDown),
         ("+", 20.0, KeyCode::ArrowUp),
     ] {
@@ -77,7 +77,7 @@ pub(crate) fn draw_replay_bar(
     let top = base - gh;
     let span = (end - start).max(1.0);
     let x_of = |t: f64| x + (((t - start) / span).clamp(0.0, 1.0) as f32) * bw;
-    let f = ((game.time - start) / span).clamp(0.0, 1.0) as f32;
+    let f = ((game.time() - start) / span).clamp(0.0, 1.0) as f32;
     c.text(left, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
     c.round_rect(
         [x - 2.0, top - 2.0],
@@ -87,7 +87,7 @@ pub(crate) fn draw_replay_bar(
         rgba(0x2a2a38, 1.0),
         1.0,
     );
-    if let Some((graph, misses)) = &game.replay_timeline {
+    if let Some((graph, misses)) = game.replay_timeline() {
         // Kiai tinted, as on song select's graph.
         for &(s, e) in &graph.kiai {
             let (kx0, kx1) = (x_of(s), x_of(e));
@@ -207,7 +207,7 @@ pub(crate) fn draw_spectate_all(
             .find(|(p, _)| p == id)
             .map(|(_, n)| n.as_str())
             .unwrap_or("?");
-        let st = &g.stats;
+        let st = g.stats();
         let line = format!(
             "{name}   {:08}   {:.2}%   {}x",
             st.score,
@@ -233,5 +233,5 @@ pub(crate) const FAIL_RESTART_LINGER: f64 = 0.6;
 /// Whether a play that just ended starts over instead of showing results: one of the player's own
 /// (not a replay) failed by Sudden Death / Perfect, with `Config::fail_restart` on.
 pub(crate) fn fail_restarts(cfg: &Config, game: &Game) -> bool {
-    cfg.fail_restart && game.failed_early() && game.replay.is_none()
+    cfg.fail_restart && game.failed_early() && game.replay().is_none()
 }
