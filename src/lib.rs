@@ -7344,10 +7344,7 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
-        if self.shot_view.is_some() {
-            if pressed {
-                self.close_shot();
-            }
+        if self.layers_button(&[app::overlays::Layer::Shot], pressed, window) {
             return;
         }
         if pressed {
@@ -7390,98 +7387,7 @@ impl State {
             }
             return;
         }
-        if pressed && self.splash.is_none() {
-            let (vx, vy) = self.mouse_virtual();
-            let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
-            let [px, py, pw, ph] = social::panel_rect(width);
-            let on_panel =
-                self.social.open && vx >= px && vx <= px + pw && vy >= py && vy <= py + ph;
-            let on_social = matches!(
-                self.hit_at(vx, vy),
-                Some(hit::Hit::SocialToggle | hit::Hit::SocialNote(_))
-            );
-            if on_panel || on_social {
-                if on_panel {
-                    self.social.typing = false;
-                }
-                if let Some(hit) = self.hit_at(vx, vy) {
-                    self.click(hit, window);
-                }
-                return;
-            }
-            if self.social.open {
-                self.social.close();
-                return;
-            }
-        }
-        if let Some(s) = &mut self.splash {
-            if pressed {
-                s.skip(Instant::now(), self.audio.as_ref(), "a left click");
-            }
-            return;
-        }
-        if self.unlock.showing() {
-            if pressed {
-                self.unlock.skip();
-            }
-            return;
-        }
-        if self.medals.is_some() {
-            // Its tabs and its Back button.
-            if pressed {
-                let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ (hit::Hit::Key(_) | hit::Hit::MedalTab(_))) = self.hit_at(vx, vy)
-                {
-                    self.click(hit, window);
-                }
-            }
-            return;
-        }
-        if self.profile.is_some() {
-            // Only its buttons.
-            if pressed {
-                let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ hit::Hit::Key(_)) = self.hit_at(vx, vy) {
-                    self.click(hit, window);
-                }
-            }
-            return;
-        }
-        if self.mod_select.is_some() {
-            // Only the mod select's own chips and buttons; nothing under it.
-            if pressed {
-                let (vx, vy) = self.mouse_virtual();
-                let hit = self.hit_at(vx, vy);
-                let ours = if self.customization_tab().is_some() {
-                    use hit::Hit as H;
-                    matches!(
-                        hit,
-                        Some(
-                            H::UniverseCell(..)
-                                | H::UniversePreset(_)
-                                | H::UniversePresetDelete(_)
-                                | H::ShapeshiftCell(..)
-                                | H::ShapeshiftMove(_)
-                                | H::TactCell(_)
-                                | H::CustomTab(_)
-                                | H::Key(_)
-                        )
-                    )
-                } else if self.preset_naming.is_some() || self.preset_deleting.is_some() {
-                    // Naming or deleting a preset: only the window's own buttons (Save or
-                    // Delete is Enter, Cancel or Keep is Esc) take a click.
-                    matches!(hit, Some(hit::Hit::Key(KeyCode::Enter | KeyCode::Escape)))
-                } else {
-                    use hit::Hit as H;
-                    matches!(
-                        hit,
-                        Some(H::ModToggle(_) | H::ModPreset(_) | H::ModPresetSave | H::Key(_))
-                    )
-                };
-                if let Some(hit) = hit.filter(|_| ours) {
-                    self.click(hit, window);
-                }
-            }
+        if self.layers_button(&app::overlays::BUTTON_LAYERS, pressed, window) {
             return;
         }
         // A replay's buttons: nothing else in a song is clicked.
@@ -15320,79 +15226,7 @@ impl State {
         if let Some(t) = self.retry_progress(now) {
             canvas.rect(0.0, 0.0, canvas.width, 480.0, rgba(0x000000, t * 0.95));
         }
-        if !self.in_song() {
-            self.volume.hold(now);
-        }
-        if self.volume.visible(now) {
-            self.volume.draw(canvas, &self.cfg, now);
-        }
-        if self.overlay_allowed() && self.splash.is_none() {
-            let logged_in = self.mp_menu.account.is_some();
-            let (lobby, lobby_unread) = match &self.mp {
-                Some(s) => (Some(&s.chat[..]), s.chat_unread),
-                None => (None, 0),
-            };
-            // The screen behind darkens, but not a play being watched.
-            let dim = !self.in_song() && !self.in_editor();
-            let animate = self.cfg.animations;
-            let tab = self
-                .social_tab_middle()
-                .filter(|_| logged_in)
-                .map(|to| self.social.glide_tab(to, canvas.dt_ms, animate));
-            if self.social.open {
-                social::draw(
-                    canvas,
-                    &self.social,
-                    logged_in,
-                    lobby,
-                    lobby_unread,
-                    dim,
-                    self.in_editor(),
-                    tab,
-                );
-            } else if self.social.closing().is_some() {
-                let hits = canvas.hits.len();
-                social::draw(
-                    canvas,
-                    &self.social,
-                    logged_in,
-                    lobby,
-                    lobby_unread,
-                    dim,
-                    self.in_editor(),
-                    tab,
-                );
-                canvas.hits.truncate(hits);
-            } else if let Some(middle) = tab {
-                social::draw_chip(canvas, &self.social, middle, lobby_unread);
-            }
-            if let Scene::Editor(_) | Scene::EditorHome(_) = self.scene {
-                let x = match &self.scene {
-                    Scene::Editor(_) => editor::view::View::menu_end() + 6.0,
-                    _ => canvas.width - 100.0,
-                };
-                if logged_in {
-                    social::draw_editor_chip(canvas, &self.social, x, lobby_unread);
-                }
-            }
-            social::draw_notes(canvas, &self.social, self.in_editor());
-        }
-        if let Some(page) = self.guide.page.filter(|_| self.splash.is_none()) {
-            let hold = self
-                .guide_hold_left()
-                .map(|left| left.as_secs_f32().ceil() as u32);
-            guide::draw(canvas, page, self.guide.binding, hold, &self.cfg);
-        }
-        if let Some(p) = &self.profile {
-            p.draw(canvas);
-        }
-        if let Some(view) = &self.medals {
-            view.draw(canvas);
-        }
-        self.unlock.draw(canvas);
-        if let Some(view) = &self.changelog {
-            view.draw(canvas);
-        }
+        self.draw_layers(&app::overlays::DRAW_UNDER_TOASTS, canvas, now);
         #[cfg(target_os = "android")]
         if self.keyboard.up {
             self.draw_typing(canvas);
@@ -15458,8 +15292,7 @@ impl State {
             song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())),
         );
         self.draw_drag_hover(canvas, now);
-        self.draw_crash(canvas);
-        self.draw_quit(canvas, now);
+        self.draw_layers(&app::overlays::DRAW_ON_TOP, canvas, now);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.

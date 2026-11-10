@@ -77,6 +77,278 @@ pub(crate) const WHEEL_LAYERS: [Layer; 5] = [
     Layer::ModSelect,
 ];
 
+/// The layers the left button walks, top first, after the screenshot (over everything) and
+/// what the editors' own drags and the editor take before them.
+pub(crate) const BUTTON_LAYERS: [Layer; 6] = [
+    Layer::Social,
+    Layer::Splash,
+    Layer::Unlock,
+    Layer::Medals,
+    Layer::Profile,
+    Layer::ModSelect,
+];
+
+/// The layers drawn under the toasts, bottom first.
+pub(crate) const DRAW_UNDER_TOASTS: [Layer; 7] = [
+    Layer::WindowKeys,
+    Layer::Social,
+    Layer::Guide,
+    Layer::Profile,
+    Layer::Medals,
+    Layer::Unlock,
+    Layer::Changelog,
+];
+
+/// The layers drawn over everything but the splash, bottom first.
+pub(crate) const DRAW_ON_TOP: [Layer; 2] = [Layer::Crash, Layer::Quit];
+
+impl State {
+    /// Draws `layers`, bottom first.
+    pub(crate) fn draw_layers(&mut self, layers: &[Layer], canvas: &mut Canvas, now: Instant) {
+        for &layer in layers {
+            self.draw_layer(layer, canvas, now);
+        }
+    }
+
+    fn draw_layer(&mut self, layer: Layer, canvas: &mut Canvas, now: Instant) {
+        match layer {
+            Layer::WindowKeys => {
+                if !self.in_song() {
+                    self.volume.hold(now);
+                }
+                if self.volume.visible(now) {
+                    self.volume.draw(canvas, &self.cfg, now);
+                }
+            }
+            Layer::Social => {
+                if self.overlay_allowed() && self.splash.is_none() {
+                    let logged_in = self.mp_menu.account.is_some();
+                    let (lobby, lobby_unread) = match &self.mp {
+                        Some(s) => (Some(&s.chat[..]), s.chat_unread),
+                        None => (None, 0),
+                    };
+                    // The screen behind darkens, but not a play being watched.
+                    let dim = !self.in_song() && !self.in_editor();
+                    let animate = self.cfg.animations;
+                    let tab = self
+                        .social_tab_middle()
+                        .filter(|_| logged_in)
+                        .map(|to| self.social.glide_tab(to, canvas.dt_ms, animate));
+                    if self.social.open {
+                        social::draw(
+                            canvas,
+                            &self.social,
+                            logged_in,
+                            lobby,
+                            lobby_unread,
+                            dim,
+                            self.in_editor(),
+                            tab,
+                        );
+                    } else if self.social.closing().is_some() {
+                        let hits = canvas.hits.len();
+                        social::draw(
+                            canvas,
+                            &self.social,
+                            logged_in,
+                            lobby,
+                            lobby_unread,
+                            dim,
+                            self.in_editor(),
+                            tab,
+                        );
+                        canvas.hits.truncate(hits);
+                    } else if let Some(middle) = tab {
+                        social::draw_chip(canvas, &self.social, middle, lobby_unread);
+                    }
+                    if let Scene::Editor(_) | Scene::EditorHome(_) = self.scene {
+                        let x = match &self.scene {
+                            Scene::Editor(_) => editor::view::View::menu_end() + 6.0,
+                            _ => canvas.width - 100.0,
+                        };
+                        if logged_in {
+                            social::draw_editor_chip(canvas, &self.social, x, lobby_unread);
+                        }
+                    }
+                    social::draw_notes(canvas, &self.social, self.in_editor());
+                }
+            }
+            Layer::Guide => {
+                if let Some(page) = self.guide.page.filter(|_| self.splash.is_none()) {
+                    let hold = self
+                        .guide_hold_left()
+                        .map(|left| left.as_secs_f32().ceil() as u32);
+                    guide::draw(canvas, page, self.guide.binding, hold, &self.cfg);
+                }
+            }
+            Layer::Profile => {
+                if let Some(p) = &self.profile {
+                    p.draw(canvas);
+                }
+            }
+            Layer::Medals => {
+                if let Some(view) = &self.medals {
+                    view.draw(canvas);
+                }
+            }
+            Layer::Unlock => self.unlock.draw(canvas),
+            Layer::Changelog => {
+                if let Some(view) = &self.changelog {
+                    view.draw(canvas);
+                }
+            }
+            Layer::Crash => self.draw_crash(canvas),
+            Layer::Quit => self.draw_quit(canvas, now),
+            _ => {}
+        }
+    }
+}
+
+impl State {
+    /// Walks `layers` top-down with the left button going down (`pressed`) or up; true when
+    /// one took it.
+    pub(crate) fn layers_button(
+        &mut self,
+        layers: &[Layer],
+        pressed: bool,
+        window: Option<&Window>,
+    ) -> bool {
+        layers
+            .iter()
+            .any(|&layer| self.layer_button(layer, pressed, window))
+    }
+
+    /// Gives the left button to `layer`; true when it took it.
+    fn layer_button(&mut self, layer: Layer, pressed: bool, window: Option<&Window>) -> bool {
+        match layer {
+            Layer::Shot => {
+                if self.shot_view.is_none() {
+                    return false;
+                }
+                if pressed {
+                    self.close_shot();
+                }
+            }
+            Layer::Social => {
+                if !pressed || self.splash.is_some() {
+                    return false;
+                }
+                let (vx, vy) = self.mouse_virtual();
+                let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
+                let [px, py, pw, ph] = social::panel_rect(width);
+                let on_panel =
+                    self.social.open && vx >= px && vx <= px + pw && vy >= py && vy <= py + ph;
+                let on_social = matches!(
+                    self.hit_at(vx, vy),
+                    Some(hit::Hit::SocialToggle | hit::Hit::SocialNote(_))
+                );
+                if on_panel || on_social {
+                    if on_panel {
+                        self.social.typing = false;
+                    }
+                    if let Some(hit) = self.hit_at(vx, vy) {
+                        self.click(hit, window);
+                    }
+                    return true;
+                }
+                if !self.social.open {
+                    return false;
+                }
+                self.social.close();
+            }
+            Layer::Splash => {
+                let Some(s) = &mut self.splash else {
+                    return false;
+                };
+                if pressed {
+                    s.skip(Instant::now(), self.audio.as_ref(), "a left click");
+                }
+            }
+            Layer::Unlock => {
+                if !self.unlock.showing() {
+                    return false;
+                }
+                if pressed {
+                    self.unlock.skip();
+                }
+            }
+            Layer::Medals => {
+                if self.medals.is_none() {
+                    return false;
+                }
+                // Its tabs and its Back button.
+                if pressed {
+                    let (vx, vy) = self.mouse_virtual();
+                    if let Some(hit @ (hit::Hit::Key(_) | hit::Hit::MedalTab(_))) =
+                        self.hit_at(vx, vy)
+                    {
+                        self.click(hit, window);
+                    }
+                }
+            }
+            Layer::Profile => {
+                if self.profile.is_none() {
+                    return false;
+                }
+                // Only its buttons.
+                if pressed {
+                    let (vx, vy) = self.mouse_virtual();
+                    if let Some(hit @ hit::Hit::Key(_)) = self.hit_at(vx, vy) {
+                        self.click(hit, window);
+                    }
+                }
+            }
+            Layer::ModSelect => {
+                if self.mod_select.is_none() {
+                    return false;
+                }
+                // Only the mod select's own chips and buttons; nothing under it.
+                if pressed {
+                    self.mod_select_click(window);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// A click on the mod select (or the customization tabs, or a preset being named or
+    /// deleted over it): only their own chips and buttons take it.
+    fn mod_select_click(&mut self, window: Option<&Window>) {
+        let (vx, vy) = self.mouse_virtual();
+        let hit = self.hit_at(vx, vy);
+        let ours = if self.customization_tab().is_some() {
+            use hit::Hit as H;
+            matches!(
+                hit,
+                Some(
+                    H::UniverseCell(..)
+                        | H::UniversePreset(_)
+                        | H::UniversePresetDelete(_)
+                        | H::ShapeshiftCell(..)
+                        | H::ShapeshiftMove(_)
+                        | H::TactCell(_)
+                        | H::CustomTab(_)
+                        | H::Key(_)
+                )
+            )
+        } else if self.preset_naming.is_some() || self.preset_deleting.is_some() {
+            // Naming or deleting a preset: only the window's own buttons (Save or
+            // Delete is Enter, Cancel or Keep is Esc) take a click.
+            matches!(hit, Some(hit::Hit::Key(KeyCode::Enter | KeyCode::Escape)))
+        } else {
+            use hit::Hit as H;
+            matches!(
+                hit,
+                Some(H::ModToggle(_) | H::ModPreset(_) | H::ModPresetSave | H::Key(_))
+            )
+        };
+        if let Some(hit) = hit.filter(|_| ours) {
+            self.click(hit, window);
+        }
+    }
+}
+
 impl State {
     /// Walks `layers` top-down with the wheel turned `notches`; true when one took it.
     pub(crate) fn layers_wheel(&mut self, layers: &[Layer], notches: i32) -> bool {
