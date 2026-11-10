@@ -113,6 +113,20 @@ pub mod phone_for_tests {
     pub fn on() -> bool {
         ON.with(Cell::get)
     }
+
+    /// The monitor's interface is untouched beside it: the switch is the test thread's own.
+    #[test]
+    fn the_phone_switch_is_this_thread_s_own() {
+        set(true);
+        assert!(super::active());
+        std::thread::spawn(|| {
+            assert!(!super::active(), "another thread got the phone's interface")
+        })
+        .join()
+        .unwrap();
+        set(false);
+        assert!(!super::active());
+    }
 }
 
 #[cfg(not(test))]

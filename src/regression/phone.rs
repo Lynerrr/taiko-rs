@@ -118,20 +118,3 @@ fn phone_results() {
     };
     assert_snapshot("phone-results", &shot(&mut s, &mut now));
 }
-
-/// The monitor's interface is untouched beside it: the switch is the test thread's own.
-#[test]
-fn the_phone_switch_is_this_thread_s_own() {
-    mobile::phone_for_tests::set(true);
-    assert!(mobile::active());
-    std::thread::spawn(|| {
-        assert!(
-            !mobile::active(),
-            "another thread got the phone's interface"
-        )
-    })
-    .join()
-    .unwrap();
-    mobile::phone_for_tests::set(false);
-    assert!(!mobile::active());
-}
