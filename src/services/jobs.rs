@@ -15,6 +15,13 @@ impl<T> Default for Job<T> {
     }
 }
 
+/// Work started elsewhere that sends its one result to the receiver.
+impl<T> From<Receiver<T>> for Job<T> {
+    fn from(rx: Receiver<T>) -> Self {
+        Self::from_receiver(rx)
+    }
+}
+
 impl<T: Send + 'static> Job<T> {
     /// Runs `work` on a thread of its own.
     pub(crate) fn spawn(work: impl FnOnce() -> T + Send + 'static) -> Self {

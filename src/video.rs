@@ -18,6 +18,7 @@ use crate::layout::{Area, Grip};
 use crate::mods::Speed;
 use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 use crate::scores::Replay;
+use crate::services::jobs;
 use winit::keyboard::KeyCode;
 
 pub type Loaded = Result<(Beatmap, Arc<Track>), String>;
@@ -176,7 +177,7 @@ use crate::scores::replay_game;
 
 pub struct Editor {
     pub replay: Replay,
-    pub rx: Option<Receiver<Loaded>>,
+    pub rx: jobs::Job<Loaded>,
     pub map: Option<(Beatmap, Arc<Track>)>,
     /// The frame shown: the replay at `cursor`.
     pub game: Option<Box<Play>>,
@@ -201,10 +202,10 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(replay: Replay, rx: Receiver<Loaded>, settings: Settings) -> Editor {
+    pub fn new(replay: Replay, rx: impl Into<jobs::Job<Loaded>>, settings: Settings) -> Editor {
         Editor {
             replay,
-            rx: Some(rx),
+            rx: rx.into(),
             map: None,
             game: None,
             cursor: 0.0,
@@ -226,9 +227,9 @@ impl Editor {
 
     /// Takes the loaded map once it's ready; true if the editor can be used.
     pub fn poll(&mut self) -> Result<bool, String> {
-        if let Some(rx) = &self.rx {
-            match rx.try_recv() {
-                Ok(Ok((map, track))) => {
+        if self.rx.is_busy() {
+            match self.rx.poll_ended() {
+                Some(Some(Ok((map, track)))) => {
                     let g = replay_game(&map, &track, &self.replay);
                     self.first = g.time;
                     self.last = g.end_time() + 1500.0;
@@ -238,12 +239,11 @@ impl Editor {
                         .first
                         .max(map.notes.first().map(|n| n.time - 2000.0).unwrap_or(0.0));
                     self.map = Some((map, track));
-                    self.rx = None;
                     self.seek(self.cursor);
                 }
-                Ok(Err(e)) => return Err(e),
-                Err(mpsc::TryRecvError::Empty) => return Ok(false),
-                Err(mpsc::TryRecvError::Disconnected) => return Err("loading stopped".into()),
+                Some(Some(Err(e))) => return Err(e),
+                None => return Ok(false),
+                Some(None) => return Err("loading stopped".into()),
             }
         }
         Ok(self.map.is_some())

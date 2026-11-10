@@ -183,7 +183,7 @@ enum Scene {
     Select,
     /// `from`: map time to start at (picked on the song select timeline), None = from the start.
     Loading {
-        rx: Receiver<Loaded>,
+        rx: Job<Loaded>,
         label: String,
         entry: usize,
         from: Option<f64>,
@@ -236,7 +236,7 @@ enum Scene {
     Lobby,
     /// `from`: map time the match starts at.
     MpWait {
-        rx: Option<Receiver<Loaded>>,
+        rx: Job<Loaded>,
         loaded: Option<Box<(Beatmap, Arc<Track>)>>,
         start: Option<Instant>,
         from: Option<f64>,
@@ -279,7 +279,7 @@ const CUSTOM_REFRESH: Duration = Duration::from_secs(2 * 60);
 const SPECTATE_DELAY: Duration = Duration::from_millis(1500);
 
 struct SpectateView {
-    rx: Option<Receiver<Loaded>>,
+    rx: Job<Loaded>,
     loaded: Option<(Beatmap, Arc<Track>)>,
     /// When the match started (local clock), its start point and speed.
     start: Instant,
@@ -335,7 +335,7 @@ struct WatchView {
     player: String,
     play: Option<online::SoloPlay>,
     entry: Option<usize>,
-    rx: Option<Receiver<Loaded>>,
+    rx: Job<Loaded>,
     game: Option<Box<Play>>,
     /// Presses that arrived before the game existed.
     inputs: Vec<(f64, u8)>,
@@ -365,7 +365,7 @@ impl WatchView {
             player,
             play: None,
             entry: None,
-            rx: None,
+            rx: Job::idle(),
             game: None,
             inputs: Vec::new(),
             clock: (-1.0e9, Instant::now(), true),
@@ -383,7 +383,7 @@ impl WatchView {
         self.inputs = start.inputs;
         self.clock = (start.t, Instant::now(), start.paused);
         self.game = None;
-        self.rx = None;
+        self.rx.cancel();
         self.entry = None;
         self.held = false;
         self.fetching = false;
@@ -939,7 +939,7 @@ enum ShotTo {
 
 /// A chat screenshot opened: being fetched until `rx` has gone.
 struct ShotView {
-    rx: Option<Receiver<Result<shots::Pixels, String>>>,
+    rx: Job<Result<shots::Pixels, String>>,
 }
 
 impl State {
@@ -1078,20 +1078,20 @@ impl State {
     }
 
     /// Loads `entry` for a play at `rate` with `mods` (`keep_pitch` unless NC/DC say otherwise).
-    fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
+    fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Job<Loaded> {
         self.load(entry, rate, mods, true, None)
     }
 
     /// The map `text` (as the editor has it now, saved or not), with `entry`'s music: a test
     /// play, at full speed and with no mods.
-    fn load_text(&mut self, entry: usize, text: String) -> Receiver<Loaded> {
+    fn load_text(&mut self, entry: usize, text: String) -> Job<Loaded> {
         // Played through to the end like osu!'s editor test, however it goes; or watched (Tab).
         let mods = Self::test_mods(self.test_auto);
         self.load(entry, 1.0, mods, true, Some(text))
     }
 
     /// `load_with` for what reads the whole song itself (a video): never a stream.
-    fn load_whole(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
+    fn load_whole(&mut self, entry: usize, rate: f64, mods: Mods) -> Job<Loaded> {
         self.load(entry, rate, mods, false, None)
     }
 
@@ -1102,7 +1102,7 @@ impl State {
         mods: Mods,
         may_stream: bool,
         text: Option<String>,
-    ) -> Receiver<Loaded> {
+    ) -> Job<Loaded> {
         let (rate, keep_pitch) = mods.speed(rate, self.cfg.rate_keep_pitch);
         let cached = self
             .cached_track(entry, rate, keep_pitch)
@@ -2363,12 +2363,11 @@ impl State {
         cached: Option<Arc<Track>>,
         may_stream: bool,
         text: Option<String>,
-    ) -> Receiver<Loaded> {
+    ) -> Job<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let result = (|| {
+        Job::spawn(move || {
+            (|| {
                 let map = match &text {
                     Some(text) => beatmap::from_text(text)?,
                     None => beatmap::load(&path)?,
@@ -2409,10 +2408,8 @@ impl State {
                     }),
                 };
                 Ok((map, track))
-            })();
-            let _ = tx.send(result);
-        });
-        rx
+            })()
+        })
     }
 
     fn show_select(&mut self) {
@@ -11139,23 +11136,18 @@ impl State {
                 }
             }
         }
-        let got = self
-            .shot_view
-            .as_ref()
-            .and_then(|v| v.rx.as_ref())
-            .and_then(|rx| rx.try_recv().ok());
+        let got = self.shot_view.as_mut().and_then(|v| v.rx.poll_ended());
         match got {
-            Some(Ok((w, h, rgba))) => {
+            Some(Some(Ok((w, h, rgba)))) => {
                 self.preview
                     .show_image(render::BgImage::from_rgba(w, h, &rgba));
-                if let Some(v) = &mut self.shot_view {
-                    v.rx = None;
-                }
             }
-            Some(Err(e)) => {
+            Some(Some(Err(e))) => {
                 self.shot_view = None;
                 self.toast(format!("couldn't open it: {e}"));
             }
+            // The fetch ended without a picture: nothing to show.
+            Some(None) => self.shot_view = None,
             None => {}
         }
     }
@@ -11189,11 +11181,9 @@ impl State {
             self.toast("open it once this play is over".into());
             return;
         }
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(shots::fetch_shot(id));
+        self.shot_view = Some(ShotView {
+            rx: Job::spawn(move || shots::fetch_shot(id)),
         });
-        self.shot_view = Some(ShotView { rx: Some(rx) });
     }
 
     /// Back from a screenshot, the background as it was.
@@ -11208,7 +11198,7 @@ impl State {
     /// The screenshot open, alone on the screen: nothing else of the frame is left.
     fn draw_shot_view(&mut self, canvas: &mut Canvas) {
         let Some(view) = &self.shot_view else { return };
-        let loading = view.rx.is_some();
+        let loading = view.rx.is_busy();
         let w = canvas.width;
         canvas.clear(w);
         self.frame_clip = None;
@@ -11732,7 +11722,7 @@ impl State {
                 Some(i) => {
                     v.entry = Some(i);
                     self.preview.show_background_for(&self.library[i]);
-                    v.rx = Some(self.load_with(i, play.map.rate, Mods::from_list(&play.map.mods)));
+                    v.rx = self.load_with(i, play.map.rate, Mods::from_list(&play.map.mods));
                 }
                 None if !v.fetching => {
                     v.fetching = true;
@@ -11741,10 +11731,9 @@ impl State {
                 None => {}
             }
         }
-        if let Some(rx) = &v.rx {
-            match rx.try_recv() {
-                Ok(Ok((map, track))) => {
-                    v.rx = None;
+        if v.rx.is_busy() {
+            match v.rx.poll() {
+                Some(Ok((map, track))) => {
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v
                         .play
@@ -11776,12 +11765,8 @@ impl State {
                     }
                     v.game = Some(Box::new(g));
                 }
-                Ok(Err(e)) => {
-                    v.rx = None;
-                    self.toast(format!("can't load the map: {e}"));
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => v.rx = None,
+                Some(Err(e)) => self.toast(format!("can't load the map: {e}")),
+                None => {}
             }
         }
         let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
@@ -11950,7 +11935,7 @@ impl State {
                         };
                         let rx = self.load_with(i, map.rate, mods);
                         self.scene = Scene::MpWait {
-                            rx: Some(rx),
+                            rx,
                             loaded: None,
                             start: None,
                             from: map.from,
@@ -11978,7 +11963,7 @@ impl State {
                         let mods = Mods::from_list(&map.mods);
                         let rx = self.load_with(i, map.rate, mods);
                         self.scene = Scene::Spectate(Box::new(SpectateView {
-                            rx: Some(rx),
+                            rx,
                             loaded: None,
                             start,
                             from: map.from,
@@ -14225,8 +14210,8 @@ impl State {
                     rgba(0x9a9ab0, 1.0),
                     &Canvas::fit(10.0, canvas.width - 48.0, label),
                 );
-                match rx.try_recv() {
-                    Ok(Ok((map, track))) => {
+                match rx.poll_ended() {
+                    Some(Some(Ok((map, track)))) => {
                         let mods = std::mem::take(&mut self.pending_mods);
                         // Random: the replay's colouring, otherwise the configured repeatable seed.
                         let seed = match &self.pending_replay {
@@ -14295,13 +14280,13 @@ impl State {
                             from: *from,
                         });
                     }
-                    Ok(Err(e)) => {
+                    Some(Some(Err(e))) => {
                         self.status = format!("failed to load {label}: {e}");
                         eprintln!("{}", self.status);
                         next = Some(Scene::Select);
                     }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Select),
+                    None => {}
+                    Some(None) => next = Some(Scene::Select),
                 }
             }
             Scene::Play { game, entry, from } => {
@@ -14731,25 +14716,22 @@ impl State {
                 start,
                 from,
             } => {
-                if let Some(r) = rx {
-                    match r.try_recv() {
-                        Ok(Ok(l)) => {
-                            *loaded = Some(Box::new(l));
-                            *rx = None;
-                            if let Some(s) = &self.mp {
-                                s.client.send(net::ClientMsg::Loaded(true));
-                            }
+                match rx.poll_ended() {
+                    Some(Some(Ok(l))) => {
+                        *loaded = Some(Box::new(l));
+                        if let Some(s) = &self.mp {
+                            s.client.send(net::ClientMsg::Loaded(true));
                         }
-                        Ok(Err(e)) => {
-                            if let Some(s) = &self.mp {
-                                s.client.send(net::ClientMsg::Loaded(false));
-                            }
-                            self.status = format!("failed to load map: {e}");
-                            next = Some(Scene::Lobby);
-                        }
-                        Err(mpsc::TryRecvError::Empty) => {}
-                        Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
                     }
+                    Some(Some(Err(e))) => {
+                        if let Some(s) = &self.mp {
+                            s.client.send(net::ClientMsg::Loaded(false));
+                        }
+                        self.status = format!("failed to load map: {e}");
+                        next = Some(Scene::Lobby);
+                    }
+                    None => {}
+                    Some(None) => next = Some(Scene::Lobby),
                 }
                 if start.is_some_and(|at| now >= at)
                     && let Some(loaded) = loaded.take()
@@ -14885,19 +14867,14 @@ impl State {
                 }
             }
             Scene::Spectate(v) => {
-                if let Some(rx) = &v.rx {
-                    match rx.try_recv() {
-                        Ok(Ok(l)) => {
-                            v.loaded = Some(l);
-                            v.rx = None;
-                        }
-                        Ok(Err(e)) => {
-                            self.status = format!("can't spectate: {e}");
-                            next = Some(Scene::Lobby);
-                        }
-                        Err(mpsc::TryRecvError::Empty) => {}
-                        Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
+                match v.rx.poll_ended() {
+                    Some(Some(Ok(l))) => v.loaded = Some(l),
+                    Some(Some(Err(e))) => {
+                        self.status = format!("can't spectate: {e}");
+                        next = Some(Scene::Lobby);
                     }
+                    None => {}
+                    Some(None) => next = Some(Scene::Lobby),
                 }
                 if v.ended
                     .is_some_and(|t| now >= t + SPECTATE_DELAY + Duration::from_millis(500))
