@@ -17,6 +17,7 @@ pub mod mods;
 pub mod multiverse;
 pub mod od_override;
 pub mod pp;
+pub mod scores;
 pub mod shapeshift;
 pub mod sim;
 pub mod stars;
