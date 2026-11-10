@@ -10520,6 +10520,16 @@ impl State {
         matches!(self.scene, Scene::Editor(_) | Scene::EditorHome(_))
     }
 
+    /// Where the friends overlay's chip goes in the editors' top bar (its left edge), on a
+    /// screen `width` wide; None outside the editors.
+    fn editor_chip_x(&self, width: f32) -> Option<f32> {
+        match &self.scene {
+            Scene::Editor(_) => Some(editor::view::View::menu_end() + 6.0),
+            Scene::EditorHome(_) => Some(width - 100.0),
+            _ => None,
+        }
+    }
+
     /// The open friends panel has the keyboard.
     fn social_keys(&self) -> bool {
         self.social.open && (self.social.typing || !self.in_editor())
@@ -11952,161 +11962,6 @@ impl State {
         }
     }
 
-    /// A key while "Exit taiko.rs?" is up: yes, no, or nothing. 1 and 2 answer like osu!'s.
-    fn quit_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Enter
-            | KeyCode::NumpadEnter
-            | KeyCode::KeyY
-            | KeyCode::Digit1
-            | KeyCode::Numpad1 => self.quit = true,
-            KeyCode::KeyQ if self.modifiers_ctrl => self.quit = true,
-            KeyCode::Escape
-            | KeyCode::KeyN
-            | KeyCode::Backspace
-            | KeyCode::Digit2
-            | KeyCode::Numpad2 => self.quit_asked = false,
-            _ => {}
-        }
-    }
-
-    /// The crash question is up: after the splash, over everything but the exit question.
-    fn crash_shown(&self) -> bool {
-        self.crash.is_some() && self.splash.is_none() && !self.quit_asked
-    }
-
-    /// A key while "taiko.rs crashed last time" is up: copy the report, or not.
-    fn crash_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Enter
-            | KeyCode::NumpadEnter
-            | KeyCode::KeyC
-            | KeyCode::Digit1
-            | KeyCode::Numpad1 => {
-                let Some(report) = self.crash.take() else {
-                    return;
-                };
-                let text = if clipboard::set(&report) {
-                    tr!(
-                        "crash log copied: paste it in #bugs on Discord",
-                        "クラッシュログをコピーしました: Discordの#bugsに貼ってください",
-                        "лог краша скопирован: вставьте его в #bugs в Discord"
-                    )
-                } else {
-                    tr!(
-                        "couldn't copy it: send crash.log from the game's data folder",
-                        "コピーできませんでした: データフォルダのcrash.logを送ってください",
-                        "не удалось скопировать: пришлите crash.log из папки данных игры"
-                    )
-                };
-                self.toast = Some(Toast {
-                    text: text.into(),
-                    until: Instant::now() + Duration::from_secs(6),
-                });
-            }
-            KeyCode::Escape | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => {
-                self.crash = None
-            }
-            _ => {}
-        }
-    }
-
-    /// "taiko.rs crashed last time": the report to copy and send in.
-    fn draw_crash(&self, c: &mut Canvas) {
-        if !self.crash_shown() {
-            return;
-        }
-        let w = c.width;
-        c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
-        let (bw, bh) = (380.0f32.min(w - 32.0), 132.0);
-        let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        c.round_rect(
-            [x, y],
-            [bw, bh],
-            10.0,
-            rgba(0x1d1d27, 1.0),
-            rgba(accent(), 1.0),
-            1.5,
-        );
-        c.text_centered(
-            w / 2.0,
-            y + 18.0,
-            12.0,
-            rgba(0xffffff, 1.0),
-            tr!(
-                "taiko.rs crashed last time",
-                "前回taiko.rsがクラッシュしました",
-                "taiko.rs вылетел в прошлый раз"
-            ),
-        );
-        let room = bw - 32.0;
-        let lines = if self.crash_sent {
-            [
-                tr!(
-                    "Its report went to the developers by itself.",
-                    "レポートは自動で開発者に送られました。",
-                    "Отчёт уже ушёл разработчикам сам."
-                ),
-                tr!(
-                    "To say what you were doing, paste the log in #bugs.",
-                    "何をしていたか伝えるには、ログを#bugsに貼ってください。",
-                    "Чтобы рассказать, что вы делали, вставьте лог в #bugs."
-                ),
-            ]
-        } else {
-            [
-                tr!(
-                    "Copy the crash log and paste it in #bugs",
-                    "クラッシュログをコピーして",
-                    "Скопируйте лог краша и вставьте его"
-                ),
-                tr!(
-                    "on the taiko.rs Discord, so it gets fixed.",
-                    "Discordの#bugsに貼ってください。",
-                    "в #bugs в Discord taiko.rs, чтобы мы починили."
-                ),
-            ]
-        };
-        for (k, line) in lines.iter().enumerate() {
-            let size = Canvas::fit_size(8.0, 6.5, room, line);
-            c.text_centered(
-                w / 2.0,
-                y + 42.0 + 13.0 * k as f32,
-                size,
-                rgba(0xc8c8d8, 1.0),
-                &Canvas::fit(size, room, line),
-            );
-        }
-        let gap = 10.0;
-        let button = (bw - 36.0 - gap) / 2.0;
-        let copy = tr!(
-            "1. Copy log  (Enter)",
-            "1. コピー  (Enter)",
-            "1. Копировать  (Enter)"
-        );
-        let close = tr!("2. Close  (Esc)", "2. 閉じる  (Esc)", "2. Закрыть  (Esc)");
-        c.button(
-            x + 18.0,
-            y + 88.0,
-            button,
-            26.0,
-            copy,
-            9.0,
-            hit::Hit::Key(KeyCode::KeyC),
-            true,
-        );
-        c.button(
-            x + 18.0 + button + gap,
-            y + 88.0,
-            button,
-            26.0,
-            close,
-            9.0,
-            hit::Hit::Key(KeyCode::Escape),
-            false,
-        );
-    }
-
     /// How far in the exit question has slid at `now`, 0 to 1: fast, then easing to a stop.
     fn quit_slide(&self, now: Instant) -> f32 {
         let Some(at) = self.quit_asked_at.filter(|_| self.cfg.animations) else {
@@ -12114,104 +11969,6 @@ impl State {
         };
         let ms = now.saturating_duration_since(at).as_secs_f32() * 1000.0;
         1.0 - (1.0 - (ms / QUIT_SLIDE_MS).min(1.0)).powi(3)
-    }
-
-    /// The exit question over everything, sliding down from above the screen.
-    fn draw_quit(&self, c: &mut Canvas, now: Instant) {
-        if !self.quit_asked {
-            return;
-        }
-        // The main menu's look: one panel, the two answers as notes on it (Exit a don, Stay a kat),
-        // the selector on the one Enter picks, or on the one under the pointer.
-        let w = c.width;
-        let slide = self.quit_slide(now);
-        c.rect(
-            0.0,
-            0.0,
-            w,
-            render::VIRTUAL_HEIGHT,
-            rgba(0x000000, 0.6 * slide),
-        );
-        let (bw, bh) = (340.0f32.min(w - 32.0), 124.0);
-        let (x, rest) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        let y = -bh + (rest + bh) * slide;
-        style::panel(c, x, y, bw, bh);
-        let title = tr!(
-            "Exit taiko.rs?",
-            "taiko.rsを終了しますか?",
-            "Выйти из taiko.rs?"
-        );
-        let size = Canvas::fit_size(16.0, 10.0, bw - 28.0, title);
-        style::title(
-            c,
-            w / 2.0 - Canvas::text_width(size, title) / 2.0,
-            y + 18.0,
-            size,
-            0xffffff,
-            title,
-        );
-        let gap = 12.0;
-        let button = (bw - 36.0 - gap) / 2.0;
-        let colours = crate::game::note_colours();
-        let options = [
-            (
-                x + 18.0,
-                tr!("Exit", "終了", "Выйти"),
-                "1 / Enter",
-                colours.don(),
-                hit::Hit::Key(KeyCode::KeyY),
-            ),
-            (
-                x + 18.0 + button + gap,
-                tr!("Stay", "戻る", "Остаться"),
-                "2 / Esc",
-                colours.kat(),
-                hit::Hit::Key(KeyCode::KeyN),
-            ),
-        ];
-        let oy = y + 62.0;
-        let hovered = options
-            .iter()
-            .position(|o| c.hovered(o.0, oy, button, 40.0));
-        let on = hovered.unwrap_or(0);
-        for (k, (ox, label, keys, col, hit)) in options.into_iter().enumerate() {
-            let selected = k == on;
-            if selected {
-                c.round_rect(
-                    [ox, oy],
-                    [button, 40.0],
-                    8.0,
-                    rgba(style::selector_colour(), 0.12 + 0.05 * style::pulse()),
-                    rgba(0, 0.0),
-                    0.0,
-                );
-                // Its easing would trail behind the panel: until that's still, it just stays on.
-                let around = [ox - 3.0, oy - 3.0, button + 6.0, 46.0];
-                if slide < 1.0 {
-                    style::brackets(c, around, 1.0);
-                } else {
-                    style::selector(c, "quit", around);
-                }
-            }
-            c.hit(ox, oy, button, 40.0, hit);
-            let (nx, ny, r) = (ox + 20.0, oy + 20.0, if selected { 10.0 } else { 8.0 });
-            style::note(c, nx, ny, r, col, selected, 0.6);
-            let room = button - 44.0;
-            c.text(
-                ox + 38.0,
-                oy + 9.0,
-                11.0,
-                rgba(if selected { 0xffffff } else { 0xa8a8bc }, 1.0),
-                &Canvas::fit(11.0, room, label),
-            );
-            c.text(
-                ox + 38.0,
-                oy + 24.0,
-                6.0,
-                rgba(0x8a8aa0, 1.0),
-                &Canvas::fit(6.0, room, keys),
-            );
-        }
     }
 
     fn key(
