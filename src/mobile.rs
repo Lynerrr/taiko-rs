@@ -476,7 +476,6 @@ impl State {
                         | Scene::Lobby
                         | Scene::MpResults
                         | Scene::HudEdit { .. }
-                        | Scene::LayoutEdit { .. }
                         | Scene::Calibrate { .. }
                         | Scene::Preview { .. }
                 )
@@ -525,8 +524,7 @@ impl State {
                 // and dragged, as with a mouse.
                 let dragged = matches!(
                     self.scene,
-                    Scene::LayoutEdit { .. }
-                        | Scene::HudEdit { .. }
+                    Scene::HudEdit { .. }
                         | Scene::Editor(_)
                         | Scene::EditorHome(_)
                         | Scene::Preview { .. }
