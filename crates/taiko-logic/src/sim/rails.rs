@@ -65,7 +65,7 @@ pub enum RailShape {
 /// top row past the fifth: the score, accuracy and HP are over it) and out to the right.
 pub const MAZE_CELL: f32 = 160.0;
 pub const MAZE_R: f32 = 80.0;
-pub const MAZE: [(f32, f32); 10] = [
+pub(crate) const MAZE: [(f32, f32); 10] = [
     (4.0, 1.0),
     (2.0, -1.0),
     (1.0, -1.0),
@@ -87,7 +87,7 @@ pub fn maze_straight(k: usize) -> f32 {
 /// of the hit error meter.
 pub const LOOP_AT: f32 = 390.0;
 pub const LOOP_R: f32 = 110.0;
-pub const LOOP_EXIT: f32 = 0.6;
+pub(crate) const LOOP_EXIT: f32 = 0.6;
 pub const LOOP_TURN: f32 = std::f32::consts::TAU - LOOP_EXIT;
 /// Meadow: square-cornered runs that cross back over themselves, as a straight run then a
 /// quarter turn (1 left, -1 right, 0 none) each. Traced from a tower-defence track, with the first
@@ -115,11 +115,11 @@ pub const MEADOW_TURN: f32 = 28.0 * RAIL_STEP;
 /// Meadow: how far right it reaches (lane edge included), how much it shrinks besides to fit the
 /// screen's height (clear of the hit error meter but for the lane out), and how far down the
 /// playfield moves.
-pub const MEADOW_RIGHT: f32 = 1163.0;
-pub const MEADOW_TALL: f32 = 0.53;
-pub const MEADOW_DROP: f32 = 28.0;
+pub(crate) const MEADOW_RIGHT: f32 = 1163.0;
+pub(crate) const MEADOW_TALL: f32 = 0.53;
+pub(crate) const MEADOW_DROP: f32 = 28.0;
 /// The bent shapes are laid out from a lane at 160: this takes them back up there from `LANE_Y`.
-pub const RAIL_LIFT: f32 = LANE_Y - 160.0;
+pub(crate) const RAIL_LIFT: f32 = LANE_Y - 160.0;
 /// Shapeshift's shapes, by the index `shapeshift::SHAPES` names them with.
 pub const SHAPESHIFT: [RailShape; 7] = [
     RailShape::Zigzag,
