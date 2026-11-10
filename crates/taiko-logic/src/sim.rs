@@ -82,6 +82,10 @@ pub trait Audio {
 
 mod rails;
 mod setup;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+#[cfg(test)]
+mod tests;
 
 pub use self::{rails::*, setup::*};
 /// Centre of the hit target: x = 160 of osu!'s 480-tall gamefield, as in stable and lazer.
