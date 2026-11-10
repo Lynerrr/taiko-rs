@@ -77,6 +77,39 @@ fn line(st: &game::Stats) -> String {
 }
 
 #[test]
+fn tapping_intro_skip_jumps_without_hitting_the_drum() {
+    let mut chart = maps::basics();
+    chart.objects = vec![maps::Obj::Don(8_000), maps::Obj::Kat(9_000)];
+    let (mut s, _songs, mut now) = client("touch-intro-skip", vec![chart]);
+    start_selected(&mut s, &mut now);
+    s.touch_used = true;
+    frame(&mut s, now);
+    let [x, y, w, h] = s
+        .hits
+        .iter()
+        .find(|area| area.hit == crate::hit::Hit::SkipIntro)
+        .expect("a long intro offers a skip button on touch")
+        .rect;
+    let scale = f64::from(s.window_h / render::VIRTUAL_HEIGHT);
+    s.touch(
+        1,
+        TouchPhase::Started,
+        f64::from(x + w / 2.0) * scale,
+        f64::from(y + h / 2.0) * scale,
+        now,
+        None,
+    );
+    assert_eq!(s.touch_flash, [None; 4]);
+    frame(&mut s, now + FRAME);
+    assert!(!harness::game(&s).unwrap().can_skip());
+    assert!(
+        !s.hits
+            .iter()
+            .any(|area| area.hit == crate::hit::Hit::SkipIntro)
+    );
+}
+
+#[test]
 fn a_map_is_played_with_the_keyboard_from_song_select_to_the_results_and_back() {
     let (mut s, _songs, mut now) = client("journey", vec![maps::rolls_and_swells()]);
     start_selected(&mut s, &mut now);

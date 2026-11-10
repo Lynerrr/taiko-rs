@@ -463,7 +463,7 @@ impl Screen for PlayScreen {
                 game.draw_playfield(c, game.scroll_speed());
             },
         );
-        game.draw_hud(canvas);
+        game.draw_hud_with_intro(canvas, state.touch_used || mobile::active());
         if game.replay().is_none()
             && game.paused().is_none()
             && !frame.hidden.has(hud::Part::Spectators)

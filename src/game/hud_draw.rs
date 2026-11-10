@@ -8,9 +8,21 @@ use crate::hud::{self, Part};
 use crate::render::{Font, Sprite, VIRTUAL_HEIGHT, accent, progress, rgba};
 
 impl Play {
+    pub(crate) fn show_intro_skip(&self) -> bool {
+        self.game.can_skip()
+            && self.game.paused().is_none()
+            && !self.game.mute_hits()
+            && !self.view.watched
+            && self.game.replay().is_none()
+    }
+
     /// The interface's parts where the player put them (see `hud`), then the skip hint and the
     /// pause menu (with the map's name), which stay at fixed screen positions.
     pub fn draw_hud(&self, c: &mut Canvas) {
+        self.draw_hud_with_intro(c, false);
+    }
+
+    pub(crate) fn draw_hud_with_intro(&self, c: &mut Canvas, touch: bool) {
         let t = self.game.time();
         let w = c.width;
         if let Some(text) = &self.view.banner {
@@ -49,17 +61,30 @@ impl Play {
             && !self.game.mute_hits()
             && !self.view.watched
         {
-            c.text_centered(
-                w / 2.0,
-                330.0,
-                12.0,
-                rgba(WHITE, 0.7),
-                tr!(
-                    "SPACE to skip intro",
-                    "SPACEでイントロを飛ばす",
-                    "ПРОБЕЛ: пропустить вступление"
-                ),
-            );
+            if touch && self.game.replay().is_none() {
+                c.button(
+                    w / 2.0 - 80.0,
+                    321.0,
+                    160.0,
+                    32.0,
+                    tr!("Skip intro", "イントロをスキップ", "Пропустить вступление"),
+                    10.0,
+                    Hit::SkipIntro,
+                    false,
+                );
+            } else {
+                c.text_centered(
+                    w / 2.0,
+                    330.0,
+                    12.0,
+                    rgba(WHITE, 0.7),
+                    tr!(
+                        "SPACE to skip intro",
+                        "SPACEでイントロを飛ばす",
+                        "ПРОБЕЛ: пропустить вступление"
+                    ),
+                );
+            }
         }
         if let (Some(_), Some((start, end))) = (self.game.paused(), self.game.resuming()) {
             // Resume countdown: the playfield stays visible, lightly dimmed.

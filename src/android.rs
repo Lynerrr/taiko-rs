@@ -11,7 +11,8 @@
 //! shows or hides it, and what is typed on it comes back as [`Typed`] events.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Mutex, OnceLock};
 
 use jni::objects::{JObject, JString, JValue};
 use jni::sys::{jboolean, jint};
@@ -21,10 +22,25 @@ use winit::keyboard::KeyCode;
 use winit::platform::android::activity::AndroidApp;
 
 use crate::UserEvent;
+use crate::library::FileKind;
 
 /// The running activity (for calling into its Java side) and where its keyboard's typing goes.
 static APP: Mutex<Option<AndroidApp>> = Mutex::new(None);
 static PROXY: Mutex<Option<EventLoopProxy<UserEvent>>> = Mutex::new(None);
+type PickResult = Result<Option<PickedFile>, String>;
+static FILE_PICK: OnceLock<Mutex<Option<Sender<PickResult>>>> = OnceLock::new();
+
+/// The local copy of a file selected through Android's document picker.
+pub struct PickedFile(pub PathBuf);
+
+impl Drop for PickedFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
 
 /// The on-screen keyboard, as the game sees it.
 #[derive(Default)]
@@ -51,8 +67,11 @@ pub enum Typed {
 pub fn setup(app: &AndroidApp) {
     forward_stderr_to_logcat();
     *APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app.clone());
-    if let Err(e) = register_natives(app) {
-        eprintln!("on-screen keyboard unavailable: {e}");
+    match register_natives(app) {
+        Ok(()) => {
+            let _ = FILE_PICK.set(Mutex::new(None));
+        }
+        Err(e) => eprintln!("Android activity callbacks unavailable: {e}"),
     }
     let internal = app
         .internal_data_path()
@@ -222,7 +241,52 @@ pub fn keep_music(on: bool) {
     }
 }
 
-/// Binds the activity's `native` methods (the keyboard's) to their Rust side here.
+/// Asks the activity for one file and returns immediately. The activity copies the chosen
+/// document before completing the request.
+pub fn pick_file(kind: FileKind) -> Receiver<PickResult> {
+    let (tx, rx) = mpsc::channel();
+    let app = APP.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let (Some(app), Some(pick)) = (app, FILE_PICK.get()) else {
+        let _ = tx.send(Err("file picker unavailable".into()));
+        return rx;
+    };
+    {
+        let mut pending = pick.lock().unwrap_or_else(|e| e.into_inner());
+        if pending.is_some() {
+            let _ = tx.send(Err("a file selection is already in progress".into()));
+            return rx;
+        }
+        *pending = Some(tx);
+    }
+    let called = JavaVM::singleton().and_then(|vm| {
+        vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            // SAFETY: a global reference to the activity, valid while it runs.
+            let activity = unsafe { JObject::from_raw(env, app.activity_as_ptr().cast()) };
+            env.call_method(
+                &activity,
+                jni_str!("pickFile"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(kind == FileKind::Image)],
+            )?;
+            Ok(())
+        })
+    });
+    if let Err(e) = called {
+        eprintln!("file picker: {e}");
+        finish_pick(Err("couldn't open the file picker".into()));
+    }
+    rx
+}
+
+fn finish_pick(result: PickResult) {
+    if let Some(pick) = FILE_PICK.get()
+        && let Some(tx) = pick.lock().unwrap_or_else(|e| e.into_inner()).take()
+    {
+        let _ = tx.send(result);
+    }
+}
+
+/// Binds the activity's `native` methods to their Rust side here.
 fn register_natives(app: &AndroidApp) -> jni::errors::Result<()> {
     JavaVM::singleton()?.attach_current_thread(|env| -> jni::errors::Result<()> {
         // SAFETY: as in `keyboard`.
@@ -247,10 +311,39 @@ fn register_natives(app: &AndroidApp) -> jni::errors::Result<()> {
                     jni_str!("(IJ)V"),
                     media_press as *mut _,
                 ),
+                NativeMethod::from_raw_parts(
+                    jni_str!("filePicked"),
+                    jni_str!("(Ljava/lang/String;Ljava/lang/String;)V"),
+                    file_picked as *mut _,
+                ),
             ]
         };
         unsafe { env.register_native_methods(&class, &methods) }
     })
+}
+
+extern "system" fn file_picked<'local>(
+    mut env: EnvUnowned<'local>,
+    _this: JObject<'local>,
+    path: JString<'local>,
+    error: JString<'local>,
+) {
+    env.with_env(|env| -> jni::errors::Result<()> {
+        let result = if !path.is_null() {
+            path.try_to_string(env)
+                .map(|path| Some(PickedFile(PathBuf::from(path))))
+                .map_err(|e| e.to_string())
+        } else if !error.is_null() {
+            Err(error
+                .try_to_string(env)
+                .unwrap_or_else(|_| "couldn't read the chosen file".into()))
+        } else {
+            Ok(None)
+        };
+        finish_pick(result);
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// `TaikoActivity.typed(text, keyCode)`: text typed on the keyboard, or (text null) a key.

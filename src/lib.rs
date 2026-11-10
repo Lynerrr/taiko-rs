@@ -6002,6 +6002,11 @@ impl State {
             return;
         }
         if phase == TouchPhase::Started && self.touch_drums() {
+            let (vx, vy) = self.mouse_at(x, y);
+            if self.hit_at(vx, vy) == Some(hit::Hit::SkipIntro) {
+                self.click(hit::Hit::SkipIntro, window);
+                return;
+            }
             let col = (x / self.window_w.max(1.0) as f64 * 4.0)
                 .floor()
                 .clamp(0.0, 3.0) as usize;
@@ -12780,6 +12785,18 @@ impl State {
             | hit::Hit::HudColour(_)
             | hit::Hit::HudButton(_) => {}
             Hit::LobbyChat => self.focus_lobby_chat(),
+            Hit::SkipIntro => {
+                self.refresh_play_offset();
+                if let Some(game) = self.play.as_deref_mut().filter(|g| g.show_intro_skip()) {
+                    if self.scene.screen_is::<PlayScreen>() {
+                        game.skip(sound(&self.audio), self.play_offset);
+                    } else if self.scene.screen_is::<screens::mp_play::MpPlay>()
+                        && let Some(s) = &mut self.mp
+                    {
+                        s.ask_to_skip();
+                    }
+                }
+            }
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),

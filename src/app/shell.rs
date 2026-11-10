@@ -199,6 +199,7 @@ pub(crate) fn run(
         cursor_accent: render::DEFAULT_ACCENT,
         cursor_hidden: false,
         window: None,
+        #[cfg(not(target_os = "android"))]
         ime: false,
         instance: None,
         render_thread: None,

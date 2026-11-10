@@ -98,6 +98,7 @@ pub enum Hit {
     /// The settings' search box.
     SettingsSearch,
     PauseItem(usize),
+    SkipIntro,
     MpRow(usize),
     /// Opens the playfield preset list.
     Presets,

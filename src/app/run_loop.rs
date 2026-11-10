@@ -553,6 +553,7 @@ pub(super) struct App {
     pub(super) window: Option<Arc<Window>>,
     /// The window takes input methods (Japanese, ...): only while text is being typed, so a
     /// song's keys never wait on one.
+    #[cfg(not(target_os = "android"))]
     pub(super) ime: bool,
     /// Kept to make a surface for each new window (Android, after coming back from the background).
     pub(super) instance: Option<wgpu::Instance>,

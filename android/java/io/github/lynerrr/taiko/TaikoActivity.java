@@ -21,15 +21,18 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.MimeTypeMap;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.file.Files;
 import java.util.ArrayList;
 
 /**
- * The game is native code (libtaiko_rs.so, see src/android.rs); this adds two things to it:
+ * The game is native code (libtaiko_rs.so, see src/android.rs). This activity provides:
  *
  * <ul>
  * <li>Importing beatmap archives opened with or shared to the game. Each one is copied into
@@ -37,9 +40,11 @@ import java.util.ArrayList;
  * the game picks it up from there and unpacks it into its Songs folder.
  * <li>The on-screen keyboard. The game shows and hides it ({@link #keyboard}); what is typed on it
  * goes to the game through {@link #typed}, and whether it is up through {@link #keyboardShown}.
+ * <li>The system file picker for the map editor.
  * </ul>
  */
 public class TaikoActivity extends NativeActivity {
+    private static final int PICK_FILE = 0x544B;
     /** Talks to the input method; the game draws everything, so it has nothing to show. */
     private KeyboardView keyboardView;
 
@@ -48,6 +53,72 @@ public class TaikoActivity extends NativeActivity {
 
     /** The on-screen keyboard came up or went away (Android 11 and later tell). */
     private native void keyboardShown(boolean shown);
+
+    /** A copied file, a failure message, or two nulls when the picker was cancelled. */
+    private native void filePicked(String path, String error);
+
+    /** Called by the game thread to open Android's document picker. */
+    public void pickFile(boolean image) {
+        runOnUiThread(() -> {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType(image ? "image/*" : "audio/*");
+            try {
+                startActivityForResult(intent, PICK_FILE);
+            } catch (RuntimeException e) {
+                android.util.Log.w("taiko-rs", "opening the file picker failed", e);
+                filePicked(null, "couldn't open the file picker");
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != PICK_FILE) {
+            return;
+        }
+        if (result != RESULT_OK) {
+            filePicked(null, null);
+            return;
+        }
+        Uri uri = data == null ? null : data.getData();
+        if (uri == null) {
+            filePicked(null, "the file picker didn't return a file");
+            return;
+        }
+        new Thread(() -> copyPickedFile(uri), "editor file picker").start();
+    }
+
+    private void copyPickedFile(Uri uri) {
+        File dir = null;
+        File file = null;
+        try {
+            String name = documentName(uri);
+            if (name.lastIndexOf('.') <= 0 || name.endsWith(".")) {
+                String type = getContentResolver().getType(uri);
+                String extension = type == null ? null
+                    : MimeTypeMap.getSingleton().getExtensionFromMimeType(type);
+                if (extension != null) {
+                    name += (name.endsWith(".") ? "" : ".") + extension;
+                }
+            }
+            dir = Files.createTempDirectory(getCacheDir().toPath(), "taiko-pick-").toFile();
+            file = new File(dir, name);
+            copyContents(uri, file);
+        } catch (IOException | RuntimeException e) {
+            android.util.Log.w("taiko-rs", "copying the chosen file failed", e);
+            if (file != null) {
+                file.delete();
+            }
+            if (dir != null) {
+                dir.delete();
+            }
+            filePicked(null, "couldn't read the chosen file");
+            return;
+        }
+        filePicked(file.getAbsolutePath(), null);
+    }
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -425,8 +496,7 @@ public class TaikoActivity extends NativeActivity {
         }
     }
 
-    /** The archive's file name without its extension, safe as a folder name. */
-    private String nameOf(Uri uri) {
+    private String documentName(Uri uri) {
         String name = null;
         try (Cursor c = getContentResolver().query(uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (c != null && c.moveToFirst() && !c.isNull(0)) {
@@ -441,7 +511,14 @@ public class TaikoActivity extends NativeActivity {
         if (name == null || name.isEmpty()) {
             name = "import " + System.currentTimeMillis();
         }
-        name = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
+        name = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        return name.isEmpty() || name.equals(".") || name.equals("..")
+            ? "import " + System.currentTimeMillis() : name;
+    }
+
+    /** The archive's file name without its extension, safe as a folder name. */
+    private String nameOf(Uri uri) {
+        String name = documentName(uri);
         String lower = name.toLowerCase();
         // taiko.rs's own .rsz is the same zip as an .osz.
         if (lower.endsWith(".osz") || lower.endsWith(".rsz") || lower.endsWith(".zip")) {
@@ -450,18 +527,24 @@ public class TaikoActivity extends NativeActivity {
         return name.trim().isEmpty() ? "import " + System.currentTimeMillis() : name.trim();
     }
 
-    private void copy(Uri uri, File dir, String name) {
-        File part = new File(dir, name + ".osz.part");
+    private void copyContents(Uri uri, File file) throws IOException {
         try (InputStream in = getContentResolver().openInputStream(uri);
-             OutputStream out = new FileOutputStream(part)) {
+             OutputStream out = new FileOutputStream(file)) {
             if (in == null) {
-                throw new java.io.IOException("can't open " + uri);
+                throw new IOException("can't open " + uri);
             }
             byte[] buf = new byte[1 << 16];
             for (int n; (n = in.read(buf)) > 0; ) {
                 out.write(buf, 0, n);
             }
-        } catch (Exception e) {
+        }
+    }
+
+    private void copy(Uri uri, File dir, String name) {
+        File part = new File(dir, name + ".osz.part");
+        try {
+            copyContents(uri, part);
+        } catch (IOException | RuntimeException e) {
             android.util.Log.w("taiko-rs", "import of " + uri + " failed", e);
             part.delete();
             return;
