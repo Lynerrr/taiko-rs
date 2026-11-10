@@ -88,7 +88,7 @@ mod render;
 mod results_tests;
 mod scores;
 mod screens;
-mod search;
+use taiko_logic::library::search;
 mod services;
 mod setstatus;
 mod settings;

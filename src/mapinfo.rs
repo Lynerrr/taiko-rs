@@ -8,15 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rosu_pp::taiko::Taiko;
-use rosu_pp::{Beatmap, Difficulty};
-
-#[derive(Clone, Copy, Debug)]
-pub struct Info {
-    pub stars: f32,
-    pub length_ms: f32,
-    pub bpm: f32,
-}
+pub use taiko_logic::library::Info;
 
 /// Results by library index (None: not known yet or the map couldn't be read).
 pub type Shared = Arc<Mutex<Vec<Option<Info>>>>;
@@ -112,21 +104,7 @@ fn save_cache(cache: &Cache) {
 
 /// Star rating (taiko, converts included), drain length and BPM of one map.
 fn analyze(path: &Path) -> Option<Info> {
-    let map = Beatmap::from_path(path).ok()?;
-    if !crate::stars::calculable(&map) {
-        return None;
-    }
-    let stars = Difficulty::new()
-        .calculate_for_mode::<Taiko>(&map)
-        .ok()?
-        .stars as f32;
-    let first = map.hit_objects.first().map(|h| h.start_time).unwrap_or(0.0);
-    let last = map.hit_objects.last().map(|h| h.start_time).unwrap_or(0.0);
-    Some(Info {
-        stars,
-        length_ms: (last - first).max(0.0) as f32,
-        bpm: map.bpm() as f32,
-    })
+    Info::of(&std::fs::read(path).ok()?)
 }
 
 impl MapInfo {
