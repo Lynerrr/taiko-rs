@@ -16106,7 +16106,7 @@ impl State {
         // reach as their time goes on.
         let resuming = matches!(&self.scene,
             Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. }
-                if game.resuming.is_some());
+                if game.resuming().is_some());
         self.preview.is_due() || resuming
     }
 
@@ -16127,7 +16127,7 @@ impl State {
         };
         let live_pp = matches!(&self.scene,
             Scene::Play { game, .. } | Scene::MpPlay { game, .. }
-                if game.live_pp.as_ref().is_some_and(|l| l.is_busy()));
+                if game.live_pp_busy());
         [
             ("the library scan", self.scan.is_some()),
             ("the maps' analysis", info_pending),

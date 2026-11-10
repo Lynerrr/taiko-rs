@@ -63,6 +63,11 @@ pub fn defense_game(team: usize) -> Game {
 
 /// What only tests set on a play directly: a moment to look at, a score, a state picked by hand.
 impl Game {
+    /// Whether the live pp counter's thread still works on an answer (`pp::Live::is_busy`).
+    pub fn live_pp_busy(&self) -> bool {
+        self.live_pp.as_ref().is_some_and(|l| l.is_busy())
+    }
+
     /// Puts the play at map time `t` (ms) without playing anything up to it (`set_time` does).
     pub fn put_at(&mut self, t: f64) {
         self.time = t;
