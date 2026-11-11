@@ -839,7 +839,7 @@ fn assert_every_screen_fits() {
         .collect();
     s.browse.query = "a long search query typed into the download tab".into();
     check(&mut s, "download results", &mut out);
-    s.scene = Scene::MpMenu;
+    s.scene = crate::screens::mp_menu::MpMenu::scene();
     check(&mut s, "multiplayer menu", &mut out);
     s.crash = Some("--- taiko.rs crash".into());
     check(&mut s, "crash report", &mut out);
@@ -2490,7 +2490,7 @@ fn an_update_restarts_the_game_only_in_a_quiet_menu() {
     for scene in [
         Scene::Select,
         crate::screens::download::Download::scene(),
-        Scene::MpMenu,
+        crate::screens::mp_menu::MpMenu::scene(),
     ] {
         s.scene = scene;
         assert!(s.can_restart());

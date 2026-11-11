@@ -34,7 +34,7 @@ fn ctrl_o_opens_settings_from_anywhere_and_closes_them() {
     for scene in [
         Scene::Select,
         crate::screens::download::Download::scene(),
-        Scene::MpMenu,
+        crate::screens::mp_menu::MpMenu::scene(),
     ] {
         s.scene = scene;
         press(&mut s);
@@ -281,7 +281,7 @@ fn a_map_gone_from_disk_leaves_the_list_only_where_nothing_holds_an_index() {
     s.select.select_path(&s.library, &keep);
     let selected = s.select.selected();
     // Somewhere that may hold an index: it waits for the next launch.
-    s.scene = Scene::MpMenu;
+    s.scene = crate::screens::mp_menu::MpMenu::scene();
     let checked = rest(&s);
     s.check_library(checked);
     assert_eq!(s.library.len(), paths.len());
