@@ -204,13 +204,15 @@ pub struct Select {
     pub custom_approved: std::collections::HashSet<u32>,
     /// The account logged in is a loved nominator: the right-click menu can love sets.
     pub nominator: bool,
-    /// osu! collections: (name, library indices).
-    pub collections: Vec<(String, std::collections::HashSet<usize>)>,
+    /// The collections: the player's own (all of them), then osu!'s that have maps here.
+    pub collections: Vec<Shown>,
     /// The collection shown (None: everything) and the open list's cursor.
     pub collection: Option<usize>,
     pub picker: Option<usize>,
-    /// The open list is the sort modes, not the collections.
-    pub sorting: bool,
+    /// What the open list is.
+    pub list: PickList,
+    /// A collection's name being typed.
+    pub naming: Option<Naming>,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
     /// The folder dialog is open (from the button shown when there are no maps at all).
@@ -449,7 +451,8 @@ impl Select {
             collections: Vec::new(),
             collection: None,
             picker: None,
-            sorting: false,
+            list: PickList::Sorts,
+            naming: None,
             scanning: None,
             favourites: crate::playlist::load_favourites(),
             picking_folder: false,
@@ -526,7 +529,7 @@ impl Select {
         let only = self
             .collection
             .and_then(|c| self.collections.get(c))
-            .map(|(_, set)| set);
+            .map(|c| &c.maps);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -1534,6 +1537,16 @@ impl Select {
         }
         if !m.header {
             items.push((
+                fit(format!("Collect [{}]", library[i].meta.version)),
+                MenuAction::Collect(false),
+            ));
+        }
+        items.push((
+            fit(format!("Collect {}", library[i].meta.title)),
+            MenuAction::Collect(true),
+        ));
+        if !m.header {
+            items.push((
                 fit(format!("Hide [{}]", library[i].meta.version)),
                 MenuAction::HideDifficulty,
             ));
@@ -1628,7 +1641,8 @@ impl Select {
             | MenuAction::Like
             | MenuAction::MapSkin
             | MenuAction::Edit
-            | MenuAction::NewDifficulty => return None,
+            | MenuAction::NewDifficulty
+            | MenuAction::Collect(_) => return None,
         };
         self.hidden.save();
         // The selection stays unless it was hidden: then another difficulty of that song, else
@@ -1817,7 +1831,7 @@ impl Select {
             let name = self
                 .collection
                 .and_then(|c| self.collections.get(c))
-                .map_or("all", |(name, _)| name.as_str());
+                .map_or("all", |c| c.name.as_str());
             buttons.push((
                 vec![format!("Collection: {name}"), name.to_string()],
                 Hit::CollectionPick,
@@ -3052,6 +3066,49 @@ pub struct SongMenu {
     pub y: f32,
 }
 
+/// A collection as song select lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    pub name: String,
+    /// The player's own (else osu!'s).
+    pub own: bool,
+    /// Its maps here (library indices), and how many of its maps aren't.
+    pub maps: std::collections::HashSet<usize>,
+    pub missing: usize,
+}
+
+/// A row of the list opened over song select: its label, what's marked on it ("sorted",
+/// "shown", "in it") and whether it has a list of its own (a collection's "...").
+pub type PickRow = (String, Option<&'static str>, bool);
+
+/// What the list opened over song select is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickList {
+    Sorts,
+    Collections,
+    /// The player's collections to put these maps (library indices) in.
+    AddTo(Vec<usize>),
+    /// What can be done with collection `k`.
+    Manage(usize),
+    /// Is collection `k` to be deleted?
+    Delete(usize),
+}
+
+/// What a collection's name is being typed for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NameFor {
+    /// A new collection holding these maps (library indices; none for an empty one).
+    New(Vec<usize>),
+    /// Collection `k` renamed.
+    Rename(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Naming {
+    pub text: String,
+    pub then: NameFor,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuAction {
     HideDifficulty,
@@ -3069,6 +3126,8 @@ pub enum MenuAction {
     Edit,
     /// Start a new, empty difficulty from this one's timing and music.
     NewDifficulty,
+    /// Put the difficulty (or the whole song, if true) in a collection, or take it out.
+    Collect(bool),
 }
 
 /// The map sets loved on the online server, each with the difficulties loved (none: all of them).
@@ -3164,26 +3223,7 @@ impl Select {
         let (row, size) = if phone { (40.0, 12.0) } else { (18.0, 7.0) };
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.5));
-        let (title, mark, rows, now): (_, _, Vec<String>, _) = if self.sorting {
-            (
-                "Sort songs by",
-                "sorted",
-                SortMode::ALL.iter().map(|m| m.name().to_string()).collect(),
-                SortMode::ALL.iter().position(|&m| m == self.sort),
-            )
-        } else {
-            let rows = std::iter::once("All songs".to_string()).chain(
-                self.collections
-                    .iter()
-                    .map(|(name, maps)| format!("{name}  ({})", maps.len())),
-            );
-            (
-                "osu! collections",
-                "shown",
-                rows.collect(),
-                Some(self.collection.map_or(0, |c| c + 1)),
-            )
-        };
+        let (title, rows, hint) = self.picker_rows();
         let (bw, max_h) = if phone {
             (440.0, 472.0)
         } else {
@@ -3200,7 +3240,13 @@ impl Select {
             1.5,
         );
         let title_size = if phone { 12.0 } else { 9.0 };
-        c.text(bx + 14.0, by + 12.0, title_size, rgba(0xffffff, 1.0), title);
+        c.text(
+            bx + 14.0,
+            by + 12.0,
+            title_size,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(title_size, bw - 28.0, &title),
+        );
         let (top, view) = if phone {
             (by + 38.0, bh - 44.0)
         } else {
@@ -3214,7 +3260,7 @@ impl Select {
                 continue;
             }
             let selected = i == cursor;
-            let current = now == Some(i);
+            let (label, mark, more) = (&label.0, label.1, label.2);
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, row - 2.0);
             if selected || hover {
                 c.round_rect(
@@ -3227,11 +3273,20 @@ impl Select {
                 );
             }
             c.hit(bx + 8.0, y, bw - 16.0, row, Hit::PickRow(i));
-            let shown_w = if current {
-                Canvas::text_width(size, mark) + 10.0
-            } else {
-                0.0
-            };
+            // A collection's own list (rename, delete, ...), to its right.
+            let more_w = if more { row.max(28.0) } else { 0.0 };
+            if more {
+                let mx = bx + bw - 8.0 - more_w;
+                c.hit(mx, y, more_w, row, Hit::PickRowMore(i));
+                c.text_centered(
+                    mx + more_w / 2.0,
+                    y + (row - 2.0 - size) / 2.0,
+                    size,
+                    rgba(0x9a9ab0, 1.0),
+                    "...",
+                );
+            }
+            let shown_w = mark.map_or(0.0, |m| Canvas::text_width(size, m) + 10.0) + more_w;
             let ty = y + (row - 2.0 - size) / 2.0;
             c.text(
                 bx + 20.0,
@@ -3240,25 +3295,126 @@ impl Select {
                 rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 &Canvas::fit(size, bw - 40.0 - shown_w, label),
             );
-            if current {
-                c.text_right(bx + bw - 20.0, ty, size, rgba(0x86E05A, 1.0), mark);
+            if let Some(mark) = mark {
+                c.text_right(bx + bw - 20.0 - more_w, ty, size, rgba(0x86E05A, 1.0), mark);
             }
         }
-        let hint = if self.sorting {
-            "Up/Down or mouse   Enter/click sort   Esc close"
-        } else {
-            "Up/Down or mouse   Enter/click show   Esc close"
-        };
         if !phone {
-            c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), hint);
+            c.text_centered(
+                w / 2.0,
+                by + bh - 11.0,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                &Canvas::fit(6.0, bw - 24.0, hint),
+            );
         }
     }
 
     pub fn picker_len(&self) -> usize {
-        if self.sorting {
-            SortMode::ALL.len()
-        } else {
-            self.collections.len() + 1
+        self.picker_rows().1.len()
+    }
+
+    /// How many collections are the player's own (they come first).
+    pub fn own_collections(&self) -> usize {
+        self.collections.iter().take_while(|c| c.own).count()
+    }
+
+    /// The open list's title, its rows (each with what's marked on it and whether it has a list
+    /// of its own) and the keys it takes.
+    pub fn picker_rows(&self) -> (String, Vec<PickRow>, &'static str) {
+        let new = || ("+ New collection".to_string(), None, false);
+        let count = |c: &Shown| {
+            let n = c.maps.len();
+            let mut label = format!("{}  ({n})", c.name);
+            if !c.own {
+                label += "  osu!";
+            }
+            label
+        };
+        match &self.list {
+            PickList::Sorts => (
+                "Sort songs by".into(),
+                SortMode::ALL
+                    .iter()
+                    .map(|&m| {
+                        (
+                            m.name().to_string(),
+                            (m == self.sort).then_some("sorted"),
+                            false,
+                        )
+                    })
+                    .collect(),
+                "Up/Down or mouse   Enter/click sort   Esc close",
+            ),
+            PickList::Collections => (
+                "Collections".into(),
+                std::iter::once((
+                    "All songs".to_string(),
+                    self.collection.is_none().then_some("shown"),
+                    false,
+                ))
+                .chain(self.collections.iter().enumerate().map(|(k, c)| {
+                    (
+                        count(c),
+                        (self.collection == Some(k)).then_some("shown"),
+                        true,
+                    )
+                }))
+                .chain(std::iter::once(new()))
+                .collect(),
+                "Enter show   Tab more   F2 rename   Del delete",
+            ),
+            PickList::AddTo(maps) => (
+                if maps.len() == 1 {
+                    "Put the difficulty in".into()
+                } else {
+                    "Put the song in".into()
+                },
+                self.collections[..self.own_collections()]
+                    .iter()
+                    .map(|c| {
+                        let all = maps.iter().all(|i| c.maps.contains(i));
+                        (count(c), all.then_some("in it"), false)
+                    })
+                    .chain(std::iter::once(new()))
+                    .collect(),
+                "Enter/click puts it in (or takes it out)   Esc close",
+            ),
+            PickList::Manage(k) => {
+                let Some(c) = self.collections.get(*k) else {
+                    return (String::new(), Vec::new(), "");
+                };
+                let rows: &[&str] = if c.own {
+                    &["Rename", "Move up", "Move down", "Delete"]
+                } else {
+                    &["Copy to my collections"]
+                };
+                (
+                    c.name.clone(),
+                    rows.iter().map(|r| (r.to_string(), None, false)).collect(),
+                    "Enter/click   Esc back",
+                )
+            }
+            PickList::Delete(k) => {
+                let Some(c) = self.collections.get(*k) else {
+                    return (String::new(), Vec::new(), "");
+                };
+                (
+                    format!("Delete {}?", c.name),
+                    vec![
+                        (
+                            match c.maps.len() {
+                                1 => "Delete it (1 map; the map stays)".to_string(),
+                                n => format!("Delete it ({n} maps; the maps stay)"),
+                            },
+                            None,
+                            false,
+                        ),
+                        ("Keep it".into(), None, false),
+                    ],
+                    "Enter/click   Esc keep it",
+                )
+            }
         }
     }
 }

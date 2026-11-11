@@ -530,6 +530,10 @@ struct State {
     /// Folders being scanned (where osu!.db / collection.db are looked for).
     song_dirs: Vec<PathBuf>,
     osudb_rx: Job<Option<osudb::OsuDb>>,
+    /// The collections: the player's own, then osu!'s (`collections.rs`).
+    collections: Vec<collections::Collection>,
+    /// `collections` came from `taiko.db` this run (so writing them back keeps what's there).
+    collections_read: bool,
     /// Maps' status from osu!.db (by path), and sets' from the mirrors (by set id; None while
     /// asking or if they couldn't say).
     db_status: std::collections::HashMap<PathBuf, u8>,
@@ -6613,7 +6617,7 @@ impl State {
             }
             if self.select.picker.is_some()
                 && self.scene.is_select()
-                && !matches!(hit, Some(hit::Hit::PickRow(_)))
+                && !matches!(hit, Some(hit::Hit::PickRow(_) | hit::Hit::PickRowMore(_)))
             {
                 self.select.picker = None;
                 return;
@@ -7958,43 +7962,6 @@ impl State {
         self.select.refilter(&self.library);
     }
 
-    /// Lists the collections (with osu!'s brought in again first, once `db` is read) and the
-    /// library's maps in each.
-    fn show_collections(&mut self, db: Option<&osudb::OsuDb>) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let all = store::with(|s| {
-            if let Some(db) = db
-                && collections::mirror_osu(s, db, now)?
-            {
-                eprintln!("collection.db: osu!'s collections brought in again");
-            }
-            s.collections()
-        })
-        // Without the database, osu!'s as they are now.
-        .unwrap_or_else(|| db.map(collections::from_osu).unwrap_or_default());
-        let found = collections::find(&all, &self.library);
-        self.select.collections = all
-            .into_iter()
-            .zip(found)
-            .filter(|(_, f)| !f.entries.is_empty())
-            .map(|(c, f)| (c.name, f.entries))
-            .collect();
-        if self
-            .select
-            .collection
-            .is_some_and(|c| c >= self.select.collections.len())
-        {
-            self.select.collection = None;
-        }
-        eprintln!(
-            "{} collections with maps here",
-            self.select.collections.len()
-        );
-    }
-
     /// Remembers that `entry` was just played (for "recently played").
     fn record_play(&mut self, entry: usize) {
         let now = std::time::SystemTime::now()
@@ -8446,6 +8413,7 @@ impl State {
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
             || self.preset_naming.is_some()
+            || self.select.naming.is_some()
             || self.scene.screen().is_some_and(|s| s.typing())
             || self
                 .universe_setup
@@ -8473,6 +8441,7 @@ impl State {
                 .is_some_and(|d| d.editing.is_some())
             || self.random_setup.is_some()
             || self.preset_naming.is_some()
+            || self.select.naming.is_some()
             || self.scene.screen().is_some_and(|s| s.typing())
             || self
                 .universe_setup
@@ -9051,19 +9020,8 @@ impl State {
         self.toast(format!("sorted by {}", self.select.sort.name()));
     }
 
-    fn open_collections(&mut self) {
-        if self.select.collections.is_empty() {
-            self.toast(
-                "no osu! collections found (collection.db next to your Songs folder)".into(),
-            );
-        } else {
-            self.select.sorting = false;
-            self.select.picker = Some(self.select.collection.map(|c| c + 1).unwrap_or(0));
-        }
-    }
-
     fn open_sorts(&mut self) {
-        self.select.sorting = true;
+        self.select.list = ui::PickList::Sorts;
         self.select.picker = ui::SortMode::ALL
             .iter()
             .position(|&m| m == self.select.sort);
@@ -9071,8 +9029,8 @@ impl State {
 
     /// Row `i` of the collection or sort list.
     fn pick_row(&mut self, i: usize) {
-        if !self.select.sorting {
-            self.select.pick_collection(i, &self.library);
+        if self.select.list != ui::PickList::Sorts {
+            self.pick_collection_row(i);
         } else if let Some(&sort) = ui::SortMode::ALL.get(i) {
             self.select.set_sort(sort, &self.library);
             self.sort_changed();
@@ -10813,6 +10771,11 @@ impl State {
         }
         self.refresh_play_offset();
         if self.layers_key(&app::overlays::OVER_SCREENS, code, repeat, text, at, window) {
+            return;
+        }
+        // A collection's name being typed takes every key.
+        if self.select.naming.is_some() && self.scene.is_select() {
+            self.collection_naming_key(code, text);
             return;
         }
         // Key capture must see every key, before any shortcut can claim it.
@@ -13083,6 +13046,7 @@ impl State {
             Hit::SortList => self.open_sorts(),
             Hit::CollectionPick => self.open_collections(),
             Hit::PickRow(i) => self.pick_row(i),
+            Hit::PickRowMore(i) => self.open_collection_menu(i.saturating_sub(1)),
             Hit::ChoiceRow(i) => self.pick_choice(i),
             Hit::SongsFolder => self.browse_songs_folder(),
             // Taken when pressed (`mouse_button`).
@@ -13177,6 +13141,8 @@ impl State {
                         }
                     ));
                     self.call_loved(LovedAsk::Change(set, loved, version));
+                } else if let Some(ui::MenuAction::Collect(whole)) = action {
+                    self.start_collecting(whole);
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
                         self.update_set(i);

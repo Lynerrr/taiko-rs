@@ -302,11 +302,15 @@ fn assert_every_screen_fits() {
     // The first frame takes in the library.
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.select.collections = vec![
-        (
-            "My Favourite Tech Maps For Practice".into(),
-            Default::default(),
-        ),
-        ("dans".into(), Default::default()),
+        ui::Shown {
+            name: "My Favourite Tech Maps For Practice".into(),
+            own: true,
+            ..Default::default()
+        },
+        ui::Shown {
+            name: "dans".into(),
+            ..Default::default()
+        },
     ];
     check(&mut s, "select", &mut out);
     s.cfg.main_menu = false;

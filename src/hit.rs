@@ -108,6 +108,8 @@ pub enum Hit {
     SortList,
     CollectionPick,
     PickRow(usize),
+    /// The "..." on a collection's row: what can be done with it.
+    PickRowMore(usize),
     /// A row of a setting's list of choices.
     ChoiceRow(usize),
     /// Multiverse setup: a universe's (row) colours, shape, speed or a mod (column).

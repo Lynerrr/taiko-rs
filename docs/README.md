@@ -229,9 +229,16 @@ backwards) orders songs by artist, title, difficulty, length, BPM, recently play
 a song goes by its hardest / longest / most recently played difficulty. Difficulty, length and BPM
 come from a background pass over the library (osu!'s star ratings via rosu-pp, like the pills)
 that is cached, so only new maps are analysed on later starts; the header shows its progress.
-"Recently played" combines plays in taiko.rs with osu! stable's own history from `osu!.db`. If
-an osu! stable install owns the Songs folder, its collections (`collection.db`) are listed under
-the *Collection* button (or Ctrl+L) to show just one of them.
+"Recently played" combines plays in taiko.rs with osu! stable's own history from `osu!.db`.
+
+**Collections:** the *Collection* button (or Ctrl+L) lists them, to show just one. Make your own
+there (*+ New collection*), or put the selected difficulty in one with Ctrl+K or a song's
+right-click menu (*Collect [difficulty]*, or *Collect* the whole song; a long press on a phone);
+picking one it's in already takes it out. In the list, F2 renames, Del deletes (the maps stay),
+Ctrl+Up/Down moves, and Tab or a row's *...* lists all of that. If an osu! stable install owns the
+Songs folder, its collections (`collection.db`) are listed after yours, marked *osu!*: they're
+osu!'s (changes made in osu! show up here) and can be copied to yours to change them. All are kept
+in `taiko.db`.
 
 **Fullscreen preview:** click the autoplay box (or Ctrl+Enter) to watch the autoplay over the
 whole screen, drawn in your playfield area so you can move and resize it right there (drag, drag
