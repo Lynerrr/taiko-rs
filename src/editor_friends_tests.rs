@@ -17,7 +17,7 @@ fn editing() -> State {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("map.osu");
     std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
-    s.scene = Scene::Editor(Box::new(View::open(path, 0).unwrap()));
+    s.scene = MapEditor::scene(Box::new(View::open(path, 0).unwrap()));
     s.mp_menu.account = Some("me".into());
     s
 }

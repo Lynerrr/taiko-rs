@@ -21,7 +21,7 @@ fn editing() -> State {
     let path = dir.join("map.osu");
     std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
     let view = View::open(path, 0).unwrap();
-    s.scene = Scene::Editor(Box::new(view));
+    s.scene = MapEditor::scene(Box::new(view));
     s
 }
 
@@ -43,7 +43,7 @@ fn until_playing(s: &mut State) {
 }
 
 fn press(s: &mut State, code: KeyCode, keys: Keys) {
-    let Scene::Editor(view) = &mut s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_mut::<MapEditor>() else {
         panic!("not in the editor");
     };
     view.key(code, false, keys, None);
@@ -52,7 +52,7 @@ fn press(s: &mut State, code: KeyCode, keys: Keys) {
 #[test]
 fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     let mut s = editing();
-    let Scene::Editor(view) = &mut s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_mut::<MapEditor>() else {
         unreachable!()
     };
     // An edit not saved yet: the test plays it anyway.
@@ -85,7 +85,7 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     assert!(s.editor_back.is_some());
     // Quit (from the pause menu) goes back to the editor, as it was left.
     s.show_select();
-    let Scene::Editor(view) = &s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_as::<MapEditor>() else {
         panic!("quitting a test play went somewhere else");
     };
     assert_eq!(
@@ -114,12 +114,12 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     }
     for _ in 0..200 {
         frame(&mut s);
-        if matches!(s.scene, Scene::Editor(_)) {
+        if s.scene.screen_is::<MapEditor>() {
             break;
         }
     }
     assert!(
-        matches!(s.scene, Scene::Editor(_)),
+        s.scene.screen_is::<MapEditor>(),
         "the end of a test play has no results"
     );
     assert!(s.editor_back.is_none());
@@ -128,13 +128,13 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
 #[test]
 fn a_map_not_in_the_song_list_is_not_test_played_and_says_why() {
     let mut s = editing();
-    let Scene::Editor(view) = &mut s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_mut::<MapEditor>() else {
         unreachable!()
     };
     view.entry = 9999;
     press(&mut s, KeyCode::F5, Keys::default());
     frame(&mut s);
-    let Scene::Editor(view) = &s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_as::<MapEditor>() else {
         panic!("it left the editor");
     };
     assert!(s.editor_back.is_none());
@@ -175,7 +175,7 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
     s.key(KeyCode::Tab, false, None, Instant::now(), None);
     // Back in the editor, the next test is by hand.
     s.show_select();
-    assert!(matches!(s.scene, Scene::Editor(_)));
+    assert!(s.scene.screen_is::<MapEditor>());
     press(&mut s, KeyCode::F5, Keys::default());
     frame(&mut s);
     until_playing(&mut s);

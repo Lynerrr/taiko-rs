@@ -48,7 +48,7 @@ impl State {
                 {
                     Some((entry, path)) => {
                         self.open_editor_at(path, entry);
-                        if let Scene::Editor(view) = &mut self.scene {
+                        if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                             view.start_tour();
                         }
                     }

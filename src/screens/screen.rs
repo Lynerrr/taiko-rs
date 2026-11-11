@@ -557,6 +557,19 @@ impl Scene {
             _ => None,
         }
     }
+
+    /// Takes the screen up out of the scene when it is a `T`, leaving song select in its
+    /// place; None (the scene as it was) otherwise.
+    pub(crate) fn take_screen<T: Screen>(&mut self) -> Option<Box<T>> {
+        if !self.screen_is::<T>() {
+            return None;
+        }
+        let Scene::Other(screen) = std::mem::replace(self, Scene::Select) else {
+            unreachable!("a screen is up");
+        };
+        let screen: Box<dyn Any> = screen;
+        screen.downcast::<T>().ok()
+    }
 }
 
 impl State {
@@ -665,6 +678,7 @@ mod tests {
         "Watch",
         "Spectate",
         "Loading",
+        "Editor",
     ];
 
     #[test]

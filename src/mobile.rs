@@ -507,8 +507,7 @@ impl State {
                 }
                 // Screens made of things to drag, and bars and timelines, are pressed at once
                 // and dragged, as with a mouse.
-                let dragged = matches!(self.scene, Scene::Editor(_))
-                    || self.scene.screen().is_some_and(|s| s.drags())
+                let dragged = self.scene.screen().is_some_and(|s| s.drags())
                     || matches!(
                         self.hit_at(vx, vy),
                         Some(
