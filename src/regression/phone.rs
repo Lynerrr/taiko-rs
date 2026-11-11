@@ -88,3 +88,29 @@ fn phone_results() {
     s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
     assert_snapshot("phone-results", &shot(&mut s, &mut now));
 }
+
+/// During a song every finger hits the drum the moment it lands, the first one included: the
+/// menus' tap handling doesn't take it as the start of a gesture, and lifting it clicks nothing.
+#[test]
+fn phone_every_finger_hits_the_drum_during_a_song() {
+    let (mut s, _songs, mut now) = client("phone-drums");
+    press(&mut s, KeyCode::Enter, now);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let y = f64::from(s.window_h) / 2.0;
+    for (finger, col) in [(1, 0), (2, 3)] {
+        let x = f64::from(s.window_w) * (col as f64 + 0.5) / 4.0;
+        s.touch_flash = Default::default();
+        s.touch(finger, TouchPhase::Started, x, y, now, None);
+        assert!(
+            s.touch_flash[col].is_some(),
+            "finger {finger} hits column {col}"
+        );
+        now += Duration::from_millis(40);
+        s.touch(finger, TouchPhase::Ended, x, y, now, None);
+        assert_eq!(
+            scene_name(&s),
+            "Play",
+            "lifting finger {finger} clicks nothing"
+        );
+    }
+}
