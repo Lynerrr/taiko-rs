@@ -2067,6 +2067,38 @@ fn space_and_punctuation_keep_their_jobs_until_something_is_typed() {
 }
 
 #[test]
+fn minus_and_plus_type_into_the_settings_search_instead_of_moving_the_offset() {
+    let mut s = settings_screen();
+    s.cfg.offset_osu_ms = 0.0;
+    for (code, text) in [
+        (KeyCode::KeyS, "s"),
+        (KeyCode::KeyP, "p"),
+        (KeyCode::Space, " "),
+        (KeyCode::Minus, "-"),
+        (KeyCode::Equal, "="),
+        (KeyCode::NumpadSubtract, "-"),
+        (KeyCode::NumpadAdd, "+"),
+    ] {
+        type_key(&mut s, code, text);
+    }
+    assert_eq!(s.settings_ui.search, "sp -=-+");
+    assert_eq!(s.cfg.offset_osu_ms, 0.0, "the offset keys stayed out of it");
+    // Shift+= is the + on most layouts.
+    s.modifiers_shift = true;
+    type_key(&mut s, KeyCode::Equal, "+");
+    s.modifiers_shift = false;
+    assert_eq!(s.settings_ui.search, "sp -=-++");
+    assert_eq!(s.cfg.offset_osu_ms, 0.0);
+    // An empty search still leaves the offset keys to the offset.
+    s.settings_ui.search.clear();
+    s.search_settings(String::new());
+    let was = s.cfg.shown_offset();
+    type_key(&mut s, KeyCode::Equal, "=");
+    assert_eq!(s.cfg.shown_offset(), was + 1.0);
+    assert!(s.settings_ui.search.is_empty());
+}
+
+#[test]
 fn the_wheel_scrolls_the_settings_and_stays_in_the_section() {
     let mut s = settings_screen();
     s.settings_ui.cursor = settings::ITEMS
