@@ -598,6 +598,13 @@ pub fn types_text(key: KeyCode) -> bool {
         )
 }
 
+/// The offset keys, - and = and the numpad's - and +: they're letters of a search box that
+/// takes them (setting names have them: "Song select: speed -").
+pub fn is_sign(key: KeyCode) -> bool {
+    use KeyCode::*;
+    matches!(key, Minus | Equal | NumpadSubtract | NumpadAdd)
+}
+
 /// Whether `key` starts a word: punctuation keeps its other jobs until something's been typed.
 pub fn starts_text(key: KeyCode) -> bool {
     let name = format!("{key:?}");

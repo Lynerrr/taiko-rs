@@ -2438,12 +2438,7 @@ impl State {
     /// Text typed on the settings screen goes into its search; true if it took the key.
     fn settings_type(&mut self, code: KeyCode, text: Option<&str>) -> bool {
         let ui = &self.settings_ui;
-        if ui.choices.is_some()
-            || ui.binding.is_some()
-            || ui.dropdown.is_some()
-            || self.modifiers_ctrl
-            || self.modifiers_alt
-        {
+        if !self.settings_types_keys() {
             return false;
         }
         let searching = !ui.search.is_empty();
@@ -2455,15 +2450,38 @@ impl State {
             KeyCode::Escape if searching => search.clear(),
             // Space still works the row until there's something to search for.
             KeyCode::Space if !searching => return false,
-            _ if keys::starts_text(code) || (searching && keys::types_text(code)) => search.extend(
-                text.into_iter()
-                    .flat_map(str::chars)
-                    .filter(|c| !c.is_control()),
-            ),
+            _ if keys::starts_text(code)
+                || keys::is_sign(code)
+                || (searching && keys::types_text(code)) =>
+            {
+                search.extend(
+                    text.into_iter()
+                        .flat_map(str::chars)
+                        .filter(|c| !c.is_control()),
+                )
+            }
             _ => return false,
         }
         self.search_settings(search);
         true
+    }
+
+    /// Whether the settings take typed text now (the search box): not while a value is being
+    /// bound, picked from a list or held down with Ctrl or Alt.
+    fn settings_types_keys(&self) -> bool {
+        let ui = &self.settings_ui;
+        !(ui.choices.is_some()
+            || ui.binding.is_some()
+            || ui.dropdown.is_some()
+            || self.modifiers_ctrl
+            || self.modifiers_alt)
+    }
+
+    /// Whether - and + are letters of the settings search, not the offset keys: always on the
+    /// settings screen (setting names have them: "Song select: speed -"), even as the first
+    /// letter. The offset has its own row there; Ctrl still gives them to the hotkeys.
+    fn settings_search_takes_text(&self) -> bool {
+        self.in_settings() && self.settings_types_keys()
     }
 
     fn search_settings(&mut self, text: String) {
@@ -5364,7 +5382,8 @@ impl State {
                 if self.player.as_ref().is_some_and(|p| p.searching)
                     || (self.scene.is_select()
                         && self.select.searching
-                        && !self.modifiers_ctrl) =>
+                        && !self.modifiers_ctrl)
+                    || self.settings_search_takes_text() =>
             {
                 return false;
             }
@@ -10745,10 +10764,13 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        let settings_idle =
-            self.in_settings() && self.settings_ui.search.is_empty() && !keys::starts_text(code);
+        let settings_idle = self.in_settings()
+            && self.settings_ui.search.is_empty()
+            && !keys::starts_text(code)
+            && !keys::is_sign(code);
         if busy
             || (plain && self.in_song() && self.cfg.keys.contains(&code))
+            || (plain && self.in_settings() && keys::is_sign(code))
             || (plain && self.takes_text() && keys::types_text(code) && !settings_idle)
         {
             return None;
