@@ -617,6 +617,7 @@ spins so frames stay evenly spaced.
 | `crates/taiko-proto/src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
 | `crates/taiko-recalc` | `taiko-recalc` (also `taiko-rs --recalc-pp`): the server's plays worked out again from its `scores.jsonl` and the maps |
 | `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
+| `src/store.rs` | the player's data in SQLite (`taiko.db` in the data folder): scores, last plays, hidden maps, per-map offsets, maps with their skin off, favourites; the schema's versions in `src/store/N.sql` |
 | `src/library.rs` | Songs folder / `.osz` and `.rsz` scanning |
 | `src/logo.rs` | the logo: window icon, top bar |
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, skin parts and where each comes from, the image atlas, fonts, hitsounds |

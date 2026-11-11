@@ -20,6 +20,8 @@ taiko-logic = { path = "crates/taiko-logic" }
 taiko-proto = { path = "crates/taiko-proto" }
 # `--recalc-pp` (crates/taiko-recalc).
 taiko-recalc = { path = "crates/taiko-recalc" }
+# The player's data (`store.rs`): SQLite built into the game, the same on every platform.
+rusqlite = { version = "0.41", features = ["bundled"] }
 ureq = "3"
 wgpu = "30"
 winit = "0.30"
