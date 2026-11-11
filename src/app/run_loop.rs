@@ -109,6 +109,9 @@ pub(crate) enum UserEvent {
     /// A map archive opened from the file manager while the game runs (`link::listen`).
     #[cfg_attr(target_os = "android", allow(dead_code))]
     Open(PathBuf),
+    /// The accent and animations frames are drawn with now: the window thread draws the pointer
+    /// in them and builds no frame of its own.
+    Theme(render::Theme),
 }
 
 /// Files dragged over the window, or dropped on it.
@@ -134,6 +137,8 @@ pub(super) fn render_loop(
     let pace = std::env::var_os("TAIKO_NO_PACE").is_none();
     let mut waits = (0.0, 0.0, 0.0);
     let mut cursor_hidden = false;
+    // What the window thread was last sent to draw with (`UserEvent::Theme`).
+    let mut window_theme = render::Theme::DEFAULT;
     // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
     let profile = std::env::var_os("TAIKO_PROFILE").is_some();
     // The waits are only measured for the profile and the smoothness report: reading the clock
@@ -360,6 +365,15 @@ pub(super) fn render_loop(
                     s.hover = None;
                 }
                 let _ = proxy.send_event(UserEvent::HideCursor(hide));
+            }
+            let theme = render::Theme {
+                accent: render::accent(),
+                animations: render::animations(),
+                ..render::Theme::DEFAULT
+            };
+            if theme != window_theme {
+                window_theme = theme;
+                let _ = proxy.send_event(UserEvent::Theme(theme));
             }
             let background = s.preview.bg_upload.take();
             if background.is_some() {
@@ -1058,6 +1072,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Typed(typed) => {
                 lock(&self.state).soft_keyboard(typed, self.window.as_deref())
             }
+            UserEvent::Theme(theme) => render::set_frame_theme(Some(theme)),
             UserEvent::HideCursor(hide) => {
                 if hide != self.cursor_hidden {
                     self.cursor_hidden = hide;
