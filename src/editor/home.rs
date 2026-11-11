@@ -10,6 +10,8 @@ use winit::keyboard::KeyCode;
 
 use super::new_map::{self, NewMap};
 use super::tempo;
+#[cfg(target_os = "android")]
+use crate::android::PickedFile;
 use crate::audio::{Engine, Track};
 use crate::beatmap::OSU_TIMING_MS;
 use crate::hit::{Canvas, Hit};
@@ -223,8 +225,11 @@ enum Loading {
 /// A file dialog on its way.
 struct Dialog {
     kind: FileKind,
-    rx: Receiver<Result<Option<PathBuf>, String>>,
+    rx: Receiver<Result<Option<PickedFile>, String>>,
 }
+
+#[cfg(not(target_os = "android"))]
+type PickedFile = PathBuf;
 
 /// A drag that started on the timing page.
 #[derive(Clone, Copy, Debug)]
@@ -258,6 +263,10 @@ pub struct Home {
     /// The BPM or first beat being typed on the timing page.
     num_edit: Option<NumEdit>,
     background: Option<PathBuf>,
+    #[cfg(target_os = "android")]
+    picked_song: Option<PickedFile>,
+    #[cfg(target_os = "android")]
+    picked_background: Option<PickedFile>,
     tko: bool,
     loading: Loading,
     dialog: Option<Dialog>,
@@ -310,6 +319,10 @@ impl Home {
             focus: None,
             num_edit: None,
             background: None,
+            #[cfg(target_os = "android")]
+            picked_song: None,
+            #[cfg(target_os = "android")]
+            picked_background: None,
             tko: false,
             loading: Loading::Nothing,
             dialog: None,
@@ -410,6 +423,10 @@ impl Home {
     /// looked for in the background.
     pub fn set_song(&mut self, path: PathBuf, engine_rate: Option<u32>) {
         self.stop_playing(None);
+        #[cfg(target_os = "android")]
+        {
+            self.picked_song = None;
+        }
         let (artist, title) = new_map::guess_names(&path);
         self.set_text(Field::Artist, &artist);
         self.set_text(Field::Title, &title);
@@ -455,13 +472,21 @@ impl Home {
         self.analysis = Some(a.clone());
     }
 
+    fn set_background(&mut self, path: Option<PathBuf>) {
+        self.background = path;
+        #[cfg(target_os = "android")]
+        {
+            self.picked_background = None;
+        }
+    }
+
     /// A file dropped on the window.
     pub fn dropped(&mut self, path: PathBuf, engine_rate: Option<u32>) -> Out {
         if is_audio(&path) {
             self.set_song(path, engine_rate);
             Out::None
         } else if is_image(&path) && self.audio.is_some() {
-            self.background = Some(path);
+            self.set_background(Some(path));
             self.page = Page::Details;
             Out::None
         } else if path
@@ -478,17 +503,26 @@ impl Home {
         if self.dialog.is_some() {
             return;
         }
-        let start = self
-            .audio
-            .as_ref()
-            .and_then(|p| p.parent().map(Path::to_path_buf))
-            .or_else(dirs_music)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let (tx, rx) = mpsc::channel();
-        let title = title.to_string();
-        std::thread::spawn(move || {
-            let _ = tx.send(crate::library::pick_file(kind, &title, &start));
-        });
+        #[cfg(target_os = "android")]
+        let rx = {
+            let _ = title;
+            crate::android::pick_file(kind)
+        };
+        #[cfg(not(target_os = "android"))]
+        let rx = {
+            let start = self
+                .audio
+                .as_ref()
+                .and_then(|p| p.parent().map(Path::to_path_buf))
+                .or_else(dirs_music)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let (tx, rx) = mpsc::channel();
+            let title = title.to_string();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::library::pick_file(kind, &title, &start));
+            });
+            rx
+        };
         self.dialog = Some(Dialog { kind, rx });
     }
 
@@ -515,21 +549,71 @@ impl Home {
             }
         }
         if let Some(d) = &self.dialog
-            && let Ok(result) = d.rx.try_recv()
+            && let Some(result) = match d.rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(tr!(
+                    "file selection stopped",
+                    "ファイルの選択が中断されました",
+                    "выбор файла прерван"
+                )
+                .into())),
+                Err(mpsc::TryRecvError::Empty) => None,
+            }
         {
             let kind = d.kind;
             self.dialog = None;
             match result {
-                Ok(Some(path)) => match kind {
-                    FileKind::Audio => self.set_song(path, audio.map(|a| a.rate)),
-                    FileKind::Image => self.background = Some(path),
-                },
+                Ok(Some(file)) => out = self.use_picked_file(file, kind, audio),
                 Ok(None) => {}
-                Err(e) => out = Out::Toast(e),
+                Err(e) => {
+                    out = Out::Toast(if cfg!(target_os = "android") {
+                        tr!(
+                            "File selection failed: {}",
+                            "ファイルの選択に失敗しました: {}",
+                            "не удалось выбрать файл: {}";
+                            e
+                        )
+                    } else {
+                        e
+                    });
+                }
             }
         }
         self.follow_playback(now, audio);
         out
+    }
+
+    fn use_picked_file(&mut self, file: PickedFile, kind: FileKind, audio: Option<&Engine>) -> Out {
+        #[cfg(target_os = "android")]
+        let path = file.0.clone();
+        #[cfg(not(target_os = "android"))]
+        let path = file;
+        if cfg!(target_os = "android") && !kind.matches(&path) {
+            let extensions = kind.extensions().join(", ");
+            return Out::Toast(tr!(
+                "choose a file of type {}",
+                "次の形式のファイルを選んでください: {}",
+                "выберите файл одного из типов: {}";
+                extensions
+            ));
+        }
+        match kind {
+            FileKind::Audio => {
+                self.set_song(path, audio.map(|a| a.rate));
+                #[cfg(target_os = "android")]
+                {
+                    self.picked_song = Some(file);
+                }
+            }
+            FileKind::Image => {
+                self.set_background(Some(path));
+                #[cfg(target_os = "android")]
+                {
+                    self.picked_background = Some(file);
+                }
+            }
+        }
+        Out::None
     }
 
     fn follow_playback(&mut self, now: Instant, audio: Option<&Engine>) {
@@ -673,8 +757,11 @@ impl Home {
             }
             Act::Tour => return Out::Tour,
             Act::Focus(_) => {}
-            Act::PickBackground => self.ask_for_file(FileKind::Image, "Choose the background"),
-            Act::ClearBackground => self.background = None,
+            Act::PickBackground => self.ask_for_file(
+                FileKind::Image,
+                tr!("Choose the background", "背景画像を選ぶ", "Выбрать фон"),
+            ),
+            Act::ClearBackground => self.set_background(None),
             Act::Format(tko) => self.tko = tko,
             Act::Wave => {
                 self.drag = Some(Drag::Wave {
@@ -1236,7 +1323,19 @@ impl Home {
             116.0,
             8.0,
             rgba(TEXT, 1.0),
-            "Drop a song here: mp3, ogg, wav or flac",
+            if cfg!(target_os = "android") {
+                tr!(
+                    "Choose a song from your device: mp3, ogg, wav or flac",
+                    "端末から曲を選んでください: mp3、ogg、wav、flac",
+                    "Выберите песню на устройстве: mp3, ogg, wav или flac"
+                )
+            } else {
+                tr!(
+                    "Drop a song here: mp3, ogg, wav or flac",
+                    "曲をここにドロップ: mp3、ogg、wav、flac",
+                    "Перетащите сюда песню: mp3, ogg, wav или flac"
+                )
+            },
         );
         c.text_centered(
             w / 2.0,
@@ -1250,7 +1349,19 @@ impl Home {
             160.0,
             240.0,
             26.0,
-            "Choose a song file...   [Enter]",
+            if cfg!(target_os = "android") {
+                tr!(
+                    "Choose a song file...",
+                    "曲のファイルを選ぶ...",
+                    "Выбрать файл песни..."
+                )
+            } else {
+                tr!(
+                    "Choose a song file...   [Enter]",
+                    "曲のファイルを選ぶ...   [Enter]",
+                    "Выбрать файл песни...   [Enter]"
+                )
+            },
             8.0,
             Hit::EditorHome(Act::Browse),
             true,
@@ -1483,7 +1594,19 @@ impl Home {
             77.0,
             6.5,
             rgba(DIM, 1.0),
-            "Drop another song on the window to use that instead.",
+            if cfg!(target_os = "android") {
+                tr!(
+                    "Go back to choose a different song.",
+                    "別の曲を選ぶには戻ってください。",
+                    "Вернитесь назад, чтобы выбрать другую песню."
+                )
+            } else {
+                tr!(
+                    "Drop another song on the window to use that instead.",
+                    "別の曲をウィンドウにドロップすると差し替えられます。",
+                    "Перетащите в окно другую песню, чтобы заменить текущую."
+                )
+            },
         );
         let mut y = 100.0;
         let rows: [(Field, Field); 3] = [
@@ -2065,6 +2188,7 @@ impl Home {
 }
 
 /// Where music usually is, for the dialog to start in.
+#[cfg(not(target_os = "android"))]
 fn dirs_music() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     let music = PathBuf::from(home).join("Music");
@@ -2091,6 +2215,37 @@ mod tests {
         assert_eq!(fit_keeping_diff(8.0, 1000.0, name), name);
         // No room for the title beside a long difficulty: cut as usual.
         assert!(Canvas::text_width(8.0, &fit_keeping_diff(8.0, 60.0, name)) <= 60.0);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn a_file_dialog_applies_the_selection_and_clears_on_cancel() {
+        let mut h = home();
+        let cover = PathBuf::from("cover.png");
+        for selection in [Some(cover.clone()), None] {
+            let (tx, rx) = mpsc::channel();
+            tx.send(Ok(selection)).unwrap();
+            h.dialog = Some(Dialog {
+                kind: FileKind::Image,
+                rx,
+            });
+            assert!(matches!(h.update(Instant::now(), None), Out::None));
+            assert_eq!(h.background.as_ref(), Some(&cover));
+            assert!(h.dialog.is_none());
+        }
+
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err("blocked in tests: no programs, no internet".into()))
+            .unwrap();
+        h.dialog = Some(Dialog {
+            kind: FileKind::Audio,
+            rx,
+        });
+        assert!(matches!(
+            h.update(Instant::now(), None),
+            Out::Toast(message) if message == "blocked in tests: no programs, no internet"
+        ));
+        assert!(h.dialog.is_none());
     }
 
     fn home() -> Home {

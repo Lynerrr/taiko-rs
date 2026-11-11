@@ -171,6 +171,7 @@ pub fn launch_osu() -> Result<(), String> {
 /// closes: Ok(None) when cancelled, Err when there is no dialog to show.
 pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
     use std::process::Command;
+    #[cfg(not(target_os = "android"))]
     const TITLE: &str = "Choose your osu! Songs folder";
     #[cfg_attr(target_os = "android", allow(unused_mut))]
     let mut tries: Vec<Command> = Vec::new();
@@ -261,7 +262,7 @@ impl FileKind {
     }
 
     /// The dialogs' name for the files (macOS's dialog has no filter to name).
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg(not(any(target_os = "android", target_os = "macos")))]
     fn label(self) -> &'static str {
         match self {
             FileKind::Audio => "Songs",
@@ -279,9 +280,9 @@ impl FileKind {
 
 /// Asks for a file with the system's file dialog, starting in `start`. Blocks until it closes:
 /// Ok(None) when cancelled, Err when there is no dialog to show.
+#[cfg(not(target_os = "android"))]
 pub fn pick_file(kind: FileKind, title: &str, start: &Path) -> Result<Option<PathBuf>, String> {
     use std::process::Command;
-    #[cfg_attr(target_os = "android", allow(unused_mut))]
     let mut tries: Vec<Command> = Vec::new();
     let globs: Vec<String> = kind.extensions().iter().map(|e| format!("*.{e}")).collect();
     #[cfg(windows)]
@@ -324,7 +325,7 @@ pub fn pick_file(kind: FileKind, title: &str, start: &Path) -> Result<Option<Pat
         ]);
         tries.push(osa);
     }
-    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let mut zenity = Command::new("zenity");
         zenity

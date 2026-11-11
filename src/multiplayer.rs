@@ -95,6 +95,13 @@ impl Session {
         self.players.iter().find(|p| p.id == id)
     }
 
+    pub fn ask_to_skip(&mut self) {
+        if !self.skip_asked {
+            self.skip_asked = true;
+            self.client.send(net::ClientMsg::Skipped);
+        }
+    }
+
     /// Has the host role: picks maps and starts matches (it can be handed over).
     pub fn is_host(&self) -> bool {
         self.me().is_some_and(|p| p.host)

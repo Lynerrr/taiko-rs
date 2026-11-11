@@ -96,10 +96,8 @@ impl Screen for MpPlay {
                 KeyCode::Space => {
                     if game.can_skip()
                         && let Some(s) = &mut state.mp
-                        && !s.skip_asked
                     {
-                        s.skip_asked = true;
-                        s.client.send(net::ClientMsg::Skipped);
+                        s.ask_to_skip();
                     }
                 }
                 // Defense: 1-5 buy for the team, T takes the turn over.
@@ -231,9 +229,12 @@ impl Screen for MpPlay {
                 game.draw_playfield(c, game.scroll_speed());
             },
         );
-        game.draw_hud(canvas);
+        let touch_controls = state.touch_used || mobile::active();
+        game.draw_hud_with_intro(canvas, touch_controls);
         // The intro is skipped once every player asks: how many have.
-        if let Some(s) = mp.as_ref().filter(|_| game.can_skip()) {
+        if let Some(s) = mp.as_ref().filter(|s| {
+            game.can_skip() && (!touch_controls || s.skip_asked || s.skip_votes.is_some())
+        }) {
             multiplayer::draw_skip_votes(canvas, s);
         }
         if let Some(s) = mp
