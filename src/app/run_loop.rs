@@ -100,6 +100,9 @@ pub(crate) enum UserEvent {
     FileDrag(FileDrag),
     /// A window size was picked (`State::window_request`).
     WindowRequest,
+    /// The first frame is built and about to be shown (or two seconds passed): show the window,
+    /// which starts hidden on Windows so it isn't a white box while the graphics card gets going.
+    FirstFrame,
     /// Android: the on-screen keyboard typed something (or came up or went away).
     #[cfg(target_os = "android")]
     Typed(android::Typed),
@@ -134,6 +137,7 @@ pub(super) fn render_loop(
     let pace = std::env::var_os("TAIKO_NO_PACE").is_none();
     let mut waits = (0.0, 0.0, 0.0);
     let mut cursor_hidden = false;
+    let mut first_frame_sent = false;
     // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
     let profile = std::env::var_os("TAIKO_PROFILE").is_some();
     // The waits are only measured for the profile and the smoothness report: reading the clock
@@ -422,6 +426,11 @@ pub(super) fn render_loop(
         );
         renderer.disc = canvas.disc.map(|d| (d, vw));
         renderer.glitch = canvas.glitch;
+        // Before the present, which may wait while the window is still hidden.
+        if !first_frame_sent {
+            first_frame_sent = true;
+            let _ = proxy.send_event(UserEvent::FirstFrame);
+        }
         let t1 = timing.then(Instant::now);
         let shot = renderer.submit(
             frame,
@@ -886,7 +895,20 @@ impl ApplicationHandler<UserEvent> for App {
             Some((w, h)) => attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)),
             None => attrs.with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0)),
         };
+        // Windows paints a new window white until something draws into it, and setting up the
+        // graphics card takes a moment: keep it hidden until the first frame (`FirstFrame`).
+        #[cfg(windows)]
+        let attrs = attrs.with_visible(false);
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
+        // Shown anyway if the first frame never comes (the render thread died starting up).
+        #[cfg(windows)]
+        {
+            let proxy = self.proxy.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(2));
+                let _ = proxy.send_event(UserEvent::FirstFrame);
+            });
+        }
         #[cfg(windows)]
         {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -1041,6 +1063,15 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Stopped => event_loop.exit(),
             UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
             UserEvent::WindowRequest => self.apply_window_request(),
+            UserEvent::FirstFrame => {
+                #[cfg(windows)]
+                if let Some(w) = &self.window
+                    && w.is_visible() != Some(true)
+                {
+                    w.set_visible(true);
+                    w.focus_window();
+                }
+            }
             UserEvent::Link(link) => {
                 lock(&self.state).open_link(link);
                 if let Some(w) = &self.window {
