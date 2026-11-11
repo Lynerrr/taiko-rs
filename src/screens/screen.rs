@@ -133,6 +133,14 @@ pub(crate) trait Screen: Any + Send {
     fn menu_screen(&self) -> Option<u8> {
         None
     }
+    /// The gameplay preset keys are its own (a form takes them).
+    fn keeps_preset_keys(&self) -> bool {
+        false
+    }
+    /// On a phone: its lists scroll under a finger, as the wheel would.
+    fn finger_scrolls(&self) -> bool {
+        false
+    }
     /// Settings can open over it.
     fn allows_settings(&self) -> bool {
         false
@@ -191,6 +199,8 @@ struct Shadow {
     idle_allowed: bool,
     update_corner: bool,
     menu_screen: Option<u8>,
+    keeps_preset_keys: bool,
+    finger_scrolls: bool,
     typing: bool,
     editor: bool,
     chip_from_right: Option<f32>,
@@ -226,6 +236,8 @@ impl Shadow {
             idle_allowed: screen.idle_allowed(),
             update_corner: screen.update_corner(),
             menu_screen: screen.menu_screen(),
+            keeps_preset_keys: screen.keeps_preset_keys(),
+            finger_scrolls: screen.finger_scrolls(),
             typing: screen.typing(),
             editor: screen.editor(),
             chip_from_right: screen.chip_from_right(),
@@ -304,6 +316,12 @@ impl Screen for Shadow {
     }
     fn menu_screen(&self) -> Option<u8> {
         self.menu_screen
+    }
+    fn keeps_preset_keys(&self) -> bool {
+        self.keeps_preset_keys
+    }
+    fn finger_scrolls(&self) -> bool {
+        self.finger_scrolls
     }
     fn typing(&self) -> bool {
         self.typing
@@ -473,6 +491,7 @@ mod tests {
         "EditorHome",
         "Preview",
         "Download",
+        "MpMenu",
     ];
 
     #[test]

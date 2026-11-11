@@ -157,6 +157,7 @@ use multiplayer::{lobby_seed, map_info, mod_settings, use_mod_settings};
 use screens::editor_home::EditorHome;
 use screens::hud_editor::HudEdit;
 use screens::menu::{update_badge, updating_badge};
+use screens::mp_menu::MpMenu;
 use screens::play::{
     FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
     pause_width,
@@ -215,8 +216,8 @@ enum Scene {
         back: Box<Scene>,
         vsync: bool,
     },
-    /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
-    MpMenu,
+    /// Multiplayer: room lobby, waiting/countdown, match, results (the menu is
+    /// `screens::mp_menu`).
     Lobby,
     /// `from`: map time the match starts at.
     MpWait {
@@ -931,7 +932,6 @@ impl State {
             self.scene,
             Scene::Select
                 | Scene::Settings { .. }
-                | Scene::MpMenu
                 | Scene::Lobby
                 | Scene::Results { .. }
                 | Scene::MpResults
@@ -2017,7 +2017,7 @@ impl State {
         }
         match &mut self.scene {
             Scene::Play { game, .. } => game.pause(sound(&self.audio)),
-            Scene::Select | Scene::MpMenu | Scene::Lobby | Scene::Results { .. } => {}
+            Scene::Select | Scene::Lobby | Scene::Results { .. } => {}
             Scene::Other(s) if s.allows_settings() => {}
             _ => {
                 self.toast(
@@ -2049,7 +2049,6 @@ impl State {
             Scene::Results { .. } => Some(2),
             Scene::Settings { .. } => Some(3),
             Scene::Other(ref s) => s.menu_screen(),
-            Scene::MpMenu => Some(5),
             Scene::Lobby => Some(6),
             Scene::MpResults => Some(7),
             _ => None,
@@ -4162,8 +4161,7 @@ impl State {
             Scene::Settings { prev } => prev.as_ref(),
             scene => scene,
         };
-        (matches!(scene, Scene::Select | Scene::MpMenu)
-            || scene.screen().is_some_and(|s| s.update_corner()))
+        (matches!(scene, Scene::Select) || scene.screen().is_some_and(|s| s.update_corner()))
             && self.mp.is_none()
             && self.splash.is_none()
     }
@@ -4172,10 +4170,8 @@ impl State {
     /// once it's installed (which waits for a moment that costs the player nothing).
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
-        let menus = matches!(
-            self.scene,
-            Scene::Select | Scene::Settings { .. } | Scene::MpMenu
-        ) || self.scene.screen().is_some_and(|s| s.update_corner());
+        let menus = matches!(self.scene, Scene::Select | Scene::Settings { .. })
+            || self.scene.screen().is_some_and(|s| s.update_corner());
         if menus
             && !self.mobile_bar()
             && self.splash.is_none()
@@ -4798,10 +4794,6 @@ impl State {
             // Anywhere else while in a room (its lobby, or song select picking its map).
             Scene::Other(s) if s.presence_first() => s.presence().unwrap_or_default(),
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
-            Scene::MpMenu => (
-                tr!("Multiplayer menu", "マルチのメニュー", "Меню мультиплеера").into(),
-                String::new(),
-            ),
             Scene::Select if self.player.is_some() => {
                 let song = self
                     .player
@@ -7002,7 +6994,7 @@ impl State {
         self.scene = if self.mp.is_some() {
             Scene::Lobby
         } else {
-            Scene::MpMenu
+            MpMenu::scene()
         };
     }
 
@@ -7111,7 +7103,7 @@ impl State {
         self.mp = None;
         self.picking_lobby_map = false;
         self.mp_status = why.to_string();
-        self.scene = Scene::MpMenu;
+        self.scene = MpMenu::scene();
     }
 
     fn multiplayer_key(
@@ -7128,28 +7120,6 @@ impl State {
         {
             if !repeat && game.replay().is_none() {
                 game.press(k, at, sound(&self.audio), self.play_offset);
-            }
-            return;
-        }
-        if matches!(self.scene, Scene::MpMenu) {
-            // The form takes typed text, so only function keys act as shortcuts here.
-            let function_key = matches!(
-                code,
-                KeyCode::F1
-                    | KeyCode::F2
-                    | KeyCode::F3
-                    | KeyCode::F4
-                    | KeyCode::F5
-                    | KeyCode::F6
-                    | KeyCode::F7
-                    | KeyCode::F8
-                    | KeyCode::F9
-                    | KeyCode::F10
-                    | KeyCode::F11
-                    | KeyCode::F12
-            );
-            if !(function_key && !repeat && self.handle_global_key(code, window)) {
-                self.mp_menu_key(code, text);
             }
             return;
         }
@@ -7183,7 +7153,7 @@ impl State {
         match &mut self.scene {
             Scene::Lobby => {
                 let Some(s) = &mut self.mp else {
-                    self.scene = Scene::MpMenu;
+                    self.scene = MpMenu::scene();
                     return;
                 };
                 if s.mapguessr {
@@ -8061,7 +8031,6 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
-            Scene::MpMenu => "multiplayer menu",
             Scene::Lobby => "lobby",
             Scene::MpWait { .. } | Scene::MpPlay { .. } => "multiplayer match",
             Scene::MpResults => "multiplayer results",
@@ -8462,7 +8431,7 @@ impl State {
                 Err(mpsc::TryRecvError::Disconnected) => menu.rooms_request = None,
             }
         }
-        if matches!(self.scene, Scene::MpMenu)
+        if self.scene.screen_is::<MpMenu>()
             && self
                 .mp_menu
                 .last_refresh
@@ -9178,7 +9147,7 @@ impl State {
                 .is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none()
                 && !self.on_menu()
-                && (matches!(self.scene, Scene::Select | Scene::MpMenu | Scene::Lobby)
+                && (matches!(self.scene, Scene::Select | Scene::Lobby)
                     || self.scene.screen().is_some_and(|s| s.tab().is_some())))
             || (matches!(self.scene, Scene::Settings { .. })
                 && self.settings_ui.binding.is_none()
@@ -9212,7 +9181,7 @@ impl State {
         match hit {
             Hit::TextField | Hit::SettingsSearch | Hit::LobbyChat => true,
             Hit::MpRow(i) => {
-                matches!(self.scene, Scene::MpMenu)
+                self.scene.screen_is::<MpMenu>()
                     && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action())
             }
             Hit::SocialRow(i) => matches!(
@@ -9242,7 +9211,7 @@ impl State {
     fn update_keyboard(&mut self) {
         let field = self.keyboard.asked
             && self.takes_text()
-            && !(matches!(self.scene, Scene::MpMenu) && self.mp_menu.row().is_action());
+            && !(self.scene.screen_is::<MpMenu>() && self.mp_menu.row().is_action());
         if !field {
             // Not again by itself when coming back to the screen.
             self.keyboard.asked = false;
@@ -9365,7 +9334,7 @@ impl State {
             };
             return Some((label.into(), self.social.input.clone()));
         }
-        if matches!(self.scene, Scene::MpMenu) {
+        if self.scene.screen_is::<MpMenu>() {
             use multiplayer::Row;
             return match self.mp_menu.row() {
                 r @ Row::User => Some((
@@ -10180,7 +10149,7 @@ impl State {
         }
         self.social.close();
         self.mp_status = format!("joining {title}...");
-        self.scene = Scene::MpMenu;
+        self.scene = MpMenu::scene();
         let request = online::Request::JoinRoom {
             token: self.cfg.online_token.clone(),
             room,
@@ -10976,7 +10945,7 @@ impl State {
                     self.mp = Some(session);
                     self.mp_connecting = None;
                     self.mp_status.clear();
-                    if matches!(self.scene, Scene::MpMenu) {
+                    if self.scene.screen_is::<MpMenu>() {
                         self.scene = Scene::Lobby;
                     }
                 }
@@ -11223,7 +11192,7 @@ impl State {
                 if in_mp {
                     self.stop_audio();
                     self.mp_status = why;
-                    self.scene = Scene::MpMenu;
+                    self.scene = MpMenu::scene();
                 }
             }
             ServerMsg::GuessRound {
@@ -11577,11 +11546,11 @@ impl State {
             return;
         }
         if !repeat
-            && !matches!(
-                self.scene,
-                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_)
-            )
-            && !self.scene.screen().is_some_and(|s| s.editor())
+            && !matches!(self.scene, Scene::Settings { .. } | Scene::Editor(_))
+            && !self
+                .scene
+                .screen()
+                .is_some_and(|s| s.editor() || s.keeps_preset_keys())
             && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
         {
@@ -11669,11 +11638,7 @@ impl State {
         }
         if matches!(
             self.scene,
-            Scene::MpMenu
-                | Scene::Lobby
-                | Scene::MpWait { .. }
-                | Scene::MpPlay { .. }
-                | Scene::MpResults
+            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults
         ) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
@@ -11879,8 +11844,7 @@ impl State {
                 }
             }
             Scene::Calibrate { .. } | Scene::Other(_) => {}
-            Scene::MpMenu
-            | Scene::Lobby
+            Scene::Lobby
             | Scene::MpWait { .. }
             | Scene::MpPlay { .. }
             | Scene::MpResults
@@ -12097,7 +12061,7 @@ impl State {
             let in_menu = in_select
                 || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby) || prev.screen_is::<Preview>())
-                || matches!(self.scene, Scene::MpMenu | Scene::Lobby)
+                || matches!(self.scene, Scene::Lobby)
                 || self.scene.screen().is_some_and(|s| s.tab().is_some());
             let (entries, selected) = if browsing {
                 (&self.browse.remote, self.browse.shown)
@@ -13211,15 +13175,6 @@ impl State {
                 }
                 results.draw(canvas);
             }
-            Scene::MpMenu => {
-                multiplayer::draw_menu(
-                    canvas,
-                    &self.mp_menu,
-                    &self.cfg.online_server,
-                    &self.mp_status,
-                    self.mp_connecting.is_some(),
-                );
-            }
             Scene::Lobby => match &self.mp {
                 Some(s) if s.mapguessr => {
                     if let Some(g) = &mut self.guessr {
@@ -13229,7 +13184,7 @@ impl State {
                 Some(s) => {
                     multiplayer::draw_lobby(canvas, s, s.have_map, lobby_download);
                 }
-                None => next = Some(Scene::MpMenu),
+                None => next = Some(MpMenu::scene()),
             },
             Scene::MpWait {
                 rx,
@@ -13653,7 +13608,7 @@ impl State {
             }
             Scene::MpResults => match &self.mp {
                 Some(s) => multiplayer::draw_results(canvas, s),
-                None => next = Some(Scene::MpMenu),
+                None => next = Some(MpMenu::scene()),
             },
             Scene::Calibrate { game, vsync, .. } => {
                 if game.update(now, sound(&self.audio), self.play_offset) {
@@ -15037,7 +14992,7 @@ impl State {
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
-        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::MpMenu) || prev.screen().is_some_and(|s| s.tab().is_some()));
+        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby) || prev.screen().is_some_and(|s| s.tab().is_some()));
         match (&self.scene, tab) {
             (Scene::Select, 1) => self.open_settings(),
             (Scene::Select, 2) => {
@@ -15052,16 +15007,21 @@ impl State {
                 self.close_settings();
                 self.open_multiplayer();
             }
-            (Scene::MpMenu | Scene::Lobby, 0) => self.show_songs(),
-            (Scene::MpMenu | Scene::Lobby, 1) => self.open_settings(),
-            (Scene::Select | Scene::MpMenu | Scene::Lobby, 3) => self.open_download(),
+            (Scene::Lobby, 0) => self.show_songs(),
+            (Scene::Lobby, 1) => self.open_settings(),
+            (Scene::Select | Scene::Lobby, 3) => self.open_download(),
             (Scene::Settings { .. }, 3) if settings_from_menu => {
                 self.close_settings();
                 self.open_download();
             }
-            (Scene::Other(s), 0) if s.tab().is_some() => self.show_songs(),
-            (Scene::Other(s), 1) if s.tab().is_some() => self.open_settings(),
-            (Scene::Other(s), 2) if s.tab().is_some() => self.open_multiplayer(),
+            // Another tab than its own.
+            (Scene::Other(s), tab) if s.tab().is_some_and(|own| own != tab) => match tab {
+                0 => self.show_songs(),
+                1 => self.open_settings(),
+                2 => self.open_multiplayer(),
+                3 => self.open_download(),
+                _ => {}
+            },
             _ => {}
         }
     }

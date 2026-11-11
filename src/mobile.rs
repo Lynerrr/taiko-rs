@@ -471,7 +471,6 @@ impl State {
                     self.scene,
                     Scene::Settings { .. }
                         | Scene::Results { .. }
-                        | Scene::MpMenu
                         | Scene::Lobby
                         | Scene::MpResults
                         | Scene::Calibrate { .. }
@@ -492,8 +491,9 @@ impl State {
                 .is_some_and(|p| !crate::player::tall() || p.list_open)
             || matches!(
                 self.scene,
-                Scene::MpMenu | Scene::Lobby | Scene::MpResults | Scene::Results { .. }
+                Scene::Lobby | Scene::MpResults | Scene::Results { .. }
             )
+            || self.scene.screen().is_some_and(|s| s.finger_scrolls())
     }
 
     /// A finger on one of the phone's lists. True if it's taken: a tap is only known when the
