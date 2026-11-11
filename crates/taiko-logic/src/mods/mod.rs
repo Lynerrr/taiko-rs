@@ -1,6 +1,235 @@
 //! Mods: osu!'s (EZ, HR, HD, FL, DT...), lazer's taiko extras and taiko.rs's own (scroll speed
-//! tricks, SV experiments, visual tricks, note paths, playfield moves and copies). A set of them is a bit mask; each has a two-letter acronym used in
-//! the config, replays and multiplayer.
+//! tricks, SV experiments, visual tricks, note paths, playfield moves and copies). A set of them
+//! is a bit mask; each has a two-letter acronym used in the config, replays and multiplayer.
+//!
+//! Each mod has a file of its own here with its definition (`DEF`: acronym, name, score
+//! multiplier, conflicts...), and a line in the registry below. Adding a mod is a new file and
+//! a new line; nothing else lists the mods.
+
+/// Ties each mod to its number and its file, column by column as the mod select shows them, and
+/// makes `Mod`, `ALL` and `GROUPS` of it.
+macro_rules! registry {
+    ($($title:literal $colour:literal { $($m:ident = $bit:literal => $file:ident,)* })*) => {
+        $($(mod $file;)*)*
+
+        /// Every mod, column by column as the mod select shows them. A mod's number is its bit in
+        /// `Mods`: presets, favourites and plays keep these, so a number never changes and a new
+        /// mod takes the next one (the build fails on a gap or a number used twice).
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        #[repr(u8)]
+        pub enum Mod {
+            $($($m = $bit,)*)*
+        }
+
+        /// Each mod's definition, in the registry's order.
+        const REGISTRY: &[(Mod, &ModDef)] = &[$($((Mod::$m, &$file::DEF),)*)*];
+
+        /// Mod select columns: (title, accent colour, mods).
+        pub const GROUPS: [(&str, u32, &[Mod]); [$($title),*].len()] =
+            [$(($title, $colour, &[$(Mod::$m),*]),)*];
+    };
+}
+
+registry! {
+    "REDUCTION" 0x86E05A {
+        Easy = 0 => easy,
+        NoFail = 1 => no_fail,
+        HalfTime = 2 => half_time,
+        Daycore = 3 => daycore,
+        Half = 4 => half,
+        NoFinishers = 5 => no_finishers,
+    }
+    "INCREASE" 0xEB452C {
+        HardRock = 6 => hard_rock,
+        SuddenDeath = 7 => sudden_death,
+        Perfect = 8 => perfect,
+        DoubleTime = 9 => double_time,
+        Nightcore = 10 => nightcore,
+        Hidden = 11 => hidden,
+        Flashlight = 12 => flashlight,
+        Precise = 13 => precise,
+        GreatOrNothing = 14 => great_or_nothing,
+    }
+    "CONVERSION" 0x4fb4ff {
+        Relax = 15 => relax,
+        Autoplay = 16 => autoplay,
+        Swap = 17 => swap,
+        Random = 18 => random,
+        ConstantSpeed = 19 => constant_speed,
+        Alternate = 20 => alternate,
+        WindUp = 21 => wind_up,
+        WindDown = 22 => wind_down,
+        AllBig = 23 => all_big,
+        OdOverride = 78 => od_override,
+    }
+    "SCROLL" 0xFFD34D {
+        Accel = 24 => accel,
+        Brake = 25 => brake,
+        Wave = 26 => wave,
+        Pulse = 27 => pulse,
+        Stutter = 28 => stutter,
+        SvChaos = 29 => sv_chaos,
+        Crescendo = 30 => crescendo,
+        Drop = 31 => drop,
+        Gearbox = 32 => gearbox,
+        Roulette = 33 => roulette,
+        Tact = 77 => tact,
+    }
+    "SV LAB" 0xFF8A3D {
+        AntiSv = 34 => anti_sv,
+        HyperSv = 35 => hyper_sv,
+        Even = 36 => even,
+        Split = 37 => split,
+        Swing = 38 => swing,
+        Leapfrog = 39 => leapfrog,
+        Panic = 40 => panic,
+        Mercy = 41 => mercy,
+        LagSpike = 42 => lag_spike,
+        Moonwalk = 43 => moonwalk,
+        SnapSpeed = 44 => snap_speed,
+    }
+    "VISUAL" 0xc77dff {
+        Sudden = 45 => sudden,
+        Blink = 46 => blink,
+        Blackout = 47 => blackout,
+        Spotlight = 48 => spotlight,
+        Colorless = 49 => colorless,
+        Memory = 50 => memory,
+        Decoy = 51 => decoy,
+        Party = 52 => party,
+        Overtime = 53 => overtime,
+        Liar = 54 => liar,
+        Radar = 55 => radar,
+        Echo = 56 => echo,
+    }
+    "RAILS" 0x5ee6c8 {
+        Zigzag = 57 => zigzag,
+        UTurn = 58 => u_turn,
+        Spiral = 59 => spiral,
+        Loop = 60 => loop_the_loop,
+        Elbow = 61 => elbow,
+        Maze = 64 => maze,
+        Shapeshift = 62 => shapeshift,
+        Snake = 63 => snake,
+        Crossfire = 71 => crossfire,
+    }
+    "PLAYFIELD" 0xff5fa2 {
+        Mirror = 65 => mirror,
+        Tilt = 66 => tilt,
+        Spin = 67 => spin,
+        Mania = 68 => mania,
+        BarrelRoll = 69 => barrel_roll,
+        FlipFlop = 70 => flip_flop,
+        Shatter = 72 => shatter,
+        Cracked = 73 => cracked,
+        Crumble = 74 => crumble,
+        Portal = 75 => portal,
+        Multiverse = 76 => multiverse,
+    }
+}
+
+use Mod::*;
+
+/// How many mods there are.
+const COUNT: usize = REGISTRY.len();
+
+/// Every mod by its number (`Mod::bit`), as the mod select's keyboard and the lists of mods go.
+pub const ALL: [Mod; COUNT] = {
+    let mut all = [Mod::Easy; COUNT];
+    let mut set = [false; COUNT];
+    let mut i = 0;
+    while i < COUNT {
+        let m = REGISTRY[i].0;
+        assert!(
+            (m as usize) < COUNT,
+            "mods are numbered from 0 without gaps"
+        );
+        // The enum already refuses a number used twice; this keeps the table honest too.
+        assert!(!set[m as usize], "two mods share a number");
+        set[m as usize] = true;
+        all[m as usize] = m;
+        i += 1;
+    }
+    all
+};
+
+/// Each mod's definition by its number.
+const DEFS: [&ModDef; COUNT] = {
+    let mut defs = [&ModDef::DEFAULT; COUNT];
+    let mut i = 0;
+    while i < COUNT {
+        defs[REGISTRY[i].0 as usize] = REGISTRY[i].1;
+        i += 1;
+    }
+    defs
+};
+
+/// The bits of the mods whose definition says so.
+macro_rules! mask {
+    ($def:ident => $test:expr) => {{
+        let mut bits = 0u128;
+        let mut i = 0;
+        while i < COUNT {
+            let $def = DEFS[i];
+            if $test {
+                bits |= 1 << i;
+            }
+            i += 1;
+        }
+        bits
+    }};
+}
+
+/// Mods that change the song's speed: everyone in a lobby plays the host's (`ModDef::lobby_wide`).
+const LOBBY_WIDE: u128 = mask!(d => d.lobby_wide);
+/// Mods a Defense match can't have (`ModDef::in_defense`).
+const DEFENSE_BANNED: u128 = mask!(d => !d.in_defense);
+
+/// What a mod is: its file's `DEF`. Everything here is data the mod select, the shuffle, lobbies
+/// and scores read through `Mod`'s methods.
+struct ModDef {
+    /// Two letters, in the config, replays, labels and multiplayer.
+    acronym: &'static str,
+    name: &'static str,
+    /// The mod select's line about it.
+    description: &'static str,
+    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko.rs's own by how
+    /// much harder they make a map to read or play (HR's 1.06 is "clearly harder", DT's 1.12
+    /// "a lot"). Mods that help score below 1; ones that only look different stay at 1.
+    multiplier: f64,
+    /// How much harder it makes a map to play, for the shuffle (`Mods::shuffle`): easier mods
+    /// count against the rest. `None`: never shuffled in (nobody plays, the play just ends
+    /// early, or there's nothing left to read).
+    shuffle_cost: Option<i32>,
+    /// Mods it can't be combined with (both ways: each lists the other).
+    conflicts: &'static [Mod],
+    /// It hides or disguises notes: the shuffle takes one of those at a time.
+    obscures: bool,
+    /// It changes the song's speed: a lobby's host picks it for everyone, so the song stays in
+    /// step for all. The rest each player picks for themselves.
+    lobby_wide: bool,
+    /// It can be on in a Defense match. A team shares its lives and gold, so nothing may play
+    /// for a player, spare a player the misses or end one player's run alone.
+    in_defense: bool,
+    /// It has settings of its own: its tab in the mod customization (tabs go by this number).
+    setup_tab: Option<u8>,
+}
+
+impl ModDef {
+    /// What a definition leaves out: no conflicts, none of the flags.
+    const DEFAULT: ModDef = ModDef {
+        acronym: "",
+        name: "",
+        description: "",
+        multiplier: 1.0,
+        shuffle_cost: Some(1),
+        conflicts: &[],
+        obscures: false,
+        lobby_wide: false,
+        in_defense: true,
+        setup_tab: None,
+    };
+}
 
 /// How Half picks the notes it takes off.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -80,297 +309,14 @@ pub fn half_keeps(times: &[f64], rule: HalfRule, beat_at: &dyn Fn(f64) -> (f64, 
     keep
 }
 
-/// Every mod, in the order the mod select shows them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Mod {
-    // Difficulty reduction.
-    Easy,
-    NoFail,
-    HalfTime,
-    Daycore,
-    Half,
-    NoFinishers,
-    // Difficulty increase.
-    HardRock,
-    SuddenDeath,
-    Perfect,
-    DoubleTime,
-    Nightcore,
-    Hidden,
-    Flashlight,
-    Precise,
-    GreatOrNothing,
-    // Automation and conversion.
-    Relax,
-    Autoplay,
-    Swap,
-    Random,
-    ConstantSpeed,
-    Alternate,
-    WindUp,
-    WindDown,
-    AllBig,
-    // Scroll speed tricks.
-    Accel,
-    Brake,
-    Wave,
-    Pulse,
-    Stutter,
-    SvChaos,
-    Crescendo,
-    Drop,
-    Gearbox,
-    Roulette,
-    Tact,
-    OdOverride,
-    // SV experiments.
-    AntiSv,
-    HyperSv,
-    Even,
-    Split,
-    Swing,
-    Leapfrog,
-    Panic,
-    Mercy,
-    LagSpike,
-    Moonwalk,
-    SnapSpeed,
-    // Visual tricks.
-    Sudden,
-    Blink,
-    Blackout,
-    Spotlight,
-    Colorless,
-    Memory,
-    Decoy,
-    Party,
-    Overtime,
-    Liar,
-    Radar,
-    Echo,
-    // Rails: the lane bent into a shape.
-    Zigzag,
-    UTurn,
-    Spiral,
-    Loop,
-    Elbow,
-    Shapeshift,
-    Snake,
-    Maze,
-    // Playfield moves.
-    Mirror,
-    Tilt,
-    Spin,
-    Mania,
-    BarrelRoll,
-    FlipFlop,
-    Crossfire,
-    Shatter,
-    Cracked,
-    Crumble,
-    Portal,
-    Multiverse,
-}
-
-use Mod::*;
-
-pub const ALL: [Mod; 79] = [
-    Easy,
-    NoFail,
-    HalfTime,
-    Daycore,
-    Half,
-    NoFinishers,
-    HardRock,
-    SuddenDeath,
-    Perfect,
-    DoubleTime,
-    Nightcore,
-    Hidden,
-    Flashlight,
-    Precise,
-    GreatOrNothing,
-    Relax,
-    Autoplay,
-    Swap,
-    Random,
-    ConstantSpeed,
-    Alternate,
-    WindUp,
-    WindDown,
-    AllBig,
-    Accel,
-    Brake,
-    Wave,
-    Pulse,
-    Stutter,
-    SvChaos,
-    Crescendo,
-    Drop,
-    Gearbox,
-    Roulette,
-    AntiSv,
-    HyperSv,
-    Even,
-    Split,
-    Swing,
-    Leapfrog,
-    Panic,
-    Mercy,
-    LagSpike,
-    Moonwalk,
-    SnapSpeed,
-    Sudden,
-    Blink,
-    Blackout,
-    Spotlight,
-    Colorless,
-    Memory,
-    Decoy,
-    Party,
-    Overtime,
-    Liar,
-    Radar,
-    Echo,
-    Zigzag,
-    UTurn,
-    Spiral,
-    Loop,
-    Elbow,
-    Shapeshift,
-    Snake,
-    Maze,
-    Mirror,
-    Tilt,
-    Spin,
-    Mania,
-    BarrelRoll,
-    FlipFlop,
-    Crossfire,
-    Shatter,
-    Cracked,
-    Crumble,
-    Portal,
-    Multiverse,
-    // Added later: a mod's place in this list is its bit (`Mod::bit`), so new ones go last.
-    Tact,
-    OdOverride,
-];
-
-/// Each mod's place in `ALL`, by the mod's discriminant: `Mod::bit` without a search.
-///
-/// The build fails if a mod is missing from `ALL` (it would have no bit of its own) or listed
-/// there twice (saved bits would move).
-const BIT_INDEX: [u8; ALL.len()] = {
-    const UNSET: u8 = u8::MAX;
-    let mut index = [UNSET; ALL.len()];
-    let mut i = 0;
-    while i < ALL.len() {
-        let mod_ = ALL[i] as usize;
-        // As many places as `ALL` is long: a mod left out of it lands past the end here, or
-        // leaves a place unset below.
-        assert!(index[mod_] == UNSET, "a mod is in ALL twice");
-        index[mod_] = i as u8;
-        i += 1;
-    }
-    let mut i = 0;
-    while i < index.len() {
-        assert!(index[i] != UNSET, "a mod is missing from ALL");
-        i += 1;
-    }
-    index
-};
-
-/// Mod select columns: (title, accent colour, mods).
-pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
-    (
-        "REDUCTION",
-        0x86E05A,
-        &[Easy, NoFail, HalfTime, Daycore, Half, NoFinishers],
-    ),
-    (
-        "INCREASE",
-        0xEB452C,
-        &[
-            HardRock,
-            SuddenDeath,
-            Perfect,
-            DoubleTime,
-            Nightcore,
-            Hidden,
-            Flashlight,
-            Precise,
-            GreatOrNothing,
-        ],
-    ),
-    (
-        "CONVERSION",
-        0x4fb4ff,
-        &[
-            Relax,
-            Autoplay,
-            Swap,
-            Random,
-            ConstantSpeed,
-            Alternate,
-            WindUp,
-            WindDown,
-            AllBig,
-            OdOverride,
-        ],
-    ),
-    (
-        "SCROLL",
-        0xFFD34D,
-        &[
-            Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, Tact,
-        ],
-    ),
-    (
-        "SV LAB",
-        0xFF8A3D,
-        &[
-            AntiSv, HyperSv, Even, Split, Swing, Leapfrog, Panic, Mercy, LagSpike, Moonwalk,
-            SnapSpeed,
-        ],
-    ),
-    (
-        "VISUAL",
-        0xc77dff,
-        &[
-            Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar,
-            Radar, Echo,
-        ],
-    ),
-    (
-        "RAILS",
-        0x5ee6c8,
-        &[
-            Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Snake, Crossfire,
-        ],
-    ),
-    (
-        "PLAYFIELD",
-        0xff5fa2,
-        &[
-            Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal,
-            Multiverse,
-        ],
-    ),
-];
-
-/// The mods with settings of their own, in the order of the mod customization's tabs.
-const CUSTOMIZABLE: [Mod; 5] = [
-    Mod::Random,
-    Mod::Multiverse,
-    Mod::Shapeshift,
-    Mod::Tact,
-    Mod::OdOverride,
-];
-
 /// The tabs of the mod customization: the mods with settings that are on (only those show).
 pub fn customizable(mods: Mods) -> Vec<Mod> {
-    CUSTOMIZABLE.into_iter().filter(|&m| mods.has(m)).collect()
+    let mut tabs: Vec<(u8, Mod)> = mods
+        .iter()
+        .filter_map(|m| m.def().setup_tab.map(|tab| (tab, m)))
+        .collect();
+    tabs.sort_by_key(|&(tab, _)| tab);
+    tabs.into_iter().map(|(_, m)| m).collect()
 }
 
 /// Mod select keyboard navigation: the mod `dx` columns and `dy` rows from `index` (into `ALL`).
@@ -388,435 +334,42 @@ pub fn step(index: usize, dx: i32, dy: i32) -> usize {
 }
 
 impl Mod {
+    /// Its definition (its file's `DEF`).
+    #[inline]
+    fn def(self) -> &'static ModDef {
+        DEFS[self as usize]
+    }
+
     pub fn acronym(self) -> &'static str {
-        match self {
-            Easy => "EZ",
-            NoFail => "NF",
-            HalfTime => "HT",
-            Daycore => "DC",
-            Half => "HA",
-            NoFinishers => "NB",
-            HardRock => "HR",
-            SuddenDeath => "SD",
-            Perfect => "PF",
-            DoubleTime => "DT",
-            Nightcore => "NC",
-            Hidden => "HD",
-            Flashlight => "FL",
-            Precise => "PR",
-            GreatOrNothing => "GN",
-            Relax => "RX",
-            Autoplay => "AT",
-            Swap => "SW",
-            Random => "RD",
-            ConstantSpeed => "CS",
-            Alternate => "AL",
-            WindUp => "WU",
-            WindDown => "WD",
-            AllBig => "AB",
-            Accel => "AC",
-            Brake => "BR",
-            Wave => "WV",
-            Pulse => "PU",
-            Stutter => "ST",
-            SvChaos => "CH",
-            Crescendo => "CC",
-            Drop => "DR",
-            Gearbox => "GB",
-            Roulette => "RL",
-            Tact => "TC",
-            OdOverride => "OV",
-            AntiSv => "AS",
-            HyperSv => "HS",
-            Even => "EV",
-            Split => "SL",
-            Swing => "SG",
-            Leapfrog => "LF",
-            Panic => "PN",
-            Mercy => "MC",
-            LagSpike => "LG",
-            Moonwalk => "MW",
-            SnapSpeed => "SR",
-            Sudden => "SU",
-            Blink => "BL",
-            Blackout => "BO",
-            Spotlight => "SP",
-            Colorless => "CL",
-            Memory => "MM",
-            Decoy => "DY",
-            Party => "PY",
-            Overtime => "OT",
-            Liar => "LI",
-            Radar => "RA",
-            Echo => "EC",
-            Zigzag => "ZZ",
-            UTurn => "UT",
-            Spiral => "SI",
-            Loop => "LP",
-            Elbow => "EB",
-            Shapeshift => "SS",
-            Snake => "SK",
-            Maze => "MZ",
-            Mirror => "MR",
-            Tilt => "TL",
-            Spin => "SN",
-            Mania => "MN",
-            BarrelRoll => "BA",
-            FlipFlop => "FF",
-            Crossfire => "XF",
-            Shatter => "SH",
-            Cracked => "CK",
-            Crumble => "CR",
-            Portal => "PT",
-            Multiverse => "MV",
-        }
+        self.def().acronym
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Easy => "Easy",
-            NoFail => "No Fail",
-            HalfTime => "Half Time",
-            Daycore => "Daycore",
-            Half => "Half Notes",
-            NoFinishers => "No Finishers",
-            HardRock => "Hard Rock",
-            SuddenDeath => "Sudden Death",
-            Perfect => "Perfect",
-            DoubleTime => "Double Time",
-            Nightcore => "Nightcore",
-            Hidden => "Hidden",
-            Flashlight => "Flashlight",
-            Precise => "Precise",
-            GreatOrNothing => "Great or Nothing",
-            Relax => "Relax",
-            Autoplay => "Autoplay",
-            Swap => "Swap",
-            Random => "Random",
-            ConstantSpeed => "Constant Speed",
-            Alternate => "Alternate",
-            WindUp => "Wind Up",
-            WindDown => "Wind Down",
-            AllBig => "All Big",
-            Accel => "Accel",
-            Brake => "Brake",
-            Wave => "Wave",
-            Pulse => "Pulse",
-            Stutter => "Stutter",
-            SvChaos => "SV Chaos",
-            Crescendo => "Crescendo",
-            Drop => "Drop",
-            Gearbox => "Gearbox",
-            Roulette => "Roulette",
-            Tact => "Tact",
-            OdOverride => "OD Override",
-            AntiSv => "Anti-SV",
-            HyperSv => "Hyper SV",
-            Even => "Even",
-            Split => "Split",
-            Swing => "Swing",
-            Leapfrog => "Leapfrog",
-            Panic => "Panic",
-            Mercy => "Mercy",
-            LagSpike => "Lag Spike",
-            Moonwalk => "Moonwalk",
-            SnapSpeed => "Snap Speed",
-            Sudden => "Sudden",
-            Blink => "Blink",
-            Blackout => "Blackout",
-            Spotlight => "Spotlight",
-            Colorless => "Colorless",
-            Memory => "Memory",
-            Decoy => "Decoy",
-            Party => "Party",
-            Overtime => "Overtime",
-            Liar => "Liar",
-            Radar => "Radar",
-            Echo => "Echo",
-            Zigzag => "Zigzag",
-            UTurn => "U-Turn",
-            Spiral => "Spiral",
-            Loop => "Loop",
-            Elbow => "Elbow",
-            Shapeshift => "Shapeshift",
-            Snake => "Snake",
-            Maze => "Maze",
-            Mirror => "Mirror",
-            Tilt => "Tilt",
-            Spin => "Spin",
-            Mania => "Mania",
-            BarrelRoll => "Barrel Roll",
-            FlipFlop => "Flip Flop",
-            Crossfire => "Crossfire",
-            Shatter => "Shatter",
-            Cracked => "Cracked",
-            Crumble => "Crumble",
-            Portal => "Portal",
-            Multiverse => "Multiverse",
-        }
+        self.def().name
     }
 
     pub fn description(self) -> &'static str {
-        match self {
-            Easy => "Wider timing windows (OD x0.5), slower notes, a kinder HP bar.",
-            NoFail => "You can't fail, whatever the HP bar says.",
-            HalfTime => "0.75x speed, same pitch.",
-            Daycore => "0.75x speed, lower pitch.",
-            Half => "Streams lose their finest notes, on the beat. For learning hard maps.",
-            NoFinishers => "Big notes become normal ones.",
-            HardRock => "Tighter windows (OD x1.4), much faster notes, a stricter HP bar.",
-            SuddenDeath => "The first miss fails the play.",
-            Perfect => "Anything but a GREAT fails the play.",
-            DoubleTime => "1.5x speed, same pitch.",
-            Nightcore => "1.5x speed, higher pitch.",
-            Hidden => "Notes fade out long before they reach the drum.",
-            Flashlight => "Only a circle around the drum is lit; it shrinks at 100 and 200 combo.",
-            Precise => "OD +2.",
-            GreatOrNothing => "An OK counts as a miss (but doesn't fail you).",
-            Relax => {
-                "Colours don't matter: any key hits any note. Has its own leaderboards and pp."
-            }
-            Autoplay => "Watch the map play itself.",
-            Swap => "Dons become kats and kats become dons.",
-            Random => "Every note gets a random colour.",
-            ConstantSpeed => "All notes scroll at one speed: no SV changes.",
-            Alternate => "Hands must alternate; either may follow a finisher, drumroll or swell.",
-            WindUp => "The song speeds up from 1.0x to 1.5x of your speed.",
-            WindDown => "The song slows down from 1.0x to 0.75x of your speed.",
-            AllBig => "Every don and kat is a big note.",
-            Accel => "Notes start slow and rush in near the drum.",
-            Brake => "Notes fly in fast and brake near the drum.",
-            Wave => "Note speed swells and falls along the song.",
-            Pulse => "Notes jump forward on every beat.",
-            Stutter => "Notes freeze for half a beat, then catch up.",
-            SvChaos => "Every note gets its own speed (+-30%): they overtake each other.",
-            Crescendo => "Notes speed up steadily over the map, from 0.8x to 1.6x.",
-            Drop => "Notes freeze two beats before every kiai, then slam in 1.4x faster.",
-            Gearbox => "Every beat of a bar shifts up a gear (+15%); the next bar starts over.",
-            Roulette => "Every 4 bars a random speed (0.5x-2x); a marker shows where it changes.",
-            Tact => "Notes crawl through each bar, then rush to where they belong (C: how often).",
-            OdOverride => "Play at the OD you pick, 0 to 20 (C: which). Not saved.",
-            AntiSv => "The map's speed changes are turned upside down: 2x becomes 0.5x.",
-            HyperSv => "The map's speed changes are exaggerated: 1.5x becomes 2.25x.",
-            Even => "Notes are evenly spaced: bursts fly in fast, slow parts crawl. Play by ear.",
-            Split => "Dons are 20% faster and kats 15% slower: colours overtake each other.",
-            Swing => "Notes on the beat are faster, notes between beats slower.",
-            Leapfrog => "Every other note is faster: pairs swap places on the way in.",
-            Panic => "Every miss makes notes 15% faster for 4 seconds; misses stack.",
-            Mercy => "Every miss slows notes down for a few seconds.",
-            LagSpike => "The lane freezes now and then, then skips ahead. Like a bad stream.",
-            Moonwalk => "On every bar the notes slide backwards for a moment.",
-            SnapSpeed => {
-                "Speed by rhythm: 1/3s slower, 1/6s faster, 1/8s a bit faster than the rest."
-            }
-            Sudden => "Notes only show up close to the drum.",
-            Blink => "Approaching notes vanish on the second half of every beat.",
-            Blackout => "Kiai time turns the lights off: only the drum stays lit.",
-            Spotlight => "Flashlight whose circle breathes with the beat.",
-            Colorless => "Dons and kats look the same. Play by ear and memory.",
-            Memory => "Notes are only shown for the first 15 seconds.",
-            Decoy => {
-                "See-through fake notes fly in between the real ones and vanish before the drum."
-            }
-            Overtime => "It's me.",
-            Liar => {
-                "Far off, triplets are spaced like 1/4s; their real spacing shows near the drum."
-            }
-            Radar => {
-                "The lane is dark: a beam sweeps it every other beat and lights notes up as it passes."
-            }
-            Echo => {
-                "Notes are grey; the next bar shows in colour under the lane, a cursor running along it."
-            }
-            Party => {
-                "Everything flashy at once; notes pulse to their own rhythm, 1/4s four times a beat."
-            }
-            Zigzag => "The lane zigzags across the screen.",
-            UTurn => "Notes come in along the top, make a U-turn and come back to the drum.",
-            Spiral => "The lane coils into a spiral; notes wind their way in.",
-            Loop => "The lane has a loop-the-loop in the middle.",
-            Elbow => "Notes fall from the top and turn into the lane at a corner.",
-            Shapeshift => {
-                "Every few bars the lane bends into another rails shape (C: how often, which order)."
-            }
-            Snake => {
-                "Streams slither along the lane, triplets the other way; 1/1 notes fly straight."
-            }
-            Maze => "The lane winds round corner after corner across the whole screen to the drum.",
-            Mirror => "The lane is flipped: notes come from the left.",
-            Tilt => "The lane rocks from side to side with the beat.",
-            Spin => "The lane moves to the middle and turns full circle every 24 seconds.",
-            Mania => "The lane stands up: notes fall down onto the drum.",
-            BarrelRoll => "Every kiai starts with a full spin of the lane.",
-            FlipFlop => "Every 8 bars the lane flips over to the other side.",
-            Crossfire => {
-                "The drum sits in the middle: kats come from the left, dons from the right."
-            }
-            Shatter => {
-                "The lane breaks into pieces that slide apart and back; further where streams are."
-            }
-            Cracked => {
-                "Every miss cracks the lane and knocks a piece out of line; 50 hits mend it."
-            }
-            Crumble => {
-                "Hits knock pieces out of the lane, harder as the combo grows; a miss puts them back."
-            }
-            Portal => "Notes dive into one portal and come out of another; they move every 8 bars.",
-            Multiverse => {
-                "Eight playfields circle about, each with its own look and mods (C sets them up)."
-            }
-        }
+        self.def().description
     }
 
-    /// Score multiplier: osu!'s for its mods, and on the same scale for taiko.rs's own by how
-    /// much harder they make a map to read or play (HR's 1.06 is "clearly harder", DT's 1.12
-    /// "a lot"). Mods that help score below 1; ones that only look different stay at 1.
+    /// Score multiplier (`ModDef::multiplier`).
     pub fn multiplier(self) -> f64 {
-        match self {
-            Easy | NoFail => 0.5,
-            HalfTime | Daycore => 0.3,
-            Half => 0.5,
-            NoFinishers | ConstantSpeed | Mercy => 0.9,
-            WindDown => 0.85,
-            HardRock | Hidden | Precise => 1.06,
-            DoubleTime | Nightcore | Flashlight | Multiverse => 1.12,
-            Spotlight | Blackout | Memory | Colorless => 1.1,
-            // Hard to read or to play: notes that lie about where or when they'll arrive.
-            SvChaos | Even => 1.08,
-            Sudden | Blink | Decoy | Liar | Radar | Echo | Alternate | WindUp | Stutter
-            | Roulette | HyperSv | Split | Leapfrog | LagSpike | Moonwalk | Tact => 1.06,
-            Spiral | Maze | Shapeshift | Spin | Portal => 1.06,
-            // Noticeably harder.
-            GreatOrNothing | Random | Accel | Brake | Pulse | Crescendo | Drop | Gearbox
-            | AntiSv | Swing | Panic | SnapSpeed => 1.04,
-            UTurn | Loop | Snake | FlipFlop | Crossfire | Shatter | Crumble => 1.04,
-            // A little harder: the lane moves or bends, the notes read as usual.
-            AllBig | Wave | Zigzag | Elbow | Mirror | Tilt | Mania | BarrelRoll | Cracked
-            | Party => 1.02,
-            _ => 1.0,
-        }
+        self.def().multiplier
     }
 
     /// Mods this one can't be combined with.
     fn conflicts(self) -> &'static [Mod] {
-        match self {
-            Easy => &[HardRock],
-            HardRock => &[Easy],
-            NoFail => &[SuddenDeath, Perfect, Relax, Autoplay],
-            SuddenDeath => &[NoFail, Perfect, Relax, Autoplay],
-            Perfect => &[NoFail, SuddenDeath, Relax, Autoplay],
-            HalfTime | Daycore | DoubleTime | Nightcore => {
-                &[HalfTime, Daycore, DoubleTime, Nightcore, WindUp, WindDown]
-            }
-            WindUp | WindDown => &[HalfTime, Daycore, DoubleTime, Nightcore, WindUp, WindDown],
-            Relax => &[Autoplay, NoFail, SuddenDeath, Perfect, Alternate],
-            Autoplay => &[Relax, NoFail, SuddenDeath, Perfect, Alternate],
-            Alternate => &[Relax, Autoplay],
-            Swap => &[Random],
-            Random => &[Swap],
-            NoFinishers => &[AllBig],
-            AllBig => &[NoFinishers],
-            Accel => &[Brake],
-            Brake => &[Accel],
-            // They all move notes in steps with the beat: one at a time.
-            Pulse => &[Stutter, Tact],
-            Stutter => &[Pulse, Tact],
-            Tact => &[Pulse, Stutter],
-            Hidden => &[Sudden, Memory, Radar],
-            Sudden => &[Hidden, Memory, Radar],
-            Memory => &[Hidden, Sudden, Radar],
-            Flashlight => &[Spotlight, Multiverse, Radar],
-            Spotlight => &[Flashlight, Multiverse, Radar],
-            // Radar decides when far notes show and lights the whole lane: nothing else may hide
-            // them or keep the light to one spot. Its window-sized lanes are Multiverse's own.
-            Radar => &[
-                Hidden, Sudden, Memory, Flashlight, Spotlight, Blackout, Multiverse,
-            ],
-            // Echo's bar sits under the lane: nothing may move the lane over it. Colorless does
-            // its grey already, and Multiverse's colours are what the windows go by.
-            Echo => &[
-                Colorless, Multiverse, Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Maze,
-                Shapeshift,
-            ],
-            // The map's own speeds are what these bend, so they don't mix with each other or
-            // with one speed for everything.
-            ConstantSpeed => &[AntiSv, HyperSv],
-            AntiSv => &[HyperSv, ConstantSpeed],
-            HyperSv => &[AntiSv, ConstantSpeed],
-            Panic => &[Mercy],
-            Mercy => &[Panic],
-            Spin => &[
-                Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Multiverse, Crossfire,
-                Echo,
-            ],
-            Mania => &[
-                Spin, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Multiverse, Crossfire,
-                Echo,
-            ],
-            Zigzag | UTurn | Spiral | Loop | Elbow | Maze | Shapeshift => &[
-                Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Mania, Spin, Multiverse,
-                Crossfire, Echo,
-            ],
-            // The drum in the middle, a lane each way: nothing else may move the drum, bend the
-            // lane or break it into pieces.
-            Crossfire => &[
-                Spin, Mania, Zigzag, UTurn, Spiral, Loop, Elbow, Maze, Shapeshift, Multiverse,
-                Shatter, Cracked, Crumble, Portal,
-            ],
-            Shatter | Portal => &[Crossfire],
-            // Its playfields are small windows side by side: nothing may move them off their
-            // spots, light only one of them or take its colours away.
-            Tilt | BarrelRoll => &[Multiverse],
-            Colorless => &[Multiverse, Echo],
-            Blackout => &[Multiverse, Radar],
-            Multiverse => &[
-                Spin, Mania, Tilt, BarrelRoll, Zigzag, UTurn, Spiral, Loop, Elbow, Maze,
-                Shapeshift, Colorless, Flashlight, Spotlight, Blackout, Crossfire, Radar, Echo,
-            ],
-            Cracked => &[Crumble, Crossfire],
-            Crumble => &[Cracked, Crossfire],
-            _ => &[],
-        }
+        self.def().conflicts
     }
 
-    /// How much harder this mod makes a map to play, for the shuffle (`Mods::shuffle`): easier
-    /// mods count against the rest. `None`: never shuffled in (nobody plays, the play just ends
-    /// early, or there's nothing left to read).
+    /// How much harder this mod makes a map to play, for the shuffle (`ModDef::shuffle_cost`).
     fn shuffle_cost(self) -> Option<i32> {
-        Some(match self {
-            Autoplay | Relax | SuddenDeath | Perfect | GreatOrNothing | Memory | Overtime
-            | OdOverride => {
-                return None;
-            }
-            Half => -3,
-            Easy | HalfTime | Daycore => -2,
-            NoFail | NoFinishers | ConstantSpeed | WindDown | Mercy => 0,
-            DoubleTime | Nightcore | Flashlight | Spotlight | Colorless => 3,
-            HardRock | Hidden | Sudden | Blink | Decoy | Radar | Echo | Random | Alternate
-            | WindUp => 2,
-            Stutter | SvChaos | Roulette | HyperSv | Even | Split | Leapfrog | Panic | LagSpike
-            | Moonwalk | Tact => 2,
-            Spiral | Maze | Shapeshift | Spin | FlipFlop | Portal | Multiverse => 2,
-            _ => 1,
-        })
+        self.def().shuffle_cost
     }
 
     /// Mods that hide or disguise notes: one of them at a time is plenty.
     fn obscures(self) -> bool {
-        matches!(
-            self,
-            Hidden
-                | Sudden
-                | Flashlight
-                | Spotlight
-                | Blink
-                | Colorless
-                | Decoy
-                | Liar
-                | Radar
-                | Echo
-                | Multiverse
-        )
+        self.def().obscures
     }
 
     /// Mods that change where and how fast notes travel.
@@ -827,11 +380,10 @@ impl Mod {
             .any(|g| g.2.contains(&self))
     }
 
-    /// The mod's bit in `Mods`: its place in `ALL`. Looked up in a table made at compile time,
-    /// since the drawing asks `Mods::has` many times a frame.
+    /// The mod's bit in `Mods`: its number.
     #[inline]
     fn bit(self) -> u128 {
-        1 << BIT_INDEX[self as usize]
+        1 << self as u8
     }
 
     pub fn from_acronym(s: &str) -> Option<Mod> {
@@ -839,52 +391,28 @@ impl Mod {
             .copied()
             .find(|m| m.acronym().eq_ignore_ascii_case(s.trim()))
     }
+
+    /// A lobby's host picks it for everyone (it changes the song's speed).
+    pub fn shared(self) -> bool {
+        self.def().lobby_wide
+    }
+
+    /// Whether it can be on in a Defense match (`ModDef::in_defense`).
+    pub fn defense_ok(self) -> bool {
+        self.def().in_defense
+    }
 }
 
 /// A set of mods.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Mods(u128);
 
-/// Mods that change the song's speed: everyone in a lobby plays the host's, so the song stays
-/// in step for all. The rest each player picks for themselves.
-const SPEED: [Mod; 6] = [
-    Mod::DoubleTime,
-    Mod::Nightcore,
-    Mod::HalfTime,
-    Mod::Daycore,
-    Mod::WindUp,
-    Mod::WindDown,
-];
-
-impl Mod {
-    /// A lobby's host picks it for everyone (it changes the song's speed).
-    pub fn shared(self) -> bool {
-        SPEED.contains(&self)
-    }
-
-    /// Whether it can be on in a Defense match. A team shares its lives and gold, so nothing
-    /// may play for a player, spare a player the misses or end one player's run alone.
-    pub fn defense_ok(self) -> bool {
-        !DEFENSE_BANNED.contains(&self)
-    }
-}
-
-/// Mods a Defense match can't have (see `Mod::defense_ok`).
-pub const DEFENSE_BANNED: [Mod; 6] = [
-    Mod::Autoplay,
-    Mod::Relax,
-    Mod::NoFail,
-    Mod::SuddenDeath,
-    Mod::Perfect,
-    Mod::OdOverride,
-];
-
 impl Mods {
     pub const NONE: Mods = Mods(0);
 
     /// The mods everyone in a lobby plays with (the host's): the speed's.
     pub fn shared(self) -> Mods {
-        Mods(self.0 & SPEED.iter().fold(0, |bits, m| bits | m.bit()))
+        Mods(self.0 & LOBBY_WIDE)
     }
 
     /// The rest: each player's own in a lobby. Not OD Override: everyone's judged by the map's.
@@ -900,8 +428,7 @@ impl Mods {
         let Some(d) = defense else {
             return self.shared();
         };
-        let banned = DEFENSE_BANNED.iter().fold(0, |bits, m| bits | m.bit());
-        let mut out = Mods(self.0 & !banned);
+        let mut out = Mods(self.0 & !DEFENSE_BANNED);
         if d.maze && !out.has(Mod::Maze) {
             out.toggle(Mod::Maze);
         }
@@ -1297,6 +824,16 @@ mod tests {
         }
     }
 
+    /// The numbers (bits) of the mods, in order: what presets, favourites and plays saved.
+    #[test]
+    fn mod_numbers_never_change() {
+        let by_number: Vec<&str> = super::ALL.iter().map(|m| m.acronym()).collect();
+        assert_eq!(
+            by_number.concat(),
+            "EZNFHTDCHANBHRSDPFDTNCHDFLPRGNRXATSWRDCSALWUWDABACBRWVPUSTCHCCDRGBRLASHSEVSLSGLFPNMCLGMWSRSUBLBOSPCLMMDYPYOTLIRAECZZUTSILPEBSSSKMZMRTLSNMNBAFFXFSHCKCRPTMVTCOV"
+        );
+    }
+
     #[test]
     fn presets_keep_their_mods_speed_and_name_through_the_config() {
         use super::{Mods, Preset};
@@ -1638,7 +1175,23 @@ mod tests {
             own.has(Mod::Zigzag) && !own.has(Mod::Maze),
             "without the Maze lane the rail stays"
         );
-        assert!(DEFENSE_BANNED.iter().all(|m| !m.defense_ok()));
+        let banned: Vec<Mod> = ALL.into_iter().filter(|m| !m.defense_ok()).collect();
+        assert_eq!(
+            banned,
+            [
+                Mod::NoFail,
+                Mod::SuddenDeath,
+                Mod::Perfect,
+                Mod::Relax,
+                Mod::Autoplay,
+                Mod::OdOverride
+            ]
+        );
+        assert_eq!(
+            lane.0 & DEFENSE_BANNED,
+            0,
+            "a Defense lobby drops the banned mods"
+        );
     }
 
     #[test]

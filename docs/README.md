@@ -606,7 +606,7 @@ spins so frames stay evenly spaced.
 | `src/game.rs` | the play as the client shows it: re-exports `taiko_logic::sim`, keeps the frame's look and note colours |
 | `src/game/field.rs` | drawing the playfield: lane, notes, drum, judgements, the mods' looks |
 | `src/game/hud_draw.rs` | drawing the HUD parts (score, combo, HP, accuracy, hit error) and the pause menu |
-| `crates/taiko-logic/src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |
+| `crates/taiko-logic/src/mods/` | the mods: the registry (`mod.rs`: each mod's number and file, the mod select's columns), sets of mods, speed changes (Wind Up/Down time map); one file per mod with its definition (acronym, name, multiplier, conflicts) |
 | `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
