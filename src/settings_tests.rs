@@ -1014,11 +1014,7 @@ fn calibrating_from_the_guide_comes_back_to_it() {
     let Scene::Calibrate { back, .. } = std::mem::replace(&mut s.scene, Scene::Select) else {
         unreachable!()
     };
-    s.scene = Scene::CalibrateDone {
-        estimate,
-        back,
-        vsync: false,
-    };
+    s.scene = screens::calibrate_done::CalibrateDone::scene(estimate, back, false);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert_eq!(s.guide.page, None, "not over its results either");
     s.leave_calibration(true);

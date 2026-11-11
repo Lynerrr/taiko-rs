@@ -478,9 +478,9 @@ impl State {
                         | Scene::HudEdit { .. }
                         | Scene::LayoutEdit { .. }
                         | Scene::Calibrate { .. }
-                        | Scene::CalibrateDone { .. }
                         | Scene::Preview { .. }
                 )
+                || self.scene.screen().is_some_and(|s| s.top_bar())
                 || (matches!(self.scene, Scene::Select) && !self.on_menu()))
     }
 

@@ -1,9 +1,11 @@
 //! The screens, each in its own module (docs/client-architecture.md, 4.5). For now they hold
 //! what lib.rs drew and did for each screen; the screens themselves follow (step 7).
 
+pub(crate) mod calibrate_done;
 pub(crate) mod menu;
 pub(crate) mod play;
 pub(crate) mod results;
+pub(crate) mod screen;
 pub(crate) mod select;
 pub(crate) mod settings;
 

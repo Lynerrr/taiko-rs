@@ -791,7 +791,7 @@ fn assert_every_screen_fits() {
     check(&mut s, "interface editor, hit counter", &mut out);
     s.close_hud_editor();
     s.scene = Scene::Select;
-    s.start_calibration();
+    s.start_calibration_as(false);
     check(&mut s, "calibration", &mut out);
     let estimate = calibrate::Estimate {
         hits: 123,
@@ -800,20 +800,14 @@ fn assert_every_screen_fits() {
         margin_ms: 2.5,
         suggested_offset: -45.0,
     };
-    s.scene = Scene::CalibrateDone {
-        estimate,
-        back: Box::new(Scene::Select),
-        vsync: false,
-    };
+    s.scene =
+        screens::calibrate_done::CalibrateDone::scene(estimate, Box::new(Scene::Select), false);
     check(&mut s, "calibration result", &mut out);
     s.scene = Scene::Select;
     s.start_calibration_as(true);
     check(&mut s, "vsync calibration", &mut out);
-    s.scene = Scene::CalibrateDone {
-        estimate,
-        back: Box::new(Scene::Select),
-        vsync: true,
-    };
+    s.scene =
+        screens::calibrate_done::CalibrateDone::scene(estimate, Box::new(Scene::Select), true);
     check(&mut s, "vsync calibration result", &mut out);
     s.scene = Scene::Select;
 
