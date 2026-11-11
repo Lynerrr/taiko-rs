@@ -2053,17 +2053,17 @@ fn space_and_punctuation_keep_their_jobs_until_something_is_typed() {
     type_key(&mut s, KeyCode::Space, " ");
     assert_ne!(s.cfg.half_resolution, was, "space works the row");
     assert!(s.settings_ui.search.is_empty());
-    type_key(&mut s, KeyCode::Minus, "-");
+    type_key(&mut s, KeyCode::Comma, ",");
     assert!(s.settings_ui.search.is_empty());
     assert_eq!(
-        s.hotkey_place(KeyCode::Minus),
+        s.hotkey_place(KeyCode::Comma),
         Some(keys::Place::Other),
-        "the offset's hotkey still works"
+        "punctuation's hotkeys still work"
     );
     type_key(&mut s, KeyCode::KeyF, "f");
     type_key(&mut s, KeyCode::Space, " ");
     assert_eq!(s.settings_ui.search, "f ");
-    assert_eq!(s.hotkey_place(KeyCode::Minus), None, "now it types");
+    assert_eq!(s.hotkey_place(KeyCode::Comma), None, "now it types");
 }
 
 #[test]
@@ -2089,12 +2089,40 @@ fn minus_and_plus_type_into_the_settings_search_instead_of_moving_the_offset() {
     s.modifiers_shift = false;
     assert_eq!(s.settings_ui.search, "sp -=-++");
     assert_eq!(s.cfg.offset_osu_ms, 0.0);
-    // An empty search still leaves the offset keys to the offset.
+}
+
+#[test]
+fn minus_and_plus_start_the_settings_search_too() {
+    let mut s = settings_screen();
+    for (code, text) in [
+        (KeyCode::Minus, "-"),
+        (KeyCode::Equal, "="),
+        (KeyCode::NumpadSubtract, "-"),
+        (KeyCode::NumpadAdd, "+"),
+    ] {
+        s.settings_ui.search.clear();
+        s.search_settings(String::new());
+        let was = s.cfg.shown_offset();
+        assert_eq!(s.hotkey_place(code), None, "{code:?} is a letter here");
+        type_key(&mut s, code, text);
+        assert_eq!(
+            s.settings_ui.search, text,
+            "{code:?} types into an empty search"
+        );
+        assert_eq!(
+            s.cfg.shown_offset(),
+            was,
+            "{code:?} leaves the offset alone"
+        );
+    }
+    // Ctrl keeps them for the visual offset.
     s.settings_ui.search.clear();
     s.search_settings(String::new());
-    let was = s.cfg.shown_offset();
+    let visual = s.cfg.visual_offset_ms;
+    s.modifiers_ctrl = true;
     type_key(&mut s, KeyCode::Equal, "=");
-    assert_eq!(s.cfg.shown_offset(), was + 1.0);
+    s.modifiers_ctrl = false;
+    assert_eq!(s.cfg.visual_offset_ms, visual + 1.0);
     assert!(s.settings_ui.search.is_empty());
 }
 

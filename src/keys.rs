@@ -598,9 +598,11 @@ pub fn types_text(key: KeyCode) -> bool {
         )
 }
 
-/// The numpad's plus and minus: they type a sign where there is text to put it in.
-pub fn is_numpad_sign(key: KeyCode) -> bool {
-    matches!(key, KeyCode::NumpadAdd | KeyCode::NumpadSubtract)
+/// The offset keys, - and = and the numpad's - and +: they're letters of a search box that
+/// takes them (setting names have them: "Song select: speed -").
+pub fn is_sign(key: KeyCode) -> bool {
+    use KeyCode::*;
+    matches!(key, Minus | Equal | NumpadSubtract | NumpadAdd)
 }
 
 /// Whether `key` starts a word: punctuation keeps its other jobs until something's been typed.
