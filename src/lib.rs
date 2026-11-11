@@ -4896,6 +4896,7 @@ impl State {
                 view.label(),
             ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
+            Scene::Other(s) if s.presence_first() => s.presence(),
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
             Scene::MpMenu => (
                 tr!("Multiplayer menu", "マルチのメニュー", "Меню мультиплеера").into(),
