@@ -544,7 +544,7 @@ fn escape_after_the_last_note_goes_straight_to_the_results() {
     let mut at = Instant::now();
     // With notes to come it's the pause menu, as ever.
     s.key(KeyCode::Escape, false, None, at, None);
-    let Scene::Play { game, .. } = &mut s.scene else {
+    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
         panic!("still playing");
     };
     assert!(game.paused().is_some());
@@ -552,7 +552,7 @@ fn escape_after_the_last_note_goes_straight_to_the_results() {
     game.run_out_of_notes();
 
     s.key(KeyCode::Escape, false, None, at, None);
-    let Scene::Play { game, .. } = &s.scene else {
+    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
         panic!("the results come with the next frame");
     };
     assert!(game.paused().is_none(), "not the pause menu");
@@ -567,7 +567,7 @@ fn escape_after_the_last_note_goes_straight_to_the_results() {
 #[test]
 fn a_replay_still_pauses_after_its_last_note() {
     let mut s = in_a_song(false);
-    let Scene::Play { game, .. } = &mut s.scene else {
+    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
         panic!("playing");
     };
     game.set_replay(Some((Vec::new(), 0)));
@@ -1196,7 +1196,7 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
         "not calibrating by sight"
     );
     assert_eq!(s.wanted_present(), PresentChoice::Fifo);
-    let Scene::Calibrate { game, .. } = &mut s.scene else {
+    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
         unreachable!()
     };
     // Hit 8 ms late by sight on average: the frames show 8 ms later than the fine tune assumes.
@@ -1210,7 +1210,7 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
 fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
     let mut s = layout_tests::state();
     s.start_calibration_as(false);
-    let Scene::Calibrate { game, .. } = &mut s.scene else {
+    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
         unreachable!()
     };
     assert!(
@@ -1243,7 +1243,7 @@ fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
 fn calibrating_takes_any_drum_key() {
     let mut s = layout_tests::state();
     s.start_calibration_as(false);
-    let Scene::Calibrate { game, .. } = &s.scene else {
+    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
         unreachable!()
     };
     // No audio here: the clock runs on from where it started, so a press this far ahead lands on
@@ -1256,7 +1256,7 @@ fn calibrating_takes_any_drum_key() {
         Instant::now() + Duration::from_secs_f64(ahead),
         None,
     );
-    let Scene::Calibrate { game, .. } = &s.scene else {
+    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
         unreachable!()
     };
     assert_eq!(game.stats().errors.len(), 1, "a rim key missed the don");
@@ -1329,16 +1329,16 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.play_when_scanned = false;
     let map = beatmap::calibration_map(500.0, 4, 64);
+    s.play = Some(Box::new(Play::new(Game::new(
+        map,
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+    ))));
     s.scene = Scene::Play {
-        game: Box::new(Play::new(Game::new(
-            map,
-            Arc::new(Track {
-                samples: Vec::new(),
-                rate: 1.0,
-                stream: None,
-            }),
-            None,
-        ))),
         entry: 0,
         from: None,
     };
@@ -1356,7 +1356,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
         ..Default::default()
     };
     s.build_frame(&mut c, Instant::now(), 853.3);
-    let Scene::Play { game, .. } = &s.scene else {
+    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
         panic!()
     };
     assert_eq!(game.view.hidden, hud::Parts::DEFAULT_HIDES);
@@ -1380,16 +1380,16 @@ fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
     // Not into a song (V could be a drum).
     s.settings_ui.editing = None;
     let map = beatmap::calibration_map(500.0, 4, 64);
+    s.play = Some(Box::new(Play::new(Game::new(
+        map,
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+    ))));
     s.scene = Scene::Play {
-        game: Box::new(Play::new(Game::new(
-            map,
-            Arc::new(Track {
-                samples: Vec::new(),
-                rate: 1.0,
-                stream: None,
-            }),
-            None,
-        ))),
         entry: 0,
         from: None,
     };
@@ -1527,8 +1527,8 @@ fn scroll_speed_changes_between_songs_only() {
         None,
     ));
     game.set_scroll_speed(faster);
+    s.play = Some(Box::new(game));
     s.scene = Scene::Play {
-        game: Box::new(game),
         entry: 0,
         from: None,
     };
@@ -1647,23 +1647,27 @@ fn hotkeys_can_be_moved_and_removed() {
         .hotkeys
         .set(keys::Hotkey::Pause, Some(keys::Chord::plain(KeyCode::KeyP)));
     let map = beatmap::calibration_map(500.0, 4, 64);
+    s.play = Some(Box::new(Play::new(Game::new(
+        map,
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+    ))));
     s.scene = Scene::Play {
-        game: Box::new(Play::new(Game::new(
-            map,
-            Arc::new(Track {
-                samples: Vec::new(),
-                rate: 1.0,
-                stream: None,
-            }),
-            None,
-        ))),
         entry: 0,
         from: None,
     };
     s.key(KeyCode::Escape, false, None, now, None);
-    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused().is_none()));
+    assert!(
+        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused().is_none())
+    );
     s.key(KeyCode::KeyP, false, None, now, None);
-    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused().is_some()));
+    assert!(
+        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused().is_some())
+    );
 
     // Scroll speed up taken away: F4 does nothing.
     s.scene = Scene::Select;
@@ -2481,8 +2485,8 @@ fn in_a_song(paused: bool) -> State {
     if paused {
         game.set_paused(Some(0));
     }
+    s.play = Some(Box::new(game));
     s.scene = Scene::Play {
-        game: Box::new(game),
         entry: 0,
         from: None,
     };
@@ -2572,13 +2576,19 @@ fn the_drum_stays_out_of_menus_unless_asked_for() {
     let mut s = in_a_song(true);
     let rim = s.cfg.keys[3];
     s.key(rim, false, None, Instant::now(), None);
-    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused() == Some(0)));
+    assert!(
+        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused() == Some(0))
+    );
     s.cfg.drum_menus = true;
     s.key(rim, false, None, Instant::now(), None);
-    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused() == Some(1)));
+    assert!(
+        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused() == Some(1))
+    );
     let left = s.cfg.keys[0];
     s.key(left, false, None, Instant::now(), None);
-    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused() == Some(0)));
+    assert!(
+        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused() == Some(0))
+    );
 }
 
 #[test]
@@ -2647,7 +2657,7 @@ fn tab_opens_settings_as_ever_without_drum_menus() {
 fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
     let mut s = in_a_song(false);
     let set = |s: &mut State, ms| {
-        if let Scene::Play { game, .. } = &mut s.scene {
+        if let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) {
             game.set_played_ms(ms);
         }
     };
@@ -2670,7 +2680,7 @@ fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
     let mut next = in_a_song(false);
     next.library = library;
     next.session_play_ms = s.session_play_ms;
-    if let Scene::Play { game, .. } = &mut next.scene {
+    if let (Scene::Play { .. }, Some(game)) = (&next.scene, next.play.as_deref_mut()) {
         game.set_played_ms(500.0);
     }
     next.track_play();
@@ -2684,14 +2694,14 @@ fn the_website_button_goes_to_the_site_whatever_the_map() {
 
 fn watching_a_replay() -> State {
     let mut s = in_a_song(false);
-    if let Scene::Play { game, .. } = &mut s.scene {
+    if let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) {
         game.set_replay(Some((Vec::new(), 0)));
     }
     s
 }
 
 fn held(s: &State) -> bool {
-    matches!(&s.scene, Scene::Play { game, .. } if game.held())
+    matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.held())
 }
 
 #[test]
@@ -2699,7 +2709,9 @@ fn space_pauses_a_replay_without_a_menu_and_skips_in_a_play_as_ever() {
     let mut s = watching_a_replay();
     s.key(KeyCode::Space, false, None, Instant::now(), None);
     assert!(held(&s));
-    assert!(matches!(&s.scene, Scene::Play { game, .. } if game.paused().is_none()));
+    assert!(
+        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused().is_none())
+    );
     s.key(KeyCode::Space, false, None, Instant::now(), None);
     assert!(!held(&s));
 
@@ -2712,7 +2724,7 @@ fn space_pauses_a_replay_without_a_menu_and_skips_in_a_play_as_ever() {
 fn a_held_replay_stays_where_it_is() {
     let mut s = watching_a_replay();
     s.key(KeyCode::Space, false, None, Instant::now(), None);
-    let Scene::Play { game, .. } = &mut s.scene else {
+    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
         panic!()
     };
     let now = Instant::now();
@@ -2726,7 +2738,7 @@ fn a_held_replay_stays_where_it_is() {
 fn the_pause_menu_takes_over_from_a_held_replay() {
     let mut s = watching_a_replay();
     s.key(KeyCode::Space, false, None, Instant::now(), None);
-    let Scene::Play { game, .. } = &mut s.scene else {
+    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
         panic!()
     };
     game.pause(None);
@@ -2890,4 +2902,42 @@ fn loved_difficulties_come_from_the_server_and_an_older_one_gives_whole_sets() {
             "old server: {old}"
         );
     }
+}
+
+/// The game stays while its song is up, and while the settings are open over its pause menu;
+/// once the song has gone (back to song select), so has the game.
+#[test]
+fn the_game_goes_with_its_song() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.play_when_scanned = false;
+    let map = beatmap::calibration_map(500.0, 4, 64);
+    s.play = Some(Box::new(Play::new(Game::new(
+        map,
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+    ))));
+    s.scene = Scene::Play {
+        entry: 0,
+        from: None,
+    };
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.game().is_some(), "playing");
+    s.settings_anywhere();
+    assert!(matches!(s.scene, Scene::Settings { .. }));
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.game().is_none(), "no game is up over the settings");
+    assert!(s.play.is_some(), "but the paused one stays behind them");
+    s.close_settings();
+    assert!(
+        s.game().is_some_and(|g| g.paused().is_some()),
+        "back to its pause menu"
+    );
+    s.scene = Scene::Select;
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    assert!(s.play.is_none(), "the song has gone, and its game with it");
 }

@@ -400,7 +400,7 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
             frame(&mut s);
             std::thread::sleep(Duration::from_millis(2));
         }
-        let Scene::Play { game, .. } = &mut s.scene else {
+        let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
             panic!("the play never started");
         };
         assert_eq!(

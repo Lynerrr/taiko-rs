@@ -303,7 +303,7 @@ pub fn scene_name(s: &State) -> &'static str {
 /// The game being played, if any.
 pub fn game(s: &State) -> Option<&Game> {
     match &s.scene {
-        Scene::Play { game, .. } | Scene::MpPlay { game, .. } => Some(game),
+        Scene::Play { .. } | Scene::MpPlay { .. } => s.play.as_deref().map(|p| &**p),
         _ => None,
     }
 }

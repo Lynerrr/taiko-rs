@@ -64,7 +64,7 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     assert!(s.editor_back.is_some(), "the editor waits");
     until_playing(&mut s);
     {
-        let Scene::Play { game, from, .. } = &s.scene else {
+        let (Scene::Play { from, .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
             unreachable!()
         };
         assert_eq!(*from, Some(1500.0), "from the playhead");
@@ -108,7 +108,7 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     };
     assert_eq!(*from, None);
     // Played to the end: no results, back to the editor.
-    if let Scene::Play { game, .. } = &mut s.scene {
+    if let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) {
         game.run_out_of_notes();
         assert!(game.skip_outro());
     }
@@ -148,7 +148,7 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
     frame(&mut s);
     until_playing(&mut s);
     let autoplayed = |s: &State| {
-        let Scene::Play { game, .. } = &s.scene else {
+        let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
             unreachable!()
         };
         assert!(!game.record(), "nothing is kept");

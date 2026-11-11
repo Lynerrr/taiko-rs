@@ -156,10 +156,8 @@ impl Screen for MpWait {
                 s.skip_asked = false;
                 s.skip_votes = None;
             }
-            next = Some(Scene::MpPlay {
-                game: Box::new(game),
-                quit_armed: None,
-            });
+            state.play = Some(Box::new(game));
+            next = Some(Scene::MpPlay { quit_armed: None });
         }
         if let Some(s) = &state.mp {
             multiplayer::draw_waiting(canvas, s, self.start, self.loaded.is_some(), frame.now);

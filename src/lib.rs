@@ -199,7 +199,6 @@ enum Scene {
         retry: bool,
     },
     Play {
-        game: Box<Play>,
         entry: usize,
         from: Option<f64>,
     },
@@ -210,7 +209,6 @@ enum Scene {
     /// Offset calibration run; `back` is where to return (the settings tab).
     /// Offset calibration (by ear), or with `vsync` the vsync compensation's (by sight).
     Calibrate {
-        game: Box<Play>,
         back: Box<Scene>,
         vsync: bool,
     },
@@ -218,7 +216,6 @@ enum Scene {
     /// results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait` and
     /// `screens::mp_results`).
     MpPlay {
-        game: Box<Play>,
         quit_armed: Option<Instant>,
     },
     /// Watching the match in progress.
@@ -435,6 +432,9 @@ struct State {
     library: Vec<Entry>,
     select: Select,
     scene: Scene,
+    /// The game of the song, match or calibration up (`Scene::Play`, `MpPlay`, `Calibrate`),
+    /// kept while the settings are open over its pause menu. `State::game` reads it.
+    play: Option<Box<Play>>,
     audio: Option<Engine>,
     toast: Option<Toast>,
     /// What an input method (Japanese, ...) is composing, not typed yet: shown until it's
@@ -961,7 +961,9 @@ impl State {
         if !self.focused && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > UNFOCUSED_FPS) {
             return UNFOCUSED_FPS;
         }
-        let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused().is_some() && game.resuming().is_none());
+        let menu = self
+            .game()
+            .is_some_and(|game| game.paused().is_some() && game.resuming().is_none());
         let screen = (self.refresh_hz.round() as u32).max(30);
         if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) {
             screen
@@ -990,9 +992,9 @@ impl State {
     /// not waiting for a multiplayer match to start.
     fn player_plays(&self) -> bool {
         match &self.scene {
-            Scene::Play { game, .. } => {
+            Scene::Play { .. } => self.game().is_some_and(|game| {
                 game.replay().is_none() && !self.auto && !game.mods().has(mods::Mod::Autoplay)
-            }
+            }),
             Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
             _ => false,
         }
@@ -1756,7 +1758,7 @@ impl State {
     /// Tab in the editor's test play, as in osu!'s: autoplay plays on from here, or hands the
     /// drum back.
     fn toggle_test_auto(&mut self) {
-        let Scene::Play { game, .. } = &mut self.scene else {
+        let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) else {
             return;
         };
         self.test_auto = !self.test_auto;
@@ -1829,8 +1831,8 @@ impl State {
     fn set_background(&mut self, background: bool) {
         self.backgrounded = background;
         let Some(a) = &self.audio else { return };
-        let game_paused =
-            matches!(&self.scene, Scene::Play { game, .. } if game.paused().is_some());
+        let game_paused = matches!(self.scene, Scene::Play { .. })
+            && self.game().is_some_and(|g| g.paused().is_some());
         if background {
             if !self.music_goes_on() {
                 a.set_paused(true);
@@ -1992,7 +1994,11 @@ impl State {
             return;
         }
         match &mut self.scene {
-            Scene::Play { game, .. } => game.pause(sound(&self.audio)),
+            Scene::Play { .. } => {
+                if let Some(game) = self.play.as_deref_mut() {
+                    game.pause(sound(&self.audio));
+                }
+            }
             Scene::Select => {}
             Scene::Other(s) if s.allows_settings() => {}
             _ => {
@@ -2359,9 +2365,34 @@ impl State {
         }
     }
 
+    /// The game of the song, match or calibration up; None on any other screen (the settings
+    /// over its pause menu included).
+    fn game(&self) -> Option<&Play> {
+        match self.scene {
+            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } => {
+                self.play.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+    /// Drops the game when its scene has gone (the settings over its pause menu keep it).
+    fn drop_finished_play(&mut self) {
+        fn holds(scene: &Scene) -> bool {
+            match scene {
+                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
+                Scene::Settings { prev } => holds(prev),
+                _ => false,
+            }
+        }
+        if !holds(&self.scene) {
+            self.play = None;
+        }
+    }
+
     /// A play (or calibration) is running, not paused.
     fn playing(&self) -> bool {
-        matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused().is_none())
+        self.game().is_some_and(|game| game.paused().is_none())
     }
 
     /// Stars out the swear words already in the chats (the chat filter was just switched on).
@@ -4697,7 +4728,8 @@ impl State {
                 self.library.get(*entry)?.label(),
                 tr!("Loading...", "読み込み中...", "Загрузка...").into(),
             ),
-            Scene::Play { game, entry, .. } => {
+            Scene::Play { entry, .. } => {
+                let game = self.play.as_deref()?;
                 let label = self.library.get(*entry)?.label();
                 let state = if let Some(who) = game.replay_of() {
                     tr!("Watching {who}'s replay", "{who}のリプレイを観戦中", "Смотрит повтор {who}";)
@@ -5138,17 +5170,22 @@ impl State {
         // Your own hitsounds would let you sync to yourself instead of to the click.
         game.set_mute_hits(true);
         game.view.show_hp = false;
+        self.play = Some(Box::new(game));
         self.scene = Scene::Calibrate {
-            game: Box::new(game),
             back: Box::new(back),
             vsync,
         };
     }
 
     fn finish_calibration(&mut self) {
-        let Scene::Calibrate { game, back, vsync } =
-            std::mem::replace(&mut self.scene, Scene::Select)
+        if !matches!(self.scene, Scene::Calibrate { .. }) {
+            return;
+        }
+        let Scene::Calibrate { back, vsync } = std::mem::replace(&mut self.scene, Scene::Select)
         else {
+            unreachable!("matched above");
+        };
+        let Some(game) = self.play.take() else {
             return;
         };
         self.stop_audio();
@@ -5226,7 +5263,7 @@ impl State {
         at: Instant,
         window: Option<&Window>,
     ) {
-        if let Scene::Calibrate { game, .. } = &mut self.scene {
+        if let (Scene::Calibrate { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) {
             if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
                 if !repeat {
                     game.press(
@@ -5262,7 +5299,9 @@ impl State {
         let Some(entry) = self.song_entry() else {
             return;
         };
-        let (Scene::Play { game, .. } | Scene::MpPlay { game, .. }) = &self.scene else {
+        let (Scene::Play { .. } | Scene::MpPlay { .. }, Some(game)) =
+            (&self.scene, self.play.as_deref())
+        else {
             return;
         };
         match game.offset_suggestion(self.play_offset) {
@@ -5355,7 +5394,9 @@ impl State {
     /// How fast the song goes by: the play's, else what one would be now.
     fn song_rate(&self) -> f64 {
         let rate = match &self.scene {
-            Scene::Play { game, .. } | Scene::MpPlay { game, .. } => game.speed().r0,
+            Scene::Play { .. } | Scene::MpPlay { .. } if self.play.is_some() => {
+                self.play.as_ref().map_or(1.0, |game| game.speed().r0)
+            }
             _ => self
                 .cfg
                 .mods
@@ -5387,7 +5428,9 @@ impl State {
             ));
         }
         self.preview.map_offset = offset;
-        if let Scene::Play { game, .. } | Scene::MpPlay { game, .. } = &mut self.scene {
+        if let (Scene::Play { .. } | Scene::MpPlay { .. }, Some(game)) =
+            (&self.scene, self.play.as_deref_mut())
+        {
             game.set_shown_offset(self.cfg.shown_offset());
             game.set_latency(self.cfg.offset_latency_ms);
         }
@@ -5422,7 +5465,7 @@ impl State {
 
     /// One step faster or slower through the replay being watched.
     fn step_replay_speed(&mut self, by: i32) {
-        let Scene::Play { game, .. } = &self.scene else {
+        let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref()) else {
             return;
         };
         if !game.has_constant_speed() {
@@ -5447,7 +5490,8 @@ impl State {
     /// Makes the replay's music at the speed asked for, one at a time however fast it's asked,
     /// and plays on with it when it's ready.
     fn poll_replay_speed(&mut self) {
-        let Scene::Play { game, entry, .. } = &mut self.scene else {
+        let (Scene::Play { entry, .. }, Some(game)) = (&mut self.scene, self.play.as_deref_mut())
+        else {
             self.replay_speed = 1.0;
             self.replay_speed_wanted = 1.0;
             self.replay_speed_rx.cancel();
@@ -5544,7 +5588,8 @@ impl State {
             self.restart_map();
             return;
         }
-        let Scene::Play { game, entry, from } = &mut self.scene else {
+        let (Scene::Play { entry, from }, Some(game)) = (&mut self.scene, self.play.as_deref_mut())
+        else {
             return;
         };
         if game.resuming().is_some() {
@@ -5717,7 +5762,7 @@ impl State {
         if !grabbed && !(vx >= x - 6.0 && vx <= x + w + 6.0 && vy >= y && vy <= y + h) {
             return false;
         }
-        let Scene::Play { game, .. } = &mut self.scene else {
+        let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) else {
             return false;
         };
         let (start, end) = game.span();
@@ -5730,9 +5775,9 @@ impl State {
     /// menu) always show it.
     fn cursor_hidden(&self, now: Instant) -> bool {
         let playing = match &self.scene {
-            Scene::Play { game, .. }
-            | Scene::MpPlay { game, .. }
-            | Scene::Calibrate { game, .. } => game.paused().is_none(),
+            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } => {
+                self.game().is_some_and(|game| game.paused().is_none())
+            }
             // Watching: hidden unless the friends overlay is open (it needs the pointer).
             Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
             _ => false,
@@ -6193,8 +6238,12 @@ impl State {
     /// the first finger works as the mouse.
     fn touch_drums(&self) -> bool {
         match &self.scene {
-            Scene::Play { game, .. } => game.paused().is_none() && game.replay().is_none(),
-            Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused().is_none(),
+            Scene::Play { .. } => self
+                .game()
+                .is_some_and(|game| game.paused().is_none() && game.replay().is_none()),
+            Scene::MpPlay { .. } | Scene::Calibrate { .. } => {
+                self.game().is_some_and(|game| game.paused().is_none())
+            }
             _ => false,
         }
     }
@@ -6468,7 +6517,9 @@ impl State {
                 .hit_at(vx, vy)
                 .filter(|h| !matches!(h, hit::Hit::Preview))
         {
-            if let (hit::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
+            if let (hit::Hit::PauseItem(i), Scene::Play { .. }, Some(game)) =
+                (hit, &self.scene, self.play.as_deref_mut())
+            {
                 game.set_pause_cursor(i);
             }
             self.hover = None;
@@ -6770,7 +6821,9 @@ impl State {
             {
                 // Clicking the resolution readout opens the preset list; single-player pauses
                 // first (a multiplayer match keeps running).
-                if let Scene::Play { game, .. } | Scene::Calibrate { game, .. } = &mut self.scene {
+                if let (Scene::Play { .. } | Scene::Calibrate { .. }, Some(game)) =
+                    (&self.scene, self.play.as_deref_mut())
+                {
                     game.pause(sound(&self.audio));
                 }
                 self.open_dropdown();
@@ -7074,7 +7127,7 @@ impl State {
         window: Option<&Window>,
     ) {
         // Drum keys during a match go straight to the game.
-        if let Scene::MpPlay { game, .. } = &mut self.scene
+        if let (Scene::MpPlay { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut())
             && let Some(k) = self.cfg.keys.iter().position(|&k| k == code)
         {
             if !repeat && game.replay().is_none() {
@@ -7085,7 +7138,9 @@ impl State {
         if repeat || self.handle_global_key(code, window) {
             return;
         }
-        if let Scene::MpPlay { game, quit_armed } = &mut self.scene {
+        if let (Scene::MpPlay { quit_armed }, Some(game)) =
+            (&mut self.scene, self.play.as_deref_mut())
+        {
             match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => {
@@ -7699,8 +7754,8 @@ impl State {
             Scene::Select if self.on_menu() => "main menu",
             Scene::Select => "song select",
             Scene::Loading { .. } => "loading a map",
-            Scene::Play { game, .. } => {
-                if game.replay().is_some() {
+            Scene::Play { .. } => {
+                if self.game().is_some_and(|game| game.replay().is_some()) {
                     "watching a replay"
                 } else {
                     "playing"
@@ -7754,14 +7809,14 @@ impl State {
     /// The time played so far of the live play going on: a song or a lobby match (also while
     /// its pause menu's settings are open), not autoplay or a replay (Relax is still playing).
     fn live_play_ms(&self) -> Option<f64> {
-        fn game_of(scene: &Scene) -> Option<&Game> {
+        fn plays(scene: &Scene) -> bool {
             match scene {
-                Scene::Play { game, .. } | Scene::MpPlay { game, .. } => Some(game),
-                Scene::Settings { prev } => game_of(prev),
-                _ => None,
+                Scene::Play { .. } | Scene::MpPlay { .. } => true,
+                Scene::Settings { prev } => plays(prev),
+                _ => false,
             }
         }
-        let g = game_of(&self.scene)?;
+        let g = self.play.as_deref().filter(|_| plays(&self.scene))?;
         (g.replay().is_none() && !self.auto && !g.mods().has(mods::Mod::Autoplay))
             .then_some(g.played_ms())
     }
@@ -10071,13 +10126,15 @@ impl State {
                         .unwrap_or_default(),
                 }
             }
-            Scene::Play { game, entry, .. } if game.replay().is_none() => Activity::Playing {
-                map: self
-                    .library
-                    .get(*entry)
-                    .map(|e| e.label())
-                    .unwrap_or_default(),
-            },
+            Scene::Play { entry, .. } if self.game().is_some_and(|g| g.replay().is_none()) => {
+                Activity::Playing {
+                    map: self
+                        .library
+                        .get(*entry)
+                        .map(|e| e.label())
+                        .unwrap_or_default(),
+                }
+            }
             Scene::Watch(v) => Activity::Watching {
                 name: v.player.clone(),
             },
@@ -10438,7 +10495,8 @@ impl State {
     /// the presses since (the first frame sends all of them, for a mid-play reconnect).
     fn stream_play(&mut self) {
         let connected = self.social.connected;
-        let Scene::Play { game, entry, .. } = &mut self.scene else {
+        let (Scene::Play { entry, .. }, Some(game)) = (&mut self.scene, self.play.as_deref_mut())
+        else {
             if self.stream.take().is_some()
                 && connected
                 && let Some(c) = &self.social.conn
@@ -10459,7 +10517,7 @@ impl State {
             self.stream = None;
             return;
         };
-        let id = &**game as *const Play as usize;
+        let id = &*game as *const Play as usize;
         if self.stream.map(|s| s.0) != Some(id) {
             if self.stream.is_some() {
                 conn.send(online::Up::PlayEnd);
@@ -10811,7 +10869,11 @@ impl State {
                     }
                 }
                 match &mut self.scene {
-                    Scene::MpPlay { game, .. } => game.defense_act(from, act),
+                    Scene::MpPlay { .. } => {
+                        if let Some(game) = self.play.as_deref_mut() {
+                            game.defense_act(from, act);
+                        }
+                    }
                     Scene::Spectate(v) => {
                         for (_, g) in v.games.iter_mut() {
                             g.defense_act(from, act);
@@ -10829,7 +10891,8 @@ impl State {
                 if let Some(s) = &mut self.mp {
                     s.skip_votes = None;
                 }
-                if let Scene::MpPlay { game, .. } = &mut self.scene {
+                if let (Scene::MpPlay { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut())
+                {
                     game.skip(sound(&self.audio), self.play_offset);
                 }
             }
@@ -10977,7 +11040,10 @@ impl State {
         // Tab in the editor's test play is autoplay, as in osu!'s, whatever the map info key is.
         if code == KeyCode::Tab
             && !(self.modifiers_shift || self.modifiers_ctrl || self.modifiers_alt)
-            && matches!(&self.scene, Scene::Play { game, .. } if game.view.test_play && game.paused().is_none())
+            && matches!(self.scene, Scene::Play { .. })
+            && self
+                .game()
+                .is_some_and(|game| game.view.test_play && game.paused().is_none())
         {
             if !repeat {
                 self.toggle_test_auto();
@@ -11035,8 +11101,10 @@ impl State {
             return None;
         }
         let drum = self.cfg.keys.iter().position(|&k| k == code)?;
-        let paused = matches!(&self.scene, Scene::Play { game, .. }
-            if game.paused().is_some() && game.resuming().is_none());
+        let paused = matches!(self.scene, Scene::Play { .. })
+            && self
+                .game()
+                .is_some_and(|game| game.paused().is_some() && game.resuming().is_none());
         let place = if self.select_open() && !self.select.searching {
             drum_nav::Place::Select(self.select_zone)
         } else if self.mod_select.is_some() || (paused && !self.social.open) {
@@ -11120,7 +11188,9 @@ impl State {
             Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => {
                 keys::Place::Select
             }
-            Scene::Play { game, .. } if game.paused().is_some() => keys::Place::Paused,
+            Scene::Play { .. } if self.game().is_some_and(|g| g.paused().is_some()) => {
+                keys::Place::Paused
+            }
             Scene::Play { .. } => keys::Place::Play,
             Scene::Other(s) => s.key_place().unwrap_or(keys::Place::Other),
             _ => keys::Place::Other,
@@ -11330,7 +11400,7 @@ impl State {
                 _ => {}
             }
         }
-        if let Scene::Play { game, .. } = &mut self.scene {
+        if let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) {
             if game.paused().is_some() {
                 if !repeat
                     && !self.cfg.keys.contains(&code)
@@ -11507,15 +11577,25 @@ impl State {
             }
             Scene::Calibrate { .. } | Scene::Other(_) => {}
             Scene::MpPlay { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::Editor(_) => {}
-            Scene::Play { game, .. } => match code {
+            Scene::Play { .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
-                // After the last note there's nothing left to pause: straight to the results.
-                KeyCode::Escape if game.skip_outro() => {}
-                KeyCode::Escape => game.pause(sound(&self.audio)),
-                KeyCode::Space if game.replay().is_some() => game.toggle_held(sound(&self.audio)),
-                KeyCode::Space => {
-                    game.skip(sound(&self.audio), self.play_offset);
+                KeyCode::Escape | KeyCode::Space => {
+                    let Some(game) = self.play.as_deref_mut() else {
+                        return;
+                    };
+                    match code {
+                        // After the last note there's nothing left to pause: straight to the
+                        // results.
+                        KeyCode::Escape if game.skip_outro() => {}
+                        KeyCode::Escape => game.pause(sound(&self.audio)),
+                        KeyCode::Space if game.replay().is_some() => {
+                            game.toggle_held(sound(&self.audio))
+                        }
+                        _ => {
+                            game.skip(sound(&self.audio), self.play_offset);
+                        }
+                    }
                 }
                 KeyCode::Backquote => self.hold_retry(),
                 KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
@@ -11527,6 +11607,7 @@ impl State {
     /// Advances the game to `now` and fills `canvas`. Returns a screenshot name if this frame
     /// should be captured.
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
+        self.drop_finished_play();
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
         // What this frame is drawn with; the beat carries on from the last frame until
@@ -12472,8 +12553,8 @@ impl State {
                                 }
                             }
                         }
+                        self.play = Some(Box::new(game));
                         next = Some(Scene::Play {
-                            game: Box::new(game),
                             entry: *entry,
                             from: *from,
                         });
@@ -12487,7 +12568,10 @@ impl State {
                     Some(None) => next = Some(Scene::Select),
                 }
             }
-            Scene::Play { game, entry, from } => {
+            Scene::Play { entry, from } => 'play: {
+                let Some(game) = self.play.as_deref_mut() else {
+                    break 'play;
+                };
                 let done = game.update(now, sound(&self.audio), self.play_offset);
                 if (self.auto || game.mods().has(mods::Mod::Autoplay)) && game.replay().is_none() {
                     game.set_autoplay_style(self.cfg.autoplay);
@@ -12759,7 +12843,10 @@ impl State {
                     next = Some(ResultsScreen::scene(Box::new(results), *entry, *from));
                 }
             }
-            Scene::MpPlay { game, .. } => {
+            Scene::MpPlay { .. } => 'play: {
+                let Some(game) = self.play.as_deref_mut() else {
+                    break 'play;
+                };
                 let done = game.update(now, sound(&self.audio), self.play_offset);
                 if self.auto || game.mods().has(mods::Mod::Autoplay) {
                     game.set_autoplay_style(self.cfg.autoplay);
@@ -13094,7 +13181,10 @@ impl State {
                     next = Some(Scene::Select);
                 }
             }
-            Scene::Calibrate { game, vsync, .. } => {
+            Scene::Calibrate { vsync, .. } => 'play: {
+                let Some(game) = self.play.as_deref_mut() else {
+                    break 'play;
+                };
                 if game.update(now, sound(&self.audio), self.play_offset) {
                     finish_calibration = true;
                 }
@@ -13440,6 +13530,7 @@ impl State {
                 );
             }
             self.scene = s;
+            self.drop_finished_play();
         }
 
         let fade = render::progress(self.scene_since, 160.0);
@@ -13873,9 +13964,7 @@ impl State {
     fn is_due(&self) -> bool {
         // The resume countdown ends at a wall-clock time (`Sim::resume_after`) that frames
         // reach as their time goes on.
-        let resuming = matches!(&self.scene,
-            Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. }
-                if game.resuming().is_some());
+        let resuming = self.game().is_some_and(|game| game.resuming().is_some());
         self.preview.is_due() || resuming
     }
 
@@ -13894,9 +13983,8 @@ impl State {
             Scene::Other(s) => s.loading(),
             _ => false,
         };
-        let live_pp = matches!(&self.scene,
-            Scene::Play { game, .. } | Scene::MpPlay { game, .. }
-                if game.live_pp_busy());
+        let live_pp = matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. })
+            && self.game().is_some_and(|game| game.live_pp_busy());
         [
             ("the library scan", self.scan.is_some()),
             ("the maps' analysis", info_pending),
@@ -14982,7 +15070,7 @@ impl State {
                 self.adjust_setting(settings::ITEMS[i].1, dir, window);
             }
             Hit::PauseItem(i) => {
-                if let Scene::Play { game, .. } = &mut self.scene {
+                if let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) {
                     game.set_pause_cursor(i);
                 }
                 self.pause_key(KeyCode::Enter);
