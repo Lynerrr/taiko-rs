@@ -18,6 +18,8 @@ symphonia = { version = "0.6", features = ["mp3", "ogg", "vorbis", "wav", "pcm",
 taiko-logic = { path = "crates/taiko-logic" }
 # What the game and its server both speak: the protocols, TLS, languages (crates/taiko-proto).
 taiko-proto = { path = "crates/taiko-proto" }
+# `--recalc-pp` (crates/taiko-recalc).
+taiko-recalc = { path = "crates/taiko-recalc" }
 ureq = "3"
 wgpu = "30"
 winit = "0.30"
@@ -53,8 +55,8 @@ cpal = { version = "0.18", features = ["realtime"] }
 # The client and the crates split out of it build, lint and test together: plain `cargo test`
 # covers them all. The server and the patched vendor crates stay crates of their own.
 [workspace]
-members = ["crates/taiko-logic", "crates/taiko-proto"]
-default-members = [".", "crates/taiko-logic", "crates/taiko-proto"]
+members = ["crates/taiko-logic", "crates/taiko-proto", "crates/taiko-recalc"]
+default-members = [".", "crates/taiko-logic", "crates/taiko-proto", "crates/taiko-recalc"]
 exclude = ["server", "vendor"]
 
 [features]

@@ -1,15 +1,17 @@
 //! Works out the pp and star rating of plays on the server again, from a copy of its
 //! scores.jsonl and the `.osu` files found under some folders. The server takes the answer as
 //! DIR/recalculated.json (it can't do this itself: it has neither the maps nor the calculator).
-//!   taiko-rs --recalc-pp scores.jsonl recalculated.json FOLDER...
+//!   taiko-recalc scores.jsonl recalculated.json FOLDER...
+//! (or `taiko-rs --recalc-pp …`, which runs this).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::mods::Mods;
-use crate::online::OnlineScore;
+use taiko_logic::mods::{HalfRule, Mods};
+use taiko_logic::{beatmap, pp, stars};
+use taiko_proto::online::OnlineScore;
 
 /// A line of scores.jsonl.
 #[derive(Deserialize)]
@@ -69,7 +71,7 @@ fn index(files: Vec<PathBuf>) -> (HashMap<u64, PathBuf>, HashMap<String, PathBuf
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
-        by_hash.insert(crate::net::map_hash(&bytes), path.clone());
+        by_hash.insert(beatmap::map_hash(&bytes), path.clone());
         if let Some(l) = label(&String::from_utf8_lossy(&bytes)) {
             by_label.insert(l, path);
         }
@@ -81,8 +83,9 @@ fn index(files: Vec<PathBuf>) -> (HashMap<u64, PathBuf>, HashMap<String, PathBuf
 fn recalculate(s: &OnlineScore, path: &Path) -> Option<Recalculated> {
     let mods = Mods::from_list(&s.mods);
     let scroll_speed = s.scroll_speed.unwrap_or(1.0);
-    let half = crate::mods::HalfRule::of_pp_version(s.pp_version);
-    let play = crate::pp::Play {
+    let half = HalfRule::of_pp_version(s.pp_version);
+    let map = std::fs::read(path).ok()?;
+    let play = pp::Play {
         great: s.great,
         ok: s.ok,
         miss: s.miss,
@@ -93,11 +96,11 @@ fn recalculate(s: &OnlineScore, path: &Path) -> Option<Recalculated> {
         seed: s.seed.unwrap_or(0),
         half,
     };
-    let pp = crate::pp::play_pp(path, &play)?;
+    let pp = pp::play_pp(&map, &play)?;
     Some(Recalculated {
         pp,
-        stars: crate::stars::star_rating_played(
-            path,
+        stars: stars::star_rating_played(
+            &map,
             s.rate,
             mods,
             scroll_speed,
@@ -195,7 +198,7 @@ mod tests {
         std::fs::write(&path, &text).unwrap();
         let (by_hash, by_label) = index(osu_files(std::slice::from_ref(&dir)));
         assert_eq!(
-            by_hash.get(&crate::net::map_hash(text.as_bytes())),
+            by_hash.get(&beatmap::map_hash(text.as_bytes())),
             Some(&path)
         );
         assert_eq!(by_label.get("A - T [V]"), Some(&path));
@@ -203,7 +206,7 @@ mod tests {
         let line = r#"{"id":5,"player":"a","score":{"player":"A","map":"A - T [V]","map_hash":1,"score":1,"accuracy":1.0,"max_combo":200,"miss":0,"rate":1.0,"mods":["HA"],"pp":900.0,"date":1,"great":200,"ok":0}}"#;
         let line: Line = serde_json::from_str(line).unwrap();
         let half = recalculate(&line.score, &path).unwrap();
-        let full = crate::stars::star_rating(&path, 1.0).unwrap();
+        let full = stars::star_rating(text.as_bytes(), 1.0).unwrap();
         assert!(
             half.stars.unwrap() < full && half.pp < 900.0,
             "{half:?}, {full}"

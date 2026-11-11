@@ -17,7 +17,7 @@ Numbers below are from `dev` at 817037b with #387 and `refactor/lib-screens` on 
 | 2 | Wrong-way dependencies | done (#364, #365) |
 | 3 | Drawing globals to a frame's theme and look | done for the playfield (#366); 75 `static`/`thread_local!` left in `src/` |
 | 4 | Split `game.rs` into the play and its drawing | done (#367 to #380) |
-| 5 | `taiko-logic` | leaf rules, calibrate, mods, Defense, maps, tko's model, genres, font: done (#381 to #385). The play, stars, pp: #387. Left in the client: `scores.rs`, `search.rs`, `mapinfo.rs`, `recalc.rs` |
+| 5 | `taiko-logic` | leaf rules, calibrate, mods, Defense, maps, tko's model, genres, font: done (#381 to #385). The play, stars, pp: #387. Scores and replays (#408), search and map numbers (#409), `--recalc-pp` as `crates/taiko-recalc`; the crate reads no files and keeps no statics (#418, #420, #421). The client keeps thin wrappers over it (`scores.rs`, `mapinfo.rs`, `stars.rs`, `pp.rs`, `beatmap.rs`) |
 | 6 | `lib.rs` free functions out; `app/` | `app/` done (#386, #389); select, results and play helpers: `refactor/lib-screens`. Left: 40 free functions and one `impl State` of 361 methods in a 17,700-line `lib.rs` |
 | 7 to 15 | | not started |
 

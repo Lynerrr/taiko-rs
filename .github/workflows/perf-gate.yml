@@ -63,8 +63,8 @@ jobs:
         run: |
           mkdir -p target
           cp -a target "$BASE_TARGET"
-          # The workspace's crates the base has (taiko-proto is newer than some bases).
-          for crate in taiko-rs taiko-logic taiko-proto; do
+          # The workspace's crates the base has (the newer ones aren't in every base).
+          for crate in taiko-rs taiko-logic taiko-proto taiko-recalc; do
             if [ -n "$(cd "$RUNNER_TEMP/base" && cargo pkgid "$crate" 2>/dev/null)" ]; then
               (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo clean --profile perf-audit -p "$crate")
             fi
