@@ -137,10 +137,10 @@ rules, decided before the code:
    score link. A screen says it belongs to song select with `song_select()`; those places ask
    `State::in_song_select()` (true for `Scene::Select` and for such a screen). A place whose list
    differs from the group keeps its own question rather than bending the group.
-3. **What a frame needs, the screen works out.** A frame that used values `build_frame` had
-   worked out earlier (the preview target, the size label, whether the player hosts) computes
-   them itself from `State`, from the same functions. Each such value is listed in the PR, with
-   why nothing between the two points changes it.
+3. **What a frame was given, it is still given.** Some arms used values `build_frame` worked
+   out before polling media keys and other input (the preview target, the size label, whether
+   the player hosts). Working them out again inside the screen could see a different song in
+   that frame, so `Screen::draw` gets them in a `Frame`, computed where they were.
 4. **The game is not inside a screen.** `Play`, `MpPlay`, `Calibrate`, `Watch` and `Spectate`
    hold a `Play` that the input, the audio clock, presence, replays and pp all read while the
    screen is up. The play moves to one `State::play` slot first (its own PR, no screen moved),
