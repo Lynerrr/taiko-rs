@@ -12,7 +12,7 @@ Numbers below are from `dev` at 817037b with #387 and `refactor/lib-screens` on 
 | Step | What | State |
 |---|---|---|
 | 0 | Regression suite, perf gate | done (#350, #362, #370, #377) |
-| 1 | `taiko-proto` | not started: the server still includes `src/net.rs`, `online.rs`, `lang.rs`, `tls.rs`, `changelog_entry.rs` by `#[path]` |
+| 1 | `taiko-proto` | done: `net`, `online`, `tls`, `lang`, `changelog_entry` in `crates/taiko-proto`; the server has no `#[path]` includes left |
 | 1b | SQLite store | not started |
 | 2 | Wrong-way dependencies | done (#364, #365) |
 | 3 | Drawing globals to a frame's theme and look | done for the playfield (#366); 75 `static`/`thread_local!` left in `src/` |
@@ -148,7 +148,7 @@ S6 to be ten to twelve PRs; `lib.rs` should lose 1,000 to 2,500 lines with each.
 ### 4.3 The logic crate
 
 - No words: the crate returns keys, enums and numbers; the client turns them into text
-  (`tr!` lives in `src/lang.rs`).
+  (`tr!` lives in `taiko_proto::lang`).
 - No window, GPU, sound or network (Cargo enforces it), no file access outside explicit byte
   wrappers, no new process-wide state.
 - The `testing` feature is for test helpers only and is enabled only from dev-dependencies. It

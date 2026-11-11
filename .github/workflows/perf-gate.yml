@@ -63,7 +63,12 @@ jobs:
         run: |
           mkdir -p target
           cp -a target "$BASE_TARGET"
-          (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo clean --profile perf-audit -p taiko-rs -p taiko-logic)
+          # The workspace's crates the base has (taiko-proto is newer than some bases).
+          for crate in taiko-rs taiko-logic taiko-proto; do
+            if [ -n "$(cd "$RUNNER_TEMP/base" && cargo pkgid "$crate" 2>/dev/null)" ]; then
+              (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo clean --profile perf-audit -p "$crate")
+            fi
+          done
           (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo test --profile perf-audit --locked --lib --no-run)
           cargo test --profile perf-audit --locked --lib --no-run
 

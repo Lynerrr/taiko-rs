@@ -21,7 +21,7 @@ pub const PORT: u16 = 7801;
 /// The server these are for. Others (one of your own, on a LAN) stay plain.
 pub const SERVER_HOST: &str = "jashincraft.space";
 
-const CA: &[u8] = include_bytes!("../assets/server-ca.der");
+const CA: &[u8] = include_bytes!("../../../assets/server-ca.der");
 /// How long the handshake may take.
 const HANDSHAKE: Duration = Duration::from_secs(10);
 /// How long a write may stall before the connection counts as gone.
@@ -77,13 +77,11 @@ fn handshake<D: rustls::SideData>(
 }
 
 /// What the server answers with: DIR's certificate and key.
-#[allow(dead_code)]
 pub fn server_config(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, String> {
     let read = |p: &Path| std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()));
     server_config_of(read(cert)?, read(key)?)
 }
 
-#[allow(dead_code)]
 fn server_config_of(cert: Vec<u8>, key: Vec<u8>) -> Result<Arc<ServerConfig>, String> {
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key));
     let builder = ServerConfig::builder_with_provider(provider())
@@ -97,7 +95,6 @@ fn server_config_of(cert: Vec<u8>, key: Vec<u8>) -> Result<Arc<ServerConfig>, St
 }
 
 /// The server's side of `connect`.
-#[allow(dead_code)]
 pub fn accept(mut raw: TcpStream, config: Arc<ServerConfig>) -> Result<TcpStream, String> {
     let mut conn = ServerConnection::new(config).map_err(|e| e.to_string())?;
     handshake(&mut raw, &mut conn).map_err(|e| e.to_string())?;

@@ -8,8 +8,10 @@ description = "taiko.rs online server: accounts and server-hosted multiplayer lo
 argon2 = "0.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# The game's rules: the room code it shares with the game (`src/net.rs`) plays Defense by them.
+# The game's rules: the room code it shares with the game (`taiko_proto::net`) plays Defense by them.
 taiko-logic = { path = "../crates/taiko-logic" }
+# What it speaks with the game: the protocols, TLS, the `tr!` of their texts.
+taiko-proto = { path = "../crates/taiko-proto" }
 # The Discord bot and the map cover check: HTTPS, and Discord's gateway (a websocket over TLS),
 # all on rustls with ring (static musl builds: see deploy/deploy.sh).
 ureq = "3"

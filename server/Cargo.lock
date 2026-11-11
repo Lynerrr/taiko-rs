@@ -678,6 +678,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "taiko-proto"
+version = "0.1.0"
+dependencies = [
+ "rustls",
+ "serde",
+ "serde_json",
+ "taiko-logic",
+]
+
+[[package]]
 name = "taiko-server"
 version = "0.1.0"
 dependencies = [
@@ -687,6 +697,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taiko-logic",
+ "taiko-proto",
  "tungstenite",
  "ureq",
  "webpki-roots",
