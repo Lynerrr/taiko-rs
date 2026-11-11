@@ -2978,12 +2978,16 @@ impl Hidden {
         crate::config::data_dir().map(|d| d.join("hidden.tsv"))
     }
 
-    /// Lines of `song<TAB>folder` or `map<TAB>file`.
     pub fn load() -> Hidden {
-        let mut h = Hidden::default();
         let Some(text) = Self::file().and_then(|f| std::fs::read_to_string(f).ok()) else {
-            return h;
+            return Hidden::default();
         };
+        Hidden::parse(&text)
+    }
+
+    /// Lines of `song<TAB>folder` or `map<TAB>file`.
+    pub fn parse(text: &str) -> Hidden {
+        let mut h = Hidden::default();
         for line in text.lines() {
             match line.split_once('\t') {
                 Some(("song", p)) => h.songs.insert(p.into()),

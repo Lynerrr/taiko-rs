@@ -315,8 +315,11 @@ impl Playlist {
     }
 }
 
+/// The favourites' file in the data folder.
+pub const FAVOURITES: &str = "favourite-songs.txt";
+
 fn favourites_file() -> Option<PathBuf> {
-    Some(crate::config::data_dir()?.join("favourite-songs.txt"))
+    Some(crate::config::data_dir()?.join(FAVOURITES))
 }
 
 pub fn load_favourites() -> HashSet<String> {
@@ -325,12 +328,7 @@ pub fn load_favourites() -> HashSet<String> {
     #[cfg(not(test))]
     favourites_file()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|t| {
-            t.lines()
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
+        .map(|t| crate::config::parse_lines(&t))
         .unwrap_or_default()
 }
 

@@ -9,23 +9,34 @@ use std::path::{Path, PathBuf};
 use taiko_logic::scores::{self as logic, rename_rows};
 pub use taiko_logic::scores::{Replay, ScoreRow, new_version, top};
 
+/// The replays' folder in the data folder, and the score index in it.
+pub const REPLAYS: &str = "replays";
+pub const INDEX: &str = "scores.tsv";
+
 fn dir() -> Option<PathBuf> {
-    Some(crate::config::data_dir()?.join("replays"))
+    Some(crate::config::data_dir()?.join(REPLAYS))
 }
 
 fn index_path() -> Option<PathBuf> {
-    Some(dir()?.join("scores.tsv"))
+    Some(dir()?.join(INDEX))
 }
 
-/// Reads the score index.
+/// Reads the score index: the plays whose replay is still there.
 pub fn load_index() -> Vec<ScoreRow> {
     let Some(text) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
         return Vec::new();
     };
     let base = dir().unwrap_or_default();
-    text.lines()
-        .filter_map(|line| ScoreRow::parse(line, &base))
+    parse_index(&text, &base)
+        .into_iter()
         .filter(|r| r.file.is_file())
+        .collect()
+}
+
+/// The index's rows, their replays in `base` (whether those are there or not).
+pub fn parse_index(text: &str, base: &Path) -> Vec<ScoreRow> {
+    text.lines()
+        .filter_map(|line| ScoreRow::parse(line, base))
         .collect()
 }
 

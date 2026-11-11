@@ -19,6 +19,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::scores::ScoreRow;
 
+pub mod import;
+
 /// The database's file name in the data folder.
 pub const FILE: &str = "taiko.db";
 
@@ -192,10 +194,13 @@ impl Store {
 
     /// Replaces every score with `rows`, in their order.
     pub fn replace_scores(&mut self, rows: &[ScoreRow]) -> Result<(), String> {
-        self.transaction(|s| {
-            s.conn.execute("DELETE FROM scores", []).map_err(err)?;
-            rows.iter().try_for_each(|r| s.add_score(r))
-        })
+        self.transaction(|s| s.write_scores(rows))
+    }
+
+    /// `replace_scores` inside a transaction already open.
+    pub(crate) fn write_scores(&self, rows: &[ScoreRow]) -> Result<(), String> {
+        self.conn.execute("DELETE FROM scores", []).map_err(err)?;
+        rows.iter().try_for_each(|r| self.add_score(r))
     }
 
     // Plays.
@@ -229,6 +234,12 @@ impl Store {
             .map_err(err)
     }
 
+    /// Replaces every play with `plays` (inside a transaction already open).
+    pub(crate) fn write_plays(&self, plays: &HashMap<PathBuf, u64>) -> Result<(), String> {
+        self.conn.execute("DELETE FROM plays", []).map_err(err)?;
+        plays.iter().try_for_each(|(p, &at)| self.add_play(p, at))
+    }
+
     // Hidden maps.
 
     /// (Songs hidden by folder, difficulties hidden by file).
@@ -257,19 +268,25 @@ impl Store {
         songs: &HashSet<PathBuf>,
         maps: &HashSet<PathBuf>,
     ) -> Result<(), String> {
-        self.transaction(|s| {
-            s.conn.execute("DELETE FROM hidden", []).map_err(err)?;
-            let mut q = s
-                .conn
-                .prepare("INSERT INTO hidden (kind, path) VALUES (?1, ?2)")
-                .map_err(err)?;
-            for (kind, set) in [("song", songs), ("map", maps)] {
-                for p in set {
-                    q.execute(params![kind, path_text(p)]).map_err(err)?;
-                }
+        self.transaction(|s| s.write_hidden(songs, maps))
+    }
+
+    pub(crate) fn write_hidden(
+        &self,
+        songs: &HashSet<PathBuf>,
+        maps: &HashSet<PathBuf>,
+    ) -> Result<(), String> {
+        self.conn.execute("DELETE FROM hidden", []).map_err(err)?;
+        let mut q = self
+            .conn
+            .prepare("INSERT INTO hidden (kind, path) VALUES (?1, ?2)")
+            .map_err(err)?;
+        for (kind, set) in [("song", songs), ("map", maps)] {
+            for p in set {
+                q.execute(params![kind, path_text(p)]).map_err(err)?;
             }
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
     // Each map's own offset.
@@ -286,17 +303,21 @@ impl Store {
     }
 
     pub fn replace_map_offsets(&mut self, offsets: &HashMap<u64, f64>) -> Result<(), String> {
-        self.transaction(|s| {
-            s.conn.execute("DELETE FROM map_offsets", []).map_err(err)?;
-            let mut q = s
-                .conn
-                .prepare("INSERT INTO map_offsets (map_hash, offset_ms) VALUES (?1, ?2)")
-                .map_err(err)?;
-            for (&h, &ms) in offsets {
-                q.execute(params![h as i64, ms]).map_err(err)?;
-            }
-            Ok(())
-        })
+        self.transaction(|s| s.write_map_offsets(offsets))
+    }
+
+    pub(crate) fn write_map_offsets(&self, offsets: &HashMap<u64, f64>) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM map_offsets", [])
+            .map_err(err)?;
+        let mut q = self
+            .conn
+            .prepare("INSERT INTO map_offsets (map_hash, offset_ms) VALUES (?1, ?2)")
+            .map_err(err)?;
+        for (&h, &ms) in offsets {
+            q.execute(params![h as i64, ms]).map_err(err)?;
+        }
+        Ok(())
     }
 
     // Sets of names: the map folders whose skin is off, the favourite songs.
@@ -312,20 +333,22 @@ impl Store {
     }
 
     fn replace_names(&mut self, table: Names, names: &HashSet<String>) -> Result<(), String> {
+        self.transaction(|s| s.write_names(table, names))
+    }
+
+    pub(crate) fn write_names(&self, table: Names, names: &HashSet<String>) -> Result<(), String> {
         let (t, c) = table.sql();
-        self.transaction(|s| {
-            s.conn
-                .execute(&format!("DELETE FROM {t}"), [])
-                .map_err(err)?;
-            let mut q = s
-                .conn
-                .prepare(&format!("INSERT INTO {t} ({c}) VALUES (?1)"))
-                .map_err(err)?;
-            for n in names {
-                q.execute([n]).map_err(err)?;
-            }
-            Ok(())
-        })
+        self.conn
+            .execute(&format!("DELETE FROM {t}"), [])
+            .map_err(err)?;
+        let mut q = self
+            .conn
+            .prepare(&format!("INSERT INTO {t} ({c}) VALUES (?1)"))
+            .map_err(err)?;
+        for n in names {
+            q.execute([n]).map_err(err)?;
+        }
+        Ok(())
     }
 
     pub fn map_skins_off(&self) -> Result<HashSet<String>, String> {
@@ -347,7 +370,7 @@ impl Store {
 
 /// The tables that are a set of names, and their column.
 #[derive(Clone, Copy)]
-enum Names {
+pub(crate) enum Names {
     SkinsOff,
     Favourites,
 }
