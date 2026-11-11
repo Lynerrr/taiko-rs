@@ -146,9 +146,10 @@ rules, decided before the code:
    screen is up. The play moves to one `State::play` slot first (its own PR, no screen moved),
    and the screens then hold only what is theirs (the entry, `back`, the watched player). After
    that they move like the others.
-5. **Order:** `Preview`, `Settings`, `Download`, then the multiplayer screens together
-   (`MpMenu`, `Lobby`, `MpWait`, `MpResults`, which the multiplayer state machine creates from
-   many places), `Results`, the `State::play` slot, the play screens, `Editor`, and `Select`
+5. **Order:** `Preview`, `Download`, then the multiplayer screens together (`MpMenu`, `Lobby`,
+   `MpWait`, `MpResults`, which the multiplayer state machine creates from many places),
+   `Results`, the `State::play` slot, `Settings` (`live_play_ms` and `live_map` read the paused
+   play inside its `prev`, so it needs the slot), the play screens, `Editor`, and `Select`
    last. Tests that build or match a moved scene use its `scene()` constructor and
    `Scene::screen_mut::<T>()`; their assertions stay the same.
 
