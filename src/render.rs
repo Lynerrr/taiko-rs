@@ -2676,10 +2676,38 @@ fn limit_of(bytes: u64) -> usize {
     (bytes / std::mem::size_of::<Shape>() as u64) as usize
 }
 
-thread_local! {
+/// What the frame this thread is building is drawn with apart from its canvas: the theme, the
+/// text grid and the frame's time. One per thread, so frames built side by side (tests) each keep
+/// their own, and no thread draws with another's.
+/// Each part is a cell of its own, so a read takes only what it needs (the accent is read for
+/// nearly every shape).
+struct Frame {
+    /// `set_frame_theme`.
+    theme: std::cell::Cell<Theme>,
     /// Render pixels per virtual unit when text snaps to whole pixels, else 0 (`set_text_grid`).
-    static TEXT_GRID: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
-    static TEXT_BIAS: std::cell::Cell<f32> = const { std::cell::Cell::new(1.0) };
+    grid: std::cell::Cell<f32>,
+    /// `set_text_bias`.
+    bias: std::cell::Cell<f32>,
+    /// `set_frame_time`.
+    time: std::cell::Cell<Option<std::time::Instant>>,
+}
+
+thread_local! {
+    /// The frame this thread is building.
+    static FRAME: Frame = const {
+        Frame {
+            theme: std::cell::Cell::new(Theme::DEFAULT),
+            grid: std::cell::Cell::new(0.0),
+            bias: std::cell::Cell::new(1.0),
+            time: std::cell::Cell::new(None),
+        }
+    };
+}
+
+/// Render pixels per virtual unit of this thread's text grid (0 without one).
+#[inline]
+fn text_grid() -> f32 {
+    FRAME.with(|f| f.grid.get())
 }
 
 /// Half resolution: text is laid on a grid of `px_per_unit` render pixels per virtual unit, each
@@ -2687,19 +2715,18 @@ thread_local! {
 /// pixel boundary, so it stays crisp after the 2x scale. `None`: text at its exact size. Per
 /// thread: the render thread sets it before building each frame.
 pub fn set_text_grid(px_per_unit: Option<f32>) {
-    TEXT_GRID.with(|g| g.set(px_per_unit.filter(|p| *p > 0.0).unwrap_or(0.0)));
+    FRAME.with(|f| f.grid.set(px_per_unit.filter(|p| *p > 0.0).unwrap_or(0.0)));
 }
 
 /// See `Renderer::text_bias`.
 pub fn set_text_bias(bias: f32) {
-    TEXT_BIAS.with(|b| b.set(bias));
+    FRAME.with(|f| f.bias.set(bias));
 }
 
 /// One font pixel (in virtual units) of text `size` units tall.
 fn font_px(size: f32) -> f32 {
-    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    let (grid, bias) = FRAME.with(|f| (f.grid.get(), f.bias.get()));
     if grid > 0.0 {
-        let bias = TEXT_BIAS.with(std::cell::Cell::get);
         // A hair of slack so 2.01 pixels stays 2.
         // On a phone the smallest text is two pixels to a font pixel: one can't be read.
         let least = if crate::mobile::active() { 2.0 } else { 1.0 };
@@ -2714,8 +2741,9 @@ fn font_px(size: f32) -> f32 {
 ///
 /// The thread building a frame draws with the theme it started the frame with
 /// (`set_frame_theme`, from `build_frame`), so frames built side by side (tests) each keep their
-/// own. Other threads, and one before its first frame, see the configured accent and animations
-/// (`set_accent`, `set_animations`: the window thread draws the pointer in the accent).
+/// own. A thread that sets none, or one before its first frame, draws with `Theme::DEFAULT`. The
+/// window thread draws the pointer in the accent: the render loop sends it the frame's accent and
+/// animations, and it sets them as its own theme.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// The interface's accent: borders of what's selected, headings, sliders.
@@ -2730,38 +2758,32 @@ pub struct Theme {
     pub kiai: f32,
 }
 
+impl Theme {
+    /// The settings' defaults, and no beat.
+    pub const DEFAULT: Theme = Theme {
+        accent: DEFAULT_ACCENT,
+        animations: true,
+        legacy_menu: false,
+        pulse: 0.0,
+        kiai: 0.0,
+    };
+}
+
 impl Default for Theme {
     fn default() -> Theme {
-        Theme {
-            accent: DEFAULT_ACCENT,
-            animations: true,
-            legacy_menu: false,
-            pulse: 0.0,
-            kiai: 0.0,
-        }
+        Theme::DEFAULT
     }
 }
 
-thread_local! {
-    /// The theme of the frame this thread is building (`set_frame_theme`).
-    static FRAME_THEME: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
-}
-
-/// This thread draws with `theme` from now on (`None`: with the configured accent and
-/// animations, and no beat).
+/// This thread draws with `theme` from now on (`None`: with `Theme::DEFAULT`).
 pub fn set_frame_theme(theme: Option<Theme>) {
-    FRAME_THEME.with(|t| t.set(theme));
+    FRAME.with(|f| f.theme.set(theme.unwrap_or(Theme::DEFAULT)));
 }
 
 /// What this thread draws with.
+#[inline]
 pub fn theme() -> Theme {
-    FRAME_THEME
-        .with(std::cell::Cell::get)
-        .unwrap_or_else(|| Theme {
-            accent: ACCENT.load(std::sync::atomic::Ordering::Relaxed),
-            animations: ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed),
-            ..Theme::default()
-        })
+    FRAME.with(|f| f.theme.get())
 }
 
 /// Changes what this thread draws with for the rest of its frame.
@@ -2772,14 +2794,12 @@ pub fn edit_frame_theme(edit: impl FnOnce(&mut Theme)) {
 }
 
 pub fn legacy_menu() -> bool {
-    FRAME_THEME
-        .with(std::cell::Cell::get)
-        .is_some_and(|t| t.legacy_menu)
+    theme().legacy_menu
 }
 
 /// `v` moved onto the text grid (unchanged without one).
 pub fn snap_to_grid(v: f32) -> f32 {
-    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    let grid = text_grid();
     if grid > 0.0 {
         (v * grid).round() / grid
     } else {
@@ -2790,7 +2810,7 @@ pub fn snap_to_grid(v: f32) -> f32 {
 /// `want` (virtual units) as a whole number of screen pixels, so pixel art stays square and
 /// even at any window size (unchanged without a grid).
 pub fn pixel_size(want: f32) -> f32 {
-    let grid = TEXT_GRID.with(std::cell::Cell::get);
+    let grid = text_grid();
     if grid > 0.0 {
         (want * grid).round().max(1.0) / grid
     } else {
@@ -2798,19 +2818,10 @@ pub fn pixel_size(want: f32) -> f32 {
     }
 }
 
-static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
-/// The configured UI animations (Settings -> Video), for threads not building a frame (`Theme`).
-pub fn set_animations(on: bool) {
-    ANIMATIONS.store(on, std::sync::atomic::Ordering::Relaxed);
-}
-
 /// UI animations on or off. Off, every animation shows its end state.
+#[inline]
 pub fn animations() -> bool {
-    FRAME_THEME.with(std::cell::Cell::get).map_or_else(
-        || ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed),
-        |t| t.animations,
-    )
+    theme().animations
 }
 
 /// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
@@ -2845,15 +2856,10 @@ pub fn approach(value: &mut f32, target: f32, dt_ms: f32, tau_ms: f32) {
     }
 }
 
-thread_local! {
-    /// The time the frame being built is for (`set_frame_time`).
-    static FRAME_TIME: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
-}
-
 /// Animations in the frame being built use this time instead of each reading the clock (which
 /// can cost microseconds a read). Per thread: the render thread sets it before each frame.
 pub fn set_frame_time(now: Option<std::time::Instant>) {
-    FRAME_TIME.with(|t| t.set(now));
+    FRAME.with(|f| f.time.set(now));
 }
 
 /// Eased-out progress (0 to 1) of an animation started at `since` lasting `ms`; 1 with
@@ -2862,8 +2868,8 @@ pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
     if !animations() {
         return 1.0;
     }
-    let now = FRAME_TIME
-        .with(std::cell::Cell::get)
+    let now = FRAME
+        .with(|f| f.time.get())
         .unwrap_or_else(std::time::Instant::now);
     let t = (now.saturating_duration_since(since).as_secs_f32() * 1000.0 / ms).clamp(0.0, 1.0);
     1.0 - (1.0 - t).powi(3)
@@ -2988,20 +2994,10 @@ pub const ACCENTS: [(&str, u32); 8] = [
     ("orange", 0xFF8A3D),
 ];
 
-static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(DEFAULT_ACCENT);
-
-/// The configured accent, for threads not building a frame (`Theme`; the window thread draws the
-/// pointer in it).
-pub fn set_accent(hex: u32) {
-    ACCENT.store(hex, std::sync::atomic::Ordering::Relaxed);
-}
-
 /// The interface's accent: borders of what's selected, headings, sliders.
+#[inline]
 pub fn accent() -> u32 {
-    FRAME_THEME.with(std::cell::Cell::get).map_or_else(
-        || ACCENT.load(std::sync::atomic::Ordering::Relaxed),
-        |t| t.accent,
-    )
+    theme().accent
 }
 
 /// `default` with the default accent; with another, that accent mixed `t` of the way to `toward`
@@ -3784,7 +3780,7 @@ impl<H> Canvas<H> {
         if Self::text_height(size) <= max_h {
             return size;
         }
-        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        let grid = text_grid();
         if grid > 0.0 {
             (max_h / 7.0 * grid).floor().max(1.0) / grid * 7.0
         } else {
@@ -3871,7 +3867,7 @@ impl<H> Canvas<H> {
         if w <= max_w {
             return size;
         }
-        let grid = TEXT_GRID.with(std::cell::Cell::get);
+        let grid = text_grid();
         if grid > 0.0 {
             // Font pixels come in whole render pixels: the biggest that fits.
             let per_px = max_w / s.chars().map(font::advance).sum::<usize>().max(1) as f32;
@@ -3946,7 +3942,7 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_s_theme_holds_while_another_thread_sets_the_accent() {
+    fn a_frame_s_theme_holds_while_another_thread_draws_with_its_own() {
         let mine = super::Theme {
             accent: 0x123456,
             animations: false,
@@ -3954,12 +3950,16 @@ mod tests {
         };
         super::set_frame_theme(Some(mine));
         let other = std::thread::spawn(|| {
+            let before = super::theme();
             for i in 0..1000 {
-                super::set_accent(i);
+                super::set_frame_theme(Some(super::Theme {
+                    accent: i,
+                    ..super::Theme::default()
+                }));
             }
-            super::accent()
+            (before, super::accent())
         });
-        let seen = other.join().unwrap();
+        let (before, seen) = other.join().unwrap();
         assert_eq!(
             super::accent(),
             0x123456,
@@ -3967,12 +3967,33 @@ mod tests {
         );
         assert!(!super::animations());
         assert_eq!(super::theme(), mine);
-        assert_ne!(seen, 0x123456, "a thread without a frame sees what's set");
+        assert_eq!(
+            before,
+            super::Theme::DEFAULT,
+            "a thread without a frame draws with the defaults"
+        );
+        assert_eq!(seen, 999, "the other thread draws with its own");
         super::edit_frame_theme(|t| t.pulse = 0.5);
         assert_eq!(super::theme().pulse, 0.5);
         assert_eq!(super::accent(), 0x123456, "an edit keeps the rest");
         super::set_frame_theme(None);
-        super::set_accent(super::DEFAULT_ACCENT);
+        assert_eq!(super::theme(), super::Theme::DEFAULT);
+    }
+
+    #[test]
+    fn the_text_grid_and_the_frame_s_time_are_this_thread_s_own() {
+        let now = std::time::Instant::now();
+        super::set_text_grid(Some(2.0));
+        super::set_frame_time(Some(now));
+        let other =
+            std::thread::spawn(|| (super::text_grid(), super::FRAME.with(|f| f.time.get())));
+        assert_eq!(other.join().unwrap(), (0.0, None));
+        assert_eq!(super::text_grid(), 2.0);
+        assert_eq!(super::FRAME.with(|f| f.time.get()), Some(now));
+        assert_eq!(super::snap_to_grid(1.3), 1.5, "on this thread's grid");
+        super::set_frame_time(None);
+        super::set_text_grid(None);
+        assert_eq!(super::snap_to_grid(1.3), 1.3);
     }
 
     #[test]

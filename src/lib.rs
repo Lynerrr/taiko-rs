@@ -11274,9 +11274,6 @@ impl State {
         let idle_allowed = self.idle_allowed();
         self.idle
             .update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
-        // For threads not building frames: the window thread draws the pointer in the accent.
-        render::set_animations(self.cfg.animations);
-        render::set_accent(self.cfg.accent);
         tko::set_calm(self.cfg.calm_maps);
         // Screen changes fade in.
         let kind = self.scene.kind();
