@@ -217,6 +217,7 @@ fn lookup(codepoint: u32, len: usize, code_at: impl Fn(usize) -> u32) -> Option<
 }
 
 /// The glyph `c` draws as, numbered 0..COUNT: printable ASCII, Cyrillic, Misaki's, then Chinese.
+#[inline]
 pub fn index(c: char) -> usize {
     index_for(c, Script::Default)
 }
@@ -264,11 +265,13 @@ pub fn index_for(c: char, script: Script) -> usize {
 }
 
 /// `c`'s columns: 5 (7 for Japanese, 3 for halfwidth kana).
+#[inline]
 pub fn glyph(c: char) -> &'static [u8] {
     by_index(index(c))
 }
 
 /// LCD bitmap for a previously looked up glyph.
+#[inline]
 pub fn by_index(i: usize) -> &'static [u8] {
     if i < 95 {
         &GLYPHS[i]
@@ -282,6 +285,7 @@ pub fn by_index(i: usize) -> &'static [u8] {
 }
 
 /// How many columns glyph `i` (`index`) is: it advances one more, the gap.
+#[inline]
 pub fn columns(i: usize) -> usize {
     if i < MISAKI_BASE {
         5
@@ -291,6 +295,7 @@ pub fn columns(i: usize) -> usize {
 }
 
 /// How far `c` advances the text, in font pixels (6, or 8 for CJK glyphs).
+#[inline]
 pub fn advance(c: char) -> usize {
     columns(index(c)) + 1
 }
