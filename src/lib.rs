@@ -179,6 +179,7 @@ use screens::settings::{
     size_char, type_path,
 };
 use screens::video_edit::VideoEdit;
+use screens::watch::Watch;
 use screens::{fmt_time, shows_own_background};
 use services::jobs::Job;
 #[cfg(not(windows))]
@@ -208,8 +209,6 @@ enum Scene {
     /// `screens::mp_results`).
     /// Watching the match in progress.
     Spectate(Box<SpectateView>),
-    /// Watching a friend's solo play.
-    Watch(Box<WatchView>),
     /// The map editor, editing one difficulty.
     Editor(Box<editor::view::View>),
     /// A screen that lives outside lib.rs (`screens::screen`).
@@ -934,10 +933,8 @@ impl State {
     }
 
     fn in_song(&self) -> bool {
-        matches!(
-            self.scene,
-            Scene::Play { .. } | Scene::Spectate(_) | Scene::Watch(_)
-        ) || self.scene.screen().is_some_and(|s| s.in_song())
+        matches!(self.scene, Scene::Play { .. } | Scene::Spectate(_))
+            || self.scene.screen().is_some_and(|s| s.in_song())
     }
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
@@ -963,9 +960,7 @@ impl State {
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
         // Watching someone else play needs no low input latency: always vsync (smoothest).
-        if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
-            || self.calibration_run() == Some(true)
-        {
+        if self.watching() || self.calibration_run() == Some(true) {
             return PresentChoice::Fifo;
         }
         if self.cfg.menu_vsync && !self.player_plays() {
@@ -4775,13 +4770,6 @@ impl State {
                 };
                 (label, state)
             }
-            Scene::Watch(v) => {
-                let who = &v.player;
-                (
-                    tr!("Watching {who}", "{who}を観戦中", "Смотрит {who}";),
-                    v.play.as_ref().map(|p| p.map.label()).unwrap_or_default(),
-                )
-            }
             Scene::Editor(view) => (
                 tr!("Mapping", "マッピング中", "Делает карту").into(),
                 view.label(),
@@ -5244,7 +5232,7 @@ impl State {
         match &self.scene {
             Scene::Spectate(_) => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Other(s) if s.room_lobby() => self.mp.as_ref().and_then(|s| s.map_entry),
-            Scene::Watch(v) => v.entry,
+            Scene::Other(s) if s.watching() => s.watched_map(),
             Scene::Select => self.select.selected(),
             Scene::Other(s) if s.map_from_song_select() => self.select.selected(),
             _ => self.song_entry(),
@@ -5665,7 +5653,8 @@ impl State {
                 self.game().is_some_and(|game| game.paused().is_none())
             }
             // Watching: hidden unless the friends overlay is open (it needs the pointer).
-            Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
+            Scene::Spectate(_) => !self.social.open,
+            Scene::Other(s) if s.watching() => !self.social.open,
             _ => false,
         };
         // The idle screen all the way in: nothing to point at.
@@ -7509,7 +7498,6 @@ impl State {
             }
             Scene::Other(s) => s.activity(),
             Scene::Spectate(_) => "spectating",
-            Scene::Watch(_) => "watching a friend",
             Scene::Editor(_) => "map editor",
         };
         let map = self
@@ -9173,11 +9161,7 @@ impl State {
     fn dims_background(&self) -> bool {
         matches!(
             self.scene,
-            Scene::Play { .. }
-                | Scene::Loading { .. }
-                | Scene::Spectate(_)
-                | Scene::Watch(_)
-                | Scene::Editor(_)
+            Scene::Play { .. } | Scene::Loading { .. } | Scene::Spectate(_) | Scene::Editor(_)
         ) || self.scene.screen().is_some_and(|s| s.dims_background())
     }
 
@@ -9235,10 +9219,16 @@ impl State {
         }
     }
 
+    /// Someone else's play is being watched (a friend's, or a match spectated).
+    fn watching(&self) -> bool {
+        matches!(self.scene, Scene::Spectate(_))
+            || self.scene.screen().is_some_and(|s| s.watching())
+    }
+
     /// The friends overlay (and notifications) can show: outside songs, and while watching
     /// someone else play (spectating a match, watching a friend), never over your own play.
     fn overlay_allowed(&self) -> bool {
-        !self.in_song() || matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
+        !self.in_song() || self.watching()
     }
 
     /// Where the friends tab goes on this screen, if it shows: not over a play, or over anything
@@ -9822,7 +9812,7 @@ impl State {
         c.send(online::Up::Watch(name.clone()));
         self.stop_audio();
         self.social.close();
-        self.scene = Scene::Watch(Box::new(WatchView::new(name)));
+        self.scene = Watch::scene(Box::new(WatchView::new(name)));
     }
 
     fn stop_watching(&mut self) {
@@ -9869,9 +9859,6 @@ impl State {
                         .unwrap_or_default(),
                 }
             }
-            Scene::Watch(v) => Activity::Watching {
-                name: v.player.clone(),
-            },
             Scene::Spectate(_) => Activity::Match { map: lobby_map() },
             Scene::Other(s) if s.in_match() => Activity::Match { map: lobby_map() },
             _ => match &self.mp {
@@ -9915,8 +9902,8 @@ impl State {
                     self.social.have_list = false;
                     self.social.sent_activity = None;
                     self.stream = None;
-                    if let Scene::Watch(v) = &self.scene {
-                        let player = v.player.clone();
+                    if let Some(w) = self.scene.screen_as::<Watch>() {
+                        let player = w.view.player.clone();
                         if let Some(c) = &self.social.conn {
                             c.send(online::Up::Watch(player));
                         }
@@ -10163,7 +10150,7 @@ impl State {
                 paused,
                 inputs,
             } => {
-                if let Scene::Watch(v) = &mut self.scene
+                if let Some(v) = self.scene.screen_mut::<Watch>().map(|w| &mut w.view)
                     && key(&v.player) == key(&player)
                 {
                     let start = WatchStart {
@@ -10184,7 +10171,7 @@ impl State {
                 }
             }
             Down::WatchFrame { t, paused, inputs } => {
-                if let Scene::Watch(v) = &mut self.scene {
+                if let Some(v) = self.scene.screen_mut::<Watch>().map(|w| &mut w.view) {
                     if let Some(n) = &mut v.next {
                         n.t = t;
                         n.paused = paused;
@@ -10199,7 +10186,7 @@ impl State {
                 }
             }
             Down::WatchEnd { player } => {
-                if let Scene::Watch(v) = &mut self.scene
+                if let Some(v) = self.scene.screen_mut::<Watch>().map(|w| &mut w.view)
                     && key(&v.player) == key(&player)
                 {
                     if v.game.is_some() && v.ending.is_none() {
@@ -10216,7 +10203,7 @@ impl State {
             }
             Down::WatchStopped(why) => {
                 self.toast(why);
-                if matches!(self.scene, Scene::Watch(_)) {
+                if self.scene.screen_is::<Watch>() {
                     self.stop_audio();
                     self.show_select();
                 }
@@ -10287,12 +10274,19 @@ impl State {
     /// The watch view: finds (or downloads) and loads the map, starts the replay where the
     /// friend is (minus the delay), holds while they pause and catches up when they skip.
     fn watch_tick(&mut self) {
-        if !matches!(self.scene, Scene::Watch(_)) {
+        if !self.scene.screen_is::<Watch>() {
             return;
         }
-        let Scene::Watch(mut v) = std::mem::replace(&mut self.scene, Scene::Select) else {
-            return;
+        // Out of the scene while it runs (the scene is song select meanwhile), as when it was
+        // a variant.
+        let Scene::Other(screen) = std::mem::replace(&mut self.scene, Scene::Select) else {
+            unreachable!("checked above");
         };
+        let screen: Box<dyn std::any::Any> = screen;
+        let Ok(watch) = screen.downcast::<Watch>() else {
+            unreachable!("checked above");
+        };
+        let mut v = watch.view;
         if let (Some(play), None, None) = (v.play.clone(), v.entry, &v.game)
             && v.looked
                 .is_none_or(|t| t.elapsed() > Duration::from_secs(1))
@@ -10393,7 +10387,7 @@ impl State {
                 a.stop();
             }
         }
-        self.scene = Scene::Watch(v);
+        self.scene = Watch::scene(v);
     }
 
     /// Finishes pending connections and applies messages from the room.
@@ -11071,12 +11065,6 @@ impl State {
             self.editor_key(code, repeat, window);
             return;
         }
-        if matches!(self.scene, Scene::Watch(_)) && code == KeyCode::Escape {
-            if !repeat {
-                self.stop_watching();
-            }
-            return;
-        }
         if let Scene::Spectate(v) = &mut self.scene {
             let n = v.players.len().max(1);
             match code {
@@ -11302,7 +11290,7 @@ impl State {
                 }
             }
             Scene::Other(_) => {}
-            Scene::Spectate(_) | Scene::Watch(_) | Scene::Editor(_) => {}
+            Scene::Spectate(_) | Scene::Editor(_) => {}
             Scene::Play { .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -11761,7 +11749,7 @@ impl State {
         // A song or a replay opened by any road leaves the menu behind.
         if matches!(
             self.scene,
-            Scene::Loading { .. } | Scene::Play { .. } | Scene::Watch(_) | Scene::Editor(_)
+            Scene::Loading { .. } | Scene::Play { .. } | Scene::Editor(_)
         ) || self.scene.screen().is_some_and(|s| s.closes_main_menu())
         {
             self.main_menu = None;
@@ -12717,66 +12705,6 @@ impl State {
                     _ => {}
                 }
             }
-            Scene::Watch(v) => {
-                let scroll = self.cfg.scroll_speed;
-                match &mut v.game {
-                    Some(g) => {
-                        g.view.kiai_effects = self.cfg.kiai_effects;
-                        g.view.hidden = hidden;
-                        g.view.hud = self.cfg.hud;
-                        g.view.hud_area = self.cfg.playfield_area;
-                        g.view.hud = self.cfg.hud;
-                        g.view.hud_area = self.cfg.playfield_area;
-                        g.update(now, sound(&self.audio), self.play_offset);
-                        draw_game_area(
-                            canvas,
-                            &self.cfg,
-                            &mut self.frame_clip,
-                            &self.grip,
-                            &self.hover,
-                            self.bg_brightness > 0.0,
-                            |c| {
-                                g.draw_playfield(c, scroll);
-                            },
-                        );
-                        g.draw_hud(canvas);
-                        if v.held {
-                            canvas.text_centered(
-                                canvas.width / 2.0,
-                                300.0,
-                                9.0,
-                                rgba(0x9a9ab0, 1.0),
-                                &format!("{} paused", v.player),
-                            );
-                        }
-                    }
-                    None => {
-                        // The map they're playing, on its way.
-                        let got = v
-                            .play
-                            .as_ref()
-                            .filter(|_| v.fetching && v.entry.is_none())
-                            .and_then(|p| map_download(&self.downloads, &p.map));
-                        let looking =
-                            v.fetching && v.entry.is_none() && self.lobby_lookup.is_busy();
-                        let text = got.map_or_else(|| v.status(), download_text);
-                        let w = canvas.width;
-                        canvas.text_centered(w / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), &text);
-                        if got.is_some() || looking {
-                            let bw = (w - 48.0).min(300.0);
-                            let at = (w - bw) / 2.0;
-                            multiplayer::draw_fetch_bar(canvas, at, 240.0, bw, got.flatten());
-                        }
-                    }
-                }
-                canvas.text_centered(
-                    canvas.width / 2.0,
-                    470.0,
-                    7.0,
-                    rgba(0x9a9ab0, 1.0),
-                    "Esc: stop watching   F9: friends",
-                );
-            }
             Scene::Editor(view) => {
                 // Uploading needs the game's account on our own server.
                 let token = (self.cfg.online_server == online::DEFAULT_SERVER
@@ -13544,7 +13472,6 @@ impl State {
         let map_loading = match &self.scene {
             Scene::Loading { rx, .. } => rx.is_busy(),
             Scene::Spectate(v) => v.rx.is_busy(),
-            Scene::Watch(v) => v.rx.is_busy(),
             Scene::Other(s) => s.loading(),
             _ => false,
         };

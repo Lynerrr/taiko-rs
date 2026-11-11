@@ -20,6 +20,7 @@ pub(crate) mod screen;
 pub(crate) mod select;
 pub(crate) mod settings;
 pub(crate) mod video_edit;
+pub(crate) mod watch;
 
 use crate::Scene;
 
