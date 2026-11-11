@@ -371,3 +371,78 @@ fn offsets_from_before_osus_sign_come_in_turned_round() {
     assert!(data.join("map_offsets.tsv").is_file());
     let _ = std::fs::remove_dir_all(&data);
 }
+
+// A launch of the game (`store::open_in`, what `store::with` opens).
+
+#[test]
+fn the_first_launch_after_the_update_brings_the_files_in_and_later_ones_read_the_database() {
+    let data = temp_dir("launch");
+    old_files(&data);
+    let before = snapshot_dir(&data);
+
+    let (s, imported) = store::open_in(&data, 10).unwrap();
+    assert!(imported);
+    // Played on: the database has it.
+    let replays = data.join("replays");
+    let new = row(&replays, 7, Some(100.0));
+    s.add_score(&new).unwrap();
+    drop(s);
+
+    let (s, imported) = store::open_in(&data, 20).unwrap();
+    assert!(!imported, "brought in again");
+    let mut scores = expected(&data).scores;
+    scores.push(new);
+    assert_eq!(s.scores(&replays).unwrap(), scores);
+    drop(s);
+    // The old files are as they were; the database sits next to them.
+    let after = snapshot_dir(&data);
+    let old: Vec<_> = after
+        .iter()
+        .filter(|(p, _)| {
+            !p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("taiko.db")
+        })
+        .cloned()
+        .collect();
+    assert_eq!(old, before);
+    assert!(data.join(store::FILE).is_file());
+    let _ = std::fs::remove_dir_all(&data);
+}
+
+#[test]
+fn a_launch_that_cant_bring_the_files_in_keeps_to_them_and_tries_again_next_time() {
+    let data = temp_dir("launch-bad");
+    old_files(&data);
+    std::fs::write(data.join("map_skins_off.txt"), b"\xff\n").unwrap();
+    let e = store::open_in(&data, 1).err().expect("opened");
+    assert!(e.contains("map_skins_off.txt"), "{e}");
+    std::fs::write(data.join("map_skins_off.txt"), "1 a\n").unwrap();
+    let (s, imported) = store::open_in(&data, 2).unwrap();
+    assert!(imported);
+    assert_eq!(s.map_skins_off().unwrap(), ["1 a".to_string()].into());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&data);
+}
+
+#[test]
+fn the_database_moves_with_the_data_folder() {
+    let root = temp_dir("move");
+    let (from, to) = (root.join("old"), root.join("new"));
+    std::fs::create_dir_all(&from).unwrap();
+    let (s, _) = store::open_in(&from, 1).unwrap();
+    s.add_play(Path::new("/songs/1 a/a.osu"), 5).unwrap();
+    drop(s);
+    let (done, total) = Default::default();
+    crate::config::move_data(Some(&from), Some(&to), &done, &total).unwrap();
+    assert!(!from.join(store::FILE).exists());
+    let (s, imported) = store::open_in(&to, 2).unwrap();
+    assert!(!imported, "the moved database lost its mark");
+    assert_eq!(
+        s.plays().unwrap(),
+        [(PathBuf::from("/songs/1 a/a.osu"), 5)].into()
+    );
+    drop(s);
+    let _ = std::fs::remove_dir_all(&root);
+}

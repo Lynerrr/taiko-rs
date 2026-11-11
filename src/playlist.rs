@@ -326,6 +326,10 @@ pub fn load_favourites() -> HashSet<String> {
     #[cfg(test)]
     return HashSet::new();
     #[cfg(not(test))]
+    if let Some(songs) = crate::store::with(|s| s.favourites()) {
+        return songs;
+    }
+    #[cfg(not(test))]
     favourites_file()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .map(|t| crate::config::parse_lines(&t))
@@ -354,6 +358,7 @@ pub fn save_favourites(favourites: &HashSet<String>) {
     if std::fs::write(&tmp, lines.join("\n") + "\n").is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
+    crate::store::with(|s| s.replace_favourites(favourites));
 }
 
 #[cfg(test)]

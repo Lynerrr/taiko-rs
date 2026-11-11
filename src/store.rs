@@ -384,6 +384,75 @@ impl Names {
     }
 }
 
+/// The player's database for this run of the game (`with`).
+enum Players {
+    /// Not opened yet (or closed for the data folder to move): opened on first use.
+    Unopened,
+    Ready(Store),
+    /// None this run: tests, no data folder, or it couldn't be opened or the old files couldn't
+    /// be brought in (logged). The game keeps to the old files.
+    Off,
+}
+
+static PLAYERS: std::sync::Mutex<Players> = std::sync::Mutex::new(Players::Unopened);
+
+/// Opens `taiko.db` in the data folder and brings the old files in on the first launch.
+fn open_players() -> Players {
+    // Tests never read or write the player's data.
+    if cfg!(test) {
+        return Players::Off;
+    }
+    let Some(dir) = crate::config::data_dir() else {
+        return Players::Off;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match open_in(&dir, now) {
+        Ok((store, imported)) => {
+            if imported {
+                eprintln!("{FILE}: brought the old files in (they're kept as they were)");
+            }
+            Players::Ready(store)
+        }
+        Err(e) => {
+            eprintln!("{FILE}: {e}; keeping to the old files");
+            Players::Off
+        }
+    }
+}
+
+/// What a launch does with the data folder `dir`: opens (or makes) its `taiko.db` and brings the
+/// old files in unless that was done before (then `true`). An error means the game keeps to
+/// the old files this run.
+pub fn open_in(dir: &Path, now: u64) -> Result<(Store, bool), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut store = Store::open(&dir.join(FILE))?;
+    let imported = import::import(&mut store, dir, now)
+        .map_err(|e| format!("couldn't bring the old files in ({e})"))?;
+    Ok((store, imported))
+}
+
+/// Runs `f` on the player's database. None when there's none this run (see `Players::Off`) or
+/// `f` failed (logged): the caller then reads or writes the old files as before.
+pub fn with<T>(f: impl FnOnce(&mut Store) -> Result<T, String>) -> Option<T> {
+    let mut players = PLAYERS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Players::Unopened = *players {
+        *players = open_players();
+    }
+    let Players::Ready(store) = &mut *players else {
+        return None;
+    };
+    f(store).inspect_err(|e| eprintln!("{FILE}: {e}")).ok()
+}
+
+/// Closes the player's database (before the data folder moves, or after it changed); the next
+/// `with` opens the one in the data folder then.
+pub fn close() {
+    *PLAYERS.lock().unwrap_or_else(|e| e.into_inner()) = Players::Unopened;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

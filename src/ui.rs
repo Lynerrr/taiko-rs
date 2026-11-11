@@ -2979,6 +2979,9 @@ impl Hidden {
     }
 
     pub fn load() -> Hidden {
+        if let Some((songs, maps)) = crate::store::with(|s| s.hidden()) {
+            return Hidden { songs, maps };
+        }
         let Some(text) = Self::file().and_then(|f| std::fs::read_to_string(f).ok()) else {
             return Hidden::default();
         };
@@ -3010,6 +3013,7 @@ impl Hidden {
         if let Err(e) = std::fs::write(&file, text) {
             eprintln!("couldn't save {}: {e}", file.display());
         }
+        crate::store::with(|s| s.replace_hidden(&self.songs, &self.maps));
     }
 
     pub fn contains(&self, path: &std::path::Path) -> bool {
