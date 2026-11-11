@@ -188,7 +188,7 @@ fn the_mod_select_and_open_drop_downs_keep_the_pointer_off_the_preview() {
     s.settings_ui.dropdown = None;
 
     // The download tab's drop-down is drawn before the preview, its click-away area under it.
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     assert!(s.preview_on_top(x, y));
     s.browse.menu = Some(browse::Menu::Sort);
     assert!(!s.preview_on_top(x, y), "the download tab's drop-down");

@@ -66,7 +66,7 @@ fn phone_multiplayer_menu_and_download() {
     let (mut s, _songs, mut now) = client("phone-tabs");
     s.open_multiplayer();
     assert_snapshot("phone-multiplayer-menu", &shot(&mut s, &mut now));
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     assert_snapshot("phone-download", &shot(&mut s, &mut now));
 }
 

@@ -31,7 +31,11 @@ fn ctrl_o_opens_settings_from_anywhere_and_closes_them() {
         s.modifiers_ctrl = false;
     };
     let mut s = layout_tests::state();
-    for scene in [Scene::Select, Scene::Download, Scene::MpMenu] {
+    for scene in [
+        Scene::Select,
+        crate::screens::download::Download::scene(),
+        Scene::MpMenu,
+    ] {
         s.scene = scene;
         press(&mut s);
         assert!(matches!(s.scene, Scene::Settings { .. }));
@@ -74,10 +78,10 @@ fn the_main_menu_sits_over_song_select_and_esc_comes_back_to_it() {
     // Download opens and comes back to it; the SONGS tab leaves it for the songs.
     s.main_menu = Some(menu::Menu::new());
     s.menu_open(menu::Item::Download);
-    assert!(matches!(s.scene, Scene::Download));
+    assert!(s.scene.screen_is::<crate::screens::download::Download>());
     s.scene = Scene::Select;
     assert!(s.on_menu());
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     s.goto_tab(0);
     assert!(matches!(s.scene, Scene::Select) && !s.on_menu());
 
@@ -131,7 +135,7 @@ fn the_player_opens_from_the_menu_and_closes_with_it() {
     // Leaving the menu closes it and the music carries on.
     s.music_control(player::Control::Open);
     s.set_music_paused(true);
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.player.is_none() && !s.music_paused);
 }
@@ -494,7 +498,7 @@ fn the_screen_glitches_between_menus_only_and_only_with_the_setting_on() {
     assert_eq!(glitch(&mut s, 0), None, "the first screen just appears");
     assert_eq!(glitch(&mut s, 1), None);
 
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     assert!(glitch(&mut s, 2).is_some_and(|[strength, _]| strength > 0.9));
     assert!(glitch(&mut s, 100).is_some(), "the same change carries on");
     assert_eq!(glitch(&mut s, 2000), None, "and it's over");
@@ -506,7 +510,7 @@ fn the_screen_glitches_between_menus_only_and_only_with_the_setting_on() {
     assert_eq!(glitch(&mut s, 3001), None);
 
     s.cfg.menu_glitch = false;
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     assert_eq!(glitch(&mut s, 4000), None);
 }
 
@@ -2153,7 +2157,7 @@ fn alt_up_and_down_turn_the_volume_picked_with_alt_left_and_right() {
     let press = |s: &mut State, code: KeyCode, repeat: bool| {
         s.key_inner(code, repeat, None, Instant::now(), None)
     };
-    for scene in [Scene::Select, Scene::Download] {
+    for scene in [Scene::Select, crate::screens::download::Download::scene()] {
         let mut s = settings_screen();
         s.scene = scene;
         s.cfg.master_volume = 0.5;

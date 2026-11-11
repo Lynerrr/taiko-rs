@@ -812,7 +812,7 @@ fn assert_every_screen_fits() {
     s.scene = Scene::Select;
 
     // Not `open_download`, which would search the mirrors.
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     check(&mut s, "download", &mut out);
     let e = entry(0, 0, true);
     s.browse.results = (0..10)
@@ -2487,7 +2487,11 @@ fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
 #[test]
 fn an_update_restarts_the_game_only_in_a_quiet_menu() {
     let mut s = state();
-    for scene in [Scene::Select, Scene::Download, Scene::MpMenu] {
+    for scene in [
+        Scene::Select,
+        crate::screens::download::Download::scene(),
+        Scene::MpMenu,
+    ] {
         s.scene = scene;
         assert!(s.can_restart());
     }

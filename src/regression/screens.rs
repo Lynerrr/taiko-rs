@@ -87,7 +87,7 @@ fn multiplayer_menu_download_and_editor_home() {
     s.open_multiplayer();
     assert_snapshot("screen-multiplayer-menu", &shot(&mut s, &mut now));
     // The download tab without asking the mirrors (nothing searched yet).
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     assert_snapshot("screen-download", &shot(&mut s, &mut now));
     s.scene =
         crate::screens::editor_home::EditorHome::scene(editor::home::Home::new(&[], "tester"));
