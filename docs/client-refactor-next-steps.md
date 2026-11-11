@@ -118,6 +118,40 @@ answers every query of the `Screen` trait as the screen would, so each query a m
 to the trait is added to `Shadow` as well. A screen leaves by putting another scene in its place.
 The video export stays `State::export`: the render thread draws it and it ends on its own.
 
+Done so far: `VideoEdit` (#422), `LayoutEdit` (#424), `HudEdit` (#425), `EditorHome` (#426).
+
+#### S6, the remaining screens
+
+The four screens above had their own state and few readers. The rest are read by the code
+around them, and a `Shadow` can answer only what it copied when the screen was taken out:
+flags and small `Copy` values, never a borrow into the screen. So the rest move under these
+rules, decided before the code:
+
+1. **Questions, not variants.** Code outside a screen never matches on what is inside it. It
+   asks the trait, and the answer is a flag or a small value the `Shadow` copies: `map_entry()
+   -> Option<usize>` (the map it is about), `over_lobby()` (opened over the lobby, so the lobby's
+   map counts), `over_menu()` (opened from a top-bar screen). These replace the matches on
+   `Scene::Preview { back }` and `Scene::Settings { prev }` that look into the scene behind.
+2. **One group, not a flag per site.** About 25 places list `Select | Preview | Download`
+   together: the song list's pointer and scrubbing, the preview panel, the map's stars, the
+   score link. A screen says it belongs to song select with `song_select()`; those places ask
+   `State::in_song_select()` (true for `Scene::Select` and for such a screen). A place whose list
+   differs from the group keeps its own question rather than bending the group.
+3. **What a frame needs, the screen works out.** A frame that used values `build_frame` had
+   worked out earlier (the preview target, the size label, whether the player hosts) computes
+   them itself from `State`, from the same functions. Each such value is listed in the PR, with
+   why nothing between the two points changes it.
+4. **The game is not inside a screen.** `Play`, `MpPlay`, `Calibrate`, `Watch` and `Spectate`
+   hold a `Play` that the input, the audio clock, presence, replays and pp all read while the
+   screen is up. The play moves to one `State::play` slot first (its own PR, no screen moved),
+   and the screens then hold only what is theirs (the entry, `back`, the watched player). After
+   that they move like the others.
+5. **Order:** `Preview`, `Settings`, `Download`, then the multiplayer screens together
+   (`MpMenu`, `Lobby`, `MpWait`, `MpResults`, which the multiplayer state machine creates from
+   many places), `Results`, the `State::play` slot, the play screens, `Editor`, and `Select`
+   last. Tests that build or match a moved scene use its `scene()` constructor and
+   `Scene::screen_mut::<T>()`; their assertions stay the same.
+
 After S3 and S4 a screen's move in S6 is its own state, its drawing and its input, and nothing
 else: no job plumbing and no overlay checks travel with it.
 
