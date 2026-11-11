@@ -9,6 +9,7 @@ pub mod maps;
 pub mod snapshot;
 
 mod clicks;
+mod collections;
 mod drawing;
 mod flows;
 mod formats;
