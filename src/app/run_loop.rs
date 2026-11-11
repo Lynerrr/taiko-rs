@@ -1147,6 +1147,7 @@ impl State {
             select,
             scene: Scene::Select,
             play: None,
+            calibration_over: false,
             behind: None,
             audio,
             toast: None,

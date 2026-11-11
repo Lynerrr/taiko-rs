@@ -467,7 +467,6 @@ impl State {
                 || self.medals.is_some()
                 || self.player.is_some()
                 || self.profile.is_some()
-                || matches!(self.scene, Scene::Calibrate { .. })
                 || self.scene.screen().is_some_and(|s| s.top_bar())
                 || (matches!(self.scene, Scene::Select) && !self.on_menu()))
     }

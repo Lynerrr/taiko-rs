@@ -203,13 +203,6 @@ enum Scene {
         entry: usize,
         from: Option<f64>,
     },
-    /// Settings tab; `prev` is restored on exit (song select, or a paused game).
-    /// Offset calibration run; `back` is where to return (the settings tab).
-    /// Offset calibration (by ear), or with `vsync` the vsync compensation's (by sight).
-    Calibrate {
-        back: Box<Scene>,
-        vsync: bool,
-    },
     /// A multiplayer match (the menu, the lobby, the wait for the match to start and the
     /// results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait` and
     /// `screens::mp_results`).
@@ -433,6 +426,8 @@ struct State {
     /// The game of the song, match or calibration up (`Scene::Play`, `MpPlay`, `Calibrate`),
     /// kept while the settings are open over its pause menu. `State::game` reads it.
     play: Option<Box<Play>>,
+    /// The calibration run's last note has gone by: it finishes after this frame.
+    calibration_over: bool,
     /// The scene the settings were opened over, while they are up (`State::behind_settings`);
     /// closing them goes back to it. Left over when the settings went another way.
     behind: Option<Box<Scene>>,
@@ -947,11 +942,7 @@ impl State {
     fn in_song(&self) -> bool {
         matches!(
             self.scene,
-            Scene::Play { .. }
-                | Scene::MpPlay { .. }
-                | Scene::Calibrate { .. }
-                | Scene::Spectate(_)
-                | Scene::Watch(_)
+            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) | Scene::Watch(_)
         ) || self.scene.screen().is_some_and(|s| s.in_song())
     }
 
@@ -978,10 +969,9 @@ impl State {
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
         // Watching someone else play needs no low input latency: always vsync (smoothest).
-        if matches!(
-            self.scene,
-            Scene::Spectate(_) | Scene::Watch(_) | Scene::Calibrate { vsync: true, .. }
-        ) {
+        if matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
+            || self.calibration_run() == Some(true)
+        {
             return PresentChoice::Fifo;
         }
         if self.cfg.menu_vsync && !self.player_plays() {
@@ -998,7 +988,8 @@ impl State {
             Scene::Play { .. } => self.game().is_some_and(|game| {
                 game.replay().is_none() && !self.auto && !game.mods().has(mods::Mod::Autoplay)
             }),
-            Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
+            Scene::MpPlay { .. } => true,
+            Scene::Other(s) => s.calibration().is_some(),
             _ => false,
         }
     }
@@ -2388,21 +2379,23 @@ impl State {
     /// The game of the song, match or calibration up; None on any other screen (the settings
     /// over its pause menu included).
     fn game(&self) -> Option<&Play> {
-        match self.scene {
-            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } => {
-                self.play.as_deref()
-            }
+        match &self.scene {
+            Scene::Play { .. } | Scene::MpPlay { .. } => self.play.as_deref(),
+            Scene::Other(s) if s.holds_game() => self.play.as_deref(),
             _ => None,
         }
+    }
+
+    /// A calibration run is up: Some(true) the vsync compensation's (by sight).
+    fn calibration_run(&self) -> Option<bool> {
+        self.scene.screen().and_then(|s| s.calibration())
     }
 
     /// Drops the game when its scene has gone (the settings over its pause menu keep it).
     fn drop_finished_play(&mut self) {
         let scene = self.behind_settings().unwrap_or(&self.scene);
-        let holds = matches!(
-            scene,
-            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
-        );
+        let holds = matches!(scene, Scene::Play { .. } | Scene::MpPlay { .. })
+            || scene.screen().is_some_and(|s| s.holds_game());
         if !holds {
             self.play = None;
         }
@@ -4826,10 +4819,6 @@ impl State {
                     song,
                 )
             }
-            Scene::Calibrate { .. } => (
-                tr!("Calibrating", "調整中", "Калибровка").into(),
-                String::new(),
-            ),
             Scene::Other(s) if s.presence(self).is_some() => s.presence(self).unwrap_or_default(),
             _ => (
                 tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(),
@@ -5161,104 +5150,18 @@ impl State {
         }
     }
 
-    /// Offset calibration, or with `vsync` the vsync compensation's: the same notes, in vsync and
-    /// with no sound, hit by sight.
-    fn start_calibration_as(&mut self, vsync: bool) {
-        if self
-            .behind_settings()
-            .is_some_and(|prev| matches!(prev, Scene::Play { .. }))
-        {
-            self.toast(
-                tr!(
-                    "quit the song first to calibrate",
-                    "調整するには先に曲をやめてください",
-                    "сначала выйдите из песни"
-                )
-                .into(),
-            );
-            return;
-        }
-        // Retrying from the result screen, it has put back where calibration was started from.
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
-        let beat_ms = 60000.0 / self.cfg.calibration_bpm;
-        let beats = calibrate::total_beats(beat_ms);
-        let map = beatmap::calibration_map(beat_ms, calibrate::COUNT_IN_BEATS, beats);
-        let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
-        let mut track = audio::metronome(rate, beat_ms, beats, 2000.0);
-        if vsync {
-            // Silence the length of the click track: only the notes to go by.
-            track.samples.iter_mut().for_each(|s| *s = 0.0);
-        }
-        let track = Arc::new(track);
-        let mut game = Play::new(
-            Game::new(map, track, sound(&self.audio)).with_settings(&crate::game::settings()),
-        );
-        // Your own hitsounds would let you sync to yourself instead of to the click.
-        game.set_mute_hits(true);
-        game.view.show_hp = false;
-        self.play = Some(Box::new(game));
-        self.scene = Scene::Calibrate {
-            back: Box::new(back),
-            vsync,
-        };
-    }
-
-    fn finish_calibration(&mut self) {
-        if !matches!(self.scene, Scene::Calibrate { .. }) {
-            return;
-        }
-        let Scene::Calibrate { back, vsync } = std::mem::replace(&mut self.scene, Scene::Select)
-        else {
-            unreachable!("matched above");
-        };
-        let Some(game) = self.play.take() else {
-            return;
-        };
-        self.stop_audio();
-        // By sight in vsync, hitting late means the frames reach the screen later than assumed.
-        let current = if vsync {
-            self.cfg.vsync_tune_ms
-        } else {
-            self.cfg.offset_ms
-        };
-        let mut found = calibrate::estimate(&game.stats().errors, current);
-        if let (Some(e), false) = (&mut found, vsync) {
-            // The suggestion is in the global offset's own terms (osu!'s). Hitting late by e is
-            // the clock's offset up by e, which is the osu! one down by e.
-            e.suggested_offset = (self.cfg.shown_offset() - e.error_ms).round();
-        }
-        if let Some(e) = &found {
-            audiolog::line(&format!(
-                "calibration vsync={vsync} hits={} error={:.1} margin={:.1} ur={:.0} suggested={} current={current}",
-                e.hits, e.error_ms, e.margin_ms, e.ur, e.suggested_offset
-            ));
-        }
-        match found {
-            Some(estimate) if estimate.hits >= 4 => {
-                self.scene = screens::calibrate_done::CalibrateDone::scene(estimate, back, vsync)
-            }
-            _ => {
-                self.scene = *back;
-                self.toast(
-                    tr!(
-                        "calibration needs more hits",
-                        "調整にはもっと叩く必要があります",
-                        "для калибровки нужно больше ударов"
-                    )
-                    .into(),
-                );
-            }
-        }
-    }
-
+    /// (The run and its result leave on their own keys; tests leave them this way.)
+    #[cfg(test)]
     /// Leaves calibrating (or its result, taking its suggestion with `apply`) for where it was
     /// started from.
     fn leave_calibration(&mut self, apply: bool) {
+        if let Some(run) = self.scene.screen_mut::<screens::calibration::Calibration>() {
+            let back = run.take_back();
+            self.stop_audio();
+            self.scene = *back;
+            return;
+        }
         match std::mem::replace(&mut self.scene, Scene::Select) {
-            Scene::Calibrate { back, .. } => {
-                self.stop_audio();
-                self.scene = *back;
-            }
             other @ Scene::Other(_) if other.screen().is_some_and(|s| s.calibrating()) => {
                 // The result screen leaves on its own keys.
                 self.scene = other;
@@ -5278,39 +5181,6 @@ impl State {
             other => {
                 self.stop_audio();
                 self.scene = other;
-            }
-        }
-    }
-
-    fn calibration_key(
-        &mut self,
-        code: KeyCode,
-        repeat: bool,
-        at: Instant,
-        window: Option<&Window>,
-    ) {
-        if let (Scene::Calibrate { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) {
-            if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat {
-                    game.press(
-                        calibrate::centre_key(k),
-                        at,
-                        sound(&self.audio),
-                        self.play_offset,
-                    );
-                }
-                return;
-            }
-            if repeat {
-                return;
-            }
-            match code {
-                KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
-                KeyCode::Escape => self.leave_calibration(false),
-                KeyCode::F11 => self.toggle_fullscreen(window),
-                KeyCode::F12 => self.screenshot_due = true,
-                KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
-                _ => {}
             }
         }
     }
@@ -5801,7 +5671,10 @@ impl State {
     /// menu) always show it.
     fn cursor_hidden(&self, now: Instant) -> bool {
         let playing = match &self.scene {
-            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } => {
+            Scene::Play { .. } | Scene::MpPlay { .. } => {
+                self.game().is_some_and(|game| game.paused().is_none())
+            }
+            Scene::Other(s) if s.holds_game() => {
                 self.game().is_some_and(|game| game.paused().is_none())
             }
             // Watching: hidden unless the friends overlay is open (it needs the pointer).
@@ -5821,10 +5694,8 @@ impl State {
 
     /// Scenes where the playfield area can be moved and resized with the mouse.
     fn area_editable(&self) -> bool {
-        matches!(
-            self.scene,
-            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
-        ) || self.scene.screen().is_some_and(|s| s.area_editable())
+        matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. })
+            || self.scene.screen().is_some_and(|s| s.area_editable())
     }
 
     fn refresh_presets(&mut self) {
@@ -6267,7 +6138,8 @@ impl State {
             Scene::Play { .. } => self
                 .game()
                 .is_some_and(|game| game.paused().is_none() && game.replay().is_none()),
-            Scene::MpPlay { .. } | Scene::Calibrate { .. } => {
+            Scene::MpPlay { .. } => self.game().is_some_and(|game| game.paused().is_none()),
+            Scene::Other(s) if s.holds_game() => {
                 self.game().is_some_and(|game| game.paused().is_none())
             }
             _ => false,
@@ -6296,7 +6168,7 @@ impl State {
             && mobile::on_pause_button(self.mouse_at(x, y), self.window_width())
         {
             // Calibrating, it finishes with the hits so far; the back gesture cancels.
-            let code = if matches!(self.scene, Scene::Calibrate { .. }) {
+            let code = if self.calibration_run().is_some() {
                 KeyCode::Enter
             } else {
                 KeyCode::Escape
@@ -6346,7 +6218,7 @@ impl State {
 
     /// The touch columns along the bottom of the screen during play, each flashing when hit.
     fn draw_touch_zones(&self, c: &mut Canvas, now: Instant) {
-        mobile::draw_pause_button(c, matches!(self.scene, Scene::Calibrate { .. }));
+        mobile::draw_pause_button(c, self.calibration_run().is_some());
         let col_w = c.width / 4.0;
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
@@ -6847,8 +6719,8 @@ impl State {
             {
                 // Clicking the resolution readout opens the preset list; single-player pauses
                 // first (a multiplayer match keeps running).
-                if let (Scene::Play { .. } | Scene::Calibrate { .. }, Some(game)) =
-                    (&self.scene, self.play.as_deref_mut())
+                if (matches!(self.scene, Scene::Play { .. }) || self.calibration_run().is_some())
+                    && let Some(game) = self.play.as_deref_mut()
                 {
                     game.pause(sound(&self.audio));
                 }
@@ -7787,7 +7659,6 @@ impl State {
                     "playing"
                 }
             }
-            Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
             Scene::MpPlay { .. } => "multiplayer match",
             Scene::Spectate(_) => "spectating",
@@ -10785,10 +10656,12 @@ impl State {
                 let Some(s) = &mut self.mp else { return };
                 s.contrib.clear();
                 // Not in a position to play (single-player song, calibration): sit this one out.
-                if matches!(
-                    self.scene,
-                    Scene::Play { .. } | Scene::Calibrate { .. } | Scene::Loading { .. }
-                ) {
+                if matches!(self.scene, Scene::Play { .. } | Scene::Loading { .. })
+                    || self
+                        .scene
+                        .screen()
+                        .is_some_and(|s| s.calibration().is_some())
+                {
                     s.client.send(net::ClientMsg::Loaded(false));
                     return;
                 }
@@ -11317,10 +11190,6 @@ impl State {
         }) {
             return;
         }
-        if matches!(self.scene, Scene::Calibrate { .. }) {
-            self.calibration_key(code, repeat, at, window);
-            return;
-        }
         // Any key closes the row menu; Esc does nothing else.
         if matches!(self.scene, Scene::Select)
             && self.select.menu.take().is_some()
@@ -11586,7 +11455,7 @@ impl State {
                     self.show_select();
                 }
             }
-            Scene::Calibrate { .. } | Scene::Other(_) => {}
+            Scene::Other(_) => {}
             Scene::MpPlay { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::Editor(_) => {}
             Scene::Play { .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
@@ -11829,7 +11698,6 @@ impl State {
                         0.5
                     }
                 }
-                Scene::Calibrate { .. } => 0.0,
                 Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
                 _ => 0.35,
             };
@@ -11890,7 +11758,6 @@ impl State {
         let lobby_download = self.lobby_download_status();
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let size_label = format!("Playfield {}", self.playfield_label());
-        let mut finish_calibration = false;
         // A test play that couldn't load (or ended up in song select) goes back to its editor.
         if self.editor_back.is_some() && matches!(self.scene, Scene::Select) {
             let why = std::mem::take(&mut self.status);
@@ -12055,7 +11922,7 @@ impl State {
         }
         // Back from calibrating: on with the guide.
         if self.guide.after.is_some()
-            && !matches!(self.scene, Scene::Calibrate { .. })
+            && self.calibration_run().is_none()
             && !self.scene.screen().is_some_and(|s| s.calibrating())
         {
             self.guide.page = self.guide.after.take();
@@ -12111,10 +11978,7 @@ impl State {
             && !self.in_song()
             && !matches!(
                 self.scene,
-                Scene::Play { .. }
-                    | Scene::MpPlay { .. }
-                    | Scene::Calibrate { .. }
-                    | Scene::Loading { .. }
+                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Loading { .. }
             )
         {
             self.screen_fade = Some(0.0);
@@ -13197,36 +13061,6 @@ impl State {
                     next = Some(Scene::Select);
                 }
             }
-            Scene::Calibrate { vsync, .. } => 'play: {
-                let Some(game) = self.play.as_deref_mut() else {
-                    break 'play;
-                };
-                if game.update(now, sound(&self.audio), self.play_offset) {
-                    finish_calibration = true;
-                }
-                if self.auto {
-                    game.set_autoplay_style(self.cfg.autoplay);
-                    game.autoplay(sound(&self.audio));
-                }
-                if *vsync {
-                    game.set_visual_offset(visual_offset);
-                    draw_game_area(
-                        canvas,
-                        &self.cfg,
-                        &mut self.frame_clip,
-                        &self.grip,
-                        &self.hover,
-                        self.bg_brightness > 0.0,
-                        |c| {
-                            game.draw_playfield(c, self.cfg.scroll_speed);
-                        },
-                    );
-                    game.draw_hud(canvas);
-                    calibrate::draw_by_sight(canvas, game, self.cfg.vsync_tune_ms);
-                } else {
-                    calibrate::draw_by_ear(canvas, game);
-                }
-            }
             Scene::Other(_) => {
                 let frame = screens::screen::Frame {
                     now,
@@ -13234,6 +13068,7 @@ impl State {
                     lobby_host,
                     size_label: &size_label,
                     lobby_download,
+                    visual_offset,
                 };
                 if let Some(s) = self.draw_screen(canvas, &frame) {
                     next = Some(s);
@@ -13269,10 +13104,8 @@ impl State {
         }
         if self.cfg.show_playfield_size
             && !mobile::active()
-            && matches!(
-                self.scene,
-                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
-            )
+            && (matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. })
+                || self.calibration_run().is_some())
         {
             let text = self.playfield_label();
             let tw = Canvas::text_width(7.0, &text);
@@ -13458,7 +13291,7 @@ impl State {
         if let Some(out) = home_out {
             self.home_out(out);
         }
-        if finish_calibration {
+        if std::mem::take(&mut self.calibration_over) {
             self.finish_calibration();
         }
         if let Some(s) = next {
