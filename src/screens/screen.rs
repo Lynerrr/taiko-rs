@@ -98,6 +98,14 @@ pub(crate) trait Screen: Any + Send {
     fn takes_every_key(&self) -> bool {
         false
     }
+    /// A song is played or watched on it, or about to be (`State::in_song`).
+    fn in_song(&self) -> bool {
+        false
+    }
+    /// It is part of a match being played: waiting for it to start or playing it.
+    fn in_match(&self) -> bool {
+        false
+    }
     /// It is part of a multiplayer room: the room's map is the one it is about, and losing
     /// the connection leaves it.
     fn in_room(&self) -> bool {
@@ -197,6 +205,8 @@ struct Shadow {
     covers_social_tab: bool,
     over_lobby: bool,
     in_room: bool,
+    in_song: bool,
+    in_match: bool,
     song_select: bool,
     map_from_song_select: bool,
     allows_settings: bool,
@@ -235,6 +245,8 @@ impl Shadow {
             covers_social_tab: screen.covers_social_tab(),
             over_lobby: screen.over_lobby(),
             in_room: screen.in_room(),
+            in_song: screen.in_song(),
+            in_match: screen.in_match(),
             song_select: screen.song_select(),
             map_from_song_select: screen.map_from_song_select(),
             allows_settings: screen.allows_settings(),
@@ -302,6 +314,12 @@ impl Screen for Shadow {
     }
     fn in_room(&self) -> bool {
         self.in_room
+    }
+    fn in_song(&self) -> bool {
+        self.in_song
+    }
+    fn in_match(&self) -> bool {
+        self.in_match
     }
     fn song_select(&self) -> bool {
         self.song_select
@@ -503,6 +521,7 @@ mod tests {
         "Download",
         "MpMenu",
         "MpResults",
+        "MpWait",
     ];
 
     #[test]

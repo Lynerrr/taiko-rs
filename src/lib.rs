@@ -159,6 +159,7 @@ use screens::hud_editor::HudEdit;
 use screens::menu::{update_badge, updating_badge};
 use screens::mp_menu::MpMenu;
 use screens::mp_results::MpResults;
+use screens::mp_wait::MpWait;
 use screens::play::{
     FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
     pause_width,
@@ -217,16 +218,9 @@ enum Scene {
         back: Box<Scene>,
         vsync: bool,
     },
-    /// Multiplayer: room lobby, waiting/countdown, match (the menu and the results are
-    /// `screens::mp_menu` and `screens::mp_results`).
+    /// Multiplayer: room lobby and match (the menu, the wait for the match to start and the
+    /// results are `screens::mp_menu`, `screens::mp_wait` and `screens::mp_results`).
     Lobby,
-    /// `from`: map time the match starts at.
-    MpWait {
-        rx: Job<Loaded>,
-        loaded: Option<Box<(Beatmap, Arc<Track>)>>,
-        start: Option<Instant>,
-        from: Option<f64>,
-    },
     MpPlay {
         game: Box<Play>,
         quit_armed: Option<Instant>,
@@ -953,11 +947,10 @@ impl State {
             self.scene,
             Scene::Play { .. }
                 | Scene::MpPlay { .. }
-                | Scene::MpWait { .. }
                 | Scene::Calibrate { .. }
                 | Scene::Spectate(_)
                 | Scene::Watch(_)
-        )
+        ) || self.scene.screen().is_some_and(|s| s.in_song())
     }
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
@@ -1091,7 +1084,7 @@ impl State {
         });
         let lobby = matches!(
             self.scene,
-            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_)
+            Scene::Lobby | Scene::MpPlay { .. } | Scene::Spectate(_)
         ) || matches!(&self.scene, Scene::Settings { prev: back } if matches!(**back, Scene::Lobby))
             || self
                 .scene
@@ -1805,7 +1798,7 @@ impl State {
             return Some(entry);
         }
         let lobby = match &self.scene {
-            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) => true,
+            Scene::Lobby | Scene::MpPlay { .. } | Scene::Spectate(_) => true,
             Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
             Scene::Other(s) => s.over_lobby() || s.in_room(),
             _ => false,
@@ -4688,6 +4681,19 @@ impl State {
                 });
             (details, state)
         };
+        // In a match: waiting for it to start, or playing it.
+        let in_match = || {
+            let s = self.mp.as_ref()?;
+            let label = s.map.as_ref().map(map_label).unwrap_or_default();
+            let (n, rate) = (
+                players(s),
+                rate_text(s.map.as_ref().map(|m| m.rate).unwrap_or(1.0)),
+            );
+            Some((
+                label,
+                tr!("Multiplayer match, {n}{rate}", "マルチの対戦、{n}{rate}", "Матч мультиплеера, {n}{rate}";),
+            ))
+        };
         // Away: the idle screen is all the way in (the timer then counts the time away).
         if self.idle.amount() >= 1.0 {
             let song = self
@@ -4727,18 +4733,8 @@ impl State {
                 )
                 .into(),
             ),
-            Scene::MpWait { .. } | Scene::MpPlay { .. } => {
-                let s = self.mp.as_ref()?;
-                let label = s.map.as_ref().map(map_label).unwrap_or_default();
-                let (n, rate) = (
-                    players(s),
-                    rate_text(s.map.as_ref().map(|m| m.rate).unwrap_or(1.0)),
-                );
-                (
-                    label,
-                    tr!("Multiplayer match, {n}{rate}", "マルチの対戦、{n}{rate}", "Матч мультиплеера, {n}{rate}";),
-                )
-            }
+            Scene::MpPlay { .. } => in_match()?,
+            Scene::Other(s) if s.in_match() => in_match()?,
             Scene::Spectate(v) => {
                 let label = self
                     .mp
@@ -5329,9 +5325,7 @@ impl State {
             Scene::Loading { entry, .. }
             | Scene::Play { entry, .. }
             | Scene::Results { entry, .. } => Some(*entry),
-            Scene::MpWait { .. } | Scene::MpPlay { .. } => {
-                self.mp.as_ref().and_then(|s| s.map_entry)
-            }
+            Scene::MpPlay { .. } => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Other(s) if s.in_room() => self.mp.as_ref().and_then(|s| s.map_entry),
             _ => None,
         }
@@ -7363,18 +7357,6 @@ impl State {
                     _ => {}
                 }
             }
-            Scene::MpWait { .. } => {
-                if code == KeyCode::Escape {
-                    if let Some(s) = &self.mp {
-                        s.client.send(net::ClientMsg::Loaded(false));
-                        s.client.send(net::ClientMsg::Finished(net::Final {
-                            quit: true,
-                            ..Default::default()
-                        }));
-                    }
-                    self.scene = Scene::Lobby;
-                }
-            }
             Scene::MpPlay { game, quit_armed } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => {
@@ -8001,7 +7983,7 @@ impl State {
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
             Scene::Lobby => "lobby",
-            Scene::MpWait { .. } | Scene::MpPlay { .. } => "multiplayer match",
+            Scene::MpPlay { .. } => "multiplayer match",
             Scene::Spectate(_) => "spectating",
             Scene::Watch(_) => "watching a friend",
             Scene::Editor(_) => "map editor",
@@ -9680,7 +9662,6 @@ impl State {
             self.scene,
             Scene::Play { .. }
                 | Scene::MpPlay { .. }
-                | Scene::MpWait { .. }
                 | Scene::Loading { .. }
                 | Scene::Spectate(_)
                 | Scene::Watch(_)
@@ -10377,9 +10358,8 @@ impl State {
             Scene::Watch(v) => Activity::Watching {
                 name: v.player.clone(),
             },
-            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) => {
-                Activity::Match { map: lobby_map() }
-            }
+            Scene::MpPlay { .. } | Scene::Spectate(_) => Activity::Match { map: lobby_map() },
+            Scene::Other(s) if s.in_match() => Activity::Match { map: lobby_map() },
             _ => match &self.mp {
                 Some(s) => Activity::Lobby {
                     room: s.online_room,
@@ -10993,7 +10973,12 @@ impl State {
                 s.map = map;
                 // Dropped from the match (e.g. load timeout) while waiting for it to start.
                 let dropped = s.me().is_some_and(|p| p.status == net::Status::Lobby);
-                if dropped && matches!(self.scene, Scene::MpWait { start: None, .. }) {
+                if dropped
+                    && self
+                        .scene
+                        .screen_mut::<MpWait>()
+                        .is_some_and(|w| w.start.is_none())
+                {
                     self.scene = Scene::Lobby;
                     self.toast("the match started without you (map didn't load in time)".into());
                 }
@@ -11023,12 +11008,7 @@ impl State {
                                 .plus(self.cfg.mods.free())
                         };
                         let rx = self.load_with(i, map.rate, mods);
-                        self.scene = Scene::MpWait {
-                            rx,
-                            loaded: None,
-                            start: None,
-                            from: map.from,
-                        };
+                        self.scene = MpWait::scene(rx, map.from);
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
                 }
@@ -11036,8 +11016,8 @@ impl State {
             ServerMsg::Start { at } => {
                 let Some(s) = &self.mp else { return };
                 let when = s.client.local_instant(at);
-                if let Scene::MpWait { start, .. } = &mut self.scene {
-                    *start = Some(when);
+                if let Some(w) = self.scene.screen_mut::<MpWait>() {
+                    w.start = Some(when);
                 }
             }
             ServerMsg::MapRequested { from } => self.send_map_to(from),
@@ -11148,7 +11128,7 @@ impl State {
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
                 let in_mp = matches!(
                     self.scene,
-                    Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_)
+                    Scene::Lobby | Scene::MpPlay { .. } | Scene::Spectate(_)
                 ) || self.scene.screen().is_some_and(|s| s.in_room());
                 self.toast(format!("multiplayer: {why}"));
                 self.mp = None;
@@ -11600,10 +11580,7 @@ impl State {
             }
             return;
         }
-        if matches!(
-            self.scene,
-            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. }
-        ) {
+        if matches!(self.scene, Scene::Lobby | Scene::MpPlay { .. }) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
         }
@@ -11809,7 +11786,6 @@ impl State {
             }
             Scene::Calibrate { .. } | Scene::Other(_) => {}
             Scene::Lobby
-            | Scene::MpWait { .. }
             | Scene::MpPlay { .. }
             | Scene::Spectate(_)
             | Scene::Watch(_)
@@ -12380,7 +12356,6 @@ impl State {
                     | Scene::MpPlay { .. }
                     | Scene::Calibrate { .. }
                     | Scene::Loading { .. }
-                    | Scene::MpWait { .. }
             )
         {
             self.screen_fade = Some(0.0);
@@ -13149,91 +13124,6 @@ impl State {
                 }
                 None => next = Some(MpMenu::scene()),
             },
-            Scene::MpWait {
-                rx,
-                loaded,
-                start,
-                from,
-            } => {
-                match rx.poll_ended() {
-                    Some(Some(Ok(l))) => {
-                        *loaded = Some(Box::new(l));
-                        if let Some(s) = &self.mp {
-                            s.client.send(net::ClientMsg::Loaded(true));
-                        }
-                    }
-                    Some(Some(Err(e))) => {
-                        if let Some(s) = &self.mp {
-                            s.client.send(net::ClientMsg::Loaded(false));
-                        }
-                        self.status = format!("failed to load map: {e}");
-                        next = Some(Scene::Lobby);
-                    }
-                    None => {}
-                    Some(None) => next = Some(Scene::Lobby),
-                }
-                if start.is_some_and(|at| now >= at)
-                    && let Some(loaded) = loaded.take()
-                {
-                    let (map, track) = *loaded;
-                    let seed = self
-                        .mp
-                        .as_ref()
-                        .and_then(|s| s.map.as_ref())
-                        .and_then(|m| m.seed)
-                        .unwrap_or(0);
-                    let defense = self
-                        .mp
-                        .as_ref()
-                        .and_then(|s| s.map.as_ref())
-                        .and_then(|m| m.defense);
-                    // Defense is played on the Maze, whatever else bent the lane.
-                    let mut mods = self.pending_mods;
-                    if defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
-                        mods.toggle(mods::Mod::Maze);
-                    }
-                    let mut game = Play::new(
-                        Game::with_seed(map, track, sound(&self.audio), mods, seed)
-                            .with_settings(&crate::game::settings()),
-                    );
-                    if let (Some(d), Some(s)) = (defense, &self.mp) {
-                        let (team, me) = multiplayer::defense_team(s);
-                        game.set_defense(team, me, d);
-                    }
-                    game.set_scroll_speed(self.cfg.scroll_speed);
-                    if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                        let live_pp = pp::Live::start(
-                            self.library[i].path.clone(),
-                            stars::read,
-                            game.rate(),
-                            self.pending_mods,
-                            game.scroll_speed(),
-                            game.seed(),
-                            Default::default(),
-                        );
-                        game.set_live_pp(live_pp);
-                    }
-                    if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
-                        use_mod_settings(&mut game, m);
-                    }
-                    if let Some(t) = *from {
-                        game.start_from(t, sound(&self.audio), self.play_offset);
-                    }
-                    game.set_record(true);
-                    if let Some(s) = &mut self.mp {
-                        s.inputs_sent = 0;
-                        s.skip_asked = false;
-                        s.skip_votes = None;
-                    }
-                    next = Some(Scene::MpPlay {
-                        game: Box::new(game),
-                        quit_armed: None,
-                    });
-                }
-                if let Some(s) = &self.mp {
-                    multiplayer::draw_waiting(canvas, s, *start, loaded.is_some(), now);
-                }
-            }
             Scene::MpPlay { game, .. } => {
                 let done = game.update(now, sound(&self.audio), self.play_offset);
                 if self.auto || game.mods().has(mods::Mod::Autoplay) {
@@ -14361,7 +14251,7 @@ impl State {
             i.len() < self.library.len() || i.iter().any(Option::is_none)
         });
         let map_loading = match &self.scene {
-            Scene::Loading { rx, .. } | Scene::MpWait { rx, .. } => rx.is_busy(),
+            Scene::Loading { rx, .. } => rx.is_busy(),
             Scene::Spectate(v) => v.rx.is_busy(),
             Scene::Watch(v) => v.rx.is_busy(),
             Scene::Other(s) => s.loading(),
@@ -14841,10 +14731,9 @@ impl State {
     /// Song select goes to the maps just added, whatever its filters. During a game they're only
     /// listed: the cursor stays where the player left it.
     fn reveal_maps(&mut self, maps: Vec<PathBuf>) {
-        if !matches!(
-            self.scene,
-            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }
-        ) && self.mp.is_none()
+        if !(matches!(self.scene, Scene::Play { .. } | Scene::MpPlay { .. })
+            || self.scene.screen().is_some_and(|s| s.in_match()))
+            && self.mp.is_none()
         {
             self.select.reveal(&self.library, maps);
         } else {
