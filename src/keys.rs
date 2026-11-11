@@ -598,6 +598,11 @@ pub fn types_text(key: KeyCode) -> bool {
         )
 }
 
+/// The numpad's plus and minus: they type a sign where there is text to put it in.
+pub fn is_numpad_sign(key: KeyCode) -> bool {
+    matches!(key, KeyCode::NumpadAdd | KeyCode::NumpadSubtract)
+}
+
 /// Whether `key` starts a word: punctuation keeps its other jobs until something's been typed.
 pub fn starts_text(key: KeyCode) -> bool {
     let name = format!("{key:?}");
