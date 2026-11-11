@@ -129,7 +129,11 @@ public class TaikoActivity extends NativeActivity {
             return;
         }
         pickerCacheSwept = true;
-        File[] dirs = getCacheDir().listFiles(file ->
+        File cache = getCacheDir();
+        if (cache == null) {
+            return;
+        }
+        File[] dirs = cache.listFiles(file ->
             file.getName().startsWith(PICK_CACHE_PREFIX)
                 && Files.isDirectory(file.toPath(), LinkOption.NOFOLLOW_LINKS));
         if (dirs == null) {

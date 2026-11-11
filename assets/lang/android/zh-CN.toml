@@ -5,3 +5,8 @@
 "File selection failed: {}" = "文件选择失败：{}"
 "choose a file of type {}" = "请选择以下格式的文件：{}"
 "file selection stopped" = "文件选择已中断"
+"Skip intro" = "跳过前奏"
+"Choose a song file...   [Enter]" = "选择歌曲文件   [Enter]"
+"Drop a song here: mp3, ogg, wav or flac" = "将歌曲拖到此处：mp3、ogg、wav 或 flac"
+"Drop another song on the window to use that instead." = "将另一首歌曲拖到窗口即可替换当前歌曲。"
+"Choose the background" = "选择背景图片"

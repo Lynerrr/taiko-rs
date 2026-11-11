@@ -757,7 +757,10 @@ impl Home {
             }
             Act::Tour => return Out::Tour,
             Act::Focus(_) => {}
-            Act::PickBackground => self.ask_for_file(FileKind::Image, "Choose the background"),
+            Act::PickBackground => self.ask_for_file(
+                FileKind::Image,
+                tr!("Choose the background", "背景画像を選ぶ", "Выбрать фон"),
+            ),
             Act::ClearBackground => self.set_background(None),
             Act::Format(tko) => self.tko = tko,
             Act::Wave => {
@@ -1321,7 +1324,11 @@ impl Home {
                     "Выберите песню на устройстве: mp3, ogg, wav или flac"
                 )
             } else {
-                "Drop a song here: mp3, ogg, wav or flac"
+                tr!(
+                    "Drop a song here: mp3, ogg, wav or flac",
+                    "曲をここにドロップ: mp3、ogg、wav、flac",
+                    "Перетащите сюда песню: mp3, ogg, wav или flac"
+                )
             },
         );
         c.text_centered(
@@ -1343,7 +1350,11 @@ impl Home {
                     "Выбрать файл песни..."
                 )
             } else {
-                "Choose a song file...   [Enter]"
+                tr!(
+                    "Choose a song file...   [Enter]",
+                    "曲のファイルを選ぶ...   [Enter]",
+                    "Выбрать файл песни...   [Enter]"
+                )
             },
             8.0,
             Hit::EditorHome(Act::Browse),
@@ -1578,7 +1589,11 @@ impl Home {
                     "Вернитесь назад, чтобы выбрать другую песню."
                 )
             } else {
-                "Drop another song on the window to use that instead."
+                tr!(
+                    "Drop another song on the window to use that instead.",
+                    "別の曲をウィンドウにドロップすると差し替えられます。",
+                    "Перетащите в окно другую песню, чтобы заменить текущую."
+                )
             },
         );
         let mut y = 100.0;
