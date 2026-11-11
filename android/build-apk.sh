@@ -111,6 +111,7 @@ import os, sys, zipfile
 stage = sys.argv[1]
 with zipfile.ZipFile(os.path.join(stage, "unsigned.apk"), "a", zipfile.ZIP_DEFLATED) as apk:
     apk.write(os.path.join(stage, "classes.dex"), "classes.dex")
+    apk.write("assets/font/FusionPixel-OFL.txt", "assets/licenses/FusionPixel-OFL.txt")
     for abi in sorted(os.listdir(os.path.join(stage, "lib"))):
         apk.write(os.path.join(stage, "lib", abi, "libtaiko_rs.so"), f"lib/{abi}/libtaiko_rs.so")
 EOF

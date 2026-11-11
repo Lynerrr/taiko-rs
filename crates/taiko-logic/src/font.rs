@@ -1,5 +1,5 @@
-//! Classic 5x7 LCD font for printable ASCII and Cyrillic, and 7x7 Japanese (Misaki Gothic 2nd:
-//! kana, kanji and the rest of JIS X 0208). Each glyph is a row of columns, bit 0 = top row.
+//! LCD glyphs for printable ASCII, Cyrillic and Japanese, and 11-pixel Simplified Chinese
+//! glyphs. The LCD bitmaps store one byte per column, with the top pixel in bit 0.
 
 const GLYPHS: [[u8; 5]; 95] = [
     [0x00, 0x00, 0x00, 0x00, 0x00], // ' '
@@ -175,15 +175,22 @@ static MISAKI: &[u8] = include_bytes!("../../../assets/font/misaki.bin");
 const MISAKI_GLYPHS: usize = MISAKI.len() / 12;
 const MISAKI_BASE: usize = 95 + 66;
 
-/// How many glyphs there are: ASCII, then Cyrillic, then Misaki's (`index` numbers them in that
-/// order).
-pub const COUNT: usize = MISAKI_BASE + MISAKI_GLYPHS;
+/// One codepoint, seven columns for the server's LCD text, then the 11-pixel bitmap.
+static CHINESE: &[u8] = include_bytes!("../../../assets/font/chinese.bin");
+pub const CHINESE_SIDE: usize = 11;
+const CHINESE_RECORD: usize = 4 + 7 + CHINESE_SIDE * CHINESE_SIDE;
+const CHINESE_GLYPHS: usize = CHINESE.len() / CHINESE_RECORD;
+pub const CHINESE_BASE: usize = MISAKI_BASE + MISAKI_GLYPHS;
 
-/// Glyphs per row of the atlas, each in a cell `CELL_W` x 7.
+/// How many glyphs there are: ASCII, Cyrillic, Misaki's, then the Chinese subset.
+pub const COUNT: usize = CHINESE_BASE + CHINESE_GLYPHS;
+
+/// LCD glyphs per row, each in a cell `CELL_W` x 7. The Chinese cells are below them.
 pub const ATLAS_COLS: usize = 128;
 pub const CELL_W: usize = 8;
+pub const CHINESE_COLS: usize = ATLAS_COLS * CELL_W / CHINESE_SIDE;
+pub const CHINESE_Y: usize = CHINESE_BASE.div_ceil(ATLAS_COLS) * 7;
 
-#[inline]
 fn misaki(k: usize) -> (u32, &'static [u8]) {
     let g = &MISAKI[k * 12..k * 12 + 12];
     (
@@ -192,10 +199,39 @@ fn misaki(k: usize) -> (u32, &'static [u8]) {
     )
 }
 
-/// The glyph `c` draws as, numbered 0..COUNT: printable ASCII from 0, Cyrillic from 95, then
-/// Misaki's.
+fn chinese(k: usize) -> &'static [u8] {
+    &CHINESE[k * CHINESE_RECORD..][..CHINESE_RECORD]
+}
+
+fn lookup(codepoint: u32, len: usize, code_at: impl Fn(usize) -> u32) -> Option<usize> {
+    let (mut lo, mut hi) = (0, len);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        match code_at(mid).cmp(&codepoint) {
+            std::cmp::Ordering::Less => lo = mid + 1,
+            std::cmp::Ordering::Greater => hi = mid,
+            std::cmp::Ordering::Equal => return Some(mid),
+        }
+    }
+    None
+}
+
+/// The glyph `c` draws as, numbered 0..COUNT: printable ASCII, Cyrillic, Misaki's, then Chinese.
 #[inline]
 pub fn index(c: char) -> usize {
+    index_for(c, Script::Default)
+}
+
+/// A caller's preferred glyph shapes for characters shared by multiple scripts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Script {
+    Default,
+    SimplifiedChinese,
+}
+
+/// Looks up a glyph with an explicit script preference.
+#[inline]
+pub fn index_for(c: char, script: Script) -> usize {
     let i = c as u32;
     match c {
         _ if (32..127).contains(&i) => (i - 32) as usize,
@@ -211,16 +247,19 @@ pub fn index(c: char) -> usize {
         '№' => index('#'),
         '\u{a0}' => index(' '),
         _ => {
-            let (mut lo, mut hi) = (0, MISAKI_GLYPHS);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                match misaki(mid).0.cmp(&i) {
-                    std::cmp::Ordering::Less => lo = mid + 1,
-                    std::cmp::Ordering::Greater => hi = mid,
-                    std::cmp::Ordering::Equal => return MISAKI_BASE + mid,
-                }
+            let lcd = || lookup(i, MISAKI_GLYPHS, |k| misaki(k).0).map(|k| MISAKI_BASE + k);
+            let detailed = || {
+                lookup(i, CHINESE_GLYPHS, |k| {
+                    let g = chinese(k);
+                    u32::from_le_bytes([g[0], g[1], g[2], g[3]])
+                })
+                .map(|k| CHINESE_BASE + k)
+            };
+            if script == Script::SimplifiedChinese && i >= 0x2e80 {
+                detailed().or_else(lcd).unwrap_or_else(|| index('?'))
+            } else {
+                lcd().or_else(detailed).unwrap_or_else(|| index('?'))
             }
-            index('?')
         }
     }
 }
@@ -231,14 +270,17 @@ pub fn glyph(c: char) -> &'static [u8] {
     by_index(index(c))
 }
 
+/// LCD bitmap for a previously looked up glyph.
 #[inline]
-fn by_index(i: usize) -> &'static [u8] {
+pub fn by_index(i: usize) -> &'static [u8] {
     if i < 95 {
         &GLYPHS[i]
     } else if i < MISAKI_BASE {
         &CYRILLIC[i - 95]
-    } else {
+    } else if i < CHINESE_BASE {
         misaki(i - MISAKI_BASE).1
+    } else {
+        &chinese(i - CHINESE_BASE)[4..11]
     }
 }
 
@@ -252,19 +294,25 @@ pub fn columns(i: usize) -> usize {
     }
 }
 
-/// How far `c` advances the text, in font pixels (6, or 8 for Japanese).
+/// How far `c` advances the text, in font pixels (6, or 8 for CJK glyphs).
 #[inline]
 pub fn advance(c: char) -> usize {
     columns(index(c)) + 1
 }
 
-/// Every glyph as one 8-bit image (255 = ink), for the GPU: `ATLAS_COLS` cells of `CELL_W` x 7
-/// to a row, glyph `i`'s column `c`, row `r` at (`i % ATLAS_COLS * CELL_W + c`,
-/// `i / ATLAS_COLS * 7 + r`).
+/// Coverage values for a detailed glyph, if it uses the Chinese atlas region.
+pub fn chinese_pixels(i: usize) -> Option<&'static [u8]> {
+    (CHINESE_BASE..COUNT)
+        .contains(&i)
+        .then(|| &chinese(i - CHINESE_BASE)[11..])
+}
+
+/// LCD and Chinese glyphs packed into the same 8-bit texture, with zero for transparent pixels.
 pub fn atlas() -> (u32, u32, Vec<u8>) {
-    let (w, h) = (ATLAS_COLS * CELL_W, COUNT.div_ceil(ATLAS_COLS) * 7);
+    let w = ATLAS_COLS * CELL_W;
+    let h = CHINESE_Y + CHINESE_GLYPHS.div_ceil(CHINESE_COLS) * CHINESE_SIDE;
     let mut px = vec![0u8; w * h];
-    for i in 0..COUNT {
+    for i in 0..CHINESE_BASE {
         let (x0, y0) = (i % ATLAS_COLS * CELL_W, i / ATLAS_COLS * 7);
         for (c, bits) in by_index(i).iter().enumerate() {
             for r in 0..7 {
@@ -274,11 +322,21 @@ pub fn atlas() -> (u32, u32, Vec<u8>) {
             }
         }
     }
+    for k in 0..CHINESE_GLYPHS {
+        let (x0, y0) = (
+            k % CHINESE_COLS * CHINESE_SIDE,
+            CHINESE_Y + k / CHINESE_COLS * CHINESE_SIDE,
+        );
+        let (rows, _) = chinese(k)[11..].as_chunks::<CHINESE_SIDE>();
+        for (r, row) in rows.iter().enumerate() {
+            let start = (y0 + r) * w + x0;
+            px[start..start + CHINESE_SIDE].copy_from_slice(row);
+        }
+    }
     (w as u32, h as u32, px)
 }
 
 /// The font has a real glyph for `c` (anything else draws as `?`).
-#[inline]
 pub fn drawable(c: char) -> bool {
     c == '?' || index(c) != index('?')
 }
@@ -321,6 +379,41 @@ mod tests {
         assert!(!drawable('\u{1F600}'));
         // Misaki's own Latin and Cyrillic stay out: the 5x7 ones draw them.
         assert_eq!(glyph('A').len(), 5);
-        assert!(COUNT.div_ceil(ATLAS_COLS) * 7 <= 2048);
+        assert!(atlas().1 <= 2048);
+    }
+
+    #[test]
+    fn simplified_chinese_ui_has_real_glyphs() {
+        let glyphs = "简体中文"
+            .chars()
+            .map(|ch| index_for(ch, Script::SimplifiedChinese));
+        let (w, h, pixels) = atlas();
+        assert!(h <= 2048);
+        for i in glyphs {
+            let detail = chinese_pixels(i).expect("Simplified Chinese uses the detailed face");
+            assert!(detail.iter().all(|&alpha| alpha == 0 || alpha == 255));
+            // The language label fills the same cap height as the regular LCD font.
+            assert!(detail[..CHINESE_SIDE].contains(&255));
+            assert!(detail[detail.len() - CHINESE_SIDE..].contains(&255));
+            let k = i - CHINESE_BASE;
+            let start = (CHINESE_Y + k / CHINESE_COLS * CHINESE_SIDE) * w as usize
+                + k % CHINESE_COLS * CHINESE_SIDE;
+            assert_eq!(
+                &pixels[start..start + CHINESE_SIDE],
+                &detail[..CHINESE_SIDE]
+            );
+        }
+        assert!(chinese_pixels(index_for('中', Script::Default)).is_none());
+        for text in [
+            "简体中文",
+            "滚动速度 语言 触控布局 截图 歌曲文件夹",
+            "跳过前奏 选择歌曲文件 下载谱面 开始游戏 谱面编辑器 按空格",
+            "多人游戏 勋章 退出 设置",
+        ] {
+            for c in text.chars().filter(|c| !c.is_ascii_whitespace()) {
+                assert!(drawable(c), "{c} falls back to the replacement glyph");
+                assert!(glyph(c).iter().any(|&bits| bits != 0), "{c} is blank");
+            }
+        }
     }
 }

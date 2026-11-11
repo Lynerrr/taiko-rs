@@ -14,6 +14,7 @@ mod drawing;
 mod flows;
 mod formats;
 mod gameplay;
+mod glyphs;
 mod network;
 mod phone;
 mod pointer;

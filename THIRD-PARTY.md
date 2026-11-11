@@ -27,6 +27,9 @@ taiko.rs is an independent project. It is not affiliated with, or endorsed by, p
   `assets/font/misaki.py`. Its license: "These fonts are free softwares. Unlimited permission is
   granted to use, copy, and distribute it, with or without modification, either commercially
   and noncommercially. THESE FONTS ARE PROVIDED "AS IS" WITHOUT WARRANTY."
+- Simplified Chinese UI glyphs are baked from [Fusion Pixel Font 12px](https://github.com/TakWolf/fusion-pixel-font/releases/tag/2026.10.25)
+  into `assets/font/chinese.bin` by `assets/font/chinese.py`. Its copyright and SIL Open Font
+  License 1.1 are in `assets/font/FusionPixel-OFL.txt`.
 
 ## Rust libraries
 

@@ -20,7 +20,7 @@ pub struct Shape {
     pub border: [f32; 4],
     /// x: corner radius, y: border width, z: glow/softness width, w: half clip (0 none, 1 left, 2 right)
     /// or a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`) or a character of the font
-    /// (`GLYPH_BASE` + `font::index`, in `fill`, filling the quad's 5x7 font pixels) or a profile
+    /// (`GLYPH_BASE` + `font::index`, in `fill`, sampled from the font atlas) or a profile
     /// picture (-1 - its `avatars` slot, rounded by x, faded by fill's alpha).
     pub params: [f32; 4],
     /// Rotation (radians, clockwise on screen) about the centre; 0 for nearly everything.
@@ -831,6 +831,10 @@ fn shape_shader() -> String {
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
         .replace("FONT_COLS", &crate::font::ATLAS_COLS.to_string())
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
+        .replace("CJK_BASE", &crate::font::CHINESE_BASE.to_string())
+        .replace("CJK_COLS", &crate::font::CHINESE_COLS.to_string())
+        .replace("CJK_SIDE", &crate::font::CHINESE_SIDE.to_string())
+        .replace("CJK_Y", &crate::font::CHINESE_Y.to_string())
         .replace("AVATAR_GRID", &crate::avatars::GRID.to_string())
         .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
         .replace("MEDIA_SIDE", &MEDIA_SIDE.to_string())
@@ -941,25 +945,27 @@ fn shade(in: VOut) -> vec4<f32> {
     if (in.params.w > 99.5) {
         // A character: how much of this pixel the font pixels under it cover (a box filter, so
         // edges look like single rects did, with no seams between neighbouring font pixels).
-        // Glyphs are 7 font pixels tall and as many wide as their quad (5, or 7 for Japanese),
-        // in cells of the atlas (`font::atlas`).
-        let g = i32(in.params.w - 99.5);
-        let fpx = in.half.y / 3.5;
-        let cols = i32(round(in.half.x * 2.0 / fpx));
-        let cell = vec2<i32>(g % FONT_COLS * FONT_CELL_W, g / FONT_COLS * 7);
-        let p = (in.local + in.half) / fpx;
-        let r = 0.5 / fpx;
-        let lo = p - vec2<f32>(r);
-        let hi = p + vec2<f32>(r);
+        let glyph = i32(in.params.w - 99.5);
+        var bounds = vec2<i32>(i32(round(in.half.x * 7.0 / in.half.y)), 7);
+        var cell = vec2<i32>(glyph % FONT_COLS * FONT_CELL_W, glyph / FONT_COLS * 7);
+        if (glyph >= CJK_BASE) {
+            let cjk = glyph - CJK_BASE;
+            bounds = vec2<i32>(CJK_SIDE);
+            cell = vec2<i32>(cjk % CJK_COLS * CJK_SIDE, CJK_Y + cjk / CJK_COLS * CJK_SIDE);
+        }
+        let sample_size = 2.0 * in.half / vec2<f32>(bounds);
+        let p = in.local + in.half;
+        let lo = (p - vec2<f32>(0.5)) / sample_size;
+        let hi = (p + vec2<f32>(0.5)) / sample_size;
         var cover = 0.0;
-        for (var y = max(i32(floor(lo.y)), 0); y < min(i32(ceil(hi.y)), 7); y++) {
+        for (var y = max(i32(floor(lo.y)), 0); y < min(i32(ceil(hi.y)), bounds.y); y++) {
             let oy = min(hi.y, f32(y + 1)) - max(lo.y, f32(y));
-            for (var x = max(i32(floor(lo.x)), 0); x < min(i32(ceil(hi.x)), cols); x++) {
+            for (var x = max(i32(floor(lo.x)), 0); x < min(i32(ceil(hi.x)), bounds.x); x++) {
                 let ox = min(hi.x, f32(x + 1)) - max(lo.x, f32(x));
                 cover += textureLoad(font, cell + vec2<i32>(x, y), 0).r * ox * oy;
             }
         }
-        let a = in.fill.a * cover / (4.0 * r * r);
+        let a = in.fill.a * cover * sample_size.x * sample_size.y;
         return vec4<f32>(in.fill.rgb * a, a);
     }
     if (in.params.w > 9.5) {
@@ -2695,6 +2701,21 @@ pub fn set_text_bias(bias: f32) {
     TEXT_BIAS.with(|b| b.set(bias));
 }
 
+fn text_units(s: &str, script: font::Script) -> usize {
+    s.chars()
+        .map(|ch| font::columns(font::index_for(ch, script)) + 1)
+        .sum()
+}
+
+/// The client owns language selection; the glyph table accepts a script explicitly.
+fn font_script() -> font::Script {
+    if crate::lang::current().code() == "zh-CN" {
+        font::Script::SimplifiedChinese
+    } else {
+        font::Script::Default
+    }
+}
+
 /// One font pixel (in virtual units) of text `size` units tall.
 fn font_px(size: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
@@ -3698,11 +3719,12 @@ impl<H> Canvas<H> {
         });
     }
 
-    /// Draws text with the built-in 5x7 font; `size` is the glyph height. Returns the advance width.
+    /// Draws text with the built-in fonts; `size` is the glyph height. Returns the advance width.
     /// On a text grid (`set_text_grid`) the glyphs may come out bigger: they stay centred on the
     /// line `size` would have taken.
     pub fn text(&mut self, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
         let px = font_px(size);
+        let script = font_script();
         let x = snap_to_grid(x);
         let y = snap_to_grid(y + (size - px * 7.0) / 2.0);
         let mut cx = x;
@@ -3710,7 +3732,7 @@ impl<H> Canvas<H> {
         if !self.audit {
             // One quad per character, as wide as its glyph; the shader fills in its font pixels.
             for ch in s.chars() {
-                let i = font::index(ch);
+                let i = font::index_for(ch, script);
                 let cols = font::columns(i) as f32;
                 // Blank (space): nothing to draw.
                 if i != 0 {
@@ -3730,7 +3752,13 @@ impl<H> Canvas<H> {
         }
         // Layout checks (and their CPU-drawn pictures) see each font pixel run as its own rect.
         for ch in s.chars() {
-            let cols = font::glyph(ch);
+            let i = font::index_for(ch, script);
+            if let Some(bitmap) = font::chinese_pixels(i) {
+                self.audit_chinese_glyph(bitmap, cx, y, px * 7.0, color);
+                cx += px * 8.0;
+                continue;
+            }
+            let cols = font::by_index(i);
             for (c, bits) in cols.iter().enumerate() {
                 let mut row = 0;
                 while row < 7 {
@@ -3765,8 +3793,35 @@ impl<H> Canvas<H> {
         cx - x
     }
 
+    fn audit_chinese_glyph(&mut self, bitmap: &[u8], x: f32, y: f32, size: f32, color: [f32; 4]) {
+        let px = size / font::CHINESE_SIDE as f32;
+        let (rows, _) = bitmap.as_chunks::<{ font::CHINESE_SIDE }>();
+        for (row, samples) in rows.iter().enumerate() {
+            let mut col = 0;
+            while col < samples.len() {
+                let start = col;
+                let alpha = samples[col];
+                col += 1;
+                while col < samples.len() && samples[col] == alpha {
+                    col += 1;
+                }
+                if alpha != 0 {
+                    let mut ink = color;
+                    ink[3] *= f32::from(alpha) / 255.0;
+                    self.rect(
+                        x + start as f32 * px,
+                        y + row as f32 * px,
+                        (col - start) as f32 * px,
+                        px,
+                        ink,
+                    );
+                }
+            }
+        }
+    }
+
     pub fn text_width(size: f32, s: &str) -> f32 {
-        s.chars().map(font::advance).sum::<usize>() as f32 * font_px(size)
+        text_units(s, font_script()) as f32 * font_px(size)
     }
 
     /// The advance of one Latin character of text `size` tall (Japanese takes 4/3 of it).
@@ -3778,8 +3833,9 @@ impl<H> Canvas<H> {
     pub fn fitting_prefix(size: f32, max_w: f32, s: &str) -> usize {
         let room = (max_w / font_px(size) + 1e-3).floor() as usize;
         let mut w = 0;
+        let script = font_script();
         for (at, ch) in s.char_indices() {
-            w += font::advance(ch);
+            w += font::columns(font::index_for(ch, script)) + 1;
             if w > room {
                 return at;
             }
@@ -3889,7 +3945,7 @@ impl<H> Canvas<H> {
         let grid = TEXT_GRID.with(std::cell::Cell::get);
         if grid > 0.0 {
             // Font pixels come in whole render pixels: the biggest that fits.
-            let per_px = max_w / s.chars().map(font::advance).sum::<usize>().max(1) as f32;
+            let per_px = max_w / text_units(s, font_script()).max(1) as f32;
             return ((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
         }
         (size * max_w / w).max(min)
