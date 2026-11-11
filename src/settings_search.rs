@@ -279,6 +279,20 @@ mod tests {
     }
 
     #[test]
+    fn every_setting_is_found_by_its_name_in_every_language_and_by_its_other_words() {
+        let all = |query: &str| find(query, &|_| String::new(), &|_| true);
+        for (i, &(_, item)) in ITEMS.iter().enumerate() {
+            for l in Lang::ALL {
+                let name = lang::with(l, || item.label().to_string());
+                assert!(all(&name).contains(&i), "{item:?} by its name {name:?}");
+            }
+            for word in words(item).split_whitespace() {
+                assert!(all(word).contains(&i), "{item:?} by {word:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_row_not_in_the_list_is_not_found() {
         let hits = find("krokodil", &|_| String::new(), &|item| {
             item != Item::KrokodilKoban

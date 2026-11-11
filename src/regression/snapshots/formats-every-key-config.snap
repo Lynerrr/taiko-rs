@@ -1,0 +1,210 @@
+# taiko.rs settings
+# keys = left rim, left centre, right centre, right rim
+keys = A, S, K, L
+# previous / next playfield resolution preset
+preset_keys = F7, F8
+# touch columns left to right: KDDK, KKDD, DKKD or DDKK (K = rim, D = centre)
+touch_layout = DKKD
+# where F12 screenshots go: clipboard, folder (Screenshots) or both
+screenshot_to = both
+# the interface's language: en, ja or ru
+language = ru
+show_playfield_size = false
+# your own playfield sizes (preset list, in this order)
+saved_presets = 1600x900, 1024x768
+# where each playfield size was last put: WxH@x/y (fractions of the screen)
+preset_spots = 1600x900@0.1000/0.2000
+# what offset is set by: osu (0 is osu!'s, the output latency counts as there) | sound
+# (0 is hitting exactly on the sound you hear, the latency is taken off)
+offset_scale = sound
+# the global offset on the osu! scale: positive brings the notes earlier
+offset = 10
+# the same for older versions of the game (positive shifts the notes later), worked out with
+# the output latency below; if it is changed there, the new value is the one used
+offset_ms = -50
+offset_latency_ms = 17
+# notes drawn this many ms early to make up for display latency (judging is unaffected)
+visual_offset_ms = 8
+# 1.00 = osu!'s scroll speed
+scroll_speed = 1.35
+scroll_speed_osu = true
+master_volume = 0.35
+music_volume = 0.45
+unfocused_volume = 0.10
+fx_volume = 0.55
+# mailbox | immediate | vsync
+present_mode = vsync
+# menus always use vsync (gameplay uses present_mode)
+menu_vsync = false
+# draw at half resolution, scaled up exactly 2x (crisp pixels, faster)
+half_resolution = true
+# auto | vulkan | dx12 (Windows) | gl; auto picks DX12 on Windows where Vulkan is known to crash
+graphics_api = gl
+# mailbox/immediate only; 0 = uncapped
+fps_cap = 240
+calibration_bpm = 150
+# playfield area: x, y, width, height as fractions of the screen
+playfield_area = 0.100,0.050,0.800,0.900
+# background darkening during play, 0 (none) to 1 (hidden)
+bg_dim = 0.25
+# speed modifier (1.5 = DT) and whether it keeps the music's pitch
+rate = 1.25
+rate_keep_pitch = false
+# audio device buffer in frames (lower = less latency, more risk of crackle)
+audio_buffer = 512
+show_fps = false
+fullscreen = false
+animations = false
+splash = false
+epilepsy_warning = false
+main_menu = false
+menu_notes = false
+# dims the song's notes on the main menu's lane, 0 (none) to 1 (hidden)
+menu_notes_dim = 0.40
+guide_seen = true
+check_updates = false
+# countdown before play continues after pausing (ms)
+resume_delay_ms = 1500
+# song select order: artist, title, difficulty, length, bpm, recently played, date added
+sort = title
+kiai_effects = false
+# GREAT hits without their flash and label (only OKs and misses show)
+hide_great = false
+# a play failed by Sudden Death or Perfect starts over at once
+fail_restart = true
+# the lane and the drum's panel pure black
+black_lane = true
+# .tko notes drawn as what they are, whatever colour or size their map shows them as
+true_notes = true
+# .tko maps' flashes, glitches and camera moves toned down
+calm_maps = true
+# the drum keys move through song select and the pause menu
+drum_menus = true
+# the coloured flash on the hit target as notes are hit
+hit_flash = false
+show_offset_hint = false
+offset_hint_ur_scaled = false
+# offset/UR line during play (Tab toggles)
+show_map_info = false
+# mods picked on song select (F1), e.g. HD,HR
+mods = HR,HD
+# the live scoreboard in lobby matches (Tab toggles)
+mp_scoreboard = false
+# how autoplay hits: full, semi, single, roll or ddkk; binding 1234, 1324 or 4231; left-handed
+autoplay_style = semi
+autoplay_binding = 4231
+autoplay_left_handed = true
+# osu! skin (folder name in a Skins folder), empty = built-in
+skin = Rafis
+# parts of the skin from elsewhere: skin_part = <part> = <skin folder name> (or <built-in>)
+skin_part = notes = <built-in>
+# draw maps with the skin images in their own folder
+map_skins = false
+# main menu notes glitch when hit, and the whole screen with them and between menus
+menu_glitch = false
+# interface colour: red (the default), pink, purple, blue, teal, green, yellow, orange or #rrggbb
+accent = #123456
+# Discord status ("Playing taiko.rs"); app id empty = the built-in one
+discord_presence = false
+discord_app_id = 1234567890
+# minutes without input before the idle screen (0 = never)
+idle_minutes = 5
+# after a crash, the next start sends its report to the developers
+send_crash_reports = false
+# the map editor's first-run tour was seen (Help > Take the tour shows it again)
+editor_tour_done = true
+# in the map editor a left drag on empty timeline pans it (View > Left drag pans)
+editor_left_pan = true
+# in the map editor a red line's new time or BPM moves its notes along (Timing > Notes follow)
+editor_follow_timing = true
+# the map editor's own snap presets: beat divisions, then the name (one line each)
+editor_snap_preset = 3,6,12|Triplets
+# the snap preset in use in the map editor (none: all snaps)
+editor_snap_active = Triplets
+# maps lately opened in the editor, the latest first (one line each)
+editor_recent = /maps/a.osu
+editor_recent = /maps/b.osu
+# chats: star out swear words; a chime when a friend messages you
+chat_filter = false
+message_sound = false
+# pop-ups: a friend starts a map / comes online / messages you, a global chat line mentions you, friend requests
+notify_playing = true
+notify_online = false
+notify_messages = false
+notify_mentions = false
+notify_requests = false
+# multiplayer
+mp_name = tester
+mp_port = 7788
+mp_address = 10.0.0.2:7777
+# online server (accounts, lobbies) and your saved login there
+online_server = example.org:7800
+online_user = someone
+online_token = abc123
+# with vsync, draw notes where they'll be once the frame is on screen; ms added to that
+vsync_compensation = false
+vsync_tune_ms = -12
+# in fullscreen, the game at this size with black around it, moved from the centre (percent)
+letterbox = true
+letterbox_size = 1600x900
+letterbox_x = 10
+letterbox_y = -20
+# the window's size out of fullscreen (empty = 1280x720)
+window_size = 1600x900
+# where replays, scores, videos, taiko.rs's Songs and Skins and caches are (empty = the usual places); move it from Settings
+data_folder = /games/taiko-data
+# the mouse wheel resizes the playfield during play
+wheel_resizes_playfield = true
+# song select lists converts too
+show_converts = true
+# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)
+song_headings = true
+# during songs the background dims to black (false: the interface's grey)
+bg_dim_black = false
+# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators, ur, counts; ! before one that came later: not hidden) and its key
+interface_hidden = true
+interface_hides = score,combo,!pp,!scoreboard,!spectators,!ur,!counts
+interface_key = F9
+# song select: the song list's share of the width (drag the edge beside it); the preview's size is no longer used
+song_list_share = 0.600
+song_preview_size = 0.500
+# hotkeys moved or removed: hotkey.<name> = a key with Ctrl+ / Alt+ / Shift+ before it, or none
+hotkey.scroll_slower = Ctrl+F1
+hotkey.quit = none
+# the build last started (what's new shows after an update)
+last_build = abc1234
+# replay videos: size, fps, quality (best, high, small file, target size), target size in MB, speed (fast, balanced, slow), motion blur (off, light, strong)
+video_size = 1920x1080
+video_fps = 30
+video_quality = best
+video_target_mb = 25
+video_speed = slow
+video_blur = light
+video_hud = false
+video_hitsounds = false
+# Multiverse's universes, one per playfield, ; between: colours, note shape, speed and mods (C in the mod select)
+multiverse = classic round 1x -; neon diamond 1x -; ice ring 0.9x WV; forest pill 1x SK; classic round 1x -; candy round 1x PY; ember diamond 1.25x AC; mono square 1x BL
+# where the interface's parts go (the interface editor), and your own layouts, one per line: name: layout
+hud_layout = off=counts
+hud_preset = Mine: off=ur
+# your own Multiverse presets, one per line: name: universes as above
+multiverse_preset = Calm: classic round 1x -; neon diamond 1x -; ice ring 0.9x WV; forest pill 1x SK; classic round 1x -; candy round 1x PY; ember diamond 1.25x AC; mono square 1x BL
+# Random: repeatable note colours (C in the mod select)
+random_seed = 77
+# Shapeshift: bars per shape (4/8/16/32), bars to morph (0.5/1/2/4), order shuffle/fixed, shapes in order (- = left out)
+shapeshift = every=8 morph=1 order=fixed shapes=zigzag,uturn,spiral,loop,elbow,straight,meadow
+# Tact: how often notes move (2bars, 1bar, 1/2bar, 1beat, 1/2beat, 1/4beat)
+tact = 1beat
+# OD Override: the OD played at (0 to 20)
+od_override = 7.5
+# favourite mods (right-click or F in the mod select), e.g. HD,HR
+favourite_mods = DT,HD
+# mod presets (S saves one in the mod select, 1-9 apply them): speed|mods|name
+mod_preset = 1.5|HR,HD|Speedy
+# note colours without Multiverse: a palette (classic, neon, sunset...) or custom #don/#kat
+note_colours = neon
+# Songs folder to scan instead of finding osu!'s (empty = find it)
+songs_folder = /games/osu/Songs
+# extra song folders / .osz files, one per line
+songs = /games/more-songs
+songs = /games/one.osz

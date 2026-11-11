@@ -380,3 +380,188 @@ fn the_default_config_file_stays_the_same() {
     assert_snapshot("formats-default-config", &text);
     assert_snapshot("formats-changed-config", &changed_config().to_text());
 }
+
+/// Every key of `config.txt` away from its default, the way a player's file could have it.
+const EVERY_KEY_CHANGED: &str = "\
+keys = A, S, K, L
+preset_keys = F7, F8
+touch_layout = DKKD
+screenshot_to = both
+language = ru
+show_playfield_size = false
+saved_presets = 1600x900, 1024x768
+preset_spots = 1600x900@0.1000/0.2000
+offset_scale = sound
+offset = 10
+offset_ms = -50
+offset_latency_ms = 17
+visual_offset_ms = 8
+scroll_speed = 1.35
+scroll_speed_osu = true
+master_volume = 0.35
+music_volume = 0.45
+unfocused_volume = 0.10
+fx_volume = 0.55
+present_mode = vsync
+menu_vsync = false
+half_resolution = true
+graphics_api = gl
+fps_cap = 240
+calibration_bpm = 150
+playfield_area = 0.100,0.050,0.800,0.900
+bg_dim = 0.25
+rate = 1.25
+rate_keep_pitch = false
+audio_buffer = 512
+show_fps = false
+fullscreen = false
+animations = false
+splash = false
+epilepsy_warning = false
+main_menu = false
+menu_notes = false
+menu_notes_dim = 0.40
+guide_seen = true
+check_updates = false
+resume_delay_ms = 1500
+sort = title
+kiai_effects = false
+hide_great = false
+fail_restart = true
+black_lane = true
+true_notes = true
+calm_maps = true
+drum_menus = true
+hit_flash = false
+show_offset_hint = false
+offset_hint_ur_scaled = false
+show_map_info = false
+mods = HR,HD
+mp_scoreboard = false
+autoplay_style = semi
+autoplay_binding = 4231
+autoplay_left_handed = true
+skin = Rafis
+skin_part = notes = <built-in>
+map_skins = false
+menu_glitch = false
+accent = #123456
+discord_presence = false
+discord_app_id = 1234567890
+idle_minutes = 5
+send_crash_reports = false
+editor_tour_done = true
+editor_left_pan = true
+editor_follow_timing = true
+editor_snap_preset = 3,6,12|Triplets
+editor_snap_active = Triplets
+editor_recent = /maps/a.osu
+editor_recent = /maps/b.osu
+chat_filter = false
+message_sound = false
+notify_playing = true
+notify_online = false
+notify_messages = false
+notify_mentions = false
+notify_requests = false
+mp_name = tester
+mp_port = 7788
+mp_address = 10.0.0.2:7777
+online_server = example.org:7800
+online_user = someone
+online_token = abc123
+vsync_compensation = false
+vsync_tune_ms = -12
+letterbox = true
+letterbox_size = 1600x900
+letterbox_x = 10
+letterbox_y = -20
+window_size = 1600x900
+data_folder = /games/taiko-data
+wheel_resizes_playfield = true
+show_converts = true
+song_headings = true
+bg_dim_black = false
+interface_hidden = true
+interface_hides = score,combo,!pp,!scoreboard,!spectators,!ur,!counts
+interface_key = F9
+song_list_share = 0.600
+song_preview_size = 0.500
+hotkey.scroll_slower = Ctrl+F1
+hotkey.quit = none
+last_build = abc1234
+video_size = 1920x1080
+video_fps = 30
+video_quality = best
+video_target_mb = 25
+video_speed = slow
+video_blur = light
+video_hud = false
+video_hitsounds = false
+multiverse = classic round 1x -; neon diamond 1x -; ice ring 0.9x WV; forest pill 1x SK; classic round 1x -; candy round 1x PY; ember diamond 1.25x AC; mono square 1x BL
+hud_layout = off=counts
+hud_preset = Mine: off=ur
+multiverse_preset = Calm: classic round 1x -; neon diamond 1x -; ice ring 0.9x WV; forest pill 1x SK; classic round 1x -; candy round 1x PY; ember diamond 1.25x AC; mono square 1x BL
+random_seed = 77
+shapeshift = every=8 morph=1 order=fixed shapes=zigzag,uturn,spiral,loop,elbow,straight,meadow
+tact = 1beat
+od_override = 7.5
+favourite_mods = DT,HD
+mod_preset = 1.5|HR,HD|Speedy
+note_colours = neon
+songs_folder = /games/osu/Songs
+songs = /games/more-songs
+songs = /games/one.osz
+";
+
+/// The keys of a config file's settings lines, in order.
+fn config_keys(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split_once('=').map(|(k, _)| k.trim()))
+        .collect()
+}
+
+#[test]
+fn every_key_of_the_config_file_reads_back_what_was_saved() {
+    let cfg = Config::parse_text(EVERY_KEY_CHANGED);
+    let text = cfg.to_text();
+    assert_eq!(
+        Config::parse_text(&text).to_text(),
+        text,
+        "config.txt round trip"
+    );
+    // Each key the game writes is in the file above, and away from its default there, so a key
+    // that stopped being read or written shows up here.
+    let line = |text: &str, key: &str| {
+        text.lines()
+            .filter(|l| !l.starts_with('#'))
+            .filter(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == key))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let default = Config::default().to_text();
+    let written = config_keys(&text);
+    let mut wrong = Vec::new();
+    for key in config_keys(&default) {
+        if !written.contains(&key) {
+            wrong.push(format!("{key} isn't written"));
+        } else if key != "scroll_speed_osu" && line(&default, key) == line(&text, key) {
+            wrong.push(format!("{key} is at its default"));
+        }
+    }
+    // And what the file says is what is saved again, key for key.
+    for key in config_keys(EVERY_KEY_CHANGED) {
+        let (given, saved) = (line(EVERY_KEY_CHANGED, key), line(&text, key));
+        if given != saved {
+            wrong.push(format!(
+                "{key} reads back differently: {given:?} -> {saved:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}\n\n{text}", wrong.join("\n"));
+    // Like the default file's golden, kept on Linux only.
+    if cfg!(target_os = "linux") {
+        assert_snapshot("formats-every-key-config", &text);
+    }
+}
