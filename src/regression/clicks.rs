@@ -274,11 +274,7 @@ fn clicks_on_the_results() {
             let mut r = ui::Results::new(s.library[0].label(), stats, game::Windows::new(5.0));
             r.shown = *now - Duration::from_secs(10);
             r.pp = Some(123.4);
-            s.scene = Scene::Results {
-                results: Box::new(r),
-                entry: 0,
-                from: None,
-            };
+            s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
         }),
     );
 }

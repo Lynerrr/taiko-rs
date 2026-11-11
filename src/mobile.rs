@@ -467,10 +467,7 @@ impl State {
                 || self.medals.is_some()
                 || self.player.is_some()
                 || self.profile.is_some()
-                || matches!(
-                    self.scene,
-                    Scene::Settings { .. } | Scene::Results { .. } | Scene::Calibrate { .. }
-                )
+                || matches!(self.scene, Scene::Settings { .. } | Scene::Calibrate { .. })
                 || self.scene.screen().is_some_and(|s| s.top_bar())
                 || (matches!(self.scene, Scene::Select) && !self.on_menu()))
     }
@@ -485,7 +482,6 @@ impl State {
                 .player
                 .as_ref()
                 .is_some_and(|p| !crate::player::tall() || p.list_open)
-            || matches!(self.scene, Scene::Results { .. })
             || self.scene.screen().is_some_and(|s| s.finger_scrolls())
     }
 

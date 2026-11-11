@@ -1,8 +1,177 @@
-//! The results screen's work: its title, whether the map gives pp, submitting the score and
-//! fetching a replay to show.
+//! The results screen, and its work: its title, whether the map gives pp, submitting the
+//! score and fetching a replay to show.
 
-#[allow(unused_imports)]
+use super::screen::{Frame, Key, Screen};
 use crate::*;
+
+/// A play's results: the score, its numbers, and keys to play again, watch the replay or
+/// make a video of it. Also a score opened from a leaderboard or a link (`results.opened`).
+pub(crate) struct ResultsScreen {
+    pub(crate) results: Box<Results>,
+    /// The map played.
+    pub(crate) entry: usize,
+    /// The map time the play started from (played again from there).
+    pub(crate) from: Option<f64>,
+}
+
+impl ResultsScreen {
+    pub(crate) fn scene(results: Box<Results>, entry: usize, from: Option<f64>) -> Scene {
+        Scene::Other(Box::new(ResultsScreen {
+            results,
+            entry,
+            from,
+        }))
+    }
+}
+
+impl Screen for ResultsScreen {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        "Results"
+    }
+
+    fn activity(&self) -> &'static str {
+        "results"
+    }
+
+    fn presence(&self, state: &State) -> Option<(String, String)> {
+        Some((
+            state.library.get(self.entry)?.label(),
+            tr!(
+                "Looking at the results",
+                "リザルトを見ています",
+                "Смотрит итоги"
+            )
+            .into(),
+        ))
+    }
+
+    fn presence_first(&self) -> bool {
+        true
+    }
+
+    fn top_bar(&self) -> bool {
+        true
+    }
+
+    fn closes_main_menu(&self) -> bool {
+        true
+    }
+
+    fn idle_allowed(&self) -> bool {
+        true
+    }
+
+    fn allows_settings(&self) -> bool {
+        true
+    }
+
+    fn menu_screen(&self) -> Option<u8> {
+        Some(2)
+    }
+
+    fn finger_scrolls(&self) -> bool {
+        true
+    }
+
+    fn map_entry(&self) -> Option<usize> {
+        Some(self.entry)
+    }
+
+    fn key_place(&self) -> Option<keys::Place> {
+        Some(keys::Place::Results)
+    }
+
+    fn shows_own_background(&self) -> bool {
+        true
+    }
+
+    fn opens_score_links(&self) -> bool {
+        true
+    }
+
+    fn key(&mut self, state: &mut State, key: Key) {
+        let Key {
+            code,
+            repeat,
+            window,
+            ..
+        } = key;
+        if repeat
+            && !matches!(
+                code,
+                KeyCode::ArrowUp
+                    | KeyCode::ArrowDown
+                    | KeyCode::Backspace
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            )
+        {
+            return;
+        }
+        if state.handle_global_key(code, window) {
+            return;
+        }
+        let results = &mut self.results;
+        match code {
+            KeyCode::ArrowDown
+            | KeyCode::ArrowUp
+            | KeyCode::PageDown
+            | KeyCode::PageUp
+            | KeyCode::Home
+            | KeyCode::End => {
+                results.scroll(matches!(
+                    code,
+                    KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End
+                ));
+            }
+            KeyCode::KeyR if state.modifiers_ctrl => state.retry_from(self.entry, self.from),
+            KeyCode::KeyV if results.replay.is_some() => {
+                if let Some(file) = results.replay.clone() {
+                    state.open_video_editor(&file);
+                }
+            }
+            // A leaderboard score's results: Enter watches it too.
+            _ if results.replay.is_some()
+                && (code == KeyCode::KeyR
+                    || (results.opened.is_some()
+                        && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter))) =>
+            {
+                if let Some(file) = results.replay.clone() {
+                    state.watch_replay(&file);
+                }
+            }
+            // Back to song select, the music playing on.
+            _ if results.opened.is_some() => {
+                if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
+                    state.scene = Scene::Select;
+                }
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter => state.retry_from(self.entry, self.from),
+            KeyCode::Escape => {
+                let path = state.library[self.entry].path.clone();
+                state.show_select();
+                state.select.select_path(&state.library, &path);
+            }
+            _ => {}
+        }
+    }
+
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
+        let results = &mut self.results;
+        results.poll();
+        results.animate(canvas.dt_ms);
+        // Back to the preview point when the song ends, like osu!.
+        if let (Some((track, again)), Some(a)) = (&results.music, &state.audio) {
+            let end = track.frames() as f64 / a.rate as f64 * 1000.0;
+            if a.position_ms(frame.now).is_some_and(|p| p > end - 30.0) {
+                a.play(track.clone(), *again);
+            }
+        }
+        results.draw(canvas);
+        None
+    }
+}
 
 /// Sends a play to the online leaderboards on a background thread.
 pub(crate) fn submit_score(

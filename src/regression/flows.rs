@@ -60,8 +60,11 @@ fn play_out(s: &mut State, now: &mut Instant, presses: &[(f64, u8)]) {
 }
 
 fn results_stats(s: &State) -> game::Stats {
-    match &s.scene {
-        Scene::Results { results, .. } => results.stats.clone(),
+    match s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+    {
+        Some(r) => r.results.stats.clone(),
         _ => panic!("not on the results screen but {}", scene_name(s)),
     }
 }
@@ -210,8 +213,16 @@ fn a_failed_play_ends_on_the_results_as_failed() {
     let failed_early = scene_name(&s);
     let _ = wait_for(&mut s, &mut now, |s| scene_name(s) != "Play");
     let mut log = format!("after the miss: {failed_early} -> {}\n", scene_name(&s));
-    if let Scene::Results { results, .. } = &s.scene {
-        let _ = writeln!(log, "failed {} {}", results.failed, line(&results.stats));
+    if let Some(r) = s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+    {
+        let _ = writeln!(
+            log,
+            "failed {} {}",
+            r.results.failed,
+            line(&r.results.stats)
+        );
     }
     assert_snapshot("flows-sudden-death-fail", &log);
 }
