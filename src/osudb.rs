@@ -19,6 +19,10 @@ pub struct DbMap {
     /// osu!stable's ranked status: 4 ranked, 5 approved, 6 qualified, 7 loved, 2 pending (or
     /// graveyard / WIP: stable doesn't tell them apart), 1 not submitted, 0 unknown.
     pub status: u8,
+    /// The difficulty's name, and its beatmap and set IDs (None when 0: not submitted).
+    pub version: String,
+    pub beatmap_id: Option<u32>,
+    pub set_id: Option<u32>,
 }
 
 #[derive(Default)]
@@ -26,6 +30,9 @@ pub struct OsuDb {
     pub by_md5: HashMap<String, DbMap>,
     /// (name, map MD5s).
     pub collections: Vec<(String, Vec<String>)>,
+    /// Which `collection.db` that was and how it looked (path, size, modified): a different one
+    /// means osu!'s collections changed. None without one.
+    pub collections_stamp: Option<String>,
 }
 
 struct Reader<'a> {
@@ -104,7 +111,7 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
         for _ in 0..5 {
             r.string()?; // artist, artist unicode, title, title unicode, creator
         }
-        r.string()?; // difficulty
+        let diff = r.string()?; // difficulty
         r.string()?; // audio file
         let md5 = r.string()?;
         let file = r.string()?;
@@ -131,7 +138,10 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
         r.skip(12)?; // drain time, total time, preview time
         let points = r.i32()?.max(0) as usize;
         r.skip(points.checked_mul(17)?)?;
-        r.skip(12)?; // difficulty id, set id, thread id
+        let id = |v: i32| u32::try_from(v).ok().filter(|&v| v > 0);
+        let beatmap_id = id(r.i32()?);
+        let set_id = id(r.i32()?);
+        r.i32()?; // thread id
         r.skip(4)?; // grades
         r.skip(2)?; // local offset
         r.skip(4)?; // stack leniency
@@ -159,6 +169,9 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
                     file,
                     last_played: ticks_to_unix(last_played),
                     status,
+                    version: diff,
+                    beatmap_id,
+                    set_id,
                 },
             );
         }
@@ -191,13 +204,19 @@ pub fn load(songs: &Path) -> Option<OsuDb> {
         eprintln!("osu!.db: unrecognised format, collections and play history unavailable");
         HashMap::new()
     });
-    let collections = std::fs::read(dir.join("collection.db"))
+    let path = dir.join("collection.db");
+    let (collections, collections_stamp) = std::fs::read(&path)
         .ok()
         .and_then(|b| parse_collections(&b))
+        .map(|c| {
+            let (size, modified) = crate::library::file_stats(&path);
+            (c, Some(format!("{} {size} {modified}", path.display())))
+        })
         .unwrap_or_default();
     Some(OsuDb {
         by_md5,
         collections,
+        collections_stamp,
     })
 }
 
@@ -248,7 +267,9 @@ mod tests {
         b.extend_from_slice(&[0; 12]);
         b.extend_from_slice(&1i32.to_le_bytes()); // one timing point
         b.extend_from_slice(&[0; 17]);
-        b.extend_from_slice(&[0; 12 + 4 + 2 + 4]);
+        b.extend_from_slice(&75i32.to_le_bytes()); // beatmap id
+        b.extend_from_slice(&123i32.to_le_bytes()); // set id
+        b.extend_from_slice(&[0; 4 + 4 + 2 + 4]);
         b.push(1); // taiko
         b.push(0); // source
         b.push(0); // tags
@@ -270,6 +291,10 @@ mod tests {
         assert_eq!(
             (m.folder.as_str(), m.file.as_str(), m.last_played),
             ("123 A - T", "A - T (C) [Oni].osu", 1_609_459_200)
+        );
+        assert_eq!(
+            (m.version.as_str(), m.beatmap_id, m.set_id),
+            ("Oni", Some(75), Some(123))
         );
 
         let mut c = Vec::new();

@@ -21,6 +21,7 @@ mod calibrate;
 mod changelog;
 use taiko_proto::changelog_entry;
 mod clipboard;
+mod collections;
 use taiko_logic::clock;
 mod config;
 mod cursor;
@@ -7858,6 +7859,8 @@ impl State {
         self.mapinfo_sorted = false;
         let dirs = self.song_dirs.clone();
         self.osudb_rx = Job::spawn(move || dirs.iter().find_map(|d| osudb::load(d)));
+        // The ones kept from before, until osu!'s are read again.
+        self.show_collections(None);
         self.apply_cached_statuses();
         self.select.refilter(&self.library);
         // Start on a random song rather than the first one every time (not before a map given on
@@ -7929,11 +7932,6 @@ impl State {
                 Some((key(folder, file), i))
             })
             .collect();
-        let entry_of = |md5: &str| {
-            db.by_md5
-                .get(md5)
-                .and_then(|m| index.get(&key(&m.folder, &m.file)).copied())
-        };
         for m in db.by_md5.values() {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
                 self.db_status
@@ -7955,25 +7953,46 @@ impl State {
                 *t = (*t).max(m.last_played);
             }
         }
-        self.select.collections = db
-            .collections
-            .iter()
-            .map(|(name, maps)| {
-                (
-                    name.clone(),
-                    maps.iter()
-                        .filter_map(|h| entry_of(h))
-                        .collect::<std::collections::HashSet<usize>>(),
-                )
-            })
-            .filter(|(_, set)| !set.is_empty())
+        eprintln!("osu!.db: {} maps", db.by_md5.len());
+        self.show_collections(Some(&db));
+        self.select.refilter(&self.library);
+    }
+
+    /// Lists the collections (with osu!'s brought in again first, once `db` is read) and the
+    /// library's maps in each.
+    fn show_collections(&mut self, db: Option<&osudb::OsuDb>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let all = store::with(|s| {
+            if let Some(db) = db
+                && collections::mirror_osu(s, db, now)?
+            {
+                eprintln!("collection.db: osu!'s collections brought in again");
+            }
+            s.collections()
+        })
+        // Without the database, osu!'s as they are now.
+        .unwrap_or_else(|| db.map(collections::from_osu).unwrap_or_default());
+        let found = collections::find(&all, &self.library);
+        self.select.collections = all
+            .into_iter()
+            .zip(found)
+            .filter(|(_, f)| !f.entries.is_empty())
+            .map(|(c, f)| (c.name, f.entries))
             .collect();
+        if self
+            .select
+            .collection
+            .is_some_and(|c| c >= self.select.collections.len())
+        {
+            self.select.collection = None;
+        }
         eprintln!(
-            "osu!.db: {} maps, {} collections with maps here",
-            db.by_md5.len(),
+            "{} collections with maps here",
             self.select.collections.len()
         );
-        self.select.refilter(&self.library);
     }
 
     /// Remembers that `entry` was just played (for "recently played").

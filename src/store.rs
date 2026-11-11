@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::collections::{Collection, MapRef, Source};
 use crate::scores::ScoreRow;
 
 pub mod import;
@@ -25,7 +26,11 @@ pub mod import;
 pub const FILE: &str = "taiko.db";
 
 /// The schema, one script per version; version N is `MIGRATIONS[N - 1]`.
-const MIGRATIONS: &[&str] = &[include_str!("store/1.sql"), include_str!("store/2.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("store/1.sql"),
+    include_str!("store/2.sql"),
+    include_str!("store/3.sql"),
+];
 
 /// The schema version this build writes.
 pub const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -64,6 +69,9 @@ impl Store {
 
     fn start(conn: Connection) -> Result<Store, String> {
         conn.busy_timeout(std::time::Duration::from_secs(2))
+            .map_err(err)?;
+        // A deleted collection takes its maps with it.
+        conn.pragma_update(None, "foreign_keys", true)
             .map_err(err)?;
         let mut store = Store { conn };
         store.upgrade()?;
@@ -404,6 +412,135 @@ impl Store {
             }
             Ok(())
         })
+    }
+}
+
+impl Store {
+    // Collections (collections.rs).
+
+    /// Every collection, the player's own first, each in its order, with its maps in theirs.
+    pub fn collections(&self) -> Result<Vec<Collection>, String> {
+        let mut q = self
+            .conn
+            .prepare(
+                "SELECT id, name, source FROM collections
+                 ORDER BY source = 'osu', position, id",
+            )
+            .map_err(err)?;
+        let heads = q
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        let mut maps = self
+            .conn
+            .prepare(
+                "SELECT map_md5, beatmap_id, set_id, version, folder, file FROM collection_maps
+                 WHERE collection_id = ?1 ORDER BY position, added_at",
+            )
+            .map_err(err)?;
+        let mut out = Vec::with_capacity(heads.len());
+        for (id, name, source) in heads {
+            // A source this build doesn't know (from a newer one) is left out, not misread.
+            let Some(source) = Source::from_sql(&source) else {
+                continue;
+            };
+            let maps = maps
+                .query_map([id], |r| {
+                    Ok(MapRef {
+                        md5: r.get(0)?,
+                        beatmap_id: r.get(1)?,
+                        set_id: r.get(2)?,
+                        version: r.get(3)?,
+                        folder: r.get(4)?,
+                        file: r.get(5)?,
+                    })
+                })
+                .map_err(err)?
+                .collect::<Result<_, _>>()
+                .map_err(err)?;
+            out.push(Collection { name, source, maps });
+        }
+        Ok(out)
+    }
+
+    /// Makes `collections` the ones from `source`, in this order (a collection kept by name
+    /// keeps when it was made). Call it in a transaction.
+    pub(crate) fn write_collections(
+        &self,
+        source: Source,
+        collections: &[Collection],
+        now: u64,
+    ) -> Result<(), String> {
+        let mut head = self
+            .conn
+            .prepare(
+                "INSERT INTO collections (name, source, position, created_at, changed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?4)
+                 ON CONFLICT (source, name) DO UPDATE SET position = excluded.position,
+                                                          changed_at = excluded.changed_at
+                 RETURNING id",
+            )
+            .map_err(err)?;
+        let mut map = self
+            .conn
+            .prepare(
+                "INSERT INTO collection_maps (collection_id, map_md5, beatmap_id, set_id,
+                     version, folder, file, position, added_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT DO NOTHING",
+            )
+            .map_err(err)?;
+        let mut kept = Vec::with_capacity(collections.len());
+        for (i, c) in collections.iter().enumerate() {
+            let id: i64 = head
+                .query_row(params![c.name, source.sql(), i as i64, now as i64], |r| {
+                    r.get(0)
+                })
+                .map_err(err)?;
+            // The same name twice (osu! allows it) is one collection with both lists.
+            if !kept.contains(&id) {
+                self.conn
+                    .execute("DELETE FROM collection_maps WHERE collection_id = ?1", [id])
+                    .map_err(err)?;
+                kept.push(id);
+            }
+            for (j, m) in c.maps.iter().enumerate() {
+                map.execute(params![
+                    id,
+                    m.md5,
+                    m.beatmap_id,
+                    m.set_id,
+                    m.version,
+                    m.folder,
+                    m.file,
+                    j as i64,
+                    now as i64
+                ])
+                .map_err(err)?;
+            }
+        }
+        let mut gone = self
+            .conn
+            .prepare("SELECT id FROM collections WHERE source = ?1")
+            .map_err(err)?
+            .query_map([source.sql()], |r| r.get::<_, i64>(0))
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        gone.retain(|id| !kept.contains(id));
+        for id in gone {
+            self.conn
+                .execute("DELETE FROM collections WHERE id = ?1", [id])
+                .map_err(err)?;
+        }
+        Ok(())
     }
 }
 
