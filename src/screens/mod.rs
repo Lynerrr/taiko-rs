@@ -30,7 +30,6 @@ pub(crate) fn fmt_time(ms: f64) -> String {
 pub(crate) fn shows_own_background(scene: &Scene) -> bool {
     match scene {
         Scene::Editor(_) | Scene::Loading { .. } | Scene::Play { .. } => true,
-        Scene::Settings { prev } => shows_own_background(prev),
         Scene::Other(s) => s.shows_own_background(),
         _ => false,
     }

@@ -2479,14 +2479,12 @@ fn an_update_restarts_the_game_only_in_a_quiet_menu() {
         s.scene = scene;
         assert!(s.can_restart());
     }
-    s.scene = Scene::Settings {
-        prev: Box::new(Scene::Select),
-    };
+    s.behind = Some(Box::new(Scene::Select));
+    s.scene = crate::screens::settings::SettingsScreen::scene();
     assert!(s.can_restart());
     // The settings over something that's still going.
-    s.scene = Scene::Settings {
-        prev: Box::new(crate::screens::lobby::Lobby::scene()),
-    };
+    s.behind = Some(Box::new(crate::screens::lobby::Lobby::scene()));
+    s.scene = crate::screens::settings::SettingsScreen::scene();
     assert!(!s.can_restart());
     s.scene = crate::screens::lobby::Lobby::scene();
     assert!(!s.can_restart());

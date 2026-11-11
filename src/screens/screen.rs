@@ -124,6 +124,11 @@ pub(crate) trait Screen: Any + Send {
     fn opens_score_links(&self) -> bool {
         false
     }
+    /// It is the settings (`State::in_settings`; what they were opened over is
+    /// `State::behind_settings`).
+    fn settings(&self) -> bool {
+        false
+    }
     /// It is the room's lobby (`State::in_lobby`).
     fn room_lobby(&self) -> bool {
         false
@@ -228,6 +233,7 @@ struct Shadow {
     over_lobby: bool,
     in_room: bool,
     room_lobby: bool,
+    settings: bool,
     map_entry: Option<usize>,
     key_place: Option<keys::Place>,
     shows_own_background: bool,
@@ -273,6 +279,7 @@ impl Shadow {
             over_lobby: screen.over_lobby(),
             in_room: screen.in_room(),
             room_lobby: screen.room_lobby(),
+            settings: screen.settings(),
             map_entry: screen.map_entry(),
             key_place: screen.key_place(),
             shows_own_background: screen.shows_own_background(),
@@ -349,6 +356,9 @@ impl Screen for Shadow {
     }
     fn room_lobby(&self) -> bool {
         self.room_lobby
+    }
+    fn settings(&self) -> bool {
+        self.settings
     }
     fn map_entry(&self) -> Option<usize> {
         self.map_entry
@@ -582,6 +592,7 @@ mod tests {
         "MpWait",
         "Lobby",
         "Results",
+        "Settings",
     ];
 
     #[test]

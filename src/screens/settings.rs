@@ -1,11 +1,13 @@
-//! What lib.rs showed and parsed for the settings screen: the words of its values and choices,
-//! its folder paths, and what a typed setting means. The screen itself follows (step 7).
+//! The settings screen, and what it shows and parses: the words of its values and choices,
+//! its folder paths, and what a typed setting means.
 
 use std::path::PathBuf;
 
 use winit::keyboard::KeyCode;
 
+use super::screen::{Frame, Key, Screen};
 use crate::config;
+use crate::*;
 
 /// A setting that's on.
 pub(crate) fn on_text() -> &'static str {
@@ -99,5 +101,129 @@ pub(crate) fn offset_scale_name(scale: config::OffsetScale) -> &'static str {
     match scale {
         config::OffsetScale::Osu => "osu!",
         config::OffsetScale::Sound => tr!("By sound", "音基準", "По звуку"),
+    }
+}
+
+/// The settings screen; the scene it was opened over is `State::behind`, where code that asks
+/// about it (a song paused behind it, the menu it came from) finds it while it runs.
+pub(crate) struct SettingsScreen;
+
+impl SettingsScreen {
+    pub(crate) fn scene() -> Scene {
+        Scene::Other(Box::new(SettingsScreen))
+    }
+}
+
+impl Screen for SettingsScreen {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        "Settings"
+    }
+
+    fn activity(&self) -> &'static str {
+        "settings"
+    }
+
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
+        Some((
+            tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
+            String::new(),
+        ))
+    }
+
+    fn top_bar(&self) -> bool {
+        true
+    }
+
+    fn idle_allowed(&self) -> bool {
+        true
+    }
+
+    fn menu_screen(&self) -> Option<u8> {
+        Some(3)
+    }
+
+    fn settings(&self) -> bool {
+        true
+    }
+
+    fn key(&mut self, state: &mut State, key: Key) {
+        let Key {
+            code,
+            repeat,
+            text,
+            window,
+            ..
+        } = key;
+        if repeat
+            && !matches!(
+                code,
+                KeyCode::ArrowUp
+                    | KeyCode::ArrowDown
+                    | KeyCode::Backspace
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            )
+        {
+            return;
+        }
+        if state.handle_global_key(code, window) {
+            return;
+        }
+        if !state.settings_type(code, text) {
+            state.settings_key(code, window);
+        }
+    }
+
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
+        let from_game = state
+            .behind_settings()
+            .is_some_and(|prev| matches!(prev, Scene::Play { .. }));
+        state.settings_ui.krokodil = state.is_krokodil();
+        if mobile::active() {
+            state.draw_mobile_settings(canvas);
+            state.draw_mobile_choices(canvas);
+        } else {
+            settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
+            let searching = !state.settings_ui.search.is_empty();
+            let footer = if state
+                .settings_ui
+                .editing
+                .as_ref()
+                .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
+            {
+                "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
+            } else if state.settings_ui.editing.is_some() {
+                "type a value   Enter set   Esc cancel".to_string()
+            } else {
+                let enter = match state.settings_ui.item().kind() {
+                    Kind::List => "Enter list",
+                    Kind::Value => "Enter type a value",
+                    Kind::Toggle => "Enter toggle",
+                    Kind::Key => "Enter rebind",
+                    Kind::Action => "Enter go",
+                };
+                let back = if searching {
+                    "Esc clear the search"
+                } else if from_game {
+                    "Esc back to pause menu"
+                } else {
+                    "Esc or Tab back"
+                };
+                format!("Type to search   Up/Down select   Left/Right change   {enter}   {back}")
+            };
+            let this = &*state;
+            this.settings_ui.draw(
+                canvas,
+                &|item| this.setting_value(item),
+                &|item| this.setting_control(item),
+                &footer,
+            );
+            if let Some(p) = &state.settings_ui.choices {
+                p.draw(canvas);
+            }
+        }
+
+        None
     }
 }
