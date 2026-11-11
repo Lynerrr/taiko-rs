@@ -884,12 +884,15 @@ pub fn osz_news<'a>(
 
 /// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
 pub(crate) fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
+    config::data_dir()
+        .and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
+        .map(|text| parse_plays(&text))
+        .unwrap_or_default()
+}
+
+/// `plays.tsv`'s lines; a map played more than once keeps its latest.
+pub(crate) fn parse_plays(text: &str) -> std::collections::HashMap<PathBuf, u64> {
     let mut out = std::collections::HashMap::new();
-    let Some(text) =
-        config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
-    else {
-        return out;
-    };
     for line in text.lines() {
         if let Some((t, path)) = line.split_once('\t')
             && let Ok(t) = t.parse::<u64>()

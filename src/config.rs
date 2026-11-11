@@ -835,10 +835,10 @@ fn remove_all(p: &Path) -> std::io::Result<()> {
 pub const MAP_OFFSETS: &str = "map_offsets_osu.tsv";
 /// Before: the other way round (+ took the notes later). Read once, turned round into
 /// `MAP_OFFSETS`, then kept under `OLD_SIGN_KEPT` to go back to by hand.
-const OLD_SIGN_MAP_OFFSETS: &str = "map_offsets.tsv";
+pub const OLD_SIGN_MAP_OFFSETS: &str = "map_offsets.tsv";
 const OLD_SIGN_KEPT: &str = "map_offsets.before-osu-sign.tsv";
 
-fn parse_map_offsets(text: &str) -> std::collections::HashMap<u64, f64> {
+pub fn parse_map_offsets(text: &str) -> std::collections::HashMap<u64, f64> {
     text.lines()
         .filter_map(|l| {
             let (h, ms) = l.split_once('\t')?;
@@ -892,11 +892,17 @@ fn save_map_offsets_in(dir: &Path, offsets: &std::collections::HashMap<u64, f64>
 /// The folders of the maps whose own skin is turned off: `map_skins_off.txt` in the config folder,
 /// one folder name per line. A map's skin is its folder's, so all its difficulties share this.
 pub fn load_map_skins_off() -> std::collections::HashSet<String> {
-    let Some(text) =
-        data_dir().and_then(|d| std::fs::read_to_string(d.join("map_skins_off.txt")).ok())
-    else {
-        return Default::default();
-    };
+    data_dir()
+        .and_then(|d| std::fs::read_to_string(d.join(MAP_SKINS_OFF)).ok())
+        .map(|text| parse_lines(&text))
+        .unwrap_or_default()
+}
+
+/// The file of the maps whose own skin is off.
+pub const MAP_SKINS_OFF: &str = "map_skins_off.txt";
+
+/// A file's non-empty lines, as a set (`map_skins_off.txt`, `favourite-songs.txt`).
+pub fn parse_lines(text: &str) -> std::collections::HashSet<String> {
     text.lines()
         .filter(|l| !l.is_empty())
         .map(str::to_string)
@@ -908,7 +914,7 @@ pub fn save_map_skins_off(folders: &std::collections::HashSet<String>) {
     let _ = std::fs::create_dir_all(&dir);
     let mut lines: Vec<&str> = folders.iter().map(String::as_str).collect();
     lines.sort_unstable();
-    let _ = std::fs::write(dir.join("map_skins_off.txt"), lines.join("\n") + "\n");
+    let _ = std::fs::write(dir.join(MAP_SKINS_OFF), lines.join("\n") + "\n");
 }
 
 /// Clears every map's own offset, keeping them in `map_offsets.backup.tsv` to go back to by hand.
