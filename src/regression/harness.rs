@@ -291,7 +291,6 @@ pub fn scene_name(s: &State) -> &'static str {
         Scene::Loading { .. } => "Loading",
         Scene::Play { .. } => "Play",
         Scene::Other(s) => s.name(),
-        Scene::MpPlay { .. } => "MpPlay",
         Scene::Spectate(_) => "Spectate",
         Scene::Watch(_) => "Watch",
         Scene::Editor(_) => "Editor",
@@ -301,7 +300,7 @@ pub fn scene_name(s: &State) -> &'static str {
 /// The game being played, if any.
 pub fn game(s: &State) -> Option<&Game> {
     match &s.scene {
-        Scene::Play { .. } | Scene::MpPlay { .. } => s.play.as_deref().map(|p| &**p),
+        _ if s.scene.plays_song() => s.play.as_deref().map(|p| &**p),
         _ => None,
     }
 }
