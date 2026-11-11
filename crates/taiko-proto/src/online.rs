@@ -1,5 +1,5 @@
 //! The online server: accounts (used by multiplayer for now) and lobbies hosted on the server,
-//! so nobody needs an open port. This is the protocol shared by the game and `server/`, plus
+//! so nobody needs an open port. This is the protocol shared by the game and the server, plus
 //! the game's side of it. A connection sends one request line and reads one reply line; after
 //! `Reply::Joined` the same connection speaks the room protocol (`net.rs`). Direct play
 //! (`net::host` / `net::Client::connect`) stays as the fallback when the server is down.
@@ -1740,7 +1740,7 @@ mod editing_activity_tests {
 
     #[test]
     fn an_old_server_cannot_parse_an_editing_status() {
-        // It skips a line that fails to parse (server/src/main.rs, the read loop), so the
+        // It skips a line that fails to parse (the server's read loop), so the
         // status it had stays: harmless.
         let s = serde_json::to_string(&Up::Status(editing("m"))).unwrap();
         assert!(serde_json::from_str::<OldUp>(&s).is_err());

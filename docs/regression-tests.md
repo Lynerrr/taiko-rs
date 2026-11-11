@@ -3,7 +3,7 @@
 The client has a regression suite in `src/regression/`. It pins down how the game behaves
 today, so that a refactor or a new feature can't quietly change gameplay, scoring, file formats,
 the network protocol or the screens. It runs with the other tests (`cargo test`) and in CI on
-every pull request. The server is not covered here: it has its own tests in `server/`.
+every pull request. The online server is not covered here: it lives in its own repository.
 
 ## Running it
 

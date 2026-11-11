@@ -48,7 +48,7 @@
 
 - Before finishing any task, run lint and formatting checks for the affected crates.
 - Fix all lint errors, warnings, and formatting failures, then rerun the checks.
-- For any change to the client (everything outside `server/`), run the client tests,
+- For any change to the client, run the client tests,
   regression suite included: `cargo test --locked --all-targets`.
 - The work is not complete until lint, formatting and the client tests all pass. A task
   can't be reported as done while a regression test fails, is skipped or is disabled to get

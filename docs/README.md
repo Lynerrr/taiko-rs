@@ -547,25 +547,6 @@ shows how many players are online on the server (green dot; also on the chip):
 
 Everything typed can be Cyrillic, except account names (Latin letters, digits, `_`, `-`).
 
-### Running the online server
-
-`server/` is a separate small crate (`taiko-server`): accounts (argon2 password hashes, session
-tokens) in `DATA/accounts.json`, and lobbies that run the game's own room code (`taiko_proto::net`).
-Its protocol is `taiko_proto::online`: one JSON request line and one reply per connection; after
-`Joined` the same connection speaks the room protocol.
-
-```sh
-cd server && cargo run --release -- --port 7800 --data ./data          # locally
-server/deploy/deploy.sh user@host [ssh port] [jump host]                # static build + Docker
-```
-
-`deploy.sh` builds a static (musl) binary (`rustup target add x86_64-unknown-linux-musl` once),
-copies it with `server/deploy/Dockerfile` and `docker-compose.yml` to `~/taiko-server` and runs
-it with `restart: unless-stopped`. TCP port 7800 must be reachable. The binary it replaces stays as
-`~/taiko-server/taiko-server.bak` to roll back to. When the server's ssh port isn't reachable
-directly, a jump host (`ssh -J`, e.g. an alias from `~/.ssh/config`) goes through it:
-`deploy.sh user@host 1337 vps`.
-
 ## Discord status
 
 While Discord is running, your status shows *Playing taiko.rs* with what you're doing: the map
@@ -629,7 +610,6 @@ spins so frames stay evenly spaced.
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `crates/taiko-proto/src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
 | `crates/taiko-recalc` | `taiko-recalc` (also `taiko-rs --recalc-pp`): the server's plays worked out again from its `scores.jsonl` and the maps |
-| `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
 | `src/collections.rs` | collections: the player's own and osu!'s (mirrored from `collection.db` when it changes) in `taiko.db`, each map kept by MD5 plus folder, file, IDs and difficulty name, and found in the library by those |
 | `src/store.rs` | the player's data in SQLite (`taiko.db` in the data folder): scores, last plays, hidden maps, per-map offsets, maps with their skin off, favourites, each set's status on osu!, collections; the schema's versions in `src/store/N.sql`; the old text files are brought in once (`store/import.rs`) and still written for older builds |
 | `src/library.rs` | Songs folder / `.osz` and `.rsz` scanning |

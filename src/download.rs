@@ -227,7 +227,7 @@ pub struct SetInfo {
     pub custom: Option<CustomSet>,
 }
 
-/// A custom set on the taiko.rs website (`server/src/custom.rs`).
+/// A custom set on the taiko.rs website.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CustomSet {
     /// Every difficulty of it is approved (it gives pp).

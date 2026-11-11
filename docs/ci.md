@@ -6,14 +6,13 @@ New commits cancel the previous run for the same pull request.
 
 - The game builds its application and test binaries, runs Clippy, and executes the tests
   on Linux, Windows, and macOS.
-- The server runs the same checks on Linux.
 - Android builds an APK with a debug signing key, without release secrets.
-- Clippy treats every warning as an error (`-D warnings`). Both crates use their committed
-  lockfiles (`--locked`).
+- Clippy treats every warning as an error (`-D warnings`). Builds use the committed
+  lockfile (`--locked`).
 
 ## Build reuse
 
-Each desktop/server job uses one runner, target directory, and `ci-test` profile for all
+Each desktop job uses one runner, target directory, and `ci-test` profile for all
 three steps. `cargo build --all-targets` compiles the application and test binaries once.
 Clippy then analyzes the source, and `cargo test --all-targets` executes the already-built
 test binaries. Clippy still needs its own compiler analysis; it cannot lint an executable.
@@ -21,7 +20,7 @@ test binaries. Clippy still needs its own compiler analysis; it cannot lint an e
 The client is a Cargo workspace: the game (`.`) and the crates split out of it
 (`crates/taiko-logic`, the rules with no window, GPU, sound or network; `crates/taiko-proto`,
 what the game and the server both speak). All are default members, so these plain commands
-build, lint and test all of them. Commands that need a single package, such as the APK's `cargo rustc`, name the game with `-p taiko-rs`. The server and the
+build, lint and test all of them. Commands that need a single package, such as the APK's `cargo rustc`, name the game with `-p taiko-rs`. The
 patched `vendor/` crates are excluded from the workspace.
 
 The CI profile keeps debug assertions and unwinding enabled, omits debug symbols and
@@ -65,7 +64,7 @@ branches to be up to date before merging** when using branch protection without 
 queue. See [GitHub's required status check documentation](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
 The final check runs even when a dependency fails or is skipped and succeeds only when
-all desktop matrix jobs, the server job, and the Android build succeed. A workflow file alone does not enable
+all desktop matrix jobs and the Android build succeed. A workflow file alone does not enable
 merge protection; the repository setting must require this status check.
 
 If branch protection previously required checks from `Release build` on pull requests,

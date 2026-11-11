@@ -15,7 +15,7 @@ if ! command -v cargo >/dev/null 2>&1; then
     fi
 fi
 
-for manifest in Cargo.toml server/Cargo.toml; do
+for manifest in Cargo.toml; do
     printf 'Checking %s with Clippy (warnings are errors)...\n' "$manifest"
     if ! cargo clippy --locked --manifest-path "$manifest" --all-targets -- -D warnings; then
         printf '\nCommit blocked: fix the Clippy diagnostics above and try again.\n' >&2
