@@ -25,7 +25,7 @@ pub mod import;
 pub const FILE: &str = "taiko.db";
 
 /// The schema, one script per version; version N is `MIGRATIONS[N - 1]`.
-const MIGRATIONS: &[&str] = &[include_str!("store/1.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("store/1.sql"), include_str!("store/2.sql")];
 
 /// The schema version this build writes.
 pub const VERSION: u32 = MIGRATIONS.len() as u32;
@@ -365,6 +365,45 @@ impl Store {
 
     pub fn replace_favourites(&mut self, songs: &HashSet<String>) -> Result<(), String> {
         self.replace_names(Names::Favourites, songs)
+    }
+}
+
+impl Store {
+    // Each beatmap set's status on osu! (setstatus.rs).
+
+    /// Set ID -> (status, when it was asked).
+    pub fn set_statuses(&self) -> Result<HashMap<u32, (String, u64)>, String> {
+        let mut q = self
+            .conn
+            .prepare("SELECT set_id, status, checked_at FROM set_status")
+            .map_err(err)?;
+        let rows = q
+            .query_map([], |r| {
+                Ok((r.get(0)?, (r.get(1)?, r.get::<_, i64>(2)? as u64)))
+            })
+            .map_err(err)?;
+        rows.collect::<Result<_, _>>().map_err(err)
+    }
+
+    /// Keeps these answers (set ID, status, when), replacing earlier ones, in one transaction.
+    pub fn put_set_statuses<'a>(
+        &mut self,
+        rows: impl IntoIterator<Item = (u32, &'a str, u64)>,
+    ) -> Result<(), String> {
+        self.transaction(|s| {
+            let mut q = s
+                .conn
+                .prepare(
+                    "INSERT INTO set_status (set_id, status, checked_at) VALUES (?1, ?2, ?3)
+                     ON CONFLICT (set_id) DO UPDATE SET status = excluded.status,
+                                                        checked_at = excluded.checked_at",
+                )
+                .map_err(err)?;
+            for (set, status, at) in rows {
+                q.execute(params![set, status, at as i64]).map_err(err)?;
+            }
+            Ok(())
+        })
     }
 }
 
