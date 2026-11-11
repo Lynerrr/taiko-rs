@@ -1174,10 +1174,7 @@ fn assert_every_screen_fits() {
         s.cfg.mods,
     ));
     s.play = Some(Box::new(game));
-    s.scene = Scene::Play {
-        entry: 0,
-        from: None,
-    };
+    s.scene = screens::play::PlayScreen::scene(0, None);
     check(&mut s, "play", &mut out);
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
     check(&mut s, "pause", &mut out);

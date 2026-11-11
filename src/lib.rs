@@ -163,12 +163,9 @@ use screens::menu::{update_badge, updating_badge};
 use screens::mp_menu::MpMenu;
 use screens::mp_results::MpResults;
 use screens::mp_wait::MpWait;
-use screens::play::{
-    FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
-    pause_width,
-};
+use screens::play::{FAIL_RESTART_LINGER, PlayScreen, draw_spectate_all, pause_label, pause_width};
 use screens::preview::Preview;
-use screens::results::{ResultsScreen, map_gives_pp, results_job, results_title, submit_score};
+use screens::results::{ResultsScreen, results_job, results_title};
 use screens::select::leaderboard::{
     BOARD_HEAD, BOARD_ROW, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
     misses_and_age,
@@ -194,10 +191,6 @@ type Loaded = Result<(Beatmap, Arc<Track>), String>;
 
 enum Scene {
     Select,
-    Play {
-        entry: usize,
-        from: Option<f64>,
-    },
     /// A multiplayer match (the menu, the lobby, the wait for the match to start, watching it
     /// and the results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait`,
     /// `screens::spectate` and `screens::mp_results`).
@@ -357,7 +350,7 @@ struct State {
     library: Vec<Entry>,
     select: Select,
     scene: Scene,
-    /// The game of the song, match or calibration up (`Scene::Play`, `MpPlay`, `Calibrate`),
+    /// The game of the song, match or calibration up (`PlayScreen`, `MpPlay`, `Calibration`),
     /// kept while the settings are open over its pause menu. `State::game` reads it.
     play: Option<Box<Play>>,
     /// The calibration run's last note has gone by: it finishes after this frame.
@@ -871,7 +864,7 @@ impl State {
     }
 
     fn in_song(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. }) || self.scene.screen().is_some_and(|s| s.in_song())
+        self.scene.screen().is_some_and(|s| s.in_song())
     }
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
@@ -911,7 +904,7 @@ impl State {
     /// not waiting for a multiplayer match to start.
     fn player_plays(&self) -> bool {
         match &self.scene {
-            Scene::Play { .. } => self.game().is_some_and(|game| {
+            Scene::Other(s) if s.song_play().is_some() => self.game().is_some_and(|game| {
                 game.replay().is_none() && !self.auto && !game.mods().has(mods::Mod::Autoplay)
             }),
             Scene::Other(s) => s.holds_game(),
@@ -1652,7 +1645,7 @@ impl State {
     /// Tab in the editor's test play, as in osu!'s: autoplay plays on from here, or hands the
     /// drum back.
     fn toggle_test_auto(&mut self) {
-        let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) else {
+        let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref_mut()) else {
             return;
         };
         self.test_auto = !self.test_auto;
@@ -1732,8 +1725,7 @@ impl State {
     fn set_background(&mut self, background: bool) {
         self.backgrounded = background;
         let Some(a) = &self.audio else { return };
-        let game_paused = matches!(self.scene, Scene::Play { .. })
-            && self.game().is_some_and(|g| g.paused().is_some());
+        let game_paused = self.scene.is_play() && self.game().is_some_and(|g| g.paused().is_some());
         if background {
             if !self.music_goes_on() {
                 a.set_paused(true);
@@ -1814,7 +1806,7 @@ impl State {
     }
 
     fn report_smoothness(&mut self) {
-        if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
+        if let (Some(sm), true) = (&mut self.smooth, self.scene.is_play()) {
             eprintln!(
                 "--- smoothness ({}) ---\n{}",
                 self.present.name(),
@@ -1898,7 +1890,7 @@ impl State {
             return;
         }
         match &mut self.scene {
-            Scene::Play { .. } => {
+            Scene::Other(s) if s.song_play().is_some() => {
                 if let Some(game) = self.play.as_deref_mut() {
                     game.pause(sound(&self.audio));
                 }
@@ -1933,7 +1925,6 @@ impl State {
             Scene::Select if self.on_menu() => Some(0),
             Scene::Select => Some(1),
             Scene::Other(ref s) => s.menu_screen(),
-            _ => None,
         }
     }
 
@@ -2282,7 +2273,6 @@ impl State {
     /// over its pause menu included).
     fn game(&self) -> Option<&Play> {
         match &self.scene {
-            Scene::Play { .. } => self.play.as_deref(),
             Scene::Other(s) if s.holds_game() => self.play.as_deref(),
             _ => None,
         }
@@ -2296,8 +2286,7 @@ impl State {
     /// Drops the game when its scene has gone (the settings over its pause menu keep it).
     fn drop_finished_play(&mut self) {
         let scene = self.behind_settings().unwrap_or(&self.scene);
-        let holds =
-            matches!(scene, Scene::Play { .. }) || scene.screen().is_some_and(|s| s.holds_game());
+        let holds = scene.screen().is_some_and(|s| s.holds_game());
         if !holds {
             self.play = None;
         }
@@ -3130,10 +3119,7 @@ impl State {
 
     /// Reopens the audio device with a buffer of `frames` (not during a song).
     fn set_audio_buffer(&mut self, frames: u32) {
-        if self
-            .behind_settings()
-            .is_some_and(|prev| matches!(prev, Scene::Play { .. }))
-        {
+        if self.behind_settings().is_some_and(|prev| prev.is_play()) {
             self.toast(
                 tr!(
                     "change the audio buffer from song select",
@@ -3994,10 +3980,7 @@ impl State {
 
     /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
     fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
-        if self
-            .behind_settings()
-            .is_some_and(|prev| matches!(prev, Scene::Play { .. }))
-        {
+        if self.behind_settings().is_some_and(|prev| prev.is_play()) {
             return Err(tr!(
                 "change the Songs folder from song select",
                 "Songsフォルダは選曲画面で変えてください",
@@ -4299,11 +4282,11 @@ impl State {
     // spectating keep your skin.
     fn follow_map_skin(&mut self) {
         let entry = match &self.scene {
-            Scene::Play { entry, .. } => Some(*entry),
+            Scene::Other(s) if s.song_play().is_some() => s.song_play().map(|p| p.0),
             Scene::Select => self.preview_target(),
             Scene::Other(s) if s.map_from_song_select() => self.preview_target(),
             Scene::Other(s) if s.settings() => match self.behind.as_deref() {
-                Some(Scene::Play { entry, .. }) => Some(*entry),
+                Some(b) if b.is_play() => b.song_play().map(|p| p.0),
                 Some(Scene::Select) => self.preview_target(),
                 _ => None,
             },
@@ -4339,9 +4322,9 @@ impl State {
                     .and_then(|e| e.path.parent())
                     .map(Path::to_path_buf);
             }
-            Scene::Play { entry, .. } => *entry,
+            Scene::Other(s) if s.song_play().is_some() => s.song_play()?.0,
             Scene::Other(s) if s.settings() => match self.behind.as_deref() {
-                Some(Scene::Play { entry, .. }) => *entry,
+                Some(b) if b.is_play() => b.song_play()?.0,
                 _ => return None,
             },
             _ => return None,
@@ -4645,24 +4628,6 @@ impl State {
             return Some((tr!("AFK", "離席中", "Отошёл").into(), song));
         }
         Some(match &self.scene {
-            Scene::Play { entry, .. } => {
-                let game = self.play.as_deref()?;
-                let label = self.library.get(*entry)?.label();
-                let state = if let Some(who) = game.replay_of() {
-                    tr!("Watching {who}'s replay", "{who}のリプレイを観戦中", "Смотрит повтор {who}";)
-                } else if game.paused().is_some() {
-                    tr!("Paused", "ポーズ中", "Пауза").into()
-                } else {
-                    let stars = self
-                        .stars
-                        .get(*entry, game.rate())
-                        .map(|s| format!("  {s:.2}*"))
-                        .unwrap_or_default();
-                    let rate = rate_text(game.rate());
-                    tr!("Playing{stars}{rate}", "プレイ中{stars}{rate}", "Играет{stars}{rate}";)
-                };
-                (label, state)
-            }
             Scene::Other(s) if s.in_match() => in_match()?,
             // Anywhere else while in a room (its lobby, or song select picking its map).
             Scene::Other(s) if s.presence_first() => s.presence(self)?,
@@ -5106,7 +5071,6 @@ impl State {
     /// The map played now, or whose results are up (its own offset is what -/+ and O change).
     fn song_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Play { entry, .. } => Some(*entry),
             Scene::Other(s) if s.map_entry().is_some() => s.map_entry(),
             // The room's map is the song of its match, of the wait for it and of its results;
             // the lobby only shows it.
@@ -5218,7 +5182,7 @@ impl State {
 
     /// Plays the current map again from where it was started (in game, paused or on results).
     fn restart_map(&mut self) {
-        if let Scene::Play { entry, from, .. } = self.scene {
+        if let Some((entry, from)) = self.scene.song_play() {
             self.retry_from(entry, from);
         } else if let Some(r) = self.scene.screen_as::<ResultsScreen>() {
             let (entry, from) = (r.entry, r.from);
@@ -5228,7 +5192,7 @@ impl State {
 
     /// One step faster or slower through the replay being watched.
     fn step_replay_speed(&mut self, by: i32) {
-        let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref()) else {
+        let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref()) else {
             return;
         };
         if !game.has_constant_speed() {
@@ -5253,7 +5217,7 @@ impl State {
     /// Makes the replay's music at the speed asked for, one at a time however fast it's asked,
     /// and plays on with it when it's ready.
     fn poll_replay_speed(&mut self) {
-        let (Scene::Play { entry, .. }, Some(game)) = (&mut self.scene, self.play.as_deref_mut())
+        let (Some((entry, _)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
         else {
             self.replay_speed = 1.0;
             self.replay_speed_wanted = 1.0;
@@ -5284,7 +5248,7 @@ impl State {
         let speed = self.replay_speed_wanted;
         let rate = game.rate() * speed;
         let keep_pitch = game.mods().speed(1.0, self.cfg.rate_keep_pitch).1;
-        let path = preview::audio_path(&self.library[*entry]);
+        let path = preview::audio_path(&self.library[entry]);
         self.replay_speed_rx = Job::spawn(move || {
             let constant = mods::Speed::constant(rate);
             let track = stream::open(&path, sample_rate, constant, keep_pitch).and_then(|t| {
@@ -5329,7 +5293,7 @@ impl State {
 
     /// Restarts the map once the quick retry key has been held long enough.
     fn poll_retry(&mut self, now: Instant) {
-        if !matches!(self.scene, Scene::Play { .. }) {
+        if !self.scene.is_play() {
             self.retry_hold = None;
         }
         if self.retry_progress(now).is_some_and(|t| t >= 1.0) {
@@ -5351,7 +5315,7 @@ impl State {
             self.restart_map();
             return;
         }
-        let (Scene::Play { entry, from }, Some(game)) = (&mut self.scene, self.play.as_deref_mut())
+        let (Some((entry, from)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
         else {
             return;
         };
@@ -5372,7 +5336,7 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
                 0 => game.resume_after(delay, sound(&self.audio)),
                 1 => {
-                    let (e, f) = (*entry, *from);
+                    let (e, f) = (entry, from);
                     self.retry_from(e, f);
                 }
                 2 => self.open_dropdown(),
@@ -5525,7 +5489,7 @@ impl State {
         if !grabbed && !(vx >= x - 6.0 && vx <= x + w + 6.0 && vy >= y && vy <= y + h) {
             return false;
         }
-        let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) else {
+        let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref_mut()) else {
             return false;
         };
         let (start, end) = game.span();
@@ -5538,7 +5502,6 @@ impl State {
     /// menu) always show it.
     fn cursor_hidden(&self, now: Instant) -> bool {
         let playing = match &self.scene {
-            Scene::Play { .. } => self.game().is_some_and(|game| game.paused().is_none()),
             Scene::Other(s) if s.holds_game() => {
                 self.game().is_some_and(|game| game.paused().is_none())
             }
@@ -5559,8 +5522,7 @@ impl State {
 
     /// Scenes where the playfield area can be moved and resized with the mouse.
     fn area_editable(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. })
-            || self.scene.screen().is_some_and(|s| s.area_editable())
+        self.scene.is_play() || self.scene.screen().is_some_and(|s| s.area_editable())
     }
 
     fn refresh_presets(&mut self) {
@@ -6000,7 +5962,7 @@ impl State {
     /// the first finger works as the mouse.
     fn touch_drums(&self) -> bool {
         match &self.scene {
-            Scene::Play { .. } => self
+            Scene::Other(s) if s.song_play().is_some() => self
                 .game()
                 .is_some_and(|game| game.paused().is_none() && game.replay().is_none()),
             Scene::Other(s) if s.holds_game() => {
@@ -6279,8 +6241,8 @@ impl State {
                 .hit_at(vx, vy)
                 .filter(|h| !matches!(h, hit::Hit::Preview))
         {
-            if let (hit::Hit::PauseItem(i), Scene::Play { .. }, Some(game)) =
-                (hit, &self.scene, self.play.as_deref_mut())
+            if let (hit::Hit::PauseItem(i), true, Some(game)) =
+                (hit, self.scene.is_play(), self.play.as_deref_mut())
             {
                 game.set_pause_cursor(i);
             }
@@ -6583,7 +6545,7 @@ impl State {
             {
                 // Clicking the resolution readout opens the preset list; single-player pauses
                 // first (a multiplayer match keeps running).
-                if (matches!(self.scene, Scene::Play { .. }) || self.calibration_run().is_some())
+                if (self.scene.is_play() || self.calibration_run().is_some())
                     && let Some(game) = self.play.as_deref_mut()
                 {
                     game.pause(sound(&self.audio));
@@ -7377,7 +7339,7 @@ impl State {
         let screen = match &self.scene {
             Scene::Select if self.on_menu() => "main menu",
             Scene::Select => "song select",
-            Scene::Play { .. } => {
+            Scene::Other(s) if s.song_play().is_some() => {
                 if self.game().is_some_and(|game| game.replay().is_some()) {
                     "watching a replay"
                 } else {
@@ -7446,10 +7408,11 @@ impl State {
 
     /// The map of the live play, as the server is told it.
     fn live_map(&self) -> Option<online::PlayedMap> {
-        let entry = match self.behind_settings().unwrap_or(&self.scene) {
-            Scene::Play { entry, .. } => Some(*entry),
-            _ => None,
-        };
+        let entry = self
+            .behind_settings()
+            .unwrap_or(&self.scene)
+            .song_play()
+            .map(|p| p.0);
         if let Some(e) = entry.and_then(|i| self.library.get(i)) {
             return Some(online::PlayedMap {
                 hash: e.hash(),
@@ -9045,8 +9008,7 @@ impl State {
 
     /// Showing a song, its background dimmed by the background dim setting.
     fn dims_background(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. })
-            || self.scene.screen().is_some_and(|s| s.dims_background())
+        self.scene.is_play() || self.scene.screen().is_some_and(|s| s.dims_background())
     }
 
     /// What the window is cleared to under the background: black in a song when the background
@@ -9725,9 +9687,7 @@ impl State {
             // The editor and its test plays (`editor_back` holds the editor while one runs)
             // count as editing: a test play is the mapper checking their own work, there's
             // nothing to watch, and flipping to "playing" would offer friends a Watch button.
-            _ if self.editor_back.is_some()
-                && (matches!(self.scene, Scene::Play { .. }) || self.loading_song()) =>
-            {
+            _ if self.editor_back.is_some() && (self.scene.is_play() || self.loading_song()) => {
                 Activity::Editing {
                     map: self
                         .editor_back
@@ -9736,11 +9696,13 @@ impl State {
                         .unwrap_or_default(),
                 }
             }
-            Scene::Play { entry, .. } if self.game().is_some_and(|g| g.replay().is_none()) => {
+            Scene::Other(s)
+                if s.song_play().is_some() && self.game().is_some_and(|g| g.replay().is_none()) =>
+            {
                 Activity::Playing {
-                    map: self
-                        .library
-                        .get(*entry)
+                    map: s
+                        .song_play()
+                        .and_then(|(entry, _)| self.library.get(entry))
                         .map(|e| e.label())
                         .unwrap_or_default(),
                 }
@@ -10103,7 +10065,7 @@ impl State {
     /// the presses since (the first frame sends all of them, for a mid-play reconnect).
     fn stream_play(&mut self) {
         let connected = self.social.connected;
-        let (Scene::Play { entry, .. }, Some(game)) = (&mut self.scene, self.play.as_deref_mut())
+        let (Some((entry, _)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
         else {
             if self.stream.take().is_some()
                 && connected
@@ -10131,7 +10093,7 @@ impl State {
                 conn.send(online::Up::PlayEnd);
             }
             game.set_log_inputs(true);
-            let Some(e) = self.library.get(*entry) else {
+            let Some(e) = self.library.get(entry) else {
                 return;
             };
             conn.send(online::Up::PlayStart(online::SoloPlay {
@@ -10376,7 +10338,7 @@ impl State {
                 let Some(s) = &mut self.mp else { return };
                 s.contrib.clear();
                 // Not in a position to play (single-player song, calibration): sit this one out.
-                if matches!(self.scene, Scene::Play { .. })
+                if self.scene.is_play()
                     || self.scene.screen().is_some_and(|s| s.loads_song())
                     || self
                         .scene
@@ -10657,7 +10619,7 @@ impl State {
         // Tab in the editor's test play is autoplay, as in osu!'s, whatever the map info key is.
         if code == KeyCode::Tab
             && !(self.modifiers_shift || self.modifiers_ctrl || self.modifiers_alt)
-            && matches!(self.scene, Scene::Play { .. })
+            && self.scene.is_play()
             && self
                 .game()
                 .is_some_and(|game| game.view.test_play && game.paused().is_none())
@@ -10718,7 +10680,7 @@ impl State {
             return None;
         }
         let drum = self.cfg.keys.iter().position(|&k| k == code)?;
-        let paused = matches!(self.scene, Scene::Play { .. })
+        let paused = self.scene.is_play()
             && self
                 .game()
                 .is_some_and(|game| game.paused().is_some() && game.resuming().is_none());
@@ -10804,10 +10766,12 @@ impl State {
             Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => {
                 keys::Place::Select
             }
-            Scene::Play { .. } if self.game().is_some_and(|g| g.paused().is_some()) => {
+            Scene::Other(s)
+                if s.song_play().is_some() && self.game().is_some_and(|g| g.paused().is_some()) =>
+            {
                 keys::Place::Paused
             }
-            Scene::Play { .. } => keys::Place::Play,
+            Scene::Other(s) if s.song_play().is_some() => keys::Place::Play,
             Scene::Other(s) => s.key_place().unwrap_or(keys::Place::Other),
             _ => keys::Place::Other,
         })
@@ -10908,6 +10872,17 @@ impl State {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
         }
+        // A drum hit goes straight to the game, the busiest key there is: no screen in between.
+        if self.scene.is_play()
+            && let Some(game) = self.play.as_deref_mut()
+            && game.paused().is_none()
+            && let Some(k) = self.cfg.keys.iter().position(|&k| k == code)
+        {
+            if !repeat && game.replay().is_none() {
+                game.press(k, at, sound(&self.audio), self.play_offset);
+            }
+            return;
+        }
         if self.screen_key(screens::screen::Key {
             code,
             repeat,
@@ -10960,42 +10935,6 @@ impl State {
                     return;
                 }
                 _ => {}
-            }
-        }
-        if let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) {
-            if game.paused().is_some() {
-                if !repeat
-                    && !self.cfg.keys.contains(&code)
-                    && !self.handle_global_key(code, window)
-                {
-                    self.pause_key(code);
-                }
-                return;
-            }
-            if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat && game.replay().is_none() {
-                    game.press(k, at, sound(&self.audio), self.play_offset);
-                }
-                return;
-            }
-            if game.replay().is_some() && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
-                self.step_replay_speed(if code == KeyCode::ArrowUp { 1 } else { -1 });
-                return;
-            }
-            if game.replay().is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-                let step = if self.modifiers_shift {
-                    15_000.0
-                } else {
-                    5_000.0
-                };
-                let t = game.time()
-                    + if code == KeyCode::ArrowRight {
-                        step
-                    } else {
-                        -step
-                    };
-                game.seek(t, sound(&self.audio), self.play_offset);
-                return;
             }
         }
         if repeat
@@ -11128,30 +11067,6 @@ impl State {
                 }
             },
             Scene::Other(_) => {}
-            Scene::Play { .. } => match code {
-                KeyCode::KeyO => self.apply_live_offset(),
-                KeyCode::Tab => self.toggle_map_info(),
-                KeyCode::Escape | KeyCode::Space => {
-                    let Some(game) = self.play.as_deref_mut() else {
-                        return;
-                    };
-                    match code {
-                        // After the last note there's nothing left to pause: straight to the
-                        // results.
-                        KeyCode::Escape if game.skip_outro() => {}
-                        KeyCode::Escape => game.pause(sound(&self.audio)),
-                        KeyCode::Space if game.replay().is_some() => {
-                            game.toggle_held(sound(&self.audio))
-                        }
-                        _ => {
-                            game.skip(sound(&self.audio), self.play_offset);
-                        }
-                    }
-                }
-                KeyCode::Backquote => self.hold_retry(),
-                KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
-                _ => {}
-            },
         }
     }
 
@@ -11584,9 +11499,7 @@ impl State {
             self.pick_to_edit = false;
         }
         // A song or a replay opened by any road leaves the menu behind.
-        if matches!(self.scene, Scene::Play { .. })
-            || self.scene.screen().is_some_and(|s| s.closes_main_menu())
-        {
+        if self.scene.is_play() || self.scene.screen().is_some_and(|s| s.closes_main_menu()) {
             self.main_menu = None;
         }
         // Back from calibrating: on with the guide.
@@ -11645,7 +11558,7 @@ impl State {
         let scene = self.scene.kind();
         if self.shown_scene.is_some_and(|s| s != scene)
             && !self.in_song()
-            && !matches!(self.scene, Scene::Play { .. })
+            && !self.scene.is_play()
             && !self.loading_song()
         {
             self.screen_fade = Some(0.0);
@@ -12016,281 +11929,6 @@ impl State {
                     drum_nav::draw(canvas, self.select_zone, &self.select_rows);
                 }
             }
-            Scene::Play { entry, from } => 'play: {
-                let Some(game) = self.play.as_deref_mut() else {
-                    break 'play;
-                };
-                let done = game.update(now, sound(&self.audio), self.play_offset);
-                if (self.auto || game.mods().has(mods::Mod::Autoplay)) && game.replay().is_none() {
-                    game.set_autoplay_style(self.cfg.autoplay);
-                    game.autoplay(sound(&self.audio));
-                }
-                if let Some(sm) = &mut self.smooth {
-                    if game.paused().is_some() {
-                        // A frozen clock isn't jitter; restart the frame-to-frame comparison on resume.
-                        sm.break_sequence();
-                    } else {
-                        let wall = now.duration_since(self.started).as_secs_f64() * 1000.0;
-                        let shown = self
-                            .frame_acquired
-                            .unwrap_or(now)
-                            .duration_since(self.started)
-                            .as_secs_f64()
-                            * 1000.0;
-                        sm.sample(
-                            wall,
-                            game.raw_time(),
-                            game.last_audio_ms(),
-                            shown,
-                            game.raw_time() + visual_offset,
-                        );
-                    }
-                }
-                // Offset advice is for live play (and its line would sit on the replay timeline).
-                game.view.show_offset_hint =
-                    self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay().is_none();
-                game.view.offset_key = self
-                    .cfg
-                    .hotkeys
-                    .get(keys::Hotkey::ApplyOffset)
-                    .map(keys::Chord::name);
-                game.view.kiai_effects = self.cfg.kiai_effects;
-                game.view.hidden = hidden;
-                game.view.hud = self.cfg.hud;
-                game.view.hud_area = self.cfg.playfield_area;
-                game.set_ur_scaled_hint(self.cfg.offset_hint_ur_scaled);
-                game.set_visual_offset(visual_offset);
-                draw_game_area(
-                    canvas,
-                    &self.cfg,
-                    &mut self.frame_clip,
-                    &self.grip,
-                    &self.hover,
-                    self.bg_brightness > 0.0,
-                    |c| {
-                        game.draw_playfield(c, game.scroll_speed());
-                    },
-                );
-                game.draw_hud(canvas);
-                if game.replay().is_none()
-                    && game.paused().is_none()
-                    && !hidden.has(hud::Part::Spectators)
-                {
-                    let names = self.social.spectators();
-                    game.placed_from(canvas, hud::Part::Spectators, [12.0, 276.0], |c| {
-                        social::draw_spectators(c, &names);
-                    });
-                }
-                if game.replay().is_some() && game.paused().is_none() {
-                    if game.replay_timeline().is_none() {
-                        let misses = game.replay_misses();
-                        let replay_timeline = Some((difficulty::analyze(game.map()), misses));
-                        game.set_replay_timeline(replay_timeline);
-                    }
-                    self.replay_bar = Some(draw_replay_bar(
-                        canvas,
-                        game,
-                        self.replay_scrub.is_some(),
-                        self.replay_speed_wanted,
-                        &mut self.replay_bar_grow,
-                    ));
-                }
-                if let Some(plan) = &mut self.shots
-                    && plan.times.last().is_some_and(|&t| game.time() >= t)
-                {
-                    let t = plan.times.pop().unwrap();
-                    capture = Some(format!("play-{t:.0}.png"));
-                }
-                if done && self.editor_back.is_some() {
-                    // A test play has no results: back to the editor.
-                    test_over = true;
-                } else if done && fail_restarts(&self.cfg, game) {
-                    // Failed plays aren't kept anyway: straight into the next try.
-                    fail_restart = true;
-                } else if done {
-                    let title = results_title(&game.map().meta, *from);
-                    let failed = game.failed();
-                    if game.failed_early() {
-                        if let Some(a) = &self.audio {
-                            a.stop();
-                        }
-                        self.preview.invalidate_audio();
-                    }
-                    let mut results = Results::new(title, game.stats().clone(), game.windows());
-                    results.set_mods(game.mods(), game.rate());
-                    results.seed = Some(game.seed());
-                    results.watched = game.replay_of().clone();
-                    results.failed = failed;
-                    // The song plays on under the results (not after a fail that stopped it),
-                    // from the preview point again once it ends.
-                    if !game.failed_early() && self.audio.is_some() {
-                        let preview = game.map().meta.preview_time;
-                        let again = if preview >= 0.0 {
-                            game.track_at(preview)
-                        } else {
-                            game.track_at(game.end_time()) * 0.4
-                        };
-                        results.music = game::Song::into_any(game.track().clone())
-                            .downcast::<audio::Track>()
-                            .ok()
-                            .map(|t| (t, again.max(0.0)));
-                    }
-                    let e = &self.library[*entry];
-                    let play = pp::Play {
-                        great: game.stats().great,
-                        ok: game.stats().ok,
-                        miss: game.stats().miss,
-                        max_combo: game.stats().max_combo,
-                        rate: game.rate(),
-                        mods: game.mods(),
-                        scroll_speed: game.scroll_speed(),
-                        seed: game.seed(),
-                        half: game.half(),
-                    };
-                    results.no_pp = if game.mods().has(mods::Mod::OdOverride) {
-                        Some("OD Override gets no pp")
-                    } else if game.mods().unranked() {
-                        Some("Autoplay gets no pp")
-                    } else if failed {
-                        Some("failed plays get no pp")
-                    } else if from.is_some() {
-                        Some("plays from a start point get no pp")
-                    } else if map_gives_pp(
-                        &self.library[*entry],
-                        &self.set_status,
-                        &self.db_status,
-                        &self.select.server_loved,
-                    ) == Some(false)
-                    {
-                        Some("only ranked and loved maps give pp")
-                    } else {
-                        results.job = Some(results_job(e.path.clone(), play, None, None));
-                        None
-                    };
-                    // Failed plays aren't kept, like osu!.
-                    if game.record() && !failed {
-                        let e = &self.library[*entry];
-                        let st = game.stats();
-                        let replay = scores::Replay {
-                            version: scores::new_version(),
-                            map_hash: e.hash(),
-                            map_path: e.path.to_string_lossy().into_owned(),
-                            map_label: e.label(),
-                            player: self.cfg.mp_name.clone(),
-                            date: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0),
-                            rate: game.rate(),
-                            keep_pitch: self.cfg.rate_keep_pitch,
-                            anti_mash: true,
-                            mods: game.mods().list(),
-                            scroll_speed: game.scroll_speed(),
-                            score: st.score,
-                            accuracy: st.accuracy(),
-                            max_combo: st.max_combo,
-                            great: st.great,
-                            ok: st.ok,
-                            miss: st.miss,
-                            ur: st.unstable_rate(),
-                            inputs: game.take_inputs(),
-                            seed: game.seed(),
-                        };
-                        let pp = pp::play_pp(&e.path, &replay.pp_play());
-                        results.pp = pp.filter(|_| results.no_pp.is_none());
-                        if pp.is_none() && results.no_pp.is_none() {
-                            results.no_pp = Some("the map couldn't be rated");
-                        }
-                        // Whole plays go to the online leaderboards too, when logged in.
-                        if from.is_none()
-                            && !self.cfg.online_token.is_empty()
-                            && !game.mods().unranked()
-                        {
-                            let m = &game.map().meta;
-                            let play = online::ScoreSubmit {
-                                map: net::MapInfo {
-                                    hash: replay.map_hash,
-                                    artist: m.artist.clone(),
-                                    title: m.title.clone(),
-                                    version: m.version.clone(),
-                                    rate: replay.rate,
-                                    from: None,
-                                    set_id: e.set_id(),
-                                    mods: replay.mods.clone(),
-                                    multiverse: None,
-                                    shapeshift: None,
-                                    seed: (replay.seed != 0).then_some(replay.seed),
-                                    defense: None,
-
-                                    stats: None,
-                                },
-                                score: replay.score,
-                                accuracy: replay.accuracy,
-                                max_combo: replay.max_combo,
-                                great: replay.great,
-                                ok: replay.ok,
-                                miss: replay.miss,
-                                pp,
-                                date: replay.date,
-                                replay_version: replay.version,
-                                inputs: replay.inputs.clone(),
-                                rolls: Some(game.stats().roll_ticks),
-                                stars: None,
-                                pp_version: online::PP_VERSION,
-                                scroll_speed: Some(replay.scroll_speed),
-                                play_ms: Some(game.played_ms() as u64),
-                                md5: None,
-                                timing: {
-                                    let (latency_ms, reported_latency_ms) = self
-                                        .audio
-                                        .as_ref()
-                                        .map(|a| a.latencies_ms())
-                                        .unwrap_or_default();
-                                    Some(online::PlayTiming {
-                                        os: std::env::consts::OS.into(),
-                                        present: self.present.name().into(),
-                                        offset_ms: self.play_offset,
-                                        visual_lead_ms: visual_offset - self.pace_shift_ms,
-                                        latency_ms,
-                                        reported_latency_ms,
-                                    })
-                                },
-                            };
-                            self.submits.push(submit_score(
-                                self.cfg.online_server.clone(),
-                                self.cfg.online_token.clone(),
-                                play,
-                                e.path.clone(),
-                                replay.pp_play(),
-                            ));
-                            // Counted with the play itself.
-                            self.playing = None;
-                            results.total_due = true;
-                            self.online_boards
-                                .remove(&(replay.map_hash, game.mods().relax()));
-                        }
-                        match scores::save(&replay, pp) {
-                            Ok(row) => {
-                                results.replay = Some(row.file.clone());
-                                self.scores.push(row);
-                                let all = scores::top(
-                                    &self.scores,
-                                    replay.map_hash,
-                                    usize::MAX,
-                                    game.mods().relax(),
-                                );
-                                let rank = all
-                                    .iter()
-                                    .position(|r| r.date == replay.date && r.score == replay.score)
-                                    .map(|p| p + 1);
-                                results.rank = rank.map(|r| (r, all.len()));
-                            }
-                            Err(e) => eprintln!("couldn't save the replay: {e}"),
-                        }
-                    }
-                    next = Some(ResultsScreen::scene(Box::new(results), *entry, *from));
-                }
-            }
             Scene::Other(_) => {
                 let frame = screens::screen::Frame {
                     now,
@@ -12307,6 +11945,15 @@ impl State {
                 // The front door's frame may ask for something, done once the frame is drawn.
                 if let Some(h) = self.scene.screen_mut::<EditorHome>() {
                     home_out = h.out.take();
+                }
+                // So may the play's.
+                if let Some(p) = self.scene.screen_mut::<PlayScreen>() {
+                    let out = std::mem::take(&mut p.out);
+                    if out.capture.is_some() {
+                        capture = out.capture;
+                    }
+                    test_over = out.test_over;
+                    fail_restart = out.fail_restart;
                 }
                 // So may the editor's.
                 if let Some(e) = self.scene.screen_mut::<MapEditor>() {
@@ -12543,7 +12190,7 @@ impl State {
             }
             // TAIKO_STATS: the play's smoothness, whether the music plays on at the results or not.
             if (results.is_some() || matches!(s, Scene::Select))
-                && let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene)
+                && let (Some(sm), true) = (&mut self.smooth, self.scene.is_play())
             {
                 eprintln!(
                     "--- smoothness ({}) ---\n{}",
@@ -12552,7 +12199,7 @@ impl State {
                 );
                 *sm = debug::Smoothness::default();
             }
-            if let (Some(r), Scene::Play { .. }) = (results, &self.scene) {
+            if let (Some(r), true) = (results, self.scene.is_play()) {
                 let st = &r.results.stats;
                 eprintln!(
                     "result: {:.2}%  great {} ok {} miss {}  max combo {}  UR {:.1}  mean {:+.2} ms  rolls {}  swells {}  big {}",
@@ -13495,8 +13142,7 @@ impl State {
     /// Song select goes to the maps just added, whatever its filters. During a game they're only
     /// listed: the cursor stays where the player left it.
     fn reveal_maps(&mut self, maps: Vec<PathBuf>) {
-        if !(matches!(self.scene, Scene::Play { .. })
-            || self.scene.screen().is_some_and(|s| s.in_match()))
+        if !(self.scene.is_play() || self.scene.screen().is_some_and(|s| s.in_match()))
             && self.mp.is_none()
         {
             self.select.reveal(&self.library, maps);
@@ -14108,7 +13754,7 @@ impl State {
                 self.adjust_setting(settings::ITEMS[i].1, dir, window);
             }
             Hit::PauseItem(i) => {
-                if let (Scene::Play { .. }, Some(game)) = (&self.scene, self.play.as_deref_mut()) {
+                if let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref_mut()) {
                     game.set_pause_cursor(i);
                 }
                 self.pause_key(KeyCode::Enter);

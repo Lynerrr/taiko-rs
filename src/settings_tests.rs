@@ -1,6 +1,7 @@
 //! Typed setting values and the Songs folder setting.
 
 use super::*;
+use crate::screens::results::map_gives_pp;
 
 /// The Songs folder and the game data folder are the whole program's: tests that change them
 /// take turns.
@@ -544,7 +545,7 @@ fn escape_after_the_last_note_goes_straight_to_the_results() {
     let mut at = Instant::now();
     // With notes to come it's the pause menu, as ever.
     s.key(KeyCode::Escape, false, None, at, None);
-    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
+    let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) else {
         panic!("still playing");
     };
     assert!(game.paused().is_some());
@@ -552,7 +553,7 @@ fn escape_after_the_last_note_goes_straight_to_the_results() {
     game.run_out_of_notes();
 
     s.key(KeyCode::Escape, false, None, at, None);
-    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
+    let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref()) else {
         panic!("the results come with the next frame");
     };
     assert!(game.paused().is_none(), "not the pause menu");
@@ -567,7 +568,7 @@ fn escape_after_the_last_note_goes_straight_to_the_results() {
 #[test]
 fn a_replay_still_pauses_after_its_last_note() {
     let mut s = in_a_song(false);
-    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
+    let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) else {
         panic!("playing");
     };
     game.set_replay(Some((Vec::new(), 0)));
@@ -1359,10 +1360,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
         }),
         None,
     ))));
-    s.scene = Scene::Play {
-        entry: 0,
-        from: None,
-    };
+    s.scene = screens::play::PlayScreen::scene(0, None);
     let info = s.cfg.show_map_info;
     s.modifiers_shift = true;
     s.key(KeyCode::Tab, false, None, Instant::now(), None);
@@ -1377,7 +1375,7 @@ fn shift_tab_hides_the_interface_in_a_song_and_tab_stays_the_map_info() {
         ..Default::default()
     };
     s.build_frame(&mut c, Instant::now(), 853.3);
-    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
+    let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref()) else {
         panic!()
     };
     assert_eq!(game.view.hidden, hud::Parts::DEFAULT_HIDES);
@@ -1410,10 +1408,7 @@ fn ctrl_c_copies_what_is_typed_or_picked_and_paste_goes_only_where_text_does() {
         }),
         None,
     ))));
-    s.scene = Scene::Play {
-        entry: 0,
-        from: None,
-    };
+    s.scene = screens::play::PlayScreen::scene(0, None);
     assert!(!s.takes_text());
 }
 
@@ -1549,10 +1544,7 @@ fn scroll_speed_changes_between_songs_only() {
     ));
     game.set_scroll_speed(faster);
     s.play = Some(Box::new(game));
-    s.scene = Scene::Play {
-        entry: 0,
-        from: None,
-    };
+    s.scene = screens::play::PlayScreen::scene(0, None);
     s.key(KeyCode::F3, false, None, now, None);
     assert_eq!(s.cfg.scroll_speed, faster);
     s.behind = Some(Box::new(std::mem::replace(&mut s.scene, Scene::Select)));
@@ -1676,17 +1668,14 @@ fn hotkeys_can_be_moved_and_removed() {
         }),
         None,
     ))));
-    s.scene = Scene::Play {
-        entry: 0,
-        from: None,
-    };
+    s.scene = screens::play::PlayScreen::scene(0, None);
     s.key(KeyCode::Escape, false, None, now, None);
     assert!(
-        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused().is_none())
+        matches!((s.scene.is_play(), s.play.as_deref()), (true, Some(game)) if game.paused().is_none())
     );
     s.key(KeyCode::KeyP, false, None, now, None);
     assert!(
-        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused().is_some())
+        matches!((s.scene.is_play(), s.play.as_deref()), (true, Some(game)) if game.paused().is_some())
     );
 
     // Scroll speed up taken away: F4 does nothing.
@@ -2506,15 +2495,12 @@ fn in_a_song(paused: bool) -> State {
         game.set_paused(Some(0));
     }
     s.play = Some(Box::new(game));
-    s.scene = Scene::Play {
-        entry: 0,
-        from: None,
-    };
+    s.scene = screens::play::PlayScreen::scene(0, None);
     s
 }
 
 fn restarted(s: &State) -> bool {
-    !matches!(s.scene, Scene::Play { .. })
+    !s.scene.is_play()
 }
 
 #[test]
@@ -2597,17 +2583,17 @@ fn the_drum_stays_out_of_menus_unless_asked_for() {
     let rim = s.cfg.keys[3];
     s.key(rim, false, None, Instant::now(), None);
     assert!(
-        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused() == Some(0))
+        matches!((s.scene.is_play(), s.play.as_deref()), (true, Some(game)) if game.paused() == Some(0))
     );
     s.cfg.drum_menus = true;
     s.key(rim, false, None, Instant::now(), None);
     assert!(
-        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused() == Some(1))
+        matches!((s.scene.is_play(), s.play.as_deref()), (true, Some(game)) if game.paused() == Some(1))
     );
     let left = s.cfg.keys[0];
     s.key(left, false, None, Instant::now(), None);
     assert!(
-        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused() == Some(0))
+        matches!((s.scene.is_play(), s.play.as_deref()), (true, Some(game)) if game.paused() == Some(0))
     );
 }
 
@@ -2677,7 +2663,7 @@ fn tab_opens_settings_as_ever_without_drum_menus() {
 fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
     let mut s = in_a_song(false);
     let set = |s: &mut State, ms| {
-        if let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) {
+        if let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) {
             game.set_played_ms(ms);
         }
     };
@@ -2700,7 +2686,7 @@ fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
     let mut next = in_a_song(false);
     next.library = library;
     next.session_play_ms = s.session_play_ms;
-    if let (Scene::Play { .. }, Some(game)) = (&next.scene, next.play.as_deref_mut()) {
+    if let (true, Some(game)) = (next.scene.is_play(), next.play.as_deref_mut()) {
         game.set_played_ms(500.0);
     }
     next.track_play();
@@ -2714,14 +2700,14 @@ fn the_website_button_goes_to_the_site_whatever_the_map() {
 
 fn watching_a_replay() -> State {
     let mut s = in_a_song(false);
-    if let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) {
+    if let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) {
         game.set_replay(Some((Vec::new(), 0)));
     }
     s
 }
 
 fn held(s: &State) -> bool {
-    matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.held())
+    matches!((s.scene.is_play(), s.play.as_deref()), (true, Some(game)) if game.held())
 }
 
 #[test]
@@ -2730,7 +2716,7 @@ fn space_pauses_a_replay_without_a_menu_and_skips_in_a_play_as_ever() {
     s.key(KeyCode::Space, false, None, Instant::now(), None);
     assert!(held(&s));
     assert!(
-        matches!((&s.scene, s.play.as_deref()), (Scene::Play { .. }, Some(game)) if game.paused().is_none())
+        matches!((s.scene.is_play(), s.play.as_deref()), (true, Some(game)) if game.paused().is_none())
     );
     s.key(KeyCode::Space, false, None, Instant::now(), None);
     assert!(!held(&s));
@@ -2744,7 +2730,7 @@ fn space_pauses_a_replay_without_a_menu_and_skips_in_a_play_as_ever() {
 fn a_held_replay_stays_where_it_is() {
     let mut s = watching_a_replay();
     s.key(KeyCode::Space, false, None, Instant::now(), None);
-    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
+    let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) else {
         panic!()
     };
     let now = Instant::now();
@@ -2758,7 +2744,7 @@ fn a_held_replay_stays_where_it_is() {
 fn the_pause_menu_takes_over_from_a_held_replay() {
     let mut s = watching_a_replay();
     s.key(KeyCode::Space, false, None, Instant::now(), None);
-    let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
+    let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) else {
         panic!()
     };
     game.pause(None);
@@ -2941,10 +2927,7 @@ fn the_game_goes_with_its_song() {
         }),
         None,
     ))));
-    s.scene = Scene::Play {
-        entry: 0,
-        from: None,
-    };
+    s.scene = screens::play::PlayScreen::scene(0, None);
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.game().is_some(), "playing");
     s.settings_anywhere();

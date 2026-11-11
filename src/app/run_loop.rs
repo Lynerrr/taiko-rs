@@ -185,7 +185,7 @@ pub(super) fn render_loop(
             let size = s.want_size.take();
             let letterbox = s.sync_letterbox();
             let safe = s.safe_area();
-            if matches!(s.scene, Scene::Play { .. })
+            if s.scene.is_play()
                 && let Some(sm) = &mut s.smooth
             {
                 sm.sample_waits(waits.0, waits.1, waits.2);
@@ -744,8 +744,8 @@ impl App {
                 s.right_scroll = false;
                 // Alt is released in the other window; don't keep it "held" here.
                 s.modifiers_alt = false;
-                if let (Scene::Play { .. }, Some(game), false) =
-                    (&s.scene, s.play.as_deref_mut(), s.auto)
+                if let (true, Some(game), false) =
+                    (s.scene.is_play(), s.play.as_deref_mut(), s.auto)
                 {
                     game.pause(sound(&s.audio));
                 }

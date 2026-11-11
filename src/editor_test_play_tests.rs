@@ -34,7 +34,7 @@ fn frame(s: &mut State) {
 fn until_playing(s: &mut State) {
     for _ in 0..500 {
         frame(s);
-        if matches!(s.scene, Scene::Play { .. }) {
+        if s.scene.is_play() {
             return;
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -64,10 +64,10 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     assert!(s.editor_back.is_some(), "the editor waits");
     until_playing(&mut s);
     {
-        let (Scene::Play { from, .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
+        let (Some((_, from)), Some(game)) = (s.scene.song_play(), s.play.as_deref()) else {
             unreachable!()
         };
-        assert_eq!(*from, Some(1500.0), "from the playhead");
+        assert_eq!(from, Some(1500.0), "from the playhead");
         assert_eq!(game.map().notes.len(), 2, "the map as the editor has it");
         assert!(!game.record(), "nothing is kept");
         assert!(game.mods().has(mods::Mod::NoFail));
@@ -103,12 +103,12 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     press(&mut s, KeyCode::F5, shift);
     frame(&mut s);
     until_playing(&mut s);
-    let Scene::Play { from, .. } = &s.scene else {
+    let Some((_, from)) = s.scene.song_play() else {
         unreachable!()
     };
-    assert_eq!(*from, None);
+    assert_eq!(from, None);
     // Played to the end: no results, back to the editor.
-    if let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) {
+    if let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) {
         game.run_out_of_notes();
         assert!(game.skip_outro());
     }
@@ -148,7 +148,7 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
     frame(&mut s);
     until_playing(&mut s);
     let autoplayed = |s: &State| {
-        let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
+        let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref()) else {
             unreachable!()
         };
         assert!(!game.record(), "nothing is kept");

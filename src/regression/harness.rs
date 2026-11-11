@@ -288,7 +288,6 @@ fn config_key_letter(i: usize) -> KeyCode {
 pub fn scene_name(s: &State) -> &'static str {
     match &s.scene {
         Scene::Select => "Select",
-        Scene::Play { .. } => "Play",
         Scene::Other(s) => s.name(),
     }
 }

@@ -179,10 +179,7 @@ impl Screen for Loading {
                     }
                 }
                 state.play = Some(Box::new(game));
-                next = Some(Scene::Play {
-                    entry: self.entry,
-                    from: self.from,
-                });
+                next = Some(super::play::PlayScreen::scene(self.entry, self.from));
             }
             Some(Some(Err(e))) => {
                 state.status = format!("failed to load {}: {e}", self.label);

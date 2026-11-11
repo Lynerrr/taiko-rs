@@ -1,7 +1,8 @@
-//! Drawing around a play: the replay bar and its pause button, watching everyone, and the
-//! quick restarts after a fail.
+//! A song played on its own (`PlayScreen`), and drawing around a play: the replay bar and its
+//! pause button, watching everyone, and the quick restarts after a fail.
 
-#[allow(unused_imports)]
+use super::results::{ResultsScreen, map_gives_pp, results_job, results_title, submit_score};
+use super::screen::{Frame, Key, Screen};
 use crate::*;
 
 /// A pause button's label, `held` or going.
@@ -234,4 +235,458 @@ pub(crate) const FAIL_RESTART_LINGER: f64 = 0.6;
 /// (not a replay) failed by Sudden Death / Perfect, with `Config::fail_restart` on.
 pub(crate) fn fail_restarts(cfg: &Config, game: &Game) -> bool {
     cfg.fail_restart && game.failed_early() && game.replay().is_none()
+}
+
+/// What a play's frame asks for, done once the frame is drawn.
+#[derive(Default)]
+pub(crate) struct Out {
+    /// A screenshot of this frame, by name.
+    pub(crate) capture: Option<String>,
+    /// A test play from the editor is over: back to the editor.
+    pub(crate) test_over: bool,
+    /// A failed play starts over at once.
+    pub(crate) fail_restart: bool,
+}
+
+/// A song played on its own (by the player, a replay or autoplay); its game is `State::play`.
+pub(crate) struct PlayScreen {
+    pub(crate) entry: usize,
+    /// Where the play started (map time), None: from the start.
+    pub(crate) from: Option<f64>,
+    pub(crate) out: Out,
+}
+
+impl PlayScreen {
+    pub(crate) fn scene(entry: usize, from: Option<f64>) -> Scene {
+        Scene::Other(Box::new(PlayScreen {
+            entry,
+            from,
+            out: Out::default(),
+        }))
+    }
+}
+
+impl Screen for PlayScreen {
+    #[cfg(test)]
+    fn name(&self) -> &'static str {
+        "Play"
+    }
+
+    fn activity(&self) -> &'static str {
+        "playing"
+    }
+
+    fn presence(&self, state: &State) -> Option<(String, String)> {
+        let game = state.play.as_deref()?;
+        let label = state.library.get(self.entry)?.label();
+        let doing = if let Some(who) = game.replay_of() {
+            tr!("Watching {who}'s replay", "{who}のリプレイを観戦中", "Смотрит повтор {who}";)
+        } else if game.paused().is_some() {
+            tr!("Paused", "ポーズ中", "Пауза").into()
+        } else {
+            let stars = state
+                .stars
+                .get(self.entry, game.rate())
+                .map(|s| format!("  {s:.2}*"))
+                .unwrap_or_default();
+            let rate = if (game.rate() - 1.0).abs() > 1e-6 {
+                format!("  {:.2}x", game.rate())
+            } else {
+                String::new()
+            };
+            tr!("Playing{stars}{rate}", "プレイ中{stars}{rate}", "Играет{stars}{rate}";)
+        };
+        Some((label, doing))
+    }
+
+    fn presence_first(&self) -> bool {
+        true
+    }
+
+    fn song_play(&self) -> Option<(usize, Option<f64>)> {
+        Some((self.entry, self.from))
+    }
+
+    fn holds_game(&self) -> bool {
+        true
+    }
+
+    fn map_entry(&self) -> Option<usize> {
+        Some(self.entry)
+    }
+
+    fn in_song(&self) -> bool {
+        true
+    }
+
+    fn dims_background(&self) -> bool {
+        true
+    }
+
+    fn closes_main_menu(&self) -> bool {
+        true
+    }
+
+    fn shows_own_background(&self) -> bool {
+        true
+    }
+
+    fn key(&mut self, state: &mut State, key: Key) {
+        let Key {
+            code,
+            repeat,
+            window,
+            ..
+        } = key;
+        if let Some(game) = state.play.as_deref_mut() {
+            if game.paused().is_some() {
+                if !repeat
+                    && !state.cfg.keys.contains(&code)
+                    && !state.handle_global_key(code, window)
+                {
+                    state.pause_key(code);
+                }
+                return;
+            }
+            // Drum keys never come here: `State::key_inner` gives them to the game first.
+            if game.replay().is_some() && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
+                state.step_replay_speed(if code == KeyCode::ArrowUp { 1 } else { -1 });
+                return;
+            }
+            if game.replay().is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
+                let step = if state.modifiers_shift {
+                    15_000.0
+                } else {
+                    5_000.0
+                };
+                let t = game.time()
+                    + if code == KeyCode::ArrowRight {
+                        step
+                    } else {
+                        -step
+                    };
+                game.seek(t, sound(&state.audio), state.play_offset);
+                return;
+            }
+        }
+        if repeat
+            && !matches!(
+                code,
+                KeyCode::ArrowUp
+                    | KeyCode::ArrowDown
+                    | KeyCode::Backspace
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+            )
+        {
+            return;
+        }
+        if state.handle_global_key(code, window) {
+            return;
+        }
+        match code {
+            KeyCode::KeyO => state.apply_live_offset(),
+            KeyCode::Tab => state.toggle_map_info(),
+            KeyCode::Escape | KeyCode::Space => {
+                let Some(game) = state.play.as_deref_mut() else {
+                    return;
+                };
+                match code {
+                    // After the last note there's nothing left to pause: straight to the
+                    // results.
+                    KeyCode::Escape if game.skip_outro() => {}
+                    KeyCode::Escape => game.pause(sound(&state.audio)),
+                    KeyCode::Space if game.replay().is_some() => {
+                        game.toggle_held(sound(&state.audio))
+                    }
+                    _ => {
+                        game.skip(sound(&state.audio), state.play_offset);
+                    }
+                }
+            }
+            KeyCode::Backquote => state.hold_retry(),
+            KeyCode::KeyR if state.modifiers_ctrl => state.restart_map(),
+            _ => {}
+        }
+    }
+
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
+        let game = state.play.as_deref_mut()?;
+        let done = game.update(frame.now, sound(&state.audio), state.play_offset);
+        if (state.auto || game.mods().has(mods::Mod::Autoplay)) && game.replay().is_none() {
+            game.set_autoplay_style(state.cfg.autoplay);
+            game.autoplay(sound(&state.audio));
+        }
+        if let Some(sm) = &mut state.smooth {
+            if game.paused().is_some() {
+                // A frozen clock isn't jitter; restart the frame-to-frame comparison on resume.
+                sm.break_sequence();
+            } else {
+                let wall = frame.now.duration_since(state.started).as_secs_f64() * 1000.0;
+                let shown = state
+                    .frame_acquired
+                    .unwrap_or(frame.now)
+                    .duration_since(state.started)
+                    .as_secs_f64()
+                    * 1000.0;
+                sm.sample(
+                    wall,
+                    game.raw_time(),
+                    game.last_audio_ms(),
+                    shown,
+                    game.raw_time() + frame.visual_offset,
+                );
+            }
+        }
+        // Offset advice is for live play (and its line would sit on the replay timeline).
+        game.view.show_offset_hint =
+            state.cfg.show_offset_hint && state.cfg.show_map_info && game.replay().is_none();
+        game.view.offset_key = state
+            .cfg
+            .hotkeys
+            .get(keys::Hotkey::ApplyOffset)
+            .map(keys::Chord::name);
+        game.view.kiai_effects = state.cfg.kiai_effects;
+        game.view.hidden = frame.hidden;
+        game.view.hud = state.cfg.hud;
+        game.view.hud_area = state.cfg.playfield_area;
+        game.set_ur_scaled_hint(state.cfg.offset_hint_ur_scaled);
+        game.set_visual_offset(frame.visual_offset);
+        draw_game_area(
+            canvas,
+            &state.cfg,
+            &mut state.frame_clip,
+            &state.grip,
+            &state.hover,
+            state.bg_brightness > 0.0,
+            |c| {
+                game.draw_playfield(c, game.scroll_speed());
+            },
+        );
+        game.draw_hud(canvas);
+        if game.replay().is_none()
+            && game.paused().is_none()
+            && !frame.hidden.has(hud::Part::Spectators)
+        {
+            let names = state.social.spectators();
+            game.placed_from(canvas, hud::Part::Spectators, [12.0, 276.0], |c| {
+                social::draw_spectators(c, &names);
+            });
+        }
+        if game.replay().is_some() && game.paused().is_none() {
+            if game.replay_timeline().is_none() {
+                let misses = game.replay_misses();
+                let replay_timeline = Some((difficulty::analyze(game.map()), misses));
+                game.set_replay_timeline(replay_timeline);
+            }
+            state.replay_bar = Some(draw_replay_bar(
+                canvas,
+                game,
+                state.replay_scrub.is_some(),
+                state.replay_speed_wanted,
+                &mut state.replay_bar_grow,
+            ));
+        }
+        if let Some(plan) = &mut state.shots
+            && plan.times.last().is_some_and(|&t| game.time() >= t)
+        {
+            let t = plan.times.pop().unwrap();
+            self.out.capture = Some(format!("play-{t:.0}.png"));
+        }
+        if done && state.editor_back.is_some() {
+            // A test play has no results: back to the editor.
+            self.out.test_over = true;
+        } else if done && fail_restarts(&state.cfg, game) {
+            // Failed plays aren't kept anyway: straight into the next try.
+            self.out.fail_restart = true;
+        } else if done {
+            let title = results_title(&game.map().meta, self.from);
+            let failed = game.failed();
+            if game.failed_early() {
+                if let Some(a) = &state.audio {
+                    a.stop();
+                }
+                state.preview.invalidate_audio();
+            }
+            let mut results = Results::new(title, game.stats().clone(), game.windows());
+            results.set_mods(game.mods(), game.rate());
+            results.seed = Some(game.seed());
+            results.watched = game.replay_of().clone();
+            results.failed = failed;
+            // The song plays on under the results (not after a fail that stopped it),
+            // from the preview point again once it ends.
+            if !game.failed_early() && state.audio.is_some() {
+                let preview = game.map().meta.preview_time;
+                let again = if preview >= 0.0 {
+                    game.track_at(preview)
+                } else {
+                    game.track_at(game.end_time()) * 0.4
+                };
+                results.music = game::Song::into_any(game.track().clone())
+                    .downcast::<audio::Track>()
+                    .ok()
+                    .map(|t| (t, again.max(0.0)));
+            }
+            let e = &state.library[self.entry];
+            let play = pp::Play {
+                great: game.stats().great,
+                ok: game.stats().ok,
+                miss: game.stats().miss,
+                max_combo: game.stats().max_combo,
+                rate: game.rate(),
+                mods: game.mods(),
+                scroll_speed: game.scroll_speed(),
+                seed: game.seed(),
+                half: game.half(),
+            };
+            results.no_pp = if game.mods().has(mods::Mod::OdOverride) {
+                Some("OD Override gets no pp")
+            } else if game.mods().unranked() {
+                Some("Autoplay gets no pp")
+            } else if failed {
+                Some("failed plays get no pp")
+            } else if self.from.is_some() {
+                Some("plays from a start point get no pp")
+            } else if map_gives_pp(
+                &state.library[self.entry],
+                &state.set_status,
+                &state.db_status,
+                &state.select.server_loved,
+            ) == Some(false)
+            {
+                Some("only ranked and loved maps give pp")
+            } else {
+                results.job = Some(results_job(e.path.clone(), play, None, None));
+                None
+            };
+            // Failed plays aren't kept, like osu!.
+            if game.record() && !failed {
+                let e = &state.library[self.entry];
+                let st = game.stats();
+                let replay = scores::Replay {
+                    version: scores::new_version(),
+                    map_hash: e.hash(),
+                    map_path: e.path.to_string_lossy().into_owned(),
+                    map_label: e.label(),
+                    player: state.cfg.mp_name.clone(),
+                    date: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    rate: game.rate(),
+                    keep_pitch: state.cfg.rate_keep_pitch,
+                    anti_mash: true,
+                    mods: game.mods().list(),
+                    scroll_speed: game.scroll_speed(),
+                    score: st.score,
+                    accuracy: st.accuracy(),
+                    max_combo: st.max_combo,
+                    great: st.great,
+                    ok: st.ok,
+                    miss: st.miss,
+                    ur: st.unstable_rate(),
+                    inputs: game.take_inputs(),
+                    seed: game.seed(),
+                };
+                let pp = pp::play_pp(&e.path, &replay.pp_play());
+                results.pp = pp.filter(|_| results.no_pp.is_none());
+                if pp.is_none() && results.no_pp.is_none() {
+                    results.no_pp = Some("the map couldn't be rated");
+                }
+                // Whole plays go to the online leaderboards too, when logged in.
+                if self.from.is_none()
+                    && !state.cfg.online_token.is_empty()
+                    && !game.mods().unranked()
+                {
+                    let m = &game.map().meta;
+                    let play = online::ScoreSubmit {
+                        map: net::MapInfo {
+                            hash: replay.map_hash,
+                            artist: m.artist.clone(),
+                            title: m.title.clone(),
+                            version: m.version.clone(),
+                            rate: replay.rate,
+                            from: None,
+                            set_id: e.set_id(),
+                            mods: replay.mods.clone(),
+                            multiverse: None,
+                            shapeshift: None,
+                            seed: (replay.seed != 0).then_some(replay.seed),
+                            defense: None,
+
+                            stats: None,
+                        },
+                        score: replay.score,
+                        accuracy: replay.accuracy,
+                        max_combo: replay.max_combo,
+                        great: replay.great,
+                        ok: replay.ok,
+                        miss: replay.miss,
+                        pp,
+                        date: replay.date,
+                        replay_version: replay.version,
+                        inputs: replay.inputs.clone(),
+                        rolls: Some(game.stats().roll_ticks),
+                        stars: None,
+                        pp_version: online::PP_VERSION,
+                        scroll_speed: Some(replay.scroll_speed),
+                        play_ms: Some(game.played_ms() as u64),
+                        md5: None,
+                        timing: {
+                            let (latency_ms, reported_latency_ms) = state
+                                .audio
+                                .as_ref()
+                                .map(|a| a.latencies_ms())
+                                .unwrap_or_default();
+                            Some(online::PlayTiming {
+                                os: std::env::consts::OS.into(),
+                                present: state.present.name().into(),
+                                offset_ms: state.play_offset,
+                                visual_lead_ms: frame.visual_offset - state.pace_shift_ms,
+                                latency_ms,
+                                reported_latency_ms,
+                            })
+                        },
+                    };
+                    state.submits.push(submit_score(
+                        state.cfg.online_server.clone(),
+                        state.cfg.online_token.clone(),
+                        play,
+                        e.path.clone(),
+                        replay.pp_play(),
+                    ));
+                    // Counted with the play itself.
+                    state.playing = None;
+                    results.total_due = true;
+                    state
+                        .online_boards
+                        .remove(&(replay.map_hash, game.mods().relax()));
+                }
+                match scores::save(&replay, pp) {
+                    Ok(row) => {
+                        results.replay = Some(row.file.clone());
+                        state.scores.push(row);
+                        let all = scores::top(
+                            &state.scores,
+                            replay.map_hash,
+                            usize::MAX,
+                            game.mods().relax(),
+                        );
+                        let rank = all
+                            .iter()
+                            .position(|r| r.date == replay.date && r.score == replay.score)
+                            .map(|p| p + 1);
+                        results.rank = rank.map(|r| (r, all.len()));
+                    }
+                    Err(e) => eprintln!("couldn't save the replay: {e}"),
+                }
+            }
+            return Some(ResultsScreen::scene(
+                Box::new(results),
+                self.entry,
+                self.from,
+            ));
+        }
+        None
+    }
 }
