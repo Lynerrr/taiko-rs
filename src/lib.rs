@@ -158,6 +158,7 @@ use screens::editor_home::EditorHome;
 use screens::hud_editor::HudEdit;
 use screens::loading::Loading;
 use screens::lobby::Lobby;
+use screens::map_editor::MapEditor;
 use screens::menu::{update_badge, updating_badge};
 use screens::mp_menu::MpMenu;
 use screens::mp_results::MpResults;
@@ -200,8 +201,6 @@ enum Scene {
     /// A multiplayer match (the menu, the lobby, the wait for the match to start, watching it
     /// and the results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait`,
     /// `screens::spectate` and `screens::mp_results`).
-    /// The map editor, editing one difficulty.
-    Editor(Box<editor::view::View>),
     /// A screen that lives outside lib.rs (`screens::screen`).
     Other(Box<dyn screens::screen::Screen>),
 }
@@ -1171,7 +1170,7 @@ impl State {
                     view.start_tour();
                 }
                 self.main_menu = None;
-                self.scene = Scene::Editor(Box::new(view));
+                self.scene = MapEditor::scene(Box::new(view));
             }
             Err(e) => self.toast(format!("can't open the map: {e}")),
         }
@@ -1228,20 +1227,6 @@ impl State {
             shift: self.modifiers_shift,
             ctrl: self.modifiers_ctrl,
             alt: self.modifiers_alt,
-        }
-    }
-
-    fn editor_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
-        let keys = self.editor_keys();
-        let Scene::Editor(view) = &mut self.scene else {
-            return;
-        };
-        match view.key(code, repeat, keys, self.audio.as_ref()) {
-            editor::view::KeyResult::Handled => {}
-            editor::view::KeyResult::Exit => self.show_select(),
-            editor::view::KeyResult::Pass => {
-                self.handle_global_key(code, window);
-            }
         }
     }
 
@@ -1632,15 +1617,15 @@ impl State {
     /// Leaves the editor for a test play of `text` (its map as it is now) from `from`.
     fn start_test_play(&mut self, entry: usize, from: Option<f64>) {
         if entry >= self.library.len() {
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.status = "this map isn't in your songs yet: save it first".into();
             }
             return;
         }
-        let Scene::Editor(view) = std::mem::replace(&mut self.scene, Scene::Select) else {
+        let Some(editor) = self.scene.take_screen::<MapEditor>() else {
             return;
         };
-        self.editor_back = Some(view);
+        self.editor_back = Some(editor.view);
         self.test_auto = false;
         self.start_loading_from(entry, from);
     }
@@ -1685,7 +1670,7 @@ impl State {
             a.stop();
         }
         self.preview.invalidate_audio();
-        self.scene = Scene::Editor(view);
+        self.scene = MapEditor::scene(view);
         true
     }
 
@@ -4340,6 +4325,9 @@ impl State {
     /// The folder a `.tko` map's pictures come from: the map played or edited.
     // ponytail: multiplayer and spectating draw a map's text but not its pictures.
     fn picture_dir(&self) -> Option<PathBuf> {
+        if let Some(e) = self.scene.screen_as::<MapEditor>() {
+            return e.view.ed.path.parent().map(Path::to_path_buf);
+        }
         let entry = match &self.scene {
             // A custom map's preview may show its own pictures (the results' covers come from
             // their own folder, `pictures::COVER_PREFIX`).
@@ -4351,7 +4339,6 @@ impl State {
                     .and_then(|e| e.path.parent())
                     .map(Path::to_path_buf);
             }
-            Scene::Editor(view) => return view.ed.path.parent().map(Path::to_path_buf),
             Scene::Play { entry, .. } => *entry,
             Scene::Other(s) if s.settings() => match self.behind.as_deref() {
                 Some(Scene::Play { entry, .. }) => *entry,
@@ -4417,7 +4404,7 @@ impl State {
                 self.drag_hover = None;
                 for path in paths {
                     // A picture dropped on the editor goes into the map's folder.
-                    if let Scene::Editor(view) = &mut self.scene
+                    if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
                         && path
                             .file_name()
                             .is_some_and(|n| pictures::is_picture(&n.to_string_lossy()))
@@ -4677,10 +4664,6 @@ impl State {
                 (label, state)
             }
             Scene::Other(s) if s.in_match() => in_match()?,
-            Scene::Editor(view) => (
-                tr!("Mapping", "マッピング中", "Делает карту").into(),
-                view.label(),
-            ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
             Scene::Other(s) if s.presence_first() => s.presence(self)?,
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
@@ -5895,13 +5878,13 @@ impl State {
         if notches == 0 {
             return;
         }
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             let keys = self.editor_keys();
             // The volume's own notes, once it is up, take the wheel there as they do elsewhere.
             let mine = !self.volume.hovering(Instant::now())
-                && match &mut self.scene {
-                    Scene::Editor(view) => view.wheel(notches, keys),
-                    _ => true,
+                && match self.scene.screen_mut::<MapEditor>() {
+                    Some(MapEditor { view, .. }) => view.wheel(notches, keys),
+                    None => true,
                 };
             if !mine {
                 self.turn_volume(notches);
@@ -6228,9 +6211,9 @@ impl State {
         }
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             let keys = self.editor_keys();
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.mouse_move(vx, vy, keys);
                 return view.cursor();
             }
@@ -6380,9 +6363,9 @@ impl State {
     /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
     /// The middle button: pans the map editor's timeline.
     fn middle_button(&mut self, pressed: bool) {
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             let (vx, vy) = self.mouse_virtual();
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.middle(pressed, vx, vy);
             }
         }
@@ -6398,10 +6381,10 @@ impl State {
         } else if std::mem::take(&mut self.idle.swallow_right) {
             return;
         }
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
-                if let Scene::Editor(view) = &mut self.scene {
+                if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                     view.right_click(vx, vy);
                 }
             }
@@ -6514,10 +6497,10 @@ impl State {
             }
             return;
         }
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open && self.splash.is_none() {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open && self.splash.is_none() {
             let (vx, vy) = self.mouse_virtual();
             let keys = self.editor_keys();
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 if pressed {
                     view.mouse_down(vx, vy, keys, self.audio.as_ref());
                 } else {
@@ -7402,7 +7385,6 @@ impl State {
                 }
             }
             Scene::Other(s) => s.activity(),
-            Scene::Editor(_) => "map editor",
         };
         let map = self
             .offset_entry()
@@ -9063,7 +9045,7 @@ impl State {
 
     /// Showing a song, its background dimmed by the background dim setting.
     fn dims_background(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::Editor(_))
+        matches!(self.scene, Scene::Play { .. })
             || self.scene.screen().is_some_and(|s| s.dims_background())
     }
 
@@ -9161,14 +9143,16 @@ impl State {
     /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
     /// open panel leaves the keys to the editor until one of its fields is clicked.
     fn in_editor(&self) -> bool {
-        matches!(self.scene, Scene::Editor(_)) || self.scene.screen().is_some_and(|s| s.editor())
+        self.scene.screen().is_some_and(|s| s.editor())
     }
 
     /// Where the friends overlay's chip goes in the editors' top bar (its left edge), on a
     /// screen `width` wide; None outside the editors.
     fn editor_chip_x(&self, width: f32) -> Option<f32> {
         match &self.scene {
-            Scene::Editor(_) => Some(editor::view::View::menu_end() + 6.0),
+            Scene::Other(_) if self.scene.screen_is::<MapEditor>() => {
+                Some(editor::view::View::menu_end() + 6.0)
+            }
             Scene::Other(s) => s.chip_from_right().map(|right| width - right),
             _ => None,
         }
@@ -9741,7 +9725,6 @@ impl State {
             // The editor and its test plays (`editor_back` holds the editor while one runs)
             // count as editing: a test play is the mapper checking their own work, there's
             // nothing to watch, and flipping to "playing" would offer friends a Watch button.
-            Scene::Editor(view) => Activity::Editing { map: view.label() },
             _ if self.editor_back.is_some()
                 && (matches!(self.scene, Scene::Play { .. }) || self.loading_song()) =>
             {
@@ -10178,17 +10161,10 @@ impl State {
     /// The watch view: finds (or downloads) and loads the map, starts the replay where the
     /// friend is (minus the delay), holds while they pause and catches up when they skip.
     fn watch_tick(&mut self) {
-        if !self.scene.screen_is::<Watch>() {
-            return;
-        }
         // Out of the scene while it runs (the scene is song select meanwhile), as when it was
         // a variant.
-        let Scene::Other(screen) = std::mem::replace(&mut self.scene, Scene::Select) else {
-            unreachable!("checked above");
-        };
-        let screen: Box<dyn std::any::Any> = screen;
-        let Ok(watch) = screen.downcast::<Watch>() else {
-            unreachable!("checked above");
+        let Some(watch) = self.scene.take_screen::<Watch>() else {
+            return;
         };
         let mut v = watch.view;
         if let (Some(play), None, None) = (v.play.clone(), v.entry, &v.game)
@@ -10921,7 +10897,7 @@ impl State {
             return;
         }
         if !repeat
-            && !(self.in_settings() || matches!(self.scene, Scene::Editor(_)))
+            && !self.in_settings()
             && !self
                 .scene
                 .screen()
@@ -10959,17 +10935,6 @@ impl State {
                 KeyCode::Escape | KeyCode::Backspace => self.select.picker = None,
                 _ => {}
             }
-            return;
-        }
-        if let Scene::Editor(view) = &mut self.scene {
-            // A text block's words come as text; Enter, Esc and Backspace still as keys.
-            if view.wants_text()
-                && let Some(t) = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
-            {
-                view.type_text(t);
-                return;
-            }
-            self.editor_key(code, repeat, window);
             return;
         }
         if self.mp.is_some()
@@ -11163,7 +11128,6 @@ impl State {
                 }
             },
             Scene::Other(_) => {}
-            Scene::Editor(_) => {}
             Scene::Play { .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -11469,7 +11433,7 @@ impl State {
         if self.editor_back.is_some() && matches!(self.scene, Scene::Select) {
             let why = std::mem::take(&mut self.status);
             self.back_to_editor();
-            if let Scene::Editor(view) = &mut self.scene
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
                 && !why.is_empty()
             {
                 view.status = why;
@@ -11620,7 +11584,7 @@ impl State {
             self.pick_to_edit = false;
         }
         // A song or a replay opened by any road leaves the menu behind.
-        if matches!(self.scene, Scene::Play { .. } | Scene::Editor(_))
+        if matches!(self.scene, Scene::Play { .. })
             || self.scene.screen().is_some_and(|s| s.closes_main_menu())
         {
             self.main_menu = None;
@@ -12327,55 +12291,6 @@ impl State {
                     next = Some(ResultsScreen::scene(Box::new(results), *entry, *from));
                 }
             }
-            Scene::Editor(view) => {
-                // Uploading needs the game's account on our own server.
-                let token = (self.cfg.online_server == online::DEFAULT_SERVER
-                    && !self.cfg.online_token.is_empty())
-                .then_some(&self.cfg.online_token);
-                if view.account.as_ref() != token {
-                    view.account = token.cloned();
-                }
-                view.update(now, self.audio.as_ref());
-                if let Some(speed) = view.take_rate_request() {
-                    editor_reload = Some((view.entry, speed));
-                }
-                if view.left_pan != self.cfg.editor_left_pan {
-                    self.cfg.editor_left_pan = view.left_pan;
-                    self.cfg.save();
-                }
-                if view.ed.follow_timing != self.cfg.editor_follow_timing {
-                    self.cfg.editor_follow_timing = view.ed.follow_timing;
-                    self.cfg.save();
-                }
-                if view.snap_dirty {
-                    view.snap_dirty = false;
-                    (self.cfg.editor_snap_presets, self.cfg.editor_snap_active) =
-                        view.snap_config();
-                    self.cfg.save();
-                }
-                if let Some(from) = view.take_test_play() {
-                    editor_test = Some((view.entry, from));
-                }
-                editor_folder = view.take_folder_request();
-                editor_renamed = view.take_renamed();
-                // Maps dropped into its folder (or taken out) join the list as they come.
-                if let Some(dir) = view.ed.path.parent() {
-                    if self.folder_watch.as_ref().map(|w| w.folder()) != Some(dir) {
-                        self.folder_watch = Some(folder_watch::Watch::new(dir, now));
-                    }
-                    folder_news = self.folder_watch.as_mut().and_then(|w| w.poll(now));
-                }
-                view.draw(canvas, self.cfg.scroll_speed, self.cfg.autoplay);
-                if view.take_tour_ended() && !self.cfg.editor_tour_done {
-                    self.cfg.editor_tour_done = true;
-                    self.cfg.save();
-                }
-                if view.take_exit() {
-                    // It may have been sent just now: ask which sets are custom again.
-                    self.custom_asked = None;
-                    next = Some(Scene::Select);
-                }
-            }
             Scene::Other(_) => {
                 let frame = screens::screen::Frame {
                     now,
@@ -12392,6 +12307,15 @@ impl State {
                 // The front door's frame may ask for something, done once the frame is drawn.
                 if let Some(h) = self.scene.screen_mut::<EditorHome>() {
                     home_out = h.out.take();
+                }
+                // So may the editor's.
+                if let Some(e) = self.scene.screen_mut::<MapEditor>() {
+                    let out = std::mem::take(&mut e.out);
+                    editor_reload = out.reload;
+                    editor_test = out.test;
+                    editor_folder = out.folder;
+                    editor_renamed = out.renamed;
+                    folder_news = out.folder_news;
                 }
             }
         }
@@ -12599,7 +12523,7 @@ impl State {
         }
         if let Some((entry, speed)) = editor_reload {
             let (rx, rate) = self.spawn_track_loader(entry, speed);
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.set_track_loader(rx, rate);
             }
         }

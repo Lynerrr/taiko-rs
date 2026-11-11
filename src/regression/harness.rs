@@ -290,7 +290,6 @@ pub fn scene_name(s: &State) -> &'static str {
         Scene::Select => "Select",
         Scene::Play { .. } => "Play",
         Scene::Other(s) => s.name(),
-        Scene::Editor(_) => "Editor",
     }
 }
 

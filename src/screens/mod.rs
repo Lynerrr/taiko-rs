@@ -9,6 +9,7 @@ pub(crate) mod hud_editor;
 pub(crate) mod layout_edit;
 pub(crate) mod loading;
 pub(crate) mod lobby;
+pub(crate) mod map_editor;
 pub(crate) mod menu;
 pub(crate) mod mp_menu;
 pub(crate) mod mp_play;
@@ -34,7 +35,7 @@ pub(crate) fn fmt_time(ms: f64) -> String {
 /// Whether `scene` shows its own map's background, which the song select's preview leaves be.
 pub(crate) fn shows_own_background(scene: &Scene) -> bool {
     match scene {
-        Scene::Editor(_) | Scene::Play { .. } => true,
+        Scene::Play { .. } => true,
         Scene::Other(s) => s.shows_own_background(),
         _ => false,
     }
