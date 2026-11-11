@@ -174,8 +174,9 @@ use screens::select::leaderboard::{
 use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
 use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};
 use screens::settings::{
-    browse_text, built_in_text, enter_to_start, none_text, off_text, offset_scale_name, on_text,
-    parse_number, picking_text, scroll_in_select, short_path, size_char, type_path,
+    SettingsScreen, browse_text, built_in_text, enter_to_start, none_text, off_text,
+    offset_scale_name, on_text, parse_number, picking_text, scroll_in_select, short_path,
+    size_char, type_path,
 };
 use screens::video_edit::VideoEdit;
 use screens::{fmt_time, shows_own_background};
@@ -203,9 +204,6 @@ enum Scene {
         from: Option<f64>,
     },
     /// Settings tab; `prev` is restored on exit (song select, or a paused game).
-    Settings {
-        prev: Box<Scene>,
-    },
     /// Offset calibration run; `back` is where to return (the settings tab).
     /// Offset calibration (by ear), or with `vsync` the vsync compensation's (by sight).
     Calibrate {
@@ -435,6 +433,9 @@ struct State {
     /// The game of the song, match or calibration up (`Scene::Play`, `MpPlay`, `Calibrate`),
     /// kept while the settings are open over its pause menu. `State::game` reads it.
     play: Option<Box<Play>>,
+    /// The scene the settings were opened over, while they are up (`State::behind_settings`);
+    /// closing them goes back to it. Left over when the settings went another way.
+    behind: Option<Box<Scene>>,
     audio: Option<Engine>,
     toast: Option<Toast>,
     /// What an input method (Japanese, ...) is composing, not typed yet: shown until it's
@@ -913,12 +914,14 @@ impl State {
     /// In a song (or its pause menu's settings): what counts for pp stays as it started.
     fn mid_song(&self) -> bool {
         self.in_song()
-            || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
+            || self
+                .behind_settings()
+                .is_some_and(|prev| matches!(prev, Scene::Play { .. } | Scene::MpPlay { .. }))
     }
 
     /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
     fn idle_allowed(&self) -> bool {
-        (matches!(self.scene, Scene::Select | Scene::Settings { .. })
+        (matches!(self.scene, Scene::Select)
             || self.scene.screen().is_some_and(|s| s.idle_allowed()))
             && !self.quit_asked
             && self.crash.is_none()
@@ -1084,7 +1087,9 @@ impl State {
                 .map(|m| m.rate)
         });
         let lobby = matches!(self.scene, Scene::MpPlay { .. } | Scene::Spectate(_))
-            || matches!(&self.scene, Scene::Settings { prev: back } if back.screen().is_some_and(|s| s.room_lobby()))
+            || self
+                .behind_settings()
+                .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby()))
             || self
                 .scene
                 .screen()
@@ -1793,7 +1798,10 @@ impl State {
         }
         let lobby = match &self.scene {
             Scene::MpPlay { .. } | Scene::Spectate(_) => true,
-            Scene::Settings { prev: back } => back.screen().is_some_and(|s| s.room_lobby()),
+            Scene::Other(s) if s.settings() => self
+                .behind
+                .as_deref()
+                .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby())),
             Scene::Other(s) => s.over_lobby() || s.in_room(),
             _ => false,
         };
@@ -1937,10 +1945,13 @@ impl State {
     }
 
     fn open_settings(&mut self) {
+        // Never over themselves (nothing opens them there).
+        if self.in_settings() {
+            return;
+        }
         let prev = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::Settings {
-            prev: Box::new(prev),
-        };
+        self.behind = Some(Box::new(prev));
+        self.scene = SettingsScreen::scene();
         self.settings_ui.binding = None;
         self.settings_ui.choices = None;
         self.settings_ui.editing = None;
@@ -1987,7 +1998,7 @@ impl State {
     /// Ctrl+O: settings over whatever is on (a solo song pauses first), or back out of them.
     /// Scenes that have to keep running (a match, spectating, loading) say so instead.
     fn settings_anywhere(&mut self) {
-        if matches!(self.scene, Scene::Settings { .. }) {
+        if self.in_settings() {
             self.settings_ui.dropdown = None;
             self.settings_ui.choices = None;
             self.close_settings();
@@ -2028,7 +2039,6 @@ impl State {
         match self.scene {
             Scene::Select if self.on_menu() => Some(0),
             Scene::Select => Some(1),
-            Scene::Settings { .. } => Some(3),
             Scene::Other(ref s) => s.menu_screen(),
             _ => None,
         }
@@ -2360,9 +2370,19 @@ impl State {
     }
 
     fn close_settings(&mut self) {
-        if let Scene::Settings { prev } = std::mem::replace(&mut self.scene, Scene::Select) {
-            self.scene = *prev;
+        if self.in_settings() {
+            self.scene = self.behind.take().map_or(Scene::Select, |prev| *prev);
         }
+    }
+
+    /// The settings are up.
+    fn in_settings(&self) -> bool {
+        self.scene.screen().is_some_and(|s| s.settings())
+    }
+
+    /// The scene the settings up were opened over; None when they aren't up.
+    fn behind_settings(&self) -> Option<&Scene> {
+        self.behind.as_deref().filter(|_| self.in_settings())
     }
 
     /// The game of the song, match or calibration up; None on any other screen (the settings
@@ -2378,14 +2398,12 @@ impl State {
 
     /// Drops the game when its scene has gone (the settings over its pause menu keep it).
     fn drop_finished_play(&mut self) {
-        fn holds(scene: &Scene) -> bool {
-            match scene {
-                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
-                Scene::Settings { prev } => holds(prev),
-                _ => false,
-            }
-        }
-        if !holds(&self.scene) {
+        let scene = self.behind_settings().unwrap_or(&self.scene);
+        let holds = matches!(
+            scene,
+            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
+        );
+        if !holds {
             self.play = None;
         }
     }
@@ -3217,7 +3235,10 @@ impl State {
 
     /// Reopens the audio device with a buffer of `frames` (not during a song).
     fn set_audio_buffer(&mut self, frames: u32) {
-        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
+        if self
+            .behind_settings()
+            .is_some_and(|prev| matches!(prev, Scene::Play { .. }))
+        {
             self.toast(
                 tr!(
                     "change the audio buffer from song select",
@@ -3962,7 +3983,7 @@ impl State {
             }
             Ok(None) => {}
             Err(e) => {
-                if !matches!(self.scene, Scene::Settings { .. }) {
+                if !self.in_settings() {
                     self.open_settings();
                 }
                 self.start_edit(item);
@@ -3975,7 +3996,10 @@ impl State {
     /// into `target` (into a taiko-rs folder there, unless it is one; None: back to the usual
     /// places), on its own thread. `poll_data_move` takes it from there.
     fn move_data_to(&mut self, target: Option<PathBuf>) -> Result<(), String> {
-        if matches!(&self.scene, Scene::Settings { prev } if !matches!(**prev, Scene::Select)) {
+        if self
+            .behind_settings()
+            .is_some_and(|prev| !matches!(prev, Scene::Select))
+        {
             return Err(tr!(
                 "move the game data from song select",
                 "ゲームデータは選曲画面で移動してください",
@@ -4075,7 +4099,10 @@ impl State {
 
     /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
     fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
-        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
+        if self
+            .behind_settings()
+            .is_some_and(|prev| matches!(prev, Scene::Play { .. }))
+        {
             return Err(tr!(
                 "change the Songs folder from song select",
                 "Songsフォルダは選曲画面で変えてください",
@@ -4161,10 +4188,7 @@ impl State {
     /// Nothing is lost by restarting the game now: it's in a menu, with no game paused behind the
     /// settings and no multiplayer room to drop out of.
     fn can_restart(&self) -> bool {
-        let scene = match &self.scene {
-            Scene::Settings { prev } => prev.as_ref(),
-            scene => scene,
-        };
+        let scene = self.behind_settings().unwrap_or(&self.scene);
         (matches!(scene, Scene::Select) || scene.screen().is_some_and(|s| s.update_corner()))
             && self.mp.is_none()
             && self.splash.is_none()
@@ -4174,7 +4198,7 @@ impl State {
     /// once it's installed (which waits for a moment that costs the player nothing).
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
-        let menus = matches!(self.scene, Scene::Select | Scene::Settings { .. })
+        let menus = (matches!(self.scene, Scene::Select) || self.in_settings())
             || self.scene.screen().is_some_and(|s| s.update_corner());
         if menus
             && !self.mobile_bar()
@@ -4383,9 +4407,9 @@ impl State {
             Scene::Play { entry, .. } => Some(*entry),
             Scene::Select => self.preview_target(),
             Scene::Other(s) if s.map_from_song_select() => self.preview_target(),
-            Scene::Settings { prev } => match **prev {
-                Scene::Play { entry, .. } => Some(entry),
-                Scene::Select => self.preview_target(),
+            Scene::Other(s) if s.settings() => match self.behind.as_deref() {
+                Some(Scene::Play { entry, .. }) => Some(*entry),
+                Some(Scene::Select) => self.preview_target(),
                 _ => None,
             },
             _ => None,
@@ -4419,8 +4443,8 @@ impl State {
             }
             Scene::Editor(view) => return view.ed.path.parent().map(Path::to_path_buf),
             Scene::Play { entry, .. } => *entry,
-            Scene::Settings { prev } => match **prev {
-                Scene::Play { entry, .. } => entry,
+            Scene::Other(s) if s.settings() => match self.behind.as_deref() {
+                Some(Scene::Play { entry, .. }) => *entry,
                 _ => return None,
             },
             _ => return None,
@@ -4802,10 +4826,6 @@ impl State {
                     song,
                 )
             }
-            Scene::Settings { .. } => (
-                tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
-                String::new(),
-            ),
             Scene::Calibrate { .. } => (
                 tr!("Calibrating", "調整中", "Калибровка").into(),
                 String::new(),
@@ -5129,7 +5149,10 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
                 self.adjust_setting(item, 1, window)
             }
-            KeyCode::Tab if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select)) =>
+            KeyCode::Tab
+                if self
+                    .behind_settings()
+                    .is_some_and(|prev| matches!(prev, Scene::Select)) =>
             {
                 self.open_multiplayer();
             }
@@ -5141,7 +5164,10 @@ impl State {
     /// Offset calibration, or with `vsync` the vsync compensation's: the same notes, in vsync and
     /// with no sound, hit by sight.
     fn start_calibration_as(&mut self, vsync: bool) {
-        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
+        if self
+            .behind_settings()
+            .is_some_and(|prev| matches!(prev, Scene::Play { .. }))
+        {
             self.toast(
                 tr!(
                     "quit the song first to calibrate",
@@ -6219,17 +6245,17 @@ impl State {
                     .seek_by(notches as f64 * 5000.0, self.audio.as_ref())
             }
             Scene::Other(s) if s.previews_remote() => self.browse.scroll_by(notches),
-            Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
+            Scene::Other(s) if s.settings() && self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
                     dd.wheel(notches);
                 }
             }
-            Scene::Settings { .. } if self.settings_ui.choices.is_some() => {
+            Scene::Other(s) if s.settings() && self.settings_ui.choices.is_some() => {
                 if let Some(p) = &mut self.settings_ui.choices {
                     p.move_cursor(-notches);
                 }
             }
-            Scene::Settings { .. } => self.settings_ui.scroll_by(-notches),
+            Scene::Other(s) if s.settings() => self.settings_ui.scroll_by(-notches),
             _ => {}
         }
     }
@@ -7761,7 +7787,6 @@ impl State {
                     "playing"
                 }
             }
-            Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
             Scene::MpPlay { .. } => "multiplayer match",
@@ -7809,14 +7834,9 @@ impl State {
     /// The time played so far of the live play going on: a song or a lobby match (also while
     /// its pause menu's settings are open), not autoplay or a replay (Relax is still playing).
     fn live_play_ms(&self) -> Option<f64> {
-        fn plays(scene: &Scene) -> bool {
-            match scene {
-                Scene::Play { .. } | Scene::MpPlay { .. } => true,
-                Scene::Settings { prev } => plays(prev),
-                _ => false,
-            }
-        }
-        let g = self.play.as_deref().filter(|_| plays(&self.scene))?;
+        let scene = self.behind_settings().unwrap_or(&self.scene);
+        let plays = matches!(scene, Scene::Play { .. } | Scene::MpPlay { .. });
+        let g = self.play.as_deref().filter(|_| plays)?;
         (g.replay().is_none() && !self.auto && !g.mods().has(mods::Mod::Autoplay))
             .then_some(g.played_ms())
     }
@@ -7834,14 +7854,11 @@ impl State {
 
     /// The map of the live play, as the server is told it.
     fn live_map(&self) -> Option<online::PlayedMap> {
-        fn entry_of(scene: &Scene) -> Option<usize> {
-            match scene {
-                Scene::Play { entry, .. } => Some(*entry),
-                Scene::Settings { prev } => entry_of(prev),
-                _ => None,
-            }
-        }
-        if let Some(e) = entry_of(&self.scene).and_then(|i| self.library.get(i)) {
+        let entry = match self.behind_settings().unwrap_or(&self.scene) {
+            Scene::Play { entry, .. } => Some(*entry),
+            _ => None,
+        };
+        if let Some(e) = entry.and_then(|i| self.library.get(i)) {
             return Some(online::PlayedMap {
                 hash: e.hash(),
                 name: e.label(),
@@ -8873,7 +8890,7 @@ impl State {
                 && !self.on_menu()
                 && (matches!(self.scene, Scene::Select)
                     || self.scene.screen().is_some_and(|s| s.tab().is_some())))
-            || (matches!(self.scene, Scene::Settings { .. })
+            || (self.in_settings()
                 && self.settings_ui.binding.is_none()
                 && self.settings_ui.choices.is_none()
                 && self.settings_ui.dropdown.is_none())
@@ -8883,7 +8900,7 @@ impl State {
     /// tapped): the on-screen keyboard comes up for it.
     #[cfg(target_os = "android")]
     fn typing_on_its_own(&self) -> bool {
-        (self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }))
+        (self.settings_ui.editing.is_some() && self.in_settings())
             || self
                 .settings_ui
                 .dropdown
@@ -9037,7 +9054,7 @@ impl State {
             .settings_ui
             .editing
             .as_ref()
-            .filter(|_| matches!(self.scene, Scene::Settings { .. }))
+            .filter(|_| self.in_settings())
         {
             return Some((e.item.label().into(), e.text.clone()));
         }
@@ -9517,7 +9534,7 @@ impl State {
             || self.random_setup.is_some()
             || self.universe_setup.is_some()
             || self.select.menu.is_some()
-            || matches!(self.scene, Scene::Settings { .. })
+            || self.in_settings()
             || self.scene.screen().is_some_and(|s| s.covers_social_tab());
         let middle = if self.on_menu() {
             social::TAB_MENU_MIDDLE
@@ -11174,9 +11191,8 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        let settings_idle = matches!(self.scene, Scene::Settings { .. })
-            && self.settings_ui.search.is_empty()
-            && !keys::starts_text(code);
+        let settings_idle =
+            self.in_settings() && self.settings_ui.search.is_empty() && !keys::starts_text(code);
         if busy
             || (plain && self.in_song() && self.cfg.keys.contains(&code))
             || (plain && self.takes_text() && keys::types_text(code) && !settings_idle)
@@ -11253,7 +11269,7 @@ impl State {
                 return;
             }
         }
-        if self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+        if self.settings_ui.editing.is_some() && self.in_settings() {
             if !repeat
                 || !matches!(
                     code,
@@ -11274,14 +11290,14 @@ impl State {
             self.cfg.save();
             return;
         }
-        if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+        if self.settings_ui.binding.is_some() && self.in_settings() {
             if !repeat {
                 self.settings_key(code, window);
             }
             return;
         }
         if !repeat
-            && !matches!(self.scene, Scene::Settings { .. } | Scene::Editor(_))
+            && !(self.in_settings() || matches!(self.scene, Scene::Editor(_)))
             && !self
                 .scene
                 .screen()
@@ -11570,11 +11586,6 @@ impl State {
                     self.show_select();
                 }
             }
-            Scene::Settings { .. } => {
-                if !self.settings_type(code, text) {
-                    self.settings_key(code, window);
-                }
-            }
             Scene::Calibrate { .. } | Scene::Other(_) => {}
             Scene::MpPlay { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::Editor(_) => {}
             Scene::Play { .. } => match code {
@@ -11747,7 +11758,11 @@ impl State {
                     .scene
                     .screen_as::<ResultsScreen>()
                     .is_some_and(|r| r.results.opened.is_some() && r.results.music.is_none())
-                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select) || prev.screen().is_some_and(|s| s.room_lobby()) || prev.screen_is::<Preview>())
+                || self.behind_settings().is_some_and(|prev| {
+                    matches!(prev, Scene::Select)
+                        || prev.screen().is_some_and(|s| s.room_lobby())
+                        || prev.screen_is::<Preview>()
+                })
                 || self.scene.screen().is_some_and(|s| s.tab().is_some());
             let (entries, selected) = if browsing {
                 (&self.browse.remote, self.browse.shown)
@@ -11756,7 +11771,8 @@ impl State {
             };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
-            self.preview.own_background = shows_own_background(&self.scene);
+            self.preview.own_background =
+                shows_own_background(self.behind_settings().unwrap_or(&self.scene));
             self.preview.autoplay = self.cfg.autoplay;
             self.preview.player = self.player.is_some();
             self.preview.menu = self.on_menu();
@@ -13227,55 +13243,6 @@ impl State {
                     home_out = h.out.take();
                 }
             }
-            Scene::Settings { prev } => {
-                let from_game = matches!(**prev, Scene::Play { .. });
-                self.settings_ui.krokodil = self.is_krokodil();
-                if mobile::active() {
-                    self.draw_mobile_settings(canvas);
-                    self.draw_mobile_choices(canvas);
-                } else {
-                    settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
-                    let searching = !self.settings_ui.search.is_empty();
-                    let footer = if self
-                        .settings_ui
-                        .editing
-                        .as_ref()
-                        .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
-                    {
-                        "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
-                    } else if self.settings_ui.editing.is_some() {
-                        "type a value   Enter set   Esc cancel".to_string()
-                    } else {
-                        let enter = match self.settings_ui.item().kind() {
-                            Kind::List => "Enter list",
-                            Kind::Value => "Enter type a value",
-                            Kind::Toggle => "Enter toggle",
-                            Kind::Key => "Enter rebind",
-                            Kind::Action => "Enter go",
-                        };
-                        let back = if searching {
-                            "Esc clear the search"
-                        } else if from_game {
-                            "Esc back to pause menu"
-                        } else {
-                            "Esc or Tab back"
-                        };
-                        format!(
-                            "Type to search   Up/Down select   Left/Right change   {enter}   {back}"
-                        )
-                    };
-                    let this = &*self;
-                    this.settings_ui.draw(
-                        canvas,
-                        &|item| this.setting_value(item),
-                        &|item| this.setting_control(item),
-                        &footer,
-                    );
-                    if let Some(p) = &self.settings_ui.choices {
-                        p.draw(canvas);
-                    }
-                }
-            }
         }
         // A screen just opened comes up out of black, its background too.
         if let Some(ms) = &mut self.screen_fade {
@@ -14568,23 +14535,25 @@ impl State {
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
-        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select) || prev.screen().is_some_and(|s| s.tab().is_some()));
+        let settings_from_menu = self.behind_settings().is_some_and(|prev| {
+            matches!(prev, Scene::Select) || prev.screen().is_some_and(|s| s.tab().is_some())
+        });
         match (&self.scene, tab) {
             (Scene::Select, 1) => self.open_settings(),
             (Scene::Select, 2) => {
                 self.picking_lobby_map = false;
                 self.open_multiplayer();
             }
-            (Scene::Settings { .. }, 0) if settings_from_menu => {
+            (_, 0) if settings_from_menu => {
                 self.close_settings();
                 self.show_songs();
             }
-            (Scene::Settings { .. }, 2) if settings_from_menu => {
+            (_, 2) if settings_from_menu => {
                 self.close_settings();
                 self.open_multiplayer();
             }
             (Scene::Select, 3) => self.open_download(),
-            (Scene::Settings { .. }, 3) if settings_from_menu => {
+            (_, 3) if settings_from_menu => {
                 self.close_settings();
                 self.open_download();
             }

@@ -1147,6 +1147,7 @@ impl State {
             select,
             scene: Scene::Select,
             play: None,
+            behind: None,
             audio,
             toast: None,
             medals: debug::medals_from_env().map(|view| medals::View {

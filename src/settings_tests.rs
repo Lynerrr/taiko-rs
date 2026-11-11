@@ -38,15 +38,15 @@ fn ctrl_o_opens_settings_from_anywhere_and_closes_them() {
     ] {
         s.scene = scene;
         press(&mut s);
-        assert!(matches!(s.scene, Scene::Settings { .. }));
+        assert!(s.in_settings());
         press(&mut s);
-        assert!(!matches!(s.scene, Scene::Settings { .. }));
+        assert!(!s.in_settings());
     }
     // Over the main menu too, and back to it.
     s.scene = Scene::Select;
     s.main_menu = Some(menu::Menu::new());
     press(&mut s);
-    assert!(!s.on_menu() && matches!(s.scene, Scene::Settings { .. }));
+    assert!(!s.on_menu() && s.in_settings());
     press(&mut s);
     assert!(s.on_menu());
     // Typing a value, it's only a key.
@@ -54,7 +54,7 @@ fn ctrl_o_opens_settings_from_anywhere_and_closes_them() {
     press(&mut s);
     s.settings_ui.editing = Some(settings::Edit::new(Item::Offset, "12".into()));
     press(&mut s);
-    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert!(s.in_settings());
     assert_eq!(keys::Hotkey::OpenSettings.default().name(), "Ctrl+O");
 }
 
@@ -1534,9 +1534,8 @@ fn scroll_speed_changes_between_songs_only() {
     };
     s.key(KeyCode::F3, false, None, now, None);
     assert_eq!(s.cfg.scroll_speed, faster);
-    s.scene = Scene::Settings {
-        prev: Box::new(std::mem::replace(&mut s.scene, Scene::Select)),
-    };
+    s.behind = Some(Box::new(std::mem::replace(&mut s.scene, Scene::Select)));
+    s.scene = crate::screens::settings::SettingsScreen::scene();
     s.adjust_setting(settings::Item::ScrollSpeed, -1, None);
     assert_eq!(s.cfg.scroll_speed, faster);
     assert!(s.apply_typed(settings::Item::ScrollSpeed, "0.5").is_err());
@@ -2025,9 +2024,9 @@ fn typing_in_the_settings_searches_and_escape_clears_before_it_leaves() {
     assert_eq!(s.settings_ui.search, "musi", "not the row's reset");
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
     assert!(s.settings_ui.search.is_empty());
-    assert!(matches!(s.scene, Scene::Settings { .. }), "still here");
+    assert!(s.in_settings(), "still here");
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
-    assert!(!matches!(s.scene, Scene::Settings { .. }));
+    assert!(!s.in_settings());
 }
 
 #[test]
@@ -2411,7 +2410,7 @@ fn a_screen_opened_from_the_main_menu_fades_in() {
     s.scene = Scene::Select;
     s.main_menu = Some(menu::Menu::new());
     s.menu_open(menu::Item::Settings);
-    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert!(s.in_settings());
     assert_eq!(s.screen_fade, Some(0.0));
     // Frames 50 ms apart.
     let mut at = Instant::now();
@@ -2650,7 +2649,7 @@ fn song_select_follows_the_drum_and_tab_moves_to_the_buttons() {
 fn tab_opens_settings_as_ever_without_drum_menus() {
     let mut s = at_song_select(false);
     s.key(KeyCode::Tab, false, None, Instant::now(), None);
-    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert!(s.in_settings());
 }
 
 #[test]
@@ -2928,7 +2927,7 @@ fn the_game_goes_with_its_song() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.game().is_some(), "playing");
     s.settings_anywhere();
-    assert!(matches!(s.scene, Scene::Settings { .. }));
+    assert!(s.in_settings());
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.game().is_none(), "no game is up over the settings");
     assert!(s.play.is_some(), "but the paused one stays behind them");
