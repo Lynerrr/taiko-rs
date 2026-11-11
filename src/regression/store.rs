@@ -446,3 +446,50 @@ fn the_database_moves_with_the_data_folder() {
     drop(s);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// Each set's status on osu! (`setstatus::Cache` in the database).
+
+#[test]
+fn set_statuses_come_in_from_their_file_once_and_new_answers_are_kept() {
+    use crate::setstatus::{Cache, MISSING};
+    let dir = temp_dir("set-status");
+    let db = dir.join(store::FILE);
+    let file = "1\tranked\t100\n2\tpending\t200\nbroken line\n3\tmissing\t300\n";
+
+    let mut s = Store::open(&db).unwrap();
+    let mut c = Cache::load_from(&mut s, || Some(file.into())).unwrap();
+    assert_eq!(
+        (c.status(1), c.status(2), c.status(3)),
+        (Some("ranked"), Some("pending"), None)
+    );
+    // Asked again: only the new answers are written.
+    c.put(2, "qualified", 1000);
+    c.put(4, MISSING, 1000);
+    c.save_to(&mut s).unwrap();
+    drop(s);
+
+    // The next start: from the database; the file isn't read again.
+    let mut s = Store::open(&db).unwrap();
+    let c = Cache::load_from(&mut s, || panic!("read the file again")).unwrap();
+    assert_eq!(
+        (c.status(1), c.status(2), c.status(4)),
+        (Some("ranked"), Some("qualified"), None)
+    );
+    assert!(!c.due(1, 200) && !c.due(4, 1000 + 86_400));
+    let mut all: Vec<(u32, &str)> = c.iter().collect();
+    all.sort();
+    assert_eq!(
+        all,
+        [(1, "ranked"), (2, "qualified"), (3, MISSING), (4, MISSING)]
+    );
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn without_a_set_status_file_the_database_starts_empty() {
+    let mut s = Store::in_memory().unwrap();
+    let c = crate::setstatus::Cache::load_from(&mut s, || None).unwrap();
+    assert_eq!(c.iter().count(), 0);
+    assert!(c.due(1, 0));
+}
