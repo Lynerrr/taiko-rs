@@ -290,7 +290,6 @@ pub fn scene_name(s: &State) -> &'static str {
         Scene::Select => "Select",
         Scene::Loading { .. } => "Loading",
         Scene::Play { .. } => "Play",
-        Scene::Calibrate { .. } => "Calibrate",
         Scene::Other(s) => s.name(),
         Scene::MpPlay { .. } => "MpPlay",
         Scene::Spectate(_) => "Spectate",

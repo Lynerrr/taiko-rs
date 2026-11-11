@@ -1011,7 +1011,10 @@ fn calibrating_from_the_guide_comes_back_to_it() {
     assert_eq!(s.guide.page, None);
     assert_eq!(s.guide.after, Some(guide::OFFSET_PAGE + 1));
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    assert!(matches!(s.scene, Scene::Calibrate { .. }));
+    assert!(
+        s.scene
+            .screen_is::<crate::screens::calibration::Calibration>()
+    );
     assert_eq!(s.guide.page, None, "not over the calibration");
     // Its results, as they really end: out the way the player leaves them.
     let estimate = calibrate::Estimate {
@@ -1021,7 +1024,11 @@ fn calibrating_from_the_guide_comes_back_to_it() {
         margin_ms: 2.0,
         suggested_offset: 12.0,
     };
-    let Scene::Calibrate { back, .. } = std::mem::replace(&mut s.scene, Scene::Select) else {
+    let Some(back) = s
+        .scene
+        .screen_mut::<crate::screens::calibration::Calibration>()
+        .map(|run| run.take_back())
+    else {
         unreachable!()
     };
     s.scene = screens::calibrate_done::CalibrateDone::scene(estimate, back, false);
@@ -1192,11 +1199,11 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
     s.cfg.vsync_tune_ms = 3.0;
     s.start_calibration_as(true);
     assert!(
-        matches!(s.scene, Scene::Calibrate { vsync: true, .. }),
+        s.calibration_run() == Some(true),
         "not calibrating by sight"
     );
     assert_eq!(s.wanted_present(), PresentChoice::Fifo);
-    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
+    let (true, Some(game)) = (s.calibration_run().is_some(), s.play.as_deref_mut()) else {
         unreachable!()
     };
     // Hit 8 ms late by sight on average: the frames show 8 ms later than the fine tune assumes.
@@ -1210,7 +1217,7 @@ fn vsync_calibration_is_by_sight_in_vsync_and_sets_the_fine_tune() {
 fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
     let mut s = layout_tests::state();
     s.start_calibration_as(false);
-    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
+    let (true, Some(game)) = (s.calibration_run().is_some(), s.play.as_deref_mut()) else {
         unreachable!()
     };
     assert!(
@@ -1243,20 +1250,21 @@ fn calibrating_by_ear_shows_no_notes_and_nothing_about_the_hits() {
 fn calibrating_takes_any_drum_key() {
     let mut s = layout_tests::state();
     s.start_calibration_as(false);
-    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
+    let (true, Some(game)) = (s.calibration_run().is_some(), s.play.as_deref()) else {
         unreachable!()
     };
     // No audio here: the clock runs on from where it started, so a press this far ahead lands on
     // the first note.
     let ahead = (game.map().notes[0].time - game.time()) / 1000.0;
     let rim = s.cfg.keys[0];
-    s.calibration_key(
-        rim,
-        false,
-        Instant::now() + Duration::from_secs_f64(ahead),
-        None,
-    );
-    let (Scene::Calibrate { .. }, Some(game)) = (&s.scene, s.play.as_deref()) else {
+    s.screen_key(crate::screens::screen::Key {
+        code: rim,
+        repeat: false,
+        text: None,
+        at: Instant::now() + Duration::from_secs_f64(ahead),
+        window: None,
+    });
+    let (true, Some(game)) = (s.calibration_run().is_some(), s.play.as_deref()) else {
         unreachable!()
     };
     assert_eq!(game.stats().errors.len(), 1, "a rim key missed the don");

@@ -23,6 +23,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) size_label: &'a str,
     /// The room's map being fetched or sent: `State::lobby_download_status`.
     pub(crate) lobby_download: Option<(String, Option<f32>)>,
+    /// How far ahead the notes are drawn, in ms (the visual offset and the vsync lead).
+    pub(crate) visual_offset: f64,
 }
 
 /// A key pressed, as a screen gets it.
@@ -123,6 +125,14 @@ pub(crate) trait Screen: Any + Send {
     /// A score link opened now shows its score (as on song select).
     fn opens_score_links(&self) -> bool {
         false
+    }
+    /// The game in `State::play` is its own (`State::game`).
+    fn holds_game(&self) -> bool {
+        false
+    }
+    /// A calibration run: Some(true) the vsync compensation's, by sight.
+    fn calibration(&self) -> Option<bool> {
+        None
     }
     /// It is the settings (`State::in_settings`; what they were opened over is
     /// `State::behind_settings`).
@@ -234,6 +244,8 @@ struct Shadow {
     in_room: bool,
     room_lobby: bool,
     settings: bool,
+    holds_game: bool,
+    calibration: Option<bool>,
     map_entry: Option<usize>,
     key_place: Option<keys::Place>,
     shows_own_background: bool,
@@ -280,6 +292,8 @@ impl Shadow {
             in_room: screen.in_room(),
             room_lobby: screen.room_lobby(),
             settings: screen.settings(),
+            holds_game: screen.holds_game(),
+            calibration: screen.calibration(),
             map_entry: screen.map_entry(),
             key_place: screen.key_place(),
             shows_own_background: screen.shows_own_background(),
@@ -359,6 +373,12 @@ impl Screen for Shadow {
     }
     fn settings(&self) -> bool {
         self.settings
+    }
+    fn holds_game(&self) -> bool {
+        self.holds_game
+    }
+    fn calibration(&self) -> Option<bool> {
+        self.calibration
     }
     fn map_entry(&self) -> Option<usize> {
         self.map_entry
@@ -593,6 +613,7 @@ mod tests {
         "Lobby",
         "Results",
         "Settings",
+        "Calibrate",
     ];
 
     #[test]
