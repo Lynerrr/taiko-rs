@@ -471,7 +471,7 @@ struct State {
     /// A screen just opened fades in: how long it has been showing (ms).
     screen_fade: Option<f32>,
     /// The screen last drawn, to fade in the next one.
-    shown_scene: Option<std::mem::Discriminant<Scene>>,
+    shown_scene: Option<screens::screen::SceneKind>,
     /// What drifts behind it.
     menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
@@ -683,7 +683,7 @@ struct State {
     /// A score a `taiko-rs://` link asked for, until its results screen opens.
     score_link: Option<ScoreLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
-    scene_kind: Option<std::mem::Discriminant<Scene>>,
+    scene_kind: Option<screens::screen::SceneKind>,
     scene_since: Instant,
     /// Dragging along the song select difficulty timeline: when it last seeked (for throttling)
     /// and to which map time.
@@ -12079,7 +12079,7 @@ impl State {
         render::set_accent(self.cfg.accent);
         tko::set_calm(self.cfg.calm_maps);
         // Screen changes fade in.
-        let kind = std::mem::discriminant(&self.scene);
+        let kind = self.scene.kind();
         if self.scene_kind != Some(kind) {
             self.scene_kind = Some(kind);
             self.scene_since = now;
@@ -12478,7 +12478,7 @@ impl State {
         self.replay_bar = None;
         // Another screen (not a song: nothing may stand between the player and the notes)
         // fades in.
-        let scene = std::mem::discriminant(&self.scene);
+        let scene = self.scene.kind();
         if self.shown_scene.is_some_and(|s| s != scene)
             && !self.in_song()
             && !matches!(
