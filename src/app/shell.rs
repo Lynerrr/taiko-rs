@@ -133,11 +133,7 @@ pub(crate) fn run(
     tact::set(cfg.tact);
     od_override::set(cfg.od_override);
     multiverse::set_note_colours(cfg.note_colours);
-    let inputs = if args.is_empty() {
-        song_inputs(&cfg)
-    } else {
-        args.clone()
-    };
+    let inputs = library::startup_inputs(&args, &cfg);
     let songs_dir = download_dir(&inputs);
     let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();
     let scan = start_scan(inputs);
