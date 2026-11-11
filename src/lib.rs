@@ -158,6 +158,7 @@ use screens::editor_home::EditorHome;
 use screens::hud_editor::HudEdit;
 use screens::menu::{update_badge, updating_badge};
 use screens::mp_menu::MpMenu;
+use screens::mp_results::MpResults;
 use screens::play::{
     FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
     pause_width,
@@ -216,8 +217,8 @@ enum Scene {
         back: Box<Scene>,
         vsync: bool,
     },
-    /// Multiplayer: room lobby, waiting/countdown, match, results (the menu is
-    /// `screens::mp_menu`).
+    /// Multiplayer: room lobby, waiting/countdown, match (the menu and the results are
+    /// `screens::mp_menu` and `screens::mp_results`).
     Lobby,
     /// `from`: map time the match starts at.
     MpWait {
@@ -236,7 +237,6 @@ enum Scene {
     Watch(Box<WatchView>),
     /// The map editor, editing one difficulty.
     Editor(Box<editor::view::View>),
-    MpResults,
     /// A screen that lives outside lib.rs (`screens::screen`).
     Other(Box<dyn screens::screen::Screen>),
 }
@@ -930,11 +930,7 @@ impl State {
     fn idle_allowed(&self) -> bool {
         (matches!(
             self.scene,
-            Scene::Select
-                | Scene::Settings { .. }
-                | Scene::Lobby
-                | Scene::Results { .. }
-                | Scene::MpResults
+            Scene::Select | Scene::Settings { .. } | Scene::Lobby | Scene::Results { .. }
         ) || self.scene.screen().is_some_and(|s| s.idle_allowed()))
             && !self.quit_asked
             && self.crash.is_none()
@@ -1095,13 +1091,12 @@ impl State {
         });
         let lobby = matches!(
             self.scene,
-            Scene::Lobby
-                | Scene::MpWait { .. }
-                | Scene::MpPlay { .. }
-                | Scene::MpResults
-                | Scene::Spectate(_)
+            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_)
         ) || matches!(&self.scene, Scene::Settings { prev: back } if matches!(**back, Scene::Lobby))
-            || self.scene.screen().is_some_and(|s| s.over_lobby());
+            || self
+                .scene
+                .screen()
+                .is_some_and(|s| s.over_lobby() || s.in_room());
         if let Some(p) = &self.player {
             return p.rate();
         }
@@ -1810,13 +1805,9 @@ impl State {
             return Some(entry);
         }
         let lobby = match &self.scene {
-            Scene::Lobby
-            | Scene::MpWait { .. }
-            | Scene::MpPlay { .. }
-            | Scene::MpResults
-            | Scene::Spectate(_) => true,
+            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) => true,
             Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
-            Scene::Other(s) => s.over_lobby(),
+            Scene::Other(s) => s.over_lobby() || s.in_room(),
             _ => false,
         };
         let lobby_map = self.mp.as_ref().and_then(|s| s.map_entry).filter(|_| lobby);
@@ -2050,7 +2041,6 @@ impl State {
             Scene::Settings { .. } => Some(3),
             Scene::Other(ref s) => s.menu_screen(),
             Scene::Lobby => Some(6),
-            Scene::MpResults => Some(7),
             _ => None,
         }
     }
@@ -4671,7 +4661,7 @@ impl State {
 
     /// The two lines of the Discord status for the current screen.
     fn presence_text(&self) -> Option<(String, String)> {
-        let map_label = |m: &net::MapInfo| format!("{} - {} [{}]", m.artist, m.title, m.version);
+        let map_label = multiplayer::map_label;
         let players = |s: &multiplayer::Session| {
             let n = s.players.len();
             let s = if n == 1 { "" } else { "s" };
@@ -4774,25 +4764,12 @@ impl State {
                     v.play.as_ref().map(|p| p.map.label()).unwrap_or_default(),
                 )
             }
-            Scene::MpResults => (
-                self.mp
-                    .as_ref()
-                    .and_then(|s| s.map.as_ref())
-                    .map(map_label)
-                    .unwrap_or_default(),
-                tr!(
-                    "Multiplayer results",
-                    "マルチのリザルト",
-                    "Итоги мультиплеера"
-                )
-                .into(),
-            ),
             Scene::Editor(view) => (
                 tr!("Mapping", "マッピング中", "Делает карту").into(),
                 view.label(),
             ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
-            Scene::Other(s) if s.presence_first() => s.presence().unwrap_or_default(),
+            Scene::Other(s) if s.presence_first() => s.presence(self).unwrap_or_default(),
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
             Scene::Select if self.player.is_some() => {
                 let song = self
@@ -4824,7 +4801,7 @@ impl State {
                 tr!("Calibrating", "調整中", "Калибровка").into(),
                 String::new(),
             ),
-            Scene::Other(s) if s.presence().is_some() => s.presence().unwrap_or_default(),
+            Scene::Other(s) if s.presence(self).is_some() => s.presence(self).unwrap_or_default(),
             _ => (
                 tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(),
                 self.select
@@ -5352,9 +5329,10 @@ impl State {
             Scene::Loading { entry, .. }
             | Scene::Play { entry, .. }
             | Scene::Results { entry, .. } => Some(*entry),
-            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {
+            Scene::MpWait { .. } | Scene::MpPlay { .. } => {
                 self.mp.as_ref().and_then(|s| s.map_entry)
             }
+            Scene::Other(s) if s.in_room() => self.mp.as_ref().and_then(|s| s.map_entry),
             _ => None,
         }
     }
@@ -7502,7 +7480,7 @@ impl State {
                                 )));
                         }
                         self.stop_audio();
-                        self.scene = Scene::MpResults;
+                        self.scene = MpResults::scene();
                     } else {
                         *quit_armed = Some(Instant::now());
                         self.toast("press Esc again to forfeit".into());
@@ -7510,15 +7488,6 @@ impl State {
                 }
                 _ => {}
             },
-            Scene::MpResults => {
-                // Results stay on the session so the lobby can show the last winner.
-                if matches!(
-                    code,
-                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
-                ) {
-                    self.scene = Scene::Lobby;
-                }
-            }
             _ => {}
         }
     }
@@ -8033,7 +8002,6 @@ impl State {
             Scene::Other(s) => s.activity(),
             Scene::Lobby => "lobby",
             Scene::MpWait { .. } | Scene::MpPlay { .. } => "multiplayer match",
-            Scene::MpResults => "multiplayer results",
             Scene::Spectate(_) => "spectating",
             Scene::Watch(_) => "watching a friend",
             Scene::Editor(_) => "map editor",
@@ -11170,7 +11138,7 @@ impl State {
                 if let Scene::Spectate(v) = &mut self.scene {
                     if v.games.is_empty() {
                         self.stop_audio();
-                        self.scene = Scene::MpResults;
+                        self.scene = MpResults::scene();
                     } else {
                         // Watch the rest of it: the view is `SPECTATE_DELAY` behind.
                         v.ended.get_or_insert_with(Instant::now);
@@ -11180,12 +11148,8 @@ impl State {
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
                 let in_mp = matches!(
                     self.scene,
-                    Scene::Lobby
-                        | Scene::MpWait { .. }
-                        | Scene::MpPlay { .. }
-                        | Scene::MpResults
-                        | Scene::Spectate(_)
-                );
+                    Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_)
+                ) || self.scene.screen().is_some_and(|s| s.in_room());
                 self.toast(format!("multiplayer: {why}"));
                 self.mp = None;
                 self.picking_lobby_map = false;
@@ -11638,7 +11602,7 @@ impl State {
         }
         if matches!(
             self.scene,
-            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults
+            Scene::Lobby | Scene::MpWait { .. } | Scene::MpPlay { .. }
         ) {
             self.multiplayer_key(code, repeat, text, at, window);
             return;
@@ -11847,7 +11811,6 @@ impl State {
             Scene::Lobby
             | Scene::MpWait { .. }
             | Scene::MpPlay { .. }
-            | Scene::MpResults
             | Scene::Spectate(_)
             | Scene::Watch(_)
             | Scene::Editor(_) => {}
@@ -13342,7 +13305,7 @@ impl State {
                         if failed && let Some(a) = &self.audio {
                             a.stop();
                         }
-                        next = Some(Scene::MpResults);
+                        next = Some(MpResults::scene());
                     }
                 }
             }
@@ -13362,7 +13325,7 @@ impl State {
                     if let Some(a) = &self.audio {
                         a.stop();
                     }
-                    next = Some(Scene::MpResults);
+                    next = Some(MpResults::scene());
                 }
                 // Start once the map is ready and the delay has passed: the music where the
                 // players were SPECTATE_DELAY ago, every player's game snapping to it.
@@ -13606,10 +13569,6 @@ impl State {
                     next = Some(Scene::Select);
                 }
             }
-            Scene::MpResults => match &self.mp {
-                Some(s) => multiplayer::draw_results(canvas, s),
-                None => next = Some(MpMenu::scene()),
-            },
             Scene::Calibrate { game, vsync, .. } => {
                 if game.update(now, sound(&self.audio), self.play_offset) {
                     finish_calibration = true;

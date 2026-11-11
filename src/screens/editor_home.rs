@@ -88,7 +88,7 @@ impl Screen for EditorHome {
         true
     }
 
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
         Some({
             (
                 tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),

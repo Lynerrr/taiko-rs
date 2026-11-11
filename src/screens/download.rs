@@ -104,7 +104,7 @@ impl Screen for Download {
         "downloads"
     }
 
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
         Some((
             tr!(
                 "Looking for new maps",

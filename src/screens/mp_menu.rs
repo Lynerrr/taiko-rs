@@ -26,7 +26,7 @@ impl Screen for MpMenu {
         "multiplayer menu"
     }
 
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
         Some((
             tr!("Multiplayer menu", "マルチのメニュー", "Меню мультиплеера").into(),
             String::new(),

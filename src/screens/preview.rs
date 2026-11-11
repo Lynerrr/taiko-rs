@@ -93,7 +93,7 @@ impl Screen for Preview {
     }
 
     /// Song select's.
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
         None
     }
 

@@ -167,7 +167,7 @@ impl Screen for VideoEdit {
         true
     }
 
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
         Some({
             (
                 tr!(

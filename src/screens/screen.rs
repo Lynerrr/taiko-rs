@@ -43,7 +43,7 @@ pub(crate) trait Screen: Any + Send {
     fn activity(&self) -> &'static str;
     /// The same for Discord, in the player's language, and the map it is about (or nothing).
     /// None: what song select would say.
-    fn presence(&self) -> Option<(String, String)>;
+    fn presence(&self, state: &State) -> Option<(String, String)>;
     /// Its presence holds in a multiplayer room and over the menu too, which otherwise say
     /// where the player is.
     fn presence_first(&self) -> bool {
@@ -96,6 +96,11 @@ pub(crate) trait Screen: Any + Send {
     }
     /// It takes every key as it is: no hotkeys on it.
     fn takes_every_key(&self) -> bool {
+        false
+    }
+    /// It is part of a multiplayer room: the room's map is the one it is about, and losing
+    /// the connection leaves it.
+    fn in_room(&self) -> bool {
         false
     }
     /// It was opened over the multiplayer lobby: the lobby's map is the one it is about.
@@ -191,6 +196,7 @@ struct Shadow {
     wheel_scales_area: bool,
     covers_social_tab: bool,
     over_lobby: bool,
+    in_room: bool,
     song_select: bool,
     map_from_song_select: bool,
     allows_settings: bool,
@@ -211,12 +217,12 @@ struct Shadow {
 }
 
 impl Shadow {
-    fn of(screen: &dyn Screen) -> Shadow {
+    fn of(screen: &dyn Screen, state: &State) -> Shadow {
         Shadow {
             #[cfg(test)]
             name: screen.name(),
             activity: screen.activity(),
-            presence: screen.presence(),
+            presence: screen.presence(state),
             presence_first: screen.presence_first(),
             background_dim: screen.background_dim(),
             top_bar: screen.top_bar(),
@@ -228,6 +234,7 @@ impl Shadow {
             wheel_scales_area: screen.wheel_scales_area(),
             covers_social_tab: screen.covers_social_tab(),
             over_lobby: screen.over_lobby(),
+            in_room: screen.in_room(),
             song_select: screen.song_select(),
             map_from_song_select: screen.map_from_song_select(),
             allows_settings: screen.allows_settings(),
@@ -257,7 +264,7 @@ impl Screen for Shadow {
     fn activity(&self) -> &'static str {
         self.activity
     }
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _: &State) -> Option<(String, String)> {
         self.presence.clone()
     }
     fn presence_first(&self) -> bool {
@@ -292,6 +299,9 @@ impl Screen for Shadow {
     }
     fn over_lobby(&self) -> bool {
         self.over_lobby
+    }
+    fn in_room(&self) -> bool {
+        self.in_room
     }
     fn song_select(&self) -> bool {
         self.song_select
@@ -404,7 +414,7 @@ impl State {
         f: impl FnOnce(&mut dyn Screen, &mut State) -> R,
     ) -> Option<R> {
         let shadow = match &self.scene {
-            Scene::Other(s) if !is_shadow(s.as_ref()) => Shadow::of(s.as_ref()),
+            Scene::Other(s) if !is_shadow(s.as_ref()) => Shadow::of(s.as_ref(), self),
             _ => return None,
         };
         let Scene::Other(mut screen) =
@@ -442,7 +452,7 @@ mod tests {
         let mut s = layout_tests::state();
         s.mp = Some(layout_tests::session(false));
         s.open_editor_home();
-        let own = s.scene.screen().and_then(|h| h.presence());
+        let own = s.scene.screen().and_then(|h| h.presence(&s));
         assert!(own.is_some(), "the front door is up");
         assert_eq!(s.presence_text(), own);
     }
@@ -492,6 +502,7 @@ mod tests {
         "Preview",
         "Download",
         "MpMenu",
+        "MpResults",
     ];
 
     #[test]

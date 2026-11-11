@@ -29,7 +29,7 @@ impl Screen for LayoutEdit {
         "layout editor"
     }
 
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
         Some({
             (
                 tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
