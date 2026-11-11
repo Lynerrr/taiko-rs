@@ -13,32 +13,44 @@ fn lang_tables() {
     let mut out = String::new();
     for path in files {
         println!("cargo:rerun-if-changed={}", path.display());
-        let at = path.display();
         let code = path
             .file_stem()
             .and_then(|s| s.to_str())
             .expect("a language code");
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{at}: {e}"));
-        let table: toml::Table = text.parse().unwrap_or_else(|e| panic!("{at}: {e}"));
+        let android = path
+            .with_file_name("android")
+            .join(path.file_name().unwrap());
         let mut entries = Vec::new();
-        for (key, value) in table {
-            match value {
-                toml::Value::String(t) => entries.push((String::new(), key, t)),
-                // Translations kept for English the game no longer has (examples/lang_sync.rs).
-                toml::Value::Table(_) if key == "unused" => {}
-                toml::Value::Table(ctx) => {
-                    for (en, t) in ctx {
-                        let t = t
-                            .as_str()
-                            .unwrap_or_else(|| panic!("{at}: [{key}] {en:?}: text"));
-                        entries.push((key.clone(), en, t.to_string()));
+        for source in std::iter::once(&path).chain(android.is_file().then_some(&android)) {
+            println!("cargo:rerun-if-changed={}", source.display());
+            let at = source.display();
+            let text = std::fs::read_to_string(source).unwrap_or_else(|e| panic!("{at}: {e}"));
+            let table: toml::Table = text.parse().unwrap_or_else(|e| panic!("{at}: {e}"));
+            for (key, value) in table {
+                match value {
+                    toml::Value::String(t) => entries.push((String::new(), key, t)),
+                    // Historical translations are excluded from the runtime table.
+                    toml::Value::Table(_) if key == "unused" => {}
+                    toml::Value::Table(ctx) => {
+                        for (en, t) in ctx {
+                            let t = t
+                                .as_str()
+                                .unwrap_or_else(|| panic!("{at}: [{key}] {en:?}: text"));
+                            entries.push((key.clone(), en, t.to_string()));
+                        }
                     }
+                    _ => panic!("{at}: {key:?} wants text in quotes or a [context] table"),
                 }
-                _ => panic!("{at}: {key:?} wants text in quotes or a [context] table"),
             }
         }
         entries.retain(|e| !e.2.is_empty());
         entries.sort();
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| (&pair[0].0, &pair[0].1) != (&pair[1].0, &pair[1].1)),
+            "duplicate translation key for {code}"
+        );
         writeln!(
             out,
             "pub static {}: &[super::Entry] = &[",

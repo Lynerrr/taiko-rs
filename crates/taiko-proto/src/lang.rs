@@ -419,11 +419,21 @@ macro_rules! tr {
             ),
         }
     }};
-    ($en:literal, $ja:literal, $ru:literal; $($arg:tt)*) => {
+    ($en:literal, $ja:literal, $ru:literal; $($arg:expr),* $(,)?) => {
         match $crate::lang::current() {
-            $crate::lang::Lang::En | $crate::lang::Lang::ZhCn => format!($en, $($arg)*),
-            $crate::lang::Lang::Ja => format!($ja, $($arg)*),
-            $crate::lang::Lang::Ru => format!($ru, $($arg)*),
+            $crate::lang::Lang::En => format!($en $(, $arg)*),
+            $crate::lang::Lang::Ja => format!($ja $(, $arg)*),
+            $crate::lang::Lang::Ru => format!($ru $(, $arg)*),
+            $crate::lang::Lang::ZhCn => {
+                // Legacy calls can supply positional arguments. Captured names need the
+                // explicit argument list above so the catalog can format them.
+                match $crate::lang::translation("", $en)
+                    .filter(|_| $crate::lang::hole_trouble($en, &[]) == 0)
+                {
+                    Some(t) => $crate::lang::fill(t, $en, &[$(&$arg as &dyn ::std::fmt::Display),*], &[]),
+                    None => format!($en $(, $arg)*),
+                }
+            }
         }
     };
     ($($ctx:ident :)? $en:literal $(,)?) => {{

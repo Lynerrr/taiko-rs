@@ -664,7 +664,7 @@ impl Home {
         match act {
             Act::Back => return self.back(audio),
             Act::Next => self.next(audio),
-            Act::Browse => self.ask_for_file(FileKind::Audio, "Choose the song"),
+            Act::Browse => self.ask_for_file(FileKind::Audio, tr!("Choose the song")),
             Act::PickInLibrary => return Out::PickInLibrary,
             Act::Recent(i) => {
                 if let Some(p) = self.recent.get(i) {
@@ -876,7 +876,7 @@ impl Home {
 
     fn next(&mut self, audio: Option<&Engine>) {
         match self.page {
-            Page::Start => self.ask_for_file(FileKind::Audio, "Choose the song"),
+            Page::Start => self.ask_for_file(FileKind::Audio, tr!("Choose the song")),
             Page::Details => {
                 let said = self.plan().map(|p| p.problems()).unwrap_or_default();
                 if said.is_empty() {
@@ -1055,7 +1055,7 @@ impl Home {
         match (self.page, code) {
             (_, KeyCode::Escape) => return self.back(audio),
             (Page::Start, KeyCode::Enter | KeyCode::NumpadEnter) => {
-                self.ask_for_file(FileKind::Audio, "Choose the song")
+                self.ask_for_file(FileKind::Audio, tr!("Choose the song"))
             }
             (Page::Start, KeyCode::KeyL) => return Out::PickInLibrary,
             (Page::Start, KeyCode::KeyT) => return Out::Tour,
@@ -1224,7 +1224,13 @@ impl Home {
             rgba(VIOLET, if hover { 1.0 } else { 0.7 }),
             2.0,
         );
-        c.text_centered(w / 2.0, 90.0, 14.0, rgba(0xffffff, 1.0), "Make a new map");
+        c.text_centered(
+            w / 2.0,
+            90.0,
+            14.0,
+            rgba(0xffffff, 1.0),
+            tr!("Make a new map"),
+        );
         c.text_centered(
             w / 2.0,
             116.0,
@@ -1394,15 +1400,10 @@ impl Home {
 
     fn draw_field(&self, c: &mut Canvas, f: Field, x: f32, y: f32, w: f32) {
         let i = f.index();
-        let chinese = crate::lang::current() == crate::lang::Lang::ZhCn;
-        c.text(
-            x,
-            y,
-            if chinese { 7.0 } else { 6.5 },
-            rgba(DIM, 1.0),
-            f.label(),
-        );
-        let box_y = y + if chinese { 13.0 } else { 10.0 };
+        let label_size = 6.5;
+        let label = Canvas::fit(label_size, w, f.label());
+        c.text(x, y, label_size, rgba(DIM, 1.0), &label);
+        let box_y = y + Canvas::text_height(label_size) + 3.5;
         let focused = self.focus == Some(f);
         c.round_rect(
             [x, box_y],

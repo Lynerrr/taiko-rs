@@ -180,7 +180,7 @@ pub fn draw_pause_button(c: &mut Canvas, finish: bool) {
     );
     let mid = c.width / 2.0;
     if finish {
-        c.text_centered(mid, 14.0, SMALL, rgba(0xffffff, 0.9), "End");
+        c.text_centered(mid, 14.0, SMALL, rgba(0xffffff, 0.9), tr!("End"));
         return;
     }
     c.rect(mid - 9.0, 11.0, 6.0, 18.0, rgba(0xffffff, 0.75));
@@ -618,11 +618,12 @@ impl State {
             x,
             search_w,
             &filter,
-            "search...",
+            tr!("search..."),
             searching,
             Hit::TextField,
         );
-        let sort = format!("Sort: {}", self.select.sort.name());
+        let sort = self.select.sort.name();
+        let sort = tr!("Sort: {sort}"; sort);
         let sx = x + search_w + 8.0;
         c.button(
             sx,
@@ -636,9 +637,9 @@ impl State {
         );
         let groups = self.select.song_groups().len();
         let summary = if self.picking_lobby_map {
-            "Pick the lobby's map".to_string()
+            tr!("Pick the lobby's map").to_string()
         } else if self.pick_to_edit {
-            "Pick a map to edit".to_string()
+            tr!("Pick a map to edit").to_string()
         } else {
             format!("{groups} songs, {} maps", self.select.rows().len())
         };
@@ -663,7 +664,7 @@ impl State {
         let label = if mods.is_empty() {
             "Mods".to_string()
         } else {
-            format!("Mods: {mods}")
+            tr!("Mods: {mods}"; mods)
         };
         let play = if self.picking_lobby_map {
             "Pick"
@@ -772,7 +773,7 @@ impl State {
         let (ix, iw) = (px + gap + 2.0, pw - 2.0 * gap - 4.0);
         let mut y = py + gap + 4.0;
         let ty = |y: f32, size: f32| y + (row - size) / 2.0;
-        c.text(ix, ty(y, big), big, rgba(0xffffff, 1.0), "Speed");
+        c.text(ix, ty(y, big), big, rgba(0xffffff, 1.0), tr!("Speed"));
         let done_w = iw * 0.28;
         c.button(
             ix + iw - done_w,
@@ -820,7 +821,13 @@ impl State {
             c.button(x, y, chip, row, &label, text, Hit::RateSet(to), on);
         }
         y += row + gap;
-        c.text(ix, ty(y, text), text, rgba(0xc8c8d8, 1.0), "Keep pitch");
+        c.text(
+            ix,
+            ty(y, text),
+            text,
+            rgba(0xc8c8d8, 1.0),
+            tr!("Keep pitch"),
+        );
         let (sw, sh) = (row * 1.3, row * 0.66);
         let (sx, sy) = (ix + iw - sw, y + (row - sh) / 2.0);
         let track = if keep { accent() } else { 0x3a3a4e };
@@ -842,7 +849,7 @@ impl State {
         c.hit(ix, y, iw, row, Hit::RateKeepPitch);
         y += row + gap;
         if let Some(semitones) = semitones {
-            c.text(ix, ty(y, text), text, rgba(0xc8c8d8, 1.0), "Pitch");
+            c.text(ix, ty(y, text), text, rgba(0xc8c8d8, 1.0), tr!("Pitch"));
             let bw = iw * 0.2;
             let right = ix + iw;
             c.button(
@@ -888,7 +895,7 @@ impl State {
                 h,
                 self.cfg.scroll_speed,
                 stars,
-                Some(("Play from", "Shift+Enter")),
+                Some((tr!("Play from"), "Shift+Enter")),
                 status,
                 liked,
             ) {
@@ -985,7 +992,7 @@ impl State {
                 Some(Ok(rows)) => rows,
             };
             if rows.is_empty() && note.is_none() {
-                note = Some("No online scores yet.".to_string());
+                note = Some(tr!("No online scores yet.").to_string());
             }
             let lines = rows
                 .iter()
@@ -1131,9 +1138,9 @@ impl State {
         let scroll = self.mob.songs.pos;
         if groups.is_empty() {
             let text = if self.select.filter.is_empty() {
-                "No maps yet. Get some in Download, or open an .osz with taiko.rs."
+                tr!("No maps yet. Get some in Download, or open an .osz with taiko.rs.")
             } else {
-                "No maps match the search."
+                tr!("No maps match the search.")
             };
             for (k, line) in wrap(SMALL, w - 40.0, text, 4).iter().enumerate() {
                 let ly = y + 60.0 + k as f32 * 20.0;
@@ -1259,7 +1266,7 @@ impl State {
             w - box_w,
             box_w,
             &search,
-            "Search settings",
+            tr!("Search settings"),
             !search.is_empty(),
             Hit::SettingsSearch,
         );
@@ -1590,7 +1597,7 @@ impl State {
             0.0,
             100.0,
             BAR_H - 2.0,
-            "Clear",
+            tr!("Clear"),
             SMALL,
             clear,
             false,
@@ -1604,7 +1611,7 @@ impl State {
                 0.0,
                 140.0,
                 BAR_H - 2.0,
-                "Customize",
+                tr!("Customize"),
                 SMALL,
                 custom,
                 false,
@@ -1612,11 +1619,11 @@ impl State {
         }
         crate::style::title(c, 6.0, 12.0, MEDIUM, 0xffffff, "MODS");
         let unsaved = if picked.unranked() {
-            "  (not saved)"
+            tr!("  (not saved)")
         } else {
             ""
         };
-        let score = format!("score x{:.2}{unsaved}", picked.multiplier());
+        let score = tr!("score x{:.2}{unsaved}", picked.multiplier(); unsaved);
         let room = left - 112.0 - 12.0;
         let score = Canvas::fit(SMALL, room, &score);
         c.text(112.0, 16.0, SMALL, rgba(0xc8c8d8, 1.0), &score);
@@ -1701,7 +1708,15 @@ impl State {
         let (source_w, status_w, sort_w) = (120.0, 192.0, 180.0);
         let search_w = w - x - source_w - status_w - sort_w - 24.0;
         let query = self.browse.query.clone();
-        search_box(c, x, search_w, &query, "Search maps", false, Hit::TextField);
+        search_box(
+            c,
+            x,
+            search_w,
+            &query,
+            tr!("Search maps"),
+            false,
+            Hit::TextField,
+        );
         // osu! or taiko.rs: a tap switches.
         let source = self.browse.source();
         let other = match source {
@@ -1751,7 +1766,7 @@ impl State {
         } else {
             sorts[at].name()
         };
-        let label = format!("Sort: {sort}");
+        let label = tr!("Sort: {sort}"; sort);
         let hit = Hit::DlSort(next);
         c.button(
             sx + status_w + 8.0,
@@ -1776,7 +1791,7 @@ impl State {
         if count == 0 {
             let status = self.browse.status.clone();
             let text = if status.is_empty() {
-                "Search for a song, artist or mapper.".to_string()
+                tr!("Search for a song, artist or mapper.").to_string()
             } else {
                 status
             };
@@ -1815,11 +1830,17 @@ impl State {
                 None => installed.contains(&set.id),
             };
             if here {
-                c.text_centered(ax + aw / 2.0, ty, SMALL, rgba(0x86E05A, 1.0), "Installed");
+                c.text_centered(
+                    ax + aw / 2.0,
+                    ty,
+                    SMALL,
+                    rgba(0x86E05A, 1.0),
+                    tr!("Installed"),
+                );
             } else if let Some(job) = job {
-                let text = job
-                    .fraction()
-                    .map_or("Starting".to_string(), |f| format!("{:.0}%", f * 100.0));
+                let text = job.fraction().map_or(tr!("Starting").to_string(), |f| {
+                    format!("{:.0}%", f * 100.0)
+                });
                 c.text_centered(ax + aw / 2.0, ty, SMALL, rgba(0xffffff, 1.0), &text);
             } else {
                 c.button(
@@ -1827,7 +1848,7 @@ impl State {
                     y + 10.0,
                     aw,
                     ROW_H - GAP - 20.0,
-                    "Get",
+                    tr!("Get"),
                     SMALL,
                     Hit::DlGet(i),
                     on,
@@ -1842,9 +1863,9 @@ impl State {
             let pill = match &set.custom {
                 Some(cs) => {
                     let (label, colour) = if cs.approved {
-                        ("Approved", 0x86E05A)
+                        (tr!("Approved"), 0x86E05A)
                     } else {
-                        ("Custom", 0xB28CFF)
+                        (tr!("Custom"), 0xB28CFF)
                     };
                     let lw = Canvas::text_width(SMALL, label);
                     c.text(ax - 12.0 - lw, ty, SMALL, rgba(colour, 1.0), label);
