@@ -25,9 +25,9 @@ pub(super) fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
 }
 
 /// Desktop entry point: the command line, then the game.
-/// `--recalc-pp`: see `recalc`.
+/// `--recalc-pp`: see `taiko_recalc`.
 pub fn recalc_pp(args: &[String]) -> Result<(), String> {
-    recalc::run(args)
+    taiko_recalc::run(args)
 }
 
 pub fn desktop_main() {

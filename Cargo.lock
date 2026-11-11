@@ -3437,6 +3437,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "taiko-recalc"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "taiko-logic",
+ "taiko-proto",
+]
+
+[[package]]
 name = "taiko-rs"
 version = "0.1.0"
 dependencies = [
@@ -3457,6 +3467,7 @@ dependencies = [
  "symphonia",
  "taiko-logic",
  "taiko-proto",
+ "taiko-recalc",
  "ureq",
  "wayland-backend",
  "wayland-client",

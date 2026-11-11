@@ -81,7 +81,6 @@ mod pp;
 mod pp_tests;
 mod preview;
 mod profile;
-mod recalc;
 #[cfg(test)]
 mod regression;
 mod render;

@@ -1,0 +1,13 @@
+[package]
+name = "taiko-recalc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Works out the server's plays again from its scores.jsonl and the maps (see src/lib.rs). The
+# game's `--recalc-pp` runs the same.
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+taiko-logic = { path = "../taiko-logic" }
+taiko-proto = { path = "../taiko-proto" }

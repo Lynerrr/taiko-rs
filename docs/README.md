@@ -615,6 +615,7 @@ spins so frames stay evenly spaced.
 | `crates/taiko-proto/src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
 | `crates/taiko-proto/src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
+| `crates/taiko-recalc` | `taiko-recalc` (also `taiko-rs --recalc-pp`): the server's plays worked out again from its `scores.jsonl` and the maps |
 | `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
 | `src/library.rs` | Songs folder / `.osz` and `.rsz` scanning |
 | `src/logo.rs` | the logo: window icon, top bar |
