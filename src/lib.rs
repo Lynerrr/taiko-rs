@@ -211,10 +211,6 @@ enum Scene {
         back: Box<Scene>,
         vsync: bool,
     },
-    /// Full-screen editor for the playfield area, opened from settings.
-    LayoutEdit {
-        back: Box<Scene>,
-    },
     /// The interface editor (see `State::hud_edit`), opened from settings.
     HudEdit {
         back: Box<Scene>,
@@ -5022,7 +5018,7 @@ impl State {
                 .into(),
                 String::new(),
             ),
-            Scene::Settings { .. } | Scene::LayoutEdit { .. } | Scene::HudEdit { .. } => (
+            Scene::Settings { .. } | Scene::HudEdit { .. } => (
                 tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
                 String::new(),
             ),
@@ -5994,10 +5990,9 @@ impl State {
             Scene::Play { .. }
                 | Scene::MpPlay { .. }
                 | Scene::Calibrate { .. }
-                | Scene::LayoutEdit { .. }
                 | Scene::HudEdit { .. }
                 | Scene::Preview { .. }
-        )
+        ) || self.scene.screen().is_some_and(|s| s.area_editable())
     }
 
     fn open_hud_editor(&mut self) {
@@ -6031,61 +6026,6 @@ impl State {
             let outcome = ed.key(code, text, mods, &mut self.cfg);
             self.hud_outcome(outcome);
         }
-    }
-
-    fn open_layout_editor(&mut self) {
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::LayoutEdit {
-            back: Box::new(back),
-        };
-    }
-
-    fn layout_key(&mut self, code: KeyCode) {
-        let a = self.cfg.playfield_area;
-        let step = 0.01;
-        // Arrows move; Shift+arrows resize from the bottom-right, like a window.
-        let resize = |dx: f32, dy: f32| {
-            layout::drag(
-                a,
-                Grip::Resize {
-                    left: false,
-                    right: true,
-                    top: false,
-                    bottom: true,
-                },
-                dx,
-                dy,
-            )
-        };
-        let moved = |dx: f32, dy: f32| layout::drag(a, Grip::Move, dx, dy);
-        let shift = self.modifiers_shift;
-        let next = match code {
-            KeyCode::ArrowLeft if shift => resize(-step, 0.0),
-            KeyCode::ArrowRight if shift => resize(step, 0.0),
-            KeyCode::ArrowUp if shift => resize(0.0, -step),
-            KeyCode::ArrowDown if shift => resize(0.0, step),
-            KeyCode::ArrowLeft => moved(-step, 0.0),
-            KeyCode::ArrowRight => moved(step, 0.0),
-            KeyCode::ArrowUp => moved(0.0, -step),
-            KeyCode::ArrowDown => moved(0.0, step),
-            KeyCode::KeyR => Area::FULL,
-            KeyCode::BracketLeft | KeyCode::BracketRight => {
-                self.cycle_preset(if code == KeyCode::BracketRight { 1 } else { -1 });
-                return;
-            }
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
-                self.cfg.save();
-                if let Scene::LayoutEdit { back } =
-                    std::mem::replace(&mut self.scene, Scene::Select)
-                {
-                    self.scene = *back;
-                }
-                return;
-            }
-            _ => return,
-        };
-        self.cfg.playfield_area = next;
-        self.cfg.save();
     }
 
     fn refresh_presets(&mut self) {
@@ -6448,7 +6388,8 @@ impl State {
         }
         if self.area_editable()
             && (self.cfg.wheel_resizes_playfield
-                || matches!(self.scene, Scene::LayoutEdit { .. } | Scene::HudEdit { .. }))
+                || matches!(self.scene, Scene::HudEdit { .. })
+                || self.scene.screen().is_some_and(|s| s.wheel_scales_area()))
         {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
@@ -8342,7 +8283,6 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
-            Scene::LayoutEdit { .. } => "layout editor",
             Scene::HudEdit { .. } => "interface editor",
             Scene::Preview { .. } => "map preview",
             Scene::Download => "downloads",
@@ -10111,11 +10051,9 @@ impl State {
             || self.select.menu.is_some()
             || matches!(
                 self.scene,
-                Scene::Settings { .. }
-                    | Scene::LayoutEdit { .. }
-                    | Scene::HudEdit { .. }
-                    | Scene::Preview { .. }
-            );
+                Scene::Settings { .. } | Scene::HudEdit { .. } | Scene::Preview { .. }
+            )
+            || self.scene.screen().is_some_and(|s| s.covers_social_tab());
         let middle = if self.on_menu() {
             social::TAB_MENU_MIDDLE
         } else {
@@ -11879,10 +11817,6 @@ impl State {
             self.calibration_key(code, repeat, at, window);
             return;
         }
-        if matches!(self.scene, Scene::LayoutEdit { .. }) {
-            self.layout_key(code);
-            return;
-        }
         if matches!(self.scene, Scene::HudEdit { .. }) {
             self.hud_key(code, text);
             return;
@@ -12189,7 +12123,6 @@ impl State {
             }
             Scene::Calibrate { .. }
             | Scene::Other(_)
-            | Scene::LayoutEdit { .. }
             | Scene::HudEdit { .. }
             | Scene::Preview { .. }
             | Scene::Download => {}
@@ -12480,7 +12413,7 @@ impl State {
                         0.5
                     }
                 }
-                Scene::Calibrate { .. } | Scene::LayoutEdit { .. } | Scene::HudEdit { .. } => 0.0,
+                Scene::Calibrate { .. } | Scene::HudEdit { .. } => 0.0,
                 Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
                 _ => 0.35,
             };
@@ -14174,57 +14107,6 @@ impl State {
                         p.draw(canvas);
                     }
                 }
-            }
-            Scene::LayoutEdit { .. } => {
-                draw_game_area(
-                    canvas,
-                    &self.cfg,
-                    &mut self.frame_clip,
-                    &self.grip,
-                    &self.hover,
-                    false,
-                    game::draw_preview,
-                );
-                let sample = self
-                    .hud_sample
-                    .get_or_insert_with(|| Box::new(game::Play::hud_sample()));
-                sample.view.hud = self.cfg.hud;
-                sample.view.hud_area = self.cfg.playfield_area;
-                sample.view.hidden = self.cfg.hud.off;
-                sample.draw_parts(canvas);
-                let area = self.cfg.playfield_area;
-                layout::draw_frame(canvas, area, true);
-                let w = canvas.width;
-                let bw = (w - 32.0).min(660.0);
-                canvas.round_rect(
-                    [w / 2.0 - bw / 2.0, 440.0],
-                    [bw, 34.0],
-                    8.0,
-                    rgba(0x000000, 0.75),
-                    rgba(accent(), 0.6),
-                    1.0,
-                );
-                let room = bw - 16.0;
-                canvas.text_centered(
-                    w / 2.0,
-                    446.0,
-                    8.0,
-                    rgba(0xffffff, 1.0),
-                    &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())),
-                );
-                let help = if mobile::active() {
-                    "Back when done"
-                } else {
-                    "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done"
-                };
-                let size = Canvas::fit_size(7.0, 5.5, room, help);
-                canvas.text_centered(
-                    w / 2.0,
-                    460.0 + (7.0 - size) / 2.0,
-                    size,
-                    rgba(0x9a9ab0, 1.0),
-                    &Canvas::fit(size, room, help),
-                );
             }
             Scene::HudEdit { .. } => {
                 draw_game_area(

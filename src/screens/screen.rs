@@ -43,6 +43,18 @@ pub(crate) trait Screen: Any + Send {
     fn drags(&self) -> bool {
         false
     }
+    /// The playfield area can be moved and resized on it with the mouse.
+    fn area_editable(&self) -> bool {
+        false
+    }
+    /// The wheel scales the playfield area on it, whatever the setting says.
+    fn wheel_scales_area(&self) -> bool {
+        false
+    }
+    /// It covers the screen where the friends tab would go (F9 still opens the panel).
+    fn covers_social_tab(&self) -> bool {
+        false
+    }
     /// A map loads for it on another thread.
     #[cfg(test)]
     fn loading(&self) -> bool {
@@ -76,6 +88,9 @@ struct Shadow {
     dims_background: bool,
     closes_main_menu: bool,
     drags: bool,
+    area_editable: bool,
+    wheel_scales_area: bool,
+    covers_social_tab: bool,
     #[cfg(test)]
     loading: bool,
 }
@@ -93,6 +108,9 @@ impl Shadow {
             dims_background: screen.dims_background(),
             closes_main_menu: screen.closes_main_menu(),
             drags: screen.drags(),
+            area_editable: screen.area_editable(),
+            wheel_scales_area: screen.wheel_scales_area(),
+            covers_social_tab: screen.covers_social_tab(),
             #[cfg(test)]
             loading: screen.loading(),
         }
@@ -127,6 +145,15 @@ impl Screen for Shadow {
     }
     fn drags(&self) -> bool {
         self.drags
+    }
+    fn area_editable(&self) -> bool {
+        self.area_editable
+    }
+    fn wheel_scales_area(&self) -> bool {
+        self.wheel_scales_area
+    }
+    fn covers_social_tab(&self) -> bool {
+        self.covers_social_tab
     }
     #[cfg(test)]
     fn loading(&self) -> bool {
@@ -210,7 +237,7 @@ mod tests {
     /// The screens moved out of lib.rs stay out: no `Scene` variant of their own, no state of
     /// theirs in lib.rs.
     /// Every screen moved out so far.
-    const MOVED: &[&str] = &["CalibrateDone", "VideoEdit"];
+    const MOVED: &[&str] = &["CalibrateDone", "VideoEdit", "LayoutEdit"];
 
     #[test]
     fn moved_screens_stay_out_of_lib() {
