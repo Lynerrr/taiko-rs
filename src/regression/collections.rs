@@ -495,6 +495,74 @@ mod in_song_select {
     }
 
     #[test]
+    fn the_search_takes_collections_by_name_not_in_one_or_in_none() {
+        let charts = maps::all();
+        let songs = Songs::new("collections-search", &charts);
+        let mut s = state_with(config(), songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        let refs = |s: &State, versions: &[&str]| -> Vec<collections::MapRef> {
+            s.library
+                .iter()
+                .filter(|e| versions.contains(&e.meta.version.as_str()))
+                .filter_map(collections::MapRef::of)
+                .collect()
+        };
+        let mine = refs(&s, &["basics", "stream"]);
+        let theirs = refs(&s, &["stream", "high-od"]);
+        s.collections = vec![
+            collections::Collection {
+                name: "Warm Up".into(),
+                source: collections::Source::Local,
+                maps: mine,
+            },
+            collections::Collection {
+                name: "dans".into(),
+                source: collections::Source::Osu,
+                maps: theirs,
+            },
+        ];
+        s.show_collections(None);
+        let shown = |s: &mut State, filter: &str| -> Vec<String> {
+            s.select.filter = filter.into();
+            s.select.refilter(&s.library);
+            let mut v: Vec<String> = s
+                .select
+                .rows()
+                .iter()
+                .map(|&i| s.library[i].meta.version.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            shown(&mut s, r#"collection="warm up""#),
+            ["basics", "stream"]
+        );
+        assert_eq!(shown(&mut s, "col=DANS"), ["high-od", "stream"]);
+        assert_eq!(
+            shown(&mut s, r#"collection="warm up" collection!=dans"#),
+            ["basics"]
+        );
+        assert_eq!(
+            shown(&mut s, "collection=none"),
+            ["big-notes", "low-od", "rolls-and-swells", "sv-and-kiai"]
+        );
+        assert_eq!(
+            shown(&mut s, "collection!=none"),
+            ["basics", "high-od", "stream"]
+        );
+        assert_eq!(
+            shown(&mut s, "collection=nothing-called-so"),
+            Vec::<String>::new()
+        );
+        // With words, and with the collection picked in the list.
+        assert_eq!(shown(&mut s, "stream collection=dans"), ["stream"]);
+        s.select.pick_collection(1, &s.library);
+        assert_eq!(shown(&mut s, "collection!=dans"), ["basics"]);
+    }
+
+    #[test]
     fn an_osu_collection_is_copied_to_the_players_own_and_stays_osus() {
         let charts = maps::all();
         let songs = Songs::new("collections-copy", &charts);

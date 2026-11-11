@@ -85,6 +85,21 @@ enum Cond {
         codes: Vec<u8>,
     },
     Unplayed,
+    /// In the collection named so (any case), or in none (`collection=none`): the client knows
+    /// its collections and applies these itself (`Query::collections`).
+    Collection {
+        negated: bool,
+        name: InCollection,
+    },
+}
+
+/// What a `collection=` filter asks for.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum InCollection {
+    /// In the collection of this name (lowercased).
+    Named(String),
+    /// In no collection.
+    None,
 }
 
 /// What a map is, for the filters. None where it isn't known (yet).
@@ -242,6 +257,17 @@ fn cond(key: &str, op: Op, value: &str) -> Option<Cond> {
         "artist" => text(Field::Artist),
         "title" => text(Field::Title),
         "diff" | "version" => text(Field::Version),
+        "collection" | "col" => match op {
+            Op::Eq | Op::Ne if !value.is_empty() => Some(Cond::Collection {
+                negated: op == Op::Ne,
+                name: if value.eq_ignore_ascii_case("none") {
+                    InCollection::None
+                } else {
+                    InCollection::Named(value.to_lowercase())
+                },
+            }),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -299,6 +325,15 @@ impl Query {
 
     pub fn is_empty(&self) -> bool {
         self.words.is_empty() && self.conds.is_empty()
+    }
+
+    /// The `collection=` filters (`!=` when negated), for the caller to apply: `matches_text`
+    /// lets everything through them.
+    pub fn collections(&self) -> impl Iterator<Item = (&InCollection, bool)> {
+        self.conds.iter().filter_map(|c| match c {
+            Cond::Collection { negated, name } => Some((name, *negated)),
+            _ => None,
+        })
     }
 
     /// Filters on what the background analysis works out (stars, length, BPM).
@@ -374,6 +409,7 @@ impl Query {
                     }
                 },
                 Cond::Unplayed => facts.played_days.is_none(),
+                Cond::Collection { .. } => true,
             })
     }
 }
@@ -429,6 +465,24 @@ mod tests {
         for q in ["sr>6", "sr=5.3", "sr<5", "sr!=5", "od>7", "hp>5", "bpm<180"] {
             assert!(!hit(q), "{q}");
         }
+    }
+
+    #[test]
+    fn collection_filters_are_parsed_for_the_caller_and_pass_here() {
+        let q = Query::parse(r#"ghost collection="Warm Up" col!=dans collection=NONE"#);
+        assert_eq!(
+            q.collections().collect::<Vec<_>>(),
+            vec![
+                (&InCollection::Named("warm up".into()), false),
+                (&InCollection::Named("dans".into()), true),
+                (&InCollection::None, false),
+            ]
+        );
+        assert!(q.matches(&meta(), "Camellia - Ghost [Inner Oni]", &facts()));
+        // Without a name it's just a word.
+        let q = Query::parse("collection=");
+        assert_eq!(q.collections().count(), 0);
+        assert!(!q.is_empty());
     }
 
     #[test]

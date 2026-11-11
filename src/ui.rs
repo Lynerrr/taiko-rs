@@ -530,6 +530,29 @@ impl Select {
             .collection
             .and_then(|c| self.collections.get(c))
             .map(|c| &c.maps);
+        // `collection=` in the search: each the maps it takes in, and whether it's `!=`.
+        let in_any = || -> std::collections::HashSet<usize> {
+            self.collections
+                .iter()
+                .flat_map(|c| c.maps.iter().copied())
+                .collect()
+        };
+        let by_collection: Vec<(bool, bool, std::collections::HashSet<usize>)> = query
+            .collections()
+            .map(|(name, negated)| match name {
+                crate::search::InCollection::Named(name) => (
+                    negated,
+                    true,
+                    self.collections
+                        .iter()
+                        .filter(|c| c.name.to_lowercase() == *name)
+                        .flat_map(|c| c.maps.iter().copied())
+                        .collect(),
+                ),
+                // In none: not in any.
+                crate::search::InCollection::None => (negated, false, in_any()),
+            })
+            .collect();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -557,6 +580,9 @@ impl Select {
                 self.pinned.contains(&e.path)
                     || ((self.show_converts || e.meta.mode == 1)
                         && only.is_none_or(|set| set.contains(&i))
+                        && by_collection.iter().all(|(negated, inside, set)| {
+                            (set.contains(&i) == *inside) != *negated
+                        })
                         && (query.is_empty()
                             || query.matches_text(&e.meta, e.text(), &facts(i, e))))
             })
