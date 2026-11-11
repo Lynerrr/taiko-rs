@@ -2337,6 +2337,10 @@ pub fn draw_scoreboard(c: &mut Canvas, s: &Session, my_live: &Live) {
         c.text(x, y0 + i as f32 * h, 8.0, rgba(*color, 1.0), line);
     }
 }
+/// How a room's map is named in the Discord status: "artist - title [version]".
+pub(crate) fn map_label(m: &MapInfo) -> String {
+    format!("{} - {} [{}]", m.artist, m.title, m.version)
+}
 
 pub fn draw_results(c: &mut Canvas, s: &Session) {
     let w = c.width;

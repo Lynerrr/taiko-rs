@@ -472,7 +472,6 @@ impl State {
                     Scene::Settings { .. }
                         | Scene::Results { .. }
                         | Scene::Lobby
-                        | Scene::MpResults
                         | Scene::Calibrate { .. }
                 )
                 || self.scene.screen().is_some_and(|s| s.top_bar())
@@ -489,10 +488,7 @@ impl State {
                 .player
                 .as_ref()
                 .is_some_and(|p| !crate::player::tall() || p.list_open)
-            || matches!(
-                self.scene,
-                Scene::Lobby | Scene::MpResults | Scene::Results { .. }
-            )
+            || matches!(self.scene, Scene::Lobby | Scene::Results { .. })
             || self.scene.screen().is_some_and(|s| s.finger_scrolls())
     }
 

@@ -718,7 +718,7 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
     // Joined late, nothing on screen yet: straight to the results.
     s.scene = view(Vec::new());
     s.handle_server_msg(net::ServerMsg::Results(Vec::new()));
-    assert!(matches!(s.scene, Scene::MpResults));
+    assert!(s.scene.screen_is::<crate::screens::mp_results::MpResults>());
     // Watching: the room is over, but the view is `SPECTATE_DELAY` behind.
     s.scene = view(vec![(1, game())]);
     s.handle_server_msg(net::ServerMsg::Results(Vec::new()));
@@ -728,7 +728,10 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
     assert!(v.ended.is_some());
     v.ended = Some(Instant::now() - SPECTATE_DELAY - Duration::from_millis(600));
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    assert!(matches!(s.scene, Scene::MpResults), "then the results");
+    assert!(
+        s.scene.screen_is::<crate::screens::mp_results::MpResults>(),
+        "then the results"
+    );
 }
 
 #[test]

@@ -63,7 +63,7 @@ impl Screen for CalibrateDone {
         "calibration"
     }
 
-    fn presence(&self) -> Option<(String, String)> {
+    fn presence(&self, _state: &State) -> Option<(String, String)> {
         Some({
             (
                 tr!("Calibrating", "調整中", "Калибровка").into(),

@@ -2506,7 +2506,7 @@ fn an_update_restarts_the_game_only_in_a_quiet_menu() {
     assert!(!s.can_restart());
     s.scene = Scene::Lobby;
     assert!(!s.can_restart());
-    s.scene = Scene::MpResults;
+    s.scene = crate::screens::mp_results::MpResults::scene();
     assert!(!s.can_restart());
 }
 
