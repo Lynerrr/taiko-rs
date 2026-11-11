@@ -178,6 +178,7 @@ use screens::settings::{
     offset_scale_name, on_text, parse_number, picking_text, scroll_in_select, short_path,
     size_char, type_path,
 };
+use screens::spectate::{Spectate, SpectateView};
 use screens::video_edit::VideoEdit;
 use screens::watch::Watch;
 use screens::{fmt_time, shows_own_background};
@@ -204,11 +205,9 @@ enum Scene {
         entry: usize,
         from: Option<f64>,
     },
-    /// A multiplayer match (the menu, the lobby, the wait for the match to start and the
-    /// results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait` and
-    /// `screens::mp_results`).
-    /// Watching the match in progress.
-    Spectate(Box<SpectateView>),
+    /// A multiplayer match (the menu, the lobby, the wait for the match to start, watching it
+    /// and the results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait`,
+    /// `screens::spectate` and `screens::mp_results`).
     /// The map editor, editing one difficulty.
     Editor(Box<editor::view::View>),
     /// A screen that lives outside lib.rs (`screens::screen`).
@@ -229,58 +228,6 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 
 /// How often the open song list asks again which of its custom sets the website approved.
 const CUSTOM_REFRESH: Duration = Duration::from_secs(2 * 60);
-
-/// How far behind the live match spectators watch, so players' presses arrive in time.
-const SPECTATE_DELAY: Duration = Duration::from_millis(1500);
-
-struct SpectateView {
-    rx: Job<Loaded>,
-    loaded: Option<(Beatmap, Arc<Track>)>,
-    /// When the match started (local clock), its start point and speed.
-    start: Instant,
-    from: Option<f64>,
-    rate: f64,
-    mods: Mods,
-    /// The match's map as the room named it, with the host's mod settings.
-    map: net::MapInfo,
-    players: Vec<(u32, String)>,
-    /// One game per player, fed with their presses.
-    games: Vec<(u32, Box<Play>)>,
-    /// The player shown, or None for everyone at once.
-    focus: Option<usize>,
-    /// Presses that arrived before the games existed.
-    pending: std::collections::HashMap<u32, Vec<(f64, u8)>>,
-    /// Players who skipped the intro; once all have, so does the view.
-    skipped: std::collections::HashSet<u32>,
-    skip_done: bool,
-    /// Watching everyone: what each player's strip shows (see `draw_spectate_all`), and when it
-    /// was last drawn.
-    zones: Vec<[f32; 4]>,
-    zones_at: Option<Instant>,
-    /// The match is over (the results came); we're `SPECTATE_DELAY` behind, so the last seconds
-    /// are still to be watched.
-    ended: Option<Instant>,
-}
-
-impl SpectateView {
-    /// When every player has skipped the intro, skips it too, staying `SPECTATE_DELAY` behind.
-    fn follow_skip(&mut self, audio: Option<&audio::Engine>, offset: f64) {
-        if self.skip_done
-            || self.games.is_empty()
-            || !self.players.iter().all(|(id, _)| self.skipped.contains(id))
-        {
-            return;
-        }
-        self.skip_done = true;
-        let target =
-            self.games[0].1.skip_target() - SPECTATE_DELAY.as_secs_f64() * 1000.0 * self.rate;
-        if self.games[0].1.time() < target {
-            for (_, g) in &mut self.games {
-                g.seek(target, audio.map(|a| a as &dyn game::Audio), offset);
-            }
-        }
-    }
-}
 
 /// How far behind a watched friend the view plays (room for the network).
 const WATCH_DELAY_MS: f64 = 2000.0;
@@ -933,8 +880,7 @@ impl State {
     }
 
     fn in_song(&self) -> bool {
-        matches!(self.scene, Scene::Play { .. } | Scene::Spectate(_))
-            || self.scene.screen().is_some_and(|s| s.in_song())
+        matches!(self.scene, Scene::Play { .. }) || self.scene.screen().is_some_and(|s| s.in_song())
     }
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
@@ -1065,14 +1011,13 @@ impl State {
                 .filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target())
                 .map(|m| m.rate)
         });
-        let lobby = matches!(self.scene, Scene::Spectate(_))
-            || self
-                .behind_settings()
-                .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby()))
+        let lobby = self
+            .behind_settings()
+            .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby()))
             || self
                 .scene
                 .screen()
-                .is_some_and(|s| s.over_lobby() || s.in_room());
+                .is_some_and(|s| s.over_lobby() || s.in_room() || s.spectating());
         if let Some(p) = &self.player {
             return p.rate();
         }
@@ -1776,12 +1721,11 @@ impl State {
             return Some(entry);
         }
         let lobby = match &self.scene {
-            Scene::Spectate(_) => true,
             Scene::Other(s) if s.settings() => self
                 .behind
                 .as_deref()
                 .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby())),
-            Scene::Other(s) => s.over_lobby() || s.in_room(),
+            Scene::Other(s) => s.over_lobby() || s.in_room() || s.spectating(),
             _ => false,
         };
         let lobby_map = self.mp.as_ref().and_then(|s| s.map_entry).filter(|_| lobby);
@@ -4752,24 +4696,6 @@ impl State {
                 (label, state)
             }
             Scene::Other(s) if s.in_match() => in_match()?,
-            Scene::Spectate(v) => {
-                let label = self
-                    .mp
-                    .as_ref()
-                    .and_then(|s| s.map.as_ref())
-                    .map(map_label)
-                    .unwrap_or_default();
-                let who = v
-                    .focus
-                    .and_then(|k| v.games.get(k))
-                    .and_then(|(id, _)| v.players.iter().find(|p| p.0 == *id))
-                    .map(|p| p.1.clone());
-                let state = match who {
-                    Some(w) => tr!("Spectating {w}", "{w}を観戦中", "Наблюдает за {w}";),
-                    None => tr!("Spectating everyone", "全員を観戦中", "Наблюдает за всеми").into(),
-                };
-                (label, state)
-            }
             Scene::Editor(view) => (
                 tr!("Mapping", "マッピング中", "Делает карту").into(),
                 view.label(),
@@ -5230,7 +5156,7 @@ impl State {
     /// The map whose offset applies on this screen (also the selected one, for the preview).
     fn offset_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Spectate(_) => self.mp.as_ref().and_then(|s| s.map_entry),
+            Scene::Other(s) if s.spectating() => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Other(s) if s.room_lobby() => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Other(s) if s.watching() => s.watched_map(),
             Scene::Select => self.select.selected(),
@@ -5653,7 +5579,6 @@ impl State {
                 self.game().is_some_and(|game| game.paused().is_none())
             }
             // Watching: hidden unless the friends overlay is open (it needs the pointer).
-            Scene::Spectate(_) => !self.social.open,
             Scene::Other(s) if s.watching() => !self.social.open,
             _ => false,
         };
@@ -7497,7 +7422,6 @@ impl State {
                 }
             }
             Scene::Other(s) => s.activity(),
-            Scene::Spectate(_) => "spectating",
             Scene::Editor(_) => "map editor",
         };
         let map = self
@@ -9161,7 +9085,7 @@ impl State {
     fn dims_background(&self) -> bool {
         matches!(
             self.scene,
-            Scene::Play { .. } | Scene::Loading { .. } | Scene::Spectate(_) | Scene::Editor(_)
+            Scene::Play { .. } | Scene::Loading { .. } | Scene::Editor(_)
         ) || self.scene.screen().is_some_and(|s| s.dims_background())
     }
 
@@ -9221,8 +9145,7 @@ impl State {
 
     /// Someone else's play is being watched (a friend's, or a match spectated).
     fn watching(&self) -> bool {
-        matches!(self.scene, Scene::Spectate(_))
-            || self.scene.screen().is_some_and(|s| s.watching())
+        self.scene.screen().is_some_and(|s| s.watching())
     }
 
     /// The friends overlay (and notifications) can show: outside songs, and while watching
@@ -9859,8 +9782,9 @@ impl State {
                         .unwrap_or_default(),
                 }
             }
-            Scene::Spectate(_) => Activity::Match { map: lobby_map() },
-            Scene::Other(s) if s.in_match() => Activity::Match { map: lobby_map() },
+            Scene::Other(s) if s.in_match() || s.spectating() => {
+                Activity::Match { map: lobby_map() }
+            }
             _ => match &self.mp {
                 Some(s) => Activity::Lobby {
                     room: s.online_room,
@@ -10542,7 +10466,7 @@ impl State {
                         self.preview.show_background_for(&self.library[i]);
                         let mods = Mods::from_list(&map.mods);
                         let rx = self.load_with(i, map.rate, mods);
-                        self.scene = Scene::Spectate(Box::new(SpectateView {
+                        self.scene = Spectate::scene(Box::new(SpectateView {
                             rx,
                             loaded: None,
                             start,
@@ -10568,13 +10492,13 @@ impl State {
                 }
             }
             ServerMsg::Skipped { from } => {
-                if let Scene::Spectate(v) = &mut self.scene {
+                if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
                     v.skipped.insert(from);
                     v.follow_skip(self.audio.as_ref(), self.play_offset);
                 }
             }
             ServerMsg::Inputs { from, inputs, .. } => {
-                if let Scene::Spectate(v) = &mut self.scene {
+                if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
                     match v.games.iter_mut().find(|(id, _)| *id == from) {
                         Some((_, g)) => {
                             if let Some((list, _)) = g.replay_mut() {
@@ -10598,18 +10522,18 @@ impl State {
                         net::DefenseAct::TagIn { .. } => c.1 += 1,
                     }
                 }
-                match &mut self.scene {
-                    Scene::Other(s) if s.in_match() && s.holds_game() => {
-                        if let Some(game) = self.play.as_deref_mut() {
-                            game.defense_act(from, act);
-                        }
+                if self
+                    .scene
+                    .screen()
+                    .is_some_and(|s| s.in_match() && s.holds_game())
+                {
+                    if let Some(game) = self.play.as_deref_mut() {
+                        game.defense_act(from, act);
                     }
-                    Scene::Spectate(v) => {
-                        for (_, g) in v.games.iter_mut() {
-                            g.defense_act(from, act);
-                        }
+                } else if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
+                    for (_, g) in v.games.iter_mut() {
+                        g.defense_act(from, act);
                     }
-                    _ => {}
                 }
             }
             ServerMsg::SkipVotes { votes, of } => {
@@ -10635,7 +10559,7 @@ impl State {
                 if let Some(s) = &mut self.mp {
                     s.results = Some(r);
                 }
-                if let Scene::Spectate(v) = &mut self.scene {
+                if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
                     if v.games.is_empty() {
                         self.stop_audio();
                         self.scene = MpResults::scene();
@@ -10646,8 +10570,10 @@ impl State {
                 }
             }
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
-                let in_mp = matches!(self.scene, Scene::Spectate(_))
-                    || self.scene.screen().is_some_and(|s| s.in_room());
+                let in_mp = self
+                    .scene
+                    .screen()
+                    .is_some_and(|s| s.in_room() || s.spectating());
                 self.toast(format!("multiplayer: {why}"));
                 self.mp = None;
                 self.picking_lobby_map = false;
@@ -11065,35 +10991,6 @@ impl State {
             self.editor_key(code, repeat, window);
             return;
         }
-        if let Scene::Spectate(v) = &mut self.scene {
-            let n = v.players.len().max(1);
-            match code {
-                KeyCode::ArrowLeft | KeyCode::ArrowRight if !repeat => {
-                    let dir = if code == KeyCode::ArrowRight {
-                        1
-                    } else {
-                        n - 1
-                    };
-                    v.focus = Some(v.focus.map(|f| (f + dir) % n).unwrap_or(0));
-                }
-                KeyCode::KeyA | KeyCode::Tab if !repeat => {
-                    v.focus = if v.focus.is_some() { None } else { Some(0) }
-                }
-                KeyCode::Escape if !repeat => {
-                    if let Some(s) = &self.mp {
-                        s.client.send(net::ClientMsg::Spectate(false));
-                    }
-                    self.stop_audio();
-                    self.scene = Lobby::scene();
-                }
-                _ => {
-                    if !repeat {
-                        self.handle_global_key(code, window);
-                    }
-                }
-            }
-            return;
-        }
         if self.mp.is_some()
             && !self.picking_lobby_map
             && matches!(self.scene, Scene::Select)
@@ -11290,7 +11187,7 @@ impl State {
                 }
             }
             Scene::Other(_) => {}
-            Scene::Spectate(_) | Scene::Editor(_) => {}
+            Scene::Editor(_) => {}
             Scene::Play { .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -12554,157 +12451,6 @@ impl State {
                     next = Some(ResultsScreen::scene(Box::new(results), *entry, *from));
                 }
             }
-            Scene::Spectate(v) => {
-                match v.rx.poll_ended() {
-                    Some(Some(Ok(l))) => v.loaded = Some(l),
-                    Some(Some(Err(e))) => {
-                        self.status = format!("can't spectate: {e}");
-                        next = Some(Lobby::scene());
-                    }
-                    None => {}
-                    Some(None) => next = Some(Lobby::scene()),
-                }
-                if v.ended
-                    .is_some_and(|t| now >= t + SPECTATE_DELAY + Duration::from_millis(500))
-                {
-                    if let Some(a) = &self.audio {
-                        a.stop();
-                    }
-                    next = Some(MpResults::scene());
-                }
-                // Start once the map is ready and the delay has passed: the music where the
-                // players were SPECTATE_DELAY ago, every player's game snapping to it.
-                if v.games.is_empty()
-                    && now >= v.start + SPECTATE_DELAY
-                    && let (Some((map, track)), Some(audio)) =
-                        (v.loaded.take(), self.audio.as_ref())
-                {
-                    let probe = Game::with_mods(map.clone(), track.clone(), None, v.mods);
-                    let first_ms = match v.from {
-                        Some(t) => {
-                            (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time()))
-                                + self.play_offset
-                        }
-                        None => probe.track_at(probe.time()),
-                    };
-                    let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
-                    audio.play(track.clone(), first_ms + behind);
-                    for (k, (id, name)) in v.players.iter().enumerate() {
-                        // The lobby's speed mods, and the player's own others.
-                        let own = self
-                            .mp
-                            .as_ref()
-                            .and_then(|s| s.players.iter().find(|p| p.id == *id))
-                            .map(|p| Mods::from_list(&p.mods).free())
-                            .unwrap_or(Mods::NONE);
-                        let mut mods = if v.map.defense.is_some() {
-                            v.mods
-                        } else {
-                            v.mods.shared().plus(own)
-                        };
-                        if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
-                            mods.toggle(mods::Mod::Maze);
-                        }
-                        let mut g = Play::new(
-                            Game::with_seed(
-                                map.clone(),
-                                track.clone(),
-                                None,
-                                mods,
-                                v.map.seed.unwrap_or(0),
-                            )
-                            .with_settings(&crate::game::settings()),
-                        );
-                        use_mod_settings(&mut g, &v.map);
-                        // Defense: each player's game takes only their turns' notes, as theirs did
-                        // (the team in the order the players have it: by id).
-                        if let Some(d) = v.map.defense {
-                            let mut team = v.players.clone();
-                            team.sort_by_key(|p| p.0);
-                            let me = team.iter().position(|p| p.0 == *id).unwrap_or(0);
-                            g.set_defense(team, me, d);
-                        }
-                        if let Some(t) = v.from {
-                            g.skip_to(t);
-                        }
-                        let inputs = v.pending.remove(id).unwrap_or_default();
-                        g.set_replay(Some((inputs, 0)));
-                        g.view.banner = Some(format!(
-                            "SPECTATING  -  {name}  ({}/{})",
-                            k + 1,
-                            v.players.len()
-                        ));
-                        g.view.watched = true;
-                        v.games.push((*id, Box::new(g)));
-                    }
-                    // Players may have skipped the intro before the view was ready.
-                    v.follow_skip(self.audio.as_ref(), self.play_offset);
-                }
-                if v.games.is_empty() {
-                    canvas.text_centered(
-                        canvas.width / 2.0,
-                        220.0,
-                        12.0,
-                        rgba(0xffffff, 1.0),
-                        "joining the match...",
-                    );
-                }
-                let scroll = self.cfg.scroll_speed;
-                for (k, (_, g)) in v.games.iter_mut().enumerate() {
-                    // Only the player watched (or the first one) is heard.
-                    g.set_mute_hits(v.focus.unwrap_or(0) != k);
-                    g.view.kiai_effects = self.cfg.kiai_effects;
-                    g.view.hidden = hidden;
-                    g.view.hud = self.cfg.hud;
-                    g.view.hud_area = self.cfg.playfield_area;
-                    g.update(now, sound(&self.audio), self.play_offset);
-                }
-                // Defense: the team's lives and gold, as the room has them.
-                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
-                    for (_, g) in v.games.iter_mut() {
-                        g.set_team(team);
-                    }
-                }
-                match v.focus {
-                    Some(k) if k < v.games.len() => {
-                        let g = &mut v.games[k].1;
-                        draw_game_area(
-                            canvas,
-                            &self.cfg,
-                            &mut self.frame_clip,
-                            &self.grip,
-                            &self.hover,
-                            self.bg_brightness > 0.0,
-                            |c| {
-                                g.draw_playfield(c, scroll);
-                            },
-                        );
-                        g.draw_hud(canvas);
-                        canvas.text_centered(
-                            canvas.width / 2.0,
-                            470.0,
-                            7.0,
-                            rgba(0x9a9ab0, 1.0),
-                            "Left/Right: other player   A: everyone   Esc: leave",
-                        );
-                    }
-                    _ if !v.games.is_empty() => {
-                        let dt = v
-                            .zones_at
-                            .map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f32());
-                        v.zones_at = Some(now);
-                        draw_spectate_all(
-                            canvas,
-                            &mut v.games,
-                            &v.players,
-                            scroll,
-                            &mut v.zones,
-                            dt,
-                        );
-                    }
-                    _ => {}
-                }
-            }
             Scene::Editor(view) => {
                 // Uploading needs the game's account on our own server.
                 let token = (self.cfg.online_server == online::DEFAULT_SERVER
@@ -13471,7 +13217,6 @@ impl State {
         });
         let map_loading = match &self.scene {
             Scene::Loading { rx, .. } => rx.is_busy(),
-            Scene::Spectate(v) => v.rx.is_busy(),
             Scene::Other(s) => s.loading(),
             _ => false,
         };

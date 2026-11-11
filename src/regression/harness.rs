@@ -291,7 +291,6 @@ pub fn scene_name(s: &State) -> &'static str {
         Scene::Loading { .. } => "Loading",
         Scene::Play { .. } => "Play",
         Scene::Other(s) => s.name(),
-        Scene::Spectate(_) => "Spectate",
         Scene::Editor(_) => "Editor",
     }
 }
