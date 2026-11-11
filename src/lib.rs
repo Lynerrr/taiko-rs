@@ -166,7 +166,7 @@ use screens::play::{
     pause_width,
 };
 use screens::preview::Preview;
-use screens::results::{map_gives_pp, results_job, results_title, submit_score};
+use screens::results::{ResultsScreen, map_gives_pp, results_job, results_title, submit_score};
 use screens::select::leaderboard::{
     BOARD_HEAD, BOARD_ROW, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
     misses_and_age,
@@ -200,11 +200,6 @@ enum Scene {
     },
     Play {
         game: Box<Play>,
-        entry: usize,
-        from: Option<f64>,
-    },
-    Results {
-        results: Box<Results>,
         entry: usize,
         from: Option<f64>,
     },
@@ -923,10 +918,8 @@ impl State {
 
     /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
     fn idle_allowed(&self) -> bool {
-        (matches!(
-            self.scene,
-            Scene::Select | Scene::Settings { .. } | Scene::Results { .. }
-        ) || self.scene.screen().is_some_and(|s| s.idle_allowed()))
+        (matches!(self.scene, Scene::Select | Scene::Settings { .. })
+            || self.scene.screen().is_some_and(|s| s.idle_allowed()))
             && !self.quit_asked
             && self.crash.is_none()
             && self.splash.is_none()
@@ -1479,11 +1472,7 @@ impl State {
             Some(file.to_path_buf()),
             None,
         ));
-        self.scene = Scene::Results {
-            results: Box::new(results),
-            entry,
-            from: None,
-        };
+        self.scene = ResultsScreen::scene(Box::new(results), entry, None);
     }
 
     /// Opens what a `taiko-rs://` link asks for: a score's results, its replay ready to watch.
@@ -1545,8 +1534,11 @@ impl State {
                 }
             }
         }
-        let free = (matches!(self.scene, Scene::Select | Scene::Results { .. })
-            || self.scene.screen().is_some_and(|s| s.song_select()))
+        let free = (matches!(self.scene, Scene::Select)
+            || self
+                .scene
+                .screen()
+                .is_some_and(|s| s.song_select() || s.opens_score_links()))
             && self.mp.is_none();
         if self.scan.is_some() || !free {
             return;
@@ -1676,11 +1668,7 @@ impl State {
         };
         let online = (self.cfg.online_server.clone(), score, e.label());
         results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
-        self.scene = Scene::Results {
-            results: Box::new(results),
-            entry,
-            from: None,
-        };
+        self.scene = ResultsScreen::scene(Box::new(results), entry, None);
     }
 
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
@@ -2005,7 +1993,7 @@ impl State {
         }
         match &mut self.scene {
             Scene::Play { game, .. } => game.pause(sound(&self.audio)),
-            Scene::Select | Scene::Results { .. } => {}
+            Scene::Select => {}
             Scene::Other(s) if s.allows_settings() => {}
             _ => {
                 self.toast(
@@ -2034,7 +2022,6 @@ impl State {
         match self.scene {
             Scene::Select if self.on_menu() => Some(0),
             Scene::Select => Some(1),
-            Scene::Results { .. } => Some(2),
             Scene::Settings { .. } => Some(3),
             Scene::Other(ref s) => s.menu_screen(),
             _ => None,
@@ -4727,15 +4714,6 @@ impl State {
                 };
                 (label, state)
             }
-            Scene::Results { entry, .. } => (
-                self.library.get(*entry)?.label(),
-                tr!(
-                    "Looking at the results",
-                    "リザルトを見ています",
-                    "Смотрит итоги"
-                )
-                .into(),
-            ),
             Scene::MpPlay { .. } => in_match()?,
             Scene::Other(s) if s.in_match() => in_match()?,
             Scene::Spectate(v) => {
@@ -4768,7 +4746,7 @@ impl State {
                 view.label(),
             ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
-            Scene::Other(s) if s.presence_first() => s.presence(self).unwrap_or_default(),
+            Scene::Other(s) if s.presence_first() => s.presence(self)?,
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
             Scene::Select if self.player.is_some() => {
                 let song = self
@@ -5325,9 +5303,8 @@ impl State {
     /// The map played now, or whose results are up (its own offset is what -/+ and O change).
     fn song_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Loading { entry, .. }
-            | Scene::Play { entry, .. }
-            | Scene::Results { entry, .. } => Some(*entry),
+            Scene::Loading { entry, .. } | Scene::Play { entry, .. } => Some(*entry),
+            Scene::Other(s) if s.map_entry().is_some() => s.map_entry(),
             Scene::MpPlay { .. } => self.mp.as_ref().and_then(|s| s.map_entry),
             // The room's map is the song of its match, of the wait for it and of its results;
             // the lobby only shows it.
@@ -5435,7 +5412,10 @@ impl State {
 
     /// Plays the current map again from where it was started (in game, paused or on results).
     fn restart_map(&mut self) {
-        if let Scene::Play { entry, from, .. } | Scene::Results { entry, from, .. } = self.scene {
+        if let Scene::Play { entry, from, .. } = self.scene {
+            self.retry_from(entry, from);
+        } else if let Some(r) = self.scene.screen_as::<ResultsScreen>() {
+            let (entry, from) = (r.entry, r.from);
             self.retry_from(entry, from);
         }
     }
@@ -6148,8 +6128,8 @@ impl State {
             return;
         }
         let (vx, vy) = self.mouse_virtual();
-        if let Scene::Results { results, .. } = &mut self.scene {
-            results.scroll(notches < 0);
+        if let Some(r) = self.scene.screen_mut::<ResultsScreen>() {
+            r.results.scroll(notches < 0);
             return;
         }
         if self.on_menu() {
@@ -7726,7 +7706,6 @@ impl State {
                     "playing"
                 }
             }
-            Scene::Results { .. } => "results",
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
@@ -9140,10 +9119,10 @@ impl State {
         if let Some(seed) = &self.random_setup {
             return Some(seed.clone());
         }
-        if let Scene::Results { results, .. } = &self.scene
-            && results.mods.has(mods::Mod::Random)
+        if let Some(r) = self.scene.screen_as::<ResultsScreen>()
+            && r.results.mods.has(mods::Mod::Random)
         {
-            return results.seed.map(|s| s.to_string());
+            return r.results.seed.map(|s| s.to_string());
         }
         if let Some(e) = &self.settings_ui.editing {
             return Some(e.text.clone()).filter(|t| !t.is_empty());
@@ -11143,7 +11122,7 @@ impl State {
             }
             Scene::Play { game, .. } if game.paused().is_some() => keys::Place::Paused,
             Scene::Play { .. } => keys::Place::Play,
-            Scene::Results { .. } => keys::Place::Results,
+            Scene::Other(s) => s.key_place().unwrap_or(keys::Place::Other),
             _ => keys::Place::Other,
         })
     }
@@ -11542,59 +11521,6 @@ impl State {
                 KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
                 _ => {}
             },
-            Scene::Results { results, .. }
-                if matches!(
-                    code,
-                    KeyCode::ArrowDown
-                        | KeyCode::ArrowUp
-                        | KeyCode::PageDown
-                        | KeyCode::PageUp
-                        | KeyCode::Home
-                        | KeyCode::End
-                ) =>
-            {
-                results.scroll(matches!(
-                    code,
-                    KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End
-                ));
-            }
-            Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => {
-                self.restart_map()
-            }
-            Scene::Results { results, .. } if code == KeyCode::KeyV && results.replay.is_some() => {
-                if let Some(file) = results.replay.clone() {
-                    self.open_video_editor(&file);
-                }
-            }
-            // A leaderboard score's results: Enter watches it too.
-            Scene::Results { results, .. }
-                if results.replay.is_some()
-                    && (code == KeyCode::KeyR
-                        || (results.opened.is_some()
-                            && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter))) =>
-            {
-                if let Some(file) = results.replay.clone() {
-                    self.watch_replay(&file);
-                }
-            }
-            // Back to song select, the music playing on.
-            Scene::Results { results, .. } if results.opened.is_some() => {
-                if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
-                    self.scene = Scene::Select;
-                }
-            }
-            Scene::Results { entry, from, .. } => match code {
-                KeyCode::Enter | KeyCode::NumpadEnter => {
-                    let (e, f) = (*entry, *from);
-                    self.retry_from(e, f);
-                }
-                KeyCode::Escape => {
-                    let path = self.library[*entry].path.clone();
-                    self.show_select();
-                    self.select.select_path(&self.library, &path);
-                }
-                _ => {}
-            },
         }
     }
 
@@ -11736,7 +11662,10 @@ impl State {
             }
             let in_select = self.in_song_select();
             let in_menu = in_select
-                || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
+                || self
+                    .scene
+                    .screen_as::<ResultsScreen>()
+                    .is_some_and(|r| r.results.opened.is_some() && r.results.music.is_none())
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select) || prev.screen().is_some_and(|s| s.room_lobby()) || prev.screen_is::<Preview>())
                 || self.scene.screen().is_some_and(|s| s.tab().is_some());
             let (entries, selected) = if browsing {
@@ -12000,7 +11929,7 @@ impl State {
         if self.shots.is_some() && self.stats.frames > 5 {
             let screen = match self.scene {
                 Scene::Select => Some("select"),
-                Scene::Results { .. } => Some("results"),
+                _ if self.scene.screen_is::<ResultsScreen>() => Some("results"),
                 _ => None,
             };
             if let Some(name) = screen
@@ -12022,11 +11951,7 @@ impl State {
         // A song or a replay opened by any road leaves the menu behind.
         if matches!(
             self.scene,
-            Scene::Loading { .. }
-                | Scene::Play { .. }
-                | Scene::Results { .. }
-                | Scene::Watch(_)
-                | Scene::Editor(_)
+            Scene::Loading { .. } | Scene::Play { .. } | Scene::Watch(_) | Scene::Editor(_)
         ) || self.scene.screen().is_some_and(|s| s.closes_main_menu())
         {
             self.main_menu = None;
@@ -12831,24 +12756,8 @@ impl State {
                             Err(e) => eprintln!("couldn't save the replay: {e}"),
                         }
                     }
-                    next = Some(Scene::Results {
-                        results: Box::new(results),
-                        entry: *entry,
-                        from: *from,
-                    });
+                    next = Some(ResultsScreen::scene(Box::new(results), *entry, *from));
                 }
-            }
-            Scene::Results { results, .. } => {
-                results.poll();
-                results.animate(canvas.dt_ms);
-                // Back to the preview point when the song ends, like osu!.
-                if let (Some((track, again)), Some(a)) = (&results.music, &self.audio) {
-                    let end = track.frames() as f64 / a.rate as f64 * 1000.0;
-                    if a.position_ms(now).is_some_and(|p| p > end - 30.0) {
-                        a.play(track.clone(), *again);
-                    }
-                }
-                results.draw(canvas);
             }
             Scene::MpPlay { game, .. } => {
                 let done = game.update(now, sound(&self.audio), self.play_offset);
@@ -13496,14 +13405,15 @@ impl State {
             self.finish_calibration();
         }
         if let Some(s) = next {
-            let music_on = matches!(&s, Scene::Results { results, .. } if results.music.is_some());
+            let results = s.screen_as::<ResultsScreen>();
+            let music_on = results.is_some_and(|r| r.results.music.is_some());
             if music_on {
                 self.preview.invalidate_audio();
-            } else if matches!(s, Scene::Results { .. } | Scene::Select) {
+            } else if results.is_some() || matches!(s, Scene::Select) {
                 self.stop_audio();
             }
             // TAIKO_STATS: the play's smoothness, whether the music plays on at the results or not.
-            if matches!(s, Scene::Results { .. } | Scene::Select)
+            if (results.is_some() || matches!(s, Scene::Select))
                 && let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene)
             {
                 eprintln!(
@@ -13513,8 +13423,8 @@ impl State {
                 );
                 *sm = debug::Smoothness::default();
             }
-            if let (Scene::Results { results, .. }, Scene::Play { .. }) = (&s, &self.scene) {
-                let st = &results.stats;
+            if let (Some(r), Scene::Play { .. }) = (results, &self.scene) {
+                let st = &r.results.stats;
                 eprintln!(
                     "result: {:.2}%  great {} ok {} miss {}  max combo {}  UR {:.1}  mean {:+.2} ms  rolls {}  swells {}  big {}",
                     st.accuracy() * 100.0,
@@ -14087,7 +13997,10 @@ impl State {
                     // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
                     let pp = pp + 0.0;
                     *mine = Some((pp, rank));
-                    if let Scene::Results { results, .. } = &mut self.scene
+                    if let Some(results) = self
+                        .scene
+                        .screen_mut::<ResultsScreen>()
+                        .map(|r| &mut r.results)
                         && results.opened.is_none()
                         && results.replay.is_some()
                     {

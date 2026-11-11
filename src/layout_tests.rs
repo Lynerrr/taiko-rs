@@ -1230,17 +1230,9 @@ fn assert_every_screen_fits() {
     s.me_for = LONG_NAME.to_string();
     s.scene = Scene::Select;
     check(&mut s, "select logged in", &mut out);
-    s.scene = Scene::Results {
-        results: Box::new(results(false)),
-        entry: 0,
-        from: None,
-    };
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(results(false)), 0, None);
     check(&mut s, "results", &mut out);
-    s.scene = Scene::Results {
-        results: Box::new(results(true)),
-        entry: 0,
-        from: None,
-    };
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(results(true)), 0, None);
     check(&mut s, "results failed", &mut out);
     let mut opened = results(false);
     (opened.watched, opened.rank, opened.replay, opened.partial) = (None, None, None, true);
@@ -1250,21 +1242,13 @@ fn assert_every_screen_fits() {
         online: true,
     });
     opened.replay_error = Some("that replay isn't on the server".into());
-    s.scene = Scene::Results {
-        results: Box::new(opened),
-        entry: 0,
-        from: None,
-    };
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(opened), 0, None);
     check(&mut s, "results of an online score", &mut out);
     // Scrolled down to the pp.
     for failed in [false, true] {
         let mut r = results(failed);
         (r.scroll, r.scroll_to) = (ui::RESULTS_SCROLL, ui::RESULTS_SCROLL);
-        s.scene = Scene::Results {
-            results: Box::new(r),
-            entry: 0,
-            from: None,
-        };
+        s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
         check(
             &mut s,
             if failed {

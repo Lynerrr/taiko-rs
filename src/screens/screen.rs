@@ -108,6 +108,22 @@ pub(crate) trait Screen: Any + Send {
     fn in_match(&self) -> bool {
         false
     }
+    /// The map it is about (`State::song_entry`: its offset is what -/+ and O change).
+    fn map_entry(&self) -> Option<usize> {
+        None
+    }
+    /// Where hotkeys bound to a place work on it (None: `keys::Place::Other`).
+    fn key_place(&self) -> Option<keys::Place> {
+        None
+    }
+    /// It shows its own map's background, which the song select's preview leaves be.
+    fn shows_own_background(&self) -> bool {
+        false
+    }
+    /// A score link opened now shows its score (as on song select).
+    fn opens_score_links(&self) -> bool {
+        false
+    }
     /// It is the room's lobby (`State::in_lobby`).
     fn room_lobby(&self) -> bool {
         false
@@ -212,6 +228,10 @@ struct Shadow {
     over_lobby: bool,
     in_room: bool,
     room_lobby: bool,
+    map_entry: Option<usize>,
+    key_place: Option<keys::Place>,
+    shows_own_background: bool,
+    opens_score_links: bool,
     in_song: bool,
     in_match: bool,
     song_select: bool,
@@ -253,6 +273,10 @@ impl Shadow {
             over_lobby: screen.over_lobby(),
             in_room: screen.in_room(),
             room_lobby: screen.room_lobby(),
+            map_entry: screen.map_entry(),
+            key_place: screen.key_place(),
+            shows_own_background: screen.shows_own_background(),
+            opens_score_links: screen.opens_score_links(),
             in_song: screen.in_song(),
             in_match: screen.in_match(),
             song_select: screen.song_select(),
@@ -325,6 +349,18 @@ impl Screen for Shadow {
     }
     fn room_lobby(&self) -> bool {
         self.room_lobby
+    }
+    fn map_entry(&self) -> Option<usize> {
+        self.map_entry
+    }
+    fn key_place(&self) -> Option<keys::Place> {
+        self.key_place
+    }
+    fn shows_own_background(&self) -> bool {
+        self.shows_own_background
+    }
+    fn opens_score_links(&self) -> bool {
+        self.opens_score_links
     }
     fn in_song(&self) -> bool {
         self.in_song
@@ -421,6 +457,17 @@ impl Scene {
             let any: &dyn Any = s;
             any.is::<T>()
         })
+    }
+
+    /// The screen up, when it is a `T` (and not a shadow holding its place).
+    pub(crate) fn screen_as<T: Screen>(&self) -> Option<&T> {
+        match self {
+            Scene::Other(s) => {
+                let any: &dyn Any = s.as_ref();
+                any.downcast_ref::<T>()
+            }
+            _ => None,
+        }
     }
 
     /// The screen up, when it is a `T` (and not a shadow holding its place).
@@ -534,6 +581,7 @@ mod tests {
         "MpResults",
         "MpWait",
         "Lobby",
+        "Results",
     ];
 
     #[test]

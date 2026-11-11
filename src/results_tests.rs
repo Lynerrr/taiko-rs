@@ -313,8 +313,11 @@ fn a_score_link_opens_its_results_on_its_map() {
     };
     s.open_link(link::Link::Score(41));
     settle(&mut s);
-    match &s.scene {
-        Scene::Results { results, entry, .. } => {
+    match s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+    {
+        Some(crate::screens::results::ResultsScreen { results, entry, .. }) => {
             assert_eq!(*entry, 1);
             assert_eq!(
                 results
@@ -413,9 +416,13 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
             frame(&mut s);
             std::thread::sleep(Duration::from_millis(2));
         }
-        match &s.scene {
-            Scene::Loading { retry, entry, .. } if restart => assert!(*retry && *entry == 0),
-            Scene::Results { results, .. } if !restart => assert!(results.failed),
+        match (
+            &s.scene,
+            s.scene
+                .screen_as::<crate::screens::results::ResultsScreen>(),
+        ) {
+            (Scene::Loading { retry, entry, .. }, _) if restart => assert!(*retry && *entry == 0),
+            (_, Some(r)) if !restart => assert!(r.results.failed),
             _ => panic!("restart {restart}: ended up elsewhere"),
         }
     }

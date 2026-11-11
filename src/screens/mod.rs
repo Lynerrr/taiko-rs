@@ -29,10 +29,9 @@ pub(crate) fn fmt_time(ms: f64) -> String {
 /// Whether `scene` shows its own map's background, which the song select's preview leaves be.
 pub(crate) fn shows_own_background(scene: &Scene) -> bool {
     match scene {
-        Scene::Editor(_) | Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } => {
-            true
-        }
+        Scene::Editor(_) | Scene::Loading { .. } | Scene::Play { .. } => true,
         Scene::Settings { prev } => shows_own_background(prev),
+        Scene::Other(s) => s.shows_own_background(),
         _ => false,
     }
 }

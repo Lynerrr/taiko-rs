@@ -558,7 +558,10 @@ fn escape_after_the_last_note_goes_straight_to_the_results() {
     assert!(game.paused().is_none(), "not the pause menu");
     at += Duration::from_millis(16);
     s.build_frame(&mut Canvas::default(), at, 853.3);
-    assert!(matches!(s.scene, Scene::Results { .. }));
+    assert!(
+        s.scene
+            .screen_is::<crate::screens::results::ResultsScreen>()
+    );
 }
 
 #[test]
@@ -1940,13 +1943,12 @@ fn the_results_scroll_down_to_the_pp_and_back() {
         game::Windows::new(5.0),
     );
     r.no_pp = Some("no pp here");
-    s.scene = Scene::Results {
-        results: Box::new(r),
-        entry: 0,
-        from: None,
-    };
-    let scroll = |s: &State| match &s.scene {
-        Scene::Results { results, .. } => results.scroll_to,
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    let scroll = |s: &State| match s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+    {
+        Some(r) => r.results.scroll_to,
         _ => panic!("left the results"),
     };
     // One notch takes it all the way, either way.
