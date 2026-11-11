@@ -326,7 +326,7 @@ fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
     let mut v = WatchView::new("bob".into());
     v.play = Some(play);
     v.fetching = true;
-    s.scene = Scene::Watch(Box::new(v));
+    s.scene = crate::screens::watch::Watch::scene(Box::new(v));
     let mut c = Canvas {
         audit: true,
         ..Default::default()
@@ -650,13 +650,17 @@ fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
     });
     v.game = Some(Box::new(Play::new(Game::new(map, track, None))));
     v.clock = (30_000.0, Instant::now(), false);
-    s.scene = Scene::Watch(Box::new(v));
+    s.scene = crate::screens::watch::Watch::scene(Box::new(v));
 
     // They stop: we're seconds behind them, so the view plays on rather than going blank.
     s.social_down(online::Down::WatchEnd {
         player: "bob".into(),
     });
-    let Scene::Watch(v) = &mut s.scene else {
+    let Some(v) = s
+        .scene
+        .screen_mut::<crate::screens::watch::Watch>()
+        .map(|w| &mut w.view)
+    else {
         panic!("still watching")
     };
     assert!(
@@ -671,14 +675,22 @@ fn a_watched_play_is_watched_to_its_end_before_the_view_waits_for_the_next() {
         paused: false,
         inputs: Vec::new(),
     });
-    let Scene::Watch(v) = &mut s.scene else {
+    let Some(v) = s
+        .scene
+        .screen_mut::<crate::screens::watch::Watch>()
+        .map(|w| &mut w.view)
+    else {
         panic!("still watching")
     };
     assert!(v.game.is_some() && v.next.is_some());
     // Once the view has got to where they stopped it moves on to that play.
     v.game.as_mut().unwrap().put_at(30_000.0);
     s.watch_tick();
-    let Scene::Watch(v) = &s.scene else {
+    let Some(v) = s
+        .scene
+        .screen_as::<crate::screens::watch::Watch>()
+        .map(|w| &w.view)
+    else {
         panic!("still watching")
     };
     assert!(v.game.is_none() && v.play.is_some() && v.next.is_none() && v.ending.is_none());

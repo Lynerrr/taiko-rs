@@ -136,6 +136,14 @@ pub(crate) trait Screen: Any + Send {
     fn calibration(&self) -> Option<bool> {
         None
     }
+    /// Someone else's play is watched on it (`State::watching`).
+    fn watching(&self) -> bool {
+        false
+    }
+    /// The library's copy of the map being watched (its offset is the one that applies).
+    fn watched_map(&self) -> Option<usize> {
+        None
+    }
     /// It is the settings (`State::in_settings`; what they were opened over is
     /// `State::behind_settings`).
     fn settings(&self) -> bool {
@@ -246,6 +254,8 @@ struct Shadow {
     in_room: bool,
     room_lobby: bool,
     settings: bool,
+    watching: bool,
+    watched_map: Option<usize>,
     holds_game: bool,
     calibration: Option<bool>,
     map_entry: Option<usize>,
@@ -294,6 +304,8 @@ impl Shadow {
             in_room: screen.in_room(),
             room_lobby: screen.room_lobby(),
             settings: screen.settings(),
+            watching: screen.watching(),
+            watched_map: screen.watched_map(),
             holds_game: screen.holds_game(),
             calibration: screen.calibration(),
             map_entry: screen.map_entry(),
@@ -375,6 +387,12 @@ impl Screen for Shadow {
     }
     fn settings(&self) -> bool {
         self.settings
+    }
+    fn watching(&self) -> bool {
+        self.watching
+    }
+    fn watched_map(&self) -> Option<usize> {
+        self.watched_map
     }
     fn holds_game(&self) -> bool {
         self.holds_game
@@ -626,6 +644,7 @@ mod tests {
         "Settings",
         "Calibrate",
         "MpPlay",
+        "Watch",
     ];
 
     #[test]
