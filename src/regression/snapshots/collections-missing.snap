@@ -1,0 +1,20 @@
+missing ones counted:
+  list "Collections", cursor on 1
+    All songs  [shown]
+    mine  (1, 3 not here)  ...
+    + New collection
+  Local mine: Gone, Gone, Gone, basics
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+its list offers them:
+  list "mine", cursor on 0
+    Rename
+    Move up
+    Move down
+    Delete
+    Download the 3 maps not here
+  Local mine: Gone, Gone, Gone, basics
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+no set ID:
+  Local mine: Gone, basics
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: the maps not here have no set ID to download them by

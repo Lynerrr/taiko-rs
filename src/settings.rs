@@ -127,7 +127,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 135] = [
+pub const ITEMS: [(&str, Item); 136] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -202,6 +202,7 @@ pub const ITEMS: [(&str, Item); 135] = [
     ("INPUT", Item::Hotkey(31)),
     ("INPUT", Item::Hotkey(32)),
     ("INPUT", Item::Hotkey(33)),
+    ("INPUT", Item::Hotkey(34)),
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::OffsetScale),
     ("OFFSET", Item::VisualOffset),

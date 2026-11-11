@@ -313,3 +313,460 @@ fn a_database_from_before_collections_gains_them_and_keeps_its_data() {
         vec![("a", Source::Osu, 1)]
     );
 }
+
+#[test]
+fn the_players_collections_go_into_osus_collection_db_keeping_osus_and_a_backup() {
+    let dir = temp_db("export").parent().unwrap().to_path_buf();
+    let path = dir.join("collection.db");
+    let theirs = vec![
+        ("practice".to_string(), vec!["aaaa".to_string()]),
+        ("warm up".to_string(), vec!["bbbb".to_string()]),
+    ];
+    let original = crate::osudb::write_collections(20240101, &theirs);
+    std::fs::write(&path, &original).unwrap();
+    let map = |md5: &str| MapRef {
+        md5: md5.into(),
+        ..MapRef::default()
+    };
+    let own = vec![
+        Collection {
+            name: "warm up".into(),
+            source: Source::Local,
+            maps: vec![map("bbbb"), map("cccc")],
+        },
+        Collection {
+            name: "dans".into(),
+            source: Source::Local,
+            maps: vec![map("dddd"), map("")],
+        },
+        // osu!'s mirrored ones aren't written back.
+        Collection {
+            name: "mirror".into(),
+            source: Source::Osu,
+            maps: vec![map("eeee")],
+        },
+    ];
+    // Each map's MD5 now: "cccc" was updated to "c2c2".
+    let now = |m: &MapRef| {
+        if m.md5 == "cccc" {
+            "c2c2".to_string()
+        } else {
+            m.md5.clone()
+        }
+    };
+    let done = collections::export_to_osu(&path, &own, now).unwrap();
+    assert_eq!(
+        done,
+        collections::Exported {
+            added: 1,
+            merged: 1
+        }
+    );
+    let back = std::fs::read(&path).unwrap();
+    assert_eq!(crate::osudb::collections_version(&back), Some(20240101));
+    let s = |v: &[&str]| v.iter().map(|m| m.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        crate::osudb::parse_collections(&back).unwrap(),
+        vec![
+            ("practice".to_string(), s(&["aaaa"])),
+            ("warm up".to_string(), s(&["bbbb", "c2c2"])),
+            ("dans".to_string(), s(&["dddd"])),
+        ]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("collection.db.bak")).unwrap(),
+        original
+    );
+    assert!(!dir.join("collection.db.taiko-rs").exists());
+
+    // Again: nothing new, nothing doubled.
+    let done = collections::export_to_osu(&path, &own, now).unwrap();
+    assert_eq!(
+        done,
+        collections::Exported {
+            added: 0,
+            merged: 0
+        }
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), back);
+
+    // A collection.db that can't be read is left alone.
+    std::fs::write(&path, b"\x01\x00").unwrap();
+    assert!(collections::export_to_osu(&path, &own, now).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"\x01\x00");
+
+    // None yet: made, with nothing to back up.
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(dir.join("collection.db.bak"));
+    collections::export_to_osu(&path, &own, now).unwrap();
+    assert_eq!(
+        crate::osudb::parse_collections(&std::fs::read(&path).unwrap())
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!dir.join("collection.db.bak").exists());
+}
+
+mod in_song_select {
+    //! The player's own collections made and changed in the song select, with the keyboard and
+    //! the mouse, as a player does: each step's list, collections and songs shown in a golden.
+
+    use std::fmt::Write as _;
+
+    use super::super::harness::*;
+    use super::super::maps;
+    use super::super::snapshot::assert_snapshot;
+    use crate::hit::Hit;
+    use crate::*;
+
+    fn step(s: &mut State, now: Instant, log: &mut String, what: &str) {
+        frame(s, now);
+        let _ = writeln!(log, "{what}:");
+        if let Some(cursor) = s.select.picker {
+            let (title, rows, _) = s.select.picker_rows();
+            let _ = writeln!(log, "  list {title:?}, cursor on {cursor}");
+            for (label, mark, more) in rows {
+                let _ = writeln!(
+                    log,
+                    "    {label}{}{}",
+                    mark.map(|m| format!("  [{m}]")).unwrap_or_default(),
+                    if more { "  ..." } else { "" }
+                );
+            }
+        }
+        if let Some(n) = &s.select.naming {
+            let _ = writeln!(log, "  naming {:?} for {:?}", n.text, n.then);
+        }
+        for c in &s.collections {
+            let mut maps: Vec<String> = c.maps.iter().map(|m| m.version.clone()).collect();
+            maps.sort();
+            let _ = writeln!(log, "  {:?} {}: {}", c.source, c.name, maps.join(", "));
+        }
+        let shown = s
+            .select
+            .collection
+            .map(|k| s.select.collections[k].name.clone());
+        let mut songs: Vec<String> = s
+            .select
+            .rows()
+            .iter()
+            .map(|&i| s.library[i].meta.version.clone())
+            .collect();
+        songs.sort();
+        let _ = writeln!(log, "  showing {shown:?}: {}", songs.join(", "));
+        if let Some(t) = s.toast.take() {
+            let _ = writeln!(log, "  toast: {}", t.text);
+        }
+    }
+
+    /// The song menu's item `what` ("Collect ...") on the selected difficulty's row.
+    fn menu_item(s: &mut State, starts: &str) {
+        let row = s.select.cursor();
+        s.select.menu = Some(ui::SongMenu {
+            row,
+            header: false,
+            skin: false,
+            x: 100.0,
+            y: 100.0,
+        });
+        let k = s
+            .select
+            .menu_items(&s.library)
+            .iter()
+            .position(|(label, _)| label.starts_with(starts))
+            .unwrap_or_else(|| panic!("no {starts:?} in the song menu"));
+        s.click(Hit::SongMenu(k), None);
+    }
+
+    fn select_version(s: &mut State, now: Instant, version: &str) {
+        let at = s
+            .select
+            .rows()
+            .iter()
+            .position(|&i| s.library[i].meta.version == version)
+            .expect("the difficulty is listed");
+        s.select.set_cursor(at);
+        frame(s, now);
+    }
+
+    #[test]
+    fn the_players_own_collections_are_made_filled_renamed_moved_and_deleted() {
+        let charts = maps::all();
+        let songs = Songs::new("collections", &charts);
+        let mut s = state_with(config(), songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        // Song select starts on a random song.
+        s.select.set_cursor(0);
+        frame(&mut s, now);
+        let first = s.library[s.select.selected().unwrap()].meta.version.clone();
+        let second = s
+            .library
+            .iter()
+            .map(|e| e.meta.version.clone())
+            .find(|v| *v != first)
+            .unwrap();
+        let mut log = String::new();
+
+        s.modifiers_ctrl = true;
+        press(&mut s, KeyCode::KeyL, now);
+        s.modifiers_ctrl = false;
+        step(&mut s, now, &mut log, "Ctrl+L with no collections yet");
+        press(&mut s, KeyCode::Escape, now);
+
+        menu_item(&mut s, "Collect [");
+        step(&mut s, now, &mut log, "Collect from the song menu");
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "+ New collection");
+        type_text(&mut s, "warm up", now);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "named and saved");
+
+        select_version(&mut s, now, &second);
+        menu_item(&mut s, "Collect [");
+        s.click(Hit::PickRow(0), None);
+        step(
+            &mut s,
+            now,
+            &mut log,
+            "a second difficulty put in it with a click",
+        );
+
+        menu_item(&mut s, "Collect [");
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "put in again: taken out");
+
+        // A second collection, empty, from the list itself; the same name again isn't taken.
+        s.open_collections();
+        let new = s.select.picker_len() - 1;
+        s.click(Hit::PickRow(new), None);
+        type_text(&mut s, "WARM UP", now);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "a name taken already");
+        press(&mut s, KeyCode::Delete, now);
+        type_text(&mut s, "dans", now);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "an empty one made");
+
+        s.open_collections();
+        press(&mut s, KeyCode::ArrowDown, now);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "warm up shown");
+
+        s.open_collections();
+        press(&mut s, KeyCode::F2, now);
+        press(&mut s, KeyCode::Backspace, now);
+        press(&mut s, KeyCode::Backspace, now);
+        type_text(&mut s, "ups", now);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "renamed with F2 while shown");
+
+        press(&mut s, KeyCode::ArrowDown, now);
+        s.modifiers_ctrl = true;
+        press(&mut s, KeyCode::ArrowUp, now);
+        s.modifiers_ctrl = false;
+        step(&mut s, now, &mut log, "dans moved up with Ctrl+Up");
+
+        s.click(Hit::PickRowMore(2), None);
+        step(&mut s, now, &mut log, "warm ups' ... clicked");
+        press(&mut s, KeyCode::ArrowDown, now);
+        press(&mut s, KeyCode::ArrowDown, now);
+        press(&mut s, KeyCode::ArrowDown, now);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "Delete picked");
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "Enter keeps it");
+        press(&mut s, KeyCode::Delete, now);
+        press(&mut s, KeyCode::ArrowUp, now);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "Del, then Delete it");
+
+        now += Duration::from_millis(16);
+        step(&mut s, now, &mut log, "after");
+        assert_snapshot("collections-own", &log);
+        drop(songs);
+    }
+
+    #[test]
+    fn the_search_takes_collections_by_name_not_in_one_or_in_none() {
+        let charts = maps::all();
+        let songs = Songs::new("collections-search", &charts);
+        let mut s = state_with(config(), songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        let refs = |s: &State, versions: &[&str]| -> Vec<collections::MapRef> {
+            s.library
+                .iter()
+                .filter(|e| versions.contains(&e.meta.version.as_str()))
+                .filter_map(collections::MapRef::of)
+                .collect()
+        };
+        let mine = refs(&s, &["basics", "stream"]);
+        let theirs = refs(&s, &["stream", "high-od"]);
+        s.collections = vec![
+            collections::Collection {
+                name: "Warm Up".into(),
+                source: collections::Source::Local,
+                maps: mine,
+            },
+            collections::Collection {
+                name: "dans".into(),
+                source: collections::Source::Osu,
+                maps: theirs,
+            },
+        ];
+        s.show_collections(None);
+        let shown = |s: &mut State, filter: &str| -> Vec<String> {
+            s.select.filter = filter.into();
+            s.select.refilter(&s.library);
+            let mut v: Vec<String> = s
+                .select
+                .rows()
+                .iter()
+                .map(|&i| s.library[i].meta.version.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            shown(&mut s, r#"collection="warm up""#),
+            ["basics", "stream"]
+        );
+        assert_eq!(shown(&mut s, "col=DANS"), ["high-od", "stream"]);
+        assert_eq!(
+            shown(&mut s, r#"collection="warm up" collection!=dans"#),
+            ["basics"]
+        );
+        assert_eq!(
+            shown(&mut s, "collection=none"),
+            ["big-notes", "low-od", "rolls-and-swells", "sv-and-kiai"]
+        );
+        assert_eq!(
+            shown(&mut s, "collection!=none"),
+            ["basics", "high-od", "stream"]
+        );
+        assert_eq!(
+            shown(&mut s, "collection=nothing-called-so"),
+            Vec::<String>::new()
+        );
+        // With words, and with the collection picked in the list.
+        assert_eq!(shown(&mut s, "stream collection=dans"), ["stream"]);
+        s.select.pick_collection(1, &s.library);
+        assert_eq!(shown(&mut s, "collection!=dans"), ["basics"]);
+    }
+
+    #[test]
+    fn maps_moved_or_updated_are_followed_and_the_ones_not_here_counted_and_offered() {
+        let charts = maps::all();
+        let songs = Songs::new("collections-missing", &charts);
+        let mut s = state_with(config(), songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        let at = s
+            .library
+            .iter()
+            .position(|e| e.meta.version == "basics")
+            .unwrap();
+        // Its beatmap ID, as a submitted map has.
+        s.library[at].meta.beatmap_id = Some(555);
+        let here = collections::MapRef::of(&s.library[at]).unwrap();
+        // The same difficulty as it was before an update: another file, another MD5.
+        let before = collections::MapRef {
+            md5: "0123456789abcdef0123456789abcdef".into(),
+            folder: "Regression - old".into(),
+            file: "old.osu".into(),
+            beatmap_id: Some(555),
+            ..collections::MapRef::default()
+        };
+        let gone = |md5: &str, set_id: Option<u32>| collections::MapRef {
+            md5: md5.into(),
+            set_id,
+            version: "Gone".into(),
+            folder: "77 Some - Song".into(),
+            file: "gone.osu".into(),
+            ..collections::MapRef::default()
+        };
+        s.collections = vec![collections::Collection {
+            name: "mine".into(),
+            source: collections::Source::Local,
+            maps: vec![
+                before,
+                gone("aa", Some(77)),
+                gone("bb", Some(77)),
+                gone("cc", None),
+            ],
+        }];
+        s.show_collections(None);
+        assert_eq!(
+            s.collections[0].maps[0], here,
+            "followed to where it is now"
+        );
+        assert_eq!(here.file, "basics.osu");
+        let finder = collections::Finder::new(&s.library);
+        assert_eq!(
+            collections::missing_sets(&s.collections[0], &finder),
+            vec![(77, "77 Some - Song".to_string())],
+            "a set once, and none for the map without a set ID"
+        );
+        let mut log = String::new();
+        s.open_collections();
+        press(&mut s, KeyCode::ArrowDown, now);
+        step(&mut s, now, &mut log, "missing ones counted");
+        press(&mut s, KeyCode::Tab, now);
+        step(&mut s, now, &mut log, "its list offers them");
+        // A collection whose maps not here have no set ID: nothing to download them by.
+        s.collections[0].maps.retain(|m| m.set_id != Some(77));
+        s.list_collections();
+        s.open_collection_menu(0);
+        let last = s.select.picker_len() - 1;
+        s.select.picker = Some(last);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "no set ID");
+        assert!(s.downloads.is_empty());
+        assert_snapshot("collections-missing", &log);
+    }
+
+    #[test]
+    fn an_osu_collection_is_copied_to_the_players_own_and_stays_osus() {
+        let charts = maps::all();
+        let songs = Songs::new("collections-copy", &charts);
+        let mut s = state_with(config(), songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        let entries: Vec<_> = s
+            .library
+            .iter()
+            .take(2)
+            .filter_map(collections::MapRef::of)
+            .collect();
+        s.collections = vec![
+            collections::Collection {
+                name: "pool".into(),
+                source: collections::Source::Local,
+                maps: Vec::new(),
+            },
+            collections::Collection {
+                name: "pool".into(),
+                source: collections::Source::Osu,
+                maps: entries,
+            },
+        ];
+        s.show_collections(None);
+        let mut log = String::new();
+        s.open_collections();
+        step(&mut s, now, &mut log, "osu!'s pool after the player's own");
+        press(&mut s, KeyCode::ArrowDown, now);
+        press(&mut s, KeyCode::ArrowDown, now);
+        press(&mut s, KeyCode::Tab, now);
+        step(&mut s, now, &mut log, "Tab on osu!'s pool");
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "copied");
+        // osu!'s own can't be renamed or deleted here.
+        press(&mut s, KeyCode::ArrowDown, now);
+        press(&mut s, KeyCode::F2, now);
+        press(&mut s, KeyCode::Delete, now);
+        step(&mut s, now, &mut log, "F2 and Del on osu!'s");
+        assert_snapshot("collections-copy", &log);
+    }
+}

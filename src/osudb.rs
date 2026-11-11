@@ -179,7 +179,45 @@ fn parse_osu_db(b: &[u8]) -> Option<HashMap<String, DbMap>> {
     Some(out)
 }
 
-fn parse_collections(b: &[u8]) -> Option<Vec<(String, Vec<String>)>> {
+/// `collection.db`'s format version (osu!'s build date, like 20250108).
+pub(crate) fn collections_version(b: &[u8]) -> Option<i32> {
+    Reader { b, at: 0 }.i32()
+}
+
+/// `collection.db` as osu! stable writes it: version, count, then each name and its MD5s.
+pub(crate) fn write_collections(version: i32, collections: &[(String, Vec<String>)]) -> Vec<u8> {
+    fn string(out: &mut Vec<u8>, s: &str) {
+        if s.is_empty() {
+            out.push(0x00);
+            return;
+        }
+        out.push(0x0b);
+        let mut len = s.len();
+        loop {
+            let byte = (len & 0x7f) as u8;
+            len >>= 7;
+            if len == 0 {
+                out.push(byte);
+                break;
+            }
+            out.push(byte | 0x80);
+        }
+        out.extend_from_slice(s.as_bytes());
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(&version.to_le_bytes());
+    out.extend_from_slice(&(collections.len() as i32).to_le_bytes());
+    for (name, maps) in collections {
+        string(&mut out, name);
+        out.extend_from_slice(&(maps.len() as i32).to_le_bytes());
+        for m in maps {
+            string(&mut out, m);
+        }
+    }
+    out
+}
+
+pub(crate) fn parse_collections(b: &[u8]) -> Option<Vec<(String, Vec<String>)>> {
     let mut r = Reader { b, at: 0 };
     r.i32()?; // version
     let count = r.i32()?.max(0) as usize;
@@ -304,6 +342,16 @@ mod tests {
         c.extend_from_slice(&2i32.to_le_bytes());
         s(&mut c, "abc123");
         s(&mut c, "def456");
+        assert_eq!(
+            write_collections(20250108, &parse_collections(&c).unwrap()),
+            c
+        );
+        // Long names (a two-byte length) and empty ones read back the same.
+        let long = vec![("x".repeat(300), vec![String::new(), "abc".into()])];
+        assert_eq!(
+            parse_collections(&write_collections(1, &long)).unwrap(),
+            long
+        );
         assert_eq!(
             parse_collections(&c).unwrap(),
             vec![(

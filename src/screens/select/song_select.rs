@@ -45,15 +45,10 @@ impl Screen for SongSelect {
             return;
         }
         if let Some(cursor) = state.select.picker {
-            let n = state.select.picker_len();
-            match code {
-                KeyCode::ArrowUp => state.select.picker = Some(cursor.saturating_sub(1)),
-                KeyCode::ArrowDown => state.select.picker = Some((cursor + 1).min(n - 1)),
-                KeyCode::PageUp => state.select.picker = Some(cursor.saturating_sub(10)),
-                KeyCode::PageDown => state.select.picker = Some((cursor + 10).min(n - 1)),
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => state.pick_row(cursor),
-                KeyCode::Escape | KeyCode::Backspace => state.select.picker = None,
-                _ => {}
+            if state.select.list == ui::PickList::Sorts {
+                state.list_key(code, cursor);
+            } else {
+                state.collections_list_key(code, cursor);
             }
             return;
         }
@@ -130,6 +125,7 @@ impl Screen for SongSelect {
                 state.cycle_sort(dir);
             }
             () if state.modifiers_ctrl && code == KeyCode::KeyL => state.open_collections(),
+            () if state.modifiers_ctrl && code == KeyCode::KeyK => state.collect_selected(),
             () if state.modifiers_ctrl && state.modifiers_shift && code == KeyCode::KeyU => {
                 if let Some(i) = state.select.selected() {
                     state.update_set(i);
@@ -554,6 +550,9 @@ impl Screen for SongSelect {
                 );
             }
             state.select.draw_popups(canvas, &state.library);
+            if let Some(naming) = &state.select.naming {
+                super::collections::draw_collection_naming(canvas, naming);
+            }
             if state.cfg.drum_menus {
                 state.select_rows = drum_nav::Rows::of(canvas);
                 state.select_zone = state.select_zone.within(&state.select_rows);

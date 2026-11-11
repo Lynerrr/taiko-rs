@@ -127,6 +127,8 @@ pub enum Hotkey {
     Download,
     Sort,
     Collections,
+    /// Song select: put the selected difficulty in a collection.
+    Collect,
     Pause,
     SkipIntro,
     QuickRetry,
@@ -147,7 +149,7 @@ const ANYWHERE: &[Place] = &[
 ];
 
 impl Hotkey {
-    pub const ALL: [Hotkey; 34] = [
+    pub const ALL: [Hotkey; 35] = [
         Hotkey::Pause,
         Hotkey::SkipIntro,
         Hotkey::QuickRetry,
@@ -164,6 +166,7 @@ impl Hotkey {
         Hotkey::Download,
         Hotkey::Sort,
         Hotkey::Collections,
+        Hotkey::Collect,
         Hotkey::Retry,
         Hotkey::WatchReplay,
         Hotkey::ExportVideo,
@@ -216,6 +219,7 @@ impl Hotkey {
             Hotkey::Download => const { &[Chord::ctrl(KeyD)] },
             Hotkey::Sort => const { &[Chord::ctrl(KeyS)] },
             Hotkey::Collections => const { &[Chord::ctrl(KeyL)] },
+            Hotkey::Collect => const { &[Chord::ctrl(KeyK)] },
             Hotkey::Pause => const { &[Chord::plain(Escape)] },
             Hotkey::SkipIntro => const { &[Chord::plain(Space)] },
             Hotkey::QuickRetry => const { &[Chord::plain(Backquote)] },
@@ -266,7 +270,8 @@ impl Hotkey {
             | Hotkey::Preview
             | Hotkey::Download
             | Hotkey::Sort
-            | Hotkey::Collections => &[Place::Select],
+            | Hotkey::Collections
+            | Hotkey::Collect => &[Place::Select],
             Hotkey::Pause | Hotkey::ApplyOffset | Hotkey::QuickRetry => {
                 &[Place::Play, Place::Paused]
             }
@@ -369,6 +374,11 @@ impl Hotkey {
                 "選曲: コレクション",
                 "Выбор песни: коллекции"
             ),
+            Hotkey::Collect => tr!(
+                "Song select: put in a collection",
+                "選曲: コレクションに入れる",
+                "Выбор песни: добавить в коллекцию"
+            ),
             Hotkey::Pause => tr!("Song: pause", "曲: ポーズ", "Песня: пауза"),
             Hotkey::SkipIntro => tr!(
                 "Song: skip intro",
@@ -437,6 +447,7 @@ impl Hotkey {
             Hotkey::Download => "download",
             Hotkey::Sort => "sort",
             Hotkey::Collections => "collections",
+            Hotkey::Collect => "collect",
             Hotkey::Pause => "pause",
             Hotkey::SkipIntro => "skip_intro",
             Hotkey::QuickRetry => "quick_retry",

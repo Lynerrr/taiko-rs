@@ -1241,6 +1241,8 @@ impl State {
             shapeshift_setup: None,
             random_setup: None,
             preset_naming: None,
+            collections: Vec::new(),
+            collections_read: false,
             preset_deleting: None,
             tact_setup: None,
             od_setup: None,

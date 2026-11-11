@@ -1,0 +1,38 @@
+osu!'s pool after the player's own:
+  list "Collections", cursor on 0
+    All songs  [shown]
+    pool  (0)  ...
+    pool  (2)  osu!  ...
+    + New collection
+  Local pool:
+  Osu pool: basics, big-notes
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+Tab on osu!'s pool:
+  list "pool", cursor on 0
+    Copy to my collections
+  Local pool:
+  Osu pool: basics, big-notes
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+copied:
+  list "Collections", cursor on 2
+    All songs  [shown]
+    pool  (0)  ...
+    pool 2  (2)  ...
+    pool  (2)  osu!  ...
+    + New collection
+  Local pool:
+  Local pool 2: basics, big-notes
+  Osu pool: basics, big-notes
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: copied to your collections as pool 2
+F2 and Del on osu!'s:
+  list "Collections", cursor on 3
+    All songs  [shown]
+    pool  (0)  ...
+    pool 2  (2)  ...
+    pool  (2)  osu!  ...
+    + New collection
+  Local pool:
+  Local pool 2: basics, big-notes
+  Osu pool: basics, big-notes
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
