@@ -1,7 +1,7 @@
 //! The video editor: a saved replay's cut, crop and export settings, rendered to an MP4 with
 //! ffmpeg. The export itself is `State::export`, drawn on the render thread.
 
-use super::screen::{Key, Screen};
+use super::screen::{Frame, Key, Screen};
 use crate::*;
 
 /// The video editor up, on a saved replay.
@@ -167,16 +167,18 @@ impl Screen for VideoEdit {
         true
     }
 
-    fn presence(&self) -> (String, String) {
-        (
-            tr!(
-                "Making a replay video",
-                "リプレイの動画を作成中",
-                "Делает видео повтора"
+    fn presence(&self) -> Option<(String, String)> {
+        Some({
+            (
+                tr!(
+                    "Making a replay video",
+                    "リプレイの動画を作成中",
+                    "Делает видео повтора"
+                )
+                .into(),
+                self.ed.replay.map_label.clone(),
             )
-            .into(),
-            self.ed.replay.map_label.clone(),
-        )
+        })
     }
 
     fn dims_background(&self) -> bool {
@@ -433,7 +435,7 @@ impl Screen for VideoEdit {
         false
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
         let mut next = None;
         let ed = &mut self.ed;
         match ed.poll() {

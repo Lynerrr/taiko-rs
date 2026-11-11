@@ -164,6 +164,7 @@ use screens::play::{
     FAIL_RESTART_LINGER, draw_replay_bar, draw_spectate_all, fail_restarts, pause_label,
     pause_width,
 };
+use screens::preview::Preview;
 use screens::results::{map_gives_pp, results_job, results_title, submit_score};
 use screens::select::leaderboard::{
     BOARD_HEAD, BOARD_ROW, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
@@ -216,11 +217,6 @@ enum Scene {
         game: Box<Play>,
         back: Box<Scene>,
         vsync: bool,
-    },
-    /// The autoplay preview over the whole screen (in the playfield area, which can be moved
-    /// and resized here), with the timeline. `back`: song select or the multiplayer lobby.
-    Preview {
-        back: Box<Scene>,
     },
     /// Download tab: search the mirrors, download sets into the Songs folder.
     Download,
@@ -1109,7 +1105,8 @@ impl State {
                 | Scene::MpPlay { .. }
                 | Scene::MpResults
                 | Scene::Spectate(_)
-        ) || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
+        ) || matches!(&self.scene, Scene::Settings { prev: back } if matches!(**back, Scene::Lobby))
+            || self.scene.screen().is_some_and(|s| s.over_lobby());
         if let Some(p) = &self.player {
             return p.rate();
         }
@@ -1561,10 +1558,11 @@ impl State {
                 }
             }
         }
-        let free = matches!(
+        let free = (matches!(
             self.scene,
-            Scene::Select | Scene::Results { .. } | Scene::Preview { .. } | Scene::Download
-        ) && self.mp.is_none();
+            Scene::Select | Scene::Results { .. } | Scene::Download
+        ) || self.scene.screen().is_some_and(|s| s.song_select()))
+            && self.mp.is_none();
         if self.scan.is_some() || !free {
             return;
         }
@@ -1824,105 +1822,12 @@ impl State {
             | Scene::MpPlay { .. }
             | Scene::MpResults
             | Scene::Spectate(_) => true,
-            Scene::Preview { back } | Scene::Settings { prev: back } => {
-                matches!(**back, Scene::Lobby)
-            }
+            Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
+            Scene::Other(s) => s.over_lobby(),
             _ => false,
         };
         let lobby_map = self.mp.as_ref().and_then(|s| s.map_entry).filter(|_| lobby);
         lobby_map.or_else(|| self.select.selected())
-    }
-
-    fn open_preview(&mut self) {
-        if self.preview_target().is_none() {
-            return;
-        }
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::Preview {
-            back: Box::new(back),
-        };
-    }
-
-    fn close_preview(&mut self) {
-        if let Scene::Preview { back } = std::mem::replace(&mut self.scene, Scene::Select) {
-            self.scene = *back;
-        }
-    }
-
-    fn previewing_lobby(&self) -> bool {
-        matches!(&self.scene, Scene::Preview { back } if matches!(**back, Scene::Lobby))
-    }
-
-    /// Host, in the lobby preview: the picked start point becomes the match's.
-    fn set_match_start(&mut self) {
-        let Some(s) = &mut self.mp else { return };
-        if !s.is_host() || s.in_match {
-            return;
-        }
-        let (Some(i), Some(mut m)) = (s.map_entry, s.map.clone()) else {
-            return;
-        };
-        m.from = self.preview.marker(&self.library[i]);
-        let text = match m.from {
-            Some(t) => format!("the match starts at {}", fmt_time(t)),
-            None => "the match starts at the beginning".to_string(),
-        };
-        s.client.send(net::ClientMsg::SelectMap(m));
-        self.toast(text);
-    }
-
-    /// The preview's button: play from the start point (or the match's start point).
-    fn preview_button(&mut self) {
-        if self.previewing_lobby() {
-            self.set_match_start();
-        } else if self.picking_lobby_map {
-            if let Some(i) = self.select.selected() {
-                self.pick_lobby_map(i);
-            }
-        } else {
-            self.play_from_marker();
-        }
-    }
-
-    fn preview_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
-        if matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-            let step = if code == KeyCode::ArrowRight {
-                5000.0
-            } else {
-                -5000.0
-            };
-            self.preview.seek_by(step, self.audio.as_ref());
-            return;
-        }
-        if repeat || self.handle_global_key(code, window) {
-            return;
-        }
-        match code {
-            KeyCode::Space => self.toggle_preview_held(),
-            KeyCode::Escape | KeyCode::Backspace => self.close_preview(),
-            KeyCode::Enter | KeyCode::NumpadEnter if self.modifiers_ctrl => self.close_preview(),
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                let marked = self
-                    .preview_target()
-                    .is_some_and(|i| self.preview.marker(&self.library[i]).is_some());
-                if marked || self.previewing_lobby() || self.picking_lobby_map {
-                    self.preview_button();
-                } else if let Some(i) = self.select.selected() {
-                    self.start_loading(i);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Plays the selected map from the start point picked on its timeline.
-    fn play_from_marker(&mut self) {
-        let Some(i) = self.select.selected() else {
-            return;
-        };
-        if let Some(t) = self.preview.marker(&self.library[i]) {
-            self.start_loading_from(i, Some(t));
-        }
     }
 
     fn apply_volume(&self) {
@@ -2123,8 +2028,8 @@ impl State {
             | Scene::Download
             | Scene::MpMenu
             | Scene::Lobby
-            | Scene::Results { .. }
-            | Scene::Preview { .. } => {}
+            | Scene::Results { .. } => {}
+            Scene::Other(s) if s.allows_settings() => {}
             _ => {
                 self.toast(
                     tr!(
@@ -4486,7 +4391,8 @@ impl State {
     fn follow_map_skin(&mut self) {
         let entry = match &self.scene {
             Scene::Play { entry, .. } => Some(*entry),
-            Scene::Select | Scene::Preview { .. } => self.preview_target(),
+            Scene::Select => self.preview_target(),
+            Scene::Other(s) if s.map_from_song_select() => self.preview_target(),
             Scene::Settings { prev } => match **prev {
                 Scene::Play { entry, .. } => Some(entry),
                 Scene::Select => self.preview_target(),
@@ -4900,7 +4806,7 @@ impl State {
                 view.label(),
             ),
             // Anywhere else while in a room (its lobby, or song select picking its map).
-            Scene::Other(s) if s.presence_first() => s.presence(),
+            Scene::Other(s) if s.presence_first() => s.presence().unwrap_or_default(),
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
             Scene::MpMenu => (
                 tr!("Multiplayer menu", "マルチのメニュー", "Меню мультиплеера").into(),
@@ -4945,7 +4851,7 @@ impl State {
                 tr!("Calibrating", "調整中", "Калибровка").into(),
                 String::new(),
             ),
-            Scene::Other(s) => s.presence(),
+            Scene::Other(s) if s.presence().is_some() => s.presence().unwrap_or_default(),
             _ => (
                 tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(),
                 self.select
@@ -5485,7 +5391,8 @@ impl State {
         match &self.scene {
             Scene::Spectate(_) | Scene::Lobby => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Watch(v) => v.entry,
-            Scene::Select | Scene::Preview { .. } => self.select.selected(),
+            Scene::Select => self.select.selected(),
+            Scene::Other(s) if s.map_from_song_select() => self.select.selected(),
             _ => self.song_entry(),
         }
     }
@@ -5912,10 +5819,7 @@ impl State {
     fn area_editable(&self) -> bool {
         matches!(
             self.scene,
-            Scene::Play { .. }
-                | Scene::MpPlay { .. }
-                | Scene::Calibrate { .. }
-                | Scene::Preview { .. }
+            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
         ) || self.scene.screen().is_some_and(|s| s.area_editable())
     }
 
@@ -6262,7 +6166,7 @@ impl State {
             dd.wheel(notches);
             return;
         }
-        if matches!(self.scene, Scene::Preview { .. }) {
+        if self.scene.screen_is::<Preview>() {
             let (vx, vy) = self.mouse_virtual();
             if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() {
                 self.preview
@@ -6653,12 +6557,7 @@ impl State {
             }
             return CursorIcon::Pointer;
         }
-        if !self.on_menu()
-            && matches!(
-                self.scene,
-                Scene::Select | Scene::Preview { .. } | Scene::Download
-            )
-        {
+        if !self.on_menu() && self.in_song_select() {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
@@ -6898,17 +6797,15 @@ impl State {
             }
             return;
         }
-        if matches!(
-            self.scene,
-            Scene::Select | Scene::Preview { .. } | Scene::Download
-        ) {
+        if self.in_song_select() {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
                 if !self.preview_on_top(vx, vy) {
                     // Something's drawn over the preview here: it takes the click below.
                 } else if self.preview.play_button_at(vx, vy) {
-                    if matches!(self.scene, Scene::Preview { .. }) {
-                        self.preview_button();
+                    if let Some(p) = self.scene.screen_mut::<Preview>() {
+                        let lobby = screens::screen::Screen::over_lobby(p);
+                        self.preview_button(lobby);
                     } else if !self.picking_lobby_map {
                         self.play_from_marker();
                     }
@@ -8181,7 +8078,6 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
-            Scene::Preview { .. } => "map preview",
             Scene::Download => "downloads",
             Scene::MpMenu => "multiplayer menu",
             Scene::Lobby => "lobby",
@@ -9868,7 +9764,6 @@ impl State {
                 | Scene::MpPlay { .. }
                 | Scene::MpWait { .. }
                 | Scene::Loading { .. }
-                | Scene::Preview { .. }
                 | Scene::Spectate(_)
                 | Scene::Watch(_)
                 | Scene::Editor(_)
@@ -9945,7 +9840,7 @@ impl State {
             || self.random_setup.is_some()
             || self.universe_setup.is_some()
             || self.select.menu.is_some()
-            || matches!(self.scene, Scene::Settings { .. } | Scene::Preview { .. })
+            || matches!(self.scene, Scene::Settings { .. })
             || self.scene.screen().is_some_and(|s| s.covers_social_tab());
         let middle = if self.on_menu() {
             social::TAB_MENU_MIDDLE
@@ -9953,6 +9848,13 @@ impl State {
             social::TAB_MIDDLE
         };
         (!covered).then_some(middle)
+    }
+
+    /// Song select, or a screen that is part of it (its fullscreen preview, the download tab):
+    /// the song list's pointer, the preview panel and the map's stars work there.
+    fn in_song_select(&self) -> bool {
+        matches!(self.scene, Scene::Select | Scene::Download)
+            || self.scene.screen().is_some_and(|s| s.song_select())
     }
 
     /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
@@ -11719,10 +11621,6 @@ impl State {
             self.calibration_key(code, repeat, at, window);
             return;
         }
-        if matches!(self.scene, Scene::Preview { .. }) {
-            self.preview_key(code, repeat, window);
-            return;
-        }
         if matches!(self.scene, Scene::Download) {
             if !repeat
                 || matches!(
@@ -12015,8 +11913,7 @@ impl State {
                     self.settings_key(code, window);
                 }
             }
-            Scene::Calibrate { .. } | Scene::Other(_) | Scene::Preview { .. } | Scene::Download => {
-            }
+            Scene::Calibrate { .. } | Scene::Other(_) | Scene::Download => {}
             Scene::MpMenu
             | Scene::Lobby
             | Scene::MpWait { .. }
@@ -12231,13 +12128,10 @@ impl State {
                 self.preview_remote = browsing;
                 self.preview.forget();
             }
-            let in_select = matches!(
-                self.scene,
-                Scene::Select | Scene::Preview { .. } | Scene::Download
-            );
+            let in_select = self.in_song_select();
             let in_menu = in_select
                 || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
-                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::Preview { .. }))
+                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby) || prev.screen_is::<Preview>())
                 || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
             let (entries, selected) = if browsing {
                 (&self.browse.remote, self.browse.shown)
@@ -12279,7 +12173,7 @@ impl State {
                 self.menu_notes
                     .update(playing, &self.library, &mut self.stars, play_rate);
             }
-            if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
+            if let (true, Some(i)) = (self.scene.screen_is::<Preview>(), selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
             }
             if matches!(self.scene, Scene::Select) {
@@ -12314,7 +12208,7 @@ impl State {
         self.poll_retry(now);
         self.poll_replay_speed();
         // Paused in the fullscreen preview, and left it.
-        if self.preview.held && !matches!(self.scene, Scene::Preview { .. }) {
+        if self.preview.held && !self.scene.screen_is::<Preview>() {
             self.toggle_preview_held();
         }
         if self.cfg.check_updates {
@@ -12525,7 +12419,6 @@ impl State {
             Scene::Loading { .. }
                 | Scene::Play { .. }
                 | Scene::Results { .. }
-                | Scene::Preview { .. }
                 | Scene::Watch(_)
                 | Scene::Editor(_)
         ) || self.scene.screen().is_some_and(|s| s.closes_main_menu())
@@ -13404,68 +13297,6 @@ impl State {
                     }
                 }
             }
-            Scene::Preview { back } => {
-                let lobby = matches!(**back, Scene::Lobby);
-                match preview_target {
-                    Some(i) => {
-                        let scroll = self.cfg.scroll_speed;
-                        let see_through = self.bg_brightness > 0.0;
-                        let kiai = self.cfg.kiai_effects;
-                        if let Some(game) = self.preview.game_for(&self.library, i) {
-                            game.view.kiai_effects = kiai;
-                            draw_game_area(
-                                canvas,
-                                &self.cfg,
-                                &mut self.frame_clip,
-                                &self.grip,
-                                &self.hover,
-                                see_through,
-                                |c| game.draw_playfield(c, scroll),
-                            );
-                        }
-                        let e = &self.library[i];
-                        let stars = self.stars.get(i, self.play_speed().0);
-                        draw_preview_chrome(canvas, &self.cfg, e, stars, lobby, &size_label);
-                        let (x, y, w) = (24.0, 394.0, canvas.width - 48.0);
-                        canvas.round_rect(
-                            [x, y],
-                            [w, 78.0],
-                            8.0,
-                            rgba(0x15151d, 0.9),
-                            rgba(0x2a2a38, 1.0),
-                            1.0,
-                        );
-                        let button = match (lobby, lobby_host) {
-                            (false, _) => Some(("Play from", "Enter")),
-                            (true, true) => Some(("Start the match from", "Enter")),
-                            (true, false) => None,
-                        };
-                        self.preview.draw_timeline(
-                            canvas,
-                            e,
-                            [x + 12.0, y + 10.0, w - 24.0, 34.0],
-                            button,
-                        );
-                        // A thumb's over the timeline on a phone, where its times don't run into it.
-                        let [bx, by, bw, bh] = if mobile::active() {
-                            [x + w - 130.0, y - 50.0, 130.0, 44.0]
-                        } else {
-                            [x + 12.0, y + 54.0, pause_width(), 16.0]
-                        };
-                        canvas.button(
-                            bx,
-                            by,
-                            bw,
-                            bh,
-                            pause_label(self.preview.held),
-                            mobile::pick(7.0, 12.0),
-                            hit::Hit::Key(KeyCode::Space),
-                            false,
-                        );
-                    }
-                    None => next = Some(*std::mem::replace(back, Box::new(Scene::Select))),
-                }
-            }
             Scene::MpMenu => {
                 multiplayer::draw_menu(
                     canvas,
@@ -13938,7 +13769,13 @@ impl State {
                 }
             }
             Scene::Other(_) => {
-                if let Some(s) = self.draw_screen(canvas, now) {
+                let frame = screens::screen::Frame {
+                    now,
+                    preview_target,
+                    lobby_host,
+                    size_label: &size_label,
+                };
+                if let Some(s) = self.draw_screen(canvas, &frame) {
                     next = Some(s);
                 }
                 // The front door's frame may ask for something, done once the frame is drawn.

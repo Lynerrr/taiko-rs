@@ -1,6 +1,6 @@
 //! The map editor's front door: a new map from a song, or one to go on with.
 
-use super::screen::{Key, Screen};
+use super::screen::{Frame, Key, Screen};
 use crate::*;
 
 /// The editor's front door up.
@@ -88,11 +88,13 @@ impl Screen for EditorHome {
         true
     }
 
-    fn presence(&self) -> (String, String) {
-        (
-            tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),
-            String::new(),
-        )
+    fn presence(&self) -> Option<(String, String)> {
+        Some({
+            (
+                tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),
+                String::new(),
+            )
+        })
     }
 
     fn drags(&self) -> bool {
@@ -142,8 +144,8 @@ impl Screen for EditorHome {
         state.home_out(out);
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, now: Instant) -> Option<Scene> {
-        let out = self.home.update(now, state.audio.as_ref());
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
+        let out = self.home.update(frame.now, state.audio.as_ref());
         self.home.draw(canvas);
         if !matches!(out, editor::home::Out::None) {
             self.out = Some(out);

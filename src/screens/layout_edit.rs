@@ -1,7 +1,7 @@
 //! The playfield area's editor: drag, resize or scale where the play goes on the screen,
 //! opened from settings.
 
-use super::screen::{Key, Screen};
+use super::screen::{Frame, Key, Screen};
 use crate::*;
 
 /// The playfield area's editor up.
@@ -29,11 +29,13 @@ impl Screen for LayoutEdit {
         "layout editor"
     }
 
-    fn presence(&self) -> (String, String) {
-        (
-            tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
-            String::new(),
-        )
+    fn presence(&self) -> Option<(String, String)> {
+        Some({
+            (
+                tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
+                String::new(),
+            )
+        })
     }
 
     fn background_dim(&self) -> Option<f32> {
@@ -105,7 +107,7 @@ impl Screen for LayoutEdit {
         state.cfg.save();
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
         draw_game_area(
             canvas,
             &state.cfg,
