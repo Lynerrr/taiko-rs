@@ -701,7 +701,7 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     let view = |games: Vec<(u32, Box<Play>)>| {
-        Scene::Spectate(Box::new(SpectateView {
+        screens::spectate::Spectate::scene(Box::new(SpectateView {
             rx: Job::idle(),
             loaded: None,
             start: Instant::now(),
@@ -737,11 +737,12 @@ fn a_spectator_sees_the_last_seconds_before_the_results() {
     // Watching: the room is over, but the view is `SPECTATE_DELAY` behind.
     s.scene = view(vec![(1, game())]);
     s.handle_server_msg(net::ServerMsg::Results(Vec::new()));
-    let Scene::Spectate(v) = &mut s.scene else {
+    let Some(v) = s.scene.screen_mut::<screens::spectate::Spectate>() else {
         panic!("the last seconds are still to be watched")
     };
-    assert!(v.ended.is_some());
-    v.ended = Some(Instant::now() - SPECTATE_DELAY - Duration::from_millis(600));
+    assert!(v.view.ended.is_some());
+    v.view.ended =
+        Some(Instant::now() - screens::spectate::SPECTATE_DELAY - Duration::from_millis(600));
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(
         s.scene.screen_is::<crate::screens::mp_results::MpResults>(),

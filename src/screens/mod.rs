@@ -19,6 +19,7 @@ pub(crate) mod results;
 pub(crate) mod screen;
 pub(crate) mod select;
 pub(crate) mod settings;
+pub(crate) mod spectate;
 pub(crate) mod video_edit;
 pub(crate) mod watch;
 
