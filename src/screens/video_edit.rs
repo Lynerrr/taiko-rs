@@ -163,6 +163,10 @@ impl Screen for VideoEdit {
         "video editor"
     }
 
+    fn presence_first(&self) -> bool {
+        true
+    }
+
     fn presence(&self) -> (String, String) {
         (
             tr!(

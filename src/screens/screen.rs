@@ -31,6 +31,11 @@ pub(crate) trait Screen: Any + Send {
     fn activity(&self) -> &'static str;
     /// The same for Discord, in the player's language, and the map it is about (or nothing).
     fn presence(&self) -> (String, String);
+    /// Its presence holds in a multiplayer room and over the menu too, which otherwise say
+    /// where the player is.
+    fn presence_first(&self) -> bool {
+        false
+    }
     /// How dark the map's background is behind it, when not the usual.
     fn background_dim(&self) -> Option<f32> {
         None
@@ -115,6 +120,7 @@ struct Shadow {
     name: &'static str,
     activity: &'static str,
     presence: (String, String),
+    presence_first: bool,
     background_dim: Option<f32>,
     top_bar: bool,
     calibrating: bool,
@@ -140,6 +146,7 @@ impl Shadow {
             name: screen.name(),
             activity: screen.activity(),
             presence: screen.presence(),
+            presence_first: screen.presence_first(),
             background_dim: screen.background_dim(),
             top_bar: screen.top_bar(),
             calibrating: screen.calibrating(),
@@ -170,6 +177,9 @@ impl Screen for Shadow {
     }
     fn presence(&self) -> (String, String) {
         self.presence.clone()
+    }
+    fn presence_first(&self) -> bool {
+        self.presence_first
     }
     fn background_dim(&self) -> Option<f32> {
         self.background_dim
@@ -287,6 +297,20 @@ impl State {
 
 #[cfg(test)]
 mod tests {
+    use crate::*;
+
+    /// The editor's front door (and the video editor, the same way) says what it is in a
+    /// room as well: it was matched before the room's presence when it was a `Scene` arm.
+    #[test]
+    fn a_screen_that_said_itself_in_a_room_still_does() {
+        let mut s = layout_tests::state();
+        s.mp = Some(layout_tests::session(false));
+        s.open_editor_home();
+        let own = s.scene.screen().map(|h| h.presence());
+        assert!(own.is_some(), "the front door is up");
+        assert_eq!(s.presence_text(), own);
+    }
+
     /// The screens moved out of lib.rs stay out: no `Scene` variant of their own, no state of
     /// theirs in lib.rs.
     /// Every screen moved out so far.

@@ -84,6 +84,10 @@ impl Screen for EditorHome {
         "map editor menu"
     }
 
+    fn presence_first(&self) -> bool {
+        true
+    }
+
     fn presence(&self) -> (String, String) {
         (
             tr!("Starting a map", "譜面作りを開始中", "Начинает карту").into(),
