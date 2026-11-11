@@ -152,6 +152,11 @@ pub(crate) trait Screen: Any + Send {
     fn loads_song(&self) -> bool {
         false
     }
+    /// A song is played on it on its own (`Scene::song_play`): its map and where the play
+    /// started (None: from the start).
+    fn song_play(&self) -> Option<(usize, Option<f64>)> {
+        None
+    }
     /// It is the settings (`State::in_settings`; what they were opened over is
     /// `State::behind_settings`).
     fn settings(&self) -> bool {
@@ -266,6 +271,7 @@ struct Shadow {
     watched_map: Option<usize>,
     spectating: bool,
     loads_song: bool,
+    song_play: Option<(usize, Option<f64>)>,
     holds_game: bool,
     calibration: Option<bool>,
     map_entry: Option<usize>,
@@ -318,6 +324,7 @@ impl Shadow {
             watched_map: screen.watched_map(),
             spectating: screen.spectating(),
             loads_song: screen.loads_song(),
+            song_play: screen.song_play(),
             holds_game: screen.holds_game(),
             calibration: screen.calibration(),
             map_entry: screen.map_entry(),
@@ -411,6 +418,9 @@ impl Screen for Shadow {
     }
     fn loads_song(&self) -> bool {
         self.loads_song
+    }
+    fn song_play(&self) -> Option<(usize, Option<f64>)> {
+        self.song_play
     }
     fn holds_game(&self) -> bool {
         self.holds_game
@@ -511,13 +521,22 @@ impl Scene {
         (std::mem::discriminant(self), screen)
     }
 
-    /// A song is played on it (by the player, a replay or autoplay): `Scene::Play` or a screen
-    /// with its game in `State::play` that isn't a calibration run.
+    /// A song is played on it (by the player, a replay or autoplay, on its own or in a match):
+    /// a screen with its game in `State::play` that isn't a calibration run.
     pub(crate) fn plays_song(&self) -> bool {
-        matches!(self, Scene::Play { .. })
-            || self
-                .screen()
-                .is_some_and(|s| s.holds_game() && s.calibration().is_none())
+        self.screen()
+            .is_some_and(|s| s.holds_game() && s.calibration().is_none())
+    }
+
+    /// The song played on it on its own (`screens::play::PlayScreen`): its map and where the
+    /// play started.
+    pub(crate) fn song_play(&self) -> Option<(usize, Option<f64>)> {
+        self.screen().and_then(|s| s.song_play())
+    }
+
+    /// A song is played on it on its own (`screens::play::PlayScreen`).
+    pub(crate) fn is_play(&self) -> bool {
+        self.song_play().is_some()
     }
 
     /// The screen up, if it is one of those outside lib.rs.
@@ -679,6 +698,7 @@ mod tests {
         "Spectate",
         "Loading",
         "Editor",
+        "Play",
     ];
 
     #[test]

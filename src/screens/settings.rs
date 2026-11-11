@@ -176,9 +176,7 @@ impl Screen for SettingsScreen {
     }
 
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
-        let from_game = state
-            .behind_settings()
-            .is_some_and(|prev| matches!(prev, Scene::Play { .. }));
+        let from_game = state.behind_settings().is_some_and(|prev| prev.is_play());
         state.settings_ui.krokodil = state.is_krokodil();
         if mobile::active() {
             state.draw_mobile_settings(canvas);

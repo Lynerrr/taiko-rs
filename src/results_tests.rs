@@ -396,11 +396,11 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
             s.build_frame(&mut c, Instant::now(), 853.0);
         };
         let until = Instant::now() + Duration::from_secs(10);
-        while !matches!(s.scene, Scene::Play { .. }) && Instant::now() < until {
+        while !s.scene.is_play() && Instant::now() < until {
             frame(&mut s);
             std::thread::sleep(Duration::from_millis(2));
         }
-        let (Scene::Play { .. }, Some(game)) = (&s.scene, s.play.as_deref_mut()) else {
+        let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) else {
             panic!("the play never started");
         };
         assert_eq!(
@@ -412,7 +412,7 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
         game.set_time(t);
         assert!(game.failed_early());
         game.set_fail_linger(0.0);
-        while matches!(s.scene, Scene::Play { .. }) && Instant::now() < until {
+        while s.scene.is_play() && Instant::now() < until {
             frame(&mut s);
             std::thread::sleep(Duration::from_millis(2));
         }

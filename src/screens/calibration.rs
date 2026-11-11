@@ -27,10 +27,7 @@ impl State {
     /// Offset calibration, or with `vsync` the vsync compensation's: the same notes, in vsync and
     /// with no sound, hit by sight.
     pub(crate) fn start_calibration_as(&mut self, vsync: bool) {
-        if self
-            .behind_settings()
-            .is_some_and(|prev| matches!(prev, Scene::Play { .. }))
-        {
+        if self.behind_settings().is_some_and(|prev| prev.is_play()) {
             self.toast(
                 tr!(
                     "quit the song first to calibrate",
