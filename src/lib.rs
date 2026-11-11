@@ -101,6 +101,10 @@ mod skin;
 mod social;
 mod splash;
 mod stars;
+// Not read or written by the game yet: the old files are brought in and the game switched over
+// to it in the following changes.
+#[allow(dead_code)]
+mod store;
 mod stream;
 mod style;
 mod tact;

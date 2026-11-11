@@ -19,3 +19,4 @@ mod pointer;
 mod scoring;
 mod screens;
 mod select;
+mod store;

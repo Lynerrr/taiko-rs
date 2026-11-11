@@ -55,7 +55,7 @@ pub struct Replay {
 }
 
 /// One line of the score index.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScoreRow {
     pub map_hash: u64,
     pub date: u64,
