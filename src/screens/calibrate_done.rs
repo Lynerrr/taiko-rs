@@ -1,7 +1,7 @@
 //! The offset calibration's result: what was measured, the offset it suggests, and keys to
 //! take it (Enter), leave it (Esc), go again (R) or change the click's tempo (Left/Right).
 
-use super::screen::{Key, Screen};
+use super::screen::{Frame, Key, Screen};
 use crate::*;
 
 /// The result of a calibration run.
@@ -63,11 +63,13 @@ impl Screen for CalibrateDone {
         "calibration"
     }
 
-    fn presence(&self) -> (String, String) {
-        (
-            tr!("Calibrating", "調整中", "Калибровка").into(),
-            String::new(),
-        )
+    fn presence(&self) -> Option<(String, String)> {
+        Some({
+            (
+                tr!("Calibrating", "調整中", "Калибровка").into(),
+                String::new(),
+            )
+        })
     }
 
     fn background_dim(&self) -> Option<f32> {
@@ -118,7 +120,7 @@ impl Screen for CalibrateDone {
         }
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
         let current = if self.vsync {
             state.cfg.vsync_tune_ms
         } else {

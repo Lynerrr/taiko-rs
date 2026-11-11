@@ -11,6 +11,18 @@ use std::any::Any;
 
 use crate::*;
 
+/// What `build_frame` worked out for this frame before handling the media keys and the rest,
+/// which a screen's frame uses as the `Scene` arm did.
+pub(crate) struct Frame<'a> {
+    pub(crate) now: Instant,
+    /// `State::preview_target`.
+    pub(crate) preview_target: Option<usize>,
+    /// The player hosts the room and no match is on.
+    pub(crate) lobby_host: bool,
+    /// "Playfield 1280x720 ...": `State::playfield_label`.
+    pub(crate) size_label: &'a str,
+}
+
 /// A key pressed, as a screen gets it.
 #[derive(Clone, Copy)]
 pub(crate) struct Key<'a> {
@@ -30,7 +42,8 @@ pub(crate) trait Screen: Any + Send {
     /// What the player is doing on it, for the status line friends see.
     fn activity(&self) -> &'static str;
     /// The same for Discord, in the player's language, and the map it is about (or nothing).
-    fn presence(&self) -> (String, String);
+    /// None: what song select would say.
+    fn presence(&self) -> Option<(String, String)>;
     /// Its presence holds in a multiplayer room and over the menu too, which otherwise say
     /// where the player is.
     fn presence_first(&self) -> bool {
@@ -85,6 +98,23 @@ pub(crate) trait Screen: Any + Send {
     fn takes_every_key(&self) -> bool {
         false
     }
+    /// It was opened over the multiplayer lobby: the lobby's map is the one it is about.
+    fn over_lobby(&self) -> bool {
+        false
+    }
+    /// It is part of song select (`State::in_song_select`): the song list's pointer, the
+    /// preview panel and the map's stars work on it.
+    fn song_select(&self) -> bool {
+        false
+    }
+    /// The map it is about is song select's (its offset, the map's own skin).
+    fn map_from_song_select(&self) -> bool {
+        false
+    }
+    /// Settings can open over it.
+    fn allows_settings(&self) -> bool {
+        false
+    }
     /// It covers the screen where the friends tab would go (F9 still opens the panel).
     fn covers_social_tab(&self) -> bool {
         false
@@ -109,9 +139,9 @@ pub(crate) trait Screen: Any + Send {
     fn mouse_button(&mut self, _state: &mut State, _pressed: bool) -> bool {
         false
     }
-    /// Its frame at `now`: brings it up to date and draws it over the background. Some: the
+    /// Its frame: brings it up to date and draws it over the background. Some: the
     /// scene to go to once the frame is drawn.
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, now: Instant) -> Option<Scene>;
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene>;
 }
 
 /// Holds a screen's place while the screen handles something, answering as it would.
@@ -119,7 +149,7 @@ struct Shadow {
     #[cfg(test)]
     name: &'static str,
     activity: &'static str,
-    presence: (String, String),
+    presence: Option<(String, String)>,
     presence_first: bool,
     background_dim: Option<f32>,
     top_bar: bool,
@@ -130,6 +160,10 @@ struct Shadow {
     area_editable: bool,
     wheel_scales_area: bool,
     covers_social_tab: bool,
+    over_lobby: bool,
+    song_select: bool,
+    map_from_song_select: bool,
+    allows_settings: bool,
     typing: bool,
     editor: bool,
     chip_from_right: Option<f32>,
@@ -156,6 +190,10 @@ impl Shadow {
             area_editable: screen.area_editable(),
             wheel_scales_area: screen.wheel_scales_area(),
             covers_social_tab: screen.covers_social_tab(),
+            over_lobby: screen.over_lobby(),
+            song_select: screen.song_select(),
+            map_from_song_select: screen.map_from_song_select(),
+            allows_settings: screen.allows_settings(),
             typing: screen.typing(),
             editor: screen.editor(),
             chip_from_right: screen.chip_from_right(),
@@ -175,7 +213,7 @@ impl Screen for Shadow {
     fn activity(&self) -> &'static str {
         self.activity
     }
-    fn presence(&self) -> (String, String) {
+    fn presence(&self) -> Option<(String, String)> {
         self.presence.clone()
     }
     fn presence_first(&self) -> bool {
@@ -208,6 +246,18 @@ impl Screen for Shadow {
     fn covers_social_tab(&self) -> bool {
         self.covers_social_tab
     }
+    fn over_lobby(&self) -> bool {
+        self.over_lobby
+    }
+    fn song_select(&self) -> bool {
+        self.song_select
+    }
+    fn map_from_song_select(&self) -> bool {
+        self.map_from_song_select
+    }
+    fn allows_settings(&self) -> bool {
+        self.allows_settings
+    }
     fn typing(&self) -> bool {
         self.typing
     }
@@ -229,7 +279,7 @@ impl Screen for Shadow {
     }
     // The screen itself has the input and the frame (`State::with_screen`).
     fn key(&mut self, _: &mut State, _: Key) {}
-    fn draw(&mut self, _: &mut State, _: &mut Canvas, _: Instant) -> Option<Scene> {
+    fn draw(&mut self, _: &mut State, _: &mut Canvas, _: &Frame) -> Option<Scene> {
         None
     }
 }
@@ -246,6 +296,14 @@ impl Scene {
             Scene::Other(s) => Some(s.as_ref()),
             _ => None,
         }
+    }
+
+    /// The screen up is a `T` (not a shadow holding its place).
+    pub(crate) fn screen_is<T: Screen>(&self) -> bool {
+        self.screen().is_some_and(|s| {
+            let any: &dyn Any = s;
+            any.is::<T>()
+        })
     }
 
     /// The screen up, when it is a `T` (and not a shadow holding its place).
@@ -289,8 +347,8 @@ impl State {
     }
 
     /// The frame of the screen up when it is one outside lib.rs; Some: the scene to go to.
-    pub(crate) fn draw_screen(&mut self, canvas: &mut Canvas, now: Instant) -> Option<Scene> {
-        self.with_screen(|s, state| s.draw(state, canvas, now))
+    pub(crate) fn draw_screen(&mut self, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
+        self.with_screen(|s, state| s.draw(state, canvas, frame))
             .flatten()
     }
 }
@@ -306,7 +364,7 @@ mod tests {
         let mut s = layout_tests::state();
         s.mp = Some(layout_tests::session(false));
         s.open_editor_home();
-        let own = s.scene.screen().map(|h| h.presence());
+        let own = s.scene.screen().and_then(|h| h.presence());
         assert!(own.is_some(), "the front door is up");
         assert_eq!(s.presence_text(), own);
     }
@@ -320,6 +378,7 @@ mod tests {
         "LayoutEdit",
         "HudEdit",
         "EditorHome",
+        "Preview",
     ];
 
     #[test]

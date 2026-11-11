@@ -1,7 +1,7 @@
 //! The interface editor: where each part of the play's interface goes, its size, colour and
 //! presets, on a made-up play (`State::hud_sample`), opened from settings.
 
-use super::screen::{Key, Screen};
+use super::screen::{Frame, Key, Screen};
 use crate::*;
 
 /// The interface editor up.
@@ -50,11 +50,13 @@ impl Screen for HudEdit {
         "interface editor"
     }
 
-    fn presence(&self) -> (String, String) {
-        (
-            tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
-            String::new(),
-        )
+    fn presence(&self) -> Option<(String, String)> {
+        Some({
+            (
+                tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
+                String::new(),
+            )
+        })
     }
 
     fn background_dim(&self) -> Option<f32> {
@@ -100,7 +102,7 @@ impl Screen for HudEdit {
         }
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _frame: &Frame) -> Option<Scene> {
         draw_game_area(
             canvas,
             &state.cfg,

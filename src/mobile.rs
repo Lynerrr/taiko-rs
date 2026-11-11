@@ -476,7 +476,6 @@ impl State {
                         | Scene::Lobby
                         | Scene::MpResults
                         | Scene::Calibrate { .. }
-                        | Scene::Preview { .. }
                 )
                 || self.scene.screen().is_some_and(|s| s.top_bar())
                 || (matches!(self.scene, Scene::Select) && !self.on_menu()))
@@ -521,7 +520,7 @@ impl State {
                 }
                 // Screens made of things to drag, and bars and timelines, are pressed at once
                 // and dragged, as with a mouse.
-                let dragged = matches!(self.scene, Scene::Editor(_) | Scene::Preview { .. })
+                let dragged = matches!(self.scene, Scene::Editor(_))
                     || self.scene.screen().is_some_and(|s| s.drags())
                     || matches!(
                         self.hit_at(vx, vy),

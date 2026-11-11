@@ -7,6 +7,7 @@ pub(crate) mod hud_editor;
 pub(crate) mod layout_edit;
 pub(crate) mod menu;
 pub(crate) mod play;
+pub(crate) mod preview;
 pub(crate) mod results;
 pub(crate) mod screen;
 pub(crate) mod select;
