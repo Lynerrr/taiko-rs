@@ -563,6 +563,77 @@ mod in_song_select {
     }
 
     #[test]
+    fn maps_moved_or_updated_are_followed_and_the_ones_not_here_counted_and_offered() {
+        let charts = maps::all();
+        let songs = Songs::new("collections-missing", &charts);
+        let mut s = state_with(config(), songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        let at = s
+            .library
+            .iter()
+            .position(|e| e.meta.version == "basics")
+            .unwrap();
+        // Its beatmap ID, as a submitted map has.
+        s.library[at].meta.beatmap_id = Some(555);
+        let here = collections::MapRef::of(&s.library[at]).unwrap();
+        // The same difficulty as it was before an update: another file, another MD5.
+        let before = collections::MapRef {
+            md5: "0123456789abcdef0123456789abcdef".into(),
+            folder: "Regression - old".into(),
+            file: "old.osu".into(),
+            beatmap_id: Some(555),
+            ..collections::MapRef::default()
+        };
+        let gone = |md5: &str, set_id: Option<u32>| collections::MapRef {
+            md5: md5.into(),
+            set_id,
+            version: "Gone".into(),
+            folder: "77 Some - Song".into(),
+            file: "gone.osu".into(),
+            ..collections::MapRef::default()
+        };
+        s.collections = vec![collections::Collection {
+            name: "mine".into(),
+            source: collections::Source::Local,
+            maps: vec![
+                before,
+                gone("aa", Some(77)),
+                gone("bb", Some(77)),
+                gone("cc", None),
+            ],
+        }];
+        s.show_collections(None);
+        assert_eq!(
+            s.collections[0].maps[0], here,
+            "followed to where it is now"
+        );
+        assert_eq!(here.file, "basics.osu");
+        let finder = collections::Finder::new(&s.library);
+        assert_eq!(
+            collections::missing_sets(&s.collections[0], &finder),
+            vec![(77, "77 Some - Song".to_string())],
+            "a set once, and none for the map without a set ID"
+        );
+        let mut log = String::new();
+        s.open_collections();
+        press(&mut s, KeyCode::ArrowDown, now);
+        step(&mut s, now, &mut log, "missing ones counted");
+        press(&mut s, KeyCode::Tab, now);
+        step(&mut s, now, &mut log, "its list offers them");
+        // A collection whose maps not here have no set ID: nothing to download them by.
+        s.collections[0].maps.retain(|m| m.set_id != Some(77));
+        s.list_collections();
+        s.open_collection_menu(0);
+        let last = s.select.picker_len() - 1;
+        s.select.picker = Some(last);
+        press(&mut s, KeyCode::Enter, now);
+        step(&mut s, now, &mut log, "no set ID");
+        assert!(s.downloads.is_empty());
+        assert_snapshot("collections-missing", &log);
+    }
+
+    #[test]
     fn an_osu_collection_is_copied_to_the_players_own_and_stays_osus() {
         let charts = maps::all();
         let songs = Songs::new("collections-copy", &charts);

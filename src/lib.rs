@@ -4369,6 +4369,8 @@ impl State {
             );
             self.mapinfo_sorted = false;
         }
+        // A map downloaded for a collection joins it.
+        self.list_collections();
         self.select.refilter(&self.library);
     }
 

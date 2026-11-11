@@ -52,12 +52,22 @@ impl State {
 
     /// Song select's list of `self.collections`: the player's own, then osu!'s with maps here.
     /// The one shown stays shown.
-    fn list_collections(&mut self) {
+    pub(crate) fn list_collections(&mut self) {
         let shown = self
             .select
             .collection
             .and_then(|k| self.select.collections.get(k))
             .map(|c| (c.name.clone(), c.own));
+        // The player's own follow their maps when they're moved or updated.
+        let finder = Finder::new(&self.library);
+        let own = collections::own_len(&self.collections);
+        let mut moved = false;
+        for c in &mut self.collections[..own] {
+            moved |= collections::repoint(c, &finder, &self.library);
+        }
+        if moved {
+            self.keep_own_collections();
+        }
         let found = collections::find(&self.collections, &self.library);
         self.select.collections = self
             .collections
@@ -95,19 +105,25 @@ impl State {
     /// Keeps the player's own collections in `taiko.db`, lists them again, and the songs shown
     /// if the one shown changed.
     fn collections_changed(&mut self) {
-        let own = &self.collections[..collections::own_len(&self.collections)];
-        let now = unix_now();
-        // Not before they were read from taiko.db: what this run has would replace what's there.
-        let kept = self.collections_read
-            && store::with(|s| {
-                s.transaction(|s| s.write_collections(collections::Source::Local, own, now))
-            })
-            .is_some();
-        if !kept && !cfg!(test) {
+        if !self.keep_own_collections() && !cfg!(test) {
             self.toast("collections can't be kept this run: taiko.db couldn't be read".into());
         }
         self.list_collections();
         self.select.refilter(&self.library);
+    }
+
+    /// Writes the player's own collections to `taiko.db`; whether they were. Not before they
+    /// were read from it: what this run has would replace what's there.
+    fn keep_own_collections(&mut self) -> bool {
+        if !self.collections_read {
+            return false;
+        }
+        let own = &self.collections[..collections::own_len(&self.collections)];
+        let now = unix_now();
+        store::with(|s| {
+            s.transaction(|s| s.write_collections(collections::Source::Local, own, now))
+        })
+        .is_some()
     }
 
     pub(crate) fn open_collections(&mut self) {
@@ -194,6 +210,10 @@ impl State {
         let Some(c) = self.select.collections.get(k) else {
             return;
         };
+        if row == self.select.picker_len().saturating_sub(1) && c.missing > 0 {
+            self.download_missing(k);
+            return;
+        }
         if !c.own {
             self.copy_collection(k);
             return;
@@ -339,6 +359,45 @@ impl State {
         self.collections_changed();
         self.back_to_collections(to);
         self.toast(format!("copied to your collections as {name}"));
+    }
+
+    /// Downloads the sets of collection `k`'s maps that aren't here (the ones with a set ID).
+    fn download_missing(&mut self, k: usize) {
+        let Some(at) = self.collection_at(k) else {
+            return;
+        };
+        let finder = Finder::new(&self.library);
+        let sets = collections::missing_sets(&self.collections[at], &finder);
+        self.select.picker = None;
+        if sets.is_empty() {
+            self.toast("the maps not here have no set ID to download them by".into());
+            return;
+        }
+        self.toast(match sets.len() {
+            1 => "downloading 1 set".into(),
+            n => format!("downloading {n} sets"),
+        });
+        for (id, folder) in sets {
+            // "123 Artist - Title", as osu! names a set's folder.
+            let name = folder
+                .split_once(' ')
+                .filter(|(n, _)| n.parse::<u32>().is_ok())
+                .map_or(folder.as_str(), |(_, rest)| rest);
+            let (artist, title) = name.split_once(" - ").unwrap_or(("", name));
+            self.start_download(download::SetInfo {
+                id,
+                artist: artist.to_string(),
+                title: title.to_string(),
+                creator: String::new(),
+                status: String::new(),
+                diffs: Vec::new(),
+                play_count: 0,
+                favourite_count: 0,
+                rating: 0.0,
+                ranked_date: String::new(),
+                custom: None,
+            });
+        }
     }
 
     /// Puts `maps` in the player's collection `k`, or takes them out if they're all in it.

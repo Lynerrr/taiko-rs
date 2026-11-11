@@ -3351,7 +3351,10 @@ impl Select {
         let new = || ("+ New collection".to_string(), None, false);
         let count = |c: &Shown| {
             let n = c.maps.len();
-            let mut label = format!("{}  ({n})", c.name);
+            let mut label = match c.missing {
+                0 => format!("{}  ({n})", c.name),
+                m => format!("{}  ({n}, {m} not here)", c.name),
+            };
             if !c.own {
                 label += "  osu!";
             }
@@ -3415,11 +3418,19 @@ impl Select {
                 } else {
                     &["Copy to my collections"]
                 };
-                (
-                    c.name.clone(),
-                    rows.iter().map(|r| (r.to_string(), None, false)).collect(),
-                    "Enter/click   Esc back",
-                )
+                let mut rows: Vec<PickRow> =
+                    rows.iter().map(|r| (r.to_string(), None, false)).collect();
+                if c.missing > 0 {
+                    rows.push((
+                        match c.missing {
+                            1 => "Download the map not here".into(),
+                            n => format!("Download the {n} maps not here"),
+                        },
+                        None,
+                        false,
+                    ));
+                }
+                (c.name.clone(), rows, "Enter/click   Esc back")
             }
             PickList::Delete(k) => {
                 let Some(c) = self.collections.get(*k) else {

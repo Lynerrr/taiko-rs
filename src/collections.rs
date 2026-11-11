@@ -164,15 +164,25 @@ impl Finder {
 
     /// Where map `m` is in the library, if it's there.
     pub fn at(&self, m: &MapRef) -> Option<usize> {
-        (!m.file.is_empty())
+        self.found(m).map(|(i, _)| i)
+    }
+
+    /// Where map `m` is in the library, and whether that's the folder and file it was in (else
+    /// it was moved or updated, and found by its IDs).
+    pub fn found(&self, m: &MapRef) -> Option<(usize, bool)> {
+        let by_file = (!m.file.is_empty())
             .then(|| self.by_file.get(&(lower(&m.folder), lower(&m.file))))
-            .flatten()
-            .or_else(|| m.beatmap_id.and_then(|id| self.by_id.get(&id)))
+            .flatten();
+        if let Some(&i) = by_file {
+            return Some((i, true));
+        }
+        m.beatmap_id
+            .and_then(|id| self.by_id.get(&id))
             .or_else(|| {
                 m.set_id
                     .and_then(|set| self.by_version.get(&(set, lower(&m.version))))
             })
-            .copied()
+            .map(|&i| (i, false))
     }
 }
 
@@ -216,6 +226,39 @@ impl MapRef {
             file: name(e.path.file_name()),
         })
     }
+}
+
+/// Points collection `c`'s maps that were moved or updated at where they are now (their new
+/// folder, file and MD5), so they're found by their file again and the MD5 is the map's now.
+/// Whether any changed.
+pub fn repoint(c: &mut Collection, finder: &Finder, library: &[Entry]) -> bool {
+    let mut changed = false;
+    for m in &mut c.maps {
+        if let Some((i, false)) = finder.found(m)
+            && let Some(now) = MapRef::of(&library[i])
+        {
+            *m = now;
+            changed = true;
+        }
+    }
+    // Two old versions of a map now the same one: kept once.
+    if changed {
+        let mut seen = HashSet::new();
+        c.maps.retain(|m| seen.insert(m.md5.clone()));
+    }
+    changed
+}
+
+/// The sets of collection `c`'s maps that aren't in the library: (set ID, the folder they were
+/// in), once each.
+pub fn missing_sets(c: &Collection, finder: &Finder) -> Vec<(u32, String)> {
+    let mut seen = HashSet::new();
+    c.maps
+        .iter()
+        .filter(|m| finder.at(m).is_none())
+        .filter_map(|m| Some((m.set_id?, m.folder.clone())))
+        .filter(|(set, _)| seen.insert(*set))
+        .collect()
 }
 
 /// The longest name a collection can have, in characters.
