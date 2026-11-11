@@ -1173,8 +1173,8 @@ fn assert_every_screen_fits() {
         None,
         s.cfg.mods,
     ));
+    s.play = Some(Box::new(game));
     s.scene = Scene::Play {
-        game: Box::new(game),
         entry: 0,
         from: None,
     };

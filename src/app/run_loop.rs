@@ -744,7 +744,9 @@ impl App {
                 s.right_scroll = false;
                 // Alt is released in the other window; don't keep it "held" here.
                 s.modifiers_alt = false;
-                if let (Scene::Play { game, .. }, false) = (&mut s.scene, s.auto) {
+                if let (Scene::Play { .. }, Some(game), false) =
+                    (&s.scene, s.play.as_deref_mut(), s.auto)
+                {
                     game.pause(sound(&s.audio));
                 }
             }
@@ -1144,6 +1146,7 @@ impl State {
             library,
             select,
             scene: Scene::Select,
+            play: None,
             audio,
             toast: None,
             medals: debug::medals_from_env().map(|view| medals::View {
