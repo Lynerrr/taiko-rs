@@ -1,8 +1,9 @@
-//! Each beatmap set's status on osu! as the mirrors told it, kept in the cache folder so asking
-//! the mirrors once is enough: sorting and searching by status work from it at the next start
+//! Each beatmap set's status on osu! as the mirrors told it, kept in the player's database
+//! (`taiko.db`; without one, `set-status.tsv` in the cache folder) so asking the mirrors once is
+//! enough: sorting and searching by status work from it at the next start
 //! (and for every set, since the sweep in the background asks about them all, slowly).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// What the cache keeps for a set the mirrors don't know.
@@ -19,7 +20,12 @@ pub struct Cache {
     /// Set ID -> (status, when it was asked: Unix seconds).
     sets: HashMap<u32, (String, u64)>,
     dirty: bool,
+    /// The sets answered since the cache was last written (the database writes only those).
+    changed: HashSet<u32>,
 }
+
+/// The `meta` key set once `set-status.tsv` has been brought into the player's database.
+const MOVED: &str = "set_status_from_file";
 
 pub fn now() -> u64 {
     std::time::SystemTime::now()
@@ -38,10 +44,45 @@ impl Cache {
         if cfg!(test) {
             return Cache::default();
         }
-        file()
-            .and_then(|f| std::fs::read_to_string(f).ok())
-            .map(|t| Cache::parse(&t))
-            .unwrap_or_default()
+        let text = || file().and_then(|f| std::fs::read_to_string(f).ok());
+        if let Some(cache) = crate::store::with(|s| Cache::load_from(s, text)) {
+            return cache;
+        }
+        text().map(|t| Cache::parse(&t)).unwrap_or_default()
+    }
+
+    /// The cache as the player's database keeps it; the first time, filled from the file's
+    /// `text` (which is left as it is).
+    pub fn load_from(
+        store: &mut crate::store::Store,
+        text: impl FnOnce() -> Option<String>,
+    ) -> Result<Cache, String> {
+        if store.meta(MOVED)?.is_none() {
+            let old = text().map(|t| Cache::parse(&t)).unwrap_or_default();
+            store.put_set_statuses(
+                old.sets
+                    .iter()
+                    .map(|(&set, (s, at))| (set, s.as_str(), *at)),
+            )?;
+            store.set_meta(MOVED, "1")?;
+        }
+        Ok(Cache {
+            sets: store.set_statuses()?,
+            ..Cache::default()
+        })
+    }
+
+    /// Writes the answers since the last write into the player's database.
+    pub fn save_to(&mut self, store: &mut crate::store::Store) -> Result<(), String> {
+        let rows: Vec<(u32, &str, u64)> = self
+            .changed
+            .iter()
+            .filter_map(|set| self.sets.get(set).map(|(s, at)| (*set, s.as_str(), *at)))
+            .collect();
+        store.put_set_statuses(rows)?;
+        self.changed.clear();
+        self.dirty = false;
+        Ok(())
     }
 
     fn parse(text: &str) -> Cache {
@@ -55,12 +96,18 @@ impl Cache {
                 (!status.is_empty()).then_some((set, (status, at)))
             })
             .collect();
-        Cache { sets, dirty: false }
+        Cache {
+            sets,
+            ..Cache::default()
+        }
     }
 
     /// Writes the cache if it changed since it was last written.
     pub fn save(&mut self) {
         if !self.dirty {
+            return;
+        }
+        if crate::store::with(|s| self.save_to(s)).is_some() {
             return;
         }
         self.dirty = false;
@@ -86,6 +133,7 @@ impl Cache {
     pub fn put(&mut self, set: u32, status: &str, at: u64) {
         self.sets.insert(set, (status.to_string(), at));
         self.dirty = true;
+        self.changed.insert(set);
     }
 
     /// The status the mirrors gave (not `MISSING`).

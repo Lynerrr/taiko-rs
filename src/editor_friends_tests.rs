@@ -17,7 +17,7 @@ fn editing() -> State {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("map.osu");
     std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
-    s.scene = Scene::Editor(Box::new(View::open(path, 0).unwrap()));
+    s.scene = MapEditor::scene(Box::new(View::open(path, 0).unwrap()));
     s.mp_menu.account = Some("me".into());
     s
 }
@@ -27,7 +27,7 @@ fn toggle_rect(s: &mut State) -> Option<[f32; 4]> {
     s.build_frame(&mut c, Instant::now(), 853.3);
     s.hits
         .iter()
-        .find(|h| h.hit == render::Hit::SocialToggle)
+        .find(|h| h.hit == crate::hit::Hit::SocialToggle)
         .map(|h| h.rect)
 }
 
@@ -35,15 +35,18 @@ fn toggle_rect(s: &mut State) -> Option<[f32; 4]> {
 fn the_editor_scenes_have_no_edge_tab() {
     let mut s = editing();
     assert_eq!(s.social_tab_middle(), None);
-    s.scene = Scene::EditorHome(Box::new(editor::home::Home::new(&[], "me")));
+    s.scene = crate::screens::editor_home::EditorHome::scene(editor::home::Home::new(&[], "me"));
     assert_eq!(s.social_tab_middle(), None);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     assert!(s.social_tab_middle().is_some(), "other screens keep it");
 }
 
 #[test]
 fn the_chip_sits_in_the_menu_bar_clear_of_the_title_and_toggles_the_panel() {
-    crate::render::set_animations(false);
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
     let mut s = editing();
     let [x, y, w, h] = toggle_rect(&mut s).expect("a chip to click");
     assert!(y + h <= 14.0, "inside the menu bar");
@@ -53,15 +56,18 @@ fn the_chip_sits_in_the_menu_bar_clear_of_the_title_and_toggles_the_panel() {
         "inside the room the title leaves it"
     );
     assert!(!s.social.open);
-    s.click(render::Hit::SocialToggle, None);
+    s.click(crate::hit::Hit::SocialToggle, None);
     assert!(s.social.open);
-    s.click(render::Hit::SocialToggle, None);
+    s.click(crate::hit::Hit::SocialToggle, None);
     assert!(!s.social.open);
 }
 
 #[test]
 fn the_open_panel_leaves_editor_keys_alone_until_a_field_is_clicked() {
-    crate::render::set_animations(false);
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
     let mut s = editing();
     s.open_social();
     assert!(!s.social_keys());
@@ -72,7 +78,7 @@ fn the_open_panel_leaves_editor_keys_alone_until_a_field_is_clicked() {
     assert!(!s.social.open);
     // Clicking the message box gives the panel the keys.
     s.open_social();
-    s.click(render::Hit::TextField, None);
+    s.click(crate::hit::Hit::TextField, None);
     assert!(s.social_keys());
     s.key_inner(KeyCode::KeyA, false, Some("a"), Instant::now(), None);
     assert_eq!(s.social.input, "a");
@@ -84,10 +90,13 @@ fn the_open_panel_leaves_editor_keys_alone_until_a_field_is_clicked() {
 
 #[test]
 fn elsewhere_the_open_panel_takes_the_keyboard_at_once() {
-    crate::render::set_animations(false);
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
     let mut s = crate::layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_social();
     assert!(s.social_keys());
 }

@@ -1,0 +1,74 @@
+text   17,17   < MENU
+text  116,17   search...
+text  409,17   Sort: artist
+text  908,17   7 songs, 7 maps
+text   52,69   basics
+text  579,70   basics
+text  481,72   1 diff
+text  579,89   Regression
+text   52,96   Regression  |  mapped by tests
+text  579,108  mapped by tests
+text  969,108  NOT SUBMITTED
+text  580,127  [basics]
+text 1017,127  3.08
+text   42,133  basics
+text  490,133  3.08
+text  579,145  OD
+text  600,145  5.0
+text  630,145  BPM
+text  658,145  200
+text  688,145  Length
+text  736,145  0:09
+text  579,157  Notes
+text  620,157  64
+text  644,157  Don
+text  671,157  32
+text  695,157  Kat
+text  722,157  32
+text  579,169  SS
+text  600,169  93pp
+text  637,169  99%
+text  664,169  82pp
+text  702,169  98%
+text  729,169  69pp
+text   52,171  big-notes
+text  481,174  1 diff
+text   52,198  Regression  |  mapped by tests
+text   52,229  rolls-and-swells
+text  481,232  1 diff
+text   52,256  Regression  |  mapped by tests
+text   52,287  sv-and-kiai
+text  481,290  1 diff
+text   52,314  Regression  |  mapped by tests
+text  575,320  0:00 / 0:10
+text  913,320  peak 7.0 notes/s at 0:01
+text  762,336  tap or drag to scroll
+text   52,345  stream
+text  481,348  1 diff
+text   52,372  Regression  |  mapped by tests
+text   55,403  low-od
+text  481,406  1 diff
+text   52,430  Regression  |  mapped by tests
+text   75,451  Mods
+text  265,451  Random
+text  452,451  1.00x
+text  618,451  Leaderboard >
+text  922,451  Play
+hit     0,0      96x46   ToMenu
+hit   104,0     275x46   TextField
+hit   387,0     168x46   SortList
+hit     4,62    547x58   SongRow(0)
+hit    30,120   517x44   SongRow(0)
+hit     4,164   547x58   SongRow(1)
+hit     4,222   547x58   SongRow(2)
+hit     4,280   547x58   SongRow(3)
+hit     4,338   547x58   SongRow(4)
+hit     4,396   547x26   SongRow(5)
+hit     0,434   192x46   ModsButton
+hit   200,434   192x46   Key(F2)
+hit   399,434   153x46   RateOpen
+hit   560,434   249x46   BoardPage
+hit   818,434   249x46   Key(Enter)
+hit   939,105    16x13   SelectLike
+hit   575,187   482x80   Preview
+hit   573,273   486x44   Preview

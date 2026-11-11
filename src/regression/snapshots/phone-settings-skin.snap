@@ -1,0 +1,51 @@
+text  110,12   SETTINGS
+text   17,17   < BACK
+text  739,17   Search settings
+text   14,77   LIBRARY
+text  964,77   <
+text 1023,77   >
+text  236,80   Skin
+text  854,80   built-in
+text   14,133  GAMEPLAY
+text  964,139  <
+text 1023,139  >
+text  236,142  Skin parts
+text  741,142  notes from the skin
+text   14,189  VIEW
+text  236,204  Skins folder
+text  940,204  Tap to open
+text   16,245  INPUT
+text  236,266  Beatmap skins
+text   14,301  OFFSET
+text  236,328  Hit flash
+text   14,357  AUDIO
+text  228,380  Colours
+text   14,413  VIDEO
+text  964,421  <
+text 1023,421  >
+text  236,424  Note colours
+text  865,424  classic
+text  236,436  Enter opens the list. osu! skins from osu!'s or taiko.rs's Skins folder.
+text   14,469  SKIN
+hit     0,0      96x46   Key(Escape)
+hit   727,0     340x46   SettingsSearch
+hit     0,58    212x50   SettingsSection(0)
+hit     0,114   212x50   SettingsSection(1)
+hit     0,170   212x50   SettingsSection(2)
+hit     0,226   212x50   SettingsSection(3)
+hit     0,282   212x50   SettingsSection(4)
+hit     0,338   212x50   SettingsSection(5)
+hit     0,394   212x50   SettingsSection(6)
+hit     0,450   212x30   SettingsSection(7)
+hit   222,58    845x56   SettingRow(104)
+hit   947,64     50x44   SettingStep(104, -1)
+hit  1003,64     50x44   SettingStep(104, 1)
+hit   222,120   845x56   SettingRow(105)
+hit   947,126    50x44   SettingStep(105, -1)
+hit  1003,126    50x44   SettingStep(105, 1)
+hit   222,182   845x56   SettingRow(106)
+hit   222,244   845x56   SettingRow(107)
+hit   222,306   845x56   SettingRow(108)
+hit   222,402   845x20   SettingRow(109)
+hit   947,408    50x44   SettingStep(109, -1)
+hit  1003,408    50x44   SettingStep(109, 1)

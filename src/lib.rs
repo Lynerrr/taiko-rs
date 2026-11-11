@@ -3,26 +3,31 @@
 
 // First, so `tr!` is there for every module after it.
 #[macro_use]
-mod lang;
+extern crate taiko_proto;
+use taiko_proto::lang;
 mod admin;
 #[cfg(target_os = "android")]
 mod android;
+mod app;
 mod audio;
 mod audiolog;
-mod autoplay;
+use taiko_logic::autoplay;
 mod avatars;
 mod beatmap;
+#[cfg(test)]
+mod beatmap_tests;
 mod browse;
 mod calibrate;
 mod changelog;
-mod changelog_entry;
+use taiko_proto::changelog_entry;
 mod clipboard;
-mod clock;
+mod collections;
+use taiko_logic::clock;
 mod config;
 mod cursor;
 mod custom;
 mod debug;
-mod difficulty;
+use taiko_logic::difficulty;
 mod discord;
 mod download;
 mod drum_nav;
@@ -32,10 +37,11 @@ mod editor_friends_tests;
 #[cfg(test)]
 mod editor_test_play_tests;
 mod folder_watch;
-mod font;
+use taiko_logic::font;
 mod game;
-mod genres;
+use taiko_logic::genres;
 mod guide;
+mod hit;
 mod hud;
 mod hud_edit;
 mod idle;
@@ -54,12 +60,17 @@ mod media;
 mod menu;
 mod menu_notes;
 mod mobile;
-mod mods;
+mod mod_setup;
+use taiko_logic::mods;
+#[cfg(test)]
+mod mods_tests;
 mod multiplayer;
+use mod_setup::multiverse::LookText as _;
 mod multiverse;
-mod net;
+use taiko_proto::net;
 mod od_override;
-mod online;
+mod offline;
+use taiko_proto::online;
 mod osudb;
 #[cfg(test)]
 mod perf_audit;
@@ -67,14 +78,19 @@ mod pictures;
 mod player;
 mod playlist;
 mod pp;
+#[cfg(test)]
+mod pp_tests;
 mod preview;
 mod profile;
-mod recalc;
+#[cfg(test)]
+mod regression;
 mod render;
 #[cfg(test)]
 mod results_tests;
 mod scores;
-mod search;
+mod screens;
+use taiko_logic::library::search;
+mod services;
 mod setstatus;
 mod settings;
 mod settings_search;
@@ -86,12 +102,12 @@ mod skin;
 mod social;
 mod splash;
 mod stars;
+mod store;
 mod stream;
 mod style;
 mod tact;
 #[doc(hidden)]
 pub mod tko;
-mod tls;
 mod ui;
 mod update;
 mod video;
@@ -115,94 +131,70 @@ use winit::window::{Fullscreen, Window, WindowId};
 use audio::{Engine, Track};
 use beatmap::Beatmap;
 use config::{Config, FPS_CAPS, RATE_RANGE};
-use game::{Game, PAUSE_ITEMS};
+use game::{Game, PAUSE_ITEMS, Play};
+use hit::Canvas;
 use layout::{Area, Grip};
 use library::Entry;
 use mods::Mods;
-use render::{Canvas, PresentChoice, Renderer, accent, rgba, themed};
+use net::ItemText;
+use render::{PresentChoice, Renderer, accent, rgba, themed};
 use settings::{Choices, Dropdown, Edit, Item, Kind, PresetAction, SettingsUi};
 use ui::{Results, Select, SelectAction};
 use winit::window::CursorIcon;
 
+use app::crash::{CRASH_SCENE, SEND_CRASH_REPORTS};
+pub use app::gpu::graphics_backends;
+use app::input::{ime_has_key, pointer_wake_px};
+use app::run_loop::{FileDrag, UserEvent};
+pub use app::shell::{desktop_main, recalc_pp};
+use audio::sound;
+use config::fresh_seed;
+use download::{download_text, map_download};
+use layout::draw_game_area;
+use library::{
+    Scanned, download_dir, find_map, find_score_map, load_plays, main_maps, song_inputs, start_scan,
+};
+use multiplayer::{lobby_seed, map_info, mod_settings, use_mod_settings};
+use screens::editor_home::EditorHome;
+use screens::hud_editor::HudEdit;
+use screens::loading::Loading;
+use screens::lobby::Lobby;
+use screens::map_editor::MapEditor;
+use screens::menu::{update_badge, updating_badge};
+use screens::mp_menu::MpMenu;
+use screens::mp_results::MpResults;
+use screens::mp_wait::MpWait;
+use screens::play::{FAIL_RESTART_LINGER, PlayScreen, draw_spectate_all, pause_label, pause_width};
+use screens::preview::Preview;
+use screens::results::{ResultsScreen, results_job, results_title};
+use screens::select::leaderboard::{
+    BOARD_HEAD, BOARD_ROW, draw_divider, draw_leaderboard, draw_online_leaderboard, fetch_board,
+    misses_and_age,
+};
+use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
+use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};
+use screens::select::song_select::SongSelect;
+use screens::settings::{
+    SettingsScreen, browse_text, built_in_text, enter_to_start, none_text, off_text,
+    offset_scale_name, on_text, parse_number, picking_text, scroll_in_select, short_path,
+    size_char, type_path,
+};
+use screens::spectate::{Spectate, SpectateView};
+use screens::video_edit::VideoEdit;
+use screens::watch::Watch;
+use screens::{fmt_time, shows_own_background};
+use services::jobs::Job;
+#[cfg(not(windows))]
+use services::system::file_uri;
+use services::system::{map_url, open_url, profile_url};
+use video::no_ffmpeg;
+
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
 
 enum Scene {
-    Select,
-    /// `from`: map time to start at (picked on the song select timeline), None = from the start.
-    Loading {
-        rx: Receiver<Loaded>,
-        label: String,
-        entry: usize,
-        from: Option<f64>,
-        /// A retry: the intro was heard already, so it's skipped.
-        retry: bool,
-    },
-    Play {
-        game: Box<Game>,
-        entry: usize,
-        from: Option<f64>,
-    },
-    Results {
-        results: Box<Results>,
-        entry: usize,
-        from: Option<f64>,
-    },
-    /// Settings tab; `prev` is restored on exit (song select, or a paused game).
-    Settings {
-        prev: Box<Scene>,
-    },
-    /// Offset calibration run; `back` is where to return (the settings tab).
-    /// Offset calibration (by ear), or with `vsync` the vsync compensation's (by sight).
-    Calibrate {
-        game: Box<Game>,
-        back: Box<Scene>,
-        vsync: bool,
-    },
-    CalibrateDone {
-        estimate: calibrate::Estimate,
-        back: Box<Scene>,
-        vsync: bool,
-    },
-    /// Full-screen editor for the playfield area, opened from settings.
-    LayoutEdit {
-        back: Box<Scene>,
-    },
-    /// The interface editor (see `State::hud_edit`), opened from settings.
-    HudEdit {
-        back: Box<Scene>,
-    },
-    /// The autoplay preview over the whole screen (in the playfield area, which can be moved
-    /// and resized here), with the timeline. `back`: song select or the multiplayer lobby.
-    Preview {
-        back: Box<Scene>,
-    },
-    /// Download tab: search the mirrors, download sets into the Songs folder.
-    Download,
-    /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
-    MpMenu,
-    Lobby,
-    /// `from`: map time the match starts at.
-    MpWait {
-        rx: Option<Receiver<Loaded>>,
-        loaded: Option<Box<(Beatmap, Arc<Track>)>>,
-        start: Option<Instant>,
-        from: Option<f64>,
-    },
-    MpPlay {
-        game: Box<Game>,
-        quit_armed: Option<Instant>,
-    },
-    /// Watching the match in progress.
-    Spectate(Box<SpectateView>),
-    /// Watching a friend's solo play.
-    Watch(Box<WatchView>),
-    /// Turning a replay into a video: cut, crop, size, export.
-    VideoEdit(Box<video::Editor>),
-    /// The map editor, editing one difficulty.
-    Editor(Box<editor::view::View>),
-    /// The editor's front door: a new map from a song, or one to go on with.
-    EditorHome(Box<editor::home::Home>),
-    MpResults,
+    /// A screen that lives outside lib.rs (`screens::screen`): song select is
+    /// `screens::select::SongSelect`.
+    Other(Box<dyn screens::screen::Screen>),
 }
 
 /// How slowly a new background comes in on the main menu, where it's the whole picture.
@@ -210,8 +202,6 @@ const MENU_BACKGROUND_FADE_MS: f32 = 900.0;
 
 /// How long "Reset map offsets" waits for its second press.
 const RESET_CONFIRM: Duration = Duration::from_secs(4);
-/// How long a new player stays on the guide's welcome and offset pages before moving on.
-const GUIDE_HOLD: Duration = Duration::from_secs(4);
 
 /// How far the player's arrow keys and wheel move the music.
 const MUSIC_SEEK_MS: f64 = 5000.0;
@@ -222,58 +212,6 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 /// How often the open song list asks again which of its custom sets the website approved.
 const CUSTOM_REFRESH: Duration = Duration::from_secs(2 * 60);
 
-/// How far behind the live match spectators watch, so players' presses arrive in time.
-const SPECTATE_DELAY: Duration = Duration::from_millis(1500);
-
-struct SpectateView {
-    rx: Option<Receiver<Loaded>>,
-    loaded: Option<(Beatmap, Arc<Track>)>,
-    /// When the match started (local clock), its start point and speed.
-    start: Instant,
-    from: Option<f64>,
-    rate: f64,
-    mods: Mods,
-    /// The match's map as the room named it, with the host's mod settings.
-    map: net::MapInfo,
-    players: Vec<(u32, String)>,
-    /// One game per player, fed with their presses.
-    games: Vec<(u32, Box<Game>)>,
-    /// The player shown, or None for everyone at once.
-    focus: Option<usize>,
-    /// Presses that arrived before the games existed.
-    pending: std::collections::HashMap<u32, Vec<(f64, u8)>>,
-    /// Players who skipped the intro; once all have, so does the view.
-    skipped: std::collections::HashSet<u32>,
-    skip_done: bool,
-    /// Watching everyone: what each player's strip shows (see `draw_spectate_all`), and when it
-    /// was last drawn.
-    zones: Vec<[f32; 4]>,
-    zones_at: Option<Instant>,
-    /// The match is over (the results came); we're `SPECTATE_DELAY` behind, so the last seconds
-    /// are still to be watched.
-    ended: Option<Instant>,
-}
-
-impl SpectateView {
-    /// When every player has skipped the intro, skips it too, staying `SPECTATE_DELAY` behind.
-    fn follow_skip(&mut self, audio: Option<&audio::Engine>, offset: f64) {
-        if self.skip_done
-            || self.games.is_empty()
-            || !self.players.iter().all(|(id, _)| self.skipped.contains(id))
-        {
-            return;
-        }
-        self.skip_done = true;
-        let target =
-            self.games[0].1.skip_target() - SPECTATE_DELAY.as_secs_f64() * 1000.0 * self.rate;
-        if self.games[0].1.time < target {
-            for (_, g) in &mut self.games {
-                g.seek(target, audio, offset);
-            }
-        }
-    }
-}
-
 /// How far behind a watched friend the view plays (room for the network).
 const WATCH_DELAY_MS: f64 = 2000.0;
 
@@ -282,8 +220,8 @@ struct WatchView {
     player: String,
     play: Option<online::SoloPlay>,
     entry: Option<usize>,
-    rx: Option<Receiver<Loaded>>,
-    game: Option<Box<Game>>,
+    rx: Job<Loaded>,
+    game: Option<Box<Play>>,
     /// Presses that arrived before the game existed.
     inputs: Vec<(f64, u8)>,
     /// Their map time when last heard, when that was, and whether they're paused.
@@ -312,7 +250,7 @@ impl WatchView {
             player,
             play: None,
             entry: None,
-            rx: None,
+            rx: Job::idle(),
             game: None,
             inputs: Vec::new(),
             clock: (-1.0e9, Instant::now(), true),
@@ -330,7 +268,7 @@ impl WatchView {
         self.inputs = start.inputs;
         self.clock = (start.t, Instant::now(), start.paused);
         self.game = None;
-        self.rx = None;
+        self.rx.cancel();
         self.entry = None;
         self.held = false;
         self.fetching = false;
@@ -354,33 +292,19 @@ impl WatchView {
         match (&self.play, self.entry) {
             (None, _) => {
                 let player = &self.player;
-                tr!("waiting for {player} to play something..."; player)
+                tr!("waiting for {player} to play something...", "{player}が何かプレイするのを待っています...", "ждём, когда {player} начнёт играть..."; [] [player])
             }
-            (Some(_), None) if self.fetching => tr!("getting the map...").into(),
-            (Some(_), None) => tr!("looking for the map...").into(),
-            (Some(_), Some(_)) => tr!("loading...").into(),
+            (Some(_), None) if self.fetching => {
+                tr!("getting the map...", "譜面を取得中...", "получаем карту...").into()
+            }
+            (Some(_), None) => tr!(
+                "looking for the map...",
+                "譜面を探しています...",
+                "ищем карту..."
+            )
+            .into(),
+            (Some(_), Some(_)) => tr!("loading...", "読み込み中...", "загрузка...").into(),
         }
-    }
-}
-
-/// How far along the download of the set `m` is from is, if there's one (None inside: it's going,
-/// its size not known yet).
-fn map_download(downloads: &[download::Job], m: &net::MapInfo) -> Option<Option<f32>> {
-    downloads
-        .iter()
-        .find(|j| {
-            j.set.is_osu_set(m.set_id) || (j.set.title == m.title && j.set.artist == m.artist)
-        })
-        .map(download::Job::fraction)
-}
-
-fn download_text(done: Option<f32>) -> String {
-    match done {
-        Some(f) => {
-            let percent = f * 100.0;
-            tr!("downloading {percent:.0}%"; percent)
-        }
-        None => tr!("downloading...").into(),
     }
 }
 
@@ -425,6 +349,14 @@ struct State {
     library: Vec<Entry>,
     select: Select,
     scene: Scene,
+    /// The game of the song, match or calibration up (`PlayScreen`, `MpPlay`, `Calibration`),
+    /// kept while the settings are open over its pause menu. `State::game` reads it.
+    play: Option<Box<Play>>,
+    /// The calibration run's last note has gone by: it finishes after this frame.
+    calibration_over: bool,
+    /// The scene the settings were opened over, while they are up (`State::behind_settings`);
+    /// closing them goes back to it. Left over when the settings went another way.
+    behind: Option<Box<Scene>>,
     audio: Option<Engine>,
     toast: Option<Toast>,
     /// What an input method (Japanese, ...) is composing, not typed yet: shown until it's
@@ -447,20 +379,13 @@ struct State {
     /// A screen just opened fades in: how long it has been showing (ms).
     screen_fade: Option<f32>,
     /// The screen last drawn, to fade in the next one.
-    shown_scene: Option<std::mem::Discriminant<Scene>>,
+    shown_scene: Option<screens::screen::SceneKind>,
     /// What drifts behind it.
     menu_notes: menu_notes::Notes,
     /// When dragging the player's timeline last moved the music.
     music_seeked: Option<Instant>,
-    /// The first steps guide is up, on this page.
-    guide: Option<usize>,
-    /// The drum (`Config::keys`) the guide is waiting for a new key for.
-    guide_binding: Option<usize>,
-    /// The page to go back to once calibrating from the guide is done.
-    guide_after: Option<usize>,
-    /// The page on screen and since when, and the pages that were up for all of `GUIDE_HOLD`.
-    guide_shown: Option<(usize, Instant)>,
-    guide_read: [bool; guide::PAGES],
+    /// The first steps guide: its page, if it's up, and what it waits for.
+    guide: guide::Tour,
     /// When "Reset map offsets" was pressed once, waiting for the second.
     reset_armed: Option<Instant>,
     /// The music player, instead of the main menu.
@@ -475,7 +400,7 @@ struct State {
     window_handle: Option<usize>,
     updater: update::Updater,
     /// Clickable areas of the last frame drawn.
-    hits: Vec<render::HitBox>,
+    hits: Vec<hit::HitBox>,
     browse: browse::Browse,
     downloads: Vec<download::Job>,
     /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
@@ -507,7 +432,7 @@ struct State {
     /// Local scores (index of saved replays).
     scores: Vec<scores::ScoreRow>,
     /// Working out the pp of scores saved before pp (started once, on the first frame).
-    pp_backfill: Option<Receiver<Vec<(PathBuf, f64)>>>,
+    pp_backfill: Job<Vec<(PathBuf, f64)>>,
     pp_backfill_started: bool,
     /// Plays on their way to the online leaderboards.
     submits: Vec<Receiver<Result<online::Reply, String>>>,
@@ -517,7 +442,7 @@ struct State {
     /// The same on the Relax boards, which count apart.
     me_relax: Option<(f64, Option<u32>)>,
     me_for: String,
-    me_fetch: Option<Receiver<Result<online::Profile, String>>>,
+    me_fetch: Job<Result<online::Profile, String>>,
     /// The song select leaderboard shows the server's scores, not the local ones.
     board_online: bool,
     /// A player's profile, over everything else.
@@ -542,15 +467,15 @@ struct State {
     mod_select: Option<usize>,
     /// The mod customization over the mod select: the Multiverse tab or the Shapeshift tab (at
     /// most one is open).
-    universe_setup: Option<multiverse::Setup>,
-    shapeshift_setup: Option<shapeshift::Setup>,
+    universe_setup: Option<mod_setup::multiverse::Setup>,
+    shapeshift_setup: Option<mod_setup::shapeshift::Setup>,
     random_setup: Option<String>,
     /// The name being typed for a new mod preset (S or "+ Save" in the mod select).
     preset_naming: Option<String>,
     /// The mod preset a right-click asked to delete, waiting for a yes.
     preset_deleting: Option<usize>,
-    tact_setup: Option<tact::Setup>,
-    od_setup: Option<od_override::Setup>,
+    tact_setup: Option<mod_setup::tact::Setup>,
+    od_setup: Option<mod_setup::od_override::Setup>,
     /// Replay files of the leaderboard rows drawn this frame, and the online rows.
     leaderboard: Vec<PathBuf>,
     /// The leaderboard's rows scrolled past, for which map and tab (a new one starts at the
@@ -561,14 +486,11 @@ struct State {
     board_rect: Option<[f32; 4]>,
     /// A song select divider being dragged: which, where the pointer started (virtual units)
     /// and the size it had then; and the last press on one (a second soon after resets it).
-    split_drag: Option<(render::Hit, f32, f32)>,
-    split_click: Option<(render::Hit, Instant)>,
+    split_drag: Option<(hit::Hit, f32, f32)>,
+    split_click: Option<(hit::Hit, Instant)>,
     online_leaderboard: Vec<online::OnlineScore>,
-    /// A video export in progress, and the editor's last message.
+    /// A video export in progress (`screens::video_edit`).
     export: Option<video::Export>,
-    video_status: String,
-    /// The video last exported from the open editor.
-    last_video: Option<PathBuf>,
     /// When the background image last changed (it fades in).
     bg_changed: Option<Instant>,
     /// A newly loaded skin's note images, for the render thread to upload.
@@ -595,7 +517,7 @@ struct State {
     scrollbar_drag: bool,
     /// Right button pressed on song select and not moved yet (virtual units, what's under it):
     /// released there it opens the row's menu; moved, it becomes right-click scrolling.
-    right_press: Option<(f32, f32, Option<render::Hit>)>,
+    right_press: Option<(f32, f32, Option<hit::Hit>)>,
     /// Left button pressed on a song list row: dragging scrolls the list, releasing without
     /// dragging clicks the row.
     list_drag: Option<ListDrag>,
@@ -607,7 +529,11 @@ struct State {
     mapinfo_sorted: bool,
     /// Folders being scanned (where osu!.db / collection.db are looked for).
     song_dirs: Vec<PathBuf>,
-    osudb_rx: Option<Receiver<Option<osudb::OsuDb>>>,
+    osudb_rx: Job<Option<osudb::OsuDb>>,
+    /// The collections: the player's own, then osu!'s (`collections.rs`).
+    collections: Vec<collections::Collection>,
+    /// `collections` came from `taiko.db` this run (so writing them back keeps what's there).
+    collections_read: bool,
     /// Maps' status from osu!.db (by path), and sets' from the mirrors (by set id; None while
     /// asking or if they couldn't say).
     db_status: std::collections::HashMap<PathBuf, u8>,
@@ -629,7 +555,7 @@ struct State {
     loved_asked: bool,
     /// Asking the website which custom sets in the library are approved, and when it was last
     /// asked for this library (None: ask now).
-    custom_call: Option<Receiver<CustomKnown>>,
+    custom_call: Job<CustomKnown>,
     custom_asked: Option<Instant>,
     /// The folder of the map in the editor, looked at for maps dropped into it.
     folder_watch: Option<folder_watch::Watch>,
@@ -657,7 +583,7 @@ struct State {
     /// (the music takes a moment), and that music on its way.
     replay_speed: f64,
     replay_speed_wanted: f64,
-    replay_speed_rx: Option<Receiver<ReplayMusic>>,
+    replay_speed_rx: Job<ReplayMusic>,
     /// Song select's selector with the drum in menus (`drum_nav`), and the button rows it
     /// moves along, as drawn last.
     select_zone: drum_nav::Zone,
@@ -665,11 +591,11 @@ struct State {
     /// The selected set and since when: asked about once the selection rests.
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
-    lobby_lookup: Option<Receiver<Result<download::SetInfo, String>>>,
+    lobby_lookup: Job<Result<download::SetInfo, String>>,
     /// A score a `taiko-rs://` link asked for, until its results screen opens.
     score_link: Option<ScoreLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
-    scene_kind: Option<std::mem::Discriminant<Scene>>,
+    scene_kind: Option<screens::screen::SceneKind>,
     scene_since: Instant,
     /// Dragging along the song select difficulty timeline: when it last seeked (for throttling)
     /// and to which map time.
@@ -751,7 +677,7 @@ struct State {
     scan_checking: bool,
     /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
     /// there is no dialog.
-    folder_pick: Option<Receiver<Result<Option<PathBuf>, String>>>,
+    folder_pick: Job<Result<Option<PathBuf>, String>>,
     /// What the folder dialog is for: the Songs folder or the game data folder.
     folder_pick_for: Item,
     /// The game's data being moved to another folder (`config::move_data`).
@@ -825,10 +751,8 @@ struct State {
     mouse_moved_from: (f64, f64),
     /// Snap guides to draw while dragging the playfield area.
     guides: Vec<layout::Guide>,
-    /// The interface editor, while it's open.
-    hud_edit: Option<hud_edit::Editor>,
     /// The made-up play the editors show the interface with.
-    hud_sample: Option<Box<game::Game>>,
+    hud_sample: Option<Box<game::Play>>,
     /// Playfield presets (resolutions that fit the window), filled when the window opens.
     resolutions: Vec<(u32, u32)>,
     monitor_modes: Vec<(u32, u32)>,
@@ -840,1206 +764,15 @@ struct State {
     window_resized_at: Option<Instant>,
 }
 
-/// Draws gameplay (via `f`) into the playfield area, records the shapes to clip, and shows the
-/// area's frame while it's being dragged or an edge is hovered.
-fn draw_game_area(
-    canvas: &mut Canvas,
-    cfg: &Config,
-    clip: &mut Option<(std::ops::Range<usize>, Area)>,
-    grip: &Option<(Grip, (f64, f64), Area)>,
-    hover: &Option<Grip>,
-    see_through: bool,
-    f: impl FnOnce(&mut Canvas),
-) {
-    let area = cfg.playfield_area;
-    let (start, full) = layout::begin(canvas, area, see_through, cfg.bg_dim_black);
-    f(canvas);
-    let range = layout::end(canvas, area, start, full);
-    *clip = Some((range, area));
-    if grip.is_some() || matches!(hover, Some(Grip::Resize { .. })) {
-        layout::draw_frame(canvas, area, grip.is_some());
-    }
-}
-
 /// A press on a song list row (see `State::list_drag`).
 struct ListDrag {
     from_y: f32,
-    hit: render::Hit,
+    hit: hit::Hit,
     moved: bool,
 }
 
 /// How far (virtual units) a held button must move before it counts as dragging, not a click.
 const DRAG_START: f32 = 5.0;
-
-/// How far (window pixels) a pointer that gameplay hid has to travel to show again: about 1% of
-/// the window's height, so desk vibration or a jittery sensor doesn't keep bringing it back.
-fn pointer_wake_px(window_h: f32) -> f64 {
-    (window_h as f64 * 0.01).max(6.0)
-}
-
-/// Whether a key press belongs to the input method (Japanese, Chinese, Korean typing) rather than
-/// the game: while a word is being composed (`preedit` shows it), Enter takes the word, Tab and the
-/// arrows go through its suggestions, Backspace and Esc edit or drop it. Windows marks such keys
-/// `Process` even when the word was just taken and `preedit` already cleared.
-fn ime_has_key(logical: &Key, preedit: &str) -> bool {
-    *logical == Key::Named(NamedKey::Process) || !preedit.is_empty()
-}
-
-fn fmt_time(ms: f64) -> String {
-    let s = (ms / 1000.0).max(0.0) as u64;
-    format!("{}:{:02}", s / 60, s % 60)
-}
-
-/// A pause button's label, `held` or going.
-fn pause_label(held: bool) -> &'static str {
-    if held {
-        tr!(music: "Play")
-    } else {
-        tr!("Pause")
-    }
-}
-
-/// A pause button's width: the same with either label, so nothing moves when it's pressed.
-fn pause_width() -> f32 {
-    Canvas::text_width(7.0, pause_label(true)).max(Canvas::text_width(7.0, pause_label(false)))
-        + 12.0
-}
-
-/// Replays: a timeline along the bottom of the screen to click or drag through, over the
-/// map's difficulty with the replay's misses marked. Returns the bar's rect (virtual units) for
-/// `replay_seek_at`.
-/// `grow`: how far it has grown towards its hovered height (0 to 1), kept between frames.
-fn draw_replay_bar(
-    c: &mut Canvas,
-    game: &Game,
-    active: bool,
-    speed: f64,
-    grow: &mut f32,
-) -> [f32; 4] {
-    let w = c.width;
-    let (start, end) = game.span();
-    let label = format!("{} / {}", fmt_time(game.time), fmt_time(end));
-    let y = 456.0;
-    // Its buttons, then the time and the timeline.
-    let mut left = 18.0;
-    for (text, bw, hit) in [
-        (pause_label(game.held), pause_width(), KeyCode::Space),
-        ("-", 20.0, KeyCode::ArrowDown),
-        ("+", 20.0, KeyCode::ArrowUp),
-    ] {
-        c.button(
-            left,
-            y - 8.0,
-            bw,
-            16.0,
-            text,
-            7.0,
-            render::Hit::Key(hit),
-            false,
-        );
-        left += bw + 4.0;
-    }
-    let shown = format!("{speed:.2}x");
-    c.text(left + 2.0, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &shown);
-    left += Canvas::text_width(7.0, "0.00x") + 12.0;
-    // Sized for the longest label so the bar doesn't twitch as the time changes.
-    let lw = Canvas::text_width(7.0, &format!("{} / {}", fmt_time(end), fmt_time(end)));
-    let (x, bw) = (left + lw + 10.0, w - 18.0 - (left + lw + 10.0));
-    // The strip: difficulty bars standing on `base`, misses over them. Hovered or dragged, it
-    // grows upwards to show more.
-    let base = y + 1.0;
-    let hover_at = |gh: f32| [x, base - gh, bw, gh + 2.0];
-    let now_rect = hover_at(17.0 + *grow * 13.0);
-    let hover = active
-        || c.hovered(
-            now_rect[0] - 6.0,
-            now_rect[1],
-            now_rect[2] + 12.0,
-            now_rect[3],
-        );
-    render::approach(grow, if hover { 1.0 } else { 0.0 }, c.dt_ms, 60.0);
-    let gh = 17.0 + *grow * 13.0;
-    let rect = hover_at(gh);
-    let top = base - gh;
-    let span = (end - start).max(1.0);
-    let x_of = |t: f64| x + (((t - start) / span).clamp(0.0, 1.0) as f32) * bw;
-    let f = ((game.time - start) / span).clamp(0.0, 1.0) as f32;
-    c.text(left, y - 3.5, 7.0, rgba(0xc8c8d8, 1.0), &label);
-    c.round_rect(
-        [x - 2.0, top - 2.0],
-        [bw + 4.0, gh + 4.0],
-        4.0,
-        rgba(0x0c0c12, 0.8),
-        rgba(0x2a2a38, 1.0),
-        1.0,
-    );
-    if let Some((graph, misses)) = &game.replay_timeline {
-        // Kiai tinted, as on song select's graph.
-        for &(s, e) in &graph.kiai {
-            let (kx0, kx1) = (x_of(s), x_of(e));
-            c.rect(kx0, top, (kx1 - kx0).max(1.0), gh, rgba(0xff8a3d, 0.12));
-        }
-        let (bx0, bx1) = (
-            x_of(graph.peaks_start),
-            x_of(graph.peaks_start + graph.peaks.len() as f64 * graph.section),
-        );
-        let n = (((bx1 - bx0) / 2.5) as usize).max(1);
-        let bar_w = (bx1 - bx0) / n as f32;
-        let now_x = x + bw * f;
-        for (i, v) in graph.bins(n).into_iter().enumerate() {
-            let bh = 1.0 + v * (gh - 3.0);
-            let bx = bx0 + i as f32 * bar_w;
-            let played = bx + bar_w / 2.0 <= now_x;
-            let colour = rgba(preview::strain_colour(v), if played { 1.0 } else { 0.55 });
-            c.rect(bx, base - 1.0 - bh, (bar_w - 0.5).max(0.5), bh, colour);
-        }
-        // Each miss: a glowing dot on the strip's top edge and a fine line down to the bars;
-        // the ones still ahead are dimmed, like the bars.
-        const MISS: u32 = 0xff4d6a;
-        for &t in misses {
-            let mx = x_of(t);
-            let a = if mx <= now_x { 1.0 } else { 0.5 };
-            c.rect(mx - 0.5, top + 2.0, 1.0, gh - 3.0, rgba(MISS, 0.35 * a));
-            c.circle(mx, top - 1.0, 4.0, rgba(MISS, 0.18 * a), rgba(0, 0.0), 0.0);
-            c.circle(
-                mx,
-                top - 1.0,
-                2.0,
-                rgba(MISS, a),
-                rgba(0xffffff, 0.8 * a),
-                0.75,
-            );
-        }
-    }
-    c.text(
-        x,
-        y + 10.0,
-        6.0,
-        rgba(0x6f6f86, 1.0),
-        tr!("Left/Right or drag: seek   Space: pause   Up/Down: speed"),
-    );
-    // The playhead: a white line a little taller than the strip.
-    let hx = x + bw * f;
-    c.rect(hx - 0.75, top - 2.0, 1.5, gh + 4.0, rgba(0xffffff, 0.95));
-    rect
-}
-
-/// Every spectated player at once: one lane per player, stacked, with their numbers.
-/// Each player's strip shows where they play: the lane, or wherever the mods take it (rails,
-/// Multiverse's playfield in focus...), fitted in and followed smoothly. `zones` keeps what each
-/// strip shows between frames; `dt` is the time since the last one (s).
-fn draw_spectate_all(
-    c: &mut Canvas,
-    games: &mut [(u32, Box<Game>)],
-    players: &[(u32, String)],
-    scroll: f64,
-    zones: &mut Vec<[f32; 4]>,
-    dt: f32,
-) {
-    let n = games.len().max(1) as f32;
-    let (band_top, band_h) = game::lane_band();
-    let (top, bottom) = (40.0, 470.0);
-    let strip = ((bottom - top) / n).min(120.0);
-    let k = strip / band_h;
-    let full_w = c.width;
-    // Drawn wider than the screen, so a plain lane fills the strip's width.
-    let plain = [0.0, band_top, full_w / k, band_h];
-    zones.resize(games.len(), [f32::NAN; 4]);
-    let follow = 1.0 - (-dt / 0.15).exp();
-    let head = tr!("SPECTATING  -  everyone   Left/Right or A: one player   Esc leave");
-    c.text_centered(
-        full_w / 2.0,
-        16.0,
-        9.0,
-        rgba(0x4fb4ff, 1.0),
-        &Canvas::fit(9.0, full_w - 16.0, head),
-    );
-    for (i, (id, g)) in games.iter_mut().enumerate() {
-        let y = top + i as f32 * strip;
-        let start = c.shapes.len();
-        c.width = full_w / k;
-        g.draw_playfield(c, scroll);
-        c.width = full_w;
-        let target = g
-            .play_zone()
-            .filter(|z| z[2] > 1.0 && z[3] > 1.0)
-            .unwrap_or(plain);
-        let z = &mut zones[i];
-        if z[0].is_nan() {
-            *z = target;
-        } else {
-            for (v, t) in z.iter_mut().zip(target) {
-                *v += (t - *v) * follow;
-            }
-        }
-        let [zx, zy, zw, zh] = *z;
-        let scale = (full_w / zw).min(strip / zh);
-        let (dx, dy) = (
-            (full_w - zw * scale) / 2.0 - zx * scale,
-            y + (strip - zh * scale) / 2.0 - zy * scale,
-        );
-        c.transform_since(start, [0.0, 0.0], scale, dx, dy);
-        c.clip_since(start, 0.0, y, full_w, strip - 2.0);
-        let name = players
-            .iter()
-            .find(|(p, _)| p == id)
-            .map(|(_, n)| n.as_str())
-            .unwrap_or("?");
-        let st = &g.stats;
-        let line = format!(
-            "{name}   {:08}   {:.2}%   {}x",
-            st.score,
-            st.accuracy() * 100.0,
-            st.combo
-        );
-        let tw = Canvas::text_width(8.0, &line);
-        c.round_rect(
-            [full_w - tw - 28.0, y + 4.0],
-            [tw + 16.0, 16.0],
-            6.0,
-            rgba(0x000000, 0.6),
-            rgba(0, 0.0),
-            0.0,
-        );
-        c.text_right(full_w - 20.0, y + 8.0, 8.0, rgba(0xffffff, 1.0), &line);
-    }
-}
-
-fn score_video_label() -> &'static str {
-    tr!("video")
-}
-
-/// How wide a leaderboard row's video button is.
-fn score_video_width() -> f32 {
-    Canvas::text_width(6.0, score_video_label()) + 12.0
-}
-
-/// Where a leaderboard's rows start under its buttons.
-const BOARD_HEAD: f32 = 28.0;
-
-/// The leaderboard's Local / Online buttons from `x`, and the way back to the preview and the
-/// map's website ending at `right`;
-/// returns the free span between them, for a hint.
-fn board_tabs(c: &mut Canvas, x: f32, y: f32, online: bool, relax: bool, right: f32) -> [f32; 2] {
-    let mut tx = x;
-    for (label, on) in [(tr!("Local"), false), (tr!("Online"), true)] {
-        let tw = Canvas::text_width(7.0, label) + 24.0;
-        c.button(
-            tx,
-            y,
-            tw,
-            20.0,
-            label,
-            7.0,
-            render::Hit::BoardTab(on),
-            on == online,
-        );
-        tx += tw + 6.0;
-    }
-    // With Relax on, these are its scores, which count apart.
-    if relax {
-        let label = "RELAX";
-        let tw = Canvas::text_width(7.0, label) + 14.0;
-        c.round_rect(
-            [tx, y],
-            [tw, 20.0],
-            5.0,
-            rgba(0xFFD34D, 0.15),
-            rgba(0xFFD34D, 0.9),
-            1.0,
-        );
-        c.text_centered(tx + tw / 2.0, y + 10.0, 7.0, rgba(0xFFD34D, 1.0), label);
-        tx += tw + 6.0;
-    }
-    // Back to the preview at the far right, the website left of it.
-    let back = tr!("< Preview");
-    let bw = Canvas::text_width(7.0, back) + 24.0;
-    c.button(
-        right - bw,
-        y,
-        bw,
-        20.0,
-        back,
-        7.0,
-        render::Hit::BoardPage,
-        true,
-    );
-    let right = right - bw - 6.0;
-    let label = tr!("Website");
-    let tw = Canvas::text_width(7.0, label) + 24.0;
-    c.button(
-        right - tw,
-        y,
-        tw,
-        20.0,
-        label,
-        7.0,
-        render::Hit::BoardWebsite,
-        false,
-    );
-    [tx + 4.0, right - tw - 10.0]
-}
-
-/// A leaderboard's message in place of its rows, centred under its buttons.
-fn board_note(c: &mut Canvas, x: f32, y: f32, w: f32, note: &str) {
-    for (k, line) in mobile::wrap(7.0, w - 16.0, note, 3).iter().enumerate() {
-        let ly = y + BOARD_HEAD + 14.0 + k as f32 * 14.0;
-        c.text_centered(x + w / 2.0, ly, 7.0, rgba(0x9a9ab0, 1.0), line);
-    }
-}
-
-/// The server's scores for the selected map: each player's best (`board` None while loading).
-#[allow(clippy::too_many_arguments)]
-fn draw_online_leaderboard(
-    c: &mut Canvas,
-    [x, y]: [f32; 2],
-    w: f32,
-    board: Option<&Result<Vec<online::OnlineScore>, String>>,
-    me: &str,
-    fits: usize,
-    first: usize,
-    relax: bool,
-) {
-    let [free, free_end] = board_tabs(c, x, y, true, relax, x + w);
-    let note = match board {
-        None => Some(tr!("loading...").to_string()),
-        Some(Err(e)) => Some(tr!("can't reach the server: {e}"; e)),
-        Some(Ok(rows)) if rows.is_empty() => {
-            Some(tr!("no online scores yet - log in (F9) and finish a play").to_string())
-        }
-        Some(Ok(_)) => None,
-    };
-    if let Some(note) = note {
-        board_note(c, x, y, w, &note);
-        return;
-    }
-    let Some(Ok(rows)) = board else { return };
-    let hint = tr!("click: results and replay");
-    c.text_right(
-        free_end,
-        y + 7.0,
-        6.0,
-        rgba(0x6f6f86, 1.0),
-        &Canvas::fit_hints(6.0, free_end - free, hint),
-    );
-    let shown = rows.len().saturating_sub(first).min(fits);
-    board_scrollbar(
-        c,
-        x + w + 5.0,
-        y + BOARD_HEAD,
-        shown.max(1),
-        first,
-        rows.len(),
-    );
-    for (k, r) in rows.iter().skip(first).take(fits).enumerate() {
-        let line = BoardLine {
-            place: first + k + 1,
-            player: &r.player,
-            score: r.score,
-            accuracy: r.accuracy,
-            combo: r.max_combo,
-            pp: r.pp,
-            rate: r.rate,
-            mods: r.mods.concat(),
-            miss: r.miss,
-            date: r.date,
-            mine: r.player.eq_ignore_ascii_case(me),
-        };
-        let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
-        board_row(c, x, ry, w, &line, render::Hit::OnlineScoreRow(k), None);
-    }
-}
-
-/// A leaderboard row's height, the gap under it included.
-const BOARD_ROW: f32 = 34.0;
-
-/// What a leaderboard row shows, local or online.
-struct BoardLine<'a> {
-    place: usize,
-    player: &'a str,
-    score: u64,
-    accuracy: f64,
-    combo: u32,
-    pp: Option<f64>,
-    rate: f64,
-    mods: String,
-    miss: u32,
-    date: u64,
-    mine: bool,
-}
-
-/// One play on a leaderboard, a card at `ry`: its place, the player's picture, then their name
-/// (as chat shows it) over how it went, the score and when on the right. `video`: the local
-/// board's export button, at the far right.
-#[allow(clippy::too_many_arguments)]
-fn board_row(
-    c: &mut Canvas,
-    x: f32,
-    ry: f32,
-    w: f32,
-    l: &BoardLine,
-    hit: render::Hit,
-    video: Option<render::Hit>,
-) {
-    let h = BOARD_ROW - 4.0;
-    let hover = c.hovered(x, ry, w, h);
-    let bg = if hover {
-        0x262634
-    } else if l.mine {
-        0x23232f
-    } else {
-        0x15151d
-    };
-    // The podium in gold, silver and bronze.
-    let medal = match l.place {
-        1 => Some(0xFFD34D),
-        2 => Some(0xC8D2E6),
-        3 => Some(0xE0995E),
-        _ => None,
-    };
-    let edge = if l.mine {
-        accent()
-    } else {
-        medal.unwrap_or(0x2a2a38)
-    };
-    let edge_a = if l.mine || medal.is_none() { 1.0 } else { 0.45 };
-    c.round_rect(
-        [x, ry],
-        [w, h],
-        7.0,
-        rgba(bg, 0.92),
-        rgba(edge, edge_a),
-        1.0,
-    );
-    c.hit(x, ry, w, h, hit);
-    let mid = ry + h / 2.0;
-    let place = format!("#{}", l.place);
-    let place_colour = medal.unwrap_or(0x9a9ab0);
-    c.text_centered(x + 16.0, mid, 8.0, rgba(place_colour, 1.0), &place);
-    c.avatar(l.player, x + 42.0, mid, 10.0, accent(), 1.0);
-    let tx = x + 58.0;
-    let mut right = x + w - 8.0;
-    if let Some(video) = video {
-        let bw = score_video_width();
-        right -= bw;
-        c.button(
-            right,
-            mid - 7.0,
-            bw,
-            14.0,
-            score_video_label(),
-            6.0,
-            video,
-            false,
-        );
-        right -= 10.0;
-    }
-    let (top, under) = (ry + 5.0, ry + 18.0);
-    // Top line: the player, the score at the right.
-    let score = format!("{:08}", l.score);
-    let score_w = Canvas::text_width(8.0, &score);
-    c.text_right(right, top, 8.0, rgba(0xffffff, 1.0), &score);
-    let white = rgba(0xffffff, 1.0);
-    social::styled_name(
-        c,
-        tx,
-        top,
-        8.0,
-        l.player,
-        white,
-        right - score_w - 10.0 - tx,
-    );
-    // Under it: how it went, and misses and age at the right.
-    let when = misses_and_age(l.miss, l.date);
-    let when_w = Canvas::text_width(6.5, &when);
-    c.text_right(right, under, 6.5, rgba(0x6f6f86, 1.0), &when);
-    let mut parts = vec![
-        (format!("{:.2}%", l.accuracy * 100.0), 0xdedeea),
-        (format!("{}x", l.combo), 0x9a9ab0),
-    ];
-    if let Some(pp) = l.pp {
-        parts.push((format!("{pp:.0}pp"), 0xff8ad8));
-    }
-    if (l.rate - 1.0).abs() > 1e-6 {
-        parts.push((format!("{:.2}x", l.rate), 0x4fb4ff));
-    }
-    if !l.mods.is_empty() {
-        parts.push((format!("+{}", l.mods), 0xFFC66B));
-    }
-    let end = right - when_w - 10.0;
-    let mut px = tx;
-    for (text, colour) in parts {
-        let shown = Canvas::fit(6.5, end - px, &text);
-        if shown.is_empty() {
-            break;
-        }
-        px += c.text(px, under, 6.5, rgba(colour, 1.0), &shown) + 8.0;
-        if shown != text {
-            break;
-        }
-    }
-}
-
-/// A leaderboard row's "3 miss  2d".
-fn misses_and_age(miss: u32, date: u64) -> String {
-    let age = scores::age(date);
-    tr!("{miss} miss  {age}"; miss, age)
-}
-
-/// Local scores for the selected map, under the song select panel: `rows` from place `first`
-/// on, of `total`.
-#[allow(clippy::too_many_arguments)]
-fn draw_leaderboard(
-    c: &mut Canvas,
-    x: f32,
-    y: f32,
-    w: f32,
-    rows: &[&scores::ScoreRow],
-    first: usize,
-    total: usize,
-    relax: bool,
-) {
-    let [free, free_end] = board_tabs(c, x, y, false, relax, x + w);
-    if rows.is_empty() {
-        let none = tr!("No plays yet: finish one to set a score.");
-        board_note(c, x, y, w, none);
-        return;
-    }
-    let room = free_end - free;
-    let hint = tr!("click: results and replay   video: export it");
-    c.text_right(
-        free_end,
-        y + 7.0,
-        6.0,
-        rgba(0x6f6f86, 1.0),
-        &Canvas::fit_hints(6.0, room, hint),
-    );
-    for (k, r) in rows.iter().enumerate() {
-        let line = BoardLine {
-            place: first + k + 1,
-            player: &r.player,
-            score: r.score,
-            accuracy: r.accuracy,
-            combo: r.max_combo,
-            pp: r.pp,
-            rate: r.rate,
-            mods: r.mods.clone(),
-            miss: r.miss,
-            date: r.date,
-            mine: false,
-        };
-        let ry = y + BOARD_HEAD + k as f32 * BOARD_ROW;
-        let video = Some(render::Hit::ScoreVideo(k));
-        board_row(c, x, ry, w, &line, render::Hit::ScoreRow(k), video);
-    }
-    board_scrollbar(
-        c,
-        x + w + 5.0,
-        y + BOARD_HEAD,
-        rows.len().max(1),
-        first,
-        total.max(rows.len()),
-    );
-}
-
-/// A song select divider in `rect` (`upright`: between left and right, else between top and
-/// bottom): a short grip, lit along its length while hovered or dragged. Only the grip takes the
-/// mouse, not the whole edge: passing along it shouldn't light it up.
-fn draw_divider(
-    c: &mut Canvas,
-    [x, y, w, h]: [f32; 4],
-    upright: bool,
-    dragging: bool,
-    hit: render::Hit,
-) {
-    const GRIP: f32 = 48.0;
-    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-    let [gx, gy, gw, gh] = if upright {
-        [x, cy - GRIP / 2.0, w, GRIP]
-    } else {
-        [cx - GRIP / 2.0, y, GRIP, h]
-    };
-    let lit = dragging || c.hovered(gx, gy, gw, gh);
-    if upright {
-        let len = if lit { h } else { 28.0 };
-        c.round_rect(
-            [cx - 1.0, cy - len / 2.0],
-            [2.0, len],
-            1.0,
-            rgba(if lit { accent() } else { 0x3a3a4e }, 1.0),
-            rgba(0, 0.0),
-            0.0,
-        );
-    } else {
-        let len = if lit { w } else { 28.0 };
-        c.round_rect(
-            [cx - len / 2.0, cy - 1.0],
-            [len, 2.0],
-            1.0,
-            rgba(if lit { accent() } else { 0x3a3a4e }, 1.0),
-            rgba(0, 0.0),
-            0.0,
-        );
-    }
-    c.hit(gx, gy, gw, gh, hit);
-}
-
-/// A leaderboard's scroll bar right of its rows, when there are more than the `shown`.
-fn board_scrollbar(c: &mut Canvas, x: f32, y: f32, shown: usize, first: usize, total: usize) {
-    if total <= shown || shown == 0 {
-        return;
-    }
-    let h = shown as f32 * BOARD_ROW - 4.0;
-    let thumb = (h * shown as f32 / total as f32).max(10.0);
-    let at = (h - thumb) * first as f32 / (total - shown) as f32;
-    c.round_rect(
-        [x, y],
-        [3.0, h],
-        1.5,
-        rgba(0x2a2a38, 1.0),
-        rgba(0, 0.0),
-        0.0,
-    );
-    c.round_rect(
-        [x, y + at],
-        [3.0, thumb],
-        1.5,
-        rgba(accent(), 0.9),
-        rgba(0, 0.0),
-        0.0,
-    );
-}
-
-/// Sends a play to the online leaderboards on a background thread.
-fn submit_score(
-    server: String,
-    token: String,
-    mut play: online::ScoreSubmit,
-    path: PathBuf,
-    params: pp::Play,
-) -> Receiver<Result<online::Reply, String>> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        play.stars = stars::star_rating_played(
-            &path,
-            params.rate,
-            params.mods,
-            params.scroll_speed,
-            params.seed,
-            params.half,
-        );
-        play.md5 = std::fs::read(&path)
-            .ok()
-            .map(|bytes| download::md5_hex(&bytes));
-        let _ = tx.send(online::call(
-            &server,
-            online::Request::SubmitScore {
-                token,
-                play: Box::new(play),
-            },
-        ));
-    });
-    rx
-}
-
-/// Seconds the FAILED sign shows before a Sudden Death / Perfect fail starts the map over.
-const FAIL_RESTART_LINGER: f64 = 0.6;
-
-/// Whether a play that just ended starts over instead of showing results: one of the player's own
-/// (not a replay) failed by Sudden Death / Perfect, with `Config::fail_restart` on.
-fn fail_restarts(cfg: &Config, game: &Game) -> bool {
-    cfg.fail_restart && game.failed_early() && game.replay.is_none()
-}
-
-/// The mod preset (0-8) a digit key 1-9 (top row or keypad) picks in the mod select.
-fn preset_key(code: KeyCode) -> Option<usize> {
-    use KeyCode::*;
-    [
-        (Digit1, Numpad1),
-        (Digit2, Numpad2),
-        (Digit3, Numpad3),
-        (Digit4, Numpad4),
-        (Digit5, Numpad5),
-        (Digit6, Numpad6),
-        (Digit7, Numpad7),
-        (Digit8, Numpad8),
-        (Digit9, Numpad9),
-    ]
-    .iter()
-    .position(|&(a, b)| code == a || code == b)
-}
-
-/// Over the mod select: is preset `k` (named `name`) to be deleted?
-fn draw_preset_deleting(c: &mut Canvas, k: usize, name: &str) {
-    c.hits.clear();
-    let w = c.width;
-    c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
-    let bw = (w - 32.0).min(460.0);
-    let (bx, inner) = ((w - bw) / 2.0, bw - 32.0);
-    c.round_rect(
-        [bx, 140.0],
-        [bw, 164.0],
-        10.0,
-        rgba(0x15151d, 0.98),
-        rgba(0xff6b6b, 0.8),
-        1.5,
-    );
-    let title = format!("Delete preset {}?", k + 1);
-    c.text_centered(
-        w / 2.0,
-        156.0,
-        14.0,
-        rgba(0xffffff, 1.0),
-        &Canvas::fit(14.0, inner, &title),
-    );
-    let size = Canvas::fit_size(12.0, 7.0, inner, name);
-    c.text_centered(
-        w / 2.0,
-        196.0,
-        size,
-        rgba(0xffffff, 1.0),
-        &Canvas::fit(size, inner, name),
-    );
-    c.text_centered(
-        w / 2.0,
-        230.0,
-        7.0,
-        rgba(0x9a9ab0, 1.0),
-        &Canvas::fit(
-            7.0,
-            inner,
-            "It can't be brought back. The mods on now stay on. Enter deletes, Esc keeps it.",
-        ),
-    );
-    c.button(
-        w / 2.0 - 100.0,
-        264.0,
-        90.0,
-        24.0,
-        "Delete",
-        9.0,
-        render::Hit::Key(KeyCode::Enter),
-        true,
-    );
-    c.button(
-        w / 2.0 + 10.0,
-        264.0,
-        90.0,
-        24.0,
-        "Keep",
-        9.0,
-        render::Hit::Key(KeyCode::Escape),
-        false,
-    );
-}
-
-/// Over the mod select: the name a new mod preset gets, being typed.
-fn draw_preset_naming(c: &mut Canvas, name: &str) {
-    c.hits.clear();
-    let w = c.width;
-    c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
-    let bw = (w - 32.0).min(460.0);
-    let (bx, inner) = ((w - bw) / 2.0, bw - 32.0);
-    c.round_rect(
-        [bx, 140.0],
-        [bw, 164.0],
-        10.0,
-        rgba(0x15151d, 0.98),
-        rgba(accent(), 0.8),
-        1.5,
-    );
-    c.text_centered(
-        w / 2.0,
-        156.0,
-        14.0,
-        rgba(0xffffff, 1.0),
-        &Canvas::fit(14.0, inner, "Name this preset"),
-    );
-    let typed = format!("{name}_");
-    let size = Canvas::fit_size(12.0, 7.0, inner, &typed);
-    let typed = Canvas::fit(size, inner, &typed);
-    c.text_centered(w / 2.0, 196.0, size, rgba(0xffffff, 1.0), &typed);
-    c.text_centered(
-        w / 2.0,
-        230.0,
-        7.0,
-        rgba(0x9a9ab0, 1.0),
-        &Canvas::fit(
-            7.0,
-            inner,
-            "It keeps the mods on now and the speed: 1-9 or a click puts them back.",
-        ),
-    );
-    c.button(
-        w / 2.0 - 100.0,
-        264.0,
-        90.0,
-        24.0,
-        "Save",
-        9.0,
-        render::Hit::Key(KeyCode::Enter),
-        true,
-    );
-    c.button(
-        w / 2.0 + 10.0,
-        264.0,
-        90.0,
-        24.0,
-        "Cancel",
-        9.0,
-        render::Hit::Key(KeyCode::Escape),
-        false,
-    );
-}
-
-/// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
-fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
-    let part = from
-        .map(|t| format!("  from {}", fmt_time(t)))
-        .unwrap_or_default();
-    format!("{} - {} [{}]{part}", m.artist, m.title, m.version)
-}
-
-/// A results screen's background work (`ui::Detail`): the pp breakdown of `play` on the map at
-/// `path`; with a replay file, the whole play's stats from it; with an online score id, its
-/// replay fetched from `server` first (and saved, see `scores::save_online`).
-/// Whether plays on library map `e` give pp (only ranked, approved and loved ones do, as on
-/// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
-/// last word.
-fn map_gives_pp(
-    e: &Entry,
-    set_status: &std::collections::HashMap<u32, Option<String>>,
-    db_status: &std::collections::HashMap<PathBuf, u8>,
-    server_loved: &ui::ServerLoved,
-) -> Option<bool> {
-    let Some(set) = e.set_id() else {
-        return Some(false);
-    };
-    // Loved on the online server (the set, or this difficulty): it gives pp there.
-    if ui::loved_here(server_loved, e) {
-        return Some(true);
-    }
-    if let Some(Some(s)) = set_status
-        .get(&set)
-        .filter(|s| s.as_deref() != Some(setstatus::MISSING))
-    {
-        return Some(matches!(s.as_str(), "ranked" | "approved" | "loved"));
-    }
-    db_status
-        .get(&e.path)
-        .filter(|&&s| s != 0)
-        .map(|s| matches!(s, 4 | 5 | 7))
-}
-
-fn results_job(
-    path: PathBuf,
-    play: pp::Play,
-    local: Option<PathBuf>,
-    online: Option<(String, online::OnlineScore, String)>,
-) -> Receiver<ui::Detail> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut d = ui::Detail {
-            breakdown: pp::breakdown(&path, &play),
-            ..Default::default()
-        };
-        let replay = match (local, online) {
-            (Some(file), _) => scores::load_replay(&file).ok(),
-            (None, Some((server, score, label))) => {
-                match fetch_replay(&server, &score, &path, label) {
-                    Ok((file, r)) => {
-                        d.replay = Some(Ok(file));
-                        Some(r)
-                    }
-                    Err(e) => {
-                        d.replay = Some(Err(e));
-                        None
-                    }
-                }
-            }
-            (None, None) => None,
-        };
-        if let Some(r) = &replay {
-            d.seed = Some(r.seed);
-            if r.seed != play.seed {
-                d.breakdown = pp::breakdown(&path, &r.pp_play());
-            }
-        }
-        d.stats = replay.and_then(|r| scores::simulate(&path, &r));
-        let _ = tx.send(d);
-    });
-    rx
-}
-
-/// Gets an online score's replay from the server and keeps it as a replay file of our own.
-fn fetch_replay(
-    server: &str,
-    score: &online::OnlineScore,
-    map_path: &std::path::Path,
-    map_label: String,
-) -> Result<(PathBuf, scores::Replay), String> {
-    if score.id == 0 {
-        return Err(tr!("the server doesn't keep replays yet").into());
-    }
-    if let Some(file) = scores::online_replay_path(score.id).filter(|f| f.is_file())
-        && let Ok(r) = scores::load_replay(&file)
-    {
-        return Ok((file, r));
-    }
-    let got = match online::call(server, online::Request::Replay { id: score.id }) {
-        Ok(online::Reply::Replay(r)) => *r,
-        Ok(_) => return Err(crate::lang::odd_reply()),
-        // Servers from before replays don't know the request.
-        Err(e) if e == "bad request" => {
-            return Err(tr!("the server doesn't hand out replays yet").into());
-        }
-        Err(e) => return Err(e),
-    };
-    if got.version > scores::new_version() {
-        return Err(tr!("replay from a newer version").into());
-    }
-    let replay = scores::Replay {
-        version: got.version,
-        map_hash: score.map_hash,
-        map_path: map_path.to_string_lossy().into_owned(),
-        map_label,
-        player: score.player.clone(),
-        date: score.date,
-        rate: score.rate,
-        keep_pitch: true,
-        anti_mash: true,
-        mods: score.mods.clone(),
-        scroll_speed: score.scroll_speed.unwrap_or(1.0),
-        score: score.score,
-        accuracy: score.accuracy,
-        max_combo: score.max_combo,
-        great: score.great,
-        ok: score.ok,
-        miss: score.miss,
-        ur: 0.0,
-        inputs: got.inputs,
-        seed: got.map.seed.unwrap_or(0),
-    };
-    let file = scores::save_online(score.id, &replay)?;
-    Ok((file, replay))
-}
-
-/// Why there's no exporting videos.
-fn no_ffmpeg() -> String {
-    tr!("ffmpeg wasn't found: install it to export (Windows: winget install ffmpeg; Linux: your package manager)")
-    .into()
-}
-
-/// A setting that's on.
-fn on_text() -> &'static str {
-    tr!("on")
-}
-
-fn off_text() -> &'static str {
-    tr!("off")
-}
-
-/// No key, no choice.
-fn none_text() -> &'static str {
-    tr!("none")
-}
-
-fn picking_text() -> &'static str {
-    tr!("picking...")
-}
-
-fn enter_to_start() -> &'static str {
-    tr!("Enter to start")
-}
-
-/// taiko.rs's own skin.
-fn built_in_text() -> &'static str {
-    tr!("built-in")
-}
-
-fn scroll_in_select() -> &'static str {
-    tr!("change the scroll speed in song select, not during a song")
-}
-
-/// The list's choice to type a folder's path.
-fn type_path() -> String {
-    tr!("Type a path").into()
-}
-
-/// The list's choice to pick a folder in the system's dialog.
-fn browse_text() -> String {
-    tr!("Browse...").into()
-}
-
-/// The badge for an update to install.
-fn update_badge(commit: &str) -> String {
-    let build = update::short(commit);
-    tr!("update {build}  Ctrl+U"; build)
-}
-
-/// The badge while the update downloads (`p` 0..1).
-fn updating_badge(p: f32) -> String {
-    let p = p * 100.0;
-    tr!("updating {p:.0}%"; p)
-}
-
-/// Fetches a map's online leaderboard on a background thread.
-fn fetch_board(
-    server: String,
-    map: u64,
-    relax: bool,
-) -> Receiver<Result<Vec<online::OnlineScore>, String>> {
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let rows =
-            online::call(&server, online::Request::MapScores { map, relax }).and_then(
-                |r| match r {
-                    online::Reply::Scores(rows) => Ok(rows),
-                    _ => Err(crate::lang::odd_reply()),
-                },
-            );
-        let _ = tx.send(rows);
-    });
-    rx
-}
-
-/// Opens a web page in the browser; false where that can't be done.
-/// Where a player's profile is on the website.
-fn profile_url(name: &str) -> String {
-    format!("{}/u/{name}", online::WEBSITE)
-}
-
-/// A map's page on the website, by its hash.
-fn map_url(hash: u64) -> String {
-    format!("{}/m/{hash:x}", online::WEBSITE)
-}
-
-fn open_url(url: &str) -> bool {
-    if cfg!(target_os = "android") {
-        return false;
-    }
-    #[cfg(windows)]
-    {
-        #[link(name = "shell32")]
-        unsafe extern "system" {
-            fn ShellExecuteW(
-                hwnd: *mut std::ffi::c_void,
-                verb: *const u16,
-                file: *const u16,
-                parameters: *const u16,
-                directory: *const u16,
-                show: i32,
-            ) -> *mut std::ffi::c_void;
-        }
-        const SW_SHOWNORMAL: i32 = 1;
-        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let (verb, file) = (wide("open"), wide(url));
-        // SAFETY: both strings are nul-terminated and live through the call; the rest may be null.
-        let result = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                verb.as_ptr(),
-                file.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        // Above 32 is success, the rest are error codes.
-        result as usize > 32
-    }
-    #[cfg(not(windows))]
-    std::process::Command::new("xdg-open")
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .is_ok()
-}
-
-/// `file://` URI for a local path.
-#[cfg(not(windows))]
-fn file_uri(path: &std::path::Path) -> String {
-    let mut uri = String::from("file://");
-    for b in path.to_string_lossy().bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
-            uri.push(b as char);
-        } else {
-            uri.push_str(&format!("%{b:02X}"));
-        }
-    }
-    uri
-}
-
-/// The maps being analysed, top right: how far it's got. In a song it waits, and this isn't shown.
-fn draw_analysis(c: &mut Canvas, done: usize, total: usize) {
-    const BAR: f32 = 54.0;
-    let text = tr!("analysing maps {done} / {total}"; done, total);
-    let text = Canvas::fit(6.0, (c.width - BAR - 64.0).max(40.0), &text);
-    let tw = Canvas::text_width(6.0, &text);
-    let w = tw + BAR + 20.0;
-    let (x, y) = (c.width - w - 8.0, 4.0);
-    c.round_rect(
-        [x, y],
-        [w, 13.0],
-        4.0,
-        rgba(0x101018, 0.82),
-        rgba(0x3a3a4e, 1.0),
-        1.0,
-    );
-    c.text(x + 7.0, y + 3.5, 6.0, rgba(0xc8c8d8, 1.0), &text);
-    let (bx, by) = (x + tw + 13.0, y + 5.0);
-    c.round_rect(
-        [bx, by],
-        [BAR, 3.0],
-        1.5,
-        rgba(0x2a2a38, 1.0),
-        rgba(0, 0.0),
-        0.0,
-    );
-    let part = done as f32 / total.max(1) as f32;
-    if part > 0.0 {
-        c.round_rect(
-            [bx, by],
-            [(BAR * part).max(3.0), 3.0],
-            1.5,
-            rgba(render::accent(), 1.0),
-            rgba(0, 0.0),
-            0.0,
-        );
-    }
-}
-
-/// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
-fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
-    let mut out = std::collections::HashMap::new();
-    let Some(text) =
-        config::data_dir().and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
-    else {
-        return out;
-    };
-    for line in text.lines() {
-        if let Some((t, path)) = line.split_once('\t')
-            && let Ok(t) = t.parse::<u64>()
-        {
-            let slot = out.entry(PathBuf::from(path)).or_insert(0);
-            *slot = (*slot).max(t);
-        }
-    }
-    out
-}
-
-/// The library entry for a lobby map: same artist/title/difficulty, then the exact file hash.
-/// Only those few candidates are hashed, so this stays cheap with a huge library.
-/// A path for a settings row: its last two folders.
-fn short_path(dir: &std::path::Path) -> String {
-    let parts: Vec<_> = dir.components().collect();
-    if parts.len() <= 3 {
-        return dir.display().to_string();
-    }
-    let tail: PathBuf = parts[parts.len() - 2..].iter().collect();
-    format!("...{}{}", std::path::MAIN_SEPARATOR, tail.display())
-}
 
 /// The game's data on its way to another folder: the result, bytes moved of all, and where to.
 struct DataMove {
@@ -2061,232 +794,10 @@ struct ExportView {
     last: bool,
 }
 
-/// Where downloaded maps go: the first Songs folder being scanned, else taiko.rs's own (which
-/// is scanned at startup when it exists).
-fn download_dir(inputs: &[PathBuf]) -> PathBuf {
-    if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
-        return dir.clone();
-    }
-    config::own_dir("Songs").unwrap_or_else(|| PathBuf::from("Songs"))
-}
-
-/// Marks the fullscreen preview as a preview: a blue frame and badge on the playfield area, and
-/// a header with the map and the controls.
-fn draw_preview_chrome(
-    c: &mut Canvas,
-    cfg: &Config,
-    e: &Entry,
-    stars: Option<f32>,
-    lobby: bool,
-    size_label: &str,
-) {
-    let blue = preview::MARKER;
-    let a = cfg.playfield_area;
-    let (ax, ay, aw, ah) = (
-        a.x * c.width,
-        a.y * render::VIRTUAL_HEIGHT,
-        a.w * c.width,
-        a.h * render::VIRTUAL_HEIGHT,
-    );
-    c.round_rect(
-        [ax + 1.0, ay + 1.0],
-        [aw - 2.0, ah - 2.0],
-        4.0,
-        rgba(0, 0.0),
-        rgba(blue, 0.55),
-        1.5,
-    );
-    let badge = tr!("AUTOPLAY PREVIEW");
-    let bw = Canvas::text_width(7.0, badge) + 16.0;
-    // Below the header when the area reaches the top of the screen.
-    let by = (ay + 8.0).max(52.0);
-    c.round_rect(
-        [ax + 8.0, by],
-        [bw, 16.0],
-        8.0,
-        rgba(blue, 0.85),
-        rgba(0, 0.0),
-        0.0,
-    );
-    c.text(ax + 16.0, by + 4.5, 7.0, rgba(0x0c1a28, 1.0), badge);
-
-    // A phone's bar: the way back, the map and its stars.
-    if mobile::active() {
-        let back = if lobby { tr!("< LOBBY") } else { tr!("< BACK") };
-        settings::back_button(c, 0.0, back, render::Hit::Key(KeyCode::Escape));
-        let pill = stars::draw_pill(c, c.width, 14.0, 12.0, stars);
-        let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-        let room = c.width - 112.0 - pill - 12.0;
-        c.text(
-            112.0,
-            16.0,
-            12.0,
-            rgba(0xffffff, 1.0),
-            &Canvas::fit(12.0, room, &title),
-        );
-        return;
-    }
-    c.round_rect(
-        [24.0, 10.0],
-        [c.width - 48.0, 34.0],
-        8.0,
-        rgba(0x15151d, 0.9),
-        rgba(0x2a2a38, 1.0),
-        1.0,
-    );
-    let tag = tr!("PREVIEW");
-    let tag_w = Canvas::text_width(8.0, tag) + 18.0;
-    c.round_rect(
-        [32.0, 18.0],
-        [tag_w, 18.0],
-        9.0,
-        rgba(0x173049, 1.0),
-        rgba(blue, 1.0),
-        1.0,
-    );
-    c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), tag);
-    let pill = stars::draw_pill(c, c.width - 36.0, 22.0, 8.0, stars);
-    let back = if lobby {
-        tr!("Lobby  (Esc)")
-    } else {
-        tr!("Back  (Esc)")
-    };
-    let bw = Canvas::text_width(8.0, back) + 24.0;
-    let bx = c.width - 44.0 - pill - bw;
-    c.button(
-        bx,
-        17.0,
-        bw,
-        20.0,
-        back,
-        8.0,
-        render::Hit::Key(KeyCode::Escape),
-        false,
-    );
-    // Right to left: the size button, the hints and the title share what's left. On a narrow
-    // screen the hints go first, then the size button gets shorter, so the title keeps TITLE_MIN.
-    const TITLE_MIN: f32 = 120.0;
-    let title_x = 32.0 + tag_w + 10.0;
-    let short_size = size_label.split(" (").next().unwrap_or(size_label);
-    let presets = [
-        format!("{size_label}  (F5/F6)"),
-        size_label.to_string(),
-        short_size.to_string(),
-    ]
-    .into_iter()
-    .find(|p| bx - 8.0 - (Canvas::text_width(8.0, p) + 24.0) - title_x - 12.0 >= TITLE_MIN)
-    .unwrap_or_else(|| short_size.to_string());
-    let pw = Canvas::text_width(8.0, &presets) + 24.0;
-    let px = bx - 8.0 - pw;
-    c.button(
-        px,
-        17.0,
-        pw,
-        20.0,
-        &presets,
-        8.0,
-        render::Hit::Presets,
-        false,
-    );
-    let hints = if lobby {
-        tr!("drag / wheel: playfield")
-    } else {
-        tr!("Enter play   drag / wheel: playfield")
-    };
-    let mut title_end = px - 12.0;
-    if title_end - Canvas::text_width(7.0, hints) - 12.0 - title_x >= TITLE_MIN + 60.0 {
-        c.text_right(title_end, 24.0, 7.0, rgba(0x8a8aa0, 1.0), hints);
-        title_end -= Canvas::text_width(7.0, hints) + 12.0;
-    }
-    let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-    c.text(
-        title_x,
-        22.0,
-        10.0,
-        rgba(0xffffff, 1.0),
-        &Canvas::fit(10.0, title_end - title_x, &title),
-    );
-}
-
-/// Of a set's maps, the ones to show: its taiko difficulties, else (a set of converts) all.
-fn main_maps<'a>(maps: impl Iterator<Item = &'a Entry>) -> Vec<PathBuf> {
-    let maps: Vec<&Entry> = maps.collect();
-    let taiko = maps.iter().any(|e| e.meta.mode == 1);
-    maps.into_iter()
-        .filter(|e| !taiko || e.meta.mode == 1)
-        .map(|e| e.path.clone())
-        .collect()
-}
-
-/// How a map is named to other players (lobby map, a solo play friends watch), with our
-/// settings of the mods that have them.
-fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
-    let (multiverse, shapeshift) = mod_settings(mods);
-    net::MapInfo {
-        mods: mods.list(),
-        multiverse,
-        shapeshift,
-        seed: None,
-        defense: None,
-        stats: None,
-        hash: e.hash(),
-        artist: e.meta.artist.clone(),
-        title: e.meta.title.clone(),
-        version: e.meta.version.clone(),
-        rate,
-        from: None,
-        set_id: e.set_id(),
-    }
-}
-
-/// A new seed for Random's colouring (never 0, the one from before seeds).
-fn fresh_seed() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(1, |d| d.as_nanos() as u64)
-        .max(1)
-}
-
-/// The Random colouring a lobby map plays with: the one it has, else a new one. Every map
-/// carries one, Random being each player's own mod: whoever plays it gets the same colouring,
-/// and watching everyone shows each player's.
-fn lobby_seed(had: Option<u64>) -> Option<u64> {
-    Some(had.unwrap_or_else(fresh_seed))
-}
-
-/// Our settings of the mods in `mods` that have them (Multiverse's universes, Shapeshift's
-/// setup), as the config writes them: what a lobby we host plays with.
-fn mod_settings(mods: Mods) -> (Option<String>, Option<String>) {
-    let universes = mods
-        .has(mods::Mod::Multiverse)
-        .then(|| multiverse::format(&multiverse::get()));
-    let shapes = mods
-        .has(mods::Mod::Shapeshift)
-        .then(|| shapeshift::get().format());
-    (universes, shapes)
-}
-
-/// Plays `game` with the mod settings `map` carries (the lobby host's, or the friend's being
-/// watched) where it has them; ours otherwise. Our config and presets aren't touched.
-fn use_mod_settings(game: &mut Game, map: &net::MapInfo) {
-    game.use_mod_settings(
-        map.multiverse.as_deref().map(multiverse::parse),
-        map.shapeshift.as_deref().map(shapeshift::Config::parse),
-    );
-}
-
-/// The library entry for a map someone else named: the file's content hash identifies it (the
-/// title can differ, e.g. romanised on one side and Cyrillic on the other).
-fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
-    library
-        .iter()
-        .position(|e| e.meta.version == m.version && e.hash() == m.hash)
-}
-
 /// A score a `taiko-rs://` link asked for: being fetched from the server, then waiting for its
 /// map (the library scan, or a download) and for the player to be out of a song.
 struct ScoreLink {
-    fetch: Option<Receiver<Result<online::OnlineScore, String>>>,
+    fetch: Job<Result<online::OnlineScore, String>>,
     score: Option<online::OnlineScore>,
     /// Its set is downloading, since then.
     downloading: Option<Instant>,
@@ -2294,33 +805,6 @@ struct ScoreLink {
 
 /// How long a score link waits for its map's download.
 const SCORE_LINK_WAIT: Duration = Duration::from_secs(300);
-
-/// The map an online score was played on: only maps of its set or with its name are hashed
-/// (hashing reads the file).
-fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
-    library.iter().position(|e| {
-        let candidate = match (s.set_id, e.set_id()) {
-            (Some(a), Some(b)) => a == b,
-            _ => online::clean_text(&e.label(), 160) == s.map,
-        };
-        candidate && e.hash() == s.map_hash
-    })
-}
-
-/// A character typed into a playfield size: a digit, or `x` between width and height.
-fn size_char(code: KeyCode) -> Option<char> {
-    use KeyCode::*;
-    let digits = [
-        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
-    ];
-    let numpad = [
-        Numpad0, Numpad1, Numpad2, Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9,
-    ];
-    if let Some(d) = digits.iter().chain(numpad.iter()).position(|&k| k == code) {
-        return char::from_digit(d as u32 % 10, 10);
-    }
-    matches!(code, KeyX | Space | NumpadMultiply).then_some('x')
-}
 
 const AUDIO_BUFFERS: [u32; 6] = [64, 128, 256, 512, 1024, 2048];
 
@@ -2331,29 +815,6 @@ const MIN_WINDOW: (f64, f64) = (640.0, 360.0);
 /// `Renderer::set_present`).
 const VSYNC_FRAMES: f64 = 2.0;
 
-/// A typed setting value as a number: units after it ("ms", "%", "x") are fine, a comma works
-/// as the decimal point, and "off" / "unlimited" are 0.
-fn parse_number(text: &str) -> Option<f64> {
-    let t = text.trim().to_ascii_lowercase();
-    if ["off", "unlimited", "none"].contains(&t.as_str()) {
-        return Some(0.0);
-    }
-    let num: String = t
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '+' | '-'))
-        .map(|c| if c == ',' { '.' } else { c })
-        .collect();
-    num.parse().ok().filter(|n: &f64| n.is_finite())
-}
-
-/// What to scan without arguments: the Songs folder (picked in settings, else osu!'s), plus the
-/// config's extra `songs =` lines.
-fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
-    let mut inputs = library::song_dirs();
-    inputs.extend(cfg.songs.iter().cloned());
-    inputs
-}
-
 /// Who a screenshot is being sent to.
 enum ShotTo {
     Friend(String),
@@ -2363,39 +824,7 @@ enum ShotTo {
 
 /// A chat screenshot opened: being fetched until `rx` has gone.
 struct ShotView {
-    rx: Option<Receiver<Result<shots::Pixels, String>>>,
-}
-
-/// What a library scan hands over: the list from the cache straight away, if there's one, then the
-/// list as it is on disk.
-enum Scanned {
-    Cached(Vec<Entry>),
-    Done(Vec<Entry>),
-}
-
-/// Scans `inputs` on a background thread so the window appears at once, even with a huge
-/// library.
-fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Scanned>, Arc<AtomicUsize>) {
-    let found = Arc::new(AtomicUsize::new(0));
-    let (tx, rx) = mpsc::channel();
-    let counter = found.clone();
-    std::thread::Builder::new()
-        .name("library".into())
-        .spawn(move || {
-            let started = Instant::now();
-            let early = tx.clone();
-            let library = library::scan(&inputs, &counter, &mut |cached| {
-                let _ = early.send(Scanned::Cached(cached));
-            });
-            eprintln!(
-                "scanned {} files in {:.0} ms",
-                counter.load(Ordering::Relaxed),
-                started.elapsed().as_secs_f64() * 1000.0
-            );
-            let _ = tx.send(Scanned::Done(library));
-        })
-        .expect("spawn library scan");
-    (rx, found)
+    rx: Job<Result<shots::Pixels, String>>,
 }
 
 impl State {
@@ -2409,22 +838,13 @@ impl State {
     /// Scenes that use the gameplay present mode; everything else is a menu.
     /// In a song (or its pause menu's settings): what counts for pp stays as it started.
     fn mid_song(&self) -> bool {
-        self.in_song()
-            || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. } | Scene::MpPlay { .. }))
+        self.in_song() || self.behind_settings().is_some_and(|prev| prev.plays_song())
     }
 
     /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
     fn idle_allowed(&self) -> bool {
-        matches!(
-            self.scene,
-            Scene::Select
-                | Scene::Settings { .. }
-                | Scene::Download
-                | Scene::MpMenu
-                | Scene::Lobby
-                | Scene::Results { .. }
-                | Scene::MpResults
-        ) && !self.quit_asked
+        (self.scene.is_select() || self.scene.screen().is_some_and(|s| s.idle_allowed()))
+            && !self.quit_asked
             && self.crash.is_none()
             && self.splash.is_none()
             && self.settings_ui.binding.is_none()
@@ -2440,16 +860,13 @@ impl State {
         Some((e.meta.title.clone(), e.meta.artist.clone()))
     }
 
+    /// The room's lobby is up.
+    fn in_lobby(&self) -> bool {
+        self.scene.screen().is_some_and(|s| s.room_lobby())
+    }
+
     fn in_song(&self) -> bool {
-        matches!(
-            self.scene,
-            Scene::Play { .. }
-                | Scene::MpPlay { .. }
-                | Scene::MpWait { .. }
-                | Scene::Calibrate { .. }
-                | Scene::Spectate(_)
-                | Scene::Watch(_)
-        )
+        self.scene.screen().is_some_and(|s| s.in_song())
     }
 
     /// The frame rate cap (0 = none). The pause menu gets no more frames than the screen shows:
@@ -2461,7 +878,9 @@ impl State {
         if !self.focused && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > UNFOCUSED_FPS) {
             return UNFOCUSED_FPS;
         }
-        let menu = matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_some() && game.resuming.is_none());
+        let menu = self
+            .game()
+            .is_some_and(|game| game.paused().is_some() && game.resuming().is_none());
         let screen = (self.refresh_hz.round() as u32).max(30);
         if menu && (self.cfg.fps_cap == 0 || self.cfg.fps_cap > screen) {
             screen
@@ -2473,10 +892,7 @@ impl State {
     /// The present mode this frame should use.
     fn wanted_present(&self) -> PresentChoice {
         // Watching someone else play needs no low input latency: always vsync (smoothest).
-        if matches!(
-            self.scene,
-            Scene::Spectate(_) | Scene::Watch(_) | Scene::Calibrate { vsync: true, .. }
-        ) {
+        if self.watching() || self.calibration_run() == Some(true) {
             return PresentChoice::Fifo;
         }
         if self.cfg.menu_vsync && !self.player_plays() {
@@ -2490,11 +906,10 @@ impl State {
     /// not waiting for a multiplayer match to start.
     fn player_plays(&self) -> bool {
         match &self.scene {
-            Scene::Play { game, .. } => {
-                game.replay.is_none() && !self.auto && !game.mods.has(mods::Mod::Autoplay)
-            }
-            Scene::MpPlay { .. } | Scene::Calibrate { .. } => true,
-            _ => false,
+            Scene::Other(s) if s.song_play().is_some() => self.game().is_some_and(|game| {
+                game.replay().is_none() && !self.auto && !game.mods().has(mods::Mod::Autoplay)
+            }),
+            Scene::Other(s) => s.holds_game(),
         }
     }
 
@@ -2534,20 +949,20 @@ impl State {
     }
 
     /// Loads `entry` for a play at `rate` with `mods` (`keep_pitch` unless NC/DC say otherwise).
-    fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
+    fn load_with(&mut self, entry: usize, rate: f64, mods: Mods) -> Job<Loaded> {
         self.load(entry, rate, mods, true, None)
     }
 
     /// The map `text` (as the editor has it now, saved or not), with `entry`'s music: a test
     /// play, at full speed and with no mods.
-    fn load_text(&mut self, entry: usize, text: String) -> Receiver<Loaded> {
+    fn load_text(&mut self, entry: usize, text: String) -> Job<Loaded> {
         // Played through to the end like osu!'s editor test, however it goes; or watched (Tab).
         let mods = Self::test_mods(self.test_auto);
         self.load(entry, 1.0, mods, true, Some(text))
     }
 
     /// `load_with` for what reads the whole song itself (a video): never a stream.
-    fn load_whole(&mut self, entry: usize, rate: f64, mods: Mods) -> Receiver<Loaded> {
+    fn load_whole(&mut self, entry: usize, rate: f64, mods: Mods) -> Job<Loaded> {
         self.load(entry, rate, mods, false, None)
     }
 
@@ -2558,7 +973,7 @@ impl State {
         mods: Mods,
         may_stream: bool,
         text: Option<String>,
-    ) -> Receiver<Loaded> {
+    ) -> Job<Loaded> {
         let (rate, keep_pitch) = mods.speed(rate, self.cfg.rate_keep_pitch);
         let cached = self
             .cached_track(entry, rate, keep_pitch)
@@ -2581,14 +996,13 @@ impl State {
                 .filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target())
                 .map(|m| m.rate)
         });
-        let lobby = matches!(
-            self.scene,
-            Scene::Lobby
-                | Scene::MpWait { .. }
-                | Scene::MpPlay { .. }
-                | Scene::MpResults
-                | Scene::Spectate(_)
-        ) || matches!(&self.scene, Scene::Preview { back } | Scene::Settings { prev: back } if matches!(**back, Scene::Lobby));
+        let lobby = self
+            .behind_settings()
+            .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby()))
+            || self
+                .scene
+                .screen()
+                .is_some_and(|s| s.over_lobby() || s.in_room() || s.spectating());
         if let Some(p) = &self.player {
             return p.rate();
         }
@@ -2610,111 +1024,17 @@ impl State {
         let a = self.cfg.playfield_area;
         let (pw, ph) = self.playfield_size();
         let kind = if a.is_full() {
-            tr!(" (full screen)")
+            tr!(" (full screen)", " (全画面)", " (весь экран)")
         } else if self.current_preset().is_some() {
             ""
         } else {
-            tr!(" (custom)")
+            tr!(" (custom)", " (カスタム)", " (свой)")
         };
         format!("{pw}x{ph}{kind}")
     }
 
     fn start_loading(&mut self, entry: usize) {
         self.start_loading_from(entry, None);
-    }
-
-    /// The video editor for a saved replay.
-    fn open_video_editor(&mut self, file: &std::path::Path) {
-        let r = match scores::load_replay(file) {
-            Ok(r) => r,
-            Err(e) => {
-                self.toast(tr!("can't open the replay: {e}"; e));
-                return;
-            }
-        };
-        let entry = self
-            .library
-            .iter()
-            .position(|e| e.path.to_string_lossy() == r.map_path && e.hash() == r.map_hash)
-            .or_else(|| {
-                self.library
-                    .iter()
-                    .position(|e| e.label() == r.map_label && e.hash() == r.map_hash)
-            });
-        let Some(entry) = entry else {
-            let map = &r.map_label;
-            self.toast(tr!("{map} isn't in your songs"; map));
-            return;
-        };
-        self.stop_audio();
-        self.preview.show_background_for(&self.library[entry]);
-        let rx = self.load_whole(entry, r.rate, Mods::from_list(&r.mods));
-        self.video_status = if video::find_ffmpeg().is_some() {
-            String::new()
-        } else {
-            no_ffmpeg()
-        };
-        self.last_video = None;
-        self.scene = Scene::VideoEdit(Box::new(video::Editor::new(r, rx, self.cfg.video)));
-    }
-
-    /// The editor's front door: make a map from a song, or go on with one.
-    fn open_editor_home(&mut self) {
-        self.stop_audio();
-        let creator = self.mp_menu.account.clone().unwrap_or_default();
-        self.scene = Scene::EditorHome(Box::new(editor::home::Home::new(
-            &self.cfg.editor_recent,
-            &creator,
-        )));
-    }
-
-    /// What the front door asked for.
-    fn home_out(&mut self, out: editor::home::Out) {
-        use editor::home::Out;
-        match out {
-            Out::None => {}
-            Out::Toast(text) => self.toast(text),
-            Out::Leave => self.show_select(),
-            Out::PickInLibrary => {
-                self.pick_to_edit = true;
-                self.main_menu = None;
-                self.scene = Scene::Select;
-            }
-            Out::Open(path) => match self.entry_for(&path) {
-                Some(entry) => self.open_editor_at(path, entry),
-                None => self.toast(format!("can't open {}", path.display())),
-            },
-            Out::Tour => {
-                let recent = self.cfg.editor_recent.first().map(PathBuf::from);
-                match recent
-                    .filter(|p| p.is_file())
-                    .and_then(|p| Some((self.entry_for(&p)?, p)))
-                {
-                    Some((entry, path)) => {
-                        self.open_editor_at(path, entry);
-                        if let Scene::Editor(view) = &mut self.scene {
-                            view.start_tour();
-                        }
-                    }
-                    None => self.toast(
-                        "make a map first (drop a song on this screen), then take the tour".into(),
-                    ),
-                }
-            }
-            Out::Create(plan) => {
-                let _ = std::fs::create_dir_all(&self.songs_dir);
-                match editor::new_map::create(&plan, &self.songs_dir) {
-                    Ok(file) => match self.entry_for(&file) {
-                        Some(entry) => {
-                            self.toast(format!("made {}", plan.title));
-                            self.open_editor_at(file, entry);
-                        }
-                        None => self.toast("the map was made but can't be opened".into()),
-                    },
-                    Err(e) => self.toast(format!("can't make the map: {e}")),
-                }
-            }
-        }
     }
 
     /// Maps dropped into (or taken out of) the folder of the map being edited: new ones join the
@@ -2760,9 +1080,14 @@ impl State {
             // Listed in song select, which stays where the player left it.
             self.select.pin(&self.library, paths);
             self.toast(if n == 1 {
-                tr!("picked up 1 new map from the song folder").to_string()
+                tr!(
+                    "picked up 1 new map from the song folder",
+                    "曲フォルダから譜面を1つ追加しました",
+                    "из папки песни подхвачена 1 новая карта"
+                )
+                .to_string()
             } else {
-                tr!("picked up {n} new maps from the song folder"; n)
+                tr!("picked up {n} new maps from the song folder", "曲フォルダから譜面を{n}個追加しました", "из папки песни подхвачено новых карт: {n}"; [] [n])
             });
         }
         for path in unreadable {
@@ -2770,7 +1095,7 @@ impl State {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            self.toast(tr!("{file} isn't a taiko map the game can read"; file));
+            self.toast(tr!("{file} isn't a taiko map the game can read", "{file}は読み込めない譜面です", "{file} — не читается как карта"; [] [file]));
         }
         self.select.refilter(&self.library);
     }
@@ -2809,23 +1134,6 @@ impl State {
         (self.library.len() > start).then_some(start)
     }
 
-    fn home_key(&mut self, code: KeyCode, repeat: bool, text: Option<&str>, at: Instant) {
-        let typing = matches!(&self.scene, Scene::EditorHome(h) if h.needs_text());
-        let movement = matches!(
-            code,
-            KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::Home | KeyCode::End
-        );
-        if repeat && !typing && !movement {
-            return;
-        }
-        let (ctrl, shift) = (self.modifiers_ctrl, self.modifiers_shift);
-        let out = match &mut self.scene {
-            Scene::EditorHome(h) => h.key(code, text, ctrl, shift, at, self.audio.as_ref()),
-            _ => return,
-        };
-        self.home_out(out);
-    }
-
     /// Opens the map editor on library entry `entry`.
     fn open_editor(&mut self, entry: usize) {
         let path = self.library[entry].path.clone();
@@ -2856,7 +1164,7 @@ impl State {
                     view.start_tour();
                 }
                 self.main_menu = None;
-                self.scene = Scene::Editor(Box::new(view));
+                self.scene = MapEditor::scene(Box::new(view));
             }
             Err(e) => self.toast(format!("can't open the map: {e}")),
         }
@@ -2916,259 +1224,6 @@ impl State {
         }
     }
 
-    fn editor_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
-        let keys = self.editor_keys();
-        let Scene::Editor(view) = &mut self.scene else {
-            return;
-        };
-        match view.key(code, repeat, keys, self.audio.as_ref()) {
-            editor::view::KeyResult::Handled => {}
-            editor::view::KeyResult::Exit => self.show_select(),
-            editor::view::KeyResult::Pass => {
-                self.handle_global_key(code, window);
-            }
-        }
-    }
-
-    fn video_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
-        if self.export.is_some() {
-            if code == KeyCode::Escape && !repeat {
-                // Ending ffmpeg's input (or stopping a pass) ends it early; the encoder removes
-                // what it made.
-                if let Some(ex) = self.export.take() {
-                    ex.encoder.cancel.store(true, Ordering::Relaxed);
-                }
-                self.video_status = tr!("export cancelled").into();
-            }
-            return;
-        }
-        let Scene::VideoEdit(ed) = &mut self.scene else {
-            return;
-        };
-        // Typing the target size takes the keys until Enter or Esc.
-        if let Some(text) = &mut ed.typing {
-            match code {
-                KeyCode::Enter | KeyCode::NumpadEnter => {
-                    match text
-                        .parse::<f64>()
-                        .ok()
-                        .filter(|mb| mb.is_finite() && *mb >= 1.0)
-                    {
-                        Some(mb) => {
-                            ed.settings.target_mb = (mb.min(4000.0) * 10.0).round() / 10.0;
-                            ed.typing = None;
-                        }
-                        None => {
-                            self.video_status =
-                                tr!("type a size of at least 1 MB, like 10 or 25").into()
-                        }
-                    }
-                }
-                KeyCode::Escape => ed.typing = None,
-                KeyCode::Backspace => {
-                    text.pop();
-                }
-                KeyCode::KeyQ => {
-                    ed.typing = None;
-                    ed.settings.quality = 0;
-                }
-                _ => {
-                    let ch = match code {
-                        KeyCode::Period
-                        | KeyCode::Comma
-                        | KeyCode::NumpadDecimal
-                        | KeyCode::NumpadComma => Some('.'),
-                        _ => size_char(code).filter(|c| c.is_ascii_digit()),
-                    };
-                    if let Some(ch) = ch.filter(|_| text.len() < 6) {
-                        text.push(ch);
-                    }
-                }
-            }
-            if ed.typing.is_none() {
-                self.video_status.clear();
-            }
-            self.cfg.video = ed.settings;
-            self.cfg.save();
-            return;
-        }
-        let rate = ed.replay.rate;
-        let step = if self.modifiers_shift { 5000.0 } else { 1000.0 } * rate;
-        // Shift steps back through a setting's choices.
-        let dir = if self.modifiers_shift { -1 } else { 1 };
-        let cycle = |i: usize, n: usize| (i as i32 + dir).rem_euclid(n as i32) as usize;
-        let before = ed.settings;
-        match code {
-            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
-                let t = ed.cursor
-                    + if code == KeyCode::ArrowRight {
-                        step
-                    } else {
-                        -step
-                    };
-                ed.playing = None;
-                if let Some(a) = &self.audio {
-                    a.stop();
-                }
-                ed.seek(t);
-            }
-            _ if repeat => {}
-            KeyCode::Space => {
-                if ed.playing.take().is_some() {
-                    if let Some(a) = &self.audio {
-                        a.stop();
-                    }
-                } else if let (Some((_, track)), Some(a)) = (&ed.map, &self.audio) {
-                    let at = ed
-                        .game
-                        .as_ref()
-                        .map(|g| g.track_at(ed.cursor))
-                        .unwrap_or(ed.cursor / rate);
-                    a.play(track.clone(), at);
-                    ed.playing = Some((Instant::now(), ed.cursor));
-                }
-            }
-            KeyCode::KeyI if ed.cursor < ed.end => ed.start = ed.cursor,
-            KeyCode::KeyO if ed.cursor > ed.start => ed.end = ed.cursor,
-            KeyCode::KeyC => {
-                let presets = video::crop_presets();
-                let i = presets
-                    .iter()
-                    .position(|(n, _)| *n == ed.crop_name)
-                    .map(|i| i + 1)
-                    .unwrap_or(0)
-                    % presets.len();
-                (ed.crop_name, ed.crop) = presets[i];
-            }
-            KeyCode::KeyZ => ed.settings.size = cycle(ed.settings.size, video::SIZES.len()),
-            KeyCode::KeyF => ed.settings.fps = cycle(ed.settings.fps, video::FRAME_RATES.len()),
-            KeyCode::KeyB => ed.settings.blur = cycle(ed.settings.blur, video::BLURS.len()),
-            KeyCode::KeyQ => {
-                ed.settings.quality = cycle(ed.settings.quality, video::QUALITIES.len())
-            }
-            KeyCode::KeyT => {
-                // Aiming at a size, and typing it.
-                ed.settings.quality = video::QUALITIES.len() - 1;
-                ed.typing = Some(String::new());
-            }
-            KeyCode::KeyE => ed.settings.speed = cycle(ed.settings.speed, video::SPEEDS.len()),
-            KeyCode::KeyU => ed.settings.hud = !ed.settings.hud,
-            KeyCode::KeyH => ed.settings.hitsounds = !ed.settings.hitsounds,
-            KeyCode::Enter | KeyCode::NumpadEnter => self.start_export(),
-            KeyCode::KeyS => {
-                if let Some(path) = self.last_video.clone() {
-                    self.show_in_folder(&path);
-                }
-            }
-            KeyCode::Escape => {
-                self.show_select();
-            }
-            _ => {
-                self.handle_global_key(code, window);
-            }
-        }
-        // Remembered for the next video.
-        if let Scene::VideoEdit(ed) = &self.scene
-            && ed.settings != before
-        {
-            self.video_status.clear();
-            self.cfg.video = ed.settings;
-            self.cfg.save();
-        }
-    }
-
-    /// Starts rendering the editor's cut to an MP4.
-    fn start_export(&mut self) {
-        let Scene::VideoEdit(ed) = &mut self.scene else {
-            return;
-        };
-        let Some((map, track)) = &ed.map else { return };
-        let Some(ffmpeg) = video::find_ffmpeg() else {
-            self.video_status = no_ffmpeg();
-            return;
-        };
-        ed.playing = None;
-        if let Some(a) = &self.audio {
-            a.stop();
-        }
-        let sr = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
-        // The hitsounds as they were judged, and the music, for the cut.
-        let mut sim = video::replay_game(map, track, &ed.replay);
-        sim.sfx_log = Some(Vec::new());
-        sim.set_time(ed.end);
-        let sfx: Vec<(f64, audio::Sfx, f32)> = if ed.settings.hitsounds {
-            sim.sfx_log.take().unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let sounds = audio::hitsound_set(
-            sr,
-            skin::hitsounds(&self.cfg.skin, &self.cfg.skin_parts, sr),
-        );
-        let (music, fx) = self.cfg.volumes();
-        let speed = sim.speed();
-        let samples = video::mix_audio(
-            track,
-            sr,
-            &speed,
-            ed.start,
-            ed.end,
-            music.max(0.05),
-            &sfx,
-            &sounds,
-            fx,
-        );
-        let Some(dir) = video::videos_dir() else {
-            return;
-        };
-        let _ = std::fs::create_dir_all(&dir);
-        let wav = dir.join(format!(".audio-{}.wav", std::process::id()));
-        if let Err(e) = video::write_wav(&wav, &samples, sr) {
-            self.video_status = format!("can't write the audio: {e}");
-            return;
-        }
-        let out = video::free_path(&dir, &video::file_name(&ed.replay));
-        let settings = ed.settings;
-        let size = video::SIZES[settings.size];
-        let fps = video::FRAME_RATES[settings.fps];
-        // Frames are evenly spaced in song time (what the video's audio follows).
-        let step = 1000.0 / fps as f64;
-        let (t0, t1) = (speed.track(ed.start), speed.track(ed.end));
-        let frames = ((t1 - t0) / step).ceil().max(1.0) as u64;
-        let job = video::Job {
-            size,
-            fps,
-            crop: ed.crop_px(),
-            settings,
-            seconds: frames as f64 / fps as f64,
-            wav: wav.clone(),
-            out: out.clone(),
-        };
-        match video::start_encoder(&ffmpeg, job) {
-            Ok(encoder) => {
-                let mut game = Box::new(video::replay_game(map, track, &ed.replay));
-                game.set_time(ed.start);
-                self.export = Some(video::Export {
-                    game,
-                    t: t0,
-                    step,
-                    t0,
-                    sub: 0,
-                    settings,
-                    size,
-                    encoder,
-                    frame: 0,
-                    frames,
-                });
-                self.video_status = String::new();
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(&wav);
-                self.video_status = e;
-            }
-        }
-    }
-
     /// Render thread: the shapes of the next view of a video frame (one, or several blended
     /// with motion blur); None when there's nothing (more) to render.
     fn export_frame(&mut self, c: &mut Canvas) -> Option<ExportView> {
@@ -3187,11 +1242,11 @@ impl State {
         }
         let tx = ex.encoder.tx.clone()?;
         let (w, h) = ex.size;
-        ex.game.kiai_effects = kiai;
+        ex.game.view.kiai_effects = kiai;
         let t = ex.game.speed().map(ex.view_time());
         ex.game.set_time(t);
-        ex.game.hud = self.cfg.hud;
-        ex.game.hidden = self.cfg.hud.off;
+        ex.game.view.hud = self.cfg.hud;
+        ex.game.view.hidden = self.cfg.hud.off;
         c.clear(render::VIRTUAL_HEIGHT * w as f32 / h as f32);
         ex.game.draw_playfield(c, scroll);
         if ex.settings.hud {
@@ -3214,7 +1269,7 @@ impl State {
         let r = match scores::load_replay(file) {
             Ok(r) => r,
             Err(e) => {
-                self.toast(tr!("can't open the replay: {e}"; e));
+                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}"; [] [e]));
                 return;
             }
         };
@@ -3230,22 +1285,16 @@ impl State {
             });
         let Some(entry) = entry else {
             let map = &r.map_label;
-            self.toast(tr!("{map} isn't in your songs"; map));
+            self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен"; [] [map]));
             return;
         };
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let (player, map) = (&r.player, self.library[entry].label());
-        let label = tr!("replay of {player}: {map}"; player, map);
+        let label = tr!("replay of {player}: {map}", "{player}のリプレイ: {map}", "повтор {player}: {map}"; [] [player, map]);
         let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
         self.pending_replay = Some(r);
-        self.scene = Scene::Loading {
-            rx,
-            label,
-            entry,
-            from: None,
-            retry: false,
-        };
+        self.scene = Loading::scene(rx, label, entry, None);
     }
 
     /// Song select's layout as it comes: the list's share.
@@ -3270,7 +1319,7 @@ impl State {
         let r = match scores::load_replay(file) {
             Ok(r) => r,
             Err(e) => {
-                self.toast(tr!("can't open the replay: {e}"; e));
+                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}"; [] [e]));
                 return;
             }
         };
@@ -3298,7 +1347,11 @@ impl State {
             .iter()
             .find(|row| row.file == file)
             .and_then(|row| row.pp);
-        results.no_pp = mods.unranked().then_some(tr!("Autoplay gets no pp"));
+        results.no_pp = mods.unranked().then_some(tr!(
+            "Autoplay gets no pp",
+            "Autoplayではppは付きません",
+            "Autoplay не даёт pp"
+        ));
         results.opened = Some(ui::Opened {
             player: r.player.clone(),
             date: r.date,
@@ -3315,11 +1368,7 @@ impl State {
             Some(file.to_path_buf()),
             None,
         ));
-        self.scene = Scene::Results {
-            results: Box::new(results),
-            entry,
-            from: None,
-        };
+        self.scene = ResultsScreen::scene(Box::new(results), entry, None);
     }
 
     /// Opens what a `taiko-rs://` link asks for: a score's results, its replay ready to watch.
@@ -3328,29 +1377,34 @@ impl State {
         match link {
             link::Link::Score(id) => {
                 let server = self.cfg.online_server.clone();
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
-                    let got = match online::call(&server, online::Request::Score { id }) {
+                let fetch = Job::spawn(move || {
+                    match online::call(&server, online::Request::Score { id }) {
                         Ok(online::Reply::Score(s)) => Ok(*s),
                         Ok(_) => Err(crate::lang::odd_reply()),
-                        Err(e) if e == "bad request" => {
-                            Err(tr!("the server can't open score links yet").to_string())
-                        }
+                        Err(e) if e == "bad request" => Err(tr!(
+                            "the server can't open score links yet",
+                            "このサーバーはまだスコアのリンクを開けません",
+                            "сервер пока не открывает ссылки на рекорды"
+                        )
+                        .to_string()),
                         Err(e) => Err(e),
-                    };
-                    let _ = tx.send(got);
+                    }
                 });
                 self.score_link = Some(ScoreLink {
-                    fetch: Some(rx),
+                    fetch,
                     score: None,
                     downloading: None,
                 });
                 let later = if self.in_song() || self.mp.is_some() {
-                    tr!(" (it opens once you're back in song select)")
+                    tr!(
+                        " (it opens once you're back in song select)",
+                        " (選曲に戻ると開きます)",
+                        " (откроется, когда вернётесь к выбору песни)"
+                    )
                 } else {
                     ""
                 };
-                self.toast(tr!("opening a score{later}..."; later));
+                self.toast(tr!("opening a score{later}...", "スコアを開いています{later}...", "открываем рекорд{later}..."; [] [later]));
             }
         }
     }
@@ -3361,28 +1415,27 @@ impl State {
         let Some(l) = &mut self.score_link else {
             return;
         };
-        if let Some(rx) = &l.fetch {
-            match rx.try_recv() {
-                Ok(Ok(s)) => {
-                    l.score = Some(s);
-                    l.fetch = None;
-                }
-                Ok(Err(e)) => {
+        if l.fetch.is_busy() {
+            match l.fetch.poll_ended() {
+                Some(Some(Ok(s))) => l.score = Some(s),
+                Some(Some(Err(e))) => {
                     self.score_link = None;
-                    self.toast(tr!("can't open that score: {e}"; e));
+                    self.toast(tr!("can't open that score: {e}", "そのスコアを開けません: {e}", "не удаётся открыть рекорд: {e}"; [] [e]));
                     return;
                 }
-                Err(mpsc::TryRecvError::Empty) => return,
-                Err(mpsc::TryRecvError::Disconnected) => {
+                None => return,
+                Some(None) => {
                     self.score_link = None;
                     return;
                 }
             }
         }
-        let free = matches!(
-            self.scene,
-            Scene::Select | Scene::Results { .. } | Scene::Preview { .. } | Scene::Download
-        ) && self.mp.is_none();
+        let free = (self.scene.is_select()
+            || self
+                .scene
+                .screen()
+                .is_some_and(|s| s.song_select() || s.opens_score_links()))
+            && self.mp.is_none();
         if self.scan.is_some() || !free {
             return;
         }
@@ -3391,7 +1444,7 @@ impl State {
         };
         if let Some(entry) = find_score_map(&self.library, &score) {
             self.score_link = None;
-            self.scene = Scene::Select;
+            self.scene = SongSelect::scene();
             let path = self.library[entry].path.clone();
             self.select.select_path(&self.library, &path);
             if self.select.selected() != Some(entry) {
@@ -3418,9 +1471,10 @@ impl State {
             (None, Some(id)) if self.installed_sets().contains(&id) => {
                 self.score_link = None;
                 let map = &score.map;
-                self.toast(
-                    tr!("your copy of {map} is a different version than the one played"; map),
-                );
+                self.toast(tr!(
+                    "your copy of {map} is a different version than the one played",
+                    "あなたの{map}はプレイされたものと別のバージョンです",
+                    "ваша {map} — другая версия, не та, что играли"; [] [map]));
             }
             (None, Some(id)) => {
                 let song = score
@@ -3444,12 +1498,14 @@ impl State {
                 if let Some(l) = &mut self.score_link {
                     l.downloading = Some(Instant::now());
                 }
-                self.toast(tr!("downloading {song} for that score..."; song));
+                self.toast(tr!("downloading {song} for that score...", "そのスコアのため{song}をダウンロード中...", "скачиваем {song} для этого рекорда..."; [] [song]));
             }
             (None, None) => {
                 self.score_link = None;
                 let map = &score.map;
-                self.toast(tr!("you haven't got {map}"; map));
+                self.toast(
+                    tr!("you haven't got {map}", "{map}を持っていません", "у вас нет {map}"; [] [map]),
+                );
             }
         }
     }
@@ -3484,7 +1540,11 @@ impl State {
         results.seed = score.seed;
         results.partial = true;
         results.pp = score.pp;
-        results.no_pp = mods.unranked().then_some(tr!("Autoplay gets no pp"));
+        results.no_pp = mods.unranked().then_some(tr!(
+            "Autoplay gets no pp",
+            "Autoplayではppは付きません",
+            "Autoplay не даёт pp"
+        ));
         results.opened = Some(ui::Opened {
             player: score.player.clone(),
             date: score.date,
@@ -3503,11 +1563,7 @@ impl State {
         };
         let online = (self.cfg.online_server.clone(), score, e.label());
         results.job = Some(results_job(e.path.clone(), play, None, Some(online)));
-        self.scene = Scene::Results {
-            results: Box::new(results),
-            entry,
-            from: None,
-        };
+        self.scene = ResultsScreen::scene(Box::new(results), entry, None);
     }
 
     fn start_loading_from(&mut self, entry: usize, from: Option<f64>) {
@@ -3531,7 +1587,7 @@ impl State {
         ));
         if let Some(t) = from {
             let at = fmt_time(t);
-            label.push_str(&tr!("  (from {at})"; at));
+            label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})"; [] [at]));
         }
         let rx = match test {
             Some(text) => {
@@ -3540,35 +1596,29 @@ impl State {
             }
             None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
         };
-        self.scene = Scene::Loading {
-            rx,
-            label,
-            entry,
-            from,
-            retry: false,
-        };
+        self.scene = Loading::scene(rx, label, entry, from);
     }
 
     /// Plays the map again, like starting it except that the intro is skipped.
     fn retry_from(&mut self, entry: usize, from: Option<f64>) {
         self.start_loading_from(entry, from);
-        if let Scene::Loading { retry, .. } = &mut self.scene {
-            *retry = true;
+        if let Some(l) = self.scene.screen_mut::<Loading>() {
+            l.retry = true;
         }
     }
 
     /// Leaves the editor for a test play of `text` (its map as it is now) from `from`.
     fn start_test_play(&mut self, entry: usize, from: Option<f64>) {
         if entry >= self.library.len() {
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.status = "this map isn't in your songs yet: save it first".into();
             }
             return;
         }
-        let Scene::Editor(view) = std::mem::replace(&mut self.scene, Scene::Select) else {
+        let Some(editor) = self.scene.take_screen::<MapEditor>() else {
             return;
         };
-        self.editor_back = Some(view);
+        self.editor_back = Some(editor.view);
         self.test_auto = false;
         self.start_loading_from(entry, from);
     }
@@ -3595,12 +1645,12 @@ impl State {
     /// Tab in the editor's test play, as in osu!'s: autoplay plays on from here, or hands the
     /// drum back.
     fn toggle_test_auto(&mut self) {
-        let Scene::Play { game, .. } = &mut self.scene else {
+        let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref_mut()) else {
             return;
         };
         self.test_auto = !self.test_auto;
-        game.mods = Self::test_mods(self.test_auto);
-        game.banner = Some(Self::test_banner(self.test_auto));
+        game.set_mods(Self::test_mods(self.test_auto));
+        game.view.banner = Some(Self::test_banner(self.test_auto));
     }
 
     /// Back to the editor a test play came from, as it was left.
@@ -3613,7 +1663,7 @@ impl State {
             a.stop();
         }
         self.preview.invalidate_audio();
-        self.scene = Scene::Editor(view);
+        self.scene = MapEditor::scene(view);
         true
     }
 
@@ -3629,134 +1679,52 @@ impl State {
             return Some(entry);
         }
         let lobby = match &self.scene {
-            Scene::Lobby
-            | Scene::MpWait { .. }
-            | Scene::MpPlay { .. }
-            | Scene::MpResults
-            | Scene::Spectate(_) => true,
-            Scene::Preview { back } | Scene::Settings { prev: back } => {
-                matches!(**back, Scene::Lobby)
-            }
-            _ => false,
+            Scene::Other(s) if s.settings() => self
+                .behind
+                .as_deref()
+                .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby())),
+            Scene::Other(s) => s.over_lobby() || s.in_room() || s.spectating(),
         };
         let lobby_map = self.mp.as_ref().and_then(|s| s.map_entry).filter(|_| lobby);
         lobby_map.or_else(|| self.select.selected())
     }
 
-    fn open_preview(&mut self) {
-        if self.preview_target().is_none() {
-            return;
-        }
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::Preview {
-            back: Box::new(back),
-        };
-    }
-
-    fn close_preview(&mut self) {
-        if let Scene::Preview { back } = std::mem::replace(&mut self.scene, Scene::Select) {
-            self.scene = *back;
-        }
-    }
-
-    fn previewing_lobby(&self) -> bool {
-        matches!(&self.scene, Scene::Preview { back } if matches!(**back, Scene::Lobby))
-    }
-
-    /// Host, in the lobby preview: the picked start point becomes the match's.
-    fn set_match_start(&mut self) {
-        let Some(s) = &mut self.mp else { return };
-        if !s.is_host() || s.in_match {
-            return;
-        }
-        let (Some(i), Some(mut m)) = (s.map_entry, s.map.clone()) else {
-            return;
-        };
-        m.from = self.preview.marker(&self.library[i]);
-        let text = match m.from {
-            Some(t) => format!("the match starts at {}", fmt_time(t)),
-            None => "the match starts at the beginning".to_string(),
-        };
-        s.client.send(net::ClientMsg::SelectMap(m));
-        self.toast(text);
-    }
-
-    /// The preview's button: play from the start point (or the match's start point).
-    fn preview_button(&mut self) {
-        if self.previewing_lobby() {
-            self.set_match_start();
-        } else if self.picking_lobby_map {
-            if let Some(i) = self.select.selected() {
-                self.pick_lobby_map(i);
-            }
-        } else {
-            self.play_from_marker();
-        }
-    }
-
-    fn preview_key(&mut self, code: KeyCode, repeat: bool, window: Option<&Window>) {
-        if matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-            let step = if code == KeyCode::ArrowRight {
-                5000.0
-            } else {
-                -5000.0
-            };
-            self.preview.seek_by(step, self.audio.as_ref());
-            return;
-        }
-        if repeat || self.handle_global_key(code, window) {
-            return;
-        }
-        match code {
-            KeyCode::Space => self.toggle_preview_held(),
-            KeyCode::Escape | KeyCode::Backspace => self.close_preview(),
-            KeyCode::Enter | KeyCode::NumpadEnter if self.modifiers_ctrl => self.close_preview(),
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                let marked = self
-                    .preview_target()
-                    .is_some_and(|i| self.preview.marker(&self.library[i]).is_some());
-                if marked || self.previewing_lobby() || self.picking_lobby_map {
-                    self.preview_button();
-                } else if let Some(i) = self.select.selected() {
-                    self.start_loading(i);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Plays the selected map from the start point picked on its timeline.
-    fn play_from_marker(&mut self) {
-        let Some(i) = self.select.selected() else {
-            return;
-        };
-        if let Some(t) = self.preview.marker(&self.library[i]) {
-            self.start_loading_from(i, Some(t));
-        }
-    }
-
     fn apply_volume(&self) {
         if let Some(a) = &self.audio {
-            let (music, fx) = self.heard_volumes();
+            let (music, fx) = self.cfg.volumes();
             a.set_volume(music, fx);
+            // The mixer fades to it (`audio::FOCUS_FADE_OUT`).
+            a.set_focus(self.focus_level());
         }
     }
 
-    /// Music and hitsound volume as played now: lower while another window has focus.
-    fn heard_volumes(&self) -> (f32, f32) {
-        let (music, fx) = self.cfg.volumes();
+    /// The share of the volume heard with the focus where it is: less while another window has
+    /// it.
+    fn focus_level(&self) -> f32 {
         // A phone's other apps aren't beside it: the music plays on at its own volume.
-        let left = if self.focused || mobile::active() {
+        if self.focused || mobile::active() {
             1.0
         } else {
             self.cfg.unfocused_volume
-        };
+        }
+    }
+
+    /// Music and hitsound volume where they settle: lower while another window has focus.
+    #[cfg(test)]
+    fn heard_volumes(&self) -> (f32, f32) {
+        let (music, fx) = self.cfg.volumes();
+        let left = self.focus_level();
         (music * left, fx * left)
     }
 
     /// Whether the music may carry on with the app in the background: anywhere but a song.
     fn music_goes_on(&self) -> bool {
-        !self.in_song() && !matches!(self.scene, Scene::Loading { .. })
+        !self.in_song() && !self.loading_song()
+    }
+
+    /// A song is being loaded to be played.
+    fn loading_song(&self) -> bool {
+        self.scene.screen().is_some_and(|s| s.loads_song())
     }
 
     /// Android: the app went to the background (or came back). The menus' music and the player
@@ -3765,7 +1733,7 @@ impl State {
     fn set_background(&mut self, background: bool) {
         self.backgrounded = background;
         let Some(a) = &self.audio else { return };
-        let game_paused = matches!(&self.scene, Scene::Play { game, .. } if game.paused.is_some());
+        let game_paused = self.scene.is_play() && self.game().is_some_and(|g| g.paused().is_some());
         if background {
             if !self.music_goes_on() {
                 a.set_paused(true);
@@ -3786,12 +1754,11 @@ impl State {
         cached: Option<Arc<Track>>,
         may_stream: bool,
         text: Option<String>,
-    ) -> Receiver<Loaded> {
+    ) -> Job<Loaded> {
         let path = self.library[entry].path.clone();
         let rate = self.audio.as_ref().map(|a| a.rate);
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let result = (|| {
+        Job::spawn(move || {
+            (|| {
                 let map = match &text {
                     Some(text) => beatmap::from_text(text)?,
                     None => beatmap::load(&path)?,
@@ -3832,10 +1799,8 @@ impl State {
                     }),
                 };
                 Ok((map, track))
-            })();
-            let _ = tx.send(result);
-        });
-        rx
+            })()
+        })
     }
 
     fn show_select(&mut self) {
@@ -3845,11 +1810,11 @@ impl State {
         }
         self.stop_audio();
         self.report_smoothness();
-        self.scene = Scene::Select;
+        self.scene = SongSelect::scene();
     }
 
     fn report_smoothness(&mut self) {
-        if let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene) {
+        if let (Some(sm), true) = (&mut self.smooth, self.scene.is_play()) {
             eprintln!(
                 "--- smoothness ({}) ---\n{}",
                 self.present.name(),
@@ -3864,22 +1829,22 @@ impl State {
             .audio
             .as_ref()
             .map(|a| a.description.clone())
-            .unwrap_or_else(|| tr!("no audio").into());
+            .unwrap_or_else(|| tr!("no audio", "音声なし", "нет звука").into());
         let config = config::config_path()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| tr!("not saved").into());
+            .unwrap_or_else(|| tr!("not saved", "保存されません", "не сохраняется").into());
         let (adapter, hz) = (&self.adapter, self.refresh_hz);
-        self.status = tr!(
-            "{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  config: {config}";
-            adapter, audio_desc, hz, config
-        );
+        self.status = tr!("{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  config: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  設定: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Гц  |  конфиг: {config}"; [] [adapter, audio_desc, hz, config]);
     }
 
     fn open_settings(&mut self) {
-        let prev = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::Settings {
-            prev: Box::new(prev),
-        };
+        // Never over themselves (nothing opens them there).
+        if self.in_settings() {
+            return;
+        }
+        let prev = std::mem::replace(&mut self.scene, SongSelect::scene());
+        self.behind = Some(Box::new(prev));
+        self.scene = SettingsScreen::scene();
         self.settings_ui.binding = None;
         self.settings_ui.choices = None;
         self.settings_ui.editing = None;
@@ -3890,7 +1855,7 @@ impl State {
     /// Puts a drum on `code`; false if that key is taken. In Settings and the guide alike.
     fn bind_drum_key(&mut self, slot: usize, code: KeyCode) -> bool {
         if self.cfg.preset_keys.contains(&code) {
-            self.toast(tr!("{} is a playfield preset key", config::key_name(code)));
+            self.toast(tr!("{} is a playfield preset key", "{}はプリセットのキーです", "{} — клавиша пресета поля"; [config::key_name(code)] []));
             return false;
         }
         // Swap if the key was already bound to another drum.
@@ -3899,67 +1864,6 @@ impl State {
         }
         self.cfg.keys[slot] = code;
         true
-    }
-
-    fn guide_action(&mut self, action: guide::Action) {
-        let Some(page) = self.guide else { return };
-        if self.guide_hold_left().is_some()
-            && matches!(
-                action,
-                guide::Action::Next | guide::Action::Close | guide::Action::Page(_)
-            )
-        {
-            return;
-        }
-        self.guide_binding = None;
-        let closing = action == guide::Action::Close
-            || (action == guide::Action::Next && page + 1 == guide::pages());
-        match action {
-            // A new player doesn't leave without the page that says to calibrate.
-            _ if closing && !self.cfg.guide_seen && !self.guide_read[guide::OFFSET_PAGE] => {
-                self.guide = Some(guide::OFFSET_PAGE)
-            }
-            guide::Action::Bind(slot) => self.guide_binding = Some(slot),
-            guide::Action::Back => self.guide = Some(page.saturating_sub(1)),
-            guide::Action::Next if page + 1 < guide::pages() => self.guide = Some(page + 1),
-            guide::Action::Next | guide::Action::Close => self.guide = None,
-            guide::Action::Page(i) => self.guide = Some(i),
-            guide::Action::Calibrate => {
-                self.guide = None;
-                self.guide_after = Some(page + 1);
-                self.start_calibration_as(false);
-            }
-        }
-        // Once closed, it doesn't come up by itself again.
-        if self.guide.is_none() && !self.cfg.guide_seen {
-            self.cfg.guide_seen = true;
-            self.cfg.save();
-        }
-    }
-
-    /// What's left of the time a new player stays on this page of the guide.
-    fn guide_hold_left(&self) -> Option<Duration> {
-        let page = self.guide.filter(|&p| {
-            !self.cfg.guide_seen && (p == 0 || p == guide::OFFSET_PAGE) && !self.guide_read[p]
-        })?;
-        let shown = self
-            .guide_shown
-            .filter(|s| s.0 == page)
-            .map_or(Duration::ZERO, |s| s.1.elapsed());
-        Some(GUIDE_HOLD.saturating_sub(shown)).filter(|left| !left.is_zero())
-    }
-
-    /// Times the page on screen: the clock starts once the splash is out of the way.
-    fn tick_guide(&mut self) {
-        let page = self.guide.filter(|_| self.splash.is_none());
-        if page != self.guide_shown.map(|s| s.0) {
-            self.guide_shown = page.map(|p| (p, Instant::now()));
-        }
-        if let Some((p, since)) = self.guide_shown
-            && since.elapsed() >= GUIDE_HOLD
-        {
-            self.guide_read[p] = true;
-        }
     }
 
     fn reset_is_armed(&self) -> bool {
@@ -3981,28 +1885,35 @@ impl State {
         config::reset_map_offsets();
         self.map_offsets.clear();
         self.refresh_play_offset();
-        self.toast(tr!("offsets of {n} maps reset"; n));
+        self.toast(tr!("offsets of {n} maps reset", "{n}譜面のオフセットをリセットしました", "сброшены оффсеты карт: {n}"; [] [n]));
     }
 
     /// Ctrl+O: settings over whatever is on (a solo song pauses first), or back out of them.
     /// Scenes that have to keep running (a match, spectating, loading) say so instead.
     fn settings_anywhere(&mut self) {
-        if matches!(self.scene, Scene::Settings { .. }) {
+        if self.in_settings() {
             self.settings_ui.dropdown = None;
             self.settings_ui.choices = None;
             self.close_settings();
             return;
         }
         match &mut self.scene {
-            Scene::Play { game, .. } => game.pause(self.audio.as_ref()),
-            Scene::Select
-            | Scene::Download
-            | Scene::MpMenu
-            | Scene::Lobby
-            | Scene::Results { .. }
-            | Scene::Preview { .. } => {}
+            Scene::Other(s) if s.song_play().is_some() => {
+                if let Some(game) = self.play.as_deref_mut() {
+                    game.pause(sound(&self.audio));
+                }
+            }
+            Scene::Other(sel) if sel.select_screen() => {}
+            Scene::Other(s) if s.allows_settings() => {}
             _ => {
-                self.toast(tr!("settings can't open here").into());
+                self.toast(
+                    tr!(
+                        "settings can't open here",
+                        "ここでは設定を開けません",
+                        "здесь настройки не открыть"
+                    )
+                    .into(),
+                );
                 return;
             }
         }
@@ -4019,15 +1930,9 @@ impl State {
     /// or out of them never glitches, so nothing gets in the way of a play.
     fn menu_screen(&self) -> Option<u8> {
         match self.scene {
-            Scene::Select if self.on_menu() => Some(0),
-            Scene::Select => Some(1),
-            Scene::Results { .. } => Some(2),
-            Scene::Settings { .. } => Some(3),
-            Scene::Download => Some(4),
-            Scene::MpMenu => Some(5),
-            Scene::Lobby => Some(6),
-            Scene::MpResults => Some(7),
-            _ => None,
+            Scene::Other(ref sel) if sel.select_screen() && self.on_menu() => Some(0),
+            Scene::Other(ref sel) if sel.select_screen() => Some(1),
+            Scene::Other(ref s) => s.menu_screen(),
         }
     }
 
@@ -4049,7 +1954,7 @@ impl State {
 
     fn on_menu(&self) -> bool {
         self.main_menu.is_some()
-            && matches!(self.scene, Scene::Select)
+            && self.scene.is_select()
             && self.mp.is_none()
             && !self.picking_lobby_map
     }
@@ -4325,7 +2230,9 @@ impl State {
     fn medals_earned(&mut self, new: Vec<online::MedalNote>) {
         let more = self.unlock.add(new);
         if more > 0 {
-            self.toast(tr!("and {more} more medals"; more));
+            self.toast(
+                tr!("and {more} more medals", "ほか{more}個のメダル", "и ещё медалей: {more}"; [] [more]),
+            );
         }
     }
 
@@ -4355,14 +2262,47 @@ impl State {
     }
 
     fn close_settings(&mut self) {
-        if let Scene::Settings { prev } = std::mem::replace(&mut self.scene, Scene::Select) {
-            self.scene = *prev;
+        if self.in_settings() {
+            self.scene = self.behind.take().map_or(SongSelect::scene(), |prev| *prev);
+        }
+    }
+
+    /// The settings are up.
+    fn in_settings(&self) -> bool {
+        self.scene.screen().is_some_and(|s| s.settings())
+    }
+
+    /// The scene the settings up were opened over; None when they aren't up.
+    fn behind_settings(&self) -> Option<&Scene> {
+        self.behind.as_deref().filter(|_| self.in_settings())
+    }
+
+    /// The game of the song, match or calibration up; None on any other screen (the settings
+    /// over its pause menu included).
+    fn game(&self) -> Option<&Play> {
+        match &self.scene {
+            Scene::Other(s) if s.holds_game() => self.play.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// A calibration run is up: Some(true) the vsync compensation's (by sight).
+    fn calibration_run(&self) -> Option<bool> {
+        self.scene.screen().and_then(|s| s.calibration())
+    }
+
+    /// Drops the game when its scene has gone (the settings over its pause menu keep it).
+    fn drop_finished_play(&mut self) {
+        let scene = self.behind_settings().unwrap_or(&self.scene);
+        let holds = scene.screen().is_some_and(|s| s.holds_game());
+        if !holds {
+            self.play = None;
         }
     }
 
     /// A play (or calibration) is running, not paused.
     fn playing(&self) -> bool {
-        matches!(&self.scene, Scene::Play { game, .. } | Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } if game.paused.is_none())
+        self.game().is_some_and(|game| game.paused().is_none())
     }
 
     /// Stars out the swear words already in the chats (the chat filter was just switched on).
@@ -4559,7 +2499,7 @@ impl State {
                     picked.name().into()
                 } else {
                     let (picked, running) = (picked.name(), update::BUILD_CHANNEL.name());
-                    tr!("{picked} (running {running})"; picked, running)
+                    tr!("{picked} (running {running})", "{picked} (実行中は{running})", "{picked} (запущен {running})"; [] [picked, running])
                 }
             }
             Item::Key(i) => config::key_name(c.keys[i]),
@@ -4602,28 +2542,37 @@ impl State {
             Item::SongHeadings => on(self.select.headings),
             Item::HiddenMaps => self.select.hidden.describe(),
             Item::SongsFolder
-                if self.folder_pick.is_some() && self.folder_pick_for == Item::SongsFolder =>
+                if self.folder_pick.is_busy() && self.folder_pick_for == Item::SongsFolder =>
             {
                 picking_text().into()
             }
             Item::DataFolder
-                if self.folder_pick.is_some() && self.folder_pick_for == Item::DataFolder =>
+                if self.folder_pick.is_busy() && self.folder_pick_for == Item::DataFolder =>
             {
                 picking_text().into()
             }
-            Item::DataFolder if self.data_move.is_some() => tr!("moving...").into(),
+            Item::DataFolder if self.data_move.is_some() => {
+                tr!("moving...", "移動中...", "перенос...").into()
+            }
             Item::DataFolder => match &c.data_folder {
                 Some(dir) => short_path(dir),
-                None => tr!("the usual places").into(),
+                None => tr!("the usual places", "いつもの場所", "обычные места").into(),
             },
-            Item::SongsFolder if self.scan.is_some() => tr!("scanning...").into(),
+            Item::SongsFolder if self.scan.is_some() => {
+                tr!("scanning...", "スキャン中...", "сканирование...").into()
+            }
             Item::SongsFolder => match (&c.songs_folder, self.song_dirs.first()) {
                 (Some(dir), _) => short_path(dir),
                 (None, Some(dir)) => {
                     let dir = short_path(dir);
-                    tr!("found {dir}"; dir)
+                    tr!("found {dir}", "見つけた: {dir}", "найдена {dir}"; [] [dir])
                 }
-                (None, None) => tr!("none found, Enter to pick").into(),
+                (None, None) => tr!(
+                    "none found, Enter to pick",
+                    "見つかりません、Enterで選択",
+                    "не найдена, Enter — выбрать"
+                )
+                .into(),
             },
             Item::MasterVolume => format!("{:.0}%", c.master_volume * 100.0),
             Item::MusicVolume => format!("{:.0}%", c.music_volume * 100.0),
@@ -4632,7 +2581,7 @@ impl State {
                 let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
                 let ms = c.audio_buffer as f64 / rate as f64 * 1000.0;
                 let frames = c.audio_buffer;
-                tr!("{frames} frames ({ms:.1} ms)"; frames, ms)
+                tr!("{frames} frames ({ms:.1} ms)", "{frames}フレーム ({ms:.1} ms)", "{frames} кадров ({ms:.1} мс)"; [] [frames, ms])
             }
             Item::PresentMode => c.present.within(&self.present_modes).name().to_string(),
             Item::Renderer => {
@@ -4657,7 +2606,7 @@ impl State {
                     && !running.is_empty()
                     && c.graphics_api != running
                 {
-                    tr!("{name} (after a restart)"; name)
+                    tr!("{name} (after a restart)", "{name} (再起動後)", "{name} (после перезапуска)"; [] [name])
                 } else {
                     name.to_string()
                 }
@@ -4666,7 +2615,7 @@ impl State {
             Item::HalfResolution => on(c.half_resolution),
             Item::FpsCap => {
                 if c.fps_cap == 0 {
-                    tr!("unlimited").into()
+                    tr!("unlimited", "無制限", "без ограничения").into()
                 } else {
                     c.fps_cap.to_string()
                 }
@@ -4685,34 +2634,55 @@ impl State {
             Item::Update => {
                 let build = update::BUILD.map(update::short);
                 match (self.updater.status(), build) {
-                    (_, None) => tr!("local build (no updates)").into(),
+                    (_, None) => tr!(
+                        "local build (no updates)",
+                        "ローカルビルド (更新なし)",
+                        "локальная сборка (без обновлений)"
+                    )
+                    .into(),
                     (update::Status::Off, Some(b)) => {
-                        tr!("{b}, Enter to check"; b)
+                        tr!("{b}, Enter to check", "{b}、Enterで確認", "{b}, Enter — проверить"; [] [b])
                     }
-                    (update::Status::Checking, _) => tr!("checking...").into(),
+                    (update::Status::Checking, _) => {
+                        tr!("checking...", "確認中...", "проверка...").into()
+                    }
                     (update::Status::UpToDate, Some(b)) => {
-                        tr!("{b}, up to date"; b)
+                        tr!("{b}, up to date", "{b}、最新です", "{b}, последняя"; [] [b])
                     }
                     (update::Status::Available { commit, .. }, Some(b)) => {
                         let new = update::short(&commit);
-                        tr!("{b} -> {new}, Enter to install"; b, new)
+                        tr!("{b} -> {new}, Enter to install", "{b} -> {new}、Enterでインストール", "{b} -> {new}, Enter — установить"; [] [b, new])
                     }
                     (update::Status::Downloading, _) => {
                         let p = self.updater.progress() * 100.0;
-                        tr!("downloading {p:.0}%"; p)
+                        tr!("downloading {p:.0}%", "ダウンロード中 {p:.0}%", "загрузка {p:.0}%"; [] [p])
                     }
-                    (update::Status::Installed, _) => tr!("restarting...").into(),
-                    (update::Status::Failed(_), _) => tr!("failed, Enter to retry").into(),
+                    (update::Status::Installed, _) => {
+                        tr!("restarting...", "再起動中...", "перезапуск...").into()
+                    }
+                    (update::Status::Failed(_), _) => tr!(
+                        "failed, Enter to retry",
+                        "失敗、Enterで再試行",
+                        "ошибка, Enter — ещё раз"
+                    )
+                    .into(),
                 }
             }
-            Item::Changelog => tr!("Enter to read").into(),
-            Item::SongSelectLayout if self.song_layout_is_default() => tr!("default").into(),
-            Item::SongSelectLayout => tr!("custom, Enter: default").into(),
+            Item::Changelog => tr!("Enter to read", "Enterで読む", "Enter — читать").into(),
+            Item::SongSelectLayout if self.song_layout_is_default() => {
+                tr!("default", "初期設定", "по умолчанию").into()
+            }
+            Item::SongSelectLayout => tr!(
+                "custom, Enter: default",
+                "カスタム、Enter: 初期設定",
+                "свой, Enter: по умолчанию"
+            )
+            .into(),
             Item::KrokodilKoban => String::new(),
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => {
                 let (w, h) = self.window_px();
-                tr!("fullscreen ({w:.0}x{h:.0})"; w, h)
+                tr!("fullscreen ({w:.0}x{h:.0})", "フルスクリーン ({w:.0}x{h:.0})", "полный экран ({w:.0}x{h:.0})"; [] [w, h])
             }
             Item::WindowSize => {
                 let (w, h) = self.window_px();
@@ -4720,11 +2690,18 @@ impl State {
             }
             Item::Calibrate => enter_to_start().into(),
             Item::Guide => enter_to_start().into(),
-            Item::ResetMapOffsets if self.map_offsets.is_empty() => tr!("none set").into(),
-            Item::ResetMapOffsets if self.reset_is_armed() => tr!("Enter again to reset").into(),
+            Item::ResetMapOffsets if self.map_offsets.is_empty() => {
+                tr!("none set", "なし", "их нет").into()
+            }
+            Item::ResetMapOffsets if self.reset_is_armed() => tr!(
+                "Enter again to reset",
+                "もう一度Enterでリセット",
+                "Enter ещё раз — сбросить"
+            )
+            .into(),
             Item::ResetMapOffsets => {
                 let n = self.map_offsets.len();
-                tr!(count: "{n} maps"; n)
+                tr!("{n} maps", "{n}譜面", "карт: {n}"; [] [n])
             }
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
@@ -4733,31 +2710,33 @@ impl State {
             Item::VsyncCompensation => {
                 let lead = VSYNC_FRAMES * self.refresh_ms() + c.vsync_tune_ms;
                 if c.present == PresentChoice::Fifo {
-                    tr!("on: notes {lead:.0} ms ahead"; lead)
+                    tr!("on: notes {lead:.0} ms ahead", "オン: ノーツを{lead:.0} ms先に", "вкл: ноты на {lead:.0} мс вперёд"; [] [lead])
                 } else {
-                    tr!("on ({lead:.0} ms once gameplay uses vsync)"; lead)
+                    tr!("on ({lead:.0} ms once gameplay uses vsync)", "オン (プレイが垂直同期なら{lead:.0} ms)", "вкл ({lead:.0} мс, когда игра с vsync)"; [] [lead])
                 }
             }
             Item::VsyncTune => format!("{:+.0} ms", c.vsync_tune_ms),
             Item::VsyncCalibrate => enter_to_start().into(),
             Item::Interface if c.interface_hidden => {
                 let key = config::interface_key_name(c.interface_key);
-                tr!("hidden ({key})"; key)
+                tr!("hidden ({key})", "非表示 ({key})", "скрыт ({key})"; [] [key])
             }
-            Item::Interface => tr!("shown").into(),
+            Item::Interface => tr!("shown", "表示", "виден").into(),
             Item::InterfaceHides if c.interface_hides == hud::Parts::ALL => {
-                tr!("everything").into()
+                tr!("everything", "すべて", "всё").into()
             }
-            Item::InterfaceHides if c.interface_hides == hud::Parts::NONE => tr!("nothing").into(),
+            Item::InterfaceHides if c.interface_hides == hud::Parts::NONE => {
+                tr!("nothing", "なし", "ничего").into()
+            }
             Item::InterfaceHides => {
                 let (n, all) = (c.interface_hides.len(), hud::Part::ALL.len());
-                tr!("{n} of {all}"; n, all)
+                tr!("{n} of {all}", "{all}個中{n}個", "{n} из {all}"; [] [n, all])
             }
             Item::InterfaceKey => config::interface_key_name(c.interface_key),
             Item::ResumeDelay if c.resume_delay_ms <= 0.0 => off_text().into(),
             Item::ResumeDelay => {
                 let s = c.resume_delay_ms / 1000.0;
-                tr!("{s:.2} s"; s)
+                tr!("{s:.2} s", "{s:.2}秒", "{s:.2} с"; [] [s])
             }
             Item::PlayfieldArea => c.playfield_area.describe(),
             Item::InterfaceEditor => {
@@ -4769,16 +2748,18 @@ impl State {
                 let own = c.hud_presets.iter().find(|p| p.1 == c.hud);
                 own.map(|p| p.0.clone())
                     .or(named)
-                    .unwrap_or_else(|| tr!(hud: "custom").into())
+                    .unwrap_or_else(|| tr!("custom", "カスタム", "своя").into())
             }
             Item::PlayfieldPreset => self
                 .current_preset()
                 .map(|(w, h)| format!("{w}x{h}"))
-                .unwrap_or_else(|| tr!("custom").into()),
+                .unwrap_or_else(|| tr!("custom", "カスタム", "свой").into()),
             Item::BackgroundDim => format!("{:.0}%", c.bg_dim * 100.0),
             Item::MenuNotesDim => format!("{:.0}%", c.menu_notes_dim * 100.0),
             Item::UnfocusedVolume => format!("{:.0}%", c.unfocused_volume * 100.0),
-            Item::PlayfieldReset => tr!("Enter to reset").into(),
+            Item::PlayfieldReset => {
+                tr!("Enter to reset", "Enterで元に戻す", "Enter — сбросить").into()
+            }
             Item::Rate => format!("{:.2}x", c.rate),
             Item::RateKeepPitch => on(c.rate_keep_pitch),
             Item::Skin if c.skin.is_empty() => built_in_text().into(),
@@ -4789,16 +2770,16 @@ impl State {
                     .filter(|&&p| *c.skin_parts.get(p) != p.default_source())
                     .count();
                 if changed == 0 {
-                    tr!("notes from the skin").into()
+                    tr!("notes from the skin", "ノーツはスキンから", "ноты из скина").into()
                 } else {
-                    tr!("{changed} changed"; changed)
+                    tr!("{changed} changed", "{changed}個を変更", "изменено: {changed}"; [] [changed])
                 }
             }
             Item::SkinPart(i) => skin::Part::ALL
                 .get(i)
                 .map(|&p| self.skin_source_name(c.skin_parts.get(p)))
                 .unwrap_or_default(),
-            Item::SkinFolder => tr!("Enter to open").into(),
+            Item::SkinFolder => tr!("Enter to open", "Enterで開く", "Enter — открыть").into(),
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::NoteColours => c.note_colours.label().into(),
@@ -5049,9 +3030,19 @@ impl State {
                 match next {
                     Some(&size) => self.window_request = Some(size),
                     None => self.toast(if dir > 0 {
-                        tr!("the largest size that fits this screen").into()
+                        tr!(
+                            "the largest size that fits this screen",
+                            "この画面に収まる最大のサイズです",
+                            "это самый большой размер для экрана"
+                        )
+                        .into()
                     } else {
-                        tr!("the smallest size there is").into()
+                        tr!(
+                            "the smallest size there is",
+                            "これが最小のサイズです",
+                            "это самый маленький размер"
+                        )
+                        .into()
                     }),
                 }
                 return;
@@ -5123,14 +3114,28 @@ impl State {
     fn set_update_channel(&mut self, channel: update::Channel) {
         self.updater.set_channel(channel);
         if update::BUILD.is_none() {
-            self.toast(tr!("a local build doesn't update itself").into());
+            self.toast(
+                tr!(
+                    "a local build doesn't update itself",
+                    "ローカルビルドは自分で更新しません",
+                    "локальная сборка не обновляется сама"
+                )
+                .into(),
+            );
         }
     }
 
     /// Reopens the audio device with a buffer of `frames` (not during a song).
     fn set_audio_buffer(&mut self, frames: u32) {
-        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
-            self.toast(tr!("change the audio buffer from song select").into());
+        if self.behind_settings().is_some_and(|prev| prev.is_play()) {
+            self.toast(
+                tr!(
+                    "change the audio buffer from song select",
+                    "オーディオバッファは選曲画面で変えてください",
+                    "меняйте аудиобуфер в выборе песни"
+                )
+                .into(),
+            );
             return;
         }
         self.cfg.audio_buffer = frames;
@@ -5139,7 +3144,9 @@ impl State {
         self.audio = match Engine::new(self.cfg.audio_buffer) {
             Ok(a) => Some(a),
             Err(e) => {
-                self.toast(tr!("audio failed: {e}"; e));
+                self.toast(
+                    tr!("audio failed: {e}", "音声のエラー: {e}", "ошибка звука: {e}"; [] [e]),
+                );
                 None
             }
         };
@@ -5151,264 +3158,327 @@ impl State {
     fn open_choices(&mut self, item: Item) {
         let c = &self.cfg;
         let strings = |v: &mut dyn Iterator<Item = &str>| v.map(str::to_string).collect::<Vec<_>>();
-        let (names, current, note) =
-            match item {
-                Item::TouchLayout => {
-                    let all = config::TouchLayout::ALL;
-                    (
-                        strings(&mut all.iter().map(|l| l.name())),
-                        all.iter().position(|&l| l == c.touch_layout),
-                        String::new(),
-                    )
-                }
-                Item::Language => {
-                    let all = lang::Lang::ALL;
-                    (
-                        strings(&mut all.iter().map(|l| l.name())),
-                        all.iter().position(|&l| l == c.language),
-                        String::new(),
-                    )
-                }
-                Item::IdleScreen => (
-                    idle::MINUTES
-                        .iter()
-                        .map(|&m| idle::minutes_name(m))
-                        .collect(),
-                    idle::MINUTES.iter().position(|&m| m == c.idle_minutes),
+        let (names, current, note) = match item {
+            Item::TouchLayout => {
+                let all = config::TouchLayout::ALL;
+                (
+                    strings(&mut all.iter().map(|l| l.name())),
+                    all.iter().position(|&l| l == c.touch_layout),
                     String::new(),
-                ),
-                Item::Screenshots => {
-                    let all = config::ScreenshotTo::ALL;
-                    (
-                        strings(&mut all.iter().map(|t| t.name())),
-                        all.iter().position(|&t| t == c.screenshot_to),
-                        String::new(),
-                    )
-                }
-                Item::AutoplayStyle => {
-                    let all = autoplay::Style::ALL;
-                    (
-                        strings(&mut all.iter().map(|s| s.name())),
-                        all.iter().position(|&s| s == c.autoplay.style),
-                        String::new(),
-                    )
-                }
-                Item::AutoplayBinding => (
-                    strings(&mut autoplay::BINDINGS.iter().copied()),
-                    Some(c.autoplay.binding),
+                )
+            }
+            Item::Language => {
+                let all = lang::Lang::ALL;
+                (
+                    strings(&mut all.iter().map(|l| l.name())),
+                    all.iter().position(|&l| l == c.language),
                     String::new(),
-                ),
-                Item::Renderer => {
-                    let all = config::RENDERERS;
-                    (
-                        strings(&mut all.iter().map(|&r| config::renderer_name(r))),
-                        all.iter().position(|&r| r == c.graphics_api),
-                        tr!("picking one restarts the game").into(),
+                )
+            }
+            Item::IdleScreen => (
+                idle::MINUTES
+                    .iter()
+                    .map(|&m| idle::minutes_name(m))
+                    .collect(),
+                idle::MINUTES.iter().position(|&m| m == c.idle_minutes),
+                String::new(),
+            ),
+            Item::Screenshots => {
+                let all = config::ScreenshotTo::ALL;
+                (
+                    strings(&mut all.iter().map(|t| t.name())),
+                    all.iter().position(|&t| t == c.screenshot_to),
+                    String::new(),
+                )
+            }
+            Item::AutoplayStyle => {
+                let all = autoplay::Style::ALL;
+                (
+                    strings(&mut all.iter().map(|s| s.name())),
+                    all.iter().position(|&s| s == c.autoplay.style),
+                    String::new(),
+                )
+            }
+            Item::AutoplayBinding => (
+                strings(&mut autoplay::BINDINGS.iter().copied()),
+                Some(c.autoplay.binding),
+                String::new(),
+            ),
+            Item::Renderer => {
+                let all = config::RENDERERS;
+                (
+                    strings(&mut all.iter().map(|&r| config::renderer_name(r))),
+                    all.iter().position(|&r| r == c.graphics_api),
+                    tr!(
+                        "picking one restarts the game",
+                        "選ぶとゲームが再起動します",
+                        "выбор перезапустит игру"
                     )
-                }
-                Item::PresentMode => {
-                    let all = &self.present_modes;
-                    let note = if all.len() == 1 {
-                        tr!("the only one this renderer has")
-                    } else {
-                        tr!("during songs")
-                    };
-                    (
-                        strings(&mut all.iter().map(|p| p.name())),
-                        all.iter().position(|&p| p == c.present.within(all)),
-                        note.into(),
+                    .into(),
+                )
+            }
+            Item::PresentMode => {
+                let all = &self.present_modes;
+                let note = if all.len() == 1 {
+                    tr!(
+                        "the only one this renderer has",
+                        "このレンダラーはこれだけ",
+                        "у этого рендера только он"
                     )
-                }
-                Item::AudioBuffer => {
-                    let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
-                    let names = AUDIO_BUFFERS
+                } else {
+                    tr!("during songs", "曲の間", "во время песен")
+                };
+                (
+                    strings(&mut all.iter().map(|p| p.name())),
+                    all.iter().position(|&p| p == c.present.within(all)),
+                    note.into(),
+                )
+            }
+            Item::AudioBuffer => {
+                let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
+                let names = AUDIO_BUFFERS
+                    .iter()
+                    .map(|&b| {
+                        let ms = b as f64 / rate as f64 * 1000.0;
+                        tr!("{b} frames ({ms:.1} ms)", "{b}フレーム ({ms:.1} ms)", "{b} кадров ({ms:.1} мс)"; [] [b, ms])
+                    })
+                    .collect();
+                (
+                    names,
+                    AUDIO_BUFFERS.iter().position(|&b| b == c.audio_buffer),
+                    format!("{rate} Hz"),
+                )
+            }
+            Item::OffsetScale => (
+                strings(
+                    &mut config::OffsetScale::ALL
                         .iter()
-                        .map(|&b| {
-                            let ms = b as f64 / rate as f64 * 1000.0;
-                            tr!("{b} frames ({ms:.1} ms)"; b, ms)
-                        })
-                        .collect();
-                    (
-                        names,
-                        AUDIO_BUFFERS.iter().position(|&b| b == c.audio_buffer),
-                        format!("{rate} Hz"),
-                    )
-                }
-                Item::OffsetScale => (
-                    strings(
-                        &mut config::OffsetScale::ALL
+                        .map(|&scale| offset_scale_name(scale)),
+                ),
+                config::OffsetScale::ALL
+                    .iter()
+                    .position(|&scale| scale == c.offset_scale),
+                String::new(),
+            ),
+            Item::UpdateChannel => {
+                let all = [update::Channel::Stable, update::Channel::Dev];
+                let running = update::BUILD_CHANNEL.name();
+                (
+                    strings(&mut all.iter().map(|ch| ch.name())),
+                    all.iter().position(|&ch| ch == self.updater.channel()),
+                    tr!("running {running}", "実行中: {running}", "запущен {running}"; [] [running]),
+                )
+            }
+            Item::Accent => (
+                strings(&mut render::ACCENTS.iter().map(|a| a.0)),
+                render::ACCENTS.iter().position(|a| a.1 == c.accent),
+                String::new(),
+            ),
+            Item::WindowSize => {
+                let sizes = self.window_sizes();
+                let now = (self.window_w as u32, self.window_h as u32);
+                let type_size = tr!("Type a size", "サイズを入力", "Ввести размер").to_string();
+                let names = std::iter::once(type_size)
+                    .chain(
+                        sizes
                             .iter()
-                            .map(|&scale| offset_scale_name(scale)),
-                    ),
-                    config::OffsetScale::ALL
-                        .iter()
-                        .position(|&scale| scale == c.offset_scale),
-                    String::new(),
-                ),
-                Item::UpdateChannel => {
-                    let all = [update::Channel::Stable, update::Channel::Dev];
-                    let running = update::BUILD_CHANNEL.name();
-                    (
-                        strings(&mut all.iter().map(|ch| ch.name())),
-                        all.iter().position(|&ch| ch == self.updater.channel()),
-                        tr!("running {running}"; running),
+                            .map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h))),
                     )
-                }
-                Item::Accent => (
-                    strings(&mut render::ACCENTS.iter().map(|a| a.0)),
-                    render::ACCENTS.iter().position(|a| a.1 == c.accent),
-                    String::new(),
-                ),
-                Item::WindowSize => {
-                    let sizes = self.window_sizes();
-                    let now = (self.window_w as u32, self.window_h as u32);
-                    let type_size = tr!("Type a size").to_string();
-                    let names =
-                        std::iter::once(type_size)
-                            .chain(sizes.iter().map(|&(w, h)| {
-                                format!("{w} x {h}   {}", layout::aspect_name(w, h))
-                            }))
-                            .collect();
-                    let current = sizes
-                        .iter()
-                        .position(|&s| s == now && !self.fullscreen)
-                        .map(|i| i + 1);
-                    let (mw, mh) = self.monitor_size;
-                    (names, current, tr!("screen {mw}x{mh}"; mw, mh))
-                }
-                Item::LetterboxSize => {
-                    let sizes = self.letterbox_sizes();
-                    let type_size = tr!("Type a size").to_string();
-                    let names =
-                        std::iter::once(type_size)
-                            .chain(sizes.iter().map(|&(w, h)| {
-                                format!("{w} x {h}   {}", layout::aspect_name(w, h))
-                            }))
-                            .collect();
-                    let current = sizes
-                        .iter()
-                        .position(|&s| s == c.letterbox_size)
-                        .map(|i| i + 1);
-                    let (mw, mh) = self.monitor_size;
-                    (names, current, tr!("screen {mw}x{mh}"; mw, mh))
-                }
-                Item::InterfaceHides => {
-                    let names = hud::Part::ALL
-                        .iter()
-                        .map(|&p| {
-                            format!(
-                                "{}  {}",
-                                if c.interface_hides.has(p) {
-                                    "[x]"
-                                } else {
-                                    "[ ]"
-                                },
-                                p.label()
-                            )
-                        })
-                        .collect();
-                    (names, None, tr!("hidden when toggled off").into())
-                }
-                Item::NoteColours => {
-                    let own = c.note_colours.custom;
-                    let custom = format!(
-                        "{}  #{:06x} / #{:06x}",
-                        multiverse::palette_label(multiverse::CUSTOM),
-                        own[0],
-                        own[1]
-                    );
-                    let names = (0..multiverse::PALETTES.len())
-                        .map(|i| multiverse::palette_label(i).to_string())
-                        .chain(std::iter::once(custom))
-                        .collect();
-                    (names, Some(c.note_colours.palette), tr!("don / kat").into())
-                }
-                Item::SkinParts => {
-                    let names = skin::Part::ALL
-                        .iter()
-                        .map(|&p| {
-                            format!(
-                                "{}:  {}",
-                                p.label(),
-                                self.skin_source_name(c.skin_parts.get(p))
-                            )
-                        })
-                        .collect();
-                    (names, None, tr!("Enter: where it comes from").into())
-                }
-                Item::SkinPart(i) => {
-                    let Some(&part) = skin::Part::ALL.get(i) else {
-                        return;
-                    };
-                    let skins: Vec<String> = skin::list().into_iter().map(|(n, _)| n).collect();
-                    let main = if c.skin.is_empty() {
-                        built_in_text().to_string()
-                    } else {
-                        c.skin.clone()
-                    };
-                    let picked = tr!("The skin picked ({main})"; main);
-                    let names: Vec<String> = [picked, tr!("Built-in").into()]
-                        .into_iter()
-                        .chain(skins.iter().cloned())
-                        .collect();
-                    let current = match c.skin_parts.get(part) {
-                        skin::Source::Main => Some(0),
-                        skin::Source::BuiltIn => Some(1),
-                        skin::Source::Skin(n) => skins.iter().position(|s| s == n).map(|k| k + 2),
-                    };
-                    (names, current, tr!("Esc: back to the parts").into())
-                }
-                Item::Skin => {
-                    let skins = skin::list();
-                    let n = skins.len();
-                    let note = tr!("{n} installed"; n);
-                    let names: Vec<String> = std::iter::once(built_in_text().to_string())
-                        .chain(skins.into_iter().map(|(n, _)| n))
-                        .collect();
-                    let current = if c.skin.is_empty() {
-                        Some(0)
-                    } else {
-                        names
+                    .collect();
+                let current = sizes
+                    .iter()
+                    .position(|&s| s == now && !self.fullscreen)
+                    .map(|i| i + 1);
+                let (mw, mh) = self.monitor_size;
+                (
+                    names,
+                    current,
+                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}"; [] [mw, mh]),
+                )
+            }
+            Item::LetterboxSize => {
+                let sizes = self.letterbox_sizes();
+                let type_size = tr!("Type a size", "サイズを入力", "Ввести размер").to_string();
+                let names = std::iter::once(type_size)
+                    .chain(
+                        sizes
                             .iter()
-                            .skip(1)
-                            .position(|n| *n == c.skin)
-                            .map(|i| i + 1)
-                    };
-                    (names, current, note)
-                }
-                Item::SongsFolder => {
-                    let mut names = vec![
-                        type_path(),
-                        tr!("Find osu!'s Songs folder automatically").to_string(),
-                    ];
-                    if !cfg!(target_os = "android") {
-                        names.insert(0, browse_text());
-                    }
-                    let note = match (&c.songs_folder, self.song_dirs.first()) {
-                        (Some(dir), _) => dir.display().to_string(),
-                        (None, Some(dir)) => {
-                            let dir = dir.display();
-                            tr!("found {dir}"; dir)
-                        }
-                        (None, None) => tr!("none found").into(),
-                    };
-                    (names, None, note)
-                }
-                Item::DataFolder => {
-                    let mut names = vec![type_path(), tr!("Back to the usual places").to_string()];
-                    if !cfg!(target_os = "android") {
-                        names.insert(0, browse_text());
-                    }
-                    (
-                        names,
-                        None,
-                        config::data_dir()
-                            .map(|d| d.display().to_string())
-                            .unwrap_or_default(),
+                            .map(|&(w, h)| format!("{w} x {h}   {}", layout::aspect_name(w, h))),
                     )
+                    .collect();
+                let current = sizes
+                    .iter()
+                    .position(|&s| s == c.letterbox_size)
+                    .map(|i| i + 1);
+                let (mw, mh) = self.monitor_size;
+                (
+                    names,
+                    current,
+                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}"; [] [mw, mh]),
+                )
+            }
+            Item::InterfaceHides => {
+                let names = hud::Part::ALL
+                    .iter()
+                    .map(|&p| {
+                        format!(
+                            "{}  {}",
+                            if c.interface_hides.has(p) {
+                                "[x]"
+                            } else {
+                                "[ ]"
+                            },
+                            p.label()
+                        )
+                    })
+                    .collect();
+                (
+                    names,
+                    None,
+                    tr!(
+                        "hidden when toggled off",
+                        "オフにした時に隠すもの",
+                        "прячется при выключении"
+                    )
+                    .into(),
+                )
+            }
+            Item::NoteColours => {
+                let own = c.note_colours.custom;
+                let custom = format!(
+                    "{}  #{:06x} / #{:06x}",
+                    mod_setup::multiverse::palette_label(multiverse::CUSTOM),
+                    own[0],
+                    own[1]
+                );
+                let names = (0..multiverse::PALETTES.len())
+                    .map(|i| mod_setup::multiverse::palette_label(i).to_string())
+                    .chain(std::iter::once(custom))
+                    .collect();
+                (
+                    names,
+                    Some(c.note_colours.palette),
+                    tr!("don / kat", "ドン / カッ", "дон / кат").into(),
+                )
+            }
+            Item::SkinParts => {
+                let names = skin::Part::ALL
+                    .iter()
+                    .map(|&p| {
+                        format!(
+                            "{}:  {}",
+                            p.label(),
+                            self.skin_source_name(c.skin_parts.get(p))
+                        )
+                    })
+                    .collect();
+                (
+                    names,
+                    None,
+                    tr!(
+                        "Enter: where it comes from",
+                        "Enter: 出どころを選ぶ",
+                        "Enter: откуда берётся"
+                    )
+                    .into(),
+                )
+            }
+            Item::SkinPart(i) => {
+                let Some(&part) = skin::Part::ALL.get(i) else {
+                    return;
+                };
+                let skins: Vec<String> = skin::list().into_iter().map(|(n, _)| n).collect();
+                let main = if c.skin.is_empty() {
+                    built_in_text().to_string()
+                } else {
+                    c.skin.clone()
+                };
+                let picked = tr!("The skin picked ({main})", "選んだスキン ({main})", "Выбранный скин ({main})"; [] [main]);
+                let names: Vec<String> = [picked, tr!("Built-in", "内蔵", "Встроенный").into()]
+                    .into_iter()
+                    .chain(skins.iter().cloned())
+                    .collect();
+                let current = match c.skin_parts.get(part) {
+                    skin::Source::Main => Some(0),
+                    skin::Source::BuiltIn => Some(1),
+                    skin::Source::Skin(n) => skins.iter().position(|s| s == n).map(|k| k + 2),
+                };
+                (
+                    names,
+                    current,
+                    tr!(
+                        "Esc: back to the parts",
+                        "Esc: パーツに戻る",
+                        "Esc: назад к частям"
+                    )
+                    .into(),
+                )
+            }
+            Item::Skin => {
+                let skins = skin::list();
+                let n = skins.len();
+                let note =
+                    tr!("{n} installed", "{n}個インストール済み", "установлено: {n}"; [] [n]);
+                let names: Vec<String> = std::iter::once(built_in_text().to_string())
+                    .chain(skins.into_iter().map(|(n, _)| n))
+                    .collect();
+                let current = if c.skin.is_empty() {
+                    Some(0)
+                } else {
+                    names
+                        .iter()
+                        .skip(1)
+                        .position(|n| *n == c.skin)
+                        .map(|i| i + 1)
+                };
+                (names, current, note)
+            }
+            Item::SongsFolder => {
+                let mut names = vec![
+                    type_path(),
+                    tr!(
+                        "Find osu!'s Songs folder automatically",
+                        "osu!のSongsフォルダを自動で探す",
+                        "Искать папку Songs osu! самому"
+                    )
+                    .to_string(),
+                ];
+                if !cfg!(target_os = "android") {
+                    names.insert(0, browse_text());
                 }
-                _ => return,
-            };
+                let note = match (&c.songs_folder, self.song_dirs.first()) {
+                    (Some(dir), _) => dir.display().to_string(),
+                    (None, Some(dir)) => {
+                        let dir = dir.display();
+                        tr!("found {dir}", "見つけた: {dir}", "найдена {dir}"; [] [dir])
+                    }
+                    (None, None) => tr!("none found", "見つかりません", "не найдена").into(),
+                };
+                (names, None, note)
+            }
+            Item::DataFolder => {
+                let mut names = vec![
+                    type_path(),
+                    tr!(
+                        "Back to the usual places",
+                        "いつもの場所に戻す",
+                        "Вернуть в обычные места"
+                    )
+                    .to_string(),
+                ];
+                if !cfg!(target_os = "android") {
+                    names.insert(0, browse_text());
+                }
+                (
+                    names,
+                    None,
+                    config::data_dir()
+                        .map(|d| d.display().to_string())
+                        .unwrap_or_default(),
+                )
+            }
+            _ => return,
+        };
         self.settings_ui.choices = Some(Choices::new(item, names, current, note));
     }
 
@@ -5635,7 +3705,11 @@ impl State {
         if item == Item::ScrollSpeed && self.mid_song() {
             return Err(scroll_in_select().into());
         }
-        let number = || parse_number(text).ok_or_else(|| tr!("type a number").to_string());
+        let number = || {
+            parse_number(text).ok_or_else(|| {
+                tr!("type a number", "数字を入力してください", "введите число").to_string()
+            })
+        };
         let percent = || number().map(|n| (n / 100.0).clamp(0.0, 1.0) as f32);
         let c = &mut self.cfg;
         match item {
@@ -5681,30 +3755,52 @@ impl State {
                 };
                 c.accent = render::parse_accent(t)
                     .or_else(|| render::parse_accent(&hex))
-                    .ok_or(tr!("type a colour like #ff8800"))?;
+                    .ok_or(tr!(
+                        "type a colour like #ff8800",
+                        "#ff8800のように色を入力",
+                        "введите цвет вроде #ff8800"
+                    ))?;
             }
             Item::LetterboxSize => {
-                let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720"))?;
+                let (w, h) = layout::parse_size(text).ok_or(tr!(
+                    "type a size like 1280x720",
+                    "1280x720のようにサイズを入力",
+                    "введите размер вроде 1280x720"
+                ))?;
                 let (mw, mh) = self.monitor_size;
                 if w > mw || h > mh {
-                    return Err(tr!("{w}x{h} is bigger than the screen ({mw}x{mh})"; w, h, mw, mh));
+                    return Err(
+                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})"; [] [w, h, mw, mh]),
+                    );
                 }
                 if w < MIN_WINDOW.0 as u32 || h < MIN_WINDOW.1 as u32 {
-                    return Err(tr!("at least {}x{}", MIN_WINDOW.0, MIN_WINDOW.1));
+                    return Err(
+                        tr!("at least {}x{}", "{}x{}以上", "минимум {}x{}"; [MIN_WINDOW.0, MIN_WINDOW.1] []),
+                    );
                 }
                 c.letterbox_size = (w, h);
             }
             Item::WindowSize => {
-                let (w, h) = layout::parse_size(text).ok_or(tr!("type a size like 1280x720"))?;
+                let (w, h) = layout::parse_size(text).ok_or(tr!(
+                    "type a size like 1280x720",
+                    "1280x720のようにサイズを入力",
+                    "введите размер вроде 1280x720"
+                ))?;
                 let (mw, mh) = self.monitor_size;
                 if w > mw || h > mh {
-                    return Err(tr!("{w}x{h} is bigger than the screen ({mw}x{mh})"; w, h, mw, mh));
+                    return Err(
+                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})"; [] [w, h, mw, mh]),
+                    );
                 }
                 self.window_request = Some((w, h));
                 return Ok(());
             }
             Item::DonColour | Item::KatColour => {
-                let typed = multiverse::parse_hex(text).ok_or(tr!("type a colour like #eb452c"))?;
+                let typed = multiverse::parse_hex(text).ok_or(tr!(
+                    "type a colour like #eb452c",
+                    "#eb452cのように色を入力",
+                    "введите цвет вроде #eb452c"
+                ))?;
                 let (don, kat) = (c.note_colours.don(), c.note_colours.kat());
                 c.note_colours = if item == Item::DonColour {
                     multiverse::Colours::own(typed, kat)
@@ -5739,7 +3835,7 @@ impl State {
     /// Opens the system's folder dialog for the Songs folder or the game data folder (on its
     /// own thread: it blocks). With no dialog to show, the path is typed in settings instead.
     fn browse_folder(&mut self, item: Item) {
-        if self.folder_pick.is_some() {
+        if self.folder_pick.is_busy() {
             return;
         }
         self.folder_pick_for = item;
@@ -5754,22 +3850,16 @@ impl State {
         let start = current
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
             .unwrap_or_default();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(library::pick_folder(&start));
-        });
-        self.folder_pick = Some(rx);
+        self.folder_pick = Job::spawn(move || library::pick_folder(&start));
         self.select.picking_folder = true;
     }
 
     fn poll_folder_pick(&mut self) {
-        let Some(rx) = &self.folder_pick else { return };
-        let picked = match rx.try_recv() {
-            Ok(picked) => picked,
-            Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Ok(None),
+        let picked = match self.folder_pick.poll_ended() {
+            Some(Some(picked)) => picked,
+            None => return,
+            Some(None) => Ok(None),
         };
-        self.folder_pick = None;
         self.select.picking_folder = false;
         let item = self.folder_pick_for;
         match picked {
@@ -5785,11 +3875,11 @@ impl State {
             }
             Ok(None) => {}
             Err(e) => {
-                if !matches!(self.scene, Scene::Settings { .. }) {
+                if !self.in_settings() {
                     self.open_settings();
                 }
                 self.start_edit(item);
-                self.toast(tr!("{e}: type the folder's path"; e));
+                self.toast(tr!("{e}: type the folder's path", "{e}: フォルダのパスを入力してください", "{e}: введите путь к папке"; [] [e]));
             }
         }
     }
@@ -5798,11 +3888,21 @@ impl State {
     /// into `target` (into a taiko-rs folder there, unless it is one; None: back to the usual
     /// places), on its own thread. `poll_data_move` takes it from there.
     fn move_data_to(&mut self, target: Option<PathBuf>) -> Result<(), String> {
-        if matches!(&self.scene, Scene::Settings { prev } if !matches!(**prev, Scene::Select)) {
-            return Err(tr!("move the game data from song select").into());
+        if self.behind_settings().is_some_and(|prev| !prev.is_select()) {
+            return Err(tr!(
+                "move the game data from song select",
+                "ゲームデータは選曲画面で移動してください",
+                "переносите данные из выбора песни"
+            )
+            .into());
         }
         if self.data_move.is_some() {
-            return Err(tr!("the game data is already on its way").into());
+            return Err(tr!(
+                "the game data is already on its way",
+                "ゲームデータはもう移動中です",
+                "данные уже переносятся"
+            )
+            .into());
         }
         let target = target.map(|t| {
             if t.file_name().is_some_and(|n| n == "taiko-rs") {
@@ -5812,12 +3912,19 @@ impl State {
             }
         });
         if target == self.cfg.data_folder {
-            return Err(tr!("the game data is there already").into());
+            return Err(tr!(
+                "the game data is there already",
+                "ゲームデータはもうそこにあります",
+                "данные уже там"
+            )
+            .into());
         }
         if let Some(t) = &target {
             if !t.parent().is_some_and(std::path::Path::is_dir) {
                 let dir = t.parent().unwrap_or(t).display();
-                return Err(tr!("{dir} isn't a folder"; dir));
+                return Err(
+                    tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка"; [] [dir]),
+                );
             }
             std::fs::create_dir_all(t).map_err(|e| format!("{}: {e}", t.display()))?;
         }
@@ -5853,10 +3960,15 @@ impl State {
                 );
                 let mb = |b: f64| b / 1e6;
                 let (done, total) = (mb(done), mb(total));
-                self.toast(tr!("moving the game data: {done:.0} of {total:.0} MB"; done, total));
+                self.toast(tr!("moving the game data: {done:.0} of {total:.0} MB", "ゲームデータを移動中: {total:.0} MB中{done:.0} MB", "перенос данных: {done:.0} из {total:.0} МБ"; [] [done, total]));
                 return;
             }
-            Err(mpsc::TryRecvError::Disconnected) => Err(tr!("the move stopped").into()),
+            Err(mpsc::TryRecvError::Disconnected) => Err(tr!(
+                "the move stopped",
+                "移動が止まりました",
+                "перенос прервался"
+            )
+            .into()),
         };
         let Some(m) = self.data_move.take() else {
             return;
@@ -5867,24 +3979,29 @@ impl State {
                 config::set_data_folder(self.cfg.data_folder.clone());
                 self.cfg.save();
                 let _ = self.set_songs_folder(self.cfg.songs_folder.clone());
-                let at = config::data_dir()
-                    .map(|d| d.display().to_string())
-                    .unwrap_or_default();
-                self.toast(tr!("game data moved to {at}"; at));
+                let at = config::data_dir().map(|d| d.display().to_string()).unwrap_or_default();
+                self.toast(tr!("game data moved to {at}", "ゲームデータを{at}に移動しました", "данные перенесены в {at}"; [] [at]));
             }
-            Err(e) => self.toast(tr!("couldn't move the game data: {e}"; e)),
+            Err(e) => self.toast(tr!("couldn't move the game data: {e}", "ゲームデータを移動できませんでした: {e}", "не удалось перенести данные: {e}"; [] [e])),
         }
     }
 
     /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
     fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
-        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
-            return Err(tr!("change the Songs folder from song select").into());
+        if self.behind_settings().is_some_and(|prev| prev.is_play()) {
+            return Err(tr!(
+                "change the Songs folder from song select",
+                "Songsフォルダは選曲画面で変えてください",
+                "меняйте папку Songs в выборе песни"
+            )
+            .into());
         }
         let folder = folder.map(|f| library::picked_songs(&f));
         if let Some(f) = folder.as_ref().filter(|f| !f.is_dir()) {
             let dir = f.display();
-            return Err(tr!("{dir} isn't a folder"; dir));
+            return Err(
+                tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка"; [] [dir]),
+            );
         }
         self.cfg.songs_folder = folder.clone();
         self.cfg.save();
@@ -5895,13 +4012,18 @@ impl State {
         self.toast(match (&self.cfg.songs_folder, self.song_dirs.first()) {
             (Some(dir), _) => {
                 let dir = dir.display();
-                tr!("scanning {dir}"; dir)
+                tr!("scanning {dir}", "{dir}をスキャン中", "сканируем {dir}"; [] [dir])
             }
             (None, Some(dir)) => {
                 let dir = dir.display();
-                tr!("found {dir}"; dir)
+                tr!("found {dir}", "見つけた: {dir}", "найдена {dir}"; [] [dir])
             }
-            (None, None) => tr!("no osu! Songs folder found").into(),
+            (None, None) => tr!(
+                "no osu! Songs folder found",
+                "osu!のSongsフォルダが見つかりません",
+                "папка Songs osu! не найдена"
+            )
+            .into(),
         });
         self.scan = Some(start_scan(inputs));
         self.scan_checking = false;
@@ -5912,7 +4034,14 @@ impl State {
     /// Installs the newer build when there is one, else looks for one.
     fn update_now(&mut self) {
         if update::BUILD.is_none() {
-            self.toast(tr!("a local build doesn't update itself").into());
+            self.toast(
+                tr!(
+                    "a local build doesn't update itself",
+                    "ローカルビルドは自分で更新しません",
+                    "локальная сборка не обновляется сама"
+                )
+                .into(),
+            );
             return;
         }
         match self.updater.status() {
@@ -5923,24 +4052,30 @@ impl State {
             update::Status::Checking | update::Status::Downloading | update::Status::Installed => {}
             _ => {
                 self.updater.check();
-                self.toast(tr!("checking for updates...").into());
+                self.toast(
+                    tr!(
+                        "checking for updates...",
+                        "アップデートを確認中...",
+                        "проверяем обновления..."
+                    )
+                    .into(),
+                );
             }
         }
     }
 
     fn toast_download(&mut self, commit: &str) {
         let build = update::short(commit);
-        self.toast(tr!("downloading {build}..."; build));
+        self.toast(
+            tr!("downloading {build}...", "{build}をダウンロード中...", "загрузка {build}..."; [] [build]),
+        );
     }
 
     /// Nothing is lost by restarting the game now: it's in a menu, with no game paused behind the
     /// settings and no multiplayer room to drop out of.
     fn can_restart(&self) -> bool {
-        let scene = match &self.scene {
-            Scene::Settings { prev } => prev.as_ref(),
-            scene => scene,
-        };
-        matches!(scene, Scene::Select | Scene::MpMenu | Scene::Download)
+        let scene = self.behind_settings().unwrap_or(&self.scene);
+        (scene.is_select() || scene.screen().is_some_and(|s| s.update_corner()))
             && self.mp.is_none()
             && self.splash.is_none()
     }
@@ -5949,16 +4084,14 @@ impl State {
     /// once it's installed (which waits for a moment that costs the player nothing).
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
-        let menus = matches!(
-            self.scene,
-            Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download
-        );
+        let menus = (self.scene.is_select() || self.in_settings())
+            || self.scene.screen().is_some_and(|s| s.update_corner());
         if menus
             && !self.mobile_bar()
             && self.splash.is_none()
             && self.changelog.is_none()
             && self.player.is_none()
-            && self.guide.is_none()
+            && self.guide.page.is_none()
         {
             let badge = match self.updater.status() {
                 update::Status::Available { commit, .. } => {
@@ -5974,7 +4107,7 @@ impl State {
                 (2.0, 14.0, 14.0)
             };
             let chip_text = chip_y + (chip_h - 7.0) / 2.0 + 1.0;
-            let label = tr!("what's new");
+            let label = tr!("what's new", "更新内容", "что нового");
             let w = Canvas::text_width(7.0, label) + chip_pad;
             let x = c.width - 8.0 - badge - w;
             let hover = c.hovered(x, chip_y, w, chip_h);
@@ -5993,7 +4126,7 @@ impl State {
                 rgba(if hover { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 label,
             );
-            c.hit(x, chip_y, w, chip_h, render::Hit::Changelog);
+            c.hit(x, chip_y, w, chip_h, hit::Hit::Changelog);
             // Who's logged in and their pp, left of it: their profile on the website.
             // With Relax on, how they stand on its boards.
             let relax = self.cfg.mods.relax();
@@ -6008,7 +4141,10 @@ impl State {
                     ),
                 ),
                 (Some(name), None) => (name.clone(), String::new()),
-                (None, _) => (tr!("log in").to_string(), String::new()),
+                (None, _) => (
+                    tr!("log in", "ログイン", "войти").to_string(),
+                    String::new(),
+                ),
             };
             // Their picture first.
             let pic = if self.mp_menu.account.is_some() {
@@ -6047,7 +4183,7 @@ impl State {
                 rgba(0xff8ad8, 1.0),
                 &rest,
             );
-            c.hit(ax, chip_y, aw, chip_h, render::Hit::Account);
+            c.hit(ax, chip_y, aw, chip_h, hit::Hit::Account);
         }
         let text = match self.updater.status() {
             update::Status::Available { commit, .. } => update_badge(&commit),
@@ -6062,7 +4198,7 @@ impl State {
                 match update::restart() {
                     Ok(()) => self.quit = true,
                     Err(e) => {
-                        self.toast(tr!("installed; restart taiko.rs ({e})"; e));
+                        self.toast(tr!("installed; restart taiko.rs ({e})", "インストールしました。taiko.rsを再起動してください ({e})", "установлено; перезапустите taiko.rs ({e})"; [] [e]));
                         self.updater = update::Updater::new(false);
                     }
                 }
@@ -6085,7 +4221,7 @@ impl State {
             1.0,
         );
         c.text(x + 7.0, 5.5, 7.0, rgba(0xffffff, 1.0), &text);
-        c.hit(x, 2.0, w, 14.0, render::Hit::Update);
+        c.hit(x, 2.0, w, 14.0, hit::Hit::Update);
     }
 
     /// Loads the configured skin: its note images go to the renderer, its hitsounds to the audio
@@ -6095,11 +4231,11 @@ impl State {
         match source {
             skin::Source::Main if self.cfg.skin.is_empty() => {
                 let skin = built_in_text();
-                tr!("the skin ({skin})"; skin)
+                tr!("the skin ({skin})", "スキン ({skin})", "скин ({skin})"; [] [skin])
             }
             skin::Source::Main => {
                 let skin = &self.cfg.skin;
-                tr!("the skin ({skin})"; skin)
+                tr!("the skin ({skin})", "スキン ({skin})", "скин ({skin})"; [] [skin])
             }
             skin::Source::BuiltIn => built_in_text().into(),
             skin::Source::Skin(name) => name.clone(),
@@ -6154,11 +4290,12 @@ impl State {
     // spectating keep your skin.
     fn follow_map_skin(&mut self) {
         let entry = match &self.scene {
-            Scene::Play { entry, .. } => Some(*entry),
-            Scene::Select | Scene::Preview { .. } => self.preview_target(),
-            Scene::Settings { prev } => match **prev {
-                Scene::Play { entry, .. } => Some(entry),
-                Scene::Select => self.preview_target(),
+            Scene::Other(s) if s.song_play().is_some() => s.song_play().map(|p| p.0),
+            Scene::Other(sel) if sel.select_screen() => self.preview_target(),
+            Scene::Other(s) if s.map_from_song_select() => self.preview_target(),
+            Scene::Other(s) if s.settings() => match self.behind.as_deref() {
+                Some(b) if b.is_play() => b.song_play().map(|p| p.0),
+                Some(b) if b.is_select() => self.preview_target(),
                 _ => None,
             },
             _ => None,
@@ -6179,10 +4316,13 @@ impl State {
     /// The folder a `.tko` map's pictures come from: the map played or edited.
     // ponytail: multiplayer and spectating draw a map's text but not its pictures.
     fn picture_dir(&self) -> Option<PathBuf> {
+        if let Some(e) = self.scene.screen_as::<MapEditor>() {
+            return e.view.ed.path.parent().map(Path::to_path_buf);
+        }
         let entry = match &self.scene {
             // A custom map's preview may show its own pictures (the results' covers come from
             // their own folder, `pictures::COVER_PREFIX`).
-            Scene::Download => {
+            Scene::Other(s) if s.previews_remote() => {
                 return self
                     .browse
                     .shown
@@ -6190,10 +4330,9 @@ impl State {
                     .and_then(|e| e.path.parent())
                     .map(Path::to_path_buf);
             }
-            Scene::Editor(view) => return view.ed.path.parent().map(Path::to_path_buf),
-            Scene::Play { entry, .. } => *entry,
-            Scene::Settings { prev } => match **prev {
-                Scene::Play { entry, .. } => entry,
+            Scene::Other(s) if s.song_play().is_some() => s.song_play()?.0,
+            Scene::Other(s) if s.settings() => match self.behind.as_deref() {
+                Some(b) if b.is_play() => b.song_play()?.0,
                 _ => return None,
             },
             _ => return None,
@@ -6218,7 +4357,9 @@ impl State {
             .is_err()
         {
             let dir = dir.display();
-            self.toast(tr!("skins go in {dir}"; dir));
+            self.toast(
+                tr!("skins go in {dir}", "スキンは{dir}に置きます", "скины кладутся в {dir}"; [] [dir]),
+            );
         }
     }
 
@@ -6239,6 +4380,8 @@ impl State {
             );
             self.mapinfo_sorted = false;
         }
+        // A map downloaded for a collection joins it.
+        self.list_collections();
         self.select.refilter(&self.library);
     }
 
@@ -6254,7 +4397,7 @@ impl State {
                 self.drag_hover = None;
                 for path in paths {
                     // A picture dropped on the editor goes into the map's folder.
-                    if let Scene::Editor(view) = &mut self.scene
+                    if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
                         && path
                             .file_name()
                             .is_some_and(|n| pictures::is_picture(&n.to_string_lossy()))
@@ -6262,10 +4405,10 @@ impl State {
                         view.drop_picture(&path);
                         continue;
                     }
-                    if matches!(self.scene, Scene::EditorHome(_)) {
+                    if self.scene.screen_mut::<EditorHome>().is_some() {
                         let rate = self.audio.as_ref().map(|a| a.rate);
-                        let out = match &mut self.scene {
-                            Scene::EditorHome(home) => home.dropped(path, rate),
+                        let out = match self.scene.screen_mut::<EditorHome>() {
+                            Some(h) => h.home.dropped(path, rate),
                             _ => editor::home::Out::None,
                         };
                         self.home_out(out);
@@ -6273,14 +4416,14 @@ impl State {
                     }
                     // A song dropped on song select or the menu starts a map from it.
                     if editor::home::is_audio(&path)
-                        && matches!(self.scene, Scene::Select)
+                        && self.scene.is_select()
                         && !self.picking_lobby_map
                         && self.mp.is_none()
                     {
                         self.open_editor_home();
                         let rate = self.audio.as_ref().map(|a| a.rate);
-                        if let Scene::EditorHome(home) = &mut self.scene {
-                            home.dropped(path, rate);
+                        if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                            h.home.dropped(path, rate);
                         }
                         continue;
                     }
@@ -6295,7 +4438,7 @@ impl State {
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        self.toast(tr!("{file} isn't a map: drop .osz or .rsz files"; file));
+                        self.toast(tr!("{file} isn't a map: drop .osz or .rsz files", "{file}は譜面ではありません: .oszか.rszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz или .rsz"; [] [file]));
                     }
                 }
             }
@@ -6325,7 +4468,7 @@ impl State {
                 }
                 self.toast(match result {
                     Err(e) => format!("{name}: {e}"),
-                    Ok(_) => tr!("{name} has no maps in it"; name),
+                    Ok(_) => tr!("{name} has no maps in it", "{name}には譜面がありません", "в {name} нет карт"; [] [name]),
                 });
                 return;
             }
@@ -6348,14 +4491,16 @@ impl State {
                 )
             });
             self.reveal_maps(here.unwrap_or_default());
-            self.toast(tr!("{name} is already in your songs"; name));
+            self.toast(tr!("{name} is already in your songs", "{name}はもう曲の中にあります", "{name} уже есть среди ваших песен"; [] [name]));
             return;
         }
         let folder = home
             .filter(|d| d.parent() == Some(self.songs_dir.as_path()))
             .and_then(|d| d.file_name())
             .map(|n| n.to_string_lossy().into_owned());
-        self.toast(tr!("importing {name}..."; name));
+        self.toast(
+            tr!("importing {name}...", "{name}を取り込み中...", "добавляем {name}..."; [] [name]),
+        );
         let job = download::import(
             archive,
             folder.as_deref().unwrap_or(name),
@@ -6380,7 +4525,11 @@ impl State {
             rgba(accent(), 0.9 * a),
             2.5,
         );
-        let drop = tr!("Drop .osz or .rsz maps to add them");
+        let drop = tr!(
+            "Drop .osz or .rsz maps to add them",
+            ".oszか.rszの譜面をドロップで追加",
+            "Бросьте карты .osz или .rsz, чтобы добавить"
+        );
         canvas.text_centered(
             w / 2.0,
             h / 2.0 - 22.0,
@@ -6389,7 +4538,11 @@ impl State {
             &Canvas::fit(18.0, w - 64.0, drop),
         );
         let dir = self.songs_dir.display();
-        let to = Canvas::fit(9.0, w - 96.0, &tr!("into {dir}"; dir));
+        let to = Canvas::fit(
+            9.0,
+            w - 96.0,
+            &tr!("into {dir}", "追加先: {dir}", "в {dir}"; [] [dir]),
+        );
         canvas.text_centered(w / 2.0, h / 2.0 + 14.0, 9.0, rgba(0x9a9ab0, a), &to);
     }
 
@@ -6438,11 +4591,12 @@ impl State {
 
     /// The two lines of the Discord status for the current screen.
     fn presence_text(&self) -> Option<(String, String)> {
-        let map_label = |m: &net::MapInfo| format!("{} - {} [{}]", m.artist, m.title, m.version);
+        let map_label = multiplayer::map_label;
         let players = |s: &multiplayer::Session| {
             let n = s.players.len();
             let s = if n == 1 { "" } else { "s" };
-            tr!("{n} player{s}"; n, s)
+            let ru = lang::ru_plural(n, ["игрок", "игрока", "игроков"]);
+            tr!("{n} player{s}", "{n}人", "{n} {ru}"; [] [n, s])
         };
         let rate_text = |rate: f64| {
             if (rate - 1.0).abs() > 1e-6 {
@@ -6454,16 +4608,28 @@ impl State {
         let lobby = |s: &multiplayer::Session| {
             let n = players(s);
             let details = if s.is_host() {
-                tr!("Multiplayer lobby ({n}, hosting)"; n)
+                tr!("Multiplayer lobby ({n}, hosting)", "マルチのロビー ({n}、ホスト)", "Лобби мультиплеера ({n}, хост)"; [] [n])
             } else {
-                tr!("Multiplayer lobby ({n}, in)"; n)
+                tr!("Multiplayer lobby ({n}, in)", "マルチのロビー ({n}、参加中)", "Лобби мультиплеера ({n}, участник)"; [] [n])
             };
-            let state = s
-                .map
-                .as_ref()
-                .map(map_label)
-                .unwrap_or_else(|| tr!("picking a map").into());
+            let state =
+                s.map.as_ref().map(map_label).unwrap_or_else(|| {
+                    tr!("picking a map", "譜面を選択中", "выбирает карту").into()
+                });
             (details, state)
+        };
+        // In a match: waiting for it to start, or playing it.
+        let in_match = || {
+            let s = self.mp.as_ref()?;
+            let label = s.map.as_ref().map(map_label).unwrap_or_default();
+            let (n, rate) = (
+                players(s),
+                rate_text(s.map.as_ref().map(|m| m.rate).unwrap_or(1.0)),
+            );
+            Some((
+                label,
+                tr!("Multiplayer match, {n}{rate}", "マルチの対戦、{n}{rate}", "Матч мультиплеера, {n}{rate}"; [] [n, rate]),
+            ))
         };
         // Away: the idle screen is all the way in (the timer then counts the time away).
         if self.idle.amount() >= 1.0 {
@@ -6471,109 +4637,38 @@ impl State {
                 .idle_song()
                 .map(|(title, artist)| format!("{artist} - {title}"))
                 .unwrap_or_default();
-            return Some((tr!("AFK").into(), song));
+            return Some((tr!("AFK", "離席中", "Отошёл").into(), song));
         }
         Some(match &self.scene {
-            Scene::Loading { entry, .. } => {
-                (self.library.get(*entry)?.label(), tr!("Loading...").into())
-            }
-            Scene::Play { game, entry, .. } => {
-                let label = self.library.get(*entry)?.label();
-                let state = if let Some(who) = &game.replay_of {
-                    tr!("Watching {who}'s replay"; who)
-                } else if game.paused.is_some() {
-                    tr!("Paused").into()
-                } else {
-                    let stars = self
-                        .stars
-                        .get(*entry, game.rate)
-                        .map(|s| format!("  {s:.2}*"))
-                        .unwrap_or_default();
-                    let rate = rate_text(game.rate);
-                    tr!("Playing{stars}{rate}"; stars, rate)
-                };
-                (label, state)
-            }
-            Scene::Results { entry, .. } => (
-                self.library.get(*entry)?.label(),
-                tr!("Looking at the results").into(),
-            ),
-            Scene::MpWait { .. } | Scene::MpPlay { .. } => {
-                let s = self.mp.as_ref()?;
-                let label = s.map.as_ref().map(map_label).unwrap_or_default();
-                let (n, rate) = (
-                    players(s),
-                    rate_text(s.map.as_ref().map(|m| m.rate).unwrap_or(1.0)),
-                );
-                (label, tr!("Multiplayer match, {n}{rate}"; n, rate))
-            }
-            Scene::Spectate(v) => {
-                let label = self
-                    .mp
-                    .as_ref()
-                    .and_then(|s| s.map.as_ref())
-                    .map(map_label)
-                    .unwrap_or_default();
-                let who = v
-                    .focus
-                    .and_then(|k| v.games.get(k))
-                    .and_then(|(id, _)| v.players.iter().find(|p| p.0 == *id))
-                    .map(|p| p.1.clone());
-                let state = match who {
-                    Some(w) => tr!("Spectating {w}"; w),
-                    None => tr!("Spectating everyone").into(),
-                };
-                (label, state)
-            }
-            Scene::Watch(v) => {
-                let who = &v.player;
-                (
-                    tr!("Watching {who}"; who),
-                    v.play.as_ref().map(|p| p.map.label()).unwrap_or_default(),
-                )
-            }
-            Scene::MpResults => (
-                self.mp
-                    .as_ref()
-                    .and_then(|s| s.map.as_ref())
-                    .map(map_label)
-                    .unwrap_or_default(),
-                tr!("Multiplayer results").into(),
-            ),
-            Scene::Editor(view) => (tr!("Mapping").into(), view.label()),
-            Scene::EditorHome(_) => (tr!("Starting a map").into(), String::new()),
-            Scene::VideoEdit(ed) => (
-                tr!("Making a replay video").into(),
-                ed.replay.map_label.clone(),
-            ),
+            Scene::Other(s) if s.in_match() => in_match()?,
             // Anywhere else while in a room (its lobby, or song select picking its map).
+            Scene::Other(s) if s.presence_first() => s.presence(self)?,
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
-            Scene::MpMenu => (tr!("Multiplayer menu").into(), String::new()),
-            Scene::Select if self.player.is_some() => {
+            Scene::Other(sel) if sel.select_screen() && self.player.is_some() => {
                 let song = self
                     .player
                     .as_ref()
                     .and_then(|p| p.list.entry())
                     .and_then(|i| self.library.get(i))
                     .map(Entry::label);
-                (tr!("Listening to music").into(), song.unwrap_or_default())
+                (
+                    tr!("Listening to music", "音楽を聴いている", "Слушает музыку").into(),
+                    song.unwrap_or_default(),
+                )
             }
             _ if self.on_menu() => {
                 let song = self
                     .idle_song()
                     .map(|(title, artist)| format!("{artist} - {title}"))
                     .unwrap_or_default();
-                (tr!("In the main menu").into(), song)
+                (
+                    tr!("In the main menu", "メインメニュー", "В главном меню").into(),
+                    song,
+                )
             }
-            Scene::Download => (tr!("Looking for new maps").into(), String::new()),
-            Scene::Settings { .. } | Scene::LayoutEdit { .. } | Scene::HudEdit { .. } => {
-                (tr!("Tweaking settings").into(), String::new())
-            }
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => {
-                (tr!("Calibrating").into(), String::new())
-            }
+            Scene::Other(s) if s.presence(self).is_some() => s.presence(self).unwrap_or_default(),
             _ => (
-                tr!("Choosing a song").into(),
+                tr!("Choosing a song", "曲を選んでいます", "Выбирает песню").into(),
                 self.select
                     .selected()
                     .and_then(|i| self.library.get(i))
@@ -6625,10 +4720,7 @@ impl State {
                     .is_some_and(|dir| Command::new("xdg-open").arg(dir).spawn().is_ok())
         };
         if !opened {
-            self.toast(tr!(
-                "the video is in {}",
-                path.parent().unwrap_or(path).display()
-            ));
+            self.toast(tr!("the video is in {}", "動画は{}にあります", "видео в {}"; [path.parent().unwrap_or(path).display()] []));
         }
     }
 
@@ -6692,7 +4784,7 @@ impl State {
                     }
                     _ => {}
                 }
-                self.toast(tr!("{}: no key", item.label()));
+                self.toast(tr!("{}: no key", "{}: キーなし", "{}: без клавиши"; [item.label()] []));
                 self.cfg.save();
                 return;
             }
@@ -6713,20 +4805,16 @@ impl State {
                                 .iter()
                                 .any(|p| matches!(p, keys::Place::Play | keys::Place::Paused))
                         {
-                            self.toast(tr!("{} is a drum key", config::key_name(code)));
+                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
                         if let Some(other) = self.cfg.hotkeys.set(h, Some(chord)) {
-                            self.toast(tr!(
-                                "{} now has no key ({} was its)",
-                                other.label(),
-                                chord.name()
-                            ));
+                            self.toast(tr!("{} now has no key ({} was its)", "{}はキーなしになりました ({}だったもの)", "у «{}» больше нет клавиши (была {})"; [other.label(), chord.name()] []));
                         }
                     }
                     Item::InterfaceKey => {
                         if self.cfg.keys.contains(&code) && !self.modifiers_shift {
-                            self.toast(tr!("{} is a drum key", config::key_name(code)));
+                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
                         self.cfg.interface_key = (self.modifiers_shift, code);
@@ -6738,7 +4826,7 @@ impl State {
                     }
                     Item::PresetKey(slot) => {
                         if self.cfg.keys.contains(&code) {
-                            self.toast(tr!("{} is a drum key", config::key_name(code)));
+                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
                         if let Some(other) = self.cfg.preset_keys.iter().position(|&k| k == code) {
@@ -6772,7 +4860,7 @@ impl State {
                 Item::Hotkey(i) => {
                     let h = keys::Hotkey::ALL[i];
                     if let Some(other) = self.cfg.hotkeys.set(h, h.first_key()) {
-                        self.toast(tr!("{} now has no key", other.label()));
+                        self.toast(tr!("{} now has no key", "{}はキーなしになりました", "у «{}» больше нет клавиши"; [other.label()] []));
                     }
                 }
                 _ => {}
@@ -6799,7 +4887,7 @@ impl State {
                 self.start_calibration_as(false)
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Guide => {
-                self.guide = Some(0)
+                self.guide.page = Some(0)
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
                 if item == Item::ResetMapOffsets =>
@@ -6832,12 +4920,17 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::HiddenMaps => {
                 if self.select.hidden.is_empty() {
                     self.toast(
-                        tr!("nothing is hidden: right-click a song in the list to hide it").into(),
+                        tr!(
+                            "nothing is hidden: right-click a song in the list to hide it",
+                            "何も隠れていません: リストの曲を右クリックで隠せます",
+                            "ничего не скрыто: правый клик по песне в списке прячет её"
+                        )
+                        .into(),
                     );
                 } else {
                     let what = self.select.hidden.describe();
                     self.select.unhide_all(&self.library);
-                    self.toast(tr!("{what} back in the song list"; what));
+                    self.toast(tr!("{what} back in the song list", "{what}を曲リストに戻しました", "{what} снова в списке песен"; [] [what]));
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => {
@@ -6863,7 +4956,14 @@ impl State {
                 if item == Item::SongSelectLayout =>
             {
                 self.reset_song_layout();
-                self.toast(tr!("song select: the usual layout").into());
+                self.toast(
+                    tr!(
+                        "song select: the usual layout",
+                        "選曲画面: いつものレイアウト",
+                        "выбор песни: обычный макет"
+                    )
+                    .into(),
+                );
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::Changelog => {
                 self.changelog = Some(changelog::View::recent(false))
@@ -6873,13 +4973,19 @@ impl State {
             {
                 self.cfg.playfield_area = Area::FULL;
                 self.cfg.save();
-                self.toast(tr!("playfield fills the screen").into());
+                self.toast(
+                    tr!(
+                        "playfield fills the screen",
+                        "プレイフィールドを全画面にしました",
+                        "поле на весь экран"
+                    )
+                    .into(),
+                );
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
                 self.adjust_setting(item, 1, window)
             }
-            KeyCode::Tab if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select)) =>
-            {
+            KeyCode::Tab if self.behind_settings().is_some_and(|prev| prev.is_select()) => {
                 self.open_multiplayer();
             }
             KeyCode::Escape | KeyCode::Tab | KeyCode::F1 => self.close_settings(),
@@ -6887,165 +4993,38 @@ impl State {
         }
     }
 
-    /// Offset calibration, or again the kind just finished (Retry).
-    fn start_calibration(&mut self) {
-        let vsync = matches!(self.scene, Scene::CalibrateDone { vsync: true, .. });
-        self.start_calibration_as(vsync);
-    }
-
-    /// Offset calibration, or with `vsync` the vsync compensation's: the same notes, in vsync and
-    /// with no sound, hit by sight.
-    fn start_calibration_as(&mut self, vsync: bool) {
-        if matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Play { .. })) {
-            self.toast(tr!("quit the song first to calibrate").into());
-            return;
-        }
-        let back = match std::mem::replace(&mut self.scene, Scene::Select) {
-            // Retrying from the result screen returns to wherever calibration was started from.
-            Scene::CalibrateDone { back, .. } => *back,
-            other => other,
-        };
-        let beat_ms = 60000.0 / self.cfg.calibration_bpm;
-        let beats = calibrate::total_beats(beat_ms);
-        let map = beatmap::calibration_map(beat_ms, calibrate::COUNT_IN_BEATS, beats);
-        let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
-        let mut track = audio::metronome(rate, beat_ms, beats, 2000.0);
-        if vsync {
-            // Silence the length of the click track: only the notes to go by.
-            track.samples.iter_mut().for_each(|s| *s = 0.0);
-        }
-        let track = Arc::new(track);
-        let mut game = Game::new(map, track, self.audio.as_ref());
-        // Your own hitsounds would let you sync to yourself instead of to the click.
-        game.mute_hits = true;
-        game.show_hp = false;
-        self.scene = Scene::Calibrate {
-            game: Box::new(game),
-            back: Box::new(back),
-            vsync,
-        };
-    }
-
-    fn finish_calibration(&mut self) {
-        let Scene::Calibrate { game, back, vsync } =
-            std::mem::replace(&mut self.scene, Scene::Select)
-        else {
-            return;
-        };
-        self.stop_audio();
-        // By sight in vsync, hitting late means the frames reach the screen later than assumed.
-        let current = if vsync {
-            self.cfg.vsync_tune_ms
-        } else {
-            self.cfg.offset_ms
-        };
-        let mut found = calibrate::estimate(&game.stats.errors, current);
-        if let (Some(e), false) = (&mut found, vsync) {
-            // The suggestion is in the global offset's own terms (osu!'s). Hitting late by e is
-            // the clock's offset up by e, which is the osu! one down by e.
-            e.suggested_offset = (self.cfg.shown_offset() - e.error_ms).round();
-        }
-        if let Some(e) = &found {
-            audiolog::line(&format!(
-                "calibration vsync={vsync} hits={} error={:.1} margin={:.1} ur={:.0} suggested={} current={current}",
-                e.hits, e.error_ms, e.margin_ms, e.ur, e.suggested_offset
-            ));
-        }
-        match found {
-            Some(estimate) if estimate.hits >= 4 => {
-                self.scene = Scene::CalibrateDone {
-                    estimate,
-                    back,
-                    vsync,
-                }
-            }
-            _ => {
-                self.scene = *back;
-                self.toast(tr!("calibration needs more hits").into());
-            }
-        }
-    }
-
+    /// (The run and its result leave on their own keys; tests leave them this way.)
+    #[cfg(test)]
+    /// Leaves calibrating (or its result, taking its suggestion with `apply`) for where it was
+    /// started from.
     fn leave_calibration(&mut self, apply: bool) {
-        self.stop_audio();
-        match std::mem::replace(&mut self.scene, Scene::Select) {
-            Scene::Calibrate { back, .. } => self.scene = *back,
-            Scene::CalibrateDone {
-                estimate,
-                back,
-                vsync,
-            } => {
-                if apply && vsync {
-                    self.cfg.vsync_tune_ms = estimate.suggested_offset.clamp(-200.0, 200.0);
-                    self.cfg.save();
-                    self.toast(tr!(
-                        "vsync compensation fine tune set to {:+.0} ms",
-                        self.cfg.vsync_tune_ms
-                    ));
-                } else if apply {
-                    self.cfg.set_shown_offset(estimate.suggested_offset);
-                    self.cfg.save();
-                    self.toast(tr!("offset set to {:+.0} ms", estimate.suggested_offset));
-                }
-                self.scene = *back;
-            }
-            other => self.scene = other,
-        }
-    }
-
-    fn calibration_key(
-        &mut self,
-        code: KeyCode,
-        repeat: bool,
-        at: Instant,
-        window: Option<&Window>,
-    ) {
-        if let Scene::Calibrate { game, .. } = &mut self.scene {
-            if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat {
-                    game.press(
-                        calibrate::centre_key(k),
-                        at,
-                        self.audio.as_ref(),
-                        self.play_offset,
-                    );
-                }
-                return;
-            }
-            if repeat {
-                return;
-            }
-            match code {
-                KeyCode::Enter | KeyCode::NumpadEnter => self.finish_calibration(),
-                KeyCode::Escape => self.leave_calibration(false),
-                KeyCode::F11 => self.toggle_fullscreen(window),
-                KeyCode::F12 => self.screenshot_due = true,
-                KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
-                _ => {}
-            }
+        if let Some(run) = self.scene.screen_mut::<screens::calibration::Calibration>() {
+            let back = run.take_back();
+            self.stop_audio();
+            self.scene = *back;
             return;
         }
-        if repeat {
-            return;
-        }
-        match code {
-            KeyCode::Enter | KeyCode::NumpadEnter => self.leave_calibration(true),
-            KeyCode::Escape => self.leave_calibration(false),
-            KeyCode::KeyR => self.start_calibration(),
-            KeyCode::ArrowLeft | KeyCode::ArrowRight => {
-                let step = if code == KeyCode::ArrowRight {
-                    5.0
+        match std::mem::replace(&mut self.scene, SongSelect::scene()) {
+            other @ Scene::Other(_) if other.screen().is_some_and(|s| s.calibrating()) => {
+                // The result screen leaves on its own keys.
+                self.scene = other;
+                let key = if apply {
+                    KeyCode::Enter
                 } else {
-                    -5.0
+                    KeyCode::Escape
                 };
-                let (lo, hi) = calibrate::BPM_RANGE;
-                self.cfg.calibration_bpm = (self.cfg.calibration_bpm + step).clamp(lo, hi);
-                self.cfg.save();
+                self.screen_key(screens::screen::Key {
+                    code: key,
+                    repeat: false,
+                    text: None,
+                    at: Instant::now(),
+                    window: None,
+                });
             }
-            KeyCode::F11 => self.toggle_fullscreen(window),
-            KeyCode::F12 => self.screenshot_due = true,
-            KeyCode::KeyQ if self.modifiers_ctrl => self.ask_quit(),
-            _ => {}
+            other => {
+                self.stop_audio();
+                self.scene = other;
+            }
         }
     }
 
@@ -7059,15 +5038,12 @@ impl State {
         let Some(entry) = self.song_entry() else {
             return;
         };
-        let (Scene::Play { game, .. } | Scene::MpPlay { game, .. }) = &self.scene else {
+        let (true, Some(game)) = (self.scene.plays_song(), self.play.as_deref()) else {
             return;
         };
         match game.offset_suggestion(self.play_offset) {
             Some(h) if !h.significant => {
-                let text = tr!(
-                    "offset already within +-{:.1} ms of your hits",
-                    h.estimate.margin_ms
-                );
+                let text = tr!("offset already within +-{:.1} ms of your hits", "オフセットはもう叩きの±{:.1} ms以内です", "смещение уже в пределах +-{:.1} мс от ударов"; [h.estimate.margin_ms] []);
                 self.toast(text);
             }
             // Shift+O: the suggestion is about every map (the same on all of them), so it goes
@@ -7079,10 +5055,7 @@ impl State {
                 self.cfg.set_shown_offset(shown);
                 self.cfg.save();
                 self.refresh_play_offset();
-                self.toast(tr!(
-                    "offset {:+.0} ms for all maps (was {was:+.0})", self.cfg.shown_offset();
-                    was
-                ));
+                self.toast(tr!("offset {:+.0} ms for all maps (was {was:+.0})", "全譜面のオフセット {:+.0} ms (前は{was:+.0})", "смещение {:+.0} мс для всех карт (было {was:+.0})"; [self.cfg.shown_offset()] [was]));
             }
             Some(h) => {
                 let was = self.map_offset(Some(entry));
@@ -7090,19 +5063,26 @@ impl State {
                 // osu! way round.
                 let map = (self.cfg.offset_ms - h.estimate.suggested_offset) * self.song_rate();
                 self.set_map_offset(entry, map);
-                self.toast(tr!("this map: offset {map:+.0} ms (was {was:+.0})"; map, was));
+                self.toast(tr!("this map: offset {map:+.0} ms (was {was:+.0})", "この譜面: オフセット {map:+.0} ms (前は{was:+.0})", "эта карта: смещение {map:+.0} мс (было {was:+.0})"; [] [map, was]));
             }
-            None => self.toast(tr!("need at least 10 hits for a suggestion").into()),
+            None => self.toast(
+                tr!(
+                    "need at least 10 hits for a suggestion",
+                    "提案には10回以上叩く必要があります",
+                    "для подсказки нужно хотя бы 10 ударов"
+                )
+                .into(),
+            ),
         }
     }
 
     /// The map played now, or whose results are up (its own offset is what -/+ and O change).
     fn song_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Loading { entry, .. }
-            | Scene::Play { entry, .. }
-            | Scene::Results { entry, .. } => Some(*entry),
-            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::MpResults => {
+            Scene::Other(s) if s.map_entry().is_some() => s.map_entry(),
+            // The room's map is the song of its match, of the wait for it and of its results;
+            // the lobby only shows it.
+            Scene::Other(s) if s.in_room() && !s.room_lobby() => {
                 self.mp.as_ref().and_then(|s| s.map_entry)
             }
             _ => None,
@@ -7112,9 +5092,11 @@ impl State {
     /// The map whose offset applies on this screen (also the selected one, for the preview).
     fn offset_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Spectate(_) | Scene::Lobby => self.mp.as_ref().and_then(|s| s.map_entry),
-            Scene::Watch(v) => v.entry,
-            Scene::Select | Scene::Preview { .. } => self.select.selected(),
+            Scene::Other(s) if s.spectating() => self.mp.as_ref().and_then(|s| s.map_entry),
+            Scene::Other(s) if s.room_lobby() => self.mp.as_ref().and_then(|s| s.map_entry),
+            Scene::Other(s) if s.watching() => s.watched_map(),
+            Scene::Other(sel) if sel.select_screen() => self.select.selected(),
+            Scene::Other(s) if s.map_from_song_select() => self.select.selected(),
             _ => self.song_entry(),
         }
     }
@@ -7147,7 +5129,9 @@ impl State {
     /// How fast the song goes by: the play's, else what one would be now.
     fn song_rate(&self) -> f64 {
         let rate = match &self.scene {
-            Scene::Play { game, .. } | Scene::MpPlay { game, .. } => game.speed().r0,
+            _ if self.scene.plays_song() && self.play.is_some() => {
+                self.play.as_ref().map_or(1.0, |game| game.speed().r0)
+            }
             _ => self
                 .cfg
                 .mods
@@ -7179,9 +5163,11 @@ impl State {
             ));
         }
         self.preview.map_offset = offset;
-        if let Scene::Play { game, .. } | Scene::MpPlay { game, .. } = &mut self.scene {
-            game.shown_offset = self.cfg.shown_offset();
-            game.latency = self.cfg.offset_latency_ms;
+        if self.scene.plays_song()
+            && let Some(game) = self.play.as_deref_mut()
+        {
+            game.set_shown_offset(self.cfg.shown_offset());
+            game.set_latency(self.cfg.offset_latency_ms);
         }
     }
 
@@ -7204,18 +5190,28 @@ impl State {
 
     /// Plays the current map again from where it was started (in game, paused or on results).
     fn restart_map(&mut self) {
-        if let Scene::Play { entry, from, .. } | Scene::Results { entry, from, .. } = self.scene {
+        if let Some((entry, from)) = self.scene.song_play() {
+            self.retry_from(entry, from);
+        } else if let Some(r) = self.scene.screen_as::<ResultsScreen>() {
+            let (entry, from) = (r.entry, r.from);
             self.retry_from(entry, from);
         }
     }
 
     /// One step faster or slower through the replay being watched.
     fn step_replay_speed(&mut self, by: i32) {
-        let Scene::Play { game, .. } = &self.scene else {
+        let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref()) else {
             return;
         };
         if !game.has_constant_speed() {
-            self.toast(tr!("this replay's speed changes by itself").into());
+            self.toast(
+                tr!(
+                    "this replay's speed changes by itself",
+                    "このリプレイの速度は変更できません",
+                    "скорость этого повтора меняется сама"
+                )
+                .into(),
+            );
             return;
         }
         let at = REPLAY_SPEEDS
@@ -7229,27 +5225,25 @@ impl State {
     /// Makes the replay's music at the speed asked for, one at a time however fast it's asked,
     /// and plays on with it when it's ready.
     fn poll_replay_speed(&mut self) {
-        let Scene::Play { game, entry, .. } = &mut self.scene else {
+        let (Some((entry, _)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
+        else {
             self.replay_speed = 1.0;
             self.replay_speed_wanted = 1.0;
-            self.replay_speed_rx = None;
+            self.replay_speed_rx.cancel();
             return;
         };
-        if let Some(rx) = &self.replay_speed_rx {
-            match rx.try_recv() {
-                Ok(Ok((track, speed))) => {
-                    let rate = game.rate * speed;
-                    game.change_speed(track, rate, self.audio.as_ref(), self.play_offset);
+        if self.replay_speed_rx.is_busy() {
+            match self.replay_speed_rx.poll() {
+                Some(Ok((track, speed))) => {
+                    let rate = game.rate() * speed;
+                    game.change_speed(track, rate, sound(&self.audio), self.play_offset);
                     self.replay_speed = speed;
-                    self.replay_speed_rx = None;
                 }
-                Ok(Err(e)) => {
+                Some(Err(e)) => {
                     self.replay_speed_wanted = self.replay_speed;
-                    self.replay_speed_rx = None;
                     self.status = format!("failed to change the speed: {e}");
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.replay_speed_rx = None,
+                None => {}
             }
             return;
         }
@@ -7260,11 +5254,10 @@ impl State {
             return;
         };
         let speed = self.replay_speed_wanted;
-        let rate = game.rate * speed;
-        let keep_pitch = game.mods.speed(1.0, self.cfg.rate_keep_pitch).1;
-        let path = preview::audio_path(&self.library[*entry]);
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        let rate = game.rate() * speed;
+        let keep_pitch = game.mods().speed(1.0, self.cfg.rate_keep_pitch).1;
+        let path = preview::audio_path(&self.library[entry]);
+        self.replay_speed_rx = Job::spawn(move || {
             let constant = mods::Speed::constant(rate);
             let track = stream::open(&path, sample_rate, constant, keep_pitch).and_then(|t| {
                 t.map_or_else(
@@ -7275,9 +5268,8 @@ impl State {
                     Ok,
                 )
             });
-            let _ = tx.send(track.map(|t| (t, speed)));
+            track.map(|t| (t, speed))
         });
-        self.replay_speed_rx = Some(rx);
     }
 
     /// Pauses the fullscreen preview, or sets it going again.
@@ -7309,7 +5301,7 @@ impl State {
 
     /// Restarts the map once the quick retry key has been held long enough.
     fn poll_retry(&mut self, now: Instant) {
-        if !matches!(self.scene, Scene::Play { .. }) {
+        if !self.scene.is_play() {
             self.retry_hold = None;
         }
         if self.retry_progress(now).is_some_and(|t| t >= 1.0) {
@@ -7331,10 +5323,11 @@ impl State {
             self.restart_map();
             return;
         }
-        let Scene::Play { game, entry, from } = &mut self.scene else {
+        let (Some((entry, from)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
+        else {
             return;
         };
-        if game.resuming.is_some() {
+        if game.resuming().is_some() {
             // Counting down: Esc goes back to the menu, everything else waits.
             if code == KeyCode::Escape {
                 game.cancel_resume();
@@ -7342,16 +5335,16 @@ impl State {
             return;
         }
         let delay = Duration::from_millis(self.cfg.resume_delay_ms as u64);
-        let cursor = game.paused.unwrap_or(0);
+        let cursor = game.paused().unwrap_or(0);
         match code {
             // Wrapping: Up from Continue is Quit, so pause, Up, Enter leaves at once.
-            KeyCode::ArrowUp => game.paused = Some((cursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS),
-            KeyCode::ArrowDown => game.paused = Some((cursor + 1) % PAUSE_ITEMS),
-            KeyCode::Escape => game.resume_after(delay, self.audio.as_ref()),
+            KeyCode::ArrowUp => game.set_pause_cursor((cursor + PAUSE_ITEMS - 1) % PAUSE_ITEMS),
+            KeyCode::ArrowDown => game.set_pause_cursor((cursor + 1) % PAUSE_ITEMS),
+            KeyCode::Escape => game.resume_after(delay, sound(&self.audio)),
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => match cursor {
-                0 => game.resume_after(delay, self.audio.as_ref()),
+                0 => game.resume_after(delay, sound(&self.audio)),
                 1 => {
-                    let (e, f) = (*entry, *from);
+                    let (e, f) = (entry, from);
                     self.retry_from(e, f);
                 }
                 2 => self.open_dropdown(),
@@ -7369,7 +5362,7 @@ impl State {
             // artist called -45).
             KeyCode::Minus | KeyCode::Equal | KeyCode::NumpadSubtract | KeyCode::NumpadAdd
                 if self.player.as_ref().is_some_and(|p| p.searching)
-                    || (matches!(self.scene, Scene::Select)
+                    || (self.scene.is_select()
                         && self.select.searching
                         && !self.modifiers_ctrl) =>
             {
@@ -7385,10 +5378,7 @@ impl State {
                 };
                 self.cfg.visual_offset_ms += d;
                 self.cfg.save();
-                self.toast(tr!(
-                    "visual offset {:+.0} ms (notes drawn earlier)",
-                    self.cfg.visual_offset_ms
-                ));
+                self.toast(tr!("visual offset {:+.0} ms (notes drawn earlier)", "表示オフセット {:+.0} ms (ノーツを早めに描画)", "смещение картинки {:+.0} мс (ноты раньше)"; [self.cfg.visual_offset_ms] []));
                 return true;
             }
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd => {
@@ -7402,11 +5392,7 @@ impl State {
                     Some(entry) => {
                         let ms = self.map_offset(Some(entry)) + d;
                         self.set_map_offset(entry, ms);
-                        let text = tr!(
-                            "this map: offset {ms:+.0} ms (total {:+.0})",
-                            self.cfg.shown_of_play(self.play_offset);
-                            ms
-                        );
+                        let text = tr!("this map: offset {ms:+.0} ms (total {:+.0})", "この譜面: オフセット {ms:+.0} ms (合計 {:+.0})", "эта карта: смещение {ms:+.0} мс (всего {:+.0})"; [self.cfg.shown_of_play(self.play_offset)] [ms]);
                         self.toast(text);
                     }
                     None => {
@@ -7414,7 +5400,7 @@ impl State {
                         self.cfg.set_shown_offset(self.cfg.shown_offset() + d);
                         self.cfg.save();
                         self.refresh_play_offset();
-                        self.toast(tr!("offset {:+.0} ms (all maps)", self.cfg.shown_offset()));
+                        self.toast(tr!("offset {:+.0} ms (all maps)", "オフセット {:+.0} ms (全譜面)", "смещение {:+.0} мс (все карты)"; [self.cfg.shown_offset()] []));
                     }
                 }
                 return true;
@@ -7434,11 +5420,15 @@ impl State {
                 self.cfg.present = self.step_present(1);
                 self.cfg.save();
                 let note = if self.cfg.menu_vsync && !self.player_plays() {
-                    tr!(" (menus stay on vsync)")
+                    tr!(
+                        " (menus stay on vsync)",
+                        " (メニューは垂直同期のまま)",
+                        " (меню остаются с vsync)"
+                    )
                 } else {
                     ""
                 };
-                let text = tr!("gameplay present mode: {}{note}", self.cfg.present.name(); note);
+                let text = tr!("gameplay present mode: {}{note}", "プレイ中の表示モード: {}{note}", "режим вывода в игре: {}{note}"; [self.cfg.present.name()] [note]);
                 self.toast(text);
                 return true;
             }
@@ -7449,12 +5439,21 @@ impl State {
                     .unwrap_or(0);
                 self.cfg.fps_cap = FPS_CAPS[(i + 1) % FPS_CAPS.len()];
                 let mut text = if self.cfg.fps_cap == 0 {
-                    tr!("fps cap: unlimited").to_string()
+                    tr!(
+                        "fps cap: unlimited",
+                        "FPSの上限: 無制限",
+                        "ограничение FPS: нет"
+                    )
+                    .to_string()
                 } else {
-                    tr!("fps cap: {}", self.cfg.fps_cap)
+                    tr!("fps cap: {}", "FPSの上限: {}", "ограничение FPS: {}"; [self.cfg.fps_cap] [])
                 };
                 if self.present == PresentChoice::Fifo {
-                    text.push_str(tr!(" (mailbox/immediate only)"));
+                    text.push_str(tr!(
+                        " (mailbox/immediate only)",
+                        " (mailbox/immediateのみ)",
+                        " (только mailbox/immediate)"
+                    ));
                 }
                 self.toast(text);
                 self.cfg.save();
@@ -7483,7 +5482,7 @@ impl State {
             }
             _ => return false,
         }
-        self.toast(tr!("scroll speed {:.2}x", self.cfg.scroll_speed));
+        self.toast(tr!("scroll speed {:.2}x", "スクロール速度 {:.2}x", "скорость прокрутки {:.2}x"; [self.cfg.scroll_speed] []));
         self.cfg.save();
         true
     }
@@ -7498,12 +5497,12 @@ impl State {
         if !grabbed && !(vx >= x - 6.0 && vx <= x + w + 6.0 && vy >= y && vy <= y + h) {
             return false;
         }
-        let Scene::Play { game, .. } = &mut self.scene else {
+        let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref_mut()) else {
             return false;
         };
         let (start, end) = game.span();
         let t = start + ((vx - x) / w.max(1.0)).clamp(0.0, 1.0) as f64 * (end - start);
-        game.seek(t, self.audio.as_ref(), self.play_offset);
+        game.seek(t, sound(&self.audio), self.play_offset);
         true
     }
 
@@ -7511,11 +5510,11 @@ impl State {
     /// menu) always show it.
     fn cursor_hidden(&self, now: Instant) -> bool {
         let playing = match &self.scene {
-            Scene::Play { game, .. }
-            | Scene::MpPlay { game, .. }
-            | Scene::Calibrate { game, .. } => game.paused.is_none(),
+            Scene::Other(s) if s.holds_game() => {
+                self.game().is_some_and(|game| game.paused().is_none())
+            }
             // Watching: hidden unless the friends overlay is open (it needs the pointer).
-            Scene::Spectate(_) | Scene::Watch(_) => !self.social.open,
+            Scene::Other(s) if s.watching() => !self.social.open,
             _ => false,
         };
         // The idle screen all the way in: nothing to point at.
@@ -7531,103 +5530,7 @@ impl State {
 
     /// Scenes where the playfield area can be moved and resized with the mouse.
     fn area_editable(&self) -> bool {
-        matches!(
-            self.scene,
-            Scene::Play { .. }
-                | Scene::MpPlay { .. }
-                | Scene::Calibrate { .. }
-                | Scene::LayoutEdit { .. }
-                | Scene::HudEdit { .. }
-                | Scene::Preview { .. }
-        )
-    }
-
-    fn open_hud_editor(&mut self) {
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.hud_edit = Some(hud_edit::Editor::new(&self.cfg));
-        self.scene = Scene::HudEdit {
-            back: Box::new(back),
-        };
-    }
-
-    fn close_hud_editor(&mut self) {
-        self.cfg.save();
-        self.hud_edit = None;
-        self.hud_sample = None;
-        if let Scene::HudEdit { back } = std::mem::replace(&mut self.scene, Scene::Select) {
-            self.scene = *back;
-        }
-    }
-
-    fn hud_outcome(&mut self, outcome: hud_edit::Outcome) {
-        match outcome {
-            hud_edit::Outcome::Nothing => {}
-            hud_edit::Outcome::Toast(text) => self.toast(text),
-            hud_edit::Outcome::Close => self.close_hud_editor(),
-        }
-    }
-
-    fn hud_key(&mut self, code: KeyCode, text: Option<&str>) {
-        let mods = (self.modifiers_shift, self.modifiers_ctrl);
-        if let Some(ed) = &mut self.hud_edit {
-            let outcome = ed.key(code, text, mods, &mut self.cfg);
-            self.hud_outcome(outcome);
-        }
-    }
-
-    fn open_layout_editor(&mut self) {
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
-        self.scene = Scene::LayoutEdit {
-            back: Box::new(back),
-        };
-    }
-
-    fn layout_key(&mut self, code: KeyCode) {
-        let a = self.cfg.playfield_area;
-        let step = 0.01;
-        // Arrows move; Shift+arrows resize from the bottom-right, like a window.
-        let resize = |dx: f32, dy: f32| {
-            layout::drag(
-                a,
-                Grip::Resize {
-                    left: false,
-                    right: true,
-                    top: false,
-                    bottom: true,
-                },
-                dx,
-                dy,
-            )
-        };
-        let moved = |dx: f32, dy: f32| layout::drag(a, Grip::Move, dx, dy);
-        let shift = self.modifiers_shift;
-        let next = match code {
-            KeyCode::ArrowLeft if shift => resize(-step, 0.0),
-            KeyCode::ArrowRight if shift => resize(step, 0.0),
-            KeyCode::ArrowUp if shift => resize(0.0, -step),
-            KeyCode::ArrowDown if shift => resize(0.0, step),
-            KeyCode::ArrowLeft => moved(-step, 0.0),
-            KeyCode::ArrowRight => moved(step, 0.0),
-            KeyCode::ArrowUp => moved(0.0, -step),
-            KeyCode::ArrowDown => moved(0.0, step),
-            KeyCode::KeyR => Area::FULL,
-            KeyCode::BracketLeft | KeyCode::BracketRight => {
-                self.cycle_preset(if code == KeyCode::BracketRight { 1 } else { -1 });
-                return;
-            }
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
-                self.cfg.save();
-                if let Scene::LayoutEdit { back } =
-                    std::mem::replace(&mut self.scene, Scene::Select)
-                {
-                    self.scene = *back;
-                }
-                return;
-            }
-            _ => return,
-        };
-        self.cfg.playfield_area = next;
-        self.cfg.save();
+        self.scene.is_play() || self.scene.screen().is_some_and(|s| s.area_editable())
     }
 
     fn refresh_presets(&mut self) {
@@ -7693,7 +5596,7 @@ impl State {
 
     fn apply_preset(&mut self, (w, h): (u32, u32)) {
         if !self.fits_window((w, h)) {
-            self.toast(tr!("{w}x{h} doesn't fit this window"; w, h));
+            self.toast(tr!("{w}x{h} doesn't fit this window", "{w}x{h}はこのウィンドウに収まりません", "{w}x{h} не помещается в окно"; [] [w, h]));
             return;
         }
         // Where the size being left was, and where this one was last put (else the middle).
@@ -7708,7 +5611,7 @@ impl State {
         }
         self.cfg.playfield_area = area;
         self.cfg.save();
-        self.toast(tr!("playfield {w}x{h}"; w, h));
+        self.toast(tr!("playfield {w}x{h}", "プレイフィールド {w}x{h}", "поле {w}x{h}"; [] [w, h]));
     }
 
     /// Steps through resolution presets in dropdown order, applying each as a centred area.
@@ -7719,7 +5622,14 @@ impl State {
             .filter(|&r| self.fits_window(r))
             .collect();
         if list.is_empty() {
-            self.toast(tr!("no smaller resolutions fit this window").into());
+            self.toast(
+                tr!(
+                    "no smaller resolutions fit this window",
+                    "このウィンドウに収まる、より小さい解像度はありません",
+                    "меньших разрешений для этого окна нет"
+                )
+                .into(),
+            );
             return;
         }
         let n = list.len() as i32;
@@ -7828,12 +5738,14 @@ impl State {
             PresetAction::SaveCurrent => {
                 if let Some(at) = self.cfg.saved_presets.iter().position(|&p| p == size) {
                     dd.cursor = at;
-                    self.toast(tr!("{}x{} is already saved", size.0, size.1));
+                    self.toast(tr!("{}x{} is already saved", "{}x{}はもう保存されています", "{}x{} уже сохранён"; [size.0, size.1] []));
                     return;
                 }
                 self.cfg.saved_presets.push(size);
                 dd.cursor = saved;
-                self.toast(tr!("saved {}x{}", size.0, size.1));
+                self.toast(
+                    tr!("saved {}x{}", "{}x{}を保存しました", "сохранён {}x{}"; [size.0, size.1] []),
+                );
             }
             PresetAction::Add => {
                 dd.editing = Some((None, String::new()));
@@ -7850,7 +5762,9 @@ impl State {
             PresetAction::Delete if i < saved => {
                 // The cursor stays on the same row, now the next size.
                 let (w, h) = self.cfg.saved_presets.remove(i);
-                self.toast(tr!("removed {w}x{h}"; w, h));
+                self.toast(
+                    tr!("removed {w}x{h}", "{w}x{h}を削除しました", "удалён {w}x{h}"; [] [w, h]),
+                );
             }
             PresetAction::Up if i > 0 && i < saved => {
                 self.cfg.saved_presets.swap(i, i - 1);
@@ -7872,7 +5786,14 @@ impl State {
     /// Saves a typed size: a new saved size (`index` None) or a change to saved size `index`.
     fn finish_preset_edit(&mut self, index: Option<usize>, text: String) {
         let Some(size) = layout::parse_size(&text) else {
-            self.toast(tr!("type a size like 1280x720").into());
+            self.toast(
+                tr!(
+                    "type a size like 1280x720",
+                    "1280x720のようにサイズを入力",
+                    "введите размер вроде 1280x720"
+                )
+                .into(),
+            );
             if let Some(dd) = &mut self.settings_ui.dropdown {
                 dd.caret = text.len();
                 dd.editing = Some((index, text));
@@ -7882,7 +5803,7 @@ impl State {
         let saved = &mut self.cfg.saved_presets;
         let cursor = match saved.iter().position(|&p| p == size) {
             Some(at) if Some(at) != index => {
-                self.toast(tr!("{}x{} is already saved", size.0, size.1));
+                self.toast(tr!("{}x{} is already saved", "{}x{}はもう保存されています", "{}x{} уже сохранён"; [size.0, size.1] []));
                 at
             }
             _ => match index {
@@ -7929,58 +5850,35 @@ impl State {
         if notches == 0 {
             return;
         }
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             let keys = self.editor_keys();
             // The volume's own notes, once it is up, take the wheel there as they do elsewhere.
             let mine = !self.volume.hovering(Instant::now())
-                && match &mut self.scene {
-                    Scene::Editor(view) => view.wheel(notches, keys),
-                    _ => true,
+                && match self.scene.screen_mut::<MapEditor>() {
+                    Some(MapEditor { view, .. }) => view.wheel(notches, keys),
+                    None => true,
                 };
             if !mine {
                 self.turn_volume(notches);
             }
             return;
         }
-        if matches!(self.scene, Scene::EditorHome(_)) && !self.social.open {
+        if self.scene.screen_mut::<EditorHome>().is_some() && !self.social.open {
             let x = self.mouse_virtual().0;
             let keys = self.editor_keys();
-            if let Scene::EditorHome(home) = &mut self.scene {
-                home.wheel(notches, x, keys.ctrl || keys.alt);
+            if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                h.home.wheel(notches, x, keys.ctrl || keys.alt);
             }
             return;
         }
-        // Alt anywhere; with the pointer moved onto one of the volume's notes, also without Alt.
-        if self.volume.hovering(Instant::now()) || self.modifiers_alt {
-            self.turn_volume(notches);
-            return;
-        }
-        if let Some(view) = &mut self.changelog {
-            view.scroll_by(-notches * 3);
-            return;
-        }
-        if let Some(view) = &mut self.medals {
-            view.wheel(notches);
-            return;
-        }
-        if self.social.open && !self.modifiers_alt {
-            let (vx, vy) = self.mouse_virtual();
-            let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
-            let [px, py, pw, ph] = social::panel_rect(width);
-            if vx >= px && vx <= px + pw && vy >= py && vy <= py + ph {
-                self.social.wheel(notches, self.mp.is_some());
-                return;
-            }
-        }
-        if let Some(cur) = self.mod_select.filter(|_| !self.modifiers_alt) {
-            self.mod_select = Some(mods::step(cur, 0, -notches));
+        if self.layers_wheel(&app::overlays::WHEEL_LAYERS, notches) {
             return;
         }
         if let Some(dd) = &mut self.settings_ui.dropdown {
             dd.wheel(notches);
             return;
         }
-        if matches!(self.scene, Scene::Preview { .. }) {
+        if self.scene.screen_is::<Preview>() {
             let (vx, vy) = self.mouse_virtual();
             if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() {
                 self.preview
@@ -7989,19 +5887,18 @@ impl State {
             }
         }
         let (vx, vy) = self.mouse_virtual();
-        if let Some(ed) = &mut self.hud_edit
-            && matches!(self.scene, Scene::HudEdit { .. })
-            && ed.wheel(vx, vy, notches, &mut self.cfg)
+        if let Some(h) = self.scene.screen_mut::<HudEdit>()
+            && h.ed.wheel(vx, vy, notches, &mut self.cfg)
         {
             return;
         }
         if self.area_editable()
             && (self.cfg.wheel_resizes_playfield
-                || matches!(self.scene, Scene::LayoutEdit { .. } | Scene::HudEdit { .. }))
+                || self.scene.screen().is_some_and(|s| s.wheel_scales_area()))
         {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
-            let text = tr!("playfield: {}", self.cfg.playfield_area.describe());
+            let text = tr!("playfield: {}", "プレイフィールド: {}", "поле: {}"; [self.cfg.playfield_area.describe()] []);
             self.toast(text);
             return;
         }
@@ -8010,8 +5907,8 @@ impl State {
             return;
         }
         let (vx, vy) = self.mouse_virtual();
-        if let Scene::Results { results, .. } = &mut self.scene {
-            results.scroll(notches < 0);
+        if let Some(r) = self.scene.screen_mut::<ResultsScreen>() {
+            r.results.scroll(notches < 0);
             return;
         }
         if self.on_menu() {
@@ -8027,44 +5924,50 @@ impl State {
         let on_board = self
             .board_rect
             .is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
-        if matches!(self.scene, Scene::Select) && on_board && self.select.picker.is_none() {
+        if self.scene.is_select() && on_board && self.select.picker.is_none() {
             self.board_scroll = (self.board_scroll as i64 - notches as i64)
                 .clamp(0, self.board_max as i64) as usize;
             return;
         }
         match &self.scene {
-            Scene::Select
-                if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() =>
+            Scene::Other(sel)
+                if sel.select_screen()
+                    && self.preview_on_top(vx, vy)
+                    && self.preview.time_at(vx, vy).is_some() =>
             {
                 self.preview
                     .seek_by(notches as f64 * 5000.0, self.audio.as_ref())
             }
-            Scene::Select if self.select.picker.is_some() => {
+            Scene::Other(sel) if sel.select_screen() && self.select.picker.is_some() => {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self
                     .select
                     .picker
                     .map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.scroll_by(-notches, &self.library),
-            Scene::Download
-                if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() =>
+            Scene::Other(sel) if sel.select_screen() => {
+                self.select.scroll_by(-notches, &self.library)
+            }
+            Scene::Other(s)
+                if s.previews_remote()
+                    && self.preview_on_top(vx, vy)
+                    && self.preview.time_at(vx, vy).is_some() =>
             {
                 self.preview
                     .seek_by(notches as f64 * 5000.0, self.audio.as_ref())
             }
-            Scene::Download => self.browse.scroll_by(notches),
-            Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
+            Scene::Other(s) if s.previews_remote() => self.browse.scroll_by(notches),
+            Scene::Other(s) if s.settings() && self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
                     dd.wheel(notches);
                 }
             }
-            Scene::Settings { .. } if self.settings_ui.choices.is_some() => {
+            Scene::Other(s) if s.settings() && self.settings_ui.choices.is_some() => {
                 if let Some(p) = &mut self.settings_ui.choices {
                     p.move_cursor(-notches);
                 }
             }
-            Scene::Settings { .. } => self.settings_ui.scroll_by(-notches),
+            Scene::Other(s) if s.settings() => self.settings_ui.scroll_by(-notches),
             _ => {}
         }
     }
@@ -8073,8 +5976,12 @@ impl State {
     /// the first finger works as the mouse.
     fn touch_drums(&self) -> bool {
         match &self.scene {
-            Scene::Play { game, .. } => game.paused.is_none() && game.replay.is_none(),
-            Scene::MpPlay { game, .. } | Scene::Calibrate { game, .. } => game.paused.is_none(),
+            Scene::Other(s) if s.song_play().is_some() => self
+                .game()
+                .is_some_and(|game| game.paused().is_none() && game.replay().is_none()),
+            Scene::Other(s) if s.holds_game() => {
+                self.game().is_some_and(|game| game.paused().is_none())
+            }
             _ => false,
         }
     }
@@ -8101,7 +6008,7 @@ impl State {
             && mobile::on_pause_button(self.mouse_at(x, y), self.window_width())
         {
             // Calibrating, it finishes with the hits so far; the back gesture cancels.
-            let code = if matches!(self.scene, Scene::Calibrate { .. }) {
+            let code = if self.calibration_run().is_some() {
                 KeyCode::Enter
             } else {
                 KeyCode::Escape
@@ -8110,6 +6017,11 @@ impl State {
             return;
         }
         if phase == TouchPhase::Started && self.touch_drums() {
+            let (vx, vy) = self.mouse_at(x, y);
+            if self.hit_at(vx, vy) == Some(hit::Hit::SkipIntro) {
+                self.click(hit::Hit::SkipIntro, window);
+                return;
+            }
             let col = (x / self.window_w.max(1.0) as f64 * 4.0)
                 .floor()
                 .clamp(0.0, 3.0) as usize;
@@ -8151,11 +6063,11 @@ impl State {
 
     /// The touch columns along the bottom of the screen during play, each flashing when hit.
     fn draw_touch_zones(&self, c: &mut Canvas, now: Instant) {
-        mobile::draw_pause_button(c, matches!(self.scene, Scene::Calibrate { .. }));
+        mobile::draw_pause_button(c, self.calibration_run().is_some());
         let col_w = c.width / 4.0;
         let h = render::VIRTUAL_HEIGHT;
         for (col, key) in self.cfg.touch_layout.keys().into_iter().enumerate() {
-            let colours = multiverse::note_colours();
+            let colours = crate::game::note_colours();
             let color = if key == 0 || key == 3 {
                 colours.kat()
             } else {
@@ -8203,7 +6115,7 @@ impl State {
         if moved
             && self.on_menu()
             && self.player.is_none()
-            && let Some(render::Hit::MenuItem(i)) = self.hit_at(vx, vy)
+            && let Some(hit::Hit::MenuItem(i)) = self.hit_at(vx, vy)
             && let Some(m) = self
                 .main_menu
                 .as_mut()
@@ -8236,7 +6148,7 @@ impl State {
         if let Some(d) = &mut self.list_drag {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
-            if d.moved && matches!(self.scene, Scene::Select) {
+            if d.moved && self.scene.is_select() {
                 self.select.drag_to(dy);
                 return CursorIcon::NsResize;
             }
@@ -8246,7 +6158,7 @@ impl State {
             return CursorIcon::EwResize;
         }
         if self.scrollbar_drag {
-            if matches!(self.scene, Scene::Select) {
+            if self.scene.is_select() {
                 let (_, vy) = self.mouse_virtual();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
@@ -8254,7 +6166,7 @@ impl State {
             self.scrollbar_drag = false;
         }
         if self.right_scroll {
-            if matches!(self.scene, Scene::Select) {
+            if self.scene.is_select() {
                 let (_, vy) = self.mouse_virtual();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
@@ -8262,7 +6174,7 @@ impl State {
             self.right_scroll = false;
         }
         if let Some((_, from, start)) = self.split_drag {
-            if !matches!(self.scene, Scene::Select) {
+            if !self.scene.is_select() {
                 self.split_drag = None;
             } else {
                 let (vx, _) = self.mouse_virtual();
@@ -8280,49 +6192,25 @@ impl State {
         }
         let (sw, sh) = (self.window_w.max(1.0) as f64, self.window_h.max(1.0) as f64);
         let (vx, vy) = self.mouse_virtual();
-        let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             let keys = self.editor_keys();
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.mouse_move(vx, vy, keys);
                 return view.cursor();
             }
             return CursorIcon::Default;
         }
-        if let Scene::EditorHome(home) = &mut self.scene
-            && home.dragging()
+        if let Some(h) = self.scene.screen_mut::<EditorHome>()
+            && h.home.dragging()
         {
-            home.mouse_move(vx);
+            h.home.mouse_move(vx);
             return CursorIcon::Grabbing;
         }
-        if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
-            if ed.scrubbing {
-                let t = ed.time_at(vx);
-                ed.seek(t);
-                return CursorIcon::Pointer;
-            }
-            if let Some((grip, (px, py), from)) = ed.grip {
-                let [_, _, fw, fh] = ed.frame_rect;
-                ed.crop = layout::drag(
-                    from,
-                    grip,
-                    ((x - px) / (fw as f64 * k)) as f32,
-                    ((y - py) / (fh as f64 * k)) as f32,
-                )
-                .clamped();
-                ed.crop_name = "custom";
-                return grip.cursor();
-            }
-            let [fx, fy, fw, fh] = ed.frame_rect;
-            if let Some(g) = layout::hit(
-                ed.crop,
-                x - fx as f64 * k,
-                y - fy as f64 * k,
-                fw as f64 * k,
-                fh as f64 * k,
-            ) {
-                return g.cursor();
-            }
+        if let Some(cursor) = self
+            .with_screen(|s, state| s.pointer_moved(state, x, y))
+            .flatten()
+        {
+            return cursor;
         }
         if let Some(dd) = &mut self.settings_ui.dropdown {
             if dd.drag_bar(vy) {
@@ -8345,7 +6233,12 @@ impl State {
             self.hover = None;
             return CursorIcon::Pointer;
         }
-        if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.dragging()) {
+        if let Some(ed) = self
+            .scene
+            .screen_mut::<HudEdit>()
+            .map(|h| &mut h.ed)
+            .filter(|ed| ed.dragging())
+        {
             ed.drag_to(vx, vy, self.modifiers_shift, &mut self.cfg);
             return CursorIcon::Move;
         }
@@ -8365,14 +6258,16 @@ impl State {
         if self.scrubbing.is_none()
             && let Some(hit) = self
                 .hit_at(vx, vy)
-                .filter(|h| !matches!(h, render::Hit::Preview))
+                .filter(|h| !matches!(h, hit::Hit::Preview))
         {
-            if let (render::Hit::PauseItem(i), Scene::Play { game, .. }) = (hit, &mut self.scene) {
-                game.paused = Some(i);
+            if let (hit::Hit::PauseItem(i), true, Some(game)) =
+                (hit, self.scene.is_play(), self.play.as_deref_mut())
+            {
+                game.set_pause_cursor(i);
             }
             self.hover = None;
             return match hit {
-                render::Hit::SplitList => CursorIcon::EwResize,
+                hit::Hit::SplitList => CursorIcon::EwResize,
                 _ => CursorIcon::Pointer,
             };
         }
@@ -8391,13 +6286,7 @@ impl State {
             }
             return CursorIcon::Pointer;
         }
-        if !self.on_menu()
-            && !self.mobile_over_preview()
-            && matches!(
-                self.scene,
-                Scene::Select | Scene::Preview { .. } | Scene::Download
-            )
-        {
+        if !self.on_menu() && self.in_song_select() {
             if let Some((last, at)) = self.scrubbing {
                 // Seeking re-decodes nothing, but limit it to ~30 per second while dragging.
                 if last.elapsed() >= Duration::from_millis(33) {
@@ -8409,7 +6298,7 @@ impl State {
                 }
                 return CursorIcon::Pointer;
             }
-            let on_box = matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy);
+            let on_box = self.scene.is_select() && self.preview.box_at(vx, vy);
             if self.preview_on_top(vx, vy)
                 && (self.preview.time_at(vx, vy).is_some()
                     || self.preview.play_button_at(vx, vy)
@@ -8455,9 +6344,9 @@ impl State {
     /// Released without moving, it opens the row's menu; on the scrollbar, it goes there.
     /// The middle button: pans the map editor's timeline.
     fn middle_button(&mut self, pressed: bool) {
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             let (vx, vy) = self.mouse_virtual();
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.middle(pressed, vx, vy);
             }
         }
@@ -8473,10 +6362,10 @@ impl State {
         } else if std::mem::take(&mut self.idle.swallow_right) {
             return;
         }
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open {
             if pressed {
                 let (vx, vy) = self.mouse_virtual();
-                if let Scene::Editor(view) = &mut self.scene {
+                if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                     view.right_click(vx, vy);
                 }
             }
@@ -8487,11 +6376,11 @@ impl State {
             if pressed && self.customization_tab().is_none() {
                 let (vx, vy) = self.mouse_virtual();
                 match self.hit_at(vx, vy) {
-                    Some(render::Hit::ModToggle(i)) => {
+                    Some(hit::Hit::ModToggle(i)) => {
                         self.mod_select = Some(i);
                         self.toggle_favourite(mods::ALL[i]);
                     }
-                    Some(render::Hit::ModPreset(k))
+                    Some(hit::Hit::ModPreset(k))
                         if self.preset_naming.is_none() && self.preset_deleting.is_none() =>
                     {
                         self.preset_deleting = Some(k);
@@ -8511,16 +6400,16 @@ impl State {
         if pressed {
             self.select.menu = None;
             self.right_scroll = false;
-            self.right_press = (free && matches!(self.scene, Scene::Select))
-                .then(|| (vx, vy, self.hit_at(vx, vy)));
+            self.right_press =
+                (free && self.scene.is_select()).then(|| (vx, vy, self.hit_at(vx, vy)));
             return;
         }
         let press = self.right_press.take();
-        if std::mem::take(&mut self.right_scroll) || !matches!(self.scene, Scene::Select) {
+        if std::mem::take(&mut self.right_scroll) || !self.scene.is_select() {
             return;
         }
         match press {
-            Some((x, y, Some(render::Hit::SongRow(row)))) => {
+            Some((x, y, Some(hit::Hit::SongRow(row)))) => {
                 let skin = self.menu_has_skin(row);
                 self.select.menu = Some(ui::SongMenu {
                     row,
@@ -8530,7 +6419,7 @@ impl State {
                     y,
                 })
             }
-            Some((x, y, Some(render::Hit::SongHeader(row)))) => {
+            Some((x, y, Some(hit::Hit::SongHeader(row)))) => {
                 let skin = self.menu_has_skin(row);
                 self.select.menu = Some(ui::SongMenu {
                     row,
@@ -8540,9 +6429,7 @@ impl State {
                     y,
                 })
             }
-            Some((_, y, Some(render::Hit::SongScrollbar))) => {
-                self.select.scroll_to(y, &self.library)
-            }
+            Some((_, y, Some(hit::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
             _ => {}
         }
     }
@@ -8560,10 +6447,7 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
-        if self.shot_view.is_some() {
-            if pressed {
-                self.close_shot();
-            }
+        if self.layers_button(&[app::overlays::Layer::Shot], pressed, window) {
             return;
         }
         if pressed {
@@ -8585,19 +6469,19 @@ impl State {
             return;
         }
         if !pressed
-            && let Scene::EditorHome(home) = &mut self.scene
-            && home.dragging()
+            && let Some(h) = self.scene.screen_mut::<EditorHome>()
+            && h.home.dragging()
         {
             let vx = self.mouse_virtual().0;
-            if let Scene::EditorHome(home) = &mut self.scene {
-                home.release(vx, self.audio.as_ref());
+            if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                h.home.release(vx, self.audio.as_ref());
             }
             return;
         }
-        if matches!(self.scene, Scene::Editor(_)) && !self.social.open && self.splash.is_none() {
+        if self.scene.screen_is::<MapEditor>() && !self.social.open && self.splash.is_none() {
             let (vx, vy) = self.mouse_virtual();
             let keys = self.editor_keys();
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 if pressed {
                     view.mouse_down(vx, vy, keys, self.audio.as_ref());
                 } else {
@@ -8606,109 +6490,14 @@ impl State {
             }
             return;
         }
-        if pressed && self.splash.is_none() {
-            let (vx, vy) = self.mouse_virtual();
-            let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
-            let [px, py, pw, ph] = social::panel_rect(width);
-            let on_panel =
-                self.social.open && vx >= px && vx <= px + pw && vy >= py && vy <= py + ph;
-            let on_social = matches!(
-                self.hit_at(vx, vy),
-                Some(render::Hit::SocialToggle | render::Hit::SocialNote(_))
-            );
-            if on_panel || on_social {
-                if on_panel {
-                    self.social.typing = false;
-                }
-                if let Some(hit) = self.hit_at(vx, vy) {
-                    self.click(hit, window);
-                }
-                return;
-            }
-            if self.social.open {
-                self.social.close();
-                return;
-            }
-        }
-        if let Some(s) = &mut self.splash {
-            if pressed {
-                s.skip(Instant::now(), self.audio.as_ref(), "a left click");
-            }
-            return;
-        }
-        if self.unlock.showing() {
-            if pressed {
-                self.unlock.skip();
-            }
-            return;
-        }
-        if self.medals.is_some() {
-            // Its tabs and its Back button.
-            if pressed {
-                let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ (render::Hit::Key(_) | render::Hit::MedalTab(_))) =
-                    self.hit_at(vx, vy)
-                {
-                    self.click(hit, window);
-                }
-            }
-            return;
-        }
-        if self.profile.is_some() {
-            // Only its buttons.
-            if pressed {
-                let (vx, vy) = self.mouse_virtual();
-                if let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy) {
-                    self.click(hit, window);
-                }
-            }
-            return;
-        }
-        if self.mod_select.is_some() {
-            // Only the mod select's own chips and buttons; nothing under it.
-            if pressed {
-                let (vx, vy) = self.mouse_virtual();
-                let hit = self.hit_at(vx, vy);
-                let ours = if self.customization_tab().is_some() {
-                    use render::Hit as H;
-                    matches!(
-                        hit,
-                        Some(
-                            H::UniverseCell(..)
-                                | H::UniversePreset(_)
-                                | H::UniversePresetDelete(_)
-                                | H::ShapeshiftCell(..)
-                                | H::ShapeshiftMove(_)
-                                | H::TactCell(_)
-                                | H::CustomTab(_)
-                                | H::Key(_)
-                        )
-                    )
-                } else if self.preset_naming.is_some() || self.preset_deleting.is_some() {
-                    // Naming or deleting a preset: only the window's own buttons (Save or
-                    // Delete is Enter, Cancel or Keep is Esc) take a click.
-                    matches!(
-                        hit,
-                        Some(render::Hit::Key(KeyCode::Enter | KeyCode::Escape))
-                    )
-                } else {
-                    use render::Hit as H;
-                    matches!(
-                        hit,
-                        Some(H::ModToggle(_) | H::ModPreset(_) | H::ModPresetSave | H::Key(_))
-                    )
-                };
-                if let Some(hit) = hit.filter(|_| ours) {
-                    self.click(hit, window);
-                }
-            }
+        if self.layers_button(&app::overlays::BUTTON_LAYERS, pressed, window) {
             return;
         }
         // A replay's buttons: nothing else in a song is clicked.
         if pressed
             && self.replay_bar.is_some()
             && let (vx, vy) = self.mouse_virtual()
-            && let Some(hit @ render::Hit::Key(_)) = self.hit_at(vx, vy)
+            && let Some(hit @ hit::Hit::Key(_)) = self.hit_at(vx, vy)
         {
             self.click(hit, window);
             return;
@@ -8722,37 +6511,8 @@ impl State {
             self.replay_seek_to_pointer(true);
             return;
         }
-        if let (Scene::VideoEdit(ed), None) = (&mut self.scene, &self.export) {
-            let (vx, vy) = (
-                self.mouse.0 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0),
-                self.mouse.1 as f32 * render::VIRTUAL_HEIGHT / self.window_h.max(1.0),
-            );
-            let k = (self.window_h / render::VIRTUAL_HEIGHT).max(0.01) as f64;
-            if !pressed {
-                ed.scrubbing = false;
-                ed.grip = None;
-            } else if ed.in_timeline(vx, vy) {
-                ed.scrubbing = true;
-                ed.playing = None;
-                if let Some(a) = &self.audio {
-                    a.stop();
-                }
-                let t = ed.time_at(vx);
-                ed.seek(t);
-                return;
-            } else {
-                let [fx, fy, fw, fh] = ed.frame_rect;
-                if let Some(g) = layout::hit(
-                    ed.crop,
-                    self.mouse.0 - fx as f64 * k,
-                    self.mouse.1 - fy as f64 * k,
-                    fw as f64 * k,
-                    fh as f64 * k,
-                ) {
-                    ed.grip = Some((g, self.mouse, ed.crop));
-                    return;
-                }
-            }
+        if self.with_screen(|s, state| s.mouse_button(state, pressed)) == Some(true) {
+            return;
         }
         if self.on_menu() {
             let (vx, vy) = self.mouse_virtual();
@@ -8766,24 +6526,20 @@ impl State {
             }
             return;
         }
-        if !self.mobile_over_preview()
-            && matches!(
-                self.scene,
-                Scene::Select | Scene::Preview { .. } | Scene::Download
-            )
-        {
+        if self.in_song_select() {
             let (vx, vy) = self.mouse_virtual();
             if pressed {
                 if !self.preview_on_top(vx, vy) {
                     // Something's drawn over the preview here: it takes the click below.
                 } else if self.preview.play_button_at(vx, vy) {
-                    if matches!(self.scene, Scene::Preview { .. }) {
-                        self.preview_button();
+                    if let Some(p) = self.scene.screen_mut::<Preview>() {
+                        let lobby = screens::screen::Screen::over_lobby(p);
+                        self.preview_button(lobby);
                     } else if !self.picking_lobby_map {
                         self.play_from_marker();
                     }
                     return;
-                } else if matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy) {
+                } else if self.scene.is_select() && self.preview.box_at(vx, vy) {
                     self.open_preview();
                     return;
                 } else if let Some(t) = self.preview.time_at(vx, vy) {
@@ -8808,8 +6564,10 @@ impl State {
             {
                 // Clicking the resolution readout opens the preset list; single-player pauses
                 // first (a multiplayer match keeps running).
-                if let Scene::Play { game, .. } | Scene::Calibrate { game, .. } = &mut self.scene {
-                    game.pause(self.audio.as_ref());
+                if (self.scene.is_play() || self.calibration_run().is_some())
+                    && let Some(game) = self.play.as_deref_mut()
+                {
+                    game.pause(sound(&self.audio));
                 }
                 self.open_dropdown();
                 return;
@@ -8876,24 +6634,24 @@ impl State {
             let (vx, vy) = self.mouse_virtual();
             let hit = self.hit_at(vx, vy);
             // The search box takes the keys when clicked, and gives them back on a click elsewhere.
-            if matches!(self.scene, Scene::Select) {
-                self.select.searching = hit == Some(render::Hit::TextField);
+            if self.scene.is_select() {
+                self.select.searching = hit == Some(hit::Hit::TextField);
             }
             if self.select.picker.is_some()
-                && matches!(self.scene, Scene::Select)
-                && !matches!(hit, Some(render::Hit::PickRow(_)))
+                && self.scene.is_select()
+                && !matches!(hit, Some(hit::Hit::PickRow(_) | hit::Hit::PickRowMore(_)))
             {
                 self.select.picker = None;
                 return;
             }
             if self.select.menu.is_some()
-                && matches!(self.scene, Scene::Select)
-                && !matches!(hit, Some(render::Hit::SongMenu(_)))
+                && self.scene.is_select()
+                && !matches!(hit, Some(hit::Hit::SongMenu(_)))
             {
                 self.select.menu = None;
                 return;
             }
-            if let (Scene::Select, Some(h @ render::Hit::SplitList)) = (&self.scene, hit) {
+            if let (true, Some(h @ hit::Hit::SplitList)) = (self.scene.is_select(), hit) {
                 // Twice in quick succession: back to the usual size.
                 let now = Instant::now();
                 if self.split_click.take().is_some_and(|(last, at)| {
@@ -8907,15 +6665,13 @@ impl State {
                 return;
             }
             // A row acts on release, unless the press turns into dragging the list.
-            if let (Scene::Select, Some(render::Hit::SongScrollbar)) = (&self.scene, hit) {
+            if let (true, Some(hit::Hit::SongScrollbar)) = (self.scene.is_select(), hit) {
                 self.scrollbar_drag = true;
                 self.select.scroll_to(vy, &self.library);
                 return;
             }
-            if let (
-                Scene::Select,
-                Some(h @ (render::Hit::SongRow(_) | render::Hit::SongHeader(_))),
-            ) = (&self.scene, hit)
+            if let (true, Some(h @ (hit::Hit::SongRow(_) | hit::Hit::SongHeader(_)))) =
+                (self.scene.is_select(), hit)
             {
                 self.list_drag = Some(ListDrag {
                     from_y: vy,
@@ -8924,8 +6680,7 @@ impl State {
                 });
                 return;
             }
-            if self.settings_ui.choices.is_some() && !matches!(hit, Some(render::Hit::ChoiceRow(_)))
-            {
+            if self.settings_ui.choices.is_some() && !matches!(hit, Some(hit::Hit::ChoiceRow(_))) {
                 self.settings_ui.choices = None;
                 return;
             }
@@ -8933,7 +6688,12 @@ impl State {
             if self.settings_ui.editing.take().is_some() {
                 return;
             }
-            if let Some(ed) = self.hud_edit.as_mut().filter(|ed| ed.naming()) {
+            if let Some(ed) = self
+                .scene
+                .screen_mut::<HudEdit>()
+                .map(|h| &mut h.ed)
+                .filter(|ed| ed.naming())
+            {
                 ed.finish_naming(&mut self.cfg);
             }
             if let Some(hit) = hit {
@@ -8941,9 +6701,8 @@ impl State {
                 return;
             }
             let (vx, vy) = self.mouse_virtual();
-            if let Some(ed) = &mut self.hud_edit
-                && matches!(self.scene, Scene::HudEdit { .. })
-                && ed.press(vx, vy, &self.cfg)
+            if let Some(h) = self.scene.screen_mut::<HudEdit>()
+                && h.ed.press(vx, vy, &self.cfg)
             {
                 return;
             }
@@ -8956,9 +6715,9 @@ impl State {
                 }
             }
         } else if self
-            .hud_edit
-            .as_mut()
-            .is_some_and(|ed| ed.release(&self.cfg))
+            .scene
+            .screen_mut::<HudEdit>()
+            .is_some_and(|h| h.ed.release(&self.cfg))
         {
         } else if self.grip.take().is_some() {
             self.guides.clear();
@@ -8989,9 +6748,9 @@ impl State {
 
     fn open_multiplayer(&mut self) {
         self.scene = if self.mp.is_some() {
-            Scene::Lobby
+            Lobby::scene()
         } else {
-            Scene::MpMenu
+            MpMenu::scene()
         };
     }
 
@@ -9025,7 +6784,7 @@ impl State {
                 });
                 g.last_guess = Some(format!("{} - {}", e.meta.artist, e.meta.title));
             }
-            self.scene = Scene::Lobby;
+            self.scene = Lobby::scene();
             return;
         }
         let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
@@ -9039,7 +6798,7 @@ impl State {
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
-        self.scene = Scene::Lobby;
+        self.scene = Lobby::scene();
     }
 
     /// The lobby's Defense rules, when the map picked is a Defense match.
@@ -9100,421 +6859,7 @@ impl State {
         self.mp = None;
         self.picking_lobby_map = false;
         self.mp_status = why.to_string();
-        self.scene = Scene::MpMenu;
-    }
-
-    fn multiplayer_key(
-        &mut self,
-        code: KeyCode,
-        repeat: bool,
-        text: Option<&str>,
-        at: Instant,
-        window: Option<&Window>,
-    ) {
-        // Drum keys during a match go straight to the game.
-        if let Scene::MpPlay { game, .. } = &mut self.scene
-            && let Some(k) = self.cfg.keys.iter().position(|&k| k == code)
-        {
-            if !repeat && game.replay.is_none() {
-                game.press(k, at, self.audio.as_ref(), self.play_offset);
-            }
-            return;
-        }
-        if matches!(self.scene, Scene::MpMenu) {
-            // The form takes typed text, so only function keys act as shortcuts here.
-            let function_key = matches!(
-                code,
-                KeyCode::F1
-                    | KeyCode::F2
-                    | KeyCode::F3
-                    | KeyCode::F4
-                    | KeyCode::F5
-                    | KeyCode::F6
-                    | KeyCode::F7
-                    | KeyCode::F8
-                    | KeyCode::F9
-                    | KeyCode::F10
-                    | KeyCode::F11
-                    | KeyCode::F12
-            );
-            if !(function_key && !repeat && self.handle_global_key(code, window)) {
-                self.mp_menu_key(code, text);
-            }
-            return;
-        }
-        // A chat line being typed in the lobby takes the keys (function keys still work).
-        if matches!(self.scene, Scene::Lobby)
-            && self.mp.as_ref().is_some_and(|s| s.chat_input.is_some())
-        {
-            let function_key = matches!(
-                code,
-                KeyCode::F1
-                    | KeyCode::F2
-                    | KeyCode::F3
-                    | KeyCode::F4
-                    | KeyCode::F5
-                    | KeyCode::F6
-                    | KeyCode::F7
-                    | KeyCode::F8
-                    | KeyCode::F9
-                    | KeyCode::F10
-                    | KeyCode::F11
-                    | KeyCode::F12
-            );
-            if !(function_key && !repeat && self.handle_global_key(code, window)) {
-                self.lobby_chat_key(code, text);
-            }
-            return;
-        }
-        if repeat || self.handle_global_key(code, window) {
-            return;
-        }
-        match &mut self.scene {
-            Scene::Lobby => {
-                let Some(s) = &mut self.mp else {
-                    self.scene = Scene::MpMenu;
-                    return;
-                };
-                if s.mapguessr {
-                    self.guessr_key(code);
-                    return;
-                }
-                // The host typing a new password (K): it takes the keys until Enter or Esc.
-                if let Some(typed) = &mut s.edit_password {
-                    match code {
-                        KeyCode::Enter | KeyCode::NumpadEnter => {
-                            let password = Some(typed.clone()).filter(|p| !p.is_empty());
-                            s.edit_password = None;
-                            let text = if password.is_some() {
-                                tr!("the lobby has a password now")
-                            } else {
-                                tr!("the lobby is open to all")
-                            };
-                            s.client.send(net::ClientMsg::SetPassword(password));
-                            self.toast(text.into());
-                        }
-                        KeyCode::Escape => s.edit_password = None,
-                        KeyCode::Backspace => {
-                            typed.pop();
-                        }
-                        _ => {
-                            for ch in text.unwrap_or("").chars() {
-                                if net::drawable_char(ch) && ch != ' ' && typed.chars().count() < 32
-                                {
-                                    typed.push(ch);
-                                }
-                            }
-                        }
-                    }
-                    return;
-                }
-                match code {
-                    KeyCode::Space | KeyCode::KeyR if s.me().is_some_and(|p| p.spectator) => {
-                        self.toast("you're spectating: S to play instead".into());
-                    }
-                    KeyCode::Space | KeyCode::KeyR => {
-                        if s.me().is_some_and(|p| p.has_map) {
-                            s.ready = !s.me().is_some_and(|p| p.ready);
-                            s.client.send(net::ClientMsg::Ready(s.ready));
-                        } else {
-                            self.toast("you don't have this map".into());
-                        }
-                    }
-                    KeyCode::BracketLeft | KeyCode::BracketRight if s.is_host() && !s.in_match => {
-                        let step = if code == KeyCode::BracketRight {
-                            0.05
-                        } else {
-                            -0.05
-                        } * if self.modifiers_shift { 5.0 } else { 1.0 };
-                        self.cfg.rate = ((self.cfg.rate + step) * 100.0).round() / 100.0;
-                        self.cfg.rate = self.cfg.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
-                        self.cfg.save();
-                        let rate = self.cfg.mods.speed(self.cfg.rate, true).0;
-                        if let Some(mut m) = s.map.clone() {
-                            let mods = self.cfg.mods.lobby(m.defense);
-                            m.rate = rate;
-                            m.mods = mods.list();
-                            (m.multiverse, m.shapeshift) = mod_settings(mods);
-                            m.seed = lobby_seed(Some(self.cfg.random_seed));
-                            s.client.send(net::ClientMsg::SelectMap(m));
-                        }
-                        let text = format!("match rate {rate:.2}x");
-                        self.toast(text);
-                    }
-                    KeyCode::KeyT => self.focus_lobby_chat(),
-                    KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
-                    // Defense: C turns it on or off, 1-5 step its rules.
-                    KeyCode::KeyC
-                    | KeyCode::Digit1
-                    | KeyCode::Digit2
-                    | KeyCode::Digit3
-                    | KeyCode::Digit4
-                    | KeyCode::Digit5
-                        if s.is_host() && !s.in_match =>
-                    {
-                        let Some(mut m) = s.map.clone() else {
-                            self.toast("pick a map first (M)".into());
-                            return;
-                        };
-                        let option = match code {
-                            KeyCode::Digit1 => Some(net::DefenseOption::Lives),
-                            KeyCode::Digit2 => Some(net::DefenseOption::Bars),
-                            KeyCode::Digit3 => Some(net::DefenseOption::TagIns),
-                            KeyCode::Digit4 => Some(net::DefenseOption::Shop),
-                            KeyCode::Digit5 => Some(net::DefenseOption::Maze),
-                            _ => None,
-                        };
-                        let text = match (option, m.defense) {
-                            (None, Some(_)) => {
-                                m.defense = None;
-                                tr!("Defense off: an ordinary match").to_string()
-                            }
-                            (None, None) => {
-                                m.defense = Some(net::Defense::DEFAULT);
-                                tr!("Defense co-op on: 1-5 change its rules").to_string()
-                            }
-                            (Some(o), Some(d)) => {
-                                let d = o.step(d);
-                                m.defense = Some(d);
-                                format!("{}: {}", o.name(), o.value(&d))
-                            }
-                            (Some(_), None) => {
-                                self.toast(tr!("turn Defense on first (C)").into());
-                                return;
-                            }
-                        };
-                        // Defense takes the host's mods for everyone; an ordinary match, the speed's.
-                        let mods = self.cfg.mods.lobby(m.defense);
-                        m.mods = mods.list();
-                        (m.multiverse, m.shapeshift) = mod_settings(mods);
-                        s.client.send(net::ClientMsg::SelectMap(m));
-                        self.toast(text);
-                    }
-                    // The room: K types a new password, L steps how many players it takes.
-                    KeyCode::KeyK if s.is_host() && !s.in_match => {
-                        s.edit_password = Some(String::new())
-                    }
-                    KeyCode::KeyL if s.is_host() && !s.in_match => {
-                        let list = net::RoomSettings::SLOTS;
-                        let at = list
-                            .iter()
-                            .position(|&n| n == s.slots)
-                            .unwrap_or(list.len() - 1);
-                        // Never below who's in it already.
-                        let next = list
-                            .iter()
-                            .cycle()
-                            .skip(at + 1)
-                            .take(list.len())
-                            .copied()
-                            .find(|&n| n as usize >= s.players.len())
-                            .unwrap_or(s.slots);
-                        s.client.send(net::ClientMsg::SetSlots(next));
-                        self.toast(tr!("the lobby takes {next} players"; next));
-                    }
-                    KeyCode::F1 => self.open_mod_select(),
-                    KeyCode::KeyS
-                        if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) =>
-                    {
-                        if s.have_map {
-                            s.client.send(net::ClientMsg::Spectate(true));
-                        } else {
-                            self.toast("you need the map to spectate".into());
-                        }
-                    }
-                    // Before a match: watch it (and the next ones) instead of playing.
-                    KeyCode::KeyS if !s.in_match => {
-                        let on = !s.me().is_some_and(|p| p.spectator);
-                        s.ready = false;
-                        s.client.send(net::ClientMsg::Spectator(on));
-                        self.toast(
-                            if on {
-                                "you'll spectate the match"
-                            } else {
-                                "you'll play the match"
-                            }
-                            .into(),
-                        );
-                    }
-                    // Missing the map: from the host by default (fast, works for any map), the
-                    // mirrors with M or Shift+D.
-                    KeyCode::KeyD | KeyCode::KeyM
-                        if !s.have_map
-                            && s.map.is_some()
-                            && !s.is_host()
-                            && (code == KeyCode::KeyM || self.modifiers_shift) =>
-                    {
-                        self.download_lobby_map()
-                    }
-                    KeyCode::KeyD | KeyCode::KeyH
-                        if !s.have_map && s.map.is_some() && !s.is_host() =>
-                    {
-                        if self.host_transfer.is_none() {
-                            s.client.send(net::ClientMsg::RequestMap);
-                            self.host_map_asked = true;
-                            self.host_asked_at = Some(Instant::now());
-                            self.toast("getting the map from the host...".into());
-                        }
-                    }
-                    KeyCode::KeyM if s.is_host() && !s.in_match => {
-                        self.picking_lobby_map = true;
-                        self.scene = Scene::Select;
-                    }
-                    KeyCode::Enter | KeyCode::NumpadEnter if s.is_host() => {
-                        if s.players.iter().any(|p| p.ready && p.has_map) {
-                            s.client.send(net::ClientMsg::StartMatch);
-                        } else {
-                            self.toast("nobody is ready yet".into());
-                        }
-                    }
-                    KeyCode::Tab => self.scene = Scene::Select,
-                    KeyCode::Escape => {
-                        let why = if s.owns_room() {
-                            "room closed"
-                        } else {
-                            "left the room"
-                        };
-                        self.leave_room(why);
-                    }
-                    _ => {}
-                }
-            }
-            Scene::MpWait { .. } => {
-                if code == KeyCode::Escape {
-                    if let Some(s) = &self.mp {
-                        s.client.send(net::ClientMsg::Loaded(false));
-                        s.client.send(net::ClientMsg::Finished(net::Final {
-                            quit: true,
-                            ..Default::default()
-                        }));
-                    }
-                    self.scene = Scene::Lobby;
-                }
-            }
-            Scene::MpPlay { game, quit_armed } => match code {
-                KeyCode::KeyO => self.apply_live_offset(),
-                KeyCode::Tab => {
-                    self.cfg.mp_scoreboard = !self.cfg.mp_scoreboard;
-                    self.cfg.save();
-                    self.toast(
-                        if self.cfg.mp_scoreboard {
-                            "scoreboard shown (Tab)"
-                        } else {
-                            "scoreboard hidden (Tab)"
-                        }
-                        .into(),
-                    );
-                }
-                // Asks the room to skip the intro: it's skipped once every player has asked.
-                KeyCode::Space => {
-                    if game.can_skip()
-                        && let Some(s) = &mut self.mp
-                        && !s.skip_asked
-                    {
-                        s.skip_asked = true;
-                        s.client.send(net::ClientMsg::Skipped);
-                    }
-                }
-                // Defense: 1-5 buy for the team, T takes the turn over.
-                KeyCode::Digit1
-                | KeyCode::Digit2
-                | KeyCode::Digit3
-                | KeyCode::Digit4
-                | KeyCode::Digit5
-                | KeyCode::KeyT
-                    if game.defense.is_some() =>
-                {
-                    let t = game.time;
-                    let item = match code {
-                        KeyCode::Digit1 => Some(net::DefenseItem::Slow),
-                        KeyCode::Digit2 => Some(net::DefenseItem::Shield),
-                        KeyCode::Digit3 => Some(net::DefenseItem::Heal),
-                        KeyCode::Digit4 => Some(net::DefenseItem::DonTower),
-                        KeyCode::Digit5 => Some(net::DefenseItem::KatTower),
-                        _ => None,
-                    };
-                    let team = game.team_state().unwrap_or_default();
-                    let can_tag = game.can_tag_in(t);
-                    let shop = game.defense.as_ref().is_some_and(|d| d.rules.shop);
-                    let act = match (item, code) {
-                        (Some(_), _) if !shop => {
-                            self.toast("the host turned the shop off".into());
-                            None
-                        }
-                        (Some(item), _) if team.gold < item.price(&team) => {
-                            self.toast(format!(
-                                "{}: {} gold, the team has {}",
-                                item.name(),
-                                item.price(&team),
-                                team.gold
-                            ));
-                            None
-                        }
-                        (Some(net::DefenseItem::DonTower | net::DefenseItem::KatTower), _)
-                            if game.tower_active(t) =>
-                        {
-                            self.toast("a tower is already up".into());
-                            None
-                        }
-                        (Some(net::DefenseItem::Heal), _) if team.lives >= team.max => {
-                            self.toast("the team has all its lives".into());
-                            None
-                        }
-                        (Some(item), _) => {
-                            let until = if matches!(
-                                item,
-                                net::DefenseItem::DonTower | net::DefenseItem::KatTower
-                            ) {
-                                game.tower_until(t).min(f64::MAX) // JSON has no infinity
-                            } else {
-                                0.0
-                            };
-                            Some(net::DefenseAct::Buy { item, at: t, until })
-                        }
-                        (None, KeyCode::KeyT) if can_tag => Some(net::DefenseAct::TagIn { at: t }),
-                        (None, KeyCode::KeyT) => {
-                            self.toast(
-                                "can't take this turn over (yours, already taken, or ending)"
-                                    .into(),
-                            );
-                            None
-                        }
-                        (None, _) => None,
-                    };
-                    if let (Some(act), Some(s)) = (act, &self.mp) {
-                        s.client.send(net::ClientMsg::Defense(act));
-                    }
-                }
-                KeyCode::Escape => {
-                    // No pausing in a match; a second Esc forfeits.
-                    if quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
-                        if let Some(s) = &self.mp {
-                            s.client
-                                .send(net::ClientMsg::Finished(multiplayer::final_from(
-                                    &game.stats,
-                                    true,
-                                )));
-                        }
-                        self.stop_audio();
-                        self.scene = Scene::MpResults;
-                    } else {
-                        *quit_armed = Some(Instant::now());
-                        self.toast("press Esc again to forfeit".into());
-                    }
-                }
-                _ => {}
-            },
-            Scene::MpResults => {
-                // Results stay on the session so the lobby can show the last winner.
-                if matches!(
-                    code,
-                    KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
-                ) {
-                    self.scene = Scene::Lobby;
-                }
-            }
-            _ => {}
-        }
+        self.scene = MpMenu::scene();
     }
 
     /// A key in a mapguessr lobby.
@@ -9533,7 +6878,7 @@ impl State {
             {
                 if g.can_guess(s) {
                     self.picking_lobby_map = true;
-                    self.scene = Scene::Select;
+                    self.scene = SongSelect::scene();
                 } else if s.me().is_some_and(|p| p.guessed) {
                     self.toast("you've got this one".into());
                 }
@@ -9564,7 +6909,7 @@ impl State {
                     .into(),
                 );
             }
-            KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Tab => self.scene = SongSelect::scene(),
             KeyCode::Escape => {
                 let why = if s.owns_room() {
                     "room closed"
@@ -9606,7 +6951,7 @@ impl State {
                 self.mp_menu.open(multiplayer::Form::Main);
                 self.mp_status.clear();
             }
-            KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Escape | KeyCode::Tab => self.scene = SongSelect::scene(),
             KeyCode::Backspace => {
                 match row {
                     Row::User => {
@@ -9661,9 +7006,7 @@ impl State {
                     }
                     Row::ChangePassword if menu.has_email == Some(false) => {
                         menu.open(Form::Link);
-                        self.mp_status =
-                            tr!("link an email first: the code for a new password goes there")
-                                .into();
+                        self.mp_status = tr!("link an email first: the code for a new password goes there", "先にメールを登録してください: 新しいパスワードのコードはそこに届きます", "сначала привяжи почту: код для нового пароля придёт туда").into();
                     }
                     Row::ChangePassword => {
                         menu.open(Form::Reset);
@@ -9686,19 +7029,38 @@ impl State {
                             None => menu.user.trim().to_string(),
                         };
                         if who.is_empty() {
-                            self.mp_status = tr!("type your name or email first").into();
+                            self.mp_status = tr!(
+                                "type your name or email first",
+                                "先に名前かメールを入力してください",
+                                "сначала впиши ник или почту"
+                            )
+                            .into();
                             self.mp_menu.select(Row::User);
                         } else if menu.code_for == Some(CodeFor::Reset) {
                             if code.is_none() {
-                                self.mp_status = tr!("type the code from the email first").into();
+                                self.mp_status = tr!(
+                                    "type the code from the email first",
+                                    "先にメールのコードを入力してください",
+                                    "сначала введи код из письма"
+                                )
+                                .into();
                                 self.mp_menu.select(Row::Code);
                             } else if !online::valid_password(&menu.password) {
-                                self.mp_status =
-                                    tr!("type a new password of at least 6 characters").into();
+                                self.mp_status = tr!(
+                                    "type a new password of at least 6 characters",
+                                    "6文字以上の新しいパスワードを入力してください",
+                                    "впиши новый пароль от 6 символов"
+                                )
+                                .into();
                                 self.mp_menu.select(Row::Password);
                             } else {
                                 let password = Some(menu.password.clone());
-                                self.mp_status = tr!("setting the new password...").into();
+                                self.mp_status = tr!(
+                                    "setting the new password...",
+                                    "新しいパスワードを設定中...",
+                                    "сохраняю новый пароль..."
+                                )
+                                .into();
                                 menu.account_call(
                                     &server,
                                     online::Request::ResetPassword {
@@ -9710,7 +7072,12 @@ impl State {
                             }
                         } else {
                             menu.asking = Some(CodeFor::Reset);
-                            self.mp_status = tr!("sending a code to the account's email...").into();
+                            self.mp_status = tr!(
+                                "sending a code to the account's email...",
+                                "アカウントのメールにコードを送信中...",
+                                "отправляю код на почту аккаунта..."
+                            )
+                            .into();
                             menu.account_call(
                                 &server,
                                 online::Request::ResetPassword {
@@ -9723,17 +7090,27 @@ impl State {
                     }
                     Row::LinkEmail => {
                         if !email.contains('@') {
-                            self.mp_status = tr!("type your email first").into();
+                            self.mp_status = tr!(
+                                "type your email first",
+                                "先にメールを入力してください",
+                                "сначала впиши почту"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Email);
                         } else if menu.code_for == Some(CodeFor::Link) && code.is_some() {
-                            self.mp_status = tr!("linking the email...").into();
+                            self.mp_status = tr!(
+                                "linking the email...",
+                                "メールを登録中...",
+                                "привязываю почту..."
+                            )
+                            .into();
                             menu.account_call(
                                 &server,
                                 online::Request::LinkEmail { token, email, code },
                             );
                         } else {
                             menu.asking = Some(CodeFor::Link);
-                            self.mp_status = tr!("sending a code to {email}..."; email);
+                            self.mp_status = tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}..."; [] [email]);
                             menu.account_call(
                                 &server,
                                 online::Request::LinkEmail {
@@ -9747,20 +7124,30 @@ impl State {
                     Row::Register => {
                         let user = menu.user.trim().to_string();
                         if !online::valid_name(&user) {
-                            self.mp_status = tr!("names are {}", online::NAME_RULES);
+                            self.mp_status = tr!("names are {}", "名前は {}", "ник: {}"; [online::NAME_RULES] []);
                             self.mp_menu.select(Row::User);
                         } else if !online::valid_password(&menu.password) {
-                            self.mp_status = tr!("pick a password of at least 6 characters").into();
+                            self.mp_status = tr!(
+                                "pick a password of at least 6 characters",
+                                "6文字以上のパスワードを決めてください",
+                                "придумай пароль от 6 символов"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Password);
                         } else if !email.contains('@') {
-                            self.mp_status = tr!("type your email: the code goes there").into();
+                            self.mp_status = tr!(
+                                "type your email: the code goes there",
+                                "メールを入力してください: コードはそこに届きます",
+                                "впиши почту: туда придёт код"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Email);
                         } else {
                             let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
                             self.mp_status = if code.is_some() {
-                                tr!("creating {user}..."; user)
+                                tr!("creating {user}...", "{user} を作成中...", "создаю {user}..."; [] [user])
                             } else {
-                                tr!("sending a code to {email}..."; email)
+                                tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}..."; [] [email])
                             };
                             menu.asking = Some(CodeFor::Register);
                             let password = menu.password.clone();
@@ -9778,15 +7165,25 @@ impl State {
                     Row::LogIn | Row::Password => {
                         let user = menu.user.trim().to_string();
                         if !online::valid_login(&user) {
-                            self.mp_status = tr!("type your name (or the account's email)").into();
+                            self.mp_status = tr!(
+                                "type your name (or the account's email)",
+                                "名前(またはアカウントのメール)を入力してください",
+                                "впиши ник (или почту аккаунта)"
+                            )
+                            .into();
                             self.mp_menu.select(Row::User);
                         } else if menu.password.is_empty() {
-                            self.mp_status = tr!("type your password").into();
+                            self.mp_status = tr!(
+                                "type your password",
+                                "パスワードを入力してください",
+                                "впиши пароль"
+                            )
+                            .into();
                             self.mp_menu.select(Row::Password);
                         } else {
                             // Logging in forgets the typed password.
                             let password = std::mem::take(&mut menu.password);
-                            self.mp_status = tr!("logging in as {user}..."; user);
+                            self.mp_status = tr!("logging in as {user}...", "{user} でログイン中...", "вхожу как {user}..."; [] [user]);
                             menu.account_call(
                                 &server,
                                 online::Request::Login {
@@ -9829,7 +7226,12 @@ impl State {
                             return;
                         };
                         if room.players >= room.slots {
-                            self.mp_status = tr!("that lobby is full").into();
+                            self.mp_status = tr!(
+                                "that lobby is full",
+                                "そのロビーは満員です",
+                                "это лобби заполнено"
+                            )
+                            .into();
                         } else if room.locked {
                             // Its password first.
                             menu.joining = Some(room);
@@ -9855,7 +7257,12 @@ impl State {
                             return;
                         };
                         if menu.join_password.is_empty() {
-                            self.mp_status = tr!("type the lobby's password").into();
+                            self.mp_status = tr!(
+                                "type the lobby's password",
+                                "ロビーのパスワードを入力",
+                                "введи пароль лобби"
+                            )
+                            .into();
                             menu.select(Row::JoinPassword);
                             return;
                         }
@@ -9929,47 +7336,35 @@ impl State {
         #[cfg(not(target_os = "android"))]
         match update::restart() {
             Ok(()) => {
-                eprintln!(
-                    "closing: restarting for the renderer ({})",
-                    self.cfg.graphics_api
-                );
+                eprintln!("closing: restarting for the renderer ({})", self.cfg.graphics_api);
                 self.quit = true;
             }
-            Err(e) => self.toast(tr!("restart taiko.rs to switch the renderer ({e})"; e)),
+            Err(e) => self.toast(tr!("restart taiko.rs to switch the renderer ({e})", "レンダラーの切り替えはtaiko.rsの再起動後 ({e})", "рендер сменится после перезапуска taiko.rs ({e})"; [] [e])),
         }
         #[cfg(target_os = "android")]
-        self.toast(tr!("restart taiko.rs to switch the renderer").into());
+        self.toast(
+            tr!(
+                "restart taiko.rs to switch the renderer",
+                "レンダラーの切り替えはtaiko.rsの再起動後",
+                "рендер сменится после перезапуска taiko.rs"
+            )
+            .into(),
+        );
     }
 
     /// What's on screen, and the map, for a crash report (`CRASH_SCENE`).
     fn note_scene_for_crashes(&self) {
         let screen = match &self.scene {
-            Scene::Select if self.on_menu() => "main menu",
-            Scene::Select => "song select",
-            Scene::Loading { .. } => "loading a map",
-            Scene::Play { game, .. } => {
-                if game.replay.is_some() {
+            Scene::Other(sel) if sel.select_screen() && self.on_menu() => "main menu",
+            Scene::Other(sel) if sel.select_screen() => "song select",
+            Scene::Other(s) if s.song_play().is_some() => {
+                if self.game().is_some_and(|game| game.replay().is_some()) {
                     "watching a replay"
                 } else {
                     "playing"
                 }
             }
-            Scene::Results { .. } => "results",
-            Scene::Settings { .. } => "settings",
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. } => "calibration",
-            Scene::LayoutEdit { .. } => "layout editor",
-            Scene::HudEdit { .. } => "interface editor",
-            Scene::Preview { .. } => "map preview",
-            Scene::Download => "downloads",
-            Scene::MpMenu => "multiplayer menu",
-            Scene::Lobby => "lobby",
-            Scene::MpWait { .. } | Scene::MpPlay { .. } => "multiplayer match",
-            Scene::MpResults => "multiplayer results",
-            Scene::Spectate(_) => "spectating",
-            Scene::Watch(_) => "watching a friend",
-            Scene::VideoEdit(_) => "video editor",
-            Scene::Editor(_) => "map editor",
-            Scene::EditorHome(_) => "map editor menu",
+            Scene::Other(s) => s.activity(),
         };
         let map = self
             .offset_entry()
@@ -10011,16 +7406,11 @@ impl State {
     /// The time played so far of the live play going on: a song or a lobby match (also while
     /// its pause menu's settings are open), not autoplay or a replay (Relax is still playing).
     fn live_play_ms(&self) -> Option<f64> {
-        fn game_of(scene: &Scene) -> Option<&Game> {
-            match scene {
-                Scene::Play { game, .. } | Scene::MpPlay { game, .. } => Some(game),
-                Scene::Settings { prev } => game_of(prev),
-                _ => None,
-            }
-        }
-        let g = game_of(&self.scene)?;
-        (g.replay.is_none() && !self.auto && !g.mods.has(mods::Mod::Autoplay))
-            .then_some(g.played_ms)
+        let scene = self.behind_settings().unwrap_or(&self.scene);
+        let plays = scene.plays_song();
+        let g = self.play.as_deref().filter(|_| plays)?;
+        (g.replay().is_none() && !self.auto && !g.mods().has(mods::Mod::Autoplay))
+            .then_some(g.played_ms())
     }
 
     /// The selected map's page on the website.
@@ -10036,14 +7426,12 @@ impl State {
 
     /// The map of the live play, as the server is told it.
     fn live_map(&self) -> Option<online::PlayedMap> {
-        fn entry_of(scene: &Scene) -> Option<usize> {
-            match scene {
-                Scene::Play { entry, .. } => Some(*entry),
-                Scene::Settings { prev } => entry_of(prev),
-                _ => None,
-            }
-        }
-        if let Some(e) = entry_of(&self.scene).and_then(|i| self.library.get(i)) {
+        let entry = self
+            .behind_settings()
+            .unwrap_or(&self.scene)
+            .song_play()
+            .map(|p| p.0);
+        if let Some(e) = entry.and_then(|i| self.library.get(i)) {
             return Some(online::PlayedMap {
                 hash: e.hash(),
                 name: e.label(),
@@ -10122,11 +7510,10 @@ impl State {
     /// `CUSTOM_REFRESH` while the song list is open, so a set approved meanwhile shows it.
     fn poll_custom(&mut self, now: Instant) {
         let due = self.custom_asked.is_none_or(|t| {
-            matches!(self.scene, Scene::Select)
-                && now.saturating_duration_since(t) >= CUSTOM_REFRESH
+            self.scene.is_select() && now.saturating_duration_since(t) >= CUSTOM_REFRESH
         });
         if due
-            && self.custom_call.is_none()
+            && self.custom_call.is_idle()
             && !self.library.is_empty()
             && self.cfg.online_server == online::DEFAULT_SERVER
         {
@@ -10138,31 +7525,25 @@ impl State {
                 .collect();
             folders.sort();
             folders.dedup();
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
+            self.custom_call = Job::spawn(move || {
                 let known: std::collections::HashMap<PathBuf, u32> = folders
                     .into_iter()
                     .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
                     .collect();
                 if known.is_empty() {
-                    let _ = tx.send((known, Vec::new()));
-                    return;
+                    return (known, Vec::new());
                 }
                 let mut ids: Vec<u32> = known.values().copied().collect();
                 ids.sort_unstable();
                 ids.dedup();
                 // A failed answer keeps them listed as custom, not approved.
                 let approved = custom::approved_of(&ids).unwrap_or_default();
-                let _ = tx.send((known, approved));
+                (known, approved)
             });
-            self.custom_call = Some(rx);
         }
-        let Some(rx) = &self.custom_call else { return };
-        match rx.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) => self.custom_call = None,
-            Ok((folders, approved)) => {
-                self.custom_call = None;
+        match self.custom_call.poll() {
+            None => {}
+            Some((folders, approved)) => {
                 self.select.custom_folder = folders;
                 self.select.custom_approved = approved.into_iter().collect();
                 if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
@@ -10185,7 +7566,7 @@ impl State {
         let Some((_, ask)) = self.loved_call.take() else {
             return;
         };
-        let loved = match (result, &ask) {
+        let loved: Option<ui::ServerLoved> = match (result, &ask) {
             (Ok(online::Reply::LovedMaps(maps)), _) => Some(maps.into_iter().collect()),
             // Just the sets: the whole of each (the server doesn't love single difficulties yet).
             (Ok(online::Reply::LovedSets(sets)), LovedAsk::Maps | LovedAsk::Sets) => {
@@ -10217,6 +7598,7 @@ impl State {
             _ => None,
         };
         if let Some(loved) = loved {
+            self.browse.set_loved_here(loved.keys().copied());
             self.select.server_loved = loved;
             if !self.select.filter.is_empty() {
                 self.select.refilter(&self.library);
@@ -10266,12 +7648,31 @@ impl State {
                                 menu.open(multiplayer::Form::Main);
                             }
                             if reset {
-                                self.mp_status = tr!(
-                                    "password changed: you're logged in as {name}";
-                                    name
-                                );
+                                self.mp_status = tr!("password changed: you're logged in as {name}", "パスワードを変更しました: {name} でログイン中", "пароль изменён, ты вошёл как {name}"; [] [name]);
                             } else if fresh {
-                                self.mp_status = tr!("logged in as {name}"; name);
+                                self.mp_status = tr!("logged in as {name}", "{name} でログインしました", "ты вошёл как {name}"; [] [name]);
+                            }
+                            // Local plays take the account's name. Plays under a local name (the
+                            // computer's user, at first) move to it; another account's stay theirs.
+                            if self.cfg.mp_name != name {
+                                let local = self.cfg.mp_name != self.cfg.online_user;
+                                if local {
+                                    match scores::rename_player(
+                                        &mut self.scores,
+                                        &self.cfg.mp_name,
+                                        &name,
+                                    ) {
+                                        Ok(0) => {}
+                                        Ok(n) => {
+                                            self.toast = Some(Toast {
+                                                text: tr!("{n} local plays now show as {name}", "ローカルの {n} プレイを {name} の名前にしました", "локальные игры ({n}) теперь под ником {name}"; [] [n, name]),
+                                                until: Instant::now() + Duration::from_secs(5),
+                                            })
+                                        }
+                                        Err(e) => eprintln!("couldn't rename the local plays: {e}"),
+                                    }
+                                }
+                                self.cfg.mp_name = name.clone();
                             }
                             if fresh {
                                 menu.cursor = 0;
@@ -10279,7 +7680,7 @@ impl State {
                                 self.social = social::Social::default();
                                 // Accounts from before emails: a word about linking one.
                                 if email == Some(false) {
-                                    self.toast = Some(Toast { text: tr!("no email on your account: link one in the Online menu to reset a forgotten password").into(), until: Instant::now() + Duration::from_secs(8) });
+                                    self.toast = Some(Toast { text: tr!("no email on your account: link one in the Online menu to reset a forgotten password", "アカウントにメールがありません: オンラインメニューで登録するとパスワードを再設定できます", "к аккаунту не привязана почта: привяжи её в меню онлайна, чтобы можно было сбросить пароль").into(), until: Instant::now() + Duration::from_secs(8) });
                                 }
                             }
                             self.cfg.online_user = name;
@@ -10291,16 +7692,13 @@ impl State {
                             menu.code_for = menu.asking.take();
                             menu.code.clear();
                             // The server's mail is new to the big mail services: it may land in spam.
-                            self.mp_status = tr!(
-                                "code sent to {to}: look in spam too if it isn't there";
-                                to
-                            );
+                            self.mp_status = tr!("code sent to {to}: look in spam too if it isn't there", "{to} にコードを送信しました: 見つからなければ迷惑メールも確認", "код отправлен на {to}: если его нет, загляни в спам"; [] [to]);
                             menu.select(multiplayer::Row::Code);
                         }
                         Ok(online::Reply::EmailLinked(to)) => {
                             menu.has_email = Some(true);
                             menu.open(multiplayer::Form::Main);
-                            self.mp_status = tr!("email linked: {to}"; to);
+                            self.mp_status = tr!("email linked: {to}", "メールを登録しました: {to}", "почта привязана: {to}"; [] [to]);
                         }
                         Ok(_) => {}
                         Err(e) if e.contains("session") => self.sign_out(&e),
@@ -10313,8 +7711,7 @@ impl State {
                                 && menu.account.is_none()
                             {
                                 menu.select(multiplayer::Row::Password);
-                                tr!("wrong name or password (forgot it? FORGOT PASSWORD below)")
-                                    .into()
+                                tr!("wrong name or password (forgot it? FORGOT PASSWORD below)", "名前かパスワードが違います(忘れたら下の「パスワードを忘れた?」)", "неверный ник или пароль (забыл? жми ЗАБЫЛ ПАРОЛЬ ниже)").into()
                             } else {
                                 e
                             };
@@ -10354,7 +7751,7 @@ impl State {
                 Err(mpsc::TryRecvError::Disconnected) => menu.rooms_request = None,
             }
         }
-        if matches!(self.scene, Scene::MpMenu)
+        if self.scene.screen_is::<MpMenu>()
             && self
                 .mp_menu
                 .last_refresh
@@ -10416,7 +7813,7 @@ impl State {
                 .iter()
                 .any(|e| !there.contains(e.path.as_path()))
         };
-        if gone && matches!(self.scene, Scene::Select) && self.mp.is_none() {
+        if gone && self.scene.is_select() && self.mp.is_none() {
             let selected = self
                 .select
                 .selected()
@@ -10486,11 +7883,9 @@ impl State {
         self.mapinfo = Some(info);
         self.mapinfo_sorted = false;
         let dirs = self.song_dirs.clone();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(dirs.iter().find_map(|d| osudb::load(d)));
-        });
-        self.osudb_rx = Some(rx);
+        self.osudb_rx = Job::spawn(move || dirs.iter().find_map(|d| osudb::load(d)));
+        // The ones kept from before, until osu!'s are read again.
+        self.show_collections(None);
         self.apply_cached_statuses();
         self.select.refilter(&self.library);
         // Start on a random song rather than the first one every time (not before a map given on
@@ -10530,10 +7925,7 @@ impl State {
     /// Folds osu!'s collections and play history in once read, and re-sorts when the
     /// difficulty analysis finishes.
     fn poll_sorting(&mut self) {
-        if let Some(rx) = &self.osudb_rx
-            && let Ok(db) = rx.try_recv()
-        {
-            self.osudb_rx = None;
+        if let Some(db) = self.osudb_rx.poll() {
             if let Some(db) = db {
                 self.apply_osu_db(db);
             }
@@ -10565,11 +7957,6 @@ impl State {
                 Some((key(folder, file), i))
             })
             .collect();
-        let entry_of = |md5: &str| {
-            db.by_md5
-                .get(md5)
-                .and_then(|m| index.get(&key(&m.folder, &m.file)).copied())
-        };
         for m in db.by_md5.values() {
             if let Some(&i) = index.get(&key(&m.folder, &m.file)) {
                 self.db_status
@@ -10591,24 +7978,8 @@ impl State {
                 *t = (*t).max(m.last_played);
             }
         }
-        self.select.collections = db
-            .collections
-            .iter()
-            .map(|(name, maps)| {
-                (
-                    name.clone(),
-                    maps.iter()
-                        .filter_map(|h| entry_of(h))
-                        .collect::<std::collections::HashSet<usize>>(),
-                )
-            })
-            .filter(|(_, set)| !set.is_empty())
-            .collect();
-        eprintln!(
-            "osu!.db: {} maps, {} collections with maps here",
-            db.by_md5.len(),
-            self.select.collections.len()
-        );
+        eprintln!("osu!.db: {} maps", db.by_md5.len());
+        self.show_collections(Some(&db));
         self.select.refilter(&self.library);
     }
 
@@ -10629,6 +8000,7 @@ impl State {
                 let _ = writeln!(f, "{now}\t{}", path.display());
             }
         }
+        store::with(|s| s.add_play(&path, now));
         self.select.played.insert(path, now);
     }
 
@@ -10649,16 +8021,13 @@ impl State {
     fn shown_mods(&self) -> Mods {
         match &self.mp {
             // In Defense the host's mods are everyone's.
-            Some(s)
-                if matches!(self.scene, Scene::Lobby)
-                    && s.map.as_ref().is_some_and(|m| m.defense.is_some()) =>
-            {
+            Some(s) if self.in_lobby() && s.map.as_ref().is_some_and(|m| m.defense.is_some()) => {
                 match s.map.as_ref().filter(|_| !s.is_host()) {
                     Some(m) => Mods::from_list(&m.mods),
                     None => self.cfg.mods.lobby(self.lobby_defense()),
                 }
             }
-            Some(s) if matches!(self.scene, Scene::Lobby) && !s.is_host() => {
+            Some(s) if self.in_lobby() && !s.is_host() => {
                 let lobby = s
                     .map
                     .as_ref()
@@ -10672,10 +8041,7 @@ impl State {
 
     fn toggle_mod(&mut self, m: mods::Mod) {
         // In a lobby the host picks the speed for everyone.
-        if m.shared()
-            && matches!(self.scene, Scene::Lobby)
-            && self.mp.as_ref().is_some_and(|s| !s.is_host())
-        {
+        if m.shared() && self.in_lobby() && self.mp.as_ref().is_some_and(|s| !s.is_host()) {
             self.toast(format!(
                 "the host picks the speed ({} is theirs to pick)",
                 m.acronym()
@@ -10683,18 +8049,29 @@ impl State {
             return;
         }
         // In Defense the host picks all of them, from the ones a team can have.
-        if matches!(self.scene, Scene::Lobby)
+        if self.in_lobby()
             && let Some(s) = self.mp.as_ref().filter(|_| self.lobby_defense().is_some())
         {
             if !s.is_host() {
-                self.toast(tr!("in Defense the host picks the mods").into());
+                self.toast(
+                    tr!(
+                        "in Defense the host picks the mods",
+                        "ディフェンスではホストがMODを選ぶ",
+                        "в Обороне моды выбирает хост"
+                    )
+                    .into(),
+                );
                 return;
             }
             if !m.defense_ok() {
                 self.toast(format!(
                     "{} {}",
                     m.acronym(),
-                    tr!("doesn't work in Defense")
+                    tr!(
+                        "doesn't work in Defense",
+                        "はディフェンスでは使えない",
+                        "не работает в Обороне"
+                    )
                 ));
                 return;
             }
@@ -10841,10 +8218,16 @@ impl State {
         let Some(p) = self.cfg.mod_presets.get(k).cloned() else {
             return;
         };
-        let guest =
-            matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host());
+        let guest = self.in_lobby() && self.mp.as_ref().is_some_and(|s| !s.is_host());
         if guest && self.lobby_defense().is_some() {
-            self.toast(tr!("in Defense the host picks the mods").into());
+            self.toast(
+                tr!(
+                    "in Defense the host picks the mods",
+                    "ディフェンスではホストがMODを選ぶ",
+                    "в Обороне моды выбирает хост"
+                )
+                .into(),
+            );
             return;
         }
         if guest {
@@ -10890,18 +8273,20 @@ impl State {
     /// Opens the mod customization on mod `m`'s tab.
     fn open_customization(&mut self, m: mods::Mod) {
         if m == mods::Mod::Random
-            && matches!(self.scene, Scene::Lobby)
+            && self.in_lobby()
             && self.mp.as_ref().is_some_and(|s| !s.is_host())
         {
             self.toast("The host picks the Random seed for this lobby".into());
             return;
         }
         self.random_setup = (m == mods::Mod::Random).then(|| self.cfg.random_seed.to_string());
-        self.universe_setup =
-            (m == mods::Mod::Multiverse).then(|| multiverse::Setup::new(game::FIRST_FOCUS, 0));
-        self.shapeshift_setup = (m == mods::Mod::Shapeshift).then(shapeshift::Setup::default);
-        self.tact_setup = (m == mods::Mod::Tact).then(|| tact::Setup::new(self.cfg.tact));
-        self.od_setup = (m == mods::Mod::OdOverride).then_some(od_override::Setup);
+        self.universe_setup = (m == mods::Mod::Multiverse)
+            .then(|| mod_setup::multiverse::Setup::new(game::FIRST_FOCUS, 0));
+        self.shapeshift_setup =
+            (m == mods::Mod::Shapeshift).then(mod_setup::shapeshift::Setup::default);
+        self.tact_setup =
+            (m == mods::Mod::Tact).then(|| mod_setup::tact::Setup::new(self.cfg.tact));
+        self.od_setup = (m == mods::Mod::OdOverride).then_some(mod_setup::od_override::Setup);
     }
 
     /// The mod customization's open tab.
@@ -11044,23 +8429,22 @@ impl State {
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
         self.social_keys()
-            || matches!(&self.scene, Scene::EditorHome(h) if h.needs_text())
+            || self.scene.screen().is_some_and(|s| s.typing())
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
             || self.random_setup.is_some()
             || self.preset_naming.is_some()
-            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
+            || self.select.naming.is_some()
+            || self.scene.screen().is_some_and(|s| s.typing())
             || self
                 .universe_setup
                 .as_ref()
                 .is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none()
                 && !self.on_menu()
-                && matches!(
-                    self.scene,
-                    Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby
-                ))
-            || (matches!(self.scene, Scene::Settings { .. })
+                && (self.scene.is_select()
+                    || self.scene.screen().is_some_and(|s| s.tab().is_some())))
+            || (self.in_settings()
                 && self.settings_ui.binding.is_none()
                 && self.settings_ui.choices.is_none()
                 && self.settings_ui.dropdown.is_none())
@@ -11070,14 +8454,16 @@ impl State {
     /// tapped): the on-screen keyboard comes up for it.
     #[cfg(target_os = "android")]
     fn typing_on_its_own(&self) -> bool {
-        (self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }))
+        (self.settings_ui.editing.is_some() && self.in_settings())
             || self
                 .settings_ui
                 .dropdown
                 .as_ref()
                 .is_some_and(|d| d.editing.is_some())
+            || self.random_setup.is_some()
             || self.preset_naming.is_some()
-            || self.hud_edit.as_ref().is_some_and(hud_edit::Editor::naming)
+            || self.select.naming.is_some()
+            || self.scene.screen().is_some_and(|s| s.typing())
             || self
                 .universe_setup
                 .as_ref()
@@ -11086,12 +8472,12 @@ impl State {
 
     /// Android: whether tapping `hit` is tapping a text field.
     #[cfg(target_os = "android")]
-    fn is_text_field(&self, hit: render::Hit) -> bool {
-        use render::Hit;
+    fn is_text_field(&self, hit: hit::Hit) -> bool {
+        use hit::Hit;
         match hit {
             Hit::TextField | Hit::SettingsSearch | Hit::LobbyChat => true,
             Hit::MpRow(i) => {
-                matches!(self.scene, Scene::MpMenu)
+                self.scene.screen_is::<MpMenu>()
                     && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action())
             }
             Hit::SocialRow(i) => matches!(
@@ -11121,7 +8507,7 @@ impl State {
     fn update_keyboard(&mut self) {
         let field = self.keyboard.asked
             && self.takes_text()
-            && !(matches!(self.scene, Scene::MpMenu) && self.mp_menu.row().is_action());
+            && !(self.scene.screen_is::<MpMenu>() && self.mp_menu.row().is_action());
         if !field {
             // Not again by itself when coming back to the screen.
             self.keyboard.asked = false;
@@ -11223,7 +8609,7 @@ impl State {
             .settings_ui
             .editing
             .as_ref()
-            .filter(|_| matches!(self.scene, Scene::Settings { .. }))
+            .filter(|_| self.in_settings())
         {
             return Some((e.item.label().into(), e.text.clone()));
         }
@@ -11244,7 +8630,7 @@ impl State {
             };
             return Some((label.into(), self.social.input.clone()));
         }
-        if matches!(self.scene, Scene::MpMenu) {
+        if self.scene.screen_is::<MpMenu>() {
             use multiplayer::Row;
             return match self.mp_menu.row() {
                 r @ Row::User => Some((
@@ -11274,17 +8660,21 @@ impl State {
                 _ => None,
             };
         }
-        if let (Scene::Lobby, Some(typed)) = (
-            &self.scene,
-            self.mp.as_ref().and_then(|s| s.chat_input.as_ref()),
-        ) {
+        if let Some(typed) = self
+            .mp
+            .as_ref()
+            .and_then(|s| s.chat_input.as_ref())
+            .filter(|_| self.in_lobby())
+        {
             return Some(("Chat".into(), typed.clone()));
         }
         // The host typing a new lobby password (K).
-        if let (Scene::Lobby, Some(typed)) = (
-            &self.scene,
-            self.mp.as_ref().and_then(|s| s.edit_password.as_ref()),
-        ) {
+        if let Some(typed) = self
+            .mp
+            .as_ref()
+            .and_then(|s| s.edit_password.as_ref())
+            .filter(|_| self.in_lobby())
+        {
             return Some(("New lobby password".into(), typed.clone()));
         }
         None
@@ -11307,7 +8697,7 @@ impl State {
             rgba(0xffffff, 1.0),
             &Canvas::fit_end(10.0, c.width - x - 16.0, &format!("{text}_")),
         );
-        c.hit(0.0, 0.0, c.width, 31.0, render::Hit::TextField);
+        c.hit(0.0, 0.0, c.width, 31.0, hit::Hit::TextField);
     }
 
     /// `/np`'s line: the map on this screen, with its set's osu! link when it has one.
@@ -11326,7 +8716,7 @@ impl State {
         self.main_menu = None;
         let have = self.library.iter().position(|e| e.set_id() == Some(set));
         match have {
-            Some(i) if matches!(self.scene, Scene::Select) => {
+            Some(i) if self.scene.is_select() => {
                 let path = self.library[i].path.clone();
                 self.select.select_path(&self.library, &path);
                 self.social.close();
@@ -11356,10 +8746,10 @@ impl State {
         if let Some(seed) = &self.random_setup {
             return Some(seed.clone());
         }
-        if let Scene::Results { results, .. } = &self.scene
-            && results.mods.has(mods::Mod::Random)
+        if let Some(r) = self.scene.screen_as::<ResultsScreen>()
+            && r.results.mods.has(mods::Mod::Random)
         {
-            return results.seed.map(|s| s.to_string());
+            return r.results.seed.map(|s| s.to_string());
         }
         if let Some(e) = &self.settings_ui.editing {
             return Some(e.text.clone()).filter(|t| !t.is_empty());
@@ -11368,15 +8758,19 @@ impl State {
             return Some(self.social.input.clone()).filter(|t| !t.is_empty());
         }
         match &self.scene {
-            Scene::Select if !self.select.filter.is_empty() && self.select.selected().is_none() => {
+            Scene::Other(sel)
+                if sel.select_screen()
+                    && !self.select.filter.is_empty()
+                    && self.select.selected().is_none() =>
+            {
                 Some(self.select.filter.clone())
             }
-            Scene::Select => self
+            Scene::Other(sel) if sel.select_screen() => self
                 .select
                 .selected()
                 .and_then(|i| self.library.get(i))
                 .map(Entry::label),
-            Scene::Download => self.browse.selected().map(|s| {
+            Scene::Other(s) if s.previews_remote() => self.browse.selected().map(|s| {
                 format!(
                     "{} - {}  https://osu.ppy.sh/beatmapsets/{}",
                     s.artist, s.title, s.id
@@ -11618,18 +9012,7 @@ impl State {
 
     /// Showing a song, its background dimmed by the background dim setting.
     fn dims_background(&self) -> bool {
-        matches!(
-            self.scene,
-            Scene::Play { .. }
-                | Scene::MpPlay { .. }
-                | Scene::MpWait { .. }
-                | Scene::Loading { .. }
-                | Scene::Preview { .. }
-                | Scene::Spectate(_)
-                | Scene::Watch(_)
-                | Scene::VideoEdit(_)
-                | Scene::Editor(_)
-        )
+        self.scene.is_play() || self.scene.screen().is_some_and(|s| s.dims_background())
     }
 
     /// What the window is cleared to under the background: black in a song when the background
@@ -11658,19 +9041,8 @@ impl State {
         self.toast(format!("sorted by {}", self.select.sort.name()));
     }
 
-    fn open_collections(&mut self) {
-        if self.select.collections.is_empty() {
-            self.toast(
-                "no osu! collections found (collection.db next to your Songs folder)".into(),
-            );
-        } else {
-            self.select.sorting = false;
-            self.select.picker = Some(self.select.collection.map(|c| c + 1).unwrap_or(0));
-        }
-    }
-
     fn open_sorts(&mut self) {
-        self.select.sorting = true;
+        self.select.list = ui::PickList::Sorts;
         self.select.picker = ui::SortMode::ALL
             .iter()
             .position(|&m| m == self.select.sort);
@@ -11678,18 +9050,23 @@ impl State {
 
     /// Row `i` of the collection or sort list.
     fn pick_row(&mut self, i: usize) {
-        if !self.select.sorting {
-            self.select.pick_collection(i, &self.library);
+        if self.select.list != ui::PickList::Sorts {
+            self.pick_collection_row(i);
         } else if let Some(&sort) = ui::SortMode::ALL.get(i) {
             self.select.set_sort(sort, &self.library);
             self.sort_changed();
         }
     }
 
+    /// Someone else's play is being watched (a friend's, or a match spectated).
+    fn watching(&self) -> bool {
+        self.scene.screen().is_some_and(|s| s.watching())
+    }
+
     /// The friends overlay (and notifications) can show: outside songs, and while watching
     /// someone else play (spectating a match, watching a friend), never over your own play.
     fn overlay_allowed(&self) -> bool {
-        !self.in_song() || matches!(self.scene, Scene::Spectate(_) | Scene::Watch(_))
+        !self.in_song() || self.watching()
     }
 
     /// Where the friends tab goes on this screen, if it shows: not over a play, or over anything
@@ -11702,13 +9079,8 @@ impl State {
             || self.random_setup.is_some()
             || self.universe_setup.is_some()
             || self.select.menu.is_some()
-            || matches!(
-                self.scene,
-                Scene::Settings { .. }
-                    | Scene::LayoutEdit { .. }
-                    | Scene::HudEdit { .. }
-                    | Scene::Preview { .. }
-            );
+            || self.in_settings()
+            || self.scene.screen().is_some_and(|s| s.covers_social_tab());
         let middle = if self.on_menu() {
             social::TAB_MENU_MIDDLE
         } else {
@@ -11717,10 +9089,27 @@ impl State {
         (!covered).then_some(middle)
     }
 
+    /// Song select, or a screen that is part of it (its fullscreen preview, the download tab):
+    /// the song list's pointer, the preview panel and the map's stars work there.
+    fn in_song_select(&self) -> bool {
+        self.scene.is_select() || self.scene.screen().is_some_and(|s| s.song_select())
+    }
+
     /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
     /// open panel leaves the keys to the editor until one of its fields is clicked.
     fn in_editor(&self) -> bool {
-        matches!(self.scene, Scene::Editor(_) | Scene::EditorHome(_))
+        self.scene.screen().is_some_and(|s| s.editor())
+    }
+
+    /// Where the friends overlay's chip goes in the editors' top bar (its left edge), on a
+    /// screen `width` wide; None outside the editors.
+    fn editor_chip_x(&self, width: f32) -> Option<f32> {
+        match &self.scene {
+            Scene::Other(_) if self.scene.screen_is::<MapEditor>() => {
+                Some(editor::view::View::menu_end() + 6.0)
+            }
+            Scene::Other(s) => s.chip_from_right().map(|right| width - right),
+        }
     }
 
     /// The open friends panel has the keyboard.
@@ -12050,7 +9439,7 @@ impl State {
         }
         self.social.close();
         self.mp_status = format!("joining {title}...");
-        self.scene = Scene::MpMenu;
+        self.scene = MpMenu::scene();
         let request = online::Request::JoinRoom {
             token: self.cfg.online_token.clone(),
             room,
@@ -12152,23 +9541,18 @@ impl State {
                 }
             }
         }
-        let got = self
-            .shot_view
-            .as_ref()
-            .and_then(|v| v.rx.as_ref())
-            .and_then(|rx| rx.try_recv().ok());
+        let got = self.shot_view.as_mut().and_then(|v| v.rx.poll_ended());
         match got {
-            Some(Ok((w, h, rgba))) => {
+            Some(Some(Ok((w, h, rgba)))) => {
                 self.preview
                     .show_image(render::BgImage::from_rgba(w, h, &rgba));
-                if let Some(v) = &mut self.shot_view {
-                    v.rx = None;
-                }
             }
-            Some(Err(e)) => {
+            Some(Some(Err(e))) => {
                 self.shot_view = None;
                 self.toast(format!("couldn't open it: {e}"));
             }
+            // The fetch ended without a picture: nothing to show.
+            Some(None) => self.shot_view = None,
             None => {}
         }
     }
@@ -12202,11 +9586,9 @@ impl State {
             self.toast("open it once this play is over".into());
             return;
         }
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(shots::fetch_shot(id));
+        self.shot_view = Some(ShotView {
+            rx: Job::spawn(move || shots::fetch_shot(id)),
         });
-        self.shot_view = Some(ShotView { rx: Some(rx) });
     }
 
     /// Back from a screenshot, the background as it was.
@@ -12221,17 +9603,21 @@ impl State {
     /// The screenshot open, alone on the screen: nothing else of the frame is left.
     fn draw_shot_view(&mut self, canvas: &mut Canvas) {
         let Some(view) = &self.shot_view else { return };
-        let loading = view.rx.is_some();
+        let loading = view.rx.is_busy();
         let w = canvas.width;
         canvas.clear(w);
         self.frame_clip = None;
         self.bg_brightness = 1.0;
         if loading {
             canvas.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 1.0));
-            let text = tr!("loading...");
+            let text = tr!("loading...", "読み込み中...", "загрузка...");
             canvas.text_centered(w / 2.0, 234.0, 9.0, rgba(0xc8c8d8, 1.0), text);
         }
-        let hint = tr!("click or any key to close");
+        let hint = tr!(
+            "click or any key to close",
+            "クリックかキーで閉じる",
+            "клик или клавиша: закрыть"
+        );
         let hw = Canvas::text_width(7.0, hint) + 12.0;
         canvas.round_rect(
             [w / 2.0 - hw / 2.0, 462.0],
@@ -12265,7 +9651,7 @@ impl State {
         c.send(online::Up::Watch(name.clone()));
         self.stop_audio();
         self.social.close();
-        self.scene = Scene::Watch(Box::new(WatchView::new(name)));
+        self.scene = Watch::scene(Box::new(WatchView::new(name)));
     }
 
     fn stop_watching(&mut self) {
@@ -12286,13 +9672,14 @@ impl State {
                 .map(|m| m.label())
                 .unwrap_or_default()
         };
+        if let Some(activity) = self.scene.screen().and_then(|s| s.friends_activity()) {
+            return activity;
+        }
         match &self.scene {
             // The editor and its test plays (`editor_back` holds the editor while one runs)
             // count as editing: a test play is the mapper checking their own work, there's
             // nothing to watch, and flipping to "playing" would offer friends a Watch button.
-            Scene::Editor(view) => Activity::Editing { map: view.label() },
-            Scene::EditorHome(_) => Activity::Editing { map: String::new() },
-            Scene::Loading { .. } | Scene::Play { .. } if self.editor_back.is_some() => {
+            _ if self.editor_back.is_some() && (self.scene.is_play() || self.loading_song()) => {
                 Activity::Editing {
                     map: self
                         .editor_back
@@ -12301,17 +9688,18 @@ impl State {
                         .unwrap_or_default(),
                 }
             }
-            Scene::Play { game, entry, .. } if game.replay.is_none() => Activity::Playing {
-                map: self
-                    .library
-                    .get(*entry)
-                    .map(|e| e.label())
-                    .unwrap_or_default(),
-            },
-            Scene::Watch(v) => Activity::Watching {
-                name: v.player.clone(),
-            },
-            Scene::MpWait { .. } | Scene::MpPlay { .. } | Scene::Spectate(_) => {
+            Scene::Other(s)
+                if s.song_play().is_some() && self.game().is_some_and(|g| g.replay().is_none()) =>
+            {
+                Activity::Playing {
+                    map: s
+                        .song_play()
+                        .and_then(|(entry, _)| self.library.get(entry))
+                        .map(|e| e.label())
+                        .unwrap_or_default(),
+                }
+            }
+            Scene::Other(s) if s.in_match() || s.spectating() => {
                 Activity::Match { map: lobby_map() }
             }
             _ => match &self.mp {
@@ -12355,8 +9743,8 @@ impl State {
                     self.social.have_list = false;
                     self.social.sent_activity = None;
                     self.stream = None;
-                    if let Scene::Watch(v) = &self.scene {
-                        let player = v.player.clone();
+                    if let Some(w) = self.scene.screen_as::<Watch>() {
+                        let player = w.view.player.clone();
                         if let Some(c) = &self.social.conn {
                             c.send(online::Up::Watch(player));
                         }
@@ -12603,7 +9991,7 @@ impl State {
                 paused,
                 inputs,
             } => {
-                if let Scene::Watch(v) = &mut self.scene
+                if let Some(v) = self.scene.screen_mut::<Watch>().map(|w| &mut w.view)
                     && key(&v.player) == key(&player)
                 {
                     let start = WatchStart {
@@ -12624,14 +10012,14 @@ impl State {
                 }
             }
             Down::WatchFrame { t, paused, inputs } => {
-                if let Scene::Watch(v) = &mut self.scene {
+                if let Some(v) = self.scene.screen_mut::<Watch>().map(|w| &mut w.view) {
                     if let Some(n) = &mut v.next {
                         n.t = t;
                         n.paused = paused;
                         n.inputs.extend_from_slice(&inputs);
                     } else if v.ending.is_none() {
                         v.clock = (t, Instant::now(), paused);
-                        match v.game.as_mut().and_then(|g| g.replay.as_mut()) {
+                        match v.game.as_mut().and_then(|g| g.replay_mut().as_mut()) {
                             Some((list, _)) => list.extend_from_slice(&inputs),
                             None => v.inputs.extend_from_slice(&inputs),
                         }
@@ -12639,7 +10027,7 @@ impl State {
                 }
             }
             Down::WatchEnd { player } => {
-                if let Scene::Watch(v) = &mut self.scene
+                if let Some(v) = self.scene.screen_mut::<Watch>().map(|w| &mut w.view)
                     && key(&v.player) == key(&player)
                 {
                     if v.game.is_some() && v.ending.is_none() {
@@ -12656,7 +10044,7 @@ impl State {
             }
             Down::WatchStopped(why) => {
                 self.toast(why);
-                if matches!(self.scene, Scene::Watch(_)) {
+                if self.scene.screen_is::<Watch>() {
                     self.stop_audio();
                     self.show_select();
                 }
@@ -12669,7 +10057,8 @@ impl State {
     /// the presses since (the first frame sends all of them, for a mid-play reconnect).
     fn stream_play(&mut self) {
         let connected = self.social.connected;
-        let Scene::Play { game, entry, .. } = &mut self.scene else {
+        let (Some((entry, _)), Some(game)) = (self.scene.song_play(), self.play.as_deref_mut())
+        else {
             if self.stream.take().is_some()
                 && connected
                 && let Some(c) = &self.social.conn
@@ -12684,25 +10073,25 @@ impl State {
             .as_ref()
             // OD Override's value doesn't travel: a watcher would judge by their own.
             .filter(|_| {
-                connected && game.replay.is_none() && !game.mods.has(mods::Mod::OdOverride)
+                connected && game.replay().is_none() && !game.mods().has(mods::Mod::OdOverride)
             })
         else {
             self.stream = None;
             return;
         };
-        let id = &**game as *const Game as usize;
+        let id = &*game as *const Play as usize;
         if self.stream.map(|s| s.0) != Some(id) {
             if self.stream.is_some() {
                 conn.send(online::Up::PlayEnd);
             }
-            game.log_inputs = true;
-            let Some(e) = self.library.get(*entry) else {
+            game.set_log_inputs(true);
+            let Some(e) = self.library.get(entry) else {
                 return;
             };
             conn.send(online::Up::PlayStart(online::SoloPlay {
                 map: net::MapInfo {
-                    seed: (game.seed != 0).then_some(game.seed),
-                    ..map_info(e, game.rate, game.mods)
+                    seed: (game.seed() != 0).then_some(game.seed()),
+                    ..map_info(e, game.rate(), game.mods())
                 },
                 anti_mash: true,
             }));
@@ -12713,11 +10102,11 @@ impl State {
         };
         if last.elapsed() >= Duration::from_millis(100) {
             *last = Instant::now();
-            let inputs = game.inputs.get(*sent..).unwrap_or_default().to_vec();
-            *sent = game.inputs.len();
+            let inputs = game.inputs().get(*sent..).unwrap_or_default().to_vec();
+            *sent = game.inputs().len();
             conn.send(online::Up::PlayFrame {
-                t: game.time,
-                paused: game.paused.is_some() || game.resuming.is_some(),
+                t: game.time(),
+                paused: game.paused().is_some() || game.resuming().is_some(),
                 inputs,
             });
         }
@@ -12726,12 +10115,12 @@ impl State {
     /// The watch view: finds (or downloads) and loads the map, starts the replay where the
     /// friend is (minus the delay), holds while they pause and catches up when they skip.
     fn watch_tick(&mut self) {
-        if !matches!(self.scene, Scene::Watch(_)) {
-            return;
-        }
-        let Scene::Watch(mut v) = std::mem::replace(&mut self.scene, Scene::Select) else {
+        // Out of the scene while it runs (the scene is song select meanwhile), as when it was
+        // a variant.
+        let Some(watch) = self.scene.take_screen::<Watch>() else {
             return;
         };
+        let mut v = watch.view;
         if let (Some(play), None, None) = (v.play.clone(), v.entry, &v.game)
             && v.looked
                 .is_none_or(|t| t.elapsed() > Duration::from_secs(1))
@@ -12741,7 +10130,7 @@ impl State {
                 Some(i) => {
                     v.entry = Some(i);
                     self.preview.show_background_for(&self.library[i]);
-                    v.rx = Some(self.load_with(i, play.map.rate, Mods::from_list(&play.map.mods)));
+                    v.rx = self.load_with(i, play.map.rate, Mods::from_list(&play.map.mods));
                 }
                 None if !v.fetching => {
                     v.fetching = true;
@@ -12750,10 +10139,9 @@ impl State {
                 None => {}
             }
         }
-        if let Some(rx) = &v.rx {
-            match rx.try_recv() {
-                Ok(Ok((map, track))) => {
-                    v.rx = None;
+        if v.rx.is_busy() {
+            match v.rx.poll() {
+                Some(Ok((map, track))) => {
                     let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
                     let mods = v
                         .play
@@ -12761,35 +10149,36 @@ impl State {
                         .map(|p| Mods::from_list(&p.map.mods))
                         .unwrap_or_default();
                     let seed = v.play.as_ref().and_then(|p| p.map.seed).unwrap_or(0);
-                    let mut g = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
-                    g.live_pp = v.entry.and_then(|i| {
+                    let mut g = Play::new(
+                        Game::with_seed(map, track, sound(&self.audio), mods, seed)
+                            .with_settings(&crate::game::settings()),
+                    );
+                    let live_pp = v.entry.and_then(|i| {
                         pp::Live::start(
                             self.library[i].path.clone(),
-                            g.rate,
+                            stars::read,
+                            g.rate(),
                             mods,
                             1.0,
                             seed,
                             Default::default(),
                         )
                     });
+                    g.set_live_pp(live_pp);
                     if let Some(p) = &v.play {
                         use_mod_settings(&mut g, &p.map);
                     }
-                    g.replay = Some((std::mem::take(&mut v.inputs), 0));
-                    g.watched = true;
-                    g.banner = Some(format!("WATCHING  -  {}", v.player));
+                    g.set_replay(Some((std::mem::take(&mut v.inputs), 0)));
+                    g.view.watched = true;
+                    g.view.banner = Some(format!("WATCHING  -  {}", v.player));
                     let target = v.their_time() - WATCH_DELAY_MS * rate;
-                    if target > g.time {
-                        g.seek(target, self.audio.as_ref(), self.play_offset);
+                    if target > g.time() {
+                        g.seek(target, sound(&self.audio), self.play_offset);
                     }
                     v.game = Some(Box::new(g));
                 }
-                Ok(Err(e)) => {
-                    v.rx = None;
-                    self.toast(format!("can't load the map: {e}"));
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => v.rx = None,
+                Some(Err(e)) => self.toast(format!("can't load the map: {e}")),
+                None => {}
             }
         }
         let rate = v.play.as_ref().map(|p| p.map.rate).unwrap_or(1.0);
@@ -12802,22 +10191,22 @@ impl State {
         if let Some(g) = &mut v.game {
             if let Some((end, heard)) = v.ending {
                 // Their last note is on screen; or the view stalled / the map ended.
-                over = g.time >= end - 50.0
+                over = g.time() >= end - 50.0
                     || heard.elapsed()
                         > Duration::from_millis((WATCH_DELAY_MS * 2.0 + 4000.0) as u64);
                 if v.held {
-                    g.resume(self.audio.as_ref());
+                    g.resume(sound(&self.audio));
                     v.held = false;
                 }
-            } else if !v.held && g.time > target + 250.0 {
-                g.pause(self.audio.as_ref());
+            } else if !v.held && g.time() > target + 250.0 {
+                g.pause(sound(&self.audio));
                 v.held = true;
-            } else if v.held && target >= g.time {
-                g.resume(self.audio.as_ref());
+            } else if v.held && target >= g.time() {
+                g.resume(sound(&self.audio));
                 v.held = false;
-            } else if !v.held && g.time < target - 4000.0 * rate {
+            } else if !v.held && g.time() < target - 4000.0 * rate {
                 // Far behind (they skipped the intro, or we stalled): jump to them.
-                g.seek(target, self.audio.as_ref(), self.play_offset);
+                g.seek(target, sound(&self.audio), self.play_offset);
             }
         }
         if over {
@@ -12832,7 +10221,7 @@ impl State {
                 a.stop();
             }
         }
-        self.scene = Scene::Watch(v);
+        self.scene = Watch::scene(v);
     }
 
     /// Finishes pending connections and applies messages from the room.
@@ -12847,8 +10236,8 @@ impl State {
                     self.mp = Some(session);
                     self.mp_connecting = None;
                     self.mp_status.clear();
-                    if matches!(self.scene, Scene::MpMenu) {
-                        self.scene = Scene::Lobby;
+                    if self.scene.screen_is::<MpMenu>() {
+                        self.scene = Lobby::scene();
                     }
                 }
                 Ok(Err(e)) => {
@@ -12909,9 +10298,9 @@ impl State {
                         .get_or_insert_with(|| mapguessr::Guessr::new(library));
                     if game_over {
                         g.game_over();
-                        if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                        if self.picking_lobby_map && self.scene.is_select() {
                             self.picking_lobby_map = false;
-                            self.scene = Scene::Lobby;
+                            self.scene = Lobby::scene();
                         }
                     }
                     return;
@@ -12927,8 +10316,13 @@ impl State {
                 s.map = map;
                 // Dropped from the match (e.g. load timeout) while waiting for it to start.
                 let dropped = s.me().is_some_and(|p| p.status == net::Status::Lobby);
-                if dropped && matches!(self.scene, Scene::MpWait { start: None, .. }) {
-                    self.scene = Scene::Lobby;
+                if dropped
+                    && self
+                        .scene
+                        .screen_mut::<MpWait>()
+                        .is_some_and(|w| w.start.is_none())
+                {
+                    self.scene = Lobby::scene();
                     self.toast("the match started without you (map didn't load in time)".into());
                 }
             }
@@ -12936,10 +10330,13 @@ impl State {
                 let Some(s) = &mut self.mp else { return };
                 s.contrib.clear();
                 // Not in a position to play (single-player song, calibration): sit this one out.
-                if matches!(
-                    self.scene,
-                    Scene::Play { .. } | Scene::Calibrate { .. } | Scene::Loading { .. }
-                ) {
+                if self.scene.is_play()
+                    || self.scene.screen().is_some_and(|s| s.loads_song())
+                    || self
+                        .scene
+                        .screen()
+                        .is_some_and(|s| s.calibration().is_some())
+                {
                     s.client.send(net::ClientMsg::Loaded(false));
                     return;
                 }
@@ -12957,12 +10354,7 @@ impl State {
                                 .plus(self.cfg.mods.free())
                         };
                         let rx = self.load_with(i, map.rate, mods);
-                        self.scene = Scene::MpWait {
-                            rx: Some(rx),
-                            loaded: None,
-                            start: None,
-                            from: map.from,
-                        };
+                        self.scene = MpWait::scene(rx, map.from);
                     }
                     None => s.client.send(net::ClientMsg::Loaded(false)),
                 }
@@ -12970,8 +10362,8 @@ impl State {
             ServerMsg::Start { at } => {
                 let Some(s) = &self.mp else { return };
                 let when = s.client.local_instant(at);
-                if let Scene::MpWait { start, .. } = &mut self.scene {
-                    *start = Some(when);
+                if let Some(w) = self.scene.screen_mut::<MpWait>() {
+                    w.start = Some(when);
                 }
             }
             ServerMsg::MapRequested { from } => self.send_map_to(from),
@@ -12985,8 +10377,8 @@ impl State {
                         self.preview.show_background_for(&self.library[i]);
                         let mods = Mods::from_list(&map.mods);
                         let rx = self.load_with(i, map.rate, mods);
-                        self.scene = Scene::Spectate(Box::new(SpectateView {
-                            rx: Some(rx),
+                        self.scene = Spectate::scene(Box::new(SpectateView {
+                            rx,
                             loaded: None,
                             start,
                             from: map.from,
@@ -13011,16 +10403,16 @@ impl State {
                 }
             }
             ServerMsg::Skipped { from } => {
-                if let Scene::Spectate(v) = &mut self.scene {
+                if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
                     v.skipped.insert(from);
                     v.follow_skip(self.audio.as_ref(), self.play_offset);
                 }
             }
             ServerMsg::Inputs { from, inputs, .. } => {
-                if let Scene::Spectate(v) = &mut self.scene {
+                if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
                     match v.games.iter_mut().find(|(id, _)| *id == from) {
                         Some((_, g)) => {
-                            if let Some((list, _)) = &mut g.replay {
+                            if let Some((list, _)) = g.replay_mut() {
                                 list.extend_from_slice(&inputs);
                             }
                         }
@@ -13041,14 +10433,18 @@ impl State {
                         net::DefenseAct::TagIn { .. } => c.1 += 1,
                     }
                 }
-                match &mut self.scene {
-                    Scene::MpPlay { game, .. } => game.defense_act(from, act),
-                    Scene::Spectate(v) => {
-                        for (_, g) in v.games.iter_mut() {
-                            g.defense_act(from, act);
-                        }
+                if self
+                    .scene
+                    .screen()
+                    .is_some_and(|s| s.in_match() && s.holds_game())
+                {
+                    if let Some(game) = self.play.as_deref_mut() {
+                        game.defense_act(from, act);
                     }
-                    _ => {}
+                } else if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
+                    for (_, g) in v.games.iter_mut() {
+                        g.defense_act(from, act);
+                    }
                 }
             }
             ServerMsg::SkipVotes { votes, of } => {
@@ -13060,8 +10456,13 @@ impl State {
                 if let Some(s) = &mut self.mp {
                     s.skip_votes = None;
                 }
-                if let Scene::MpPlay { game, .. } = &mut self.scene {
-                    game.skip(self.audio.as_ref(), self.play_offset);
+                if self
+                    .scene
+                    .screen()
+                    .is_some_and(|s| s.in_match() && s.holds_game())
+                    && let Some(game) = self.play.as_deref_mut()
+                {
+                    game.skip(sound(&self.audio), self.play_offset);
                 }
             }
             ServerMsg::MapFile(part) => self.receive_map_part(part),
@@ -13069,10 +10470,10 @@ impl State {
                 if let Some(s) = &mut self.mp {
                     s.results = Some(r);
                 }
-                if let Scene::Spectate(v) = &mut self.scene {
+                if let Some(Spectate { view: v }) = self.scene.screen_mut::<Spectate>() {
                     if v.games.is_empty() {
                         self.stop_audio();
-                        self.scene = Scene::MpResults;
+                        self.scene = MpResults::scene();
                     } else {
                         // Watch the rest of it: the view is `SPECTATE_DELAY` behind.
                         v.ended.get_or_insert_with(Instant::now);
@@ -13080,21 +10481,17 @@ impl State {
                 }
             }
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
-                let in_mp = matches!(
-                    self.scene,
-                    Scene::Lobby
-                        | Scene::MpWait { .. }
-                        | Scene::MpPlay { .. }
-                        | Scene::MpResults
-                        | Scene::Spectate(_)
-                );
+                let in_mp = self
+                    .scene
+                    .screen()
+                    .is_some_and(|s| s.in_room() || s.spectating());
                 self.toast(format!("multiplayer: {why}"));
                 self.mp = None;
                 self.picking_lobby_map = false;
                 if in_mp {
                     self.stop_audio();
                     self.mp_status = why;
-                    self.scene = Scene::MpMenu;
+                    self.scene = MpMenu::scene();
                 }
             }
             ServerMsg::GuessRound {
@@ -13123,9 +10520,9 @@ impl State {
                     g.reveal(&self.library, hash, got, last);
                 }
                 // Picking a guess: back to the lobby to see the answer.
-                if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                if self.picking_lobby_map && self.scene.is_select() {
                     self.picking_lobby_map = false;
-                    self.scene = Scene::Lobby;
+                    self.scene = Lobby::scene();
                 }
             }
             ServerMsg::Chat { from, text } => {
@@ -13161,129 +10558,6 @@ impl State {
         }
     }
 
-    /// A key while "Exit taiko.rs?" is up: yes, no, or nothing. 1 and 2 answer like osu!'s.
-    fn quit_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Enter
-            | KeyCode::NumpadEnter
-            | KeyCode::KeyY
-            | KeyCode::Digit1
-            | KeyCode::Numpad1 => self.quit = true,
-            KeyCode::KeyQ if self.modifiers_ctrl => self.quit = true,
-            KeyCode::Escape
-            | KeyCode::KeyN
-            | KeyCode::Backspace
-            | KeyCode::Digit2
-            | KeyCode::Numpad2 => self.quit_asked = false,
-            _ => {}
-        }
-    }
-
-    /// The crash question is up: after the splash, over everything but the exit question.
-    fn crash_shown(&self) -> bool {
-        self.crash.is_some() && self.splash.is_none() && !self.quit_asked
-    }
-
-    /// A key while "taiko.rs crashed last time" is up: copy the report, or not.
-    fn crash_key(&mut self, code: KeyCode) {
-        match code {
-            KeyCode::Enter
-            | KeyCode::NumpadEnter
-            | KeyCode::KeyC
-            | KeyCode::Digit1
-            | KeyCode::Numpad1 => {
-                let Some(report) = self.crash.take() else {
-                    return;
-                };
-                let text = if clipboard::set(&report) {
-                    tr!("crash log copied: paste it in #bugs on Discord")
-                } else {
-                    tr!("couldn't copy it: send crash.log from the game's data folder")
-                };
-                self.toast = Some(Toast {
-                    text: text.into(),
-                    until: Instant::now() + Duration::from_secs(6),
-                });
-            }
-            KeyCode::Escape | KeyCode::Backspace | KeyCode::Digit2 | KeyCode::Numpad2 => {
-                self.crash = None
-            }
-            _ => {}
-        }
-    }
-
-    /// "taiko.rs crashed last time": the report to copy and send in.
-    fn draw_crash(&self, c: &mut Canvas) {
-        if !self.crash_shown() {
-            return;
-        }
-        let w = c.width;
-        c.rect(0.0, 0.0, w, render::VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
-        let (bw, bh) = (380.0f32.min(w - 32.0), 132.0);
-        let (x, y) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        c.round_rect(
-            [x, y],
-            [bw, bh],
-            10.0,
-            rgba(0x1d1d27, 1.0),
-            rgba(accent(), 1.0),
-            1.5,
-        );
-        c.text_centered(
-            w / 2.0,
-            y + 18.0,
-            12.0,
-            rgba(0xffffff, 1.0),
-            tr!("taiko.rs crashed last time"),
-        );
-        let room = bw - 32.0;
-        let lines = if self.crash_sent {
-            [
-                tr!("Its report went to the developers by itself."),
-                tr!("To say what you were doing, paste the log in #bugs."),
-            ]
-        } else {
-            [
-                tr!("Copy the crash log and paste it in #bugs"),
-                tr!("on the taiko.rs Discord, so it gets fixed."),
-            ]
-        };
-        for (k, line) in lines.iter().enumerate() {
-            let size = Canvas::fit_size(8.0, 6.5, room, line);
-            c.text_centered(
-                w / 2.0,
-                y + 42.0 + 13.0 * k as f32,
-                size,
-                rgba(0xc8c8d8, 1.0),
-                &Canvas::fit(size, room, line),
-            );
-        }
-        let gap = 10.0;
-        let button = (bw - 36.0 - gap) / 2.0;
-        let copy = tr!("1. Copy log  (Enter)");
-        let close = tr!("2. Close  (Esc)");
-        c.button(
-            x + 18.0,
-            y + 88.0,
-            button,
-            26.0,
-            copy,
-            9.0,
-            render::Hit::Key(KeyCode::KeyC),
-            true,
-        );
-        c.button(
-            x + 18.0 + button + gap,
-            y + 88.0,
-            button,
-            26.0,
-            close,
-            9.0,
-            render::Hit::Key(KeyCode::Escape),
-            false,
-        );
-    }
-
     /// How far in the exit question has slid at `now`, 0 to 1: fast, then easing to a stop.
     fn quit_slide(&self, now: Instant) -> f32 {
         let Some(at) = self.quit_asked_at.filter(|_| self.cfg.animations) else {
@@ -13291,100 +10565,6 @@ impl State {
         };
         let ms = now.saturating_duration_since(at).as_secs_f32() * 1000.0;
         1.0 - (1.0 - (ms / QUIT_SLIDE_MS).min(1.0)).powi(3)
-    }
-
-    /// The exit question over everything, sliding down from above the screen.
-    fn draw_quit(&self, c: &mut Canvas, now: Instant) {
-        if !self.quit_asked {
-            return;
-        }
-        // The main menu's look: one panel, the two answers as notes on it (Exit a don, Stay a kat),
-        // the selector on the one Enter picks, or on the one under the pointer.
-        let w = c.width;
-        let slide = self.quit_slide(now);
-        c.rect(
-            0.0,
-            0.0,
-            w,
-            render::VIRTUAL_HEIGHT,
-            rgba(0x000000, 0.6 * slide),
-        );
-        let (bw, bh) = (340.0f32.min(w - 32.0), 124.0);
-        let (x, rest) = ((w - bw) / 2.0, (render::VIRTUAL_HEIGHT - bh) / 2.0);
-        let y = -bh + (rest + bh) * slide;
-        style::panel(c, x, y, bw, bh);
-        let title = tr!("Exit taiko.rs?");
-        let size = Canvas::fit_size(16.0, 10.0, bw - 28.0, title);
-        style::title(
-            c,
-            w / 2.0 - Canvas::text_width(size, title) / 2.0,
-            y + 18.0,
-            size,
-            0xffffff,
-            title,
-        );
-        let gap = 12.0;
-        let button = (bw - 36.0 - gap) / 2.0;
-        let colours = multiverse::note_colours();
-        let options = [
-            (
-                x + 18.0,
-                tr!("Exit"),
-                "1 / Enter",
-                colours.don(),
-                render::Hit::Key(KeyCode::KeyY),
-            ),
-            (
-                x + 18.0 + button + gap,
-                tr!("Stay"),
-                "2 / Esc",
-                colours.kat(),
-                render::Hit::Key(KeyCode::KeyN),
-            ),
-        ];
-        let oy = y + 62.0;
-        let hovered = options
-            .iter()
-            .position(|o| c.hovered(o.0, oy, button, 40.0));
-        let on = hovered.unwrap_or(0);
-        for (k, (ox, label, keys, col, hit)) in options.into_iter().enumerate() {
-            let selected = k == on;
-            if selected {
-                c.round_rect(
-                    [ox, oy],
-                    [button, 40.0],
-                    8.0,
-                    rgba(style::selector_colour(), 0.12 + 0.05 * style::pulse()),
-                    rgba(0, 0.0),
-                    0.0,
-                );
-                // Its easing would trail behind the panel: until that's still, it just stays on.
-                let around = [ox - 3.0, oy - 3.0, button + 6.0, 46.0];
-                if slide < 1.0 {
-                    style::brackets(c, around, 1.0);
-                } else {
-                    style::selector(c, "quit", around);
-                }
-            }
-            c.hit(ox, oy, button, 40.0, hit);
-            let (nx, ny, r) = (ox + 20.0, oy + 20.0, if selected { 10.0 } else { 8.0 });
-            style::note(c, nx, ny, r, col, selected, 0.6);
-            let room = button - 44.0;
-            c.text(
-                ox + 38.0,
-                oy + 9.0,
-                11.0,
-                rgba(if selected { 0xffffff } else { 0xa8a8bc }, 1.0),
-                &Canvas::fit(11.0, room, label),
-            );
-            c.text(
-                ox + 38.0,
-                oy + 24.0,
-                6.0,
-                rgba(0x8a8aa0, 1.0),
-                &Canvas::fit(6.0, room, keys),
-            );
-        }
     }
 
     fn key(
@@ -13431,7 +10611,10 @@ impl State {
         // Tab in the editor's test play is autoplay, as in osu!'s, whatever the map info key is.
         if code == KeyCode::Tab
             && !(self.modifiers_shift || self.modifiers_ctrl || self.modifiers_alt)
-            && matches!(&self.scene, Scene::Play { game, .. } if game.test_play && game.paused.is_none())
+            && self.scene.is_play()
+            && self
+                .game()
+                .is_some_and(|game| game.view.test_play && game.paused().is_none())
         {
             if !repeat {
                 self.toggle_test_auto();
@@ -13473,7 +10656,7 @@ impl State {
 
     /// Song select with nothing over it.
     fn select_open(&self) -> bool {
-        matches!(self.scene, Scene::Select)
+        self.scene.is_select()
             && !self.on_menu()
             && self.mod_select.is_none()
             && self.select.picker.is_none()
@@ -13489,8 +10672,10 @@ impl State {
             return None;
         }
         let drum = self.cfg.keys.iter().position(|&k| k == code)?;
-        let paused = matches!(&self.scene, Scene::Play { game, .. }
-            if game.paused.is_some() && game.resuming.is_none());
+        let paused = self.scene.is_play()
+            && self
+                .game()
+                .is_some_and(|game| game.paused().is_some() && game.resuming().is_none());
         let place = if self.select_open() && !self.select.searching {
             drum_nav::Place::Select(self.select_zone)
         } else if self.mod_select.is_some() || (paused && !self.social.open) {
@@ -13528,7 +10713,7 @@ impl State {
             KeyCode::ArrowRight => self.select_zone = self.select_zone.moved(&self.select_rows, 1),
             KeyCode::Escape => self.select_zone = drum_nav::Zone::List,
             KeyCode::Enter | KeyCode::NumpadEnter => match self.select_rows.get(bottom, at) {
-                Some(render::Hit::TextField) => self.select.searching = true,
+                Some(hit::Hit::TextField) => self.select.searching = true,
                 Some(hit) => {
                     self.select_zone = drum_nav::Zone::List;
                     self.click(hit, window);
@@ -13549,7 +10734,7 @@ impl State {
     /// a search.
     fn hotkey_place(&self, code: KeyCode) -> Option<keys::Place> {
         let busy = self.splash.is_some()
-            || matches!(self.scene, Scene::EditorHome(_))
+            || self.scene.screen().is_some_and(|s| s.takes_every_key())
             || self.profile.is_some()
             || self.medals.is_some()
             || self.unlock.showing()
@@ -13560,9 +10745,8 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        let settings_idle = matches!(self.scene, Scene::Settings { .. })
-            && self.settings_ui.search.is_empty()
-            && !keys::starts_text(code);
+        let settings_idle =
+            self.in_settings() && self.settings_ui.search.is_empty() && !keys::starts_text(code);
         if busy
             || (plain && self.in_song() && self.cfg.keys.contains(&code))
             || (plain && self.takes_text() && keys::types_text(code) && !settings_idle)
@@ -13570,14 +10754,21 @@ impl State {
             return None;
         }
         Some(match &self.scene {
-            Scene::Select if self.on_menu() => keys::Place::Other,
-            Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => {
+            Scene::Other(sel) if sel.select_screen() && self.on_menu() => keys::Place::Other,
+            Scene::Other(sel)
+                if sel.select_screen()
+                    && self.select.picker.is_none()
+                    && self.select.menu.is_none() =>
+            {
                 keys::Place::Select
             }
-            Scene::Play { game, .. } if game.paused.is_some() => keys::Place::Paused,
-            Scene::Play { .. } => keys::Place::Play,
-            Scene::Results { .. } => keys::Place::Results,
-            _ => keys::Place::Other,
+            Scene::Other(s)
+                if s.song_play().is_some() && self.game().is_some_and(|g| g.paused().is_some()) =>
+            {
+                keys::Place::Paused
+            }
+            Scene::Other(s) if s.song_play().is_some() => keys::Place::Play,
+            Scene::Other(s) => s.key_place().unwrap_or(keys::Place::Other),
         })
     }
 
@@ -13589,244 +10780,23 @@ impl State {
         at: Instant,
         window: Option<&Window>,
     ) {
-        if self.shot_view.is_some() {
-            if !repeat {
-                self.close_shot();
-            }
-            return;
-        }
-        if self.quit_asked {
-            if !repeat {
-                self.quit_key(code);
-            }
-            return;
-        }
-        if self.crash_shown() {
-            if !repeat {
-                self.crash_key(code);
-            }
+        if self.layers_key(
+            &app::overlays::OVER_EVERYTHING,
+            code,
+            repeat,
+            text,
+            at,
+            window,
+        ) {
             return;
         }
         self.refresh_play_offset();
-        if let Some(s) = &mut self.splash {
-            // Any key skips the splash and does nothing else.
-            if !repeat {
-                s.skip(at, self.audio.as_ref(), &format!("key {code:?}"));
-            }
+        if self.layers_key(&app::overlays::OVER_SCREENS, code, repeat, text, at, window) {
             return;
         }
-        if let Some(slot) = self.guide_binding.filter(|_| self.guide.is_some()) {
-            let modifier = matches!(
-                code,
-                KeyCode::ShiftLeft
-                    | KeyCode::ShiftRight
-                    | KeyCode::ControlLeft
-                    | KeyCode::ControlRight
-                    | KeyCode::AltLeft
-                    | KeyCode::AltRight
-                    | KeyCode::SuperLeft
-                    | KeyCode::SuperRight
-            );
-            if repeat || modifier {
-                return;
-            }
-            self.guide_binding = None;
-            if code != KeyCode::Escape && self.bind_drum_key(slot, code) {
-                self.cfg.save();
-            }
-            return;
-        }
-        if self.guide.is_some() {
-            match code {
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space | KeyCode::ArrowRight => {
-                    self.guide_action(guide::Action::Next)
-                }
-                KeyCode::ArrowLeft | KeyCode::Backspace => self.guide_action(guide::Action::Back),
-                KeyCode::Escape => self.guide_action(guide::Action::Close),
-                KeyCode::KeyC if self.guide == Some(guide::OFFSET_PAGE) => {
-                    self.guide_action(guide::Action::Calibrate)
-                }
-                KeyCode::Digit1 | KeyCode::Digit2 | KeyCode::Digit3 | KeyCode::Digit4
-                    if self.guide == Some(0) =>
-                {
-                    let slot = [
-                        KeyCode::Digit1,
-                        KeyCode::Digit2,
-                        KeyCode::Digit3,
-                        KeyCode::Digit4,
-                    ]
-                    .iter()
-                    .position(|&k| k == code);
-                    self.guide_binding = slot;
-                }
-                _ => {}
-            }
-            return;
-        }
-        // Being typed or bound, Ctrl+O is just a key.
-        let free = self.settings_ui.binding.is_none() && self.settings_ui.editing.is_none();
-        if free
-            && self.modifiers_alt
-            && !self.modifiers_ctrl
-            && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight)
-        {
-            self.volume.pick_next(
-                if code == KeyCode::ArrowLeft { -1 } else { 1 },
-                Instant::now(),
-            );
-            return;
-        }
-        // Alt+Up/Down turn it like Alt+wheel (held, it keeps turning).
-        if free
-            && self.modifiers_alt
-            && !self.modifiers_ctrl
-            && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown)
-        {
-            self.turn_volume(if code == KeyCode::ArrowUp { 1 } else { -1 });
-            return;
-        }
-        if free
-            && code == KeyCode::KeyO
-            && self.modifiers_ctrl
-            && !self.modifiers_shift
-            && !self.modifiers_alt
-        {
-            if !repeat {
-                self.settings_anywhere();
-            }
-            return;
-        }
-        if let Some(view) = &mut self.changelog {
-            if (!repeat
-                || matches!(
-                    code,
-                    KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown
-                ))
-                && view.key(code)
-            {
-                self.changelog = None;
-            }
-            return;
-        }
-        // A medal being earned is over everything: anything moves it on.
-        if self.unlock.showing() {
-            self.unlock.skip();
-            return;
-        }
-        if let Some(view) = &mut self.medals {
-            match code {
-                KeyCode::Escape | KeyCode::Backspace => self.medals = None,
-                KeyCode::ArrowLeft => view.step_tab(-1),
-                KeyCode::ArrowRight | KeyCode::Tab => view.step_tab(1),
-                KeyCode::ArrowUp => view.wheel(1),
-                KeyCode::ArrowDown => view.wheel(-1),
-                KeyCode::PageUp => view.wheel(5),
-                KeyCode::PageDown => view.wheel(-5),
-                _ => {}
-            }
-            return;
-        }
-        // A profile is over everything: any of these closes it, the rest do nothing.
-        if self.profile.is_some() {
-            if matches!(
-                code,
-                KeyCode::Escape | KeyCode::Backspace | KeyCode::Enter | KeyCode::NumpadEnter
-            ) {
-                self.profile = None;
-            } else if code == KeyCode::KeyM {
-                let name = self.profile.take().map(|p| p.name);
-                self.open_medals(name);
-            } else if code == KeyCode::KeyB
-                && let Some(p) = &self.profile
-            {
-                let url = profile_url(&p.name);
-                if !open_url(&url) {
-                    self.toast(url);
-                }
-            }
-            return;
-        }
-        // Ctrl+V: the clipboard's text, typed into whatever takes text here.
-        if self.modifiers_ctrl && code == KeyCode::KeyV && self.takes_text() {
-            if !repeat {
-                let text = clipboard::get()
-                    .map(|t| clipboard::one_line(&t))
-                    .unwrap_or_default();
-                if !text.is_empty() {
-                    self.modifiers_ctrl = false;
-                    self.key_inner(KeyCode::KeyV, false, Some(&text), at, window);
-                    self.modifiers_ctrl = true;
-                }
-            }
-            return;
-        }
-        // Ctrl+C: what's being typed, else what's picked.
-        if self.modifiers_ctrl
-            && code == KeyCode::KeyC
-            && !repeat
-            && let Some(text) = self.copy_text()
-        {
-            if clipboard::set(&text) {
-                self.toast(format!("copied: {text}"));
-            } else {
-                self.toast("no clipboard to copy to".into());
-            }
-            return;
-        }
-        // The friends overlay: F9 anywhere outside songs; while open it takes the keyboard
-        // (function keys still work).
-        if code == KeyCode::F9 && !repeat {
-            self.toggle_social();
-            return;
-        }
-        if self.social.open && !self.social_keys() && code == KeyCode::Escape {
-            self.social_key(code, text);
-            return;
-        }
-        if self.social_keys() {
-            let function_key = matches!(
-                code,
-                KeyCode::F1
-                    | KeyCode::F2
-                    | KeyCode::F3
-                    | KeyCode::F4
-                    | KeyCode::F5
-                    | KeyCode::F6
-                    | KeyCode::F7
-                    | KeyCode::F8
-                    | KeyCode::F10
-                    | KeyCode::F11
-                    | KeyCode::F12
-            );
-            if !(function_key && self.handle_global_key(code, window)) {
-                self.social_key(code, text);
-            }
-            return;
-        }
-        if self.customization_tab().is_some() {
-            self.customization_key(code, text, repeat);
-            return;
-        }
-        if self.mod_select.is_some() && self.preset_deleting.is_some() {
-            self.preset_deleting_key(code);
-            return;
-        }
-        if self.mod_select.is_some() && self.preset_naming.is_some() {
-            self.preset_naming_key(code, text);
-            return;
-        }
-        if self.mod_select.is_some() {
-            if !repeat
-                || matches!(
-                    code,
-                    KeyCode::ArrowUp
-                        | KeyCode::ArrowDown
-                        | KeyCode::ArrowLeft
-                        | KeyCode::ArrowRight
-                )
-            {
-                self.mod_select_key(code);
-            }
+        // A collection's name being typed takes every key.
+        if self.select.naming.is_some() && self.scene.is_select() {
+            self.collection_naming_key(code, text);
             return;
         }
         // Key capture must see every key, before any shortcut can claim it.
@@ -13863,7 +10833,7 @@ impl State {
                 return;
             }
         }
-        if self.settings_ui.editing.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+        if self.settings_ui.editing.is_some() && self.in_settings() {
             if !repeat
                 || !matches!(
                     code,
@@ -13884,434 +10854,67 @@ impl State {
             self.cfg.save();
             return;
         }
-        if self.settings_ui.binding.is_some() && matches!(self.scene, Scene::Settings { .. }) {
+        if self.settings_ui.binding.is_some() && self.in_settings() {
             if !repeat {
                 self.settings_key(code, window);
             }
             return;
         }
         if !repeat
-            && !matches!(
-                self.scene,
-                Scene::MpMenu | Scene::Settings { .. } | Scene::Editor(_) | Scene::EditorHome(_)
-            )
+            && !self.in_settings()
+            && !self
+                .scene
+                .screen()
+                .is_some_and(|s| s.editor() || s.keeps_preset_keys())
             && self.settings_ui.dropdown.is_none()
             && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
         {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
         }
-        if matches!(
-            self.scene,
-            Scene::Calibrate { .. } | Scene::CalibrateDone { .. }
-        ) {
-            self.calibration_key(code, repeat, at, window);
-            return;
-        }
-        if matches!(self.scene, Scene::LayoutEdit { .. }) {
-            self.layout_key(code);
-            return;
-        }
-        if matches!(self.scene, Scene::HudEdit { .. }) {
-            self.hud_key(code, text);
-            return;
-        }
-        if matches!(self.scene, Scene::Preview { .. }) {
-            self.preview_key(code, repeat, window);
-            return;
-        }
-        if matches!(self.scene, Scene::Download) {
-            if !repeat
-                || matches!(
-                    code,
-                    KeyCode::ArrowUp
-                        | KeyCode::ArrowDown
-                        | KeyCode::Backspace
-                        | KeyCode::PageUp
-                        | KeyCode::PageDown
-                )
-            {
-                self.download_key(code, text, window);
-            }
-            return;
-        }
-        // Any key closes the row menu; Esc does nothing else.
-        if matches!(self.scene, Scene::Select)
-            && self.select.menu.take().is_some()
-            && code == KeyCode::Escape
+        // A drum hit goes straight to the game, the busiest key there is: no screen in between.
+        if self.scene.is_play()
+            && let Some(game) = self.play.as_deref_mut()
+            && game.paused().is_none()
+            && let Some(k) = self.cfg.keys.iter().position(|&k| k == code)
         {
-            return;
-        }
-        if let (Scene::Select, Some(cursor)) = (&self.scene, self.select.picker) {
-            let n = self.select.picker_len();
-            match code {
-                KeyCode::ArrowUp => self.select.picker = Some(cursor.saturating_sub(1)),
-                KeyCode::ArrowDown => self.select.picker = Some((cursor + 1).min(n - 1)),
-                KeyCode::PageUp => self.select.picker = Some(cursor.saturating_sub(10)),
-                KeyCode::PageDown => self.select.picker = Some((cursor + 10).min(n - 1)),
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.pick_row(cursor),
-                KeyCode::Escape | KeyCode::Backspace => self.select.picker = None,
-                _ => {}
+            if !repeat && game.replay().is_none() {
+                game.press(k, at, sound(&self.audio), self.play_offset);
             }
             return;
         }
-        if let Scene::Editor(view) = &mut self.scene {
-            // A text block's words come as text; Enter, Esc and Backspace still as keys.
-            if view.wants_text()
-                && let Some(t) = text.filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
-            {
-                view.type_text(t);
-                return;
-            }
-            self.editor_key(code, repeat, window);
-            return;
-        }
-        if matches!(self.scene, Scene::EditorHome(_)) {
-            self.home_key(code, repeat, text, at);
-            return;
-        }
-        if matches!(self.scene, Scene::VideoEdit(_)) {
-            self.video_key(code, repeat, window);
-            return;
-        }
-        if matches!(self.scene, Scene::Watch(_)) && code == KeyCode::Escape {
-            if !repeat {
-                self.stop_watching();
-            }
-            return;
-        }
-        if let Scene::Spectate(v) = &mut self.scene {
-            let n = v.players.len().max(1);
-            match code {
-                KeyCode::ArrowLeft | KeyCode::ArrowRight if !repeat => {
-                    let dir = if code == KeyCode::ArrowRight {
-                        1
-                    } else {
-                        n - 1
-                    };
-                    v.focus = Some(v.focus.map(|f| (f + dir) % n).unwrap_or(0));
-                }
-                KeyCode::KeyA | KeyCode::Tab if !repeat => {
-                    v.focus = if v.focus.is_some() { None } else { Some(0) }
-                }
-                KeyCode::Escape if !repeat => {
-                    if let Some(s) = &self.mp {
-                        s.client.send(net::ClientMsg::Spectate(false));
-                    }
-                    self.stop_audio();
-                    self.scene = Scene::Lobby;
-                }
-                _ => {
-                    if !repeat {
-                        self.handle_global_key(code, window);
-                    }
-                }
-            }
-            return;
-        }
-        if matches!(
-            self.scene,
-            Scene::MpMenu
-                | Scene::Lobby
-                | Scene::MpWait { .. }
-                | Scene::MpPlay { .. }
-                | Scene::MpResults
-        ) {
-            self.multiplayer_key(code, repeat, text, at, window);
-            return;
-        }
-        if self.mp.is_some()
-            && !self.picking_lobby_map
-            && matches!(self.scene, Scene::Select)
-            && code == KeyCode::Escape
-            && self.select.filter.is_empty()
-            && !self.select.searching
-        {
-            self.scene = Scene::Lobby;
-            return;
-        }
-        if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
-            match code {
-                KeyCode::Escape if self.select.filter.is_empty() && !self.select.searching => {
-                    self.picking_lobby_map = false;
-                    self.scene = Scene::Lobby;
-                    return;
-                }
-                KeyCode::Tab | KeyCode::F1 => {
-                    self.picking_lobby_map = false;
-                    self.scene = Scene::Lobby;
-                    return;
-                }
-                _ => {}
-            }
-        }
-        if let Scene::Play { game, .. } = &mut self.scene {
-            if game.paused.is_some() {
-                if !repeat
-                    && !self.cfg.keys.contains(&code)
-                    && !self.handle_global_key(code, window)
-                {
-                    self.pause_key(code);
-                }
-                return;
-            }
-            if let Some(k) = self.cfg.keys.iter().position(|&k| k == code) {
-                if !repeat && game.replay.is_none() {
-                    game.press(k, at, self.audio.as_ref(), self.play_offset);
-                }
-                return;
-            }
-            if game.replay.is_some() && matches!(code, KeyCode::ArrowUp | KeyCode::ArrowDown) {
-                self.step_replay_speed(if code == KeyCode::ArrowUp { 1 } else { -1 });
-                return;
-            }
-            if game.replay.is_some() && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) {
-                let step = if self.modifiers_shift {
-                    15_000.0
-                } else {
-                    5_000.0
-                };
-                let t = game.time
-                    + if code == KeyCode::ArrowRight {
-                        step
-                    } else {
-                        -step
-                    };
-                game.seek(t, self.audio.as_ref(), self.play_offset);
-                return;
-            }
-        }
-        if repeat
-            && !matches!(
-                code,
-                KeyCode::ArrowUp
-                    | KeyCode::ArrowDown
-                    | KeyCode::Backspace
-                    | KeyCode::PageUp
-                    | KeyCode::PageDown
-            )
-        {
-            return;
-        }
-        if self.handle_global_key(code, window) {
-            return;
-        }
-        if self.on_menu() {
-            if self.player.is_some() {
-                self.player_key(code, text);
-            } else {
-                self.menu_key(code);
-            }
-            return;
-        }
-        match &mut self.scene {
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => {
-                self.select.searching = true
-            }
-            // In the search box the keys that have a job here otherwise (speed's [ and ]) type.
-            Scene::Select
-                if self.select.searching
-                    && !self.modifiers_ctrl
-                    && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) =>
-            {
-                if let Some(text) = text {
-                    self.select.type_text(text, &self.library);
-                }
-            }
-            Scene::Select
-                if self.modifiers_shift
-                    && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
-                    && !self.picking_lobby_map =>
-            {
-                self.play_from_marker();
-            }
-            Scene::Select
-                if self.modifiers_ctrl && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) =>
-            {
-                self.open_preview()
-            }
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyD => self.open_download(),
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyS => {
-                let dir = if self.modifiers_shift { -1 } else { 1 };
-                self.cycle_sort(dir);
-            }
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyL => {
-                self.open_collections()
-            }
-            Scene::Select
-                if self.modifiers_ctrl && self.modifiers_shift && code == KeyCode::KeyU =>
-            {
-                if let Some(i) = self.select.selected() {
-                    self.update_set(i);
-                }
-            }
-            Scene::Select if code == KeyCode::F2 => {
-                if self.modifiers_shift {
-                    self.select.random_back();
-                } else {
-                    self.select.random(&self.library);
-                }
-            }
-            Scene::Select
-                if self.modifiers_ctrl
-                    && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) =>
-            {
-                let step = if code == KeyCode::ArrowRight {
-                    5000.0
-                } else {
-                    -5000.0
-                };
-                self.preview.seek_by(step, self.audio.as_ref());
-            }
-            Scene::Select if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
-                let step = if code == KeyCode::BracketRight {
-                    0.05
-                } else {
-                    -0.05
-                } * if self.modifiers_shift { 5.0 } else { 1.0 };
-                self.cfg.rate = (((self.cfg.rate + step) * 100.0).round() / 100.0)
-                    .clamp(RATE_RANGE.0, RATE_RANGE.1);
-                self.cfg.save();
-                let pitch = if self.cfg.rate_keep_pitch {
-                    "keeps pitch"
-                } else {
-                    "pitch shifts"
-                };
-                self.toast(format!("speed {:.2}x ({pitch})", self.cfg.rate));
-            }
-            Scene::Select
-                if self.library.is_empty()
-                    && self.scan.is_none()
-                    && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
-                    && !cfg!(target_os = "android") =>
-            {
-                self.browse_songs_folder();
-            }
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::Backspace => {
-                self.select.filter.clear();
-                self.select.refilter(&self.library);
-            }
-            Scene::Select => match self.select.key(code, &self.library) {
-                SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
-                SelectAction::Play(i) if self.pick_to_edit => {
-                    self.pick_to_edit = false;
-                    self.open_editor(i);
-                }
-                SelectAction::Play(i) => self.start_loading(i),
-                SelectAction::Settings => self.open_settings(),
-                SelectAction::Mods => self.open_mod_select(),
-                SelectAction::Quit if self.cfg.main_menu => {
-                    self.main_menu = Some(menu::Menu::new())
-                }
-                SelectAction::Quit => self.ask_quit(),
-                SelectAction::None => {
-                    if let Some(text) = text {
-                        self.select.type_text(text, &self.library);
-                    }
-                }
-            },
-            Scene::Loading { .. } => {
-                if code == KeyCode::Escape {
-                    self.show_select();
-                }
-            }
-            Scene::Settings { .. } => {
-                if !self.settings_type(code, text) {
-                    self.settings_key(code, window);
-                }
-            }
-            Scene::Calibrate { .. }
-            | Scene::CalibrateDone { .. }
-            | Scene::LayoutEdit { .. }
-            | Scene::HudEdit { .. }
-            | Scene::Preview { .. }
-            | Scene::Download => {}
-            Scene::MpMenu
-            | Scene::Lobby
-            | Scene::MpWait { .. }
-            | Scene::MpPlay { .. }
-            | Scene::MpResults
-            | Scene::Spectate(_)
-            | Scene::Watch(_)
-            | Scene::VideoEdit(_)
-            | Scene::Editor(_)
-            | Scene::EditorHome(_) => {}
-            Scene::Play { game, .. } => match code {
-                KeyCode::KeyO => self.apply_live_offset(),
-                KeyCode::Tab => self.toggle_map_info(),
-                // After the last note there's nothing left to pause: straight to the results.
-                KeyCode::Escape if game.skip_outro() => {}
-                KeyCode::Escape => game.pause(self.audio.as_ref()),
-                KeyCode::Space if game.replay.is_some() => game.toggle_held(self.audio.as_ref()),
-                KeyCode::Space => {
-                    game.skip(self.audio.as_ref(), self.play_offset);
-                }
-                KeyCode::Backquote => self.hold_retry(),
-                KeyCode::KeyR if self.modifiers_ctrl => self.restart_map(),
-                _ => {}
-            },
-            Scene::Results { results, .. }
-                if matches!(
-                    code,
-                    KeyCode::ArrowDown
-                        | KeyCode::ArrowUp
-                        | KeyCode::PageDown
-                        | KeyCode::PageUp
-                        | KeyCode::Home
-                        | KeyCode::End
-                ) =>
-            {
-                results.scroll(matches!(
-                    code,
-                    KeyCode::ArrowDown | KeyCode::PageDown | KeyCode::End
-                ));
-            }
-            Scene::Results { .. } if code == KeyCode::KeyR && self.modifiers_ctrl => {
-                self.restart_map()
-            }
-            Scene::Results { results, .. } if code == KeyCode::KeyV && results.replay.is_some() => {
-                if let Some(file) = results.replay.clone() {
-                    self.open_video_editor(&file);
-                }
-            }
-            // A leaderboard score's results: Enter watches it too.
-            Scene::Results { results, .. }
-                if results.replay.is_some()
-                    && (code == KeyCode::KeyR
-                        || (results.opened.is_some()
-                            && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter))) =>
-            {
-                if let Some(file) = results.replay.clone() {
-                    self.watch_replay(&file);
-                }
-            }
-            // Back to song select, the music playing on.
-            Scene::Results { results, .. } if results.opened.is_some() => {
-                if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
-                    self.scene = Scene::Select;
-                }
-            }
-            Scene::Results { entry, from, .. } => match code {
-                KeyCode::Enter | KeyCode::NumpadEnter => {
-                    let (e, f) = (*entry, *from);
-                    self.retry_from(e, f);
-                }
-                KeyCode::Escape => {
-                    let path = self.library[*entry].path.clone();
-                    self.show_select();
-                    self.select.select_path(&self.library, &path);
-                }
-                _ => {}
-            },
-        }
+        self.screen_key(screens::screen::Key {
+            code,
+            repeat,
+            text,
+            at,
+            window,
+        });
     }
 
     /// Advances the game to `now` and fills `canvas`. Returns a screenshot name if this frame
     /// should be captured.
     fn build_frame(&mut self, canvas: &mut Canvas, now: Instant, width: f32) -> Option<String> {
+        self.drop_finished_play();
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
-        render::set_legacy_menu(!self.cfg.main_menu);
+        // What this frame is drawn with; the beat carries on from the last frame until
+        // `style::set_beat` below.
+        let last = render::theme();
+        render::set_frame_theme(Some(render::Theme {
+            accent: self.cfg.accent,
+            animations: self.cfg.animations,
+            legacy_menu: !self.cfg.main_menu,
+            pulse: last.pulse,
+            kiai: last.kiai,
+        }));
+        game::set_frame_look(Some(game::Look {
+            hide_great: self.cfg.hide_great,
+            hit_flash: self.cfg.hit_flash,
+            black_lane: self.cfg.black_lane,
+            true_notes: self.cfg.true_notes,
+            note_colours: self.cfg.note_colours,
+        }));
         self.select.legacy = !self.cfg.main_menu;
         self.select.to_menu = self.mp.is_none() && !self.picking_lobby_map;
         self.select.covered = self.customization_tab().is_some();
@@ -14372,15 +10975,12 @@ impl State {
         let idle_allowed = self.idle_allowed();
         self.idle
             .update(now, canvas.dt_ms, idle_allowed, self.cfg.idle_minutes);
+        // For threads not building frames: the window thread draws the pointer in the accent.
         render::set_animations(self.cfg.animations);
         render::set_accent(self.cfg.accent);
-        game::set_hide_great(self.cfg.hide_great);
-        game::set_hit_flash(self.cfg.hit_flash);
-        game::set_black_lane(self.cfg.black_lane);
-        game::set_true_notes(self.cfg.true_notes);
-        tko::runtime::set_calm(self.cfg.calm_maps);
+        tko::set_calm(self.cfg.calm_maps);
         // Screen changes fade in.
-        let kind = std::mem::discriminant(&self.scene);
+        let kind = self.scene.kind();
         if self.scene_kind != Some(kind) {
             self.scene_kind = Some(kind);
             self.scene_since = now;
@@ -14424,19 +11024,23 @@ impl State {
         self.poll_data_move();
         {
             // The Download tab previews remote maps through the same preview.
-            let browsing = matches!(self.scene, Scene::Download);
+            let browsing = self.scene.screen().is_some_and(|s| s.previews_remote());
             if browsing != self.preview_remote {
                 self.preview_remote = browsing;
                 self.preview.forget();
             }
-            let in_select = matches!(
-                self.scene,
-                Scene::Select | Scene::Preview { .. } | Scene::Download
-            );
+            let in_select = self.in_song_select();
             let in_menu = in_select
-                || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
-                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::Preview { .. }))
-                || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
+                || self
+                    .scene
+                    .screen_as::<ResultsScreen>()
+                    .is_some_and(|r| r.results.opened.is_some() && r.results.music.is_none())
+                || self.behind_settings().is_some_and(|prev| {
+                    prev.is_select()
+                        || prev.screen().is_some_and(|s| s.room_lobby())
+                        || prev.screen_is::<Preview>()
+                })
+                || self.scene.screen().is_some_and(|s| s.tab().is_some());
             let (entries, selected) = if browsing {
                 (&self.browse.remote, self.browse.shown)
             } else {
@@ -14444,7 +11048,8 @@ impl State {
             };
             let rate = self.preview_rate();
             self.preview.kiai_effects = self.cfg.kiai_effects;
-            self.preview.own_background = shows_own_background(&self.scene);
+            self.preview.own_background =
+                shows_own_background(self.behind_settings().unwrap_or(&self.scene));
             self.preview.autoplay = self.cfg.autoplay;
             self.preview.player = self.player.is_some();
             self.preview.menu = self.on_menu();
@@ -14477,10 +11082,10 @@ impl State {
                 self.menu_notes
                     .update(playing, &self.library, &mut self.stars, play_rate);
             }
-            if let (Scene::Preview { .. }, Some(i)) = (&self.scene, selected) {
+            if let (true, Some(i)) = (self.scene.screen_is::<Preview>(), selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
             }
-            if matches!(self.scene, Scene::Select) {
+            if self.scene.is_select() {
                 self.poll_set_status(now);
                 for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, play_rate);
@@ -14501,11 +11106,7 @@ impl State {
                         0.5
                     }
                 }
-                Scene::Calibrate { .. }
-                | Scene::CalibrateDone { .. }
-                | Scene::LayoutEdit { .. }
-                | Scene::HudEdit { .. } => 0.0,
-                _ => 0.35,
+                Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
             };
             self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
         }
@@ -14514,7 +11115,7 @@ impl State {
         self.poll_retry(now);
         self.poll_replay_speed();
         // Paused in the fullscreen preview, and left it.
-        if self.preview.held && !matches!(self.scene, Scene::Preview { .. }) {
+        if self.preview.held && !self.scene.screen_is::<Preview>() {
             self.toggle_preview_held();
         }
         if self.cfg.check_updates {
@@ -14539,13 +11140,17 @@ impl State {
                         .file_name()
                         .map(|n| n.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    self.video_status = format!("saved \"{name}\" in the videos folder");
-                    self.last_video = Some(path);
+                    if let Some(v) = self.scene.screen_mut::<VideoEdit>() {
+                        v.status = format!("saved \"{name}\" in the videos folder");
+                        v.last_video = Some(path);
+                    }
                     self.toast("video saved".into());
                 }
                 Ok(Err(e)) => {
                     self.export = None;
-                    self.video_status = format!("export failed: {e}");
+                    if let Some(v) = self.scene.screen_mut::<VideoEdit>() {
+                        v.status = format!("export failed: {e}");
+                    }
                 }
                 Err(_) => {}
             }
@@ -14560,12 +11165,11 @@ impl State {
         let lobby_download = self.lobby_download_status();
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let size_label = format!("Playfield {}", self.playfield_label());
-        let mut finish_calibration = false;
         // A test play that couldn't load (or ended up in song select) goes back to its editor.
-        if self.editor_back.is_some() && matches!(self.scene, Scene::Select) {
+        if self.editor_back.is_some() && self.scene.is_select() {
             let why = std::mem::take(&mut self.status);
             self.back_to_editor();
-            if let Scene::Editor(view) = &mut self.scene
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
                 && !why.is_empty()
             {
                 view.status = why;
@@ -14583,7 +11187,7 @@ impl State {
         // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
         // headless screenshots and tests, like `TAIKO_INPUT`).
         if let Some(path) = std::env::var_os("TAIKO_EDIT")
-            && matches!(self.scene, Scene::Select)
+            && self.scene.is_select()
             && !self.library.is_empty()
         {
             static ONCE: AtomicBool = AtomicBool::new(false);
@@ -14600,7 +11204,7 @@ impl State {
         // `TAIKO_HOME=<song>[|details|timing]`: opens the editor's front door, on a song if one is
         // given (for headless screenshots, like `TAIKO_EDIT`).
         if let Some(spec) = std::env::var_os("TAIKO_HOME")
-            && matches!(self.scene, Scene::Select)
+            && self.scene.is_select()
             && self.splash.is_none()
         {
             static ONCE: AtomicBool = AtomicBool::new(false);
@@ -14609,11 +11213,11 @@ impl State {
                 let (song, page) = spec.split_once('|').unwrap_or((&spec, ""));
                 self.open_editor_home();
                 let rate = self.audio.as_ref().map(|a| a.rate);
-                if let Scene::EditorHome(home) = &mut self.scene {
+                if let Some(h) = self.scene.screen_mut::<EditorHome>() {
                     if !song.is_empty() {
-                        home.dropped(PathBuf::from(song), rate);
+                        h.home.dropped(PathBuf::from(song), rate);
                     }
-                    home.debug_page(page);
+                    h.home.debug_page(page);
                 }
             }
         }
@@ -14695,8 +11299,8 @@ impl State {
         }
         if self.shots.is_some() && self.stats.frames > 5 {
             let screen = match self.scene {
-                Scene::Select => Some("select"),
-                Scene::Results { .. } => Some("results"),
+                Scene::Other(ref sel) if sel.select_screen() => Some("select"),
+                _ if self.scene.screen_is::<ResultsScreen>() => Some("results"),
                 _ => None,
             };
             if let Some(name) = screen
@@ -14709,33 +11313,22 @@ impl State {
                 }
             }
         }
-        if !matches!(self.scene, Scene::Select | Scene::Lobby) {
+        if !(self.scene.is_select() || self.in_lobby()) {
             self.mod_select = None;
         }
-        if self.pick_to_edit && (self.main_menu.is_some() || !matches!(self.scene, Scene::Select)) {
+        if self.pick_to_edit && (self.main_menu.is_some() || !self.scene.is_select()) {
             self.pick_to_edit = false;
         }
         // A song or a replay opened by any road leaves the menu behind.
-        if matches!(
-            self.scene,
-            Scene::Loading { .. }
-                | Scene::Play { .. }
-                | Scene::Results { .. }
-                | Scene::Preview { .. }
-                | Scene::Watch(_)
-                | Scene::VideoEdit(_)
-                | Scene::Editor(_)
-        ) {
+        if self.scene.is_play() || self.scene.screen().is_some_and(|s| s.closes_main_menu()) {
             self.main_menu = None;
         }
         // Back from calibrating: on with the guide.
-        if self.guide_after.is_some()
-            && !matches!(
-                self.scene,
-                Scene::Calibrate { .. } | Scene::CalibrateDone { .. }
-            )
+        if self.guide.after.is_some()
+            && self.calibration_run().is_none()
+            && !self.scene.screen().is_some_and(|s| s.calibrating())
         {
-            self.guide = self.guide_after.take();
+            self.guide.page = self.guide.after.take();
         }
         if !self.on_menu() {
             if let Some(m) = &mut self.main_menu {
@@ -14773,7 +11366,7 @@ impl State {
             self.menu_open(item);
         }
         let on_menu = self.on_menu();
-        if !matches!(self.scene, Scene::Select) {
+        if !self.scene.is_select() {
             self.select.menu = None;
             self.list_drag = None;
             self.select.cancel_drag();
@@ -14783,17 +11376,11 @@ impl State {
         self.replay_bar = None;
         // Another screen (not a song: nothing may stand between the player and the notes)
         // fades in.
-        let scene = std::mem::discriminant(&self.scene);
+        let scene = self.scene.kind();
         if self.shown_scene.is_some_and(|s| s != scene)
             && !self.in_song()
-            && !matches!(
-                self.scene,
-                Scene::Play { .. }
-                    | Scene::MpPlay { .. }
-                    | Scene::Calibrate { .. }
-                    | Scene::Loading { .. }
-                    | Scene::MpWait { .. }
-            )
+            && !self.scene.is_play()
+            && !self.loading_song()
         {
             self.screen_fade = Some(0.0);
         }
@@ -14810,1502 +11397,42 @@ impl State {
             playing && self.cfg.kiai_effects && self.preview.kiai(),
         );
         match &mut self.scene {
-            Scene::Select if on_menu => {
-                self.board_rect = None;
-                self.leaderboard.clear();
-                let shown = self
-                    .player
-                    .as_ref()
-                    .and_then(|p| p.list.entry())
-                    .or(self.select.selected());
-                let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
-                let k = |i: usize| config::key_name(self.cfg.keys[i]);
-                let (a, b, d, e) = (k(0), k(3), k(1), k(2));
-                let paused = self.music_paused;
-                if let Some(p) = &mut self.player {
-                    let now = Instant::now();
-                    let engine = self.audio.as_ref();
-                    let sounding =
-                        !paused && self.preview.sounding(engine, now, &mut p.spectrum.samples);
-                    let hint = tr!(
-                        "{a} {b} song   {d} {e} pause   L love   Tab folders";
-                        a, b, d, e
-                    );
-                    let volume = self.cfg.music_volume;
-                    let frame = player::Frame {
-                        song: song.as_deref().unwrap_or_default(),
-                        hint: &hint,
-                        paused,
-                        times: self.preview.music_times(engine, now),
-                        pictured: self.preview.has_background,
-                        sounding,
-                        rate: engine.map_or(48_000, |a| a.rate),
-                        volume,
-                    };
-                    p.draw(canvas, &frame);
-                } else if let Some(m) = &mut self.main_menu {
-                    let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
-                    let shows = self.cfg.menu_notes && render::animations();
-                    let ghosts = self
-                        .preview
-                        .map_time(self.menu_notes.entry())
-                        .filter(|_| shows)
-                        .and_then(|t| self.menu_notes.view(t));
-                    let frame = menu::Frame {
-                        beat: self.preview.beat(),
-                        kiai,
-                        ghosts,
-                        lane_dim: self.cfg.menu_notes_dim,
-                        song: song.as_deref(),
-                        maps: self.library.len(),
-                        paused,
-                        session: (
-                            now.saturating_duration_since(self.started).as_secs_f64(),
-                            self.session_play_ms / 1000.0,
-                        ),
-                        glitch: self.cfg.menu_glitch,
-                    };
-                    m.draw(canvas, &frame);
-                }
-            }
-            Scene::Select => {
-                // DT / HT show on the Mods button instead.
-                self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6
-                    && self.cfg.mods.rate_override().is_none()
-                {
-                    format!(
-                        "  |  {:.2}x{}",
-                        self.cfg.rate,
-                        if self.cfg.rate_keep_pitch {
-                            ""
-                        } else {
-                            " (pitch)"
-                        }
-                    )
-                } else {
-                    String::new()
+            Scene::Other(_) => {
+                let frame = screens::screen::Frame {
+                    now,
+                    preview_target,
+                    lobby_host,
+                    size_label: &size_label,
+                    lobby_download,
+                    visual_offset,
+                    hidden,
+                    on_menu,
+                    dt,
                 };
-                let (stars, rate, plays) = (&self.stars, self.play_speed().0, &self.scores);
-                self.select.scrubbing =
-                    (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
-                self.select.list_share = self.cfg.song_list_share;
-                self.select.banner = self.pick_to_edit || self.picking_lobby_map;
-                let phone = mobile::active();
-                if phone {
-                    self.draw_mobile_select(canvas);
-                } else {
-                    self.select.draw(
-                        canvas,
-                        &self.library,
-                        dt,
-                        &self.status,
-                        &|i| stars.get(i, rate),
-                        &|e| scores::best_grade(plays, e.hash()),
-                    );
+                if let Some(s) = self.draw_screen(canvas, &frame) {
+                    next = Some(s);
                 }
-                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
-                // The panel beside the list: from `x`, `pw` wide, `panel_top` down to `panel_end`.
-                let [x, panel_top, pw, panel_end] = if phone {
-                    self.mobile_select_panel(canvas.width)
-                } else {
-                    let x = 24.0 + lw + 12.0;
-                    // Level with the list's frame (the Legacy layout keeps its own).
-                    let [top, end] = if self.select.legacy {
-                        [54.0, 436.0]
-                    } else {
-                        self.select.frame_span()
-                    };
-                    [x, top, canvas.width - x - 24.0, end]
-                };
-                self.board_rect = None;
-                // Always at full size (no longer dragged smaller).
-                self.preview.size = preview::PREVIEW_SIZE.1;
-                let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
-                self.preview.potential = match self.select.selected() {
-                    Some(i) => self.potentials.get(
-                        &self.library[i].path,
-                        rate,
-                        self.cfg.mods,
-                        self.cfg.scroll_speed,
-                    ),
-                    None => None,
-                };
-                if phone {
-                    let status = self.select.selected().and_then(|i| self.map_status(i));
-                    let liked = self
-                        .preview_target()
-                        .and_then(|i| self.library.get(i))
-                        .map(|e| self.select.is_liked(e));
-                    let rect = [x, panel_top, pw, panel_end];
-                    self.draw_mobile_panels(canvas, rect, selected_stars, status, liked);
-                } else {
-                    self.leaderboard.clear();
+                // The front door's frame may ask for something, done once the frame is drawn.
+                if let Some(h) = self.scene.screen_mut::<EditorHome>() {
+                    home_out = h.out.take();
                 }
-                if pw > 160.0 && !phone {
-                    let status = self.select.selected().and_then(|i| self.map_status(i));
-                    let liked = self
-                        .preview_target()
-                        .and_then(|i| self.library.get(i))
-                        .map(|e| self.select.is_liked(e));
-                    // Two pages side by side, as on a phone: the preview, and the leaderboard
-                    // the button slides to.
-                    let t = self.mob.slide_board(canvas.dt_ms);
-                    let step = pw + 24.0;
-                    // The page buttons sit under both pages, in what's left below the preview.
-                    const PAGE_BUTTON_H: f32 = 22.0;
-                    let panel_h = panel_end - panel_top - PAGE_BUTTON_H - 8.0;
-                    let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
-                    if t < 1.0 {
-                        let start = canvas.shapes.len();
-                        // The way to the leaderboard is where the way back is on the board (its
-                        // header's top right), so the mouse stays put going back and forth.
-                        let label = tr!("Leaderboard >");
-                        let bw = Canvas::text_width(7.0, label) + 24.0;
-                        self.preview.title_room = bw + 10.0;
-                        if let Some(clip) = self.preview.draw_panel(
-                            canvas,
-                            &self.library,
-                            x - t * step,
-                            panel_top,
-                            pw,
-                            panel_h,
-                            self.cfg.scroll_speed,
-                            selected_stars,
-                            Some(("Play from", "Shift+Enter")),
-                            status,
-                            liked,
-                        ) {
-                            self.frame_clip = Some(clip);
-                        }
-                        self.preview.title_room = 0.0;
-                        // As the board's back button: 10 in from the frame, then the rows' scroll
-                        // bar room (`board_tabs`, inside `pw - 28`).
-                        let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
-                        let hit = render::Hit::BoardPage;
-                        canvas.button(bx, by, bw, 20.0, label, 7.0, hit, false);
-                        canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
-                    } else {
-                        self.preview.hide_panel();
+                // So may the play's.
+                if let Some(p) = self.scene.screen_mut::<PlayScreen>() {
+                    let out = std::mem::take(&mut p.out);
+                    if out.capture.is_some() {
+                        capture = out.capture;
                     }
-                    let board_start = canvas.shapes.len();
-                    let page_x = x + (1.0 - t) * step;
-                    if t > 0.0 {
-                        style::panel(canvas, page_x, panel_top, pw, panel_h);
-                    }
-                    // Inside the frame, with room right of the rows for their scroll bar.
-                    let (panel_x, panel_w) = (x, pw);
-                    let (x, pw) = (page_x + 10.0, pw - 28.0);
-                    if let Some(i) = self.select.selected().filter(|_| t > 0.0) {
-                        let top = panel_top + 10.0;
-                        let room = panel_end - 10.0 - top - BOARD_HEAD;
-                        let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
-                        if fits > 0 {
-                            let hash = self.library[i].hash();
-                            let relax = self.cfg.mods.relax();
-                            if self.board_for != (hash, self.board_online, relax) {
-                                self.board_for = (hash, self.board_online, relax);
-                                self.board_scroll = 0;
-                            }
-                            self.board_rect =
-                                Some([x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW]);
-                            if self.board_online {
-                                let board = self.online_board(hash, relax).cloned();
-                                let total = board
-                                    .as_ref()
-                                    .and_then(|b| b.as_ref().ok())
-                                    .map_or(0, Vec::len);
-                                self.board_max = total.saturating_sub(fits);
-                                self.board_scroll = self.board_scroll.min(self.board_max);
-                                draw_online_leaderboard(
-                                    canvas,
-                                    [x, top],
-                                    pw,
-                                    board.as_ref(),
-                                    &self.cfg.online_user,
-                                    fits,
-                                    self.board_scroll,
-                                    relax,
-                                );
-                                self.online_leaderboard = match board {
-                                    Some(Ok(rows)) => rows
-                                        .into_iter()
-                                        .skip(self.board_scroll)
-                                        .take(fits)
-                                        .collect(),
-                                    _ => Vec::new(),
-                                };
-                            } else {
-                                let all = scores::top(&self.scores, hash, usize::MAX, relax);
-                                self.board_max = all.len().saturating_sub(fits);
-                                self.board_scroll = self.board_scroll.min(self.board_max);
-                                let rows: Vec<&scores::ScoreRow> = all
-                                    .iter()
-                                    .skip(self.board_scroll)
-                                    .take(fits)
-                                    .copied()
-                                    .collect();
-                                self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                                draw_leaderboard(
-                                    canvas,
-                                    x,
-                                    top,
-                                    pw,
-                                    &rows,
-                                    self.board_scroll,
-                                    all.len(),
-                                    relax,
-                                );
-                            }
-                        }
-                    }
-                    canvas.clip_since(board_start, clip[0], clip[1], clip[2], clip[3]);
-                    let play = if self.picking_lobby_map {
-                        tr!("Pick")
-                    } else if self.pick_to_edit {
-                        tr!("Edit")
-                    } else {
-                        tr!("Play")
-                    };
-                    let mods = &self.select.mods_label;
-                    let mods_label = if mods.is_empty() {
-                        tr!("Mods").to_string()
-                    } else {
-                        format!("{}: {mods}", tr!("Mods"))
-                    };
-                    let random = tr!("Random");
-                    // (label, hit, lit, share of the width). The Legacy layout has Mods on top.
-                    let mut buttons = vec![
-                        (
-                            mods_label.as_str(),
-                            render::Hit::ModsButton,
-                            !mods.is_empty(),
-                            1.0,
-                        ),
-                        (random, render::Hit::Key(KeyCode::F2), false, 1.0),
-                        (play, render::Hit::Key(KeyCode::Enter), true, 1.3),
-                    ];
-                    if self.select.legacy {
-                        buttons.drain(..2);
-                    }
-                    let total: f32 = buttons.iter().map(|b| b.3).sum();
-                    let unit = (panel_w - 8.0 * (buttons.len() as f32 - 1.0)) / total;
-                    let (mut bx, by) = (panel_x, panel_end - PAGE_BUTTON_H);
-                    for (label, hit, lit, share) in buttons {
-                        let bw = unit * share;
-                        let label = Canvas::fit(8.0, bw - 12.0, label);
-                        canvas.button(bx, by, bw, PAGE_BUTTON_H, &label, 8.0, hit, lit);
-                        bx += bw + 8.0;
-                    }
-                    // The song list's right edge: the gap between the list's box (`ui`, ending
-                    // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
-                    let dragging = matches!(self.split_drag, Some((render::Hit::SplitList, ..)));
-                    if !phone {
-                        draw_divider(
-                            canvas,
-                            [24.0 + lw + 4.0, panel_top, 8.0, panel_end - panel_top],
-                            true,
-                            dragging,
-                            render::Hit::SplitList,
-                        );
-                    }
+                    test_over = out.test_over;
+                    fail_restart = out.fail_restart;
                 }
-                let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
-                if let Some(g) = self
-                    .guessr
-                    .as_mut()
-                    .filter(|_| self.picking_lobby_map && guessing)
-                {
-                    mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
-                } else if self.pick_to_edit && !phone {
-                    let w = canvas.width;
-                    canvas.round_rect(
-                        [24.0, 438.0],
-                        [w - 48.0, 34.0],
-                        8.0,
-                        rgba(0x1d1630, 1.0),
-                        rgba(0x9b6cff, 1.0),
-                        1.5,
-                    );
-                    canvas.text_centered(
-                        w / 2.0,
-                        450.0,
-                        10.0,
-                        rgba(0xffffff, 1.0),
-                        &Canvas::fit(
-                            10.0,
-                            w - 64.0,
-                            "Choose a map to edit: Enter opens it in the editor, Esc cancels",
-                        ),
-                    );
-                } else if self.picking_lobby_map && !phone {
-                    let w = canvas.width;
-                    canvas.round_rect(
-                        [24.0, 438.0],
-                        [w - 48.0, 34.0],
-                        8.0,
-                        rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0),
-                        rgba(accent(), 1.0),
-                        1.5,
-                    );
-                    canvas.text_centered(
-                        w / 2.0,
-                        450.0,
-                        10.0,
-                        rgba(0xffffff, 1.0),
-                        &Canvas::fit(
-                            10.0,
-                            w - 64.0,
-                            "Picking the lobby map: Enter to choose, Esc to cancel",
-                        ),
-                    );
-                }
-                self.select.draw_popups(canvas, &self.library);
-                if self.cfg.drum_menus {
-                    self.select_rows = drum_nav::Rows::of(canvas);
-                    self.select_zone = self.select_zone.within(&self.select_rows);
-                    drum_nav::draw(canvas, self.select_zone, &self.select_rows);
-                }
-            }
-            Scene::Loading {
-                rx,
-                label,
-                entry,
-                from,
-                retry,
-            } => {
-                canvas.text_centered(
-                    canvas.width / 2.0,
-                    200.0,
-                    14.0,
-                    rgba(0xffffff, 1.0),
-                    "Loading",
-                );
-                canvas.text_centered(
-                    canvas.width / 2.0,
-                    226.0,
-                    10.0,
-                    rgba(0x9a9ab0, 1.0),
-                    &Canvas::fit(10.0, canvas.width - 48.0, label),
-                );
-                match rx.try_recv() {
-                    Ok(Ok((map, track))) => {
-                        let mods = std::mem::take(&mut self.pending_mods);
-                        // Random: the replay's colouring, otherwise the configured repeatable seed.
-                        let seed = match &self.pending_replay {
-                            Some(r) => r.seed,
-                            None if mods.has(mods::Mod::Random) => self.cfg.random_seed,
-                            None => 0,
-                        };
-                        let half = self
-                            .pending_replay
-                            .as_ref()
-                            .map_or(Default::default(), |r| r.half_rule());
-                        let mut game =
-                            Game::with_half(map, track, self.audio.as_ref(), mods, seed, half);
-                        game.scroll_speed = self.cfg.scroll_speed;
-                        game.live_pp = pp::Live::start(
-                            self.library[*entry].path.clone(),
-                            game.rate,
-                            mods,
-                            game.scroll_speed,
-                            game.seed,
-                            half,
-                        );
-                        if let Some(t) = *from {
-                            game.start_from(t, self.audio.as_ref(), self.play_offset);
-                        } else if *retry {
-                            game.skip(self.audio.as_ref(), self.play_offset);
-                        }
-                        match self.pending_replay.take() {
-                            Some(r) => {
-                                game.mash = r.mash();
-                                game.set_window_rule(r.window_rule());
-                                game.scroll_speed = r.scroll_speed;
-                                game.replay_of = Some(r.player.clone());
-                                game.banner = Some(format!("REPLAY  -  {}", r.player));
-                                game.replay = Some((r.inputs, 0));
-                            }
-                            // A test play from the editor keeps nothing.
-                            None if self.editor_back.is_some() => {
-                                game.record = false;
-                                game.test_play = true;
-                                game.banner = Some(Self::test_banner(self.test_auto));
-                            }
-                            // Full plays (not autoplay, not from a start point) are kept.
-                            None => {
-                                game.record = (!self.auto
-                                    || std::env::var_os("TAIKO_RECORD_AUTO").is_some())
-                                    && from.is_none()
-                                    && !mods.unranked();
-                                if mods.has(mods::Mod::Autoplay) {
-                                    game.banner = Some("AUTOPLAY".into());
-                                }
-                                if self.cfg.fail_restart {
-                                    game.fail_linger = FAIL_RESTART_LINGER;
-                                }
-                            }
-                        }
-                        next = Some(Scene::Play {
-                            game: Box::new(game),
-                            entry: *entry,
-                            from: *from,
-                        });
-                    }
-                    Ok(Err(e)) => {
-                        self.status = format!("failed to load {label}: {e}");
-                        eprintln!("{}", self.status);
-                        next = Some(Scene::Select);
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                    Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Select),
-                }
-            }
-            Scene::Play { game, entry, from } => {
-                let done = game.update(now, self.audio.as_ref(), self.play_offset);
-                if (self.auto || game.mods.has(mods::Mod::Autoplay)) && game.replay.is_none() {
-                    game.autoplay_style = self.cfg.autoplay;
-                    game.autoplay(self.audio.as_ref());
-                }
-                if let Some(sm) = &mut self.smooth {
-                    if game.paused.is_some() {
-                        // A frozen clock isn't jitter; restart the frame-to-frame comparison on resume.
-                        sm.break_sequence();
-                    } else {
-                        let wall = now.duration_since(self.started).as_secs_f64() * 1000.0;
-                        let shown = self
-                            .frame_acquired
-                            .unwrap_or(now)
-                            .duration_since(self.started)
-                            .as_secs_f64()
-                            * 1000.0;
-                        sm.sample(
-                            wall,
-                            game.raw_time,
-                            game.last_audio_ms,
-                            shown,
-                            game.raw_time + visual_offset,
-                        );
-                    }
-                }
-                // Offset advice is for live play (and its line would sit on the replay timeline).
-                game.show_offset_hint =
-                    self.cfg.show_offset_hint && self.cfg.show_map_info && game.replay.is_none();
-                game.offset_key = self
-                    .cfg
-                    .hotkeys
-                    .get(keys::Hotkey::ApplyOffset)
-                    .map(keys::Chord::name);
-                game.kiai_effects = self.cfg.kiai_effects;
-                game.hidden = hidden;
-                game.hud = self.cfg.hud;
-                game.hud_area = self.cfg.playfield_area;
-                game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.set_visual_offset(visual_offset);
-                draw_game_area(
-                    canvas,
-                    &self.cfg,
-                    &mut self.frame_clip,
-                    &self.grip,
-                    &self.hover,
-                    self.bg_brightness > 0.0,
-                    |c| {
-                        game.draw_playfield(c, game.scroll_speed);
-                    },
-                );
-                game.draw_hud(canvas);
-                if game.replay.is_none()
-                    && game.paused.is_none()
-                    && !hidden.has(hud::Part::Spectators)
-                {
-                    let names = self.social.spectators();
-                    game.placed_from(canvas, hud::Part::Spectators, [12.0, 276.0], |c| {
-                        social::draw_spectators(c, &names);
-                    });
-                }
-                if game.replay.is_some() && game.paused.is_none() {
-                    if game.replay_timeline.is_none() {
-                        let misses = game.replay_misses();
-                        game.replay_timeline = Some((difficulty::analyze(&game.map), misses));
-                    }
-                    self.replay_bar = Some(draw_replay_bar(
-                        canvas,
-                        game,
-                        self.replay_scrub.is_some(),
-                        self.replay_speed_wanted,
-                        &mut self.replay_bar_grow,
-                    ));
-                }
-                if let Some(plan) = &mut self.shots
-                    && plan.times.last().is_some_and(|&t| game.time >= t)
-                {
-                    let t = plan.times.pop().unwrap();
-                    capture = Some(format!("play-{t:.0}.png"));
-                }
-                if done && self.editor_back.is_some() {
-                    // A test play has no results: back to the editor.
-                    test_over = true;
-                } else if done && fail_restarts(&self.cfg, game) {
-                    // Failed plays aren't kept anyway: straight into the next try.
-                    fail_restart = true;
-                } else if done {
-                    let title = results_title(&game.map.meta, *from);
-                    let failed = game.failed();
-                    if game.failed_early() {
-                        if let Some(a) = &self.audio {
-                            a.stop();
-                        }
-                        self.preview.invalidate_audio();
-                    }
-                    let mut results = Results::new(title, game.stats.clone(), game.windows);
-                    results.set_mods(game.mods, game.rate);
-                    results.seed = Some(game.seed);
-                    results.watched = game.replay_of.clone();
-                    results.failed = failed;
-                    // The song plays on under the results (not after a fail that stopped it),
-                    // from the preview point again once it ends.
-                    if !game.failed_early() && self.audio.is_some() {
-                        let preview = game.map.meta.preview_time;
-                        let again = if preview >= 0.0 {
-                            game.track_at(preview)
-                        } else {
-                            game.track_at(game.end_time()) * 0.4
-                        };
-                        results.music = Some((game.track.clone(), again.max(0.0)));
-                    }
-                    let e = &self.library[*entry];
-                    let play = pp::Play {
-                        great: game.stats.great,
-                        ok: game.stats.ok,
-                        miss: game.stats.miss,
-                        max_combo: game.stats.max_combo,
-                        rate: game.rate,
-                        mods: game.mods,
-                        scroll_speed: game.scroll_speed,
-                        seed: game.seed,
-                        half: game.half,
-                    };
-                    results.no_pp = if game.mods.has(mods::Mod::OdOverride) {
-                        Some("OD Override gets no pp")
-                    } else if game.mods.unranked() {
-                        Some("Autoplay gets no pp")
-                    } else if failed {
-                        Some("failed plays get no pp")
-                    } else if from.is_some() {
-                        Some("plays from a start point get no pp")
-                    } else if map_gives_pp(
-                        &self.library[*entry],
-                        &self.set_status,
-                        &self.db_status,
-                        &self.select.server_loved,
-                    ) == Some(false)
-                    {
-                        Some("only ranked and loved maps give pp")
-                    } else {
-                        results.job = Some(results_job(e.path.clone(), play, None, None));
-                        None
-                    };
-                    // Failed plays aren't kept, like osu!.
-                    if game.record && !failed {
-                        let e = &self.library[*entry];
-                        let st = &game.stats;
-                        let replay = scores::Replay {
-                            version: scores::new_version(),
-                            map_hash: e.hash(),
-                            map_path: e.path.to_string_lossy().into_owned(),
-                            map_label: e.label(),
-                            player: self.cfg.mp_name.clone(),
-                            date: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0),
-                            rate: game.rate,
-                            keep_pitch: self.cfg.rate_keep_pitch,
-                            anti_mash: true,
-                            mods: game.mods.list(),
-                            scroll_speed: game.scroll_speed,
-                            score: st.score,
-                            accuracy: st.accuracy(),
-                            max_combo: st.max_combo,
-                            great: st.great,
-                            ok: st.ok,
-                            miss: st.miss,
-                            ur: st.unstable_rate(),
-                            inputs: std::mem::take(&mut game.inputs),
-                            seed: game.seed,
-                        };
-                        let pp = pp::play_pp(&e.path, &replay.pp_play());
-                        results.pp = pp.filter(|_| results.no_pp.is_none());
-                        if pp.is_none() && results.no_pp.is_none() {
-                            results.no_pp = Some("the map couldn't be rated");
-                        }
-                        // Whole plays go to the online leaderboards too, when logged in.
-                        if from.is_none()
-                            && !self.cfg.online_token.is_empty()
-                            && !game.mods.unranked()
-                        {
-                            let m = &game.map.meta;
-                            let play = online::ScoreSubmit {
-                                map: net::MapInfo {
-                                    hash: replay.map_hash,
-                                    artist: m.artist.clone(),
-                                    title: m.title.clone(),
-                                    version: m.version.clone(),
-                                    rate: replay.rate,
-                                    from: None,
-                                    set_id: e.set_id(),
-                                    mods: replay.mods.clone(),
-                                    multiverse: None,
-                                    shapeshift: None,
-                                    seed: (replay.seed != 0).then_some(replay.seed),
-                                    defense: None,
-
-                                    stats: None,
-                                },
-                                score: replay.score,
-                                accuracy: replay.accuracy,
-                                max_combo: replay.max_combo,
-                                great: replay.great,
-                                ok: replay.ok,
-                                miss: replay.miss,
-                                pp,
-                                date: replay.date,
-                                replay_version: replay.version,
-                                inputs: replay.inputs.clone(),
-                                rolls: Some(game.stats.roll_ticks),
-                                stars: None,
-                                pp_version: online::PP_VERSION,
-                                scroll_speed: Some(replay.scroll_speed),
-                                play_ms: Some(game.played_ms as u64),
-                                md5: None,
-                                timing: {
-                                    let (latency_ms, reported_latency_ms) = self
-                                        .audio
-                                        .as_ref()
-                                        .map(|a| a.latencies_ms())
-                                        .unwrap_or_default();
-                                    Some(online::PlayTiming {
-                                        os: std::env::consts::OS.into(),
-                                        present: self.present.name().into(),
-                                        offset_ms: self.play_offset,
-                                        visual_lead_ms: visual_offset - self.pace_shift_ms,
-                                        latency_ms,
-                                        reported_latency_ms,
-                                    })
-                                },
-                            };
-                            self.submits.push(submit_score(
-                                self.cfg.online_server.clone(),
-                                self.cfg.online_token.clone(),
-                                play,
-                                e.path.clone(),
-                                replay.pp_play(),
-                            ));
-                            // Counted with the play itself.
-                            self.playing = None;
-                            results.total_due = true;
-                            self.online_boards
-                                .remove(&(replay.map_hash, game.mods.relax()));
-                        }
-                        match scores::save(&replay, pp) {
-                            Ok(row) => {
-                                results.replay = Some(row.file.clone());
-                                self.scores.push(row);
-                                let all = scores::top(
-                                    &self.scores,
-                                    replay.map_hash,
-                                    usize::MAX,
-                                    game.mods.relax(),
-                                );
-                                let rank = all
-                                    .iter()
-                                    .position(|r| r.date == replay.date && r.score == replay.score)
-                                    .map(|p| p + 1);
-                                results.rank = rank.map(|r| (r, all.len()));
-                            }
-                            Err(e) => eprintln!("couldn't save the replay: {e}"),
-                        }
-                    }
-                    next = Some(Scene::Results {
-                        results: Box::new(results),
-                        entry: *entry,
-                        from: *from,
-                    });
-                }
-            }
-            Scene::Results { results, .. } => {
-                results.poll();
-                results.animate(canvas.dt_ms);
-                // Back to the preview point when the song ends, like osu!.
-                if let (Some((track, again)), Some(a)) = (&results.music, &self.audio) {
-                    let end = track.frames() as f64 / a.rate as f64 * 1000.0;
-                    if a.position_ms(now).is_some_and(|p| p > end - 30.0) {
-                        a.play(track.clone(), *again);
-                    }
-                }
-                results.draw(canvas);
-            }
-            Scene::Download => {
-                let installed = self.installed_sets.take().unwrap_or_default();
-                let dir = self.songs_dir.display().to_string();
-                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
-                self.preview.size = preview::PREVIEW_SIZE.1;
-                let phone = mobile::active();
-                if phone {
-                    let custom: std::collections::HashSet<u32> =
-                        self.select.custom_folder.values().copied().collect();
-                    self.draw_mobile_download(canvas, &installed, &custom);
-                } else {
-                    let custom = &self.select.custom_folder;
-                    let is_installed = |set: &download::SetInfo| match set.custom {
-                        Some(_) => custom.values().any(|&id| id == set.id),
-                        None => installed.contains(&set.id),
-                    };
-                    self.browse
-                        .draw(canvas, &self.downloads, &is_installed, &dir, lw);
-                }
-                self.installed_sets = Some(installed);
-                // The selected set's preview, like song select's.
-                let x = 24.0 + lw + 12.0;
-                let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
-                let stars = self.browse.selected_stars();
-                if pw > 160.0 && self.browse.selected().is_some() {
-                    match self.preview.draw_panel(
-                        canvas,
-                        &self.browse.remote,
-                        x,
-                        54.0,
-                        pw,
-                        380.0,
-                        self.cfg.scroll_speed,
-                        stars,
-                        None,
-                        None,
-                        None,
-                    ) {
-                        Some(clip) => self.frame_clip = Some(clip),
-                        None if self.browse.shown.is_none() => {
-                            canvas.text_centered(
-                                x + pw / 2.0,
-                                160.0,
-                                8.0,
-                                rgba(0x8a8aa0, 1.0),
-                                "loading preview...",
-                            );
-                        }
-                        None => {}
-                    }
-                }
-            }
-            Scene::Preview { back } => {
-                let lobby = matches!(**back, Scene::Lobby);
-                match preview_target {
-                    Some(i) => {
-                        let scroll = self.cfg.scroll_speed;
-                        let see_through = self.bg_brightness > 0.0;
-                        let kiai = self.cfg.kiai_effects;
-                        if let Some(game) = self.preview.game_for(&self.library, i) {
-                            game.kiai_effects = kiai;
-                            draw_game_area(
-                                canvas,
-                                &self.cfg,
-                                &mut self.frame_clip,
-                                &self.grip,
-                                &self.hover,
-                                see_through,
-                                |c| game.draw_playfield(c, scroll),
-                            );
-                        }
-                        let e = &self.library[i];
-                        let stars = self.stars.get(i, self.play_speed().0);
-                        draw_preview_chrome(canvas, &self.cfg, e, stars, lobby, &size_label);
-                        let (x, y, w) = (24.0, 394.0, canvas.width - 48.0);
-                        canvas.round_rect(
-                            [x, y],
-                            [w, 78.0],
-                            8.0,
-                            rgba(0x15151d, 0.9),
-                            rgba(0x2a2a38, 1.0),
-                            1.0,
-                        );
-                        let button = match (lobby, lobby_host) {
-                            (false, _) => Some(("Play from", "Enter")),
-                            (true, true) => Some(("Start the match from", "Enter")),
-                            (true, false) => None,
-                        };
-                        self.preview.draw_timeline(
-                            canvas,
-                            e,
-                            [x + 12.0, y + 10.0, w - 24.0, 34.0],
-                            button,
-                        );
-                        // A thumb's over the timeline on a phone, where its times don't run into it.
-                        let [bx, by, bw, bh] = if mobile::active() {
-                            [x + w - 130.0, y - 50.0, 130.0, 44.0]
-                        } else {
-                            [x + 12.0, y + 54.0, pause_width(), 16.0]
-                        };
-                        canvas.button(
-                            bx,
-                            by,
-                            bw,
-                            bh,
-                            pause_label(self.preview.held),
-                            mobile::pick(7.0, 12.0),
-                            render::Hit::Key(KeyCode::Space),
-                            false,
-                        );
-                    }
-                    None => next = Some(*std::mem::replace(back, Box::new(Scene::Select))),
-                }
-            }
-            Scene::MpMenu => {
-                multiplayer::draw_menu(
-                    canvas,
-                    &self.mp_menu,
-                    &self.cfg.online_server,
-                    &self.mp_status,
-                    self.mp_connecting.is_some(),
-                );
-            }
-            Scene::Lobby => match &self.mp {
-                Some(s) if s.mapguessr => {
-                    if let Some(g) = &mut self.guessr {
-                        mapguessr::draw_lobby(canvas, s, g, self.cfg.scroll_speed, Instant::now());
-                    }
-                }
-                Some(s) => {
-                    multiplayer::draw_lobby(canvas, s, s.have_map, lobby_download);
-                }
-                None => next = Some(Scene::MpMenu),
-            },
-            Scene::MpWait {
-                rx,
-                loaded,
-                start,
-                from,
-            } => {
-                if let Some(r) = rx {
-                    match r.try_recv() {
-                        Ok(Ok(l)) => {
-                            *loaded = Some(Box::new(l));
-                            *rx = None;
-                            if let Some(s) = &self.mp {
-                                s.client.send(net::ClientMsg::Loaded(true));
-                            }
-                        }
-                        Ok(Err(e)) => {
-                            if let Some(s) = &self.mp {
-                                s.client.send(net::ClientMsg::Loaded(false));
-                            }
-                            self.status = format!("failed to load map: {e}");
-                            next = Some(Scene::Lobby);
-                        }
-                        Err(mpsc::TryRecvError::Empty) => {}
-                        Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
-                    }
-                }
-                if start.is_some_and(|at| now >= at)
-                    && let Some(loaded) = loaded.take()
-                {
-                    let (map, track) = *loaded;
-                    let seed = self
-                        .mp
-                        .as_ref()
-                        .and_then(|s| s.map.as_ref())
-                        .and_then(|m| m.seed)
-                        .unwrap_or(0);
-                    let defense = self
-                        .mp
-                        .as_ref()
-                        .and_then(|s| s.map.as_ref())
-                        .and_then(|m| m.defense);
-                    // Defense is played on the Maze, whatever else bent the lane.
-                    let mut mods = self.pending_mods;
-                    if defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
-                        mods.toggle(mods::Mod::Maze);
-                    }
-                    let mut game = Game::with_seed(map, track, self.audio.as_ref(), mods, seed);
-                    if let (Some(d), Some(s)) = (defense, &self.mp) {
-                        let (team, me) = multiplayer::defense_team(s);
-                        game.set_defense(team, me, d);
-                    }
-                    game.scroll_speed = self.cfg.scroll_speed;
-                    if let Some(i) = self.mp.as_ref().and_then(|s| s.map_entry) {
-                        game.live_pp = pp::Live::start(
-                            self.library[i].path.clone(),
-                            game.rate,
-                            self.pending_mods,
-                            game.scroll_speed,
-                            game.seed,
-                            Default::default(),
-                        );
-                    }
-                    if let Some(m) = self.mp.as_ref().and_then(|s| s.map.as_ref()) {
-                        use_mod_settings(&mut game, m);
-                    }
-                    if let Some(t) = *from {
-                        game.start_from(t, self.audio.as_ref(), self.play_offset);
-                    }
-                    game.record = true;
-                    if let Some(s) = &mut self.mp {
-                        s.inputs_sent = 0;
-                        s.skip_asked = false;
-                        s.skip_votes = None;
-                    }
-                    next = Some(Scene::MpPlay {
-                        game: Box::new(game),
-                        quit_armed: None,
-                    });
-                }
-                if let Some(s) = &self.mp {
-                    multiplayer::draw_waiting(canvas, s, *start, loaded.is_some(), now);
-                }
-            }
-            Scene::MpPlay { game, .. } => {
-                let done = game.update(now, self.audio.as_ref(), self.play_offset);
-                if self.auto || game.mods.has(mods::Mod::Autoplay) {
-                    game.autoplay_style = self.cfg.autoplay;
-                    game.autoplay(self.audio.as_ref());
-                }
-                game.show_offset_hint = self.cfg.show_offset_hint && self.cfg.show_map_info;
-                game.offset_key = self
-                    .cfg
-                    .hotkeys
-                    .get(keys::Hotkey::ApplyOffset)
-                    .map(keys::Chord::name);
-                game.kiai_effects = self.cfg.kiai_effects;
-                game.hidden = hidden;
-                game.hud = self.cfg.hud;
-                game.hud_area = self.cfg.playfield_area;
-                game.ur_scaled_hint = self.cfg.offset_hint_ur_scaled;
-                game.set_visual_offset(visual_offset);
-                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
-                    game.set_team(team);
-                }
-                let live = multiplayer::live_from(game);
-                let mp = &self.mp;
-                draw_game_area(
-                    canvas,
-                    &self.cfg,
-                    &mut self.frame_clip,
-                    &self.grip,
-                    &self.hover,
-                    self.bg_brightness > 0.0,
-                    |c| {
-                        game.draw_playfield(c, game.scroll_speed);
-                    },
-                );
-                game.draw_hud(canvas);
-                // The intro is skipped once every player asks: how many have.
-                if let Some(s) = mp.as_ref().filter(|_| game.can_skip()) {
-                    multiplayer::draw_skip_votes(canvas, s);
-                }
-                if let Some(s) = mp
-                    .as_ref()
-                    .filter(|_| self.cfg.mp_scoreboard && !hidden.has(hud::Part::Scoreboard))
-                {
-                    game.placed_from(canvas, hud::Part::Scoreboard, [12.0, 276.0], |c| {
-                        multiplayer::draw_scoreboard(c, s, &live);
-                    });
-                }
-                if let Some(s) = &mut self.mp {
-                    if s.last_live.elapsed() >= Duration::from_millis(100) {
-                        s.last_live = now;
-                        s.client.send(net::ClientMsg::Live(live));
-                        if game.inputs.len() > s.inputs_sent {
-                            let inputs = game.inputs[s.inputs_sent..].to_vec();
-                            s.inputs_sent = game.inputs.len();
-                            s.client.send(net::ClientMsg::Inputs {
-                                inputs,
-                                anti_mash: true,
-                            });
-                        }
-                    }
-                    if done {
-                        // Failing (SD / PF) ends the match for you like forfeiting does.
-                        let failed = game.failed_early();
-                        s.client
-                            .send(net::ClientMsg::Finished(multiplayer::final_from(
-                                &game.stats,
-                                failed,
-                            )));
-                        if failed && let Some(a) = &self.audio {
-                            a.stop();
-                        }
-                        next = Some(Scene::MpResults);
-                    }
-                }
-            }
-            Scene::Spectate(v) => {
-                if let Some(rx) = &v.rx {
-                    match rx.try_recv() {
-                        Ok(Ok(l)) => {
-                            v.loaded = Some(l);
-                            v.rx = None;
-                        }
-                        Ok(Err(e)) => {
-                            self.status = format!("can't spectate: {e}");
-                            next = Some(Scene::Lobby);
-                        }
-                        Err(mpsc::TryRecvError::Empty) => {}
-                        Err(mpsc::TryRecvError::Disconnected) => next = Some(Scene::Lobby),
-                    }
-                }
-                if v.ended
-                    .is_some_and(|t| now >= t + SPECTATE_DELAY + Duration::from_millis(500))
-                {
-                    if let Some(a) = &self.audio {
-                        a.stop();
-                    }
-                    next = Some(Scene::MpResults);
-                }
-                // Start once the map is ready and the delay has passed: the music where the
-                // players were SPECTATE_DELAY ago, every player's game snapping to it.
-                if v.games.is_empty()
-                    && now >= v.start + SPECTATE_DELAY
-                    && let (Some((map, track)), Some(audio)) =
-                        (v.loaded.take(), self.audio.as_ref())
-                {
-                    let probe = Game::with_mods(map.clone(), track.clone(), None, v.mods);
-                    let first_ms = match v.from {
-                        Some(t) => {
-                            (probe.track_at(t) - 2000.0).max(probe.track_at(probe.time))
-                                + self.play_offset
-                        }
-                        None => probe.track_at(probe.time),
-                    };
-                    let behind = (now - v.start - SPECTATE_DELAY).as_secs_f64() * 1000.0;
-                    audio.play(track.clone(), first_ms + behind);
-                    for (k, (id, name)) in v.players.iter().enumerate() {
-                        // The lobby's speed mods, and the player's own others.
-                        let own = self
-                            .mp
-                            .as_ref()
-                            .and_then(|s| s.players.iter().find(|p| p.id == *id))
-                            .map(|p| Mods::from_list(&p.mods).free())
-                            .unwrap_or(Mods::NONE);
-                        let mut mods = if v.map.defense.is_some() {
-                            v.mods
-                        } else {
-                            v.mods.shared().plus(own)
-                        };
-                        if v.map.defense.is_some_and(|d| d.maze) && !mods.has(mods::Mod::Maze) {
-                            mods.toggle(mods::Mod::Maze);
-                        }
-                        let mut g = Game::with_seed(
-                            map.clone(),
-                            track.clone(),
-                            None,
-                            mods,
-                            v.map.seed.unwrap_or(0),
-                        );
-                        use_mod_settings(&mut g, &v.map);
-                        // Defense: each player's game takes only their turns' notes, as theirs did
-                        // (the team in the order the players have it: by id).
-                        if let Some(d) = v.map.defense {
-                            let mut team = v.players.clone();
-                            team.sort_by_key(|p| p.0);
-                            let me = team.iter().position(|p| p.0 == *id).unwrap_or(0);
-                            g.set_defense(team, me, d);
-                        }
-                        if let Some(t) = v.from {
-                            g.skip_to(t);
-                        }
-                        let inputs = v.pending.remove(id).unwrap_or_default();
-                        g.replay = Some((inputs, 0));
-                        g.banner = Some(format!(
-                            "SPECTATING  -  {name}  ({}/{})",
-                            k + 1,
-                            v.players.len()
-                        ));
-                        g.watched = true;
-                        v.games.push((*id, Box::new(g)));
-                    }
-                    // Players may have skipped the intro before the view was ready.
-                    v.follow_skip(self.audio.as_ref(), self.play_offset);
-                }
-                if v.games.is_empty() {
-                    canvas.text_centered(
-                        canvas.width / 2.0,
-                        220.0,
-                        12.0,
-                        rgba(0xffffff, 1.0),
-                        "joining the match...",
-                    );
-                }
-                let scroll = self.cfg.scroll_speed;
-                for (k, (_, g)) in v.games.iter_mut().enumerate() {
-                    // Only the player watched (or the first one) is heard.
-                    g.mute_hits = v.focus.unwrap_or(0) != k;
-                    g.kiai_effects = self.cfg.kiai_effects;
-                    g.hidden = hidden;
-                    g.hud = self.cfg.hud;
-                    g.hud_area = self.cfg.playfield_area;
-                    g.update(now, self.audio.as_ref(), self.play_offset);
-                }
-                // Defense: the team's lives and gold, as the room has them.
-                if let Some(team) = self.mp.as_ref().and_then(|s| s.team) {
-                    for (_, g) in v.games.iter_mut() {
-                        g.set_team(team);
-                    }
-                }
-                match v.focus {
-                    Some(k) if k < v.games.len() => {
-                        let g = &mut v.games[k].1;
-                        draw_game_area(
-                            canvas,
-                            &self.cfg,
-                            &mut self.frame_clip,
-                            &self.grip,
-                            &self.hover,
-                            self.bg_brightness > 0.0,
-                            |c| {
-                                g.draw_playfield(c, scroll);
-                            },
-                        );
-                        g.draw_hud(canvas);
-                        canvas.text_centered(
-                            canvas.width / 2.0,
-                            470.0,
-                            7.0,
-                            rgba(0x9a9ab0, 1.0),
-                            "Left/Right: other player   A: everyone   Esc: leave",
-                        );
-                    }
-                    _ if !v.games.is_empty() => {
-                        let dt = v
-                            .zones_at
-                            .map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f32());
-                        v.zones_at = Some(now);
-                        draw_spectate_all(
-                            canvas,
-                            &mut v.games,
-                            &v.players,
-                            scroll,
-                            &mut v.zones,
-                            dt,
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            Scene::Watch(v) => {
-                let scroll = self.cfg.scroll_speed;
-                match &mut v.game {
-                    Some(g) => {
-                        g.kiai_effects = self.cfg.kiai_effects;
-                        g.hidden = hidden;
-                        g.hud = self.cfg.hud;
-                        g.hud_area = self.cfg.playfield_area;
-                        g.hud = self.cfg.hud;
-                        g.hud_area = self.cfg.playfield_area;
-                        g.update(now, self.audio.as_ref(), self.play_offset);
-                        draw_game_area(
-                            canvas,
-                            &self.cfg,
-                            &mut self.frame_clip,
-                            &self.grip,
-                            &self.hover,
-                            self.bg_brightness > 0.0,
-                            |c| {
-                                g.draw_playfield(c, scroll);
-                            },
-                        );
-                        g.draw_hud(canvas);
-                        if v.held {
-                            canvas.text_centered(
-                                canvas.width / 2.0,
-                                300.0,
-                                9.0,
-                                rgba(0x9a9ab0, 1.0),
-                                &format!("{} paused", v.player),
-                            );
-                        }
-                    }
-                    None => {
-                        // The map they're playing, on its way.
-                        let got = v
-                            .play
-                            .as_ref()
-                            .filter(|_| v.fetching && v.entry.is_none())
-                            .and_then(|p| map_download(&self.downloads, &p.map));
-                        let looking =
-                            v.fetching && v.entry.is_none() && self.lobby_lookup.is_some();
-                        let text = got.map_or_else(|| v.status(), download_text);
-                        let w = canvas.width;
-                        canvas.text_centered(w / 2.0, 220.0, 12.0, rgba(0xffffff, 1.0), &text);
-                        if got.is_some() || looking {
-                            let bw = (w - 48.0).min(300.0);
-                            let at = (w - bw) / 2.0;
-                            multiplayer::draw_fetch_bar(canvas, at, 240.0, bw, got.flatten());
-                        }
-                    }
-                }
-                canvas.text_centered(
-                    canvas.width / 2.0,
-                    470.0,
-                    7.0,
-                    rgba(0x9a9ab0, 1.0),
-                    "Esc: stop watching   F9: friends",
-                );
-            }
-            Scene::Editor(view) => {
-                // Uploading needs the game's account on our own server.
-                let token = (self.cfg.online_server == online::DEFAULT_SERVER
-                    && !self.cfg.online_token.is_empty())
-                .then_some(&self.cfg.online_token);
-                if view.account.as_ref() != token {
-                    view.account = token.cloned();
-                }
-                view.update(now, self.audio.as_ref());
-                if let Some(speed) = view.take_rate_request() {
-                    editor_reload = Some((view.entry, speed));
-                }
-                if view.left_pan != self.cfg.editor_left_pan {
-                    self.cfg.editor_left_pan = view.left_pan;
-                    self.cfg.save();
-                }
-                if view.ed.follow_timing != self.cfg.editor_follow_timing {
-                    self.cfg.editor_follow_timing = view.ed.follow_timing;
-                    self.cfg.save();
-                }
-                if view.snap_dirty {
-                    view.snap_dirty = false;
-                    (self.cfg.editor_snap_presets, self.cfg.editor_snap_active) =
-                        view.snap_config();
-                    self.cfg.save();
-                }
-                if let Some(from) = view.take_test_play() {
-                    editor_test = Some((view.entry, from));
-                }
-                editor_folder = view.take_folder_request();
-                editor_renamed = view.take_renamed();
-                // Maps dropped into its folder (or taken out) join the list as they come.
-                if let Some(dir) = view.ed.path.parent() {
-                    if self.folder_watch.as_ref().map(|w| w.folder()) != Some(dir) {
-                        self.folder_watch = Some(folder_watch::Watch::new(dir, now));
-                    }
-                    folder_news = self.folder_watch.as_mut().and_then(|w| w.poll(now));
-                }
-                view.draw(canvas, self.cfg.scroll_speed, self.cfg.autoplay);
-                if view.take_tour_ended() && !self.cfg.editor_tour_done {
-                    self.cfg.editor_tour_done = true;
-                    self.cfg.save();
-                }
-                if view.take_exit() {
-                    // It may have been sent just now: ask which sets are custom again.
-                    self.custom_asked = None;
-                    next = Some(Scene::Select);
-                }
-            }
-            Scene::EditorHome(home) => {
-                let out = home.update(now, self.audio.as_ref());
-                home.draw(canvas);
-                if !matches!(out, editor::home::Out::None) {
-                    home_out = Some(out);
-                }
-            }
-            Scene::VideoEdit(ed) => {
-                match ed.poll() {
-                    Err(e) => {
-                        self.status = format!("can't open the replay: {e}");
-                        next = Some(Scene::Select);
-                    }
-                    Ok(_) => {
-                        if let Some((at, from)) = ed.playing {
-                            let elapsed = at.elapsed().as_secs_f64() * 1000.0;
-                            let t = match &ed.game {
-                                Some(g) => g.speed().map(g.track_at(from) + elapsed),
-                                None => from + elapsed * ed.replay.rate,
-                            };
-                            if t >= ed.end {
-                                ed.playing = None;
-                                if let Some(a) = &self.audio {
-                                    a.stop();
-                                }
-                            } else {
-                                ed.seek(t);
-                            }
-                        }
-                    }
-                }
-                let progress = self.export.as_ref().map(|ex| ex.progress());
-                if let Some(g) = &mut ed.game {
-                    g.kiai_effects = self.cfg.kiai_effects;
-                    g.hud = self.cfg.hud;
-                    g.hidden = self.cfg.hud.off;
-                }
-                ed.draw(
-                    canvas,
-                    self.cfg.scroll_speed,
-                    progress,
-                    &self.video_status,
-                    self.last_video.is_some(),
-                );
-            }
-            Scene::MpResults => match &self.mp {
-                Some(s) => multiplayer::draw_results(canvas, s),
-                None => next = Some(Scene::MpMenu),
-            },
-            Scene::Calibrate { game, vsync, .. } => {
-                if game.update(now, self.audio.as_ref(), self.play_offset) {
-                    finish_calibration = true;
-                }
-                if self.auto {
-                    game.autoplay_style = self.cfg.autoplay;
-                    game.autoplay(self.audio.as_ref());
-                }
-                if *vsync {
-                    game.set_visual_offset(visual_offset);
-                    draw_game_area(
-                        canvas,
-                        &self.cfg,
-                        &mut self.frame_clip,
-                        &self.grip,
-                        &self.hover,
-                        self.bg_brightness > 0.0,
-                        |c| {
-                            game.draw_playfield(c, self.cfg.scroll_speed);
-                        },
-                    );
-                    game.draw_hud(canvas);
-                    calibrate::draw_by_sight(canvas, game, self.cfg.vsync_tune_ms);
-                } else {
-                    calibrate::draw_by_ear(canvas, game);
-                }
-            }
-            Scene::CalibrateDone {
-                estimate, vsync, ..
-            } => {
-                let current = if *vsync {
-                    self.cfg.vsync_tune_ms
-                } else {
-                    self.cfg.shown_offset()
-                };
-                calibrate::draw_result(canvas, estimate, current, self.cfg.calibration_bpm, *vsync);
-            }
-            Scene::Settings { prev } => {
-                let from_game = matches!(**prev, Scene::Play { .. });
-                self.settings_ui.krokodil = self.is_krokodil();
-                if mobile::active() {
-                    self.draw_mobile_settings(canvas);
-                    self.draw_mobile_choices(canvas);
-                } else {
-                    settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
-                    let searching = !self.settings_ui.search.is_empty();
-                    let footer = if self
-                        .settings_ui
-                        .editing
-                        .as_ref()
-                        .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
-                    {
-                        "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
-                    } else if self.settings_ui.editing.is_some() {
-                        "type a value   Enter set   Esc cancel".to_string()
-                    } else {
-                        let enter = match self.settings_ui.item().kind() {
-                            Kind::List => "Enter list",
-                            Kind::Value => "Enter type a value",
-                            Kind::Toggle => "Enter toggle",
-                            Kind::Key => "Enter rebind",
-                            Kind::Action => "Enter go",
-                        };
-                        let back = if searching {
-                            "Esc clear the search"
-                        } else if from_game {
-                            "Esc back to pause menu"
-                        } else {
-                            "Esc or Tab back"
-                        };
-                        format!(
-                            "Type to search   Up/Down select   Left/Right change   {enter}   {back}"
-                        )
-                    };
-                    let this = &*self;
-                    this.settings_ui.draw(
-                        canvas,
-                        &|item| this.setting_value(item),
-                        &|item| this.setting_control(item),
-                        &footer,
-                    );
-                    if let Some(p) = &self.settings_ui.choices {
-                        p.draw(canvas);
-                    }
-                }
-            }
-            Scene::LayoutEdit { .. } => {
-                draw_game_area(
-                    canvas,
-                    &self.cfg,
-                    &mut self.frame_clip,
-                    &self.grip,
-                    &self.hover,
-                    false,
-                    game::draw_preview,
-                );
-                let sample = self
-                    .hud_sample
-                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
-                sample.hud = self.cfg.hud;
-                sample.hud_area = self.cfg.playfield_area;
-                sample.hidden = self.cfg.hud.off;
-                sample.draw_parts(canvas);
-                let area = self.cfg.playfield_area;
-                layout::draw_frame(canvas, area, true);
-                let w = canvas.width;
-                let bw = (w - 32.0).min(660.0);
-                canvas.round_rect(
-                    [w / 2.0 - bw / 2.0, 440.0],
-                    [bw, 34.0],
-                    8.0,
-                    rgba(0x000000, 0.75),
-                    rgba(accent(), 0.6),
-                    1.0,
-                );
-                let room = bw - 16.0;
-                canvas.text_centered(
-                    w / 2.0,
-                    446.0,
-                    8.0,
-                    rgba(0xffffff, 1.0),
-                    &Canvas::fit(8.0, room, &format!("Playfield area: {}", area.describe())),
-                );
-                let help = if mobile::active() {
-                    "Back when done"
-                } else {
-                    "Drag: move (snaps; Shift = free), edges: resize, wheel: scale.  [ ] presets, arrows move, Shift+arrows resize, R full, Enter done"
-                };
-                let size = Canvas::fit_size(7.0, 5.5, room, help);
-                canvas.text_centered(
-                    w / 2.0,
-                    460.0 + (7.0 - size) / 2.0,
-                    size,
-                    rgba(0x9a9ab0, 1.0),
-                    &Canvas::fit(size, room, help),
-                );
-            }
-            Scene::HudEdit { .. } => {
-                draw_game_area(
-                    canvas,
-                    &self.cfg,
-                    &mut self.frame_clip,
-                    &self.grip,
-                    &self.hover,
-                    false,
-                    game::draw_preview,
-                );
-                let sample = self
-                    .hud_sample
-                    .get_or_insert_with(|| Box::new(game::Game::hud_sample()));
-                sample.hud = self.cfg.hud;
-                sample.hud_area = self.cfg.playfield_area;
-                sample.hidden = self.cfg.hud.off;
-                sample.draw_stand_ins(canvas);
-                sample.draw_parts(canvas);
-                layout::draw_frame(canvas, self.cfg.playfield_area, self.grip.is_some());
-                if let Some(ed) = &mut self.hud_edit {
-                    ed.draw(canvas, &self.cfg, sample);
-                    layout::draw_guides(canvas, &ed.guides);
+                // So may the editor's.
+                if let Some(e) = self.scene.screen_mut::<MapEditor>() {
+                    let out = std::mem::take(&mut e.out);
+                    editor_reload = out.reload;
+                    editor_test = out.test;
+                    editor_folder = out.folder;
+                    editor_renamed = out.renamed;
+                    folder_news = out.folder_news;
                 }
             }
         }
@@ -16334,10 +11461,7 @@ impl State {
         }
         if self.cfg.show_playfield_size
             && !mobile::active()
-            && matches!(
-                self.scene,
-                Scene::Play { .. } | Scene::MpPlay { .. } | Scene::Calibrate { .. }
-            )
+            && (self.scene.plays_song() || self.calibration_run().is_some())
         {
             let text = self.playfield_label();
             let tw = Canvas::text_width(7.0, &text);
@@ -16348,7 +11472,7 @@ impl State {
         }
         self.draw_mobile_rate(canvas);
         if let Some(cur) = self.mod_select {
-            let seed = if matches!(self.scene, Scene::Lobby) {
+            let seed = if self.in_lobby() {
                 self.mp
                     .as_ref()
                     .and_then(|s| s.map.as_ref())
@@ -16400,9 +11524,9 @@ impl State {
                 );
                 if phone {
                     // Tapping the number brings up the keyboard.
-                    canvas.hit(w / 2.0 - 220.0, 188.0, 440.0, 36.0, render::Hit::TextField);
+                    canvas.hit(w / 2.0 - 220.0, 188.0, 440.0, 36.0, hit::Hit::TextField);
                     let (bw, bh, by) = (150.0, 46.0, 280.0);
-                    let key = render::Hit::Key;
+                    let key = hit::Hit::Key;
                     canvas.button(
                         w / 2.0 - 235.0,
                         by,
@@ -16448,7 +11572,7 @@ impl State {
                         24.0,
                         "Apply",
                         9.0,
-                        render::Hit::Key(KeyCode::Enter),
+                        hit::Hit::Key(KeyCode::Enter),
                         true,
                     );
                     canvas.button(
@@ -16458,7 +11582,7 @@ impl State {
                         24.0,
                         "Cancel",
                         9.0,
-                        render::Hit::Key(KeyCode::Escape),
+                        hit::Hit::Key(KeyCode::Escape),
                         false,
                     );
                 }
@@ -16516,26 +11640,27 @@ impl State {
         }
         if let Some((entry, speed)) = editor_reload {
             let (rx, rate) = self.spawn_track_loader(entry, speed);
-            if let Scene::Editor(view) = &mut self.scene {
+            if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 view.set_track_loader(rx, rate);
             }
         }
         if let Some(out) = home_out {
             self.home_out(out);
         }
-        if finish_calibration {
+        if std::mem::take(&mut self.calibration_over) {
             self.finish_calibration();
         }
         if let Some(s) = next {
-            let music_on = matches!(&s, Scene::Results { results, .. } if results.music.is_some());
+            let results = s.screen_as::<ResultsScreen>();
+            let music_on = results.is_some_and(|r| r.results.music.is_some());
             if music_on {
                 self.preview.invalidate_audio();
-            } else if matches!(s, Scene::Results { .. } | Scene::Select) {
+            } else if results.is_some() || s.is_select() {
                 self.stop_audio();
             }
             // TAIKO_STATS: the play's smoothness, whether the music plays on at the results or not.
-            if matches!(s, Scene::Results { .. } | Scene::Select)
-                && let (Some(sm), Scene::Play { .. }) = (&mut self.smooth, &self.scene)
+            if (results.is_some() || s.is_select())
+                && let (Some(sm), true) = (&mut self.smooth, self.scene.is_play())
             {
                 eprintln!(
                     "--- smoothness ({}) ---\n{}",
@@ -16544,8 +11669,8 @@ impl State {
                 );
                 *sm = debug::Smoothness::default();
             }
-            if let (Scene::Results { results, .. }, Scene::Play { .. }) = (&s, &self.scene) {
-                let st = &results.stats;
+            if let (Some(r), true) = (results, self.scene.is_play()) {
+                let st = &r.results.stats;
                 eprintln!(
                     "result: {:.2}%  great {} ok {} miss {}  max combo {}  UR {:.1}  mean {:+.2} ms  rolls {}  swells {}  big {}",
                     st.accuracy() * 100.0,
@@ -16561,6 +11686,7 @@ impl State {
                 );
             }
             self.scene = s;
+            self.drop_finished_play();
         }
 
         let fade = render::progress(self.scene_since, 160.0);
@@ -16609,79 +11735,7 @@ impl State {
         if let Some(t) = self.retry_progress(now) {
             canvas.rect(0.0, 0.0, canvas.width, 480.0, rgba(0x000000, t * 0.95));
         }
-        if !self.in_song() {
-            self.volume.hold(now);
-        }
-        if self.volume.visible(now) {
-            self.volume.draw(canvas, &self.cfg, now);
-        }
-        if self.overlay_allowed() && self.splash.is_none() {
-            let logged_in = self.mp_menu.account.is_some();
-            let (lobby, lobby_unread) = match &self.mp {
-                Some(s) => (Some(&s.chat[..]), s.chat_unread),
-                None => (None, 0),
-            };
-            // The screen behind darkens, but not a play being watched.
-            let dim = !self.in_song() && !self.in_editor();
-            let animate = self.cfg.animations;
-            let tab = self
-                .social_tab_middle()
-                .filter(|_| logged_in)
-                .map(|to| self.social.glide_tab(to, canvas.dt_ms, animate));
-            if self.social.open {
-                social::draw(
-                    canvas,
-                    &self.social,
-                    logged_in,
-                    lobby,
-                    lobby_unread,
-                    dim,
-                    self.in_editor(),
-                    tab,
-                );
-            } else if self.social.closing().is_some() {
-                let hits = canvas.hits.len();
-                social::draw(
-                    canvas,
-                    &self.social,
-                    logged_in,
-                    lobby,
-                    lobby_unread,
-                    dim,
-                    self.in_editor(),
-                    tab,
-                );
-                canvas.hits.truncate(hits);
-            } else if let Some(middle) = tab {
-                social::draw_chip(canvas, &self.social, middle, lobby_unread);
-            }
-            if let Scene::Editor(_) | Scene::EditorHome(_) = self.scene {
-                let x = match &self.scene {
-                    Scene::Editor(_) => editor::view::View::menu_end() + 6.0,
-                    _ => canvas.width - 100.0,
-                };
-                if logged_in {
-                    social::draw_editor_chip(canvas, &self.social, x, lobby_unread);
-                }
-            }
-            social::draw_notes(canvas, &self.social, self.in_editor());
-        }
-        if let Some(page) = self.guide.filter(|_| self.splash.is_none()) {
-            let hold = self
-                .guide_hold_left()
-                .map(|left| left.as_secs_f32().ceil() as u32);
-            guide::draw(canvas, page, self.guide_binding, hold, &self.cfg);
-        }
-        if let Some(p) = &self.profile {
-            p.draw(canvas);
-        }
-        if let Some(view) = &self.medals {
-            view.draw(canvas);
-        }
-        self.unlock.draw(canvas);
-        if let Some(view) = &self.changelog {
-            view.draw(canvas);
-        }
+        self.draw_layers(&app::overlays::DRAW_UNDER_TOASTS, canvas, now);
         #[cfg(target_os = "android")]
         if self.keyboard.up {
             self.draw_typing(canvas);
@@ -16747,8 +11801,7 @@ impl State {
             song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())),
         );
         self.draw_drag_hover(canvas, now);
-        self.draw_crash(canvas);
-        self.draw_quit(canvas, now);
+        self.draw_layers(&app::overlays::DRAW_ON_TOP, canvas, now);
         if self.splash.is_some() {
             let boot = self.boot_log();
             // Some window managers never report focus: don't wait forever.
@@ -16798,13 +11851,6 @@ impl State {
             .get_or_insert_with(|| library.iter().filter_map(Entry::set_id).collect())
     }
 
-    fn open_download(&mut self) {
-        self.picking_lobby_map = false;
-        self.installed_sets();
-        self.browse.opened();
-        self.scene = Scene::Download;
-    }
-
     /// Downloads a set unless it's already here or on its way.
     fn start_download(&mut self, set: download::SetInfo) {
         let here = match set.custom {
@@ -16850,7 +11896,7 @@ impl State {
             return;
         }
         self.browse.menu = None;
-        self.scene = Scene::Select;
+        self.scene = SongSelect::scene();
         self.reveal_maps(maps);
     }
 
@@ -16859,7 +11905,7 @@ impl State {
         let Some(m) = self.mp.as_ref().and_then(|s| s.map.clone()) else {
             return;
         };
-        if self.mp.as_ref().is_some_and(|s| s.have_map) || self.lobby_lookup.is_some() {
+        if self.mp.as_ref().is_some_and(|s| s.have_map) || self.lobby_lookup.is_busy() {
             return;
         }
         self.fetch_map(m);
@@ -16867,7 +11913,7 @@ impl State {
 
     /// Downloads the set a map someone else has comes from (mirrors: by set id, else a search).
     fn fetch_map(&mut self, m: net::MapInfo) {
-        if self.lobby_lookup.is_some() {
+        if self.lobby_lookup.is_busy() {
             return;
         }
         match m.set_id {
@@ -16885,9 +11931,8 @@ impl State {
                 custom: None,
             }),
             None => {
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
-                    let found = download::search(
+                self.lobby_lookup = Job::spawn(move || {
+                    download::search(
                         &format!("{} {}", m.artist, m.title),
                         download::Category::Any,
                         download::SortKey::Relevance,
@@ -16901,10 +11946,8 @@ impl State {
                                     && s.diffs.iter().any(|d| d.version == m.version)
                             })
                             .ok_or_else(|| "not found on the mirrors".to_string())
-                    });
-                    let _ = tx.send(found);
+                    })
                 });
-                self.lobby_lookup = Some(rx);
                 self.toast("looking for the map on the mirrors...".into());
             }
         }
@@ -17060,7 +12103,7 @@ impl State {
     /// The lobby map's download progress for the lobby screen: what's going on, and how much of
     /// it is done once that's known.
     fn lobby_download_status(&self) -> Option<(String, Option<f32>)> {
-        if self.lobby_lookup.is_some() {
+        if self.lobby_lookup.is_busy() {
             return Some(("looking it up...".into(), None));
         }
         if self.host_map_asked {
@@ -17069,6 +12112,67 @@ impl State {
         let m = self.mp.as_ref()?.map.as_ref()?;
         let done = map_download(&self.downloads, m)?;
         Some((download_text(done), done))
+    }
+
+    /// What frames to come will do (not a thread): a preview waiting out its debounce, a
+    /// resume countdown running out.
+    #[cfg(test)]
+    fn is_due(&self) -> bool {
+        // The resume countdown ends at a wall-clock time (`Sim::resume_after`) that frames
+        // reach as their time goes on.
+        let resuming = self.game().is_some_and(|game| game.resuming().is_some());
+        self.preview.is_due() || resuming
+    }
+
+    /// The background work still on its way, by name; empty when no thread works for the
+    /// client. The regression harness waits for this instead of watching frames for changes.
+    #[cfg(test)]
+    fn busy(&self) -> Vec<&'static str> {
+        let info_pending = self.select.info.as_ref().is_some_and(|i| {
+            let i = i.lock().unwrap();
+            i.len() < self.library.len() || i.iter().any(Option::is_none)
+        });
+        let map_loading = match &self.scene {
+            Scene::Other(s) => s.loading(),
+        };
+        let live_pp =
+            self.scene.plays_song() && self.game().is_some_and(|game| game.live_pp_busy());
+        [
+            ("the library scan", self.scan.is_some()),
+            ("the maps' analysis", info_pending),
+            ("the song preview", !self.preview.is_idle()),
+            ("a map loading", map_loading),
+            ("a leaderboard", self.board_fetch.is_some()),
+            ("a set's update check", self.set_check.is_some()),
+            ("the loved list", self.loved_call.is_some()),
+            ("the custom maps' call", self.custom_call.is_busy()),
+            ("osu!.db", self.osudb_rx.is_busy()),
+            ("the pp backfill", self.pp_backfill.is_busy()),
+            ("the player's profile", self.me_fetch.is_busy()),
+            ("a score's submit", !self.submits.is_empty()),
+            ("the lobby map's lookup", self.lobby_lookup.is_busy()),
+            ("the folder dialog", self.folder_pick.is_busy()),
+            ("the data move", self.data_move.is_some()),
+            (
+                "a screenshot",
+                self.shot_upload.is_some()
+                    || self.shot_view.as_ref().is_some_and(|v| v.rx.is_busy()),
+            ),
+            (
+                "a score link",
+                self.score_link.as_ref().is_some_and(|l| l.fetch.is_busy()),
+            ),
+            ("the replay's music", self.replay_speed_rx.is_busy()),
+            ("the live pp", live_pp),
+            ("the download browser", self.browse.is_busy()),
+            (
+                "the account server",
+                self.mp_menu.account_request.is_some() || self.mp_menu.rooms_request.is_some(),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(name, busy)| busy.then_some(name))
+        .collect()
     }
 
     /// Scores saved before pp get theirs worked out in the background, once, and the index is
@@ -17083,13 +12187,12 @@ impl State {
                 .map(|r| r.file.clone())
                 .collect();
             if !missing.is_empty() {
-                self.pp_backfill = Some(scores::backfill_pp(missing));
+                self.pp_backfill = Job::from_receiver(scores::backfill_pp(missing));
             }
         }
-        let Some(found) = self.pp_backfill.as_ref().and_then(|rx| rx.try_recv().ok()) else {
+        let Some(found) = self.pp_backfill.poll() else {
             return;
         };
-        self.pp_backfill = None;
         if found.is_empty() {
             return;
         }
@@ -17134,7 +12237,10 @@ impl State {
                     // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
                     let pp = pp + 0.0;
                     *mine = Some((pp, rank));
-                    if let Scene::Results { results, .. } = &mut self.scene
+                    if let Some(results) = self
+                        .scene
+                        .screen_mut::<ResultsScreen>()
+                        .map(|r| &mut r.results)
                         && results.opened.is_none()
                         && results.replay.is_some()
                     {
@@ -17202,26 +12308,22 @@ impl State {
             self.me_for = account.clone();
             self.me = None;
             self.me_relax = None;
-            self.me_fetch = None;
+            self.me_fetch.cancel();
             if !account.is_empty() {
-                let (server, (tx, rx)) = (self.cfg.online_server.clone(), mpsc::channel());
-                std::thread::spawn(move || {
-                    let result = online::call(&server, online::Request::Profile { name: account })
-                        .and_then(|r| match r {
+                let server = self.cfg.online_server.clone();
+                self.me_fetch = Job::spawn(move || {
+                    online::call(&server, online::Request::Profile { name: account }).and_then(
+                        |r| match r {
                             online::Reply::Profile(p) => Ok(*p),
                             _ => Err(crate::lang::odd_reply()),
-                        });
-                    let _ = tx.send(result);
+                        },
+                    )
                 });
-                self.me_fetch = Some(rx);
             }
         }
-        if let Some(Ok(result)) = self.me_fetch.as_ref().map(|rx| rx.try_recv()) {
-            self.me_fetch = None;
-            if let Ok(p) = result {
-                self.me = Some((p.pp + 0.0, p.rank));
-                self.me_relax = Some((p.relax.pp + 0.0, p.relax.rank));
-            }
+        if let Some(Ok(p)) = self.me_fetch.poll() {
+            self.me = Some((p.pp + 0.0, p.rank));
+            self.me_relax = Some((p.relax.pp + 0.0, p.relax.rank));
         }
     }
 
@@ -17233,8 +12335,8 @@ impl State {
         // a changelog the player has already opened manually, and the guide comes first: what's
         // new would cover it while its keys still went to the guide, closing it unseen.
         if !self.in_song()
-            && self.guide.is_none()
-            && self.guide_after.is_none()
+            && self.guide.page.is_none()
+            && self.guide.after.is_none()
             && let Some(view) = changelog::poll_automatic(&mut self.pending_changelog)
             && self.changelog.is_none()
         {
@@ -17267,19 +12369,10 @@ impl State {
                 self.import_osz(archive, &name, true);
             }
         }
-        if let Some(rx) = &self.lobby_lookup {
-            match rx.try_recv() {
-                Ok(Ok(set)) => {
-                    self.lobby_lookup = None;
-                    self.start_download(set);
-                }
-                Ok(Err(e)) => {
-                    self.lobby_lookup = None;
-                    self.toast(format!("download failed: {e}"));
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.lobby_lookup = None,
-            }
+        match self.lobby_lookup.poll() {
+            Some(Ok(set)) => self.start_download(set),
+            Some(Err(e)) => self.toast(format!("download failed: {e}")),
+            None => {}
         }
         let mut finished = Vec::new();
         self.downloads.retain(|job| match job.rx.try_recv() {
@@ -17363,7 +12456,7 @@ impl State {
                 })
                 .or_insert(state);
         }
-        if !self.cfg.check_updates || !matches!(self.scene, Scene::Select) {
+        if !self.cfg.check_updates || !self.scene.is_select() {
             self.set_check_due = None;
             return;
         }
@@ -17518,10 +12611,8 @@ impl State {
     /// Song select goes to the maps just added, whatever its filters. During a game they're only
     /// listed: the cursor stays where the player left it.
     fn reveal_maps(&mut self, maps: Vec<PathBuf>) {
-        if !matches!(
-            self.scene,
-            Scene::Play { .. } | Scene::MpPlay { .. } | Scene::MpWait { .. }
-        ) && self.mp.is_none()
+        if !(self.scene.is_play() || self.scene.screen().is_some_and(|s| s.in_match()))
+            && self.mp.is_none()
         {
             self.select.reveal(&self.library, maps);
         } else {
@@ -17595,69 +12686,6 @@ impl State {
         self.toast(text);
     }
 
-    fn download_key(&mut self, code: KeyCode, text: Option<&str>, window: Option<&Window>) {
-        let function_key = matches!(
-            code,
-            KeyCode::F1
-                | KeyCode::F2
-                | KeyCode::F3
-                | KeyCode::F4
-                | KeyCode::F7
-                | KeyCode::F8
-                | KeyCode::F9
-                | KeyCode::F10
-                | KeyCode::F11
-                | KeyCode::F12
-        );
-        if function_key && self.handle_global_key(code, window) {
-            return;
-        }
-        match code {
-            KeyCode::ArrowLeft | KeyCode::ArrowRight if self.modifiers_ctrl => self
-                .browse
-                .step_category(if code == KeyCode::ArrowRight { 1 } else { -1 }),
-            KeyCode::ArrowUp | KeyCode::ArrowDown if self.modifiers_ctrl => self
-                .browse
-                .step_sort(if code == KeyCode::ArrowDown { 1 } else { -1 }),
-            KeyCode::Tab if self.modifiers_ctrl => {
-                let next = match self.browse.source() {
-                    browse::Source::Osu => browse::Source::Ours,
-                    browse::Source::Ours => browse::Source::Osu,
-                };
-                self.browse.set_source(next);
-            }
-            KeyCode::ArrowUp => self.browse.move_by(-1),
-            KeyCode::ArrowDown => self.browse.move_by(1),
-            KeyCode::ArrowLeft => self.browse.cycle_diff(-1),
-            KeyCode::ArrowRight => self.browse.cycle_diff(1),
-            KeyCode::PageUp => self.browse.move_by(-8),
-            KeyCode::PageDown => self.browse.move_by(8),
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                if let Some(set) = self.browse.selected().cloned() {
-                    let here = match set.custom {
-                        Some(_) => self.select.custom_folder.values().any(|&id| id == set.id),
-                        None => self.installed_sets().contains(&set.id),
-                    };
-                    if here {
-                        self.play_downloaded(&set);
-                    } else {
-                        self.start_download(set);
-                    }
-                }
-            }
-            KeyCode::Escape if self.browse.menu.is_some() => self.browse.menu = None,
-            KeyCode::Backspace if self.modifiers_ctrl => self.browse.clear(),
-            KeyCode::Backspace => self.browse.backspace(),
-            KeyCode::Escape if !self.browse.query.is_empty() => self.browse.clear(),
-            KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
-            _ => {
-                if let Some(text) = text {
-                    self.browse.type_text(text);
-                }
-            }
-        }
-    }
-
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
     /// Whether the song preview is the topmost thing at a point, so it takes the pointer there.
     /// Anything drawn over it (the friends panel, a drop-down, the changelog) gets it instead.
@@ -17666,11 +12694,13 @@ impl State {
         // drawn before the preview, so its click-away area is under it.
         self.mod_select.is_none()
             && self.settings_ui.dropdown.is_none()
-            && !(matches!(self.scene, Scene::Download) && self.browse.menu.is_some())
-            && matches!(self.hit_at(x, y), Some(render::Hit::Preview))
+            && !self.mobile_over_preview()
+            && !(self.scene.screen().is_some_and(|s| s.previews_remote())
+                && self.browse.menu.is_some())
+            && matches!(self.hit_at(x, y), Some(hit::Hit::Preview))
     }
 
-    fn hit_at(&self, x: f32, y: f32) -> Option<render::Hit> {
+    fn hit_at(&self, x: f32, y: f32) -> Option<hit::Hit> {
         if mobile::active() {
             return mobile::hit_near(&self.hits, x, y);
         }
@@ -17684,57 +12714,71 @@ impl State {
     /// The SONGS tab: the songs themselves, not the menu over them.
     fn show_songs(&mut self) {
         self.main_menu = None;
-        self.scene = Scene::Select;
+        self.scene = SongSelect::scene();
     }
 
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
-        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::MpMenu | Scene::Download));
-        match (&self.scene, tab) {
-            (Scene::Select, 1) => self.open_settings(),
-            (Scene::Select, 2) => {
+        let settings_from_menu = self.behind_settings().is_some_and(|prev| {
+            prev.is_select() || prev.screen().is_some_and(|s| s.tab().is_some())
+        });
+        match (self.scene.is_select(), tab) {
+            (true, 1) => self.open_settings(),
+            (true, 2) => {
                 self.picking_lobby_map = false;
                 self.open_multiplayer();
             }
-            (Scene::Settings { .. }, 0) if settings_from_menu => {
+            (_, 0) if settings_from_menu => {
                 self.close_settings();
                 self.show_songs();
             }
-            (Scene::Settings { .. }, 2) if settings_from_menu => {
+            (_, 2) if settings_from_menu => {
                 self.close_settings();
                 self.open_multiplayer();
             }
-            (Scene::MpMenu | Scene::Lobby, 0) => self.show_songs(),
-            (Scene::MpMenu | Scene::Lobby, 1) => self.open_settings(),
-            (Scene::Select | Scene::MpMenu | Scene::Lobby, 3) => self.open_download(),
-            (Scene::Settings { .. }, 3) if settings_from_menu => {
+            (true, 3) => self.open_download(),
+            (_, 3) if settings_from_menu => {
                 self.close_settings();
                 self.open_download();
             }
-            (Scene::Download, 0) => self.show_songs(),
-            (Scene::Download, 1) => self.open_settings(),
-            (Scene::Download, 2) => self.open_multiplayer(),
+            // Another tab than its own.
+            (_, tab)
+                if self
+                    .scene
+                    .screen()
+                    .and_then(|s| s.tab())
+                    .is_some_and(|own| own != tab) =>
+            {
+                match tab {
+                    0 => self.show_songs(),
+                    1 => self.open_settings(),
+                    2 => self.open_multiplayer(),
+                    3 => self.open_download(),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
 
-    fn click(&mut self, hit: render::Hit, window: Option<&Window>) {
-        if let Some(ed) = &mut self.hud_edit {
+    fn click(&mut self, hit: hit::Hit, window: Option<&Window>) {
+        if let Some(h) = self.scene.screen_mut::<HudEdit>() {
+            let ed = &mut h.ed;
             match hit {
-                render::Hit::HudPanel => return,
-                render::Hit::HudRow(i) => return ed.select(i),
-                render::Hit::HudToggle(i) => return ed.toggle_part(i, &mut self.cfg),
-                render::Hit::HudPreset(i) => return ed.load_preset(i, &mut self.cfg),
-                render::Hit::HudColour(colour) => return ed.set_colour(colour, &mut self.cfg),
-                render::Hit::HudButton(b) => {
+                hit::Hit::HudPanel => return,
+                hit::Hit::HudRow(i) => return ed.select(i),
+                hit::Hit::HudToggle(i) => return ed.toggle_part(i, &mut self.cfg),
+                hit::Hit::HudPreset(i) => return ed.load_preset(i, &mut self.cfg),
+                hit::Hit::HudColour(colour) => return ed.set_colour(colour, &mut self.cfg),
+                hit::Hit::HudButton(b) => {
                     let outcome = ed.press_button(b, &mut self.cfg);
                     return self.hud_outcome(outcome);
                 }
                 _ => {}
             }
         }
-        use render::Hit;
+        use hit::Hit;
         // The exit question takes only its own buttons.
         if self.quit_asked && !matches!(hit, Hit::Key(KeyCode::KeyY | KeyCode::KeyN)) {
             return;
@@ -17749,13 +12793,25 @@ impl State {
             s.chat_input = None;
         }
         match hit {
-            render::Hit::HudPanel
-            | render::Hit::HudRow(_)
-            | render::Hit::HudToggle(_)
-            | render::Hit::HudPreset(_)
-            | render::Hit::HudColour(_)
-            | render::Hit::HudButton(_) => {}
+            hit::Hit::HudPanel
+            | hit::Hit::HudRow(_)
+            | hit::Hit::HudToggle(_)
+            | hit::Hit::HudPreset(_)
+            | hit::Hit::HudColour(_)
+            | hit::Hit::HudButton(_) => {}
             Hit::LobbyChat => self.focus_lobby_chat(),
+            Hit::SkipIntro => {
+                self.refresh_play_offset();
+                if let Some(game) = self.play.as_deref_mut().filter(|g| g.show_intro_skip()) {
+                    if self.scene.screen_is::<PlayScreen>() {
+                        game.skip(sound(&self.audio), self.play_offset);
+                    } else if self.scene.screen_is::<screens::mp_play::MpPlay>()
+                        && let Some(s) = &mut self.mp
+                    {
+                        s.ask_to_skip();
+                    }
+                }
+            }
             Hit::Key(code) => self.key_inner(code, false, None, Instant::now(), window),
             Hit::Tab(i) => self.goto_tab(i),
             Hit::MenuItem(i) => self.menu_click(i),
@@ -17767,8 +12823,8 @@ impl State {
             Hit::Guide(action) => self.guide_action(action),
             Hit::EditorHome(act) => {
                 let x = self.mouse_virtual().0;
-                let out = match &mut self.scene {
-                    Scene::EditorHome(home) => home.click(act, x, self.audio.as_ref()),
+                let out = match self.scene.screen_mut::<EditorHome>() {
+                    Some(h) => h.home.click(act, x, self.audio.as_ref()),
                     _ => editor::home::Out::None,
                 };
                 self.home_out(out);
@@ -17817,7 +12873,7 @@ impl State {
                 if let Some(p) = &mut self.player {
                     p.list.queue.push_back(track);
                     let n = p.list.queue.len();
-                    self.toast(tr!("queued: {n}"; n));
+                    self.toast(tr!("queued: {n}", "キュー: {n}", "в очереди: {n}"; [] [n]));
                 }
             }
             Hit::PlayerUnqueue(row) => {
@@ -17936,7 +12992,7 @@ impl State {
                         .find(|p| p.id == id)
                         .map(|p| p.name.clone())
                         .unwrap_or_default();
-                    self.toast(tr!("{name} is out of the lobby"; name));
+                    self.toast(tr!("{name} is out of the lobby", "{name} をロビーから外しました", "{name} убран из лобби"; [] [name]));
                 }
             }
             Hit::GiveHost(id) => {
@@ -18024,6 +13080,7 @@ impl State {
             Hit::SortList => self.open_sorts(),
             Hit::CollectionPick => self.open_collections(),
             Hit::PickRow(i) => self.pick_row(i),
+            Hit::PickRowMore(i) => self.open_collection_menu(i.saturating_sub(1)),
             Hit::ChoiceRow(i) => self.pick_choice(i),
             Hit::SongsFolder => self.browse_songs_folder(),
             // Taken when pressed (`mouse_button`).
@@ -18056,14 +13113,14 @@ impl State {
             Hit::ModPreset(k) => self.apply_mod_preset(k),
             Hit::ModPresetSave => self.start_preset_naming(),
             Hit::UniverseCell(row, col) => {
-                self.universe_setup = Some(multiverse::Setup::new(row, col));
+                self.universe_setup = Some(mod_setup::multiverse::Setup::new(row, col));
                 let dir = if self.modifiers_shift { -1 } else { 1 };
-                multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
+                mod_setup::multiverse::Setup::change(&mut self.cfg.universes, row, col, dir);
                 self.universe_action(multiverse::Action::Changed);
             }
             Hit::ShapeshiftCell(row, col) => {
-                self.shapeshift_setup = Some(shapeshift::Setup { row, col });
-                shapeshift::Setup::pick(&mut self.cfg.shapeshift, row, col);
+                self.shapeshift_setup = Some(mod_setup::shapeshift::Setup { row, col });
+                mod_setup::shapeshift::Setup::pick(&mut self.cfg.shapeshift, row, col);
                 self.shapeshift_changed();
             }
             Hit::ShapeshiftMove(dir) => {
@@ -18074,7 +13131,7 @@ impl State {
                 }
             }
             Hit::TactCell(col) => {
-                self.tact_setup = Some(tact::Setup::new(col));
+                self.tact_setup = Some(mod_setup::tact::Setup::new(col));
                 self.tact_changed(col);
             }
             Hit::CustomTab(i) => {
@@ -18083,12 +13140,16 @@ impl State {
                 }
             }
             Hit::UniversePreset(i) => {
-                let action =
-                    multiverse::Setup::load(&mut self.cfg.universes, &self.cfg.universe_presets, i);
+                let action = mod_setup::multiverse::Setup::load(
+                    &mut self.cfg.universes,
+                    &self.cfg.universe_presets,
+                    i,
+                );
                 self.universe_action(action);
             }
             Hit::UniversePresetDelete(i) => {
-                let action = multiverse::Setup::delete(&mut self.cfg.universe_presets, i);
+                let action =
+                    mod_setup::multiverse::Setup::delete(&mut self.cfg.universe_presets, i);
                 self.universe_action(action);
             }
             Hit::UpdateSet(i) => self.update_set(i),
@@ -18114,6 +13175,8 @@ impl State {
                         }
                     ));
                     self.call_loved(LovedAsk::Change(set, loved, version));
+                } else if let Some(ui::MenuAction::Collect(whole)) = action {
+                    self.start_collecting(whole);
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
                         self.update_set(i);
@@ -18136,9 +13199,9 @@ impl State {
                         let title = e.meta.title.clone();
                         let liked = self.select.toggle_like(e);
                         self.toast(if liked {
-                            tr!("liked {title}"; title)
+                            tr!("liked {title}", "{title}をお気に入りに追加", "в любимых: {title}"; [] [title])
                         } else {
-                            tr!("unliked {title}"; title)
+                            tr!("unliked {title}", "{title}をお気に入りから削除", "убрано из любимых: {title}"; [] [title])
                         });
                     }
                     self.select.menu = None;
@@ -18147,9 +13210,9 @@ impl State {
                         let title = e.meta.title.clone();
                         let off = self.select.toggle_map_skin(e);
                         self.toast(if off {
-                            tr!("{title}: your skin"; title)
+                            tr!("{title}: your skin", "{title}: 自分のスキン", "{title}: ваш скин"; [] [title])
                         } else {
-                            tr!("{title}: its own skin"; title)
+                            tr!("{title}: its own skin", "{title}: 譜面のスキン", "{title}: скин карты"; [] [title])
                         });
                     }
                     self.select.menu = None;
@@ -18184,8 +13247,8 @@ impl State {
                 self.adjust_setting(settings::ITEMS[i].1, dir, window);
             }
             Hit::PauseItem(i) => {
-                if let Scene::Play { game, .. } = &mut self.scene {
-                    game.paused = Some(i);
+                if let (true, Some(game)) = (self.scene.is_play(), self.play.as_deref_mut()) {
+                    game.set_pause_cursor(i);
                 }
                 self.pause_key(KeyCode::Enter);
             }
@@ -18199,166 +13262,12 @@ impl State {
     }
 }
 
-/// The graphics APIs to draw with, from the `graphics_api` setting. "auto" is DX12 on Windows
-/// (whatever the card: Vulkan drivers there have crashed on start, Intel's igvk64.dll on a UHD
-/// 630 among them) unless no card has it, and wgpu's choice (Vulkan first) elsewhere. After a
-/// Windows start that never got going (`gpu_start`) the setting itself becomes "vulkan".
-pub fn graphics_backends(api: &str) -> wgpu::Backends {
-    match api {
-        "vulkan" => wgpu::Backends::VULKAN,
-        "dx12" => wgpu::Backends::DX12,
-        "gl" => wgpu::Backends::GL,
-        "metal" => wgpu::Backends::METAL,
-        _ => auto_backends(),
-    }
-}
-
-#[cfg(windows)]
-fn auto_backends() -> wgpu::Backends {
-    // DXGI lists the cards without touching their Vulkan drivers.
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::DX12,
-        ..wgpu::InstanceDescriptor::new_without_display_handle()
-    });
-    let cards = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12))
-        .iter()
-        .filter(|a| a.get_info().device_type != wgpu::DeviceType::Cpu)
-        .count();
-    if cards > 0 {
-        return wgpu::Backends::DX12;
-    }
-    eprintln!("graphics: no DX12 graphics card: wgpu's choice");
-    wgpu::Backends::all()
-}
-
-#[cfg(not(windows))]
-fn auto_backends() -> wgpu::Backends {
-    wgpu::Backends::all()
-}
-
-/// A start of the graphics that crashes (in the driver, where nothing of ours runs) leaves its
-/// mark behind: `gpu-start` in the data folder, written before the graphics start and removed
-/// once frames have been going for a few seconds. The next start finds it and takes the other
-/// way (`auto_backends`).
-mod gpu_start {
-    const FILE: &str = "gpu-start";
-    /// Frames drawn before the start counts as having worked.
-    pub const FRAMES: u32 = 180;
-
-    fn path() -> Option<std::path::PathBuf> {
-        crate::config::data_dir().map(|d| d.join(FILE))
-    }
-
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn failed_last_time() -> bool {
-        path().is_some_and(|p| p.exists())
-    }
-
-    pub fn starting() {
-        if let Some(p) = path() {
-            let _ = std::fs::create_dir_all(p.parent().unwrap_or(&p));
-            let _ = std::fs::write(
-                p,
-                "the graphics are starting; this goes once they're going\n",
-            );
-        }
-    }
-
-    pub fn going() {
-        if let Some(p) = path() {
-            let _ = std::fs::remove_file(p);
-        }
-    }
-
-    /// The mark of a crash in an overlay or capture hook while drawing with Vulkan on "auto"
-    /// (`native_crashes`): the next start takes DX12.
-    const HOOK_FILE: &str = "vulkan-hook-crash";
-
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn hook_crashed() {
-        if let Some(d) = crate::config::data_dir() {
-            let _ = std::fs::write(
-                d.join(HOOK_FILE),
-                "a hook crashed the game drawing with Vulkan; the next start takes DX12\n",
-            );
-        }
-    }
-
-    /// Whether the last run ended that way (and forgets it).
-    #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn hook_crashed_last_time() -> bool {
-        crate::config::data_dir().is_some_and(|d| std::fs::remove_file(d.join(HOOK_FILE)).is_ok())
-    }
-}
-
-/// Programs that put their own code into the game's drawing (game capture, overlays) and
-/// sometimes crash there, as (module, what it is). OBS's game capture crashed a game drawing
-/// with Vulkan: graphics-hook64.dll, hooked into the present, made a D3D11 device for its shared
-/// texture and dxcore.dll read 0xffffffffffffffff.
-const DRAWING_HOOKS: [(&str, &str); 4] = [
-    ("graphics-hook64.dll", "OBS's game capture"),
-    ("gameoverlayrenderer64.dll", "the Steam overlay"),
-    ("discordhook64.dll", "the Discord overlay"),
-    ("rtsshooks64.dll", "RivaTuner (RTSS)"),
-];
-
-/// The first of `DRAWING_HOOKS` in a crash's `frames:` line.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn drawing_hook(frames: &str) -> Option<(&'static str, &'static str)> {
-    let frames = frames.to_ascii_lowercase();
-    frames.split_whitespace().find_map(|f| {
-        DRAWING_HOOKS
-            .iter()
-            .find(|(dll, _)| f.split('+').next() == Some(dll))
-            .copied()
-    })
-}
-
-/// What the crash window says to do about a crash in `who`.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn drawing_hook_advice(who: &str, dll: &str, to_dx12: bool, vulkan: bool) -> String {
-    let mut out = format!(
-        "It crashed inside {who} ({dll}), which hooks into the game's drawing, not in the game's own code."
-    );
-    if to_dx12 {
-        out.push_str(
-            " The next start draws with DX12 instead of Vulkan, which usually gets along with it.",
-        );
-    } else if vulkan {
-        out.push_str(" Picking DX12 in Settings > Video > Renderer may avoid it.");
-    }
-    if dll == "graphics-hook64.dll" {
-        out.push_str(" If it happens again, capture the game in OBS with Window Capture instead of Game Capture.");
-    } else {
-        out.push_str(" If it happens again, turning that overlay off avoids it.");
-    }
-    out
-}
-
-/// Drawing with Vulkan because `graphics_api` is "auto": a crash in a hook then moves the next
-/// start to DX12.
-#[cfg_attr(not(windows), allow(dead_code))]
-static VULKAN_ON_AUTO: AtomicBool = AtomicBool::new(false);
-/// Drawing with Vulkan at all (for the crash window's advice).
-#[cfg_attr(not(windows), allow(dead_code))]
-static VULKAN: AtomicBool = AtomicBool::new(false);
-
 /// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
 const STATUS_ROUNDS: usize = 60;
 const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
-/// Whether `scene` shows its own map's background, which the song select's preview leaves be.
-fn shows_own_background(scene: &Scene) -> bool {
-    match scene {
-        Scene::Editor(_) | Scene::Loading { .. } | Scene::Play { .. } | Scene::Results { .. } => {
-            true
-        }
-        Scene::Settings { prev } => shows_own_background(prev),
-        _ => false,
-    }
-}
 
 /// How long the quick retry key is held for the map to restart (ms).
 /// How long the exit question takes to slide in.
@@ -18371,2110 +13280,3 @@ const REPLAY_SPEEDS: [f64; 7] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 /// The capture name of an F12 screenshot (scripted runs name theirs).
 const SCREENSHOT: &str = "screenshot";
-
-/// Puts an F12 screenshot on the clipboard, saves it as the next free `taiko-rs-N.png` in the
-/// Screenshots folder, or both (`cfg.screenshot_to`), off the render thread (the encoding takes
-/// a moment), and says where it went.
-fn save_screenshot(state: &Arc<Mutex<State>>, w: u32, h: u32, rgb: Vec<u8>) {
-    let state = state.clone();
-    {
-        let mut s = lock(&state);
-        s.last_shot = Some(Arc::new((w, h, rgb.clone())));
-        s.social.shot_ready = true;
-    }
-    std::thread::spawn(move || {
-        let to = lock(&state).cfg.screenshot_to;
-        let copied = to.clipboard() && clipboard::set_image(w, h, &rgb);
-        let text = if !to.folder() {
-            if copied {
-                "screenshot copied".to_string()
-            } else {
-                "screenshot failed: no clipboard to copy to".to_string()
-            }
-        } else {
-            let saved = (|| {
-                let dir =
-                    config::own_dir("Screenshots").ok_or("no folder to keep screenshots in")?;
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-                let path = (1..)
-                    .map(|n| dir.join(format!("taiko-rs-{n}.png")))
-                    .find(|p| !p.exists())
-                    .unwrap();
-                image::save_buffer(&path, &rgb, w, h, image::ColorType::Rgb8)
-                    .map_err(|e| e.to_string())?;
-                Ok::<_, String>(path)
-            })();
-            match saved {
-                Ok(path) => {
-                    let name = path
-                        .file_name()
-                        .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-                    format!(
-                        "screenshot {}saved: Screenshots/{name}",
-                        if copied { "copied and " } else { "" }
-                    )
-                }
-                Err(e) => format!(
-                    "screenshot {}failed: {e}",
-                    if copied { "copied, saving " } else { "" }
-                ),
-            }
-        };
-        eprintln!("{text}");
-        lock(&state).toast = Some(Toast {
-            text,
-            until: Instant::now() + Duration::from_millis(4000),
-        });
-    });
-}
-
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
-    // A panic elsewhere shouldn't take the game down with a poisoned lock.
-    state.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// Sleeps until `deadline` with sub-100µs precision: coarse sleep, then spin the last stretch.
-fn sleep_until(deadline: Instant) {
-    const SPIN: Duration = Duration::from_micros(500);
-    loop {
-        let now = Instant::now();
-        if now >= deadline {
-            return;
-        }
-        let left = deadline - now;
-        if left > SPIN {
-            std::thread::sleep(left - SPIN);
-        } else {
-            std::hint::spin_loop();
-        }
-    }
-}
-
-/// The render loop. Order matters for latency: (under vsync) optionally delay, wait for the
-/// swapchain, and only then sample the clock and build the frame.
-/// What the render thread tells the window thread.
-enum UserEvent {
-    /// The render thread stopped (quit requested or screenshot run finished).
-    Stopped,
-    /// Gameplay wants the pointer hidden (it's been still a second) or back.
-    HideCursor(bool),
-    /// Files dragged over the window, on Wayland (winit reports them itself elsewhere).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    FileDrag(FileDrag),
-    /// A window size was picked (`State::window_request`).
-    WindowRequest,
-    /// Android: the on-screen keyboard typed something (or came up or went away).
-    #[cfg(target_os = "android")]
-    Typed(android::Typed),
-    /// A `taiko-rs://` link opened while the game runs (`link::listen`).
-    #[cfg_attr(target_os = "android", allow(dead_code))]
-    Link(link::Link),
-    /// A map archive opened from the file manager while the game runs (`link::listen`).
-    #[cfg_attr(target_os = "android", allow(dead_code))]
-    Open(PathBuf),
-}
-
-/// Files dragged over the window, or dropped on it.
-pub(crate) enum FileDrag {
-    Hover,
-    Left,
-    Drop(Vec<PathBuf>),
-}
-
-fn render_loop(state: Arc<Mutex<State>>, mut renderer: Renderer, proxy: EventLoopProxy<UserEvent>) {
-    let mut canvas = Canvas::default();
-    let mut export_canvas = Canvas::default();
-    let mut blend = video::Blend::default();
-    let mut next_frame = Instant::now();
-    let mut last_sample: Option<Instant> = None;
-    let mut requested_present: Option<PresentChoice> = None;
-    let mut pacer = clock::VsyncPacer::default();
-    // TAIKO_NO_PACE=1: draw notes for when each image was handed out, as before (to compare).
-    let pace = std::env::var_os("TAIKO_NO_PACE").is_none();
-    let mut waits = (0.0, 0.0, 0.0);
-    let mut cursor_hidden = false;
-    // TAIKO_PROFILE=1: every 2 s, print where frame time goes (build = CPU under the state lock).
-    let profile = std::env::var_os("TAIKO_PROFILE").is_some();
-    // The waits are only measured for the profile and the smoothness report: reading the clock
-    // can cost microseconds a time (HPET).
-    let timing = profile || std::env::var_os("TAIKO_STATS").is_some();
-    // TAIKO_HITCH: every frame over 10 ms, split into where its time went.
-    let hitch = std::env::var_os("TAIKO_HITCH").is_some();
-    let mut h_end = Instant::now();
-    let (mut prof_start, mut prof_n, mut prof_build, mut prof_submit, mut prof_shapes) =
-        (Instant::now(), 0u32, 0.0f64, 0.0f64, 0usize);
-    let (mut prof_acquire, mut prof_acquire_max) = (0.0f64, 0.0f64);
-    // TAIKO_LAYOUT=1: print each text that doesn't fit (once), see `debug::layout_problems`.
-    canvas.audit = std::env::var_os("TAIKO_LAYOUT").is_some();
-    let mut layout_seen = std::collections::HashSet::new();
-    let mut frames = 0u32;
-    loop {
-        frames = frames.saturating_add(1);
-        if frames == gpu_start::FRAMES {
-            gpu_start::going();
-        }
-        let (
-            wanted,
-            cap,
-            refresh_hz,
-            surface,
-            size,
-            atlas,
-            letterbox,
-            safe,
-            pixel_scale,
-            avatar_uploads,
-            picture_uploads,
-        ) = {
-            let mut s = lock(&state);
-            if s.quit {
-                // In game.log: the game was closed on purpose, not lost.
-                eprintln!(
-                    "closing: quit from the game ({})",
-                    if s.quit_asked {
-                        "answered the exit question"
-                    } else {
-                        "no question asked"
-                    }
-                );
-                break;
-            }
-            s.poll_skin();
-            let surface = s.surface_swap.take();
-            let size = s.want_size.take();
-            let letterbox = s.sync_letterbox();
-            let safe = s.safe_area();
-            if matches!(s.scene, Scene::Play { .. })
-                && let Some(sm) = &mut s.smooth
-            {
-                sm.sample_waits(waits.0, waits.1, waits.2);
-            }
-            (
-                s.wanted_present(),
-                s.frame_cap(),
-                s.refresh_hz,
-                surface,
-                size,
-                s.sprites_upload.take(),
-                letterbox,
-                safe,
-                if s.cfg.half_resolution { 2 } else { 1 },
-                s.avatars.take_uploads(),
-                s.pictures.take_uploads(),
-            )
-        };
-        // GPU waits and uploads never hold the input/state mutex.
-        if let Some((surface, w, h)) = surface {
-            renderer.set_surface(surface, w, h);
-        }
-        if let Some((w, h)) = size {
-            renderer.resize(w, h);
-        }
-        renderer.letterbox = letterbox;
-        renderer.safe = safe;
-        if requested_present != Some(wanted) {
-            renderer.set_present(wanted);
-            requested_present = Some(wanted);
-            lock(&state).present = renderer.present;
-        }
-        let present = renderer.present;
-        renderer.pixel_scale = pixel_scale;
-        for (slot, rgba) in avatar_uploads {
-            renderer.set_avatar(slot, &rgba);
-        }
-        for (slot, rgba) in picture_uploads {
-            renderer.set_picture(slot, &rgba);
-        }
-        if let Some(atlas) = atlas {
-            renderer.set_sprites(&atlas);
-            for c in [&mut canvas, &mut export_canvas] {
-                c.sprites = render::PerSprite(atlas.sprites.map(|s| s.map(|(_, size)| size)));
-                c.skin_layout = atlas.layout;
-            }
-        }
-
-        let h_top = Instant::now();
-        let t0 = timing.then(Instant::now);
-        let Some(frame) = renderer.acquire() else {
-            // In the background nothing is drawn, but the music is still looked after: the next
-            // song of the player comes from the frame. A few times a second is plenty.
-            let mut s = lock(&state);
-            if s.backgrounded {
-                if s.music_goes_on() {
-                    s.build_frame(&mut canvas, Instant::now(), renderer.virtual_width());
-                }
-                drop(s);
-                // Often enough that the media controls' presses feel immediate.
-                std::thread::sleep(Duration::from_millis(60));
-            } else {
-                drop(s);
-                std::thread::sleep(Duration::from_millis(2));
-            }
-            continue;
-        };
-        let acquired = Instant::now();
-        let now = acquired;
-        // With vsync the notes are drawn for this frame's place on the refresh grid; the game
-        // itself (and judging) runs on the real clock.
-        let pace_shift_ms = if present == PresentChoice::Fifo && pace {
-            let t = pacer.frame_time(acquired, refresh_hz);
-            if t >= acquired {
-                (t - acquired).as_secs_f64() * 1000.0
-            } else {
-                -(acquired - t).as_secs_f64() * 1000.0
-            }
-        } else {
-            pacer.reset();
-            0.0
-        };
-        // A video export renders offscreen for a while each UI frame (which shows its progress).
-        let exporting = Instant::now();
-        while exporting.elapsed() < Duration::from_millis(30) {
-            let job = lock(&state).export_frame(&mut export_canvas);
-            let Some(ExportView {
-                size: (w, h),
-                tx,
-                brightness,
-                clear,
-                blended,
-                last,
-            }) = job
-            else {
-                break;
-            };
-            let shown = renderer.bg_brightness;
-            renderer.bg_brightness = brightness;
-            let vw = export_canvas.width.max(1.0);
-            let clips: Vec<(std::ops::Range<usize>, [f32; 4])> = export_canvas
-                .clips
-                .iter()
-                .map(|(r, [x, y, cw, ch])| {
-                    (
-                        r.clone(),
-                        [
-                            x / vw,
-                            y / render::VIRTUAL_HEIGHT,
-                            cw / vw,
-                            ch / render::VIRTUAL_HEIGHT,
-                        ],
-                    )
-                })
-                .collect();
-            let frame = renderer.render_offscreen(&export_canvas.shapes, &clips, w, h, clear);
-            renderer.bg_brightness = shown;
-            let Some(px) = frame else { break };
-            // Motion blur: the frame is the average of its views.
-            let px = if blended {
-                blend.add(&px);
-                if !last {
-                    continue;
-                }
-                blend.take()
-            } else {
-                px
-            };
-            if tx.send(px).is_err() {
-                break;
-            }
-        }
-        let h_lock = Instant::now();
-        let h_build;
-        let h_built;
-        let (capture, clip, backdrop, background) = {
-            let mut s = lock(&state);
-            h_build = Instant::now();
-            // Video export frames above are drawn without the grid; the screen's frame with it.
-            render::set_text_grid(renderer.text_grid());
-            render::set_text_bias(renderer.text_bias());
-            render::set_frame_time(Some(now));
-            s.frame_acquired = Some(acquired);
-            s.pace_shift_ms = pace_shift_ms;
-            s.seen_refresh_ms = pacer.refresh_ms();
-            let capture = s.build_frame(&mut canvas, now, renderer.virtual_width());
-            h_built = Instant::now();
-            if let Some([x, y, _, h]) = safe {
-                // The margins in the interface's units.
-                let (side, edge) = (x as f32, y as f32);
-                let k = render::VIRTUAL_HEIGHT / h.max(1) as f32;
-                canvas.bleed([side * k, edge * k, side * k, edge * k]);
-            }
-            render::set_frame_time(None);
-            render::set_text_grid(None);
-            if canvas.audit {
-                for p in debug::layout_problems(&canvas) {
-                    if layout_seen.insert(p.clone()) {
-                        eprintln!("layout: {p}");
-                    }
-                }
-            }
-            // Picked from a scripted key or a frame: the window thread applies it.
-            if s.window_request.is_some() {
-                let _ = proxy.send_event(UserEvent::WindowRequest);
-            }
-            let hide = s.cursor_hidden(now);
-            if hide != cursor_hidden {
-                cursor_hidden = hide;
-                // The pointer resting on an edge of the area goes away with its frame.
-                if hide {
-                    s.hover = None;
-                }
-                let _ = proxy.send_event(UserEvent::HideCursor(hide));
-            }
-            let background = s.preview.bg_upload.take();
-            if background.is_some() {
-                s.bg_changed = Some(Instant::now());
-            }
-            renderer.bg_brightness = s.bg_brightness;
-            renderer.bg_blur = s.idle.amount();
-            // A new background cross-fades from the previous one.
-            let fade = if s.on_menu() {
-                MENU_BACKGROUND_FADE_MS
-            } else {
-                300.0
-            };
-            renderer.bg_mix = s
-                .bg_changed
-                .map(|t| render::progress(t, fade))
-                .unwrap_or(1.0);
-            (
-                capture,
-                s.frame_clip.take(),
-                s.backdrop(s.dims_background()),
-                background,
-            )
-        };
-        if let Some(image) = background {
-            renderer.set_background(image);
-        }
-        // The playfield / preview clip (fractions) plus the lists' (virtual units).
-        let vw = canvas.width.max(1.0);
-        let to_fraction = |[x, y, w, h]: [f32; 4]| {
-            [
-                x / vw,
-                y / render::VIRTUAL_HEIGHT,
-                w / vw,
-                h / render::VIRTUAL_HEIGHT,
-            ]
-        };
-        let opaque = canvas
-            .opaque_rect(clip.as_ref().map(|(range, a)| {
-                (
-                    range,
-                    [
-                        a.x * vw,
-                        a.y * render::VIRTUAL_HEIGHT,
-                        a.w * vw,
-                        a.h * render::VIRTUAL_HEIGHT,
-                    ],
-                )
-            }))
-            .map(to_fraction);
-        let mut clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clip
-            .into_iter()
-            .map(|(range, a)| (range, [a.x, a.y, a.w, a.h]))
-            .collect();
-        clips.extend(
-            canvas
-                .clips
-                .drain(..)
-                .map(|(range, r)| (range, to_fraction(r))),
-        );
-        renderer.disc = canvas.disc.map(|d| (d, vw));
-        renderer.glitch = canvas.glitch;
-        let t1 = timing.then(Instant::now);
-        let shot = renderer.submit(
-            frame,
-            &canvas.shapes,
-            backdrop,
-            capture.is_some(),
-            clips,
-            opaque,
-        );
-        if let (Some(t0), Some(t1)) = (t0, t1) {
-            let presented = Instant::now();
-            // Clock-sample-to-next-refresh: approximates how stale the previous frame was when shown.
-            let sample_age = last_sample
-                .map(|s| (acquired - s).as_secs_f64() * 1000.0)
-                .unwrap_or(0.0);
-            last_sample = Some(now);
-            waits = (
-                (acquired - t0).as_secs_f64() * 1000.0,
-                (presented - t1).as_secs_f64() * 1000.0,
-                sample_age,
-            );
-            if profile {
-                prof_n += 1;
-                prof_acquire += waits.0;
-                prof_acquire_max = prof_acquire_max.max(waits.0);
-                prof_build += (t1 - now).as_secs_f64() * 1000.0;
-                prof_submit += (presented - t1).as_secs_f64() * 1000.0;
-                prof_shapes = prof_shapes.max(canvas.shapes.len());
-                if prof_start.elapsed() >= Duration::from_secs(2) {
-                    let n = prof_n.max(1) as f64;
-                    let gpu = renderer
-                        .take_gpu_ms()
-                        .map(|ms| format!("  gpu {ms:.2} ms"))
-                        .unwrap_or_default();
-                    // Overdraw: the pixels this frame's quads cover, in screens (TAIKO_PROFILE=shapes
-                    // also lists the biggest).
-                    let ppu = renderer.size().1 as f32 / render::VIRTUAL_HEIGHT;
-                    let area = |sh: &render::Shape| {
-                        let pad = 1.5 + sh.params[2].max(0.0) * ppu;
-                        (sh.half[0] * ppu + pad) * 2.0 * (sh.half[1] * ppu + pad) * 2.0
-                    };
-                    let screen = (renderer.size().0 * renderer.size().1).max(1) as f32;
-                    let cover: f32 = canvas.shapes.iter().map(area).sum::<f32>() / screen;
-                    eprintln!(
-                        "profile: {:.0} fps  acquire {:.2} ms (max {:.2})  build {:.2} ms  submit {:.2} ms  shapes {}{gpu}  cover {cover:.2}",
-                        n / prof_start.elapsed().as_secs_f64(),
-                        prof_acquire / n,
-                        prof_acquire_max,
-                        prof_build / n,
-                        prof_submit / n,
-                        prof_shapes
-                    );
-                    if std::env::var("TAIKO_PROFILE").is_ok_and(|v| v == "shapes") {
-                        let mut big: Vec<&render::Shape> = canvas.shapes.iter().collect();
-                        big.sort_by(|a, b| area(b).total_cmp(&area(a)));
-                        for sh in big.iter().take(12) {
-                            eprintln!(
-                                "  {:.3}  c {:?} h {:?} fill {:?} border {:?} p {:?}",
-                                area(sh) / screen,
-                                sh.center,
-                                sh.half,
-                                sh.fill,
-                                sh.border,
-                                sh.params
-                            );
-                        }
-                    }
-                    (prof_start, prof_n, prof_build, prof_submit, prof_shapes) =
-                        (Instant::now(), 0, 0.0, 0.0, 0);
-                    (prof_acquire, prof_acquire_max) = (0.0, 0.0);
-                }
-            }
-        }
-        if let (Some(name), Some((w, h, rgb))) = (capture, shot) {
-            if name == SCREENSHOT {
-                save_screenshot(&state, w, h, rgb);
-            } else if let Some(dir) = lock(&state).shots.as_ref().map(|p| p.dir.clone()) {
-                let path = dir.join(name);
-                match debug::write_png(&path, w, h, &rgb) {
-                    Ok(()) => eprintln!("saved {}", path.display()),
-                    Err(e) => eprintln!("screenshot failed: {e}"),
-                }
-            }
-        }
-
-        if hitch {
-            let ms = |a: Instant, b: Instant| b.saturating_duration_since(a).as_secs_f64() * 1000.0;
-            let done = Instant::now();
-            if ms(h_end, done) > 10.0 {
-                eprintln!(
-                    "hitch {:.1} ms: sleep/loop {:.1} acquire {:.1} export {:.1} lock {:.1} build {:.1} after-build {:.1} submit {:.1}",
-                    ms(h_end, done),
-                    ms(h_end, h_top),
-                    ms(h_top, acquired),
-                    ms(acquired, h_lock),
-                    ms(h_lock, h_build),
-                    ms(h_build, h_built),
-                    ms(h_built, t1.unwrap_or(done)),
-                    ms(t1.unwrap_or(done), done)
-                );
-            }
-            h_end = done;
-        }
-        if present != PresentChoice::Fifo && cap > 0 {
-            // Fixed grid so frames are evenly spaced; resync if we fell behind.
-            let period = Duration::from_secs_f64(1.0 / cap as f64);
-            next_frame += period;
-            let late = Instant::now();
-            if next_frame < late {
-                next_frame = late + period;
-            }
-            sleep_until(next_frame);
-        }
-    }
-    // Closed before the frames counted it: the start went fine all the same.
-    gpu_start::going();
-    let _ = proxy.send_event(UserEvent::Stopped);
-}
-
-struct App {
-    state: Arc<Mutex<State>>,
-    /// Last cursor icon set, so it is only changed when the hover target changes.
-    cursor: CursorIcon,
-    /// The pixel pointer (None if the platform refused it: the system one is used).
-    cursors: Option<cursor::Cursors>,
-    /// The accent `cursors` were made in.
-    cursor_accent: u32,
-    cursor_hidden: bool,
-    window: Option<Arc<Window>>,
-    /// The window takes input methods (Japanese, ...): only while text is being typed, so a
-    /// song's keys never wait on one.
-    ime: bool,
-    /// Kept to make a surface for each new window (Android, after coming back from the background).
-    instance: Option<wgpu::Instance>,
-    render_thread: Option<JoinHandle<()>>,
-    proxy: EventLoopProxy<UserEvent>,
-}
-
-impl App {
-    fn set_cursor(&self, icon: CursorIcon) {
-        let Some(w) = &self.window else { return };
-        match &self.cursors {
-            Some(c) => w.set_cursor(c.get(icon)),
-            None => w.set_cursor(icon),
-        }
-    }
-}
-
-impl App {
-    fn handle_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
-        // A new UI colour: the pointer is drawn in it too.
-        if self.cursors.is_some()
-            && self.cursor_accent != render::accent()
-            && let Some(window) = &self.window
-        {
-            self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
-            self.cursor_accent = render::accent();
-            self.set_cursor(self.cursor);
-        }
-        match event {
-            WindowEvent::CloseRequested => lock(&self.state).ask_quit(),
-            WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
-            WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
-            WindowEvent::DroppedFile(path) => {
-                lock(&self.state).file_drag(FileDrag::Drop(vec![path]))
-            }
-            WindowEvent::Resized(size) => self.resized(size),
-            WindowEvent::KeyboardInput {
-                event,
-                is_synthetic,
-                ..
-            } => {
-                // Timestamp before anything else, including taking the lock.
-                let at = Instant::now();
-                if event.state == ElementState::Released
-                    && let PhysicalKey::Code(code) = event.physical_key
-                {
-                    lock(&self.state).key_released(code);
-                    return;
-                }
-                // Synthetic presses are keys already held when the window gets focus (the Tab of
-                // an Alt+Tab back into the game): not real presses.
-                if event.state != ElementState::Pressed || is_synthetic {
-                    return;
-                }
-                let code = match event.physical_key {
-                    PhysicalKey::Code(code) => code,
-                    // Android's Back button / gesture has no key code, only this name; it does
-                    // what Escape does (pause, close, go back).
-                    _ if event.logical_key == Key::Named(NamedKey::BrowserBack) => KeyCode::Escape,
-                    _ => return,
-                };
-                let mut s = lock(&self.state);
-                // Alt+Tab (switching windows) isn't a Tab press for the game; nor is anything
-                // that arrives while another window has focus.
-                if !s.focused || (s.modifiers_alt && code == KeyCode::Tab) {
-                    return;
-                }
-                if ime_has_key(&event.logical_key, &s.ime_preedit) {
-                    return;
-                }
-                s.key(
-                    code,
-                    event.repeat,
-                    event.text.as_deref(),
-                    at,
-                    self.window.as_deref(),
-                );
-            }
-            WindowEvent::Ime(ime) => {
-                let mut s = lock(&self.state);
-                match ime {
-                    winit::event::Ime::Preedit(text, _) => s.ime_preedit = text,
-                    winit::event::Ime::Commit(text) => {
-                        s.ime_preedit.clear();
-                        // Typed like the on-screen keyboard's text (Android): a key with no
-                        // meaning of its own, carrying each character.
-                        let at = Instant::now();
-                        for ch in text.chars().filter(|c| !c.is_control()) {
-                            s.key(
-                                KeyCode::Lang1,
-                                false,
-                                Some(&ch.to_string()),
-                                at,
-                                self.window.as_deref(),
-                            );
-                        }
-                    }
-                    winit::event::Ime::Enabled | winit::event::Ime::Disabled => {
-                        s.ime_preedit.clear()
-                    }
-                }
-            }
-            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => self.read_monitor(),
-            WindowEvent::Focused(true) => {
-                self.read_monitor();
-                let mut s = lock(&self.state);
-                s.focused = true;
-                s.focus_seen = true;
-                s.apply_volume();
-            }
-            WindowEvent::ModifiersChanged(m) => {
-                let mut s = lock(&self.state);
-                s.modifiers_shift = m.state().shift_key();
-                s.modifiers_ctrl = m.state().control_key();
-                s.modifiers_alt = m.state().alt_key();
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                let mut s = lock(&self.state);
-                s.wheel_acc += match delta {
-                    winit::event::MouseScrollDelta::LineDelta(_, y) => y,
-                    // Touchpads report pixels; ~50 px per notch feels like a wheel.
-                    winit::event::MouseScrollDelta::PixelDelta(p) => p.y as f32 / 50.0,
-                };
-                let notches = s.wheel_acc.trunc();
-                s.wheel_acc -= notches;
-                s.wheel(notches as i32);
-            }
-            WindowEvent::MouseInput {
-                state: button_state,
-                button: winit::event::MouseButton::Left,
-                ..
-            } => {
-                lock(&self.state).mouse_button(
-                    button_state == ElementState::Pressed,
-                    self.window.as_deref(),
-                );
-            }
-            WindowEvent::MouseInput {
-                state: button_state,
-                button: winit::event::MouseButton::Right,
-                ..
-            } => {
-                lock(&self.state).right_button(button_state == ElementState::Pressed);
-            }
-            WindowEvent::MouseInput {
-                state: button_state,
-                button: winit::event::MouseButton::Middle,
-                ..
-            } => {
-                lock(&self.state).middle_button(button_state == ElementState::Pressed);
-            }
-            WindowEvent::Touch(t) => {
-                let at = Instant::now();
-                let mut s = lock(&self.state);
-                let (x, y) = s.to_game(t.location.x, t.location.y);
-                s.touch(t.id, t.phase, x, y, at, self.window.as_deref());
-            }
-            WindowEvent::CursorMoved { position, .. } => {
-                let icon = {
-                    let mut s = lock(&self.state);
-                    let (x, y) = s.to_game(position.x, position.y);
-                    s.mouse_moved(x, y)
-                };
-                if icon != self.cursor {
-                    self.cursor = icon;
-                    self.set_cursor(icon);
-                }
-                // Moving brings a hidden pointer back at once, not a frame later.
-                if self.cursor_hidden && !lock(&self.state).cursor_hidden(Instant::now()) {
-                    self.cursor_hidden = false;
-                    if let Some(w) = &self.window {
-                        w.set_cursor_visible(true);
-                    }
-                }
-            }
-            WindowEvent::CursorLeft { .. } => lock(&self.state).mouse_left(),
-            WindowEvent::Focused(false) => {
-                // Losing focus mid-song (alt-tab, notification) pauses instead of failing the map.
-                let mut guard = lock(&self.state);
-                let s = &mut *guard;
-                s.focused = false;
-                s.apply_volume();
-                // A word left half composed is dropped with the focus: kept, it would hold every
-                // key for the input method (`ime_has_key`) after coming back.
-                s.ime_preedit.clear();
-                // The release may happen in another window.
-                s.retry_hold = None;
-                // The release may happen in another window.
-                s.right_scroll = false;
-                // Alt is released in the other window; don't keep it "held" here.
-                s.modifiers_alt = false;
-                if let (Scene::Play { game, .. }, false) = (&mut s.scene, s.auto) {
-                    game.pause(s.audio.as_ref());
-                }
-            }
-            _ => {}
-        }
-        if self.render_thread.is_none() && lock(&self.state).quit {
-            event_loop.exit();
-        }
-    }
-
-    /// The screen the window is on: its size, modes and refresh. Read again as the window is
-    /// resized, moved or focused: on Wayland it isn't known until the window is on screen, and
-    /// the window can go to another one.
-    fn read_monitor(&self) {
-        let Some(m) = self.window.as_ref().and_then(|w| w.current_monitor()) else {
-            return;
-        };
-        let mut s = lock(&self.state);
-        s.monitor_size = (m.size().width, m.size().height);
-        let modes: Vec<(u32, u32)> = m
-            .video_modes()
-            .map(|v| (v.size().width, v.size().height))
-            .collect();
-        if !modes.is_empty() {
-            s.monitor_modes = modes;
-        }
-        if let Some(hz) = m
-            .refresh_rate_millihertz()
-            .map(|mhz| mhz as f64 / 1000.0)
-            .filter(|&hz| hz >= 24.0)
-            && (hz - s.refresh_hz).abs() > 0.01
-        {
-            eprintln!("screen refresh {hz:.2} Hz");
-            s.refresh_hz = hz;
-            s.refresh_status();
-        }
-    }
-
-    /// The window's new size (a resize event, or a size requested and granted at once).
-    fn resized(&mut self, size: winit::dpi::PhysicalSize<u32>) {
-        self.read_monitor();
-        let mut s = lock(&self.state);
-        s.want_size = Some((size.width, size.height));
-        s.set_window(size.width as f32, size.height as f32);
-        s.refresh_presets();
-        // Out of fullscreen, the size is remembered for the next start (saved once it stops
-        // changing: dragging an edge resizes many times a second).
-        if !s.fullscreen && size.width > 0 && size.height > 0 {
-            s.cfg.window_size = Some((size.width, size.height));
-            s.window_resized_at = Some(Instant::now());
-        }
-    }
-
-    /// A window size picked in settings: out of fullscreen if need be, then that size.
-    /// Lets input methods in while text is being typed, and keeps them out otherwise.
-    #[cfg(not(target_os = "android"))]
-    fn update_ime(&mut self) {
-        let Some(window) = &self.window else { return };
-        let mut s = lock(&self.state);
-        let want = s.takes_text() && !s.quit_asked && s.splash.is_none();
-        if want != self.ime {
-            self.ime = want;
-            window.set_ime_allowed(want);
-            if want {
-                // Its candidates go by where the composed text is shown (`ime_preedit`).
-                let scale = window.inner_size().height as f64 / render::VIRTUAL_HEIGHT as f64;
-                let x = window.inner_size().width as f64 / 2.0;
-                window.set_ime_cursor_area(
-                    winit::dpi::PhysicalPosition::new(x, 344.0 * scale),
-                    winit::dpi::PhysicalSize::new(1.0, 24.0 * scale),
-                );
-            } else {
-                s.ime_preedit.clear();
-            }
-        }
-    }
-
-    fn apply_window_request(&mut self) {
-        let Some(window) = &self.window else { return };
-        let mut s = lock(&self.state);
-        let Some((w, h)) = s.window_request.take() else {
-            return;
-        };
-        if window.fullscreen().is_some() {
-            window.set_fullscreen(None);
-            s.fullscreen = false;
-            s.cfg.fullscreen = false;
-        }
-        let granted = window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
-        s.cfg.window_size = Some((w, h));
-        s.cfg.save();
-        drop(s);
-        // Granted at once (Wayland): no resize event comes for it.
-        if let Some(size) = granted {
-            self.resized(size);
-        }
-    }
-}
-
-impl ApplicationHandler<UserEvent> for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(window) = &self.window {
-            // Back from the background (Android): the old window is gone, draw into the new one.
-            let Some(instance) = &self.instance else {
-                return;
-            };
-            let size = window.inner_size();
-            match instance.create_surface(window.clone()) {
-                Ok(surface) => {
-                    let mut s = lock(&self.state);
-                    s.surface_swap = Some((Some(surface), size.width, size.height));
-                    s.set_window(size.width as f32, size.height as f32);
-                    s.set_background(false);
-                }
-                Err(e) => eprintln!("can't draw to the new window: {e}"),
-            }
-            return;
-        }
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-        let mut attrs = Window::default_attributes()
-            .with_title("taiko.rs")
-            .with_window_icon(logo::window_icon())
-            .with_min_inner_size(winit::dpi::LogicalSize::new(MIN_WINDOW.0, MIN_WINDOW.1))
-            .with_fullscreen(
-                lock(&self.state)
-                    .cfg
-                    .fullscreen
-                    .then_some(Fullscreen::Borderless(None)),
-            );
-        #[cfg(target_os = "linux")]
-        {
-            use winit::platform::wayland::WindowAttributesExtWayland;
-            attrs = attrs.with_name("taiko-rs", "taiko-rs");
-        }
-        let attrs = match lock(&self.state).cfg.window_size {
-            Some((w, h)) => attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h)),
-            None => attrs.with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0)),
-        };
-        let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
-        #[cfg(windows)]
-        {
-            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(RawWindowHandle::Win32(h)) = window.window_handle().map(|h| h.as_raw()) {
-                lock(&self.state).window_handle = Some(h.hwnd.get() as usize);
-            }
-        }
-        #[cfg(target_os = "linux")]
-        {
-            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
-            if let Ok(RawDisplayHandle::Wayland(h)) = window.display_handle().map(|h| h.as_raw()) {
-                let proxy = self.proxy.clone();
-                wayland_dnd::start(h.display.as_ptr(), move |drag| {
-                    let _ = proxy.send_event(UserEvent::FileDrag(drag));
-                });
-            }
-        }
-        #[cfg_attr(not(windows), allow(unused_mut))]
-        let mut api = lock(&self.state).cfg.graphics_api.clone();
-        // The last start crashed in the graphics driver: Vulkan from now on (kept, or every other
-        // start would crash again).
-        #[cfg(windows)]
-        if api == "auto" && gpu_start::failed_last_time() {
-            eprintln!(
-                "graphics: the last start never got going: Vulkan from now on (graphics_api in config.txt)"
-            );
-            api = "vulkan".into();
-            let mut s = lock(&self.state);
-            s.cfg.graphics_api = api.clone();
-            s.cfg.save();
-        }
-        // The last run crashed in an overlay or capture hook while drawing with Vulkan: the
-        // same, they get along with DX12 (and it would crash again).
-        #[cfg(windows)]
-        if gpu_start::hook_crashed_last_time() && api == "auto" {
-            eprintln!(
-                "graphics: the last run crashed in a hook into Vulkan's drawing: DX12 from now on (graphics_api in config.txt)"
-            );
-            api = "dx12".into();
-            let mut s = lock(&self.state);
-            s.cfg.graphics_api = api.clone();
-            s.cfg.save();
-        }
-        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
-            event_loop.owned_display_handle(),
-        ));
-        desc.backends = graphics_backends(&api);
-        // WGPU_BACKEND still has the last word.
-        let instance = wgpu::Instance::new(desc.with_env());
-        gpu_start::starting();
-        let present = lock(&self.state).cfg.present;
-        let renderer = match Renderer::new(&instance, window.clone(), present) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("failed to initialise GPU: {e}");
-                // Without a console the window just closed: say why.
-                #[cfg(windows)]
-                crash_box(&format!(
-                    "taiko.rs couldn't start the graphics card, so it closed.\n\n{e}\n\nUpdating the graphics driver usually fixes this. If it doesn't, send this message in #bugs on the taiko.rs Discord."
-                ));
-                event_loop.exit();
-                return;
-            }
-        };
-        let refresh_hz = window
-            .current_monitor()
-            .and_then(|m| m.refresh_rate_millihertz())
-            .map(|mhz| mhz as f64 / 1000.0)
-            .unwrap_or(60.0);
-        {
-            let mut s = lock(&self.state);
-            s.adapter = renderer.adapter_name.clone();
-            s.set_window(
-                window.inner_size().width as f32,
-                window.inner_size().height as f32,
-            );
-            s.monitor_modes = window
-                .current_monitor()
-                .map(|m| {
-                    m.video_modes()
-                        .map(|v| (v.size().width, v.size().height))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if let Some(m) = window.current_monitor() {
-                s.monitor_size = (m.size().width, m.size().height);
-            }
-            s.refresh_presets();
-            s.refresh_hz = refresh_hz;
-            s.refresh_status();
-            eprintln!(
-                "renderer: {}, present: {}, refresh {refresh_hz:.2} Hz",
-                renderer.adapter_name,
-                renderer.present.name()
-            );
-            let _ = CRASH_CONTEXT.set(format!(
-                "renderer: {}, present: {}, setting graphics_api = {}",
-                renderer.adapter_name,
-                renderer.present.name(),
-                s.cfg.graphics_api
-            ));
-            VULKAN.store(renderer.backend == wgpu::Backend::Vulkan, Ordering::Relaxed);
-            VULKAN_ON_AUTO.store(
-                renderer.backend == wgpu::Backend::Vulkan && s.cfg.graphics_api == "auto",
-                Ordering::Relaxed,
-            );
-            // What it could do, not what was asked: OpenGL on Linux has only vsync, and that
-            // mustn't become the setting (it stayed vsync after going back to Vulkan).
-            s.present = renderer.present;
-            s.present_modes = renderer.present_choices();
-            s.refresh_hz = refresh_hz;
-        }
-        let state = self.state.clone();
-        let proxy = self.proxy.clone();
-        self.render_thread = Some(
-            std::thread::Builder::new()
-                .name("render".into())
-                .spawn(move || render_loop(state, renderer, proxy))
-                .expect("spawn render thread"),
-        );
-        // Input only wakes this thread when there is something to do.
-        event_loop.set_control_flow(ControlFlow::Wait);
-        self.cursors = cursor::Cursors::new(event_loop, window.scale_factor());
-        self.cursor_accent = render::accent();
-        self.window = Some(window);
-        self.instance = Some(instance);
-        self.set_cursor(self.cursor);
-    }
-
-    /// Android only: the window is about to be destroyed. The render thread must let go of its
-    /// surface first, so wait (briefly) until it has.
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        {
-            let mut s = lock(&self.state);
-            s.surface_swap = Some((None, 0, 0));
-            s.set_background(true);
-        }
-        let deadline = Instant::now() + Duration::from_millis(1000);
-        while self
-            .render_thread
-            .as_ref()
-            .is_some_and(|t| !t.is_finished())
-            && lock(&self.state).surface_swap.is_some()
-            && Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
-        match event {
-            UserEvent::Stopped => event_loop.exit(),
-            UserEvent::FileDrag(drag) => lock(&self.state).file_drag(drag),
-            UserEvent::WindowRequest => self.apply_window_request(),
-            UserEvent::Link(link) => {
-                lock(&self.state).open_link(link);
-                if let Some(w) = &self.window {
-                    w.set_minimized(false);
-                    w.focus_window();
-                }
-            }
-            UserEvent::Open(path) => {
-                lock(&self.state).open_archive(path);
-                if let Some(w) = &self.window {
-                    w.set_minimized(false);
-                    w.focus_window();
-                }
-            }
-            #[cfg(target_os = "android")]
-            UserEvent::Typed(typed) => {
-                lock(&self.state).soft_keyboard(typed, self.window.as_deref())
-            }
-            UserEvent::HideCursor(hide) => {
-                if hide != self.cursor_hidden {
-                    self.cursor_hidden = hide;
-                    if let Some(w) = &self.window {
-                        w.set_cursor_visible(!hide);
-                    }
-                }
-            }
-        }
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        self.handle_window_event(event_loop, event);
-        self.apply_window_request();
-        #[cfg(not(target_os = "android"))]
-        self.update_ime();
-    }
-
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        lock(&self.state).quit = true;
-        // The Discord status goes with the game (dropping it clears it and says goodbye).
-        let discord = lock(&self.state).discord.take();
-        drop(discord);
-        if let Some(t) = self.render_thread.take() {
-            // A vsync'd present can block indefinitely while the window is minimised; don't let
-            // that keep the game from closing.
-            let deadline = Instant::now() + Duration::from_millis(750);
-            while !t.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            if t.is_finished() {
-                let _ = t.join();
-            }
-        }
-        lock(&self.state).cfg.save();
-        config::flush_saves();
-    }
-}
-
-impl State {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        mut cfg: Config,
-        audio: Option<Engine>,
-        splash: Option<splash::Splash>,
-        songs_dir: PathBuf,
-        song_dirs: Vec<PathBuf>,
-        scan: Option<(Receiver<Scanned>, Arc<AtomicUsize>)>,
-        play_when_scanned: bool,
-        auto: bool,
-    ) -> State {
-        lang::set(cfg.language);
-        let library = Vec::new();
-        let mut select = Select::new(&library);
-        let (set_status_tx, set_status_rx) = mpsc::channel();
-        let status_cache = setstatus::Cache::load();
-        select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
-        select.headings = cfg.song_headings;
-        select.mods_label = cfg.mods.label();
-        select.played = load_plays();
-        let updater = update::Updater::new(cfg.check_updates);
-        let pending_changelog = whats_new(&mut cfg);
-        let present = cfg.present;
-        let fullscreen = cfg.fullscreen;
-        SEND_CRASH_REPORTS.store(cfg.send_crash_reports, Ordering::Relaxed);
-        let crash = crash_report();
-        let crash_sent = cfg.send_crash_reports
-            && crash
-                .as_ref()
-                .is_some_and(|r| send_crash_report(&cfg.online_server, r));
-        // Pictures are on the website of our own server only (and kept on disk between runs).
-        let own_server = cfg.online_server == online::DEFAULT_SERVER;
-        let avatars = avatars::Avatars::new(
-            own_server.then(|| online::WEBSITE.to_string()),
-            config::cache_dir()
-                .filter(|_| own_server)
-                .map(|d| d.join(avatars::DIR)),
-        );
-        State {
-            avatars,
-            pictures: pictures::Pictures::default(),
-            admin: false,
-            crash,
-            crash_sent,
-            cfg,
-            library,
-            select,
-            scene: Scene::Select,
-            audio,
-            toast: None,
-            medals: debug::medals_from_env().map(|view| medals::View {
-                name: Some("TAIKO_MEDALS".into()),
-                state: medals::State::Loaded(Box::new(view)),
-                tab: 0,
-                scroll: 0,
-            }),
-            unlock: {
-                let mut unlock = medals::Unlock::default();
-                unlock.preview(debug::unlock_from_env());
-                unlock
-            },
-            ime_preedit: String::new(),
-            drag_hover: None,
-            stats: FrameStats {
-                last: Instant::now(),
-                frames: 0,
-                window_start: Instant::now(),
-                fps: 0.0,
-                worst_ms: 0.0,
-                worst_acc: 0.0,
-            },
-            status: String::new(),
-            modifiers_shift: false,
-            modifiers_ctrl: false,
-            modifiers_alt: false,
-            volume: volume::Overlay::new(),
-            volume_save_at: None,
-            splash,
-            main_menu: None,
-            screen_fade: None,
-            shown_scene: None,
-            menu_notes: Default::default(),
-            guide: None,
-            guide_binding: None,
-            guide_after: None,
-            guide_shown: None,
-            guide_read: [false; guide::PAGES],
-            reset_armed: None,
-            music_seeked: None,
-            player: None,
-            music_paused: false,
-            media: None,
-            media_told: None,
-            window_handle: None,
-            updater,
-            hits: Vec::new(),
-            browse: browse::Browse::default(),
-            downloads: Vec::new(),
-            set_check: None,
-            set_check_due: None,
-            #[cfg(target_os = "android")]
-            imports_checked: Instant::now(),
-            #[cfg(target_os = "android")]
-            keyboard: android::Keyboard::default(),
-            songs_dir,
-            installed_sets: None,
-            lobby_lookup: None,
-            score_link: None,
-            preview_remote: false,
-            host_transfer: None,
-            host_map_asked: false,
-            host_asked_at: None,
-            auto_fetched: None,
-            scores: scores::load_index(),
-            pp_backfill: None,
-            pp_backfill_started: false,
-            submits: Vec::new(),
-            session_play_ms: 0.0,
-            last_key: (KeyCode::Escape, Instant::now()),
-            retry_hold: None,
-            menu_screen_seen: None,
-            menu_changed_at: None,
-            replay_speed: 1.0,
-            replay_speed_wanted: 1.0,
-            replay_speed_rx: None,
-            select_zone: drum_nav::Zone::List,
-            select_rows: drum_nav::Rows::default(),
-            me: None,
-            me_relax: None,
-            me_for: String::new(),
-            me_fetch: None,
-            board_online: false,
-            profile: None,
-            online_boards: std::collections::HashMap::new(),
-            board_fetch: None,
-            pending_replay: None,
-            changelog: None,
-            pending_changelog,
-            pending_mods: Mods::NONE,
-            mod_select: None,
-            universe_setup: None,
-            shapeshift_setup: None,
-            random_setup: None,
-            preset_naming: None,
-            preset_deleting: None,
-            tact_setup: None,
-            od_setup: None,
-            leaderboard: Vec::new(),
-            board_scroll: 0,
-            board_for: (0, false, false),
-            board_max: 0,
-            board_rect: None,
-            split_drag: None,
-            split_click: None,
-            online_leaderboard: Vec::new(),
-            export: None,
-            video_status: String::new(),
-            last_video: None,
-            bg_changed: None,
-            sprites_upload: None,
-            skin_loader: None,
-            skin_key: None,
-            skin_map: None,
-            skin_map_seen: None,
-            focused: true,
-            right_scroll: false,
-            settings_level: None,
-            scrollbar_drag: false,
-            right_press: None,
-            list_drag: None,
-            focus_seen: false,
-            mapinfo: None,
-            mapinfo_sorted: false,
-            song_dirs,
-            osudb_rx: None,
-            db_status: Default::default(),
-            set_status: status_cache
-                .iter()
-                .map(|(set, status)| (set, Some(status.to_string())))
-                .collect(),
-            status_cache,
-            status_saved: Instant::now(),
-            status_resorted: Instant::now(),
-            status_new: false,
-            status_sweep_due: None,
-            set_status_tx,
-            set_status_rx,
-            loved_call: None,
-            loved_asked: false,
-            custom_call: None,
-            custom_asked: None,
-            folder_watch: None,
-            editor_back: None,
-            test_auto: false,
-            playing: None,
-            status_wait: None,
-            scene_kind: None,
-            scene_since: Instant::now(),
-            scrubbing: None,
-            auto,
-            shots: debug::ShotPlan::from_env(),
-            pending_screen_shots: vec!["select", "results"],
-            exit_when_done: std::env::var_os("TAIKO_EXIT_AFTER").is_some(),
-            quit: false,
-            quit_asked: false,
-            quit_asked_at: None,
-            screenshot_due: false,
-            smooth: std::env::var_os("TAIKO_STATS")
-                .is_some()
-                .then(debug::Smoothness::default),
-            frame_acquired: None,
-            pace_shift_ms: 0.0,
-            seen_refresh_ms: None,
-            started: Instant::now(),
-            want_size: None,
-            touch_used: false,
-            touch_mouse: None,
-            touch_flash: [None; 4],
-            surface_swap: None,
-            present,
-            present_modes: PresentChoice::ALL.to_vec(),
-            refresh_hz: 60.0,
-            settings_ui: SettingsUi::default(),
-            fullscreen,
-            adapter: String::new(),
-            input_script: debug::InputScript::from_env(),
-            wall_shots: debug::wall_shots_from_env(),
-            mp: None,
-            mp_connecting: None,
-            mp_menu: multiplayer::Menu::default(),
-            mp_status: String::new(),
-            picking_lobby_map: false,
-            pick_to_edit: false,
-            guessr: None,
-            discord: None,
-            map_offsets: config::load_map_offsets(),
-            play_offset: 0.0,
-            social: social::Social::default(),
-            stream: None,
-            presence: None,
-            presence_at: None,
-            scan,
-            scan_checking: false,
-            last_shot: None,
-            shot_upload: None,
-            shot_view: None,
-            folder_pick: None,
-            folder_pick_for: Item::SongsFolder,
-            data_move: None,
-            play_when_scanned,
-            wheel_acc: 0.0,
-            mouse: (0.0, 0.0),
-            grip: None,
-            hover: None,
-            window_w: 1280.0,
-            window_h: 720.0,
-            real_window: (1280.0, 720.0),
-            letterbox: None,
-            mob: mobile::Ui::default(),
-            backgrounded: false,
-            #[cfg(target_os = "android")]
-            music_service: false,
-            #[cfg(target_os = "android")]
-            may_turn: false,
-            #[cfg(target_os = "android")]
-            media_sent: None,
-            safe_insets: None,
-            #[cfg(target_os = "android")]
-            safe_asked: None,
-            frame_clip: None,
-            guides: Vec::new(),
-            hud_edit: None,
-            hud_sample: None,
-            readout_rect: None,
-            replay_bar: None,
-            replay_scrub: None,
-            replay_bar_grow: 0.0,
-            mouse_moved_at: Instant::now(),
-            mouse_moved_from: (0.0, 0.0),
-            preview: preview::Preview::default(),
-            stars: stars::Stars::default(),
-            potentials: pp::Potentials::default(),
-            bg_brightness: 0.0,
-            idle: idle::Idle::new(Instant::now()),
-            resolutions: Vec::new(),
-            monitor_modes: Vec::new(),
-            monitor_size: (1920, 1080),
-            window_request: None,
-            window_resized_at: None,
-        }
-    }
-}
-
-/// Starts loading update notes in the background, and notes this build as started.
-/// The caller keeps the view pending until a nonempty list of changes is available.
-fn whats_new(cfg: &mut Config) -> Option<changelog::View> {
-    let build = update::BUILD?;
-    if cfg.last_build == build {
-        return None;
-    }
-    let old = std::mem::replace(&mut cfg.last_build, build.to_string());
-    cfg.save();
-    if !old.is_empty() {
-        Some(changelog::View::since(old))
-    } else if cfg.existed {
-        Some(changelog::View::recent(true))
-    } else {
-        None
-    }
-}
-
-/// Desktop entry point: the command line, then the game.
-/// `--recalc-pp`: see `recalc`.
-pub fn recalc_pp(args: &[String]) -> Result<(), String> {
-    recalc::run(args)
-}
-
-pub fn desktop_main() {
-    let cfg = Config::load();
-    config::set_data_folder(cfg.data_folder.clone());
-    // Only where a crash ends the game (release builds), as with panics.
-    #[cfg(windows)]
-    if cfg!(panic = "abort") {
-        native_crashes::install();
-    }
-    log_crashes();
-    let mut args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
-    let auto = args.iter().any(|a| a == "--auto");
-    args.retain(|a| a != "--auto");
-    // A `taiko-rs://` link (a score's "Watch replay" button): the running game opens it, else
-    // this one does.
-    let link = args.iter().find_map(|a| link::parse(&a.to_string_lossy()));
-    args.retain(|a| link::parse(&a.to_string_lossy()).is_none());
-    if link.is_some_and(link::forward) {
-        return;
-    }
-    // A `.rsz` opened from the file manager (some pass it as a file:// URL): imported, by the
-    // running game if there is one.
-    for a in &mut args {
-        if let Some(path) = link::file_url(&a.to_string_lossy()) {
-            *a = path;
-        }
-    }
-    let mut opens: Vec<PathBuf> = args
-        .iter()
-        .filter(|a| library::is_rsz(a) && a.is_file())
-        .cloned()
-        .collect();
-    args.retain(|a| !opens.contains(a));
-    let had_opens = !opens.is_empty();
-    opens.retain(|p| !link::forward_open(p));
-    if had_opens && opens.is_empty() && args.is_empty() && link.is_none() {
-        return;
-    }
-    if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!(
-            "usage: taiko-rs [--auto] [Songs folder | map folder | file.osz | file.osu | taiko-rs://score/<id>]...\n       taiko-rs file.rsz...           import taiko.rs map archives into the Songs folder"
-        );
-        println!("       taiko-rs --info file.osu...   print converted map stats");
-        println!(
-            "With no arguments, scans osu! stable install locations and `songs =` lines in the config."
-        );
-        return;
-    }
-    if args.first().is_some_and(|a| a == "--info") {
-        for path in &args[1..] {
-            info(path);
-        }
-        return;
-    }
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
-        .build()
-        .expect("event loop");
-    // Scripted runs (tests) neither take links nor become their handler.
-    if std::env::var_os("TAIKO_SHOTS").is_none() && std::env::var_os("TAIKO_INPUT").is_none() {
-        let proxy = event_loop.create_proxy();
-        link::listen(move |arrival| {
-            let _ = proxy.send_event(match arrival {
-                link::Arrival::Link(l) => UserEvent::Link(l),
-                link::Arrival::Open(path) => UserEvent::Open(path),
-            });
-        });
-        link::register();
-    }
-    run(cfg, args, auto, link, opens, event_loop);
-}
-
-/// The latest crash's report, kept until the next start has offered to copy it.
-const CRASH_REPORT: &str = "crash-report.txt";
-
-/// A crash leaves `crash.log` next to the scores (release builds on Windows have no console to
-/// print it to), and the report on its own for the next start to offer (`crash_report`). On
-/// Windows the report also goes on the clipboard and a message box says to send it in, since
-/// the game just vanishes otherwise.
-fn log_crashes() {
-    let default = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let thread = std::thread::current().name().unwrap_or("?").to_string();
-        let text = format!(
-            "--- taiko.rs crash at unix {at}, build {} ({}, {})\nthread {thread}: {info}\n{}\n{}",
-            update::BUILD.unwrap_or("local"),
-            env!("CARGO_PKG_VERSION"),
-            std::env::consts::OS,
-            std::backtrace::Backtrace::force_capture(),
-            crash_context(),
-        );
-        // A release build's backtrace has no names on Windows: where each frame is, for
-        // finding them with that build's .pdb (docs/ci.md).
-        #[cfg(windows)]
-        let text = format!("{text}{}", native_crashes::frames());
-        if let Some(dir) = config::data_dir() {
-            let _ = std::fs::create_dir_all(&dir);
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join("crash.log"))
-            {
-                let _ = std::io::Write::write_all(&mut f, text.as_bytes());
-            }
-            if cfg!(panic = "abort") {
-                let _ = std::fs::write(dir.join(CRASH_REPORT), &text);
-            }
-        }
-        default(info);
-        // Only where a panic ends the game (release builds): a debug build's caught one isn't a crash.
-        #[cfg(all(windows, panic = "abort"))]
-        {
-            // A clipboard of its own: the game's may be what was held when it crashed.
-            let copied = arboard::Clipboard::new()
-                .and_then(|mut b| b.set_text(text.clone()))
-                .is_ok();
-            let what = if copied {
-                "The crash log is copied: paste it (Ctrl+V)"
-            } else {
-                "Send the crash log (crash.log in the game's data folder)"
-            };
-            let what = format!("{what} in #bugs on the taiko.rs Discord, so it can be fixed.");
-            crash_box(&format!(
-                "taiko.rs crashed.\n\n{}\n\n{}",
-                crash_box_words(&what),
-                info
-            ));
-        }
-    }));
-}
-
-/// Windows crashes that aren't panics: an access violation (often in a graphics or audio driver),
-/// a stack overflow, an abort. The panic hook never sees those, and a release build has no
-/// console, so the game just vanished with nothing left behind. Now what it printed goes to
-/// `game.log` (the last run's is kept as `game-prev.log`), and an unhandled exception leaves the
-/// same `crash.log` entry and next-start report a panic does, with the exception's code, where
-/// it happened (which module) and the end of the log.
-#[cfg(windows)]
-mod native_crashes {
-    use std::ffi::c_void;
-    use std::path::PathBuf;
-    use std::sync::OnceLock;
-
-    #[repr(C)]
-    struct ExceptionRecord {
-        code: u32,
-        flags: u32,
-        record: *mut ExceptionRecord,
-        address: *mut c_void,
-        parameters: u32,
-        information: [usize; 15],
-    }
-
-    #[repr(C)]
-    struct ExceptionPointers {
-        record: *mut ExceptionRecord,
-        context: *mut c_void,
-    }
-
-    type Filter = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn SetUnhandledExceptionFilter(filter: Option<Filter>) -> Option<Filter>;
-        fn SetStdHandle(which: u32, handle: *mut c_void) -> i32;
-        fn GetModuleHandleExW(flags: u32, address: *const c_void, module: *mut *mut c_void) -> i32;
-        fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
-    }
-
-    const STD_ERROR_HANDLE: u32 = -12i32 as u32;
-    const FROM_ADDRESS: u32 = 0x4;
-    const UNCHANGED_REFCOUNT: u32 = 0x2;
-    const CONTINUE_SEARCH: i32 = 0;
-
-    static DIR: OnceLock<PathBuf> = OnceLock::new();
-
-    pub fn install() {
-        let Some(dir) = crate::config::data_dir() else {
-            return;
-        };
-        let _ = std::fs::create_dir_all(&dir);
-        let log = dir.join("game.log");
-        let _ = std::fs::rename(&log, dir.join("game-prev.log"));
-        if let Ok(file) = std::fs::File::create(&log) {
-            use std::os::windows::io::IntoRawHandle;
-            // std looks the handle up on every write, so eprintln! lands in the file from here
-            // on, and so does std's own last word on a stack overflow or an abort.
-            // SAFETY: the handle is a file we own and never close (it lives as long as the game).
-            unsafe {
-                SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle());
-            }
-        }
-        let _ = DIR.set(dir);
-        // SAFETY: `filter` matches the signature Windows calls it with.
-        unsafe {
-            SetUnhandledExceptionFilter(Some(filter));
-        }
-        // To see this work: a crash of the kind a driver has.
-        if std::env::var_os("TAIKO_TEST_NATIVE_CRASH").is_some() {
-            eprintln!("crashing on purpose (TAIKO_TEST_NATIVE_CRASH)");
-            // SAFETY: not safe at all, on purpose: it's the access violation being tested.
-            unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
-        }
-    }
-
-    fn what(code: u32) -> &'static str {
-        match code {
-            0xC000_0005 => "access violation",
-            0xC000_00FD => "stack overflow",
-            0xC000_001D => "illegal instruction",
-            0xC000_0094 => "integer divide by zero",
-            0xC000_0409 => "fail fast (abort)",
-            0xC000_0374 => "heap corruption",
-            0x8000_0003 => "breakpoint",
-            _ => "exception",
-        }
-    }
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn RtlCaptureStackBackTrace(
-            skip: u32,
-            count: u32,
-            frames: *mut *mut c_void,
-            hash: *mut u32,
-        ) -> u16;
-    }
-
-    /// This thread's stack as `frames: taiko-rs.exe+0x1a2b3c ...` (the module and offset of
-    /// each return address): files and lines with the build's .pdb (docs/ci.md).
-    pub fn frames() -> String {
-        let mut frames = [std::ptr::null_mut::<c_void>(); 62];
-        // SAFETY: the buffer holds the 62 frames asked for.
-        let n = unsafe {
-            RtlCaptureStackBackTrace(
-                1,
-                frames.len() as u32,
-                frames.as_mut_ptr(),
-                std::ptr::null_mut(),
-            )
-        } as usize;
-        let mut out = String::from("frames:");
-        for f in &frames[..n.min(frames.len())] {
-            out.push(' ');
-            out.push_str(&module_of(*f));
-        }
-        out.push('\n');
-        out
-    }
-
-    /// The DLL or exe `address` is in, and how far into it.
-    fn module_of(address: *const c_void) -> String {
-        let mut module = std::ptr::null_mut();
-        // SAFETY: plain lookups with a valid out pointer and buffer.
-        unsafe {
-            if GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, address, &mut module) == 0 {
-                return format!("{address:p} (in no module)");
-            }
-            let mut name = [0u16; 260];
-            let n = GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize;
-            let path = String::from_utf16_lossy(&name[..n.min(name.len())]);
-            let file = path.rsplit(['\\', '/']).next().unwrap_or(&path).to_string();
-            format!("{file}+0x{:x}", address as usize - module as usize)
-        }
-    }
-
-    unsafe extern "system" fn filter(info: *mut ExceptionPointers) -> i32 {
-        // SAFETY: Windows passes valid exception pointers to an unhandled exception filter.
-        let Some(record) = (unsafe { info.as_ref().and_then(|i| i.record.as_ref()) }) else {
-            return CONTINUE_SEARCH;
-        };
-        let Some(dir) = DIR.get() else {
-            return CONTINUE_SEARCH;
-        };
-        let at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let mut text = format!(
-            "--- taiko.rs crash at unix {at}, build {} ({}, windows)\n{} 0x{:08X} at {}\n",
-            crate::update::BUILD.unwrap_or("local"),
-            env!("CARGO_PKG_VERSION"),
-            what(record.code),
-            record.code,
-            module_of(record.address),
-        );
-        if record.code == 0xC000_0005 && record.parameters >= 2 {
-            let op = match record.information[0] {
-                0 => "reading",
-                1 => "writing",
-                _ => "running",
-            };
-            text.push_str(&format!("{op} 0x{:x}\n", record.information[1]));
-        }
-        text.push_str(&super::crash_context());
-        let frames = frames();
-        text.push_str(&frames);
-        let hook = super::drawing_hook(&frames);
-        if let Some((dll, who)) = hook {
-            text.push_str(&format!("in a hook: {who} ({dll})\n"));
-        }
-        let to_dx12 =
-            hook.is_some() && super::VULKAN_ON_AUTO.load(std::sync::atomic::Ordering::Relaxed);
-        if to_dx12 {
-            super::gpu_start::hook_crashed();
-        }
-        // What the game printed last: the screen, the audio device, the map...
-        if let Ok(log) = std::fs::read_to_string(dir.join("game.log")) {
-            let lines: Vec<&str> = log.lines().collect();
-            text.push_str("last lines of game.log:\n");
-            for line in &lines[lines.len().saturating_sub(25)..] {
-                text.push_str(line);
-                text.push('\n');
-            }
-        }
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("crash.log"))
-        {
-            let _ = std::io::Write::write_all(&mut f, text.as_bytes());
-        }
-        let _ = std::fs::write(dir.join(super::CRASH_REPORT), &text);
-        let words = super::crash_box_words(
-            "The next start offers to copy the crash log: paste it in #bugs on the taiko.rs Discord, so it can be fixed.",
-        );
-        let advice = hook
-            .map(|(dll, who)| {
-                format!(
-                    "{}\n\n",
-                    super::drawing_hook_advice(
-                        who,
-                        dll,
-                        to_dx12,
-                        super::VULKAN.load(std::sync::atomic::Ordering::Relaxed)
-                    )
-                )
-            })
-            .unwrap_or_default();
-        super::crash_box(&format!(
-            "taiko.rs crashed.\n\n{advice}{words}\n\n{} 0x{:08X}",
-            what(record.code),
-            record.code
-        ));
-        // Windows' own handling goes on (its error report, and the end of the process).
-        CONTINUE_SEARCH
-    }
-}
-
-/// A message box (Windows), there even without a window of the game's.
-#[cfg(windows)]
-fn crash_box(text: &str) {
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn MessageBoxW(
-            hwnd: *mut std::ffi::c_void,
-            text: *const u16,
-            caption: *const u16,
-            kind: u32,
-        ) -> i32;
-    }
-    const MB_ICONERROR: u32 = 0x10;
-    const MB_TOPMOST: u32 = 0x4_0000;
-    let wide = |s: &str| {
-        s.encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<u16>>()
-    };
-    let (text, caption) = (wide(text), wide("taiko.rs crashed"));
-    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; no owner window.
-    unsafe {
-        MessageBoxW(
-            std::ptr::null_mut(),
-            text.as_ptr(),
-            caption.as_ptr(),
-            MB_ICONERROR | MB_TOPMOST,
-        );
-    }
-}
-
-/// Whether a crash's report goes to the server on the next start (`Config::send_crash_reports`),
-/// for the crash handlers, which can't reach the config.
-static SEND_CRASH_REPORTS: AtomicBool = AtomicBool::new(true);
-
-/// What the game is running on (the graphics card and API), for crash reports: set once the
-/// graphics have started.
-static CRASH_CONTEXT: OnceLock<String> = OnceLock::new();
-
-/// The screen (and map and mods) when it crashed: set as screens change, never under the
-/// state's lock (the crashing thread may hold that one).
-static CRASH_SCENE: Mutex<String> = Mutex::new(String::new());
-
-fn crash_context() -> String {
-    let mut out = CRASH_CONTEXT
-        .get()
-        .map(|c| format!("{c}\n"))
-        .unwrap_or_default();
-    if let Ok(scene) = CRASH_SCENE.try_lock()
-        && !scene.is_empty()
-    {
-        out.push_str(&scene);
-        out.push('\n');
-    }
-    out
-}
-
-/// The crash window's words on what happens to the report: `otherwise` is how to send it in
-/// by hand, when the game doesn't.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn crash_box_words(otherwise: &str) -> String {
-    if SEND_CRASH_REPORTS.load(Ordering::Relaxed) {
-        "The next start sends the crash report to the developers by itself, so it can be fixed (Settings > Online > Send crash reports turns that off).".into()
-    } else {
-        otherwise.into()
-    }
-}
-
-/// Sends last time's crash report to the server in the background: true when it's on its way.
-/// The player's folder names are taken out first (`online::scrub_paths`).
-fn send_crash_report(server: &str, report: &str) -> bool {
-    if update::BUILD.is_none() {
-        // A local build's crashes are the developer's own, seen already.
-        return false;
-    }
-    let mut text = online::scrub_paths(report);
-    if text.len() > online::MAX_CRASH_REPORT {
-        // The start (what crashed) and the end (the log's last lines) say most.
-        let head: String = text.chars().take(online::MAX_CRASH_REPORT / 2).collect();
-        let tail: String = text
-            .chars()
-            .rev()
-            .take(online::MAX_CRASH_REPORT / 2 - 100)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        text = format!("{head}\n[...]\n{tail}");
-    }
-    let r = online::CrashReport {
-        build: update::BUILD.unwrap_or("local").to_string(),
-        os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
-        report: text,
-    };
-    let server = server.to_string();
-    std::thread::spawn(move || {
-        match online::call(&server, online::Request::CrashReport(Box::new(r))) {
-            Ok(_) => eprintln!("crash report sent"),
-            Err(e) => eprintln!("crash report not sent: {e}"),
-        }
-    });
-    true
-}
-
-/// The report of a crash last time that hasn't been offered yet (and forgets it).
-fn crash_report() -> Option<String> {
-    let file = config::data_dir()?.join(CRASH_REPORT);
-    let text = std::fs::read_to_string(&file).ok()?;
-    let _ = std::fs::remove_file(&file);
-    Some(text).filter(|t| !t.trim().is_empty())
-}
-
-/// Android entry point (the native activity's `android_main`): no command line, the app's own
-/// storage for settings and songs.
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: winit::platform::android::activity::AndroidApp) {
-    use winit::platform::android::EventLoopBuilderExtAndroid;
-    android::setup(&app);
-    let cfg = Config::load();
-    let event_loop = EventLoop::<UserEvent>::with_user_event()
-        .with_android_app(app)
-        .build()
-        .expect("event loop");
-    android::set_proxy(event_loop.create_proxy());
-    run(cfg, Vec::new(), false, None, Vec::new(), event_loop);
-}
-
-/// Scans the library, opens audio and runs the game until it quits. `args`: songs folders, map
-/// folders, .osz or a single .osu to play; empty = the usual song folders. `link`: a score to open.
-fn run(
-    cfg: Config,
-    args: Vec<PathBuf>,
-    auto: bool,
-    link: Option<link::Link>,
-    opens: Vec<PathBuf>,
-    event_loop: EventLoop<UserEvent>,
-) {
-    config::set_data_folder(cfg.data_folder.clone());
-    library::set_songs_folder(cfg.songs_folder.clone());
-    multiverse::set(cfg.universes);
-    shapeshift::set(cfg.shapeshift);
-    tact::set(cfg.tact);
-    od_override::set(cfg.od_override);
-    multiverse::set_note_colours(cfg.note_colours);
-    let inputs = if args.is_empty() {
-        song_inputs(&cfg)
-    } else {
-        args.clone()
-    };
-    let songs_dir = download_dir(&inputs);
-    let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();
-    let scan = start_scan(inputs);
-
-    let audio = match Engine::new(cfg.audio_buffer) {
-        Ok(a) => {
-            eprintln!("audio: {}", a.description);
-            let (music, fx) = cfg.volumes();
-            a.set_volume(music, fx);
-            Some(a)
-        }
-        Err(e) => {
-            eprintln!("audio unavailable ({e}); running silent");
-            None
-        }
-    };
-    cfg.save();
-
-    // A single .osu on the command line goes straight into gameplay.
-    let play_when_scanned = args.len() == 1
-        && args[0]
-            .extension()
-            .is_some_and(|e| e == "osu" || e == "tko");
-    // No splash or warning before a map given on the command line, or in scripted runs
-    // (TAIKO_SPLASH=1 and TAIKO_WARNING=1 force them).
-    let scripted =
-        std::env::var_os("TAIKO_SHOTS").is_some() || std::env::var_os("TAIKO_INPUT").is_some();
-    let want_splash = std::env::var_os("TAIKO_SPLASH").is_some()
-        || (cfg.splash && !play_when_scanned && !scripted);
-    let want_warning = std::env::var_os("TAIKO_WARNING").is_some()
-        || (cfg.epilepsy_warning && !play_when_scanned && !scripted);
-    let splash = splash::Splash::new(audio.as_ref().map(|a| a.rate), want_splash, want_warning);
-    update::cleanup();
-    let main_menu = cfg.main_menu && !play_when_scanned && !scripted;
-    let guide = !cfg.guide_seen && !play_when_scanned && !scripted;
-    let mut state = State::new(
-        cfg,
-        audio,
-        splash,
-        songs_dir,
-        songs_dirs_for_db,
-        Some(scan),
-        play_when_scanned,
-        auto,
-    );
-    state.main_menu = main_menu.then(menu::Menu::new);
-    state.guide = guide.then_some(0);
-    state.load_skin();
-    if let Some(l) = link {
-        state.open_link(l);
-    }
-    for path in opens {
-        state.open_archive(path);
-    }
-    let mut app = App {
-        state: Arc::new(Mutex::new(state)),
-        cursor: CursorIcon::Default,
-        cursors: None,
-        cursor_accent: render::DEFAULT_ACCENT,
-        cursor_hidden: false,
-        window: None,
-        ime: false,
-        instance: None,
-        render_thread: None,
-        proxy: event_loop.create_proxy(),
-    };
-    event_loop.run_app(&mut app).expect("run");
-}
-
-/// `taiko-rs --info map.osu...`: prints what the converter produced, for checking maps headlessly.
-fn info(path: &std::path::Path) {
-    let map = match beatmap::load(path) {
-        Ok(m) => m,
-        Err(e) => return eprintln!("{}: {e}", path.display()),
-    };
-    let count = |k: beatmap::Kind| map.notes.iter().filter(|n| n.kind == k).count();
-    let big = map.notes.iter().filter(|n| n.big).count();
-    let m = &map.meta;
-    println!(
-        "{} - {} [{}] mode {} v{} OD {}",
-        m.artist, m.title, m.version, m.mode, m.format_version, m.od
-    );
-    println!(
-        "  don {}  kat {}  big {}  roll {}  swell {}  barlines {}  control points {}",
-        count(beatmap::Kind::Don),
-        count(beatmap::Kind::Kat),
-        big,
-        count(beatmap::Kind::Roll),
-        count(beatmap::Kind::Swell),
-        map.barlines.len(),
-        map.control_points.len()
-    );
-    let (lo, hi) = map.notes.iter().fold((f64::MAX, 0.0f64), |(lo, hi), n| {
-        (lo.min(n.velocity), hi.max(n.velocity))
-    });
-    println!(
-        "  first {:.0} ms  last {:.0} ms  velocity {lo:.3}..{hi:.3} px/ms",
-        map.notes[0].time,
-        map.notes.last().unwrap().end_time
-    );
-    let (sr, sr_dt) = (stars::star_rating(path, 1.0), stars::star_rating(path, 1.5));
-    println!(
-        "  stars {:.2} (1.5x: {:.2})",
-        sr.unwrap_or(f64::NAN),
-        sr_dt.unwrap_or(f64::NAN)
-    );
-    let audio_path = path.parent().unwrap_or(path).join(&m.audio_file);
-    let t = Instant::now();
-    match audio::decode(&audio_path, 48000) {
-        Ok(track) => println!(
-            "  audio {:.1} s decoded in {:.0} ms",
-            track.frames() as f64 / 48000.0,
-            t.elapsed().as_secs_f64() * 1000.0
-        ),
-        Err(e) => println!("  audio error: {e}"),
-    }
-}
-
-#[cfg(test)]
-mod drawing_hook_tests {
-    use super::*;
-
-    #[test]
-    fn finds_obs_game_capture_in_the_frames() {
-        let frames = "frames: taiko-rs.exe+0x7b154f KERNELBASE.dll+0x10f4e3 dxcore.dll+0x26d72 d3d11.dll+0xd2f7 graphics-hook64.dll+0x9b45 taiko-rs.exe+0xa1ee83";
-        assert_eq!(
-            drawing_hook(frames),
-            Some(("graphics-hook64.dll", "OBS's game capture"))
-        );
-        assert_eq!(
-            drawing_hook("frames: GameOverlayRenderer64.dll+0x10 taiko-rs.exe+0x1").map(|h| h.1),
-            Some("the Steam overlay")
-        );
-        assert_eq!(
-            drawing_hook("frames: taiko-rs.exe+0x1 nvoglv64.dll+0x2"),
-            None
-        );
-        assert_eq!(drawing_hook("frames: not-graphics-hook64.dll+0x2"), None);
-    }
-
-    #[test]
-    fn advice_says_what_happens_next() {
-        let a = drawing_hook_advice("OBS's game capture", "graphics-hook64.dll", true, true);
-        assert!(a.contains("DX12 instead of Vulkan") && a.contains("Window Capture"));
-        let b = drawing_hook_advice(
-            "the Steam overlay",
-            "gameoverlayrenderer64.dll",
-            false,
-            true,
-        );
-        assert!(b.contains("Settings > Video > Renderer") && b.contains("overlay off"));
-        assert!(
-            !drawing_hook_advice(
-                "the Steam overlay",
-                "gameoverlayrenderer64.dll",
-                false,
-                false
-            )
-            .contains("DX12")
-        );
-    }
-}
-
-#[cfg(test)]
-mod ime_key_tests {
-    use super::*;
-
-    #[test]
-    fn keys_go_to_the_input_method_while_a_word_is_composed() {
-        let enter = Key::Named(NamedKey::Enter);
-        let tab = Key::Named(NamedKey::Tab);
-        // Nothing composed: Enter and Tab are the game's (next field, submit).
-        assert!(!ime_has_key(&enter, ""));
-        assert!(!ime_has_key(&tab, ""));
-        // A word on its way: Enter takes it and Tab picks a suggestion, in the input method.
-        assert!(ime_has_key(&enter, "にほ"));
-        assert!(ime_has_key(&tab, "にほ"));
-        // Windows says so itself, also for the Enter that has just taken the word.
-        assert!(ime_has_key(&Key::Named(NamedKey::Process), ""));
-    }
-}
-
-#[cfg(test)]
-mod pointer_wake_tests {
-    use super::*;
-
-    #[test]
-    fn a_hidden_pointer_needs_more_than_a_twitch_to_show() {
-        // 1080p: a few pixels of desk vibration stay under it, a real move gets past it.
-        let wake = pointer_wake_px(1080.0);
-        assert!(wake > 3.0f64.hypot(3.0));
-        assert!(wake < 20.0);
-        // Bigger windows need a bigger move, small ones still ignore single-pixel noise.
-        assert!(pointer_wake_px(2160.0) > wake);
-        assert!(pointer_wake_px(300.0) >= 6.0);
-    }
-}
-
-/// What the offset scale setting shows for `scale`.
-fn offset_scale_name(scale: config::OffsetScale) -> &'static str {
-    match scale {
-        config::OffsetScale::Osu => "osu!",
-        config::OffsetScale::Sound => tr!("By sound"),
-    }
-}

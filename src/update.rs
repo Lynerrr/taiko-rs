@@ -26,8 +26,10 @@ const REPO: &str = match option_env!("GITHUB_REPOSITORY") {
     Some(r) => r,
     None => "Lynerrr/taiko-rs",
 };
-/// The channel this binary was built for (`TAIKO_CHANNEL` in CI).
+/// The channel this binary was built for (`TAIKO_CHANNEL` in CI). Tests always see Stable, so
+/// what they draw doesn't depend on which channel's release job runs them.
 pub const BUILD_CHANNEL: Channel = match option_env!("TAIKO_CHANNEL") {
+    _ if cfg!(test) => Channel::Stable,
     // (`str` can't be matched in a const.)
     Some(c) if matches!(c.as_bytes(), [b'd', b'e', b'v']) => Channel::Dev,
     _ => Channel::Stable,
@@ -83,10 +85,11 @@ pub enum Status {
     Off,
     Checking,
     UpToDate,
-    /// A newer build (or the other channel's): its commit, the archive's URL and size.
+    /// A newer build (or the other channel's): its commit, the archive's URLs (tried in
+    /// order) and size.
     Available {
         commit: String,
-        url: String,
+        urls: Vec<String>,
         size: u64,
     },
     Downloading,
@@ -186,11 +189,11 @@ impl Updater {
         let (status, current) = (self.status.clone(), self.channel.clone());
         let channel = self.channel();
         std::thread::spawn(move || {
-            let result = release(channel).map(|(commit, url, size)| {
+            let result = release(channel).map(|(commit, urls, size)| {
                 if commit == build && channel == BUILD_CHANNEL {
                     Status::UpToDate
                 } else {
-                    Status::Available { commit, url, size }
+                    Status::Available { commit, urls, size }
                 }
             });
             let mut status = status.lock().unwrap();
@@ -226,7 +229,7 @@ impl Updater {
     /// Downloads and swaps in the available build. Status goes to `Installed` (then call
     /// `restart`) or `Failed`.
     pub fn install(&self) {
-        let Status::Available { url, size, .. } = self.status() else {
+        let Status::Available { urls, size, .. } = self.status() else {
             return;
         };
         *self.status.lock().unwrap() = Status::Downloading;
@@ -234,7 +237,7 @@ impl Updater {
         self.total.store(size, Ordering::Relaxed);
         let (status, done, total) = (self.status.clone(), self.done.clone(), self.total.clone());
         std::thread::spawn(move || {
-            let result = install(&url, &done, &total);
+            let result = install(&urls, &done, &total);
             *status.lock().unwrap() = match result {
                 Ok(()) => Status::Installed,
                 Err(e) => {
@@ -276,7 +279,7 @@ pub fn cleanup() {
 /// Starts the (new) binary with the same arguments. The caller then quits.
 pub fn restart() -> Result<(), String> {
     let exe = exe_path()?;
-    std::process::Command::new(&exe)
+    crate::offline::command(&exe)
         .args(std::env::args_os().skip(1))
         .spawn()
         .map_err(|e| format!("restart: {e}"))?;
@@ -292,6 +295,7 @@ fn agent() -> ureq::Agent {
 
 /// A GitHub API call about the repository (`path` after `repos/<repo>/`): the JSON it returns.
 pub fn api_get(path: &str) -> Result<String, String> {
+    crate::offline::internet()?;
     let url = format!("https://api.github.com/repos/{REPO}/{path}");
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
@@ -308,12 +312,18 @@ pub fn api_get(path: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The channel's release: its commit and this platform's archive (URL, size).
-fn release(channel: Channel) -> Result<(String, String, u64), String> {
+/// The channel's release: its commit and this platform's archive (URLs, size).
+///
+/// The archive has two URLs: the usual download link, and the API's link to the same file,
+/// which goes through a different GitHub front end and still works when the first one answers
+/// 504 (as it did for hours on 2026-11-08).
+fn release(channel: Channel) -> Result<(String, Vec<String>, u64), String> {
+    crate::offline::internet()?;
     #[derive(serde::Deserialize)]
     struct Asset {
         name: String,
         browser_download_url: String,
+        url: String,
         size: u64,
     }
     #[derive(serde::Deserialize)]
@@ -346,17 +356,50 @@ fn release(channel: Channel) -> Result<(String, String, u64), String> {
         .ok_or_else(|| format!("no {ASSET} in the {} release", channel.name()))?;
     Ok((
         release.target_commitish,
-        asset.browser_download_url,
+        vec![asset.browser_download_url, asset.url],
         asset.size,
     ))
 }
 
-fn install(url: &str, done: &AtomicU64, total: &AtomicU64) -> Result<(), String> {
+/// Tries `attempt` on each URL in turn, twice round, until one works: the first error that
+/// isn't followed by a success is the one reported.
+fn first_working<T>(
+    urls: &[String],
+    mut attempt: impl FnMut(&str) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut first_error = None;
+    for round in 0..2 {
+        if round > 0 {
+            std::thread::sleep(RETRY_PAUSE);
+        }
+        for url in urls {
+            match attempt(url) {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    eprintln!("update: {url}: {e}");
+                    first_error.get_or_insert(e);
+                }
+            }
+        }
+    }
+    Err(first_error.unwrap_or_else(|| "the release has no download link".into()))
+}
+
+#[cfg(not(test))]
+const RETRY_PAUSE: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const RETRY_PAUSE: Duration = Duration::ZERO;
+
+fn install(urls: &[String], done: &AtomicU64, total: &AtomicU64) -> Result<(), String> {
     let exe = exe_path()?;
     let download = sibling(&exe, ".download");
     let new = sibling(&exe, ".new");
     let result = (|| {
-        fetch(url, &download, done, total)?;
+        first_working(urls, |url| {
+            // A failed attempt may have counted some bytes already.
+            done.store(0, Ordering::Relaxed);
+            fetch(url, &download, done, total)
+        })?;
         let binary = unpack(&download)?;
         if binary.len() < 1 << 20 {
             return Err("the downloaded binary looks broken".into());
@@ -373,6 +416,9 @@ fn fetch(url: &str, path: &Path, done: &AtomicU64, total: &AtomicU64) -> Result<
     let mut response = agent()
         .get(url)
         .header("User-Agent", USER_AGENT)
+        // The API's link answers with JSON about the file without this; the download link
+        // doesn't mind it.
+        .header("Accept", "application/octet-stream")
         .call()
         .map_err(|e| e.to_string())?;
     let body = response.body_mut();
@@ -478,7 +524,15 @@ fn swap(exe: &Path, new: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Channel, Ordering, Status, Updater};
+    use super::{BUILD_CHANNEL, Channel, Ordering, Status, Updater, first_working};
+
+    #[test]
+    fn tests_see_a_stable_build_whatever_channel_ci_builds() {
+        // The dev release job builds with TAIKO_CHANNEL=dev; the settings goldens show the
+        // channel, so they would differ there.
+        assert_eq!(BUILD_CHANNEL, Channel::Stable);
+        assert_eq!(Updater::new(false).channel(), Channel::Stable);
+    }
 
     /// An updater whose check at launch is under way, whatever this build is.
     fn launching() -> Updater {
@@ -492,7 +546,7 @@ mod tests {
         *u.status.lock().unwrap() = Status::Available {
             commit: "abc".into(),
             // Nothing listens there: the install fails at once, without the network.
-            url: "http://127.0.0.1:1/x".into(),
+            urls: vec!["http://127.0.0.1:1/x".into()],
             size: 1,
         };
     }
@@ -531,6 +585,34 @@ mod tests {
         u.set_channel(Channel::Dev);
         found(&u);
         assert_eq!(u.install_at_launch(), None);
+    }
+
+    #[test]
+    fn a_failing_download_link_falls_back_to_the_api_one() {
+        let urls = vec!["download".to_string(), "api".to_string()];
+        let mut tried = vec![];
+        let got = first_working(&urls, |url| {
+            tried.push(url.to_string());
+            if url == "api" {
+                Ok(url.to_string())
+            } else {
+                Err("504".to_string())
+            }
+        });
+        assert_eq!(got.as_deref(), Ok("api"));
+        assert_eq!(tried, ["download", "api"]);
+    }
+
+    #[test]
+    fn every_link_is_tried_twice_and_the_first_error_is_reported() {
+        let urls = vec!["download".to_string(), "api".to_string()];
+        let mut tries = 0;
+        let got: Result<(), String> = first_working(&urls, |url| {
+            tries += 1;
+            Err(format!("{url} {tries}"))
+        });
+        assert_eq!(got, Err("download 1".to_string()));
+        assert_eq!(tries, 4);
     }
 
     #[test]

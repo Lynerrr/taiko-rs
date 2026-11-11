@@ -144,6 +144,41 @@ impl ScreenshotTo {
     }
 }
 
+/// The song list's share of the width: least, most and usual (dragging its edge).
+pub const LIST_SHARE: (f32, f32, f32) = (0.3, 0.7, 0.52);
+
+/// How big the autoplay preview gets: smallest and full (dragging the panel's bottom edge).
+pub const PREVIEW_SIZE: (f32, f32) = (0.4, 1.0);
+
+/// How a replay video is exported (`video::Settings`; its methods are there).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VideoSettings {
+    pub size: usize,
+    pub fps: usize,
+    pub quality: usize,
+    /// The size aimed under with the "target size" quality (MB, 1 MB = 1,000,000 bytes).
+    pub target_mb: f64,
+    pub speed: usize,
+    pub blur: usize,
+    pub hud: bool,
+    pub hitsounds: bool,
+}
+
+impl Default for VideoSettings {
+    fn default() -> VideoSettings {
+        VideoSettings {
+            size: 1,
+            fps: 1,
+            quality: 1,
+            target_mb: 10.0,
+            speed: 0,
+            blur: 0,
+            hud: true,
+            hitsounds: true,
+        }
+    }
+}
+
 pub struct Config {
     /// Columns of the touch drum, left to right.
     pub touch_layout: TouchLayout,
@@ -340,8 +375,8 @@ pub struct Config {
     /// there was a config to read (not the first start).
     pub last_build: String,
     pub existed: bool,
-    /// Song select's layout: the share of the width the song list takes (`ui::LIST_SHARE`), and
-    /// how big the autoplay preview is (`preview::PREVIEW_SIZE`; smaller leaves the leaderboard
+    /// Song select's layout: the share of the width the song list takes (`LIST_SHARE`), and
+    /// how big the autoplay preview is (`PREVIEW_SIZE`; smaller leaves the leaderboard
     /// more room).
     pub song_list_share: f32,
     pub song_preview_size: f32,
@@ -379,7 +414,7 @@ pub struct Config {
     /// Note colours without Multiverse.
     pub note_colours: crate::multiverse::Colours,
     /// How replay videos are exported.
-    pub video: crate::video::Settings,
+    pub video: VideoSettings,
     pub songs: Vec<PathBuf>,
 }
 
@@ -532,8 +567,8 @@ impl Default for Config {
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
             preset_keys: [KeyCode::F5, KeyCode::F6],
             hotkeys: crate::keys::Bindings::default(),
-            song_list_share: crate::ui::LIST_SHARE.2,
-            song_preview_size: crate::preview::PREVIEW_SIZE.1,
+            song_list_share: LIST_SHARE.2,
+            song_preview_size: PREVIEW_SIZE.1,
             last_build: String::new(),
             existed: false,
             show_playfield_size: true,
@@ -546,7 +581,7 @@ impl Default for Config {
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
-            random_seed: crate::fresh_seed(),
+            random_seed: fresh_seed(),
             tact: crate::tact::DEFAULT,
             od_override: crate::od_override::DEFAULT,
             favourite_mods: crate::mods::Mods::NONE,
@@ -598,6 +633,8 @@ static DATA_FOLDER: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(
 
 pub fn set_data_folder(dir: Option<PathBuf>) {
     *DATA_FOLDER.write().unwrap_or_else(|e| e.into_inner()) = dir;
+    // `taiko.db` is the one in the new folder from now on.
+    crate::store::close();
 }
 
 pub fn data_folder() -> Option<PathBuf> {
@@ -625,7 +662,7 @@ pub fn renderer_name(api: &str) -> &'static str {
         "vulkan" => "Vulkan",
         "gl" => "OpenGL",
         "metal" => "Metal",
-        _ => tr!("Auto"),
+        _ => tr!("Auto", "自動", "Авто"),
     }
 }
 
@@ -673,6 +710,9 @@ fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
         "plays.tsv",
         "hidden.tsv",
         "map_skins_off.txt",
+        crate::store::FILE,
+        "taiko.db-wal",
+        "taiko.db-shm",
     ]
     .iter()
     .map(|n| base.as_ref().map(|b| b.join(n)))
@@ -694,6 +734,8 @@ pub fn move_data(
     total: &std::sync::atomic::AtomicU64,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
+    // Closed, so its journal is written into it and it moves as one file.
+    crate::store::close();
     let pairs: Vec<(PathBuf, PathBuf)> = data_paths(from)
         .into_iter()
         .zip(data_paths(to))
@@ -800,10 +842,10 @@ fn remove_all(p: &Path) -> std::io::Result<()> {
 pub const MAP_OFFSETS: &str = "map_offsets_osu.tsv";
 /// Before: the other way round (+ took the notes later). Read once, turned round into
 /// `MAP_OFFSETS`, then kept under `OLD_SIGN_KEPT` to go back to by hand.
-const OLD_SIGN_MAP_OFFSETS: &str = "map_offsets.tsv";
+pub const OLD_SIGN_MAP_OFFSETS: &str = "map_offsets.tsv";
 const OLD_SIGN_KEPT: &str = "map_offsets.before-osu-sign.tsv";
 
-fn parse_map_offsets(text: &str) -> std::collections::HashMap<u64, f64> {
+pub fn parse_map_offsets(text: &str) -> std::collections::HashMap<u64, f64> {
     text.lines()
         .filter_map(|l| {
             let (h, ms) = l.split_once('\t')?;
@@ -816,6 +858,9 @@ fn parse_map_offsets(text: &str) -> std::collections::HashMap<u64, f64> {
 }
 
 pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
+    if let Some(offsets) = crate::store::with(|s| s.map_offsets()) {
+        return offsets;
+    }
     let Some(dir) = data_dir() else {
         return Default::default();
     };
@@ -842,6 +887,7 @@ fn load_map_offsets_in(dir: &Path) -> std::collections::HashMap<u64, f64> {
 pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
     let Some(dir) = data_dir() else { return };
     save_map_offsets_in(&dir, offsets);
+    crate::store::with(|s| s.replace_map_offsets(offsets));
 }
 
 fn save_map_offsets_in(dir: &Path, offsets: &std::collections::HashMap<u64, f64>) -> bool {
@@ -857,11 +903,20 @@ fn save_map_offsets_in(dir: &Path, offsets: &std::collections::HashMap<u64, f64>
 /// The folders of the maps whose own skin is turned off: `map_skins_off.txt` in the config folder,
 /// one folder name per line. A map's skin is its folder's, so all its difficulties share this.
 pub fn load_map_skins_off() -> std::collections::HashSet<String> {
-    let Some(text) =
-        data_dir().and_then(|d| std::fs::read_to_string(d.join("map_skins_off.txt")).ok())
-    else {
-        return Default::default();
-    };
+    if let Some(folders) = crate::store::with(|s| s.map_skins_off()) {
+        return folders;
+    }
+    data_dir()
+        .and_then(|d| std::fs::read_to_string(d.join(MAP_SKINS_OFF)).ok())
+        .map(|text| parse_lines(&text))
+        .unwrap_or_default()
+}
+
+/// The file of the maps whose own skin is off.
+pub const MAP_SKINS_OFF: &str = "map_skins_off.txt";
+
+/// A file's non-empty lines, as a set (`map_skins_off.txt`, `favourite-songs.txt`).
+pub fn parse_lines(text: &str) -> std::collections::HashSet<String> {
     text.lines()
         .filter(|l| !l.is_empty())
         .map(str::to_string)
@@ -873,7 +928,8 @@ pub fn save_map_skins_off(folders: &std::collections::HashSet<String>) {
     let _ = std::fs::create_dir_all(&dir);
     let mut lines: Vec<&str> = folders.iter().map(String::as_str).collect();
     lines.sort_unstable();
-    let _ = std::fs::write(dir.join("map_skins_off.txt"), lines.join("\n") + "\n");
+    let _ = std::fs::write(dir.join(MAP_SKINS_OFF), lines.join("\n") + "\n");
+    crate::store::with(|s| s.replace_map_skins_off(folders));
 }
 
 /// Clears every map's own offset, keeping them in `map_offsets.backup.tsv` to go back to by hand.
@@ -881,6 +937,7 @@ pub fn reset_map_offsets() {
     if let Some(dir) = data_dir() {
         let _ = std::fs::rename(dir.join(MAP_OFFSETS), dir.join("map_offsets.backup.tsv"));
     }
+    crate::store::with(|s| s.replace_map_offsets(&Default::default()));
 }
 
 pub fn config_path() -> Option<PathBuf> {
@@ -1247,7 +1304,7 @@ impl Config {
                 }
                 "last_build" => cfg.last_build = v.to_string(),
                 "song_list_share" => {
-                    let (min, max, _) = crate::ui::LIST_SHARE;
+                    let (min, max, _) = LIST_SHARE;
                     cfg.song_list_share = v
                         .parse::<f32>()
                         .ok()
@@ -1255,7 +1312,7 @@ impl Config {
                         .map_or(cfg.song_list_share, |f| f.clamp(min, max));
                 }
                 "song_preview_size" => {
-                    let (min, max) = crate::preview::PREVIEW_SIZE;
+                    let (min, max) = PREVIEW_SIZE;
                     cfg.song_preview_size = v
                         .parse::<f32>()
                         .ok()
@@ -1881,6 +1938,14 @@ fn keep_unknown(out: &mut String, old: &str) {
         out.push_str("# from another version of the game, kept for it\n");
         out.push_str(&(kept.join("\n") + "\n"));
     }
+}
+
+/// A new seed for Random's colouring (never 0, the one from before seeds).
+pub(crate) fn fresh_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |d| d.as_nanos() as u64)
+        .max(1)
 }
 
 #[cfg(test)]

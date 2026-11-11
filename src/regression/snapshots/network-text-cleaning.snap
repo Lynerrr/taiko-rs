@@ -1,0 +1,17 @@
+"hello" -> chat "hello" censor "hello" clean_text "hello"
+"  spaced   out  " -> chat "spaced   out" censor "  spaced   out  " clean_text "  spaced   out  "
+"tab\tand\nnewline" -> chat "tabandnewline" censor "tab\tand\nnewline" clean_text "tabandnewline"
+"emoji 🎵 ok" -> chat "emoji  ok" censor "emoji 🎵 ok" clean_text "emoji  ok"
+"what the fuck" -> chat "what the fuck" censor "what the ****" clean_text "what the fuck"
+"\u{202e}rtl override" -> chat "rtl override" censor "\u{202e}rtl override" clean_text "rtl override"
+valid_name("ok_name") = true
+valid_name("a") = false
+valid_name("has space") = false
+valid_name("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") = false
+valid_name("кириллица") = false
+valid_name("-dash-") = true
+valid_password("") = false
+valid_password("short") = false
+valid_password("long enough password") = true
+clean_title = "My   Room"
+map label = Artist - Title [Oni]  1.50x  +HDDT  from 0:30  DEFENSE 25 lives, 8 bars a turn

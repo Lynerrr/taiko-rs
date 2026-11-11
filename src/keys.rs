@@ -127,6 +127,8 @@ pub enum Hotkey {
     Download,
     Sort,
     Collections,
+    /// Song select: put the selected difficulty in a collection.
+    Collect,
     Pause,
     SkipIntro,
     QuickRetry,
@@ -147,7 +149,7 @@ const ANYWHERE: &[Place] = &[
 ];
 
 impl Hotkey {
-    pub const ALL: [Hotkey; 34] = [
+    pub const ALL: [Hotkey; 35] = [
         Hotkey::Pause,
         Hotkey::SkipIntro,
         Hotkey::QuickRetry,
@@ -164,6 +166,7 @@ impl Hotkey {
         Hotkey::Download,
         Hotkey::Sort,
         Hotkey::Collections,
+        Hotkey::Collect,
         Hotkey::Retry,
         Hotkey::WatchReplay,
         Hotkey::ExportVideo,
@@ -216,6 +219,7 @@ impl Hotkey {
             Hotkey::Download => const { &[Chord::ctrl(KeyD)] },
             Hotkey::Sort => const { &[Chord::ctrl(KeyS)] },
             Hotkey::Collections => const { &[Chord::ctrl(KeyL)] },
+            Hotkey::Collect => const { &[Chord::ctrl(KeyK)] },
             Hotkey::Pause => const { &[Chord::plain(Escape)] },
             Hotkey::SkipIntro => const { &[Chord::plain(Space)] },
             Hotkey::QuickRetry => const { &[Chord::plain(Backquote)] },
@@ -266,7 +270,8 @@ impl Hotkey {
             | Hotkey::Preview
             | Hotkey::Download
             | Hotkey::Sort
-            | Hotkey::Collections => &[Place::Select],
+            | Hotkey::Collections
+            | Hotkey::Collect => &[Place::Select],
             Hotkey::Pause | Hotkey::ApplyOffset | Hotkey::QuickRetry => {
                 &[Place::Play, Place::Paused]
             }
@@ -280,44 +285,137 @@ impl Hotkey {
     /// For the settings list.
     pub fn label(self) -> &'static str {
         match self {
-            Hotkey::ScrollSlower => tr!("Scroll speed down"),
-            Hotkey::ScrollFaster => tr!("Scroll speed up"),
-            Hotkey::OffsetDown => tr!("Offset - (map / all)"),
-            Hotkey::OffsetUp => tr!("Offset + (map / all)"),
+            Hotkey::ScrollSlower => tr!(
+                "Scroll speed down",
+                "スクロール速度 -",
+                "Скорость прокрутки -"
+            ),
+            Hotkey::ScrollFaster => tr!(
+                "Scroll speed up",
+                "スクロール速度 +",
+                "Скорость прокрутки +"
+            ),
+            Hotkey::OffsetDown => tr!(
+                "Offset - (map / all)",
+                "オフセット - (譜面 / 全体)",
+                "Смещение - (карта / все)"
+            ),
+            Hotkey::OffsetUp => tr!(
+                "Offset + (map / all)",
+                "オフセット + (譜面 / 全体)",
+                "Смещение + (карта / все)"
+            ),
             Hotkey::VisualOffsetDown => {
-                tr!("Visual offset -")
+                tr!("Visual offset -", "表示オフセット -", "Смещение картинки -")
             }
             Hotkey::VisualOffsetUp => {
-                tr!("Visual offset +")
+                tr!("Visual offset +", "表示オフセット +", "Смещение картинки +")
             }
-            Hotkey::PresentMode => tr!("Next present mode"),
-            Hotkey::FpsCap => tr!("Next FPS cap"),
-            Hotkey::FpsOverlay => tr!("FPS overlay"),
-            Hotkey::Fullscreen => tr!("Fullscreen"),
-            Hotkey::Quit => tr!("Quit taiko.rs"),
-            Hotkey::Screenshot => tr!("Screenshot"),
-            Hotkey::Friends => tr!("Friends and chat"),
-            Hotkey::OpenSettings => tr!("Settings, from anywhere"),
-            Hotkey::Update => tr!("Update"),
-            Hotkey::Mods => tr!("Song select: mods"),
-            Hotkey::Settings => tr!("Song select: settings"),
-            Hotkey::Random => tr!("Song select: random (Shift: back)"),
-            Hotkey::SpeedDown => tr!("Song select: speed -"),
-            Hotkey::SpeedUp => tr!("Song select: speed +"),
-            Hotkey::PlayFrom => tr!("Song select: play from the flag"),
-            Hotkey::Preview => tr!("Song select: autoplay preview"),
-            Hotkey::Download => tr!("Song select: download maps"),
-            Hotkey::Sort => tr!("Song select: sort"),
-            Hotkey::Collections => tr!("Song select: collections"),
-            Hotkey::Pause => tr!("Song: pause"),
-            Hotkey::SkipIntro => tr!("Song: skip intro"),
-            Hotkey::QuickRetry => tr!("Song: quick retry (hold)"),
-            Hotkey::Restart => tr!("Song / results: restart"),
-            Hotkey::ApplyOffset => tr!("Song: apply offset suggestion"),
-            Hotkey::MapInfo => tr!("Song: offset / UR line"),
-            Hotkey::Retry => tr!("Results: retry"),
-            Hotkey::WatchReplay => tr!("Results: watch replay"),
-            Hotkey::ExportVideo => tr!("Results: export video"),
+            Hotkey::PresentMode => tr!(
+                "Next present mode",
+                "次の表示モード",
+                "Следующий режим вывода"
+            ),
+            Hotkey::FpsCap => tr!("Next FPS cap", "次のFPS上限", "Следующее ограничение FPS"),
+            Hotkey::FpsOverlay => tr!("FPS overlay", "FPSの表示", "Счётчик FPS"),
+            Hotkey::Fullscreen => tr!("Fullscreen", "フルスクリーン", "Полный экран"),
+            Hotkey::Quit => tr!("Quit taiko.rs", "taiko.rsを終了", "Выйти из taiko.rs"),
+            Hotkey::Screenshot => tr!("Screenshot", "スクリーンショット", "Скриншот"),
+            Hotkey::Friends => tr!("Friends and chat", "フレンドとチャット", "Друзья и чат"),
+            Hotkey::OpenSettings => tr!(
+                "Settings, from anywhere",
+                "設定 (どこからでも)",
+                "Настройки откуда угодно"
+            ),
+            Hotkey::Update => tr!("Update", "アップデート", "Обновление"),
+            Hotkey::Mods => tr!("Song select: mods", "選曲: Mod", "Выбор песни: моды"),
+            Hotkey::Settings => tr!(
+                "Song select: settings",
+                "選曲: 設定",
+                "Выбор песни: настройки"
+            ),
+            Hotkey::Random => tr!(
+                "Song select: random (Shift: back)",
+                "選曲: ランダム (Shift: 戻る)",
+                "Выбор песни: случайная (Shift: назад)"
+            ),
+            Hotkey::SpeedDown => tr!(
+                "Song select: speed -",
+                "選曲: 速度 -",
+                "Выбор песни: скорость -"
+            ),
+            Hotkey::SpeedUp => tr!(
+                "Song select: speed +",
+                "選曲: 速度 +",
+                "Выбор песни: скорость +"
+            ),
+            Hotkey::PlayFrom => tr!(
+                "Song select: play from the flag",
+                "選曲: 旗の位置からプレイ",
+                "Выбор песни: играть с флажка"
+            ),
+            Hotkey::Preview => tr!(
+                "Song select: autoplay preview",
+                "選曲: オートのプレビュー",
+                "Выбор песни: превью автоплея"
+            ),
+            Hotkey::Download => tr!(
+                "Song select: download maps",
+                "選曲: 譜面をダウンロード",
+                "Выбор песни: скачать карты"
+            ),
+            Hotkey::Sort => tr!(
+                "Song select: sort",
+                "選曲: 並べ替え",
+                "Выбор песни: сортировка"
+            ),
+            Hotkey::Collections => tr!(
+                "Song select: collections",
+                "選曲: コレクション",
+                "Выбор песни: коллекции"
+            ),
+            Hotkey::Collect => tr!(
+                "Song select: put in a collection",
+                "選曲: コレクションに入れる",
+                "Выбор песни: добавить в коллекцию"
+            ),
+            Hotkey::Pause => tr!("Song: pause", "曲: ポーズ", "Песня: пауза"),
+            Hotkey::SkipIntro => tr!(
+                "Song: skip intro",
+                "曲: イントロを飛ばす",
+                "Песня: пропустить вступление"
+            ),
+            Hotkey::QuickRetry => tr!(
+                "Song: quick retry (hold)",
+                "曲: すぐにやり直す (長押し)",
+                "Песня: быстрый перезапуск (удерживать)"
+            ),
+            Hotkey::Restart => tr!(
+                "Song / results: restart",
+                "曲 / リザルト: 最初から",
+                "Песня / итоги: заново"
+            ),
+            Hotkey::ApplyOffset => tr!(
+                "Song: apply offset suggestion",
+                "曲: オフセットの提案を適用",
+                "Песня: применить подсказку смещения"
+            ),
+            Hotkey::MapInfo => tr!(
+                "Song: offset / UR line",
+                "曲: オフセット / URの行",
+                "Песня: строка смещения / UR"
+            ),
+            Hotkey::Retry => tr!("Results: retry", "リザルト: リトライ", "Итоги: ещё раз"),
+            Hotkey::WatchReplay => tr!(
+                "Results: watch replay",
+                "リザルト: リプレイを見る",
+                "Итоги: смотреть повтор"
+            ),
+            Hotkey::ExportVideo => tr!(
+                "Results: export video",
+                "リザルト: 動画を書き出す",
+                "Итоги: экспорт видео"
+            ),
         }
     }
 
@@ -349,6 +447,7 @@ impl Hotkey {
             Hotkey::Download => "download",
             Hotkey::Sort => "sort",
             Hotkey::Collections => "collections",
+            Hotkey::Collect => "collect",
             Hotkey::Pause => "pause",
             Hotkey::SkipIntro => "skip_intro",
             Hotkey::QuickRetry => "quick_retry",

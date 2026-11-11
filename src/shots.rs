@@ -50,6 +50,7 @@ pub fn shot_jpeg(w: u32, h: u32, rgb: Vec<u8>) -> Result<Vec<u8>, String> {
 
 /// Uploads a JPEG with the game's `token`; the id it's known by now.
 pub fn upload_shot(token: &str, jpeg: Vec<u8>) -> Result<u128, String> {
+    crate::offline::internet()?;
     let reply = ureq::post(format!("{WEBSITE}/shot"))
         .config()
         .http_status_as_error(false)
@@ -74,6 +75,7 @@ pub type Pixels = (u32, u32, Vec<u8>);
 
 /// Fetches a screenshot.
 pub fn fetch_shot(id: u128) -> Result<Pixels, String> {
+    crate::offline::internet()?;
     use std::io::Read;
     let mut reply = ureq::get(shot_url(id)).call().map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();

@@ -3,8 +3,9 @@
 //! music and the background just carry on.
 
 use crate::game::{DON, KAT};
+use crate::hit::{Canvas, Hit};
 use crate::player::Control;
-use crate::render::{self, Canvas, Hit, Sprite, approach, pixel_size, rgba, snap_to_grid};
+use crate::render::{self, Sprite, approach, pixel_size, rgba, snap_to_grid};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Item {
@@ -289,27 +290,52 @@ const CROSS: Icon = [
 impl Item {
     fn name(self) -> &'static str {
         match self {
-            Item::Play => tr!("PLAY"),
-            Item::Multiplayer => tr!("MULTIPLAYER"),
-            Item::Download => tr!("DOWNLOAD"),
-            Item::Medals => tr!("MEDALS"),
-            Item::Editor => tr!("EDITOR"),
-            Item::Settings => tr!("SETTINGS"),
-            Item::Exit => tr!("EXIT"),
+            Item::Play => tr!("PLAY", "プレイ", "ИГРАТЬ"),
+            Item::Multiplayer => tr!("MULTIPLAYER", "マルチ", "МУЛЬТИПЛЕЕР"),
+            Item::Download => tr!("DOWNLOAD", "ダウンロード", "ЗАГРУЗКА"),
+            Item::Medals => tr!("MEDALS", "メダル", "МЕДАЛИ"),
+            Item::Editor => tr!("EDITOR", "エディタ", "РЕДАКТОР"),
+            Item::Settings => tr!("SETTINGS", "設定", "НАСТРОЙКИ"),
+            Item::Exit => tr!("EXIT", "終了", "ВЫХОД"),
         }
     }
 
     fn about(self, maps: usize) -> String {
         match self {
             Item::Play => {
-                tr!("{maps} maps in your library"; maps)
+                tr!("{maps} maps in your library", "ライブラリに{maps}譜面", "{maps} карт в библиотеке"; [] [maps])
             }
-            Item::Multiplayer => tr!("Play with friends and everyone else").into(),
-            Item::Download => tr!("Find and get new maps").into(),
-            Item::Medals => tr!("What you've earned, and what's next").into(),
-            Item::Editor => tr!("Make your own maps and share them").into(),
-            Item::Settings => tr!("Sound, keys, skin, offset").into(),
-            Item::Exit => tr!("Close taiko.rs").into(),
+            Item::Multiplayer => tr!(
+                "Play with friends and everyone else",
+                "フレンドやみんなと遊ぶ",
+                "Играть с друзьями и не только"
+            )
+            .into(),
+            Item::Download => tr!(
+                "Find and get new maps",
+                "新しい譜面を探す",
+                "Найти и скачать новые карты"
+            )
+            .into(),
+            Item::Medals => tr!(
+                "What you've earned, and what's next",
+                "獲得したメダルと次の目標",
+                "Что уже получено и что дальше"
+            )
+            .into(),
+            Item::Editor => tr!(
+                "Make your own maps and share them",
+                "自分の譜面を作って公開しよう",
+                "Делай свои карты и делись ими"
+            )
+            .into(),
+            Item::Settings => tr!(
+                "Sound, keys, skin, offset",
+                "音、キー、スキン、オフセット",
+                "Звук, клавиши, скин, оффсет"
+            )
+            .into(),
+            Item::Exit => tr!("Close taiko.rs", "taiko.rsを閉じる", "Закрыть taiko.rs").into(),
         }
     }
 
@@ -901,7 +927,7 @@ impl Menu {
         let small_r = big_r * song_note_r() / song_big_r();
         let start = c.shapes.len();
         let fade = song.fade() * SONG_ALPHA;
-        let colours = crate::multiverse::note_colours();
+        let colours = crate::game::note_colours();
         let (don, kat) = (colours.don(), colours.kat());
         // The target, as in a song: the skin's, or rings.
         let big = c.sprite(
@@ -962,7 +988,7 @@ impl Menu {
             let r = if note.big { big_r } else { small_r };
             let col = if note.kat { kat } else { don };
             if !crate::game::skin_note(c, x, lane_mid(), r, note.big, col, fade) {
-                crate::multiverse::note(
+                crate::game::shaped_note(
                     c,
                     crate::multiverse::Shape::Round,
                     x,
@@ -1296,7 +1322,10 @@ fn time_text(secs: f64) -> String {
 /// How long the game has been running, and how much of that was in songs.
 fn draw_session(c: &mut Canvas, (running, playing): (f64, f64)) {
     let (running, playing) = (time_text(running), time_text(playing));
-    let text = tr!("Running {running}   In songs {playing}"; running, playing);
+    let text = tr!(
+        "Running {running}   In songs {playing}",
+        "起動 {running}   プレイ {playing}",
+        "Запущено {running}   В песнях {playing}"; [] [running, playing]);
     let (w, h) = (Canvas::text_width(7.0, &text), Canvas::text_height(7.0));
     c.round_rect(
         [18.0, 47.5],
@@ -1575,7 +1604,7 @@ fn draw_footer(c: &mut Canvas, f: &Frame) {
         y0 + crate::mobile::pick(1.0, 3.0),
         7.0,
         rgba(0x9a9ab0, 1.0),
-        tr!("NOW PLAYING"),
+        tr!("NOW PLAYING", "再生中", "СЕЙЧАС ИГРАЕТ"),
     );
     c.text(
         side + 11.0,

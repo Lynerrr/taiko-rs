@@ -8,9 +8,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use crate::beatmap::{self, Kind};
+use crate::hit::Canvas;
 use crate::library::Entry;
 use crate::multiverse;
-use crate::render::{self, Canvas, rgba};
+use crate::render::{self, rgba};
 use crate::stars::Stars;
 
 /// A note as the background needs it.
@@ -265,7 +266,7 @@ pub fn draw(c: &mut Canvas, view: &View, clock: f32, kiai: f32, kick: f32, shift
                 universe.don()
             };
             let r = route.r * if note.big { 1.45 } else { 1.0 } + kick * 1.5;
-            multiverse::note(c, universe.shape, x, y, r, col, route.alpha * bright * ends);
+            crate::game::shaped_note(c, universe.shape, x, y, r, col, route.alpha * bright * ends);
         }
     }
 }
@@ -381,7 +382,7 @@ mod tests {
             library[0].size > library[1].size,
             "the file size alone would pick the kantan"
         );
-        let (mut notes, mut stars) = (Notes::default(), Stars::default());
+        let (mut notes, mut stars) = (Notes::default(), Stars::new(crate::stars::read));
         for _ in 0..500 {
             stars.poll();
             notes.update(Some(0), &library, &mut stars, 1.0);

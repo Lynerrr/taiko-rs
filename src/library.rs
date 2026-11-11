@@ -5,6 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use crate::beatmap::{self, Meta};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
+use std::time::Instant;
+
+use crate::config::{self, Config};
+use crate::{net, online};
 
 pub struct Entry {
     pub path: PathBuf,
@@ -126,6 +132,9 @@ pub fn launch_osu() -> Result<(), String> {
     #[cfg(not(target_os = "android"))]
     {
         use std::process::{Command, Stdio};
+        if !crate::offline::may_spawn() {
+            return Err(crate::offline::BLOCKED.into());
+        }
         let quiet = |mut c: Command| {
             c.stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -162,6 +171,7 @@ pub fn launch_osu() -> Result<(), String> {
 /// closes: Ok(None) when cancelled, Err when there is no dialog to show.
 pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
     use std::process::Command;
+    #[cfg(not(target_os = "android"))]
     const TITLE: &str = "Choose your osu! Songs folder";
     #[cfg_attr(target_os = "android", allow(unused_mut))]
     let mut tries: Vec<Command> = Vec::new();
@@ -221,6 +231,9 @@ pub fn pick_folder(start: &Path) -> Result<Option<PathBuf>, String> {
 /// Runs the first of the system's dialogs that exists: Ok(None) when cancelled, Err when there
 /// is none to show.
 fn run_dialogs(tries: Vec<std::process::Command>) -> Result<Option<PathBuf>, String> {
+    if !crate::offline::may_spawn() {
+        return Err(crate::offline::BLOCKED.into());
+    }
     for mut cmd in tries {
         let Ok(out) = cmd.stderr(std::process::Stdio::null()).output() else {
             continue;
@@ -249,7 +262,7 @@ impl FileKind {
     }
 
     /// The dialogs' name for the files (macOS's dialog has no filter to name).
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg(not(any(target_os = "android", target_os = "macos")))]
     fn label(self) -> &'static str {
         match self {
             FileKind::Audio => "Songs",
@@ -267,9 +280,9 @@ impl FileKind {
 
 /// Asks for a file with the system's file dialog, starting in `start`. Blocks until it closes:
 /// Ok(None) when cancelled, Err when there is no dialog to show.
+#[cfg(not(target_os = "android"))]
 pub fn pick_file(kind: FileKind, title: &str, start: &Path) -> Result<Option<PathBuf>, String> {
     use std::process::Command;
-    #[cfg_attr(target_os = "android", allow(unused_mut))]
     let mut tries: Vec<Command> = Vec::new();
     let globs: Vec<String> = kind.extensions().iter().map(|e| format!("*.{e}")).collect();
     #[cfg(windows)]
@@ -312,7 +325,7 @@ pub fn pick_file(kind: FileKind, title: &str, start: &Path) -> Result<Option<Pat
         ]);
         tries.push(osa);
     }
-    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let mut zenity = Command::new("zenity");
         zenity
@@ -479,6 +492,28 @@ fn extract_osz(path: &Path) -> Result<PathBuf, String> {
 fn is_dir(e: &std::fs::DirEntry) -> bool {
     e.file_type()
         .is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()))
+}
+
+/// A path the library can read when given on the command line: a folder, a map or a map
+/// archive.
+fn is_library_input(p: &Path) -> bool {
+    p.is_dir() || (p.is_file() && (is_map_file(p) || is_map_archive(p)))
+}
+
+/// What the library scans at start: what the command line gives that it can read, else the
+/// usual song folders. A file it can't read (one a file manager opened the game with) is
+/// skipped rather than leaving song select empty.
+pub(crate) fn startup_inputs(args: &[PathBuf], cfg: &Config) -> Vec<PathBuf> {
+    let given: Vec<PathBuf> = args
+        .iter()
+        .filter(|a| is_library_input(a))
+        .cloned()
+        .collect();
+    if given.is_empty() {
+        song_inputs(cfg)
+    } else {
+        given
+    }
 }
 
 /// A chart file: `.osu`, or `.tko` (an `.osu` with the client's own gimmicks added).
@@ -870,9 +905,142 @@ pub fn osz_news<'a>(
     (fresh, home)
 }
 
+/// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
+pub(crate) fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
+    if let Some(plays) = crate::store::with(|s| s.plays()) {
+        return plays;
+    }
+    config::data_dir()
+        .and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
+        .map(|text| parse_plays(&text))
+        .unwrap_or_default()
+}
+
+/// `plays.tsv`'s lines; a map played more than once keeps its latest.
+pub(crate) fn parse_plays(text: &str) -> std::collections::HashMap<PathBuf, u64> {
+    let mut out = std::collections::HashMap::new();
+    for line in text.lines() {
+        if let Some((t, path)) = line.split_once('\t')
+            && let Ok(t) = t.parse::<u64>()
+        {
+            let slot = out.entry(PathBuf::from(path)).or_insert(0);
+            *slot = (*slot).max(t);
+        }
+    }
+    out
+}
+
+/// Where downloaded maps go: the first Songs folder being scanned, else taiko.rs's own (which
+/// is scanned at startup when it exists).
+pub(crate) fn download_dir(inputs: &[PathBuf]) -> PathBuf {
+    if let Some(dir) = inputs.iter().find(|p| p.is_dir()) {
+        return dir.clone();
+    }
+    config::own_dir("Songs").unwrap_or_else(|| PathBuf::from("Songs"))
+}
+
+/// Of a set's maps, the ones to show: its taiko difficulties, else (a set of converts) all.
+pub(crate) fn main_maps<'a>(maps: impl Iterator<Item = &'a Entry>) -> Vec<PathBuf> {
+    let maps: Vec<&Entry> = maps.collect();
+    let taiko = maps.iter().any(|e| e.meta.mode == 1);
+    maps.into_iter()
+        .filter(|e| !taiko || e.meta.mode == 1)
+        .map(|e| e.path.clone())
+        .collect()
+}
+
+/// What to scan without arguments: the Songs folder (picked in settings, else osu!'s), plus the
+/// config's extra `songs =` lines.
+pub(crate) fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
+    let mut inputs = song_dirs();
+    inputs.extend(cfg.songs.iter().cloned());
+    inputs
+}
+
+/// What a library scan hands over: the list from the cache straight away, if there's one, then the
+/// list as it is on disk.
+pub(crate) enum Scanned {
+    Cached(Vec<Entry>),
+    Done(Vec<Entry>),
+}
+
+/// Scans `inputs` on a background thread so the window appears at once, even with a huge
+/// library.
+pub(crate) fn start_scan(inputs: Vec<PathBuf>) -> (Receiver<Scanned>, Arc<AtomicUsize>) {
+    let found = Arc::new(AtomicUsize::new(0));
+    let (tx, rx) = mpsc::channel();
+    let counter = found.clone();
+    std::thread::Builder::new()
+        .name("library".into())
+        .spawn(move || {
+            let started = Instant::now();
+            let early = tx.clone();
+            let library = scan(&inputs, &counter, &mut |cached| {
+                let _ = early.send(Scanned::Cached(cached));
+            });
+            eprintln!(
+                "scanned {} files in {:.0} ms",
+                counter.load(Ordering::Relaxed),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            let _ = tx.send(Scanned::Done(library));
+        })
+        .expect("spawn library scan");
+    (rx, found)
+}
+
+/// The library entry for a map someone else named: the file's content hash identifies it (the
+/// title can differ, e.g. romanised on one side and Cyrillic on the other).
+pub(crate) fn find_map(library: &[Entry], m: &net::MapInfo) -> Option<usize> {
+    library
+        .iter()
+        .position(|e| e.meta.version == m.version && e.hash() == m.hash)
+}
+
+/// The map an online score was played on: only maps of its set or with its name are hashed
+/// (hashing reads the file).
+pub(crate) fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Option<usize> {
+    library.iter().position(|e| {
+        let candidate = match (s.set_id, e.set_id()) {
+            (Some(a), Some(b)) => a == b,
+            _ => online::clean_text(&e.label(), 160) == s.map,
+        };
+        candidate && e.hash() == s.map_hash
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file the game was opened with that it can't read (an archive type it doesn't know, a
+    /// path that isn't there) leaves the usual songs in place instead of an empty list.
+    #[test]
+    fn a_file_the_library_cant_read_on_the_command_line_keeps_the_usual_songs() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-args-{}", std::process::id()));
+        let songs = root.join("Songs");
+        std::fs::create_dir_all(&songs).unwrap();
+        let unknown = root.join("set.zip");
+        std::fs::write(&unknown, b"zip").unwrap();
+        let cfg = Config {
+            songs: vec![songs.clone()],
+            ..Config::default()
+        };
+        let usual = song_inputs(&cfg);
+        assert!(usual.contains(&songs));
+        assert_eq!(startup_inputs(&[], &cfg), usual);
+        assert_eq!(startup_inputs(std::slice::from_ref(&unknown), &cfg), usual);
+        assert_eq!(startup_inputs(&[root.join("gone.rsz")], &cfg), usual);
+        // What it can read is what it scans.
+        let map = root.join("a.osu");
+        std::fs::write(&map, b"osu").unwrap();
+        assert_eq!(startup_inputs(&[unknown, map.clone()], &cfg), vec![map]);
+        assert_eq!(
+            startup_inputs(std::slice::from_ref(&songs), &cfg),
+            vec![songs]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn an_osz_already_in_the_list_adds_nothing() {

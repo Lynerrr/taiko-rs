@@ -48,7 +48,30 @@
 
 - Before finishing any task, run lint and formatting checks for the affected crates.
 - Fix all lint errors, warnings, and formatting failures, then rerun the checks.
-- The work is not complete until both lint and formatting checks pass.
+- For any change to the client, run the client tests,
+  regression suite included: `cargo test --locked --all-targets`.
+- The work is not complete until lint, formatting and the client tests all pass. A task
+  can't be reported as done while a regression test fails, is skipped or is disabled to get
+  it through. The same goes for golden files updated without reviewing their diff.
+
+## Regression tests
+
+- The client's regression suite lives in `src/regression/` and is described in
+  `docs/regression-tests.md`. It covers gameplay, scoring, file formats, the network protocol,
+  user journeys and every screen. The server is not part of it.
+- Every change to the client must come with regression tests for the behaviour it adds or
+  changes. A bug fix comes with a test that fails without the fix. A refactor must leave the
+  existing regression tests passing unchanged.
+- An intended change of behaviour updates the golden files with
+  `TAIKO_BLESS=1 cargo test --locked --lib regression::`. Commit the reviewed `.snap` diffs
+  with the code, and explain in the pull request why they changed.
+- Don't weaken a regression test to make a change pass: no deleting, ignoring or loosening
+  assertions or golden files. Change the behaviour back, or update the golden output on purpose
+  as described above.
+- CI enforces this. The `Pre-merge` workflow runs the suite on Linux, Windows and macOS. The
+  `Regression coverage` check fails a pull request that changes client code without touching
+  any test, unless it carries the `no-regression-test` label with a reason in its description,
+  for example a pure refactor proven by the existing tests.
 
 ## Feature branches and protected integration
 
@@ -56,3 +79,21 @@
 - Never commit or push code directly to `worktree-taiko-client`.
 - Integrate changes into `worktree-taiko-client` only through a pull request after the required CI checks pass.
 - Requests to bypass this workflow do not waive the branch, pull request, or validation requirements.
+
+## graphify
+
+A graph of the code (who calls what, what references what) can live in `graphify-out/`. It is
+built locally and ignored by git: its 11 MB graph.json is rewritten on every build and would
+conflict between parallel branches. Install the tool once with `uv tool install graphifyy`.
+
+- In a checkout or worktree without `graphify-out/graph.json`, build it with
+  `graphify update .` (AST only, no API cost, about ten seconds), and run it again after
+  changing code. Never commit `graphify-out/`.
+- For a symbol you know by name, ask the graph before grepping for its uses:
+  `graphify explain "<name>"` (where it is, its callers and callees),
+  `graphify affected "<name>"` (what a change to it reaches, tests included) and
+  `graphify path "<A>" "<B>"` (how two things connect).
+- To find where something happens, grep as usual. `graphify query "<question>"` only matches
+  words in names: on this repo it returns loosely related nodes and misses the target, so use
+  it at most for a first look at an unfamiliar area.
+- Pass these rules on to subagents that explore code.

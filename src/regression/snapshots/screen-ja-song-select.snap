@@ -1,0 +1,71 @@
+text  754,7    ログイン
+text  806,7    更新内容
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   曲
+text  236,27   設定
+text  285,27   マルチ
+text  343,27   ダウンロード
+text  427,27   Tab
+text  625,28   1 songs, 1 maps  |  taiko only
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text   34,61   click to search (ctrl+f)...
+text  336,63   Sort: artist
+text  434,63   Mods
+text  494,66   basics
+text  747,71   ランキング >
+text  494,85   Regression
+text   44,92   basics
+text  416,97   1 diff
+text  494,104  mapped by tests
+text  731,104  NOT SUBMITTED
+text   44,106  Regression  |  mapped by tests
+text  495,123  [basics]
+text  780,123  3.08
+text   56,126  basics
+text  430,126  3.08
+text  494,141  OD
+text  514,141  5.0
+text  545,141  BPM
+text  572,141  200
+text  603,141  Length
+text  651,141  0:09
+text  494,153  Notes
+text  535,153  64
+text  559,153  Don
+text  586,153  32
+text  610,153  Kat
+text  637,153  32
+text  494,165  SS
+text  514,165  93pp
+text  552,165  99%
+text  579,165  82pp
+text  617,165  98%
+text  644,165  69pp
+text  490,297  0:00 / 0:10
+text  675,297  peak 7.0 notes/s at 0:01
+text  508,313  click / drag / wheel to scroll - play from where you stop
+text  641,421  プレイ
+text   24,452  Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了
+hit   188,20     30x22   Tab(0)
+hit   226,20     41x22   Tab(1)
+hit   275,20     51x22   Tab(2)
+hit   333,20     82x22   Tab(3)
+hit   424,56     44x20   ModsButton
+hit   326,56     92x20   SortList
+hit    24,54    296x24   TextField
+hit    24,86    444x34   SongHeader(0)
+hit    44,120   424x22   SongRow(0)
+hit   701,101    16x13   SelectLike
+hit   490,183   330x61   Preview
+hit   488,250   334x44   Preview
+hit   735,64     76x20   BoardPage
+hit   480,414   350x22   Key(Enter)
+hit   472,221     8x48   SplitList
+hit   799,2      46x14   Changelog
+hit   747,2      46x14   Account

@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::game::{DON, KAT};
+use crate::hit::Canvas;
 use crate::menu::pixel_ring;
-use crate::render::{self, Canvas, VIRTUAL_HEIGHT, approach, pixel_size, rgba, snap_to_grid};
+use crate::render::{self, VIRTUAL_HEIGHT, approach, pixel_size, rgba, snap_to_grid};
 
 pub const MUSIC: usize = 0;
 pub const MASTER: usize = 1;
@@ -41,9 +42,9 @@ const NOTE_Y: f32 = 47.0;
 
 fn name(note: usize) -> &'static str {
     match note {
-        MUSIC => tr!("MUSIC"),
-        MASTER => tr!("ALL"),
-        _ => tr!("HITSOUNDS"),
+        MUSIC => tr!("MUSIC", "音楽", "МУЗЫКА"),
+        MASTER => tr!("ALL", "全体", "ВСЁ"),
+        _ => tr!("HITSOUNDS", "ヒット音", "ХИТСАУНДЫ"),
     }
 }
 

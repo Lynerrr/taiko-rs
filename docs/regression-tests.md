@@ -1,0 +1,104 @@
+# Client regression tests
+
+The client has a regression suite in `src/regression/`. It pins down how the game behaves
+today, so that a refactor or a new feature can't quietly change gameplay, scoring, file formats,
+the network protocol or the screens. It runs with the other tests (`cargo test`) and in CI on
+every pull request. The online server is not covered here: it lives in its own repository.
+
+## Running it
+
+```sh
+# The whole client suite, regression tests included (what CI runs):
+cargo test --locked --all-targets
+
+# Only the regression suite (a few seconds):
+cargo test --locked --lib regression::
+
+# One area:
+cargo test --locked --lib regression::gameplay
+```
+
+## What it covers
+
+| Module | What is checked |
+| --- | --- |
+| `gameplay` | Judging (Great/OK/Miss boundaries for every OD, rule and rate), combo, score, accuracy, HP and failing, drumrolls, swells, big notes, all 79 mods alone and in common combinations, Sudden Death / Perfect / No Fail, autoplay, practice from the middle, every replay version's rules, and judging that doesn't depend on the frame rate |
+| `scoring` | Star rating by rate and mods, pp and its breakdown, letters, levels, the weighted pp total, the mod cap, and results worked out again from a saved replay |
+| `formats` | `.osu` parsing, including converts, mania, fake sliders, missing timing points, old versions, garbage lines, CRLF and BOM. Also the mod table (acronyms, names, multipliers, incompatibilities), mod lists, the replay JSON format and old replays, and `config.txt` round trips and defaults |
+| `network` | The wire format of every room, online and social message, messages from older servers, chat and name cleaning, JSON-line framing, and the client against a scripted room: hello and clock sync, a whole match as a guest, lobby events (missing map, chat, skip votes, typed chat, rejection) and a dropped connection |
+| `flows` | Whole journeys with the keyboard: song select to loading, a play with the drum keys, results and back. Also live play judged the same as its replay, pausing, resuming, retrying and quitting, a Sudden Death fail, walking through every settings section, song select navigation and search, and the top tabs |
+| `screens` | Every screen as drawn: the texts on it, where they are and what can be clicked. That covers song select, the main menu and each of its items, every settings section, multiplayer, download, the editor home, the interface and playfield editors, the guide pages, play, pause and results, plus the main screens in Japanese and Russian. Linux only |
+| `drawing` | What the playfield draws, shape by shape (kind, position, size, colours, in draw order, rounded): a dense stream before its first note, mid-stream with judgements showing and near its end, with no mods, Hidden, Hard Rock + Double Time and Multiverse. The screen goldens keep only texts and hit areas, so a note in the wrong place or colour shows up here |
+| `phone` | The phone's interface (`mobile.rs`) on a 20:9 window: song select with and without mods, every settings section, the multiplayer menu, download and results, texts and hit areas as in `screens`. The phone layout is Android's; `mobile::phone_for_tests` switches it on for a test's own thread. Linux only |
+| `select` | Song select's list without drawing it, on a varied made-up library: every sort that needs no background analysis (artist, title, HP, OD, date added, recently played) with its headings, converts on and off, searches (words, capitals, `od>7`, `hp<4`, `creator=`, non-Latin titles, nothing found), and moving with the keyboard between difficulties and songs |
+| `collections` | Collections in `taiko.db`: osu!'s brought in with what finds each map (osu!.db's folder, file, IDs, difficulty name; an MD5 osu!.db doesn't know kept alone) and read back after reopening; brought in again only when `collection.db` changed (collections gone, changed, made), kept when it's gone; the player's own listed first and left alone; a name or map twice comes in once; maps found where they were, else by beatmap ID, else by set and difficulty name, the rest counted missing; a version 2 database gains the tables and keeps its data. In song select (golden `collections-own`, `collections-copy`): Ctrl+L with none yet; a difficulty put in a new collection from the song menu, a second by a click, put in again taken out; a name taken already refused; an empty one made from the list; one shown, renamed with F2 while shown, moved with Ctrl+Up, its `...` list, Delete kept and then done; osu!'s copied to the player's own (a number after a name they have), F2 and Del doing nothing on osu!'s. The search: `collection="name"` any case, `!=`, `collection=none` and `!=none`, a name nobody has, with words and with a collection picked. Maps moved or updated followed to their new file and MD5 (by beatmap ID); the ones not here counted on the row (golden `collections-missing`), their sets offered for download once each, and none without a set ID. Export to osu!'s `collection.db`: osu!'s kept as they were and its version kept, a same-named one gaining the new maps (each map's MD5 as it is now), the rest appended, osu!'s mirrored ones not written back, `collection.db.bak` the old file, a second export changing nothing, an unreadable file left alone, none yet made without a backup |
+| `store` | The player's data in `taiko.db`: scores (in order, with and without pp), last plays, hidden songs and difficulties, each map's offset, the maps whose skin is off and the favourites, written, closed, opened again and read back the same; written whole, what was left out is gone; replays found by name when the data folder moves. Bringing the old text files in: a realistic set (lines from before pp and mods, garbage, a last line cut short) read back as the game read them, the files untouched; a second launch doesn't bring them in again; a file that can't be read stops it and keeps nothing until it's mended; no files, an empty database; offsets from before osu!'s sign turned round. A launch: the first after the update brings the files in and the next reads the database; one that can't bring them in keeps to them and tries again; the database moves with the data folder. Each set's status on osu!: brought in from its file once, new answers kept, the file not read again |
+| `pointer` | The song preview and the pointer: its autoplay box and seek graph take clicks, the wheel and the hand cursor, but only where nothing is drawn over them (the guide, the friends panel, the mod select, a drop-down or any other overlay) |
+| `clicks` | What every click does: on song select, settings, multiplayer, download, the editor home, the interface and playfield editors, the guide, the main menu, the music player, the friends overlay, medals, results and pause, each clickable area is clicked in its middle on a fresh client, and the scene it leads to, any message, quitting and the texts that appear or go are kept. Linux only |
+
+The client runs headless in these tests: no window, GPU or sound card. Charts are generated by
+`maps.rs` and written to a temporary Songs folder. Frames are drawn at made-up instants, and
+keys are pressed at the exact moment a note is due (`harness.rs`).
+
+## Golden files
+
+Most tests render what they check as text and compare it with a golden file in
+`src/regression/snapshots/`. If the behaviour changes, the test fails with a diff and writes the
+new text next to the old one as `<name>.snap.new` (ignored by git). CI uploads these files as an
+artifact of the failed run.
+
+- **The change is a bug**: fix the code until the test passes again.
+- **The change is intended**: accept it with
+  `TAIKO_BLESS=1 cargo test --locked --lib regression::`, review the diff of the `.snap` files,
+  and commit them together with the code. Explain in the pull request why the golden output
+  changed.
+
+Never update golden files just to make CI pass without understanding the diff.
+
+## Adding tests for a change
+
+Every change to the client comes with regression tests for what it changes or adds:
+
+- **New or changed gameplay** (judging, scoring, a mod, HP): add a chart to `maps.rs`, a player
+  to `maps::Player` or a case to `gameplay.rs`. A new mod is picked up by `every_mod_on_its_own`
+  and the mod table automatically, so bless and review its lines.
+- **A new screen or a changed one**: add a shot in `screens.rs` and, if keys or clicks lead to
+  it, a journey in `flows.rs`.
+- **A change to how the playfield looks** (notes, lane, drum, judgements, a mod's look): add a
+  frame or a mod to `drawing.rs`.
+- **A change to a phone screen** (`mobile.rs`): add a shot in `phone.rs`.
+- **A change to what the pointer reaches** (clicks, the wheel, the cursor): add a case to
+  `pointer.rs`.
+- **A new or changed message**: add it to the lists in `network.rs`. If old builds or servers
+  send something different, add a case to `messages_from_older_servers_still_read`. Handle
+  the message in a scripted-room test.
+- **A new file format or setting**: add it to `formats.rs`. A new setting already shows in the
+  `config.txt` golden files.
+- **A bug fix**: add a test that fails without the fix.
+
+Tests next to the code (`#[cfg(test)] mod tests`) are welcome too for details. The regression
+suite is for behaviour seen from outside: what the player sees, what gets saved and what goes
+over the network.
+
+## Determinism
+
+Golden files must never depend on time, the machine or the order tests run in:
+
+- Use `harness::config()`, which turns off update checks, crash reports, Discord, sound and
+  animations, points the online server at nothing and fixes the Random seed.
+- Use `harness::ready` / `harness::settle` before reading a screen, so the client's background
+  work (stars, BPM, pp, the preview) is finished. They draw frames in made-up time, and while
+  anything in `State::busy` is on its way that time stands still, so a slow machine sees the
+  same frames as a fast one. New background work goes into `State::busy` (or `State::is_due`
+  when frames, not a thread, finish it); `harness::wait_idle` waits for it without moving time.
+- `harness::state_with` pins the drawing switches that other tests running in parallel change
+  (animations, accent, note colours).
+- Round floats with `snapshot::num` (other systems' maths libraries differ in the last bits).
+- Leave out texts that change by themselves with `screens::VOLATILE`.
+- Tests never start other programs or reach the internet: `crate::offline` makes browsers,
+  folder dialogs, osu!, ffmpeg, clipboard tools and restarts fail as if missing, and lets HTTP
+  through only to this machine (the tests' fake servers). New code that spawns a program or
+  asks a host goes through `offline::command`, `offline::internet()` or `offline::url()`.
+
+Before committing new golden files, run the suite several times: a test that passes once and
+fails the next time is a bug in the test.

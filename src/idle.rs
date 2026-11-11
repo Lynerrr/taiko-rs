@@ -4,8 +4,9 @@
 
 use std::time::{Duration, Instant};
 
+use crate::hit::Canvas;
 use crate::player;
-use crate::render::{Canvas, rgba};
+use crate::render::rgba;
 
 /// The choices for how long until it shows (minutes; 0 is never).
 pub const MINUTES: [u32; 5] = [0, 1, 2, 5, 10];
@@ -24,10 +25,11 @@ const SPIN: f32 = 0.4;
 /// A choice's name in settings.
 pub fn minutes_name(minutes: u32) -> String {
     match minutes {
-        0 => tr!("Off").into(),
-        1 => tr!("After 1 minute").into(),
+        0 => tr!("Off", "オフ", "Выкл").into(),
+        1 => tr!("After 1 minute", "1分後", "Через 1 минуту").into(),
         m => {
-            tr!("After {m} minutes"; m)
+            let ru = crate::lang::ru_plural(m as usize, ["минуту", "минуты", "минут"]);
+            tr!("After {m} minutes", "{m}分後", "Через {m} {ru}"; [] [m])
         }
     }
 }

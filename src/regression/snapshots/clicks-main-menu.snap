@@ -1,0 +1,15 @@
+screen main-menu: Select, 14 areas
+MenuItem(0) @179,202 -> Select +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +"3.08" +30 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -14 more
+MenuItem(1) @280,202 -> EditorHome +"Choose a song file...   [Enter]" +"Drop a song here: mp3, ogg, wav or flac" +"Esc: back to the menu" +"Go on with a map" +"MAP EDITOR" +"Make a new map" +5 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -16 more
+MenuItem(2) @381,202 -> MpMenu +"127.0.0.1:9   no connection" +"< BACK" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +6 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -13 more
+MenuItem(3) @483,202 -> Download +"< BACK" +"Has leaderboard" +"Relevance" +"SORT" +"STATUS" +"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" +6 more -"." -"1 maps in your library" -"EDITOR" -"EXIT" -"MEDALS" -"MULTIPLAYER" -13 more
+MenuItem(4) @584,202 -> Select +"Back" +"MEDALS" +"Running 1s   In songs 0s" +"What you've earned, and what's next" +"can't reach the server: it's restarting or down. Try again in a minute" -"1 maps in your library" -"PLAY" -"Running 0s   In songs 0s"
+MenuItem(5) @685,202 -> Settings +"<  none found, Enter to pick  >" +"< BACK" +"AUDIO" +"Clipboard" +"Drag the edge between the song list and the map panel. Enter: back to the default." +"GAMEPLAY" +30 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -13 more
+MenuItem(6) @787,202 -> Select [quit] +"1 / Enter" +"2 / Esc" +"Close taiko.rs" +"EXIT" +"Exit" +"Exit taiko.rs?" +2 more -"1 maps in your library" -"PLAY" -"Running 0s   In songs 0s"
+DiscordServer @821,454 -> Select [toast "https://discord.gg/6JUm46p9Zz"] +"Discord" +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
+Music(Prev) @273,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
+Music(Toggle) @303,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
+Music(Next) @333,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
+Music(Open) @363,449 -> Select +"+ on a song adds it" +"0:00" +"1 songs" +"< menu" +"All songs" +"D K song   F J pause   L love   Tab folders" +9 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -15 more
+Changelog @808,9 -> Select +"Close" +"Running 1s   In songs 0s" +"Up/Down, wheel: scroll   Esc: close" +"What's new" +"blocked in tests: no programs, no internet" -"Running 0s   In songs 0s" -"log in" -"what's new"
+Account @740,9 -> MpMenu +"127.0.0.1:9   no connection" +"< BACK" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +6 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -13 more

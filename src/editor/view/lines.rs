@@ -5,7 +5,8 @@ use super::chrome::sample_name;
 use super::{Btn, Drag, Field, Keys, SAct, View};
 use crate::editor::chart::TimingPoint;
 use crate::editor::timing;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TAct {

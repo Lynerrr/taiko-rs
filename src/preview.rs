@@ -4,15 +4,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::audio::{self, Engine, Track};
 use crate::beatmap::{self, Beatmap, Kind};
 use crate::difficulty::{self, Graph};
-use crate::game::{self, Game};
+use crate::game::{self, Game, Play};
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, rgba};
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
+use crate::services::jobs::Job;
 
 /// While scrolling, wait this long after the selection settles before loading, so scrolling
 /// stays cheap. A single change after a quiet moment loads at once.
@@ -112,7 +114,7 @@ pub struct Preview {
     changed_at: Option<Instant>,
     last_change: Option<Instant>,
     requested: Option<usize>,
-    map_rx: Option<Receiver<LoadedMap>>,
+    map_rx: Job<LoadedMap>,
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
     requested_pitch: f64,
@@ -120,8 +122,8 @@ pub struct Preview {
     pub held: bool,
     /// After a speed change: map time to continue the music from once the new track is ready.
     resume_at: Option<f64>,
-    bg_rx: Option<Receiver<(PathBuf, Option<Image>)>>,
-    audio_rx: Option<Receiver<Decoded>>,
+    bg_rx: Job<(PathBuf, Option<Image>)>,
+    audio_rx: Job<Decoded>,
     map: Option<(usize, Beatmap, Details, Graph)>,
     /// Waiting for the music to reach a seek target before rebuilding the autoplay preview.
     pending_seek: Option<f64>,
@@ -140,7 +142,7 @@ pub struct Preview {
     shown_for: Option<usize>,
     /// The entry whose autoplay has been ready: its music played.
     ready_for: Option<usize>,
-    game: Option<Game>,
+    game: Option<Play>,
     last_time: f64,
     bg_path: Option<PathBuf>,
     /// New background for the renderer: `Some(None)` clears it.
@@ -294,8 +296,22 @@ impl Preview {
         self.requested = None;
         self.map = None;
         self.game = None;
-        self.map_rx = None;
+        self.map_rx.cancel();
         self.pending_seek = None;
+    }
+
+    /// Whether no thread works for it: the map, background and music asked for are in (or
+    /// failed).
+    #[cfg(test)]
+    pub fn is_idle(&self) -> bool {
+        self.map_rx.is_idle() && self.bg_rx.is_idle() && self.audio_rx.is_idle()
+    }
+
+    /// Whether a newer selection is waiting out its debounce: frames to come, not a thread,
+    /// will start its loads.
+    #[cfg(test)]
+    pub fn is_due(&self) -> bool {
+        self.seen != self.requested
     }
 
     /// Something else (gameplay, calibration) took over the audio engine.
@@ -320,7 +336,7 @@ impl Preview {
             .is_some_and(|s| s.track.frames() > LONG_FRAMES);
         if long {
             self.call_off_music();
-            self.audio_rx = None;
+            self.audio_rx.cancel();
             self.audio = None;
             self.requested = None;
         }
@@ -358,12 +374,10 @@ impl Preview {
         self.bg_path = path.clone();
         match path {
             Some(p) => {
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
+                self.bg_rx = Job::spawn(move || {
                     let img = load_image(&p);
-                    let _ = tx.send((p, img));
+                    (p, img)
                 });
-                self.bg_rx = Some(rx);
             }
             None => {
                 self.bg_upload = Some(None);
@@ -438,8 +452,7 @@ impl Preview {
             if let Some(i) = self.seen.filter(|&i| i < library.len()) {
                 let e = &library[i];
                 let path = e.path.clone();
-                let (tx, rx) = mpsc::channel();
-                std::thread::spawn(move || {
+                self.map_rx = Job::spawn(move || {
                     let map = beatmap::load(&path);
                     let first = map
                         .as_ref()
@@ -452,9 +465,8 @@ impl Preview {
                     })
                     .ok()
                     .flatten();
-                    let _ = tx.send((i, map, curve));
+                    (i, map, curve)
                 });
-                self.map_rx = Some(rx);
                 if !self.own_background {
                     self.show_background_for(e);
                 }
@@ -543,47 +555,36 @@ impl Preview {
                         }
                         let _ = tx.send((song, track));
                     });
-                    self.audio_rx = Some(rx);
+                    self.audio_rx = Job::from_receiver(rx);
                 }
             }
         }
 
-        if let Some(rx) = &self.map_rx
-            && let Ok((i, result, curve)) = rx.try_recv()
+        if let Some((i, result, curve)) = self.map_rx.poll()
+            && Some(i) == self.requested
+            && let Ok(map) = result
         {
-            self.map_rx = None;
-            if Some(i) == self.requested
-                && let Ok(map) = result
-            {
-                let details = Details::of(&map);
-                let mut graph = difficulty::analyze(&map);
-                if let Some(curve) = curve {
-                    graph.use_curve(curve);
-                }
-                // The details and the music, but no playfield for a map gone wild.
-                self.game = (!map.too_wild_to_preview())
-                    .then(|| new_preview_game(&map, self.requested_rate.0));
-                self.last_time = f64::NEG_INFINITY;
-                self.map = Some((i, map, details, graph));
+            let details = Details::of(&map);
+            let mut graph = difficulty::analyze(&map);
+            if let Some(curve) = curve {
+                graph.use_curve(curve);
             }
+            // The details and the music, but no playfield for a map gone wild.
+            self.game =
+                (!map.too_wild_to_preview()).then(|| new_preview_game(&map, self.requested_rate.0));
+            self.last_time = f64::NEG_INFINITY;
+            self.map = Some((i, map, details, graph));
         }
-        if let Some(rx) = &self.bg_rx
-            && let Ok((path, img)) = rx.try_recv()
+        if let Some((path, img)) = self.bg_rx.poll()
+            && Some(&path) == self.bg_path.as_ref()
         {
-            self.bg_rx = None;
-            if Some(&path) == self.bg_path.as_ref() {
-                self.has_background = img.is_some();
-                self.bg_upload = Some(img);
-            }
+            self.has_background = img.is_some();
+            self.bg_upload = Some(img);
         }
-        let decoded: Vec<Decoded> = self
-            .audio_rx
-            .as_ref()
-            .map(|rx| rx.try_iter().collect())
-            .unwrap_or_default();
+        let decoded: Vec<Decoded> = self.audio_rx.poll_all();
         for (path, result) in decoded {
             if !matches!(result, Some((_, _, false))) {
-                self.audio_rx = None; // the full song (or a failure) is the last message
+                self.audio_rx.cancel(); // the full song (or a failure) is the last message
             }
             let wanted = self.requested.and_then(|i| library.get(i));
             let (Some((track, base, full)), Some(engine), Some(e)) =
@@ -642,7 +643,7 @@ impl Preview {
         if let Some(song) = &self.audio {
             let end_ms = song.end_ms(engine.rate);
             // A seek past the quick part waits, silent, for the full song; it's not the end.
-            let ended = self.audio_rx.is_none()
+            let ended = self.audio_rx.is_idle()
                 && played_long_enough(self.song_since, now, end_ms)
                 && engine.position_ms(now).is_some_and(|p| p > end_ms - 30.0);
             // There the next song takes over; if none does, this one goes round again.
@@ -698,7 +699,7 @@ impl Preview {
                     } else {
                         fresh.update(now, Some(engine), offset);
                     }
-                    self.last_time = fresh.time;
+                    self.last_time = fresh.time();
                     self.game = Some(fresh);
                 }
                 self.pending_seek = None;
@@ -724,8 +725,8 @@ impl Preview {
             }
         }
         game.update(now, Some(engine), offset);
-        self.last_time = game.time;
-        game.autoplay_style = self.autoplay;
+        self.last_time = game.time();
+        game.set_autoplay_style(self.autoplay);
         game.autoplay(None);
     }
 
@@ -847,7 +848,7 @@ impl Preview {
     pub fn seek_by(&mut self, delta_ms: f64, engine: Option<&Engine>) {
         let now = self
             .pending_seek
-            .or_else(|| self.game.as_ref().map(|g| g.time));
+            .or_else(|| self.game.as_ref().map(|g| g.time()));
         if let Some(t) = now {
             self.seek(t + delta_ms, engine);
         }
@@ -888,7 +889,7 @@ impl Preview {
     }
 
     /// The autoplay preview of library entry `i`, once it is ready.
-    pub fn game_for(&mut self, library: &[Entry], i: usize) -> Option<&mut Game> {
+    pub fn game_for(&mut self, library: &[Entry], i: usize) -> Option<&mut Play> {
         let ready = self.ready(library, i);
         self.game.as_mut().filter(|_| ready)
     }
@@ -914,7 +915,7 @@ impl Preview {
             c,
             graph,
             rect,
-            self.pending_seek.unwrap_or(game.time),
+            self.pending_seek.unwrap_or(game.time()),
             e.meta.preview_time,
             marker,
         );
@@ -1052,7 +1053,10 @@ impl Preview {
                 "OD",
                 format!(
                     "{:.1}",
-                    crate::beatmap::od_at_rate(self.mods.od(e.meta.od), self.requested_rate.0)
+                    crate::beatmap::od_at_rate(
+                        self.mods.od_with(e.meta.od, crate::od_override::get()),
+                        self.requested_rate.0,
+                    )
                 ),
                 1.0,
             )],
@@ -1197,7 +1201,7 @@ impl Preview {
             &mapper,
         );
         cy += 13.0 + 6.0;
-        crate::stars::draw_pill(c, x + w - 14.0, cy + 3.0, 9.0, stars);
+        crate::style::star_pill(c, x + w - 14.0, cy + 3.0, 9.0, stars);
         for line in &version {
             c.text(lx, cy + 3.0, 9.0, rgba(accent(), 1.0), line);
             cy += body_step;
@@ -1260,7 +1264,7 @@ impl Preview {
         }
         // What's over the panel goes last, on the way out with a lane or without.
         let tip = od_hovered.map(|at| {
-            let od = self.mods.od(e.meta.od);
+            let od = self.mods.od_with(e.meta.od, crate::od_override::get());
             (
                 at,
                 crate::game::Windows::new(od).at_rate(self.requested_rate.0),
@@ -1275,7 +1279,7 @@ impl Preview {
         let full_w = c.width;
         let start = c.shapes.len();
         c.width = lane_w;
-        game.kiai_effects = self.kiai_effects;
+        game.view.kiai_effects = self.kiai_effects;
         game.draw_playfield(c, scroll_speed);
         let oy = by - band_top * k;
         c.transform_since(start, [0.0, 0.0], k, bx, oy);
@@ -1319,8 +1323,7 @@ impl Preview {
     }
 }
 
-/// How big the autoplay preview gets: smallest and full (dragging the panel's bottom edge).
-pub const PREVIEW_SIZE: (f32, f32) = (0.4, 1.0);
+pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
@@ -1512,7 +1515,7 @@ fn draw_play_button(
     Some([bx, y, bw, bh])
 }
 
-fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
+fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
     // No samples: the preview only borrows the music's clock; `rate` maps it to map time.
     let mut g = Game::new(
         map.clone(),
@@ -1522,9 +1525,10 @@ fn new_preview_game(map: &Beatmap, rate: f64) -> Game {
             stream: None,
         }),
         None,
-    );
-    g.mute_hits = true;
-    g
+    )
+    .with_settings(&crate::game::settings());
+    g.set_mute_hits(true);
+    Play::new(g)
 }
 
 #[cfg(test)]

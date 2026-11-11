@@ -9,7 +9,8 @@ use crate::editor::motion::{
     BEFORES, PACES, PATHS, REVEALS, SPEEDS, ScrollMove, before_tracks, pace_track,
 };
 use crate::game::{HIT_X, LANE_Y};
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 use crate::tko::gimmick::{BEFORE_BEATS, FieldProp, NoteProp, ShowColour, ShowSize};
 use crate::tko::path::PathTable;
 use crate::tko::track::{Ease, Key};

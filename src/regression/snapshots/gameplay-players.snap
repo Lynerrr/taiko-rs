@@ -1,0 +1,105 @@
+== basics
+perfect                  great 64 ok 0 miss 0 | combo 64 max 64 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+offset -30ms             great 64 ok 0 miss 0 | combo 64 max 64 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err -30.00 ur 0.00 | hp 1.0000 | failed false
+offset +18ms             great 64 ok 0 miss 0 | combo 64 max 64 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 18.00 ur 0.00 | hp 1.0000 | failed false
+offset +45ms             great 0 ok 64 miss 0 | combo 64 max 64 | score 350293 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 45.00 ur 0.00 | hp 0.4889 | failed true
+offset -90ms             great 0 ok 31 miss 33 | combo 0 max 2 | score 35638 | rolls 0 swells 0 strong 0 | acc 24.2188 | err 60.00 ur 0.00 | hp 0.0040 | failed true
+offset +130ms            great 31 ok 0 miss 33 | combo 0 max 2 | score 71489 | rolls 0 swells 0 strong 0 | acc 48.4375 | err -20.00 ur 0.00 | hp 0.4133 | failed true
+jitter +-25ms            great 64 ok 0 miss 0 | combo 64 max 64 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err -2.49 ur 138.16 | hp 1.0000 | failed false
+jitter +-70ms            great 31 ok 33 miss 0 | combo 64 max 64 | score 531812 | rolls 0 swells 0 strong 0 | acc 74.2188 | err -6.97 ur 386.84 | hp 0.8979 | failed false
+wrong colour every 4     great 48 ok 0 miss 16 | combo 0 max 3 | score 151446 | rolls 0 swells 0 strong 0 | acc 75.0000 | err 0.00 ur 0.00 | hp 0.8800 | failed false
+skips every 3            great 43 ok 0 miss 21 | combo 1 max 2 | score 110479 | rolls 0 swells 0 strong 0 | acc 67.1875 | err 0.00 ur 0.00 | hp 0.7383 | failed false
+one key on big notes     great 64 ok 0 miss 0 | combo 64 max 64 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+mash                     great 32 ok 0 miss 32 | combo 1 max 3 | score 81021 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.4267 | failed true
+idle                     great 0 ok 0 miss 64 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+gives up halfway         great 32 ok 0 miss 32 | combo 0 max 32 | score 250387 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.4267 | failed true
+== big-notes
+perfect                  great 40 ok 0 miss 0 | combo 40 max 40 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+offset -30ms             great 40 ok 0 miss 0 | combo 40 max 40 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err -30.00 ur 0.00 | hp 1.0000 | failed false
+offset +18ms             great 40 ok 0 miss 0 | combo 40 max 40 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 18.00 ur 0.00 | hp 1.0000 | failed false
+offset +45ms             great 0 ok 40 miss 0 | combo 40 max 40 | score 350293 | rolls 0 swells 0 strong 16 | acc 50.0000 | err 45.00 ur 0.00 | hp 0.4606 | failed true
+offset -90ms             great 0 ok 0 miss 40 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+offset +130ms            great 0 ok 8 miss 32 | combo 0 max 1 | score 16316 | rolls 0 swells 0 strong 0 | acc 10.0000 | err -70.00 ur 0.00 | hp 0.0000 | failed true
+jitter +-25ms            great 40 ok 0 miss 0 | combo 40 max 40 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err -0.22 ur 135.14 | hp 1.0000 | failed false
+jitter +-70ms            great 20 ok 20 miss 0 | combo 40 max 40 | score 546162 | rolls 0 swells 0 strong 16 | acc 75.0000 | err -0.63 ur 378.39 | hp 0.8585 | failed false
+wrong colour every 4     great 30 ok 0 miss 10 | combo 0 max 3 | score 186015 | rolls 0 swells 0 strong 12 | acc 75.0000 | err 0.00 ur 0.00 | hp 0.8582 | failed false
+skips every 3            great 27 ok 0 miss 13 | combo 1 max 2 | score 137984 | rolls 0 swells 0 strong 10 | acc 67.5000 | err 0.00 ur 0.00 | hp 0.7388 | failed false
+one key on big notes     great 40 ok 0 miss 0 | combo 40 max 40 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+mash                     great 16 ok 0 miss 24 | combo 0 max 1 | score 65294 | rolls 0 swells 0 strong 0 | acc 40.0000 | err 0.00 ur 0.00 | hp 0.3009 | failed true
+idle                     great 0 ok 0 miss 40 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+gives up halfway         great 20 ok 0 miss 20 | combo 0 max 20 | score 251821 | rolls 0 swells 0 strong 8 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.4601 | failed true
+== rolls-and-swells
+perfect                  great 14 ok 0 miss 0 | combo 14 max 14 | score 1000000 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+offset -30ms             great 14 ok 0 miss 0 | combo 14 max 14 | score 1000000 | rolls 59 swells 2 strong 0 | acc 100.0000 | err -30.00 ur 0.00 | hp 1.0000 | failed false
+offset +18ms             great 14 ok 0 miss 0 | combo 14 max 14 | score 1000000 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 18.00 ur 0.00 | hp 1.0000 | failed false
+offset +45ms             great 0 ok 14 miss 0 | combo 14 max 14 | score 350293 | rolls 59 swells 2 strong 0 | acc 50.0000 | err 45.00 ur 0.00 | hp 0.5238 | failed false
+offset -90ms             great 0 ok 0 miss 14 | combo 0 max 0 | score 0 | rolls 59 swells 2 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+offset +130ms            great 0 ok 0 miss 14 | combo 0 max 0 | score 0 | rolls 59 swells 2 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+jitter +-25ms            great 14 ok 0 miss 0 | combo 14 max 14 | score 1000000 | rolls 59 swells 2 strong 0 | acc 100.0000 | err -3.66 ur 127.14 | hp 1.0000 | failed false
+jitter +-70ms            great 8 ok 6 miss 0 | combo 14 max 14 | score 591605 | rolls 59 swells 2 strong 0 | acc 78.5714 | err -10.24 ur 355.98 | hp 1.0000 | failed false
+wrong colour every 4     great 10 ok 0 miss 4 | combo 2 max 3 | score 247342 | rolls 59 swells 2 strong 0 | acc 71.4286 | err 0.00 ur 0.00 | hp 0.9950 | failed false
+skips every 3            great 11 ok 0 miss 3 | combo 3 max 3 | score 311004 | rolls 33 swells 1 strong 0 | acc 78.5714 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+one key on big notes     great 14 ok 0 miss 0 | combo 14 max 14 | score 1000000 | rolls 59 swells 2 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+mash                     great 8 ok 0 miss 6 | combo 1 max 2 | score 162058 | rolls 59 swells 2 strong 0 | acc 57.1429 | err 0.00 ur 0.00 | hp 0.7782 | failed false
+idle                     great 0 ok 0 miss 14 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+gives up halfway         great 5 ok 0 miss 9 | combo 0 max 5 | score 160345 | rolls 50 swells 2 strong 0 | acc 35.7143 | err 0.00 ur 0.00 | hp 0.4530 | failed true
+== sv-and-kiai
+perfect                  great 42 ok 0 miss 0 | combo 42 max 42 | score 1000000 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+offset -30ms             great 0 ok 42 miss 0 | combo 42 max 42 | score 350293 | rolls 2 swells 0 strong 6 | acc 50.0000 | err -30.00 ur 0.00 | hp 0.4889 | failed true
+offset +18ms             great 42 ok 0 miss 0 | combo 42 max 42 | score 1000000 | rolls 2 swells 0 strong 6 | acc 100.0000 | err 18.00 ur 0.00 | hp 1.0000 | failed false
+offset +45ms             great 0 ok 42 miss 0 | combo 42 max 42 | score 350293 | rolls 2 swells 0 strong 6 | acc 50.0000 | err 45.00 ur 0.00 | hp 0.4889 | failed true
+offset -90ms             great 0 ok 11 miss 31 | combo 0 max 1 | score 20867 | rolls 2 swells 0 strong 0 | acc 13.0952 | err 35.00 ur 0.00 | hp 0.0000 | failed true
+offset +130ms            great 11 ok 0 miss 31 | combo 0 max 1 | score 41735 | rolls 2 swells 0 strong 0 | acc 26.1905 | err 5.00 ur 0.00 | hp 0.2217 | failed true
+jitter +-25ms            great 42 ok 0 miss 0 | combo 42 max 42 | score 1000000 | rolls 2 swells 0 strong 6 | acc 100.0000 | err -0.13 ur 133.29 | hp 1.0000 | failed false
+jitter +-70ms            great 21 ok 20 miss 1 | combo 12 max 29 | score 397505 | rolls 2 swells 0 strong 6 | acc 73.8095 | err 1.28 ur 362.23 | hp 0.8920 | failed false
+wrong colour every 4     great 32 ok 0 miss 10 | combo 3 max 3 | score 186246 | rolls 2 swells 0 strong 6 | acc 76.1905 | err 0.00 ur 0.00 | hp 0.9409 | failed false
+skips every 3            great 28 ok 0 miss 14 | combo 1 max 2 | score 131866 | rolls 2 swells 0 strong 4 | acc 66.6667 | err 0.00 ur 0.00 | hp 0.7839 | failed false
+one key on big notes     great 42 ok 0 miss 0 | combo 42 max 42 | score 1000000 | rolls 2 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+mash                     great 20 ok 0 miss 22 | combo 0 max 2 | score 90205 | rolls 2 swells 0 strong 0 | acc 47.6190 | err 0.00 ur 0.00 | hp 0.4699 | failed true
+idle                     great 0 ok 0 miss 42 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+gives up halfway         great 21 ok 0 miss 21 | combo 0 max 21 | score 251643 | rolls 0 swells 0 strong 3 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.5092 | failed false
+== stream
+perfect                  great 160 ok 0 miss 0 | combo 160 max 160 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+offset -30ms             great 0 ok 160 miss 0 | combo 160 max 160 | score 350293 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -30.00 ur 0.00 | hp 0.4355 | failed true
+offset +18ms             great 160 ok 0 miss 0 | combo 160 max 160 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 18.00 ur 0.00 | hp 1.0000 | failed false
+offset +45ms             great 0 ok 160 miss 0 | combo 160 max 160 | score 350293 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 45.00 ur 0.00 | hp 0.4355 | failed true
+offset -90ms             great 106 ok 0 miss 54 | combo 0 max 2 | score 70970 | rolls 0 swells 0 strong 0 | acc 66.2500 | err -6.50 ur 5.00 | hp 0.2846 | failed true
+offset +130ms            great 0 ok 106 miss 54 | combo 0 max 2 | score 33047 | rolls 0 swells 0 strong 0 | acc 33.1250 | err 46.50 ur 5.00 | hp 0.0000 | failed true
+jitter +-25ms            great 160 ok 0 miss 0 | combo 160 max 160 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err -0.78 ur 139.30 | hp 1.0000 | failed false
+jitter +-70ms            great 61 ok 75 miss 24 | combo 5 max 29 | score 131239 | rolls 0 swells 0 strong 0 | acc 61.5625 | err -0.19 ur 340.52 | hp 0.4337 | failed true
+wrong colour every 4     great 120 ok 0 miss 40 | combo 0 max 3 | score 102551 | rolls 0 swells 0 strong 0 | acc 75.0000 | err 0.00 ur 0.00 | hp 0.5187 | failed false
+skips every 3            great 107 ok 0 miss 53 | combo 1 max 2 | score 71968 | rolls 0 swells 0 strong 0 | acc 66.8750 | err 0.00 ur 0.00 | hp 0.3013 | failed true
+one key on big notes     great 160 ok 0 miss 0 | combo 160 max 160 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+mash                     great 81 ok 0 miss 79 | combo 0 max 3 | score 58150 | rolls 0 swells 0 strong 0 | acc 50.6250 | err 0.00 ur 0.00 | hp 0.0130 | failed true
+idle                     great 0 ok 0 miss 160 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+gives up halfway         great 80 ok 0 miss 80 | combo 0 max 80 | score 248868 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+== low-od
+perfect                  great 24 ok 0 miss 0 | combo 24 max 24 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+offset -30ms             great 24 ok 0 miss 0 | combo 24 max 24 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err -30.00 ur 0.00 | hp 1.0000 | failed false
+offset +18ms             great 24 ok 0 miss 0 | combo 24 max 24 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 18.00 ur 0.00 | hp 1.0000 | failed false
+offset +45ms             great 24 ok 0 miss 0 | combo 24 max 24 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 45.00 ur 0.00 | hp 1.0000 | failed false
+offset -90ms             great 0 ok 24 miss 0 | combo 24 max 24 | score 350293 | rolls 0 swells 0 strong 0 | acc 50.0000 | err -90.00 ur 0.00 | hp 0.7333 | failed false
+offset +130ms            great 0 ok 0 miss 24 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+jitter +-25ms            great 24 ok 0 miss 0 | combo 24 max 24 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err -2.02 ur 132.01 | hp 1.0000 | failed false
+jitter +-70ms            great 19 ok 5 miss 0 | combo 24 max 24 | score 739529 | rolls 0 swells 0 strong 0 | acc 89.5833 | err -5.66 ur 369.63 | hp 1.0000 | failed false
+wrong colour every 4     great 18 ok 0 miss 6 | combo 0 max 3 | score 232862 | rolls 0 swells 0 strong 0 | acc 75.0000 | err 0.00 ur 0.00 | hp 0.9982 | failed false
+skips every 3            great 16 ok 0 miss 8 | combo 0 max 2 | score 172869 | rolls 0 swells 0 strong 0 | acc 66.6667 | err 0.00 ur 0.00 | hp 0.9982 | failed false
+one key on big notes     great 24 ok 0 miss 0 | combo 24 max 24 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+mash                     great 12 ok 0 miss 12 | combo 0 max 1 | score 104468 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.9784 | failed false
+idle                     great 0 ok 0 miss 24 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+gives up halfway         great 12 ok 0 miss 12 | combo 0 max 12 | score 254210 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.9784 | failed false
+== high-od
+perfect                  great 48 ok 0 miss 0 | combo 48 max 48 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+offset -30ms             great 0 ok 48 miss 0 | combo 48 max 48 | score 350293 | rolls 0 swells 0 strong 16 | acc 50.0000 | err -30.00 ur 0.00 | hp 0.3741 | failed true
+offset +18ms             great 48 ok 0 miss 0 | combo 48 max 48 | score 1000000 | rolls 0 swells 0 strong 16 | acc 100.0000 | err 18.00 ur 0.00 | hp 1.0000 | failed false
+offset +45ms             great 0 ok 48 miss 0 | combo 48 max 48 | score 350293 | rolls 0 swells 0 strong 16 | acc 50.0000 | err 45.00 ur 0.00 | hp 0.3741 | failed true
+offset -90ms             great 0 ok 15 miss 33 | combo 0 max 1 | score 23337 | rolls 0 swells 0 strong 0 | acc 15.6250 | err 30.00 ur 0.00 | hp 0.0000 | failed true
+offset +130ms            great 15 ok 0 miss 33 | combo 0 max 1 | score 46677 | rolls 0 swells 0 strong 0 | acc 31.2500 | err 10.00 ur 0.00 | hp 0.0000 | failed true
+jitter +-25ms            great 40 ok 8 miss 0 | combo 48 max 48 | score 777528 | rolls 0 swells 0 strong 16 | acc 91.6667 | err -1.34 ur 134.31 | hp 0.9127 | failed false
+jitter +-70ms            great 14 ok 23 miss 11 | combo 1 max 9 | score 135987 | rolls 0 swells 0 strong 13 | acc 53.1250 | err -2.61 ur 289.02 | hp 0.3569 | failed true
+wrong colour every 4     great 36 ok 0 miss 12 | combo 0 max 3 | score 171712 | rolls 0 swells 0 strong 12 | acc 75.0000 | err 0.00 ur 0.00 | hp 0.6213 | failed false
+skips every 3            great 32 ok 0 miss 16 | combo 0 max 2 | score 125395 | rolls 0 swells 0 strong 0 | acc 66.6667 | err 0.00 ur 0.00 | hp 0.4883 | failed true
+one key on big notes     great 48 ok 0 miss 0 | combo 48 max 48 | score 1000000 | rolls 0 swells 0 strong 0 | acc 100.0000 | err 0.00 ur 0.00 | hp 1.0000 | failed false
+mash                     great 24 ok 0 miss 24 | combo 1 max 2 | score 83993 | rolls 0 swells 0 strong 0 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.2249 | failed true
+idle                     great 0 ok 0 miss 48 | combo 0 max 0 | score 0 | rolls 0 swells 0 strong 0 | acc 0.0000 | err 0.00 ur 0.00 | hp 0.0000 | failed true
+gives up halfway         great 24 ok 0 miss 24 | combo 0 max 24 | score 251193 | rolls 0 swells 0 strong 8 | acc 50.0000 | err 0.00 ur 0.00 | hp 0.2222 | failed true

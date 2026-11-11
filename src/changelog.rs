@@ -6,7 +6,8 @@ use std::sync::mpsc::{self, Receiver};
 
 use winit::keyboard::KeyCode;
 
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{accent, rgba};
 
 /// One change: when and its player-facing notes (including legacy history).
 #[derive(Clone, Debug, PartialEq)]
@@ -98,7 +99,14 @@ impl View {
                 Ok(Err(e)) => self.state = State::Failed(e),
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.state = State::Failed(tr!("couldn't get the changes").into())
+                    self.state = State::Failed(
+                        tr!(
+                            "couldn't get the changes",
+                            "変更点を取得できませんでした",
+                            "не удалось получить изменения"
+                        )
+                        .into(),
+                    )
                 }
             }
         }
@@ -155,16 +163,21 @@ impl View {
             py + 12.0,
             14.0,
             rgba(0xffffff, 1.0),
-            tr!("What's new"),
+            tr!("What's new", "更新内容", "Что нового"),
         );
         let about = match (self.after_update, crate::update::BUILD) {
             (true, Some(b)) => {
-                tr!("updated to {}", crate::update::short(b))
+                tr!("updated to {}", "{}に更新しました", "обновлено до {}"; [crate::update::short(b)] [])
             }
             (false, Some(b)) => {
-                tr!("this build: {}", crate::update::short(b))
+                tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; [crate::update::short(b)] [])
             }
-            (_, None) => tr!("a local build: the latest changes").into(),
+            (_, None) => tr!(
+                "a local build: the latest changes",
+                "ローカルビルド: 最新の変更",
+                "локальная сборка: последние изменения"
+            )
+            .into(),
         };
         c.text_right(
             px + pw - 16.0,
@@ -183,7 +196,7 @@ impl View {
             by,
             bw,
             bh,
-            tr!("Close"),
+            tr!("Close", "閉じる", "Закрыть"),
             crate::mobile::pick(7.0, 12.0),
             Hit::Key(KeyCode::Escape),
             true,
@@ -194,7 +207,11 @@ impl View {
                 by + 4.5,
                 6.0,
                 rgba(0x6f6f86, 1.0),
-                tr!("Up/Down, wheel: scroll   Esc: close"),
+                tr!(
+                    "Up/Down, wheel: scroll   Esc: close",
+                    "上下、ホイール: スクロール   Esc: 閉じる",
+                    "Вверх/вниз, колесо: прокрутка   Esc: закрыть"
+                ),
             );
         }
         let changes = match &self.state {
@@ -204,7 +221,11 @@ impl View {
                     py + ph / 2.0,
                     9.0,
                     rgba(0xc8c8d8, 1.0),
-                    tr!("getting the changes..."),
+                    tr!(
+                        "getting the changes...",
+                        "変更点を取得中...",
+                        "получаем изменения..."
+                    ),
                 );
                 return;
             }
@@ -224,7 +245,7 @@ impl View {
                     py + ph / 2.0,
                     9.0,
                     rgba(0xc8c8d8, 1.0),
-                    tr!("nothing new"),
+                    tr!("nothing new", "新しいものはありません", "ничего нового"),
                 );
                 return;
             }

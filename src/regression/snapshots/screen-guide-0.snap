@@ -1,0 +1,132 @@
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  377,26   Your drum
+text  198,27   SONGS
+text  264,27   SETTINGS
+text  354,27   MULTIPLAYER
+text  467,27   DOWNLOAD
+text  551,27   Tab
+text  624,28   7 songs, 7 maps  |  taiko only
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text   34,61   click to search (ctrl+f)...
+text  336,63   Sort: artist
+text  434,63   Mods
+text  494,66   basics
+text  721,71   Leaderboard >
+text  494,85   Regression
+text  337,89   D
+text  364,89   F
+text  483,89   J
+text  510,89   K
+text   44,92   basics
+text  416,97   1 diff
+text  494,104  mapped by tests
+text  731,104  NOT SUBMITTED
+text   44,106  Regression  |  mapped by tests
+text  495,123  [basics]
+text  780,123  3.08
+text   56,126  basics
+text  430,126  3.08
+text  494,141  OD
+text  514,141  5.0
+text  545,141  BPM
+text  572,141  200
+text  603,141  Length
+text  651,141  0:09
+text  344,143  Click a key to change it
+text   44,148  big-notes
+text  416,153  1 diff
+text  494,153  Notes
+text  535,153  64
+text  559,153  Don
+text  586,153  32
+text  610,153  Kat
+text  637,153  32
+text   44,162  Regression  |  mapped by tests
+text  494,165  SS
+text  514,165  93pp
+text  552,165  99%
+text  579,165  82pp
+text  617,165  98%
+text  644,165  69pp
+text  143,167  Red notes are don, the drum's face. Blue notes are kat, its rim.
+text   44,182  rolls-and-swells
+text  143,182  Each has two keys, so you can play with both hands in turn.
+text  416,187  1 diff
+text   44,196  Regression  |  mapped by tests
+text  149,206  F
+text  171,206  J
+text  273,206  don, red notes
+text   44,216  sv-and-kiai
+text  416,221  1 diff
+text  149,227  D
+text  171,227  K
+text  273,227  kat, blue notes
+text   44,230  Regression  |  mapped by tests
+text  149,248  Ctrl+O
+text  273,248  Settings from anywhere: keys are in Input
+text   44,250  stream
+text  416,255  1 diff
+text   44,264  Regression  |  mapped by tests
+text  149,269  Tab
+text  273,269  songs and settings
+text   45,284  low-od
+text  416,289  1 diff
+text  149,290  Esc
+text  273,290  back; from the main menu, it asks to quit
+text  490,297  0:00 / 0:10
+text  675,297  peak 7.0 notes/s at 0:01
+text   44,298  Regression  |  mapped by tests
+text  149,311  Alt+wheel/arrows
+text  273,311  volume, anywhere; point at music or hitsounds
+text  508,313  click / drag / wheel to scroll - play from where you stop
+text   44,318  high-od
+text  416,323  1 diff
+text   44,332  Regression  |  mapped by tests
+text  273,332  everything can be clicked too, the wheel scrolls
+text  149,334  mouse
+text  641,421  Play
+text  158,441  Skip (Esc) 4
+text  627,441  Next > 4
+text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort
+hit   188,20     59x22   Tab(0)
+hit   254,20     82x22   Tab(1)
+hit   344,20    105x22   Tab(2)
+hit   457,20     82x22   Tab(3)
+hit   424,56     44x20   ModsButton
+hit   326,56     92x20   SortList
+hit    24,54    296x24   TextField
+hit    24,86    444x34   SongHeader(0)
+hit    44,120   424x22   SongRow(0)
+hit    24,142   444x34   SongHeader(1)
+hit    24,176   444x34   SongHeader(2)
+hit    24,210   444x34   SongHeader(3)
+hit    24,244   444x34   SongHeader(4)
+hit    24,278   444x34   SongHeader(5)
+hit    24,312   444x34   SongHeader(6)
+hit     4,86     20x354  SongScrollbar
+hit   701,101    16x13   SelectLike
+hit   490,183   330x61   Preview
+hit   488,250   334x44   Preview
+hit   709,64    102x20   BoardPage
+hit   480,414   350x22   Key(Enter)
+hit   472,221     8x48   SplitList
+hit     0,0     853x480  Overlay
+hit   328,80     25x24   Guide(Bind(0))
+hit   355,80     25x24   Guide(Bind(1))
+hit   474,80     25x24   Guide(Bind(2))
+hit   501,80     25x24   Guide(Bind(3))
+hit   385,416    12x16   Guide(Page(0))
+hit   397,416    12x16   Guide(Page(1))
+hit   409,416    12x16   Guide(Page(2))
+hit   421,416    12x16   Guide(Page(3))
+hit   433,416    12x16   Guide(Page(4))
+hit   445,416    12x16   Guide(Page(5))
+hit   457,416    12x16   Guide(Page(6))
+hit   143,434   112x22   Overlay
+hit   599,434   112x22   Overlay

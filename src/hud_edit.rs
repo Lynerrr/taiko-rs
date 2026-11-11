@@ -5,10 +5,11 @@
 use winit::keyboard::KeyCode;
 
 use crate::config::Config;
-use crate::game::Game;
+use crate::game::Play;
+use crate::hit::{Canvas, Hit};
 use crate::hud::{self, Frames, Layout, MAX_SCALE, MIN_SCALE, Part, Place, Placed, Snapping};
 use crate::layout::{Area, Guide};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 use crate::settings;
 
 fn panel_w() -> f32 {
@@ -343,10 +344,10 @@ impl Editor {
     fn start_naming(&mut self, cfg: &Config) {
         let mut n = cfg.hud_presets.len() + 1;
         let taken = |name: &str| cfg.hud_presets.iter().any(|p| p.0 == name);
-        let mut name = tr!("Layout {n}"; n);
+        let mut name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}"; [] [n]);
         while taken(&name) {
             n += 1;
-            name = tr!("Layout {n}"; n);
+            name = tr!("Layout {n}", "レイアウト {n}", "Раскладка {n}"; [] [n]);
         }
         let caret = name.len();
         self.naming = Some((name, caret));
@@ -393,7 +394,9 @@ impl Editor {
                     cfg.hud_presets[i].1 = cfg.hud;
                     cfg.save();
                     let name = cfg.hud_presets[i].0.clone();
-                    return Outcome::Toast(tr!("saved {name}"; name));
+                    return Outcome::Toast(
+                        tr!("saved {name}", "{name}を保存しました", "сохранено: {name}"; [] [name]),
+                    );
                 }
                 None => self.start_naming(cfg),
             },
@@ -405,20 +408,39 @@ impl Editor {
                     let last = self.preset_count(cfg).saturating_sub(PRESET_ROWS);
                     self.preset_scroll = self.preset_scroll.min(last);
                     cfg.save();
-                    return Outcome::Toast(tr!("deleted {name}"; name));
+                    return Outcome::Toast(
+                        tr!("deleted {name}", "{name}を削除しました", "удалено: {name}"; [] [name]),
+                    );
                 }
             }
             Button::Copy => {
                 return Outcome::Toast(if crate::clipboard::set(&cfg.hud.format()) {
-                    tr!("layout copied: paste it to share it").into()
+                    tr!(
+                        "layout copied: paste it to share it",
+                        "レイアウトをコピーしました",
+                        "раскладка скопирована: вставьте, чтобы поделиться"
+                    )
+                    .into()
                 } else {
-                    tr!("can't reach the clipboard").into()
+                    tr!(
+                        "can't reach the clipboard",
+                        "クリップボードを使えません",
+                        "нет доступа к буферу обмена"
+                    )
+                    .into()
                 });
             }
             Button::Paste => {
                 let pasted = crate::clipboard::get().and_then(|t| Layout::parse(&t));
                 let Some(layout) = pasted else {
-                    return Outcome::Toast(tr!("no layout on the clipboard").into());
+                    return Outcome::Toast(
+                        tr!(
+                            "no layout on the clipboard",
+                            "クリップボードにレイアウトがありません",
+                            "в буфере обмена нет раскладки"
+                        )
+                        .into(),
+                    );
                 };
                 self.remember(cfg);
                 cfg.hud = layout;
@@ -504,7 +526,7 @@ impl Editor {
     }
 
     /// Over the parts `game` has just drawn: their outlines and the panel.
-    pub fn draw(&mut self, c: &mut Canvas, cfg: &Config, game: &Game) {
+    pub fn draw(&mut self, c: &mut Canvas, cfg: &Config, game: &Play) {
         self.frames = Frames::new(c.width, cfg.playfield_area);
         for (i, part) in Part::PLACED.into_iter().enumerate() {
             let (place, size, at) = game.part_box(c, part);
@@ -618,7 +640,7 @@ impl Editor {
         c.hit(x, y0, panel_w(), h, Hit::HudPanel);
         let (ix, iw) = (x + 8.0, panel_w() - 16.0);
         let mut y = y0 + 7.0;
-        let title = tr!("INTERFACE");
+        let title = tr!("INTERFACE", "インターフェース", "ИНТЕРФЕЙС");
         c.text(ix, y, 9.0, rgba(0xffffff, 1.0), title);
         let side = if self.panel_left { ">" } else { "<" };
         button(
@@ -684,8 +706,16 @@ impl Editor {
                 let stop = stops[(a.at * 2.0).round() as usize % 3];
                 format!("{name}: {} {stop}", a.target.label())
             };
-            let lr = [tr!("left"), tr!("centre"), tr!("right")];
-            let tb = [tr!("top"), tr!("centre"), tr!("bottom")];
+            let lr = [
+                tr!("left", "左", "слева"),
+                tr!("centre", "中央", "центр"),
+                tr!("right", "右", "справа"),
+            ];
+            let tb = [
+                tr!("top", "上", "сверху"),
+                tr!("centre", "中央", "центр"),
+                tr!("bottom", "下", "снизу"),
+            ];
             let fit = |s: String| Canvas::fit(7.0, iw - 8.0, &s);
             button(
                 c,
@@ -703,7 +733,7 @@ impl Editor {
                 Button::AttachY,
             );
             y += bh + GAP;
-            let reset = tr!("Reset");
+            let reset = tr!("Reset", "戻す", "Сброс");
             let size = format!("{:.0}%", b.place.scale * 100.0);
             let step_w = crate::mobile::pick(16.0, 44.0);
             let plus_x = crate::mobile::pick(64.0, 124.0);
@@ -725,13 +755,13 @@ impl Editor {
             if self.part().has_text() {
                 self.draw_swatches(c, cfg, ix, y);
             } else {
-                let none = tr!("no text to colour");
+                let none = tr!("no text to colour", "文字なし", "нет текста");
                 c.text(ix, y + 2.0, 7.0, rgba(0x6f6f86, 1.0), none);
             }
             y += swatch() + 5.0;
             if self.part() == Part::Counts {
                 let on = cfg.hud.counter;
-                let titles = tr!("Titles");
+                let titles = tr!("Titles", "題名", "Подписи");
                 let w = (iw - 3.0 * GAP) / 4.0;
                 for (i, (label, on, b)) in [
                     ("300", on.great, Button::CounterGreat),
@@ -749,7 +779,13 @@ impl Editor {
             }
         }
 
-        c.text(ix, y, 7.5, rgba(0x9a9ab0, 1.0), tr!("PRESETS"));
+        c.text(
+            ix,
+            y,
+            7.5,
+            rgba(0x9a9ab0, 1.0),
+            tr!("PRESETS", "プリセット", "ПРЕСЕТЫ"),
+        );
         y += crate::mobile::pick(11.0, 16.0);
         let rows = self.preset_rows();
         self.presets_rect = [ix, y, iw, rows as f32 * row_h()];
@@ -802,9 +838,9 @@ impl Editor {
             let cx = ix + 4.0 + settings::caret_x(7.5, name, *caret);
             c.rect(cx, y + 2.0, 1.0, 9.0, rgba(0xffffff, 0.9));
         } else {
-            let save = tr!("Save");
-            let new = tr!("New");
-            let delete = tr!("Delete");
+            let save = tr!("Save", "保存", "Сохр.");
+            let new = tr!("New", "新規", "Новый");
+            let delete = tr!("Delete", "削除", "Удалить");
             button(c, [ix, y, third, bh], save, true, Button::SavePreset);
             button(
                 c,
@@ -822,8 +858,8 @@ impl Editor {
             );
         }
         y += bh + GAP;
-        let copy = tr!("Copy");
-        let paste = tr!("Paste");
+        let copy = tr!("Copy", "コピー", "Копировать");
+        let paste = tr!("Paste", "貼り付け", "Вставить");
         button(c, [ix, y, half, bh], copy, true, Button::Copy);
         button(
             c,
@@ -833,8 +869,8 @@ impl Editor {
             Button::Paste,
         );
         y += bh + GAP;
-        let undo = tr!("Undo");
-        let reset_all = tr!("Reset all");
+        let undo = tr!("Undo", "元に戻す", "Отменить");
+        let reset_all = tr!("Reset all", "全て戻す", "Сбросить всё");
         button(
             c,
             [ix, y, half, bh],
@@ -853,7 +889,7 @@ impl Editor {
         button(
             c,
             [ix, y, iw, crate::mobile::pick(15.0, bh)],
-            tr!("Done"),
+            tr!("Done", "完了", "Готово"),
             true,
             Button::Done,
         );
@@ -901,7 +937,9 @@ impl Editor {
             return;
         }
         let help = tr!(
-            "Drag: near the lane it attaches to it (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel"
+            "Drag: near the lane it attaches to it (Shift: free).  Wheel: size.  Arrows: nudge.  H: show.  P: panel",
+            "ドラッグ: レーン付近で取り付け (Shift: 自由)。ホイール: サイズ。矢印: 微調整。H: 表示。P: パネル",
+            "Тяните: у дорожки крепится к ней (Shift: свободно). Колесо: размер. Стрелки: сдвиг. H: показать. P: панель"
         );
         let panel = if self.panel_hidden {
             0.0
@@ -983,20 +1021,20 @@ fn button(c: &mut Canvas, [x, y, w, h]: [f32; 4], label: &str, on: bool, b: Butt
 mod tests {
     use super::*;
 
-    fn setup() -> (Editor, Config, Game, Canvas) {
+    fn setup() -> (Editor, Config, Play, Canvas) {
         let cfg = Config::default();
         let mut c = Canvas::default();
         c.clear(853.3);
         let ed = Editor::new(&cfg);
-        (ed, cfg, Game::hud_sample(), c)
+        (ed, cfg, Play::hud_sample(), c)
     }
 
     /// A frame of the editor, as the game draws it.
-    fn frame(ed: &mut Editor, cfg: &Config, g: &mut Game, c: &mut Canvas) {
+    fn frame(ed: &mut Editor, cfg: &Config, g: &mut Play, c: &mut Canvas) {
         c.clear(853.3);
-        g.hud = cfg.hud;
-        g.hud_area = cfg.playfield_area;
-        g.hidden = cfg.hud.off;
+        g.view.hud = cfg.hud;
+        g.view.hud_area = cfg.playfield_area;
+        g.view.hidden = cfg.hud.off;
         g.draw_parts(c);
         ed.draw(c, cfg, g);
     }
@@ -1080,12 +1118,12 @@ mod tests {
 
     /// What the counter draws with `set` done to a fresh layout: its texts and their colours.
     fn counter_texts(set: impl Fn(&mut hud::Counter)) -> Vec<(String, [f32; 4])> {
-        let mut g = Game::hud_sample();
+        let mut g = Play::hud_sample();
         let mut l = Layout::default();
         l.off = hud::Parts::NONE;
         set(&mut l.counter);
-        g.hud = l;
-        g.hidden = {
+        g.view.hud = l;
+        g.view.hidden = {
             let mut hidden = hud::Parts::ALL;
             hidden.toggle(Part::Counts);
             hidden
@@ -1284,22 +1322,22 @@ mod tests {
 
     #[test]
     fn the_counters_show_only_once_added_and_a_hidden_interface_hides_them() {
-        let mut g = Game::hud_sample();
-        let draw = |g: &Game| {
+        let mut g = Play::hud_sample();
+        let draw = |g: &Play| {
             let mut c = Canvas::default();
             c.clear(853.3);
             g.draw_parts(&mut c);
             c.shapes.len()
         };
-        g.hidden = Layout::default().off;
+        g.view.hidden = Layout::default().off;
         let without = draw(&g);
-        g.hidden = hud::Parts::NONE;
+        g.view.hidden = hud::Parts::NONE;
         assert!(draw(&g) > without);
     }
 
     #[test]
     fn the_interface_stays_put_until_the_player_moves_it() {
-        let g = Game::hud_sample();
+        let g = Play::hud_sample();
         let mut c = Canvas::default();
         c.clear(853.3);
         let at = |p: Part| g.part_box(&c, p).2;

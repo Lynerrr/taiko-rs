@@ -5,7 +5,8 @@
 use super::chrome::wrap;
 use super::look::{self, Look};
 use super::{Btn, Drag, Mode, View, inside};
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
 use crate::tko::graph::{Category, Kind, Node, Port, Target};
 use crate::tko::recipes::Recipe;

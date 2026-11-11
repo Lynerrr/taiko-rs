@@ -4,11 +4,27 @@
 
 use crate::config::{Config, interface_key_name, key_name};
 use crate::game::{DON, KAT};
+use crate::hit::{Canvas, Hit};
 use crate::keys::Hotkey;
 use crate::menu::{self, Item};
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, pixel_size, rgba, snap_to_grid};
+use crate::render::{VIRTUAL_HEIGHT, accent, pixel_size, rgba, snap_to_grid};
 
 pub const PAGES: usize = 7;
+
+/// The guide as the player goes through it.
+#[derive(Debug, Default)]
+pub struct Tour {
+    /// The page up, if the guide is.
+    pub page: Option<usize>,
+    /// The drum (`Config::keys`) it is waiting for a new key for.
+    pub binding: Option<usize>,
+    /// The page to go back to once calibrating from it is done.
+    pub after: Option<usize>,
+    /// The page on screen and since when.
+    pub shown: Option<(usize, std::time::Instant)>,
+    /// The pages that were up for all of `app::overlays::GUIDE_HOLD`.
+    pub read: [bool; PAGES],
+}
 /// How many pages this build's guide has: a phone's is its own, shorter one.
 pub fn pages() -> usize {
     if crate::mobile::active() { 3 } else { PAGES }
@@ -56,9 +72,10 @@ fn printed(name: String) -> String {
 
 /// What's bound to `h` now, or a dash.
 fn key(cfg: &Config, h: Hotkey) -> String {
-    cfg.hotkeys
-        .get(h)
-        .map_or_else(|| tr!("no key").to_string(), |c| printed(c.name()))
+    cfg.hotkeys.get(h).map_or_else(
+        || tr!("no key", "なし", "нет").to_string(),
+        |c| printed(c.name()),
+    )
 }
 
 fn both(cfg: &Config, a: Hotkey, b: Hotkey) -> String {
@@ -86,186 +103,452 @@ fn page(i: usize, cfg: &Config) -> Page {
     let cap = |s: &str| s.replace(' ', "\u{a0}");
     match i {
         0 => Page {
-            title: tr!("Your drum"),
+            title: tr!("Your drum", "太鼓のたたき方", "Твой барабан"),
             intro: [
-                tr!("Red notes are don, the drum's face. Blue notes are kat, its rim."),
-                tr!("Each has two keys, so you can play with both hands in turn."),
+                tr!(
+                    "Red notes are don, the drum's face. Blue notes are kat, its rim.",
+                    "赤いノーツはドン (面)、青いノーツはカッ (ふち) です。",
+                    "Красные ноты: дон, центр барабана. Синие: кат, обод."
+                ),
+                tr!(
+                    "Each has two keys, so you can play with both hands in turn.",
+                    "それぞれキーが2つあり、左右交互に叩けます。",
+                    "На каждую по две клавиши, чтобы бить обеими руками по очереди."
+                ),
             ],
             rows: vec![
-                (drum(1, 2), tr!("don, red notes")),
-                (drum(0, 3), tr!("kat, blue notes")),
+                (
+                    drum(1, 2),
+                    tr!("don, red notes", "ドン (赤)", "дон, красные ноты"),
+                ),
+                (
+                    drum(0, 3),
+                    tr!("kat, blue notes", "カッ (青)", "кат, синие ноты"),
+                ),
                 (
                     "Ctrl+O".into(),
-                    tr!("Settings from anywhere: keys are in Input"),
+                    tr!(
+                        "Settings from anywhere: keys are in Input",
+                        "どこからでも設定へ。キーは入力の項目に",
+                        "настройки откуда угодно, клавиши в разделе Управление"
+                    ),
                 ),
-                (key(cfg, Settings), tr!("songs and settings")),
+                (
+                    key(cfg, Settings),
+                    tr!(
+                        "songs and settings",
+                        "曲と設定を切り替え",
+                        "песни и настройки"
+                    ),
+                ),
                 (
                     "Esc".into(),
-                    tr!("back; from the main menu, it asks to quit"),
+                    tr!(
+                        "back; from the main menu, it asks to quit",
+                        "戻る (メインメニューでは終了の確認)",
+                        "назад, а в главном меню спросит о выходе"
+                    ),
                 ),
                 (
                     "Alt+wheel/arrows".into(),
-                    tr!("volume, anywhere; point at music or hitsounds"),
+                    tr!(
+                        "volume, anywhere; point at music or hitsounds",
+                        "音量 (どこでも)、音楽やヒット音にポインタを合わせて",
+                        "громкость, где угодно; наведи на музыку или хитсаунды"
+                    ),
                 ),
                 (
-                    cap(tr!("mouse")),
-                    tr!("everything can be clicked too, the wheel scrolls"),
+                    cap(tr!("mouse", "マウス", "мышь")),
+                    tr!(
+                        "everything can be clicked too, the wheel scrolls",
+                        "すべてクリックでも操作できます",
+                        "всё можно нажимать мышью, колесо листает"
+                    ),
                 ),
             ],
         },
         1 => Page {
-            title: tr!("Offset: the most important setting"),
+            title: tr!(
+                "Offset: the most important setting",
+                "オフセット: いちばん大切な設定",
+                "Оффсет (смещение): самая важная настройка"
+            ),
             intro: [
-                tr!("If notes feel early or late, it's your sound and screen's delay, not you."),
-                tr!("Calibrating measures it: tap along with the beat for a moment."),
+                tr!(
+                    "If notes feel early or late, it's your sound and screen's delay, not you.",
+                    "ノーツがずれて感じるのは、音と画面の遅延のせいです。",
+                    "Если ноты кажутся ранними или поздними, виноваты задержки звука и экрана, а не ты."
+                ),
+                tr!(
+                    "Calibrating measures it: tap along with the beat for a moment.",
+                    "調整で測れます。しばらくリズムに合わせて叩くだけです。",
+                    "Калибровка измеряет это: просто постучи в такт."
+                ),
             ],
             rows: vec![
-                ("C".into(), tr!("calibrate now (later: Settings > Offset)")),
                 (
-                    cap(tr!(guide: "Audio offset")),
-                    tr!("raise it if you hit late, lower it if you hit early"),
+                    "C".into(),
+                    tr!(
+                        "calibrate now (later: Settings > Offset)",
+                        "今すぐ調整 (あとで 設定 > オフセット)",
+                        "калибровать сейчас (потом: настройки > Смещение)"
+                    ),
+                ),
+                (
+                    cap(tr!("Audio offset", "オーディオ", "Audio offset")),
+                    tr!(
+                        "raise it if you hit late, lower it if you hit early",
+                        "遅いなら上げ、早いなら下げます",
+                        "бьёшь поздно: подними, рано: опусти"
+                    ),
                 ),
                 (
                     both(cfg, OffsetDown, OffsetUp),
-                    tr!("in a song: this map's own offset"),
+                    tr!(
+                        "in a song: this map's own offset",
+                        "曲中: この譜面のオフセット",
+                        "в песне: оффсет только этой карты"
+                    ),
                 ),
                 (
                     both(cfg, VisualOffsetDown, VisualOffsetUp),
-                    tr!("draw the notes earlier or later, judging stays"),
+                    tr!(
+                        "draw the notes earlier or later, judging stays",
+                        "ノーツの表示だけを前後に動かします",
+                        "сдвиг картинки нот, судейство не меняется"
+                    ),
                 ),
                 (
-                    cap(tr!(guide: "Results")),
-                    tr!("show how early or late you were on average"),
+                    cap(tr!("Results", "リザルト", "Итоги")),
+                    tr!(
+                        "show how early or late you were on average",
+                        "平均して早いか遅いかを表示します",
+                        "показывают, насколько рано или поздно ты бил"
+                    ),
                 ),
                 (
-                    cap(tr!("Suggestion")),
-                    tr!("Settings > Offset can suggest an offset during a song"),
+                    cap(tr!("Suggestion", "提案", "Подсказка")),
+                    tr!(
+                        "Settings > Offset can suggest an offset during a song",
+                        "設定 > オフセット で曲中に提案を表示できます",
+                        "настройки > Смещение: подскажет оффсет прямо в песне"
+                    ),
                 ),
                 (
-                    cap(tr!(guide: "Reset")),
-                    tr!("Settings > Offset clears every map's own offset"),
+                    cap(tr!("Reset", "リセット", "Сброс")),
+                    tr!(
+                        "Settings > Offset clears every map's own offset",
+                        "設定 > オフセット で譜面ごとのオフセットを消せます",
+                        "настройки > Смещение: убрать оффсеты всех карт"
+                    ),
                 ),
             ],
         },
         2 => Page {
-            title: tr!("Smooth picture"),
+            title: tr!("Smooth picture", "なめらかな画面", "Плавная картинка"),
             intro: [
                 tr!(
-                    "Less delay means easier reading. With vsync on, calibrate its compensation too."
+                    "Less delay means easier reading. With vsync on, calibrate its compensation too.",
+                    "遅延が少ないほど読みやすくなります。垂直同期なら補正も調整しましょう。",
+                    "Чем меньше задержка, тем проще читать ноты. С vsync откалибруй и его компенсацию."
                 ),
-                tr!("All of it is in Settings > Video, and these change it on the spot."),
+                tr!(
+                    "All of it is in Settings > Video, and these change it on the spot.",
+                    "すべて 設定 > グラフィック にあり、次のキーでもすぐ変えられます。",
+                    "Всё есть в настройках > Графика, а эти клавиши меняют на лету."
+                ),
             ],
             rows: vec![
-                (key(cfg, Fullscreen), tr!("fullscreen")),
+                (
+                    key(cfg, Fullscreen),
+                    tr!("fullscreen", "フルスクリーン", "полный экран"),
+                ),
                 (
                     key(cfg, PresentMode),
-                    tr!("next present mode (vsync, mailbox, immediate)"),
-                ),
-                (key(cfg, FpsCap), tr!("next FPS cap")),
-                (key(cfg, FpsOverlay), tr!("show FPS and frame times")),
-                (key(cfg, Screenshot), tr!("screenshot")),
-                (
-                    cap(tr!("Vsync")),
-                    tr!("Settings > Offset has its compensation and calibration"),
+                    tr!(
+                        "next present mode (vsync, mailbox, immediate)",
+                        "次の表示モード (垂直同期など)",
+                        "режим вывода (vsync, mailbox, immediate)"
+                    ),
                 ),
                 (
-                    cap(tr!(guide: "Half resolution")),
-                    tr!("Settings > Video: for a weak graphics card"),
+                    key(cfg, FpsCap),
+                    tr!("next FPS cap", "次のFPS上限", "ограничение FPS"),
+                ),
+                (
+                    key(cfg, FpsOverlay),
+                    tr!(
+                        "show FPS and frame times",
+                        "FPSとフレーム時間を表示",
+                        "показать FPS и время кадра"
+                    ),
+                ),
+                (
+                    key(cfg, Screenshot),
+                    tr!("screenshot", "スクリーンショット", "скриншот"),
+                ),
+                (
+                    cap(tr!("Vsync", "垂直同期", "Vsync")),
+                    tr!(
+                        "Settings > Offset has its compensation and calibration",
+                        "補正と調整は 設定 > オフセット に",
+                        "компенсация и её калибровка: настройки > Смещение"
+                    ),
+                ),
+                (
+                    cap(tr!("Half resolution", "半分の解像度", "Половинное")),
+                    tr!(
+                        "Settings > Video: for a weak graphics card",
+                        "設定 > グラフィック: 非力なGPU向け",
+                        "настройки > Графика: для слабой видеокарты"
+                    ),
                 ),
             ],
         },
         3 => Page {
-            title: tr!("Finding a song"),
+            title: tr!("Finding a song", "曲を探す", "Как найти песню"),
             intro: [
                 tr!(
-                    "Just start typing to search. Filters work too: stars>5 length<2:30 creator=name"
+                    "Just start typing to search. Filters work too: stars>5 length<2:30 creator=name",
+                    "そのまま入力すると検索できます。stars>5 length<2:30 なども使えます。",
+                    "Просто начни печатать. Работают фильтры: stars>5 length<2:30 creator=name"
                 ),
-                tr!("No maps yet? Download finds them right inside the game."),
+                tr!(
+                    "No maps yet? Download finds them right inside the game.",
+                    "譜面がなければ、ゲーム内のダウンロードで探せます。",
+                    "Нет карт? Вкладка загрузки найдёт их прямо в игре."
+                ),
             ],
             rows: vec![
-                ("Enter".into(), tr!("play")),
-                (key(cfg, Random), tr!("random song (Shift: back)")),
-                (key(cfg, Download), tr!("download maps")),
-                (both(cfg, Sort, Collections), tr!("sort, collections")),
-                (key(cfg, Preview), tr!("watch autoplay")),
+                ("Enter".into(), tr!("play", "プレイ", "играть")),
+                (
+                    key(cfg, Random),
+                    tr!(
+                        "random song (Shift: back)",
+                        "ランダム (Shift: 戻る)",
+                        "случайная песня (Shift: назад)"
+                    ),
+                ),
+                (
+                    key(cfg, Download),
+                    tr!("download maps", "譜面をダウンロード", "скачать карты"),
+                ),
+                (
+                    both(cfg, Sort, Collections),
+                    tr!(
+                        "sort, collections",
+                        "並べ替え、コレクション",
+                        "сортировка, коллекции"
+                    ),
+                ),
+                (
+                    key(cfg, Preview),
+                    tr!(
+                        "watch autoplay",
+                        "オートのプレビュー",
+                        "посмотреть автоплей"
+                    ),
+                ),
                 (
                     key(cfg, PlayFrom),
-                    tr!("play from the flag on the timeline"),
+                    tr!(
+                        "play from the flag on the timeline",
+                        "タイムラインの旗からプレイ",
+                        "играть с флажка на таймлайне"
+                    ),
                 ),
-                (both(cfg, SpeedDown, SpeedUp), tr!("speed down and up")),
+                (
+                    both(cfg, SpeedDown, SpeedUp),
+                    tr!(
+                        "speed down and up",
+                        "速度を下げる / 上げる",
+                        "скорость ниже и выше"
+                    ),
+                ),
             ],
         },
         4 => Page {
-            title: tr!(guide: "In a song"),
+            title: tr!("In a song", "プレイ中", "Во время песни"),
             intro: [
-                tr!("Scroll speed is yours to choose: many read a faster lane more easily."),
-                tr!("After a song, look at the results: early or late, your UR, pp."),
+                tr!(
+                    "Scroll speed is yours to choose: many read a faster lane more easily.",
+                    "スクロール速度は自由に変えられます。",
+                    "Скорость прокрутки выбираешь сам: многим быстрая дорожка читается легче."
+                ),
+                tr!(
+                    "After a song, look at the results: early or late, your UR, pp.",
+                    "曲のあとはリザルトで早い・遅い、UR、ppを確認できます。",
+                    "После песни смотри итоги: рано или поздно, UR, pp."
+                ),
             ],
             rows: vec![
-                (key(cfg, Pause), tr!("pause")),
-                (key(cfg, SkipIntro), tr!("skip the intro")),
+                (key(cfg, Pause), tr!("pause", "ポーズ", "пауза")),
+                (
+                    key(cfg, SkipIntro),
+                    tr!(
+                        "skip the intro",
+                        "イントロを飛ばす",
+                        "пропустить вступление"
+                    ),
+                ),
                 (
                     format!("{} / {}", key(cfg, QuickRetry), key(cfg, Restart)),
-                    tr!("restart"),
+                    tr!("restart", "最初から", "заново"),
                 ),
-                (both(cfg, ScrollSlower, ScrollFaster), tr!("scroll speed")),
-                (key(cfg, MapInfo), tr!("offset and UR line")),
+                (
+                    both(cfg, ScrollSlower, ScrollFaster),
+                    tr!("scroll speed", "スクロール速度", "скорость прокрутки"),
+                ),
+                (
+                    key(cfg, MapInfo),
+                    tr!(
+                        "offset and UR line",
+                        "オフセットとURの行",
+                        "строка оффсета и UR"
+                    ),
+                ),
                 (
                     interface_key_name(cfg.interface_key),
-                    tr!("hide the interface"),
+                    tr!(
+                        "hide the interface",
+                        "インターフェースを隠す",
+                        "скрыть интерфейс"
+                    ),
                 ),
                 (
                     format!("{} {}", key(cfg, WatchReplay), key(cfg, ExportVideo)),
-                    tr!("in results: watch the replay, make a video"),
+                    tr!(
+                        "in results: watch the replay, make a video",
+                        "リザルト: リプレイ、動画",
+                        "в итогах: смотреть повтор, сделать видео"
+                    ),
                 ),
             ],
         },
         5 => Page {
-            title: tr!("Mods and playing with others"),
+            title: tr!(
+                "Mods and playing with others",
+                "Modとみんなで遊ぶ",
+                "Моды и игра с другими"
+            ),
             intro: [
-                tr!("Mods go far beyond osu!'s: try the ones that bend the whole playfield."),
-                tr!("Log in from Multiplayer to climb the ranks and save scores online."),
+                tr!(
+                    "Mods go far beyond osu!'s: try the ones that bend the whole playfield.",
+                    "Modはosu!より豊富です。画面全体が変わるものも試してみましょう。",
+                    "Модов намного больше, чем в osu!: попробуй те, что ломают всё поле."
+                ),
+                tr!(
+                    "Log in from Multiplayer to climb the ranks and save scores online.",
+                    "マルチプレイからログインすると、ランキングに参加できます。",
+                    "Войди через мультиплеер, чтобы попасть в рейтинг и хранить результаты онлайн."
+                ),
             ],
             rows: vec![
                 (
                     key(cfg, Mods),
-                    tr!("mods; a right click makes one a favourite"),
+                    tr!(
+                        "mods; a right click makes one a favourite",
+                        "Mod (右クリックでお気に入り)",
+                        "моды, правый клик: в избранное"
+                    ),
                 ),
-                ("C".into(), tr!("in mods: customise the mods that can be")),
-                (key(cfg, Friends), tr!("friends and chat")),
                 (
-                    cap(tr!("Multiplayer")),
-                    tr!("rooms to play together, spectate, chat"),
+                    "C".into(),
+                    tr!(
+                        "in mods: customise the mods that can be",
+                        "Mod画面: Modをカスタマイズ",
+                        "в модах: настроить мод, если он настраивается"
+                    ),
                 ),
-                (cap("Discord"), tr!("our server, on the main menu")),
+                (
+                    key(cfg, Friends),
+                    tr!("friends and chat", "フレンドとチャット", "друзья и чат"),
+                ),
+                (
+                    cap(tr!("Multiplayer", "マルチ", "Мультиплеер")),
+                    tr!(
+                        "rooms to play together, spectate, chat",
+                        "ルームで一緒に遊ぶ、観戦、チャット",
+                        "комнаты: игра вместе, наблюдение, чат"
+                    ),
+                ),
+                (
+                    cap("Discord"),
+                    tr!(
+                        "our server, on the main menu",
+                        "メインメニューから公式サーバーへ",
+                        "наш сервер, в главном меню"
+                    ),
+                ),
             ],
         },
         _ => Page {
-            title: tr!("Make it yours"),
+            title: tr!("Make it yours", "自分好みに", "Настрой под себя"),
             intro: [
-                tr!("taiko.rs is a music player too: the disc button in Now playing opens it."),
-                tr!("Skins, note colours, the interface colour and the playfield are in Settings."),
+                tr!(
+                    "taiko.rs is a music player too: the disc button in Now playing opens it.",
+                    "taiko.rsは音楽プレーヤーにもなります。再生中のディスクボタンから。",
+                    "taiko.rs ещё и музыкальный плеер: кнопка с диском в блоке Сейчас играет."
+                ),
+                tr!(
+                    "Skins, note colours, the interface colour and the playfield are in Settings.",
+                    "スキン、ノーツの色、UIの色、プレイフィールドは設定にあります。",
+                    "Скины, цвета нот, цвет интерфейса и игровое поле есть в настройках."
+                ),
             ],
             rows: vec![
-                ("L".into(), tr!("in the player: love the song")),
+                (
+                    "L".into(),
+                    tr!(
+                        "in the player: love the song",
+                        "プレーヤー: お気に入り",
+                        "в плеере: в любимые"
+                    ),
+                ),
                 (
                     "Tab".into(),
-                    tr!("in the player: genre folders and favourites"),
+                    tr!(
+                        "in the player: genre folders and favourites",
+                        "プレーヤー: ジャンルとお気に入り",
+                        "в плеере: папки жанров и любимые"
+                    ),
                 ),
                 (
                     "[ ]".into(),
-                    tr!("in the player: move the pitch, DT NC HT DC on the buttons"),
-                ),
-                (key(cfg, Update), tr!("update the game")),
-                (key(cfg, Quit), tr!("quit")),
-                (both_presets(cfg), tr!("previous and next playfield preset")),
-                (
-                    cap(tr!("Keys")),
-                    tr!("every key in this guide can be moved: Settings > Input"),
+                    tr!(
+                        "in the player: move the pitch, DT NC HT DC on the buttons",
+                        "プレーヤー: ピッチを変える",
+                        "в плеере: питч, а DT NC HT DC на кнопках"
+                    ),
                 ),
                 (
-                    cap(tr!("This guide")),
-                    tr!("is always in Settings > System"),
+                    key(cfg, Update),
+                    tr!("update the game", "アップデート", "обновить игру"),
+                ),
+                (key(cfg, Quit), tr!("quit", "終了", "выйти")),
+                (
+                    both_presets(cfg),
+                    tr!(
+                        "previous and next playfield preset",
+                        "プレイフィールドのプリセット",
+                        "пресеты игрового поля"
+                    ),
+                ),
+                (
+                    cap(tr!("Keys", "キー", "Клавиши")),
+                    tr!(
+                        "every key in this guide can be moved: Settings > Input",
+                        "このガイドのキーはすべて変更できます (入力)",
+                        "любую клавишу отсюда можно поменять: настройки > Управление"
+                    ),
+                ),
+                (
+                    cap(tr!("This guide", "このガイド", "Этот гид")),
+                    tr!(
+                        "is always in Settings > System",
+                        "いつでも 設定 > システム から",
+                        "всегда есть в настройках > Система"
+                    ),
                 ),
             ],
         },
@@ -350,11 +633,20 @@ fn draw_picture(
                     Hit::Guide(Action::Bind(slot)),
                 );
             }
-            let name = binding
-                .map(|slot| names[slot].clone())
-                .map_or(tr!("Click a key to change it"), |_| {
-                    tr!("Press the new key, Esc to keep the old one")
-                });
+            let name = binding.map(|slot| names[slot].clone()).map_or(
+                tr!(
+                    "Click a key to change it",
+                    "キーをクリックして変更",
+                    "Нажми на клавишу, чтобы её сменить"
+                ),
+                |_| {
+                    tr!(
+                        "Press the new key, Esc to keep the old one",
+                        "新しいキーを押してください (Esc: そのまま)",
+                        "Нажми новую клавишу, Esc: оставить старую"
+                    )
+                },
+            );
             c.text_centered(
                 cx,
                 y + PICTURE_H - 15.0,
@@ -399,14 +691,14 @@ fn draw_picture(
                 mid - 3.5,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
-                tr!("early"),
+                tr!("early", "早い", "рано"),
             );
             c.text(
                 cx + half + 8.0,
                 mid - 3.5,
                 7.0,
                 rgba(0xffd34d, 1.0),
-                tr!("late"),
+                tr!("late", "遅い", "поздно"),
             );
         }
         2 => {
@@ -626,13 +918,13 @@ pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, hold: Option<u32>,
             bottom,
             bw,
             22.0,
-            tr!("< Back"),
+            tr!("< Back", "< 戻る", "< Назад"),
             8.0,
             Hit::Guide(Action::Back),
             false,
         );
     } else {
-        let skip = tr!("Skip (Esc)");
+        let skip = tr!("Skip (Esc)", "閉じる (Esc)", "Пропустить (Esc)");
         let (label, hit) = match hold {
             Some(s) => (format!("{skip} {s}"), Hit::Overlay),
             None => (skip.to_string(), Hit::Guide(Action::Close)),
@@ -645,13 +937,17 @@ pub fn draw(c: &mut Canvas, i: usize, binding: Option<usize>, hold: Option<u32>,
             bottom,
             bw,
             22.0,
-            tr!("Calibrate (C)"),
+            tr!("Calibrate (C)", "調整 (C)", "Калибровать (C)"),
             8.0,
             Hit::Guide(Action::Calibrate),
             true,
         );
     }
-    let next = if last { tr!("Done") } else { tr!("Next >") };
+    let next = if last {
+        tr!("Done", "完了", "Готово")
+    } else {
+        tr!("Next >", "次へ >", "Далее >")
+    };
     match hold {
         Some(s) => c.button(
             x + w - 16.0 - bw,
@@ -694,28 +990,68 @@ fn draw_touch(c: &mut Canvas, i: usize, hold: Option<u32>, cfg: &Config) {
     );
     let (title, lines): (&str, Vec<&str>) = match i {
         0 => (
-            tr!("Your drum"),
+            tr!("Your drum", "太鼓のたたき方", "Твой барабан"),
             vec![
-                tr!("During a song the screen is four columns, each a side of the drum."),
-                tr!("Red notes are don, blue notes are kat. Tap with both thumbs in turn."),
-                tr!("Settings > Input > Touch layout changes the order."),
+                tr!(
+                    "During a song the screen is four columns, each a side of the drum.",
+                    "プレイ中の画面は4列で、それぞれ太鼓の面かふちです。",
+                    "Во время песни экран разделён на четыре колонки: это части барабана."
+                ),
+                tr!(
+                    "Red notes are don, blue notes are kat. Tap with both thumbs in turn.",
+                    "赤はドン、青はカッ。両手の親指で交互にタップ。",
+                    "Красные ноты: дон, синие: кат. Бей большими пальцами по очереди."
+                ),
+                tr!(
+                    "Settings > Input > Touch layout changes the order.",
+                    "設定 > 入力 > タッチ配置で順番を変えられます。",
+                    "Настройки > Ввод > Раскладка меняет порядок."
+                ),
             ],
         ),
         OFFSET_PAGE => (
-            tr!("Offset"),
+            tr!("Offset", "オフセット", "Смещение"),
             vec![
-                tr!("A phone's sound arrives a little late, and each phone differs."),
-                tr!("If notes feel early or late, calibrate: tap along with the beat for a while."),
-                tr!("You can do it later in Settings > Offset."),
+                tr!(
+                    "A phone's sound arrives a little late, and each phone differs.",
+                    "スマホの音は少し遅れて届き、機種ごとに違います。",
+                    "Звук на телефоне немного опаздывает, и на каждом по-своему."
+                ),
+                tr!(
+                    "If notes feel early or late, calibrate: tap along with the beat for a while.",
+                    "ノーツが早い・遅いと感じたら調整: しばらくビートに合わせてタップ。",
+                    "Если ноты кажутся ранними или поздними, откалибруй: потапай в ритм."
+                ),
+                tr!(
+                    "You can do it later in Settings > Offset.",
+                    "あとで 設定 > オフセット からもできます。",
+                    "Потом это есть в Настройки > Смещение."
+                ),
             ],
         ),
         _ => (
-            tr!("Finding your way"),
+            tr!("Finding your way", "使い方", "Как тут всё устроено"),
             vec![
-                tr!("Get maps in Download, or open an .osz file with taiko.rs."),
-                tr!("Drag lists to scroll. Tap a difficulty, then tap it again or Play."),
-                tr!("Hold a song for its menu. The pause button is at the top during a song."),
-                tr!("Your phone's back gesture goes back everywhere."),
+                tr!(
+                    "Get maps in Download, or open an .osz file with taiko.rs.",
+                    "Downloadで譜面を入手、または.oszをtaiko.rsで開く。",
+                    "Карты есть в Download, или открой .osz через taiko.rs."
+                ),
+                tr!(
+                    "Drag lists to scroll. Tap a difficulty, then tap it again or Play.",
+                    "リストはドラッグでスクロール。難易度をタップし、もう一度かPlayで開始。",
+                    "Списки листаются пальцем. Выбери сложность и нажми её снова или Play."
+                ),
+                tr!(
+                    "Hold a song for its menu. The pause button is at the top during a song.",
+                    "曲を長押しでメニュー。プレイ中のポーズは画面上部です。",
+                    "Удерживай песню для меню. Пауза во время песни: кнопка сверху."
+                ),
+                tr!(
+                    "Your phone's back gesture goes back everywhere.",
+                    "スマホの戻る操作はどこでも使えます。",
+                    "Жест «назад» работает везде."
+                ),
             ],
         ),
     };
@@ -730,7 +1066,7 @@ fn draw_touch(c: &mut Canvas, i: usize, hold: Option<u32>, cfg: &Config) {
     let mut row = y + 52.0;
     if i == 0 {
         // The columns, as they come out.
-        let colours = crate::multiverse::note_colours();
+        let colours = crate::game::note_colours();
         let (bx, bw, bh) = (x + 20.0, w - 40.0, 96.0);
         let col_w = bw / 4.0;
         for (k, key) in cfg.touch_layout.keys().into_iter().enumerate() {
@@ -764,7 +1100,7 @@ fn draw_touch(c: &mut Canvas, i: usize, hold: Option<u32>, cfg: &Config) {
     let (bw, bh) = (180.0, 48.0);
     let by = y + h - bh - 14.0;
     if i > 0 {
-        let back = tr!("< Back");
+        let back = tr!("< Back", "< 戻る", "< Назад");
         c.button(
             x + 16.0,
             by,
@@ -776,7 +1112,7 @@ fn draw_touch(c: &mut Canvas, i: usize, hold: Option<u32>, cfg: &Config) {
             false,
         );
     } else {
-        let skip = tr!("Skip");
+        let skip = tr!("Skip", "閉じる", "Пропустить");
         let (label, hit) = match hold {
             Some(s) => (format!("{skip} {s}"), Hit::Overlay),
             None => (skip.to_string(), Hit::Guide(Action::Close)),
@@ -784,12 +1120,16 @@ fn draw_touch(c: &mut Canvas, i: usize, hold: Option<u32>, cfg: &Config) {
         c.button(x + 16.0, by, bw, bh, &label, SIZE, hit, false);
     }
     if i == OFFSET_PAGE {
-        let label = tr!("Calibrate");
+        let label = tr!("Calibrate", "調整", "Калибровать");
         let hit = Hit::Guide(Action::Calibrate);
         c.button(cx - bw / 2.0, by, bw, bh, label, SIZE, hit, true);
     }
     let last = i + 1 == pages();
-    let next = if last { tr!("Done") } else { tr!("Next >") };
+    let next = if last {
+        tr!("Done", "完了", "Готово")
+    } else {
+        tr!("Next >", "次へ >", "Далее >")
+    };
     let nx = x + w - 16.0 - bw;
     match hold {
         Some(s) => {

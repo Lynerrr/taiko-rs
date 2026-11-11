@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crate::game::DON;
 use crate::genres::GENRES;
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::playlist::{Folder, Playlist, Repeat};
-use crate::render::{Canvas, Hit, pixel_size, rgba, snap_to_grid};
+use crate::render::{pixel_size, rgba, snap_to_grid};
 
 /// Spectrum bands, each drawn twice (mirrored left and right).
 const BANDS: usize = 64;
@@ -101,6 +102,26 @@ pub enum Control {
     Favourite,
     /// To the current song in song select.
     PlayMap,
+}
+
+/// A genre's name in the player's language (the logic names them in English).
+fn genre_name(i: usize) -> &'static str {
+    match GENRES[i].name {
+        "Electronic" => tr!("Electronic", "エレクトロニック", "Электроника"),
+        "Hardcore" => tr!("Hardcore", "ハードコア", "Хардкор"),
+        "Trance" => tr!("Trance", "トランス", "Транс"),
+        "Techno & House" => tr!("Techno & House", "テクノ / ハウス", "Техно и хаус"),
+        "Pop" => tr!("Pop", "ポップ", "Поп"),
+        "Rock" => tr!("Rock", "ロック", "Рок"),
+        "Metal" => tr!("Metal", "メタル", "Метал"),
+        "Hip Hop" => tr!("Hip Hop", "ヒップホップ", "Хип-хоп"),
+        "Anime" => tr!("Anime", "アニメ", "Аниме"),
+        "Game music" => tr!("Game music", "ゲーム音楽", "Музыка из игр"),
+        "Classical" => tr!("Classical", "クラシック", "Классика"),
+        "Chiptune" => tr!("Chiptune", "チップチューン", "Чиптюн"),
+        // Names that read the same in every language.
+        name => name,
+    }
 }
 
 /// What a speed mod does to the music.
@@ -572,7 +593,7 @@ impl Player {
             back[1],
             back[2],
             back[3],
-            tr!("< menu"),
+            tr!("< menu", "< メニュー", "< меню"),
             crate::mobile::pick(8.0, 12.0),
             Hit::Key(winit::keyboard::KeyCode::Escape),
             false,
@@ -644,7 +665,7 @@ impl Player {
         }
         let escape = Hit::Key(winit::keyboard::KeyCode::Escape);
         c.button(0.0, 0.0, 44.0, 30.0, "<", TALL_TEXT, escape, false);
-        let heading = tr!("NOW PLAYING");
+        let heading = tr!("NOW PLAYING", "再生中", "СЕЙЧАС ИГРАЕТ");
         c.text_centered(cx, 11.0, TALL_SMALL, rgba(0x9a9ab0, 1.0), heading);
         c.button(
             w - 44.0,
@@ -755,7 +776,7 @@ impl Player {
 
         // The volume, and the way into the map.
         let (y, h) = (440.0, 34.0);
-        let play = tr!("play map");
+        let play = tr!("play map", "譜面をプレイ", "сыграть карту");
         let play_w = 96.0;
         let hit = Hit::Music(Control::PlayMap);
         c.button(w - play_w, y, play_w, h, play, TALL_SMALL, hit, true);
@@ -830,10 +851,10 @@ impl Player {
     /// The name of a folder.
     fn folder_name(folder: Folder) -> &'static str {
         match folder {
-            Folder::All => tr!("All songs"),
-            Folder::Favourites => tr!("Favourites"),
-            Folder::Genre(i) => (GENRES[i].name)(),
-            Folder::Other => tr!("No genre"),
+            Folder::All => tr!("All songs", "すべての曲", "Все песни"),
+            Folder::Favourites => tr!("Favourites", "お気に入り", "Любимые"),
+            Folder::Genre(i) => genre_name(i),
+            Folder::Other => tr!("No genre", "ジャンルなし", "Без жанра"),
         }
     }
 
@@ -953,9 +974,9 @@ impl Player {
         let (text, col) = if filter.is_empty() && !self.searching {
             (
                 if crate::mobile::active() {
-                    tr!("search").to_string()
+                    tr!("search", "検索", "поиск").to_string()
                 } else {
-                    tr!("search (Ctrl+F)").to_string()
+                    tr!("search (Ctrl+F)", "検索 (Ctrl+F)", "поиск (Ctrl+F)").to_string()
                 },
                 0x6f6f86,
             )
@@ -1066,7 +1087,7 @@ impl Player {
                 top + 9.0,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
-                tr!("nothing found"),
+                tr!("nothing found", "見つかりません", "ничего не нашлось"),
             );
         }
         let count = self.list.shown.len();
@@ -1075,7 +1096,7 @@ impl Player {
             top + rows() as f32 * row_h() + 9.0,
             text_size,
             rgba(0x9a9ab0, 1.0),
-            &tr!("{count} songs"; count),
+            &tr!("{count} songs", "{count}曲", "{count} песен"; [] [count]),
         );
     }
 
@@ -1086,7 +1107,7 @@ impl Player {
             list_top() + crate::mobile::pick(5.5, 14.0),
             7.0,
             rgba(0x9a9ab0, 1.0),
-            tr!("UP NEXT"),
+            tr!("UP NEXT", "次に再生", "ДАЛЬШЕ"),
         );
         let top = list_top() + crate::mobile::pick(18.0, 40.0) + 4.0;
         c.round_rect(
@@ -1117,7 +1138,11 @@ impl Player {
                 top + 9.0,
                 7.0,
                 rgba(0x6f6f86, 1.0),
-                &Canvas::fit(7.0, queue_w() - 14.0, tr!("+ on a song adds it")),
+                &Canvas::fit(
+                    7.0,
+                    queue_w() - 14.0,
+                    tr!("+ on a song adds it", "曲の + で追加", "+ у песни добавит"),
+                ),
             );
         }
     }
@@ -1128,9 +1153,9 @@ impl Player {
         let h = crate::mobile::pick(18.0, 36.0);
         let pitch = if self.semitones == 0 {
             if phone {
-                tr!("pitch").to_string()
+                tr!("pitch", "ピッチ", "питч").to_string()
             } else {
-                tr!("pitch [ ]").to_string()
+                tr!("pitch [ ]", "ピッチ [ ]", "питч [ ]").to_string()
             }
         } else {
             if phone {
@@ -1139,7 +1164,7 @@ impl Player {
                 format!("{:+} [ ]", self.semitones)
             }
         };
-        let play = tr!("play map");
+        let play = tr!("play map", "譜面をプレイ", "сыграть карту");
         let play_w = Canvas::text_width(7.0, play) + 12.0;
         let pitch_w = if phone {
             76.0
@@ -1439,6 +1464,26 @@ fn slice_at(angle: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn genre_folders_are_named_in_the_player_s_language() {
+        // The logic names the genres in English; the folders say them in the player's language.
+        let at = |name: &str| GENRES.iter().position(|g| g.name == name).unwrap();
+        crate::lang::set(crate::lang::Lang::Ru);
+        assert_eq!(genre_name(at("Electronic")), "Электроника");
+        assert_eq!(genre_name(at("Game music")), "Музыка из игр");
+        assert_eq!(
+            genre_name(at("Touhou")),
+            "Touhou",
+            "a name that reads the same"
+        );
+        crate::lang::set(crate::lang::Lang::Ja);
+        assert_eq!(genre_name(at("Pop")), "ポップ");
+        crate::lang::set(crate::lang::Lang::En);
+        for (i, g) in GENRES.iter().enumerate() {
+            assert_eq!(genre_name(i), g.name);
+        }
+    }
 
     fn tone(hz: f32, rate: u32) -> Spectrum {
         let mut sp = Spectrum::default();

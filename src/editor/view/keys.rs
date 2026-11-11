@@ -4,7 +4,8 @@
 
 use super::{Btn, Drag, Mode, View, fmt_time, inside};
 use crate::editor::keyframes::Subject;
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
 use crate::tko::track::Key;
 

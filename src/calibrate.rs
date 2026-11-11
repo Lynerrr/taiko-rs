@@ -1,68 +1,13 @@
 //! Offset calibration: hit along to a click track by ear, then turn the hit errors into a
 //! suggested offset. The vsync compensation's is the same notes by sight, with the sound off.
 
+// The math: the count-in, the tempo range, and what the hits say the offset should be.
+pub use taiko_logic::calibrate::*;
+
 use crate::game::Game;
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::hit::{Canvas, Hit};
+use crate::render::{accent, rgba};
 use winit::keyboard::KeyCode;
-
-/// Clicks before the first note, so the pulse is established before you have to hit.
-pub const COUNT_IN_BEATS: u32 = 8;
-pub const BPM_RANGE: (f64, f64) = (60.0, 240.0);
-
-/// About 30 seconds of notes at any tempo (at least 24), after the count-in.
-pub fn total_beats(beat_ms: f64) -> u32 {
-    COUNT_IN_BEATS + ((30_000.0 / beat_ms).ceil() as u32).max(24)
-}
-/// Hits needed before a result is trusted.
-pub const MIN_HITS: usize = 16;
-
-#[derive(Clone, Copy)]
-pub struct Estimate {
-    pub hits: usize,
-    /// Robust average error: positive means you hit late.
-    pub error_ms: f64,
-    /// Consistency, as osu! unstable rate (10x standard deviation).
-    pub ur: f64,
-    /// 95% confidence half-width of `error_ms`: 1.96 * sigma / sqrt(hits).
-    pub margin_ms: f64,
-    pub suggested_offset: f64,
-}
-
-/// Median first, then the mean of hits within 60 ms of it, so stray early/late taps don't skew
-/// the result.
-pub fn estimate(errors: &[f64], current_offset: f64) -> Option<Estimate> {
-    if errors.is_empty() {
-        return None;
-    }
-    let mut sorted = errors.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let median = sorted[sorted.len() / 2];
-    let kept: Vec<f64> = errors
-        .iter()
-        .copied()
-        .filter(|e| (e - median).abs() <= 60.0)
-        .collect();
-    let mean = kept.iter().sum::<f64>() / kept.len() as f64;
-    let var = kept.iter().map(|e| (e - mean).powi(2)).sum::<f64>() / kept.len() as f64;
-    Some(Estimate {
-        hits: kept.len(),
-        error_ms: mean,
-        ur: var.sqrt() * 10.0,
-        margin_ms: 1.96 * var.sqrt() / (kept.len() as f64).sqrt(),
-        // Hitting late by e ms means the audio reaches you e ms later than assumed.
-        suggested_offset: (current_offset + mean).round(),
-    })
-}
-
-/// With no note to tell centre from rim by, any drum key is a hit: the rims (the outer keys of
-/// `Config::keys`) count as the centre next to them.
-pub fn centre_key(key: usize) -> usize {
-    match key {
-        0 => 1,
-        3 => 2,
-        k => k,
-    }
-}
 
 /// A line across the screen, smaller if it has to be to fit.
 fn line(c: &mut Canvas, y: f32, size: f32, color: [f32; 4], text: &str) {
@@ -86,20 +31,32 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
         70.0,
         14.0,
         rgba(0x9a9ab0, 1.0),
-        tr!("OFFSET CALIBRATION"),
+        tr!(
+            "OFFSET CALIBRATION",
+            "オフセット調整",
+            "КАЛИБРОВКА СМЕЩЕНИЯ"
+        ),
     );
-    let first = game.map.notes.first().map_or(0.0, |n| n.time);
+    let first = game.map().notes.first().map_or(0.0, |n| n.time);
     let beat = game
-        .map
+        .map()
         .control_points
         .first()
         .map_or(500.0, |p| p.beat_length);
     // Between two clicks, so the words changing isn't a beat to follow.
-    let hitting = game.time >= first - beat / 2.0;
+    let hitting = game.time() >= first - beat / 2.0;
     let headline = if hitting {
-        tr!("Hit on every click")
+        tr!(
+            "Hit on every click",
+            "クリックごとに叩いて",
+            "Бейте на каждый клик"
+        )
     } else {
-        tr!("Listen to the clicks")
+        tr!(
+            "Listen to the clicks",
+            "クリック音を聞いて",
+            "Слушайте клики"
+        )
     };
     line(c, 160.0, 20.0, rgba(0xffffff, 1.0), headline);
     line(
@@ -108,17 +65,25 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
         10.0,
         rgba(0xc8c8d8, 1.0),
         if crate::mobile::active() {
-            tr!("By ear: tap anywhere on the beat. It works best with your eyes closed")
+            tr!(
+                "By ear: tap anywhere on the beat. It works best with your eyes closed",
+                "耳だけで: ビートに合わせてどこでもタップ。目を閉じるのがおすすめです",
+                "На слух: тапай в любом месте в ритм. Лучше с закрытыми глазами"
+            )
         } else {
-            tr!("By ear, with any drum key. It works best with your eyes closed")
+            tr!(
+                "By ear, with any drum key. It works best with your eyes closed",
+                "耳だけで、どのドラムキーでも。目を閉じるのがおすすめです",
+                "Только на слух, любой клавишей барабана. Лучше с закрытыми глазами"
+            )
         },
     );
-    let hits = game.stats.errors.len();
+    let hits = game.stats().errors.len();
     if hitting {
         let count = if hits < MIN_HITS {
-            tr!("{hits} of {MIN_HITS} hits"; hits, MIN_HITS)
+            tr!("{hits} of {MIN_HITS} hits", "{hits} / {MIN_HITS} 打", "ударов: {hits} из {MIN_HITS}"; [] [hits, MIN_HITS])
         } else {
-            tr!("{hits} hits"; hits)
+            tr!("{hits} hits", "{hits} 打", "ударов: {hits}"; [] [hits])
         };
         line(c, 262.0, 10.0, rgba(0xFFD34D, 1.0), &count);
     }
@@ -132,7 +97,11 @@ pub fn draw_by_ear(c: &mut Canvas, game: &Game) {
         4.0,
         rgba(accent(), 0.9),
     );
-    let hints = tr!("Enter finish early    Esc cancel");
+    let hints = tr!(
+        "Enter finish early    Esc cancel",
+        "Enter 早めに終了    Esc 中止",
+        "Enter закончить раньше    Esc отмена"
+    );
     c.text_centered(
         c.width / 2.0,
         448.0,
@@ -147,7 +116,7 @@ pub fn draw_by_sight(c: &mut Canvas, game: &Game, current_offset: f64) {
     let w = c.width;
     let line = "Hit any drum key as notes reach the drum, by sight (no sound)";
     let what = "fine tune";
-    let status = match estimate(&game.stats.errors, current_offset) {
+    let status = match estimate(&game.stats().errors, current_offset) {
         Some(e) => {
             let dir = if e.error_ms >= 0.0 { "late" } else { "early" };
             format!(
@@ -345,15 +314,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn estimate_ignores_stray_hits() {
-        let mut errors = vec![12.0; 20];
-        errors.extend([8.0, 16.0, 180.0, -140.0]);
-        let e = estimate(&errors, 20.0).unwrap();
-        assert_eq!(e.hits, 22);
-        assert!((e.error_ms - 12.0).abs() < 1e-9);
-        assert_eq!(e.suggested_offset, 32.0);
     }
 }

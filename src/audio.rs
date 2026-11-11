@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, OutputCallbackInfo, SizedSample, StreamConfig};
 
+use crate::game;
+
 /// Interleaved stereo samples at the device sample rate.
 pub struct Track {
     pub samples: Vec<f32>,
@@ -67,6 +69,20 @@ impl Sfx {
             (_, 2) => Sfx::MedalFutsuu,
             (_, 3) => Sfx::MedalMuzukashii,
             _ => Sfx::MedalOni,
+        }
+    }
+}
+
+impl From<crate::game::Sound> for Sfx {
+    fn from(s: crate::game::Sound) -> Sfx {
+        use crate::game::Sound;
+        match s {
+            Sound::Don => Sfx::Don,
+            Sound::Kat => Sfx::Kat,
+            Sound::BigDon => Sfx::BigDon,
+            Sound::BigKat => Sfx::BigKat,
+            Sound::ComboBreak => Sfx::ComboBreak,
+            Sound::Scream => Sfx::Scream,
         }
     }
 }
@@ -131,7 +147,7 @@ pub struct Engine {
     stamp: Arc<Mutex<Stamp>>,
     /// The last Play / Seek sent.
     epoch: AtomicU64,
-    volume: Arc<[AtomicU32; 2]>,
+    volume: Arc<[AtomicU32; 3]>,
     pub rate: u32,
     pub description: String,
 }
@@ -161,6 +177,7 @@ impl Engine {
         }));
         let volume = Arc::new([
             AtomicU32::new(0.8f32.to_bits()),
+            AtomicU32::new(1.0f32.to_bits()),
             AtomicU32::new(1.0f32.to_bits()),
         ]);
         let fmt = supported.sample_format();
@@ -290,6 +307,12 @@ impl Engine {
     pub fn set_volume(&self, music: f32, effects: f32) {
         self.volume[0].store(music.to_bits(), Ordering::Relaxed);
         self.volume[1].store(effects.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The share of both volumes heard while the window has the focus or not (1 = all). The
+    /// mixer fades to it: down over `FOCUS_FADE_OUT`, back up over `FOCUS_FADE_IN`.
+    pub fn set_focus(&self, level: f32) {
+        self.volume[2].store(level.to_bits(), Ordering::Relaxed);
     }
 
     /// The output latency (ms) the clock goes by, and what the stream reports.
@@ -440,7 +463,7 @@ struct Mixer {
     rx: Receiver<Cmd>,
     gc: Sender<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
-    volume: Arc<[AtomicU32; 2]>,
+    volume: Arc<[AtomicU32; 3]>,
     channels: usize,
     rate: u32,
     steady: SteadyLatency,
@@ -457,6 +480,23 @@ struct Mixer {
     pending: Vec<Pending>,
     sounds: Arc<Sounds>,
     limiter: Limiter,
+    /// The focus's share of the volume as heard now, on its way to `volume[2]`.
+    focus: f32,
+}
+
+/// How long the volume takes to fall all the way when the window loses the focus: slow, so
+/// a glance at another window doesn't cut the music.
+const FOCUS_FADE_OUT: f32 = 1.5;
+/// And to come back with the focus: quick, the player is back.
+const FOCUS_FADE_IN: f32 = 0.25;
+
+/// The focus's share of the volume `secs` later, from `at` towards `to`.
+fn focus_step(at: f32, to: f32, secs: f32) -> f32 {
+    if to < at {
+        (at - secs / FOCUS_FADE_OUT).max(to)
+    } else {
+        (at + secs / FOCUS_FADE_IN).min(to)
+    }
 }
 
 impl Mixer {
@@ -464,7 +504,7 @@ impl Mixer {
         rx: Receiver<Cmd>,
         gc: Sender<Garbage>,
         stamp: Arc<Mutex<Stamp>>,
-        volume: Arc<[AtomicU32; 2]>,
+        volume: Arc<[AtomicU32; 3]>,
         rate: u32,
         channels: usize,
     ) -> Mixer {
@@ -487,6 +527,7 @@ impl Mixer {
             pending: Vec::with_capacity(PENDING_CAPACITY),
             sounds,
             limiter: Limiter::new(rate),
+            focus: 1.0,
         }
     }
 
@@ -604,9 +645,12 @@ impl Mixer {
             };
         }
 
-        let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));
-        let fx_vol = f32::from_bits(self.volume[1].load(Ordering::Relaxed));
         let ch = self.channels;
+        let focus_to = f32::from_bits(self.volume[2].load(Ordering::Relaxed));
+        let secs = (out.len() / ch.max(1)) as f32 / self.rate.max(1) as f32;
+        self.focus = focus_step(self.focus, focus_to, secs);
+        let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed)) * self.focus;
+        let fx_vol = f32::from_bits(self.volume[1].load(Ordering::Relaxed)) * self.focus;
         // A stream's frames for this callback. Where they run out inside the song, the position
         // holds, so that the music comes back still on the notes.
         let stream = self.track.as_ref().and_then(|t| t.stream.as_ref());
@@ -725,9 +769,96 @@ impl Limiter {
     }
 }
 
+impl crate::game::Song for Track {
+    fn frames(&self) -> usize {
+        Track::frames(self)
+    }
+
+    fn rate(&self) -> f64 {
+        self.rate
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
+        self
+    }
+}
+
+impl crate::game::Audio for Engine {
+    fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    fn play(&self, song: Arc<dyn crate::game::Song>, start_ms: f64) {
+        // The client's plays keep time to its own tracks.
+        if let Ok(track) = song.into_any().downcast::<Track>() {
+            Engine::play(self, track, start_ms);
+        }
+    }
+
+    fn seek(&self, ms: f64) {
+        Engine::seek(self, ms);
+    }
+
+    fn set_paused(&self, paused: bool) {
+        Engine::set_paused(self, paused);
+    }
+
+    fn sfx_at(&self, s: crate::game::Sound, volume: f32) {
+        Engine::sfx_at(self, s.into(), volume);
+    }
+
+    fn sfx_at_song(&self, s: crate::game::Sound, volume: f32, song_ms: f64) {
+        Engine::sfx_at_song(self, s.into(), volume, song_ms);
+    }
+
+    fn latencies_ms(&self) -> (f64, f64) {
+        Engine::latencies_ms(self)
+    }
+
+    fn position_ms(&self, now: Instant) -> Option<f64> {
+        Engine::position_ms(self, now)
+    }
+}
+
+/// The sound, as plays take it (borrowing only the `audio` field, so a play in the scene can be
+/// borrowed beside it).
+pub(crate) fn sound(audio: &Option<Engine>) -> Option<&dyn game::Audio> {
+    audio.as_ref().map(|a| a as &dyn game::Audio)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_track_is_a_song_that_comes_back_as_itself() {
+        use crate::game::Song;
+        let track = Arc::new(Track {
+            samples: vec![0.0; 2 * 4800],
+            rate: 1.5,
+            stream: None,
+        });
+        let song: Arc<dyn Song> = track.clone();
+        assert_eq!(song.frames(), 4800);
+        assert_eq!(song.rate(), 1.5);
+        let back = song.into_any().downcast::<Track>().expect("the same track");
+        assert!(Arc::ptr_eq(&back, &track));
+    }
+
+    #[test]
+    fn each_sound_of_a_play_is_the_hitsound_of_its_name() {
+        use crate::game::Sound;
+        for s in [
+            Sound::Don,
+            Sound::Kat,
+            Sound::BigDon,
+            Sound::BigKat,
+            Sound::ComboBreak,
+            Sound::Scream,
+        ] {
+            assert_eq!(format!("{:?}", Sfx::from(s)), format!("{s:?}"));
+        }
+    }
 
     #[test]
     fn cached_sounds_share_samples_but_custom_hits_keep_their_mix() {
@@ -788,6 +919,31 @@ mod tests {
         assert!(hi / lo < 1.02, "{lo}..{hi}");
     }
 
+    /// Losing the focus fades the volume over a second or so instead of cutting it; it comes
+    /// back quickly.
+    #[test]
+    fn the_volume_fades_out_slowly_without_the_focus_and_back_quickly() {
+        let callback = 0.01;
+        let after = |mut at: f32, to: f32, secs: f32| {
+            for _ in 0..(secs / callback).round() as usize {
+                at = focus_step(at, to, callback);
+            }
+            at
+        };
+        assert!(
+            after(1.0, 0.35, 0.1) > 0.9,
+            "a glance away barely lowers it"
+        );
+        let half = after(1.0, 0.35, 0.5);
+        assert!(half > 0.6 && half < 0.7, "{half}");
+        assert_eq!(after(1.0, 0.35, 1.5), 0.35);
+        assert_eq!(after(0.35, 1.0, 0.25), 1.0);
+        assert!(after(0.35, 1.0, 0.1) > 0.6);
+        // Never past where it's going.
+        assert_eq!(after(0.36, 0.35, 1.0), 0.35);
+        assert_eq!(after(0.99, 1.0, 1.0), 1.0);
+    }
+
     fn mixer() -> Mixer {
         let (_tx, rx) = mpsc::channel();
         let (gc, _garbage) = mpsc::channel();
@@ -800,7 +956,11 @@ mod tests {
             reported: Duration::ZERO,
             epoch: 0,
         }));
-        let volume = Arc::new([AtomicU32::new(1), AtomicU32::new(1)]);
+        let volume = Arc::new([
+            AtomicU32::new(1),
+            AtomicU32::new(1),
+            AtomicU32::new(1.0f32.to_bits()),
+        ]);
         Mixer::new(rx, gc, stamp, volume, 48_000, 2)
     }
 

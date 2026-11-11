@@ -6,7 +6,9 @@
 
 use winit::window::CursorIcon;
 
-use crate::render::{Canvas, VIRTUAL_HEIGHT, accent, rgba};
+use crate::config::Config;
+use crate::hit::Canvas;
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 
 /// Smallest area, as a fraction of the screen in each direction.
 const MIN_SIZE: f32 = 0.2;
@@ -55,7 +57,7 @@ impl Area {
 
     pub fn describe(&self) -> String {
         if self.is_full() {
-            tr!("full screen").into()
+            tr!("full screen", "全画面", "весь экран").into()
         } else {
             let (w, h, x, y) = (
                 self.w * 100.0,
@@ -63,7 +65,7 @@ impl Area {
                 self.x * 100.0,
                 self.y * 100.0,
             );
-            tr!("{w:.0}% x {h:.0}% at {x:.0}%, {y:.0}%"; w, h, x, y)
+            tr!("{w:.0}% x {h:.0}% at {x:.0}%, {y:.0}%", "{w:.0}% x {h:.0}% 位置 {x:.0}%, {y:.0}%", "{w:.0}% x {h:.0}% в {x:.0}%, {y:.0}%"; [] [w, h, x, y])
         }
     }
 
@@ -465,6 +467,27 @@ pub fn draw_frame(c: &mut Canvas, area: Area, strong: bool) {
             rgba(0xffffff, a),
             1.0,
         );
+    }
+}
+
+/// Draws gameplay (via `f`) into the playfield area, records the shapes to clip, and shows the
+/// area's frame while it's being dragged or an edge is hovered.
+pub(crate) fn draw_game_area(
+    canvas: &mut Canvas,
+    cfg: &Config,
+    clip: &mut Option<(std::ops::Range<usize>, Area)>,
+    grip: &Option<(Grip, (f64, f64), Area)>,
+    hover: &Option<Grip>,
+    see_through: bool,
+    f: impl FnOnce(&mut Canvas),
+) {
+    let area = cfg.playfield_area;
+    let (start, full) = begin(canvas, area, see_through, cfg.bg_dim_black);
+    f(canvas);
+    let range = end(canvas, area, start, full);
+    *clip = Some((range, area));
+    if grip.is_some() || matches!(hover, Some(Grip::Resize { .. })) {
+        draw_frame(canvas, area, grip.is_some());
     }
 }
 

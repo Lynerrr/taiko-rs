@@ -3,8 +3,9 @@
 use winit::keyboard::KeyCode;
 
 use crate::game::{Stats, Windows};
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
-use crate::render::{Canvas, Glide, Hit, accent, progress, rgba};
+use crate::render::{Glide, accent, progress, rgba};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortMode {
@@ -203,13 +204,18 @@ pub struct Select {
     pub custom_approved: std::collections::HashSet<u32>,
     /// The account logged in is a loved nominator: the right-click menu can love sets.
     pub nominator: bool,
-    /// osu! collections: (name, library indices).
-    pub collections: Vec<(String, std::collections::HashSet<usize>)>,
+    /// The collections: the player's own (all of them), then osu!'s that have maps here.
+    pub collections: Vec<Shown>,
     /// The collection shown (None: everything) and the open list's cursor.
     pub collection: Option<usize>,
     pub picker: Option<usize>,
-    /// The open list is the sort modes, not the collections.
-    pub sorting: bool,
+    /// What the open list is.
+    pub list: PickList,
+    /// A collection's name being typed.
+    pub naming: Option<Naming>,
+    /// The collections list offers to export the player's own to osu!'s `collection.db`
+    /// (there's an osu! install, and collections of their own).
+    pub can_export: bool,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
     /// The folder dialog is open (from the button shown when there are no maps at all).
@@ -376,8 +382,7 @@ const LIST_ANIM_MS: f32 = 200.0;
 /// and without.
 const LIST_TOP_LEGACY: f32 = 86.0;
 const LIST_TOP: f32 = 52.0;
-/// The song list's share of the width: least, most and usual (dragging its edge).
-pub const LIST_SHARE: (f32, f32, f32) = (0.3, 0.7, 0.52);
+pub use crate::config::LIST_SHARE;
 /// The narrowest the song list and the panel beside it get (virtual units).
 const LIST_MIN: f32 = 260.0;
 const PANEL_MIN: f32 = 220.0;
@@ -449,7 +454,9 @@ impl Select {
             collections: Vec::new(),
             collection: None,
             picker: None,
-            sorting: false,
+            list: PickList::Sorts,
+            naming: None,
+            can_export: false,
             scanning: None,
             favourites: crate::playlist::load_favourites(),
             picking_folder: false,
@@ -526,7 +533,30 @@ impl Select {
         let only = self
             .collection
             .and_then(|c| self.collections.get(c))
-            .map(|(_, set)| set);
+            .map(|c| &c.maps);
+        // `collection=` in the search: each the maps it takes in, and whether it's `!=`.
+        let in_any = || -> std::collections::HashSet<usize> {
+            self.collections
+                .iter()
+                .flat_map(|c| c.maps.iter().copied())
+                .collect()
+        };
+        let by_collection: Vec<(bool, bool, std::collections::HashSet<usize>)> = query
+            .collections()
+            .map(|(name, negated)| match name {
+                crate::search::InCollection::Named(name) => (
+                    negated,
+                    true,
+                    self.collections
+                        .iter()
+                        .filter(|c| c.name.to_lowercase() == *name)
+                        .flat_map(|c| c.maps.iter().copied())
+                        .collect(),
+                ),
+                // In none: not in any.
+                crate::search::InCollection::None => (negated, false, in_any()),
+            })
+            .collect();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -554,6 +584,9 @@ impl Select {
                 self.pinned.contains(&e.path)
                     || ((self.show_converts || e.meta.mode == 1)
                         && only.is_none_or(|set| set.contains(&i))
+                        && by_collection.iter().all(|(negated, inside, set)| {
+                            (set.contains(&i) == *inside) != *negated
+                        })
                         && (query.is_empty()
                             || query.matches_text(&e.meta, e.text(), &facts(i, e))))
             })
@@ -1534,6 +1567,16 @@ impl Select {
         }
         if !m.header {
             items.push((
+                fit(format!("Collect [{}]", library[i].meta.version)),
+                MenuAction::Collect(false),
+            ));
+        }
+        items.push((
+            fit(format!("Collect {}", library[i].meta.title)),
+            MenuAction::Collect(true),
+        ));
+        if !m.header {
+            items.push((
                 fit(format!("Hide [{}]", library[i].meta.version)),
                 MenuAction::HideDifficulty,
             ));
@@ -1582,9 +1625,17 @@ impl Select {
                 .is_some_and(|d| self.map_skin_off(d));
             items.push((
                 if off {
-                    tr!("Use this map's skin")
+                    tr!(
+                        "Use this map's skin",
+                        "この譜面のスキンを使う",
+                        "Включить скин карты"
+                    )
                 } else {
-                    tr!("Turn off this map's skin")
+                    tr!(
+                        "Turn off this map's skin",
+                        "この譜面のスキンをオフ",
+                        "Выключить скин карты"
+                    )
                 }
                 .to_string(),
                 MenuAction::MapSkin,
@@ -1620,7 +1671,8 @@ impl Select {
             | MenuAction::Like
             | MenuAction::MapSkin
             | MenuAction::Edit
-            | MenuAction::NewDifficulty => return None,
+            | MenuAction::NewDifficulty
+            | MenuAction::Collect(_) => return None,
         };
         self.hidden.save();
         // The selection stays unless it was hidden: then another difficulty of that song, else
@@ -1760,9 +1812,9 @@ impl Select {
             crate::settings::tab_bar(c, 0, &summary);
         } else {
             let back = if self.to_menu {
-                tr!("< MENU")
+                tr!("< MENU", "< メニュー", "< МЕНЮ")
             } else {
-                tr!("< BACK")
+                tr!("< BACK", "< 戻る", "< НАЗАД")
             };
             if self.covered {
                 left += Canvas::text_width(8.0, back) + 26.0;
@@ -1809,7 +1861,7 @@ impl Select {
             let name = self
                 .collection
                 .and_then(|c| self.collections.get(c))
-                .map_or("all", |(name, _)| name.as_str());
+                .map_or("all", |c| c.name.as_str());
             buttons.push((
                 vec![format!("Collection: {name}"), name.to_string()],
                 Hit::CollectionPick,
@@ -2249,7 +2301,7 @@ impl Select {
                     // A note for the song, as on the main menu: a don for taiko maps, a kat for
                     // converts; the open song's bigger and lit.
                     let any_taiko = g.clone().any(|i| library[self.visible[i]].meta.mode == 1);
-                    let colours = crate::multiverse::note_colours();
+                    let colours = crate::game::note_colours();
                     let tag = if any_taiko {
                         colours.don()
                     } else {
@@ -2300,7 +2352,7 @@ impl Select {
                             .copied()
                             .filter(|v| v.is_finite())
                             .map(|v| v as f32);
-                        crate::stars::draw_pill(c, 24.0 + lw - 12.0, diffs_y - 1.0, 8.0, sorted_by);
+                        crate::style::star_pill(c, 24.0 + lw - 12.0, diffs_y - 1.0, 8.0, sorted_by);
                     } else {
                         c.text_right(
                             24.0 + lw - 12.0,
@@ -2370,7 +2422,7 @@ impl Select {
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = if a > 0.6 {
-                        crate::stars::draw_pill(
+                        crate::style::star_pill(
                             c,
                             24.0 + lw - 10.0,
                             y + 6.0,
@@ -2477,7 +2529,11 @@ impl Select {
             && !self.visible.is_empty()
             && (cursor_y < top - DIFF_H || cursor_y > bottom)
         {
-            let label = tr!("back to the selected song");
+            let label = tr!(
+                "back to the selected song",
+                "選択中の曲へ戻る",
+                "к выбранной песне"
+            );
             let bw = Canvas::text_width(7.0, label) + 20.0;
             c.button(
                 24.0 + (lw - bw) / 2.0,
@@ -2492,7 +2548,9 @@ impl Select {
         }
 
         let hints = tr!(
-            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit"
+            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit",
+            "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了",
+            "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка  Ctrl+L коллекция  Tab настройки  Esc выход"
         );
         if legacy {
             c.text(
@@ -2964,12 +3022,19 @@ impl Hidden {
         crate::config::data_dir().map(|d| d.join("hidden.tsv"))
     }
 
-    /// Lines of `song<TAB>folder` or `map<TAB>file`.
     pub fn load() -> Hidden {
-        let mut h = Hidden::default();
+        if let Some((songs, maps)) = crate::store::with(|s| s.hidden()) {
+            return Hidden { songs, maps };
+        }
         let Some(text) = Self::file().and_then(|f| std::fs::read_to_string(f).ok()) else {
-            return h;
+            return Hidden::default();
         };
+        Hidden::parse(&text)
+    }
+
+    /// Lines of `song<TAB>folder` or `map<TAB>file`.
+    pub fn parse(text: &str) -> Hidden {
+        let mut h = Hidden::default();
         for line in text.lines() {
             match line.split_once('\t') {
                 Some(("song", p)) => h.songs.insert(p.into()),
@@ -2992,6 +3057,7 @@ impl Hidden {
         if let Err(e) = std::fs::write(&file, text) {
             eprintln!("couldn't save {}: {e}", file.display());
         }
+        crate::store::with(|s| s.replace_hidden(&self.songs, &self.maps));
     }
 
     pub fn contains(&self, path: &std::path::Path) -> bool {
@@ -3030,6 +3096,51 @@ pub struct SongMenu {
     pub y: f32,
 }
 
+/// A collection as song select lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    pub name: String,
+    /// The player's own (else osu!'s).
+    pub own: bool,
+    /// Its maps here (library indices), and how many of its maps aren't.
+    pub maps: std::collections::HashSet<usize>,
+    pub missing: usize,
+}
+
+/// A row of the list opened over song select: its label, what's marked on it ("sorted",
+/// "shown", "in it") and whether it has a list of its own (a collection's "...").
+pub type PickRow = (String, Option<&'static str>, bool);
+
+/// What the list opened over song select is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PickList {
+    Sorts,
+    Collections,
+    /// The player's collections to put these maps (library indices) in.
+    AddTo(Vec<usize>),
+    /// What can be done with collection `k`.
+    Manage(usize),
+    /// Is collection `k` to be deleted?
+    Delete(usize),
+    /// Are the player's collections to be written into osu!'s `collection.db`?
+    Export,
+}
+
+/// What a collection's name is being typed for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NameFor {
+    /// A new collection holding these maps (library indices; none for an empty one).
+    New(Vec<usize>),
+    /// Collection `k` renamed.
+    Rename(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Naming {
+    pub text: String,
+    pub then: NameFor,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuAction {
     HideDifficulty,
@@ -3047,6 +3158,8 @@ pub enum MenuAction {
     Edit,
     /// Start a new, empty difficulty from this one's timing and music.
     NewDifficulty,
+    /// Put the difficulty (or the whole song, if true) in a collection, or take it out.
+    Collect(bool),
 }
 
 /// The map sets loved on the online server, each with the difficulties loved (none: all of them).
@@ -3142,26 +3255,7 @@ impl Select {
         let (row, size) = if phone { (40.0, 12.0) } else { (18.0, 7.0) };
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.5));
-        let (title, mark, rows, now): (_, _, Vec<String>, _) = if self.sorting {
-            (
-                "Sort songs by",
-                "sorted",
-                SortMode::ALL.iter().map(|m| m.name().to_string()).collect(),
-                SortMode::ALL.iter().position(|&m| m == self.sort),
-            )
-        } else {
-            let rows = std::iter::once("All songs".to_string()).chain(
-                self.collections
-                    .iter()
-                    .map(|(name, maps)| format!("{name}  ({})", maps.len())),
-            );
-            (
-                "osu! collections",
-                "shown",
-                rows.collect(),
-                Some(self.collection.map_or(0, |c| c + 1)),
-            )
-        };
+        let (title, rows, hint) = self.picker_rows();
         let (bw, max_h) = if phone {
             (440.0, 472.0)
         } else {
@@ -3178,7 +3272,13 @@ impl Select {
             1.5,
         );
         let title_size = if phone { 12.0 } else { 9.0 };
-        c.text(bx + 14.0, by + 12.0, title_size, rgba(0xffffff, 1.0), title);
+        c.text(
+            bx + 14.0,
+            by + 12.0,
+            title_size,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(title_size, bw - 28.0, &title),
+        );
         let (top, view) = if phone {
             (by + 38.0, bh - 44.0)
         } else {
@@ -3192,7 +3292,7 @@ impl Select {
                 continue;
             }
             let selected = i == cursor;
-            let current = now == Some(i);
+            let (label, mark, more) = (&label.0, label.1, label.2);
             let hover = c.hovered(bx + 8.0, y, bw - 16.0, row - 2.0);
             if selected || hover {
                 c.round_rect(
@@ -3205,11 +3305,20 @@ impl Select {
                 );
             }
             c.hit(bx + 8.0, y, bw - 16.0, row, Hit::PickRow(i));
-            let shown_w = if current {
-                Canvas::text_width(size, mark) + 10.0
-            } else {
-                0.0
-            };
+            // A collection's own list (rename, delete, ...), to its right.
+            let more_w = if more { row.max(28.0) } else { 0.0 };
+            if more {
+                let mx = bx + bw - 8.0 - more_w;
+                c.hit(mx, y, more_w, row, Hit::PickRowMore(i));
+                c.text_centered(
+                    mx + more_w / 2.0,
+                    y + (row - 2.0 - size) / 2.0,
+                    size,
+                    rgba(0x9a9ab0, 1.0),
+                    "...",
+                );
+            }
+            let shown_w = mark.map_or(0.0, |m| Canvas::text_width(size, m) + 10.0) + more_w;
             let ty = y + (row - 2.0 - size) / 2.0;
             c.text(
                 bx + 20.0,
@@ -3218,25 +3327,153 @@ impl Select {
                 rgba(if selected { 0xffffff } else { 0xc8c8d8 }, 1.0),
                 &Canvas::fit(size, bw - 40.0 - shown_w, label),
             );
-            if current {
-                c.text_right(bx + bw - 20.0, ty, size, rgba(0x86E05A, 1.0), mark);
+            if let Some(mark) = mark {
+                c.text_right(bx + bw - 20.0 - more_w, ty, size, rgba(0x86E05A, 1.0), mark);
             }
         }
-        let hint = if self.sorting {
-            "Up/Down or mouse   Enter/click sort   Esc close"
-        } else {
-            "Up/Down or mouse   Enter/click show   Esc close"
-        };
         if !phone {
-            c.text_centered(w / 2.0, by + bh - 11.0, 6.0, rgba(0x6f6f86, 1.0), hint);
+            c.text_centered(
+                w / 2.0,
+                by + bh - 11.0,
+                6.0,
+                rgba(0x6f6f86, 1.0),
+                &Canvas::fit(6.0, bw - 24.0, hint),
+            );
         }
     }
 
     pub fn picker_len(&self) -> usize {
-        if self.sorting {
-            SortMode::ALL.len()
-        } else {
-            self.collections.len() + 1
+        self.picker_rows().1.len()
+    }
+
+    /// How many collections are the player's own (they come first).
+    pub fn own_collections(&self) -> usize {
+        self.collections.iter().take_while(|c| c.own).count()
+    }
+
+    /// The open list's title, its rows (each with what's marked on it and whether it has a list
+    /// of its own) and the keys it takes.
+    pub fn picker_rows(&self) -> (String, Vec<PickRow>, &'static str) {
+        let new = || ("+ New collection".to_string(), None, false);
+        let count = |c: &Shown| {
+            let n = c.maps.len();
+            let mut label = match c.missing {
+                0 => format!("{}  ({n})", c.name),
+                m => format!("{}  ({n}, {m} not here)", c.name),
+            };
+            if !c.own {
+                label += "  osu!";
+            }
+            label
+        };
+        match &self.list {
+            PickList::Sorts => (
+                "Sort songs by".into(),
+                SortMode::ALL
+                    .iter()
+                    .map(|&m| {
+                        (
+                            m.name().to_string(),
+                            (m == self.sort).then_some("sorted"),
+                            false,
+                        )
+                    })
+                    .collect(),
+                "Up/Down or mouse   Enter/click sort   Esc close",
+            ),
+            PickList::Collections => (
+                "Collections".into(),
+                std::iter::once((
+                    "All songs".to_string(),
+                    self.collection.is_none().then_some("shown"),
+                    false,
+                ))
+                .chain(self.collections.iter().enumerate().map(|(k, c)| {
+                    (
+                        count(c),
+                        (self.collection == Some(k)).then_some("shown"),
+                        true,
+                    )
+                }))
+                .chain(std::iter::once(new()))
+                .chain(
+                    self.can_export
+                        .then(|| ("Export my collections to osu!".to_string(), None, false)),
+                )
+                .collect(),
+                "Enter show   Tab more   F2 rename   Del delete",
+            ),
+            PickList::AddTo(maps) => (
+                if maps.len() == 1 {
+                    "Put the difficulty in".into()
+                } else {
+                    "Put the song in".into()
+                },
+                self.collections[..self.own_collections()]
+                    .iter()
+                    .map(|c| {
+                        let all = maps.iter().all(|i| c.maps.contains(i));
+                        (count(c), all.then_some("in it"), false)
+                    })
+                    .chain(std::iter::once(new()))
+                    .collect(),
+                "Enter/click puts it in (or takes it out)   Esc close",
+            ),
+            PickList::Manage(k) => {
+                let Some(c) = self.collections.get(*k) else {
+                    return (String::new(), Vec::new(), "");
+                };
+                let rows: &[&str] = if c.own {
+                    &["Rename", "Move up", "Move down", "Delete"]
+                } else {
+                    &["Copy to my collections"]
+                };
+                let mut rows: Vec<PickRow> =
+                    rows.iter().map(|r| (r.to_string(), None, false)).collect();
+                if c.missing > 0 {
+                    rows.push((
+                        match c.missing {
+                            1 => "Download the map not here".into(),
+                            n => format!("Download the {n} maps not here"),
+                        },
+                        None,
+                        false,
+                    ));
+                }
+                (c.name.clone(), rows, "Enter/click   Esc back")
+            }
+            PickList::Export => (
+                "Put your collections in osu!?".into(),
+                vec![
+                    (
+                        "Export (osu!'s stay; the old file is kept as collection.db.bak)".into(),
+                        None,
+                        false,
+                    ),
+                    ("Cancel".into(), None, false),
+                ],
+                "With osu! closed   Enter/click   Esc cancel",
+            ),
+            PickList::Delete(k) => {
+                let Some(c) = self.collections.get(*k) else {
+                    return (String::new(), Vec::new(), "");
+                };
+                (
+                    format!("Delete {}?", c.name),
+                    vec![
+                        (
+                            match c.maps.len() {
+                                1 => "Delete it (1 map; the map stays)".to_string(),
+                                n => format!("Delete it ({n} maps; the maps stay)"),
+                            },
+                            None,
+                            false,
+                        ),
+                        ("Keep it".into(), None, false),
+                    ],
+                    "Enter/click   Esc keep it",
+                )
+            }
         }
     }
 }
@@ -3758,7 +3995,7 @@ impl Results {
             1.0,
         );
         c.text(x + 16.0, y + 12.0, 8.0, label, "PERFORMANCE");
-        crate::stars::draw_pill(c, x + pw - 14.0, y + 9.0, 8.0, Some(b.stars as f32));
+        crate::style::star_pill(c, x + pw - 14.0, y + 9.0, 8.0, Some(b.stars as f32));
         // Two columns: the pp and its parts, then what could have been and the total.
         let col_w = (pw - 48.0) / 2.0;
         let (lx, rx) = (x + 16.0, x + 32.0 + col_w);

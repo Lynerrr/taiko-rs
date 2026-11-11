@@ -302,11 +302,15 @@ fn assert_every_screen_fits() {
     // The first frame takes in the library.
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.select.collections = vec![
-        (
-            "My Favourite Tech Maps For Practice".into(),
-            Default::default(),
-        ),
-        ("dans".into(), Default::default()),
+        ui::Shown {
+            name: "My Favourite Tech Maps For Practice".into(),
+            own: true,
+            ..Default::default()
+        },
+        ui::Shown {
+            name: "dans".into(),
+            ..Default::default()
+        },
     ];
     check(&mut s, "select", &mut out);
     s.cfg.main_menu = false;
@@ -321,12 +325,12 @@ fn assert_every_screen_fits() {
         let mut m = menu::Menu::new();
         m.pick(i);
         s.main_menu = Some(m);
-        s.scene = Scene::Select;
+        s.scene = SongSelect::scene();
         check(&mut s, &format!("main menu, {item:?}"), &mut out);
     }
     for paused in [false, true] {
         s.main_menu = Some(menu::Menu::new());
-        s.scene = Scene::Select;
+        s.scene = SongSelect::scene();
         s.music_control(player::Control::Open);
         s.music_paused = paused;
         if paused {
@@ -357,16 +361,16 @@ fn assert_every_screen_fits() {
     s.player = None;
     s.music_paused = false;
     s.main_menu = None;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     for page in 0..guide::PAGES {
-        s.guide = Some(page);
+        s.guide.page = Some(page);
         check(&mut s, &format!("guide page {page}"), &mut out);
     }
-    s.guide = Some(0);
-    s.guide_binding = Some(3);
+    s.guide.page = Some(0);
+    s.guide.binding = Some(3);
     check(&mut s, "guide waiting for a key", &mut out);
-    s.guide_binding = None;
-    s.guide = None;
+    s.guide.binding = None;
+    s.guide.page = None;
     s.select.collection = Some(0);
     s.select.filter = "camellia long search query that is typed".into();
     s.select.refilter(&s.library);
@@ -545,10 +549,10 @@ fn assert_every_screen_fits() {
     s.open_customization(mods::Mod::Shapeshift);
     check(&mut s, "shapeshift setup", &mut out);
     s.cfg.shapeshift.shapes[2].1 = false;
-    s.shapeshift_setup = Some(shapeshift::Setup { row: 3, col: 4 });
+    s.shapeshift_setup = Some(crate::mod_setup::shapeshift::Setup { row: 3, col: 4 });
     check(&mut s, "shapeshift setup, shapes row", &mut out);
     s.shapeshift_setup = None;
-    s.universe_setup = Some(multiverse::Setup::new(3, 7));
+    s.universe_setup = Some(crate::mod_setup::multiverse::Setup::new(3, 7));
     check(&mut s, "multiverse setup", &mut out);
     // Presets with long names (more than fit), one of them the universes now, and own colours
     // being typed.
@@ -566,11 +570,11 @@ fn assert_every_screen_fits() {
     })
     .collect();
     s.cfg.universes = s.cfg.universe_presets[1].universes;
-    s.universe_setup = Some(multiverse::Setup {
+    s.universe_setup = Some(crate::mod_setup::multiverse::Setup {
         typing: Some(multiverse::Typing::Colours(
             "#ff4020 #40a0ff and some more".into(),
         )),
-        ..multiverse::Setup::new(2, 0)
+        ..crate::mod_setup::multiverse::Setup::new(2, 0)
     });
     check(&mut s, "multiverse setup presets", &mut out);
     s.universe_setup = None;
@@ -777,11 +781,11 @@ fn assert_every_screen_fits() {
 
     s.open_layout_editor();
     check(&mut s, "layout editor", &mut out);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_hud_editor();
     check(&mut s, "interface editor", &mut out);
-    if let Some(ed) = &mut s.hud_edit {
-        ed.select(
+    if let Some(h) = s.scene.screen_mut::<screens::hud_editor::HudEdit>() {
+        h.ed.select(
             hud::Part::PLACED
                 .iter()
                 .position(|&p| p == hud::Part::Counts)
@@ -790,8 +794,8 @@ fn assert_every_screen_fits() {
     }
     check(&mut s, "interface editor, hit counter", &mut out);
     s.close_hud_editor();
-    s.scene = Scene::Select;
-    s.start_calibration();
+    s.scene = SongSelect::scene();
+    s.start_calibration_as(false);
     check(&mut s, "calibration", &mut out);
     let estimate = calibrate::Estimate {
         hits: 123,
@@ -800,25 +804,25 @@ fn assert_every_screen_fits() {
         margin_ms: 2.5,
         suggested_offset: -45.0,
     };
-    s.scene = Scene::CalibrateDone {
+    s.scene = screens::calibrate_done::CalibrateDone::scene(
         estimate,
-        back: Box::new(Scene::Select),
-        vsync: false,
-    };
+        Box::new(SongSelect::scene()),
+        false,
+    );
     check(&mut s, "calibration result", &mut out);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.start_calibration_as(true);
     check(&mut s, "vsync calibration", &mut out);
-    s.scene = Scene::CalibrateDone {
+    s.scene = screens::calibrate_done::CalibrateDone::scene(
         estimate,
-        back: Box::new(Scene::Select),
-        vsync: true,
-    };
+        Box::new(SongSelect::scene()),
+        true,
+    );
     check(&mut s, "vsync calibration result", &mut out);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     // Not `open_download`, which would search the mirrors.
-    s.scene = Scene::Download;
+    s.scene = crate::screens::download::Download::scene();
     check(&mut s, "download", &mut out);
     let e = entry(0, 0, true);
     s.browse.results = (0..10)
@@ -845,7 +849,7 @@ fn assert_every_screen_fits() {
         .collect();
     s.browse.query = "a long search query typed into the download tab".into();
     check(&mut s, "download results", &mut out);
-    s.scene = Scene::MpMenu;
+    s.scene = crate::screens::mp_menu::MpMenu::scene();
     check(&mut s, "multiplayer menu", &mut out);
     s.crash = Some("--- taiko.rs crash".into());
     check(&mut s, "crash report", &mut out);
@@ -953,7 +957,7 @@ fn assert_every_screen_fits() {
     }
     s.cfg.language = crate::lang::Lang::En;
     s.mp_menu = Default::default();
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     s.mp_menu.account = Some("MyOwnAccountName".into());
     s.social.open = true;
@@ -1169,7 +1173,7 @@ fn assert_every_screen_fits() {
 
     let mut map = beatmap::calibration_map(500.0, 4, 64);
     map.meta = entry(0, 0, true).meta;
-    let game = Game::with_mods(
+    let game = Play::new(Game::with_mods(
         map,
         Arc::new(Track {
             samples: Vec::new(),
@@ -1178,12 +1182,9 @@ fn assert_every_screen_fits() {
         }),
         None,
         s.cfg.mods,
-    );
-    s.scene = Scene::Play {
-        game: Box::new(game),
-        entry: 0,
-        from: None,
-    };
+    ));
+    s.play = Some(Box::new(game));
+    s.scene = screens::play::PlayScreen::scene(0, None);
     check(&mut s, "play", &mut out);
     s.key(KeyCode::Escape, false, None, Instant::now(), None);
     check(&mut s, "pause", &mut out);
@@ -1234,19 +1235,11 @@ fn assert_every_screen_fits() {
     s.mp_menu.account = Some(LONG_NAME.to_string());
     s.me = Some((12_345.6, Some(99_999)));
     s.me_for = LONG_NAME.to_string();
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     check(&mut s, "select logged in", &mut out);
-    s.scene = Scene::Results {
-        results: Box::new(results(false)),
-        entry: 0,
-        from: None,
-    };
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(results(false)), 0, None);
     check(&mut s, "results", &mut out);
-    s.scene = Scene::Results {
-        results: Box::new(results(true)),
-        entry: 0,
-        from: None,
-    };
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(results(true)), 0, None);
     check(&mut s, "results failed", &mut out);
     let mut opened = results(false);
     (opened.watched, opened.rank, opened.replay, opened.partial) = (None, None, None, true);
@@ -1256,21 +1249,13 @@ fn assert_every_screen_fits() {
         online: true,
     });
     opened.replay_error = Some("that replay isn't on the server".into());
-    s.scene = Scene::Results {
-        results: Box::new(opened),
-        entry: 0,
-        from: None,
-    };
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(opened), 0, None);
     check(&mut s, "results of an online score", &mut out);
     // Scrolled down to the pp.
     for failed in [false, true] {
         let mut r = results(failed);
         (r.scroll, r.scroll_to) = (ui::RESULTS_SCROLL, ui::RESULTS_SCROLL);
-        s.scene = Scene::Results {
-            results: Box::new(r),
-            entry: 0,
-            from: None,
-        };
+        s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
         check(
             &mut s,
             if failed {
@@ -1283,7 +1268,7 @@ fn assert_every_screen_fits() {
     }
     s.mp_menu.account = None;
     s.me = None;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     // The video editor (its map still loading): quality, a target size being typed, exporting.
     let json = format!(
@@ -1298,24 +1283,21 @@ fn assert_every_screen_fits() {
         speed: 1,
         ..Default::default()
     };
-    s.scene = Scene::VideoEdit(Box::new(video::Editor::new(
-        serde_json::from_str(&json).unwrap(),
-        video_rx,
-        settings,
-    )));
+    s.scene = screens::video_edit::VideoEdit::scene(
+        video::Editor::new(serde_json::from_str(&json).unwrap(), video_rx, settings),
+        String::new(),
+    );
+    fn video(s: &mut State) -> &mut screens::video_edit::VideoEdit {
+        s.scene.screen_mut().unwrap()
+    }
     check(&mut s, "video editor", &mut out);
-    if let Scene::VideoEdit(ed) = &mut s.scene {
-        ed.settings.quality = video::QUALITIES.len() - 1;
-        ed.typing = Some("1234.5".into());
-    }
+    video(&mut s).ed.settings.quality = video::QUALITIES.len() - 1;
+    video(&mut s).ed.typing = Some("1234.5".into());
     check(&mut s, "video editor target size", &mut out);
-    if let Scene::VideoEdit(ed) = &mut s.scene {
-        ed.typing = None;
-    }
-    s.video_status = "saved \"Camellia feat. Hatsune Miku - Extremely Long Song Title.mp4\" in the videos folder".into();
+    video(&mut s).ed.typing = None;
+    video(&mut s).status = "saved \"Camellia feat. Hatsune Miku - Extremely Long Song Title.mp4\" in the videos folder".into();
     check(&mut s, "video editor saved", &mut out);
-    s.video_status.clear();
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     // No maps anywhere: the Songs folder button.
     let library = std::mem::take(&mut s.library);
@@ -1381,7 +1363,7 @@ fn assert_every_screen_fits() {
     });
 
     // The exit question, over song select.
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.quit_asked = true;
     check(&mut s, "exit question", &mut out);
     s.quit_asked = false;
@@ -1426,7 +1408,7 @@ fn assert_every_screen_fits() {
     s.mp = Some(guessr_room());
     s.guessr = Some(g);
     s.picking_lobby_map = true;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     check(&mut s, "mapguessr picking", &mut out);
 
     // The startup warning is translated: it fits in every language.
@@ -1537,13 +1519,13 @@ fn watching_everyone_shows_where_each_player_plays() {
         .map(|i| (i, format!("player {i}")))
         .collect();
     for &w in widths() {
-        let mut games: Vec<(u32, Box<Game>)> = mods
+        let mut games: Vec<(u32, Box<Play>)> = mods
             .iter()
             .enumerate()
             .map(|(i, mods)| {
                 let mut map = beatmap::calibration_map(500.0, 4, 64);
                 map.meta = entry(0, 0, false).meta;
-                let mut g = Game::with_mods(
+                let mut g = Play::new(Game::with_mods(
                     map,
                     Arc::new(Track {
                         samples: Vec::new(),
@@ -1552,7 +1534,7 @@ fn watching_everyone_shows_where_each_player_plays() {
                     }),
                     None,
                     Mods::parse(mods),
-                );
+                ));
                 g.set_time(9000.0);
                 (i as u32, Box::new(g))
             })
@@ -1622,7 +1604,7 @@ fn song_select_search_takes_the_keys_only_once_clicked() {
         !s.select.searching && s.select.filter == "-45[",
         "Escape leaves the box, keeping the search"
     );
-    assert!(matches!(s.scene, Scene::Select));
+    assert!(s.scene.is_select());
 }
 
 #[test]
@@ -1800,7 +1782,7 @@ fn by_difficulty_each_is_listed_under_its_own_stars() {
 fn without_headings_the_songs_are_one_list_and_by_difficulty_each_stands_alone() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let by_artist = s.select.songs();
     let maps = by_artist.iter().map(Vec::len).sum::<usize>();
     // Stars counting down through the library, so by difficulty its order turns round.
@@ -1865,9 +1847,9 @@ fn the_song_headings_setting_is_kept() {
 fn the_sort_button_lists_the_sorts() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let before = s.select.sort;
-    s.click(render::Hit::SortList, None);
+    s.click(crate::hit::Hit::SortList, None);
     assert_eq!(s.select.sort, before, "the button only opens the list");
     assert_eq!(s.select.picker_len(), ui::SortMode::ALL.len());
     let mut problems = Vec::new();
@@ -1879,7 +1861,7 @@ fn the_sort_button_lists_the_sorts() {
         .iter()
         .position(|&m| m == ui::SortMode::Added)
         .unwrap();
-    s.click(render::Hit::PickRow(row), None);
+    s.click(crate::hit::Hit::PickRow(row), None);
     assert_eq!(s.select.sort, ui::SortMode::Added);
     assert_eq!(s.select.picker, None);
     assert_eq!(s.cfg.sort, "date added");
@@ -1889,7 +1871,7 @@ fn the_sort_button_lists_the_sorts() {
 fn select_under_headings() -> State {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let paths: Vec<PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
     for (k, p) in paths.iter().enumerate() {
         s.select.status.insert(
@@ -2007,7 +1989,7 @@ fn a_search_opens_every_heading_and_clearing_it_puts_them_back() {
 fn the_list_scrolls_on_its_own_and_comes_back_for_the_selection() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     draw_select(&mut s);
     let (at, top) = (s.select.cursor(), s.select.list_scroll());
     // The wheel moves the list only, and walks past no difficulty.
@@ -2038,7 +2020,7 @@ fn the_list_scrolls_on_its_own_and_comes_back_for_the_selection() {
 fn letting_go_of_the_list_leaves_it_there_and_selects_nothing() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     draw_select(&mut s);
     let at = s.select.cursor();
     s.select.drag_to(-120.0);
@@ -2054,7 +2036,7 @@ fn letting_go_of_the_list_leaves_it_there_and_selects_nothing() {
 fn a_right_click_off_the_rows_does_nothing() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.right_press = Some((700.0, 400.0, None));
     let at = s.select.cursor();
     s.right_button(false);
@@ -2070,7 +2052,7 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
     room.map.as_mut().unwrap().mods = Mods::parse("DT,HD").list();
     room.map.as_mut().unwrap().defense = None;
     s.mp = Some(room);
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     s.cfg.mods = Mods::parse("FL");
     let shown = s.shown_mods();
     assert!(
@@ -2082,7 +2064,7 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
         "the host's other mods aren't forced on us"
     );
     // Not in a lobby (or as the host), the mod select shows just ours.
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     assert_eq!(s.shown_mods(), s.cfg.mods);
 }
 
@@ -2098,7 +2080,7 @@ fn in_defense_the_hosts_mods_are_everyones_and_a_guest_cant_change_them() {
         m.mods = Mods::parse("DT,HD,AT").lobby(m.defense).list();
     }
     s.mp = Some(room);
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     s.cfg.mods = Mods::parse("FL");
     let shown = s.shown_mods();
     assert!(shown.has(mods::Mod::Hidden) && shown.has(mods::Mod::Maze));
@@ -2120,7 +2102,7 @@ fn in_defense_the_hosts_mods_are_everyones_and_a_guest_cant_change_them() {
 fn np_names_the_map_on_screen_with_a_link_others_can_click() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let np = s.now_playing().expect("a map is selected");
     let e = &s.library[s.select.selected().unwrap()];
     assert!(
@@ -2305,8 +2287,8 @@ fn update_notes_wait_for_the_guide_instead_of_covering_it() {
     )
     .unwrap();
     s.pending_changelog = Some(changelog::View::loaded(vec![change]));
-    s.guide = Some(guide::OFFSET_PAGE);
-    s.guide_read = [true; guide::PAGES];
+    s.guide.page = Some(guide::OFFSET_PAGE);
+    s.guide.read = [true; guide::PAGES];
     s.poll_changelog();
     assert!(
         s.changelog.is_none(),
@@ -2314,15 +2296,15 @@ fn update_notes_wait_for_the_guide_instead_of_covering_it() {
     );
     assert!(s.pending_changelog.is_some(), "the notes aren't lost");
 
-    s.guide = None;
-    s.guide_after = Some(guide::OFFSET_PAGE + 1);
+    s.guide.page = None;
+    s.guide.after = Some(guide::OFFSET_PAGE + 1);
     s.poll_changelog();
     assert!(
         s.changelog.is_none(),
         "calibrating from the guide isn't the end of it"
     );
 
-    s.guide_after = None;
+    s.guide.after = None;
     s.poll_changelog();
     assert!(s.changelog.is_some());
 }
@@ -2355,7 +2337,7 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
     let mut room = session(false);
     room.client.id = Some(0);
     s.mp = Some(room);
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     let at = Instant::now();
     let key = |s: &mut State, code, text: Option<&str>| s.key_inner(code, false, text, at, None);
 
@@ -2372,7 +2354,7 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
     // Esc only puts the line away; the lobby stays.
     key(&mut s, KeyCode::Escape, None);
     assert!(s.mp.as_ref().unwrap().chat_input.is_none());
-    assert!(matches!(s.scene, Scene::Lobby));
+    assert!(s.scene.screen_is::<crate::screens::lobby::Lobby>());
 
     // Enter sends.
     key(&mut s, KeyCode::KeyT, Some("t"));
@@ -2387,7 +2369,7 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
         "sent, and the box stays open for the next line"
     );
     assert!(
-        matches!(s.scene, Scene::Lobby),
+        s.scene.screen_is::<crate::screens::lobby::Lobby>(),
         "Enter didn't start a match"
     );
     // Enter on an empty line puts it away.
@@ -2395,15 +2377,15 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
     assert!(s.mp.as_ref().unwrap().chat_input.is_none());
 
     // A click on the line focuses it; a click elsewhere puts it away.
-    s.click(render::Hit::LobbyChat, None);
+    s.click(crate::hit::Hit::LobbyChat, None);
     assert!(s.mp.as_ref().unwrap().chat_input.is_some());
-    s.click(render::Hit::ListBack, None);
+    s.click(crate::hit::Hit::ListBack, None);
     assert!(s.mp.as_ref().unwrap().chat_input.is_none());
 }
 
 #[test]
 fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
-    use crate::render::Hit;
+    use crate::hit::Hit;
     let audit = |draw: &dyn Fn(&mut Canvas)| {
         let mut c = Canvas {
             audit: true,
@@ -2496,22 +2478,24 @@ fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
 #[test]
 fn an_update_restarts_the_game_only_in_a_quiet_menu() {
     let mut s = state();
-    for scene in [Scene::Select, Scene::Download, Scene::MpMenu] {
+    for scene in [
+        SongSelect::scene(),
+        crate::screens::download::Download::scene(),
+        crate::screens::mp_menu::MpMenu::scene(),
+    ] {
         s.scene = scene;
         assert!(s.can_restart());
     }
-    s.scene = Scene::Settings {
-        prev: Box::new(Scene::Select),
-    };
+    s.behind = Some(Box::new(SongSelect::scene()));
+    s.scene = crate::screens::settings::SettingsScreen::scene();
     assert!(s.can_restart());
     // The settings over something that's still going.
-    s.scene = Scene::Settings {
-        prev: Box::new(Scene::Lobby),
-    };
+    s.behind = Some(Box::new(crate::screens::lobby::Lobby::scene()));
+    s.scene = crate::screens::settings::SettingsScreen::scene();
     assert!(!s.can_restart());
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     assert!(!s.can_restart());
-    s.scene = Scene::MpResults;
+    s.scene = crate::screens::mp_results::MpResults::scene();
     assert!(!s.can_restart());
 }
 
@@ -2567,10 +2551,10 @@ fn mod_presets_are_saved_named_applied_and_removed() {
     let at = s
         .hits
         .iter()
-        .find(|h| h.hit == render::Hit::ModPreset(0))
+        .find(|h| h.hit == crate::hit::Hit::ModPreset(0))
         .map(|h| h.rect)
         .expect("preset 1 is drawn");
-    s.click(render::Hit::ModPreset(0), None);
+    s.click(crate::hit::Hit::ModPreset(0), None);
     assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"));
     assert!(at[2] > 0.0);
     s.remove_mod_preset(0);
@@ -2583,7 +2567,7 @@ fn mod_presets_are_saved_and_applied_with_the_mouse() {
     s.play_when_scanned = false;
     s.open_mod_select();
     s.cfg.mods = mods::Mods::parse("HD,PF");
-    let click = |s: &mut State, hit: render::Hit| {
+    let click = |s: &mut State, hit: crate::hit::Hit| {
         s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
         let r = s
             .hits
@@ -2601,25 +2585,25 @@ fn mod_presets_are_saved_and_applied_with_the_mouse() {
         s.mouse_button(true, None);
         s.mouse_button(false, None);
     };
-    click(&mut s, render::Hit::ModPresetSave);
+    click(&mut s, crate::hit::Hit::ModPresetSave);
     assert!(s.preset_naming.is_some(), "+ Save starts naming a preset");
     // The naming window's Cancel and Save take the mouse.
-    click(&mut s, render::Hit::Key(KeyCode::Escape));
+    click(&mut s, crate::hit::Hit::Key(KeyCode::Escape));
     assert!(s.preset_naming.is_none() && s.mod_select.is_some());
     assert!(s.cfg.mod_presets.is_empty(), "Cancel saves nothing");
-    click(&mut s, render::Hit::ModPresetSave);
-    click(&mut s, render::Hit::Key(KeyCode::Enter));
+    click(&mut s, crate::hit::Hit::ModPresetSave);
+    click(&mut s, crate::hit::Hit::Key(KeyCode::Enter));
     assert!(s.preset_naming.is_none());
     assert_eq!(s.cfg.mod_presets.len(), 1, "Save keeps it");
     // A click elsewhere while naming does nothing (no mod toggles under the window).
-    click(&mut s, render::Hit::ModPresetSave);
+    click(&mut s, crate::hit::Hit::ModPresetSave);
     s.mouse = (5.0, 5.0);
     s.mouse_button(true, None);
     s.mouse_button(false, None);
     assert!(s.preset_naming.is_some());
     s.key_inner(KeyCode::Escape, false, None, Instant::now(), None);
     s.cfg.mods = mods::Mods::NONE;
-    click(&mut s, render::Hit::ModPreset(0));
+    click(&mut s, crate::hit::Hit::ModPreset(0));
     assert_eq!(s.cfg.mods, mods::Mods::parse("HD,PF"), "a click applies it");
     assert!(s.mod_select.is_some());
 }
@@ -2634,7 +2618,7 @@ fn deleting_a_mod_preset_asks_first() {
         mods: mods::Mods::parse("HD,PF"),
         rate: 1.0,
     }];
-    let point_at = |s: &mut State, hit: render::Hit| {
+    let point_at = |s: &mut State, hit: crate::hit::Hit| {
         s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
         let r = s
             .hits
@@ -2650,25 +2634,25 @@ fn deleting_a_mod_preset_asks_first() {
         );
     };
     // A right-click asks; Keep (a click) leaves it.
-    point_at(&mut s, render::Hit::ModPreset(0));
+    point_at(&mut s, crate::hit::Hit::ModPreset(0));
     s.right_button(true);
     s.right_button(false);
     assert_eq!(s.preset_deleting, Some(0));
     assert_eq!(s.cfg.mod_presets.len(), 1, "nothing goes before the yes");
-    point_at(&mut s, render::Hit::Key(KeyCode::Escape));
+    point_at(&mut s, crate::hit::Hit::Key(KeyCode::Escape));
     s.mouse_button(true, None);
     s.mouse_button(false, None);
     assert_eq!(s.preset_deleting, None);
     assert_eq!(s.cfg.mod_presets.len(), 1);
     // Keys while asking go to the question, not the mod select (1 would apply the preset).
-    point_at(&mut s, render::Hit::ModPreset(0));
+    point_at(&mut s, crate::hit::Hit::ModPreset(0));
     s.right_button(true);
     s.right_button(false);
     s.cfg.mods = mods::Mods::NONE;
     s.key_inner(KeyCode::Digit1, false, None, Instant::now(), None);
     assert_eq!(s.cfg.mods, mods::Mods::NONE);
     // Delete (a click) deletes it.
-    point_at(&mut s, render::Hit::Key(KeyCode::Enter));
+    point_at(&mut s, crate::hit::Hit::Key(KeyCode::Enter));
     s.mouse_button(true, None);
     s.mouse_button(false, None);
     assert!(s.cfg.mod_presets.is_empty());

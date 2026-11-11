@@ -7,7 +7,8 @@ use super::look::{self, Look};
 use super::{Btn, View};
 use crate::editor::snaps::{self, SnapPreset};
 use crate::editor::timing::SNAP_DIVISORS;
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SnapAct {

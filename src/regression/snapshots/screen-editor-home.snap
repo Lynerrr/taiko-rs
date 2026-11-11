@@ -1,0 +1,15 @@
+text   24,14   MAP EDITOR
+text  343,90   Make a new map
+text  293,116  Drop a song here: mp3, ogg, wav or flac
+text  205,132  The tempo and the first beat are found for you, and you can time it by ear
+text  320,169  Choose a song file...   [Enter]
+text  107,232  Go on with a map
+text  550,256  Pick from my songs   [L]
+text  119,262  Maps you open in the editor will be listed here.
+text  567,286  Take the tour   [T]
+text  517,318  Or drop a .osu or .tko here.
+text   24,460  Esc: back to the menu
+hit   307,160   240x26   EditorHome(Browse)
+hit   107,66    640x150  EditorHome(Browse)
+hit   517,248   229x24   EditorHome(PickInLibrary)
+hit   517,278   229x24   EditorHome(Tour)

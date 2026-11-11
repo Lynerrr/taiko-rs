@@ -21,7 +21,7 @@ fn editing() -> State {
     let path = dir.join("map.osu");
     std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
     let view = View::open(path, 0).unwrap();
-    s.scene = Scene::Editor(Box::new(view));
+    s.scene = MapEditor::scene(Box::new(view));
     s
 }
 
@@ -34,7 +34,7 @@ fn frame(s: &mut State) {
 fn until_playing(s: &mut State) {
     for _ in 0..500 {
         frame(s);
-        if matches!(s.scene, Scene::Play { .. }) {
+        if s.scene.is_play() {
             return;
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -43,7 +43,7 @@ fn until_playing(s: &mut State) {
 }
 
 fn press(s: &mut State, code: KeyCode, keys: Keys) {
-    let Scene::Editor(view) = &mut s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_mut::<MapEditor>() else {
         panic!("not in the editor");
     };
     view.key(code, false, keys, None);
@@ -52,7 +52,7 @@ fn press(s: &mut State, code: KeyCode, keys: Keys) {
 #[test]
 fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     let mut s = editing();
-    let Scene::Editor(view) = &mut s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_mut::<MapEditor>() else {
         unreachable!()
     };
     // An edit not saved yet: the test plays it anyway.
@@ -64,15 +64,20 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     assert!(s.editor_back.is_some(), "the editor waits");
     until_playing(&mut s);
     {
-        let Scene::Play { game, from, .. } = &s.scene else {
+        let (Some((_, from)), Some(game)) = (s.scene.song_play(), s.play.as_deref()) else {
             unreachable!()
         };
-        assert_eq!(*from, Some(1500.0), "from the playhead");
-        assert_eq!(game.map.notes.len(), 2, "the map as the editor has it");
-        assert!(!game.record, "nothing is kept");
-        assert!(game.mods.has(mods::Mod::NoFail));
-        assert!(game.banner.as_deref().is_some_and(|b| b.contains("TEST")));
-        assert!(game.test_play);
+        assert_eq!(from, Some(1500.0), "from the playhead");
+        assert_eq!(game.map().notes.len(), 2, "the map as the editor has it");
+        assert!(!game.record(), "nothing is kept");
+        assert!(game.mods().has(mods::Mod::NoFail));
+        assert!(
+            game.view
+                .banner
+                .as_deref()
+                .is_some_and(|b| b.contains("TEST"))
+        );
+        assert!(game.view.test_play);
     }
     // A retry plays the editor's map again.
     s.restart_map();
@@ -80,7 +85,7 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     assert!(s.editor_back.is_some());
     // Quit (from the pause menu) goes back to the editor, as it was left.
     s.show_select();
-    let Scene::Editor(view) = &s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_as::<MapEditor>() else {
         panic!("quitting a test play went somewhere else");
     };
     assert_eq!(
@@ -98,23 +103,23 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
     press(&mut s, KeyCode::F5, shift);
     frame(&mut s);
     until_playing(&mut s);
-    let Scene::Play { from, .. } = &s.scene else {
+    let Some((_, from)) = s.scene.song_play() else {
         unreachable!()
     };
-    assert_eq!(*from, None);
+    assert_eq!(from, None);
     // Played to the end: no results, back to the editor.
-    if let Scene::Play { game, .. } = &mut s.scene {
+    if let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) {
         game.run_out_of_notes();
         assert!(game.skip_outro());
     }
     for _ in 0..200 {
         frame(&mut s);
-        if matches!(s.scene, Scene::Editor(_)) {
+        if s.scene.screen_is::<MapEditor>() {
             break;
         }
     }
     assert!(
-        matches!(s.scene, Scene::Editor(_)),
+        s.scene.screen_is::<MapEditor>(),
         "the end of a test play has no results"
     );
     assert!(s.editor_back.is_none());
@@ -123,13 +128,13 @@ fn f5_plays_the_editors_map_as_it_is_and_quitting_comes_back_to_it() {
 #[test]
 fn a_map_not_in_the_song_list_is_not_test_played_and_says_why() {
     let mut s = editing();
-    let Scene::Editor(view) = &mut s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_mut::<MapEditor>() else {
         unreachable!()
     };
     view.entry = 9999;
     press(&mut s, KeyCode::F5, Keys::default());
     frame(&mut s);
-    let Scene::Editor(view) = &s.scene else {
+    let Some(MapEditor { view, .. }) = s.scene.screen_as::<MapEditor>() else {
         panic!("it left the editor");
     };
     assert!(s.editor_back.is_none());
@@ -143,15 +148,18 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
     frame(&mut s);
     until_playing(&mut s);
     let autoplayed = |s: &State| {
-        let Scene::Play { game, .. } = &s.scene else {
+        let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref()) else {
             unreachable!()
         };
-        assert!(!game.record, "nothing is kept");
-        assert!(game.test_play);
-        let auto = game.mods.has(mods::Mod::Autoplay);
-        assert_eq!(game.mods.has(mods::Mod::NoFail), !auto);
+        assert!(!game.record(), "nothing is kept");
+        assert!(game.view.test_play);
+        let auto = game.mods().has(mods::Mod::Autoplay);
+        assert_eq!(game.mods().has(mods::Mod::NoFail), !auto);
         assert_eq!(
-            game.banner.as_deref().is_some_and(|b| b.contains("AUTO")),
+            game.view
+                .banner
+                .as_deref()
+                .is_some_and(|b| b.contains("AUTO")),
             auto
         );
         auto
@@ -167,7 +175,7 @@ fn tab_in_a_test_play_hands_it_to_autoplay_and_back_and_a_retry_keeps_it() {
     s.key(KeyCode::Tab, false, None, Instant::now(), None);
     // Back in the editor, the next test is by hand.
     s.show_select();
-    assert!(matches!(s.scene, Scene::Editor(_)));
+    assert!(s.scene.screen_is::<MapEditor>());
     press(&mut s, KeyCode::F5, Keys::default());
     frame(&mut s);
     until_playing(&mut s);
@@ -189,7 +197,7 @@ fn friends_see_editing_through_the_editor_its_start_screen_and_a_test_play() {
     assert!(matches!(s.activity(), Activity::Editing { .. }), "back");
     // Leaving the editor goes back to the menus.
     s.editor_back = None;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     assert_eq!(s.activity(), Activity::Menus);
     // The editor's start screen has no map yet.
     s.open_editor_home();

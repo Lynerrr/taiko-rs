@@ -8,7 +8,8 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use super::chrome::{DIM, WARN};
 use super::{Btn, Modal, View};
 use crate::custom;
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 
 /// A button of the upload window.
 #[derive(Clone, Copy, PartialEq, Debug)]

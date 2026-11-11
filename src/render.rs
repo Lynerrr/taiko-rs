@@ -20,7 +20,7 @@ pub struct Shape {
     pub border: [f32; 4],
     /// x: corner radius, y: border width, z: glow/softness width, w: half clip (0 none, 1 left, 2 right)
     /// or a skin image (`SPRITE_BASE` + `Sprite`, tinted by `fill`) or a character of the font
-    /// (`GLYPH_BASE` + `font::index`, in `fill`, filling the quad's 5x7 font pixels) or a profile
+    /// (`GLYPH_BASE` + `font::index`, in `fill`, sampled from the font atlas) or a profile
     /// picture (-1 - its `avatars` slot, rounded by x, faded by fill's alpha).
     pub params: [f32; 4],
     /// Rotation (radians, clockwise on screen) about the centre; 0 for nearly everything.
@@ -831,6 +831,10 @@ fn shape_shader() -> String {
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
         .replace("FONT_COLS", &crate::font::ATLAS_COLS.to_string())
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
+        .replace("CJK_BASE", &crate::font::CHINESE_BASE.to_string())
+        .replace("CJK_COLS", &crate::font::CHINESE_COLS.to_string())
+        .replace("CJK_SIDE", &crate::font::CHINESE_SIDE.to_string())
+        .replace("CJK_Y", &crate::font::CHINESE_Y.to_string())
         .replace("AVATAR_GRID", &crate::avatars::GRID.to_string())
         .replace("AVATAR_CELL", &crate::avatars::CELL.to_string())
         .replace("MEDIA_SIDE", &MEDIA_SIDE.to_string())
@@ -941,25 +945,27 @@ fn shade(in: VOut) -> vec4<f32> {
     if (in.params.w > 99.5) {
         // A character: how much of this pixel the font pixels under it cover (a box filter, so
         // edges look like single rects did, with no seams between neighbouring font pixels).
-        // Glyphs are 7 font pixels tall and as many wide as their quad (5, or 7 for Japanese),
-        // in cells of the atlas (`font::atlas`).
-        let g = i32(in.params.w - 99.5);
-        let fpx = in.half.y / 3.5;
-        let cols = i32(round(in.half.x * 2.0 / fpx));
-        let cell = vec2<i32>(g % FONT_COLS * FONT_CELL_W, g / FONT_COLS * 7);
-        let p = (in.local + in.half) / fpx;
-        let r = 0.5 / fpx;
-        let lo = p - vec2<f32>(r);
-        let hi = p + vec2<f32>(r);
+        let glyph = i32(in.params.w - 99.5);
+        var bounds = vec2<i32>(i32(round(in.half.x * 7.0 / in.half.y)), 7);
+        var cell = vec2<i32>(glyph % FONT_COLS * FONT_CELL_W, glyph / FONT_COLS * 7);
+        if (glyph >= CJK_BASE) {
+            let cjk = glyph - CJK_BASE;
+            bounds = vec2<i32>(CJK_SIDE);
+            cell = vec2<i32>(cjk % CJK_COLS * CJK_SIDE, CJK_Y + cjk / CJK_COLS * CJK_SIDE);
+        }
+        let sample_size = 2.0 * in.half / vec2<f32>(bounds);
+        let p = in.local + in.half;
+        let lo = (p - vec2<f32>(0.5)) / sample_size;
+        let hi = (p + vec2<f32>(0.5)) / sample_size;
         var cover = 0.0;
-        for (var y = max(i32(floor(lo.y)), 0); y < min(i32(ceil(hi.y)), 7); y++) {
+        for (var y = max(i32(floor(lo.y)), 0); y < min(i32(ceil(hi.y)), bounds.y); y++) {
             let oy = min(hi.y, f32(y + 1)) - max(lo.y, f32(y));
-            for (var x = max(i32(floor(lo.x)), 0); x < min(i32(ceil(hi.x)), cols); x++) {
+            for (var x = max(i32(floor(lo.x)), 0); x < min(i32(ceil(hi.x)), bounds.x); x++) {
                 let ox = min(hi.x, f32(x + 1)) - max(lo.x, f32(x));
                 cover += textureLoad(font, cell + vec2<i32>(x, y), 0).r * ox * oy;
             }
         }
-        let a = in.fill.a * cover / (4.0 * r * r);
+        let a = in.fill.a * cover * sample_size.x * sample_size.y;
         return vec4<f32>(in.fill.rgb * a, a);
     }
     if (in.params.w > 9.5) {
@@ -2695,6 +2701,21 @@ pub fn set_text_bias(bias: f32) {
     TEXT_BIAS.with(|b| b.set(bias));
 }
 
+fn text_units(s: &str, script: font::Script) -> usize {
+    s.chars()
+        .map(|ch| font::columns(font::index_for(ch, script)) + 1)
+        .sum()
+}
+
+/// The client owns language selection; the glyph table accepts a script explicitly.
+fn font_script() -> font::Script {
+    if crate::lang::current().code() == "zh-CN" {
+        font::Script::SimplifiedChinese
+    } else {
+        font::Script::Default
+    }
+}
+
 /// One font pixel (in virtual units) of text `size` units tall.
 fn font_px(size: f32) -> f32 {
     let grid = TEXT_GRID.with(std::cell::Cell::get);
@@ -2709,17 +2730,72 @@ fn font_px(size: f32) -> f32 {
     }
 }
 
-thread_local! {
-    /// The Legacy menu setting, for the frame being built.
-    static LEGACY_MENU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+/// What the interface is drawn with apart from the canvas: the settings that change every
+/// screen's look, and the music's beat.
+///
+/// The thread building a frame draws with the theme it started the frame with
+/// (`set_frame_theme`, from `build_frame`), so frames built side by side (tests) each keep their
+/// own. Other threads, and one before its first frame, see the configured accent and animations
+/// (`set_accent`, `set_animations`: the window thread draws the pointer in the accent).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Theme {
+    /// The interface's accent: borders of what's selected, headings, sliders.
+    pub accent: u32,
+    /// UI animations (Settings -> Video). Off, every animation shows its end state.
+    pub animations: bool,
+    /// The Legacy menu setting: tabs along the top instead of the main menu.
+    pub legacy_menu: bool,
+    /// What's left of the music's beat (1 on it, falling to 0; `style::set_beat`).
+    pub pulse: f32,
+    /// How far into a kiai (0 to 1; `style::set_beat`).
+    pub kiai: f32,
 }
 
-pub fn set_legacy_menu(on: bool) {
-    LEGACY_MENU.with(|l| l.set(on));
+impl Default for Theme {
+    fn default() -> Theme {
+        Theme {
+            accent: DEFAULT_ACCENT,
+            animations: true,
+            legacy_menu: false,
+            pulse: 0.0,
+            kiai: 0.0,
+        }
+    }
+}
+
+thread_local! {
+    /// The theme of the frame this thread is building (`set_frame_theme`).
+    static FRAME_THEME: std::cell::Cell<Option<Theme>> = const { std::cell::Cell::new(None) };
+}
+
+/// This thread draws with `theme` from now on (`None`: with the configured accent and
+/// animations, and no beat).
+pub fn set_frame_theme(theme: Option<Theme>) {
+    FRAME_THEME.with(|t| t.set(theme));
+}
+
+/// What this thread draws with.
+pub fn theme() -> Theme {
+    FRAME_THEME
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(|| Theme {
+            accent: ACCENT.load(std::sync::atomic::Ordering::Relaxed),
+            animations: ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed),
+            ..Theme::default()
+        })
+}
+
+/// Changes what this thread draws with for the rest of its frame.
+pub fn edit_frame_theme(edit: impl FnOnce(&mut Theme)) {
+    let mut t = theme();
+    edit(&mut t);
+    set_frame_theme(Some(t));
 }
 
 pub fn legacy_menu() -> bool {
-    LEGACY_MENU.with(std::cell::Cell::get)
+    FRAME_THEME
+        .with(std::cell::Cell::get)
+        .is_some_and(|t| t.legacy_menu)
 }
 
 /// `v` moved onto the text grid (unchanged without one).
@@ -2745,13 +2821,17 @@ pub fn pixel_size(want: f32) -> f32 {
 
 static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// UI animations on or off (Settings -> Video). Off, every animation shows its end state.
+/// The configured UI animations (Settings -> Video), for threads not building a frame (`Theme`).
 pub fn set_animations(on: bool) {
     ANIMATIONS.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// UI animations on or off. Off, every animation shows its end state.
 pub fn animations() -> bool {
-    ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed)
+    FRAME_THEME.with(std::cell::Cell::get).map_or_else(
+        || ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed),
+        |t| t.animations,
+    )
 }
 
 /// Moves `value` toward `target`, covering ~63% of the way every `tau_ms` (jumps there with
@@ -2810,206 +2890,26 @@ pub fn progress(since: std::time::Instant, ms: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-/// Something clickable drawn this frame, for mouse navigation.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Hit {
-    /// A button that does what this key does.
-    Key(winit::keyboard::KeyCode),
-    /// The interface editor: its panel (which only stops clicks), a part's row and its show /
-    /// hide box (indices into `hud::Part::PLACED`), a preset and a button.
-    HudPanel,
-    HudRow(usize),
-    HudToggle(usize),
-    HudPreset(usize),
-    HudButton(crate::hud_edit::Button),
-    /// A colour for the selected part's text (None: its own).
-    HudColour(Option<u32>),
-    /// Top bar tab: 0 songs, 1 settings, 2 multiplayer.
-    Tab(usize),
-    /// A note of the main menu (index into `menu::ITEMS`).
-    MenuItem(usize),
-    /// A tab of the medals screen.
-    MedalTab(usize),
-    /// Takes the song list back to the selection it was scrolled away from.
-    ListBack,
-    /// Song select's way out: the main menu, or back where it came from.
-    ToMenu,
-    /// A button of the first steps guide.
-    Guide(crate::guide::Action),
-    /// A button or field of the editor's front door.
-    EditorHome(crate::editor::home::Act),
-    /// The main menu's button to our Discord server.
-    DiscordServer,
-    /// A music button of the main menu or the player, and the player's timeline.
-    Music(crate::player::Control),
-    MusicBar,
-    /// The player: its search box, a song (index into the list's tracks), its `+`, a row of the
-    /// queue, the volume, a speed mod (`player::Speed::ALL`) and the pitch (resets it).
-    PlayerSearch,
-    PlayerRow(usize),
-    /// Its heart on a song, the folders button, and a folder (index into `Playlist::folders`).
-    PlayerFavourite(usize),
-    /// A screenshot in the chat (`shots::shot_in`), and the button that sends one.
-    ChatShot(u128),
-    SendShot,
-    /// Song select's heart on the song it's showing.
-    SelectLike,
-    /// The song preview's autoplay box, seek graph and play button. It only marks the preview as
-    /// the topmost thing there, so whatever is drawn over it takes the click instead.
-    Preview,
-    /// A phone's speed panel: opens it, closes it, moves the speed by hundredths or sets it, flips
-    /// keeping the pitch, moves the pitch by semitones.
-    RateOpen,
-    RateClose,
-    RateStep(i32),
-    RateSet(i32),
-    RateKeepPitch,
-    PitchStep(i32),
-    /// The upright player: the list comes up or goes.
-    PlayerList,
-    /// A phone's song select: slides between the preview and the leaderboard.
-    BoardPage,
-    PlayerFolders,
-    PlayerFolder(usize),
-    PlayerQueue(usize),
-    PlayerUnqueue(usize),
-    PlayerVolume,
-    PlayerSpeed(usize),
-    PlayerPitch,
-    /// A row of the song list (index into its visible list): a difficulty, or a song's own row
-    /// (pointing at its first difficulty).
-    SongRow(usize),
-    SongHeader(usize),
-    /// A heading of the song list (index into its sections): opens or closes it.
-    SectionHeader(usize),
-    /// An item of the song list's right-click menu.
-    SongMenu(usize),
-    /// A song's "update available" (library index of one of its difficulties).
-    UpdateSet(usize),
-    /// A mod in the mod select (index into `mods::ALL`) / the song select's Mods button.
-    ModToggle(usize),
-    /// A mod preset in the mod select (index into `Config::mod_presets`): applies it.
-    ModPreset(usize),
-    /// The mod select's "+ Save": keeps the mods on now (and the speed) as a preset.
-    ModPresetSave,
-    ModsButton,
-    SettingRow(usize),
-    /// The `<` (-1) / `>` (+1) of the selected settings row.
-    SettingStep(usize, i32),
-    /// The bar of a setting (index into `settings::ITEMS`): set by clicking or dragging it.
-    SettingLevel(usize),
-    /// The settings' search box.
-    SettingsSearch,
-    PauseItem(usize),
-    MpRow(usize),
-    /// Opens the playfield preset list.
-    Presets,
-    /// A download tab result row / its Download button.
-    DlRow(usize),
-    DlGet(usize),
-    /// Song select: next sort mode / open the collection list / a row of that list.
-    SortList,
-    CollectionPick,
-    PickRow(usize),
-    /// A row of a setting's list of choices.
-    ChoiceRow(usize),
-    /// Multiverse setup: a universe's (row) colours, shape, speed or a mod (column).
-    UniverseCell(usize, usize),
-    /// Shapeshift setup: a choice (row, column) / move the selected shape earlier or later.
-    ShapeshiftCell(usize, usize),
-    ShapeshiftMove(i32),
-    /// Tact setup: a step (index into `tact::STEPS`).
-    TactCell(usize),
-    /// Mod customization: a tab (index into the customizable mods that are on).
-    CustomTab(usize),
-    /// Multiverse setup: load a preset / delete one of the player's.
-    UniversePreset(usize),
-    UniversePresetDelete(usize),
-    /// Song select with no maps: choose the Songs folder.
-    SongsFolder,
-    /// The song list's scroll bar.
-    SongScrollbar,
-    /// A settings sidebar section.
-    SettingsSection(usize),
-    /// The update badge: install the new build.
-    Update,
-    /// Download tab status category / sort chips.
-    /// The download tab's source: osu! or taiko.rs (`browse::Source::ALL`).
-    DlSource(usize),
-    /// The download tab's drop-downs: 0 status, 1 order (`browse::Menu`).
-    DlMenu(u8),
-    /// Anywhere outside an open drop-down: closes it.
-    DlMenuClose,
-    /// Flips the download tab's order.
-    DlSortDir,
-    /// Plays result `i`, which is installed.
-    DlPlay(usize),
-    /// Stops download `i` (`App::downloads`).
-    DlCancel(usize),
-    /// Tries failed download `i` again, or forgets it (`Browse::failed_jobs`).
-    DlRetry(usize),
-    DlDismiss(usize),
-    DlCategory(usize),
-    DlSort(usize),
-    /// A row of the song select leaderboard (opens its results) / its video button, and a row
-    /// of the online leaderboard.
-    ScoreRow(usize),
-    ScoreVideo(usize),
-    OnlineScoreRow(usize),
-    /// The What's new chip, and an overlay over everything (takes clicks meant for underneath).
-    Changelog,
-    /// The account badge: the website profile (or logging in).
-    Account,
-    /// Song select's divider between the song list and the panel (dragged).
-    SplitList,
-    Overlay,
-    /// The leaderboard's tabs: local (false) or online (true).
-    BoardTab(bool),
-    /// Opens the selected map's page in the browser.
-    BoardWebsite,
-    /// Lobby: give the host role to this player.
-    GiveHost(u32),
-    /// Lobby host: takes this player (id) out of the lobby.
-    Kick(u32),
-    /// The friends overlay: its chip, its panel (swallows clicks), a tab, a row, a row's button, and a
-    /// notification card.
-    SocialToggle,
-    SocialPanel,
-    /// Back from a conversation to the friend list.
-    SocialBack,
-    SocialTab(crate::social::Tab),
-    SocialRow(usize),
-    SocialAction(usize, crate::social::Action),
-    SocialNote(usize),
-    /// An admin takes this global chat line (its index) down.
-    SocialDeleteChat(usize),
-    /// A chat line naming a map set (`/np`): downloads it, or picks it in song select.
-    ChatMap(u32),
-    /// A text field (a search box, the message box): on Android, tapping it brings up the
-    /// on-screen keyboard.
-    TextField,
-    /// The line to write on under the lobby's chat.
-    LobbyChat,
-}
-
+/// A clickable area drawn this frame. `H` says what it is: the renderer only keeps it
+/// (the app's `Hit`, in its `hit` module).
 #[derive(Clone, Copy, Debug)]
-pub struct HitBox {
+pub struct HitBox<H> {
     pub rect: [f32; 4],
-    pub hit: Hit,
+    pub hit: H,
     /// Shapes drawn before it, so a transform of later shapes (the playfield area) moves it too.
     pub(crate) shape: usize,
 }
 
-impl HitBox {
+impl<H> HitBox<H> {
     pub fn contains(&self, x: f32, y: f32) -> bool {
         let [rx, ry, rw, rh] = self.rect;
         x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
     }
 }
 
-/// Immediate-mode drawing helpers. Coordinates are virtual units.
-#[derive(Default)]
-pub struct Canvas {
+/// Immediate-mode drawing helpers. Coordinates are virtual units. `H`: what a clickable area
+/// is (see `HitBox`).
+pub struct Canvas<H> {
     pub shapes: Vec<Shape>,
     /// The music player's disc: centre, radius, angle (drawn under every shape, see `DISC_SHADER`).
     pub disc: Option<[f32; 4]>,
@@ -3017,7 +2917,7 @@ pub struct Canvas {
     pub glitch: Option<[f32; 2]>,
     pub width: f32,
     /// Clickable areas, in drawing order (later ones are on top).
-    pub hits: Vec<HitBox>,
+    pub hits: Vec<HitBox<H>>,
     /// Pointer position (virtual units), for hover highlights.
     pub mouse: (f32, f32),
     /// Time since the previous frame (ms), for animations.
@@ -3044,6 +2944,32 @@ pub struct Canvas {
     pub picture_slots: std::sync::Arc<std::collections::HashMap<String, (u32, f32)>>,
     /// Map pictures drawn this frame (file names, lowercase), for the app to load.
     pub pictures_wanted: Vec<String>,
+}
+
+// By hand: a derive would ask `H: Default` of the hit type.
+impl<H> Default for Canvas<H> {
+    fn default() -> Self {
+        Canvas {
+            shapes: Default::default(),
+            disc: Default::default(),
+            glitch: Default::default(),
+            width: Default::default(),
+            hits: Default::default(),
+            mouse: Default::default(),
+            dt_ms: Default::default(),
+            clips: Default::default(),
+            sprites: Default::default(),
+            skin_layout: Default::default(),
+            audit: Default::default(),
+            texts: Default::default(),
+            boxes: Default::default(),
+            opaque: Default::default(),
+            avatar_slots: Default::default(),
+            avatars_wanted: Default::default(),
+            picture_slots: Default::default(),
+            pictures_wanted: Default::default(),
+        }
+    }
 }
 
 /// A button's label: on a phone without the key that presses it ("Retry  (Enter)").
@@ -3085,30 +3011,18 @@ pub const ACCENTS: [(&str, u32); 8] = [
 
 static ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(DEFAULT_ACCENT);
 
+/// The configured accent, for threads not building a frame (`Theme`; the window thread draws the
+/// pointer in it).
 pub fn set_accent(hex: u32) {
     ACCENT.store(hex, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// The interface's accent: borders of what's selected, headings, sliders.
 pub fn accent() -> u32 {
-    #[cfg(test)]
-    if let Some(pinned) = PINNED_ACCENT.with(std::cell::Cell::get) {
-        return pinned;
-    }
-    ACCENT.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-thread_local! {
-    static PINNED_ACCENT: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
-}
-
-/// Tests: this thread sees `hex` as the accent whatever `set_accent` does meanwhile. The accent
-/// is process-wide (the window thread reads it too), and tests building frames in parallel set
-/// it from their own configs, so a test comparing draws pins it first.
-#[cfg(test)]
-pub fn pin_accent_for_this_thread(hex: Option<u32>) {
-    PINNED_ACCENT.with(|p| p.set(hex));
+    FRAME_THEME.with(std::cell::Cell::get).map_or_else(
+        || ACCENT.load(std::sync::atomic::Ordering::Relaxed),
+        |t| t.accent,
+    )
 }
 
 /// `default` with the default accent; with another, that accent mixed `t` of the way to `toward`
@@ -3230,7 +3144,7 @@ pub fn rotate_shapes(
     }
 }
 
-impl Canvas {
+impl<H> Canvas<H> {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
         self.avatars_wanted.clear();
@@ -3338,7 +3252,7 @@ impl Canvas {
 
     /// Makes a rect clickable. Call after drawing at least one of its shapes, so it belongs to
     /// the same transformed region.
-    pub fn hit(&mut self, x: f32, y: f32, w: f32, h: f32, hit: Hit) {
+    pub fn hit(&mut self, x: f32, y: f32, w: f32, h: f32, hit: H) {
         self.hits.push(HitBox {
             rect: [x, y, w, h],
             hit,
@@ -3361,7 +3275,7 @@ impl Canvas {
         h: f32,
         label: &str,
         size: f32,
-        hit: Hit,
+        hit: H,
         accent: bool,
     ) {
         let hover = self.hovered(x, y, w, h);
@@ -3398,7 +3312,10 @@ impl Canvas {
     }
 
     /// A centred row of buttons: (label, hit, accent).
-    pub fn button_row(&mut self, y: f32, buttons: &[(&str, Hit, bool)]) {
+    pub fn button_row(&mut self, y: f32, buttons: &[(&str, H, bool)])
+    where
+        H: Copy,
+    {
         // On a phone: big enough for a thumb, and no keys to name.
         let phone = crate::mobile::active();
         let (size, height) = if phone { (12.0, 44.0) } else { (8.0, 20.0) };
@@ -3414,7 +3331,7 @@ impl Canvas {
         // shrink and get cut in `button`).
         let text: Vec<f32> = buttons
             .iter()
-            .map(|(l, _, _)| Canvas::text_width(size, label_of(l, phone)))
+            .map(|(l, _, _)| Self::text_width(size, label_of(l, phone)))
             .collect();
         let padded = |pad: f32| text.iter().map(|t| t + pad).collect::<Vec<f32>>();
         let mut widths = padded(28.0);
@@ -3715,6 +3632,21 @@ impl Canvas {
                 hh * scale,
             ];
         }
+        // Clips of what moved go with it: a .tko map's slices cut the playfield into strips, and
+        // a play area smaller than the screen (`layout::end`) would otherwise show each strip's
+        // copy through a strip that stayed where it was, cutting off the drum and the target.
+        for (range, rect) in self.clips.iter_mut().filter(|(r, _)| r.start >= start) {
+            if range.start >= range.end {
+                continue;
+            }
+            let [x, y, w, hh] = *rect;
+            *rect = [
+                anchor[0] + (x - anchor[0]) * scale + dx,
+                anchor[1] + (y - anchor[1]) * scale + dy,
+                w * scale,
+                hh * scale,
+            ];
+        }
     }
 
     /// Turns every shape drawn since `start` by `angle` (radians, clockwise on screen) and scales
@@ -3787,11 +3719,12 @@ impl Canvas {
         });
     }
 
-    /// Draws text with the built-in 5x7 font; `size` is the glyph height. Returns the advance width.
+    /// Draws text with the built-in fonts; `size` is the glyph height. Returns the advance width.
     /// On a text grid (`set_text_grid`) the glyphs may come out bigger: they stay centred on the
     /// line `size` would have taken.
     pub fn text(&mut self, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
         let px = font_px(size);
+        let script = font_script();
         let x = snap_to_grid(x);
         let y = snap_to_grid(y + (size - px * 7.0) / 2.0);
         let mut cx = x;
@@ -3799,7 +3732,7 @@ impl Canvas {
         if !self.audit {
             // One quad per character, as wide as its glyph; the shader fills in its font pixels.
             for ch in s.chars() {
-                let i = font::index(ch);
+                let i = font::index_for(ch, script);
                 let cols = font::columns(i) as f32;
                 // Blank (space): nothing to draw.
                 if i != 0 {
@@ -3819,7 +3752,13 @@ impl Canvas {
         }
         // Layout checks (and their CPU-drawn pictures) see each font pixel run as its own rect.
         for ch in s.chars() {
-            let cols = font::glyph(ch);
+            let i = font::index_for(ch, script);
+            if let Some(bitmap) = font::chinese_pixels(i) {
+                self.audit_chinese_glyph(bitmap, cx, y, px * 7.0, color);
+                cx += px * 8.0;
+                continue;
+            }
+            let cols = font::by_index(i);
             for (c, bits) in cols.iter().enumerate() {
                 let mut row = 0;
                 while row < 7 {
@@ -3854,8 +3793,35 @@ impl Canvas {
         cx - x
     }
 
+    fn audit_chinese_glyph(&mut self, bitmap: &[u8], x: f32, y: f32, size: f32, color: [f32; 4]) {
+        let px = size / font::CHINESE_SIDE as f32;
+        let (rows, _) = bitmap.as_chunks::<{ font::CHINESE_SIDE }>();
+        for (row, samples) in rows.iter().enumerate() {
+            let mut col = 0;
+            while col < samples.len() {
+                let start = col;
+                let alpha = samples[col];
+                col += 1;
+                while col < samples.len() && samples[col] == alpha {
+                    col += 1;
+                }
+                if alpha != 0 {
+                    let mut ink = color;
+                    ink[3] *= f32::from(alpha) / 255.0;
+                    self.rect(
+                        x + start as f32 * px,
+                        y + row as f32 * px,
+                        (col - start) as f32 * px,
+                        px,
+                        ink,
+                    );
+                }
+            }
+        }
+    }
+
     pub fn text_width(size: f32, s: &str) -> f32 {
-        s.chars().map(font::advance).sum::<usize>() as f32 * font_px(size)
+        text_units(s, font_script()) as f32 * font_px(size)
     }
 
     /// The advance of one Latin character of text `size` tall (Japanese takes 4/3 of it).
@@ -3867,13 +3833,47 @@ impl Canvas {
     pub fn fitting_prefix(size: f32, max_w: f32, s: &str) -> usize {
         let room = (max_w / font_px(size) + 1e-3).floor() as usize;
         let mut w = 0;
+        let script = font_script();
         for (at, ch) in s.char_indices() {
-            w += font::advance(ch);
+            w += font::columns(font::index_for(ch, script)) + 1;
             if w > room {
                 return at;
             }
         }
         s.len()
+    }
+
+    /// Wraps at whitespace when possible and at glyph boundaries for words wider than the line.
+    pub(crate) fn wrap_words(size: f32, width: f32, text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut line = String::new();
+        for mut word in text.split_whitespace() {
+            let next = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if Self::text_width(size, &next) <= width {
+                line = next;
+                continue;
+            }
+            if !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+            }
+            while let Some(first) = word.chars().next() {
+                let end = Self::fitting_prefix(size, width, word).max(first.len_utf8());
+                if end == word.len() {
+                    break;
+                }
+                out.push(word[..end].to_string());
+                word = &word[end..];
+            }
+            line.push_str(word);
+        }
+        if !line.is_empty() {
+            out.push(line);
+        }
+        out
     }
 
     /// How tall text `size` comes out (`size`, or more on a text grid).
@@ -3978,7 +3978,7 @@ impl Canvas {
         let grid = TEXT_GRID.with(std::cell::Cell::get);
         if grid > 0.0 {
             // Font pixels come in whole render pixels: the biggest that fits.
-            let per_px = max_w / s.chars().map(font::advance).sum::<usize>().max(1) as f32;
+            let per_px = max_w / text_units(s, font_script()).max(1) as f32;
             return ((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
         }
         (size * max_w / w).max(min)
@@ -3987,6 +3987,27 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
+    /// Moving what was drawn since a point moves its clips with it (a .tko map's slices in a play
+    /// area smaller than the screen), and leaves the clips of what came before alone.
+    #[test]
+    fn moving_shapes_moves_their_clips_and_only_theirs() {
+        let mut c = super::Canvas::<()>::default();
+        c.clear(800.0);
+        c.rect(0.0, 0.0, 10.0, 10.0, super::rgba(0xffffff, 1.0));
+        c.clip_since(0, 0.0, 0.0, 400.0, 480.0);
+        let start = c.shapes.len();
+        c.rect(100.0, 100.0, 40.0, 40.0, super::rgba(0xffffff, 1.0));
+        c.clip_since(start, 90.0, 80.0, 60.0, 100.0);
+        c.transform_since(start, [0.0, 0.0], 0.5, 80.0, 48.0);
+        assert_eq!(c.clips[0].1, [0.0, 0.0, 400.0, 480.0]);
+        assert_eq!(c.clips[1].1, [125.0, 88.0, 30.0, 50.0]);
+        // The strip still holds the shape it showed.
+        let s = c.shapes[start];
+        let [x, y, w, h] = c.clips[1].1;
+        assert!(s.center[0] - s.half[0] >= x && s.center[0] + s.half[0] <= x + w);
+        assert!(s.center[1] - s.half[1] >= y && s.center[1] + s.half[1] <= y + h);
+    }
+
     #[test]
     fn nested_clips_flatten_to_the_part_both_allow() {
         let frame = [0.0, 0.0, 0.5, 1.0];
@@ -4021,7 +4042,7 @@ mod tests {
 
     #[test]
     fn an_outer_clip_keeps_the_inner_ones_cut_down_to_it() {
-        let mut c = super::Canvas::default();
+        let mut c = super::Canvas::<()>::default();
         for i in 0..10 {
             c.rect(i as f32, 0.0, 1.0, 1.0, [1.0; 4]);
             if i == 3 {
@@ -4043,15 +4064,20 @@ mod tests {
             ]
         );
         // Without inner clips it's one range, as before.
-        let mut c = super::Canvas::default();
+        let mut c = super::Canvas::<()>::default();
         c.rect(0.0, 0.0, 1.0, 1.0, [1.0; 4]);
         c.clip_since(0, 1.0, 2.0, 3.0, 4.0);
         assert_eq!(c.clips, vec![(0..1, [1.0, 2.0, 3.0, 4.0])]);
     }
 
     #[test]
-    fn a_pinned_accent_holds_while_another_thread_sets_it() {
-        super::pin_accent_for_this_thread(Some(0x123456));
+    fn a_frame_s_theme_holds_while_another_thread_sets_the_accent() {
+        let mine = super::Theme {
+            accent: 0x123456,
+            animations: false,
+            ..super::Theme::default()
+        };
+        super::set_frame_theme(Some(mine));
         let other = std::thread::spawn(|| {
             for i in 0..1000 {
                 super::set_accent(i);
@@ -4059,9 +4085,18 @@ mod tests {
             super::accent()
         });
         let seen = other.join().unwrap();
-        assert_eq!(super::accent(), 0x123456, "the pin holds on this thread");
-        assert_ne!(seen, 0x123456, "other threads see what's set");
-        super::pin_accent_for_this_thread(None);
+        assert_eq!(
+            super::accent(),
+            0x123456,
+            "the frame's accent holds on this thread"
+        );
+        assert!(!super::animations());
+        assert_eq!(super::theme(), mine);
+        assert_ne!(seen, 0x123456, "a thread without a frame sees what's set");
+        super::edit_frame_theme(|t| t.pulse = 0.5);
+        assert_eq!(super::theme().pulse, 0.5);
+        assert_eq!(super::accent(), 0x123456, "an edit keeps the rest");
+        super::set_frame_theme(None);
         super::set_accent(super::DEFAULT_ACCENT);
     }
 

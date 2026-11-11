@@ -229,9 +229,22 @@ backwards) orders songs by artist, title, difficulty, length, BPM, recently play
 a song goes by its hardest / longest / most recently played difficulty. Difficulty, length and BPM
 come from a background pass over the library (osu!'s star ratings via rosu-pp, like the pills)
 that is cached, so only new maps are analysed on later starts; the header shows its progress.
-"Recently played" combines plays in taiko.rs with osu! stable's own history from `osu!.db`. If
-an osu! stable install owns the Songs folder, its collections (`collection.db`) are listed under
-the *Collection* button (or Ctrl+L) to show just one of them.
+"Recently played" combines plays in taiko.rs with osu! stable's own history from `osu!.db`.
+
+**Collections:** the *Collection* button (or Ctrl+L) lists them, to show just one. Make your own
+there (*+ New collection*), or put the selected difficulty in one with Ctrl+K or a song's
+right-click menu (*Collect [difficulty]*, or *Collect* the whole song; a long press on a phone);
+picking one it's in already takes it out. In the list, F2 renames, Del deletes (the maps stay),
+Ctrl+Up/Down moves, and Tab or a row's *...* lists all of that. If an osu! stable install owns the
+Songs folder, its collections (`collection.db`) are listed after yours, marked *osu!*: they're
+osu!'s (changes made in osu! show up here) and can be copied to yours to change them. A map that's not
+here (deleted, or never downloaded) stays in the collection, counted as *not here*: its list
+downloads their sets. A map of yours that was updated or moved is followed to its new file. *Export my collections
+to osu!* (at the end of the list, with an osu! install) puts yours into osu!'s `collection.db`
+while osu! is closed: osu!'s stay as they are, one with the same name gains your maps, and the old
+file is kept as `collection.db.bak`. All are kept
+in `taiko.db`. The search takes them too: `collection="warm up"` (any case), `collection!=dans`, and
+`collection=none` for the maps in none, with the other filters and the collection picked.
 
 **Fullscreen preview:** click the autoplay box (or Ctrl+Enter) to watch the autoplay over the
 whole screen, drawn in your playfield area so you can move and resize it right there (drag, drag
@@ -449,6 +462,15 @@ so a custom set is never taken for the osu! set with the same number. The set ca
 website's `taiko-rs.custom` file, so song select shows it as CUSTOM or CUSTOM APPROVED at once and
 the tab says *installed* for it from then on.
 
+*Loved here* lists the osu! sets that taiko.rs's loved nominators have loved
+([the loved page](https://rstaiko.auneu.space/loved)): they give pp on taiko.rs whatever their
+status on osu!. The server says which sets they are; their details come from the osu! mirrors, one
+set at a time under the mirrors' rate limits, so the first load takes a while and the list fills
+in as it goes (the count above it says how far). Each set's details are kept in the cache folder
+(`loved-sets/`) for a week, so later loads only ask for newly loved sets. These are ordinary osu!
+sets: the osu! orders, preview and download all work as on the osu! side, and an osu! search tags
+any set loved here with *loved here*.
+
 ## Multiplayer
 
 The **MULTIPLAYER** tab has two columns: **ONLINE** (lobbies on the taiko.rs server, no open
@@ -525,25 +547,6 @@ shows how many players are online on the server (green dot; also on the chip):
 
 Everything typed can be Cyrillic, except account names (Latin letters, digits, `_`, `-`).
 
-### Running the online server
-
-`server/` is a separate small crate (`taiko-server`): accounts (argon2 password hashes, session
-tokens) in `DATA/accounts.json`, and lobbies that run the game's own room code (`src/net.rs`).
-Its protocol is `src/online.rs`: one JSON request line and one reply per connection; after
-`Joined` the same connection speaks the room protocol.
-
-```sh
-cd server && cargo run --release -- --port 7800 --data ./data          # locally
-server/deploy/deploy.sh user@host [ssh port] [jump host]                # static build + Docker
-```
-
-`deploy.sh` builds a static (musl) binary (`rustup target add x86_64-unknown-linux-musl` once),
-copies it with `server/deploy/Dockerfile` and `docker-compose.yml` to `~/taiko-server` and runs
-it with `restart: unless-stopped`. TCP port 7800 must be reachable. The binary it replaces stays as
-`~/taiko-server/taiko-server.bak` to roll back to. When the server's ssh port isn't reachable
-directly, a jump host (`ssh -J`, e.g. an alias from `~/.ssh/config`) goes through it:
-`deploy.sh user@host 1337 vps`.
-
 ## Discord status
 
 While Discord is running, your status shows *Playing taiko.rs* with what you're doing: the map
@@ -586,19 +589,29 @@ spins so frames stay evenly spaced.
 
 | File | |
 | --- | --- |
-| `src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
+| `crates/taiko-logic` | the game's rules without the client: maps, mods, the play itself, star ratings and pp, Defense, tko's model and runtime, the font, autoplay, the clock (the client re-exports each module under its old name) |
+| `crates/taiko-logic/src/beatmap.rs` | `.osu` parser, timing/SV control points, taiko conversion, barlines |
 | `src/audio.rs` | decode (symphonia) + resample, cpal/PipeWire output, mixer, built-in hitsounds |
-| `src/clock.rs` | audio-slaved smooth game clock |
-| `src/game.rs` | judging, scoring, HP, playfield drawing (and what the mods do to them) |
-| `src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |
+| `crates/taiko-logic/src/clock.rs` | audio-slaved smooth game clock |
+| `crates/taiko-logic/src/sim.rs` | the play: judging, scoring, HP, autoplay, Defense (and what the mods do to them) |
+| `crates/taiko-logic/src/sim/setup.rs` | a map made ready to play: the mods' changes to notes and speeds, Multiverse focus, Roulette |
+| `crates/taiko-logic/src/sim/rails.rs` | the rails mods' lane shapes and the path along one |
+| `crates/taiko-logic/src/stars.rs`, `pp.rs` | star ratings and pp (rosu-pp), with the mods' own factors |
+| `src/game.rs` | the play as the client shows it: re-exports `taiko_logic::sim`, keeps the frame's look and note colours |
+| `src/game/field.rs` | drawing the playfield: lane, notes, drum, judgements, the mods' looks |
+| `src/game/hud_draw.rs` | drawing the HUD parts (score, combo, HP, accuracy, hit error) and the pause menu |
+| `crates/taiko-logic/src/mods.rs` | the mods: list, conflicts, multipliers, speed changes (Wind Up/Down time map) |
 | `src/render.rs` | wgpu SDF shape renderer, skin images, text, present mode handling |
 | `src/ui.rs` | song select and results screens |
 | `src/settings.rs` | settings tab items and layout, tab bar |
-| `src/calibrate.rs` | offset calibration: estimate, overlay and result screen |
-| `src/net.rs` | multiplayer protocol, room server, client with clock sync |
+| `src/calibrate.rs` | offset calibration: overlay and result screen (the estimate: `taiko_logic::calibrate`) |
+| `crates/taiko-proto` | what the game and the server both speak: `net`, `online`, `tls`, `lang` (`tr!`), `changelog_entry` (the client and the server re-export each module under its old name) |
+| `crates/taiko-proto/src/net.rs` | multiplayer protocol, room server, client with clock sync |
 | `src/multiplayer.rs` | multiplayer session, menu, lobby, scoreboard and results screens |
-| `src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
-| `server/` | `taiko-server`: accounts and server-hosted lobbies (deploy files in `server/deploy/`) |
+| `crates/taiko-proto/src/online.rs` | online server protocol (accounts, lobby list) and the game's side of it |
+| `crates/taiko-recalc` | `taiko-recalc` (also `taiko-rs --recalc-pp`): the server's plays worked out again from its `scores.jsonl` and the maps |
+| `src/collections.rs` | collections: the player's own and osu!'s (mirrored from `collection.db` when it changes) in `taiko.db`, each map kept by MD5 plus folder, file, IDs and difficulty name, and found in the library by those |
+| `src/store.rs` | the player's data in SQLite (`taiko.db` in the data folder): scores, last plays, hidden maps, per-map offsets, maps with their skin off, favourites, each set's status on osu!, collections; the schema's versions in `src/store/N.sql`; the old text files are brought in once (`store/import.rs`) and still written for older builds |
 | `src/library.rs` | Songs folder / `.osz` and `.rsz` scanning |
 | `src/logo.rs` | the logo: window icon, top bar |
 | `src/skin.rs` | osu! skins: listing, `.osk` unpacking, skin parts and where each comes from, the image atlas, fonts, hitsounds |

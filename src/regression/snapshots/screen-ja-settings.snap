@@ -1,0 +1,77 @@
+text  754,7    ログイン
+text  806,7    更新内容
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   曲
+text  236,27   設定
+text  285,27   マルチ
+text  343,27   ダウンロード
+text  427,27   Tab
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text  223,58   ライブラリ
+text  586,61   入力して検索...
+text   73,69   ライブラリ
+text   73,83   Songsフォルダ、非表示の譜面、...
+text  235,90   Songsフォルダ
+text  629,90   <  見つかりません、Enterで選択  >
+text   73,109  ゲームプレイ
+text  235,120  osu!standardの変換譜面を表示
+text   73,123  速度、レート、インターフェース
+text   73,149  表示
+text  235,150  曲リストの見出し
+text   73,163  プレイフィールド、背景
+text  235,180  非表示の譜面
+text  777,182  none
+text   73,189  入力
+text   73,203  太鼓のキー、ショートカット、タッチ
+text  235,210  選曲画面のレイアウト
+text  768,210  初期設定
+text   73,229  オフセット
+text  235,240  ゲームデータのフォルダ
+text  750,240  いつもの場所
+text   73,243  音声オフセット、調整
+text   73,269  オーディオ
+text  235,270  スクリーンショット
+text  743,270  Clipboard
+text   73,283  音量、遅延
+text  233,306  譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。
+text   73,309  グラフィック
+text   73,323  フレーム、画面
+text   73,349  スキン
+text   73,363  ノーツ、ヒット時の光、色
+text   73,389  オンライン
+text   73,403  チャット、通知、Discord
+text   73,429  システム
+text   73,443  言語、起動、アップデート
+text  146,462  Type to search   Up/Down select   Left/Right change   Enter list   Esc or Tab back
+hit   188,20     30x22   Tab(0)
+hit   226,20     41x22   Tab(1)
+hit   275,20     51x22   Tab(2)
+hit   333,20     82x22   Tab(3)
+hit    37,62    170x34   SettingsSection(0)
+hit    37,102   170x34   SettingsSection(1)
+hit    37,142   170x34   SettingsSection(2)
+hit    37,182   170x34   SettingsSection(3)
+hit    37,222   170x34   SettingsSection(4)
+hit    37,262   170x34   SettingsSection(5)
+hit    37,302   170x34   SettingsSection(6)
+hit    37,342   170x34   SettingsSection(7)
+hit    37,382   170x34   SettingsSection(8)
+hit    37,422   170x34   SettingsSection(9)
+hit   577,55    240x19   SettingsSearch
+hit   223,78    594x30   SettingRow(0)
+hit   623,80     20x26   SettingStep(0, -1)
+hit   791,80     24x26   SettingStep(0, 1)
+hit   223,108   594x30   SettingRow(1)
+hit   223,138   594x30   SettingRow(2)
+hit   223,168   594x30   SettingRow(3)
+hit   223,198   594x30   SettingRow(4)
+hit   223,228   594x30   SettingRow(5)
+hit   223,258   594x30   SettingRow(6)
+hit   799,2      46x14   Changelog
+hit   747,2      46x14   Account

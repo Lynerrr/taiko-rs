@@ -14,8 +14,15 @@ rosu-pp = "4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 symphonia = { version = "0.6", features = ["mp3", "ogg", "vorbis", "wav", "pcm", "flac"] }
+# The game's rules, apart from the client (crates/taiko-logic).
+taiko-logic = { path = "crates/taiko-logic" }
+# What the game and its server both speak: the protocols, TLS, languages (crates/taiko-proto).
+taiko-proto = { path = "crates/taiko-proto", features = ["client-catalog"] }
+# `--recalc-pp` (crates/taiko-recalc).
+taiko-recalc = { path = "crates/taiko-recalc" }
+# The player's data (`store.rs`): SQLite built into the game, the same on every platform.
+rusqlite = { version = "0.41", features = ["bundled"] }
 ureq = "3"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 wgpu = "30"
 winit = "0.30"
 zip = { version = "9", default-features = false, features = ["deflate"] }
@@ -46,6 +53,13 @@ libc = "0.2"
 jni = "0.22"
 # AAudio's low-latency mode (and a real-time audio thread); without it hitsounds lag by tens of ms.
 cpal = { version = "0.18", features = ["realtime"] }
+
+# The client and the crates split out of it build, lint and test together: plain `cargo test`
+# covers them all. The patched vendor crates stay crates of their own.
+[workspace]
+members = ["crates/taiko-logic", "crates/taiko-proto", "crates/taiko-recalc"]
+default-members = [".", "crates/taiko-logic", "crates/taiko-proto", "crates/taiko-recalc"]
+exclude = ["vendor"]
 
 [features]
 default = ["pipewire"]
@@ -78,10 +92,13 @@ incremental = false
 opt-level = 3
 
 # Reproducible CPU audits: optimized application code without release LTO's build cost.
+# One codegen unit, as the release has: with 16, a change anywhere in the game moved generic
+# code (the PNG decoder under `skin::load`) between units and made it 30-40 % slower or faster
+# on CI's runners, so the perf gate failed pure moves (#409, #414).
 [profile.perf-audit]
 inherits = "release"
 lto = "off"
-codegen-units = 16
+codegen-units = 1
 
 # Audio decoding is unbearably slow unoptimised; keep dependencies fast in debug builds too.
 [profile.dev.package."*"]
@@ -101,12 +118,20 @@ symphonia-bundle-mp3 = { path = "vendor/symphonia-bundle-mp3" }
 # The Windows exe's icon (build.rs).
 [build-dependencies]
 embed-resource = "3.0.12"
-# Reading the translations, assets/lang/*.toml (build.rs). The version embed-resource uses.
-toml = "1"
 
-# The translations' files (examples/lang_sync.rs). The version build.rs reads them with.
-[dev-dependencies.toml]
-version = "1"
+[dev-dependencies]
+proc-macro2 = "1"
+syn = { version = "2", default-features = false, features = ["parsing"] }
+
+# The client's tests use the crate's test helpers.
+[dev-dependencies.taiko-logic]
+path = "crates/taiko-logic"
+features = ["testing"]
+
+# Each test thread keeps its own language.
+[dev-dependencies.taiko-proto]
+path = "crates/taiko-proto"
+features = ["testing"]
 
 [dev-dependencies.cargo-husky]
 version = "1"

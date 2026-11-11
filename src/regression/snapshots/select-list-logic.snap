@@ -1,0 +1,120 @@
+taiko only (the default with taiko maps in the library):
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    alphabet - Middle [Muzukashii]
+  # D
+    Delta - 夜明け [Futsuu]
+  # G
+    Gamma - Both Kinds [Inner Oni]
+with converts:
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    alphabet - Middle [Muzukashii]
+  # B
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+  # D
+    Delta - 夜明け [Futsuu]
+  # G
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+sort artist:
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    alphabet - Middle [Muzukashii]
+  # B
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+  # D
+    Delta - 夜明け [Futsuu]
+  # G
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+sort title:
+  # B
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+  # C
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+  # M
+    alphabet - Middle [Muzukashii]
+  # Z
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+  # Other
+    Delta - 夜明け [Futsuu]
+sort hp:
+  # HP 3.0 - 3.9
+    Delta - 夜明け [Futsuu]
+  # HP 4.0 - 4.9
+    alphabet - Middle [Muzukashii]
+  # HP 6.0 - 6.9
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+  # HP 7.0 - 7.9
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+sort od:
+  # OD 4.0 - 4.9
+    Delta - 夜明け [Futsuu]
+  # OD 6.0 - 6.9
+    alphabet - Middle [Muzukashii]
+  # OD 7.0 - 7.9
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+  # OD 8.0 - 8.9
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+sort date added:
+  # Older
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+    Delta - 夜明け [Futsuu]
+    alphabet - Middle [Muzukashii]
+sort date added, no headings:
+  #
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+    Delta - 夜明け [Futsuu]
+    alphabet - Middle [Muzukashii]
+sort recently played (Middle, then 夜明け):
+  # Older
+    alphabet - Middle [Muzukashii]
+    Delta - 夜明け [Futsuu]
+  # Never played
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    Beta - Converted [Normal] | Beta - Converted [Insane]
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+search "zebra":
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+search "ALPHA":
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+    alphabet - Middle [Muzukashii]
+search "kat":
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Hard] | Alpha - Zebra Run [Oni]
+  # G
+    Gamma - Both Kinds [Convert] | Gamma - Both Kinds [Inner Oni]
+search "od>7":
+  # A
+    Alpha - Zebra Run [Oni]
+  # B
+    Beta - Converted [Insane]
+  # G
+    Gamma - Both Kinds [Inner Oni]
+search "hp<4":
+  # A
+    Alpha - Zebra Run [Easy]
+  # D
+    Delta - 夜明け [Futsuu]
+search "od>=5 hp<=5":
+  # A
+    Alpha - Zebra Run [Hard]
+    alphabet - Middle [Muzukashii]
+  # G
+    Gamma - Both Kinds [Convert]
+search "creator=don":
+  # A
+    alphabet - Middle [Muzukashii]
+  # D
+    Delta - 夜明け [Futsuu]
+search "夜明け":
+  # D
+    Delta - 夜明け [Futsuu]
+search "nothing like this":

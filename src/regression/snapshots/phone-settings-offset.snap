@@ -1,0 +1,57 @@
+text  110,12   SETTINGS
+text   17,17   < BACK
+text  739,17   Search settings
+text   14,77   LIBRARY
+text  964,77   <
+text 1023,77   >
+text  236,80   Global offset
+text  885,80   +0 ms
+text   14,133  GAMEPLAY
+text  964,139  <
+text 1023,139  >
+text  236,142  Offset scale
+text  896,142  osu!
+text   14,189  VIEW
+text  964,201  <
+text 1023,201  >
+text  236,204  Visual offset
+text  885,204  +0 ms
+text   16,245  INPUT
+text  236,266  Offset calibration
+text  929,266  Tap to start
+text   14,301  OFFSET
+text  236,328  Reset map offsets
+text  970,328  none set
+text   14,357  AUDIO
+text  964,387  <
+text 1023,387  >
+text  236,390  Calibration tempo
+text  866,390  120 BPM
+text   14,413  VIDEO
+text  236,436  For every map. Positive brings the notes earlier, so lower it if you hit late.
+text  238,455  In a song, - / + set that map's own offset on top. Where 0 is depends on the...
+text   14,469  SKIN
+hit     0,0      96x46   Key(Escape)
+hit   727,0     340x46   SettingsSearch
+hit     0,58    212x50   SettingsSection(0)
+hit     0,114   212x50   SettingsSection(1)
+hit     0,170   212x50   SettingsSection(2)
+hit     0,226   212x50   SettingsSection(3)
+hit     0,282   212x50   SettingsSection(4)
+hit     0,338   212x50   SettingsSection(5)
+hit     0,394   212x50   SettingsSection(6)
+hit     0,450   212x30   SettingsSection(7)
+hit   222,58    845x56   SettingRow(75)
+hit   947,64     50x44   SettingStep(75, -1)
+hit  1003,64     50x44   SettingStep(75, 1)
+hit   222,120   845x56   SettingRow(76)
+hit   947,126    50x44   SettingStep(76, -1)
+hit  1003,126    50x44   SettingStep(76, 1)
+hit   222,182   845x56   SettingRow(77)
+hit   947,188    50x44   SettingStep(77, -1)
+hit  1003,188    50x44   SettingStep(77, 1)
+hit   222,244   845x56   SettingRow(78)
+hit   222,306   845x56   SettingRow(79)
+hit   222,368   845x54   SettingRow(80)
+hit   947,374    50x44   SettingStep(80, -1)
+hit  1003,374    50x44   SettingStep(80, 1)

@@ -11,11 +11,12 @@ use std::time::{Duration, Instant};
 
 use crate::audio::Track;
 use crate::beatmap::{self, Beatmap};
-use crate::game::Game;
+use crate::game::{Game, Play};
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
 use crate::multiplayer::Session;
 use crate::net::{self, ClientMsg, PlayerInfo};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 use winit::keyboard::KeyCode;
 
 /// The pattern moves on in steps this long, so autoplay hits every note even after a slow
@@ -65,7 +66,7 @@ pub struct Round {
     from: f64,
     load: Option<Receiver<Result<Beatmap, String>>>,
     map: Option<Beatmap>,
-    pub game: Option<Game>,
+    pub game: Option<Play>,
     /// Where the pattern starts (map ms).
     start: f64,
     /// When the pattern last moved on.
@@ -84,11 +85,12 @@ impl Round {
                 stream: None,
             }),
             None,
-        );
-        g.mute_hits = true;
+        )
+        .with_settings(&crate::game::settings());
+        g.set_mute_hits(true);
         g.skip_to(self.start - 50.0);
         g.start_from(self.start, None, 0.0);
-        self.game = Some(g);
+        self.game = Some(Play::new(g));
         self.ticked = None;
     }
 
@@ -97,14 +99,17 @@ impl Round {
         if self
             .game
             .as_ref()
-            .is_some_and(|g| g.time > g.end_time() + 1500.0)
+            .is_some_and(|g| g.time() > g.end_time() + 1500.0)
         {
             self.new_game();
         }
-        let Some(g) = &mut self.game else { return };
+        // The play alone: moving it on draws nothing.
+        let Some(g) = self.game.as_mut().map(|p| &mut p.game) else {
+            return;
+        };
         let mut at = self.ticked.filter(|&t| t < now).unwrap_or(now);
         if now - at > CATCH_UP {
-            g.skip_to(g.time + (now - at).as_secs_f64() * 1000.0 - 100.0);
+            g.skip_to(g.time() + (now - at).as_secs_f64() * 1000.0 - 100.0);
             at = now - STEP;
         }
         loop {
@@ -269,7 +274,7 @@ fn load(path: PathBuf) -> Receiver<Result<Beatmap, String>> {
 }
 
 /// The lane of `game`, fitted into the box at (x, y, w, h).
-pub fn draw_pattern(c: &mut Canvas, game: &mut Game, [x, y, w, h]: [f32; 4], scroll_speed: f64) {
+pub fn draw_pattern(c: &mut Canvas, game: &mut Play, [x, y, w, h]: [f32; 4], scroll_speed: f64) {
     let (band_top, band_h) = crate::game::lane_band();
     let k = (w / 640.0).min(h / band_h);
     let full_w = c.width;
@@ -652,12 +657,12 @@ mod tests {
         r.advance(t0 + Duration::from_millis(11_300));
         let game = r.game.as_ref().unwrap();
         assert!(
-            game.time > r.start + 5000.0,
+            game.time() > r.start + 5000.0,
             "it moved on: {} from {}",
-            game.time,
+            game.time(),
             r.start
         );
-        assert_eq!(game.stats.miss, 0);
-        assert!(game.stats.great > 30, "{}", game.stats.great);
+        assert_eq!(game.stats().miss, 0);
+        assert!(game.stats().great > 30, "{}", game.stats().great);
     }
 }

@@ -1,0 +1,116 @@
+//! The phone's interface (`mobile.rs`): its main screens as drawn on a phone-shaped window, the
+//! texts on them, where they are and what can be clicked, kept golden like `screens`. A phone
+//! build draws these on Android only; the tests switch them on for their own thread.
+//!
+//! Linux only, as `screens`: other systems name keys, folders and renderers differently.
+#![cfg(target_os = "linux")]
+
+use super::harness::{self, *};
+use super::maps;
+use super::screens::VOLATILE;
+use super::snapshot::assert_snapshot;
+use crate::*;
+
+/// A 20:9 phone held sideways: the game's 480 units tall, this wide.
+const PHONE_W: f32 = 480.0 * 20.0 / 9.0;
+
+/// One frame at `now` on the phone-shaped window.
+fn phone_frame(s: &mut State, now: Instant) -> Canvas {
+    frame_on(s, now, PHONE_W)
+}
+
+/// The screen `s` is on, drawn until fades settle, as text.
+fn shot(s: &mut State, now: &mut Instant) -> String {
+    phone_frame(s, *now);
+    s.scene_since = *now - Duration::from_secs(5);
+    s.toast = None;
+    settle_on(s, now, PHONE_W);
+    *now += Duration::from_millis(16);
+    screen(&phone_frame(s, *now), VOLATILE)
+}
+
+/// A phone client with the test charts, its song select ready.
+fn client(tag: &str) -> (State, Songs, Instant) {
+    mobile::phone_for_tests::set(true);
+    let songs = Songs::new(tag, &maps::all());
+    let mut s = state_with(harness::config(), songs.entries());
+    s.window_w = 2400.0;
+    s.window_h = 1080.0;
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    (s, songs, now)
+}
+
+#[test]
+fn phone_song_select_and_mods() {
+    let (mut s, _songs, mut now) = client("phone-select");
+    assert_snapshot("phone-song-select", &shot(&mut s, &mut now));
+    s.cfg.mods = Mods::parse("HD,HR");
+    s.select.mods_label = s.cfg.mods.label();
+    assert_snapshot("phone-song-select-with-mods", &shot(&mut s, &mut now));
+}
+
+#[test]
+fn phone_settings_sections() {
+    let (mut s, _songs, mut now) = client("phone-settings");
+    s.open_settings();
+    for sec in 0..settings::SECTIONS.len() {
+        s.settings_ui.cursor = settings::section_start(sec);
+        let name = settings::section_name(sec).to_lowercase();
+        assert_snapshot(&format!("phone-settings-{name}"), &shot(&mut s, &mut now));
+    }
+}
+
+#[test]
+fn phone_multiplayer_menu_and_download() {
+    let (mut s, _songs, mut now) = client("phone-tabs");
+    s.open_multiplayer();
+    assert_snapshot("phone-multiplayer-menu", &shot(&mut s, &mut now));
+    s.scene = crate::screens::download::Download::scene();
+    assert_snapshot("phone-download", &shot(&mut s, &mut now));
+}
+
+#[test]
+fn phone_results() {
+    let (mut s, _songs, mut now) = client("phone-results");
+    let stats = game::Stats {
+        great: 60,
+        ok: 3,
+        miss: 1,
+        max_combo: 50,
+        score: 912_345,
+        roll_ticks: 4,
+        ..Default::default()
+    };
+    let mut r = ui::Results::new(s.library[0].label(), stats, game::Windows::new(5.0));
+    r.shown = now - Duration::from_secs(10);
+    r.pp = Some(123.4);
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    assert_snapshot("phone-results", &shot(&mut s, &mut now));
+}
+
+/// During a song every finger hits the drum the moment it lands, the first one included: the
+/// menus' tap handling doesn't take it as the start of a gesture, and lifting it clicks nothing.
+#[test]
+fn phone_every_finger_hits_the_drum_during_a_song() {
+    let (mut s, _songs, mut now) = client("phone-drums");
+    press(&mut s, KeyCode::Enter, now);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let y = f64::from(s.window_h) / 2.0;
+    for (finger, col) in [(1, 0), (2, 3)] {
+        let x = f64::from(s.window_w) * (col as f64 + 0.5) / 4.0;
+        s.touch_flash = Default::default();
+        s.touch(finger, TouchPhase::Started, x, y, now, None);
+        assert!(
+            s.touch_flash[col].is_some(),
+            "finger {finger} hits column {col}"
+        );
+        now += Duration::from_millis(40);
+        s.touch(finger, TouchPhase::Ended, x, y, now, None);
+        assert_eq!(
+            scene_name(&s),
+            "Play",
+            "lifting finger {finger} clicks nothing"
+        );
+    }
+}

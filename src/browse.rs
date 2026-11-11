@@ -6,8 +6,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use crate::download::{self, Category, Diff, Job, SetInfo, SortKey};
+use crate::hit::{Canvas, Hit};
 use crate::library::Entry;
-use crate::render::{Canvas, Hit, accent, approach, rgba};
+use crate::render::{accent, approach, rgba};
 
 /// Search this long after the last keystroke.
 const TYPE_DELAY: Duration = Duration::from_millis(450);
@@ -114,6 +115,12 @@ pub struct Browse {
     cover_rx: Receiver<(String, bool)>,
     /// Downloads that failed (the set and why), for the panel's Retry.
     pub failed_jobs: Vec<(SetInfo, String)>,
+    /// The osu! sets loved on the taiko.rs server (None: it hasn't said yet).
+    loved_here: Option<HashSet<u32>>,
+    /// The loved list as it loads: the sets so far, and how many are done of how many.
+    loved_progress: Option<Receiver<(Vec<SetInfo>, usize, usize)>>,
+    /// How many loved sets are done of how many, while they load.
+    loved_count: Option<(usize, usize)>,
 }
 
 impl Default for Browse {
@@ -150,6 +157,9 @@ impl Default for Browse {
             cover_tx,
             cover_rx,
             failed_jobs: Vec::new(),
+            loved_here: None,
+            loved_progress: None,
+            loved_count: None,
         }
     }
 }
@@ -162,6 +172,15 @@ pub enum RowState {
 }
 
 impl Browse {
+    /// Whether a search, a previewed difficulty, a cover or the loved list is on its way.
+    #[cfg(test)]
+    pub fn is_busy(&self) -> bool {
+        self.search.is_some()
+            || self.fetching.is_some()
+            || self.loved_progress.is_some()
+            || self.covers.values().any(|c| matches!(c, Cover::Fetching))
+    }
+
     /// Starts a search for the current query, category and order now.
     pub fn search_now(&mut self) {
         let query = self.query.trim().to_string();
@@ -169,9 +188,12 @@ impl Browse {
         self.edited = None;
         self.status = if query.is_empty() {
             let what = self.category.name().to_lowercase();
-            match self.source() {
-                Source::Osu => format!("loading {what} taiko maps..."),
-                Source::Ours => format!("loading {what} maps from taiko.rs..."),
+            match (self.source(), self.category) {
+                (_, Category::LovedHere) => {
+                    "loading loved maps (slower the first time)...".to_string()
+                }
+                (Source::Osu, _) => format!("loading {what} taiko maps..."),
+                (Source::Ours, _) => format!("loading {what} maps from taiko.rs..."),
             }
         } else {
             format!("searching \"{query}\"...")
@@ -183,13 +205,31 @@ impl Browse {
     fn fetch(&mut self, query: String, page: usize) {
         let (tx, rx) = mpsc::channel();
         let (category, sort, desc) = (self.category, self.sort, self.desc);
+        let loved: Option<Vec<u32>> = self
+            .loved_here
+            .as_ref()
+            .map(|l| l.iter().copied().collect());
+        let (progress_tx, progress_rx) = mpsc::channel();
+        self.loved_progress = (category == Category::LovedHere).then_some(progress_rx);
+        self.loved_count = None;
         std::thread::spawn(move || {
-            let found = if category.is_ours() {
-                // The website lists them all at once.
-                crate::custom::search(&query, category == Category::CustomApproved, sort, desc)
+            // The website and the loved list come all at once.
+            let found = match (category, loved) {
+                (Category::LovedHere, None) => {
+                    Err("the taiko.rs server hasn't said which maps are loved there yet".into())
+                }
+                (Category::LovedHere, Some(ids)) => {
+                    let progress = std::sync::Mutex::new(progress_tx);
+                    download::loved_here(&ids, &query, sort, desc, &|sets, done, of| {
+                        let _ = progress.lock().unwrap().send((sets, done, of));
+                    })
                     .map(|sets| (sets, false))
-            } else {
-                download::search(&query, category, sort, desc, page)
+                }
+                (c, _) if c.is_custom() => {
+                    crate::custom::search(&query, c == Category::CustomApproved, sort, desc)
+                        .map(|sets| (sets, false))
+                }
+                _ => download::search(&query, category, sort, desc, page),
             };
             let _ = tx.send(found);
         });
@@ -235,11 +275,68 @@ impl Browse {
         }
     }
 
-    /// The orders the current source can list in.
+    /// The orders the current category can list in (the loved sets are osu!'s, with all of
+    /// osu!'s details).
     pub fn sorts(&self) -> &'static [SortKey] {
-        match self.source() {
-            Source::Osu => &SortKey::ALL,
-            Source::Ours => &SortKey::OURS,
+        if self.category.is_custom() {
+            &SortKey::OURS
+        } else {
+            &SortKey::ALL
+        }
+    }
+
+    /// Takes the sets the taiko.rs server says are loved there, and shows them if the loved
+    /// list is open (it may have been waiting for them).
+    pub fn set_loved_here(&mut self, sets: impl IntoIterator<Item = u32>) {
+        let sets: HashSet<u32> = sets.into_iter().collect();
+        if self.loved_here.as_ref() == Some(&sets) {
+            return;
+        }
+        self.loved_here = Some(sets);
+        if self.category == Category::LovedHere && self.searched.is_some() {
+            self.search_now();
+        }
+    }
+
+    /// Whether `set` is an osu! set loved on the taiko.rs server.
+    fn is_loved_here(&self, set: &SetInfo) -> bool {
+        set.custom.is_none()
+            && self
+                .loved_here
+                .as_ref()
+                .is_some_and(|l| l.contains(&set.id))
+    }
+
+    /// Shows `sets` instead, with the same set selected if it's still there.
+    fn replace_keeping_selection(&mut self, sets: Vec<SetInfo>) {
+        let selected = self
+            .results
+            .get(self.cursor)
+            .map(|s| (s.id, s.custom.is_some()));
+        self.results = sets;
+        self.cursor = selected
+            .and_then(|key| {
+                self.results
+                    .iter()
+                    .position(|s| (s.id, s.custom.is_some()) == key)
+            })
+            .unwrap_or(0);
+    }
+
+    /// Drops the results of another list, so they don't stand in for this one while it loads
+    /// (or if it fails).
+    fn forget_results(&mut self) {
+        self.results.clear();
+        self.cursor = 0;
+        (self.page, self.more) = (0, false);
+        (self.scroll_target, self.follow) = (0.0, true);
+    }
+
+    /// Keeps the order to one the current category has.
+    fn fit_sort(&mut self) {
+        if !self.sorts().contains(&self.sort) {
+            self.sort = SortKey::Relevance;
+            self.desc = true;
         }
     }
 
@@ -249,10 +346,8 @@ impl Browse {
             return;
         }
         std::mem::swap(&mut self.category, &mut self.other_category);
-        if !self.sorts().contains(&self.sort) {
-            self.sort = SortKey::Relevance;
-            self.desc = true;
-        }
+        self.fit_sort();
+        self.forget_results();
         self.search_now();
     }
 
@@ -271,6 +366,8 @@ impl Browse {
         self.menu = None;
         if c != self.category {
             self.category = c;
+            self.fit_sort();
+            self.forget_results();
             self.search_now();
         }
     }
@@ -412,20 +509,39 @@ impl Browse {
         {
             self.search_now();
         }
+        // The loved list fills in as it loads: the selection stays where it is.
+        if let Some(rx) = &self.loved_progress
+            && self.search.is_some()
+            && let Some((sets, done, of)) = rx.try_iter().last()
+        {
+            self.loved_count = Some((done, of));
+            if !sets.is_empty() {
+                // The count above the list says how far it got.
+                self.status.clear();
+            }
+            self.replace_keeping_selection(sets);
+        }
+        let growing = self.loved_count.is_some();
         if let Some((page, rx)) = &self.search {
             let page = *page;
             if let Ok(result) = rx.try_recv() {
                 self.search = None;
+                self.loved_progress = None;
+                self.loved_count = None;
                 match result {
                     Ok((sets, more)) if page == 0 => {
-                        (self.scroll_target, self.follow) = (0.0, true);
                         self.status = if sets.is_empty() {
                             "no taiko maps found".into()
                         } else {
                             String::new()
                         };
-                        self.results = sets;
-                        self.cursor = 0;
+                        if growing {
+                            self.replace_keeping_selection(sets);
+                        } else {
+                            (self.scroll_target, self.follow) = (0.0, true);
+                            self.results = sets;
+                            self.cursor = 0;
+                        }
                         (self.page, self.more) = (0, more);
                     }
                     Ok((sets, more)) => {
@@ -527,9 +643,12 @@ impl Browse {
         crate::settings::tab_bar(
             c,
             3,
-            match source {
-                Source::Osu => "maps from catboy.best / osu.direct",
-                Source::Ours => "custom maps from the taiko.rs website",
+            match (source, self.category) {
+                (Source::Osu, _) => "maps from catboy.best / osu.direct",
+                (Source::Ours, Category::LovedHere) => {
+                    "osu! maps loved on taiko.rs (they give pp here), from the mirrors"
+                }
+                (Source::Ours, _) => "custom maps from the taiko.rs website",
             },
         );
         let busy = self.search.as_ref().is_some_and(|s| s.0 == 0) || self.edited.is_some();
@@ -599,9 +718,10 @@ impl Browse {
                 0.0
             };
         let text = if self.query.is_empty() {
-            let hint = match source {
-                Source::Osu => "search artist, title, mapper...",
-                Source::Ours => "search song, mapper, sender...",
+            let hint = if self.category.is_custom() {
+                "search song, mapper, sender..."
+            } else {
+                "search artist, title, mapper..."
             };
             Canvas::fit(10.0, room, hint)
         } else {
@@ -646,9 +766,13 @@ impl Browse {
             self.menu == Some(Menu::Status),
         );
         let sort_x = status_x + status_w + 6.0;
-        let sort_name = |key: SortKey| match source {
-            Source::Osu => key.name(),
-            Source::Ours => key.name_for_ours(),
+        let custom = self.category.is_custom();
+        let sort_name = |key: SortKey| {
+            if custom {
+                key.name_for_ours()
+            } else {
+                key.name()
+            }
         };
         let sort_w = dropdown(
             c,
@@ -684,11 +808,14 @@ impl Browse {
         }
         if !self.results.is_empty() {
             let n = self.results.len();
-            let count = format!(
-                "{n}{} map{}",
-                if self.more { "+" } else { "" },
-                if n == 1 { "" } else { "s" }
-            );
+            let count = match self.loved_count {
+                Some((done, of)) => format!("{done} of {of} loaded"),
+                None => format!(
+                    "{n}{} map{}",
+                    if self.more { "+" } else { "" },
+                    if n == 1 { "" } else { "s" }
+                ),
+            };
             if right_of_filters + Canvas::text_width(7.0, &count) + 12.0 < x0 + col {
                 c.text_right(x0 + col - 4.0, fy + 7.0, 7.0, rgba(0x8a8aa0, 1.0), &count);
             }
@@ -837,7 +964,7 @@ impl Browse {
                 &Canvas::fit(7.0, room, &by_line),
             );
             let ly = y + 30.0;
-            let (label, color) = status_look(set);
+            let (label, color) = status_look(set, self.is_loved_here(set));
             let mut lx = tx2 + pill(c, tx2, ly, label, color) + 6.0;
             let chosen = selected.then(|| {
                 self.diff_choice
@@ -907,7 +1034,7 @@ impl Browse {
             let n = self.results.len();
             let end = if self.search.is_some() {
                 "loading more...".to_string()
-            } else if source == Source::Ours {
+            } else if self.category.is_custom() {
                 format!(
                     "{n} map{}  |  yours: editor > File > Upload",
                     if n == 1 { "" } else { "s" }
@@ -1192,11 +1319,13 @@ fn close_button(c: &mut Canvas, x: f32, y: f32, hit: Hit) {
     c.hit(x, y, 16.0, 15.0, hit);
 }
 
-/// A set's status as a word and a colour: osu!'s, or the website's for a custom set.
-fn status_look(set: &SetInfo) -> (&'static str, u32) {
+/// A set's status as a word and a colour: osu!'s, the website's for a custom set, or loved
+/// here (`loved_here`) whatever osu! says.
+fn status_look(set: &SetInfo, loved_here: bool) -> (&'static str, u32) {
     match &set.custom {
         Some(c) if c.approved => ("approved", 0x86E05A),
         Some(_) => ("custom", 0xB28CFF),
+        None if loved_here => ("loved here", 0xFF8AD0),
         None => match set.status.as_str() {
             "ranked" => ("ranked", 0x66CCFF),
             "approved" => ("approved", 0x66CCFF),
@@ -1252,4 +1381,61 @@ fn make_entry(osu: &std::path::Path) -> Option<Entry> {
         .is_file()
         .then(|| "cover.jpg".to_string());
     Some(Entry::new(osu.to_path_buf(), meta))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(id: u32) -> SetInfo {
+        SetInfo {
+            id,
+            ..SetInfo::default()
+        }
+    }
+
+    #[test]
+    fn a_growing_list_keeps_the_same_set_selected() {
+        let mut b = Browse {
+            results: vec![set(3), set(1)],
+            cursor: 1,
+            ..Browse::default()
+        };
+        b.replace_keeping_selection(vec![set(5), set(3), set(2), set(1)]);
+        assert_eq!(b.results[b.cursor].id, 1);
+        b.replace_keeping_selection(vec![set(7)]);
+        assert_eq!(b.cursor, 0);
+    }
+
+    #[test]
+    fn the_loved_list_waits_for_the_server_and_then_loads() {
+        let mut b = Browse::default();
+        b.set_category(Category::LovedHere);
+        assert!(b.results.is_empty());
+        let (_, rx) = b.search.take().unwrap();
+        let waited = rx.recv().unwrap();
+        assert!(waited.is_err_and(|e| e.contains("hasn't said")));
+        // Nothing loved: no mirror is asked.
+        b.set_loved_here([]);
+        let (_, rx) = b.search.take().unwrap();
+        assert_eq!(rx.recv().unwrap().map(|(sets, _)| sets.len()), Ok(0));
+        // The same answer again doesn't search again.
+        b.set_loved_here([]);
+        assert!(b.search.is_none());
+    }
+
+    #[test]
+    fn custom_orders_dont_carry_over_to_other_lists() {
+        let mut b = Browse {
+            category: Category::LovedHere,
+            sort: SortKey::Difficulty,
+            ..Browse::default()
+        };
+        // The loved sets are osu!'s: every osu! order works.
+        b.fit_sort();
+        assert_eq!(b.sort, SortKey::Difficulty);
+        b.category = Category::Custom;
+        b.fit_sort();
+        assert_eq!((b.sort, b.desc), (SortKey::Relevance, true));
+    }
 }

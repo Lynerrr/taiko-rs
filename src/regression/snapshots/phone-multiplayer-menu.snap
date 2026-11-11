@@ -1,0 +1,32 @@
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   SONGS
+text  264,27   SETTINGS
+text  354,27   MULTIPLAYER
+text  467,27   DOWNLOAD
+text  551,27   Tab
+text  859,28   127.0.0.1:9   no connection
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text  213,66   ONLINE ACCOUNT
+text  225,105  Name or email
+text  834,112  _
+text  225,157  Password
+text  505,208  LOG IN
+text  305,258  CREATE ACCOUNT
+text  620,258  FORGOT PASSWORD?
+text  365,298  An account plays online: lobbies, friends, leaderboards.
+text  395,318  No account yet? CREATE ACCOUNT takes a minute.
+hit   188,20     59x22   Tab(0)
+hit   254,20     82x22   Tab(1)
+hit   344,20    105x22   Tab(2)
+hit   457,20     82x22   Tab(3)
+hit   213,86    640x46   MpRow(0)
+hit   213,138   640x46   MpRow(1)
+hit   213,190   640x46   MpRow(2)
+hit   213,242   316x42   MpRow(3)
+hit   537,242   316x42   MpRow(4)

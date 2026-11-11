@@ -1,0 +1,49 @@
+text  110,12   SETTINGS
+text   17,17   < BACK
+text  739,17   Search settings
+text   14,77   LIBRARY
+text  964,77   <
+text 1023,77   >
+text  236,80   Present mode (gameplay)
+text  846,80   immediate
+text   14,133  GAMEPLAY
+text  964,139  <
+text 1023,139  >
+text  236,142  Renderer
+text  896,142  Auto
+text   14,189  VIEW
+text  236,204  Menus use vsync
+text   16,245  INPUT
+text  236,266  Half resolution
+text   14,301  OFFSET
+text  964,325  <
+text 1023,325  >
+text  236,328  FPS cap
+text  844,328  unlimited
+text   14,357  AUDIO
+text  236,390  FPS overlay
+text   14,413  VIDEO
+text  236,436  Used during songs. vsync is smoothest on Wayland; mailbox/immediate add judder.
+text   14,469  SKIN
+hit     0,0      96x46   Key(Escape)
+hit   727,0     340x46   SettingsSearch
+hit     0,58    212x50   SettingsSection(0)
+hit     0,114   212x50   SettingsSection(1)
+hit     0,170   212x50   SettingsSection(2)
+hit     0,226   212x50   SettingsSection(3)
+hit     0,282   212x50   SettingsSection(4)
+hit     0,338   212x50   SettingsSection(5)
+hit     0,394   212x50   SettingsSection(6)
+hit     0,450   212x30   SettingsSection(7)
+hit   222,58    845x56   SettingRow(91)
+hit   947,64     50x44   SettingStep(91, -1)
+hit  1003,64     50x44   SettingStep(91, 1)
+hit   222,120   845x56   SettingRow(92)
+hit   947,126    50x44   SettingStep(92, -1)
+hit  1003,126    50x44   SettingStep(92, 1)
+hit   222,182   845x56   SettingRow(93)
+hit   222,244   845x56   SettingRow(94)
+hit   222,306   845x56   SettingRow(95)
+hit   947,312    50x44   SettingStep(95, -1)
+hit  1003,312    50x44   SettingStep(95, 1)
+hit   222,368   845x54   SettingRow(96)

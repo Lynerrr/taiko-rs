@@ -4,7 +4,8 @@
 use super::chrome::{DIM, WARN, wrap};
 use super::{Btn, Cmd, Field, Modal, View};
 use crate::editor::setup::Key;
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 /// The text fields, two to a row (`None`: a gap).
 const ROWS: [[Option<Key>; 2]; 4] = [

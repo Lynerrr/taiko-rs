@@ -6,8 +6,9 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::hit::{Canvas, Hit};
 use crate::online::{self, Activity, ChatLine, Friend, OnlinePlayer};
-use crate::render::{Canvas, Hit, accent, rgba};
+use crate::render::{accent, rgba};
 
 /// The overlay's tabs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -190,8 +191,8 @@ pub fn draw_spectators(c: &mut Canvas, names: &[&str]) {
     let n = names.len();
     let (x, y0, h) = (18.0, 282.0, 14.0);
     let more = n.saturating_sub(SPECTATORS_LISTED);
-    let title = tr!("Spectators ({n})"; n);
-    let rest = (more > 0).then(|| tr!("and {more} more"; more));
+    let title = tr!("Spectators ({n})", "観戦者 ({n})", "Зрители ({n})"; [] [n]);
+    let rest = (more > 0).then(|| tr!("and {more} more", "他{more}人", "и ещё {more}"; [] [more]));
     let listed = &names[..n.min(SPECTATORS_LISTED)];
     let lines = 1 + listed.len() + usize::from(rest.is_some());
     let longest = listed
@@ -2203,7 +2204,7 @@ fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
         }
         if let Some(id) = crate::shots::shot_in(&line.text) {
             rows.push(ChatRow {
-                text: tr!("Screenshot").into(),
+                text: tr!("Screenshot", "スクリーンショット", "Скриншот").into(),
                 colour: 0x66ccff,
                 kind: ChatKind::Shot(id),
                 gap,
@@ -2323,7 +2324,7 @@ fn chat_lines(
             }
             ChatKind::Shot(id) => {
                 let x = inner + 3.0 + MESSAGE_INDENT;
-                let hint = tr!("click to view");
+                let hint = tr!("click to view", "クリックで表示", "нажмите, чтобы открыть");
                 let w =
                     Canvas::text_width(CHAT_SIZE, &row.text) + Canvas::text_width(6.0, hint) + 20.0;
                 let w = w.min(inner + iw - x);
@@ -2419,7 +2420,7 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
     c.hit(inner, input_y, iw, h, Hit::TextField);
     // The last F12's, on its way to whoever this is with.
     if s.shot_ready && !typing {
-        let label = tr!("Send screenshot");
+        let label = tr!("Send screenshot", "スクショを送信", "Отправить скриншот");
         button(
             c,
             inner + iw - 3.0,
@@ -2727,7 +2728,10 @@ mod tests {
 
     #[test]
     fn the_tab_stands_on_the_edge_and_rides_on_the_open_panel() {
-        crate::render::set_animations(false);
+        crate::render::set_frame_theme(Some(crate::render::Theme {
+            animations: false,
+            ..crate::render::Theme::default()
+        }));
         let mut s = Social::default();
         let [x, _, w, h] = tab_rect(&s, false);
         assert_eq!(x + w, 853.0, "against the edge of the screen");

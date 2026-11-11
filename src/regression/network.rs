@@ -1,0 +1,914 @@
+//! The client's side of the network: the wire format of every message it sends and reads (kept
+//! golden, so a rename can't silently break talking to the live server or older builds), and
+//! the client against a scripted room that answers like the server does. The server's own logic
+//! is not tested here.
+
+use super::harness::{self, *};
+use super::maps::{self, Player};
+use super::snapshot::assert_snapshot;
+use crate::net::{self, ClientMsg, ServerMsg};
+use crate::online::{self, Down, Envelope, Reply, Request, Up};
+use crate::*;
+use std::fmt::Write as _;
+use std::io::{BufRead, Write as _};
+use std::sync::Mutex;
+
+// ---------------------------------------------------------------------------------------------
+// Wire format.
+
+fn map_info() -> net::MapInfo {
+    net::MapInfo {
+        hash: 0xfeed_beef_0000_0001,
+        artist: "Artist".into(),
+        title: "Title".into(),
+        version: "Oni".into(),
+        rate: 1.5,
+        from: Some(30_000.0),
+        set_id: Some(123),
+        mods: vec!["HD".into(), "DT".into()],
+        multiverse: Some("mirror".into()),
+        shapeshift: None,
+        seed: Some(99),
+        defense: Some(net::Defense::DEFAULT),
+        stats: Some(Box::new(net::MapStats {
+            stars: 5.25,
+            length_ms: 120_000.0,
+            bpm: 180.0,
+            od: 6.0,
+            hp: 5.0,
+            creator: "mapper".into(),
+        })),
+    }
+}
+
+fn live() -> net::Live {
+    net::Live {
+        score: 123_456,
+        combo: 78,
+        accuracy: 0.975,
+        miss: 2,
+        progress: 0.5,
+        great: 70,
+        ok: 6,
+    }
+}
+
+fn result() -> net::Final {
+    net::Final {
+        score: 900_000,
+        accuracy: 0.99,
+        max_combo: 300,
+        great: 295,
+        ok: 5,
+        miss: 0,
+        ur: 95.5,
+        quit: false,
+    }
+}
+
+fn player(id: u32, name: &str, host: bool) -> net::PlayerInfo {
+    serde_json::from_value(serde_json::json!({
+        "id": id, "name": name, "host": host, "ready": true, "has_map": true,
+        "status": "Lobby", "live": live(), "result": null,
+    }))
+    .expect("a player as older servers send it")
+}
+
+fn part() -> net::MapPart {
+    net::MapPart {
+        name: "123 Artist - Title".into(),
+        total: 10,
+        offset: 4,
+        data: "AAEC".into(),
+        error: None,
+    }
+}
+
+fn client_messages() -> Vec<ClientMsg> {
+    vec![
+        ClientMsg::Hello {
+            name: "me".into(),
+            protocol: net::PROTOCOL,
+            host_token: Some(7),
+            password: Some("pw".into()),
+        },
+        ClientMsg::Hello {
+            name: "me".into(),
+            protocol: net::PROTOCOL,
+            host_token: None,
+            password: None,
+        },
+        ClientMsg::Ping { t: 12.5 },
+        ClientMsg::SelectMap(map_info()),
+        ClientMsg::HasMap(true),
+        ClientMsg::Ready(false),
+        ClientMsg::StartMatch,
+        ClientMsg::Loaded(true),
+        ClientMsg::Live(live()),
+        ClientMsg::Finished(result()),
+        ClientMsg::RequestMap,
+        ClientMsg::MapFile {
+            to: 3,
+            part: part(),
+        },
+        ClientMsg::Inputs {
+            inputs: vec![(1023.0, 1), (1100.5, 3)],
+            anti_mash: true,
+        },
+        ClientMsg::Spectate(true),
+        ClientMsg::Spectator(false),
+        ClientMsg::GiveHost(4),
+        ClientMsg::Skipped,
+        ClientMsg::Chat("hi".into()),
+        ClientMsg::Mods(vec!["HR".into()]),
+        ClientMsg::Library {
+            maps: vec![(1, 2), (3, 4)],
+            done: true,
+        },
+        ClientMsg::StartGuessr { rounds: 5 },
+        ClientMsg::Guess { hash: 9, song: 10 },
+        ClientMsg::Defense(net::DefenseAct::Buy {
+            item: net::DefenseItem::Shield,
+            at: 5000.0,
+            until: 0.0,
+        }),
+        ClientMsg::Defense(net::DefenseAct::TagIn { at: 6000.0 }),
+        ClientMsg::SetPassword(Some("secret".into())),
+        ClientMsg::SetSlots(8),
+        ClientMsg::Kick(5),
+    ]
+}
+
+fn server_messages() -> Vec<ServerMsg> {
+    vec![
+        ServerMsg::Welcome { id: 2 },
+        ServerMsg::Rejected("full".into()),
+        ServerMsg::Pong {
+            t: 10.0,
+            server: 20.0,
+        },
+        ServerMsg::Room {
+            players: vec![player(1, "host", true), player(2, "me", false)],
+            map: Some(map_info()),
+            in_match: false,
+            mapguessr: false,
+            common: Some(3),
+            team: Some(net::TeamState::default()),
+            locked: true,
+            slots: 8,
+        },
+        ServerMsg::Prepare(map_info()),
+        ServerMsg::Start { at: 5000.0 },
+        ServerMsg::Results(vec![player(1, "host", true)]),
+        ServerMsg::MapRequested { from: 2 },
+        ServerMsg::MapFile(part()),
+        ServerMsg::Spectate {
+            map: map_info(),
+            at: 100.0,
+            players: vec![(1, "host".into())],
+        },
+        ServerMsg::Inputs {
+            from: 1,
+            inputs: vec![(1000.0, 0)],
+            anti_mash: true,
+        },
+        ServerMsg::Skipped { from: 1 },
+        ServerMsg::SkipVotes { votes: 1, of: 2 },
+        ServerMsg::SkipNow,
+        ServerMsg::Chat {
+            from: "host".into(),
+            text: "gl".into(),
+        },
+        ServerMsg::GuessRound {
+            round: 1,
+            rounds: 5,
+            hash: 9,
+            from: 0.25,
+            seconds: 45,
+        },
+        ServerMsg::GuessWrong { tries: 2 },
+        ServerMsg::GuessReveal {
+            hash: 9,
+            got: vec![(2, 100)],
+            last: false,
+        },
+        ServerMsg::Defense {
+            from: 1,
+            act: net::DefenseAct::TagIn { at: 1.0 },
+        },
+        ServerMsg::Disconnected("gone".into()),
+    ]
+}
+
+fn requests() -> Vec<Request> {
+    vec![
+        Request::Register {
+            name: "me".into(),
+            password: "pw".into(),
+            email: Some("a@b.c".into()),
+            code: None,
+        },
+        Request::Login {
+            name: "me".into(),
+            password: "pw".into(),
+        },
+        Request::ResetPassword {
+            who: "me".into(),
+            code: Some("123".into()),
+            password: None,
+        },
+        Request::LinkEmail {
+            token: "t".into(),
+            email: "a@b.c".into(),
+            code: None,
+        },
+        Request::WhoAmI { token: "t".into() },
+        Request::Logout { token: "t".into() },
+        Request::ListRooms,
+        Request::CreateRoom {
+            token: "t".into(),
+            title: "room".into(),
+            mapguessr: false,
+            settings: net::RoomSettings {
+                password: Some("pw".into()),
+                slots: 4,
+            },
+        },
+        Request::JoinRoom {
+            token: "t".into(),
+            room: 3,
+        },
+        Request::Connect { token: "t".into() },
+        Request::SubmitScore {
+            token: "t".into(),
+            play: Box::new(online::ScoreSubmit {
+                map: map_info(),
+                score: 900_000,
+                accuracy: 0.99,
+                max_combo: 300,
+                great: 295,
+                ok: 5,
+                miss: 0,
+                pp: Some(123.4),
+                date: 1_700_000_000,
+                replay_version: crate::scores::new_version(),
+                inputs: vec![(1023.0, 1)],
+                stars: Some(5.25),
+                play_ms: Some(120_000),
+                scroll_speed: Some(1.0),
+                md5: Some("abc".into()),
+                pp_version: online::PP_VERSION,
+                timing: None,
+                rolls: Some(12),
+            }),
+        },
+        Request::MapScores {
+            map: 1,
+            relax: false,
+        },
+        Request::MapScores {
+            map: 1,
+            relax: true,
+        },
+        Request::Profile { name: "me".into() },
+        Request::Replay { id: 5 },
+        Request::Score { id: 5 },
+        Request::SetStatuses {
+            token: "t".into(),
+            maps: vec![(1, 2)],
+        },
+        Request::LovedSets,
+        Request::LovedMaps,
+        Request::SetLoved {
+            token: "t".into(),
+            set: 1,
+            loved: true,
+            version: Some("Oni".into()),
+        },
+        Request::Played {
+            token: "t".into(),
+            ms: 1000,
+            map: None,
+        },
+        Request::Medals { name: "me".into() },
+    ]
+}
+
+fn ups() -> Vec<Up> {
+    vec![
+        Up::Status(online::Activity::Menus),
+        Up::AddFriend("friend".into()),
+        Up::RemoveFriend("friend".into()),
+        Up::Watch("friend".into()),
+        Up::StopWatching,
+        Up::PlayStart(online::SoloPlay {
+            map: map_info(),
+            anti_mash: true,
+        }),
+        Up::PlayEnd,
+        Up::Ping,
+        Up::GlobalChat("hello".into()),
+    ]
+}
+
+fn downs() -> Vec<Down> {
+    vec![
+        Down::Notice("maintenance".into()),
+        Down::WatchStart {
+            player: "friend".into(),
+            play: online::SoloPlay {
+                map: map_info(),
+                anti_mash: true,
+            },
+            t: 100.0,
+            paused: false,
+            inputs: vec![(50.0, 1)],
+        },
+        Down::WatchFrame {
+            t: 200.0,
+            paused: true,
+            inputs: vec![],
+        },
+        Down::WatchEnd {
+            player: "friend".into(),
+        },
+        Down::WatchStopped("offline".into()),
+        Down::Pong,
+        Down::Medals(vec![online::MedalNote::default()]),
+        Down::GlobalChatDeleted {
+            from: "x".into(),
+            at: 5,
+        },
+        Down::Groups(vec![("dev".into(), vec!["DEV".into()])]),
+    ]
+}
+
+fn replies() -> Vec<Reply> {
+    vec![
+        Reply::CodeSent("a@b.c".into()),
+        Reply::EmailLinked("a@b.c".into()),
+        Reply::LovedSets(vec![1, 2]),
+        Reply::LovedMaps(vec![(1, vec!["Oni".into()])]),
+        Reply::SetStatuses(vec![(1, "ranked".into())]),
+        Reply::Counted,
+        Reply::LoggedOut,
+        Reply::Error("nope".into()),
+        Reply::Medals(Box::default()),
+        Reply::Scores(vec![online::OnlineScore::default()]),
+        Reply::Profile(Box::default()),
+        Reply::Score(Box::default()),
+    ]
+}
+
+/// Each message as its JSON line, checked to read back into the same line.
+fn wire<T: serde::Serialize + serde::de::DeserializeOwned>(
+    out: &mut String,
+    title: &str,
+    msgs: &[T],
+) {
+    let _ = writeln!(out, "== {title}");
+    for m in msgs {
+        let line = serde_json::to_string(m).unwrap();
+        let back: T = serde_json::from_str(&line).unwrap_or_else(|e| panic!("{line}: {e}"));
+        assert_eq!(serde_json::to_string(&back).unwrap(), line, "round trip");
+        let _ = writeln!(out, "{line}");
+    }
+}
+
+#[test]
+fn every_message_keeps_its_wire_format() {
+    let mut out = format!(
+        "room protocol {} | online protocol {} | pp version {}\n",
+        net::PROTOCOL,
+        online::PROTOCOL,
+        online::PP_VERSION
+    );
+    wire(&mut out, "room: client -> server", &client_messages());
+    wire(&mut out, "room: server -> client", &server_messages());
+    let envelopes: Vec<Envelope> = requests()
+        .into_iter()
+        .map(|request| Envelope {
+            protocol: online::PROTOCOL,
+            request,
+        })
+        .collect();
+    wire(&mut out, "online: requests", &envelopes);
+    wire(&mut out, "online: replies", &replies());
+    wire(&mut out, "social: up", &ups());
+    wire(&mut out, "social: down", &downs());
+    assert_snapshot("network-wire-format", &out);
+}
+
+#[test]
+fn messages_from_older_servers_still_read() {
+    // A room message from before mapguessr, Defense, passwords and slots.
+    let room: ServerMsg = serde_json::from_str(
+        r#"{"Room":{"players":[{"id":1,"name":"h","host":true,"ready":false,"has_map":true,"status":"Lobby","live":{"score":0,"combo":0,"accuracy":1.0,"miss":0,"progress":0.0},"result":null}],"map":{"hash":1,"artist":"a","title":"t","version":"v"},"in_match":false}}"#,
+    )
+    .expect("an old Room message");
+    let ServerMsg::Room {
+        players,
+        map,
+        mapguessr,
+        locked,
+        slots,
+        ..
+    } = room
+    else {
+        panic!("not a room");
+    };
+    assert_eq!(players.len(), 1);
+    assert!(!mapguessr && !locked);
+    assert_eq!(slots, 16);
+    let map = map.unwrap();
+    assert!((map.rate - 1.0).abs() < 1e-9, "no rate means 1x");
+    assert!(map.mods.is_empty() && map.defense.is_none());
+    // An old lobby's Defense settings (before tag-ins, the shop and the maze).
+    let d: net::Defense = serde_json::from_str(r#"{"lives":3,"bars":4}"#).unwrap();
+    assert_eq!((d.tag_ins, d.shop, d.maze), (2, true, true));
+    // A tower bought by an old build (no `until`).
+    let act: net::DefenseAct =
+        serde_json::from_str(r#"{"Buy":{"item":"Shield","at":1.0}}"#).unwrap();
+    assert!(matches!(act, net::DefenseAct::Buy { until, .. } if until == 0.0));
+    // A message this build doesn't know is skipped by the reader, not a disconnect: it just
+    // doesn't parse as a ServerMsg.
+    assert!(serde_json::from_str::<ServerMsg>(r#"{"FutureThing":{"x":1}}"#).is_err());
+}
+
+#[test]
+fn chat_and_names_are_cleaned_the_same() {
+    let mut out = String::new();
+    for text in [
+        "hello",
+        "  spaced   out  ",
+        "tab\tand\nnewline",
+        "emoji 🎵 ok",
+        "what the fuck",
+        "\u{202e}rtl override",
+    ] {
+        let _ = writeln!(
+            out,
+            "{text:?} -> chat {:?} censor {:?} clean_text {:?}",
+            net::clean_chat(text),
+            net::censor(text),
+            online::clean_text(text, 20)
+        );
+    }
+    for name in [
+        "ok_name",
+        "a",
+        "has space",
+        "x".repeat(40).as_str(),
+        "кириллица",
+        "-dash-",
+    ] {
+        let _ = writeln!(out, "valid_name({name:?}) = {}", online::valid_name(name));
+    }
+    for pw in ["", "short", "long enough password"] {
+        let _ = writeln!(
+            out,
+            "valid_password({pw:?}) = {}",
+            online::valid_password(pw)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "clean_title = {:?}",
+        online::clean_title("  My   Room  ", "owner", false)
+    );
+    let _ = writeln!(out, "map label = {}", map_info().label());
+    assert_snapshot("network-text-cleaning", &out);
+}
+
+#[test]
+fn online_lines_are_framed_as_json_lines() {
+    let mut buf = Vec::new();
+    online::write_line(&mut buf, &Request::ListRooms).unwrap();
+    assert_eq!(buf.last(), Some(&b'\n'));
+    let mut reader = std::io::BufReader::new(&buf[..]);
+    let line = online::read_line(&mut reader).unwrap();
+    let back: Request = serde_json::from_str(&line).unwrap();
+    assert!(matches!(back, Request::ListRooms));
+}
+
+// ---------------------------------------------------------------------------------------------
+// A scripted room.
+
+/// A room server on this machine that records what the client sends and sends what the test
+/// tells it to. It answers pings itself with its clock equal to the client's.
+pub struct FakeRoom {
+    pub addr: String,
+    got: Arc<Mutex<Vec<ClientMsg>>>,
+    out: Arc<Mutex<Option<std::net::TcpStream>>>,
+    last_ping: Arc<Mutex<f64>>,
+}
+
+impl FakeRoom {
+    pub fn new() -> FakeRoom {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let out: Arc<Mutex<Option<std::net::TcpStream>>> = Arc::new(Mutex::new(None));
+        let last_ping = Arc::new(Mutex::new(0.0));
+        let (g, o, p) = (got.clone(), out.clone(), last_ping.clone());
+        std::thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            *o.lock().unwrap() = Some(stream.try_clone().unwrap());
+            let reader = std::io::BufReader::new(stream);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                let Ok(msg) = serde_json::from_str::<ClientMsg>(&line) else {
+                    continue;
+                };
+                if let ClientMsg::Ping { t } = msg {
+                    *p.lock().unwrap() = t;
+                    send_to(&o, &ServerMsg::Pong { t, server: t });
+                    continue;
+                }
+                g.lock().unwrap().push(msg);
+            }
+        });
+        FakeRoom {
+            addr,
+            got,
+            out,
+            last_ping,
+        }
+    }
+
+    pub fn send(&self, msg: &ServerMsg) {
+        let until = Instant::now() + Duration::from_secs(5);
+        while self.out.lock().unwrap().is_none() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        send_to(&self.out, msg);
+    }
+
+    /// Everything the client has sent so far (pings left out).
+    pub fn received(&self) -> Vec<String> {
+        self.got
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|m| serde_json::to_string(m).unwrap())
+            .collect()
+    }
+
+    /// The client's clock (ms since it connected) at its last ping: the room's clock too.
+    pub fn clock(&self) -> f64 {
+        *self.last_ping.lock().unwrap()
+    }
+
+    /// Waits until the client has sent something matching `what`.
+    pub fn wait_for_msg(&self, what: impl Fn(&ClientMsg) -> bool) -> bool {
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            if self.got.lock().unwrap().iter().any(&what) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        false
+    }
+
+    pub fn close(&self) {
+        if let Some(s) = self.out.lock().unwrap().take() {
+            let _ = s.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
+fn send_to(out: &Mutex<Option<std::net::TcpStream>>, msg: &ServerMsg) {
+    if let Some(s) = out.lock().unwrap().as_mut() {
+        let mut line = serde_json::to_string(msg).unwrap();
+        line.push('\n');
+        let _ = s.write_all(line.as_bytes());
+    }
+}
+
+/// Draws frames (the client reads the room in them) until the room got a message matching `what`.
+fn pump(
+    s: &mut State,
+    now: &mut Instant,
+    room: &FakeRoom,
+    what: impl Fn(&ClientMsg) -> bool,
+) -> bool {
+    let until = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < until {
+        if room.got.lock().unwrap().iter().any(&what) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+        *now += Duration::from_millis(16);
+        frame(s, *now);
+    }
+    false
+}
+
+/// The kind of a client message (its JSON key), for logs that don't depend on timing.
+fn kind(json: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    match v {
+        serde_json::Value::String(s) => s,
+        serde_json::Value::Object(m) => m.keys().next().cloned().unwrap_or_default(),
+        _ => "?".into(),
+    }
+}
+
+/// The kinds in order, repeats of one kind in a row shown once. Live and Inputs are left out:
+/// the client batches them on a real-time timer (every 100 ms), so how many go out during a
+/// test depends on how fast the machine runs it.
+fn kinds(msgs: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = Vec::new();
+    for m in msgs {
+        let k = kind(m);
+        if k == "Live" || k == "Inputs" {
+            continue;
+        }
+        if v.last() != Some(&k) {
+            v.push(k);
+        }
+    }
+    v
+}
+
+#[test]
+fn the_client_says_hello_and_keeps_its_clock_with_the_room() {
+    let room = FakeRoom::new();
+    let mut client =
+        net::Client::connect_with(&room.addr, "me", Some(42), Some("pw".into())).unwrap();
+    assert!(room.wait_for_msg(|m| matches!(m, ClientMsg::Hello { .. })));
+    assert_eq!(
+        room.received()[0],
+        serde_json::to_string(&ClientMsg::Hello {
+            name: "me".into(),
+            protocol: net::PROTOCOL,
+            host_token: Some(42),
+            password: Some("pw".into()),
+        })
+        .unwrap()
+    );
+    room.send(&ServerMsg::Welcome { id: 7 });
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut seen = Vec::new();
+    while client.id.is_none() && Instant::now() < until {
+        seen.extend(client.poll());
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(client.id, Some(7), "Welcome gives the client its id");
+    assert!(
+        seen.iter().all(|m| !matches!(m, ServerMsg::Pong { .. })),
+        "pongs stay inside"
+    );
+    // The room's clock is the client's (see FakeRoom): its times map to local instants as sent.
+    let t = room.clock() + 1000.0;
+    let at = client.local_instant(t);
+    let now = client.local_instant(room.clock());
+    let diff = at.duration_since(now).as_secs_f64() * 1000.0;
+    assert!(
+        (diff - 1000.0).abs() < 50.0,
+        "1 s on the room's clock is 1 s here ({diff} ms)"
+    );
+    // The room going away is reported as a message, not a hang.
+    room.close();
+    let until = Instant::now() + Duration::from_secs(5);
+    let mut gone = false;
+    while !gone && Instant::now() < until {
+        gone = client
+            .poll()
+            .iter()
+            .any(|m| matches!(m, ServerMsg::Disconnected(_)));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(gone, "a dropped room reads as Disconnected");
+}
+
+/// A client on song select with `chart` in its library, joined to `room` as player 2.
+fn guest(tag: &str, chart: maps::Chart, room: &FakeRoom) -> (State, Songs, Instant) {
+    let songs = Songs::new(tag, &[chart]);
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    let client = net::Client::connect(&room.addr, "me", None).unwrap();
+    s.mp = Some(multiplayer::joined(client, "regression room"));
+    s.scene = crate::screens::lobby::Lobby::scene();
+    room.send(&ServerMsg::Welcome { id: 2 });
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    (s, songs, now)
+}
+
+fn lobby_map(s: &State) -> net::MapInfo {
+    let e = &s.library[0];
+    net::MapInfo {
+        hash: e.hash(),
+        artist: e.meta.artist.clone(),
+        title: e.meta.title.clone(),
+        version: e.meta.version.clone(),
+        rate: 1.0,
+        from: None,
+        set_id: None,
+        mods: Vec::new(),
+        multiverse: None,
+        shapeshift: None,
+        seed: None,
+        defense: None,
+        stats: None,
+    }
+}
+
+fn room_msg(map: Option<net::MapInfo>, in_match: bool) -> ServerMsg {
+    ServerMsg::Room {
+        players: vec![player(1, "host", true), player(2, "me", false)],
+        map,
+        in_match,
+        mapguessr: false,
+        common: None,
+        team: None,
+        locked: false,
+        slots: 16,
+    }
+}
+
+#[test]
+fn a_guest_plays_a_whole_match() {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("mp-match", maps::basics(), &room);
+    let mut log = String::new();
+    let map = lobby_map(&s);
+    // The lobby picks our map: we say we have it.
+    room.send(&room_msg(Some(map.clone()), false));
+    assert!(
+        pump(&mut s, &mut now, &room, |m| matches!(
+            m,
+            ClientMsg::HasMap(true)
+        )),
+        "HasMap(true)"
+    );
+    wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.map.is_some())
+    });
+    let _ = writeln!(
+        log,
+        "lobby: {} have_map {}",
+        scene_name(&s),
+        s.mp.as_ref().unwrap().have_map
+    );
+    // The match: load, say so, start when the room says.
+    room.send(&ServerMsg::Prepare(map.clone()));
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "MpWait"));
+    let _ = writeln!(log, "prepare: {}", scene_name(&s));
+    assert!(pump(&mut s, &mut now, &room, |m| matches!(
+        m,
+        ClientMsg::Loaded(true)
+    )));
+    room.send(&ServerMsg::Start {
+        at: room.clock() + 200.0,
+    });
+    assert!(
+        wait_for(&mut s, &mut now, |s| scene_name(s) == "MpPlay"),
+        "the match starts"
+    );
+    let _ = writeln!(log, "start: {}", scene_name(&s));
+    // Play it with the keyboard.
+    let beatmap = harness::game(&s).unwrap().map().clone();
+    let presses = maps::presses(&beatmap, Player::Perfect);
+    let keys = s.cfg.keys;
+    let mut next = 0;
+    while harness::game(&s).is_some() {
+        let horizon = now + Duration::from_millis(4);
+        while let Some(&(t, k)) = presses.get(next) {
+            let at = instant_of(&s, now, t);
+            if at > horizon {
+                break;
+            }
+            press(&mut s, keys[k as usize], at.max(now));
+            next += 1;
+        }
+        now = horizon;
+        frame(&mut s, now);
+    }
+    let _ = writeln!(log, "after the map: {}", scene_name(&s));
+    assert!(
+        pump(&mut s, &mut now, &room, |m| matches!(
+            m,
+            ClientMsg::Finished(_)
+        )),
+        "Finished is sent"
+    );
+    let finished = room
+        .received()
+        .into_iter()
+        .find(|m| kind(m) == "Finished")
+        .unwrap();
+    let Ok(ClientMsg::Finished(f)) = serde_json::from_str(&finished) else {
+        panic!("not a Finished message: {finished}");
+    };
+    // Rounded: press instants turn into map times with sub-nanosecond noise.
+    let _ = writeln!(
+        log,
+        "finished: score {} acc {} max combo {} great {} ok {} miss {} ur {} quit {}",
+        f.score,
+        super::snapshot::num(f.accuracy, 4),
+        f.max_combo,
+        f.great,
+        f.ok,
+        f.miss,
+        super::snapshot::num(f.ur, 2),
+        f.quit
+    );
+    // The room's results.
+    room.send(&ServerMsg::Results(vec![
+        player(1, "host", true),
+        player(2, "me", false),
+    ]));
+    wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.results.is_some())
+    });
+    let _ = writeln!(log, "results: {}", scene_name(&s));
+    let _ = writeln!(log, "client sent: {}", kinds(&room.received()).join(" "));
+    assert_snapshot("network-guest-match", &log);
+}
+
+#[test]
+fn the_lobby_follows_the_room() {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("mp-lobby", maps::basics(), &room);
+    let mut log = String::new();
+    // A map we don't have.
+    let mut other = lobby_map(&s);
+    other.hash ^= 1;
+    room.send(&room_msg(Some(other.clone()), false));
+    assert!(pump(&mut s, &mut now, &room, |m| matches!(
+        m,
+        ClientMsg::HasMap(false)
+    )));
+    wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.map.is_some())
+    });
+    let _ = writeln!(
+        log,
+        "unknown map: have_map {}",
+        s.mp.as_ref().unwrap().have_map
+    );
+    // Preparing a match on it: we can't load it.
+    room.send(&ServerMsg::Prepare(other));
+    assert!(pump(&mut s, &mut now, &room, |m| matches!(
+        m,
+        ClientMsg::Loaded(false)
+    )));
+    let _ = writeln!(log, "prepare without the map: {}", scene_name(&s));
+    // Chat, filtered.
+    room.send(&ServerMsg::Chat {
+        from: "host".into(),
+        text: "what the fuck".into(),
+    });
+    wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| !m.chat.is_empty())
+    });
+    let mp = s.mp.as_ref().unwrap();
+    let _ = writeln!(log, "chat: {:?} unread {}", mp.chat, mp.chat_unread);
+    // Skip votes.
+    room.send(&ServerMsg::SkipVotes { votes: 1, of: 2 });
+    wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.skip_votes.is_some())
+    });
+    let _ = writeln!(log, "skip votes: {:?}", s.mp.as_ref().unwrap().skip_votes);
+    // Typing in the lobby chat sends a line.
+    press(&mut s, KeyCode::KeyT, now);
+    type_text(&mut s, "hi all", now);
+    press(&mut s, KeyCode::Enter, now);
+    let sent = pump(
+        &mut s,
+        &mut now,
+        &room,
+        |m| matches!(m, ClientMsg::Chat(t) if t == "hi all"),
+    );
+    let _ = writeln!(log, "typed chat sent: {sent}");
+    // Turned away: back to the multiplayer menu with the reason.
+    room.send(&ServerMsg::Rejected("the room is full".into()));
+    wait_for(&mut s, &mut now, |s| s.mp.is_none());
+    let _ = writeln!(log, "rejected: {} status {:?}", scene_name(&s), s.mp_status);
+    let _ = writeln!(log, "client sent: {}", kinds(&room.received()).join(" "));
+    assert_snapshot("network-lobby", &log);
+}
+
+#[test]
+fn a_dropped_connection_mid_match_goes_back_to_the_menu() {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("mp-drop", maps::basics(), &room);
+    let map = lobby_map(&s);
+    room.send(&room_msg(Some(map.clone()), false));
+    room.send(&ServerMsg::Prepare(map));
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "MpWait"));
+    room.close();
+    assert!(
+        wait_for(&mut s, &mut now, |s| scene_name(s) == "MpMenu"),
+        "a lost room ends the match: {}",
+        scene_name(&s)
+    );
+    assert!(s.mp.is_none());
+    assert!(!s.mp_status.is_empty(), "and says why");
+}

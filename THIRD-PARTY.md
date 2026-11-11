@@ -20,13 +20,16 @@ taiko.rs is an independent project. It is not affiliated with, or endorsed by, p
 
 - The built-in hitsounds (`assets/hitsounds/`: don, kat, finisher, combo break) are synthesized
   from scratch by `assets/hitsounds/synth.py`; a skin's own hitsounds replace them.
-- The 5x7 LCD font is drawn in `src/font.rs`; the website's font (`server/site/taiko5x7.woff2`)
-  is built from it by `server/site/build_font.py`.
+- The 5x7 LCD font is drawn in `crates/taiko-logic/src/font.rs`; the website's 5x7 font
+  is built from it.
 - Japanese text is drawn in [Misaki Gothic 2nd](https://littlelimit.net/misaki.htm) (美咲ゴシック第2),
   Copyright (C) 2002-2021 Num Kadoma, converted to `assets/font/misaki.bin` by
   `assets/font/misaki.py`. Its license: "These fonts are free softwares. Unlimited permission is
   granted to use, copy, and distribute it, with or without modification, either commercially
   and noncommercially. THESE FONTS ARE PROVIDED "AS IS" WITHOUT WARRANTY."
+- Simplified Chinese UI glyphs are baked from [Fusion Pixel Font 12px](https://github.com/TakWolf/fusion-pixel-font/releases/tag/2026.10.25)
+  into `assets/font/chinese.bin` by `assets/font/chinese.py`. Its copyright and SIL Open Font
+  License 1.1 are in `assets/font/FusionPixel-OFL.txt`.
 
 ## Rust libraries
 

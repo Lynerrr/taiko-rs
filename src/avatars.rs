@@ -315,6 +315,7 @@ fn prune(dir: &Path, now: SystemTime) {
 
 /// The picture at `url` as a cell (None: the player has none).
 fn fetch(url: &str) -> Result<Option<Vec<u8>>, String> {
+    crate::offline::url(url)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .build()

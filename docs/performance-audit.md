@@ -17,6 +17,12 @@ a hitsound command reach the audio thread before the mutex is released.
 cargo test --profile perf-audit --locked --lib perf_audit:: -- --ignored --nocapture --test-threads=1
 ```
 
+Pull requests run it on their base and head and fail on a slowdown: see the perf gate in
+[ci.md](ci.md). Cases added after this report: `dense_playfield` (streams of 33 and 67 notes a
+second, with no mods, HD, HR+DT and MV), `whole_frames` (`State::build_frame` on song select,
+settings, multiplayer, the main menu, the friends overlay and a dense play) and
+`drum_press_in_play` (a drum key through `State::key`, judged on its note).
+
 The [harness](../src/perf_audit.rs) calls the real client functions, without a window or audio
 device. It generates its own maps, library entries, and PNGs in temporary directories, and
 does not benchmark the player's music library. `perf-audit` enables optimized application
@@ -101,7 +107,7 @@ version/coalesce background queries for large libraries while keeping the old vi
 
 ### A4: one global minimum velocity expands every field's scan
 
-[`Game::draw_field`](../src/game.rs#L2707) derives lookahead from the minimum velocity anywhere
+[`Game::draw_field`](../src/game/field.rs#L382) derives lookahead from the minimum velocity anywhere
 in the map. One note at velocity `1e-5` near the end of a 10,000-note, 100 ms-spaced map widens
 the scan of mostly ordinary offscreen notes. Plain drawing grows from **1.94 to 201.75 us**,
 while emitted shape count changes only from **59 to 61**. Multiverse grows from **16.80 to
@@ -144,7 +150,7 @@ possible (rate, mods, seed, Half rule and scroll speed all matter).
 
 ### A7: swapchain reconfiguration may wait for the GPU while input is locked out
 
-At the start of [`render_loop`](../src/lib.rs#L10163), the `State` guard remains alive during
+At the start of [`render_loop`](../src/app/run_loop.rs#L121), the `State` guard remains alive during
 `renderer.resize`, `set_surface` and `set_present`. They reach `Surface::configure`, whose
 [wgpu 30 contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Surface.html#method.configure) says
 reconfiguration waits for GPU idle. This is a demonstrated blocking dependency; its duration

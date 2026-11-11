@@ -151,14 +151,7 @@ impl Pictures {
     }
 }
 
-/// A file name a map may give for a picture: inside its folder, nothing climbing out of it.
-pub fn safe_name(name: &str) -> bool {
-    let p = Path::new(name);
-    !name.is_empty()
-        && !p.is_absolute()
-        && p.components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)))
-}
+pub use crate::tko::clips::safe_name;
 
 /// The picture `name` in `dir` (matched ignoring case, as maps from Windows expect).
 fn read(dir: &Path, name: &str) -> Result<(Vec<u8>, f32), String> {

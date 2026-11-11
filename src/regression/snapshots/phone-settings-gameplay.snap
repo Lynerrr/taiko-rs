@@ -1,0 +1,49 @@
+text  110,12   SETTINGS
+text   17,17   < BACK
+text  739,17   Search settings
+text   14,77   LIBRARY
+text  964,77   <
+text 1023,77   >
+text  236,80   Scroll speed
+text  887,80   1.00x
+text   14,133  GAMEPLAY
+text  964,139  <
+text 1023,139  >
+text  236,142  Speed (rate)
+text  887,142  1.00x
+text   14,189  VIEW
+text  236,204  Rate keeps pitch
+text   16,245  INPUT
+text  964,263  <
+text 1023,263  >
+text  236,266  Resume delay
+text  877,266  1.00 s
+text   14,301  OFFSET
+text  236,328  Restart on SD/PF fail
+text   14,357  AUDIO
+text  236,390  Hide GREAT splash
+text   14,413  VIDEO
+text  236,436  How fast notes travel. Shortcut: F3 / F4.
+text   14,469  SKIN
+hit     0,0      96x46   Key(Escape)
+hit   727,0     340x46   SettingsSearch
+hit     0,58    212x50   SettingsSection(0)
+hit     0,114   212x50   SettingsSection(1)
+hit     0,170   212x50   SettingsSection(2)
+hit     0,226   212x50   SettingsSection(3)
+hit     0,282   212x50   SettingsSection(4)
+hit     0,338   212x50   SettingsSection(5)
+hit     0,394   212x50   SettingsSection(6)
+hit     0,450   212x30   SettingsSection(7)
+hit   222,58    845x56   SettingRow(7)
+hit   947,64     50x44   SettingStep(7, -1)
+hit  1003,64     50x44   SettingStep(7, 1)
+hit   222,120   845x56   SettingRow(8)
+hit   947,126    50x44   SettingStep(8, -1)
+hit  1003,126    50x44   SettingStep(8, 1)
+hit   222,182   845x56   SettingRow(9)
+hit   222,244   845x56   SettingRow(10)
+hit   947,250    50x44   SettingStep(10, -1)
+hit  1003,250    50x44   SettingStep(10, 1)
+hit   222,306   845x56   SettingRow(11)
+hit   222,368   845x54   SettingRow(12)

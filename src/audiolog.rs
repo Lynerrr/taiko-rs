@@ -64,6 +64,12 @@ pub fn start() -> bool {
     true
 }
 
+/// Where plays write their line at their end (`Settings::log`): the log, once it's open.
+pub fn sink() -> Option<fn(&str)> {
+    let open = LOG.lock().is_ok_and(|log| log.is_some());
+    open.then_some(line as fn(&str))
+}
+
 /// A line, stamped with the seconds since the game started. Nothing if the log isn't open.
 pub fn line(text: &str) {
     if let Ok(mut log) = LOG.lock()

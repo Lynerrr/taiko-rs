@@ -1,0 +1,96 @@
+Ctrl+L with no collections yet:
+  list "Collections", cursor on 0
+    All songs  [shown]
+    + New collection
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+Collect from the song menu:
+  list "Put the difficulty in", cursor on 0
+    + New collection
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
++ New collection:
+  naming "" for New([0])
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+named and saved:
+  Local warm up: basics
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: put in warm up, a new collection
+a second difficulty put in it with a click:
+  Local warm up: basics, big-notes
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: put in warm up
+put in again: taken out:
+  Local warm up: basics
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: taken out of warm up
+a name taken already:
+  naming "WARM UP" for New([])
+  Local warm up: basics
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: there's a collection called WARM UP already
+an empty one made:
+  Local warm up: basics
+  Local dans:
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: collection dans made
+warm up shown:
+  Local warm up: basics
+  Local dans:
+  showing Some("warm up"): basics
+renamed with F2 while shown:
+  list "Collections", cursor on 1
+    All songs
+    warm ups  (1)  [shown]  ...
+    dans  (0)  ...
+    + New collection
+  Local warm ups: basics
+  Local dans:
+  showing Some("warm ups"): basics
+dans moved up with Ctrl+Up:
+  list "Collections", cursor on 1
+    All songs
+    dans  (0)  ...
+    warm ups  (1)  [shown]  ...
+    + New collection
+  Local dans:
+  Local warm ups: basics
+  showing Some("warm ups"): basics
+warm ups' ... clicked:
+  list "warm ups", cursor on 0
+    Rename
+    Move up
+    Move down
+    Delete
+  Local dans:
+  Local warm ups: basics
+  showing Some("warm ups"): basics
+Delete picked:
+  list "Delete warm ups?", cursor on 1
+    Delete it (1 map; the map stays)
+    Keep it
+  Local dans:
+  Local warm ups: basics
+  showing Some("warm ups"): basics
+Enter keeps it:
+  list "Collections", cursor on 2
+    All songs
+    dans  (0)  ...
+    warm ups  (1)  [shown]  ...
+    + New collection
+  Local dans:
+  Local warm ups: basics
+  showing Some("warm ups"): basics
+Del, then Delete it:
+  list "Collections", cursor on 1
+    All songs  [shown]
+    dans  (0)  ...
+    + New collection
+  Local dans:
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai
+  toast: collection warm ups deleted (its maps stay)
+after:
+  list "Collections", cursor on 1
+    All songs  [shown]
+    dans  (0)  ...
+    + New collection
+  Local dans:
+  showing None: basics, big-notes, high-od, low-od, rolls-and-swells, stream, sv-and-kiai

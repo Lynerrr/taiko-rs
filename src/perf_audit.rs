@@ -2,6 +2,7 @@
 //! wall-clock thresholds; correctness assertions check the compared offset estimates.
 
 use super::*;
+use crate::app::run_loop::lock;
 use std::hint::black_box;
 
 fn report(name: &str, mut samples: Vec<f64>) {
@@ -46,8 +47,8 @@ fn map(notes: usize, slow: bool) -> beatmap::Beatmap {
     map
 }
 
-fn game(notes: usize, slow: bool, mods: &str) -> Game {
-    Game::with_mods(
+fn game(notes: usize, slow: bool, mods: &str) -> Play {
+    Play::new(Game::with_mods(
         map(notes, slow),
         Arc::new(audio::Track {
             samples: Vec::new(),
@@ -56,7 +57,7 @@ fn game(notes: usize, slow: bool, mods: &str) -> Game {
         }),
         None,
         Mods::parse(mods),
-    )
+    ))
 }
 
 #[test]
@@ -64,14 +65,15 @@ fn game(notes: usize, slow: bool, mods: &str) -> Game {
 fn offset_hint_history() {
     for n in [200usize, 10_000, 100_000] {
         let mut full = game(64, false, "");
-        full.stats.errors = (0..n).map(|i| 8.0 + (i % 41) as f64 - 20.0).collect();
-        full.stats.error_offsets = (0..n).map(|i| (i % 5) as f64).collect();
+        full.stats_mut().errors = (0..n).map(|i| 8.0 + (i % 41) as f64 - 20.0).collect();
+        full.stats_mut().error_offsets = (0..n).map(|i| (i % 5) as f64).collect();
         let mut tail = game(64, false, "");
-        tail.stats.errors = full.stats.errors[n.saturating_sub(200)..].to_vec();
-        tail.stats.error_offsets = full.stats.error_offsets[n.saturating_sub(200)..].to_vec();
+        tail.stats_mut().errors = full.stats().errors[n.saturating_sub(200)..].to_vec();
+        tail.stats_mut().error_offsets =
+            full.stats().error_offsets[n.saturating_sub(200)..].to_vec();
         for scaled in [false, true] {
-            full.ur_scaled_hint = scaled;
-            tail.ur_scaled_hint = scaled;
+            full.set_ur_scaled_hint(scaled);
+            tail.set_ur_scaled_hint(scaled);
             let a = full.offset_suggestion(3.0).unwrap();
             let b = tail.offset_suggestion(3.0).unwrap();
             assert_eq!(
@@ -105,11 +107,14 @@ fn offset_hint_history() {
 #[test]
 #[ignore = "opt-in performance audit; run with the perf-audit profile"]
 fn rare_slow_note() {
-    render::set_animations(false);
+    render::set_frame_theme(Some(render::Theme {
+        animations: false,
+        ..render::Theme::default()
+    }));
     for n in [2_000, 10_000] {
         for (slow, mods) in [(false, ""), (true, ""), (false, "MV"), (true, "MV")] {
             let mut game = game(n, slow, mods);
-            game.time = 3000.0;
+            game.put_at(3000.0);
             let mut canvas = Canvas::default();
             measure(&format!("draw/{n}/slow={slow}/mods={mods}"), 10, || {
                 canvas.clear(853.3);
@@ -144,7 +149,10 @@ fn library(size: usize) -> Vec<Entry> {
 #[test]
 #[ignore = "opt-in performance audit; run with the perf-audit profile"]
 fn library_draw_and_filter() {
-    render::set_animations(false);
+    render::set_frame_theme(Some(render::Theme {
+        animations: false,
+        ..render::Theme::default()
+    }));
     for size in [100, 10_000, 50_000] {
         let library = library(size);
         let mut select = Select::new(&library);
@@ -304,7 +312,7 @@ fn game_preparation_and_expiry() {
         for _ in 0..21 {
             let map = template.clone();
             let at = Instant::now();
-            let game = Game::with_mods(map, track.clone(), None, Mods::NONE);
+            let game = Play::new(Game::with_mods(map, track.clone(), None, Mods::NONE));
             samples.push(at.elapsed().as_secs_f64() * 1e6);
             black_box(game);
         }
@@ -324,10 +332,10 @@ fn game_preparation_and_expiry() {
                     },
                 );
             }
-            let mut game = Game::with_mods(map, track.clone(), None, Mods::parse("NF"));
+            let mut game = Play::new(Game::with_mods(map, track.clone(), None, Mods::parse("NF")));
             let time = 2000.0 + n as f64 * 50.0;
             game.set_time(time);
-            let missed = game.stats.miss;
+            let missed = game.stats().miss;
             measure(
                 &format!("game/expiry/{n}/long-roll={long_roll}"),
                 100,
@@ -335,7 +343,7 @@ fn game_preparation_and_expiry() {
                     game.set_time(black_box(time));
                 },
             );
-            assert_eq!(game.stats.miss, missed);
+            assert_eq!(game.stats().miss, missed);
         }
     }
 }
@@ -347,7 +355,7 @@ fn lazy_map_hash() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("map.osu");
     let mut state = layout_tests::state();
-    state.scene = Scene::Select;
+    state.scene = SongSelect::scene();
     state.map_offsets.clear();
     state.library = vec![Entry::new(path.clone(), Default::default())];
     state.select = Select::new(&state.library);
@@ -384,4 +392,170 @@ fn lazy_map_hash() {
         });
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A stream: `notes` notes `spacing` ms apart, dons and kats, every 8th one big.
+fn stream(notes: usize, spacing: f64) -> beatmap::Beatmap {
+    let mut m = map(notes, false);
+    for (i, n) in m.notes.iter_mut().enumerate() {
+        n.time = 2000.0 + i as f64 * spacing;
+        n.end_time = n.time;
+        n.kind = if i % 3 == 1 {
+            beatmap::Kind::Kat
+        } else {
+            beatmap::Kind::Don
+        };
+        n.big = i % 8 == 7;
+    }
+    m
+}
+
+#[test]
+#[ignore = "opt-in performance audit; run with the perf-audit profile"]
+fn dense_playfield() {
+    // About 33 and 67 notes a second: far more on screen than `rare_slow_note`'s 10.
+    render::set_frame_theme(Some(render::Theme {
+        animations: false,
+        ..render::Theme::default()
+    }));
+    let track = Arc::new(audio::Track {
+        samples: Vec::new(),
+        rate: 1.0,
+        stream: None,
+    });
+    for spacing in [30.0, 15.0] {
+        for mods in ["", "HD", "HR,DT", "MV"] {
+            let mut game = Play::new(Game::with_mods(
+                stream(4_000, spacing),
+                track.clone(),
+                None,
+                Mods::parse(mods),
+            ));
+            game.put_at(2000.0 + 1000.0 * spacing);
+            let mut canvas = Canvas::default();
+            measure(&format!("draw/dense/{spacing}ms/mods={mods}"), 10, || {
+                canvas.clear(853.3);
+                game.draw_playfield(&mut canvas, 1.0);
+                black_box(canvas.shapes.len());
+            });
+            println!(
+                "AUDIT shapes/dense/{spacing}ms/mods={mods}: {}",
+                canvas.shapes.len()
+            );
+        }
+    }
+}
+
+/// Whole frames (`State::build_frame`, the work done under the state lock every frame) on the
+/// screens the refactor reshapes, each frame 4 ms after the last.
+fn frames(name: &str, s: &mut State, now: &mut Instant) {
+    let mut canvas = Canvas::default();
+    measure(&format!("frame/{name}"), 5, || {
+        *now += Duration::from_millis(4);
+        render::set_frame_time(Some(*now));
+        canvas.clear(853.3);
+        black_box(s.build_frame(&mut canvas, *now, 853.3));
+        black_box(canvas.shapes.len());
+    });
+    render::set_frame_time(None);
+}
+
+/// A chart of `notes` notes `spacing` ms apart, for a client to load and play.
+fn stream_chart(notes: i64, spacing: i64) -> regression::maps::Chart {
+    use regression::maps::{Chart, Obj};
+    Chart {
+        name: "perf-stream",
+        od: 8.0,
+        hp: 5.0,
+        slider_multiplier: 1.4,
+        tick_rate: 1.0,
+        timing: vec!["1000,333.333,4,1,0,100,1,0".into()],
+        objects: (0..notes)
+            .map(|k| {
+                let t = 1000 + k * spacing;
+                match k % 8 {
+                    7 => Obj::BigDon(t),
+                    1 | 4 => Obj::Kat(t),
+                    _ => Obj::Don(t),
+                }
+            })
+            .collect(),
+    }
+}
+
+#[test]
+#[ignore = "opt-in performance audit; run with the perf-audit profile"]
+fn whole_frames() {
+    use regression::harness::{self, *};
+    let songs = Songs::new("perf-frames", &[stream_chart(4_000, 30)]);
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    frames("select", &mut s, &mut now);
+    s.open_settings();
+    frames("settings", &mut s, &mut now);
+    s.close_settings();
+    s.open_multiplayer();
+    frames("multiplayer-menu", &mut s, &mut now);
+    s.scene = SongSelect::scene();
+    s.cfg.main_menu = true;
+    s.main_menu = Some(menu::Menu::new());
+    frames("main-menu", &mut s, &mut now);
+    s.main_menu = None;
+    s.cfg.main_menu = false;
+    s.scene = SongSelect::scene();
+    s.open_social();
+    frames("select+friends-overlay", &mut s, &mut now);
+    s.social.close();
+    // No Fail: nothing is hit here, and a failed play would leave the play screen.
+    s.cfg.mods = Mods::parse("NF");
+    press(&mut s, KeyCode::Enter, now);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    // Into the stream, then a frame every 4 ms (the notes keep coming, nothing is hit).
+    let into = instant_of(&s, now, 2_000.0);
+    while now < into {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    frames("play/dense-30ms", &mut s, &mut now);
+    assert_eq!(scene_name(&s), "Play", "measured in play, not after it");
+}
+
+#[test]
+#[ignore = "opt-in performance audit; run with the perf-audit profile"]
+fn drum_press_in_play() {
+    // A drum key in play through the whole keyboard path (`State::key`: bindings, judging, the
+    // hitsound request), each press right on its note; headless: no sound card, so no mixer
+    // time is included.
+    use regression::harness::{self, *};
+    use regression::maps::{self, Player};
+    let songs = Songs::new("perf-press", &[stream_chart(4_000, 30)]);
+    let mut s = state_with(harness::config(), songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    press(&mut s, KeyCode::Enter, now);
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Play"));
+    let keys = s.cfg.keys;
+    let map = harness::game(&s).unwrap().map().clone();
+    let presses = maps::presses(&map, Player::Perfect);
+    let mut samples = Vec::new();
+    for &(t, k) in presses.iter().take(3 + 201) {
+        let at = instant_of(&s, now, t).max(now);
+        while now + Duration::from_millis(4) <= at {
+            now += Duration::from_millis(4);
+            frame(&mut s, now);
+        }
+        let started = Instant::now();
+        s.key(keys[k as usize], false, None, at, None);
+        samples.push(started.elapsed().as_secs_f64() * 1e6);
+    }
+    let stats = &harness::game(&s).expect("still playing").stats();
+    assert!(
+        stats.great + stats.ok >= 170,
+        "the presses were judged as hits: {} great, {} ok, {} miss",
+        stats.great,
+        stats.ok,
+        stats.miss
+    );
+    report("input/drum-press", samples.split_off(3));
 }

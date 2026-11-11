@@ -12,9 +12,10 @@ use winit::keyboard::KeyCode;
 use winit::window::Window;
 
 use crate::config::RATE_RANGE;
-use crate::render::{Canvas, Hit, HitBox, VIRTUAL_HEIGHT, accent, approach, rgba};
+use crate::hit::{Canvas, Hit, HitBox};
+use crate::render::{VIRTUAL_HEIGHT, accent, approach, rgba};
 use crate::settings::{self, Control, ITEMS, Kind, SECTIONS};
-use crate::{Scene, State, mods, stars};
+use crate::{State, mods};
 
 /// The song list's width on a `w` wide screen.
 pub fn select_list_w(w: f32) -> f32 {
@@ -52,28 +53,9 @@ pub fn setup_button(bottom: f32) -> (f32, f32, f32, f32) {
 
 /// Text written for a keyboard, said for a finger.
 fn for_touch(s: &str) -> String {
-    use crate::lang::Lang;
-    // The text is already in the player's language: each language says Enter its own way.
-    let (enter_to, enter, wheel) = match crate::lang::current() {
-        Lang::En => (
-            ["Enter to ", "Tap to "],
-            ["Enter: ", "Tap: "],
-            ", the wheel",
-        ),
-        Lang::Ja => (
-            ["Enterで", "タップで"],
-            ["Enter: ", "タップ: "],
-            "、ホイール",
-        ),
-        Lang::Ru => (
-            ["Enter — ", "Нажатие — "],
-            ["Enter: ", "Нажатие: "],
-            ", колесо",
-        ),
-    };
-    s.replace(enter_to[0], enter_to[1])
-        .replace(enter[0], enter[1])
-        .replace(wheel, "")
+    s.replace("Enter to ", "Tap to ")
+        .replace("Enter: ", "Tap: ")
+        .replace(", the wheel", "")
 }
 
 /// `hint` naming keys: nothing on a phone, else as much as fits.
@@ -111,7 +93,47 @@ pub fn hit_near(hits: &[HitBox], x: f32, y: f32) -> Option<Hit> {
 
 /// Whether this build has the phone's interface.
 pub fn active() -> bool {
-    cfg!(target_os = "android")
+    cfg!(target_os = "android") || phone_for_tests::on()
+}
+
+/// Tests draw the phone's interface on other systems too: switched on per thread, so tests
+/// running beside them keep the monitor's. Not compiled into the game.
+#[cfg(test)]
+pub mod phone_for_tests {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn set(on: bool) {
+        ON.with(|o| o.set(on));
+    }
+
+    pub fn on() -> bool {
+        ON.with(Cell::get)
+    }
+
+    /// The monitor's interface is untouched beside it: the switch is the test thread's own.
+    #[test]
+    fn the_phone_switch_is_this_thread_s_own() {
+        set(true);
+        assert!(super::active());
+        std::thread::spawn(|| {
+            assert!(!super::active(), "another thread got the phone's interface")
+        })
+        .join()
+        .unwrap();
+        set(false);
+        assert!(!super::active());
+    }
+}
+
+#[cfg(not(test))]
+mod phone_for_tests {
+    pub const fn on() -> bool {
+        false
+    }
 }
 
 /// Text sizes. At half resolution these are whole font pixels: 2 and 3 of them.
@@ -397,23 +419,7 @@ fn panel(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32) {
 
 /// `text` broken into lines `w` wide, `lines` at most.
 pub(crate) fn wrap(size: f32, w: f32, text: &str, lines: usize) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        let next = if line.is_empty() {
-            word.to_string()
-        } else {
-            format!("{line} {word}")
-        };
-        if Canvas::text_width(size, &next) <= w || line.is_empty() {
-            line = next;
-        } else {
-            out.push(std::mem::replace(&mut line, word.to_string()));
-        }
-    }
-    if !line.is_empty() {
-        out.push(line);
-    }
+    let mut out = Canvas::wrap_words(size, w, text);
     if out.len() > lines {
         let rest = out[lines - 1..].join(" ");
         out.truncate(lines - 1);
@@ -445,21 +451,8 @@ impl State {
                 || self.medals.is_some()
                 || self.player.is_some()
                 || self.profile.is_some()
-                || matches!(
-                    self.scene,
-                    Scene::Settings { .. }
-                        | Scene::Download
-                        | Scene::Results { .. }
-                        | Scene::MpMenu
-                        | Scene::Lobby
-                        | Scene::MpResults
-                        | Scene::HudEdit { .. }
-                        | Scene::LayoutEdit { .. }
-                        | Scene::Calibrate { .. }
-                        | Scene::CalibrateDone { .. }
-                        | Scene::Preview { .. }
-                )
-                || (matches!(self.scene, Scene::Select) && !self.on_menu()))
+                || self.scene.screen().is_some_and(|s| s.top_bar())
+                || (self.scene.is_select() && !self.on_menu()))
     }
 
     /// Something made for a wheel is up: a finger dragging over it turns the wheel.
@@ -472,10 +465,7 @@ impl State {
                 .player
                 .as_ref()
                 .is_some_and(|p| !crate::player::tall() || p.list_open)
-            || matches!(
-                self.scene,
-                Scene::MpMenu | Scene::Lobby | Scene::MpResults | Scene::Results { .. }
-            )
+            || self.scene.screen().is_some_and(|s| s.finger_scrolls())
     }
 
     /// A finger on one of the phone's lists. True if it's taken: a tap is only known when the
@@ -502,26 +492,20 @@ impl State {
                 }
                 // Screens made of things to drag, and bars and timelines, are pressed at once
                 // and dragged, as with a mouse.
-                let dragged = matches!(
-                    self.scene,
-                    Scene::LayoutEdit { .. }
-                        | Scene::HudEdit { .. }
-                        | Scene::Editor(_)
-                        | Scene::EditorHome(_)
-                        | Scene::Preview { .. }
-                        | Scene::VideoEdit(_)
-                ) || matches!(
-                    self.hit_at(vx, vy),
-                    Some(
-                        Hit::SettingLevel(_)
-                            | Hit::MusicBar
-                            | Hit::PlayerVolume
-                            | Hit::SongScrollbar
+                let dragged = self.scene.screen().is_some_and(|s| s.drags())
+                    || matches!(
+                        self.hit_at(vx, vy),
+                        Some(
+                            Hit::SettingLevel(_)
+                                | Hit::MusicBar
+                                | Hit::PlayerVolume
+                                | Hit::SongScrollbar
+                        )
                     )
-                ) || !self.mob.rate_open
-                    && self.preview.graph_rect().is_some_and(|[x, y, w, h]| {
-                        vx >= x && vx <= x + w && vy >= y && vy <= y + h
-                    });
+                    || !self.mob.rate_open
+                        && self.preview.graph_rect().is_some_and(|[x, y, w, h]| {
+                            vx >= x && vx <= x + w && vy >= y && vy <= y + h
+                        });
                 if dragged {
                     return false;
                 }
@@ -624,9 +608,9 @@ impl State {
     pub(crate) fn draw_mobile_select(&mut self, c: &mut Canvas) {
         let w = c.width;
         let back = if self.select.to_menu {
-            tr!("< MENU")
+            "< MENU"
         } else {
-            tr!("< BACK")
+            "< BACK"
         };
         let x = back_button(c, back, Hit::ToMenu);
         let list_w = select_list_w(w);
@@ -661,8 +645,7 @@ impl State {
         } else if self.pick_to_edit {
             tr!("Pick a map to edit").to_string()
         } else {
-            let maps = self.select.rows().len();
-            tr!("{groups} songs, {maps} maps"; groups, maps)
+            format!("{groups} songs, {} maps", self.select.rows().len())
         };
         let room = w - list_w - 20.0;
         let summary = Canvas::fit(SMALL, room, &summary);
@@ -683,30 +666,30 @@ impl State {
 
         let mods = self.select.mods_label.clone();
         let label = if mods.is_empty() {
-            tr!("Mods").to_string()
+            "Mods".to_string()
         } else {
             tr!("Mods: {mods}"; mods)
         };
         let play = if self.picking_lobby_map {
-            tr!("Pick")
+            "Pick"
         } else if self.pick_to_edit {
-            tr!("Edit")
+            "Edit"
         } else {
-            tr!("Play")
+            "Play"
         };
         let by = SELECT_BOTTOM + 8.0;
         let bh = VIRTUAL_HEIGHT - by;
         // The other screens are a step back, on the main menu.
         let page = if self.mob.board_open {
-            tr!("< Preview")
+            "< Preview"
         } else {
-            tr!("Leaderboard >")
+            "Leaderboard >"
         };
         let speed = format!("{:.2}x", self.cfg.rate);
         let changed = (self.cfg.rate - 1.0).abs() > 1e-6;
         let buttons: [(&str, Hit, bool, f32); 5] = [
             (&label, Hit::ModsButton, !mods.is_empty(), 1.0),
-            (tr!("Random"), Hit::Key(KeyCode::F2), false, 1.0),
+            ("Random", Hit::Key(KeyCode::F2), false, 1.0),
             (&speed, Hit::RateOpen, changed, 0.8),
             (page, Hit::BoardPage, self.mob.board_open, 1.3),
             (play, Hit::Key(KeyCode::Enter), true, 1.3),
@@ -764,8 +747,7 @@ impl State {
 
     /// The speed panel, over song select or the player: steps, presets and the pitch.
     pub(crate) fn draw_mobile_rate(&mut self, c: &mut Canvas) {
-        let shown =
-            matches!(self.scene, Scene::Select) && !(self.on_menu() && self.player.is_none());
+        let shown = self.scene.is_select() && !(self.on_menu() && self.player.is_none());
         if !self.mob.rate_open || !shown || self.mod_select.is_some() {
             self.mob.rate_open = false;
             return;
@@ -807,7 +789,7 @@ impl State {
             y,
             done_w,
             row,
-            tr!("Done"),
+            "Done",
             text,
             Hit::RateClose,
             true,
@@ -948,23 +930,14 @@ impl State {
         let tab_w = 104.0;
         let (ty, inner) = (y + 8.0, w - 16.0);
         let local = Hit::BoardTab(false);
-        c.button(
-            x + 8.0,
-            ty,
-            tab_w,
-            TAB_H,
-            tr!("Local"),
-            SMALL,
-            local,
-            !online,
-        );
+        c.button(x + 8.0, ty, tab_w, TAB_H, "Local", SMALL, local, !online);
         let net = Hit::BoardTab(true);
         c.button(
             x + 16.0 + tab_w,
             ty,
             tab_w,
             TAB_H,
-            tr!("Online"),
+            "Online",
             SMALL,
             net,
             online,
@@ -976,7 +949,7 @@ impl State {
             ty,
             site_w,
             TAB_H,
-            tr!("Website"),
+            "Website",
             SMALL,
             site,
             false,
@@ -1018,11 +991,11 @@ impl State {
             let board = self.online_board(hash, relax).cloned();
             let rows = match board {
                 None => {
-                    note = Some(tr!("loading...").to_string());
+                    note = Some("loading...".to_string());
                     Vec::new()
                 }
                 Some(Err(e)) => {
-                    note = Some(tr!("can't reach the server: {e}"; e));
+                    note = Some(format!("can't reach the server: {e}"));
                     Vec::new()
                 }
                 Some(Ok(rows)) => rows,
@@ -1050,7 +1023,7 @@ impl State {
         } else {
             let rows = crate::scores::top(&self.scores, hash, usize::MAX, relax);
             if rows.is_empty() {
-                note = Some(tr!("No plays yet: finish one to set a score.").to_string());
+                note = Some("No plays yet: finish one to set a score.".to_string());
             }
             self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
             rows.iter()
@@ -1193,7 +1166,7 @@ impl State {
             Some(o) => ((scroll / SONG_H) as usize).min(o),
             None => (scroll / SONG_H) as usize,
         };
-        let colours = crate::multiverse::note_colours();
+        let colours = crate::game::note_colours();
         for (g, range) in groups.iter().enumerate().skip(first) {
             let sy = y + song_top(g) - scroll;
             if sy > y + h {
@@ -1274,7 +1247,7 @@ impl State {
                 }
                 let found = self.stars.get(i, rate);
                 let py = dy + (DIFF_H - SMALL - 6.0) / 2.0;
-                let pill = stars::draw_pill(c, dx + dw - 10.0, py, SMALL, found);
+                let pill = crate::style::star_pill(c, dx + dw - 10.0, py, SMALL, found);
                 let name = &self.library[i].meta.version;
                 let name = Canvas::fit(MEDIUM, dw - pill - 34.0, name);
                 let ny = dy + (DIFF_H - MEDIUM) / 2.0;
@@ -1293,8 +1266,8 @@ impl State {
     /// Settings: the sections down the side and the rows of the one open, or the search's.
     pub(crate) fn draw_mobile_settings(&mut self, c: &mut Canvas) {
         let w = c.width;
-        let x = back_button(c, tr!("< BACK"), Hit::Key(KeyCode::Escape));
-        crate::style::title(c, x + 6.0, 12.0, MEDIUM, 0xffffff, tr!("SETTINGS"));
+        let x = back_button(c, "< BACK", Hit::Key(KeyCode::Escape));
+        crate::style::title(c, x + 6.0, 12.0, MEDIUM, 0xffffff, "SETTINGS");
         let box_w = (w * 0.34).min(340.0);
         let search = self.settings_ui.search.clone();
         search_box(
@@ -1564,7 +1537,7 @@ impl State {
             6.0,
             96.0,
             44.0,
-            tr!("Close"),
+            "Close",
             SMALL,
             close,
             false,
@@ -1622,7 +1595,7 @@ impl State {
             0.0,
             118.0,
             BAR_H - 2.0,
-            tr!("Done"),
+            "Done",
             SMALL,
             done,
             true,
@@ -1653,7 +1626,7 @@ impl State {
                 false,
             );
         }
-        crate::style::title(c, 6.0, 12.0, MEDIUM, 0xffffff, tr!("MODS"));
+        crate::style::title(c, 6.0, 12.0, MEDIUM, 0xffffff, "MODS");
         let unsaved = if picked.unranked() {
             tr!("  (not saved)")
         } else {
@@ -1740,7 +1713,7 @@ impl State {
     ) {
         use crate::browse::Source;
         let (w, dt) = (c.width - self.tab_room(), c.dt_ms);
-        let x = back_button(c, tr!("< BACK"), Hit::Key(KeyCode::Escape));
+        let x = back_button(c, "< BACK", Hit::Key(KeyCode::Escape));
         let (source_w, status_w, sort_w) = (120.0, 192.0, 180.0);
         let search_w = w - x - source_w - status_w - sort_w - 24.0;
         let query = self.browse.query.clone();
@@ -1796,9 +1769,11 @@ impl State {
             .position(|&k| k == self.browse.sort)
             .unwrap_or(0);
         let next = (at + 1) % sorts.len();
-        let sort = match source {
-            Source::Osu => sorts[at].name(),
-            Source::Ours => sorts[at].name_for_ours(),
+        // The website's lists name some orders their own way (sent, not ranked).
+        let sort = if self.browse.category.is_custom() {
+            sorts[at].name_for_ours()
+        } else {
+            sorts[at].name()
         };
         let label = tr!("Sort: {sort}"; sort);
         let hit = Hit::DlSort(next);
@@ -1905,7 +1880,7 @@ impl State {
                     c.text(ax - 12.0 - lw, ty, SMALL, rgba(colour, 1.0), label);
                     lw
                 }
-                None => stars::draw_pill(c, ax - 12.0, ty, SMALL, hi),
+                None => crate::style::star_pill(c, ax - 12.0, ty, SMALL, hi),
             };
             let room = ax - pill - 40.0;
             let title = Canvas::fit(MEDIUM, room, &set.title);

@@ -8,20 +8,26 @@
 //! notes. It never changes when a note is hit or how it is judged, so scores, pp and replays of a
 //! `.tko` map are as fair as those of its `.osu`.
 
-pub mod clips;
-pub mod format;
-pub mod gimmick;
-pub mod graph;
-pub mod path;
-pub mod recipes;
-pub mod runtime;
-pub mod screen;
-pub mod scroll;
-pub mod track;
+// The model, its file format and the runtime are the game's (taiko-logic); drawing them is the
+// client's.
+pub use taiko_logic::tko::{
+    TKO_VERSION, clips, format, gimmick, graph, path, runtime, scroll, track,
+};
 
-/// The newest format this build reads and writes. Raising it needs a migration in
-/// `format::MIGRATIONS` and a fixture of the old format in its tests.
-pub const TKO_VERSION: u32 = 4;
+static CALM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Maps' playfield effects toned down (Settings -> Gameplay, Reduce map effects): see
+/// `FieldProp::calm`. The crate keeps no process-wide settings, so it is kept here.
+pub fn set_calm(on: bool) {
+    CALM.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether maps' playfield effects are toned down (`set_calm`).
+pub fn calm() -> bool {
+    CALM.load(std::sync::atomic::Ordering::Relaxed)
+}
+pub mod recipes;
+pub mod screen;
 
 #[cfg(test)]
 mod tests {

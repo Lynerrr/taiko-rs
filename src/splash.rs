@@ -15,7 +15,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::audio::{self, Engine, Track};
-use crate::render::{Canvas, VIRTUAL_HEIGHT, rgba};
+use crate::hit::Canvas;
+use crate::render::{VIRTUAL_HEIGHT, rgba};
 
 /// Pixel portraits, one picked at random each start.
 const PORTRAITS: [&[u8]; 9] = [
@@ -812,12 +813,26 @@ pub(crate) fn draw_warning(c: &mut Canvas, bg: f32, alpha: f32, left: f32) {
     let w = c.width;
     c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(BG, bg));
     let cx = w / 2.0;
-    let title = tr!("WARNING: PHOTOSENSITIVITY");
-    let body = tr!(
-        "This game has flashing lights and fast-changing patterns (in the intro, in mods and in map effects) that may trigger seizures in people with photosensitive epilepsy. If you or anyone in your family has had seizures or epilepsy, talk to a doctor before playing. Stop playing at once if you feel dizzy or sick, or notice blurred vision, eye or muscle twitches, or any movement you don't control."
+    let title = tr!(
+        "WARNING: PHOTOSENSITIVITY",
+        "注意: 光過敏性発作",
+        "ВНИМАНИЕ: ЭПИЛЕПСИЯ"
     );
-    let hint = tr!("Any key or click to continue");
-    let off = tr!("Settings -> System -> Epilepsy warning turns this off");
+    let body = tr!(
+        "This game has flashing lights and fast-changing patterns (in the intro, in mods and in map effects) that may trigger seizures in people with photosensitive epilepsy. If you or anyone in your family has had seizures or epilepsy, talk to a doctor before playing. Stop playing at once if you feel dizzy or sick, or notice blurred vision, eye or muscle twitches, or any movement you don't control.",
+        "このゲームには、光の点滅や急速に変化する模様(起動画面、Mod、譜面のエフェクト)が含まれており、光過敏性てんかんの方に発作を引き起こす可能性があります。ご本人やご家族に発作やてんかんの経験がある場合は、プレイ前に医師にご相談ください。めまいや気分の悪さ、視覚の異常、目や筋肉のけいれん、意識しない体の動きを感じたら、すぐにプレイを中止してください。",
+        "В игре есть вспышки света и быстро меняющиеся узоры (в заставке, модах и эффектах карт), которые могут вызвать приступ у людей со светочувствительной эпилепсией. Если у вас или у кого-то из родных были приступы или эпилепсия, перед игрой посоветуйтесь с врачом. Сразу прекратите играть, если почувствуете головокружение или тошноту, заметите размытое зрение, подёргивание глаз или мышц или непроизвольные движения."
+    );
+    let hint = tr!(
+        "Any key or click to continue",
+        "キーかクリックで続ける",
+        "Любая клавиша или клик, чтобы продолжить"
+    );
+    let off = tr!(
+        "Settings -> System -> Epilepsy warning turns this off",
+        "設定 -> システム -> 光過敏性発作の注意 でオフにできます",
+        "Отключается в Настройки -> Система -> Предупреждение об эпилепсии"
+    );
     let (title_size, body_size, small) = (21.0, 14.0, 7.0);
     let line = Canvas::text_height(body_size) + 6.0;
     let chars = ((w.min(760.0) - 80.0) / Canvas::char_width(body_size)).max(20.0) as usize;

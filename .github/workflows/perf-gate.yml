@@ -1,0 +1,112 @@
+name: Perf gate
+
+# The client's main requirement is speed (docs/client-architecture.md, 4.12). Every pull request
+# that touches the client runs the perf audit (src/perf_audit.rs) on its base and its head, in
+# turns on the same runner, and fails when a case got more than 10 % slower
+# (.github/scripts/perf-gate.py). A slowdown that is meant (and explained in the description)
+# is accepted with the `perf-regression-ok` label; re-run the job after adding it.
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - ".github/workflows/perf-gate.yml"
+      - ".github/scripts/perf-gate.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
+  AUDIT: "cargo test --profile perf-audit --locked --lib perf_audit:: -- --ignored --nocapture --test-threads=1"
+
+jobs:
+  perf:
+    name: Perf gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf-gate
+
+      - name: Install Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang pkg-config libasound2-dev libpipewire-0.3-dev
+
+      - name: Check out the base next to the head
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: git worktree add --detach "$RUNNER_TEMP/base" "${BASE_SHA:-HEAD~1}"
+
+      # A target folder each: in a shared one cargo took the base's build of the game for the
+      # head's (its dep-info names the files it read, and the base's were as new as ever), so
+      # the gate measured the base against itself. The base's folder starts as a copy of the
+      # cached one without the workspace's own crates, so only the dependencies are reused.
+      - name: Build base and head
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          BASE_TARGET: ${{ runner.temp }}/base-target
+        run: |
+          mkdir -p target
+          cp -a target "$BASE_TARGET"
+          # The workspace's crates the base has (the newer ones aren't in every base).
+          for crate in taiko-rs taiko-logic taiko-proto taiko-recalc; do
+            if [ -n "$(cd "$RUNNER_TEMP/base" && cargo pkgid "$crate" 2>/dev/null)" ]; then
+              (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo clean --profile perf-audit -p "$crate")
+            fi
+          done
+          (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo test --profile perf-audit --locked --lib --no-run)
+          cargo test --profile perf-audit --locked --lib --no-run
+
+      - name: Run the audit, base and head in turns
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          mkdir -p perf-logs
+          for round in 1 2 3; do
+            (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$RUNNER_TEMP/base-target" $AUDIT) > "perf-logs/base-$round.log" 2>&1 || true
+            $AUDIT > "perf-logs/head-$round.log" 2>&1
+          done
+
+      # A runner's noise can last for several rounds (a frame case once read +24 % and then +1 %
+      # on a re-run of the same code). A slowdown has to hold over two more rounds, head first,
+      # to fail: the lowest p50 of all five is compared.
+      - name: Compare
+        id: compare
+        continue-on-error: true
+        env:
+          WAIVED: ${{ contains(github.event.pull_request.labels.*.name, 'perf-regression-ok') }}
+        run: python3 .github/scripts/perf-gate.py --base perf-logs/base-*.log --head perf-logs/head-*.log
+
+      - name: Confirm a slowdown with two more rounds
+        if: steps.compare.outcome == 'failure'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+          WAIVED: ${{ contains(github.event.pull_request.labels.*.name, 'perf-regression-ok') }}
+        run: |
+          for round in 4 5; do
+            $AUDIT > "perf-logs/head-$round.log" 2>&1
+            (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$RUNNER_TEMP/base-target" $AUDIT) > "perf-logs/base-$round.log" 2>&1 || true
+          done
+          python3 .github/scripts/perf-gate.py --base perf-logs/base-*.log --head perf-logs/head-*.log
+
+      - name: Upload the audit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-logs
+          path: perf-logs/

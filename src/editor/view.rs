@@ -18,8 +18,9 @@ use super::timing;
 use super::tools::{GimmickTool, Target};
 use crate::audio::{Engine, Sfx, Track};
 use crate::beatmap::{self, OSU_TIMING_MS};
-use crate::game::Game;
-use crate::render::{Canvas, accent, rgba};
+use crate::game::{Game, Play};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 use crate::video::FRAME_VW;
 
 mod chrome;
@@ -445,7 +446,7 @@ pub struct View {
     renamed: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// An export on its way: the file it wrote.
     export_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
-    game: Option<Box<Game>>,
+    game: Option<Box<Play>>,
     game_err: Option<String>,
     /// The chart changed at this moment and the preview hasn't caught up.
     stale: Option<Instant>,
@@ -1227,9 +1228,9 @@ impl View {
                         stream: None,
                     })
                 });
-                let mut g = Game::new(map, track, None);
-                g.mute_hits = true;
-                self.game = Some(Box::new(g));
+                let mut g = Game::new(map, track, None).with_settings(&crate::game::settings());
+                g.set_mute_hits(true);
+                self.game = Some(Box::new(Play::new(g)));
                 self.game_err = None;
                 self.shown = f64::NAN;
             }
@@ -1249,14 +1250,15 @@ impl View {
         if let Some(g) = &mut self.game {
             if backwards && !self.shown.is_nan() {
                 // Notes already played stay played going forwards only: a seek back starts over.
-                let map = g.map.clone();
-                let track = g.track.clone();
-                **g = Game::new(map, track, None);
-                g.mute_hits = true;
+                let map = g.map().clone();
+                let track = g.track().clone();
+                **g =
+                    Play::new(Game::new(map, track, None).with_settings(&crate::game::settings()));
+                g.set_mute_hits(true);
             }
             g.skip_to(t - 50.0);
             g.set_time(t);
-            g.autoplay_style = autoplay;
+            g.set_autoplay_style(autoplay);
             g.autoplay(None);
         }
         self.shown = t;
@@ -1348,17 +1350,12 @@ impl View {
         c.rect(fx, fy, fw, fh, rgba(0x0c0c12, 0.7));
         if let Some(g) = &mut self.game {
             let start = c.shapes.len();
-            let clips = c.clips.len();
             let full = c.width;
             c.width = FRAME_VW;
             g.draw_playfield(c, scroll_speed);
             c.width = full;
-            c.transform_since(start, [0.0, 0.0], fw / FRAME_VW, fx, fy);
             // Clips the playfield made for itself (a glitch's slices) move with its shapes.
-            let k = fw / FRAME_VW;
-            for (_, [x, y, w, h]) in &mut c.clips[clips..] {
-                (*x, *y, *w, *h) = (*x * k + fx, *y * k + fy, *w * k, *h * k);
-            }
+            c.transform_since(start, [0.0, 0.0], fw / FRAME_VW, fx, fy);
             c.clip_since(start, fx, fy, fw, fh);
         } else {
             let why = match &self.game_err {

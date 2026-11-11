@@ -1,0 +1,22 @@
+text  389,24   Regression - basics [basics]
+text  503,80   A
+text  461,170  96.09%
+text  478,212  00912345
+text  509,236  123 pp
+text  363,260  GREAT  60
+text  563,260  UR      0.0
+text  363,284  OK     3
+text  563,284  MEAN    +0.0 ms
+text  363,308  MISS   1
+text  563,308  DRUMROLL 4
+text  363,332  MAX COMBO  50
+text  563,332  BIG x2  0
+text  414,380  Windows: great +-34  ok +-80 ms
+text  433,418  Retry
+text  520,418  Song select
+text  434,455  scroll down: 123 pp breakdown
+text  239,668  PERFORMANCE
+text  460,700  no pp for this play
+hit   419,402    79x44   Key(Enter)
+hit   506,402   141x44   Key(Escape)
+hit   410,450   247x18   Key(PageDown)

@@ -313,8 +313,11 @@ fn a_score_link_opens_its_results_on_its_map() {
     };
     s.open_link(link::Link::Score(41));
     settle(&mut s);
-    match &s.scene {
-        Scene::Results { results, entry, .. } => {
+    match s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+    {
+        Some(crate::screens::results::ResultsScreen { results, entry, .. }) => {
             assert_eq!(*entry, 1);
             assert_eq!(
                 results
@@ -327,10 +330,10 @@ fn a_score_link_opens_its_results_on_its_map() {
         _ => panic!("not on the score's results"),
     }
     assert_eq!(s.select.selected(), Some(1));
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_link(link::Link::Score(42));
     settle(&mut s);
-    assert!(matches!(s.scene, Scene::Select));
+    assert!(s.scene.is_select());
     assert_eq!(
         s.toast.as_ref().map(|t| t.text.as_str()),
         Some("you haven't got B - U [Hard]")
@@ -393,29 +396,33 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
             s.build_frame(&mut c, Instant::now(), 853.0);
         };
         let until = Instant::now() + Duration::from_secs(10);
-        while !matches!(s.scene, Scene::Play { .. }) && Instant::now() < until {
+        while !s.scene.is_play() && Instant::now() < until {
             frame(&mut s);
             std::thread::sleep(Duration::from_millis(2));
         }
-        let Scene::Play { game, .. } = &mut s.scene else {
+        let (true, Some(game)) = (s.scene.is_play(), s.play.as_deref_mut()) else {
             panic!("the play never started");
         };
         assert_eq!(
-            game.fail_linger,
+            game.fail_linger(),
             if restart { FAIL_RESTART_LINGER } else { 1.6 }
         );
         // Three notes go by unhit: the first miss fails the play.
-        let t = game.map.notes[2].time + 500.0;
+        let t = game.map().notes[2].time + 500.0;
         game.set_time(t);
         assert!(game.failed_early());
-        game.fail_linger = 0.0;
-        while matches!(s.scene, Scene::Play { .. }) && Instant::now() < until {
+        game.set_fail_linger(0.0);
+        while s.scene.is_play() && Instant::now() < until {
             frame(&mut s);
             std::thread::sleep(Duration::from_millis(2));
         }
-        match &s.scene {
-            Scene::Loading { retry, entry, .. } if restart => assert!(*retry && *entry == 0),
-            Scene::Results { results, .. } if !restart => assert!(results.failed),
+        match (
+            s.scene.screen_as::<crate::screens::loading::Loading>(),
+            s.scene
+                .screen_as::<crate::screens::results::ResultsScreen>(),
+        ) {
+            (Some(l), _) if restart => assert!(l.retry && l.entry == 0),
+            (_, Some(r)) if !restart => assert!(r.results.failed),
             _ => panic!("restart {restart}: ended up elsewhere"),
         }
     }

@@ -1,0 +1,5 @@
+od 0: [-160..-120] Some(Miss); [-119.5..-50] Some(Ok); [-49.5..49.5] Some(Great); [50..119.5] Some(Ok); [120..160] Some(Miss);
+od 3: [-160..-96] Some(Miss); [-95.5..-41] Some(Ok); [-40.5..40.5] Some(Great); [41..95.5] Some(Ok); [96..160] Some(Miss);
+od 5: [-160..-80] Some(Miss); [-79.5..-35] Some(Ok); [-34.5..34.5] Some(Great); [35..79.5] Some(Ok); [80..160] Some(Miss);
+od 8: [-160..-62] Some(Miss); [-61.5..-26] Some(Ok); [-25.5..25.5] Some(Great); [26..61.5] Some(Ok); [62..160] Some(Miss);
+od 10: [-160..-50] Some(Miss); [-49.5..-20] Some(Ok); [-19.5..19.5] Some(Great); [20..49.5] Some(Ok); [50..160] Some(Miss);

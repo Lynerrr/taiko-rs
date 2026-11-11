@@ -5,7 +5,8 @@ use super::chrome::{DIM, EDGE};
 use super::cmd::{Cmd, Mode};
 use super::{Btn, View};
 use crate::editor::state::Tool;
-use crate::render::{Canvas, rgba};
+use crate::hit::Canvas;
+use crate::render::rgba;
 
 pub enum Item {
     Do(Cmd),

@@ -1,0 +1,7 @@
+unknown map: have_map false
+prepare without the map: Lobby
+chat: [("host", "what the ****")] unread 1
+skip votes: Some((1, 2))
+typed chat sent: true
+rejected: MpMenu status "the room is full"
+client sent: Hello HasMap RequestMap Loaded Chat

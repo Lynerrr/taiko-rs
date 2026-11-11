@@ -12,11 +12,13 @@ use std::time::Instant;
 
 use crate::audio::{self, Sfx, Sounds, Track};
 use crate::beatmap::Beatmap;
-use crate::game::{self, Game};
+use crate::game::{self, Play};
+use crate::hit::{Canvas, Hit};
 use crate::layout::{Area, Grip};
 use crate::mods::Speed;
-use crate::render::{Canvas, Hit, VIRTUAL_HEIGHT, accent, rgba};
+use crate::render::{VIRTUAL_HEIGHT, accent, rgba};
 use crate::scores::Replay;
+use crate::services::jobs;
 use winit::keyboard::KeyCode;
 
 pub type Loaded = Result<(Beatmap, Arc<Track>), String>;
@@ -46,34 +48,8 @@ pub const SPEEDS: [(&str, &str); 3] = [
 /// Motion blur: (name, frames blended into each, the share of the frame time they span).
 pub const BLURS: [(&str, usize, f64); 3] = [("off", 1, 0.0), ("light", 4, 0.5), ("strong", 8, 1.0)];
 
-/// How a video is exported (all remembered in the config).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Settings {
-    pub size: usize,
-    pub fps: usize,
-    pub quality: usize,
-    /// The size aimed under with the "target size" quality (MB, 1 MB = 1,000,000 bytes).
-    pub target_mb: f64,
-    pub speed: usize,
-    pub blur: usize,
-    pub hud: bool,
-    pub hitsounds: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Settings {
-        Settings {
-            size: 1,
-            fps: 1,
-            quality: 1,
-            target_mb: 10.0,
-            speed: 0,
-            blur: 0,
-            hud: true,
-            hitsounds: true,
-        }
-    }
-}
+/// The export settings (kept in the config).
+pub use crate::config::VideoSettings as Settings;
 
 impl Settings {
     /// The x264 CRF, or None when aiming at a file size.
@@ -151,7 +127,7 @@ pub fn target_rates(mb: f64, seconds: f64) -> Option<(u32, u32)> {
 /// app there, so a console program would get a window of its own).
 fn ffmpeg_command(ffmpeg: &Path) -> Command {
     #[allow(unused_mut)]
-    let mut cmd = Command::new(ffmpeg);
+    let mut cmd = crate::offline::command(ffmpeg);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -197,30 +173,14 @@ pub fn crop_presets() -> [(&'static str, Area); 4] {
 /// Virtual width of a 16:9 frame (the playfield is laid out in 480-unit-tall space).
 pub const FRAME_VW: f32 = VIRTUAL_HEIGHT * 16.0 / 9.0;
 
-/// A replay game with no audio, at its start.
-pub fn replay_game(map: &Beatmap, track: &Arc<Track>, r: &Replay) -> Game {
-    let mut g = Game::with_half(
-        map.clone(),
-        track.clone(),
-        None,
-        crate::mods::Mods::from_list(&r.mods),
-        r.seed,
-        r.half_rule(),
-    );
-    g.replay = Some((r.inputs.clone(), 0));
-    g.mash = r.mash();
-    g.scoring = r.scoring();
-    g.set_window_rule(r.window_rule());
-    g.mute_hits = true;
-    g
-}
+use crate::scores::replay_game;
 
 pub struct Editor {
     pub replay: Replay,
-    pub rx: Option<Receiver<Loaded>>,
+    pub rx: jobs::Job<Loaded>,
     pub map: Option<(Beatmap, Arc<Track>)>,
     /// The frame shown: the replay at `cursor`.
-    pub game: Option<Box<Game>>,
+    pub game: Option<Box<Play>>,
     pub cursor: f64,
     /// Timeline range and the part exported (map ms).
     pub first: f64,
@@ -242,10 +202,10 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(replay: Replay, rx: Receiver<Loaded>, settings: Settings) -> Editor {
+    pub fn new(replay: Replay, rx: impl Into<jobs::Job<Loaded>>, settings: Settings) -> Editor {
         Editor {
             replay,
-            rx: Some(rx),
+            rx: rx.into(),
             map: None,
             game: None,
             cursor: 0.0,
@@ -267,11 +227,11 @@ impl Editor {
 
     /// Takes the loaded map once it's ready; true if the editor can be used.
     pub fn poll(&mut self) -> Result<bool, String> {
-        if let Some(rx) = &self.rx {
-            match rx.try_recv() {
-                Ok(Ok((map, track))) => {
+        if self.rx.is_busy() {
+            match self.rx.poll_ended() {
+                Some(Some(Ok((map, track)))) => {
                     let g = replay_game(&map, &track, &self.replay);
-                    self.first = g.time;
+                    self.first = g.time();
                     self.last = g.end_time() + 1500.0;
                     self.start = self.first;
                     self.end = self.last;
@@ -279,12 +239,11 @@ impl Editor {
                         .first
                         .max(map.notes.first().map(|n| n.time - 2000.0).unwrap_or(0.0));
                     self.map = Some((map, track));
-                    self.rx = None;
                     self.seek(self.cursor);
                 }
-                Ok(Err(e)) => return Err(e),
-                Err(mpsc::TryRecvError::Empty) => return Ok(false),
-                Err(mpsc::TryRecvError::Disconnected) => return Err("loading stopped".into()),
+                Some(Some(Err(e))) => return Err(e),
+                None => return Ok(false),
+                Some(None) => return Err("loading stopped".into()),
             }
         }
         Ok(self.map.is_some())
@@ -296,9 +255,9 @@ impl Editor {
             return;
         };
         let t = t.clamp(self.first, self.last);
-        let behind = self.game.as_ref().is_none_or(|g| t < g.time);
+        let behind = self.game.as_ref().is_none_or(|g| t < g.time());
         if behind {
-            self.game = Some(Box::new(replay_game(map, track, &self.replay)));
+            self.game = Some(Box::new(Play::new(replay_game(map, track, &self.replay))));
         }
         if let Some(g) = &mut self.game {
             g.set_time(t);
@@ -988,7 +947,7 @@ impl Passes<'_> {
 
 /// An export in progress: the replay stepped one frame at a time.
 pub struct Export {
-    pub game: Box<Game>,
+    pub game: Box<Play>,
     /// Song ms of the next frame, and song ms per frame (map time is `game.speed().map(t)`).
     pub t: f64,
     pub step: f64,
@@ -1118,6 +1077,16 @@ pub fn free_path(dir: &Path, name: &str) -> PathBuf {
         .unwrap_or_else(|| dir.join(name))
 }
 
+/// Why there's no exporting videos.
+pub(crate) fn no_ffmpeg() -> String {
+    tr!(
+        "ffmpeg wasn't found: install it to export (Windows: winget install ffmpeg; Linux: your package manager)",
+        "ffmpegが見つかりません: 書き出すにはインストールしてください (Windows: winget install ffmpeg、Linux: パッケージマネージャー)",
+        "ffmpeg не найден: установите его для экспорта (Windows: winget install ffmpeg; Linux: менеджер пакетов)"
+    )
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1209,7 +1178,7 @@ mod tests {
             ..Default::default()
         };
         let mut ex = Export {
-            game: Box::new(replay_game(&map, &track, &replay)),
+            game: Box::new(Play::new(replay_game(&map, &track, &replay))),
             t: 1000.0,
             step: 1000.0 / 60.0,
             t0: 1000.0,

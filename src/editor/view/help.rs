@@ -6,7 +6,8 @@ use std::time::Duration;
 use super::chrome::{DIM, WARN, wrap};
 use super::cmd::{BINDS, Cmd, MOUSE, Mode};
 use super::{Btn, Layout, Modal, View, inside};
-use crate::render::{Canvas, accent, rgba};
+use crate::hit::Canvas;
+use crate::render::{accent, rgba};
 
 // ---- the tour ----
 
