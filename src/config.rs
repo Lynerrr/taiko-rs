@@ -633,6 +633,8 @@ static DATA_FOLDER: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(
 
 pub fn set_data_folder(dir: Option<PathBuf>) {
     *DATA_FOLDER.write().unwrap_or_else(|e| e.into_inner()) = dir;
+    // `taiko.db` is the one in the new folder from now on.
+    crate::store::close();
 }
 
 pub fn data_folder() -> Option<PathBuf> {
@@ -708,6 +710,9 @@ fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
         "plays.tsv",
         "hidden.tsv",
         "map_skins_off.txt",
+        crate::store::FILE,
+        "taiko.db-wal",
+        "taiko.db-shm",
     ]
     .iter()
     .map(|n| base.as_ref().map(|b| b.join(n)))
@@ -729,6 +734,8 @@ pub fn move_data(
     total: &std::sync::atomic::AtomicU64,
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
+    // Closed, so its journal is written into it and it moves as one file.
+    crate::store::close();
     let pairs: Vec<(PathBuf, PathBuf)> = data_paths(from)
         .into_iter()
         .zip(data_paths(to))
@@ -851,6 +858,9 @@ pub fn parse_map_offsets(text: &str) -> std::collections::HashMap<u64, f64> {
 }
 
 pub fn load_map_offsets() -> std::collections::HashMap<u64, f64> {
+    if let Some(offsets) = crate::store::with(|s| s.map_offsets()) {
+        return offsets;
+    }
     let Some(dir) = data_dir() else {
         return Default::default();
     };
@@ -877,6 +887,7 @@ fn load_map_offsets_in(dir: &Path) -> std::collections::HashMap<u64, f64> {
 pub fn save_map_offsets(offsets: &std::collections::HashMap<u64, f64>) {
     let Some(dir) = data_dir() else { return };
     save_map_offsets_in(&dir, offsets);
+    crate::store::with(|s| s.replace_map_offsets(offsets));
 }
 
 fn save_map_offsets_in(dir: &Path, offsets: &std::collections::HashMap<u64, f64>) -> bool {
@@ -892,6 +903,9 @@ fn save_map_offsets_in(dir: &Path, offsets: &std::collections::HashMap<u64, f64>
 /// The folders of the maps whose own skin is turned off: `map_skins_off.txt` in the config folder,
 /// one folder name per line. A map's skin is its folder's, so all its difficulties share this.
 pub fn load_map_skins_off() -> std::collections::HashSet<String> {
+    if let Some(folders) = crate::store::with(|s| s.map_skins_off()) {
+        return folders;
+    }
     data_dir()
         .and_then(|d| std::fs::read_to_string(d.join(MAP_SKINS_OFF)).ok())
         .map(|text| parse_lines(&text))
@@ -915,6 +929,7 @@ pub fn save_map_skins_off(folders: &std::collections::HashSet<String>) {
     let mut lines: Vec<&str> = folders.iter().map(String::as_str).collect();
     lines.sort_unstable();
     let _ = std::fs::write(dir.join(MAP_SKINS_OFF), lines.join("\n") + "\n");
+    crate::store::with(|s| s.replace_map_skins_off(folders));
 }
 
 /// Clears every map's own offset, keeping them in `map_offsets.backup.tsv` to go back to by hand.
@@ -922,6 +937,7 @@ pub fn reset_map_offsets() {
     if let Some(dir) = data_dir() {
         let _ = std::fs::rename(dir.join(MAP_OFFSETS), dir.join("map_offsets.backup.tsv"));
     }
+    crate::store::with(|s| s.replace_map_offsets(&Default::default()));
 }
 
 pub fn config_path() -> Option<PathBuf> {

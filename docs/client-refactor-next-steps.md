@@ -13,7 +13,7 @@ Numbers below are from `dev` at 817037b with #387 and `refactor/lib-screens` on 
 |---|---|---|
 | 0 | Regression suite, perf gate | done (#350, #362, #370, #377) |
 | 1 | `taiko-proto` | done: `net`, `online`, `tls`, `lang`, `changelog_entry` in `crates/taiko-proto`; the server has no `#[path]` includes left |
-| 1b | SQLite store | not started |
+| 1b | SQLite store | the player's data: done (#429, #431, switch-over). Not yet: the library cache and FTS search, `set_status`, collections (§4.11 of `docs/client-architecture`) |
 | 2 | Wrong-way dependencies | done (#364, #365) |
 | 3 | Drawing globals to a frame's theme and look | done for the playfield (#366); 75 `static`/`thread_local!` left in `src/` |
 | 4 | Split `game.rs` into the play and its drawing | done (#367 to #380) |

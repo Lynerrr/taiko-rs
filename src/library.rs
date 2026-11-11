@@ -884,6 +884,9 @@ pub fn osz_news<'a>(
 
 /// When each map was last played in taiko.rs (`plays.tsv`: Unix seconds, tab, path).
 pub(crate) fn load_plays() -> std::collections::HashMap<PathBuf, u64> {
+    if let Some(plays) = crate::store::with(|s| s.plays()) {
+        return plays;
+    }
     config::data_dir()
         .and_then(|d| std::fs::read_to_string(d.join("plays.tsv")).ok())
         .map(|text| parse_plays(&text))

@@ -21,16 +21,22 @@ fn index_path() -> Option<PathBuf> {
     Some(dir()?.join(INDEX))
 }
 
-/// Reads the score index: the plays whose replay is still there.
+/// Reads the score index (from `taiko.db`, else `scores.tsv`): the plays whose replay is still
+/// there.
 pub fn load_index() -> Vec<ScoreRow> {
-    let Some(text) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+    let Some(base) = dir() else {
         return Vec::new();
     };
-    let base = dir().unwrap_or_default();
-    parse_index(&text, &base)
-        .into_iter()
-        .filter(|r| r.file.is_file())
-        .collect()
+    let rows = match crate::store::with(|s| s.scores(&base)) {
+        Some(rows) => rows,
+        None => {
+            let Some(text) = index_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+                return Vec::new();
+            };
+            parse_index(&text, &base)
+        }
+    };
+    rows.into_iter().filter(|r| r.file.is_file()).collect()
 }
 
 /// The index's rows, their replays in `base` (whether those are there or not).
@@ -56,6 +62,8 @@ pub fn save(replay: &Replay, pp: Option<f64>) -> Result<ScoreRow, String> {
         .map_err(|e| e.to_string())?;
     f.write_all(row.line().as_bytes())
         .map_err(|e| e.to_string())?;
+    // And in the database (the index file is still written, for an older build).
+    crate::store::with(|s| s.add_score(&row));
     Ok(row)
 }
 
@@ -83,7 +91,9 @@ pub fn rewrite_index(rows: &[ScoreRow]) -> Result<(), String> {
     let text: String = rows.iter().map(ScoreRow::line).collect();
     let tmp = index.with_extension("tsv.tmp");
     std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &index).map_err(|e| e.to_string())
+    std::fs::rename(&tmp, &index).map_err(|e| e.to_string())?;
+    crate::store::with(|s| s.replace_scores(rows));
+    Ok(())
 }
 
 /// Moves the local plays saved as `from` to the name `to`: the index right away, their replays
