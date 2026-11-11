@@ -330,10 +330,10 @@ fn a_score_link_opens_its_results_on_its_map() {
         _ => panic!("not on the score's results"),
     }
     assert_eq!(s.select.selected(), Some(1));
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_link(link::Link::Score(42));
     settle(&mut s);
-    assert!(matches!(s.scene, Scene::Select));
+    assert!(s.scene.is_select());
     assert_eq!(
         s.toast.as_ref().map(|t| t.text.as_str()),
         Some("you haven't got B - U [Hard]")

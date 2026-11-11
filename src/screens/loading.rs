@@ -184,10 +184,10 @@ impl Screen for Loading {
             Some(Some(Err(e))) => {
                 state.status = format!("failed to load {}: {e}", self.label);
                 eprintln!("{}", state.status);
-                next = Some(Scene::Select);
+                next = Some(SongSelect::scene());
             }
             None => {}
-            Some(None) => next = Some(Scene::Select),
+            Some(None) => next = Some(SongSelect::scene()),
         }
         next
     }

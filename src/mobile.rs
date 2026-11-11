@@ -15,7 +15,7 @@ use crate::config::RATE_RANGE;
 use crate::hit::{Canvas, Hit, HitBox};
 use crate::render::{VIRTUAL_HEIGHT, accent, approach, rgba};
 use crate::settings::{self, Control, ITEMS, Kind, SECTIONS};
-use crate::{Scene, State, mods};
+use crate::{State, mods};
 
 /// The song list's width on a `w` wide screen.
 pub fn select_list_w(w: f32) -> f32 {
@@ -468,7 +468,7 @@ impl State {
                 || self.player.is_some()
                 || self.profile.is_some()
                 || self.scene.screen().is_some_and(|s| s.top_bar())
-                || (matches!(self.scene, Scene::Select) && !self.on_menu()))
+                || (self.scene.is_select() && !self.on_menu()))
     }
 
     /// Something made for a wheel is up: a finger dragging over it turns the wheel.
@@ -753,8 +753,7 @@ impl State {
 
     /// The speed panel, over song select or the player: steps, presets and the pitch.
     pub(crate) fn draw_mobile_rate(&mut self, c: &mut Canvas) {
-        let shown =
-            matches!(self.scene, Scene::Select) && !(self.on_menu() && self.player.is_none());
+        let shown = self.scene.is_select() && !(self.on_menu() && self.player.is_none());
         if !self.mob.rate_open || !shown || self.mod_select.is_some() {
             self.mob.rate_open = false;
             return;

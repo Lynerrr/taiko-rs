@@ -152,7 +152,7 @@ impl Screen for MapEditor {
         if view.take_exit() {
             // It may have been sent just frame.now: ask which sets are custom again.
             state.custom_asked = None;
-            return Some(Scene::Select);
+            return Some(SongSelect::scene());
         }
         None
     }

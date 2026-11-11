@@ -19,7 +19,7 @@ impl Calibration {
 
     /// Takes where to go back to, for leaving.
     pub(crate) fn take_back(&mut self) -> Box<Scene> {
-        std::mem::replace(&mut self.back, Box::new(Scene::Select))
+        std::mem::replace(&mut self.back, Box::new(SongSelect::scene()))
     }
 }
 
@@ -39,7 +39,7 @@ impl State {
             return;
         }
         // Retrying from the result screen, it has put back where calibration was started from.
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        let back = std::mem::replace(&mut self.scene, SongSelect::scene());
         let beat_ms = 60000.0 / self.cfg.calibration_bpm;
         let beats = calibrate::total_beats(beat_ms);
         let map = beatmap::calibration_map(beat_ms, calibrate::COUNT_IN_BEATS, beats);
@@ -72,7 +72,7 @@ impl State {
     /// Ends a calibration run (started from `back`) with the hits so far: its result screen,
     /// or back with a word when there were too few.
     fn finish_calibration_with(&mut self, back: Box<Scene>, vsync: bool) {
-        self.scene = Scene::Select;
+        self.scene = SongSelect::scene();
         let Some(game) = self.play.take() else {
             return;
         };

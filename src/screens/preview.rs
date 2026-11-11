@@ -14,7 +14,7 @@ pub(crate) struct Preview {
 impl Preview {
     /// Back to where it was opened from.
     fn close(&mut self, state: &mut State) {
-        state.scene = *std::mem::replace(&mut self.back, Box::new(Scene::Select));
+        state.scene = *std::mem::replace(&mut self.back, Box::new(SongSelect::scene()));
     }
 }
 
@@ -23,7 +23,7 @@ impl State {
         if self.preview_target().is_none() {
             return;
         }
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        let back = std::mem::replace(&mut self.scene, SongSelect::scene());
         self.scene = Scene::Other(Box::new(Preview {
             back: Box::new(back),
         }));
@@ -35,8 +35,8 @@ impl State {
         let back = self
             .scene
             .screen_mut::<Preview>()
-            .map(|p| std::mem::replace(&mut p.back, Box::new(Scene::Select)));
-        self.scene = back.map_or(Scene::Select, |back| *back);
+            .map(|p| std::mem::replace(&mut p.back, Box::new(SongSelect::scene())));
+        self.scene = back.map_or(SongSelect::scene(), |back| *back);
     }
 
     /// Host, in the lobby preview: the picked start point becomes the match's.
@@ -234,7 +234,12 @@ impl Screen for Preview {
                     false,
                 );
             }
-            None => return Some(*std::mem::replace(&mut self.back, Box::new(Scene::Select))),
+            None => {
+                return Some(*std::mem::replace(
+                    &mut self.back,
+                    Box::new(SongSelect::scene()),
+                ));
+            }
         }
         None
     }

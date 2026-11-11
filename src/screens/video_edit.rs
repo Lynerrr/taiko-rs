@@ -441,7 +441,7 @@ impl Screen for VideoEdit {
         match ed.poll() {
             Err(e) => {
                 state.status = format!("can't open the replay: {e}");
-                next = Some(Scene::Select);
+                next = Some(SongSelect::scene());
             }
             Ok(_) => {
                 if let Some((at, from)) = ed.playing {

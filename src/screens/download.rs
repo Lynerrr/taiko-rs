@@ -84,7 +84,7 @@ impl State {
             KeyCode::Backspace if self.modifiers_ctrl => self.browse.clear(),
             KeyCode::Backspace => self.browse.backspace(),
             KeyCode::Escape if !self.browse.query.is_empty() => self.browse.clear(),
-            KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Escape | KeyCode::Tab => self.scene = SongSelect::scene(),
             _ => {
                 if let Some(text) = text {
                     self.browse.type_text(text);

@@ -123,12 +123,15 @@ Done so far: `VideoEdit` (#422), `LayoutEdit` (#424), `HudEdit` (#425), `EditorH
 Then, under the rules below: `Preview` (#430), `Download` (#433), `MpMenu` (#435), `MpResults`
 (#436), `MpWait` (#437), `Lobby` (#438), `Results` (#439), the `State::play` slot (#441), and in
 this order after them `Settings` (`State::behind`), `Calibrate`, `MpPlay`, `Watch`, `Spectate`,
-`Loading`, `Editor` (`screens::map_editor`) and `Play`. `Scene` is down to `Select` and `Other`.
+`Loading`, `Editor` (`screens::map_editor`) and `Play`. `Scene` was then down to `Select` and `Other`.
 Questions added on the way: `map_entry`, `key_place`, `holds_game`, `calibration`, `watching`,
 `watched_map`, `spectating`, `loads_song`, `song_play`; `Scene::take_screen` takes a screen out
 by value. A drum key goes to the game in `key_inner` just before `screen_key`, so a hit doesn't
 build a `Shadow` (`input/drum-press` p50 0.35 -> 0.45 us on the build PC; a play frame about
-+0.6 us, the `Shadow` built once per frame). `Select` is next, and last.
++0.6 us, the `Shadow` built once per frame). Last, `Select` (`screens::select::song_select::SongSelect`, with the main menu over it): its
+keys and frame moved, the rest asks `Scene::is_select` (the `select_screen` question), and
+`Scene` has only `Other` left; the main menu and `on_menu`/`dt` reach its frame in the `Frame`.
+Collapsing `Scene` into the screen it holds is a follow-up of its own.
 
 #### S6, the remaining screens
 

@@ -355,7 +355,7 @@ fn lazy_map_hash() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("map.osu");
     let mut state = layout_tests::state();
-    state.scene = Scene::Select;
+    state.scene = SongSelect::scene();
     state.map_offsets.clear();
     state.library = vec![Entry::new(path.clone(), Default::default())];
     state.select = Select::new(&state.library);
@@ -497,13 +497,13 @@ fn whole_frames() {
     s.close_settings();
     s.open_multiplayer();
     frames("multiplayer-menu", &mut s, &mut now);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.cfg.main_menu = true;
     s.main_menu = Some(menu::Menu::new());
     frames("main-menu", &mut s, &mut now);
     s.main_menu = None;
     s.cfg.main_menu = false;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_social();
     frames("select+friends-overlay", &mut s, &mut now);
     s.social.close();

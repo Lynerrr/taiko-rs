@@ -313,7 +313,7 @@ fn the_top_tabs_lead_to_every_part_of_the_game() {
         now += Duration::from_millis(16);
         frame(&mut s, now);
         let _ = writeln!(log, "  Escape: {}", scene_name(&s));
-        s.scene = Scene::Select;
+        s.scene = SongSelect::scene();
     }
     assert_snapshot("flows-top-tabs", &log);
 }

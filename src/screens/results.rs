@@ -144,7 +144,7 @@ impl Screen for ResultsScreen {
             // Back to song select, the music playing on.
             _ if results.opened.is_some() => {
                 if matches!(code, KeyCode::Escape | KeyCode::Backspace) {
-                    state.scene = Scene::Select;
+                    state.scene = SongSelect::scene();
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter => state.retry_from(self.entry, self.from),

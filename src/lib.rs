@@ -172,6 +172,7 @@ use screens::select::leaderboard::{
 };
 use screens::select::presets::{draw_preset_deleting, draw_preset_naming, preset_key};
 use screens::select::preview_chrome::{draw_analysis, draw_preview_chrome};
+use screens::select::song_select::SongSelect;
 use screens::settings::{
     SettingsScreen, browse_text, built_in_text, enter_to_start, none_text, off_text,
     offset_scale_name, on_text, parse_number, picking_text, scroll_in_select, short_path,
@@ -190,11 +191,8 @@ use video::no_ffmpeg;
 type Loaded = Result<(Beatmap, Arc<Track>), String>;
 
 enum Scene {
-    Select,
-    /// A multiplayer match (the menu, the lobby, the wait for the match to start, watching it
-    /// and the results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait`,
-    /// `screens::spectate` and `screens::mp_results`).
-    /// A screen that lives outside lib.rs (`screens::screen`).
+    /// A screen that lives outside lib.rs (`screens::screen`): song select is
+    /// `screens::select::SongSelect`.
     Other(Box<dyn screens::screen::Screen>),
 }
 
@@ -840,8 +838,7 @@ impl State {
 
     /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
     fn idle_allowed(&self) -> bool {
-        (matches!(self.scene, Scene::Select)
-            || self.scene.screen().is_some_and(|s| s.idle_allowed()))
+        (self.scene.is_select() || self.scene.screen().is_some_and(|s| s.idle_allowed()))
             && !self.quit_asked
             && self.crash.is_none()
             && self.splash.is_none()
@@ -908,7 +905,6 @@ impl State {
                 game.replay().is_none() && !self.auto && !game.mods().has(mods::Mod::Autoplay)
             }),
             Scene::Other(s) => s.holds_game(),
-            _ => false,
         }
     }
 
@@ -1429,7 +1425,7 @@ impl State {
                 }
             }
         }
-        let free = (matches!(self.scene, Scene::Select)
+        let free = (self.scene.is_select()
             || self
                 .scene
                 .screen()
@@ -1443,7 +1439,7 @@ impl State {
         };
         if let Some(entry) = find_score_map(&self.library, &score) {
             self.score_link = None;
-            self.scene = Scene::Select;
+            self.scene = SongSelect::scene();
             let path = self.library[entry].path.clone();
             self.select.select_path(&self.library, &path);
             if self.select.selected() != Some(entry) {
@@ -1684,7 +1680,6 @@ impl State {
                 .as_deref()
                 .is_some_and(|back| back.screen().is_some_and(|s| s.room_lobby())),
             Scene::Other(s) => s.over_lobby() || s.in_room() || s.spectating(),
-            _ => false,
         };
         let lobby_map = self.mp.as_ref().and_then(|s| s.map_entry).filter(|_| lobby);
         lobby_map.or_else(|| self.select.selected())
@@ -1802,7 +1797,7 @@ impl State {
         }
         self.stop_audio();
         self.report_smoothness();
-        self.scene = Scene::Select;
+        self.scene = SongSelect::scene();
     }
 
     fn report_smoothness(&mut self) {
@@ -1834,7 +1829,7 @@ impl State {
         if self.in_settings() {
             return;
         }
-        let prev = std::mem::replace(&mut self.scene, Scene::Select);
+        let prev = std::mem::replace(&mut self.scene, SongSelect::scene());
         self.behind = Some(Box::new(prev));
         self.scene = SettingsScreen::scene();
         self.settings_ui.binding = None;
@@ -1895,7 +1890,7 @@ impl State {
                     game.pause(sound(&self.audio));
                 }
             }
-            Scene::Select => {}
+            Scene::Other(sel) if sel.select_screen() => {}
             Scene::Other(s) if s.allows_settings() => {}
             _ => {
                 self.toast(
@@ -1922,8 +1917,8 @@ impl State {
     /// or out of them never glitches, so nothing gets in the way of a play.
     fn menu_screen(&self) -> Option<u8> {
         match self.scene {
-            Scene::Select if self.on_menu() => Some(0),
-            Scene::Select => Some(1),
+            Scene::Other(ref sel) if sel.select_screen() && self.on_menu() => Some(0),
+            Scene::Other(ref sel) if sel.select_screen() => Some(1),
             Scene::Other(ref s) => s.menu_screen(),
         }
     }
@@ -1946,7 +1941,7 @@ impl State {
 
     fn on_menu(&self) -> bool {
         self.main_menu.is_some()
-            && matches!(self.scene, Scene::Select)
+            && self.scene.is_select()
             && self.mp.is_none()
             && !self.picking_lobby_map
     }
@@ -2255,7 +2250,7 @@ impl State {
 
     fn close_settings(&mut self) {
         if self.in_settings() {
-            self.scene = self.behind.take().map_or(Scene::Select, |prev| *prev);
+            self.scene = self.behind.take().map_or(SongSelect::scene(), |prev| *prev);
         }
     }
 
@@ -3877,10 +3872,7 @@ impl State {
     /// into `target` (into a taiko-rs folder there, unless it is one; None: back to the usual
     /// places), on its own thread. `poll_data_move` takes it from there.
     fn move_data_to(&mut self, target: Option<PathBuf>) -> Result<(), String> {
-        if self
-            .behind_settings()
-            .is_some_and(|prev| !matches!(prev, Scene::Select))
-        {
+        if self.behind_settings().is_some_and(|prev| !prev.is_select()) {
             return Err(tr!(
                 "move the game data from song select",
                 "ゲームデータは選曲画面で移動してください",
@@ -4067,7 +4059,7 @@ impl State {
     /// settings and no multiplayer room to drop out of.
     fn can_restart(&self) -> bool {
         let scene = self.behind_settings().unwrap_or(&self.scene);
-        (matches!(scene, Scene::Select) || scene.screen().is_some_and(|s| s.update_corner()))
+        (scene.is_select() || scene.screen().is_some_and(|s| s.update_corner()))
             && self.mp.is_none()
             && self.splash.is_none()
     }
@@ -4076,7 +4068,7 @@ impl State {
     /// once it's installed (which waits for a moment that costs the player nothing).
     fn draw_update(&mut self, c: &mut Canvas) {
         // What's new, top right in the menus (left of the update badge when there is one).
-        let menus = (matches!(self.scene, Scene::Select) || self.in_settings())
+        let menus = (self.scene.is_select() || self.in_settings())
             || self.scene.screen().is_some_and(|s| s.update_corner());
         if menus
             && !self.mobile_bar()
@@ -4283,11 +4275,11 @@ impl State {
     fn follow_map_skin(&mut self) {
         let entry = match &self.scene {
             Scene::Other(s) if s.song_play().is_some() => s.song_play().map(|p| p.0),
-            Scene::Select => self.preview_target(),
+            Scene::Other(sel) if sel.select_screen() => self.preview_target(),
             Scene::Other(s) if s.map_from_song_select() => self.preview_target(),
             Scene::Other(s) if s.settings() => match self.behind.as_deref() {
                 Some(b) if b.is_play() => b.song_play().map(|p| p.0),
-                Some(Scene::Select) => self.preview_target(),
+                Some(b) if b.is_select() => self.preview_target(),
                 _ => None,
             },
             _ => None,
@@ -4406,7 +4398,7 @@ impl State {
                     }
                     // A song dropped on song select or the menu starts a map from it.
                     if editor::home::is_audio(&path)
-                        && matches!(self.scene, Scene::Select)
+                        && self.scene.is_select()
                         && !self.picking_lobby_map
                         && self.mp.is_none()
                     {
@@ -4632,7 +4624,7 @@ impl State {
             // Anywhere else while in a room (its lobby, or song select picking its map).
             Scene::Other(s) if s.presence_first() => s.presence(self)?,
             _ if self.mp.is_some() => lobby(self.mp.as_ref()?),
-            Scene::Select if self.player.is_some() => {
+            Scene::Other(sel) if sel.select_screen() && self.player.is_some() => {
                 let song = self
                     .player
                     .as_ref()
@@ -4973,11 +4965,7 @@ impl State {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
                 self.adjust_setting(item, 1, window)
             }
-            KeyCode::Tab
-                if self
-                    .behind_settings()
-                    .is_some_and(|prev| matches!(prev, Scene::Select)) =>
-            {
+            KeyCode::Tab if self.behind_settings().is_some_and(|prev| prev.is_select()) => {
                 self.open_multiplayer();
             }
             KeyCode::Escape | KeyCode::Tab | KeyCode::F1 => self.close_settings(),
@@ -4996,7 +4984,7 @@ impl State {
             self.scene = *back;
             return;
         }
-        match std::mem::replace(&mut self.scene, Scene::Select) {
+        match std::mem::replace(&mut self.scene, SongSelect::scene()) {
             other @ Scene::Other(_) if other.screen().is_some_and(|s| s.calibrating()) => {
                 // The result screen leaves on its own keys.
                 self.scene = other;
@@ -5087,7 +5075,7 @@ impl State {
             Scene::Other(s) if s.spectating() => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Other(s) if s.room_lobby() => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Other(s) if s.watching() => s.watched_map(),
-            Scene::Select => self.select.selected(),
+            Scene::Other(sel) if sel.select_screen() => self.select.selected(),
             Scene::Other(s) if s.map_from_song_select() => self.select.selected(),
             _ => self.song_entry(),
         }
@@ -5354,7 +5342,7 @@ impl State {
             // artist called -45).
             KeyCode::Minus | KeyCode::Equal | KeyCode::NumpadSubtract | KeyCode::NumpadAdd
                 if self.player.as_ref().is_some_and(|p| p.searching)
-                    || (matches!(self.scene, Scene::Select)
+                    || (self.scene.is_select()
                         && self.select.searching
                         && !self.modifiers_ctrl) =>
             {
@@ -5914,26 +5902,30 @@ impl State {
         let on_board = self
             .board_rect
             .is_some_and(|[bx, by, bw, bh]| vx >= bx && vx <= bx + bw && vy >= by && vy <= by + bh);
-        if matches!(self.scene, Scene::Select) && on_board && self.select.picker.is_none() {
+        if self.scene.is_select() && on_board && self.select.picker.is_none() {
             self.board_scroll = (self.board_scroll as i64 - notches as i64)
                 .clamp(0, self.board_max as i64) as usize;
             return;
         }
         match &self.scene {
-            Scene::Select
-                if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() =>
+            Scene::Other(sel)
+                if sel.select_screen()
+                    && self.preview_on_top(vx, vy)
+                    && self.preview.time_at(vx, vy).is_some() =>
             {
                 self.preview
                     .seek_by(notches as f64 * 5000.0, self.audio.as_ref())
             }
-            Scene::Select if self.select.picker.is_some() => {
+            Scene::Other(sel) if sel.select_screen() && self.select.picker.is_some() => {
                 let n = self.select.picker_len() as i32;
                 self.select.picker = self
                     .select
                     .picker
                     .map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
-            Scene::Select => self.select.scroll_by(-notches, &self.library),
+            Scene::Other(sel) if sel.select_screen() => {
+                self.select.scroll_by(-notches, &self.library)
+            }
             Scene::Other(s)
                 if s.previews_remote()
                     && self.preview_on_top(vx, vy)
@@ -6129,7 +6121,7 @@ impl State {
         if let Some(d) = &mut self.list_drag {
             let dy = drag_y - d.from_y;
             d.moved |= dy.abs() > DRAG_START;
-            if d.moved && matches!(self.scene, Scene::Select) {
+            if d.moved && self.scene.is_select() {
                 self.select.drag_to(dy);
                 return CursorIcon::NsResize;
             }
@@ -6139,7 +6131,7 @@ impl State {
             return CursorIcon::EwResize;
         }
         if self.scrollbar_drag {
-            if matches!(self.scene, Scene::Select) {
+            if self.scene.is_select() {
                 let (_, vy) = self.mouse_virtual();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
@@ -6147,7 +6139,7 @@ impl State {
             self.scrollbar_drag = false;
         }
         if self.right_scroll {
-            if matches!(self.scene, Scene::Select) {
+            if self.scene.is_select() {
                 let (_, vy) = self.mouse_virtual();
                 self.select.scroll_to(vy, &self.library);
                 return CursorIcon::NsResize;
@@ -6155,7 +6147,7 @@ impl State {
             self.right_scroll = false;
         }
         if let Some((_, from, start)) = self.split_drag {
-            if !matches!(self.scene, Scene::Select) {
+            if !self.scene.is_select() {
                 self.split_drag = None;
             } else {
                 let (vx, _) = self.mouse_virtual();
@@ -6279,7 +6271,7 @@ impl State {
                 }
                 return CursorIcon::Pointer;
             }
-            let on_box = matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy);
+            let on_box = self.scene.is_select() && self.preview.box_at(vx, vy);
             if self.preview_on_top(vx, vy)
                 && (self.preview.time_at(vx, vy).is_some()
                     || self.preview.play_button_at(vx, vy)
@@ -6381,12 +6373,12 @@ impl State {
         if pressed {
             self.select.menu = None;
             self.right_scroll = false;
-            self.right_press = (free && matches!(self.scene, Scene::Select))
-                .then(|| (vx, vy, self.hit_at(vx, vy)));
+            self.right_press =
+                (free && self.scene.is_select()).then(|| (vx, vy, self.hit_at(vx, vy)));
             return;
         }
         let press = self.right_press.take();
-        if std::mem::take(&mut self.right_scroll) || !matches!(self.scene, Scene::Select) {
+        if std::mem::take(&mut self.right_scroll) || !self.scene.is_select() {
             return;
         }
         match press {
@@ -6520,7 +6512,7 @@ impl State {
                         self.play_from_marker();
                     }
                     return;
-                } else if matches!(self.scene, Scene::Select) && self.preview.box_at(vx, vy) {
+                } else if self.scene.is_select() && self.preview.box_at(vx, vy) {
                     self.open_preview();
                     return;
                 } else if let Some(t) = self.preview.time_at(vx, vy) {
@@ -6615,24 +6607,24 @@ impl State {
             let (vx, vy) = self.mouse_virtual();
             let hit = self.hit_at(vx, vy);
             // The search box takes the keys when clicked, and gives them back on a click elsewhere.
-            if matches!(self.scene, Scene::Select) {
+            if self.scene.is_select() {
                 self.select.searching = hit == Some(hit::Hit::TextField);
             }
             if self.select.picker.is_some()
-                && matches!(self.scene, Scene::Select)
+                && self.scene.is_select()
                 && !matches!(hit, Some(hit::Hit::PickRow(_)))
             {
                 self.select.picker = None;
                 return;
             }
             if self.select.menu.is_some()
-                && matches!(self.scene, Scene::Select)
+                && self.scene.is_select()
                 && !matches!(hit, Some(hit::Hit::SongMenu(_)))
             {
                 self.select.menu = None;
                 return;
             }
-            if let (Scene::Select, Some(h @ hit::Hit::SplitList)) = (&self.scene, hit) {
+            if let (true, Some(h @ hit::Hit::SplitList)) = (self.scene.is_select(), hit) {
                 // Twice in quick succession: back to the usual size.
                 let now = Instant::now();
                 if self.split_click.take().is_some_and(|(last, at)| {
@@ -6646,13 +6638,13 @@ impl State {
                 return;
             }
             // A row acts on release, unless the press turns into dragging the list.
-            if let (Scene::Select, Some(hit::Hit::SongScrollbar)) = (&self.scene, hit) {
+            if let (true, Some(hit::Hit::SongScrollbar)) = (self.scene.is_select(), hit) {
                 self.scrollbar_drag = true;
                 self.select.scroll_to(vy, &self.library);
                 return;
             }
-            if let (Scene::Select, Some(h @ (hit::Hit::SongRow(_) | hit::Hit::SongHeader(_)))) =
-                (&self.scene, hit)
+            if let (true, Some(h @ (hit::Hit::SongRow(_) | hit::Hit::SongHeader(_)))) =
+                (self.scene.is_select(), hit)
             {
                 self.list_drag = Some(ListDrag {
                     from_y: vy,
@@ -6859,7 +6851,7 @@ impl State {
             {
                 if g.can_guess(s) {
                     self.picking_lobby_map = true;
-                    self.scene = Scene::Select;
+                    self.scene = SongSelect::scene();
                 } else if s.me().is_some_and(|p| p.guessed) {
                     self.toast("you've got this one".into());
                 }
@@ -6890,7 +6882,7 @@ impl State {
                     .into(),
                 );
             }
-            KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Tab => self.scene = SongSelect::scene(),
             KeyCode::Escape => {
                 let why = if s.owns_room() {
                     "room closed"
@@ -6932,7 +6924,7 @@ impl State {
                 self.mp_menu.open(multiplayer::Form::Main);
                 self.mp_status.clear();
             }
-            KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
+            KeyCode::Escape | KeyCode::Tab => self.scene = SongSelect::scene(),
             KeyCode::Backspace => {
                 match row {
                     Row::User => {
@@ -7337,8 +7329,8 @@ impl State {
     /// What's on screen, and the map, for a crash report (`CRASH_SCENE`).
     fn note_scene_for_crashes(&self) {
         let screen = match &self.scene {
-            Scene::Select if self.on_menu() => "main menu",
-            Scene::Select => "song select",
+            Scene::Other(sel) if sel.select_screen() && self.on_menu() => "main menu",
+            Scene::Other(sel) if sel.select_screen() => "song select",
             Scene::Other(s) if s.song_play().is_some() => {
                 if self.game().is_some_and(|game| game.replay().is_some()) {
                     "watching a replay"
@@ -7492,8 +7484,7 @@ impl State {
     /// `CUSTOM_REFRESH` while the song list is open, so a set approved meanwhile shows it.
     fn poll_custom(&mut self, now: Instant) {
         let due = self.custom_asked.is_none_or(|t| {
-            matches!(self.scene, Scene::Select)
-                && now.saturating_duration_since(t) >= CUSTOM_REFRESH
+            self.scene.is_select() && now.saturating_duration_since(t) >= CUSTOM_REFRESH
         });
         if due
             && self.custom_call.is_idle()
@@ -7796,7 +7787,7 @@ impl State {
                 .iter()
                 .any(|e| !there.contains(e.path.as_path()))
         };
-        if gone && matches!(self.scene, Scene::Select) && self.mp.is_none() {
+        if gone && self.scene.is_select() && self.mp.is_none() {
             let selected = self
                 .select
                 .selected()
@@ -8443,7 +8434,7 @@ impl State {
                 .is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none()
                 && !self.on_menu()
-                && (matches!(self.scene, Scene::Select)
+                && (self.scene.is_select()
                     || self.scene.screen().is_some_and(|s| s.tab().is_some())))
             || (self.in_settings()
                 && self.settings_ui.binding.is_none()
@@ -8716,7 +8707,7 @@ impl State {
         self.main_menu = None;
         let have = self.library.iter().position(|e| e.set_id() == Some(set));
         match have {
-            Some(i) if matches!(self.scene, Scene::Select) => {
+            Some(i) if self.scene.is_select() => {
                 let path = self.library[i].path.clone();
                 self.select.select_path(&self.library, &path);
                 self.social.close();
@@ -8758,10 +8749,14 @@ impl State {
             return Some(self.social.input.clone()).filter(|t| !t.is_empty());
         }
         match &self.scene {
-            Scene::Select if !self.select.filter.is_empty() && self.select.selected().is_none() => {
+            Scene::Other(sel)
+                if sel.select_screen()
+                    && !self.select.filter.is_empty()
+                    && self.select.selected().is_none() =>
+            {
                 Some(self.select.filter.clone())
             }
-            Scene::Select => self
+            Scene::Other(sel) if sel.select_screen() => self
                 .select
                 .selected()
                 .and_then(|i| self.library.get(i))
@@ -9099,7 +9094,7 @@ impl State {
     /// Song select, or a screen that is part of it (its fullscreen preview, the download tab):
     /// the song list's pointer, the preview panel and the map's stars work there.
     fn in_song_select(&self) -> bool {
-        matches!(self.scene, Scene::Select) || self.scene.screen().is_some_and(|s| s.song_select())
+        self.scene.is_select() || self.scene.screen().is_some_and(|s| s.song_select())
     }
 
     /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
@@ -9116,7 +9111,6 @@ impl State {
                 Some(editor::view::View::menu_end() + 6.0)
             }
             Scene::Other(s) => s.chip_from_right().map(|right| width - right),
-            _ => None,
         }
     }
 
@@ -10306,7 +10300,7 @@ impl State {
                         .get_or_insert_with(|| mapguessr::Guessr::new(library));
                     if game_over {
                         g.game_over();
-                        if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                        if self.picking_lobby_map && self.scene.is_select() {
                             self.picking_lobby_map = false;
                             self.scene = Lobby::scene();
                         }
@@ -10528,7 +10522,7 @@ impl State {
                     g.reveal(&self.library, hash, got, last);
                 }
                 // Picking a guess: back to the lobby to see the answer.
-                if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
+                if self.picking_lobby_map && self.scene.is_select() {
                     self.picking_lobby_map = false;
                     self.scene = Lobby::scene();
                 }
@@ -10664,7 +10658,7 @@ impl State {
 
     /// Song select with nothing over it.
     fn select_open(&self) -> bool {
-        matches!(self.scene, Scene::Select)
+        self.scene.is_select()
             && !self.on_menu()
             && self.mod_select.is_none()
             && self.select.picker.is_none()
@@ -10762,8 +10756,12 @@ impl State {
             return None;
         }
         Some(match &self.scene {
-            Scene::Select if self.on_menu() => keys::Place::Other,
-            Scene::Select if self.select.picker.is_none() && self.select.menu.is_none() => {
+            Scene::Other(sel) if sel.select_screen() && self.on_menu() => keys::Place::Other,
+            Scene::Other(sel)
+                if sel.select_screen()
+                    && self.select.picker.is_none()
+                    && self.select.menu.is_none() =>
+            {
                 keys::Place::Select
             }
             Scene::Other(s)
@@ -10773,7 +10771,6 @@ impl State {
             }
             Scene::Other(s) if s.song_play().is_some() => keys::Place::Play,
             Scene::Other(s) => s.key_place().unwrap_or(keys::Place::Other),
-            _ => keys::Place::Other,
         })
     }
 
@@ -10883,191 +10880,13 @@ impl State {
             }
             return;
         }
-        if self.screen_key(screens::screen::Key {
+        self.screen_key(screens::screen::Key {
             code,
             repeat,
             text,
             at,
             window,
-        }) {
-            return;
-        }
-        // Any key closes the row menu; Esc does nothing else.
-        if matches!(self.scene, Scene::Select)
-            && self.select.menu.take().is_some()
-            && code == KeyCode::Escape
-        {
-            return;
-        }
-        if let (Scene::Select, Some(cursor)) = (&self.scene, self.select.picker) {
-            let n = self.select.picker_len();
-            match code {
-                KeyCode::ArrowUp => self.select.picker = Some(cursor.saturating_sub(1)),
-                KeyCode::ArrowDown => self.select.picker = Some((cursor + 1).min(n - 1)),
-                KeyCode::PageUp => self.select.picker = Some(cursor.saturating_sub(10)),
-                KeyCode::PageDown => self.select.picker = Some((cursor + 10).min(n - 1)),
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => self.pick_row(cursor),
-                KeyCode::Escape | KeyCode::Backspace => self.select.picker = None,
-                _ => {}
-            }
-            return;
-        }
-        if self.mp.is_some()
-            && !self.picking_lobby_map
-            && matches!(self.scene, Scene::Select)
-            && code == KeyCode::Escape
-            && self.select.filter.is_empty()
-            && !self.select.searching
-        {
-            self.scene = Lobby::scene();
-            return;
-        }
-        if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
-            match code {
-                KeyCode::Escape if self.select.filter.is_empty() && !self.select.searching => {
-                    self.picking_lobby_map = false;
-                    self.scene = Lobby::scene();
-                    return;
-                }
-                KeyCode::Tab | KeyCode::F1 => {
-                    self.picking_lobby_map = false;
-                    self.scene = Lobby::scene();
-                    return;
-                }
-                _ => {}
-            }
-        }
-        if repeat
-            && !matches!(
-                code,
-                KeyCode::ArrowUp
-                    | KeyCode::ArrowDown
-                    | KeyCode::Backspace
-                    | KeyCode::PageUp
-                    | KeyCode::PageDown
-            )
-        {
-            return;
-        }
-        if self.handle_global_key(code, window) {
-            return;
-        }
-        if self.on_menu() {
-            if self.player.is_some() {
-                self.player_key(code, text);
-            } else {
-                self.menu_key(code);
-            }
-            return;
-        }
-        match &mut self.scene {
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyF => {
-                self.select.searching = true
-            }
-            // In the search box the keys that have a job here otherwise (speed's [ and ]) type.
-            Scene::Select
-                if self.select.searching
-                    && !self.modifiers_ctrl
-                    && matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) =>
-            {
-                if let Some(text) = text {
-                    self.select.type_text(text, &self.library);
-                }
-            }
-            Scene::Select
-                if self.modifiers_shift
-                    && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
-                    && !self.picking_lobby_map =>
-            {
-                self.play_from_marker();
-            }
-            Scene::Select
-                if self.modifiers_ctrl && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter) =>
-            {
-                self.open_preview()
-            }
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyD => self.open_download(),
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyS => {
-                let dir = if self.modifiers_shift { -1 } else { 1 };
-                self.cycle_sort(dir);
-            }
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::KeyL => {
-                self.open_collections()
-            }
-            Scene::Select
-                if self.modifiers_ctrl && self.modifiers_shift && code == KeyCode::KeyU =>
-            {
-                if let Some(i) = self.select.selected() {
-                    self.update_set(i);
-                }
-            }
-            Scene::Select if code == KeyCode::F2 => {
-                if self.modifiers_shift {
-                    self.select.random_back();
-                } else {
-                    self.select.random(&self.library);
-                }
-            }
-            Scene::Select
-                if self.modifiers_ctrl
-                    && matches!(code, KeyCode::ArrowLeft | KeyCode::ArrowRight) =>
-            {
-                let step = if code == KeyCode::ArrowRight {
-                    5000.0
-                } else {
-                    -5000.0
-                };
-                self.preview.seek_by(step, self.audio.as_ref());
-            }
-            Scene::Select if matches!(code, KeyCode::BracketLeft | KeyCode::BracketRight) => {
-                let step = if code == KeyCode::BracketRight {
-                    0.05
-                } else {
-                    -0.05
-                } * if self.modifiers_shift { 5.0 } else { 1.0 };
-                self.cfg.rate = (((self.cfg.rate + step) * 100.0).round() / 100.0)
-                    .clamp(RATE_RANGE.0, RATE_RANGE.1);
-                self.cfg.save();
-                let pitch = if self.cfg.rate_keep_pitch {
-                    "keeps pitch"
-                } else {
-                    "pitch shifts"
-                };
-                self.toast(format!("speed {:.2}x ({pitch})", self.cfg.rate));
-            }
-            Scene::Select
-                if self.library.is_empty()
-                    && self.scan.is_none()
-                    && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
-                    && !cfg!(target_os = "android") =>
-            {
-                self.browse_songs_folder();
-            }
-            Scene::Select if self.modifiers_ctrl && code == KeyCode::Backspace => {
-                self.select.filter.clear();
-                self.select.refilter(&self.library);
-            }
-            Scene::Select => match self.select.key(code, &self.library) {
-                SelectAction::Play(i) if self.picking_lobby_map => self.pick_lobby_map(i),
-                SelectAction::Play(i) if self.pick_to_edit => {
-                    self.pick_to_edit = false;
-                    self.open_editor(i);
-                }
-                SelectAction::Play(i) => self.start_loading(i),
-                SelectAction::Settings => self.open_settings(),
-                SelectAction::Mods => self.open_mod_select(),
-                SelectAction::Quit if self.cfg.main_menu => {
-                    self.main_menu = Some(menu::Menu::new())
-                }
-                SelectAction::Quit => self.ask_quit(),
-                SelectAction::None => {
-                    if let Some(text) = text {
-                        self.select.type_text(text, &self.library);
-                    }
-                }
-            },
-            Scene::Other(_) => {}
-        }
+        });
     }
 
     /// Advances the game to `now` and fills `canvas`. Returns a screenshot name if this frame
@@ -11214,7 +11033,7 @@ impl State {
                     .screen_as::<ResultsScreen>()
                     .is_some_and(|r| r.results.opened.is_some() && r.results.music.is_none())
                 || self.behind_settings().is_some_and(|prev| {
-                    matches!(prev, Scene::Select)
+                    prev.is_select()
                         || prev.screen().is_some_and(|s| s.room_lobby())
                         || prev.screen_is::<Preview>()
                 })
@@ -11263,7 +11082,7 @@ impl State {
             if let (true, Some(i)) = (self.scene.screen_is::<Preview>(), selected) {
                 self.stars.request(i, &self.library[i].path, play_rate);
             }
-            if matches!(self.scene, Scene::Select) {
+            if self.scene.is_select() {
                 self.poll_set_status(now);
                 for i in self.select.selected_set() {
                     self.stars.request(i, &self.library[i].path, play_rate);
@@ -11285,7 +11104,6 @@ impl State {
                     }
                 }
                 Scene::Other(ref s) => s.background_dim().unwrap_or(0.35),
-                _ => 0.35,
             };
             self.bg_brightness *= 1.0 - idle::DARKEN * self.idle.amount();
         }
@@ -11345,7 +11163,7 @@ impl State {
         let lobby_host = self.mp.as_ref().is_some_and(|s| s.is_host() && !s.in_match);
         let size_label = format!("Playfield {}", self.playfield_label());
         // A test play that couldn't load (or ended up in song select) goes back to its editor.
-        if self.editor_back.is_some() && matches!(self.scene, Scene::Select) {
+        if self.editor_back.is_some() && self.scene.is_select() {
             let why = std::mem::take(&mut self.status);
             self.back_to_editor();
             if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
@@ -11366,7 +11184,7 @@ impl State {
         // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
         // headless screenshots and tests, like `TAIKO_INPUT`).
         if let Some(path) = std::env::var_os("TAIKO_EDIT")
-            && matches!(self.scene, Scene::Select)
+            && self.scene.is_select()
             && !self.library.is_empty()
         {
             static ONCE: AtomicBool = AtomicBool::new(false);
@@ -11383,7 +11201,7 @@ impl State {
         // `TAIKO_HOME=<song>[|details|timing]`: opens the editor's front door, on a song if one is
         // given (for headless screenshots, like `TAIKO_EDIT`).
         if let Some(spec) = std::env::var_os("TAIKO_HOME")
-            && matches!(self.scene, Scene::Select)
+            && self.scene.is_select()
             && self.splash.is_none()
         {
             static ONCE: AtomicBool = AtomicBool::new(false);
@@ -11478,7 +11296,7 @@ impl State {
         }
         if self.shots.is_some() && self.stats.frames > 5 {
             let screen = match self.scene {
-                Scene::Select => Some("select"),
+                Scene::Other(ref sel) if sel.select_screen() => Some("select"),
                 _ if self.scene.screen_is::<ResultsScreen>() => Some("results"),
                 _ => None,
             };
@@ -11492,10 +11310,10 @@ impl State {
                 }
             }
         }
-        if !(matches!(self.scene, Scene::Select) || self.in_lobby()) {
+        if !(self.scene.is_select() || self.in_lobby()) {
             self.mod_select = None;
         }
-        if self.pick_to_edit && (self.main_menu.is_some() || !matches!(self.scene, Scene::Select)) {
+        if self.pick_to_edit && (self.main_menu.is_some() || !self.scene.is_select()) {
             self.pick_to_edit = false;
         }
         // A song or a replay opened by any road leaves the menu behind.
@@ -11545,7 +11363,7 @@ impl State {
             self.menu_open(item);
         }
         let on_menu = self.on_menu();
-        if !matches!(self.scene, Scene::Select) {
+        if !self.scene.is_select() {
             self.select.menu = None;
             self.list_drag = None;
             self.select.cancel_drag();
@@ -11576,359 +11394,6 @@ impl State {
             playing && self.cfg.kiai_effects && self.preview.kiai(),
         );
         match &mut self.scene {
-            Scene::Select if on_menu => {
-                self.board_rect = None;
-                self.leaderboard.clear();
-                let shown = self
-                    .player
-                    .as_ref()
-                    .and_then(|p| p.list.entry())
-                    .or(self.select.selected());
-                let song = shown.and_then(|i| self.library.get(i)).map(Entry::label);
-                let k = |i: usize| config::key_name(self.cfg.keys[i]);
-                let (a, b, d, e) = (k(0), k(3), k(1), k(2));
-                let paused = self.music_paused;
-                if let Some(p) = &mut self.player {
-                    let now = Instant::now();
-                    let engine = self.audio.as_ref();
-                    let sounding =
-                        !paused && self.preview.sounding(engine, now, &mut p.spectrum.samples);
-                    let hint = tr!("{a} {b} song   {d} {e} pause   L love   Tab folders", "{a} {b} 曲   {d} {e} ポーズ   L お気に入り   Tab フォルダ", "{a} {b} трек   {d} {e} пауза   L любимое   Tab папки";);
-                    let volume = self.cfg.music_volume;
-                    let frame = player::Frame {
-                        song: song.as_deref().unwrap_or_default(),
-                        hint: &hint,
-                        paused,
-                        times: self.preview.music_times(engine, now),
-                        pictured: self.preview.has_background,
-                        sounding,
-                        rate: engine.map_or(48_000, |a| a.rate),
-                        volume,
-                    };
-                    p.draw(canvas, &frame);
-                } else if let Some(m) = &mut self.main_menu {
-                    let kiai = self.cfg.kiai_effects && !paused && self.preview.kiai();
-                    let shows = self.cfg.menu_notes && render::animations();
-                    let ghosts = self
-                        .preview
-                        .map_time(self.menu_notes.entry())
-                        .filter(|_| shows)
-                        .and_then(|t| self.menu_notes.view(t));
-                    let frame = menu::Frame {
-                        beat: self.preview.beat(),
-                        kiai,
-                        ghosts,
-                        lane_dim: self.cfg.menu_notes_dim,
-                        song: song.as_deref(),
-                        maps: self.library.len(),
-                        paused,
-                        session: (
-                            now.saturating_duration_since(self.started).as_secs_f64(),
-                            self.session_play_ms / 1000.0,
-                        ),
-                        glitch: self.cfg.menu_glitch,
-                    };
-                    m.draw(canvas, &frame);
-                }
-            }
-            Scene::Select => {
-                // DT / HT show on the Mods button instead.
-                self.select.rate_label = if (self.cfg.rate - 1.0).abs() > 1e-6
-                    && self.cfg.mods.rate_override().is_none()
-                {
-                    format!(
-                        "  |  {:.2}x{}",
-                        self.cfg.rate,
-                        if self.cfg.rate_keep_pitch {
-                            ""
-                        } else {
-                            " (pitch)"
-                        }
-                    )
-                } else {
-                    String::new()
-                };
-                let (stars, rate, plays) = (&self.stars, self.play_speed().0, &self.scores);
-                self.select.scrubbing =
-                    (self.right_scroll || self.scrollbar_drag).then(|| self.mouse_virtual().1);
-                self.select.list_share = self.cfg.song_list_share;
-                self.select.banner = self.pick_to_edit || self.picking_lobby_map;
-                let phone = mobile::active();
-                if phone {
-                    self.draw_mobile_select(canvas);
-                } else {
-                    self.select.draw(
-                        canvas,
-                        &self.library,
-                        dt,
-                        &self.status,
-                        &|i| stars.get(i, rate),
-                        &|e| scores::best_grade(plays, e.hash()),
-                    );
-                }
-                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
-                // The panel beside the list: from `x`, `pw` wide, `panel_top` down to `panel_end`.
-                let [x, panel_top, pw, panel_end] = if phone {
-                    self.mobile_select_panel(canvas.width)
-                } else {
-                    let x = 24.0 + lw + 12.0;
-                    // Level with the list's frame (the Legacy layout keeps its own).
-                    let [top, end] = if self.select.legacy {
-                        [54.0, 436.0]
-                    } else {
-                        self.select.frame_span()
-                    };
-                    [x, top, canvas.width - x - 24.0, end]
-                };
-                self.board_rect = None;
-                // Always at full size (no longer dragged smaller).
-                self.preview.size = preview::PREVIEW_SIZE.1;
-                let selected_stars = self.select.selected().and_then(|i| self.stars.get(i, rate));
-                self.preview.potential = match self.select.selected() {
-                    Some(i) => self.potentials.get(
-                        &self.library[i].path,
-                        rate,
-                        self.cfg.mods,
-                        self.cfg.scroll_speed,
-                    ),
-                    None => None,
-                };
-                if phone {
-                    let status = self.select.selected().and_then(|i| self.map_status(i));
-                    let liked = self
-                        .preview_target()
-                        .and_then(|i| self.library.get(i))
-                        .map(|e| self.select.is_liked(e));
-                    let rect = [x, panel_top, pw, panel_end];
-                    self.draw_mobile_panels(canvas, rect, selected_stars, status, liked);
-                } else {
-                    self.leaderboard.clear();
-                }
-                if pw > 160.0 && !phone {
-                    let status = self.select.selected().and_then(|i| self.map_status(i));
-                    let liked = self
-                        .preview_target()
-                        .and_then(|i| self.library.get(i))
-                        .map(|e| self.select.is_liked(e));
-                    // Two pages side by side, as on a phone: the preview, and the leaderboard
-                    // the button slides to.
-                    let t = self.mob.slide_board(canvas.dt_ms);
-                    let step = pw + 24.0;
-                    // The page buttons sit under both pages, in what's left below the preview.
-                    const PAGE_BUTTON_H: f32 = 22.0;
-                    let panel_h = panel_end - panel_top - PAGE_BUTTON_H - 8.0;
-                    let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
-                    if t < 1.0 {
-                        let start = canvas.shapes.len();
-                        // The way to the leaderboard is where the way back is on the board (its
-                        // header's top right), so the mouse stays put going back and forth.
-                        let label = tr!("Leaderboard >", "ランキング >", "Рейтинг >");
-                        let bw = Canvas::text_width(7.0, label) + 24.0;
-                        self.preview.title_room = bw + 10.0;
-                        if let Some(clip) = self.preview.draw_panel(
-                            canvas,
-                            &self.library,
-                            x - t * step,
-                            panel_top,
-                            pw,
-                            panel_h,
-                            self.cfg.scroll_speed,
-                            selected_stars,
-                            Some(("Play from", "Shift+Enter")),
-                            status,
-                            liked,
-                        ) {
-                            self.frame_clip = Some(clip);
-                        }
-                        self.preview.title_room = 0.0;
-                        // As the board's back button: 10 in from the frame, then the rows' scroll
-                        // bar room (`board_tabs`, inside `pw - 28`).
-                        let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
-                        let hit = hit::Hit::BoardPage;
-                        canvas.button(bx, by, bw, 20.0, label, 7.0, hit, false);
-                        canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
-                    } else {
-                        self.preview.hide_panel();
-                    }
-                    let board_start = canvas.shapes.len();
-                    let page_x = x + (1.0 - t) * step;
-                    if t > 0.0 {
-                        style::panel(canvas, page_x, panel_top, pw, panel_h);
-                    }
-                    // Inside the frame, with room right of the rows for their scroll bar.
-                    let (panel_x, panel_w) = (x, pw);
-                    let (x, pw) = (page_x + 10.0, pw - 28.0);
-                    if let Some(i) = self.select.selected().filter(|_| t > 0.0) {
-                        let top = panel_top + 10.0;
-                        let room = panel_end - 10.0 - top - BOARD_HEAD;
-                        let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
-                        if fits > 0 {
-                            let hash = self.library[i].hash();
-                            let relax = self.cfg.mods.relax();
-                            if self.board_for != (hash, self.board_online, relax) {
-                                self.board_for = (hash, self.board_online, relax);
-                                self.board_scroll = 0;
-                            }
-                            self.board_rect =
-                                Some([x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW]);
-                            if self.board_online {
-                                let board = self.online_board(hash, relax).cloned();
-                                let total = board
-                                    .as_ref()
-                                    .and_then(|b| b.as_ref().ok())
-                                    .map_or(0, Vec::len);
-                                self.board_max = total.saturating_sub(fits);
-                                self.board_scroll = self.board_scroll.min(self.board_max);
-                                draw_online_leaderboard(
-                                    canvas,
-                                    [x, top],
-                                    pw,
-                                    board.as_ref(),
-                                    &self.cfg.online_user,
-                                    fits,
-                                    self.board_scroll,
-                                    relax,
-                                );
-                                self.online_leaderboard = match board {
-                                    Some(Ok(rows)) => rows
-                                        .into_iter()
-                                        .skip(self.board_scroll)
-                                        .take(fits)
-                                        .collect(),
-                                    _ => Vec::new(),
-                                };
-                            } else {
-                                let all = scores::top(&self.scores, hash, usize::MAX, relax);
-                                self.board_max = all.len().saturating_sub(fits);
-                                self.board_scroll = self.board_scroll.min(self.board_max);
-                                let rows: Vec<&scores::ScoreRow> = all
-                                    .iter()
-                                    .skip(self.board_scroll)
-                                    .take(fits)
-                                    .copied()
-                                    .collect();
-                                self.leaderboard = rows.iter().map(|r| r.file.clone()).collect();
-                                draw_leaderboard(
-                                    canvas,
-                                    x,
-                                    top,
-                                    pw,
-                                    &rows,
-                                    self.board_scroll,
-                                    all.len(),
-                                    relax,
-                                );
-                            }
-                        }
-                    }
-                    canvas.clip_since(board_start, clip[0], clip[1], clip[2], clip[3]);
-                    let play = if self.picking_lobby_map {
-                        tr!("Pick", "選ぶ", "Выбрать")
-                    } else if self.pick_to_edit {
-                        tr!("Edit", "編集", "Править")
-                    } else {
-                        tr!("Play", "プレイ", "Играть")
-                    };
-                    let mods = &self.select.mods_label;
-                    let mods_label = if mods.is_empty() {
-                        tr!("Mods", "Mod", "Моды").to_string()
-                    } else {
-                        format!("{}: {mods}", tr!("Mods", "Mod", "Моды"))
-                    };
-                    let random = tr!("Random", "ランダム", "Случайная");
-                    // (label, hit, lit, share of the width). The Legacy layout has Mods on top.
-                    let mut buttons = vec![
-                        (
-                            mods_label.as_str(),
-                            hit::Hit::ModsButton,
-                            !mods.is_empty(),
-                            1.0,
-                        ),
-                        (random, hit::Hit::Key(KeyCode::F2), false, 1.0),
-                        (play, hit::Hit::Key(KeyCode::Enter), true, 1.3),
-                    ];
-                    if self.select.legacy {
-                        buttons.drain(..2);
-                    }
-                    let total: f32 = buttons.iter().map(|b| b.3).sum();
-                    let unit = (panel_w - 8.0 * (buttons.len() as f32 - 1.0)) / total;
-                    let (mut bx, by) = (panel_x, panel_end - PAGE_BUTTON_H);
-                    for (label, hit, lit, share) in buttons {
-                        let bw = unit * share;
-                        let label = Canvas::fit(8.0, bw - 12.0, label);
-                        canvas.button(bx, by, bw, PAGE_BUTTON_H, &label, 8.0, hit, lit);
-                        bx += bw + 8.0;
-                    }
-                    // The song list's right edge: the gap between the list's box (`ui`, ending
-                    // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
-                    let dragging = matches!(self.split_drag, Some((hit::Hit::SplitList, ..)));
-                    if !phone {
-                        draw_divider(
-                            canvas,
-                            [24.0 + lw + 4.0, panel_top, 8.0, panel_end - panel_top],
-                            true,
-                            dragging,
-                            hit::Hit::SplitList,
-                        );
-                    }
-                }
-                let guessing = self.mp.as_ref().is_some_and(|s| s.mapguessr);
-                if let Some(g) = self
-                    .guessr
-                    .as_mut()
-                    .filter(|_| self.picking_lobby_map && guessing)
-                {
-                    mapguessr::draw_picking(canvas, g, self.cfg.scroll_speed, Instant::now());
-                } else if self.pick_to_edit && !phone {
-                    let w = canvas.width;
-                    canvas.round_rect(
-                        [24.0, 438.0],
-                        [w - 48.0, 34.0],
-                        8.0,
-                        rgba(0x1d1630, 1.0),
-                        rgba(0x9b6cff, 1.0),
-                        1.5,
-                    );
-                    canvas.text_centered(
-                        w / 2.0,
-                        450.0,
-                        10.0,
-                        rgba(0xffffff, 1.0),
-                        &Canvas::fit(
-                            10.0,
-                            w - 64.0,
-                            "Choose a map to edit: Enter opens it in the editor, Esc cancels",
-                        ),
-                    );
-                } else if self.picking_lobby_map && !phone {
-                    let w = canvas.width;
-                    canvas.round_rect(
-                        [24.0, 438.0],
-                        [w - 48.0, 34.0],
-                        8.0,
-                        rgba(themed(0x2b1a17, 0x15151d, 0.84), 1.0),
-                        rgba(accent(), 1.0),
-                        1.5,
-                    );
-                    canvas.text_centered(
-                        w / 2.0,
-                        450.0,
-                        10.0,
-                        rgba(0xffffff, 1.0),
-                        &Canvas::fit(
-                            10.0,
-                            w - 64.0,
-                            "Picking the lobby map: Enter to choose, Esc to cancel",
-                        ),
-                    );
-                }
-                self.select.draw_popups(canvas, &self.library);
-                if self.cfg.drum_menus {
-                    self.select_rows = drum_nav::Rows::of(canvas);
-                    self.select_zone = self.select_zone.within(&self.select_rows);
-                    drum_nav::draw(canvas, self.select_zone, &self.select_rows);
-                }
-            }
             Scene::Other(_) => {
                 let frame = screens::screen::Frame {
                     now,
@@ -11938,6 +11403,8 @@ impl State {
                     lobby_download,
                     visual_offset,
                     hidden,
+                    on_menu,
+                    dt,
                 };
                 if let Some(s) = self.draw_screen(canvas, &frame) {
                     next = Some(s);
@@ -12185,11 +11652,11 @@ impl State {
             let music_on = results.is_some_and(|r| r.results.music.is_some());
             if music_on {
                 self.preview.invalidate_audio();
-            } else if results.is_some() || matches!(s, Scene::Select) {
+            } else if results.is_some() || s.is_select() {
                 self.stop_audio();
             }
             // TAIKO_STATS: the play's smoothness, whether the music plays on at the results or not.
-            if (results.is_some() || matches!(s, Scene::Select))
+            if (results.is_some() || s.is_select())
                 && let (Some(sm), true) = (&mut self.smooth, self.scene.is_play())
             {
                 eprintln!(
@@ -12426,7 +11893,7 @@ impl State {
             return;
         }
         self.browse.menu = None;
-        self.scene = Scene::Select;
+        self.scene = SongSelect::scene();
         self.reveal_maps(maps);
     }
 
@@ -12664,7 +12131,6 @@ impl State {
         });
         let map_loading = match &self.scene {
             Scene::Other(s) => s.loading(),
-            _ => false,
         };
         let live_pp =
             self.scene.plays_song() && self.game().is_some_and(|game| game.live_pp_busy());
@@ -12987,7 +12453,7 @@ impl State {
                 })
                 .or_insert(state);
         }
-        if !self.cfg.check_updates || !matches!(self.scene, Scene::Select) {
+        if !self.cfg.check_updates || !self.scene.is_select() {
             self.set_check_due = None;
             return;
         }
@@ -13244,18 +12710,18 @@ impl State {
     /// The SONGS tab: the songs themselves, not the menu over them.
     fn show_songs(&mut self) {
         self.main_menu = None;
-        self.scene = Scene::Select;
+        self.scene = SongSelect::scene();
     }
 
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
         let settings_from_menu = self.behind_settings().is_some_and(|prev| {
-            matches!(prev, Scene::Select) || prev.screen().is_some_and(|s| s.tab().is_some())
+            prev.is_select() || prev.screen().is_some_and(|s| s.tab().is_some())
         });
-        match (&self.scene, tab) {
-            (Scene::Select, 1) => self.open_settings(),
-            (Scene::Select, 2) => {
+        match (self.scene.is_select(), tab) {
+            (true, 1) => self.open_settings(),
+            (true, 2) => {
                 self.picking_lobby_map = false;
                 self.open_multiplayer();
             }
@@ -13267,19 +12733,27 @@ impl State {
                 self.close_settings();
                 self.open_multiplayer();
             }
-            (Scene::Select, 3) => self.open_download(),
+            (true, 3) => self.open_download(),
             (_, 3) if settings_from_menu => {
                 self.close_settings();
                 self.open_download();
             }
             // Another tab than its own.
-            (Scene::Other(s), tab) if s.tab().is_some_and(|own| own != tab) => match tab {
-                0 => self.show_songs(),
-                1 => self.open_settings(),
-                2 => self.open_multiplayer(),
-                3 => self.open_download(),
-                _ => {}
-            },
+            (_, tab)
+                if self
+                    .scene
+                    .screen()
+                    .and_then(|s| s.tab())
+                    .is_some_and(|own| own != tab) =>
+            {
+                match tab {
+                    0 => self.show_songs(),
+                    1 => self.open_settings(),
+                    2 => self.open_multiplayer(),
+                    3 => self.open_download(),
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }

@@ -34,7 +34,7 @@ impl State {
             Out::PickInLibrary => {
                 self.pick_to_edit = true;
                 self.main_menu = None;
-                self.scene = Scene::Select;
+                self.scene = SongSelect::scene();
             }
             Out::Open(path) => match self.entry_for(&path) {
                 Some(entry) => self.open_editor_at(path, entry),
