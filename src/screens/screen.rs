@@ -289,7 +289,20 @@ fn is_shadow(screen: &dyn Screen) -> bool {
     any.is::<Shadow>()
 }
 
+/// Which screen is up, for noticing a change of screen: the variant, and for the screens
+/// outside lib.rs (all `Scene::Other`) which one.
+pub(crate) type SceneKind = (std::mem::Discriminant<Scene>, Option<std::any::TypeId>);
+
 impl Scene {
+    /// Which screen this is; two scenes of the same kind are the same screen.
+    pub(crate) fn kind(&self) -> SceneKind {
+        let screen = self.screen().map(|s| {
+            let any: &dyn Any = s;
+            any.type_id()
+        });
+        (std::mem::discriminant(self), screen)
+    }
+
     /// The screen up, if it is one of those outside lib.rs.
     pub(crate) fn screen(&self) -> Option<&dyn Screen> {
         match self {
@@ -367,6 +380,39 @@ mod tests {
         let own = s.scene.screen().and_then(|h| h.presence());
         assert!(own.is_some(), "the front door is up");
         assert_eq!(s.presence_text(), own);
+    }
+
+    /// Going from one screen outside lib.rs to another is a change of screen, though both are
+    /// `Scene::Other`: the new one fades in and its animations start over, as when each was a
+    /// variant of its own.
+    #[test]
+    fn going_between_two_moved_screens_is_a_change_of_screen() {
+        let mut s = layout_tests::state();
+        s.cfg.animations = true;
+        // The library's scan comes in on the first frame.
+        let mut at = Instant::now();
+        s.build_frame(&mut Canvas::default(), at, 853.3);
+        s.open_layout_editor();
+        for _ in 0..20 {
+            at += Duration::from_millis(50);
+            s.build_frame(&mut Canvas::default(), at, 853.3);
+        }
+        assert!(
+            s.scene
+                .screen_mut::<screens::layout_edit::LayoutEdit>()
+                .is_some()
+        );
+        assert_eq!(s.screen_fade, None, "the first screen has faded in");
+        s.open_hud_editor();
+        at += Duration::from_millis(50);
+        s.build_frame(&mut Canvas::default(), at, 853.3);
+        assert!(
+            s.scene
+                .screen_mut::<screens::hud_editor::HudEdit>()
+                .is_some()
+        );
+        assert_eq!(s.scene_since, at, "its animations start now");
+        assert!(s.screen_fade.is_some(), "the second one fades in");
     }
 
     /// The screens moved out of lib.rs stay out: no `Scene` variant of their own, no state of
