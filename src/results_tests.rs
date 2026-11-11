@@ -417,11 +417,11 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
             std::thread::sleep(Duration::from_millis(2));
         }
         match (
-            &s.scene,
+            s.scene.screen_as::<crate::screens::loading::Loading>(),
             s.scene
                 .screen_as::<crate::screens::results::ResultsScreen>(),
         ) {
-            (Scene::Loading { retry, entry, .. }, _) if restart => assert!(*retry && *entry == 0),
+            (Some(l), _) if restart => assert!(l.retry && l.entry == 0),
             (_, Some(r)) if !restart => assert!(r.results.failed),
             _ => panic!("restart {restart}: ended up elsewhere"),
         }

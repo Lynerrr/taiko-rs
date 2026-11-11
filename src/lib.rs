@@ -156,6 +156,7 @@ use library::{
 use multiplayer::{lobby_seed, map_info, mod_settings, use_mod_settings};
 use screens::editor_home::EditorHome;
 use screens::hud_editor::HudEdit;
+use screens::loading::Loading;
 use screens::lobby::Lobby;
 use screens::menu::{update_badge, updating_badge};
 use screens::mp_menu::MpMenu;
@@ -192,15 +193,6 @@ type Loaded = Result<(Beatmap, Arc<Track>), String>;
 
 enum Scene {
     Select,
-    /// `from`: map time to start at (picked on the song select timeline), None = from the start.
-    Loading {
-        rx: Job<Loaded>,
-        label: String,
-        entry: usize,
-        from: Option<f64>,
-        /// A retry: the intro was heard already, so it's skipped.
-        retry: bool,
-    },
     Play {
         entry: usize,
         from: Option<f64>,
@@ -1323,13 +1315,7 @@ impl State {
         let label = tr!("replay of {player}: {map}", "{player}のリプレイ: {map}", "повтор {player}: {map}";);
         let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
         self.pending_replay = Some(r);
-        self.scene = Scene::Loading {
-            rx,
-            label,
-            entry,
-            from: None,
-            retry: false,
-        };
+        self.scene = Loading::scene(rx, label, entry, None);
     }
 
     /// Song select's layout as it comes: the list's share.
@@ -1632,20 +1618,14 @@ impl State {
             }
             None => self.load_with(entry, self.cfg.rate, self.cfg.mods),
         };
-        self.scene = Scene::Loading {
-            rx,
-            label,
-            entry,
-            from,
-            retry: false,
-        };
+        self.scene = Loading::scene(rx, label, entry, from);
     }
 
     /// Plays the map again, like starting it except that the intro is skipped.
     fn retry_from(&mut self, entry: usize, from: Option<f64>) {
         self.start_loading_from(entry, from);
-        if let Scene::Loading { retry, .. } = &mut self.scene {
-            *retry = true;
+        if let Some(l) = self.scene.screen_mut::<Loading>() {
+            l.retry = true;
         }
     }
 
@@ -1753,7 +1733,12 @@ impl State {
 
     /// Whether the music may carry on with the app in the background: anywhere but a song.
     fn music_goes_on(&self) -> bool {
-        !self.in_song() && !matches!(self.scene, Scene::Loading { .. })
+        !self.in_song() && !self.loading_song()
+    }
+
+    /// A song is being loaded to be played.
+    fn loading_song(&self) -> bool {
+        self.scene.screen().is_some_and(|s| s.loads_song())
     }
 
     /// Android: the app went to the background (or came back). The menus' music and the player
@@ -4673,10 +4658,6 @@ impl State {
             return Some((tr!("AFK", "離席中", "Отошёл").into(), song));
         }
         Some(match &self.scene {
-            Scene::Loading { entry, .. } => (
-                self.library.get(*entry)?.label(),
-                tr!("Loading...", "読み込み中...", "Загрузка...").into(),
-            ),
             Scene::Play { entry, .. } => {
                 let game = self.play.as_deref()?;
                 let label = self.library.get(*entry)?.label();
@@ -5142,7 +5123,7 @@ impl State {
     /// The map played now, or whose results are up (its own offset is what -/+ and O change).
     fn song_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Loading { entry, .. } | Scene::Play { entry, .. } => Some(*entry),
+            Scene::Play { entry, .. } => Some(*entry),
             Scene::Other(s) if s.map_entry().is_some() => s.map_entry(),
             // The room's map is the song of its match, of the wait for it and of its results;
             // the lobby only shows it.
@@ -7413,7 +7394,6 @@ impl State {
         let screen = match &self.scene {
             Scene::Select if self.on_menu() => "main menu",
             Scene::Select => "song select",
-            Scene::Loading { .. } => "loading a map",
             Scene::Play { .. } => {
                 if self.game().is_some_and(|game| game.replay().is_some()) {
                     "watching a replay"
@@ -9083,10 +9063,8 @@ impl State {
 
     /// Showing a song, its background dimmed by the background dim setting.
     fn dims_background(&self) -> bool {
-        matches!(
-            self.scene,
-            Scene::Play { .. } | Scene::Loading { .. } | Scene::Editor(_)
-        ) || self.scene.screen().is_some_and(|s| s.dims_background())
+        matches!(self.scene, Scene::Play { .. } | Scene::Editor(_))
+            || self.scene.screen().is_some_and(|s| s.dims_background())
     }
 
     /// What the window is cleared to under the background: black in a song when the background
@@ -9764,7 +9742,9 @@ impl State {
             // count as editing: a test play is the mapper checking their own work, there's
             // nothing to watch, and flipping to "playing" would offer friends a Watch button.
             Scene::Editor(view) => Activity::Editing { map: view.label() },
-            Scene::Loading { .. } | Scene::Play { .. } if self.editor_back.is_some() => {
+            _ if self.editor_back.is_some()
+                && (matches!(self.scene, Scene::Play { .. }) || self.loading_song()) =>
+            {
                 Activity::Editing {
                     map: self
                         .editor_back
@@ -10420,7 +10400,8 @@ impl State {
                 let Some(s) = &mut self.mp else { return };
                 s.contrib.clear();
                 // Not in a position to play (single-player song, calibration): sit this one out.
-                if matches!(self.scene, Scene::Play { .. } | Scene::Loading { .. })
+                if matches!(self.scene, Scene::Play { .. })
+                    || self.scene.screen().is_some_and(|s| s.loads_song())
                     || self
                         .scene
                         .screen()
@@ -11181,11 +11162,6 @@ impl State {
                     }
                 }
             },
-            Scene::Loading { .. } => {
-                if code == KeyCode::Escape {
-                    self.show_select();
-                }
-            }
             Scene::Other(_) => {}
             Scene::Editor(_) => {}
             Scene::Play { .. } => match code {
@@ -11644,10 +11620,8 @@ impl State {
             self.pick_to_edit = false;
         }
         // A song or a replay opened by any road leaves the menu behind.
-        if matches!(
-            self.scene,
-            Scene::Loading { .. } | Scene::Play { .. } | Scene::Editor(_)
-        ) || self.scene.screen().is_some_and(|s| s.closes_main_menu())
+        if matches!(self.scene, Scene::Play { .. } | Scene::Editor(_))
+            || self.scene.screen().is_some_and(|s| s.closes_main_menu())
         {
             self.main_menu = None;
         }
@@ -11707,7 +11681,8 @@ impl State {
         let scene = self.scene.kind();
         if self.shown_scene.is_some_and(|s| s != scene)
             && !self.in_song()
-            && !matches!(self.scene, Scene::Play { .. } | Scene::Loading { .. })
+            && !matches!(self.scene, Scene::Play { .. })
+            && !self.loading_song()
         {
             self.screen_fade = Some(0.0);
         }
@@ -12075,105 +12050,6 @@ impl State {
                     self.select_rows = drum_nav::Rows::of(canvas);
                     self.select_zone = self.select_zone.within(&self.select_rows);
                     drum_nav::draw(canvas, self.select_zone, &self.select_rows);
-                }
-            }
-            Scene::Loading {
-                rx,
-                label,
-                entry,
-                from,
-                retry,
-            } => {
-                canvas.text_centered(
-                    canvas.width / 2.0,
-                    200.0,
-                    14.0,
-                    rgba(0xffffff, 1.0),
-                    "Loading",
-                );
-                canvas.text_centered(
-                    canvas.width / 2.0,
-                    226.0,
-                    10.0,
-                    rgba(0x9a9ab0, 1.0),
-                    &Canvas::fit(10.0, canvas.width - 48.0, label),
-                );
-                match rx.poll_ended() {
-                    Some(Some(Ok((map, track)))) => {
-                        let mods = std::mem::take(&mut self.pending_mods);
-                        // Random: the replay's colouring, otherwise the configured repeatable seed.
-                        let seed = match &self.pending_replay {
-                            Some(r) => r.seed,
-                            None if mods.has(mods::Mod::Random) => self.cfg.random_seed,
-                            None => 0,
-                        };
-                        let half = self
-                            .pending_replay
-                            .as_ref()
-                            .map_or(Default::default(), |r| r.half_rule());
-                        let mut game = Play::new(
-                            Game::with_half(map, track, sound(&self.audio), mods, seed, half)
-                                .with_settings(&crate::game::settings()),
-                        );
-                        game.set_scroll_speed(self.cfg.scroll_speed);
-                        let live_pp = pp::Live::start(
-                            self.library[*entry].path.clone(),
-                            stars::read,
-                            game.rate(),
-                            mods,
-                            game.scroll_speed(),
-                            game.seed(),
-                            half,
-                        );
-                        game.set_live_pp(live_pp);
-                        if let Some(t) = *from {
-                            game.start_from(t, sound(&self.audio), self.play_offset);
-                        } else if *retry {
-                            game.skip(sound(&self.audio), self.play_offset);
-                        }
-                        match self.pending_replay.take() {
-                            Some(r) => {
-                                game.set_mash(r.mash());
-                                game.set_window_rule(r.window_rule());
-                                game.set_scroll_speed(r.scroll_speed);
-                                game.set_replay_of(Some(r.player.clone()));
-                                game.view.banner = Some(format!("REPLAY  -  {}", r.player));
-                                game.set_replay(Some((r.inputs, 0)));
-                            }
-                            // A test play from the editor keeps nothing.
-                            None if self.editor_back.is_some() => {
-                                game.set_record(false);
-                                game.view.test_play = true;
-                                game.view.banner = Some(Self::test_banner(self.test_auto));
-                            }
-                            // Full plays (not autoplay, not from a start point) are kept.
-                            None => {
-                                game.set_record(
-                                    (!self.auto || std::env::var_os("TAIKO_RECORD_AUTO").is_some())
-                                        && from.is_none()
-                                        && !mods.unranked(),
-                                );
-                                if mods.has(mods::Mod::Autoplay) {
-                                    game.view.banner = Some("AUTOPLAY".into());
-                                }
-                                if self.cfg.fail_restart {
-                                    game.set_fail_linger(FAIL_RESTART_LINGER);
-                                }
-                            }
-                        }
-                        self.play = Some(Box::new(game));
-                        next = Some(Scene::Play {
-                            entry: *entry,
-                            from: *from,
-                        });
-                    }
-                    Some(Some(Err(e))) => {
-                        self.status = format!("failed to load {label}: {e}");
-                        eprintln!("{}", self.status);
-                        next = Some(Scene::Select);
-                    }
-                    None => {}
-                    Some(None) => next = Some(Scene::Select),
                 }
             }
             Scene::Play { entry, from } => 'play: {
@@ -13216,7 +13092,6 @@ impl State {
             i.len() < self.library.len() || i.iter().any(Option::is_none)
         });
         let map_loading = match &self.scene {
-            Scene::Loading { rx, .. } => rx.is_busy(),
             Scene::Other(s) => s.loading(),
             _ => false,
         };

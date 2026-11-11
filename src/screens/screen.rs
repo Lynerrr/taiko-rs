@@ -148,6 +148,10 @@ pub(crate) trait Screen: Any + Send {
     fn spectating(&self) -> bool {
         false
     }
+    /// A song is loaded on it to be played (`State::loading_song`).
+    fn loads_song(&self) -> bool {
+        false
+    }
     /// It is the settings (`State::in_settings`; what they were opened over is
     /// `State::behind_settings`).
     fn settings(&self) -> bool {
@@ -261,6 +265,7 @@ struct Shadow {
     watching: bool,
     watched_map: Option<usize>,
     spectating: bool,
+    loads_song: bool,
     holds_game: bool,
     calibration: Option<bool>,
     map_entry: Option<usize>,
@@ -312,6 +317,7 @@ impl Shadow {
             watching: screen.watching(),
             watched_map: screen.watched_map(),
             spectating: screen.spectating(),
+            loads_song: screen.loads_song(),
             holds_game: screen.holds_game(),
             calibration: screen.calibration(),
             map_entry: screen.map_entry(),
@@ -402,6 +408,9 @@ impl Screen for Shadow {
     }
     fn spectating(&self) -> bool {
         self.spectating
+    }
+    fn loads_song(&self) -> bool {
+        self.loads_song
     }
     fn holds_game(&self) -> bool {
         self.holds_game
@@ -655,6 +664,7 @@ mod tests {
         "MpPlay",
         "Watch",
         "Spectate",
+        "Loading",
     ];
 
     #[test]
