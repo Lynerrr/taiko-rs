@@ -2451,7 +2451,8 @@ impl State {
             // Space still works the row until there's something to search for.
             KeyCode::Space if !searching => return false,
             _ if keys::starts_text(code)
-                || (searching && (keys::types_text(code) || keys::is_numpad_sign(code))) =>
+                || keys::is_sign(code)
+                || (searching && keys::types_text(code)) =>
             {
                 search.extend(
                     text.into_iter()
@@ -2476,11 +2477,11 @@ impl State {
             || self.modifiers_alt)
     }
 
-    /// Whether the settings search has words in it, so - and + are letters of it, not the
-    /// offset keys (setting names have them: "Song select: speed -"). An empty search leaves
-    /// the keys to the offset, as it does for Space.
+    /// Whether - and + are letters of the settings search, not the offset keys: always on the
+    /// settings screen (setting names have them: "Song select: speed -"), even as the first
+    /// letter. The offset has its own row there; Ctrl still gives them to the hotkeys.
     fn settings_search_takes_text(&self) -> bool {
-        self.in_settings() && !self.settings_ui.search.is_empty() && self.settings_types_keys()
+        self.in_settings() && self.settings_types_keys()
     }
 
     fn search_settings(&mut self, text: String) {
@@ -10763,10 +10764,13 @@ impl State {
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
         let plain = !self.modifiers_ctrl && !self.modifiers_alt;
-        let settings_idle =
-            self.in_settings() && self.settings_ui.search.is_empty() && !keys::starts_text(code);
+        let settings_idle = self.in_settings()
+            && self.settings_ui.search.is_empty()
+            && !keys::starts_text(code)
+            && !keys::is_sign(code);
         if busy
             || (plain && self.in_song() && self.cfg.keys.contains(&code))
+            || (plain && self.in_settings() && keys::is_sign(code))
             || (plain && self.takes_text() && keys::types_text(code) && !settings_idle)
         {
             return None;
