@@ -391,7 +391,10 @@ impl Play {
             if l.behind != behind || p.alpha < 0.002 {
                 continue;
             }
-            let (x, y) = (c.width / 2.0 + p.x as f32, p.y as f32);
+            // `x` is from the middle of the editor's 16:9 frame: in a play area of another shape
+            // it keeps its place on the width. Sizes and `y` go by the height, as the area's does.
+            let sideways = c.width / crate::video::FRAME_VW;
+            let (x, y) = (c.width / 2.0 + p.x as f32 * sideways, p.y as f32);
             let h = (p.size * at.scale) as f32;
             let angle = (p.turn as f32).to_radians();
             let tint = rgba(l.colour, p.alpha as f32);
