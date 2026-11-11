@@ -12684,6 +12684,7 @@ impl State {
         // drawn before the preview, so its click-away area is under it.
         self.mod_select.is_none()
             && self.settings_ui.dropdown.is_none()
+            && !self.mobile_over_preview()
             && !(self.scene.screen().is_some_and(|s| s.previews_remote())
                 && self.browse.menu.is_some())
             && matches!(self.hit_at(x, y), Some(hit::Hit::Preview))
