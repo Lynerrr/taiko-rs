@@ -8,6 +8,7 @@ pub(crate) mod results;
 pub(crate) mod screen;
 pub(crate) mod select;
 pub(crate) mod settings;
+pub(crate) mod video_edit;
 
 use crate::Scene;
 

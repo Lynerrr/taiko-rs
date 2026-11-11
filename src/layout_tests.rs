@@ -1292,23 +1292,20 @@ fn assert_every_screen_fits() {
         speed: 1,
         ..Default::default()
     };
-    s.scene = Scene::VideoEdit(Box::new(video::Editor::new(
-        serde_json::from_str(&json).unwrap(),
-        video_rx,
-        settings,
-    )));
+    s.scene = screens::video_edit::VideoEdit::scene(
+        video::Editor::new(serde_json::from_str(&json).unwrap(), video_rx, settings),
+        String::new(),
+    );
+    fn video(s: &mut State) -> &mut screens::video_edit::VideoEdit {
+        s.scene.screen_mut().unwrap()
+    }
     check(&mut s, "video editor", &mut out);
-    if let Scene::VideoEdit(ed) = &mut s.scene {
-        ed.settings.quality = video::QUALITIES.len() - 1;
-        ed.typing = Some("1234.5".into());
-    }
+    video(&mut s).ed.settings.quality = video::QUALITIES.len() - 1;
+    video(&mut s).ed.typing = Some("1234.5".into());
     check(&mut s, "video editor target size", &mut out);
-    if let Scene::VideoEdit(ed) = &mut s.scene {
-        ed.typing = None;
-    }
-    s.video_status = "saved \"Camellia feat. Hatsune Miku - Extremely Long Song Title.mp4\" in the videos folder".into();
+    video(&mut s).ed.typing = None;
+    video(&mut s).status = "saved \"Camellia feat. Hatsune Miku - Extremely Long Song Title.mp4\" in the videos folder".into();
     check(&mut s, "video editor saved", &mut out);
-    s.video_status.clear();
     s.scene = Scene::Select;
 
     // No maps anywhere: the Songs folder button.

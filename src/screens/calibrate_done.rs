@@ -1,7 +1,7 @@
 //! The offset calibration's result: what was measured, the offset it suggests, and keys to
 //! take it (Enter), leave it (Esc), go again (R) or change the click's tempo (Left/Right).
 
-use super::screen::{Next, Screen};
+use super::screen::Screen;
 use crate::*;
 
 /// The result of a calibration run.
@@ -63,8 +63,11 @@ impl Screen for CalibrateDone {
         "calibration"
     }
 
-    fn presence(&self) -> String {
-        tr!("Calibrating", "調整中", "Калибровка").into()
+    fn presence(&self) -> (String, String) {
+        (
+            tr!("Calibrating", "調整中", "Калибровка").into(),
+            String::new(),
+        )
     }
 
     fn background_dim(&self) -> Option<f32> {
@@ -79,31 +82,18 @@ impl Screen for CalibrateDone {
         true
     }
 
-    fn key(
-        &mut self,
-        state: &mut State,
-        code: KeyCode,
-        repeat: bool,
-        window: Option<&Window>,
-    ) -> Next {
+    fn key(&mut self, state: &mut State, code: KeyCode, repeat: bool, window: Option<&Window>) {
         if repeat {
-            return Next::Stay;
+            return;
         }
         match code {
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                self.take().leave(state, true);
-                return Next::Left;
-            }
-            KeyCode::Escape => {
-                self.take().leave(state, false);
-                return Next::Left;
-            }
+            KeyCode::Enter | KeyCode::NumpadEnter => self.take().leave(state, true),
+            KeyCode::Escape => self.take().leave(state, false),
             KeyCode::KeyR => {
                 // Again, the same kind, going back to the same place in the end.
                 let vsync = self.vsync;
                 state.scene = *self.take().back;
                 state.start_calibration_as(vsync);
-                return Next::Left;
             }
             KeyCode::ArrowLeft | KeyCode::ArrowRight => {
                 let step = if code == KeyCode::ArrowRight {
@@ -120,10 +110,9 @@ impl Screen for CalibrateDone {
             KeyCode::KeyQ if state.modifiers_ctrl => state.ask_quit(),
             _ => {}
         }
-        Next::Stay
     }
 
-    fn draw(&self, state: &State, canvas: &mut Canvas) {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas) -> Option<Scene> {
         let current = if self.vsync {
             state.cfg.vsync_tune_ms
         } else {
@@ -136,5 +125,6 @@ impl Screen for CalibrateDone {
             state.cfg.calibration_bpm,
             self.vsync,
         );
+        None
     }
 }
