@@ -1197,7 +1197,9 @@ pub(crate) fn download_to(
 pub const PART_BYTES: usize = 96 * 1024;
 
 /// Packs a map set folder into an `.osz` (stored, not compressed: audio and images already
-/// are). Refuses absurdly large folders.
+/// are). Refuses absurdly large folders. Only a set's own kinds of file go in
+/// ([`is_set_file`]), and links aren't followed: what a host sends is the map, never other files
+/// that happen to be next to it.
 pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
     use std::io::Write as _;
     const LIMIT: u64 = 300 << 20;
@@ -1205,12 +1207,13 @@ pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
         for e in std::fs::read_dir(&d).map_err(|e| e.to_string())?.flatten() {
+            let Ok(kind) = e.file_type() else { continue };
             let p = e.path();
-            if p.is_dir() {
+            if kind.is_dir() {
                 if files.len() < 10_000 {
                     stack.push(p);
                 }
-            } else {
+            } else if kind.is_file() && is_set_file(&p) {
                 files.push(p);
             }
         }
@@ -1238,6 +1241,112 @@ pub fn pack_folder(dir: &Path) -> Result<Vec<u8>, String> {
         zip.write_all(&bytes).map_err(|e| e.to_string())?;
     }
     Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
+}
+
+/// Whether `folder` is a set folder a lobby host may send: inside one of `roots` (the Songs
+/// folders), and not one of them. A map lying loose in a Songs folder, or opened from anywhere
+/// else (Downloads, the desktop), would otherwise send everything in the folder it's in.
+pub fn is_set_folder(folder: &Path, roots: &[PathBuf]) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).ok();
+    let Some(folder) = real(folder) else {
+        return false;
+    };
+    roots
+        .iter()
+        .filter_map(|r| real(r))
+        .any(|r| folder != r && folder.starts_with(&r))
+}
+
+/// A file's kind (its extension, lowercase) as Windows reads its name: without trailing dots and
+/// spaces, since "x.exe." is saved as x.exe there. None for a name with a `:`, which on Windows
+/// writes an NTFS stream ("x.exe:y.png" makes x.exe).
+fn kind_of(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    if name.contains(':') {
+        return None;
+    }
+    let name = name.trim_end_matches(['.', ' ']);
+    Some(
+        Path::new(name)
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default(),
+    )
+}
+
+/// What a map set is made of: its maps and storyboard, and the music, sounds, images and videos
+/// they use, and a taiko.rs custom set's number (`custom::SIDECAR`). A set from a lobby host is
+/// sent and unpacked with only these.
+pub fn is_set_file(path: &Path) -> bool {
+    const KINDS: &[&str] = &[
+        "osu", "osb", "tko", "mp3", "ogg", "wav", "flac", "jpg", "jpeg", "png", "gif", "webp",
+        "bmp", "mp4", "avi", "flv", "wmv", "mkv", "webm", "m4v", "mov", "mpg", "mpeg",
+    ];
+    path.file_name()
+        .is_some_and(|n| n.eq_ignore_ascii_case(crate::custom::SIDECAR))
+        || kind_of(path).is_some_and(|k| KINDS.contains(&k.as_str()))
+}
+
+/// Programs, scripts and shortcuts: no map set or skin needs one, and a double click on it in a
+/// file manager would run it. No archive is unpacked with them (nor with Windows's folder
+/// settings files, which can point Explorer elsewhere).
+fn is_runnable(path: &Path) -> bool {
+    const KINDS: &[&str] = &[
+        "exe",
+        "dll",
+        "scr",
+        "com",
+        "pif",
+        "bat",
+        "cmd",
+        "ps1",
+        "psm1",
+        "psd1",
+        "vbs",
+        "vbe",
+        "js",
+        "jse",
+        "wsf",
+        "wsh",
+        "hta",
+        "msi",
+        "msp",
+        "mst",
+        "msc",
+        "cpl",
+        "lnk",
+        "url",
+        "scf",
+        "inf",
+        "reg",
+        "jar",
+        "appref-ms",
+        "application",
+        "gadget",
+        "sys",
+        "drv",
+        "ocx",
+        "sh",
+        "desktop",
+        "appimage",
+        "command",
+        "app",
+        "pkg",
+        "dmg",
+        "deb",
+        "rpm",
+        "run",
+    ];
+    let named = path.file_name().is_some_and(|n| {
+        let n = n.to_string_lossy().to_ascii_lowercase();
+        let n = n.trim_end_matches(['.', ' ']);
+        n == "desktop.ini" || n == "autorun.inf"
+    });
+    named || kind_of(path).is_none_or(|k| KINDS.contains(&k.as_str()))
+}
+
+fn not_runnable(path: &Path) -> bool {
+    !is_runnable(path)
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1347,9 +1456,10 @@ pub fn receive(
             }
             drop(file);
             let result = holds_map(&archive, map).and_then(|_| {
-                // In a folder of its own: what the host sent doesn't touch what's there.
+                // In a folder of its own: what the host sent doesn't touch what's there. Only a
+                // set's kinds of file: the host is just another player.
                 let dest = free_folder(&songs, &name);
-                extract(&archive, &dest).map(|_| dest)
+                extract_keeping(&archive, &dest, is_set_file).map(|_| dest)
             });
             let _ = std::fs::remove_file(&archive);
             result
@@ -1465,17 +1575,28 @@ const MAX_UNPACKED: u64 = 2 << 30;
 const MAX_ENTRIES: usize = 20_000;
 
 /// Unpacks a zip into `to`, which is gone again if it fails. Entries that would land outside
-/// `to` fail it (zip-slip), and links aren't made.
+/// `to` fail it (zip-slip), links aren't made, and programs and shortcuts are left out
+/// ([`is_runnable`]).
 pub fn unpack(archive: &Path, to: &Path) -> Result<(), String> {
+    unpack_keeping(archive, to, not_runnable)
+}
+
+/// [`unpack`] with only the files `keep` takes.
+fn unpack_keeping(archive: &Path, to: &Path, keep: fn(&Path) -> bool) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(to);
-    let result = unpack_within(archive, to, MAX_UNPACKED);
+    let result = unpack_within(archive, to, MAX_UNPACKED, keep);
     if result.is_err() {
         let _ = std::fs::remove_dir_all(to);
     }
     result
 }
 
-fn unpack_within(archive: &Path, to: &Path, limit: u64) -> Result<(), String> {
+fn unpack_within(
+    archive: &Path,
+    to: &Path,
+    limit: u64,
+    keep: fn(&Path) -> bool,
+) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
     if zip.len() > MAX_ENTRIES {
@@ -1494,6 +1615,9 @@ fn unpack_within(archive: &Path, to: &Path, limit: u64) -> Result<(), String> {
             .ok_or("the archive has a bad file path")?;
         if entry.is_dir() {
             std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if !keep(&path) {
             continue;
         }
         if let Some(dir) = path.parent() {
@@ -1544,8 +1668,13 @@ pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, 
 /// A set that is already there gets the archive's files on top: what else is in its folder (a
 /// difficulty of your own) stays.
 fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
+    extract_keeping(archive, dest, not_runnable)
+}
+
+/// [`extract`] with only the files `keep` takes.
+fn extract_keeping(archive: &Path, dest: &Path, keep: fn(&Path) -> bool) -> Result<(), String> {
     let tmp = partial_of(dest);
-    unpack(archive, &tmp)?;
+    unpack_keeping(archive, &tmp, keep)?;
     if dest.is_dir() {
         merge(&tmp, dest).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_dir_all(&tmp);
@@ -1781,9 +1910,9 @@ mod tests {
             &[("a/map.osu", &[b'x'; 600]), ("b.bin", &[b'y'; 600])],
         );
         let to = dir.join("set");
-        assert!(unpack_within(&archive, &to, 1200).is_ok());
+        assert!(unpack_within(&archive, &to, 1200, not_runnable).is_ok());
         assert_eq!(std::fs::read(to.join("a/map.osu")).unwrap().len(), 600);
-        assert!(unpack_within(&archive, &dir.join("over"), 1199).is_err());
+        assert!(unpack_within(&archive, &dir.join("over"), 1199, not_runnable).is_err());
         assert!(unpack(&archive, &to).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1817,6 +1946,105 @@ mod tests {
             std::fs::read(theirs.join("map [Oni].osu")).unwrap(),
             b"mine"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_archive_unpacks_programs_or_shortcuts() {
+        let (dir, archive) = a_zip(
+            "runnable",
+            &[
+                ("map [Oni].osu", b"map"),
+                ("bg.jpg", b"bg"),
+                ("skin.ini", b"ini"),
+                ("sb/notes.txt", b"txt"),
+                ("setup.exe", b"MZ"),
+                ("sb/run.BAT", b"x"),
+                ("open me.lnk", b"x"),
+                ("trailing.exe.", b"x"),
+                ("trailing.exe ", b"x"),
+                ("desktop.ini", b"x"),
+            ],
+        );
+        let to = dir.join("set");
+        unpack(&archive, &to).unwrap();
+        let mut left: Vec<String> = Vec::new();
+        let mut stack = vec![to.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                if e.path().is_dir() {
+                    stack.push(e.path());
+                } else {
+                    let rel = e.path().strip_prefix(&to).unwrap().to_path_buf();
+                    left.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        left.sort();
+        assert_eq!(
+            left,
+            ["bg.jpg", "map [Oni].osu", "sb/notes.txt", "skin.ini"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_set_from_the_host_keeps_only_map_files() {
+        let (dir, archive) = a_zip(
+            "host-kinds",
+            &[
+                ("map [Oni].osu", b"the lobby map"),
+                ("audio.MP3", b"mp3"),
+                ("sb/star.png", b"png"),
+                (crate::custom::SIDECAR, b"{\"id\": 7}"),
+                ("notes.txt", b"txt"),
+                ("payload.dat", b"x"),
+                ("x.exe:y.png", b"x"),
+            ],
+        );
+        let dest = dir.join("Songs").join("set");
+        extract_keeping(&archive, &dest, is_set_file).unwrap();
+        assert!(dest.join("map [Oni].osu").is_file());
+        assert!(dest.join("audio.MP3").is_file());
+        assert!(dest.join("sb/star.png").is_file());
+        // A custom set stays one on the player's side.
+        assert!(dest.join(crate::custom::SIDECAR).is_file());
+        assert!(!dest.join("notes.txt").exists());
+        assert!(!dest.join("payload.dat").exists());
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_host_packs_only_the_set_and_only_from_a_set_folder() {
+        let dir = std::env::temp_dir().join(format!("taiko-pack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let songs = dir.join("Songs");
+        let set = songs.join("1 A - T");
+        std::fs::create_dir_all(set.join("sb")).unwrap();
+        std::fs::write(set.join("map [Oni].osu"), b"map").unwrap();
+        std::fs::write(set.join("sb").join("star.png"), b"png").unwrap();
+        std::fs::write(set.join("passwords.txt"), b"secret").unwrap();
+        std::fs::write(set.join("tool.exe"), b"MZ").unwrap();
+        let bytes = pack_folder(&set).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["map [Oni].osu", "sb/star.png"]);
+
+        // A loose map: its folder is the Songs folder itself, or somewhere else entirely.
+        let downloads = dir.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let roots = [songs.clone()];
+        assert!(is_set_folder(&set, &roots));
+        assert!(is_set_folder(&set.join("sb"), &roots));
+        assert!(!is_set_folder(&songs, &roots));
+        assert!(!is_set_folder(&downloads, &roots));
+        assert!(!is_set_folder(&dir, &roots));
+        assert!(!is_set_folder(&songs.join("..").join("Downloads"), &roots));
+        assert!(!is_set_folder(&songs.join("gone"), &roots));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

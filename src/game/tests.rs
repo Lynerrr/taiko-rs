@@ -2036,6 +2036,120 @@ fn a_maps_text_and_pictures_are_drawn_while_their_clips_last() {
     assert_eq!(c.shapes[0].half, [36.0, 18.0], "as wide as its shape says");
 }
 
+/// A map's text and pictures are placed on the editor's 16:9 frame, from its middle: in a play
+/// area of another shape their sideways offset scales with its width, so they stay inside.
+#[test]
+fn a_maps_layers_scale_sideways_with_a_resized_play_area_and_stay_inside() {
+    use crate::layout::{Area, draw_game_area};
+    use crate::tko::clips::{Clip, Show, Target};
+    draw_with_defaults();
+    let layers = |x: f64| {
+        let mut g = crate::tko::gimmick::Gimmick::default();
+        let mut text = Clip::new(Target::Layer, 2000.0, 6000.0);
+        let l = text.layer.as_deref_mut().unwrap();
+        l.show = Show::Text {
+            text: "HELLO".into(),
+        };
+        l.from.x = x;
+        let mut pic = Clip::new(Target::Layer, 2000.0, 6000.0);
+        let l = pic.layer.as_deref_mut().unwrap();
+        l.show = Show::Picture {
+            file: "Logo.png".into(),
+        };
+        l.from.x = -x;
+        g.clips = vec![text, pic];
+        g
+    };
+    let screen = 853.3;
+    let draw = |game: &mut Play, area: Area| {
+        game.put_at(4000.0);
+        let mut c = Canvas::default();
+        c.clear(screen);
+        c.picture_slots = std::sync::Arc::new([("logo.png".to_string(), (3, 2.0))].into());
+        let mut clip = None;
+        let cfg = crate::config::Config {
+            playfield_area: area,
+            ..Default::default()
+        };
+        draw_game_area(&mut c, &cfg, &mut clip, &None, &None, false, |c| {
+            game.draw_playfield(c, 1.0)
+        });
+        c
+    };
+    // What the play with the layers draws that the one without doesn't.
+    let added = |x: f64, area: Area| {
+        let mut with = tko_game(Some(layers(x)), Mods::NONE);
+        let mut plain = tko_game(None, Mods::NONE);
+        let (with, plain) = (draw(&mut with, area), draw(&mut plain, area));
+        let bytes = |s: &crate::render::Shape| bytemuck::bytes_of(s).to_vec();
+        let known: Vec<Vec<u8>> = plain.shapes.iter().map(bytes).collect();
+        with.shapes
+            .iter()
+            .filter(|s| !known.contains(&bytes(s)))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let inside = |s: &crate::render::Shape, a: Area| {
+        let (ax, ay) = (a.x * screen, a.y * crate::render::VIRTUAL_HEIGHT);
+        let (aw, ah) = (a.w * screen, a.h * crate::render::VIRTUAL_HEIGHT);
+        s.center[0] - s.half[0] >= ax - 0.01
+            && s.center[0] + s.half[0] <= ax + aw + 0.01
+            && s.center[1] - s.half[1] >= ay - 0.01
+            && s.center[1] + s.half[1] <= ay + ah + 0.01
+    };
+    let full = added(380.0, Area::FULL);
+    assert_eq!(full.len(), 6, "a quad per letter of HELLO and the picture");
+    // A narrower area than 16:9 (the area is 0.5 x 0.6 of a 16:9 screen).
+    let narrow = Area {
+        x: 0.25,
+        y: 0.2,
+        w: 0.5,
+        h: 0.6,
+    };
+    let small = added(380.0, narrow);
+    assert_eq!(small.len(), 6);
+    // Near the frame's edge a letter's own width may reach over: the text's middle (the mean of
+    // its letters) and the picture's are what must be in.
+    let middle = |v: &[crate::render::Shape]| -> [f32; 2] {
+        let text = &v[..5];
+        [
+            text.iter().map(|s| s.center[0]).sum::<f32>() / 5.0,
+            text[0].center[1],
+        ]
+    };
+    let (ax, aw) = (narrow.x * screen, narrow.w * screen);
+    let m = middle(&small);
+    assert!(m[0] >= ax && m[0] <= ax + aw, "the text is at {m:?}");
+    let pic = small[5].center[0];
+    assert!(pic >= ax && pic <= ax + aw, "the picture is at {pic}");
+    // And a layer well inside the frame is wholly inside the area.
+    let snug = added(300.0, narrow);
+    assert_eq!(snug.len(), 6);
+    for s in &snug {
+        assert!(inside(s, narrow), "{:?} / {:?}", s.center, s.half);
+    }
+    // The layers keep their place on the area's width as on the editor's frame (a letter's own
+    // size goes by the height, so it's the text's middle and the picture that are compared).
+    let fraction = |x: f32, area: Area| (x - area.x * screen) / (area.w * screen);
+    let (full_text, small_text) = (middle(&full)[0], middle(&small)[0]);
+    assert!((fraction(full_text, Area::FULL) - fraction(small_text, narrow)).abs() < 0.01);
+    assert!((fraction(full[5].center[0], Area::FULL) - fraction(pic, narrow)).abs() < 0.01);
+    // A wider area than 16:9 keeps the same places on its width too.
+    let wide = Area {
+        x: 0.0,
+        y: 0.25,
+        w: 1.0,
+        h: 0.5,
+    };
+    let spread = added(380.0, wide);
+    assert_eq!(spread.len(), 6);
+    assert!((fraction(middle(&spread)[0], wide) - fraction(full_text, Area::FULL)).abs() < 0.01);
+    assert!(
+        (fraction(spread[5].center[0], wide) - fraction(full[5].center[0], Area::FULL)).abs()
+            < 0.01
+    );
+}
+
 /// The whole point of version 1: the gimmick is only ever drawn. The same hits give the same
 /// judgements, score and combo, with or without it.
 #[test]
