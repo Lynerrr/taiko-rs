@@ -475,7 +475,6 @@ impl State {
                         | Scene::MpMenu
                         | Scene::Lobby
                         | Scene::MpResults
-                        | Scene::HudEdit { .. }
                         | Scene::Calibrate { .. }
                         | Scene::Preview { .. }
                 )
@@ -524,10 +523,7 @@ impl State {
                 // and dragged, as with a mouse.
                 let dragged = matches!(
                     self.scene,
-                    Scene::HudEdit { .. }
-                        | Scene::Editor(_)
-                        | Scene::EditorHome(_)
-                        | Scene::Preview { .. }
+                    Scene::Editor(_) | Scene::EditorHome(_) | Scene::Preview { .. }
                 ) || self.scene.screen().is_some_and(|s| s.drags())
                     || matches!(
                         self.hit_at(vx, vy),

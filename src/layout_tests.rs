@@ -780,8 +780,8 @@ fn assert_every_screen_fits() {
     s.scene = Scene::Select;
     s.open_hud_editor();
     check(&mut s, "interface editor", &mut out);
-    if let Some(ed) = &mut s.hud_edit {
-        ed.select(
+    if let Some(h) = s.scene.screen_mut::<screens::hud_editor::HudEdit>() {
+        h.ed.select(
             hud::Part::PLACED
                 .iter()
                 .position(|&p| p == hud::Part::Counts)

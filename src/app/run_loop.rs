@@ -1361,7 +1361,6 @@ impl State {
             safe_asked: None,
             frame_clip: None,
             guides: Vec::new(),
-            hud_edit: None,
             hud_sample: None,
             readout_rect: None,
             replay_bar: None,

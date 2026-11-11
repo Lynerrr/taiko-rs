@@ -55,13 +55,24 @@ pub(crate) trait Screen: Any + Send {
     fn covers_social_tab(&self) -> bool {
         false
     }
+    /// Something on it is being typed (a name), so keys are text and Ctrl+V pastes there.
+    fn typing(&self) -> bool {
+        false
+    }
     /// A map loads for it on another thread.
     #[cfg(test)]
     fn loading(&self) -> bool {
         false
     }
-    /// A key, with the app it runs in.
-    fn key(&mut self, state: &mut State, code: KeyCode, repeat: bool, window: Option<&Window>);
+    /// A key, the text it types (if any), with the app it runs in.
+    fn key(
+        &mut self,
+        state: &mut State,
+        code: KeyCode,
+        repeat: bool,
+        text: Option<&str>,
+        window: Option<&Window>,
+    );
     /// The pointer moved to (`x`, `y`) in window pixels; Some: it took the move, and the cursor
     /// to show.
     fn pointer_moved(&mut self, _state: &mut State, _x: f64, _y: f64) -> Option<CursorIcon> {
@@ -91,6 +102,7 @@ struct Shadow {
     area_editable: bool,
     wheel_scales_area: bool,
     covers_social_tab: bool,
+    typing: bool,
     #[cfg(test)]
     loading: bool,
 }
@@ -111,6 +123,7 @@ impl Shadow {
             area_editable: screen.area_editable(),
             wheel_scales_area: screen.wheel_scales_area(),
             covers_social_tab: screen.covers_social_tab(),
+            typing: screen.typing(),
             #[cfg(test)]
             loading: screen.loading(),
         }
@@ -155,12 +168,15 @@ impl Screen for Shadow {
     fn covers_social_tab(&self) -> bool {
         self.covers_social_tab
     }
+    fn typing(&self) -> bool {
+        self.typing
+    }
     #[cfg(test)]
     fn loading(&self) -> bool {
         self.loading
     }
     // The screen itself has the input and the frame (`State::with_screen`).
-    fn key(&mut self, _: &mut State, _: KeyCode, _: bool, _: Option<&Window>) {}
+    fn key(&mut self, _: &mut State, _: KeyCode, _: bool, _: Option<&str>, _: Option<&Window>) {}
     fn draw(&mut self, _: &mut State, _: &mut Canvas) -> Option<Scene> {
         None
     }
@@ -220,9 +236,10 @@ impl State {
         &mut self,
         code: KeyCode,
         repeat: bool,
+        text: Option<&str>,
         window: Option<&Window>,
     ) -> bool {
-        self.with_screen(|s, state| s.key(state, code, repeat, window))
+        self.with_screen(|s, state| s.key(state, code, repeat, text, window))
             .is_some()
     }
 
@@ -237,7 +254,7 @@ mod tests {
     /// The screens moved out of lib.rs stay out: no `Scene` variant of their own, no state of
     /// theirs in lib.rs.
     /// Every screen moved out so far.
-    const MOVED: &[&str] = &["CalibrateDone", "VideoEdit", "LayoutEdit"];
+    const MOVED: &[&str] = &["CalibrateDone", "VideoEdit", "LayoutEdit", "HudEdit"];
 
     #[test]
     fn moved_screens_stay_out_of_lib() {

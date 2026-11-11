@@ -82,7 +82,14 @@ impl Screen for CalibrateDone {
         true
     }
 
-    fn key(&mut self, state: &mut State, code: KeyCode, repeat: bool, window: Option<&Window>) {
+    fn key(
+        &mut self,
+        state: &mut State,
+        code: KeyCode,
+        repeat: bool,
+        _text: Option<&str>,
+        window: Option<&Window>,
+    ) {
         if repeat {
             return;
         }
