@@ -551,7 +551,12 @@ impl Home {
         if let Some(d) = &self.dialog
             && let Some(result) = match d.rx.try_recv() {
                 Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Disconnected) => Some(Err("file selection stopped".into())),
+                Err(mpsc::TryRecvError::Disconnected) => Some(Err(tr!(
+                    "file selection stopped",
+                    "ファイルの選択が中断されました",
+                    "выбор файла прерван"
+                )
+                .into())),
                 Err(mpsc::TryRecvError::Empty) => None,
             }
         {
@@ -560,7 +565,18 @@ impl Home {
             match result {
                 Ok(Some(file)) => out = self.use_picked_file(file, kind, audio),
                 Ok(None) => {}
-                Err(e) => out = Out::Toast(format!("File selection failed: {e}")),
+                Err(e) => {
+                    out = Out::Toast(if cfg!(target_os = "android") {
+                        tr!(
+                            "File selection failed: {}",
+                            "ファイルの選択に失敗しました: {}",
+                            "не удалось выбрать файл: {}";
+                            e
+                        )
+                    } else {
+                        e
+                    });
+                }
             }
         }
         self.follow_playback(now, audio);
@@ -574,7 +590,12 @@ impl Home {
         let path = file;
         if cfg!(target_os = "android") && !kind.matches(&path) {
             let extensions = kind.extensions().join(", ");
-            return Out::Toast(format!("choose a file of type {extensions}"));
+            return Out::Toast(tr!(
+                "choose a file of type {}",
+                "次の形式のファイルを選んでください: {}",
+                "выберите файл одного из типов: {}";
+                extensions
+            ));
         }
         match kind {
             FileKind::Audio => {
@@ -1294,7 +1315,11 @@ impl Home {
             8.0,
             rgba(TEXT, 1.0),
             if cfg!(target_os = "android") {
-                "Choose a song from your device: mp3, ogg, wav or flac"
+                tr!(
+                    "Choose a song from your device: mp3, ogg, wav or flac",
+                    "端末から曲を選んでください: mp3、ogg、wav、flac",
+                    "Выберите песню на устройстве: mp3, ogg, wav или flac"
+                )
             } else {
                 "Drop a song here: mp3, ogg, wav or flac"
             },
@@ -1312,7 +1337,11 @@ impl Home {
             240.0,
             26.0,
             if cfg!(target_os = "android") {
-                "Choose a song file..."
+                tr!(
+                    "Choose a song file...",
+                    "曲のファイルを選ぶ...",
+                    "Выбрать файл песни..."
+                )
             } else {
                 "Choose a song file...   [Enter]"
             },
@@ -1543,7 +1572,11 @@ impl Home {
             6.5,
             rgba(DIM, 1.0),
             if cfg!(target_os = "android") {
-                "Go back to choose a different song."
+                tr!(
+                    "Go back to choose a different song.",
+                    "別の曲を選ぶには戻ってください。",
+                    "Вернитесь назад, чтобы выбрать другую песню."
+                )
             } else {
                 "Drop another song on the window to use that instead."
             },
@@ -2163,6 +2196,19 @@ mod tests {
             assert_eq!(h.background.as_ref(), Some(&cover));
             assert!(h.dialog.is_none());
         }
+
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err("blocked in tests: no programs, no internet".into()))
+            .unwrap();
+        h.dialog = Some(Dialog {
+            kind: FileKind::Audio,
+            rx,
+        });
+        assert!(matches!(
+            h.update(Instant::now(), None),
+            Out::Toast(message) if message == "blocked in tests: no programs, no internet"
+        ));
+        assert!(h.dialog.is_none());
     }
 
     fn home() -> Home {

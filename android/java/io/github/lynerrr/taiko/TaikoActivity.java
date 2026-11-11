@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.util.ArrayList;
 
 /**
@@ -45,6 +46,8 @@ import java.util.ArrayList;
  */
 public class TaikoActivity extends NativeActivity {
     private static final int PICK_FILE = 0x544B;
+    private static final String PICK_CACHE_PREFIX = "taiko-pick-";
+    private static boolean pickerCacheSwept;
     /** Talks to the input method; the game draws everything, so it has nothing to show. */
     private KeyboardView keyboardView;
 
@@ -103,7 +106,7 @@ public class TaikoActivity extends NativeActivity {
                     name += (name.endsWith(".") ? "" : ".") + extension;
                 }
             }
-            dir = Files.createTempDirectory(getCacheDir().toPath(), "taiko-pick-").toFile();
+            dir = Files.createTempDirectory(getCacheDir().toPath(), PICK_CACHE_PREFIX).toFile();
             file = new File(dir, name);
             copyContents(uri, file);
         } catch (IOException | RuntimeException e) {
@@ -120,8 +123,32 @@ public class TaikoActivity extends NativeActivity {
         filePicked(file.getAbsolutePath(), null);
     }
 
+    /** Remove picker copies left by a previous process, before starting the native game. */
+    private void sweepPickerCache() {
+        if (pickerCacheSwept) {
+            return;
+        }
+        pickerCacheSwept = true;
+        File[] dirs = getCacheDir().listFiles(file ->
+            file.getName().startsWith(PICK_CACHE_PREFIX)
+                && Files.isDirectory(file.toPath(), LinkOption.NOFOLLOW_LINKS));
+        if (dirs == null) {
+            return;
+        }
+        for (File dir : dirs) {
+            File[] entries = dir.listFiles();
+            if (entries != null) {
+                for (File entry : entries) {
+                    entry.delete();
+                }
+            }
+            dir.delete();
+        }
+    }
+
     @Override
     protected void onCreate(Bundle saved) {
+        sweepPickerCache();
         super.onCreate(saved);
         running = this;
         // NativeActivity asks for resizing; the keyboard goes over the game instead (the game

@@ -1,0 +1,7 @@
+# Simplified Chinese strings owned by the Android editor picker.
+"Choose a song from your device: mp3, ogg, wav or flac" = "从设备中选择歌曲：mp3、ogg、wav 或 flac"
+"Choose a song file..." = "选择歌曲文件"
+"Go back to choose a different song." = "返回上一步即可重新选择歌曲。"
+"File selection failed: {}" = "文件选择失败：{}"
+"choose a file of type {}" = "请选择以下格式的文件：{}"
+"file selection stopped" = "文件选择已中断"
