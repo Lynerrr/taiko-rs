@@ -9,7 +9,7 @@ head=$2
 range="$(git merge-base "$base" "$head")..$head"
 changed=$(git diff --name-only "$range")
 
-# Client code: the game's sources and what is built into it. The server, docs, CI and the
+# Client code: the game's sources and what is built into it. Docs, CI and the
 # platform packaging (android/, windows/, macos/) are not.
 client=$(printf '%s\n' "$changed" |
     grep -E '^(src/|crates/|assets/|vendor/|build\.rs$|Cargo\.toml$)' |

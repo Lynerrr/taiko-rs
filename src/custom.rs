@@ -1,5 +1,5 @@
 //! Custom maps from the game's side: packing a map's folder into an `.osz`, sending it to the
-//! server (`server/src/custom.rs`), and the little file that remembers which set on the server
+//! server, and the little file that remembers which set on the server
 //! the folder is, so the next upload updates it instead of making another.
 
 use std::io::Write;

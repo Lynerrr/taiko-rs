@@ -55,11 +55,11 @@ jni = "0.22"
 cpal = { version = "0.18", features = ["realtime"] }
 
 # The client and the crates split out of it build, lint and test together: plain `cargo test`
-# covers them all. The server and the patched vendor crates stay crates of their own.
+# covers them all. The patched vendor crates stay crates of their own.
 [workspace]
 members = ["crates/taiko-logic", "crates/taiko-proto", "crates/taiko-recalc"]
 default-members = [".", "crates/taiko-logic", "crates/taiko-proto", "crates/taiko-recalc"]
-exclude = ["server", "vendor"]
+exclude = ["vendor"]
 
 [features]
 default = ["pipewire"]
