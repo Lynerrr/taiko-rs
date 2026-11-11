@@ -27,6 +27,10 @@ pub(crate) struct Frame<'a> {
     pub(crate) visual_offset: f64,
     /// The interface's parts hidden in a song.
     pub(crate) hidden: hud::Parts,
+    /// The main menu is up (`State::on_menu`), as the frame began.
+    pub(crate) on_menu: bool,
+    /// The time since the last frame, in ms.
+    pub(crate) dt: f64,
 }
 
 /// A key pressed, as a screen gets it.
@@ -157,6 +161,10 @@ pub(crate) trait Screen: Any + Send {
     fn song_play(&self) -> Option<(usize, Option<f64>)> {
         None
     }
+    /// It is song select itself, or the main menu over it (`Scene::is_select`).
+    fn select_screen(&self) -> bool {
+        false
+    }
     /// It is the settings (`State::in_settings`; what they were opened over is
     /// `State::behind_settings`).
     fn settings(&self) -> bool {
@@ -272,6 +280,7 @@ struct Shadow {
     spectating: bool,
     loads_song: bool,
     song_play: Option<(usize, Option<f64>)>,
+    select_screen: bool,
     holds_game: bool,
     calibration: Option<bool>,
     map_entry: Option<usize>,
@@ -325,6 +334,7 @@ impl Shadow {
             spectating: screen.spectating(),
             loads_song: screen.loads_song(),
             song_play: screen.song_play(),
+            select_screen: screen.select_screen(),
             holds_game: screen.holds_game(),
             calibration: screen.calibration(),
             map_entry: screen.map_entry(),
@@ -421,6 +431,9 @@ impl Screen for Shadow {
     }
     fn song_play(&self) -> Option<(usize, Option<f64>)> {
         self.song_play
+    }
+    fn select_screen(&self) -> bool {
+        self.select_screen
     }
     fn holds_game(&self) -> bool {
         self.holds_game
@@ -539,11 +552,15 @@ impl Scene {
         self.song_play().is_some()
     }
 
+    /// It is song select, or the main menu over it (`screens::select::song_select`).
+    pub(crate) fn is_select(&self) -> bool {
+        self.screen().is_some_and(|s| s.select_screen())
+    }
+
     /// The screen up, if it is one of those outside lib.rs.
     pub(crate) fn screen(&self) -> Option<&dyn Screen> {
         match self {
             Scene::Other(s) => Some(s.as_ref()),
-            _ => None,
         }
     }
 
@@ -562,7 +579,6 @@ impl Scene {
                 let any: &dyn Any = s.as_ref();
                 any.downcast_ref::<T>()
             }
-            _ => None,
         }
     }
 
@@ -573,7 +589,6 @@ impl Scene {
                 let any: &mut dyn Any = s.as_mut();
                 any.downcast_mut::<T>()
             }
-            _ => None,
         }
     }
 
@@ -583,9 +598,7 @@ impl Scene {
         if !self.screen_is::<T>() {
             return None;
         }
-        let Scene::Other(screen) = std::mem::replace(self, Scene::Select) else {
-            unreachable!("a screen is up");
-        };
+        let Scene::Other(screen) = std::mem::replace(self, SongSelect::scene());
         let screen: Box<dyn Any> = screen;
         screen.downcast::<T>().ok()
     }
@@ -603,10 +616,7 @@ impl State {
             _ => return None,
         };
         let Scene::Other(mut screen) =
-            std::mem::replace(&mut self.scene, Scene::Other(Box::new(shadow)))
-        else {
-            unreachable!("matched above");
-        };
+            std::mem::replace(&mut self.scene, Scene::Other(Box::new(shadow)));
         let out = f(screen.as_mut(), self);
         if self.scene.screen().is_some_and(is_shadow) {
             self.scene = Scene::Other(screen);
@@ -699,6 +709,7 @@ mod tests {
         "Loading",
         "Editor",
         "Play",
+        "Select",
     ];
 
     #[test]

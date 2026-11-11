@@ -302,7 +302,7 @@ impl Screen for Lobby {
             }
             KeyCode::KeyM if s.is_host() && !s.in_match => {
                 state.picking_lobby_map = true;
-                state.scene = Scene::Select;
+                state.scene = SongSelect::scene();
             }
             KeyCode::Enter | KeyCode::NumpadEnter if s.is_host() => {
                 if s.players.iter().any(|p| p.ready && p.has_map) {
@@ -311,7 +311,7 @@ impl Screen for Lobby {
                     state.toast("nobody is ready yet".into());
                 }
             }
-            KeyCode::Tab => state.scene = Scene::Select,
+            KeyCode::Tab => state.scene = SongSelect::scene(),
             KeyCode::Escape => {
                 let why = if s.owns_room() {
                     "room closed"

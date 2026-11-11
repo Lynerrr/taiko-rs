@@ -37,7 +37,7 @@ fn the_editor_scenes_have_no_edge_tab() {
     assert_eq!(s.social_tab_middle(), None);
     s.scene = crate::screens::editor_home::EditorHome::scene(editor::home::Home::new(&[], "me"));
     assert_eq!(s.social_tab_middle(), None);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     assert!(s.social_tab_middle().is_some(), "other screens keep it");
 }
 
@@ -96,7 +96,7 @@ fn elsewhere_the_open_panel_takes_the_keyboard_at_once() {
     }));
     let mut s = crate::layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.0);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_social();
     assert!(s.social_keys());
 }

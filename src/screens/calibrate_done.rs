@@ -47,7 +47,7 @@ impl CalibrateDone {
     fn take(&mut self) -> CalibrateDone {
         CalibrateDone {
             estimate: self.estimate,
-            back: std::mem::replace(&mut self.back, Box::new(Scene::Select)),
+            back: std::mem::replace(&mut self.back, Box::new(SongSelect::scene())),
             vsync: self.vsync,
         }
     }

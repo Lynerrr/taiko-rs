@@ -36,7 +36,6 @@ pub(crate) fn fmt_time(ms: f64) -> String {
 pub(crate) fn shows_own_background(scene: &Scene) -> bool {
     match scene {
         Scene::Other(s) => s.shows_own_background(),
-        _ => false,
     }
 }
 

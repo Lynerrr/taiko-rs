@@ -193,7 +193,7 @@ fn the_mod_select_and_open_drop_downs_keep_the_pointer_off_the_preview() {
     s.browse.menu = Some(browse::Menu::Sort);
     assert!(!s.preview_on_top(x, y), "the download tab's drop-down");
     s.browse.menu = None;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     assert!(s.preview_on_top(x, y));
 }
 

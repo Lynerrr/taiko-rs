@@ -287,7 +287,6 @@ fn config_key_letter(i: usize) -> KeyCode {
 /// The scene's name, for checks and golden files.
 pub fn scene_name(s: &State) -> &'static str {
     match &s.scene {
-        Scene::Select => "Select",
         Scene::Other(s) => s.name(),
     }
 }

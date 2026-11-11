@@ -197,7 +197,7 @@ fn friends_see_editing_through_the_editor_its_start_screen_and_a_test_play() {
     assert!(matches!(s.activity(), Activity::Editing { .. }), "back");
     // Leaving the editor goes back to the menus.
     s.editor_back = None;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     assert_eq!(s.activity(), Activity::Menus);
     // The editor's start screen has no map yet.
     s.open_editor_home();

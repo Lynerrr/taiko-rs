@@ -1145,7 +1145,7 @@ impl State {
             cfg,
             library,
             select,
-            scene: Scene::Select,
+            scene: SongSelect::scene(),
             play: None,
             calibration_over: false,
             behind: None,

@@ -321,12 +321,12 @@ fn assert_every_screen_fits() {
         let mut m = menu::Menu::new();
         m.pick(i);
         s.main_menu = Some(m);
-        s.scene = Scene::Select;
+        s.scene = SongSelect::scene();
         check(&mut s, &format!("main menu, {item:?}"), &mut out);
     }
     for paused in [false, true] {
         s.main_menu = Some(menu::Menu::new());
-        s.scene = Scene::Select;
+        s.scene = SongSelect::scene();
         s.music_control(player::Control::Open);
         s.music_paused = paused;
         if paused {
@@ -357,7 +357,7 @@ fn assert_every_screen_fits() {
     s.player = None;
     s.music_paused = false;
     s.main_menu = None;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     for page in 0..guide::PAGES {
         s.guide.page = Some(page);
         check(&mut s, &format!("guide page {page}"), &mut out);
@@ -777,7 +777,7 @@ fn assert_every_screen_fits() {
 
     s.open_layout_editor();
     check(&mut s, "layout editor", &mut out);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_hud_editor();
     check(&mut s, "interface editor", &mut out);
     if let Some(h) = s.scene.screen_mut::<screens::hud_editor::HudEdit>() {
@@ -790,7 +790,7 @@ fn assert_every_screen_fits() {
     }
     check(&mut s, "interface editor, hit counter", &mut out);
     s.close_hud_editor();
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.start_calibration_as(false);
     check(&mut s, "calibration", &mut out);
     let estimate = calibrate::Estimate {
@@ -800,16 +800,22 @@ fn assert_every_screen_fits() {
         margin_ms: 2.5,
         suggested_offset: -45.0,
     };
-    s.scene =
-        screens::calibrate_done::CalibrateDone::scene(estimate, Box::new(Scene::Select), false);
+    s.scene = screens::calibrate_done::CalibrateDone::scene(
+        estimate,
+        Box::new(SongSelect::scene()),
+        false,
+    );
     check(&mut s, "calibration result", &mut out);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.start_calibration_as(true);
     check(&mut s, "vsync calibration", &mut out);
-    s.scene =
-        screens::calibrate_done::CalibrateDone::scene(estimate, Box::new(Scene::Select), true);
+    s.scene = screens::calibrate_done::CalibrateDone::scene(
+        estimate,
+        Box::new(SongSelect::scene()),
+        true,
+    );
     check(&mut s, "vsync calibration result", &mut out);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     // Not `open_download`, which would search the mirrors.
     s.scene = crate::screens::download::Download::scene();
@@ -947,7 +953,7 @@ fn assert_every_screen_fits() {
     }
     s.cfg.language = crate::lang::Lang::En;
     s.mp_menu = Default::default();
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     s.mp_menu.account = Some("MyOwnAccountName".into());
     s.social.open = true;
@@ -1225,7 +1231,7 @@ fn assert_every_screen_fits() {
     s.mp_menu.account = Some(LONG_NAME.to_string());
     s.me = Some((12_345.6, Some(99_999)));
     s.me_for = LONG_NAME.to_string();
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     check(&mut s, "select logged in", &mut out);
     s.scene = crate::screens::results::ResultsScreen::scene(Box::new(results(false)), 0, None);
     check(&mut s, "results", &mut out);
@@ -1258,7 +1264,7 @@ fn assert_every_screen_fits() {
     }
     s.mp_menu.account = None;
     s.me = None;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     // The video editor (its map still loading): quality, a target size being typed, exporting.
     let json = format!(
@@ -1287,7 +1293,7 @@ fn assert_every_screen_fits() {
     video(&mut s).ed.typing = None;
     video(&mut s).status = "saved \"Camellia feat. Hatsune Miku - Extremely Long Song Title.mp4\" in the videos folder".into();
     check(&mut s, "video editor saved", &mut out);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
 
     // No maps anywhere: the Songs folder button.
     let library = std::mem::take(&mut s.library);
@@ -1353,7 +1359,7 @@ fn assert_every_screen_fits() {
     });
 
     // The exit question, over song select.
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.quit_asked = true;
     check(&mut s, "exit question", &mut out);
     s.quit_asked = false;
@@ -1398,7 +1404,7 @@ fn assert_every_screen_fits() {
     s.mp = Some(guessr_room());
     s.guessr = Some(g);
     s.picking_lobby_map = true;
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     check(&mut s, "mapguessr picking", &mut out);
 
     // The startup warning is translated: it fits in every language.
@@ -1594,7 +1600,7 @@ fn song_select_search_takes_the_keys_only_once_clicked() {
         !s.select.searching && s.select.filter == "-45[",
         "Escape leaves the box, keeping the search"
     );
-    assert!(matches!(s.scene, Scene::Select));
+    assert!(s.scene.is_select());
 }
 
 #[test]
@@ -1772,7 +1778,7 @@ fn by_difficulty_each_is_listed_under_its_own_stars() {
 fn without_headings_the_songs_are_one_list_and_by_difficulty_each_stands_alone() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let by_artist = s.select.songs();
     let maps = by_artist.iter().map(Vec::len).sum::<usize>();
     // Stars counting down through the library, so by difficulty its order turns round.
@@ -1837,7 +1843,7 @@ fn the_song_headings_setting_is_kept() {
 fn the_sort_button_lists_the_sorts() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let before = s.select.sort;
     s.click(crate::hit::Hit::SortList, None);
     assert_eq!(s.select.sort, before, "the button only opens the list");
@@ -1861,7 +1867,7 @@ fn the_sort_button_lists_the_sorts() {
 fn select_under_headings() -> State {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let paths: Vec<PathBuf> = s.library.iter().map(|e| e.path.clone()).collect();
     for (k, p) in paths.iter().enumerate() {
         s.select.status.insert(
@@ -1979,7 +1985,7 @@ fn a_search_opens_every_heading_and_clearing_it_puts_them_back() {
 fn the_list_scrolls_on_its_own_and_comes_back_for_the_selection() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     draw_select(&mut s);
     let (at, top) = (s.select.cursor(), s.select.list_scroll());
     // The wheel moves the list only, and walks past no difficulty.
@@ -2010,7 +2016,7 @@ fn the_list_scrolls_on_its_own_and_comes_back_for_the_selection() {
 fn letting_go_of_the_list_leaves_it_there_and_selects_nothing() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     draw_select(&mut s);
     let at = s.select.cursor();
     s.select.drag_to(-120.0);
@@ -2026,7 +2032,7 @@ fn letting_go_of_the_list_leaves_it_there_and_selects_nothing() {
 fn a_right_click_off_the_rows_does_nothing() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.right_press = Some((700.0, 400.0, None));
     let at = s.select.cursor();
     s.right_button(false);
@@ -2054,7 +2060,7 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
         "the host's other mods aren't forced on us"
     );
     // Not in a lobby (or as the host), the mod select shows just ours.
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     assert_eq!(s.shown_mods(), s.cfg.mods);
 }
 
@@ -2092,7 +2098,7 @@ fn in_defense_the_hosts_mods_are_everyones_and_a_guest_cant_change_them() {
 fn np_names_the_map_on_screen_with_a_link_others_can_click() {
     let mut s = state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     let np = s.now_playing().expect("a map is selected");
     let e = &s.library[s.select.selected().unwrap()];
     assert!(
@@ -2469,14 +2475,14 @@ fn the_audit_reports_touching_buttons_and_pills_but_not_spaced_ones() {
 fn an_update_restarts_the_game_only_in_a_quiet_menu() {
     let mut s = state();
     for scene in [
-        Scene::Select,
+        SongSelect::scene(),
         crate::screens::download::Download::scene(),
         crate::screens::mp_menu::MpMenu::scene(),
     ] {
         s.scene = scene;
         assert!(s.can_restart());
     }
-    s.behind = Some(Box::new(Scene::Select));
+    s.behind = Some(Box::new(SongSelect::scene()));
     s.scene = crate::screens::settings::SettingsScreen::scene();
     assert!(s.can_restart());
     // The settings over something that's still going.

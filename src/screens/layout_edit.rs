@@ -12,7 +12,7 @@ pub(crate) struct LayoutEdit {
 
 impl State {
     pub(crate) fn open_layout_editor(&mut self) {
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        let back = std::mem::replace(&mut self.scene, SongSelect::scene());
         self.scene = Scene::Other(Box::new(LayoutEdit {
             back: Box::new(back),
         }));
@@ -98,7 +98,7 @@ impl Screen for LayoutEdit {
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape => {
                 state.cfg.save();
-                state.scene = *std::mem::replace(&mut self.back, Box::new(Scene::Select));
+                state.scene = *std::mem::replace(&mut self.back, Box::new(SongSelect::scene()));
                 return;
             }
             _ => return,

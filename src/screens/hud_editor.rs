@@ -13,7 +13,7 @@ pub(crate) struct HudEdit {
 
 impl State {
     pub(crate) fn open_hud_editor(&mut self) {
-        let back = std::mem::replace(&mut self.scene, Scene::Select);
+        let back = std::mem::replace(&mut self.scene, SongSelect::scene());
         let ed = hud_edit::Editor::new(&self.cfg);
         self.scene = Scene::Other(Box::new(HudEdit {
             back: Box::new(back),
@@ -25,10 +25,10 @@ impl State {
         let back = self
             .scene
             .screen_mut::<HudEdit>()
-            .map(|h| std::mem::replace(&mut h.back, Box::new(Scene::Select)));
+            .map(|h| std::mem::replace(&mut h.back, Box::new(SongSelect::scene())));
         self.cfg.save();
         self.hud_sample = None;
-        self.scene = back.map_or(Scene::Select, |back| *back);
+        self.scene = back.map_or(SongSelect::scene(), |back| *back);
     }
 
     pub(crate) fn hud_outcome(&mut self, outcome: hud_edit::Outcome) {
@@ -97,7 +97,7 @@ impl Screen for HudEdit {
             hud_edit::Outcome::Close => {
                 state.cfg.save();
                 state.hud_sample = None;
-                state.scene = *std::mem::replace(&mut self.back, Box::new(Scene::Select));
+                state.scene = *std::mem::replace(&mut self.back, Box::new(SongSelect::scene()));
             }
         }
     }

@@ -64,7 +64,7 @@ fn main_menu() {
         let mut m = menu::Menu::new();
         m.pick(i);
         s.main_menu = Some(m);
-        s.scene = Scene::Select;
+        s.scene = SongSelect::scene();
         let name = format!("{item:?}").to_lowercase();
         assert_snapshot(&format!("screen-main-menu-{name}"), &shot(&mut s, &mut now));
     }
@@ -92,10 +92,10 @@ fn multiplayer_menu_download_and_editor_home() {
     s.scene =
         crate::screens::editor_home::EditorHome::scene(editor::home::Home::new(&[], "tester"));
     assert_snapshot("screen-editor-home", &shot(&mut s, &mut now));
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_hud_editor();
     assert_snapshot("screen-interface-editor", &shot(&mut s, &mut now));
-    s.scene = Scene::Select;
+    s.scene = SongSelect::scene();
     s.open_layout_editor();
     assert_snapshot("screen-playfield-editor", &shot(&mut s, &mut now));
 }
