@@ -383,3 +383,129 @@ impl Own<'_> {
         }
     }
 }
+
+/// The `collection.db` version written when there's none to keep (osu! stable's of 2025-01-08,
+/// which reads the same format).
+const NEW_DB_VERSION: i32 = 20250108;
+
+/// What exporting did: how many collections went in new, and how many of osu!'s gained maps.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Exported {
+    pub added: usize,
+    pub merged: usize,
+}
+
+/// Writes the player's own collections (`own`, each map's MD5 now by `md5_of`) into osu!'s
+/// `collection.db` at `path`. osu!'s own collections stay as they are: one with the same name
+/// as one of the player's gains its maps, the rest come after. A `collection.db` that can't be
+/// read is left alone. Before it's replaced, the file is copied to `collection.db.bak`; the new
+/// one is written beside it, read back, and only then put in its place.
+pub fn export_to_osu(
+    path: &std::path::Path,
+    own: &[Collection],
+    md5_of: impl Fn(&MapRef) -> String,
+) -> Result<Exported, String> {
+    let shown = |e: std::io::Error| format!("{}: {e}", path.display());
+    let (version, mut all) = match std::fs::read(path) {
+        Ok(b) => {
+            let version = crate::osudb::collections_version(&b);
+            let all = crate::osudb::parse_collections(&b);
+            match (version, all) {
+                (Some(v), Some(all)) => (v, all),
+                _ => {
+                    return Err(
+                        "osu!'s collection.db couldn't be read, so it's left as it is".into(),
+                    );
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (NEW_DB_VERSION, Vec::new()),
+        Err(e) => return Err(shown(e)),
+    };
+    let mut done = Exported {
+        added: 0,
+        merged: 0,
+    };
+    for c in own.iter().filter(|c| c.source == Source::Local) {
+        let md5s: Vec<String> = c
+            .maps
+            .iter()
+            .map(&md5_of)
+            .filter(|m| !m.is_empty())
+            .collect();
+        match all.iter_mut().find(|(name, _)| *name == c.name) {
+            Some((_, theirs)) => {
+                let before = theirs.len();
+                for m in md5s {
+                    if !theirs.contains(&m) {
+                        theirs.push(m);
+                    }
+                }
+                if theirs.len() > before {
+                    done.merged += 1;
+                }
+            }
+            None => {
+                all.push((c.name.clone(), md5s));
+                done.added += 1;
+            }
+        }
+    }
+    let bytes = crate::osudb::write_collections(version, &all);
+    if path.exists() {
+        std::fs::copy(path, path.with_extension("db.bak")).map_err(shown)?;
+    }
+    let fresh = path.with_extension("db.taiko-rs");
+    std::fs::write(&fresh, &bytes).map_err(shown)?;
+    let back = std::fs::read(&fresh).map_err(shown)?;
+    if crate::osudb::parse_collections(&back).as_ref() != Some(&all) {
+        let _ = std::fs::remove_file(&fresh);
+        return Err(
+            "the new collection.db didn't read back the same; osu!'s is left as it is".into(),
+        );
+    }
+    std::fs::rename(&fresh, path).map_err(shown)?;
+    Ok(done)
+}
+
+/// Whether osu! stable is running (it writes `collection.db` again when it closes, so an export
+/// then would be lost).
+pub fn osu_running() -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // No console window flashing up.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq osu!.exe", "/NH"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("osu!.exe"))
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        // Through Wine: a process whose command line names osu!.exe.
+        std::fs::read_dir("/proc").is_ok_and(|dir| {
+            dir.flatten().any(|p| {
+                std::fs::read(p.path().join("cmdline"))
+                    .is_ok_and(|c| c.windows(8).any(|w| w.eq_ignore_ascii_case(b"osu!.exe")))
+            })
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("pgrep")
+            .args(["-f", "osu!.exe"])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+    #[cfg(not(any(
+        windows,
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos"
+    )))]
+    {
+        false
+    }
+}

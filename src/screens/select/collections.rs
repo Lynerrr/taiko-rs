@@ -81,6 +81,7 @@ impl State {
             })
             .filter(|c| c.own || !c.maps.is_empty())
             .collect();
+        self.select.can_export = own > 0 && self.osu_collection_db().is_some();
         self.select.collection = shown.and_then(|(name, own)| {
             self.select
                 .collections
@@ -167,8 +168,12 @@ impl State {
         match self.select.list.clone() {
             PickList::Sorts => {}
             PickList::Collections => {
-                if i == self.select.collections.len() + 1 {
+                let n = self.select.collections.len();
+                if i == n + 1 {
                     self.start_naming(NameFor::New(Vec::new()));
+                } else if i == n + 2 {
+                    self.select.list = PickList::Export;
+                    self.select.picker = Some(1);
                 } else {
                     self.select.pick_collection(i, &self.library);
                 }
@@ -188,6 +193,14 @@ impl State {
                 } else {
                     self.back_to_collections(k);
                 }
+            }
+            PickList::Export => {
+                if i == 0 {
+                    self.export_collections();
+                }
+                let n = self.select.collections.len();
+                self.select.list = PickList::Collections;
+                self.select.picker = Some(n + 2);
             }
         }
     }
@@ -361,6 +374,51 @@ impl State {
         self.toast(format!("copied to your collections as {name}"));
     }
 
+    /// osu!'s `collection.db` beside a Songs folder in use (by its `osu!.db`), if there's one.
+    fn osu_collection_db(&self) -> Option<PathBuf> {
+        self.song_dirs
+            .iter()
+            .filter_map(|d| d.parent())
+            .find(|p| p.join("osu!.db").is_file())
+            .map(|p| p.join("collection.db"))
+    }
+
+    /// Writes the player's own collections into osu!'s `collection.db`, unless osu! is open.
+    fn export_collections(&mut self) {
+        let Some(path) = self.osu_collection_db() else {
+            return;
+        };
+        if collections::osu_running() {
+            self.toast("close osu! first: it writes collection.db again when it closes".into());
+            return;
+        }
+        let finder = Finder::new(&self.library);
+        let library = &self.library;
+        // Each map's MD5 now: a map updated in place has another.
+        let md5_of = |m: &MapRef| {
+            finder
+                .at(m)
+                .and_then(|i| std::fs::read(&library[i].path).ok())
+                .map_or_else(|| m.md5.clone(), |b| download::md5_hex(&b))
+        };
+        let own = &self.collections[..collections::own_len(&self.collections)];
+        let text = match collections::export_to_osu(&path, own, md5_of) {
+            Ok(done) => {
+                let mut text = match done.added {
+                    1 => "1 collection put in osu!".to_string(),
+                    n => format!("{n} collections put in osu!"),
+                };
+                if done.merged > 0 {
+                    text += &format!(", {} of osu!'s gained maps", done.merged);
+                }
+                text + " (the old collection.db is kept as collection.db.bak)"
+            }
+            Err(e) => format!("export to osu! failed: {e}"),
+        };
+        eprintln!("{text}");
+        self.toast(text);
+    }
+
     /// Downloads the sets of collection `k`'s maps that aren't here (the ones with a set ID).
     fn download_missing(&mut self, k: usize) {
         let Some(at) = self.collection_at(k) else {
@@ -447,6 +505,10 @@ impl State {
             ) => {
                 let k = *k;
                 self.back_to_collections(k)
+            }
+            (PickList::Export, KeyCode::Escape | KeyCode::Backspace, _) => {
+                self.select.list = PickList::Collections;
+                self.select.picker = Some(self.select.collections.len() + 2);
             }
             _ => self.list_key(code, cursor),
         }

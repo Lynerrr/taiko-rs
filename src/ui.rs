@@ -213,6 +213,9 @@ pub struct Select {
     pub list: PickList,
     /// A collection's name being typed.
     pub naming: Option<Naming>,
+    /// The collections list offers to export the player's own to osu!'s `collection.db`
+    /// (there's an osu! install, and collections of their own).
+    pub can_export: bool,
     /// Files read so far while the library is still being scanned.
     pub scanning: Option<usize>,
     /// The folder dialog is open (from the button shown when there are no maps at all).
@@ -453,6 +456,7 @@ impl Select {
             picker: None,
             list: PickList::Sorts,
             naming: None,
+            can_export: false,
             scanning: None,
             favourites: crate::playlist::load_favourites(),
             picking_folder: false,
@@ -3118,6 +3122,8 @@ pub enum PickList {
     Manage(usize),
     /// Is collection `k` to be deleted?
     Delete(usize),
+    /// Are the player's collections to be written into osu!'s `collection.db`?
+    Export,
 }
 
 /// What a collection's name is being typed for.
@@ -3390,6 +3396,10 @@ impl Select {
                     )
                 }))
                 .chain(std::iter::once(new()))
+                .chain(
+                    self.can_export
+                        .then(|| ("Export my collections to osu!".to_string(), None, false)),
+                )
                 .collect(),
                 "Enter show   Tab more   F2 rename   Del delete",
             ),
@@ -3432,6 +3442,18 @@ impl Select {
                 }
                 (c.name.clone(), rows, "Enter/click   Esc back")
             }
+            PickList::Export => (
+                "Put your collections in osu!?".into(),
+                vec![
+                    (
+                        "Export (osu!'s stay; the old file is kept as collection.db.bak)".into(),
+                        None,
+                        false,
+                    ),
+                    ("Cancel".into(), None, false),
+                ],
+                "With osu! closed   Enter/click   Esc cancel",
+            ),
             PickList::Delete(k) => {
                 let Some(c) = self.collections.get(*k) else {
                     return (String::new(), Vec::new(), "");

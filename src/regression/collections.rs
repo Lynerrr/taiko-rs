@@ -314,6 +314,100 @@ fn a_database_from_before_collections_gains_them_and_keeps_its_data() {
     );
 }
 
+#[test]
+fn the_players_collections_go_into_osus_collection_db_keeping_osus_and_a_backup() {
+    let dir = temp_db("export").parent().unwrap().to_path_buf();
+    let path = dir.join("collection.db");
+    let theirs = vec![
+        ("practice".to_string(), vec!["aaaa".to_string()]),
+        ("warm up".to_string(), vec!["bbbb".to_string()]),
+    ];
+    let original = crate::osudb::write_collections(20240101, &theirs);
+    std::fs::write(&path, &original).unwrap();
+    let map = |md5: &str| MapRef {
+        md5: md5.into(),
+        ..MapRef::default()
+    };
+    let own = vec![
+        Collection {
+            name: "warm up".into(),
+            source: Source::Local,
+            maps: vec![map("bbbb"), map("cccc")],
+        },
+        Collection {
+            name: "dans".into(),
+            source: Source::Local,
+            maps: vec![map("dddd"), map("")],
+        },
+        // osu!'s mirrored ones aren't written back.
+        Collection {
+            name: "mirror".into(),
+            source: Source::Osu,
+            maps: vec![map("eeee")],
+        },
+    ];
+    // Each map's MD5 now: "cccc" was updated to "c2c2".
+    let now = |m: &MapRef| {
+        if m.md5 == "cccc" {
+            "c2c2".to_string()
+        } else {
+            m.md5.clone()
+        }
+    };
+    let done = collections::export_to_osu(&path, &own, now).unwrap();
+    assert_eq!(
+        done,
+        collections::Exported {
+            added: 1,
+            merged: 1
+        }
+    );
+    let back = std::fs::read(&path).unwrap();
+    assert_eq!(crate::osudb::collections_version(&back), Some(20240101));
+    let s = |v: &[&str]| v.iter().map(|m| m.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        crate::osudb::parse_collections(&back).unwrap(),
+        vec![
+            ("practice".to_string(), s(&["aaaa"])),
+            ("warm up".to_string(), s(&["bbbb", "c2c2"])),
+            ("dans".to_string(), s(&["dddd"])),
+        ]
+    );
+    assert_eq!(
+        std::fs::read(dir.join("collection.db.bak")).unwrap(),
+        original
+    );
+    assert!(!dir.join("collection.db.taiko-rs").exists());
+
+    // Again: nothing new, nothing doubled.
+    let done = collections::export_to_osu(&path, &own, now).unwrap();
+    assert_eq!(
+        done,
+        collections::Exported {
+            added: 0,
+            merged: 0
+        }
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), back);
+
+    // A collection.db that can't be read is left alone.
+    std::fs::write(&path, b"\x01\x00").unwrap();
+    assert!(collections::export_to_osu(&path, &own, now).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), b"\x01\x00");
+
+    // None yet: made, with nothing to back up.
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(dir.join("collection.db.bak"));
+    collections::export_to_osu(&path, &own, now).unwrap();
+    assert_eq!(
+        crate::osudb::parse_collections(&std::fs::read(&path).unwrap())
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(!dir.join("collection.db.bak").exists());
+}
+
 mod in_song_select {
     //! The player's own collections made and changed in the song select, with the keyboard and
     //! the mouse, as a player does: each step's list, collections and songs shown in a golden.

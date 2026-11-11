@@ -239,7 +239,10 @@ Ctrl+Up/Down moves, and Tab or a row's *...* lists all of that. If an osu! stabl
 Songs folder, its collections (`collection.db`) are listed after yours, marked *osu!*: they're
 osu!'s (changes made in osu! show up here) and can be copied to yours to change them. A map that's not
 here (deleted, or never downloaded) stays in the collection, counted as *not here*: its list
-downloads their sets. A map of yours that was updated or moved is followed to its new file. All are kept
+downloads their sets. A map of yours that was updated or moved is followed to its new file. *Export my collections
+to osu!* (at the end of the list, with an osu! install) puts yours into osu!'s `collection.db`
+while osu! is closed: osu!'s stay as they are, one with the same name gains your maps, and the old
+file is kept as `collection.db.bak`. All are kept
 in `taiko.db`. The search takes them too: `collection="warm up"` (any case), `collection!=dans`, and
 `collection=none` for the maps in none, with the other filters and the collection picked.
 
