@@ -2061,7 +2061,7 @@ fn a_guests_mod_select_shows_the_hosts_speed_mods_on() {
     room.map.as_mut().unwrap().mods = Mods::parse("DT,HD").list();
     room.map.as_mut().unwrap().defense = None;
     s.mp = Some(room);
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     s.cfg.mods = Mods::parse("FL");
     let shown = s.shown_mods();
     assert!(
@@ -2089,7 +2089,7 @@ fn in_defense_the_hosts_mods_are_everyones_and_a_guest_cant_change_them() {
         m.mods = Mods::parse("DT,HD,AT").lobby(m.defense).list();
     }
     s.mp = Some(room);
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     s.cfg.mods = Mods::parse("FL");
     let shown = s.shown_mods();
     assert!(shown.has(mods::Mod::Hidden) && shown.has(mods::Mod::Maze));
@@ -2346,7 +2346,7 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
     let mut room = session(false);
     room.client.id = Some(0);
     s.mp = Some(room);
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     let at = Instant::now();
     let key = |s: &mut State, code, text: Option<&str>| s.key_inner(code, false, text, at, None);
 
@@ -2363,7 +2363,7 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
     // Esc only puts the line away; the lobby stays.
     key(&mut s, KeyCode::Escape, None);
     assert!(s.mp.as_ref().unwrap().chat_input.is_none());
-    assert!(matches!(s.scene, Scene::Lobby));
+    assert!(s.scene.screen_is::<crate::screens::lobby::Lobby>());
 
     // Enter sends.
     key(&mut s, KeyCode::KeyT, Some("t"));
@@ -2378,7 +2378,7 @@ fn the_lobby_chat_takes_typed_text_without_firing_hotkeys() {
         "sent, and the box stays open for the next line"
     );
     assert!(
-        matches!(s.scene, Scene::Lobby),
+        s.scene.screen_is::<crate::screens::lobby::Lobby>(),
         "Enter didn't start a match"
     );
     // Enter on an empty line puts it away.
@@ -2501,10 +2501,10 @@ fn an_update_restarts_the_game_only_in_a_quiet_menu() {
     assert!(s.can_restart());
     // The settings over something that's still going.
     s.scene = Scene::Settings {
-        prev: Box::new(Scene::Lobby),
+        prev: Box::new(crate::screens::lobby::Lobby::scene()),
     };
     assert!(!s.can_restart());
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     assert!(!s.can_restart());
     s.scene = crate::screens::mp_results::MpResults::scene();
     assert!(!s.can_restart());

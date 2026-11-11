@@ -6,6 +6,7 @@ pub(crate) mod download;
 pub(crate) mod editor_home;
 pub(crate) mod hud_editor;
 pub(crate) mod layout_edit;
+pub(crate) mod lobby;
 pub(crate) mod menu;
 pub(crate) mod mp_menu;
 pub(crate) mod mp_results;

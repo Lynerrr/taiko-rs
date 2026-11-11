@@ -122,7 +122,7 @@ impl Screen for Preview {
     }
 
     fn over_lobby(&self) -> bool {
-        matches!(*self.back, Scene::Lobby)
+        self.back.screen().is_some_and(|s| s.room_lobby())
     }
 
     fn song_select(&self) -> bool {

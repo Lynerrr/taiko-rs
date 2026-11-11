@@ -21,6 +21,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) lobby_host: bool,
     /// "Playfield 1280x720 ...": `State::playfield_label`.
     pub(crate) size_label: &'a str,
+    /// The room's map being fetched or sent: `State::lobby_download_status`.
+    pub(crate) lobby_download: Option<(String, Option<f32>)>,
 }
 
 /// A key pressed, as a screen gets it.
@@ -104,6 +106,10 @@ pub(crate) trait Screen: Any + Send {
     }
     /// It is part of a match being played: waiting for it to start or playing it.
     fn in_match(&self) -> bool {
+        false
+    }
+    /// It is the room's lobby (`State::in_lobby`).
+    fn room_lobby(&self) -> bool {
         false
     }
     /// It is part of a multiplayer room: the room's map is the one it is about, and losing
@@ -205,6 +211,7 @@ struct Shadow {
     covers_social_tab: bool,
     over_lobby: bool,
     in_room: bool,
+    room_lobby: bool,
     in_song: bool,
     in_match: bool,
     song_select: bool,
@@ -245,6 +252,7 @@ impl Shadow {
             covers_social_tab: screen.covers_social_tab(),
             over_lobby: screen.over_lobby(),
             in_room: screen.in_room(),
+            room_lobby: screen.room_lobby(),
             in_song: screen.in_song(),
             in_match: screen.in_match(),
             song_select: screen.song_select(),
@@ -314,6 +322,9 @@ impl Screen for Shadow {
     }
     fn in_room(&self) -> bool {
         self.in_room
+    }
+    fn room_lobby(&self) -> bool {
+        self.room_lobby
     }
     fn in_song(&self) -> bool {
         self.in_song
@@ -522,6 +533,7 @@ mod tests {
         "MpMenu",
         "MpResults",
         "MpWait",
+        "Lobby",
     ];
 
     #[test]
@@ -531,8 +543,11 @@ mod tests {
             let variant = ["Scene::", *name].concat();
             let named: Vec<&str> = lib.lines().filter(|l| l.contains(&variant)).collect();
             assert!(named.is_empty(), "lib.rs names {variant}: {named:?}");
+            // A variant with fields is declared on a line of its own (`Activity::Lobby {` is
+            // another enum's).
             let field = [*name, " {"].concat();
-            assert!(!lib.contains(&field), "lib.rs declares {field}");
+            let declared = lib.lines().any(|l| l.trim_start().starts_with(&field));
+            assert!(!declared, "lib.rs declares {field}");
         }
     }
 }

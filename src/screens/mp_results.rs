@@ -79,7 +79,7 @@ impl Screen for MpResults {
             code,
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape
         ) {
-            state.scene = Scene::Lobby;
+            state.scene = super::lobby::Lobby::scene();
         }
     }
 
