@@ -394,16 +394,14 @@ impl Setup {
                 let line = tr!(
                     "Universe {n}'s own colours, don then kat: {s}_   Enter set   Esc cancel",
                     "宇宙{n}の自分の色 (ドン、カッの順): {s}_   Enter 決定   Esc 取消",
-                    "Свои цвета вселенной {n}, дон и кат: {s}_   Enter задать   Esc отмена";
-                );
+                    "Свои цвета вселенной {n}, дон и кат: {s}_   Enter задать   Esc отмена"; [] [n, s]);
                 (line, 0xFFD34D)
             }
             Some(Typing::Name(s)) => {
                 let line = tr!(
                     "Save these universes as: {s}_   Enter save (the same name replaces it)   Esc cancel",
                     "この宇宙たちの保存名: {s}_   Enter 保存 (同じ名前は上書き)   Esc 取消",
-                    "Сохранить вселенные как: {s}_   Enter сохранить (то же имя заменяет)   Esc отмена";
-                );
+                    "Сохранить вселенные как: {s}_   Enter сохранить (то же имя заменяет)   Esc отмена"; [] [s]);
                 (line, 0xFFD34D)
             }
             None => {

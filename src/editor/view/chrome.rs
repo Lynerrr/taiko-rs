@@ -23,23 +23,14 @@ pub const FRIENDS_CHIP_ROOM: f32 = 90.0;
 
 /// `text` broken into lines no wider than `w` at `size`.
 pub(super) fn wrap(size: f32, w: f32, text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    let mut out = Vec::new();
     for para in text.split('\n') {
-        let mut line = String::new();
-        for word in para.split_whitespace() {
-            let try_line = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            if !line.is_empty() && Canvas::text_width(size, &try_line) > w {
-                out.push(std::mem::take(&mut line));
-                line = word.to_string();
-            } else {
-                line = try_line;
-            }
+        let lines = Canvas::wrap_words(size, w, para);
+        if lines.is_empty() {
+            out.push(String::new());
+        } else {
+            out.extend(lines);
         }
-        out.push(line);
     }
     out
 }

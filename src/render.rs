@@ -3843,6 +3843,39 @@ impl<H> Canvas<H> {
         s.len()
     }
 
+    /// Wraps at whitespace when possible and at glyph boundaries for words wider than the line.
+    pub(crate) fn wrap_words(size: f32, width: f32, text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut line = String::new();
+        for mut word in text.split_whitespace() {
+            let next = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if Self::text_width(size, &next) <= width {
+                line = next;
+                continue;
+            }
+            if !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+            }
+            while let Some(first) = word.chars().next() {
+                let end = Self::fitting_prefix(size, width, word).max(first.len_utf8());
+                if end == word.len() {
+                    break;
+                }
+                out.push(word[..end].to_string());
+                word = &word[end..];
+            }
+            line.push_str(word);
+        }
+        if !line.is_empty() {
+            out.push(line);
+        }
+        out
+    }
+
     /// How tall text `size` comes out (`size`, or more on a text grid).
     pub fn text_height(size: f32) -> f32 {
         font_px(size) * 7.0

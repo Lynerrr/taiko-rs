@@ -29,7 +29,7 @@ pub fn minutes_name(minutes: u32) -> String {
         1 => tr!("After 1 minute", "1分後", "Через 1 минуту").into(),
         m => {
             let ru = crate::lang::ru_plural(m as usize, ["минуту", "минуты", "минут"]);
-            tr!("After {m} minutes", "{m}分後", "Через {m} {ru}";)
+            tr!("After {m} minutes", "{m}分後", "Через {m} {ru}"; [] [m])
         }
     }
 }

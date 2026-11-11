@@ -178,12 +178,12 @@ fn defense_verdict(
     let left = team.map_or(lives.saturating_sub(leaked), |t| t.lives);
     if left == 0 {
         (
-            tr!("THE TEAM FELL  ({leaked} notes got through)", "チーム敗北  ({leaked}ノーツ突破)", "КОМАНДА ПАЛА  (прорвалось {leaked})";),
+            tr!("THE TEAM FELL  ({leaked} notes got through)", "チーム敗北  ({leaked}ノーツ突破)", "КОМАНДА ПАЛА  (прорвалось {leaked})"; [] [leaked]),
             0xEB452C,
         )
     } else {
         (
-            tr!("DEFENDED  ({left}/{lives} lives left)", "防衛成功  (ライフ {left}/{lives})", "ОБОРОНА УСТОЯЛА  ({left}/{lives} жизней)";),
+            tr!("DEFENDED  ({left}/{lives} lives left)", "防衛成功  (ライフ {left}/{lives})", "ОБОРОНА УСТОЯЛА  ({left}/{lives} жизней)"; [] [left, lives]),
             0x86E05A,
         )
     }
@@ -966,7 +966,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         top + 13.0,
         7.0,
         rgba(0x6f6f86, 1.0),
-        &tr!("{count} open", "{count}件", "открыто: {count}";),
+        &tr!("{count} open", "{count}件", "открыто: {count}"; [] [count]),
     );
     let lobby_rows: Vec<(usize, usize)> = rows
         .iter()
@@ -1089,7 +1089,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
             bottom - 12.0,
             6.5,
             rgba(0x6f6f86, 1.0),
-            &tr!("{more} more (Up/Down)", "あと{more}件 (上下)", "ещё {more} (вверх/вниз)";),
+            &tr!("{more} more (Up/Down)", "あと{more}件 (上下)", "ещё {more} (вверх/вниз)"; [] [more]),
         );
     }
 
@@ -1113,7 +1113,7 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
         &Canvas::fit(
             8.0,
             rw - 28.0,
-            &tr!("logged in as {who}", "{who} でログイン中", "ты вошёл как {who}";),
+            &tr!("logged in as {who}", "{who} でログイン中", "ты вошёл как {who}"; [] [who]),
         ),
     );
     let half = (rw - 28.0 - 8.0) / 2.0;
@@ -1563,7 +1563,7 @@ pub fn draw_lobby(
             }
             if let Some(t) = m.from {
                 let (min, sec) = ((t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60);
-                extra.push(tr!("from {min}:{sec:02}", "{min}:{sec:02}から", "с {min}:{sec:02}";));
+                extra.push(tr!("from {min}:{sec:02}", "{min}:{sec:02}から", "с {min}:{sec:02}"; [] [min, sec]));
             }
             if m.defense.is_some() {
                 extra.push(tr!("DEFENSE co-op", "ディフェンス協力", "ОБОРОНА кооп").to_string());
@@ -1657,7 +1657,7 @@ pub fn draw_lobby(
         py + 10.0,
         9.0,
         rgba(accent(), 1.0),
-        &tr!("PLAYERS  {count}/{slots}", "プレイヤー  {count}/{slots}", "ИГРОКИ  {count}/{slots}";),
+        &tr!("PLAYERS  {count}/{slots}", "プレイヤー  {count}/{slots}", "ИГРОКИ  {count}/{slots}"; [] [count, slots]),
     );
     let my_id = s.client.id;
     let cell_w = (iw - 8.0) / 2.0;
@@ -2150,8 +2150,7 @@ pub fn draw_skip_votes(c: &mut Canvas, s: &Session) {
         (_, Some((votes, of))) => tr!(
             "SKIP {votes}/{of}  waiting for everyone",
             "スキップ {votes}/{of}  全員待ち",
-            "ПРОПУСК {votes}/{of}  ждём всех";
-        ),
+            "ПРОПУСК {votes}/{of}  ждём всех"; [] [votes, of]),
         (true, None) => tr!("SKIP asked", "スキップ要求済み", "ПРОПУСК запрошен").to_string(),
         (false, None) => tr!(
             "Space: ask to skip (everyone must)",
@@ -2216,8 +2215,7 @@ fn draw_team_board(c: &mut Canvas, s: &Session, defense: net::Defense, my_live: 
         tr!(
             "TEAM  lives {lives}/{max}   gold {gold}   shield {shield}",
             "チーム  ライフ {lives}/{max}   ゴールド {gold}   シールド {shield}",
-            "КОМАНДА  жизни {lives}/{max}   золото {gold}   щит {shield}";
-        ),
+            "КОМАНДА  жизни {lives}/{max}   золото {gold}   щит {shield}"; [] [lives, max, gold, shield]),
         0xFFD34D,
     ));
     lines.push((team_columns(), 0x6f6f86));

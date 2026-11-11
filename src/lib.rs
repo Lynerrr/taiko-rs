@@ -292,7 +292,7 @@ impl WatchView {
         match (&self.play, self.entry) {
             (None, _) => {
                 let player = &self.player;
-                tr!("waiting for {player} to play something...", "{player}が何かプレイするのを待っています...", "ждём, когда {player} начнёт играть...";)
+                tr!("waiting for {player} to play something...", "{player}が何かプレイするのを待っています...", "ждём, когда {player} начнёт играть..."; [] [player])
             }
             (Some(_), None) if self.fetching => {
                 tr!("getting the map...", "譜面を取得中...", "получаем карту...").into()
@@ -1087,7 +1087,7 @@ impl State {
                 )
                 .to_string()
             } else {
-                tr!("picked up {n} new maps from the song folder", "曲フォルダから譜面を{n}個追加しました", "из папки песни подхвачено новых карт: {n}";)
+                tr!("picked up {n} new maps from the song folder", "曲フォルダから譜面を{n}個追加しました", "из папки песни подхвачено новых карт: {n}"; [] [n])
             });
         }
         for path in unreadable {
@@ -1095,7 +1095,7 @@ impl State {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            self.toast(tr!("{file} isn't a taiko map the game can read", "{file}は読み込めない譜面です", "{file} — не читается как карта";));
+            self.toast(tr!("{file} isn't a taiko map the game can read", "{file}は読み込めない譜面です", "{file} — не читается как карта"; [] [file]));
         }
         self.select.refilter(&self.library);
     }
@@ -1269,7 +1269,7 @@ impl State {
         let r = match scores::load_replay(file) {
             Ok(r) => r,
             Err(e) => {
-                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}";));
+                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}"; [] [e]));
                 return;
             }
         };
@@ -1285,13 +1285,13 @@ impl State {
             });
         let Some(entry) = entry else {
             let map = &r.map_label;
-            self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен";));
+            self.toast(tr!("{map} isn't in your songs", "{map}は曲の中にありません", "{map} нет среди ваших песен"; [] [map]));
             return;
         };
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
         let (player, map) = (&r.player, self.library[entry].label());
-        let label = tr!("replay of {player}: {map}", "{player}のリプレイ: {map}", "повтор {player}: {map}";);
+        let label = tr!("replay of {player}: {map}", "{player}のリプレイ: {map}", "повтор {player}: {map}"; [] [player, map]);
         let rx = self.load_with(entry, r.rate, Mods::from_list(&r.mods));
         self.pending_replay = Some(r);
         self.scene = Loading::scene(rx, label, entry, None);
@@ -1319,7 +1319,7 @@ impl State {
         let r = match scores::load_replay(file) {
             Ok(r) => r,
             Err(e) => {
-                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}";));
+                self.toast(tr!("can't open the replay: {e}", "リプレイを開けません: {e}", "не удаётся открыть повтор: {e}"; [] [e]));
                 return;
             }
         };
@@ -1404,7 +1404,7 @@ impl State {
                 } else {
                     ""
                 };
-                self.toast(tr!("opening a score{later}...", "スコアを開いています{later}...", "открываем рекорд{later}...";));
+                self.toast(tr!("opening a score{later}...", "スコアを開いています{later}...", "открываем рекорд{later}..."; [] [later]));
             }
         }
     }
@@ -1420,7 +1420,7 @@ impl State {
                 Some(Some(Ok(s))) => l.score = Some(s),
                 Some(Some(Err(e))) => {
                     self.score_link = None;
-                    self.toast(tr!("can't open that score: {e}", "そのスコアを開けません: {e}", "не удаётся открыть рекорд: {e}";));
+                    self.toast(tr!("can't open that score: {e}", "そのスコアを開けません: {e}", "не удаётся открыть рекорд: {e}"; [] [e]));
                     return;
                 }
                 None => return,
@@ -1474,8 +1474,7 @@ impl State {
                 self.toast(tr!(
                     "your copy of {map} is a different version than the one played",
                     "あなたの{map}はプレイされたものと別のバージョンです",
-                    "ваша {map} — другая версия, не та, что играли";
-                ));
+                    "ваша {map} — другая версия, не та, что играли"; [] [map]));
             }
             (None, Some(id)) => {
                 let song = score
@@ -1499,13 +1498,13 @@ impl State {
                 if let Some(l) = &mut self.score_link {
                     l.downloading = Some(Instant::now());
                 }
-                self.toast(tr!("downloading {song} for that score...", "そのスコアのため{song}をダウンロード中...", "скачиваем {song} для этого рекорда...";));
+                self.toast(tr!("downloading {song} for that score...", "そのスコアのため{song}をダウンロード中...", "скачиваем {song} для этого рекорда..."; [] [song]));
             }
             (None, None) => {
                 self.score_link = None;
                 let map = &score.map;
                 self.toast(
-                    tr!("you haven't got {map}", "{map}を持っていません", "у вас нет {map}";),
+                    tr!("you haven't got {map}", "{map}を持っていません", "у вас нет {map}"; [] [map]),
                 );
             }
         }
@@ -1588,7 +1587,7 @@ impl State {
         ));
         if let Some(t) = from {
             let at = fmt_time(t);
-            label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})";));
+            label.push_str(&tr!("  (from {at})", "  ({at}から)", "  (с {at})"; [] [at]));
         }
         let rx = match test {
             Some(text) => {
@@ -1835,7 +1834,7 @@ impl State {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| tr!("not saved", "保存されません", "не сохраняется").into());
         let (adapter, hz) = (&self.adapter, self.refresh_hz);
-        self.status = tr!("{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  config: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  設定: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Гц  |  конфиг: {config}";);
+        self.status = tr!("{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  config: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Hz  |  設定: {config}", "{adapter}  |  {audio_desc}  |  {hz:.0} Гц  |  конфиг: {config}"; [] [adapter, audio_desc, hz, config]);
     }
 
     fn open_settings(&mut self) {
@@ -1856,7 +1855,7 @@ impl State {
     /// Puts a drum on `code`; false if that key is taken. In Settings and the guide alike.
     fn bind_drum_key(&mut self, slot: usize, code: KeyCode) -> bool {
         if self.cfg.preset_keys.contains(&code) {
-            self.toast(tr!("{} is a playfield preset key", "{}はプリセットのキーです", "{} — клавиша пресета поля"; config::key_name(code)));
+            self.toast(tr!("{} is a playfield preset key", "{}はプリセットのキーです", "{} — клавиша пресета поля"; [config::key_name(code)] []));
             return false;
         }
         // Swap if the key was already bound to another drum.
@@ -1886,7 +1885,7 @@ impl State {
         config::reset_map_offsets();
         self.map_offsets.clear();
         self.refresh_play_offset();
-        self.toast(tr!("offsets of {n} maps reset", "{n}譜面のオフセットをリセットしました", "сброшены оффсеты карт: {n}";));
+        self.toast(tr!("offsets of {n} maps reset", "{n}譜面のオフセットをリセットしました", "сброшены оффсеты карт: {n}"; [] [n]));
     }
 
     /// Ctrl+O: settings over whatever is on (a solo song pauses first), or back out of them.
@@ -2232,7 +2231,7 @@ impl State {
         let more = self.unlock.add(new);
         if more > 0 {
             self.toast(
-                tr!("and {more} more medals", "ほか{more}個のメダル", "и ещё медалей: {more}";),
+                tr!("and {more} more medals", "ほか{more}個のメダル", "и ещё медалей: {more}"; [] [more]),
             );
         }
     }
@@ -2500,7 +2499,7 @@ impl State {
                     picked.name().into()
                 } else {
                     let (picked, running) = (picked.name(), update::BUILD_CHANNEL.name());
-                    tr!("{picked} (running {running})", "{picked} (実行中は{running})", "{picked} (запущен {running})";)
+                    tr!("{picked} (running {running})", "{picked} (実行中は{running})", "{picked} (запущен {running})"; [] [picked, running])
                 }
             }
             Item::Key(i) => config::key_name(c.keys[i]),
@@ -2566,7 +2565,7 @@ impl State {
                 (Some(dir), _) => short_path(dir),
                 (None, Some(dir)) => {
                     let dir = short_path(dir);
-                    tr!("found {dir}", "見つけた: {dir}", "найдена {dir}";)
+                    tr!("found {dir}", "見つけた: {dir}", "найдена {dir}"; [] [dir])
                 }
                 (None, None) => tr!(
                     "none found, Enter to pick",
@@ -2582,7 +2581,7 @@ impl State {
                 let rate = self.audio.as_ref().map(|a| a.rate).unwrap_or(48000);
                 let ms = c.audio_buffer as f64 / rate as f64 * 1000.0;
                 let frames = c.audio_buffer;
-                tr!("{frames} frames ({ms:.1} ms)", "{frames}フレーム ({ms:.1} ms)", "{frames} кадров ({ms:.1} мс)";)
+                tr!("{frames} frames ({ms:.1} ms)", "{frames}フレーム ({ms:.1} ms)", "{frames} кадров ({ms:.1} мс)"; [] [frames, ms])
             }
             Item::PresentMode => c.present.within(&self.present_modes).name().to_string(),
             Item::Renderer => {
@@ -2607,7 +2606,7 @@ impl State {
                     && !running.is_empty()
                     && c.graphics_api != running
                 {
-                    tr!("{name} (after a restart)", "{name} (再起動後)", "{name} (после перезапуска)";)
+                    tr!("{name} (after a restart)", "{name} (再起動後)", "{name} (после перезапуска)"; [] [name])
                 } else {
                     name.to_string()
                 }
@@ -2642,21 +2641,21 @@ impl State {
                     )
                     .into(),
                     (update::Status::Off, Some(b)) => {
-                        tr!("{b}, Enter to check", "{b}、Enterで確認", "{b}, Enter — проверить";)
+                        tr!("{b}, Enter to check", "{b}、Enterで確認", "{b}, Enter — проверить"; [] [b])
                     }
                     (update::Status::Checking, _) => {
                         tr!("checking...", "確認中...", "проверка...").into()
                     }
                     (update::Status::UpToDate, Some(b)) => {
-                        tr!("{b}, up to date", "{b}、最新です", "{b}, последняя";)
+                        tr!("{b}, up to date", "{b}、最新です", "{b}, последняя"; [] [b])
                     }
                     (update::Status::Available { commit, .. }, Some(b)) => {
                         let new = update::short(&commit);
-                        tr!("{b} -> {new}, Enter to install", "{b} -> {new}、Enterでインストール", "{b} -> {new}, Enter — установить";)
+                        tr!("{b} -> {new}, Enter to install", "{b} -> {new}、Enterでインストール", "{b} -> {new}, Enter — установить"; [] [b, new])
                     }
                     (update::Status::Downloading, _) => {
                         let p = self.updater.progress() * 100.0;
-                        tr!("downloading {p:.0}%", "ダウンロード中 {p:.0}%", "загрузка {p:.0}%";)
+                        tr!("downloading {p:.0}%", "ダウンロード中 {p:.0}%", "загрузка {p:.0}%"; [] [p])
                     }
                     (update::Status::Installed, _) => {
                         tr!("restarting...", "再起動中...", "перезапуск...").into()
@@ -2683,7 +2682,7 @@ impl State {
             Item::Fullscreen => on(self.fullscreen),
             Item::WindowSize if self.fullscreen => {
                 let (w, h) = self.window_px();
-                tr!("fullscreen ({w:.0}x{h:.0})", "フルスクリーン ({w:.0}x{h:.0})", "полный экран ({w:.0}x{h:.0})";)
+                tr!("fullscreen ({w:.0}x{h:.0})", "フルスクリーン ({w:.0}x{h:.0})", "полный экран ({w:.0}x{h:.0})"; [] [w, h])
             }
             Item::WindowSize => {
                 let (w, h) = self.window_px();
@@ -2702,7 +2701,7 @@ impl State {
             .into(),
             Item::ResetMapOffsets => {
                 let n = self.map_offsets.len();
-                tr!("{n} maps", "{n}譜面", "карт: {n}";)
+                tr!("{n} maps", "{n}譜面", "карт: {n}"; [] [n])
             }
             Item::CalibrationBpm => format!("{:.0} BPM", c.calibration_bpm),
             Item::LiveOffset => on(c.show_offset_hint),
@@ -2711,16 +2710,16 @@ impl State {
             Item::VsyncCompensation => {
                 let lead = VSYNC_FRAMES * self.refresh_ms() + c.vsync_tune_ms;
                 if c.present == PresentChoice::Fifo {
-                    tr!("on: notes {lead:.0} ms ahead", "オン: ノーツを{lead:.0} ms先に", "вкл: ноты на {lead:.0} мс вперёд";)
+                    tr!("on: notes {lead:.0} ms ahead", "オン: ノーツを{lead:.0} ms先に", "вкл: ноты на {lead:.0} мс вперёд"; [] [lead])
                 } else {
-                    tr!("on ({lead:.0} ms once gameplay uses vsync)", "オン (プレイが垂直同期なら{lead:.0} ms)", "вкл ({lead:.0} мс, когда игра с vsync)";)
+                    tr!("on ({lead:.0} ms once gameplay uses vsync)", "オン (プレイが垂直同期なら{lead:.0} ms)", "вкл ({lead:.0} мс, когда игра с vsync)"; [] [lead])
                 }
             }
             Item::VsyncTune => format!("{:+.0} ms", c.vsync_tune_ms),
             Item::VsyncCalibrate => enter_to_start().into(),
             Item::Interface if c.interface_hidden => {
                 let key = config::interface_key_name(c.interface_key);
-                tr!("hidden ({key})", "非表示 ({key})", "скрыт ({key})";)
+                tr!("hidden ({key})", "非表示 ({key})", "скрыт ({key})"; [] [key])
             }
             Item::Interface => tr!("shown", "表示", "виден").into(),
             Item::InterfaceHides if c.interface_hides == hud::Parts::ALL => {
@@ -2731,13 +2730,13 @@ impl State {
             }
             Item::InterfaceHides => {
                 let (n, all) = (c.interface_hides.len(), hud::Part::ALL.len());
-                tr!("{n} of {all}", "{all}個中{n}個", "{n} из {all}";)
+                tr!("{n} of {all}", "{all}個中{n}個", "{n} из {all}"; [] [n, all])
             }
             Item::InterfaceKey => config::interface_key_name(c.interface_key),
             Item::ResumeDelay if c.resume_delay_ms <= 0.0 => off_text().into(),
             Item::ResumeDelay => {
                 let s = c.resume_delay_ms / 1000.0;
-                tr!("{s:.2} s", "{s:.2}秒", "{s:.2} с";)
+                tr!("{s:.2} s", "{s:.2}秒", "{s:.2} с"; [] [s])
             }
             Item::PlayfieldArea => c.playfield_area.describe(),
             Item::InterfaceEditor => {
@@ -2773,7 +2772,7 @@ impl State {
                 if changed == 0 {
                     tr!("notes from the skin", "ノーツはスキンから", "ноты из скина").into()
                 } else {
-                    tr!("{changed} changed", "{changed}個を変更", "изменено: {changed}";)
+                    tr!("{changed} changed", "{changed}個を変更", "изменено: {changed}"; [] [changed])
                 }
             }
             Item::SkinPart(i) => skin::Part::ALL
@@ -3145,7 +3144,9 @@ impl State {
         self.audio = match Engine::new(self.cfg.audio_buffer) {
             Ok(a) => Some(a),
             Err(e) => {
-                self.toast(tr!("audio failed: {e}", "音声のエラー: {e}", "ошибка звука: {e}";));
+                self.toast(
+                    tr!("audio failed: {e}", "音声のエラー: {e}", "ошибка звука: {e}"; [] [e]),
+                );
                 None
             }
         };
@@ -3239,7 +3240,7 @@ impl State {
                     .iter()
                     .map(|&b| {
                         let ms = b as f64 / rate as f64 * 1000.0;
-                        tr!("{b} frames ({ms:.1} ms)", "{b}フレーム ({ms:.1} ms)", "{b} кадров ({ms:.1} мс)";)
+                        tr!("{b} frames ({ms:.1} ms)", "{b}フレーム ({ms:.1} ms)", "{b} кадров ({ms:.1} мс)"; [] [b, ms])
                     })
                     .collect();
                 (
@@ -3265,7 +3266,7 @@ impl State {
                 (
                     strings(&mut all.iter().map(|ch| ch.name())),
                     all.iter().position(|&ch| ch == self.updater.channel()),
-                    tr!("running {running}", "実行中: {running}", "запущен {running}";),
+                    tr!("running {running}", "実行中: {running}", "запущен {running}"; [] [running]),
                 )
             }
             Item::Accent => (
@@ -3292,7 +3293,7 @@ impl State {
                 (
                     names,
                     current,
-                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";),
+                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}"; [] [mw, mh]),
                 )
             }
             Item::LetterboxSize => {
@@ -3313,7 +3314,7 @@ impl State {
                 (
                     names,
                     current,
-                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}";),
+                    tr!("screen {mw}x{mh}", "画面 {mw}x{mh}", "экран {mw}x{mh}"; [] [mw, mh]),
                 )
             }
             Item::InterfaceHides => {
@@ -3392,7 +3393,7 @@ impl State {
                 } else {
                     c.skin.clone()
                 };
-                let picked = tr!("The skin picked ({main})", "選んだスキン ({main})", "Выбранный скин ({main})";);
+                let picked = tr!("The skin picked ({main})", "選んだスキン ({main})", "Выбранный скин ({main})"; [] [main]);
                 let names: Vec<String> = [picked, tr!("Built-in", "内蔵", "Встроенный").into()]
                     .into_iter()
                     .chain(skins.iter().cloned())
@@ -3416,7 +3417,8 @@ impl State {
             Item::Skin => {
                 let skins = skin::list();
                 let n = skins.len();
-                let note = tr!("{n} installed", "{n}個インストール済み", "установлено: {n}";);
+                let note =
+                    tr!("{n} installed", "{n}個インストール済み", "установлено: {n}"; [] [n]);
                 let names: Vec<String> = std::iter::once(built_in_text().to_string())
                     .chain(skins.into_iter().map(|(n, _)| n))
                     .collect();
@@ -3448,7 +3450,7 @@ impl State {
                     (Some(dir), _) => dir.display().to_string(),
                     (None, Some(dir)) => {
                         let dir = dir.display();
-                        tr!("found {dir}", "見つけた: {dir}", "найдена {dir}";)
+                        tr!("found {dir}", "見つけた: {dir}", "найдена {dir}"; [] [dir])
                     }
                     (None, None) => tr!("none found", "見つかりません", "не найдена").into(),
                 };
@@ -3768,12 +3770,12 @@ impl State {
                 let (mw, mh) = self.monitor_size;
                 if w > mw || h > mh {
                     return Err(
-                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";),
+                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})"; [] [w, h, mw, mh]),
                     );
                 }
                 if w < MIN_WINDOW.0 as u32 || h < MIN_WINDOW.1 as u32 {
                     return Err(
-                        tr!("at least {}x{}", "{}x{}以上", "минимум {}x{}"; MIN_WINDOW.0, MIN_WINDOW.1),
+                        tr!("at least {}x{}", "{}x{}以上", "минимум {}x{}"; [MIN_WINDOW.0, MIN_WINDOW.1] []),
                     );
                 }
                 c.letterbox_size = (w, h);
@@ -3787,7 +3789,7 @@ impl State {
                 let (mw, mh) = self.monitor_size;
                 if w > mw || h > mh {
                     return Err(
-                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})";),
+                        tr!("{w}x{h} is bigger than the screen ({mw}x{mh})", "{w}x{h}は画面 ({mw}x{mh}) より大きいです", "{w}x{h} больше экрана ({mw}x{mh})"; [] [w, h, mw, mh]),
                     );
                 }
                 self.window_request = Some((w, h));
@@ -3877,7 +3879,7 @@ impl State {
                     self.open_settings();
                 }
                 self.start_edit(item);
-                self.toast(tr!("{e}: type the folder's path", "{e}: フォルダのパスを入力してください", "{e}: введите путь к папке";));
+                self.toast(tr!("{e}: type the folder's path", "{e}: フォルダのパスを入力してください", "{e}: введите путь к папке"; [] [e]));
             }
         }
     }
@@ -3921,7 +3923,7 @@ impl State {
             if !t.parent().is_some_and(std::path::Path::is_dir) {
                 let dir = t.parent().unwrap_or(t).display();
                 return Err(
-                    tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка";),
+                    tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка"; [] [dir]),
                 );
             }
             std::fs::create_dir_all(t).map_err(|e| format!("{}: {e}", t.display()))?;
@@ -3958,7 +3960,7 @@ impl State {
                 );
                 let mb = |b: f64| b / 1e6;
                 let (done, total) = (mb(done), mb(total));
-                self.toast(tr!("moving the game data: {done:.0} of {total:.0} MB", "ゲームデータを移動中: {total:.0} MB中{done:.0} MB", "перенос данных: {done:.0} из {total:.0} МБ";));
+                self.toast(tr!("moving the game data: {done:.0} of {total:.0} MB", "ゲームデータを移動中: {total:.0} MB中{done:.0} MB", "перенос данных: {done:.0} из {total:.0} МБ"; [] [done, total]));
                 return;
             }
             Err(mpsc::TryRecvError::Disconnected) => Err(tr!(
@@ -3978,9 +3980,9 @@ impl State {
                 self.cfg.save();
                 let _ = self.set_songs_folder(self.cfg.songs_folder.clone());
                 let at = config::data_dir().map(|d| d.display().to_string()).unwrap_or_default();
-                self.toast(tr!("game data moved to {at}", "ゲームデータを{at}に移動しました", "данные перенесены в {at}";));
+                self.toast(tr!("game data moved to {at}", "ゲームデータを{at}に移動しました", "данные перенесены в {at}"; [] [at]));
             }
-            Err(e) => self.toast(tr!("couldn't move the game data: {e}", "ゲームデータを移動できませんでした: {e}", "не удалось перенести данные: {e}";)),
+            Err(e) => self.toast(tr!("couldn't move the game data: {e}", "ゲームデータを移動できませんでした: {e}", "не удалось перенести данные: {e}"; [] [e])),
         }
     }
 
@@ -3998,7 +4000,7 @@ impl State {
         if let Some(f) = folder.as_ref().filter(|f| !f.is_dir()) {
             let dir = f.display();
             return Err(
-                tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка";),
+                tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка"; [] [dir]),
             );
         }
         self.cfg.songs_folder = folder.clone();
@@ -4010,11 +4012,11 @@ impl State {
         self.toast(match (&self.cfg.songs_folder, self.song_dirs.first()) {
             (Some(dir), _) => {
                 let dir = dir.display();
-                tr!("scanning {dir}", "{dir}をスキャン中", "сканируем {dir}";)
+                tr!("scanning {dir}", "{dir}をスキャン中", "сканируем {dir}"; [] [dir])
             }
             (None, Some(dir)) => {
                 let dir = dir.display();
-                tr!("found {dir}", "見つけた: {dir}", "найдена {dir}";)
+                tr!("found {dir}", "見つけた: {dir}", "найдена {dir}"; [] [dir])
             }
             (None, None) => tr!(
                 "no osu! Songs folder found",
@@ -4065,7 +4067,7 @@ impl State {
     fn toast_download(&mut self, commit: &str) {
         let build = update::short(commit);
         self.toast(
-            tr!("downloading {build}...", "{build}をダウンロード中...", "загрузка {build}...";),
+            tr!("downloading {build}...", "{build}をダウンロード中...", "загрузка {build}..."; [] [build]),
         );
     }
 
@@ -4196,7 +4198,7 @@ impl State {
                 match update::restart() {
                     Ok(()) => self.quit = true,
                     Err(e) => {
-                        self.toast(tr!("installed; restart taiko.rs ({e})", "インストールしました。taiko.rsを再起動してください ({e})", "установлено; перезапустите taiko.rs ({e})";));
+                        self.toast(tr!("installed; restart taiko.rs ({e})", "インストールしました。taiko.rsを再起動してください ({e})", "установлено; перезапустите taiko.rs ({e})"; [] [e]));
                         self.updater = update::Updater::new(false);
                     }
                 }
@@ -4229,11 +4231,11 @@ impl State {
         match source {
             skin::Source::Main if self.cfg.skin.is_empty() => {
                 let skin = built_in_text();
-                tr!("the skin ({skin})", "スキン ({skin})", "скин ({skin})";)
+                tr!("the skin ({skin})", "スキン ({skin})", "скин ({skin})"; [] [skin])
             }
             skin::Source::Main => {
                 let skin = &self.cfg.skin;
-                tr!("the skin ({skin})", "スキン ({skin})", "скин ({skin})";)
+                tr!("the skin ({skin})", "スキン ({skin})", "скин ({skin})"; [] [skin])
             }
             skin::Source::BuiltIn => built_in_text().into(),
             skin::Source::Skin(name) => name.clone(),
@@ -4356,7 +4358,7 @@ impl State {
         {
             let dir = dir.display();
             self.toast(
-                tr!("skins go in {dir}", "スキンは{dir}に置きます", "скины кладутся в {dir}";),
+                tr!("skins go in {dir}", "スキンは{dir}に置きます", "скины кладутся в {dir}"; [] [dir]),
             );
         }
     }
@@ -4436,7 +4438,7 @@ impl State {
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        self.toast(tr!("{file} isn't a map: drop .osz or .rsz files", "{file}は譜面ではありません: .oszか.rszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz или .rsz";));
+                        self.toast(tr!("{file} isn't a map: drop .osz or .rsz files", "{file}は譜面ではありません: .oszか.rszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz или .rsz"; [] [file]));
                     }
                 }
             }
@@ -4466,7 +4468,7 @@ impl State {
                 }
                 self.toast(match result {
                     Err(e) => format!("{name}: {e}"),
-                    Ok(_) => tr!("{name} has no maps in it", "{name}には譜面がありません", "в {name} нет карт";),
+                    Ok(_) => tr!("{name} has no maps in it", "{name}には譜面がありません", "в {name} нет карт"; [] [name]),
                 });
                 return;
             }
@@ -4489,14 +4491,16 @@ impl State {
                 )
             });
             self.reveal_maps(here.unwrap_or_default());
-            self.toast(tr!("{name} is already in your songs", "{name}はもう曲の中にあります", "{name} уже есть среди ваших песен";));
+            self.toast(tr!("{name} is already in your songs", "{name}はもう曲の中にあります", "{name} уже есть среди ваших песен"; [] [name]));
             return;
         }
         let folder = home
             .filter(|d| d.parent() == Some(self.songs_dir.as_path()))
             .and_then(|d| d.file_name())
             .map(|n| n.to_string_lossy().into_owned());
-        self.toast(tr!("importing {name}...", "{name}を取り込み中...", "добавляем {name}...";));
+        self.toast(
+            tr!("importing {name}...", "{name}を取り込み中...", "добавляем {name}..."; [] [name]),
+        );
         let job = download::import(
             archive,
             folder.as_deref().unwrap_or(name),
@@ -4537,7 +4541,7 @@ impl State {
         let to = Canvas::fit(
             9.0,
             w - 96.0,
-            &tr!("into {dir}", "追加先: {dir}", "в {dir}";),
+            &tr!("into {dir}", "追加先: {dir}", "в {dir}"; [] [dir]),
         );
         canvas.text_centered(w / 2.0, h / 2.0 + 14.0, 9.0, rgba(0x9a9ab0, a), &to);
     }
@@ -4592,7 +4596,7 @@ impl State {
             let n = s.players.len();
             let s = if n == 1 { "" } else { "s" };
             let ru = lang::ru_plural(n, ["игрок", "игрока", "игроков"]);
-            tr!("{n} player{s}", "{n}人", "{n} {ru}";)
+            tr!("{n} player{s}", "{n}人", "{n} {ru}"; [] [n, s])
         };
         let rate_text = |rate: f64| {
             if (rate - 1.0).abs() > 1e-6 {
@@ -4604,9 +4608,9 @@ impl State {
         let lobby = |s: &multiplayer::Session| {
             let n = players(s);
             let details = if s.is_host() {
-                tr!("Multiplayer lobby ({n}, hosting)", "マルチのロビー ({n}、ホスト)", "Лобби мультиплеера ({n}, хост)";)
+                tr!("Multiplayer lobby ({n}, hosting)", "マルチのロビー ({n}、ホスト)", "Лобби мультиплеера ({n}, хост)"; [] [n])
             } else {
-                tr!("Multiplayer lobby ({n}, in)", "マルチのロビー ({n}、参加中)", "Лобби мультиплеера ({n}, участник)";)
+                tr!("Multiplayer lobby ({n}, in)", "マルチのロビー ({n}、参加中)", "Лобби мультиплеера ({n}, участник)"; [] [n])
             };
             let state =
                 s.map.as_ref().map(map_label).unwrap_or_else(|| {
@@ -4624,7 +4628,7 @@ impl State {
             );
             Some((
                 label,
-                tr!("Multiplayer match, {n}{rate}", "マルチの対戦、{n}{rate}", "Матч мультиплеера, {n}{rate}";),
+                tr!("Multiplayer match, {n}{rate}", "マルチの対戦、{n}{rate}", "Матч мультиплеера, {n}{rate}"; [] [n, rate]),
             ))
         };
         // Away: the idle screen is all the way in (the timer then counts the time away).
@@ -4716,7 +4720,7 @@ impl State {
                     .is_some_and(|dir| Command::new("xdg-open").arg(dir).spawn().is_ok())
         };
         if !opened {
-            self.toast(tr!("the video is in {}", "動画は{}にあります", "видео в {}"; path.parent().unwrap_or(path).display()));
+            self.toast(tr!("the video is in {}", "動画は{}にあります", "видео в {}"; [path.parent().unwrap_or(path).display()] []));
         }
     }
 
@@ -4780,7 +4784,7 @@ impl State {
                     }
                     _ => {}
                 }
-                self.toast(tr!("{}: no key", "{}: キーなし", "{}: без клавиши"; item.label()));
+                self.toast(tr!("{}: no key", "{}: キーなし", "{}: без клавиши"; [item.label()] []));
                 self.cfg.save();
                 return;
             }
@@ -4801,16 +4805,16 @@ impl State {
                                 .iter()
                                 .any(|p| matches!(p, keys::Place::Play | keys::Place::Paused))
                         {
-                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; config::key_name(code)));
+                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
                         if let Some(other) = self.cfg.hotkeys.set(h, Some(chord)) {
-                            self.toast(tr!("{} now has no key ({} was its)", "{}はキーなしになりました ({}だったもの)", "у «{}» больше нет клавиши (была {})"; other.label(), chord.name()));
+                            self.toast(tr!("{} now has no key ({} was its)", "{}はキーなしになりました ({}だったもの)", "у «{}» больше нет клавиши (была {})"; [other.label(), chord.name()] []));
                         }
                     }
                     Item::InterfaceKey => {
                         if self.cfg.keys.contains(&code) && !self.modifiers_shift {
-                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; config::key_name(code)));
+                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
                         self.cfg.interface_key = (self.modifiers_shift, code);
@@ -4822,7 +4826,7 @@ impl State {
                     }
                     Item::PresetKey(slot) => {
                         if self.cfg.keys.contains(&code) {
-                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; config::key_name(code)));
+                            self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
                         if let Some(other) = self.cfg.preset_keys.iter().position(|&k| k == code) {
@@ -4856,7 +4860,7 @@ impl State {
                 Item::Hotkey(i) => {
                     let h = keys::Hotkey::ALL[i];
                     if let Some(other) = self.cfg.hotkeys.set(h, h.first_key()) {
-                        self.toast(tr!("{} now has no key", "{}はキーなしになりました", "у «{}» больше нет клавиши"; other.label()));
+                        self.toast(tr!("{} now has no key", "{}はキーなしになりました", "у «{}» больше нет клавиши"; [other.label()] []));
                     }
                 }
                 _ => {}
@@ -4926,7 +4930,7 @@ impl State {
                 } else {
                     let what = self.select.hidden.describe();
                     self.select.unhide_all(&self.library);
-                    self.toast(tr!("{what} back in the song list", "{what}を曲リストに戻しました", "{what} снова в списке песен";));
+                    self.toast(tr!("{what} back in the song list", "{what}を曲リストに戻しました", "{what} снова в списке песен"; [] [what]));
                 }
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => {
@@ -5039,7 +5043,7 @@ impl State {
         };
         match game.offset_suggestion(self.play_offset) {
             Some(h) if !h.significant => {
-                let text = tr!("offset already within +-{:.1} ms of your hits", "オフセットはもう叩きの±{:.1} ms以内です", "смещение уже в пределах +-{:.1} мс от ударов"; h.estimate.margin_ms);
+                let text = tr!("offset already within +-{:.1} ms of your hits", "オフセットはもう叩きの±{:.1} ms以内です", "смещение уже в пределах +-{:.1} мс от ударов"; [h.estimate.margin_ms] []);
                 self.toast(text);
             }
             // Shift+O: the suggestion is about every map (the same on all of them), so it goes
@@ -5051,7 +5055,7 @@ impl State {
                 self.cfg.set_shown_offset(shown);
                 self.cfg.save();
                 self.refresh_play_offset();
-                self.toast(tr!("offset {:+.0} ms for all maps (was {was:+.0})", "全譜面のオフセット {:+.0} ms (前は{was:+.0})", "смещение {:+.0} мс для всех карт (было {was:+.0})"; self.cfg.shown_offset()));
+                self.toast(tr!("offset {:+.0} ms for all maps (was {was:+.0})", "全譜面のオフセット {:+.0} ms (前は{was:+.0})", "смещение {:+.0} мс для всех карт (было {was:+.0})"; [self.cfg.shown_offset()] [was]));
             }
             Some(h) => {
                 let was = self.map_offset(Some(entry));
@@ -5059,7 +5063,7 @@ impl State {
                 // osu! way round.
                 let map = (self.cfg.offset_ms - h.estimate.suggested_offset) * self.song_rate();
                 self.set_map_offset(entry, map);
-                self.toast(tr!("this map: offset {map:+.0} ms (was {was:+.0})", "この譜面: オフセット {map:+.0} ms (前は{was:+.0})", "эта карта: смещение {map:+.0} мс (было {was:+.0})";));
+                self.toast(tr!("this map: offset {map:+.0} ms (was {was:+.0})", "この譜面: オフセット {map:+.0} ms (前は{was:+.0})", "эта карта: смещение {map:+.0} мс (было {was:+.0})"; [] [map, was]));
             }
             None => self.toast(
                 tr!(
@@ -5374,7 +5378,7 @@ impl State {
                 };
                 self.cfg.visual_offset_ms += d;
                 self.cfg.save();
-                self.toast(tr!("visual offset {:+.0} ms (notes drawn earlier)", "表示オフセット {:+.0} ms (ノーツを早めに描画)", "смещение картинки {:+.0} мс (ноты раньше)"; self.cfg.visual_offset_ms));
+                self.toast(tr!("visual offset {:+.0} ms (notes drawn earlier)", "表示オフセット {:+.0} ms (ノーツを早めに描画)", "смещение картинки {:+.0} мс (ноты раньше)"; [self.cfg.visual_offset_ms] []));
                 return true;
             }
             KeyCode::Minus | KeyCode::NumpadSubtract | KeyCode::Equal | KeyCode::NumpadAdd => {
@@ -5388,7 +5392,7 @@ impl State {
                     Some(entry) => {
                         let ms = self.map_offset(Some(entry)) + d;
                         self.set_map_offset(entry, ms);
-                        let text = tr!("this map: offset {ms:+.0} ms (total {:+.0})", "この譜面: オフセット {ms:+.0} ms (合計 {:+.0})", "эта карта: смещение {ms:+.0} мс (всего {:+.0})"; self.cfg.shown_of_play(self.play_offset));
+                        let text = tr!("this map: offset {ms:+.0} ms (total {:+.0})", "この譜面: オフセット {ms:+.0} ms (合計 {:+.0})", "эта карта: смещение {ms:+.0} мс (всего {:+.0})"; [self.cfg.shown_of_play(self.play_offset)] [ms]);
                         self.toast(text);
                     }
                     None => {
@@ -5396,7 +5400,7 @@ impl State {
                         self.cfg.set_shown_offset(self.cfg.shown_offset() + d);
                         self.cfg.save();
                         self.refresh_play_offset();
-                        self.toast(tr!("offset {:+.0} ms (all maps)", "オフセット {:+.0} ms (全譜面)", "смещение {:+.0} мс (все карты)"; self.cfg.shown_offset()));
+                        self.toast(tr!("offset {:+.0} ms (all maps)", "オフセット {:+.0} ms (全譜面)", "смещение {:+.0} мс (все карты)"; [self.cfg.shown_offset()] []));
                     }
                 }
                 return true;
@@ -5424,7 +5428,7 @@ impl State {
                 } else {
                     ""
                 };
-                let text = tr!("gameplay present mode: {}{note}", "プレイ中の表示モード: {}{note}", "режим вывода в игре: {}{note}"; self.cfg.present.name());
+                let text = tr!("gameplay present mode: {}{note}", "プレイ中の表示モード: {}{note}", "режим вывода в игре: {}{note}"; [self.cfg.present.name()] [note]);
                 self.toast(text);
                 return true;
             }
@@ -5442,7 +5446,7 @@ impl State {
                     )
                     .to_string()
                 } else {
-                    tr!("fps cap: {}", "FPSの上限: {}", "ограничение FPS: {}"; self.cfg.fps_cap)
+                    tr!("fps cap: {}", "FPSの上限: {}", "ограничение FPS: {}"; [self.cfg.fps_cap] [])
                 };
                 if self.present == PresentChoice::Fifo {
                     text.push_str(tr!(
@@ -5478,7 +5482,7 @@ impl State {
             }
             _ => return false,
         }
-        self.toast(tr!("scroll speed {:.2}x", "スクロール速度 {:.2}x", "скорость прокрутки {:.2}x"; self.cfg.scroll_speed));
+        self.toast(tr!("scroll speed {:.2}x", "スクロール速度 {:.2}x", "скорость прокрутки {:.2}x"; [self.cfg.scroll_speed] []));
         self.cfg.save();
         true
     }
@@ -5592,7 +5596,7 @@ impl State {
 
     fn apply_preset(&mut self, (w, h): (u32, u32)) {
         if !self.fits_window((w, h)) {
-            self.toast(tr!("{w}x{h} doesn't fit this window", "{w}x{h}はこのウィンドウに収まりません", "{w}x{h} не помещается в окно";));
+            self.toast(tr!("{w}x{h} doesn't fit this window", "{w}x{h}はこのウィンドウに収まりません", "{w}x{h} не помещается в окно"; [] [w, h]));
             return;
         }
         // Where the size being left was, and where this one was last put (else the middle).
@@ -5607,7 +5611,7 @@ impl State {
         }
         self.cfg.playfield_area = area;
         self.cfg.save();
-        self.toast(tr!("playfield {w}x{h}", "プレイフィールド {w}x{h}", "поле {w}x{h}";));
+        self.toast(tr!("playfield {w}x{h}", "プレイフィールド {w}x{h}", "поле {w}x{h}"; [] [w, h]));
     }
 
     /// Steps through resolution presets in dropdown order, applying each as a centred area.
@@ -5734,13 +5738,13 @@ impl State {
             PresetAction::SaveCurrent => {
                 if let Some(at) = self.cfg.saved_presets.iter().position(|&p| p == size) {
                     dd.cursor = at;
-                    self.toast(tr!("{}x{} is already saved", "{}x{}はもう保存されています", "{}x{} уже сохранён"; size.0, size.1));
+                    self.toast(tr!("{}x{} is already saved", "{}x{}はもう保存されています", "{}x{} уже сохранён"; [size.0, size.1] []));
                     return;
                 }
                 self.cfg.saved_presets.push(size);
                 dd.cursor = saved;
                 self.toast(
-                    tr!("saved {}x{}", "{}x{}を保存しました", "сохранён {}x{}"; size.0, size.1),
+                    tr!("saved {}x{}", "{}x{}を保存しました", "сохранён {}x{}"; [size.0, size.1] []),
                 );
             }
             PresetAction::Add => {
@@ -5758,7 +5762,9 @@ impl State {
             PresetAction::Delete if i < saved => {
                 // The cursor stays on the same row, now the next size.
                 let (w, h) = self.cfg.saved_presets.remove(i);
-                self.toast(tr!("removed {w}x{h}", "{w}x{h}を削除しました", "удалён {w}x{h}";));
+                self.toast(
+                    tr!("removed {w}x{h}", "{w}x{h}を削除しました", "удалён {w}x{h}"; [] [w, h]),
+                );
             }
             PresetAction::Up if i > 0 && i < saved => {
                 self.cfg.saved_presets.swap(i, i - 1);
@@ -5797,7 +5803,7 @@ impl State {
         let saved = &mut self.cfg.saved_presets;
         let cursor = match saved.iter().position(|&p| p == size) {
             Some(at) if Some(at) != index => {
-                self.toast(tr!("{}x{} is already saved", "{}x{}はもう保存されています", "{}x{} уже сохранён"; size.0, size.1));
+                self.toast(tr!("{}x{} is already saved", "{}x{}はもう保存されています", "{}x{} уже сохранён"; [size.0, size.1] []));
                 at
             }
             _ => match index {
@@ -5892,7 +5898,7 @@ impl State {
         {
             self.cfg.playfield_area = self.cfg.playfield_area.scaled(1.05f32.powi(notches));
             self.cfg.save();
-            let text = tr!("playfield: {}", "プレイフィールド: {}", "поле: {}"; self.cfg.playfield_area.describe());
+            let text = tr!("playfield: {}", "プレイフィールド: {}", "поле: {}"; [self.cfg.playfield_area.describe()] []);
             self.toast(text);
             return;
         }
@@ -7099,7 +7105,7 @@ impl State {
                             );
                         } else {
                             menu.asking = Some(CodeFor::Link);
-                            self.mp_status = tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";);
+                            self.mp_status = tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}..."; [] [email]);
                             menu.account_call(
                                 &server,
                                 online::Request::LinkEmail {
@@ -7113,8 +7119,7 @@ impl State {
                     Row::Register => {
                         let user = menu.user.trim().to_string();
                         if !online::valid_name(&user) {
-                            self.mp_status =
-                                tr!("names are {}", "名前は {}", "ник: {}"; online::NAME_RULES);
+                            self.mp_status = tr!("names are {}", "名前は {}", "ник: {}"; [online::NAME_RULES] []);
                             self.mp_menu.select(Row::User);
                         } else if !online::valid_password(&menu.password) {
                             self.mp_status = tr!(
@@ -7135,9 +7140,9 @@ impl State {
                         } else {
                             let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
                             self.mp_status = if code.is_some() {
-                                tr!("creating {user}...", "{user} を作成中...", "создаю {user}...";)
+                                tr!("creating {user}...", "{user} を作成中...", "создаю {user}..."; [] [user])
                             } else {
-                                tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}...";)
+                                tr!("sending a code to {email}...", "{email} にコードを送信中...", "отправляю код на {email}..."; [] [email])
                             };
                             menu.asking = Some(CodeFor::Register);
                             let password = menu.password.clone();
@@ -7173,7 +7178,7 @@ impl State {
                         } else {
                             // Logging in forgets the typed password.
                             let password = std::mem::take(&mut menu.password);
-                            self.mp_status = tr!("logging in as {user}...", "{user} でログイン中...", "вхожу как {user}...";);
+                            self.mp_status = tr!("logging in as {user}...", "{user} でログイン中...", "вхожу как {user}..."; [] [user]);
                             menu.account_call(
                                 &server,
                                 online::Request::Login {
@@ -7329,7 +7334,7 @@ impl State {
                 eprintln!("closing: restarting for the renderer ({})", self.cfg.graphics_api);
                 self.quit = true;
             }
-            Err(e) => self.toast(tr!("restart taiko.rs to switch the renderer ({e})", "レンダラーの切り替えはtaiko.rsの再起動後 ({e})", "рендер сменится после перезапуска taiko.rs ({e})";)),
+            Err(e) => self.toast(tr!("restart taiko.rs to switch the renderer ({e})", "レンダラーの切り替えはtaiko.rsの再起動後 ({e})", "рендер сменится после перезапуска taiko.rs ({e})"; [] [e])),
         }
         #[cfg(target_os = "android")]
         self.toast(
@@ -7638,9 +7643,9 @@ impl State {
                                 menu.open(multiplayer::Form::Main);
                             }
                             if reset {
-                                self.mp_status = tr!("password changed: you're logged in as {name}", "パスワードを変更しました: {name} でログイン中", "пароль изменён, ты вошёл как {name}";);
+                                self.mp_status = tr!("password changed: you're logged in as {name}", "パスワードを変更しました: {name} でログイン中", "пароль изменён, ты вошёл как {name}"; [] [name]);
                             } else if fresh {
-                                self.mp_status = tr!("logged in as {name}", "{name} でログインしました", "ты вошёл как {name}";);
+                                self.mp_status = tr!("logged in as {name}", "{name} でログインしました", "ты вошёл как {name}"; [] [name]);
                             }
                             // Local plays take the account's name. Plays under a local name (the
                             // computer's user, at first) move to it; another account's stay theirs.
@@ -7655,7 +7660,7 @@ impl State {
                                         Ok(0) => {}
                                         Ok(n) => {
                                             self.toast = Some(Toast {
-                                                text: tr!("{n} local plays now show as {name}", "ローカルの {n} プレイを {name} の名前にしました", "локальные игры ({n}) теперь под ником {name}";),
+                                                text: tr!("{n} local plays now show as {name}", "ローカルの {n} プレイを {name} の名前にしました", "локальные игры ({n}) теперь под ником {name}"; [] [n, name]),
                                                 until: Instant::now() + Duration::from_secs(5),
                                             })
                                         }
@@ -7682,13 +7687,13 @@ impl State {
                             menu.code_for = menu.asking.take();
                             menu.code.clear();
                             // The server's mail is new to the big mail services: it may land in spam.
-                            self.mp_status = tr!("code sent to {to}: look in spam too if it isn't there", "{to} にコードを送信しました: 見つからなければ迷惑メールも確認", "код отправлен на {to}: если его нет, загляни в спам";);
+                            self.mp_status = tr!("code sent to {to}: look in spam too if it isn't there", "{to} にコードを送信しました: 見つからなければ迷惑メールも確認", "код отправлен на {to}: если его нет, загляни в спам"; [] [to]);
                             menu.select(multiplayer::Row::Code);
                         }
                         Ok(online::Reply::EmailLinked(to)) => {
                             menu.has_email = Some(true);
                             menu.open(multiplayer::Form::Main);
-                            self.mp_status = tr!("email linked: {to}", "メールを登録しました: {to}", "почта привязана: {to}";);
+                            self.mp_status = tr!("email linked: {to}", "メールを登録しました: {to}", "почта привязана: {to}"; [] [to]);
                         }
                         Ok(_) => {}
                         Err(e) if e.contains("session") => self.sign_out(&e),
@@ -12851,7 +12856,7 @@ impl State {
                 if let Some(p) = &mut self.player {
                     p.list.queue.push_back(track);
                     let n = p.list.queue.len();
-                    self.toast(tr!("queued: {n}", "キュー: {n}", "в очереди: {n}";));
+                    self.toast(tr!("queued: {n}", "キュー: {n}", "в очереди: {n}"; [] [n]));
                 }
             }
             Hit::PlayerUnqueue(row) => {
@@ -12970,7 +12975,7 @@ impl State {
                         .find(|p| p.id == id)
                         .map(|p| p.name.clone())
                         .unwrap_or_default();
-                    self.toast(tr!("{name} is out of the lobby", "{name} をロビーから外しました", "{name} убран из лобби";));
+                    self.toast(tr!("{name} is out of the lobby", "{name} をロビーから外しました", "{name} убран из лобби"; [] [name]));
                 }
             }
             Hit::GiveHost(id) => {
@@ -13177,9 +13182,9 @@ impl State {
                         let title = e.meta.title.clone();
                         let liked = self.select.toggle_like(e);
                         self.toast(if liked {
-                            tr!("liked {title}", "{title}をお気に入りに追加", "в любимых: {title}";)
+                            tr!("liked {title}", "{title}をお気に入りに追加", "в любимых: {title}"; [] [title])
                         } else {
-                            tr!("unliked {title}", "{title}をお気に入りから削除", "убрано из любимых: {title}";)
+                            tr!("unliked {title}", "{title}をお気に入りから削除", "убрано из любимых: {title}"; [] [title])
                         });
                     }
                     self.select.menu = None;
@@ -13188,9 +13193,9 @@ impl State {
                         let title = e.meta.title.clone();
                         let off = self.select.toggle_map_skin(e);
                         self.toast(if off {
-                            tr!("{title}: your skin", "{title}: 自分のスキン", "{title}: ваш скин";)
+                            tr!("{title}: your skin", "{title}: 自分のスキン", "{title}: ваш скин"; [] [title])
                         } else {
-                            tr!("{title}: its own skin", "{title}: 譜面のスキン", "{title}: скин карты";)
+                            tr!("{title}: its own skin", "{title}: 譜面のスキン", "{title}: скин карты"; [] [title])
                         });
                     }
                     self.select.menu = None;

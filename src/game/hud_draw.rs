@@ -827,14 +827,13 @@ impl Play {
         let e = &h.estimate;
         let (hits, needed) = (e.hits, h.needed);
         let building = if hits < needed {
-            tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}";)
+            tr!("  confidence {hits}/{needed}", "  信頼度 {hits}/{needed}", "  надёжность {hits}/{needed}"; [] [hits, needed])
         } else {
             String::new()
         };
         let ur = e.ur;
         let hits_ru = crate::lang::ru_plural(hits, ["удар", "удара", "ударов"]);
-        let stats =
-            tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}";);
+        let stats = tr!("UR {ur:.0}, {hits} hits", "UR {ur:.0}、{hits}回", "UR {ur:.0}, {hits} {hits_ru}"; [] [ur, hits]);
         let suggested = self.game.suggested_shown_offset(e.suggested_offset);
         let (error, margin) = (e.error_ms.abs(), e.margin_ms);
         if h.significant {
@@ -843,20 +842,18 @@ impl Play {
             } else {
                 tr!("early", "早い", "рано")
             };
-            let apply = self.view.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все";));
+            let apply = self.view.offset_key.as_ref().map_or(String::new(), |k| tr!("  |  {k}: this map  Shift+{k}: all", "  |  {k}: この譜面  Shift+{k}: 全体", "  |  {k}: эта карта  Shift+{k}: все"; [] [k]));
             let text = tr!(
                 "{error:.1} +-{margin:.1} ms {dir} ({stats})  |  suggested offset {suggested:+.0} ms{apply}{building}",
                 "{error:.1} ±{margin:.1} ms {dir} ({stats})  |  提案オフセット {suggested:+.0} ms{apply}{building}",
-                "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}";
-            );
+                "{error:.1} +-{margin:.1} мс {dir} ({stats})  |  смещение {suggested:+.0} мс{apply}{building}"; [] [error, margin, dir, stats, suggested, apply, building]);
             Some((text, rgba(0xFFD34D, 0.95)))
         } else {
             let error = e.error_ms;
             let text = tr!(
                 "offset looks good: {error:+.1} +-{margin:.1} ms ({stats}){building}",
                 "オフセットは良好: {error:+.1} ±{margin:.1} ms ({stats}){building}",
-                "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}";
-            );
+                "смещение в порядке: {error:+.1} +-{margin:.1} мс ({stats}){building}"; [] [error, margin, stats, building]);
             Some((text, rgba(0x86E05A, 0.9)))
         }
     }

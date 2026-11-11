@@ -162,8 +162,8 @@ impl View {
             rgba(0x5a5a78, 1.0),
             1.0,
         );
-        c.text(x + 12.0, y + 9.0, 9.0, rgba(0xffffff, 1.0), "Manual");
-        let close = "Close  [Esc]";
+        c.text(x + 12.0, y + 9.0, 9.0, rgba(0xffffff, 1.0), tr!("Manual"));
+        let close = tr!("Close  [Esc]");
         let cw = Canvas::text_width(7.0, close) + 16.0;
         self.button(
             c,
@@ -237,7 +237,7 @@ impl View {
                 y + h - 14.0,
                 6.0,
                 rgba(DIM, 1.0),
-                "Wheel, arrows and PgUp / PgDn scroll",
+                tr!("Wheel, arrows and PgUp / PgDn scroll"),
             );
         }
         if let Some((label, _)) = chapter.try_it {
@@ -279,6 +279,22 @@ mod tests {
             }
             assert_eq!(e.body.contains("{recipes}"), r.body.contains("{recipes}"));
         }
+    }
+
+    #[test]
+    fn chinese_paragraph_wraps_without_spaces() {
+        lang::with(Lang::ZhCn, || {
+            let text = "中文段落需要根据字宽换行";
+            let width = 48.0;
+            let lines = wrap(TEXT, width, text);
+            assert!(lines.len() > 1);
+            assert_eq!(lines.concat(), text);
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| Canvas::text_width(TEXT, line) <= width)
+            );
+        });
     }
 
     #[test]

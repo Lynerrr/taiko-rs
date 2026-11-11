@@ -1747,7 +1747,7 @@ pub(crate) fn download_text(done: Option<f32>) -> String {
     match done {
         Some(f) => {
             let percent = f * 100.0;
-            tr!("downloading {percent:.0}%", "ダウンロード中 {percent:.0}%", "скачивание {percent:.0}%";)
+            tr!("downloading {percent:.0}%", "ダウンロード中 {percent:.0}%", "скачивание {percent:.0}%"; [] [percent])
         }
         None => tr!("downloading...", "ダウンロード中...", "скачивание...").into(),
     }

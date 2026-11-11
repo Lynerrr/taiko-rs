@@ -1571,7 +1571,7 @@ impl Dropdown {
             rgba(0xffffff, 1.0),
             Item::PlayfieldPreset.label(),
         );
-        let screen = tr!("screen {}x{}", "画面 {}x{}", "экран {}x{}"; native.0, native.1);
+        let screen = tr!("screen {}x{}", "画面 {}x{}", "экран {}x{}"; [native.0, native.1] []);
         c.text_right(
             bx + bw - 14.0,
             by + 13.0,
@@ -1579,7 +1579,7 @@ impl Dropdown {
             rgba(0x6f6f86, 1.0),
             &Canvas::fit(7.0, bw - 28.0 - title_w - 10.0, &screen),
         );
-        let save_label = tr!("+ Save current {}x{}", "+ 今の{}x{}を保存", "+ Сохранить текущий {}x{}"; playfield.0, playfield.1);
+        let save_label = tr!("+ Save current {}x{}", "+ 今の{}x{}を保存", "+ Сохранить текущий {}x{}"; [playfield.0, playfield.1] []);
         let bw0 = self.button(
             c,
             bx + 14.0,
@@ -2184,7 +2184,7 @@ impl SettingsUi {
             let name = section_name(i);
             let found = self.results.iter().filter(|&&r| ITEMS[r].0 == *id).count();
             let about = if searching {
-                tr!("found: {found}", "{found}件", "найдено: {found}";)
+                tr!("found: {found}", "{found}件", "найдено: {found}"; [] [found])
             } else {
                 section_summary(i).to_string()
             };
@@ -2265,7 +2265,7 @@ impl SettingsUi {
         let box_x = cx + col - box_w;
         let n = self.results.len();
         let title = if searching {
-            tr!("Found: {n}", "{n}件", "Найдено: {n}";)
+            tr!("Found: {n}", "{n}件", "Найдено: {n}"; [] [n])
         } else {
             section_name(section).to_string()
         };

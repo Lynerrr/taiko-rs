@@ -17,7 +17,7 @@ symphonia = { version = "0.6", features = ["mp3", "ogg", "vorbis", "wav", "pcm",
 # The game's rules, apart from the client (crates/taiko-logic).
 taiko-logic = { path = "crates/taiko-logic" }
 # What the game and its server both speak: the protocols, TLS, languages (crates/taiko-proto).
-taiko-proto = { path = "crates/taiko-proto" }
+taiko-proto = { path = "crates/taiko-proto", features = ["client-catalog"] }
 # `--recalc-pp` (crates/taiko-recalc).
 taiko-recalc = { path = "crates/taiko-recalc" }
 # The player's data (`store.rs`): SQLite built into the game, the same on every platform.
@@ -118,6 +118,10 @@ symphonia-bundle-mp3 = { path = "vendor/symphonia-bundle-mp3" }
 # The Windows exe's icon (build.rs).
 [build-dependencies]
 embed-resource = "3.0.12"
+
+[dev-dependencies]
+proc-macro2 = "1"
+syn = { version = "2", default-features = false, features = ["parsing"] }
 
 # The client's tests use the crate's test helpers.
 [dev-dependencies.taiko-logic]

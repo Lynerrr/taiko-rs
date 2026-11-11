@@ -3500,6 +3500,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taiko-logic",
+ "toml",
 ]
 
 [[package]]
@@ -3526,12 +3527,14 @@ dependencies = [
  "jni",
  "libc",
  "pollster 1.0.1",
+ "proc-macro2",
  "rosu-pp",
  "rusqlite",
  "serde",
  "serde_json",
  "souvlaki",
  "symphonia",
+ "syn 2.0.119",
  "taiko-logic",
  "taiko-proto",
  "taiko-recalc",

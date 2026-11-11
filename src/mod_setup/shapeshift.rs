@@ -242,7 +242,7 @@ impl Setup {
                     0 => {
                         let n = EVERY[col];
                         let bars_ru = crate::lang::ru_plural(n, ["такт", "такта", "тактов"]);
-                        tr!("{n} bars", "{n}小節", "{n} {bars_ru}";)
+                        tr!("{n} bars", "{n}小節", "{n} {bars_ru}"; [] [n])
                     }
                     1 => morph_name(col).to_string(),
                     2 => [
@@ -309,7 +309,7 @@ impl Setup {
         }
         let bars = cfg.bars();
         let morph_note = if cfg.morph_bars() < MORPH[cfg.morph] {
-            tr!(" (at most half of {bars} bars)", " (最大で{bars}小節の半分)", " (не больше половины из {bars})";)
+            tr!(" (at most half of {bars} bars)", " (最大で{bars}小節の半分)", " (не больше половины из {bars})"; [] [bars])
         } else {
             String::new()
         };
@@ -318,8 +318,7 @@ impl Setup {
             1 => tr!(
                 "Morph: how long the lane takes to bend into the next shape{morph_note}.",
                 "変形: レーンが次の形に曲がるまでの長さ{morph_note}。",
-                "Переход: сколько дорожка изгибается в следующую форму{morph_note}.";
-            ),
+                "Переход: сколько дорожка изгибается в следующую форму{morph_note}."; [] [morph_note]),
             2 => tr!(
                 "Order: Shuffled gives each map its own order (the same every time you play it); In order goes along the shapes below.",
                 "順番: シャッフルは譜面ごとに決まった順番 (毎回同じ)。順番どおりは下の形の順に進みます。",

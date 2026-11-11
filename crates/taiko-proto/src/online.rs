@@ -493,19 +493,23 @@ impl Activity {
     pub fn describe(&self) -> String {
         match self {
             Activity::Menus => tr!("in the menus", "メニュー中", "в меню").into(),
-            Activity::Playing { map } => tr!("playing {map}", "プレイ中: {map}", "играет: {map}";),
-            Activity::Lobby { title, .. } => {
-                tr!("in lobby {title}", "ロビー: {title}", "в лобби {title}";)
+            Activity::Playing { map } => {
+                tr!("playing {map}", "プレイ中: {map}", "играет: {map}"; [] [map])
             }
-            Activity::Match { map } => tr!("in a match: {map}", "対戦中: {map}", "в матче: {map}";),
+            Activity::Lobby { title, .. } => {
+                tr!("in lobby {title}", "ロビー: {title}", "в лобби {title}"; [] [title])
+            }
+            Activity::Match { map } => {
+                tr!("in a match: {map}", "対戦中: {map}", "в матче: {map}"; [] [map])
+            }
             Activity::Watching { name } => {
-                tr!("watching {name}", "{name}を観戦中", "смотрит {name}";)
+                tr!("watching {name}", "{name}を観戦中", "смотрит {name}"; [] [name])
             }
             Activity::Editing { map } if map.is_empty() => {
                 tr!("in the editor", "エディター中", "в редакторе").into()
             }
             Activity::Editing { map } => {
-                tr!("editing {map}", "編集中: {map}", "редактирует {map}";)
+                tr!("editing {map}", "編集中: {map}", "редактирует {map}"; [] [map])
             }
         }
     }
@@ -573,7 +577,7 @@ pub type Said = [String; 3];
 /// The side of `text` for the language the game is in.
 pub fn said(text: &Said) -> &str {
     match crate::lang::current() {
-        crate::lang::Lang::En => &text[0],
+        crate::lang::Lang::En | crate::lang::Lang::ZhCn => &text[0],
         crate::lang::Lang::Ja => &text[1],
         crate::lang::Lang::Ru => &text[2],
     }
@@ -629,16 +633,16 @@ impl ChatLine {
         let (player, name, holders, players) = (&m.player, said(&m.name), m.holders, m.players);
         let line = match m.secret {
             true => {
-                tr!("{player} found the secret {name}", "{player}が秘密のメダル「{name}」を見つけた", "{player} находит секрет «{name}»";)
+                tr!("{player} found the secret {name}", "{player}が秘密のメダル「{name}」を見つけた", "{player} находит секрет «{name}»"; [] [player, name])
             }
             false => {
-                tr!("{player} earned {name}", "{player}がメダル「{name}」を獲得", "{player} получает «{name}»";)
+                tr!("{player} earned {name}", "{player}がメダル「{name}」を獲得", "{player} получает «{name}»"; [] [player, name])
             }
         };
         let rarity = match m.first {
             true => tr!("first on the server", "サーバー初", "первым на сервере").to_string(),
             false => {
-                tr!("{holders} of {players} have it", "{players}人中{holders}人", "есть у {holders} из {players}";)
+                tr!("{holders} of {players} have it", "{players}人中{holders}人", "есть у {holders} из {players}"; [] [holders, players])
             }
         };
         format!("{line} · {rarity}")
@@ -1268,7 +1272,7 @@ pub fn network_error(e: &std::io::Error) -> String {
         .to_string(),
         _ => match e.raw_os_error() {
             Some(code) => {
-                tr!("network error {code}. Try again", "ネットワークエラー {code}。もう一度試してください", "сетевая ошибка {code}. Попробуй ещё раз";)
+                tr!("network error {code}. Try again", "ネットワークエラー {code}。もう一度試してください", "сетевая ошибка {code}. Попробуй ещё раз"; [] [code])
             }
             None => tr!(
                 "network error. Try again",

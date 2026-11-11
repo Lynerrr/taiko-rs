@@ -40,22 +40,22 @@ impl NewMap {
     pub fn problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         for (name, value) in [
-            ("Artist", &self.artist),
-            ("Title", &self.title),
-            ("Creator", &self.creator),
-            ("Difficulty name", &self.version),
+            (tr!("Artist"), &self.artist),
+            (tr!("Title"), &self.title),
+            (tr!("Creator"), &self.creator),
+            (tr!("Difficulty name"), &self.version),
         ] {
             if value.trim().is_empty() {
-                out.push(format!("{name} is empty"));
+                out.push(tr!("{name} is empty"; name));
             }
         }
         if !(crate::editor::tempo::MIN_BPM / 2.0..=crate::editor::tempo::MAX_BPM * 2.0)
             .contains(&self.bpm)
         {
-            out.push("the BPM doesn't make sense".into());
+            out.push(tr!("the BPM doesn't make sense").into());
         }
         if !self.audio.is_file() {
-            out.push("the song file is gone".into());
+            out.push(tr!("the song file is gone").into());
         }
         out
     }
@@ -250,7 +250,7 @@ pub fn create(m: &NewMap, songs: &Path) -> Result<PathBuf, String> {
         return Err(problems.join(", "));
     }
     let dir = set_folder(songs, m);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| tr!("{}: {e}", dir.display(); e))?;
     let made = (|| {
         let ext = |p: &Path, fallback: &str| {
             p.extension()
@@ -260,12 +260,12 @@ pub fn create(m: &NewMap, songs: &Path) -> Result<PathBuf, String> {
         };
         let audio_name = format!("audio.{}", ext(&m.audio, "mp3"));
         std::fs::copy(&m.audio, dir.join(&audio_name))
-            .map_err(|e| format!("copying the song: {e}"))?;
+            .map_err(|e| tr!("copying the song: {e}"; e))?;
         let background = match &m.background {
             Some(bg) => {
                 let name = format!("bg.{}", ext(bg, "jpg"));
                 std::fs::copy(bg, dir.join(&name))
-                    .map_err(|e| format!("copying the background: {e}"))?;
+                    .map_err(|e| tr!("copying the background: {e}"; e))?;
                 Some(name)
             }
             None => None,
@@ -282,7 +282,7 @@ pub fn create(m: &NewMap, songs: &Path) -> Result<PathBuf, String> {
             "{}.{extension}",
             file_stem(&m.artist, &m.title, &m.creator, &m.version)
         ));
-        std::fs::write(&file, text).map_err(|e| format!("writing the map: {e}"))?;
+        std::fs::write(&file, text).map_err(|e| tr!("writing the map: {e}"; e))?;
         Ok(file)
     })();
     if made.is_err() {

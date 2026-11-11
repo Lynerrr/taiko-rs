@@ -22,3 +22,5 @@ mod scoring;
 mod screens;
 mod select;
 mod store;
+
+mod language_catalog;

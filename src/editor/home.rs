@@ -102,14 +102,14 @@ impl Field {
 
     fn label(self) -> &'static str {
         match self {
-            Field::Artist => "Artist",
-            Field::Title => "Title",
-            Field::ArtistRomanised => "Artist in Latin letters (if it isn't)",
-            Field::TitleRomanised => "Title in Latin letters (if it isn't)",
-            Field::Creator => "Mapper (you)",
-            Field::Version => "Difficulty name",
-            Field::Source => "Source (a game, a series)",
-            Field::Tags => "Tags (separated by spaces)",
+            Field::Artist => tr!("Artist"),
+            Field::Title => tr!("Title"),
+            Field::ArtistRomanised => tr!("Artist in Latin letters (if it isn't)"),
+            Field::TitleRomanised => tr!("Title in Latin letters (if it isn't)"),
+            Field::Creator => tr!("Mapper (you)"),
+            Field::Version => tr!("Difficulty name"),
+            Field::Source => tr!("Source (a game, a series)"),
+            Field::Tags => tr!("Tags (separated by spaces)"),
         }
     }
 }
@@ -470,7 +470,7 @@ impl Home {
         {
             Out::Open(path)
         } else {
-            Out::Toast("drop a song (mp3, ogg, wav, flac) to make a map from it".into())
+            Out::Toast(tr!("drop a song (mp3, ogg, wav, flac) to make a map from it").into())
         }
     }
 
@@ -509,7 +509,7 @@ impl Home {
                 }
                 Ok(Err(e)) => self.loading = Loading::Failed(e),
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.loading = Loading::Failed("decoding stopped".into())
+                    self.loading = Loading::Failed(tr!("decoding stopped").into())
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
             }
@@ -664,7 +664,7 @@ impl Home {
         match act {
             Act::Back => return self.back(audio),
             Act::Next => self.next(audio),
-            Act::Browse => self.ask_for_file(FileKind::Audio, "Choose the song"),
+            Act::Browse => self.ask_for_file(FileKind::Audio, tr!("Choose the song")),
             Act::PickInLibrary => return Out::PickInLibrary,
             Act::Recent(i) => {
                 if let Some(p) = self.recent.get(i) {
@@ -837,18 +837,18 @@ impl Home {
             Some(a) => {
                 self.apply_analysis(&a);
                 self.touched = true;
-                self.status = "back to what was found".into();
+                self.status = tr!("back to what was found").into();
             }
             None => {
                 self.status =
-                    "no tempo could be found in this song: tap it or set it by hand".into()
+                    tr!("no tempo could be found in this song: tap it or set it by hand").into()
             }
         }
     }
 
     fn create(&mut self) -> Out {
         let Some(plan) = self.plan() else {
-            return Out::Toast("pick a song first".into());
+            return Out::Toast(tr!("pick a song first").into());
         };
         let problems = plan.problems();
         if !problems.is_empty() {
@@ -876,7 +876,7 @@ impl Home {
 
     fn next(&mut self, audio: Option<&Engine>) {
         match self.page {
-            Page::Start => self.ask_for_file(FileKind::Audio, "Choose the song"),
+            Page::Start => self.ask_for_file(FileKind::Audio, tr!("Choose the song")),
             Page::Details => {
                 let said = self.plan().map(|p| p.problems()).unwrap_or_default();
                 if said.is_empty() {
@@ -1055,7 +1055,7 @@ impl Home {
         match (self.page, code) {
             (_, KeyCode::Escape) => return self.back(audio),
             (Page::Start, KeyCode::Enter | KeyCode::NumpadEnter) => {
-                self.ask_for_file(FileKind::Audio, "Choose the song")
+                self.ask_for_file(FileKind::Audio, tr!("Choose the song"))
             }
             (Page::Start, KeyCode::KeyL) => return Out::PickInLibrary,
             (Page::Start, KeyCode::KeyT) => return Out::Tour,
@@ -1180,9 +1180,9 @@ impl Home {
         // A stripe of the editor's colour along the top, and the page's name.
         c.rect(0.0, 0.0, w, 3.0, rgba(VIOLET, 1.0));
         let (title, step) = match self.page {
-            Page::Start => ("MAP EDITOR", None),
-            Page::Details => ("NEW MAP", Some("1 of 2: the names")),
-            Page::Timing => ("NEW MAP", Some("2 of 2: the timing")),
+            Page::Start => (tr!("MAP EDITOR"), None),
+            Page::Details => (tr!("NEW MAP"), Some(tr!("1 of 2: the names"))),
+            Page::Timing => (tr!("NEW MAP"), Some(tr!("2 of 2: the timing"))),
         };
         crate::style::title(c, 24.0, 14.0, 20.0, 0xffffff, title);
         if let Some(step) = step {
@@ -1200,7 +1200,7 @@ impl Home {
                 VIRTUAL_HEIGHT / 2.0 - 5.0,
                 10.0,
                 rgba(TEXT, 1.0),
-                "Choose a file in the window that opened...",
+                tr!("Choose a file in the window that opened..."),
             );
         }
     }
@@ -1224,7 +1224,13 @@ impl Home {
             rgba(VIOLET, if hover { 1.0 } else { 0.7 }),
             2.0,
         );
-        c.text_centered(w / 2.0, 90.0, 14.0, rgba(0xffffff, 1.0), "Make a new map");
+        c.text_centered(
+            w / 2.0,
+            90.0,
+            14.0,
+            rgba(0xffffff, 1.0),
+            tr!("Make a new map"),
+        );
         c.text_centered(
             w / 2.0,
             116.0,
@@ -1237,7 +1243,7 @@ impl Home {
             132.0,
             7.0,
             rgba(DIM, 1.0),
-            "The tempo and the first beat are found for you, and you can time it by ear",
+            tr!("The tempo and the first beat are found for you, and you can time it by ear"),
         );
         c.button(
             w / 2.0 - 120.0,
@@ -1258,7 +1264,7 @@ impl Home {
         );
         // Going on with one.
         let top = 232.0;
-        c.text(x, top, 9.0, rgba(0xffffff, 1.0), "Go on with a map");
+        c.text(x, top, 9.0, rgba(0xffffff, 1.0), tr!("Go on with a map"));
         let list_h = 6.0 * 22.0 + 8.0;
         self.panel(c, x, top + 16.0, col * 0.62, list_h);
         if self.recent.is_empty() {
@@ -1267,7 +1273,11 @@ impl Home {
                 top + 30.0,
                 8.0,
                 rgba(DIM, 1.0),
-                "Maps you open in the editor will be listed here.",
+                &Canvas::fit(
+                    8.0,
+                    col * 0.62 - 24.0,
+                    tr!("Maps you open in the editor will be listed here."),
+                ),
             );
         }
         for (i, path) in self.recent.iter().take(6).enumerate() {
@@ -1329,7 +1339,7 @@ impl Home {
             top + 16.0,
             bw,
             24.0,
-            "Pick from my songs   [L]",
+            tr!("Pick from my songs   [L]"),
             8.0,
             Hit::EditorHome(Act::PickInLibrary),
             false,
@@ -1339,7 +1349,7 @@ impl Home {
             top + 46.0,
             bw,
             24.0,
-            "Take the tour   [T]",
+            tr!("Take the tour   [T]"),
             8.0,
             Hit::EditorHome(Act::Tour),
             false,
@@ -1349,14 +1359,14 @@ impl Home {
             top + 86.0,
             7.0,
             rgba(DIM, 1.0),
-            &Canvas::fit(7.0, bw, "Or drop a .osu or .tko here."),
+            &Canvas::fit(7.0, bw, tr!("Or drop a .osu or .tko here.")),
         );
         c.text(
             24.0,
             VIRTUAL_HEIGHT - 20.0,
             7.0,
             rgba(DIM, 1.0),
-            "Esc: back to the menu",
+            tr!("Esc: back to the menu"),
         );
     }
 
@@ -1390,8 +1400,10 @@ impl Home {
 
     fn draw_field(&self, c: &mut Canvas, f: Field, x: f32, y: f32, w: f32) {
         let i = f.index();
-        c.text(x, y, 6.5, rgba(DIM, 1.0), f.label());
-        let box_y = y + 10.0;
+        let label_size = 6.5;
+        let label = Canvas::fit(label_size, w, f.label());
+        c.text(x, y, label_size, rgba(DIM, 1.0), &label);
+        let box_y = y + Canvas::text_height(label_size) + 3.5;
         let focused = self.focus == Some(f);
         c.round_rect(
             [x, box_y],
@@ -1445,14 +1457,14 @@ impl Home {
             &Canvas::fit(8.0, col - 150.0, &name),
         );
         let state = match &self.loading {
-            Loading::Working(_) => ("reading the song...".to_string(), DIM),
+            Loading::Working(_) => (tr!("reading the song...").to_string(), DIM),
             Loading::Ready(d) => {
                 let secs = (d.track.frames() as f64 / d.rate) as u64;
                 let found = d
                     .analysis
                     .as_ref()
-                    .map_or("no tempo found".to_string(), |a| {
-                        format!("{:.2} BPM found", a.bpm)
+                    .map_or(tr!("no tempo found").to_string(), |a| {
+                        tr!("{:.2} BPM found", a.bpm)
                     });
                 (
                     format!("{}:{:02}   {found}", secs / 60, secs % 60),
@@ -1460,7 +1472,7 @@ impl Home {
                 )
             }
             Loading::Failed(e) => (
-                Canvas::fit(7.0, col - 20.0, &format!("can't read it: {e}")),
+                Canvas::fit(7.0, col - 20.0, &tr!("can't read it: {e}"; e)),
                 BAD,
             ),
             Loading::Nothing => (String::new(), DIM),
@@ -1488,7 +1500,13 @@ impl Home {
         self.draw_field(c, Field::Tags, x + half + 14.0, y, half);
         y += 44.0;
         // Background and format.
-        c.text(x, y, 6.5, rgba(DIM, 1.0), "Background picture (optional)");
+        c.text(
+            x,
+            y,
+            6.5,
+            rgba(DIM, 1.0),
+            tr!("Background picture (optional)"),
+        );
         let bg_name = self
             .background
             .as_ref()
@@ -1499,7 +1517,7 @@ impl Home {
             y + 10.0,
             120.0,
             20.0,
-            "Choose a picture...",
+            tr!("Choose a picture..."),
             7.5,
             Hit::EditorHome(Act::PickBackground),
             false,
@@ -1530,15 +1548,19 @@ impl Home {
                     y + 16.0,
                     7.0,
                     rgba(DIM, 1.0),
-                    "none: the map has a plain background",
+                    &Canvas::fit(
+                        7.0,
+                        (half - 170.0).max(24.0),
+                        tr!("none: the map has a plain background"),
+                    ),
                 );
             }
         }
         let fx = x + half + 14.0;
-        c.text(fx, y, 6.5, rgba(DIM, 1.0), "Format");
+        c.text(fx, y, 6.5, rgba(DIM, 1.0), tr!("Format"));
         for (k, (tko, label)) in [
-            (false, ".osu  for osu!stable too"),
-            (true, ".tko  + client effects"),
+            (false, tr!(".osu  for osu!stable too")),
+            (true, tr!(".tko  + client effects")),
         ]
         .into_iter()
         .enumerate()
@@ -1578,7 +1600,8 @@ impl Home {
             let mut notes = plan.problems();
             if plan.wants_romanised() {
                 notes.push(
-                    "a name in other letters should have a Latin one too (osu! asks for it)".into(),
+                    tr!("a name in other letters should have a Latin one too (osu! asks for it)")
+                        .into(),
                 );
             }
             if let Some(n) = notes.first() {
@@ -1600,7 +1623,7 @@ impl Home {
             by,
             90.0,
             24.0,
-            "< Back",
+            tr!("< Back"),
             8.0,
             Hit::EditorHome(Act::Back),
             false,
@@ -1610,7 +1633,7 @@ impl Home {
             by,
             170.0,
             24.0,
-            "Next: the timing >",
+            tr!("Next: the timing >"),
             8.0,
             Hit::EditorHome(Act::Next),
             true,
@@ -1620,7 +1643,7 @@ impl Home {
             by + 8.0,
             6.5,
             rgba(DIM, 1.0),
-            "Tab: next field   Esc: leave the field",
+            tr!("Tab: next field   Esc: leave the field"),
         );
     }
 
@@ -1653,10 +1676,10 @@ impl Home {
         // What was found.
         let mut y = overview[1] + overview[3] + 6.0;
         let line = match (&self.loading, &self.analysis) {
-            (Loading::Working(_), _) => ("Reading the song...".to_string(), DIM),
-            (Loading::Failed(e), _) => (format!("Can't read the song: {e}"), BAD),
+            (Loading::Working(_), _) => (tr!("Reading the song...").to_string(), DIM),
+            (Loading::Failed(e), _) => (tr!("Can't read the song: {e}"; e), BAD),
             (_, Some(a)) => (
-                format!(
+                tr!(
                     "Found {:.2} BPM, {}. First beat at {} ms.",
                     a.bpm,
                     if a.lift >= 3.0 {
@@ -1671,7 +1694,8 @@ impl Home {
                 if a.lift >= 2.0 { 0x7ee08a } else { WARN },
             ),
             _ => (
-                "No tempo was found: tap it (T, while the song plays) or set it by hand.".into(),
+                tr!("No tempo was found: tap it (T, while the song plays) or set it by hand.")
+                    .into(),
                 WARN,
             ),
         };
@@ -1692,11 +1716,9 @@ impl Home {
                 &Canvas::fit(
                     7.0,
                     col,
-                    &format!(
-                        "The tempo seems to change near {}:{:02}. Time the later part in the editor (F3, F6).",
+                    &tr!("The tempo seems to change near {}:{:02}. Time the later part in the editor (F3, F6).",
                         (at / 60_000.0) as u32,
-                        ((at / 1000.0) as u32) % 60
-                    ),
+                        ((at / 1000.0) as u32) % 60),
                 ),
             );
         } else if !self.status.is_empty() {
@@ -1770,14 +1792,14 @@ impl Home {
             y,
             140.0,
             bh,
-            "Back to found  [D]",
+            tr!("Back to found  [D]"),
             7.5,
             Hit::EditorHome(Act::Detect),
             false,
         );
         y += 28.0;
         // The first beat.
-        c.text(x, y + 6.0, 8.0, rgba(0xffffff, 1.0), "First beat");
+        c.text(x, y + 6.0, 8.0, rgba(0xffffff, 1.0), tr!("First beat"));
         let mut bx = x + 92.0;
         for (label, d) in [("-10", -10i16), ("-1", -1)] {
             c.button(
@@ -1819,7 +1841,7 @@ impl Home {
             y,
             64.0,
             bh,
-            "< 1 beat",
+            tr!("< 1 beat"),
             7.5,
             Hit::EditorHome(Act::Shift(-1)),
             false,
@@ -1829,7 +1851,7 @@ impl Home {
             y,
             64.0,
             bh,
-            "1 beat >",
+            tr!("1 beat >"),
             7.5,
             Hit::EditorHome(Act::Shift(1)),
             false,
@@ -1839,14 +1861,14 @@ impl Home {
             y,
             150.0,
             bh,
-            "Beat at the playhead  [B]",
+            tr!("Beat at the playhead  [B]"),
             7.5,
             Hit::EditorHome(Act::BeatHere),
             false,
         );
         y += 28.0;
         // Meter and tap.
-        c.text(x, y + 6.0, 8.0, rgba(0xffffff, 1.0), "Beats per bar");
+        c.text(x, y + 6.0, 8.0, rgba(0xffffff, 1.0), tr!("Beats per bar"));
         let mut bx = x + 92.0;
         for n in [3u8, 4] {
             let on = self.per_bar == n as u32;
@@ -1867,7 +1889,7 @@ impl Home {
             y,
             150.0,
             bh,
-            "Tap the tempo  [T]",
+            tr!("Tap the tempo  [T]"),
             7.5,
             Hit::EditorHome(Act::Tap),
             false,
@@ -1880,15 +1902,15 @@ impl Home {
             &Canvas::fit(
                 6.5,
                 (col - (bx + 172.0 - x)).max(40.0),
-                "While the song plays, tap on the beat.",
+                tr!("While the song plays, tap on the beat."),
             ),
         );
         y += 30.0;
         // Playback.
         let play_label = if self.playing.is_some() {
-            "Stop  [Space]"
+            tr!("Stop  [Space]")
         } else {
-            "Play  [Space]"
+            tr!("Play  [Space]")
         };
         c.button(
             x,
@@ -1900,7 +1922,7 @@ impl Home {
             Hit::EditorHome(Act::Play),
             self.playing.is_none(),
         );
-        let on = |b: bool| if b { "on" } else { "off" };
+        let on = |b: bool| if b { tr!("on") } else { tr!("off") };
         c.button(
             x + 118.0,
             y,
@@ -1929,7 +1951,7 @@ impl Home {
             &Canvas::fit(
                 6.5,
                 (col - 436.0).max(40.0),
-                "Wheel or drag: move along. Ctrl+wheel: zoom. Click: playhead.",
+                tr!("Wheel or drag: move along. Ctrl+wheel: zoom. Click: playhead."),
             ),
         );
         let by = VIRTUAL_HEIGHT - 36.0;
@@ -1938,7 +1960,7 @@ impl Home {
             by,
             90.0,
             24.0,
-            "< Back",
+            tr!("< Back"),
             8.0,
             Hit::EditorHome(Act::Back),
             false,
@@ -1948,7 +1970,7 @@ impl Home {
             by,
             190.0,
             24.0,
-            "Create the map  [Enter]",
+            tr!("Create the map  [Enter]"),
             8.0,
             Hit::EditorHome(Act::Create),
             true,
@@ -1958,7 +1980,7 @@ impl Home {
             by + 8.0,
             6.5,
             rgba(DIM, 1.0),
-            "Not sure? Create it anyway: the editor has the same tools (F3, F6).",
+            tr!("Not sure? Create it anyway: the editor has the same tools (F3, F6)."),
         );
     }
 
@@ -1987,7 +2009,7 @@ impl Home {
     fn draw_wave(&self, c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
         let Some(d) = self.decoded() else {
             let text = match &self.loading {
-                Loading::Working(_) => "reading the song...",
+                Loading::Working(_) => tr!("reading the song..."),
                 _ => "",
             };
             c.text_centered(x + w / 2.0, y + h / 2.0 - 4.0, 8.0, rgba(DIM, 1.0), text);
