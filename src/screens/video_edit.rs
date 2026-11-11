@@ -1,7 +1,7 @@
 //! The video editor: a saved replay's cut, crop and export settings, rendered to an MP4 with
 //! ffmpeg. The export itself is `State::export`, drawn on the render thread.
 
-use super::screen::Screen;
+use super::screen::{Key, Screen};
 use crate::*;
 
 /// The video editor up, on a saved replay.
@@ -192,14 +192,13 @@ impl Screen for VideoEdit {
         self.ed.rx.is_busy()
     }
 
-    fn key(
-        &mut self,
-        state: &mut State,
-        code: KeyCode,
-        repeat: bool,
-        _text: Option<&str>,
-        window: Option<&Window>,
-    ) {
+    fn key(&mut self, state: &mut State, key: Key) {
+        let Key {
+            code,
+            repeat,
+            window,
+            ..
+        } = key;
         if state.export.is_some() {
             if code == KeyCode::Escape && !repeat {
                 // Ending ffmpeg's input (or stopping a pass) ends it early; the encoder removes
@@ -430,7 +429,7 @@ impl Screen for VideoEdit {
         false
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
         let mut next = None;
         let ed = &mut self.ed;
         match ed.poll() {

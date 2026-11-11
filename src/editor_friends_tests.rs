@@ -35,7 +35,7 @@ fn toggle_rect(s: &mut State) -> Option<[f32; 4]> {
 fn the_editor_scenes_have_no_edge_tab() {
     let mut s = editing();
     assert_eq!(s.social_tab_middle(), None);
-    s.scene = Scene::EditorHome(Box::new(editor::home::Home::new(&[], "me")));
+    s.scene = crate::screens::editor_home::EditorHome::scene(editor::home::Home::new(&[], "me"));
     assert_eq!(s.social_tab_middle(), None);
     s.scene = Scene::Select;
     assert!(s.social_tab_middle().is_some(), "other screens keep it");

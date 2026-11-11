@@ -1,7 +1,7 @@
 //! The playfield area's editor: drag, resize or scale where the play goes on the screen,
 //! opened from settings.
 
-use super::screen::Screen;
+use super::screen::{Key, Screen};
 use crate::*;
 
 /// The playfield area's editor up.
@@ -60,14 +60,8 @@ impl Screen for LayoutEdit {
         true
     }
 
-    fn key(
-        &mut self,
-        state: &mut State,
-        code: KeyCode,
-        _repeat: bool,
-        _text: Option<&str>,
-        _window: Option<&Window>,
-    ) {
+    fn key(&mut self, state: &mut State, key: Key) {
+        let code = key.code;
         let a = state.cfg.playfield_area;
         let step = 0.01;
         // Arrows move; Shift+arrows resize from the bottom-right, like a window.
@@ -111,7 +105,7 @@ impl Screen for LayoutEdit {
         state.cfg.save();
     }
 
-    fn draw(&mut self, state: &mut State, canvas: &mut Canvas) -> Option<Scene> {
+    fn draw(&mut self, state: &mut State, canvas: &mut Canvas, _now: Instant) -> Option<Scene> {
         draw_game_area(
             canvas,
             &state.cfg,

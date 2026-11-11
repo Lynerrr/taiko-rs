@@ -183,7 +183,10 @@ fn clicks_on_the_editor_home() {
     assert_snapshot(
         "clicks-editor-home",
         &clicks("editor-home", |s, _| {
-            s.scene = Scene::EditorHome(Box::new(editor::home::Home::new(&[], "tester")));
+            s.scene = crate::screens::editor_home::EditorHome::scene(editor::home::Home::new(
+                &[],
+                "tester",
+            ));
         }),
     );
 }
