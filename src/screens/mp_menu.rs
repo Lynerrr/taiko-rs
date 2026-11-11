@@ -5,7 +5,7 @@ use super::screen::{Frame, Key, Screen};
 use crate::*;
 
 /// Where the multiplayer tab sits in the top bar.
-const MULTIPLAYER_TAB: usize = 2;
+pub(super) const MULTIPLAYER_TAB: usize = 2;
 
 /// The multiplayer menu up.
 pub(crate) struct MpMenu;

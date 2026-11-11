@@ -156,6 +156,7 @@ use library::{
 use multiplayer::{lobby_seed, map_info, mod_settings, use_mod_settings};
 use screens::editor_home::EditorHome;
 use screens::hud_editor::HudEdit;
+use screens::lobby::Lobby;
 use screens::menu::{update_badge, updating_badge};
 use screens::mp_menu::MpMenu;
 use screens::mp_results::MpResults;
@@ -218,9 +219,9 @@ enum Scene {
         back: Box<Scene>,
         vsync: bool,
     },
-    /// Multiplayer: room lobby and match (the menu, the wait for the match to start and the
-    /// results are `screens::mp_menu`, `screens::mp_wait` and `screens::mp_results`).
-    Lobby,
+    /// A multiplayer match (the menu, the lobby, the wait for the match to start and the
+    /// results are `screens::mp_menu`, `screens::lobby`, `screens::mp_wait` and
+    /// `screens::mp_results`).
     MpPlay {
         game: Box<Play>,
         quit_armed: Option<Instant>,
@@ -924,7 +925,7 @@ impl State {
     fn idle_allowed(&self) -> bool {
         (matches!(
             self.scene,
-            Scene::Select | Scene::Settings { .. } | Scene::Lobby | Scene::Results { .. }
+            Scene::Select | Scene::Settings { .. } | Scene::Results { .. }
         ) || self.scene.screen().is_some_and(|s| s.idle_allowed()))
             && !self.quit_asked
             && self.crash.is_none()
@@ -940,6 +941,11 @@ impl State {
         }?;
         let e = self.library.get(entry)?;
         Some((e.meta.title.clone(), e.meta.artist.clone()))
+    }
+
+    /// The room's lobby is up.
+    fn in_lobby(&self) -> bool {
+        self.scene.screen().is_some_and(|s| s.room_lobby())
     }
 
     fn in_song(&self) -> bool {
@@ -1082,10 +1088,8 @@ impl State {
                 .filter(|_| s.map_entry.is_some() && s.map_entry == self.preview_target())
                 .map(|m| m.rate)
         });
-        let lobby = matches!(
-            self.scene,
-            Scene::Lobby | Scene::MpPlay { .. } | Scene::Spectate(_)
-        ) || matches!(&self.scene, Scene::Settings { prev: back } if matches!(**back, Scene::Lobby))
+        let lobby = matches!(self.scene, Scene::MpPlay { .. } | Scene::Spectate(_))
+            || matches!(&self.scene, Scene::Settings { prev: back } if back.screen().is_some_and(|s| s.room_lobby()))
             || self
                 .scene
                 .screen()
@@ -1798,8 +1802,8 @@ impl State {
             return Some(entry);
         }
         let lobby = match &self.scene {
-            Scene::Lobby | Scene::MpPlay { .. } | Scene::Spectate(_) => true,
-            Scene::Settings { prev: back } => matches!(**back, Scene::Lobby),
+            Scene::MpPlay { .. } | Scene::Spectate(_) => true,
+            Scene::Settings { prev: back } => back.screen().is_some_and(|s| s.room_lobby()),
             Scene::Other(s) => s.over_lobby() || s.in_room(),
             _ => false,
         };
@@ -2001,7 +2005,7 @@ impl State {
         }
         match &mut self.scene {
             Scene::Play { game, .. } => game.pause(sound(&self.audio)),
-            Scene::Select | Scene::Lobby | Scene::Results { .. } => {}
+            Scene::Select | Scene::Results { .. } => {}
             Scene::Other(s) if s.allows_settings() => {}
             _ => {
                 self.toast(
@@ -2033,7 +2037,6 @@ impl State {
             Scene::Results { .. } => Some(2),
             Scene::Settings { .. } => Some(3),
             Scene::Other(ref s) => s.menu_screen(),
-            Scene::Lobby => Some(6),
             _ => None,
         }
     }
@@ -5326,7 +5329,11 @@ impl State {
             | Scene::Play { entry, .. }
             | Scene::Results { entry, .. } => Some(*entry),
             Scene::MpPlay { .. } => self.mp.as_ref().and_then(|s| s.map_entry),
-            Scene::Other(s) if s.in_room() => self.mp.as_ref().and_then(|s| s.map_entry),
+            // The room's map is the song of its match, of the wait for it and of its results;
+            // the lobby only shows it.
+            Scene::Other(s) if s.in_room() && !s.room_lobby() => {
+                self.mp.as_ref().and_then(|s| s.map_entry)
+            }
             _ => None,
         }
     }
@@ -5334,7 +5341,8 @@ impl State {
     /// The map whose offset applies on this screen (also the selected one, for the preview).
     fn offset_entry(&self) -> Option<usize> {
         match &self.scene {
-            Scene::Spectate(_) | Scene::Lobby => self.mp.as_ref().and_then(|s| s.map_entry),
+            Scene::Spectate(_) => self.mp.as_ref().and_then(|s| s.map_entry),
+            Scene::Other(s) if s.room_lobby() => self.mp.as_ref().and_then(|s| s.map_entry),
             Scene::Watch(v) => v.entry,
             Scene::Select => self.select.selected(),
             Scene::Other(s) if s.map_from_song_select() => self.select.selected(),
@@ -6964,7 +6972,7 @@ impl State {
 
     fn open_multiplayer(&mut self) {
         self.scene = if self.mp.is_some() {
-            Scene::Lobby
+            Lobby::scene()
         } else {
             MpMenu::scene()
         };
@@ -7000,7 +7008,7 @@ impl State {
                 });
                 g.last_guess = Some(format!("{} - {}", e.meta.artist, e.meta.title));
             }
-            self.scene = Scene::Lobby;
+            self.scene = Lobby::scene();
             return;
         }
         let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
@@ -7014,7 +7022,7 @@ impl State {
         if let Some(s) = &self.mp {
             s.client.send(net::ClientMsg::SelectMap(info));
         }
-        self.scene = Scene::Lobby;
+        self.scene = Lobby::scene();
     }
 
     /// The lobby's Defense rules, when the map picked is a Defense match.
@@ -7082,7 +7090,6 @@ impl State {
         &mut self,
         code: KeyCode,
         repeat: bool,
-        text: Option<&str>,
         at: Instant,
         window: Option<&Window>,
     ) {
@@ -7095,269 +7102,11 @@ impl State {
             }
             return;
         }
-        // A chat line being typed in the lobby takes the keys (function keys still work).
-        if matches!(self.scene, Scene::Lobby)
-            && self.mp.as_ref().is_some_and(|s| s.chat_input.is_some())
-        {
-            let function_key = matches!(
-                code,
-                KeyCode::F1
-                    | KeyCode::F2
-                    | KeyCode::F3
-                    | KeyCode::F4
-                    | KeyCode::F5
-                    | KeyCode::F6
-                    | KeyCode::F7
-                    | KeyCode::F8
-                    | KeyCode::F9
-                    | KeyCode::F10
-                    | KeyCode::F11
-                    | KeyCode::F12
-            );
-            if !(function_key && !repeat && self.handle_global_key(code, window)) {
-                self.lobby_chat_key(code, text);
-            }
-            return;
-        }
         if repeat || self.handle_global_key(code, window) {
             return;
         }
-        match &mut self.scene {
-            Scene::Lobby => {
-                let Some(s) = &mut self.mp else {
-                    self.scene = MpMenu::scene();
-                    return;
-                };
-                if s.mapguessr {
-                    self.guessr_key(code);
-                    return;
-                }
-                // The host typing a new password (K): it takes the keys until Enter or Esc.
-                if let Some(typed) = &mut s.edit_password {
-                    match code {
-                        KeyCode::Enter | KeyCode::NumpadEnter => {
-                            let password = Some(typed.clone()).filter(|p| !p.is_empty());
-                            s.edit_password = None;
-                            let text = if password.is_some() {
-                                tr!(
-                                    "the lobby has a password now",
-                                    "ロビーにパスワードを設定しました",
-                                    "у лобби теперь есть пароль"
-                                )
-                            } else {
-                                tr!(
-                                    "the lobby is open to all",
-                                    "ロビーは誰でも入れます",
-                                    "лобби открыто для всех"
-                                )
-                            };
-                            s.client.send(net::ClientMsg::SetPassword(password));
-                            self.toast(text.into());
-                        }
-                        KeyCode::Escape => s.edit_password = None,
-                        KeyCode::Backspace => {
-                            typed.pop();
-                        }
-                        _ => {
-                            for ch in text.unwrap_or("").chars() {
-                                if net::drawable_char(ch) && ch != ' ' && typed.chars().count() < 32
-                                {
-                                    typed.push(ch);
-                                }
-                            }
-                        }
-                    }
-                    return;
-                }
-                match code {
-                    KeyCode::Space | KeyCode::KeyR if s.me().is_some_and(|p| p.spectator) => {
-                        self.toast("you're spectating: S to play instead".into());
-                    }
-                    KeyCode::Space | KeyCode::KeyR => {
-                        if s.me().is_some_and(|p| p.has_map) {
-                            s.ready = !s.me().is_some_and(|p| p.ready);
-                            s.client.send(net::ClientMsg::Ready(s.ready));
-                        } else {
-                            self.toast("you don't have this map".into());
-                        }
-                    }
-                    KeyCode::BracketLeft | KeyCode::BracketRight if s.is_host() && !s.in_match => {
-                        let step = if code == KeyCode::BracketRight {
-                            0.05
-                        } else {
-                            -0.05
-                        } * if self.modifiers_shift { 5.0 } else { 1.0 };
-                        self.cfg.rate = ((self.cfg.rate + step) * 100.0).round() / 100.0;
-                        self.cfg.rate = self.cfg.rate.clamp(RATE_RANGE.0, RATE_RANGE.1);
-                        self.cfg.save();
-                        let rate = self.cfg.mods.speed(self.cfg.rate, true).0;
-                        if let Some(mut m) = s.map.clone() {
-                            let mods = self.cfg.mods.lobby(m.defense);
-                            m.rate = rate;
-                            m.mods = mods.list();
-                            (m.multiverse, m.shapeshift) = mod_settings(mods);
-                            m.seed = lobby_seed(Some(self.cfg.random_seed));
-                            s.client.send(net::ClientMsg::SelectMap(m));
-                        }
-                        let text = format!("match rate {rate:.2}x");
-                        self.toast(text);
-                    }
-                    KeyCode::KeyT => self.focus_lobby_chat(),
-                    KeyCode::KeyP if s.map_entry.is_some() => self.open_preview(),
-                    // Defense: C turns it on or off, 1-5 step its rules.
-                    KeyCode::KeyC
-                    | KeyCode::Digit1
-                    | KeyCode::Digit2
-                    | KeyCode::Digit3
-                    | KeyCode::Digit4
-                    | KeyCode::Digit5
-                        if s.is_host() && !s.in_match =>
-                    {
-                        let Some(mut m) = s.map.clone() else {
-                            self.toast("pick a map first (M)".into());
-                            return;
-                        };
-                        let option = match code {
-                            KeyCode::Digit1 => Some(net::DefenseOption::Lives),
-                            KeyCode::Digit2 => Some(net::DefenseOption::Bars),
-                            KeyCode::Digit3 => Some(net::DefenseOption::TagIns),
-                            KeyCode::Digit4 => Some(net::DefenseOption::Shop),
-                            KeyCode::Digit5 => Some(net::DefenseOption::Maze),
-                            _ => None,
-                        };
-                        let text = match (option, m.defense) {
-                            (None, Some(_)) => {
-                                m.defense = None;
-                                tr!(
-                                    "Defense off: an ordinary match",
-                                    "ディフェンス オフ",
-                                    "Оборона выключена: обычный матч"
-                                )
-                                .to_string()
-                            }
-                            (None, None) => {
-                                m.defense = Some(net::Defense::DEFAULT);
-                                tr!(
-                                    "Defense co-op on: 1-5 change its rules",
-                                    "ディフェンス協力 オン: 1-5でルール変更",
-                                    "Оборона включена: 1-5 меняют правила"
-                                )
-                                .to_string()
-                            }
-                            (Some(o), Some(d)) => {
-                                let d = o.step(d);
-                                m.defense = Some(d);
-                                format!("{}: {}", o.name(), o.value(&d))
-                            }
-                            (Some(_), None) => {
-                                self.toast(
-                                    tr!(
-                                        "turn Defense on first (C)",
-                                        "先にディフェンスをオン (C)",
-                                        "сначала включи Оборону (C)"
-                                    )
-                                    .into(),
-                                );
-                                return;
-                            }
-                        };
-                        // Defense takes the host's mods for everyone; an ordinary match, the speed's.
-                        let mods = self.cfg.mods.lobby(m.defense);
-                        m.mods = mods.list();
-                        (m.multiverse, m.shapeshift) = mod_settings(mods);
-                        s.client.send(net::ClientMsg::SelectMap(m));
-                        self.toast(text);
-                    }
-                    // The room: K types a new password, L steps how many players it takes.
-                    KeyCode::KeyK if s.is_host() && !s.in_match => {
-                        s.edit_password = Some(String::new())
-                    }
-                    KeyCode::KeyL if s.is_host() && !s.in_match => {
-                        let list = net::RoomSettings::SLOTS;
-                        let at = list
-                            .iter()
-                            .position(|&n| n == s.slots)
-                            .unwrap_or(list.len() - 1);
-                        // Never below who's in it already.
-                        let next = list
-                            .iter()
-                            .cycle()
-                            .skip(at + 1)
-                            .take(list.len())
-                            .copied()
-                            .find(|&n| n as usize >= s.players.len())
-                            .unwrap_or(s.slots);
-                        s.client.send(net::ClientMsg::SetSlots(next));
-                        self.toast(tr!("the lobby takes {next} players", "ロビーの定員: {next}人", "лобби на {next} игроков";));
-                    }
-                    KeyCode::F1 => self.open_mod_select(),
-                    KeyCode::KeyS
-                        if s.in_match && s.me().is_some_and(|p| p.status == net::Status::Lobby) =>
-                    {
-                        if s.have_map {
-                            s.client.send(net::ClientMsg::Spectate(true));
-                        } else {
-                            self.toast("you need the map to spectate".into());
-                        }
-                    }
-                    // Before a match: watch it (and the next ones) instead of playing.
-                    KeyCode::KeyS if !s.in_match => {
-                        let on = !s.me().is_some_and(|p| p.spectator);
-                        s.ready = false;
-                        s.client.send(net::ClientMsg::Spectator(on));
-                        self.toast(
-                            if on {
-                                "you'll spectate the match"
-                            } else {
-                                "you'll play the match"
-                            }
-                            .into(),
-                        );
-                    }
-                    // Missing the map: from the host by default (fast, works for any map), the
-                    // mirrors with M or Shift+D.
-                    KeyCode::KeyD | KeyCode::KeyM
-                        if !s.have_map
-                            && s.map.is_some()
-                            && !s.is_host()
-                            && (code == KeyCode::KeyM || self.modifiers_shift) =>
-                    {
-                        self.download_lobby_map()
-                    }
-                    KeyCode::KeyD | KeyCode::KeyH
-                        if !s.have_map && s.map.is_some() && !s.is_host() =>
-                    {
-                        if self.host_transfer.is_none() {
-                            s.client.send(net::ClientMsg::RequestMap);
-                            self.host_map_asked = true;
-                            self.host_asked_at = Some(Instant::now());
-                            self.toast("getting the map from the host...".into());
-                        }
-                    }
-                    KeyCode::KeyM if s.is_host() && !s.in_match => {
-                        self.picking_lobby_map = true;
-                        self.scene = Scene::Select;
-                    }
-                    KeyCode::Enter | KeyCode::NumpadEnter if s.is_host() => {
-                        if s.players.iter().any(|p| p.ready && p.has_map) {
-                            s.client.send(net::ClientMsg::StartMatch);
-                        } else {
-                            self.toast("nobody is ready yet".into());
-                        }
-                    }
-                    KeyCode::Tab => self.scene = Scene::Select,
-                    KeyCode::Escape => {
-                        let why = if s.owns_room() {
-                            "room closed"
-                        } else {
-                            "left the room"
-                        };
-                        self.leave_room(why);
-                    }
-                    _ => {}
-                }
-            }
-            Scene::MpPlay { game, quit_armed } => match code {
+        if let Scene::MpPlay { game, quit_armed } = &mut self.scene {
+            match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => {
                     self.cfg.mp_scoreboard = !self.cfg.mp_scoreboard;
@@ -7469,8 +7218,7 @@ impl State {
                     }
                 }
                 _ => {}
-            },
-            _ => {}
+            }
         }
     }
 
@@ -7982,7 +7730,6 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
-            Scene::Lobby => "lobby",
             Scene::MpPlay { .. } => "multiplayer match",
             Scene::Spectate(_) => "spectating",
             Scene::Watch(_) => "watching a friend",
@@ -8670,16 +8417,13 @@ impl State {
     fn shown_mods(&self) -> Mods {
         match &self.mp {
             // In Defense the host's mods are everyone's.
-            Some(s)
-                if matches!(self.scene, Scene::Lobby)
-                    && s.map.as_ref().is_some_and(|m| m.defense.is_some()) =>
-            {
+            Some(s) if self.in_lobby() && s.map.as_ref().is_some_and(|m| m.defense.is_some()) => {
                 match s.map.as_ref().filter(|_| !s.is_host()) {
                     Some(m) => Mods::from_list(&m.mods),
                     None => self.cfg.mods.lobby(self.lobby_defense()),
                 }
             }
-            Some(s) if matches!(self.scene, Scene::Lobby) && !s.is_host() => {
+            Some(s) if self.in_lobby() && !s.is_host() => {
                 let lobby = s
                     .map
                     .as_ref()
@@ -8693,10 +8437,7 @@ impl State {
 
     fn toggle_mod(&mut self, m: mods::Mod) {
         // In a lobby the host picks the speed for everyone.
-        if m.shared()
-            && matches!(self.scene, Scene::Lobby)
-            && self.mp.as_ref().is_some_and(|s| !s.is_host())
-        {
+        if m.shared() && self.in_lobby() && self.mp.as_ref().is_some_and(|s| !s.is_host()) {
             self.toast(format!(
                 "the host picks the speed ({} is theirs to pick)",
                 m.acronym()
@@ -8704,7 +8445,7 @@ impl State {
             return;
         }
         // In Defense the host picks all of them, from the ones a team can have.
-        if matches!(self.scene, Scene::Lobby)
+        if self.in_lobby()
             && let Some(s) = self.mp.as_ref().filter(|_| self.lobby_defense().is_some())
         {
             if !s.is_host() {
@@ -8873,8 +8614,7 @@ impl State {
         let Some(p) = self.cfg.mod_presets.get(k).cloned() else {
             return;
         };
-        let guest =
-            matches!(self.scene, Scene::Lobby) && self.mp.as_ref().is_some_and(|s| !s.is_host());
+        let guest = self.in_lobby() && self.mp.as_ref().is_some_and(|s| !s.is_host());
         if guest && self.lobby_defense().is_some() {
             self.toast(
                 tr!(
@@ -8929,7 +8669,7 @@ impl State {
     /// Opens the mod customization on mod `m`'s tab.
     fn open_customization(&mut self, m: mods::Mod) {
         if m == mods::Mod::Random
-            && matches!(self.scene, Scene::Lobby)
+            && self.in_lobby()
             && self.mp.as_ref().is_some_and(|s| !s.is_host())
         {
             self.toast("The host picks the Random seed for this lobby".into());
@@ -9097,7 +8837,7 @@ impl State {
                 .is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none()
                 && !self.on_menu()
-                && (matches!(self.scene, Scene::Select | Scene::Lobby)
+                && (matches!(self.scene, Scene::Select)
                     || self.scene.screen().is_some_and(|s| s.tab().is_some())))
             || (matches!(self.scene, Scene::Settings { .. })
                 && self.settings_ui.binding.is_none()
@@ -9314,17 +9054,21 @@ impl State {
                 _ => None,
             };
         }
-        if let (Scene::Lobby, Some(typed)) = (
-            &self.scene,
-            self.mp.as_ref().and_then(|s| s.chat_input.as_ref()),
-        ) {
+        if let Some(typed) = self
+            .mp
+            .as_ref()
+            .and_then(|s| s.chat_input.as_ref())
+            .filter(|_| self.in_lobby())
+        {
             return Some(("Chat".into(), typed.clone()));
         }
         // The host typing a new lobby password (K).
-        if let (Scene::Lobby, Some(typed)) = (
-            &self.scene,
-            self.mp.as_ref().and_then(|s| s.edit_password.as_ref()),
-        ) {
+        if let Some(typed) = self
+            .mp
+            .as_ref()
+            .and_then(|s| s.edit_password.as_ref())
+            .filter(|_| self.in_lobby())
+        {
             return Some(("New lobby password".into(), typed.clone()));
         }
         None
@@ -10894,7 +10638,7 @@ impl State {
                     self.mp_connecting = None;
                     self.mp_status.clear();
                     if self.scene.screen_is::<MpMenu>() {
-                        self.scene = Scene::Lobby;
+                        self.scene = Lobby::scene();
                     }
                 }
                 Ok(Err(e)) => {
@@ -10957,7 +10701,7 @@ impl State {
                         g.game_over();
                         if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
                             self.picking_lobby_map = false;
-                            self.scene = Scene::Lobby;
+                            self.scene = Lobby::scene();
                         }
                     }
                     return;
@@ -10979,7 +10723,7 @@ impl State {
                         .screen_mut::<MpWait>()
                         .is_some_and(|w| w.start.is_none())
                 {
-                    self.scene = Scene::Lobby;
+                    self.scene = Lobby::scene();
                     self.toast("the match started without you (map didn't load in time)".into());
                 }
             }
@@ -11126,10 +10870,8 @@ impl State {
                 }
             }
             ServerMsg::Rejected(why) | ServerMsg::Disconnected(why) => {
-                let in_mp = matches!(
-                    self.scene,
-                    Scene::Lobby | Scene::MpPlay { .. } | Scene::Spectate(_)
-                ) || self.scene.screen().is_some_and(|s| s.in_room());
+                let in_mp = matches!(self.scene, Scene::MpPlay { .. } | Scene::Spectate(_))
+                    || self.scene.screen().is_some_and(|s| s.in_room());
                 self.toast(format!("multiplayer: {why}"));
                 self.mp = None;
                 self.picking_lobby_map = false;
@@ -11167,7 +10909,7 @@ impl State {
                 // Picking a guess: back to the lobby to see the answer.
                 if self.picking_lobby_map && matches!(self.scene, Scene::Select) {
                     self.picking_lobby_map = false;
-                    self.scene = Scene::Lobby;
+                    self.scene = Lobby::scene();
                 }
             }
             ServerMsg::Chat { from, text } => {
@@ -11570,7 +11312,7 @@ impl State {
                         s.client.send(net::ClientMsg::Spectate(false));
                     }
                     self.stop_audio();
-                    self.scene = Scene::Lobby;
+                    self.scene = Lobby::scene();
                 }
                 _ => {
                     if !repeat {
@@ -11580,8 +11322,8 @@ impl State {
             }
             return;
         }
-        if matches!(self.scene, Scene::Lobby | Scene::MpPlay { .. }) {
-            self.multiplayer_key(code, repeat, text, at, window);
+        if matches!(self.scene, Scene::MpPlay { .. }) {
+            self.multiplayer_key(code, repeat, at, window);
             return;
         }
         if self.mp.is_some()
@@ -11591,19 +11333,19 @@ impl State {
             && self.select.filter.is_empty()
             && !self.select.searching
         {
-            self.scene = Scene::Lobby;
+            self.scene = Lobby::scene();
             return;
         }
         if self.picking_lobby_map && matches!(self.scene, Scene::Select) && !repeat {
             match code {
                 KeyCode::Escape if self.select.filter.is_empty() && !self.select.searching => {
                     self.picking_lobby_map = false;
-                    self.scene = Scene::Lobby;
+                    self.scene = Lobby::scene();
                     return;
                 }
                 KeyCode::Tab | KeyCode::F1 => {
                     self.picking_lobby_map = false;
-                    self.scene = Scene::Lobby;
+                    self.scene = Lobby::scene();
                     return;
                 }
                 _ => {}
@@ -11785,11 +11527,7 @@ impl State {
                 }
             }
             Scene::Calibrate { .. } | Scene::Other(_) => {}
-            Scene::Lobby
-            | Scene::MpPlay { .. }
-            | Scene::Spectate(_)
-            | Scene::Watch(_)
-            | Scene::Editor(_) => {}
+            Scene::MpPlay { .. } | Scene::Spectate(_) | Scene::Watch(_) | Scene::Editor(_) => {}
             Scene::Play { game, .. } => match code {
                 KeyCode::KeyO => self.apply_live_offset(),
                 KeyCode::Tab => self.toggle_map_info(),
@@ -11999,8 +11737,7 @@ impl State {
             let in_select = self.in_song_select();
             let in_menu = in_select
                 || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
-                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby) || prev.screen_is::<Preview>())
-                || matches!(self.scene, Scene::Lobby)
+                || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select) || prev.screen().is_some_and(|s| s.room_lobby()) || prev.screen_is::<Preview>())
                 || self.scene.screen().is_some_and(|s| s.tab().is_some());
             let (entries, selected) = if browsing {
                 (&self.browse.remote, self.browse.shown)
@@ -12276,7 +12013,7 @@ impl State {
                 }
             }
         }
-        if !matches!(self.scene, Scene::Select | Scene::Lobby) {
+        if !(matches!(self.scene, Scene::Select) || self.in_lobby()) {
             self.mod_select = None;
         }
         if self.pick_to_edit && (self.main_menu.is_some() || !matches!(self.scene, Scene::Select)) {
@@ -13113,17 +12850,6 @@ impl State {
                 }
                 results.draw(canvas);
             }
-            Scene::Lobby => match &self.mp {
-                Some(s) if s.mapguessr => {
-                    if let Some(g) = &mut self.guessr {
-                        mapguessr::draw_lobby(canvas, s, g, self.cfg.scroll_speed, Instant::now());
-                    }
-                }
-                Some(s) => {
-                    multiplayer::draw_lobby(canvas, s, s.have_map, lobby_download);
-                }
-                None => next = Some(MpMenu::scene()),
-            },
             Scene::MpPlay { game, .. } => {
                 let done = game.update(now, sound(&self.audio), self.play_offset);
                 if self.auto || game.mods().has(mods::Mod::Autoplay) {
@@ -13204,10 +12930,10 @@ impl State {
                     Some(Some(Ok(l))) => v.loaded = Some(l),
                     Some(Some(Err(e))) => {
                         self.status = format!("can't spectate: {e}");
-                        next = Some(Scene::Lobby);
+                        next = Some(Lobby::scene());
                     }
                     None => {}
-                    Some(None) => next = Some(Scene::Lobby),
+                    Some(None) => next = Some(Lobby::scene()),
                 }
                 if v.ended
                     .is_some_and(|t| now >= t + SPECTATE_DELAY + Duration::from_millis(500))
@@ -13492,6 +13218,7 @@ impl State {
                     preview_target,
                     lobby_host,
                     size_label: &size_label,
+                    lobby_download,
                 };
                 if let Some(s) = self.draw_screen(canvas, &frame) {
                     next = Some(s);
@@ -13590,7 +13317,7 @@ impl State {
         }
         self.draw_mobile_rate(canvas);
         if let Some(cur) = self.mod_select {
-            let seed = if matches!(self.scene, Scene::Lobby) {
+            let seed = if self.in_lobby() {
                 self.mp
                     .as_ref()
                     .and_then(|s| s.map.as_ref())
@@ -14840,7 +14567,7 @@ impl State {
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
-        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby) || prev.screen().is_some_and(|s| s.tab().is_some()));
+        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select) || prev.screen().is_some_and(|s| s.tab().is_some()));
         match (&self.scene, tab) {
             (Scene::Select, 1) => self.open_settings(),
             (Scene::Select, 2) => {
@@ -14855,9 +14582,7 @@ impl State {
                 self.close_settings();
                 self.open_multiplayer();
             }
-            (Scene::Lobby, 0) => self.show_songs(),
-            (Scene::Lobby, 1) => self.open_settings(),
-            (Scene::Select | Scene::Lobby, 3) => self.open_download(),
+            (Scene::Select, 3) => self.open_download(),
             (Scene::Settings { .. }, 3) if settings_from_menu => {
                 self.close_settings();
                 self.open_download();

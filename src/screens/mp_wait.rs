@@ -80,7 +80,7 @@ impl Screen for MpWait {
                     ..Default::default()
                 }));
             }
-            state.scene = Scene::Lobby;
+            state.scene = super::lobby::Lobby::scene();
         }
     }
 
@@ -98,10 +98,10 @@ impl Screen for MpWait {
                     s.client.send(net::ClientMsg::Loaded(false));
                 }
                 state.status = format!("failed to load map: {e}");
-                next = Some(Scene::Lobby);
+                next = Some(super::lobby::Lobby::scene());
             }
             None => {}
-            Some(None) => next = Some(Scene::Lobby),
+            Some(None) => next = Some(super::lobby::Lobby::scene()),
         }
         if self.start.is_some_and(|at| frame.now >= at)
             && let Some(loaded) = self.loaded.take()

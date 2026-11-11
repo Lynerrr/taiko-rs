@@ -693,7 +693,7 @@ fn guest(tag: &str, chart: maps::Chart, room: &FakeRoom) -> (State, Songs, Insta
     ready(&mut s, &mut now);
     let client = net::Client::connect(&room.addr, "me", None).unwrap();
     s.mp = Some(multiplayer::joined(client, "regression room"));
-    s.scene = Scene::Lobby;
+    s.scene = crate::screens::lobby::Lobby::scene();
     room.send(&ServerMsg::Welcome { id: 2 });
     now += Duration::from_millis(16);
     frame(&mut s, now);
