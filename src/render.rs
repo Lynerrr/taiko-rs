@@ -3611,6 +3611,21 @@ impl<H> Canvas<H> {
                 hh * scale,
             ];
         }
+        // Clips of what moved go with it: a .tko map's slices cut the playfield into strips, and
+        // a play area smaller than the screen (`layout::end`) would otherwise show each strip's
+        // copy through a strip that stayed where it was, cutting off the drum and the target.
+        for (range, rect) in self.clips.iter_mut().filter(|(r, _)| r.start >= start) {
+            if range.start >= range.end {
+                continue;
+            }
+            let [x, y, w, hh] = *rect;
+            *rect = [
+                anchor[0] + (x - anchor[0]) * scale + dx,
+                anchor[1] + (y - anchor[1]) * scale + dy,
+                w * scale,
+                hh * scale,
+            ];
+        }
     }
 
     /// Turns every shape drawn since `start` by `angle` (radians, clockwise on screen) and scales
@@ -3883,6 +3898,27 @@ impl<H> Canvas<H> {
 
 #[cfg(test)]
 mod tests {
+    /// Moving what was drawn since a point moves its clips with it (a .tko map's slices in a play
+    /// area smaller than the screen), and leaves the clips of what came before alone.
+    #[test]
+    fn moving_shapes_moves_their_clips_and_only_theirs() {
+        let mut c = super::Canvas::<()>::default();
+        c.clear(800.0);
+        c.rect(0.0, 0.0, 10.0, 10.0, super::rgba(0xffffff, 1.0));
+        c.clip_since(0, 0.0, 0.0, 400.0, 480.0);
+        let start = c.shapes.len();
+        c.rect(100.0, 100.0, 40.0, 40.0, super::rgba(0xffffff, 1.0));
+        c.clip_since(start, 90.0, 80.0, 60.0, 100.0);
+        c.transform_since(start, [0.0, 0.0], 0.5, 80.0, 48.0);
+        assert_eq!(c.clips[0].1, [0.0, 0.0, 400.0, 480.0]);
+        assert_eq!(c.clips[1].1, [125.0, 88.0, 30.0, 50.0]);
+        // The strip still holds the shape it showed.
+        let s = c.shapes[start];
+        let [x, y, w, h] = c.clips[1].1;
+        assert!(s.center[0] - s.half[0] >= x && s.center[0] + s.half[0] <= x + w);
+        assert!(s.center[1] - s.half[1] >= y && s.center[1] + s.half[1] <= y + h);
+    }
+
     #[test]
     fn nested_clips_flatten_to_the_part_both_allow() {
         let frame = [0.0, 0.0, 0.5, 1.0];
