@@ -470,7 +470,6 @@ impl State {
                 || matches!(
                     self.scene,
                     Scene::Settings { .. }
-                        | Scene::Download
                         | Scene::Results { .. }
                         | Scene::MpMenu
                         | Scene::Lobby

@@ -2,6 +2,7 @@
 //! what lib.rs drew and did for each screen; the screens themselves follow (step 7).
 
 pub(crate) mod calibrate_done;
+pub(crate) mod download;
 pub(crate) mod editor_home;
 pub(crate) mod hud_editor;
 pub(crate) mod layout_edit;

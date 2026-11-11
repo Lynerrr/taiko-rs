@@ -111,6 +111,28 @@ pub(crate) trait Screen: Any + Send {
     fn map_from_song_select(&self) -> bool {
         false
     }
+    /// It is a tab of the top bar (songs 0, settings 1, multiplayer 2, downloads 3).
+    fn tab(&self) -> Option<usize> {
+        None
+    }
+    /// It previews remote maps (the download tab's search results) through song select's
+    /// preview.
+    fn previews_remote(&self) -> bool {
+        false
+    }
+    /// The idle screen may come up over it.
+    fn idle_allowed(&self) -> bool {
+        false
+    }
+    /// The update badge and what's new sit in its corner, and the app may restart there to
+    /// update.
+    fn update_corner(&self) -> bool {
+        false
+    }
+    /// Which menu screen it is, for telling when the menus change (`State::menu_screen`).
+    fn menu_screen(&self) -> Option<u8> {
+        None
+    }
     /// Settings can open over it.
     fn allows_settings(&self) -> bool {
         false
@@ -164,6 +186,11 @@ struct Shadow {
     song_select: bool,
     map_from_song_select: bool,
     allows_settings: bool,
+    tab: Option<usize>,
+    previews_remote: bool,
+    idle_allowed: bool,
+    update_corner: bool,
+    menu_screen: Option<u8>,
     typing: bool,
     editor: bool,
     chip_from_right: Option<f32>,
@@ -194,6 +221,11 @@ impl Shadow {
             song_select: screen.song_select(),
             map_from_song_select: screen.map_from_song_select(),
             allows_settings: screen.allows_settings(),
+            tab: screen.tab(),
+            previews_remote: screen.previews_remote(),
+            idle_allowed: screen.idle_allowed(),
+            update_corner: screen.update_corner(),
+            menu_screen: screen.menu_screen(),
             typing: screen.typing(),
             editor: screen.editor(),
             chip_from_right: screen.chip_from_right(),
@@ -257,6 +289,21 @@ impl Screen for Shadow {
     }
     fn allows_settings(&self) -> bool {
         self.allows_settings
+    }
+    fn tab(&self) -> Option<usize> {
+        self.tab
+    }
+    fn previews_remote(&self) -> bool {
+        self.previews_remote
+    }
+    fn idle_allowed(&self) -> bool {
+        self.idle_allowed
+    }
+    fn update_corner(&self) -> bool {
+        self.update_corner
+    }
+    fn menu_screen(&self) -> Option<u8> {
+        self.menu_screen
     }
     fn typing(&self) -> bool {
         self.typing
@@ -425,6 +472,7 @@ mod tests {
         "HudEdit",
         "EditorHome",
         "Preview",
+        "Download",
     ];
 
     #[test]

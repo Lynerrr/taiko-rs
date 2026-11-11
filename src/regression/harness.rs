@@ -294,7 +294,6 @@ pub fn scene_name(s: &State) -> &'static str {
         Scene::Settings { .. } => "Settings",
         Scene::Calibrate { .. } => "Calibrate",
         Scene::Other(s) => s.name(),
-        Scene::Download => "Download",
         Scene::MpMenu => "MpMenu",
         Scene::Lobby => "Lobby",
         Scene::MpWait { .. } => "MpWait",

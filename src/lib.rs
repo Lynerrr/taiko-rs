@@ -215,8 +215,6 @@ enum Scene {
         back: Box<Scene>,
         vsync: bool,
     },
-    /// Download tab: search the mirrors, download sets into the Songs folder.
-    Download,
     /// Multiplayer: host/join form, room lobby, waiting/countdown, match, results.
     MpMenu,
     Lobby,
@@ -929,16 +927,16 @@ impl State {
 
     /// Screens that go idle after a while: menus and lists, never a song or an open dialog.
     fn idle_allowed(&self) -> bool {
-        matches!(
+        (matches!(
             self.scene,
             Scene::Select
                 | Scene::Settings { .. }
-                | Scene::Download
                 | Scene::MpMenu
                 | Scene::Lobby
                 | Scene::Results { .. }
                 | Scene::MpResults
-        ) && !self.quit_asked
+        ) || self.scene.screen().is_some_and(|s| s.idle_allowed()))
+            && !self.quit_asked
             && self.crash.is_none()
             && self.splash.is_none()
             && self.settings_ui.binding.is_none()
@@ -1555,10 +1553,8 @@ impl State {
                 }
             }
         }
-        let free = (matches!(
-            self.scene,
-            Scene::Select | Scene::Results { .. } | Scene::Download
-        ) || self.scene.screen().is_some_and(|s| s.song_select()))
+        let free = (matches!(self.scene, Scene::Select | Scene::Results { .. })
+            || self.scene.screen().is_some_and(|s| s.song_select()))
             && self.mp.is_none();
         if self.scan.is_some() || !free {
             return;
@@ -2021,11 +2017,7 @@ impl State {
         }
         match &mut self.scene {
             Scene::Play { game, .. } => game.pause(sound(&self.audio)),
-            Scene::Select
-            | Scene::Download
-            | Scene::MpMenu
-            | Scene::Lobby
-            | Scene::Results { .. } => {}
+            Scene::Select | Scene::MpMenu | Scene::Lobby | Scene::Results { .. } => {}
             Scene::Other(s) if s.allows_settings() => {}
             _ => {
                 self.toast(
@@ -2056,7 +2048,7 @@ impl State {
             Scene::Select => Some(1),
             Scene::Results { .. } => Some(2),
             Scene::Settings { .. } => Some(3),
-            Scene::Download => Some(4),
+            Scene::Other(ref s) => s.menu_screen(),
             Scene::MpMenu => Some(5),
             Scene::Lobby => Some(6),
             Scene::MpResults => Some(7),
@@ -4170,7 +4162,8 @@ impl State {
             Scene::Settings { prev } => prev.as_ref(),
             scene => scene,
         };
-        matches!(scene, Scene::Select | Scene::MpMenu | Scene::Download)
+        (matches!(scene, Scene::Select | Scene::MpMenu)
+            || scene.screen().is_some_and(|s| s.update_corner()))
             && self.mp.is_none()
             && self.splash.is_none()
     }
@@ -4181,8 +4174,8 @@ impl State {
         // What's new, top right in the menus (left of the update badge when there is one).
         let menus = matches!(
             self.scene,
-            Scene::Select | Scene::Settings { .. } | Scene::MpMenu | Scene::Download
-        );
+            Scene::Select | Scene::Settings { .. } | Scene::MpMenu
+        ) || self.scene.screen().is_some_and(|s| s.update_corner());
         if menus
             && !self.mobile_bar()
             && self.splash.is_none()
@@ -4416,7 +4409,7 @@ impl State {
         let entry = match &self.scene {
             // A custom map's preview may show its own pictures (the results' covers come from
             // their own folder, `pictures::COVER_PREFIX`).
-            Scene::Download => {
+            Scene::Other(s) if s.previews_remote() => {
                 return self
                     .browse
                     .shown
@@ -4831,15 +4824,6 @@ impl State {
                     song,
                 )
             }
-            Scene::Download => (
-                tr!(
-                    "Looking for new maps",
-                    "新しい譜面を探しています",
-                    "Ищет новые карты"
-                )
-                .into(),
-                String::new(),
-            ),
             Scene::Settings { .. } => (
                 tr!("Tweaking settings", "設定を調整中", "Копается в настройках").into(),
                 String::new(),
@@ -6229,13 +6213,15 @@ impl State {
                     .map(|c| (c as i32 - notches).clamp(0, n - 1) as usize);
             }
             Scene::Select => self.select.scroll_by(-notches, &self.library),
-            Scene::Download
-                if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() =>
+            Scene::Other(s)
+                if s.previews_remote()
+                    && self.preview_on_top(vx, vy)
+                    && self.preview.time_at(vx, vy).is_some() =>
             {
                 self.preview
                     .seek_by(notches as f64 * 5000.0, self.audio.as_ref())
             }
-            Scene::Download => self.browse.scroll_by(notches),
+            Scene::Other(s) if s.previews_remote() => self.browse.scroll_by(notches),
             Scene::Settings { .. } if self.settings_ui.dropdown.is_some() => {
                 if let Some(dd) = &mut self.settings_ui.dropdown {
                     dd.wheel(notches);
@@ -8075,7 +8061,6 @@ impl State {
             Scene::Settings { .. } => "settings",
             Scene::Calibrate { .. } => "calibration",
             Scene::Other(s) => s.activity(),
-            Scene::Download => "downloads",
             Scene::MpMenu => "multiplayer menu",
             Scene::Lobby => "lobby",
             Scene::MpWait { .. } | Scene::MpPlay { .. } => "multiplayer match",
@@ -9193,10 +9178,8 @@ impl State {
                 .is_some_and(|u| u.typing.is_some())
             || (self.mod_select.is_none()
                 && !self.on_menu()
-                && matches!(
-                    self.scene,
-                    Scene::Select | Scene::Download | Scene::MpMenu | Scene::Lobby
-                ))
+                && (matches!(self.scene, Scene::Select | Scene::MpMenu | Scene::Lobby)
+                    || self.scene.screen().is_some_and(|s| s.tab().is_some())))
             || (matches!(self.scene, Scene::Settings { .. })
                 && self.settings_ui.binding.is_none()
                 && self.settings_ui.choices.is_none()
@@ -9514,7 +9497,7 @@ impl State {
                 .selected()
                 .and_then(|i| self.library.get(i))
                 .map(Entry::label),
-            Scene::Download => self.browse.selected().map(|s| {
+            Scene::Other(s) if s.previews_remote() => self.browse.selected().map(|s| {
                 format!(
                     "{} - {}  https://osu.ppy.sh/beatmapsets/{}",
                     s.artist, s.title, s.id
@@ -9851,8 +9834,7 @@ impl State {
     /// Song select, or a screen that is part of it (its fullscreen preview, the download tab):
     /// the song list's pointer, the preview panel and the map's stars work there.
     fn in_song_select(&self) -> bool {
-        matches!(self.scene, Scene::Select | Scene::Download)
-            || self.scene.screen().is_some_and(|s| s.song_select())
+        matches!(self.scene, Scene::Select) || self.scene.screen().is_some_and(|s| s.song_select())
     }
 
     /// The map editor or its start screen: the friends chip replaces the edge tab there, and an
@@ -11619,21 +11601,6 @@ impl State {
             self.calibration_key(code, repeat, at, window);
             return;
         }
-        if matches!(self.scene, Scene::Download) {
-            if !repeat
-                || matches!(
-                    code,
-                    KeyCode::ArrowUp
-                        | KeyCode::ArrowDown
-                        | KeyCode::Backspace
-                        | KeyCode::PageUp
-                        | KeyCode::PageDown
-                )
-            {
-                self.download_key(code, text, window);
-            }
-            return;
-        }
         // Any key closes the row menu; Esc does nothing else.
         if matches!(self.scene, Scene::Select)
             && self.select.menu.take().is_some()
@@ -11911,7 +11878,7 @@ impl State {
                     self.settings_key(code, window);
                 }
             }
-            Scene::Calibrate { .. } | Scene::Other(_) | Scene::Download => {}
+            Scene::Calibrate { .. } | Scene::Other(_) => {}
             Scene::MpMenu
             | Scene::Lobby
             | Scene::MpWait { .. }
@@ -12121,7 +12088,7 @@ impl State {
         self.poll_data_move();
         {
             // The Download tab previews remote maps through the same preview.
-            let browsing = matches!(self.scene, Scene::Download);
+            let browsing = self.scene.screen().is_some_and(|s| s.previews_remote());
             if browsing != self.preview_remote {
                 self.preview_remote = browsing;
                 self.preview.forget();
@@ -12130,7 +12097,8 @@ impl State {
             let in_menu = in_select
                 || matches!(&self.scene, Scene::Results { results, .. } if results.opened.is_some() && results.music.is_none())
                 || matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby) || prev.screen_is::<Preview>())
-                || matches!(self.scene, Scene::MpMenu | Scene::Lobby | Scene::Download);
+                || matches!(self.scene, Scene::MpMenu | Scene::Lobby)
+                || self.scene.screen().is_some_and(|s| s.tab().is_some());
             let (entries, selected) = if browsing {
                 (&self.browse.remote, self.browse.shown)
             } else {
@@ -13243,58 +13211,6 @@ impl State {
                 }
                 results.draw(canvas);
             }
-            Scene::Download => {
-                let installed = self.installed_sets.take().unwrap_or_default();
-                let dir = self.songs_dir.display().to_string();
-                let lw = Select::list_width(canvas.width, self.cfg.song_list_share);
-                self.preview.size = preview::PREVIEW_SIZE.1;
-                let phone = mobile::active();
-                if phone {
-                    let custom: std::collections::HashSet<u32> =
-                        self.select.custom_folder.values().copied().collect();
-                    self.draw_mobile_download(canvas, &installed, &custom);
-                } else {
-                    let custom = &self.select.custom_folder;
-                    let is_installed = |set: &download::SetInfo| match set.custom {
-                        Some(_) => custom.values().any(|&id| id == set.id),
-                        None => installed.contains(&set.id),
-                    };
-                    self.browse
-                        .draw(canvas, &self.downloads, &is_installed, &dir, lw);
-                }
-                self.installed_sets = Some(installed);
-                // The selected set's preview, like song select's.
-                let x = 24.0 + lw + 12.0;
-                let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
-                let stars = self.browse.selected_stars();
-                if pw > 160.0 && self.browse.selected().is_some() {
-                    match self.preview.draw_panel(
-                        canvas,
-                        &self.browse.remote,
-                        x,
-                        54.0,
-                        pw,
-                        380.0,
-                        self.cfg.scroll_speed,
-                        stars,
-                        None,
-                        None,
-                        None,
-                    ) {
-                        Some(clip) => self.frame_clip = Some(clip),
-                        None if self.browse.shown.is_none() => {
-                            canvas.text_centered(
-                                x + pw / 2.0,
-                                160.0,
-                                8.0,
-                                rgba(0x8a8aa0, 1.0),
-                                "loading preview...",
-                            );
-                        }
-                        None => {}
-                    }
-                }
-            }
             Scene::MpMenu => {
                 multiplayer::draw_menu(
                     canvas,
@@ -14247,13 +14163,6 @@ impl State {
             .get_or_insert_with(|| library.iter().filter_map(Entry::set_id).collect())
     }
 
-    fn open_download(&mut self) {
-        self.picking_lobby_map = false;
-        self.installed_sets();
-        self.browse.opened();
-        self.scene = Scene::Download;
-    }
-
     /// Downloads a set unless it's already here or on its way.
     fn start_download(&mut self, set: download::SetInfo) {
         let here = match set.custom {
@@ -15095,69 +15004,6 @@ impl State {
         self.toast(text);
     }
 
-    fn download_key(&mut self, code: KeyCode, text: Option<&str>, window: Option<&Window>) {
-        let function_key = matches!(
-            code,
-            KeyCode::F1
-                | KeyCode::F2
-                | KeyCode::F3
-                | KeyCode::F4
-                | KeyCode::F7
-                | KeyCode::F8
-                | KeyCode::F9
-                | KeyCode::F10
-                | KeyCode::F11
-                | KeyCode::F12
-        );
-        if function_key && self.handle_global_key(code, window) {
-            return;
-        }
-        match code {
-            KeyCode::ArrowLeft | KeyCode::ArrowRight if self.modifiers_ctrl => self
-                .browse
-                .step_category(if code == KeyCode::ArrowRight { 1 } else { -1 }),
-            KeyCode::ArrowUp | KeyCode::ArrowDown if self.modifiers_ctrl => self
-                .browse
-                .step_sort(if code == KeyCode::ArrowDown { 1 } else { -1 }),
-            KeyCode::Tab if self.modifiers_ctrl => {
-                let next = match self.browse.source() {
-                    browse::Source::Osu => browse::Source::Ours,
-                    browse::Source::Ours => browse::Source::Osu,
-                };
-                self.browse.set_source(next);
-            }
-            KeyCode::ArrowUp => self.browse.move_by(-1),
-            KeyCode::ArrowDown => self.browse.move_by(1),
-            KeyCode::ArrowLeft => self.browse.cycle_diff(-1),
-            KeyCode::ArrowRight => self.browse.cycle_diff(1),
-            KeyCode::PageUp => self.browse.move_by(-8),
-            KeyCode::PageDown => self.browse.move_by(8),
-            KeyCode::Enter | KeyCode::NumpadEnter => {
-                if let Some(set) = self.browse.selected().cloned() {
-                    let here = match set.custom {
-                        Some(_) => self.select.custom_folder.values().any(|&id| id == set.id),
-                        None => self.installed_sets().contains(&set.id),
-                    };
-                    if here {
-                        self.play_downloaded(&set);
-                    } else {
-                        self.start_download(set);
-                    }
-                }
-            }
-            KeyCode::Escape if self.browse.menu.is_some() => self.browse.menu = None,
-            KeyCode::Backspace if self.modifiers_ctrl => self.browse.clear(),
-            KeyCode::Backspace => self.browse.backspace(),
-            KeyCode::Escape if !self.browse.query.is_empty() => self.browse.clear(),
-            KeyCode::Escape | KeyCode::Tab => self.scene = Scene::Select,
-            _ => {
-                if let Some(text) = text {
-                    self.browse.type_text(text);
-                }
-            }
-        }
-    }
-
     /// The topmost clickable thing under (`x`, `y`), from the last frame.
     /// Whether the song preview is the topmost thing at a point, so it takes the pointer there.
     /// Anything drawn over it (the friends panel, a drop-down, the changelog) gets it instead.
@@ -15166,7 +15012,8 @@ impl State {
         // drawn before the preview, so its click-away area is under it.
         self.mod_select.is_none()
             && self.settings_ui.dropdown.is_none()
-            && !(matches!(self.scene, Scene::Download) && self.browse.menu.is_some())
+            && !(self.scene.screen().is_some_and(|s| s.previews_remote())
+                && self.browse.menu.is_some())
             && matches!(self.hit_at(x, y), Some(hit::Hit::Preview))
     }
 
@@ -15190,7 +15037,7 @@ impl State {
     /// Switches between the top bar's tabs (songs, settings, multiplayer) from the screens that
     /// show it.
     fn goto_tab(&mut self, tab: usize) {
-        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::MpMenu | Scene::Download));
+        let settings_from_menu = matches!(&self.scene, Scene::Settings { prev } if matches!(**prev, Scene::Select | Scene::Lobby | Scene::MpMenu) || prev.screen().is_some_and(|s| s.tab().is_some()));
         match (&self.scene, tab) {
             (Scene::Select, 1) => self.open_settings(),
             (Scene::Select, 2) => {
@@ -15212,9 +15059,9 @@ impl State {
                 self.close_settings();
                 self.open_download();
             }
-            (Scene::Download, 0) => self.show_songs(),
-            (Scene::Download, 1) => self.open_settings(),
-            (Scene::Download, 2) => self.open_multiplayer(),
+            (Scene::Other(s), 0) if s.tab().is_some() => self.show_songs(),
+            (Scene::Other(s), 1) if s.tab().is_some() => self.open_settings(),
+            (Scene::Other(s), 2) if s.tab().is_some() => self.open_multiplayer(),
             _ => {}
         }
     }
