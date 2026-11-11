@@ -25,6 +25,8 @@ pub(crate) struct Frame<'a> {
     pub(crate) lobby_download: Option<(String, Option<f32>)>,
     /// How far ahead the notes are drawn, in ms (the visual offset and the vsync lead).
     pub(crate) visual_offset: f64,
+    /// The interface's parts hidden in a song.
+    pub(crate) hidden: hud::Parts,
 }
 
 /// A key pressed, as a screen gets it.
@@ -473,6 +475,15 @@ impl Scene {
         (std::mem::discriminant(self), screen)
     }
 
+    /// A song is played on it (by the player, a replay or autoplay): `Scene::Play` or a screen
+    /// with its game in `State::play` that isn't a calibration run.
+    pub(crate) fn plays_song(&self) -> bool {
+        matches!(self, Scene::Play { .. })
+            || self
+                .screen()
+                .is_some_and(|s| s.holds_game() && s.calibration().is_none())
+    }
+
     /// The screen up, if it is one of those outside lib.rs.
     pub(crate) fn screen(&self) -> Option<&dyn Screen> {
         match self {
@@ -614,6 +625,7 @@ mod tests {
         "Results",
         "Settings",
         "Calibrate",
+        "MpPlay",
     ];
 
     #[test]

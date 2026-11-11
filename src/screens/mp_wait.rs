@@ -1,5 +1,5 @@
 //! Waiting for a multiplayer match to start: the room's map loads, the server is told it
-//! did, and at the start time the server set the match begins (`Scene::MpPlay`).
+//! did, and at the start time the server set the match begins (`screens::mp_play`).
 
 use super::screen::{Frame, Key, Screen};
 use crate::*;
@@ -157,7 +157,7 @@ impl Screen for MpWait {
                 s.skip_votes = None;
             }
             state.play = Some(Box::new(game));
-            next = Some(Scene::MpPlay { quit_armed: None });
+            next = Some(super::mp_play::MpPlay::scene());
         }
         if let Some(s) = &state.mp {
             multiplayer::draw_waiting(canvas, s, self.start, self.loaded.is_some(), frame.now);

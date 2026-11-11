@@ -10,6 +10,7 @@ pub(crate) mod layout_edit;
 pub(crate) mod lobby;
 pub(crate) mod menu;
 pub(crate) mod mp_menu;
+pub(crate) mod mp_play;
 pub(crate) mod mp_results;
 pub(crate) mod mp_wait;
 pub(crate) mod play;
