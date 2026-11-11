@@ -11982,6 +11982,11 @@ impl State {
         let folder = s
             .map_entry
             .and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
+        // Only a set folder in the Songs folders (or an opened .osz's) is sent, never the folder
+        // a loose map happens to be in: any player in the lobby can ask for it.
+        let mut roots = self.song_dirs.clone();
+        roots.push(self.songs_dir.clone());
+        roots.push(library::extracted_dir());
         std::thread::spawn(move || {
             let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part }).is_ok();
             let error = |why: String| net::MapPart {
@@ -11995,6 +12000,12 @@ impl State {
                 send(error("the host doesn't have the map either".into()));
                 return;
             };
+            if !download::is_set_folder(&folder, &roots) {
+                send(error(
+                    "the host's map isn't in a set folder of its own".into(),
+                ));
+                return;
+            }
             let name = folder
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
