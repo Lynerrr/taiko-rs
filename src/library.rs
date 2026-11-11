@@ -493,6 +493,28 @@ fn is_dir(e: &std::fs::DirEntry) -> bool {
         .is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir()))
 }
 
+/// A path the library can read when given on the command line: a folder, a map or a map
+/// archive.
+fn is_library_input(p: &Path) -> bool {
+    p.is_dir() || (p.is_file() && (is_map_file(p) || is_map_archive(p)))
+}
+
+/// What the library scans at start: what the command line gives that it can read, else the
+/// usual song folders. A file it can't read (one a file manager opened the game with) is
+/// skipped rather than leaving song select empty.
+pub(crate) fn startup_inputs(args: &[PathBuf], cfg: &Config) -> Vec<PathBuf> {
+    let given: Vec<PathBuf> = args
+        .iter()
+        .filter(|a| is_library_input(a))
+        .cloned()
+        .collect();
+    if given.is_empty() {
+        song_inputs(cfg)
+    } else {
+        given
+    }
+}
+
 /// A chart file: `.osu`, or `.tko` (an `.osu` with the client's own gimmicks added).
 pub(crate) fn is_map_file(p: &Path) -> bool {
     p.extension()
@@ -989,6 +1011,35 @@ pub(crate) fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file the game was opened with that it can't read (an archive type it doesn't know, a
+    /// path that isn't there) leaves the usual songs in place instead of an empty list.
+    #[test]
+    fn a_file_the_library_cant_read_on_the_command_line_keeps_the_usual_songs() {
+        let root = std::env::temp_dir().join(format!("taiko-rs-args-{}", std::process::id()));
+        let songs = root.join("Songs");
+        std::fs::create_dir_all(&songs).unwrap();
+        let unknown = root.join("set.zip");
+        std::fs::write(&unknown, b"zip").unwrap();
+        let cfg = Config {
+            songs: vec![songs.clone()],
+            ..Config::default()
+        };
+        let usual = song_inputs(&cfg);
+        assert!(usual.contains(&songs));
+        assert_eq!(startup_inputs(&[], &cfg), usual);
+        assert_eq!(startup_inputs(std::slice::from_ref(&unknown), &cfg), usual);
+        assert_eq!(startup_inputs(&[root.join("gone.rsz")], &cfg), usual);
+        // What it can read is what it scans.
+        let map = root.join("a.osu");
+        std::fs::write(&map, b"osu").unwrap();
+        assert_eq!(startup_inputs(&[unknown, map.clone()], &cfg), vec![map]);
+        assert_eq!(
+            startup_inputs(std::slice::from_ref(&songs), &cfg),
+            vec![songs]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn an_osz_already_in_the_list_adds_nothing() {

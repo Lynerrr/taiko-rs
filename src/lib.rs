@@ -1692,20 +1692,29 @@ impl State {
 
     fn apply_volume(&self) {
         if let Some(a) = &self.audio {
-            let (music, fx) = self.heard_volumes();
+            let (music, fx) = self.cfg.volumes();
             a.set_volume(music, fx);
+            // The mixer fades to it (`audio::FOCUS_FADE_OUT`).
+            a.set_focus(self.focus_level());
         }
     }
 
-    /// Music and hitsound volume as played now: lower while another window has focus.
-    fn heard_volumes(&self) -> (f32, f32) {
-        let (music, fx) = self.cfg.volumes();
+    /// The share of the volume heard with the focus where it is: less while another window has
+    /// it.
+    fn focus_level(&self) -> f32 {
         // A phone's other apps aren't beside it: the music plays on at its own volume.
-        let left = if self.focused || mobile::active() {
+        if self.focused || mobile::active() {
             1.0
         } else {
             self.cfg.unfocused_volume
-        };
+        }
+    }
+
+    /// Music and hitsound volume where they settle: lower while another window has focus.
+    #[cfg(test)]
+    fn heard_volumes(&self) -> (f32, f32) {
+        let (music, fx) = self.cfg.volumes();
+        let left = self.focus_level();
         (music * left, fx * left)
     }
 

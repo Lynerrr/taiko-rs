@@ -147,7 +147,7 @@ pub struct Engine {
     stamp: Arc<Mutex<Stamp>>,
     /// The last Play / Seek sent.
     epoch: AtomicU64,
-    volume: Arc<[AtomicU32; 2]>,
+    volume: Arc<[AtomicU32; 3]>,
     pub rate: u32,
     pub description: String,
 }
@@ -177,6 +177,7 @@ impl Engine {
         }));
         let volume = Arc::new([
             AtomicU32::new(0.8f32.to_bits()),
+            AtomicU32::new(1.0f32.to_bits()),
             AtomicU32::new(1.0f32.to_bits()),
         ]);
         let fmt = supported.sample_format();
@@ -306,6 +307,12 @@ impl Engine {
     pub fn set_volume(&self, music: f32, effects: f32) {
         self.volume[0].store(music.to_bits(), Ordering::Relaxed);
         self.volume[1].store(effects.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The share of both volumes heard while the window has the focus or not (1 = all). The
+    /// mixer fades to it: down over `FOCUS_FADE_OUT`, back up over `FOCUS_FADE_IN`.
+    pub fn set_focus(&self, level: f32) {
+        self.volume[2].store(level.to_bits(), Ordering::Relaxed);
     }
 
     /// The output latency (ms) the clock goes by, and what the stream reports.
@@ -456,7 +463,7 @@ struct Mixer {
     rx: Receiver<Cmd>,
     gc: Sender<Garbage>,
     stamp: Arc<Mutex<Stamp>>,
-    volume: Arc<[AtomicU32; 2]>,
+    volume: Arc<[AtomicU32; 3]>,
     channels: usize,
     rate: u32,
     steady: SteadyLatency,
@@ -473,6 +480,23 @@ struct Mixer {
     pending: Vec<Pending>,
     sounds: Arc<Sounds>,
     limiter: Limiter,
+    /// The focus's share of the volume as heard now, on its way to `volume[2]`.
+    focus: f32,
+}
+
+/// How long the volume takes to fall all the way when the window loses the focus: slow, so
+/// a glance at another window doesn't cut the music.
+const FOCUS_FADE_OUT: f32 = 1.5;
+/// And to come back with the focus: quick, the player is back.
+const FOCUS_FADE_IN: f32 = 0.25;
+
+/// The focus's share of the volume `secs` later, from `at` towards `to`.
+fn focus_step(at: f32, to: f32, secs: f32) -> f32 {
+    if to < at {
+        (at - secs / FOCUS_FADE_OUT).max(to)
+    } else {
+        (at + secs / FOCUS_FADE_IN).min(to)
+    }
 }
 
 impl Mixer {
@@ -480,7 +504,7 @@ impl Mixer {
         rx: Receiver<Cmd>,
         gc: Sender<Garbage>,
         stamp: Arc<Mutex<Stamp>>,
-        volume: Arc<[AtomicU32; 2]>,
+        volume: Arc<[AtomicU32; 3]>,
         rate: u32,
         channels: usize,
     ) -> Mixer {
@@ -503,6 +527,7 @@ impl Mixer {
             pending: Vec::with_capacity(PENDING_CAPACITY),
             sounds,
             limiter: Limiter::new(rate),
+            focus: 1.0,
         }
     }
 
@@ -620,9 +645,12 @@ impl Mixer {
             };
         }
 
-        let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed));
-        let fx_vol = f32::from_bits(self.volume[1].load(Ordering::Relaxed));
         let ch = self.channels;
+        let focus_to = f32::from_bits(self.volume[2].load(Ordering::Relaxed));
+        let secs = (out.len() / ch.max(1)) as f32 / self.rate.max(1) as f32;
+        self.focus = focus_step(self.focus, focus_to, secs);
+        let music_vol = f32::from_bits(self.volume[0].load(Ordering::Relaxed)) * self.focus;
+        let fx_vol = f32::from_bits(self.volume[1].load(Ordering::Relaxed)) * self.focus;
         // A stream's frames for this callback. Where they run out inside the song, the position
         // holds, so that the music comes back still on the notes.
         let stream = self.track.as_ref().and_then(|t| t.stream.as_ref());
@@ -891,6 +919,31 @@ mod tests {
         assert!(hi / lo < 1.02, "{lo}..{hi}");
     }
 
+    /// Losing the focus fades the volume over a second or so instead of cutting it; it comes
+    /// back quickly.
+    #[test]
+    fn the_volume_fades_out_slowly_without_the_focus_and_back_quickly() {
+        let callback = 0.01;
+        let after = |mut at: f32, to: f32, secs: f32| {
+            for _ in 0..(secs / callback).round() as usize {
+                at = focus_step(at, to, callback);
+            }
+            at
+        };
+        assert!(
+            after(1.0, 0.35, 0.1) > 0.9,
+            "a glance away barely lowers it"
+        );
+        let half = after(1.0, 0.35, 0.5);
+        assert!(half > 0.6 && half < 0.7, "{half}");
+        assert_eq!(after(1.0, 0.35, 1.5), 0.35);
+        assert_eq!(after(0.35, 1.0, 0.25), 1.0);
+        assert!(after(0.35, 1.0, 0.1) > 0.6);
+        // Never past where it's going.
+        assert_eq!(after(0.36, 0.35, 1.0), 0.35);
+        assert_eq!(after(0.99, 1.0, 1.0), 1.0);
+    }
+
     fn mixer() -> Mixer {
         let (_tx, rx) = mpsc::channel();
         let (gc, _garbage) = mpsc::channel();
@@ -903,7 +956,11 @@ mod tests {
             reported: Duration::ZERO,
             epoch: 0,
         }));
-        let volume = Arc::new([AtomicU32::new(1), AtomicU32::new(1)]);
+        let volume = Arc::new([
+            AtomicU32::new(1),
+            AtomicU32::new(1),
+            AtomicU32::new(1.0f32.to_bits()),
+        ]);
         Mixer::new(rx, gc, stamp, volume, 48_000, 2)
     }
 
