@@ -182,6 +182,12 @@ impl View {
                     Some(Notice::Send(lines)) => out.extend(lines),
                     None => {}
                 },
+                // Sessions live in the server's memory: after a restart the session is gone.
+                // The chart stays here, ours to save or to open a new session with.
+                LinkEvent::Refused(why) => {
+                    closed = Some(why);
+                    break;
+                }
                 LinkEvent::Lost(why) => {
                     self.status = tr!("mapping session: connection lost ({why}), reconnecting", "マッピングセッション: 接続が切れました ({why})、再接続中", "совместный маппинг: связь потеряна ({why}), переподключаюсь"; [] [why]);
                     retry = Some(now + RETRY);
@@ -579,6 +585,10 @@ mod tests {
         let objects = v.ed.chart.objects.len();
         let closed = LinkEvent::Down(Box::new(MapDown::Closed("bye".into())));
         v.take_link_events(vec![closed], now);
+        // A resume the server refuses (the session went with a restart) ends it the same way.
+        let mut w = view(true);
+        w.take_link_events(vec![LinkEvent::Refused("no such session".into())], now);
+        assert!(w.collab.is_none() && w.status.contains("no such session"));
         assert!(v.collab.is_none() && v.relink.is_none());
         assert!(v.status.contains("bye"), "{}", v.status);
         assert_eq!(v.ed.chart.objects.len(), objects, "the chart stays");

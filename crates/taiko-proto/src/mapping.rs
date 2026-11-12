@@ -87,6 +87,11 @@ pub const KEYS: [(&str, &str); 11] = [
     ("Difficulty", "SliderMultiplier"),
 ];
 
+/// Where a difficulty's file credits its mappers: a `[Metadata]` key osu! passes over, with the
+/// names of everyone who placed its objects, most objects first (`Creator` stays the set's
+/// host). The custom map upload reads it per difficulty.
+pub const CREDITS_KEY: &str = "TaikoRsMappers";
+
 /// `KEYS`' own `&'static str`s for a section and key, if an op may set them.
 pub fn known_key(section: &str, key: &str) -> Option<(&'static str, &'static str)> {
     KEYS.iter()
@@ -295,8 +300,14 @@ pub fn refusal(state: &SessionState, who: u32, diff: Option<u32>, op: &MapOp) ->
             {
                 refused = Some("only the host changes the song's metadata".to_string());
             }
-            MapOp::SetKey { .. } | MapOp::Gimmick { .. } if !doc.parts.is_empty() => {
+            MapOp::SetKey { .. } if !doc.parts.is_empty() => {
                 refused = Some("only the host changes this in a collab difficulty".to_string());
+            }
+            // A collab difficulty's gimmick is everyone's who maps a part of it.
+            MapOp::Gimmick { .. }
+                if !doc.parts.is_empty() && !doc.parts.iter().any(|p| p.assignee == Some(who)) =>
+            {
+                refused = Some(format!("you have no part in {}", doc.name));
             }
             _ => {}
         }
@@ -584,6 +595,9 @@ pub enum LinkEvent {
         done: u64,
     },
     Down(Box<MapDown>),
+    /// The server answered the request with a refusal (no such session any more, after a
+    /// server restart, say, or not invited): why. Not worth trying again.
+    Refused(String),
     /// The connection couldn't be made or was lost: why. The game resumes with
     /// `Request::ResumeMapping` when it wants to go on.
     Lost(String),
@@ -631,7 +645,10 @@ impl Link {
                         done,
                     });
                 }
-                crate::online::Reply::Error(e) => return lost(&events, e),
+                crate::online::Reply::Error(e) => {
+                    let _ = events.send(LinkEvent::Refused(e));
+                    return;
+                }
                 _ => return lost(&events, "the server didn't open the session".into()),
             }
             let _ = reader
@@ -794,6 +811,43 @@ mod tests {
             refusal(&s, 3, Some(0), &inside).is_some(),
             "a modder edits nothing"
         );
+    }
+
+    #[test]
+    fn collab_mappers_share_the_gimmick_of_a_difficulty_they_have_a_part_in() {
+        let mut s = state(
+            vec![Part {
+                from: 0.0,
+                to: 1000.0,
+                assignee: Some(2),
+            }],
+            None,
+        );
+        let g = MapOp::Gimmick {
+            before: "{}".into(),
+            after: "{\"zoom\":[]}".into(),
+        };
+        assert_eq!(refusal(&s, 2, Some(0), &g), None, "a mapper with a part");
+        assert_eq!(refusal(&s, 1, Some(0), &g), None, "the host");
+        assert!(refusal(&s, 3, Some(0), &g).is_some(), "a modder");
+        let name = MapOp::SetKey {
+            section: "Metadata".into(),
+            key: "Version".into(),
+            before: None,
+            after: Some("x".into()),
+        };
+        assert!(
+            refusal(&s, 2, Some(0), &name).is_some(),
+            "keys stay the host's"
+        );
+        s.documents[0].parts[0].assignee = None;
+        assert_eq!(
+            refusal(&s, 2, Some(0), &g).as_deref(),
+            Some("you have no part in Oni")
+        );
+        s.documents[0].parts[0].assignee = Some(2);
+        s.documents[0].locked = true;
+        assert!(refusal(&s, 2, Some(0), &g).is_some(), "locked");
     }
 
     #[test]

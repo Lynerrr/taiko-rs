@@ -503,6 +503,28 @@ impl Sync {
         self.authors.get(&(diff, id)).copied()
     }
 
+    /// Who made a chart of a difficulty, by how many of its objects, most first (ties by
+    /// participant). Objects the session has no maker for are `host`'s (the set's own).
+    pub fn credits(&self, diff: u32, chart: &Chart, host: u32) -> Vec<(u32, usize)> {
+        let mut counts: BTreeMap<u32, usize> = BTreeMap::new();
+        for o in &chart.objects {
+            *counts
+                .entry(self.author(diff, o.id).unwrap_or(host))
+                .or_default() += 1;
+        }
+        let mut out: Vec<(u32, usize)> = counts.into_iter().collect();
+        out.sort_by_key(|&(who, n)| (std::cmp::Reverse(n), who));
+        out
+    }
+
+    /// Every difficulty's confirmed chart and name, but the open one.
+    pub fn others(&self) -> impl Iterator<Item = (u32, &str, &Chart)> {
+        self.docs
+            .iter()
+            .filter(|(d, _)| **d != self.open)
+            .map(|(d, c)| (*d, self.names.get(d).map_or("", String::as_str), c))
+    }
+
     /// The confirmed chart of a difficulty: everything the server ordered so far.
     #[cfg(test)]
     pub fn confirmed(&self, diff: u32) -> Option<&Chart> {

@@ -1458,3 +1458,48 @@ fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
     assert!(view.ed.chart.objects.iter().any(|o| o.time == 8000.0));
     assert!(view.link.is_none() && view.relink.is_none());
 }
+
+/// Sessions live in the server's memory: after a restart, a resume is refused, and the link
+/// says so (the game then ends the session instead of trying again).
+#[test]
+fn a_resume_the_server_refuses_is_reported_as_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut out = stream;
+        let first = online::read_line(&mut reader).unwrap();
+        let env: Envelope = serde_json::from_str(&first).unwrap();
+        assert!(matches!(
+            env.request,
+            Request::ResumeMapping {
+                session: 9,
+                epoch: 2,
+                last_seq: 40,
+                ..
+            }
+        ));
+        online::write_line(&mut out, &Reply::Error("no such session".into())).unwrap();
+    });
+    let link = mapping::Link::start(
+        format!("127.0.0.1:{port}"),
+        Request::ResumeMapping {
+            token: "t".into(),
+            session: 9,
+            epoch: 2,
+            last_seq: 40,
+        },
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut events = Vec::new();
+    while events.is_empty() && Instant::now() < deadline {
+        events.extend(link.poll());
+        std::thread::yield_now();
+    }
+    server.join().unwrap();
+    assert!(
+        matches!(&events[..], [mapping::LinkEvent::Refused(why)] if why == "no such session"),
+        "{events:?}"
+    );
+}

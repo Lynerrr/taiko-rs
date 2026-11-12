@@ -498,6 +498,24 @@ fn an_edit_outside_your_part_is_refused_and_taken_back() {
 }
 
 #[test]
+fn a_collab_mapper_changes_the_shared_gimmick_for_everyone() {
+    let (mut server, mut host, mut mapper) = pair();
+    let after = crate::tko::gimmick::Gimmick {
+        above: vec![1000.0],
+        ..Default::default()
+    };
+    let cmd = Command::Gimmick {
+        before: Box::default(),
+        after: Box::new(after.clone()),
+    };
+    mapper.ed.history.run(&mut mapper.ed.chart, cmd);
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert_eq!(mapper.sync.pending(), 0, "taken, not refused");
+    assert_eq!(host.ed.chart.gimmick.as_ref(), Some(&after));
+    assert_eq!(mapper.ed.chart.gimmick.as_ref(), Some(&after));
+}
+
+#[test]
 fn edits_made_offline_survive_a_reconnect() {
     let (mut server, mut host, mut mapper) = pair();
     mapper.ed.place_hit(1250.0, false).unwrap();

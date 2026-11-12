@@ -69,7 +69,7 @@ fn is_chart(p: &Path) -> bool {
 }
 
 /// The chart files in a folder: (path, text).
-fn charts_in(dir: &Path) -> Vec<(PathBuf, String)> {
+pub fn charts_in(dir: &Path) -> Vec<(PathBuf, String)> {
     let mut out: Vec<(PathBuf, String)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -300,7 +300,7 @@ impl Connecting {
                     None => Ok(Vec::new()),
                 }
             }
-            LinkEvent::Lost(why) => Err(why),
+            LinkEvent::Lost(why) | LinkEvent::Refused(why) => Err(why),
             LinkEvent::Down(d) => self.down(*d),
         }
     }

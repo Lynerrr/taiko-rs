@@ -53,6 +53,23 @@ parts (`snapshot_lines`, `SnapshotPieces`), keeping every line within protocol 1
   server's `SnapshotWanted` at our seq is answered with our confirmed state. When the session
   ends the chart stays in the editor to edit alone.
 
+## Rights, credits and a server restart
+
+- **Rights** are checked by `mapping::refusal`, the same function the server runs: the host
+  edits everything; a collab mapper edits objects and green lines inside their own parts and
+  the gimmick of a difficulty they have a part in (shared with the other mappers of it), not
+  its keys; a guest edits their own unlocked difficulty (not red lines or the set's metadata);
+  modders and viewers edit nothing.
+- **Credits** go in each difficulty's file as `TaikoRsMappers: anna, host` in `[Metadata]`
+  (`mapping::CREDITS_KEY`): who placed its objects, most first, objects the session has no
+  maker for counting as the host's. osu! passes over the key; `Creator` stays the host. Saving
+  in a session writes it into the open difficulty and writes every other difficulty of the
+  session to its file in the set's folder (found by its name, or a new file), so the host can
+  pack and upload the whole set with its credits.
+- **Server restart:** sessions live in the server's memory only. A resume the server refuses
+  (`LinkEvent::Refused`, "no such session") ends the session like the host closing it: the
+  chart, our unsent edits included, stays in the editor to save or to start a new session with.
+
 ## Sync (`src/editor/collab.rs`)
 
 Every edit is a `history::Command` already. In a session the history keeps an outbox of the

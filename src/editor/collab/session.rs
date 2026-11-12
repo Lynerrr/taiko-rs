@@ -4,12 +4,14 @@
 //! and makes the `MapUp` lines the game sends.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::path::Path;
 use std::time::Instant;
 
 use taiko_proto::mapping::{
-    MapDown, MapUp, Participant, SessionState, SnapshotPieces, snapshot_lines,
+    CREDITS_KEY, MapDown, MapUp, Participant, SessionState, SnapshotPieces, snapshot_lines,
 };
 
+use super::super::chart::Chart;
 use super::super::state::Editor;
 use super::{OutOfStep, Sync};
 
@@ -195,6 +197,51 @@ impl Session {
             | MapDown::Pong => {}
         }
         None
+    }
+
+    /// The credits line of a difficulty's chart (`mapping::CREDITS_KEY`): the names of who
+    /// made its objects, most first.
+    pub fn credits_line(&self, diff: u32, chart: &Chart) -> String {
+        self.sync
+            .credits(diff, chart, self.state.host)
+            .into_iter()
+            .filter_map(|(who, _)| self.participant(who).map(|p| p.name.clone()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Saving in a session: the open difficulty's chart gets its credits, and every other
+    /// difficulty of the session is written to its file in `dir` (found by its name, or a
+    /// new one named like the set's), with its credits. Returns how many others were written.
+    pub fn save_with_credits(&self, ed: &mut Editor) -> Result<usize, String> {
+        let line = self.credits_line(self.sync.open(), &ed.chart);
+        if !line.is_empty() {
+            ed.chart.set_key("Metadata", CREDITS_KEY, &line);
+        }
+        let dir = ed.path.parent().map(Path::to_path_buf).unwrap_or_default();
+        let files = super::connect::charts_in(&dir);
+        let mut written = 0;
+        for (diff, name, chart) in self.sync.others() {
+            let mut chart = chart.clone();
+            let line = self.credits_line(diff, &chart);
+            if !line.is_empty() {
+                chart.set_key("Metadata", CREDITS_KEY, &line);
+            }
+            let path = files
+                .iter()
+                .find(|(_, text)| super::connect::version(text).as_deref() == Some(name))
+                .map(|(p, _)| p.clone())
+                .unwrap_or_else(|| {
+                    let file = format!("{} [{name}].osu", self.state.title);
+                    dir.join(crate::download::safe_folder_name(&file))
+                });
+            if path == ed.path {
+                continue;
+            }
+            chart.save(&path, true)?;
+            written += 1;
+        }
+        Ok(written)
     }
 
     /// Back on a resumed connection: `done` is the last of our ops the server had taken.
@@ -520,5 +567,47 @@ pub(crate) mod tests {
             panic!("our snapshot");
         };
         assert!(matches!(lines[0], MapUp::Snapshot { seq: 7, .. }));
+    }
+
+    #[test]
+    fn saving_credits_every_difficulty_and_writes_the_others() {
+        let (mut s, mut ed) = session();
+        let dir =
+            std::env::temp_dir().join(format!("taiko-rs-session-credits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ed.path = dir.join("Test [Oni].osu");
+        let note = |t: f64, n: u64| {
+            MapDown::Op(Sequenced {
+                seq: n,
+                author: 2,
+                epoch: 2,
+                client_seq: n,
+                diff: Some(0),
+                op: MapOp::InsertObjects(
+                    (0..6)
+                        .map(|i| Obj {
+                            id: (2 << 40) | (n * 10 + i),
+                            line: format!("256,192,{},1,0,0:0:0:0:", t + i as f64 * 100.0),
+                            fake: false,
+                            group: None,
+                        })
+                        .collect(),
+                ),
+            })
+        };
+        s.handle(&mut ed, note(12000.0, 1), 0.0);
+        assert_eq!(
+            s.credits_line(0, &ed.chart),
+            "anna, host",
+            "six of anna's, five of the set's own"
+        );
+        assert_eq!(s.save_with_credits(&mut ed).unwrap(), 1);
+        ed.save().unwrap();
+        let oni = std::fs::read_to_string(&ed.path).unwrap();
+        assert!(oni.contains("TaikoRsMappers:anna, host"), "{oni}");
+        let other = std::fs::read_to_string(dir.join("Test [Anna's Muzukashii].osu")).unwrap();
+        assert!(other.contains("TaikoRsMappers:host"), "{other}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

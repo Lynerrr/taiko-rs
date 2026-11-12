@@ -3080,6 +3080,11 @@ impl View {
         // What is still being typed counts, as a click elsewhere would have taken it.
         self.commit_typing();
         let was = self.ed.path.clone();
+        // In a mapping session: the credits, and the session's other difficulties too.
+        let others = match &self.collab {
+            Some(s) => s.save_with_credits(&mut self.ed)?,
+            None => 0,
+        };
         let kept = self.ed.save()?;
         let file = self
             .ed
@@ -3091,9 +3096,14 @@ impl View {
             self.renamed = Some((was, self.ed.path.clone()));
             return Ok(format!("saved as {file}"));
         }
-        Ok(match kept {
+        let saved = match kept {
             Some(why) => format!("saved {} ({why})", self.ed.path.display()),
             None => format!("saved {}", self.ed.path.display()),
+        };
+        Ok(if others > 0 {
+            format!("{saved} and {others} other difficulties of the session")
+        } else {
+            saved
         })
     }
 
