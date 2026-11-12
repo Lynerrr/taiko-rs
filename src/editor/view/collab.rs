@@ -1391,9 +1391,11 @@ mod tests {
     #[test]
     fn the_session_window_closes_on_esc_and_on_a_click_elsewhere_but_not_on_itself() {
         let mut v = view(false);
+        v.open_session_window();
+        assert!(!v.picking_mode, "not on a server without sessions");
         v.sessions = true;
         draw(&mut v);
-        v.press(Btn::Collab(CollabAct::Start), Keys::default(), None);
+        v.open_session_window();
         draw(&mut v);
         let [x, y, w, h] = v.session_win;
         assert!(w > 0.0 && h > 0.0);
