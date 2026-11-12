@@ -841,8 +841,9 @@ impl View {
         self.picking_mode
     }
 
-    /// Presses a button of the session's panel, as a click on it does.
-    #[cfg(test)]
+    /// Presses a button of the session's panel, as a click on it does (for the screens'
+    /// snapshots, which are taken on Linux only).
+    #[cfg(all(test, target_os = "linux"))]
     pub fn press_session(&mut self, a: CollabAct) {
         self.press_collab(a);
     }
