@@ -2467,8 +2467,7 @@ impl Grains {
         // hop, not the window): near the end of the song a grain must still fit.
         let chosen = chosen.min(frames - win);
         let (input, base) = (heard.input, heard.base);
-        for i in 0..win {
-            let wgt = self.window[i];
+        for (i, &wgt) in self.window[..win].iter().enumerate() {
             let (to, from) = ((out_pos + i - out_base) * 2, (chosen + i - base) * 2);
             out[to] += input[from] * wgt;
             out[to + 1] += input[from + 1] * wgt;

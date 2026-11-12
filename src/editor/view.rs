@@ -433,8 +433,11 @@ pub struct View {
     pub sessions: bool,
     /// Starting a session was asked for (the screen takes it).
     session_wanted: Option<taiko_proto::mapping::Mode>,
-    /// The session window (opened from the menu bar's "Mapping session" button) is open.
+    /// The session window under the menu bar's "Mapping session" button is open: the kinds of
+    /// session to start, or in a session its panel (people, chat, comments).
     picking_mode: bool,
+    /// The session chat lines read (`Session::heard` when the chat was last in sight).
+    chat_seen: u64,
     /// The kind of session picked in that window.
     session_pick: taiko_proto::mapping::Mode,
     /// Where the session window was drawn last (clicks on it stay in it).
@@ -725,6 +728,7 @@ impl View {
             sessions: false,
             session_wanted: None,
             picking_mode: false,
+            chat_seen: 0,
             session_pick: taiko_proto::mapping::Mode::Collab,
             session_win: [0.0; 4],
             entry,
@@ -1327,7 +1331,6 @@ impl View {
             self.draw_palette(c);
             self.draw_timeline(c);
             self.draw_graph(c);
-            self.draw_participants(c);
         }
         self.draw_overview(c);
         self.draw_status(c);

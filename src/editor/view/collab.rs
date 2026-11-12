@@ -1,4 +1,5 @@
-//! A mapping session on the editor's screen: who is in it (a panel over the preview's corner),
+//! A mapping session on the editor's screen: who is in it (a panel under the menu bar's session
+//! button, never over the preview),
 //! where the others are on the timeline (their playheads, pointers and selections in their
 //! colours), the collab parts of the open difficulty along the ruler, and following someone.
 //! None of it is drawn, and nothing here runs, while editing alone. It also keeps the session's
@@ -10,7 +11,7 @@ use std::time::{Duration, Instant};
 use super::{Btn, Drag, Field, NOTE_R, RULER, View};
 use crate::editor::collab::Sync;
 use crate::editor::collab::connect::Ready;
-use crate::editor::collab::session::{Notice, Session, Tab, first_stamp, stamp};
+use crate::editor::collab::session::{Notice, Rights, Session, Tab, first_stamp, stamp};
 use crate::hit::Canvas;
 use crate::render::rgba;
 use taiko_proto::mapping::{Document, HostCmd, Link, LinkEvent, MapUp, Mode, Part, Role};
@@ -66,8 +67,12 @@ pub enum CollabAct {
     Kick(u32),
     /// Host: the open difficulty to this player as a guest, or back.
     GiveDiff(u32),
-    /// Host: the selected notes' stretch of the open difficulty to this player as a part.
+    /// Host: the selected notes' stretch of the open difficulty to this player as a part (with
+    /// none selected, from the playhead to the end).
     GivePart(u32),
+    /// Host: every mapper maps anywhere in the open difficulty (outside the parts given to
+    /// people), or only in their own parts again.
+    Free,
     /// Host: only the host edits the open difficulty, or everyone with rights again.
     Lock,
     /// Host: the guest's difficulty is taken as final (and locked), or not any more.
@@ -85,8 +90,13 @@ const SMALL: f32 = 5.0;
 /// Chat lines or comments the panel shows at once.
 const LINES: usize = 6;
 
-/// The parts of a difficulty once `from..to` goes to `who`: what overlapped it is cut away.
-fn with_part(parts: &[Part], from: f64, to: f64, who: u32) -> Vec<Part> {
+/// Where an open part spanning the whole song ends (ms): far past any song, and finite, as the
+/// server wants part bounds.
+const FREE_TO: f64 = 86_400_000.0;
+
+/// The parts of a difficulty once `from..to` goes to `who` (`None`: open, every mapper's):
+/// what overlapped it is cut away.
+fn with_part(parts: &[Part], from: f64, to: f64, who: Option<u32>) -> Vec<Part> {
     let mut out = Vec::new();
     for p in parts {
         if p.to <= from || p.from >= to {
@@ -111,9 +121,44 @@ fn with_part(parts: &[Part], from: f64, to: f64, who: u32) -> Vec<Part> {
     out.push(Part {
         from,
         to,
-        assignee: Some(who),
+        assignee: who,
     });
     out.sort_by(|a, b| a.from.total_cmp(&b.from));
+    out
+}
+
+/// The parts with every mapper free to map: the parts given to people stay theirs, and the rest
+/// of the song becomes open parts; or (`free` false) only the parts given to people are left.
+fn freed(parts: &[Part], free: bool) -> Vec<Part> {
+    let mut given: Vec<Part> = parts
+        .iter()
+        .filter(|p| p.assignee.is_some())
+        .cloned()
+        .collect();
+    if !free {
+        return given;
+    }
+    given.sort_by(|a, b| a.from.total_cmp(&b.from));
+    let mut out = Vec::new();
+    let mut at = 0.0_f64;
+    for p in given {
+        if p.from > at {
+            out.push(Part {
+                from: at,
+                to: p.from,
+                assignee: None,
+            });
+        }
+        at = at.max(p.to);
+        out.push(p);
+    }
+    if at < FREE_TO {
+        out.push(Part {
+            from: at,
+            to: FREE_TO,
+            assignee: None,
+        });
+    }
     out
 }
 
@@ -165,6 +210,73 @@ fn caret(c: &mut Canvas, x: f32, y: f32, open: bool) {
 
 /// The colour of mapping sessions.
 const VIOLET: u32 = 0x8c7cf0;
+/// What can't be done yet, in the session panel.
+const AMBER: u32 = 0xffc66b;
+
+/// A song time as minutes and seconds (`1:05`).
+fn short_time(ms: f64) -> String {
+    let s = (ms.max(0.0) / 1000.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// What we may edit in the open difficulty, in a line for the session panel (`end`: the song's
+/// length, ms), and whether we may edit anything there; `None` for the host, who edits all.
+fn rights_text(s: &Session, end: f64) -> Option<(String, bool)> {
+    let diff = s.diff_name(s.sync.open()).to_string();
+    let rights = s.rights();
+    let text = match &rights {
+        Rights::All => return None,
+        Rights::Free => tr!(
+            "Everyone maps anywhere here",
+            "ここでは誰でもどこでもマッピングできます",
+            "Тут все маппят где угодно"
+        )
+        .to_string(),
+        Rights::Diff => {
+            tr!("You map {diff}", "{diff} はあなたの担当です", "{diff} — твоя сложность"; [] [diff])
+        }
+        Rights::Parts(parts) => {
+            let spans: Vec<String> = parts
+                .iter()
+                .map(|&(from, to)| {
+                    let to = if to >= end {
+                        tr!("end", "最後", "конец").to_string()
+                    } else {
+                        short_time(to)
+                    };
+                    format!("{}–{to}", short_time(from))
+                })
+                .collect();
+            let spans = spans.join(", ");
+            tr!("Your part: {spans}", "あなたのパート: {spans}", "Твоя часть: {spans}"; [] [spans])
+        }
+        Rights::NoPart => tr!(
+            "The host hasn't given you a part yet: you can't place notes",
+            "ホストがまだパートを割り当てていません。ノーツは置けません",
+            "Хост ещё не дал тебе часть: ноты ставить пока нельзя"
+        )
+        .to_string(),
+        Rights::NotOurs(Some(own)) => {
+            tr!("{diff} isn't yours: open {own} to map", "{diff} はあなたの担当ではありません。{own} を開いてください", "{diff} не твоя: открой {own}"; [] [diff, own])
+        }
+        Rights::NotOurs(None) => tr!(
+            "The host hasn't given you a difficulty yet: you can't place notes",
+            "ホストがまだ難易度を割り当てていません。ノーツは置けません",
+            "Хост ещё не дал тебе сложность: ноты ставить пока нельзя"
+        )
+        .to_string(),
+        Rights::Locked => {
+            tr!("{diff} is locked by the host", "{diff} はホストがロックしました", "{diff} закрыта хостом"; [] [diff])
+        }
+        Rights::ReadOnly => tr!(
+            "You chat and comment here; only mappers place notes",
+            "ここではチャットとコメントができます。ノーツを置けるのはマッパーだけです",
+            "Ты тут пишешь в чат и замечания, ноты ставят только мапперы"
+        )
+        .to_string(),
+    };
+    Some((text, rights.edits()))
+}
 
 fn role_tag(r: Role) -> &'static str {
     match r {
@@ -234,18 +346,24 @@ impl View {
                 self.follow(true);
                 return;
             }
-            CollabAct::GivePart(_) if self.ed.selection.is_empty() => {
-                self.status = tr!(
-                    "select the notes of the part first",
-                    "先にパートのノーツを選択してください",
-                    "сначала выдели ноты этой части"
-                )
-                .into();
-                return;
-            }
             _ => {}
         }
         if let Some(cmd) = self.host_cmd(a) {
+            if let (CollabAct::GivePart(who), Some((from, to))) = (a, self.part_range()) {
+                let name = self
+                    .collab
+                    .as_ref()
+                    .and_then(|s| s.participant(who))
+                    .map_or("?", |p| p.name.as_str())
+                    .to_string();
+                let to = if to >= self.end_ms() {
+                    tr!("the end", "最後", "конца").to_string()
+                } else {
+                    short_time(to)
+                };
+                let from = short_time(from);
+                self.status = tr!("{name} maps {from} to {to}", "{name} の担当: {from} から {to}", "{name} маппит с {from} до {to}"; [] [name, from, to]);
+            }
             self.send_host(cmd);
             return;
         }
@@ -301,22 +419,16 @@ impl View {
                 owner: (doc?.owner != Some(who)).then_some(who),
             },
             CollabAct::GivePart(who) => {
-                let times = self
-                    .ed
-                    .chart
-                    .objects
-                    .iter()
-                    .filter(|o| self.ed.selection.contains(&o.id))
-                    .map(|o| o.time);
-                let (from, to) = times.fold(None, |r: Option<(f64, f64)>, t| {
-                    Some(r.map_or((t, t), |(a, b)| (a.min(t), b.max(t))))
-                })?;
+                let (from, to) = self.part_range()?;
                 HostCmd::Parts {
                     diff,
-                    // The last selected note belongs to the part too.
-                    parts: with_part(&doc?.parts, from, to + 1.0, who),
+                    parts: with_part(&doc?.parts, from, to, Some(who)),
                 }
             }
+            CollabAct::Free => HostCmd::Parts {
+                diff,
+                parts: freed(&doc?.parts, !s.free()),
+            },
             CollabAct::Lock => HostCmd::Lock {
                 diff,
                 locked: !doc?.locked,
@@ -331,6 +443,31 @@ impl View {
             _ => return None,
         };
         Some(cmd)
+    }
+
+    /// The stretch of the song the host's "part" button gives (ms, `from..to`): from the first
+    /// to the last selected note; with none selected (an empty song has none to select), from
+    /// the playhead to the end of the song, so pressing it for each mapper in turn at the
+    /// playhead splits the song between them.
+    fn part_range(&self) -> Option<(f64, f64)> {
+        let selected = self
+            .ed
+            .chart
+            .objects
+            .iter()
+            .filter(|o| self.ed.selection.contains(&o.id))
+            .map(|o| o.time)
+            .fold(None, |r: Option<(f64, f64)>, t| {
+                Some(r.map_or((t, t), |(a, b)| (a.min(t), b.max(t))))
+            });
+        Some(match selected {
+            // The last selected note belongs to the part too.
+            Some((from, to)) => (from, to + 1.0),
+            None => {
+                let from = self.ed.time.max(0.0);
+                (from, self.end_ms().max(from) + 1.0)
+            }
+        })
     }
 
     /// What a typed line becomes: chat, or a comment at the playhead of the open difficulty.
@@ -390,6 +527,9 @@ impl View {
         self.collab = Some(Box::new(session));
         self.link = Some(link);
         self.relink = Some(relink);
+        // The panel opens on joining: who is here, and what we may edit.
+        self.picking_mode = true;
+        self.chat_seen = 0;
         Ok(())
     }
 
@@ -466,6 +606,7 @@ impl View {
     /// out of step with the server, at once; the end of the session leaves the chart to edit
     /// alone.
     pub(super) fn take_link_events(&mut self, events: Vec<LinkEvent>, now: Instant) -> Vec<MapUp> {
+        let end = self.end_ms();
         let Some(s) = self.collab.as_mut() else {
             return Vec::new();
         };
@@ -478,7 +619,14 @@ impl View {
                 LinkEvent::Joined { done, .. } => s.resumed(&mut self.ed, done),
                 LinkEvent::Down(d) => match s.handle(&mut self.ed, *d, t) {
                     Some(Notice::Resume) => retry = Some(now),
-                    Some(Notice::Refused(why)) => self.status = why,
+                    // Why, and what we may edit after all: a refused note is taken back, so
+                    // the reason has to be plain.
+                    Some(Notice::Refused(why)) => {
+                        self.status = match rights_text(s, end) {
+                            Some((rights, false)) => format!("{why}. {rights}"),
+                            _ => why,
+                        }
+                    }
                     Some(Notice::Closed(why)) => {
                         closed = Some(why);
                         break;
@@ -499,6 +647,7 @@ impl View {
             }
         }
         if let Some(why) = closed {
+            self.picking_mode = false;
             self.collab = None;
             self.link = None;
             self.relink = None;
@@ -528,49 +677,73 @@ impl View {
         out
     }
 
-    /// The session's panel over the preview's top right corner: its title, tabs, and who is
-    /// in it (with the host's buttons), the chat, or the review comments of the open
-    /// difficulty. Times written in chat and comments are links to them.
-    pub(super) fn draw_participants(&mut self, c: &mut Canvas) {
-        let panel = self.panel_w();
+    /// The session's name on its menu-bar button: who is online, or, between connections, how
+    /// many of our edits wait to go out.
+    fn session_title(&self) -> String {
         let Some(s) = self.collab.as_ref() else {
-            return;
+            return tr!(
+                "Mapping session",
+                "マッピングセッション",
+                "Совместный маппинг"
+            )
+            .to_string();
         };
-        let [px, py, pw, _] = self.layout.preview;
-        let x = px + pw - panel - 4.0;
-        let y = py + 4.0;
-        let h = 14.0 + 11.0 + self.panel_body_height() + 2.0;
-        c.round_rect(
-            [x, y],
-            [panel, h],
-            3.0,
-            rgba(0x0c0c14, 0.88),
-            rgba(0x2c2c3c, 1.0),
-            1.0,
-        );
+        if self.link.is_none() && self.relink.is_some() {
+            let n = s.sync.pending();
+            return tr!("Offline · {n} unsent", "オフライン · 未送信 {n}", "Нет связи · не отпр.: {n}"; [] [n]);
+        }
         let online = s.state.participants.iter().filter(|p| p.online).count();
-        let title = format!(
+        format!(
             "{} · {online}",
             tr!(
                 "Mapping session",
                 "マッピングセッション",
                 "Совместный маппинг"
             )
-        );
-        // Between connections: our edits wait to go out.
-        let title = if self.link.is_none() && self.relink.is_some() {
-            let n = s.sync.pending();
-            tr!("Offline · {n} unsent", "オフライン · 未送信 {n}", "Нет связи · не отпр.: {n}"; [] [n])
-        } else {
-            title
+        )
+    }
+
+    /// The session's panel under its menu-bar button (`chip`), never over the preview: what we
+    /// may edit, its tabs, and who is in it (with the host's buttons), the chat, or the review
+    /// comments of the open difficulty. Times written in chat and comments are links to them.
+    fn draw_participants(&mut self, c: &mut Canvas, chip: [f32; 4]) {
+        let panel = self.panel_w();
+        let end = self.end_ms();
+        let Some(s) = self.collab.as_ref() else {
+            return;
         };
-        c.text(
-            x + 4.0,
-            y + 3.0,
-            TEXT,
-            rgba(0xffffff, 0.9),
-            &Canvas::fit(TEXT, panel - 8.0, &title),
+        let rights = rights_text(s, end);
+        let head: Vec<String> = rights.as_ref().map_or(Vec::new(), |(t, _)| {
+            super::chrome::wrap(SMALL, panel - 8.0, t)
+        });
+        let head_h = 3.0 + head.len() as f32 * 7.0;
+        let x = (chip[0] + chip[2] - panel).max(4.0);
+        let y = chip[1] + chip[3] + 2.0;
+        let tabs_y = y + head_h + 1.0;
+        let top = tabs_y + 13.0;
+        let h = top - y + self.panel_body_height() + 2.0;
+        self.session_win = [x, y, panel, h];
+        c.round_rect(
+            [x, y],
+            [panel, h],
+            3.0,
+            rgba(0x0c0c14, 0.96),
+            rgba(VIOLET, 0.85),
+            1.0,
         );
+        let col = match rights {
+            Some((_, false)) => AMBER,
+            _ => 0xc8f0c8,
+        };
+        for (i, line) in head.iter().enumerate() {
+            c.text(
+                x + 4.0,
+                y + 3.0 + i as f32 * 7.0,
+                SMALL,
+                rgba(col, 1.0),
+                line,
+            );
+        }
         let open_notes = self
             .open_doc()
             .map(|d| {
@@ -581,9 +754,15 @@ impl View {
                     .count()
             })
             .unwrap_or(0);
+        let unread = s.heard.saturating_sub(self.chat_seen);
+        let chat = if unread > 0 && s.tab != Tab::Chat {
+            format!("{} {unread}", tr!("Chat", "チャット", "Чат"))
+        } else {
+            tr!("Chat", "チャット", "Чат").to_string()
+        };
         let tabs = [
             (Tab::People, tr!("People", "参加者", "Люди").to_string()),
-            (Tab::Chat, tr!("Chat", "チャット", "Чат").to_string()),
+            (Tab::Chat, chat),
             (
                 Tab::Notes,
                 format!("{} {open_notes}", tr!("Notes", "メモ", "Замеч.")),
@@ -596,25 +775,27 @@ impl View {
             let on = s.tab == tab;
             c.rect(
                 tx,
-                y + 12.0,
+                tabs_y,
                 tw - 1.0,
                 9.0,
                 rgba(0x2c2c3c, if on { 1.0 } else { 0.35 }),
             );
             c.text(
                 tx + 2.0,
-                y + 14.0,
+                tabs_y + 2.0,
                 SMALL,
                 rgba(0xffffff, if on { 0.95 } else { 0.6 }),
                 &Canvas::fit(SMALL, tw - 4.0, &label),
             );
             buttons.push((
-                [tx, y + 12.0, tw - 1.0, 9.0],
+                [tx, tabs_y, tw - 1.0, 9.0],
                 Btn::Collab(CollabAct::Tab(tab)),
             ));
         }
+        if s.tab == Tab::Chat {
+            self.chat_seen = s.heard;
+        }
         self.buttons.extend(buttons);
-        let top = y + 25.0;
         match self.collab.as_ref().map(|s| s.tab) {
             Some(Tab::Chat) => self.draw_chat(c, x, top),
             Some(Tab::Notes) => self.draw_notes(c, x, top),
@@ -638,7 +819,7 @@ impl View {
         };
         match s.tab {
             Tab::People => {
-                let host = if s.state.host == s.me { 11.0 } else { 0.0 };
+                let host = if s.state.host == s.me { 22.0 } else { 0.0 };
                 s.state.participants.len() as f32 * ROW + 11.0 + host
             }
             Tab::Chat | Tab::Notes => LINES as f32 * 8.0 + 11.0,
@@ -667,8 +848,14 @@ impl View {
                 c.rect(x + 1.0, ry - 1.0, panel - 2.0, ROW, rgba(p.colour, 0.22));
             }
             c.rect(x + 4.0, ry + 1.0, 6.0, 6.0, rgba(p.colour, 1.0));
+            let idle = p.online && p.role == Role::Mapper && !s.has_work(p.id);
             let state = if !p.online {
                 Some(tr!("offline", "オフライン", "не в сети").to_string())
+            } else if idle {
+                Some(match s.state.mode {
+                    Mode::Guest => tr!("no diff", "難易度なし", "нет сложн.").to_string(),
+                    _ => tr!("no part", "パートなし", "нет части").to_string(),
+                })
             } else if s.away(p.id, now) {
                 Some(tr!("away", "離席", "отошёл").to_string())
             } else {
@@ -723,7 +910,7 @@ impl View {
                         x + panel - 4.0,
                         ry,
                         SMALL,
-                        rgba(0x9a9ab0, alpha),
+                        rgba(if idle { AMBER } else { 0x9a9ab0 }, alpha),
                         &Canvas::fit(SMALL, panel - 146.0, &state),
                     );
                 }
@@ -733,7 +920,7 @@ impl View {
                     x + panel - 4.0,
                     ry,
                     TEXT,
-                    rgba(0x9a9ab0, alpha),
+                    rgba(if idle { AMBER } else { 0x9a9ab0 }, alpha),
                     &Canvas::fit(TEXT, 40.0, &tag),
                 );
             }
@@ -765,6 +952,31 @@ impl View {
                 chip(c, &mut buttons, [cx, ry, w, 9.0], label, act);
                 cx += w + 2.0;
             }
+            ry += 11.0;
+            let free = if s.free() {
+                tr!(
+                    "[x] everyone maps anywhere",
+                    "[x] 誰でもどこでもマッピング",
+                    "[x] все маппят где угодно"
+                )
+            } else {
+                tr!(
+                    "[ ] everyone maps anywhere",
+                    "[ ] 誰でもどこでもマッピング",
+                    "[ ] все маппят где угодно"
+                )
+            };
+            c.text(
+                x + 4.0,
+                ry + 2.0,
+                TEXT,
+                rgba(0xc8c8d8, 1.0),
+                &Canvas::fit(TEXT, panel - 8.0, free),
+            );
+            buttons.push((
+                [x + 1.0, ry, panel - 2.0, 11.0],
+                Btn::Collab(CollabAct::Free),
+            ));
             ry += 11.0;
         }
         let label = if s.by_author {
@@ -943,10 +1155,16 @@ impl View {
         self.buttons.push((r, Btn::Collab(CollabAct::Say(to))));
     }
 
+    /// Whether the session window (in a session: its panel) is open.
+    #[cfg(test)]
+    pub fn session_panel_open(&self) -> bool {
+        self.picking_mode
+    }
+
     /// Opens the session window, as its button does.
     #[cfg(test)]
     pub fn open_session_window(&mut self) {
-        self.picking_mode = self.offers_session();
+        self.picking_mode = self.offers_session() || self.collab.is_some();
     }
 
     /// Whether the editor offers to start a session: alone, on a server that runs them.
@@ -962,16 +1180,19 @@ impl View {
         right: f32,
         h: f32,
     ) -> Option<f32> {
-        if !self.offers_session() {
+        let in_session = self.collab.is_some();
+        if !self.offers_session() && !in_session {
             self.picking_mode = false;
             return None;
         }
-        let label = tr!(
-            "Mapping session",
-            "マッピングセッション",
-            "Совместный маппинг"
-        );
-        let w = Canvas::text_width(7.0, label) + 24.0;
+        let title = self.session_title();
+        let label = title.as_str();
+        // Chat not read yet: a mark on the button while the panel is shut.
+        let unread = self
+            .collab
+            .as_ref()
+            .is_some_and(|s| s.heard > self.chat_seen && !self.picking_mode);
+        let w = Canvas::text_width(7.0, label) + 24.0 + if unread { 6.0 } else { 0.0 };
         let x = right - w;
         let open = self.picking_mode;
         let fill = if open {
@@ -992,6 +1213,16 @@ impl View {
         // A pulse of the accent, as of someone live.
         c.circle(x + 7.0, h / 2.0, 2.2, rgba(VIOLET, 1.0), rgba(0, 0.0), 0.0);
         c.text(x + 12.0, 3.5, 7.0, rgba(0xffffff, 1.0), label);
+        if unread {
+            c.circle(
+                x + w - 14.0,
+                h / 2.0,
+                2.0,
+                rgba(AMBER, 1.0),
+                rgba(0, 0.0),
+                0.0,
+            );
+        }
         caret(c, x + w - 7.0, h / 2.0, open);
         self.buttons
             .push(([x, 0.0, w, h], Btn::Collab(CollabAct::Start)));
@@ -1009,6 +1240,10 @@ impl View {
             return;
         };
         if !self.picking_mode {
+            return;
+        }
+        if self.collab.is_some() {
+            self.draw_participants(c, chip);
             return;
         }
         const W: f32 = 210.0;
@@ -1257,6 +1492,12 @@ mod tests {
         c.texts.iter().any(|(_, t)| t.contains(s))
     }
 
+    /// `s` in the drawn text, lines wrapped or not.
+    fn has_words(c: &Canvas, s: &str) -> bool {
+        let all: Vec<&str> = c.texts.iter().map(|(_, t)| t.as_str()).collect();
+        all.join(" ").contains(s)
+    }
+
     fn collab_buttons(v: &View) -> Vec<([f32; 4], CollabAct)> {
         v.buttons
             .iter()
@@ -1292,17 +1533,27 @@ mod tests {
             },
             now,
         );
+        // The panel is shut: only the menu bar's button, nothing over the preview.
         let c = draw(&mut v);
-        assert!(has_text(&c, "Mapping session · 3"));
+        assert!(has_text(&c, "Mapping session · 3"), "on the button");
+        assert!(!has_text(&c, "host (you)"));
+        let [px, py, pw, ph] = v.layout.preview;
+        let acts: Vec<CollabAct> = collab_buttons(&v).iter().map(|r| r.1).collect();
+        assert_eq!(acts, vec![CollabAct::Start]);
+        assert!(collab_buttons(&v)[0].0[1] < 14.0, "up in the menu bar");
+        v.press(Btn::Collab(CollabAct::Start), Keys::default(), None);
+        let c = draw(&mut v);
         assert!(has_text(&c, "host (you)"));
         assert!(has_text(&c, "anna"), "in the panel and on their playhead");
-        // The tabs; everyone but us can be followed, and the host has a say over each of them;
-        // the host's row for the open difficulty and the session; the colour toggle is last.
+        // The button; the tabs; everyone but us can be followed, and the host has a say over
+        // each of them; the host's row for the open difficulty and the session, letting
+        // everyone map anywhere; the colour toggle is last.
         let rows = collab_buttons(&v);
         let acts: Vec<CollabAct> = rows.iter().map(|r| r.1).collect();
         assert_eq!(
             acts,
             vec![
+                CollabAct::Start,
                 CollabAct::Tab(Tab::People),
                 CollabAct::Tab(Tab::Chat),
                 CollabAct::Tab(Tab::Notes),
@@ -1317,14 +1568,17 @@ mod tests {
                 CollabAct::Lock,
                 CollabAct::Accept,
                 CollabAct::Close,
+                CollabAct::Free,
                 CollabAct::ByAuthor
             ]
         );
-        // Every row fits the preview's corner.
-        let [px, py, pw, ph] = v.layout.preview;
-        for ([x, y, w, h], _) in &rows {
-            assert!(*x >= px && x + w <= px + pw && *y >= py && y + h <= py + ph);
+        // The panel hangs under its button, on the screen.
+        let [wx, wy, ww, wh] = v.session_win;
+        assert!(wy >= rows[0].0[1] + rows[0].0[3] && wx >= 0.0 && wx + ww <= 853.0);
+        for ([x, y, w, h], _) in &rows[1..] {
+            assert!(*x >= wx && x + w <= wx + ww && *y >= wy && y + h <= wy + wh);
         }
+        assert!(pw > 0.0 && ph > 0.0 && px >= 0.0 && py >= 0.0);
         v.press(Btn::Collab(CollabAct::Follow(2)), Keys::default(), None);
         draw(&mut v);
         assert_eq!(v.ed.time, 1500.0, "the playhead keeps to theirs");
@@ -1500,10 +1754,28 @@ mod tests {
                 owner: None
             })
         );
-        // A part needs notes selected: from the first to the last of them.
+        // With no notes selected, a part runs from the playhead to the end of the song: an
+        // empty song splits by moving the playhead and giving each mapper theirs in turn.
+        v.ed.time = 1000.0;
+        let end = v.end_ms();
+        assert_eq!(
+            cmd(&v, CollabAct::GivePart(2)),
+            Some(HostCmd::Parts {
+                diff: 0,
+                parts: vec![Part {
+                    from: 1000.0,
+                    to: end.max(1000.0) + 1.0,
+                    assignee: Some(2)
+                }]
+            })
+        );
         v.press(Btn::Collab(CollabAct::GivePart(2)), Keys::default(), None);
-        assert!(v.status.contains("select the notes"), "{}", v.status);
-        assert_eq!(cmd(&v, CollabAct::GivePart(2)), None);
+        assert!(
+            v.status.contains("anna maps 0:01 to the end"),
+            "{}",
+            v.status
+        );
+        // With notes selected: from the first to the last of them.
         let (a, b) = (&v.ed.chart.objects[0], &v.ed.chart.objects[2]);
         let (ta, tb) = (a.time, b.time);
         v.ed.selection = [a.id, b.id].into_iter().collect();
@@ -1521,6 +1793,7 @@ mod tests {
         // Not the host: none of it, and the buttons aren't drawn.
         v.collab.as_mut().unwrap().me = 2;
         assert_eq!(cmd(&v, CollabAct::Kick(3)), None);
+        v.picking_mode = true;
         draw(&mut v);
         assert!(!collab_buttons(&v).iter().any(|b| b.1 == CollabAct::Kick(3)));
         assert!(
@@ -1539,7 +1812,7 @@ mod tests {
         };
         let parts = vec![part(0.0, 1000.0, 2), part(1000.0, 3000.0, 3)];
         assert_eq!(
-            with_part(&parts, 500.0, 1500.0, 4),
+            with_part(&parts, 500.0, 1500.0, Some(4)),
             vec![
                 part(0.0, 500.0, 2),
                 part(500.0, 1500.0, 4),
@@ -1547,7 +1820,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            with_part(&parts, 1200.0, 1800.0, 4),
+            with_part(&parts, 1200.0, 1800.0, Some(4)),
             vec![
                 part(0.0, 1000.0, 2),
                 part(1000.0, 1200.0, 3),
@@ -1556,9 +1829,155 @@ mod tests {
             ]
         );
         assert_eq!(
-            with_part(&parts, 0.0, 5000.0, 4),
+            with_part(&parts, 0.0, 5000.0, Some(4)),
             vec![part(0.0, 5000.0, 4)]
         );
+    }
+
+    #[test]
+    fn the_host_lets_everyone_map_anywhere_but_in_the_parts_given_to_people() {
+        let given = |from, to, who| Part {
+            from,
+            to,
+            assignee: Some(who),
+        };
+        let open = |from, to| Part {
+            from,
+            to,
+            assignee: None,
+        };
+        assert_eq!(freed(&[], true), vec![open(0.0, FREE_TO)]);
+        let parts = vec![given(1000.0, 2000.0, 2), given(3000.0, 4000.0, 3)];
+        let free = freed(&parts, true);
+        assert_eq!(
+            free,
+            vec![
+                open(0.0, 1000.0),
+                given(1000.0, 2000.0, 2),
+                open(2000.0, 3000.0),
+                given(3000.0, 4000.0, 3),
+                open(4000.0, FREE_TO)
+            ]
+        );
+        assert_eq!(freed(&free, false), parts, "back to the given parts only");
+        // The host's toggle sends that; pressed again, it takes the open parts back.
+        let mut v = view(true);
+        v.collab.as_mut().unwrap().state.mode = Mode::Collab;
+        let free = v.host_cmd(CollabAct::Free).unwrap();
+        assert_eq!(
+            free,
+            HostCmd::Parts {
+                diff: 0,
+                parts: vec![open(0.0, FREE_TO)]
+            }
+        );
+        let HostCmd::Parts { parts, .. } = free else {
+            unreachable!()
+        };
+        let s = v.collab.as_mut().unwrap();
+        s.state.documents[0].parts = parts;
+        assert!(s.free());
+        assert_eq!(
+            v.host_cmd(CollabAct::Free),
+            Some(HostCmd::Parts {
+                diff: 0,
+                parts: Vec::new()
+            })
+        );
+    }
+
+    #[test]
+    fn a_mapper_sees_where_they_may_place_notes_and_why_an_edit_was_refused() {
+        let mut v = view(true);
+        let s = v.collab.as_mut().unwrap();
+        s.state.mode = Mode::Collab;
+        s.state.documents[1].owner = None;
+        s.me = 2;
+        v.picking_mode = true;
+        let c = draw(&mut v);
+        assert!(has_words(&c, "The host hasn't given you a part yet"));
+        // A refused note says why, and what we may do instead.
+        let refused = LinkEvent::Down(Box::new(MapDown::Refused {
+            client_seq: 0,
+            why: "Oni isn't yours".into(),
+        }));
+        v.take_link_events(vec![refused], Instant::now());
+        assert!(
+            v.status
+                .contains("Oni isn't yours. The host hasn't given you a part yet"),
+            "{}",
+            v.status
+        );
+        // Given a part, then the whole difficulty free.
+        let s = v.collab.as_mut().unwrap();
+        s.state.documents[0].parts = vec![Part {
+            from: 1_000.0,
+            to: 2_000.0,
+            assignee: Some(2),
+        }];
+        assert!(v.end_ms() > 2_000.0);
+        let c = draw(&mut v);
+        assert!(has_words(&c, "Your part: 0:01–0:02"));
+        // A part to the end of the song says so.
+        v.collab.as_mut().unwrap().state.documents[0].parts[0].to = FREE_TO;
+        let c = draw(&mut v);
+        assert!(has_words(&c, "Your part: 0:01–end"));
+        v.collab.as_mut().unwrap().state.documents[0].parts = freed(&[], true);
+        let c = draw(&mut v);
+        assert!(has_words(&c, "Everyone maps anywhere here"));
+        // In guest difficulties: the difficulty that is ours is named.
+        let s = v.collab.as_mut().unwrap();
+        s.state.mode = Mode::Guest;
+        s.state.documents[0].parts.clear();
+        s.state.documents[1].owner = Some(2);
+        let c = draw(&mut v);
+        assert!(has_words(&c, "open Anna's Muzukashii"));
+    }
+
+    #[test]
+    fn the_host_sees_who_has_nothing_to_map_yet() {
+        let mut v = view(true);
+        let s = v.collab.as_mut().unwrap();
+        s.state.mode = Mode::Collab;
+        s.state.documents[1].owner = None;
+        v.picking_mode = true;
+        let c = draw(&mut v);
+        assert!(has_text(&c, "no part"), "anna, a mapper with no part");
+        let s = v.collab.as_mut().unwrap();
+        s.state.documents[0].parts = freed(&[], true);
+        let c = draw(&mut v);
+        assert!(!has_text(&c, "no part"), "an open part is everyone's");
+    }
+
+    #[test]
+    fn unread_chat_marks_the_shut_panel_and_the_panel_shuts_with_the_session() {
+        let mut v = view(true);
+        let s = v.collab.as_mut().unwrap();
+        let now = s.now();
+        s.handle(
+            &mut v.ed,
+            MapDown::Chat {
+                who: 2,
+                text: "hi".into(),
+                at: 0,
+            },
+            now,
+        );
+        let c = draw(&mut v);
+        let amber = |c: &Canvas| c.shapes.len();
+        let marked = amber(&c);
+        v.chat_seen = 1;
+        let c = draw(&mut v);
+        assert!(amber(&c) < marked, "the mark goes once read");
+        v.chat_seen = 0;
+        v.picking_mode = true;
+        v.collab.as_mut().unwrap().tab = Tab::Chat;
+        let c = draw(&mut v);
+        assert!(has_text(&c, "anna: hi"));
+        assert_eq!(v.chat_seen, 1, "read in the open chat");
+        let closed = LinkEvent::Down(Box::new(MapDown::Closed("bye".into())));
+        v.take_link_events(vec![closed], Instant::now());
+        assert!(!v.picking_mode, "no start window pops up after the session");
     }
 
     #[test]
@@ -1596,6 +2015,7 @@ mod tests {
                 now,
             );
         }
+        v.picking_mode = true;
         let c = draw(&mut v);
         assert!(
             has_text(&c, "Notes 1"),
@@ -1670,14 +2090,17 @@ mod tests {
             .unwrap();
         assert!(first < second);
         assert!(acts.contains(&CollabAct::Seek(4000)) && acts.contains(&CollabAct::Say(Say::Note)));
-        // Every tab fits the preview.
-        let [px, py, pw, ph] = v.layout.preview;
+        // Every tab fits its panel under the menu bar's button.
         for tab in [Tab::People, Tab::Chat, Tab::Notes] {
             v.collab.as_mut().unwrap().tab = tab;
             draw(&mut v);
-            for ([x, y, w, h], _) in collab_buttons(&v) {
+            let [wx, wy, ww, wh] = v.session_win;
+            for ([x, y, w, h], a) in collab_buttons(&v) {
+                if a == CollabAct::Start {
+                    continue;
+                }
                 assert!(
-                    x >= px && x + w <= px + pw && y >= py && y + h <= py + ph,
+                    x >= wx && x + w <= wx + ww && y >= wy && y + h <= wy + wh,
                     "{tab:?}"
                 );
             }

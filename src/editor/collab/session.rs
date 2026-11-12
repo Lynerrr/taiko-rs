@@ -8,7 +8,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use taiko_proto::mapping::{
-    CREDITS_KEY, MapDown, MapUp, Participant, SessionState, SnapshotPieces, snapshot_lines,
+    CREDITS_KEY, MapDown, MapUp, Mode, Participant, Role, SessionState, SnapshotPieces,
+    snapshot_lines,
 };
 
 use super::super::chart::Chart;
@@ -83,6 +84,38 @@ pub struct Remote {
     pub seen: f64,
 }
 
+/// What we may edit in the open difficulty, judged as the server judges our edits.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Rights {
+    /// Everything: we host the session.
+    All,
+    /// The whole difficulty: the host gave it to us.
+    Diff,
+    /// Anywhere: the host let every mapper map the whole difficulty.
+    Free,
+    /// Inside these stretches of the song (ms, `from..to`): our parts of a collab difficulty,
+    /// and the open ones (anyone's) between the parts the host gave to people.
+    Parts(Vec<(f64, f64)>),
+    /// Nothing yet: the host hasn't given us a part of this collab difficulty.
+    NoPart,
+    /// Nothing here: the difficulty is someone else's (or nobody's yet); ours is named, if any.
+    NotOurs(Option<String>),
+    /// Nothing: the host locked the difficulty.
+    Locked,
+    /// Nothing: modders and viewers don't edit.
+    ReadOnly,
+}
+
+impl Rights {
+    /// Whether we may place notes anywhere in the open difficulty.
+    pub fn edits(&self) -> bool {
+        matches!(
+            self,
+            Rights::All | Rights::Free | Rights::Diff | Rights::Parts(_)
+        )
+    }
+}
+
 /// What a line from the server asks of the game besides what the session does itself.
 #[derive(Debug, PartialEq)]
 pub enum Notice {
@@ -109,6 +142,8 @@ pub struct Session {
     pub by_author: bool,
     /// What the panel shows.
     pub tab: Tab,
+    /// Chat lines heard in all (the kept ones are fewer), for the unread mark.
+    pub heard: u64,
     /// The last presence sent and when.
     sent: Option<(f64, Remote)>,
     /// A snapshot coming in parts (after a resume).
@@ -130,6 +165,7 @@ impl Session {
             follow: None,
             by_author: false,
             tab: Tab::People,
+            heard: 0,
             sent: None,
             pieces: SnapshotPieces::default(),
             done: 0,
@@ -158,6 +194,79 @@ impl Session {
             .iter()
             .find(|d| d.diff == diff)
             .map_or("?", |d| d.name.as_str())
+    }
+
+    /// What `who` may edit in the open difficulty, as the server's rules have it: the host
+    /// everything; a mapper a guest difficulty given to them, their parts of a collab one and
+    /// the open parts (nobody's: every mapper's); nobody but the host a locked difficulty;
+    /// modders and viewers nothing.
+    pub fn rights_of(&self, who: u32) -> Rights {
+        if who == self.state.host {
+            return Rights::All;
+        }
+        if self.participant(who).is_none_or(|p| p.role != Role::Mapper) {
+            return Rights::ReadOnly;
+        }
+        let open = self.sync.open();
+        let Some(doc) = self.state.documents.iter().find(|d| d.diff == open) else {
+            return Rights::NotOurs(None);
+        };
+        if doc.locked || doc.accepted {
+            return Rights::Locked;
+        }
+        if !doc.parts.is_empty() {
+            if doc.parts.iter().all(|p| p.assignee.is_none()) {
+                return Rights::Free;
+            }
+            let mine: Vec<(f64, f64)> = doc
+                .parts
+                .iter()
+                .filter(|p| p.assignee.is_none_or(|a| a == who))
+                .map(|p| (p.from, p.to))
+                .collect();
+            return if mine.is_empty() {
+                Rights::NoPart
+            } else {
+                Rights::Parts(mine)
+            };
+        }
+        if doc.owner == Some(who) {
+            return Rights::Diff;
+        }
+        match self.state.mode {
+            Mode::Collab => Rights::NoPart,
+            _ => Rights::NotOurs(
+                self.state
+                    .documents
+                    .iter()
+                    .find(|d| d.owner == Some(who))
+                    .map(|d| d.name.clone()),
+            ),
+        }
+    }
+
+    /// What we may edit in the open difficulty.
+    pub fn rights(&self) -> Rights {
+        self.rights_of(self.me)
+    }
+
+    /// Whether a mapper has been given anything to map yet: a part of the open collab
+    /// difficulty (an open part is everyone's), or a guest difficulty.
+    pub fn has_work(&self, who: u32) -> bool {
+        let open = self.sync.open();
+        self.state.documents.iter().any(|d| {
+            d.owner == Some(who)
+                || (d.diff == open && d.parts.iter().any(|p| p.assignee.is_none_or(|a| a == who)))
+        })
+    }
+
+    /// Whether the open difficulty has open parts: every mapper maps there.
+    pub fn free(&self) -> bool {
+        let open = self.sync.open();
+        self.state
+            .documents
+            .iter()
+            .any(|d| d.diff == open && d.parts.iter().any(|p| p.assignee.is_none()))
     }
 
     /// Whether a player in the session is away: online, but nothing of theirs moved for a while.
@@ -205,6 +314,7 @@ impl Session {
                 self.remotes.insert(who, r);
             }
             MapDown::Chat { who, text, .. } => {
+                self.heard += 1;
                 self.chat.push_back((who, text));
                 while self.chat.len() > CHAT_KEPT {
                     self.chat.pop_front();
@@ -261,29 +371,63 @@ impl Session {
             .join(", ")
     }
 
+    /// Puts a difficulty's credits in its chart. Every mapper but the host (the set's
+    /// `Creator`) goes in osu!'s own `Tags`, as osu!'s ranking rules ask of guest and collab
+    /// mappers, so a plain `.osu` keeps to the osu! format. A `.tko`, our own format, also
+    /// keeps the full list, most objects first, in `CREDITS_KEY` for the custom map upload;
+    /// a plain `.osu` loses that key if it has one.
+    pub fn credit(&self, diff: u32, chart: &mut Chart) {
+        let line = self.credits_line(diff, chart);
+        if line.is_empty() {
+            return;
+        }
+        if chart.gimmick.is_some() {
+            chart.set_key("Metadata", CREDITS_KEY, &line);
+        } else if chart.get_key("Metadata", CREDITS_KEY).is_some() {
+            chart.remove_key("Metadata", CREDITS_KEY);
+        }
+        let host = self.participant(self.state.host).map(|p| p.name.as_str());
+        let old = chart.get_key("Metadata", "Tags").unwrap_or_default();
+        let mut tags: Vec<String> = old.split_whitespace().map(str::to_string).collect();
+        for name in line.split(", ") {
+            if Some(name) == host {
+                continue;
+            }
+            // A tag is one word: osu! writes a name with spaces with underscores.
+            let tag = name.split_whitespace().collect::<Vec<_>>().join("_");
+            if !tags.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+                tags.push(tag);
+            }
+        }
+        let new = tags.join(" ");
+        if new != old.trim() {
+            chart.set_key("Metadata", "Tags", &new);
+        }
+    }
+
     /// Saving in a session: the open difficulty's chart gets its credits, and every other
     /// difficulty of the session is written to its file in `dir` (found by its name, or a
-    /// new one named like the set's), with its credits. Returns how many others were written.
+    /// new `.osu` or `.tko` named like the set's), with its credits. Returns how many others
+    /// were written.
     pub fn save_with_credits(&self, ed: &mut Editor) -> Result<usize, String> {
-        let line = self.credits_line(self.sync.open(), &ed.chart);
-        if !line.is_empty() {
-            ed.chart.set_key("Metadata", CREDITS_KEY, &line);
-        }
+        self.credit(self.sync.open(), &mut ed.chart);
         let dir = ed.path.parent().map(Path::to_path_buf).unwrap_or_default();
         let files = super::connect::charts_in(&dir);
         let mut written = 0;
         for (diff, name, chart) in self.sync.others() {
             let mut chart = chart.clone();
-            let line = self.credits_line(diff, &chart);
-            if !line.is_empty() {
-                chart.set_key("Metadata", CREDITS_KEY, &line);
-            }
+            self.credit(diff, &mut chart);
             let path = files
                 .iter()
                 .find(|(_, text)| super::connect::version(text).as_deref() == Some(name))
                 .map(|(p, _)| p.clone())
                 .unwrap_or_else(|| {
-                    let file = format!("{} [{name}].osu", self.state.title);
+                    let ext = if chart.gimmick.is_some() {
+                        "tko"
+                    } else {
+                        "osu"
+                    };
+                    let file = format!("{} [{name}].{ext}", self.state.title);
                     dir.join(crate::download::safe_folder_name(&file))
                 });
             if path == ed.path {
@@ -665,12 +809,56 @@ pub(crate) mod tests {
             "anna, host",
             "six of anna's, five of the set's own"
         );
+        // A plain .osu: the mappers in osu!'s Tags (not the host, the set's Creator), and no
+        // key osu! doesn't know.
+        ed.chart.set_key("Metadata", "Tags", "taiko Anna");
+        ed.chart.set_key("Metadata", CREDITS_KEY, "stale");
         assert_eq!(s.save_with_credits(&mut ed).unwrap(), 1);
         ed.save().unwrap();
         let oni = std::fs::read_to_string(&ed.path).unwrap();
-        assert!(oni.contains("TaikoRsMappers:anna, host"), "{oni}");
+        assert!(
+            oni.contains("Tags:taiko Anna\r\n"),
+            "a name already tagged stays: {oni}"
+        );
+        assert!(!oni.contains(CREDITS_KEY), "{oni}");
         let other = std::fs::read_to_string(dir.join("Test [Anna's Muzukashii].osu")).unwrap();
-        assert!(other.contains("TaikoRsMappers:host"), "{other}");
+        assert!(
+            !other.contains(CREDITS_KEY) && !other.contains("Tags:"),
+            "the host's own: {other}"
+        );
+        // A .tko keeps the full list for the upload, and the tags too.
+        let mut tko = ed.chart.clone();
+        tko.remove_key("Metadata", "Tags");
+        tko.gimmick = Some(Default::default());
+        s.credit(0, &mut tko);
+        assert_eq!(
+            tko.get_key("Metadata", CREDITS_KEY).as_deref(),
+            Some("anna, host")
+        );
+        assert_eq!(tko.get_key("Metadata", "Tags").as_deref(), Some("anna"));
+        // A name with spaces is one tag.
+        s.state.participants[1].name = "anna maria".into();
+        let mut plain = ed.chart.clone();
+        plain.remove_key("Metadata", "Tags");
+        s.credit(0, &mut plain);
+        assert_eq!(
+            plain.get_key("Metadata", "Tags").as_deref(),
+            Some("anna_maria")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tko_difficulty_missing_from_the_folder_is_written_as_a_tko() {
+        let (mut s, mut ed) = session();
+        let dir = std::env::temp_dir().join(format!("taiko-rs-session-tko-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ed.path = dir.join("Test [Oni].osu");
+        s.sync.set_gimmick_for_tests(1, Default::default());
+        assert_eq!(s.save_with_credits(&mut ed).unwrap(), 1);
+        assert!(dir.join("Test [Anna's Muzukashii].tko").exists());
+        assert!(!dir.join("Test [Anna's Muzukashii].osu").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

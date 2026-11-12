@@ -3,7 +3,8 @@ text   49,4    Edit
 text   87,4    View
 text  125,4    Timing
 text  175,4    Help
-text  773,4     - Test [Oni]
+text  627,4     - Test [Oni]
+text  719,4    Mapping session · 3
 text  385,23   0:00.000
 text   19,24   Compose
 text   98,24   Gimmicks
@@ -26,36 +27,17 @@ text  632,26   +
 text  488,28   -
 text  585,28   -
 text  305,49   NOTES
-text  109,51   Mapping session · 3
-text  111,62   People
-text  168,62   Chat
-text  226,62   Notes 0
 text  305,65   Nothing selected
 text  637,65   THIS DIFFICULTY
-text  118,73   host (you)
-text  260,73   host
 text  637,77   3 notes
 text  305,83   New notes:
 text  370,84   Kat  W
 text  422,84   Big  E
-text  118,85   anna
-text  198,85   GD
-text  223,85   kick
-text  163,86   mapper
 text  638,88   1 don, 2 kat
-text  118,93   bob
-text  251,93   Anna...
-text  163,95   modder
-text  198,95   GD
-text  223,95   kick
 text  638,99   1 drumrolls, 1 dendens
 text  305,101  Click the lane to place a note on the grid. W makes the
-text  111,105  lock
-text  148,105  accept
-text  200,105  end session
 text  638,110  120.0 BPM at the playhead
 text  305,111  note in hand a kat (or a don again), E a big one. Click
-text  110,116  [x] colour by author
 text  305,120  a placed note to give it that colour. Right click
 text  637,121  Length 0:21.000
 text  305,130  deletes.

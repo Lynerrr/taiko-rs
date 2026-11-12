@@ -495,8 +495,8 @@ mod tests {
     fn folders_list_the_biggest_genres_first_and_only_those_with_songs() {
         let mut l = list(5);
         l.tracks[0].genres = 0b1;
-        for t in 1..4 {
-            l.tracks[t].genres = 0b100;
+        for t in &mut l.tracks[1..4] {
+            t.genres = 0b100;
         }
         let folders = l.folders();
         assert_eq!(

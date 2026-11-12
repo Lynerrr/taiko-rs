@@ -1453,6 +1453,12 @@ fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
             view.ed.chart.objects.iter().any(|o| o.time == 7000.0),
             "the op after the snapshot"
         );
+        // The session panel opens on joining, under its menu-bar button, and says what we map.
+        assert!(view.session_panel_open());
+        assert_eq!(
+            view.collab.as_ref().unwrap().rights(),
+            crate::editor::collab::session::Rights::Diff
+        );
         view.ed.place_hit(8000.0, false).unwrap();
     }
     let alone = |s: &State| {

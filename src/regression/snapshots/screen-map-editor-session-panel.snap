@@ -1,0 +1,83 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  627,4     - Test [Oni]
+text  719,4    Mapping session · 3
+text  673,22   People
+text  731,22   Chat
+text  788,22   Notes 0
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  506,24   1/4
+text  600,24   100%
+text  347,25   Play
+text  458,25   Snap
+text  550,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  534,26   +
+text  632,26   +
+text  488,28   -
+text  585,28   -
+text  680,33   host (you)
+text  823,33   host
+text  680,45   anna
+text  761,45   GD
+text  786,45   kick
+text  726,46   mapper
+text  305,49   NOTES
+text  680,53   bob
+text  813,53   Anna...
+text  726,55   modder
+text  761,55   GD
+text  786,55   kick
+text  305,65   Nothing selected
+text  637,65   THIS DIFFICULTY
+text  674,65   lock
+text  711,65   accept
+text  763,65   end session
+text  672,76   [x] everyone maps anywhere
+text  637,77   3 notes
+text  305,83   New notes:
+text  370,84   Kat  W
+text  422,84   Big  E
+text  672,87   [x] colour by author
+text  638,88   1 don, 2 kat
+text  638,99   1 drumrolls, 1 dendens
+text  305,101  Click the lane to place a note on the grid. W makes the
+text  638,110  120.0 BPM at the playhead
+text  305,111  note in hand a kat (or a don again), E a big one. Click
+text  305,120  a placed note to give it that colour. Right click
+text  637,121  Length 0:21.000
+text  305,130  deletes.
+text  637,132  0 bookmarks
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  660,211  anna
+text  786,211  0:02.000
+text   21,214  1
+text  287,224  120 BPM
+text   10,234  Select
+text   20,250  2
+text   14,269  Note
+text   20,285  3
+text   14,305  Roll
+text   20,321  4
+text   10,340  Denden
+text  531,361  Slider velocity (read only here: edit it in Timing mode, F3)
+text   11,372  x2
+text   11,393  x1
+text   11,414  x0.5
+text    8,447  0:00.000    1/4 snap    120.0 BPM    SV x1.00    5 notes
+text    8,460  Compose: place and edit notes. Hover anything for a tip.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save
