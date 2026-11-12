@@ -13,6 +13,17 @@ it never send the field, and the game sends nothing about sessions to a server t
 it: no session request, no mapping stream, no social message. The single-player editor never
 builds a session at all.
 
+## Connection (`taiko_proto::mapping::Link`)
+
+`Request::OpenMapping` (the host, for a set), `JoinMapping` (an invited player) or
+`ResumeMapping` (back after a lost connection, as the same join) is answered with
+`Reply::Mapping` (session, our epoch and id, the assets the server still needs, and on a resume
+the last of our ops it took), and the connection then carries `MapUp` / `MapDown` lines, read and
+written on threads of their own like the social connection, with a ping every 25 s. A line the
+game doesn't know is passed over. The link reports `Joined`, every `Down` and `Lost`; it never
+reconnects by itself, since the resume needs the session's last seq. Snapshots go in 512 KiB
+parts (`snapshot_lines`, `SnapshotPieces`), keeping every line within protocol 1's 1 MiB.
+
 ## Sync (`src/editor/collab.rs`)
 
 Every edit is a `history::Command` already. In a session the history keeps an outbox of the

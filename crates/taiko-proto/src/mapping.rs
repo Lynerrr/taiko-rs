@@ -330,6 +330,55 @@ pub fn refusal(state: &SessionState, who: u32, diff: Option<u32>, op: &MapOp) ->
     None
 }
 
+/// A file of the set other than its charts (audio, background, video, storyboard images).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AssetRef {
+    pub name: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+/// The set a host opens a session for.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SetDescriptor {
+    pub title: String,
+    /// Its folder's name (the set is found by it again on resuming).
+    pub folder: String,
+    /// The difficulties' names.
+    pub diffs: Vec<String>,
+    pub assets: Vec<AssetRef>,
+}
+
+/// What only the host does in a session.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum HostCmd {
+    /// Invites a friend by name.
+    Invite(String),
+    Kick(u32),
+    Role {
+        who: u32,
+        role: Role,
+    },
+    /// Gives a difficulty to a guest, or takes it back (`None`).
+    AssignDiff {
+        diff: u32,
+        owner: Option<u32>,
+    },
+    Lock {
+        diff: u32,
+        locked: bool,
+        accepted: bool,
+    },
+    Parts {
+        diff: u32,
+        parts: Vec<Part>,
+    },
+    AddDiff {
+        name: String,
+    },
+    Close,
+}
+
 /// One difficulty in a snapshot: the file's text and the ids of its timing points and hit
 /// objects in the order the game's parser reads them, and who made each object.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -369,7 +418,7 @@ pub enum MapUp {
         op: MapOp,
     },
     /// The confirmed state at `seq` (asked by `MapDown::SnapshotWanted`, or the first one),
-    /// the JSON of `SnapshotData` in pieces.
+    /// the JSON of `SnapshotData` in parts (`snapshot_lines`).
     Snapshot {
         seq: u64,
         part: u32,
@@ -383,6 +432,30 @@ pub enum MapUp {
         selection: Vec<u64>,
     },
     Chat(String),
+    /// A review comment pinned to a time of a difficulty, and resolving one.
+    Comment {
+        diff: u32,
+        time: f64,
+        text: String,
+    },
+    Resolve {
+        comment: u64,
+        resolved: bool,
+    },
+    Host(HostCmd),
+    /// Host: a piece of an asset the server needs (base64 `data`, at most `ASSET_PIECE` bytes
+    /// before encoding).
+    Asset {
+        sha256: String,
+        offset: u64,
+        total: u64,
+        data: String,
+    },
+    /// Asks for an asset from `offset` on (`MapDown::AssetPart`).
+    GetAsset {
+        sha256: String,
+        offset: u64,
+    },
     Ping,
 }
 
@@ -416,8 +489,212 @@ pub enum MapDown {
     SnapshotWanted {
         seq: u64,
     },
+    Comment(Comment),
+    Resolved {
+        comment: u64,
+        resolved: bool,
+        by: u32,
+    },
+    AssetPart {
+        sha256: String,
+        offset: u64,
+        total: u64,
+        data: String,
+    },
     Closed(String),
     Pong,
+}
+
+/// Raw bytes of an asset per piece, and characters of snapshot JSON per part: both keep a line
+/// well under the protocol's 1 MiB.
+pub const ASSET_PIECE: usize = 512 * 1024;
+pub const SNAPSHOT_PART: usize = 512 * 1024;
+
+/// A snapshot as the lines that carry it.
+pub fn snapshot_lines(seq: u64, data: &SnapshotData) -> Vec<MapUp> {
+    let json = serde_json::to_string(data).unwrap_or_default();
+    let mut parts: Vec<String> = Vec::new();
+    let mut rest = json.as_str();
+    while !rest.is_empty() || parts.is_empty() {
+        let mut cut = rest.len().min(SNAPSHOT_PART);
+        while !rest.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        parts.push(rest[..cut].to_string());
+        rest = &rest[cut..];
+    }
+    let n = parts.len() as u32;
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(i, data)| MapUp::Snapshot {
+            seq,
+            part: i as u32,
+            parts: n,
+            data,
+        })
+        .collect()
+}
+
+/// Puts a snapshot back together from its parts as they come.
+#[derive(Default)]
+pub struct SnapshotPieces {
+    seq: u64,
+    parts: Vec<Option<String>>,
+}
+
+impl SnapshotPieces {
+    /// Takes a part; the whole snapshot (at its seq) once every part is in. A part of another
+    /// snapshot starts over.
+    pub fn add(
+        &mut self,
+        seq: u64,
+        part: u32,
+        parts: u32,
+        data: String,
+    ) -> Option<(u64, SnapshotData)> {
+        if seq != self.seq || self.parts.len() != parts as usize {
+            self.seq = seq;
+            self.parts = vec![None; parts as usize];
+        }
+        *self.parts.get_mut(part as usize)? = Some(data);
+        if self.parts.iter().any(Option::is_none) {
+            return None;
+        }
+        let json: String = self.parts.drain(..).flatten().collect();
+        serde_json::from_str(&json).ok().map(|d| (seq, d))
+    }
+}
+
+/// What a mapping connection reports to the game.
+#[derive(Debug)]
+pub enum LinkEvent {
+    /// In the session (`Reply::Mapping`).
+    Joined {
+        session: u64,
+        epoch: u32,
+        me: u32,
+        needs: Vec<String>,
+        done: u64,
+    },
+    Down(Box<MapDown>),
+    /// The connection couldn't be made or was lost: why. The game resumes with
+    /// `Request::ResumeMapping` when it wants to go on.
+    Lost(String),
+}
+
+/// The game's connection to a mapping session: one request, then the mapping stream, read and
+/// written on threads of its own. Dropping it disconnects.
+pub struct Link {
+    tx: std::sync::mpsc::Sender<MapUp>,
+    rx: std::sync::mpsc::Receiver<LinkEvent>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Link {
+    /// Connects with `request` (`OpenMapping`, `JoinMapping` or `ResumeMapping`).
+    pub fn start(server: String, request: crate::online::Request) -> Link {
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+        let (tx, out) = mpsc::channel::<MapUp>();
+        let (events, rx) = mpsc::channel();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = stop.clone();
+        std::thread::spawn(move || {
+            let lost = |events: &mpsc::Sender<LinkEvent>, why: String| {
+                let _ = events.send(LinkEvent::Lost(why));
+            };
+            let (reply, reader) = match crate::online::exchange(&server, request) {
+                Ok(r) => r,
+                Err(e) => return lost(&events, e),
+            };
+            match reply {
+                crate::online::Reply::Mapping {
+                    session,
+                    epoch,
+                    me,
+                    needs,
+                    done,
+                } => {
+                    let _ = events.send(LinkEvent::Joined {
+                        session,
+                        epoch,
+                        me,
+                        needs,
+                        done,
+                    });
+                }
+                crate::online::Reply::Error(e) => return lost(&events, e),
+                _ => return lost(&events, "the server didn't open the session".into()),
+            }
+            let _ = reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_secs(70)));
+            let _ = reader.get_ref().set_write_timeout(None);
+            let Ok(mut stream) = reader.get_ref().try_clone() else {
+                return lost(&events, "the connection dropped".into());
+            };
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
+            let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            {
+                let (events, alive) = (events.clone(), alive.clone());
+                std::thread::spawn(move || {
+                    let mut reader = reader;
+                    while let Ok(line) = crate::online::read_line(&mut reader) {
+                        // A line this build doesn't know is passed over.
+                        if let Ok(d) = serde_json::from_str::<MapDown>(&line)
+                            && events.send(LinkEvent::Down(Box::new(d))).is_err()
+                        {
+                            break;
+                        }
+                    }
+                    alive.store(false, Ordering::Relaxed);
+                });
+            }
+            let mut last_ping = Instant::now();
+            loop {
+                if stopped.load(Ordering::Relaxed) {
+                    let _ = stream.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+                if !alive.load(Ordering::Relaxed) {
+                    break;
+                }
+                if last_ping.elapsed() > Duration::from_secs(25) {
+                    last_ping = Instant::now();
+                    if crate::online::write_line(&mut stream, &MapUp::Ping).is_err() {
+                        break;
+                    }
+                }
+                let up = match out.recv_timeout(Duration::from_millis(100)) {
+                    Ok(up) => up,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                };
+                if crate::online::write_line(&mut stream, &up).is_err() {
+                    break;
+                }
+            }
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+            lost(&events, "the connection dropped".into());
+        });
+        Link { tx, rx, stop }
+    }
+
+    pub fn send(&self, up: MapUp) {
+        let _ = self.tx.send(up);
+    }
+
+    pub fn poll(&self) -> Vec<LinkEvent> {
+        self.rx.try_iter().collect()
+    }
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -549,6 +826,40 @@ mod tests {
         s.documents[0].owner = Some(3);
         s.documents[0].accepted = false;
         assert!(refusal(&s, 2, Some(0), &n).is_some(), "not theirs");
+    }
+
+    #[test]
+    fn a_snapshot_goes_in_parts_and_comes_back_whole() {
+        let data = SnapshotData {
+            docs: vec![DocSnapshot {
+                diff: 0,
+                name: "Oni".into(),
+                text: "ü".repeat(SNAPSHOT_PART),
+                timing_ids: vec![1],
+                object_ids: vec![2, 3],
+                authors: vec![(2, 1)],
+            }],
+        };
+        let lines = snapshot_lines(7, &data);
+        assert_eq!(lines.len(), 3, "two bytes a letter: just over two parts");
+        let mut pieces = SnapshotPieces::default();
+        // A part of an older snapshot is dropped by a newer one starting.
+        assert!(pieces.add(6, 0, 2, "{".into()).is_none());
+        let mut whole = None;
+        for l in lines.into_iter().rev() {
+            let MapUp::Snapshot {
+                seq,
+                part,
+                parts,
+                data,
+            } = l
+            else {
+                unreachable!()
+            };
+            assert!(data.len() <= SNAPSHOT_PART);
+            whole = pieces.add(seq, part, parts, data);
+        }
+        assert_eq!(whole, Some((7, data)));
     }
 
     #[test]

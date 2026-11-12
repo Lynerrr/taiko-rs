@@ -292,6 +292,30 @@ fn requests() -> Vec<Request> {
             map: None,
         },
         Request::Medals { name: "me".into() },
+        Request::OpenMapping {
+            token: "t".into(),
+            set: mapping::SetDescriptor {
+                title: "Artist - Song".into(),
+                folder: "1 Artist - Song".into(),
+                diffs: vec!["Oni".into(), "Muzukashii".into()],
+                assets: vec![mapping::AssetRef {
+                    name: "audio.mp3".into(),
+                    sha256: "ab".into(),
+                    size: 3,
+                }],
+            },
+            mode: mapping::Mode::Guest,
+        },
+        Request::JoinMapping {
+            token: "t".into(),
+            session: 9,
+        },
+        Request::ResumeMapping {
+            token: "t".into(),
+            session: 9,
+            epoch: 2,
+            last_seq: 40,
+        },
     ]
 }
 
@@ -365,6 +389,13 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: Vec::new(),
+        },
+        Reply::Mapping {
+            session: 9,
+            epoch: 2,
+            me: 2,
+            needs: vec!["ab".into()],
+            done: 0,
         },
         Reply::Account {
             name: "a".into(),
@@ -460,6 +491,40 @@ fn mapping_ups() -> Vec<mapping::MapUp> {
             selection: vec![5],
         },
         mapping::MapUp::Chat("hi".into()),
+        mapping::MapUp::Comment {
+            diff: 0,
+            time: 1000.0,
+            text: "01:00:000 (1) - too dense".into(),
+        },
+        mapping::MapUp::Resolve {
+            comment: 1,
+            resolved: true,
+        },
+        mapping::MapUp::Host(mapping::HostCmd::Invite("anna".into())),
+        mapping::MapUp::Host(mapping::HostCmd::Parts {
+            diff: 0,
+            parts: vec![mapping::Part {
+                from: 0.0,
+                to: 1000.0,
+                assignee: None,
+            }],
+        }),
+        mapping::MapUp::Host(mapping::HostCmd::Lock {
+            diff: 1,
+            locked: true,
+            accepted: true,
+        }),
+        mapping::MapUp::Host(mapping::HostCmd::Close),
+        mapping::MapUp::Asset {
+            sha256: "ab".into(),
+            offset: 0,
+            total: 3,
+            data: "AAEC".into(),
+        },
+        mapping::MapUp::GetAsset {
+            sha256: "ab".into(),
+            offset: 0,
+        },
         mapping::MapUp::Ping,
     ]
 }
@@ -492,6 +557,18 @@ fn mapping_downs() -> Vec<mapping::MapDown> {
             at: 7,
         },
         mapping::MapDown::SnapshotWanted { seq: 2000 },
+        mapping::MapDown::Comment(mapping_state().comments[0].clone()),
+        mapping::MapDown::Resolved {
+            comment: 1,
+            resolved: true,
+            by: 1,
+        },
+        mapping::MapDown::AssetPart {
+            sha256: "ab".into(),
+            offset: 0,
+            total: 3,
+            data: "AAEC".into(),
+        },
         mapping::MapDown::Closed("the host closed the session".into()),
         mapping::MapDown::Pong,
     ]
@@ -580,6 +657,82 @@ fn messages_from_older_servers_still_read() {
     // A message this build doesn't know is skipped by the reader, not a disconnect: it just
     // doesn't parse as a ServerMsg.
     assert!(serde_json::from_str::<ServerMsg>(r#"{"FutureThing":{"x":1}}"#).is_err());
+}
+
+/// A mapping session's connection against a scripted server: the request and its reply, the
+/// stream both ways, and the end of the connection reported.
+#[test]
+fn a_mapping_session_connects_streams_and_reports_the_end() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut out = stream;
+        let first = online::read_line(&mut reader).unwrap();
+        let env: Envelope = serde_json::from_str(&first).unwrap();
+        assert!(matches!(
+            env.request,
+            Request::JoinMapping { session: 9, .. }
+        ));
+        online::write_line(
+            &mut out,
+            &Reply::Mapping {
+                session: 9,
+                epoch: 3,
+                me: 2,
+                needs: Vec::new(),
+                done: 0,
+            },
+        )
+        .unwrap();
+        online::write_line(&mut out, &mapping::MapDown::State(mapping_state())).unwrap();
+        // A line from a newer server is passed over, not a disconnect.
+        out.write_all(b"{\"FutureThing\":1}\n").unwrap();
+        online::write_line(&mut out, &mapping::MapDown::Pong).unwrap();
+        let up = online::read_line(&mut reader).unwrap();
+        let up: mapping::MapUp = serde_json::from_str(&up).unwrap();
+        assert_eq!(up, mapping::MapUp::Chat("hi".into()));
+        // The server goes away.
+    });
+    let link = mapping::Link::start(
+        format!("127.0.0.1:{port}"),
+        Request::JoinMapping {
+            token: "t".into(),
+            session: 9,
+        },
+    );
+    let mut events = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while events.len() < 3 && Instant::now() < deadline {
+        events.extend(link.poll());
+        std::thread::yield_now();
+    }
+    assert!(matches!(
+        events[0],
+        mapping::LinkEvent::Joined {
+            session: 9,
+            epoch: 3,
+            me: 2,
+            ..
+        }
+    ));
+    assert!(
+        matches!(&events[1], mapping::LinkEvent::Down(d) if matches!(**d, mapping::MapDown::State(_)))
+    );
+    assert!(matches!(&events[2], mapping::LinkEvent::Down(d) if **d == mapping::MapDown::Pong));
+    link.send(mapping::MapUp::Chat("hi".into()));
+    server.join().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut lost = false;
+    while !lost && Instant::now() < deadline {
+        lost = link
+            .poll()
+            .iter()
+            .any(|e| matches!(e, mapping::LinkEvent::Lost(_)));
+        std::thread::yield_now();
+    }
+    assert!(lost, "the end of the connection is reported");
 }
 
 #[test]

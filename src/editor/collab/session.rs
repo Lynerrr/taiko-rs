@@ -147,8 +147,21 @@ impl Session {
                     self.chat.pop_front();
                 }
             }
+            MapDown::Comment(c) => match self.state.comments.iter_mut().find(|k| k.id == c.id) {
+                Some(k) => *k = c,
+                None => self.state.comments.push(c),
+            },
+            MapDown::Resolved {
+                comment, resolved, ..
+            } => {
+                if let Some(k) = self.state.comments.iter_mut().find(|k| k.id == comment) {
+                    k.resolved = resolved;
+                }
+            }
             MapDown::Closed(why) => return Some(Notice::Closed(why)),
-            MapDown::Presence { .. }
+            // Assets are fetched while joining, before the editor opens.
+            MapDown::AssetPart { .. }
+            | MapDown::Presence { .. }
             | MapDown::Snapshot { .. }
             | MapDown::SnapshotWanted { .. }
             | MapDown::Pong => {}
@@ -388,6 +401,31 @@ pub(crate) mod tests {
         }
         assert_eq!(s.chat.len(), 200);
         assert_eq!(s.chat.back(), Some(&(2, "249".to_string())));
+        let note = taiko_proto::mapping::Comment {
+            id: 4,
+            diff: 0,
+            time: 1000.0,
+            author: 3,
+            text: "00:01:000 (1) - too dense".into(),
+            resolved: false,
+        };
+        s.handle(&mut ed, MapDown::Comment(note.clone()), 0.0);
+        s.handle(&mut ed, MapDown::Comment(note), 0.0);
+        s.handle(
+            &mut ed,
+            MapDown::Resolved {
+                comment: 4,
+                resolved: true,
+                by: 1,
+            },
+            0.0,
+        );
+        assert_eq!(
+            s.state.comments.len(),
+            1,
+            "the same comment again replaces it"
+        );
+        assert!(s.state.comments[0].resolved);
         assert_eq!(
             s.handle(&mut ed, MapDown::Closed("bye".into()), 0.0),
             Some(Notice::Closed("bye".into()))

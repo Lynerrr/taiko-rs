@@ -147,6 +147,27 @@ pub enum Request {
     Medals {
         name: String,
     },
+    /// Collaborative mapping, only to a server that lists `mapping::FEATURE`: the host opens a
+    /// session for a map set (or resumes their open one for it), `Reply::Mapping`, then the
+    /// mapping stream (`mapping::MapUp` / `mapping::MapDown`) on the same connection.
+    OpenMapping {
+        token: String,
+        set: crate::mapping::SetDescriptor,
+        mode: crate::mapping::Mode,
+    },
+    /// Joins a session we were invited to (`Reply::Mapping`, then the mapping stream).
+    JoinMapping {
+        token: String,
+        session: u64,
+    },
+    /// Back in a session after a lost connection, as the same join (`epoch`), having every op
+    /// up to `last_seq`.
+    ResumeMapping {
+        token: String,
+        session: u64,
+        epoch: u32,
+        last_seq: u64,
+    },
     /// The game crashed last time: its report, sent on the next start (`Reply::Counted`),
     /// unless the player turned that off (Settings > Online > Send crash reports).
     CrashReport(Box<CrashReport>),
@@ -1099,6 +1120,18 @@ pub enum Reply {
         host_token: Option<u64>,
     },
     Error(String),
+    /// In a mapping session: which it is, our join (`epoch`, whose ids we make) and our id in it,
+    /// the set's files the server still needs from the host (by sha256), and on a resume the last
+    /// of our ops it took (`done`, by client sequence).
+    Mapping {
+        session: u64,
+        epoch: u32,
+        me: u32,
+        #[serde(default)]
+        needs: Vec<String>,
+        #[serde(default)]
+        done: u64,
+    },
     /// The play is on the leaderboards: its place on the map (if it's the player's best there),
     /// and the player's pp total and rank now.
     Submitted {
