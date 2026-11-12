@@ -371,29 +371,63 @@ impl Session {
             .join(", ")
     }
 
+    /// Puts a difficulty's credits in its chart. Every mapper but the host (the set's
+    /// `Creator`) goes in osu!'s own `Tags`, as osu!'s ranking rules ask of guest and collab
+    /// mappers, so a plain `.osu` keeps to the osu! format. A `.tko`, our own format, also
+    /// keeps the full list, most objects first, in `CREDITS_KEY` for the custom map upload;
+    /// a plain `.osu` loses that key if it has one.
+    pub fn credit(&self, diff: u32, chart: &mut Chart) {
+        let line = self.credits_line(diff, chart);
+        if line.is_empty() {
+            return;
+        }
+        if chart.gimmick.is_some() {
+            chart.set_key("Metadata", CREDITS_KEY, &line);
+        } else if chart.get_key("Metadata", CREDITS_KEY).is_some() {
+            chart.remove_key("Metadata", CREDITS_KEY);
+        }
+        let host = self.participant(self.state.host).map(|p| p.name.as_str());
+        let old = chart.get_key("Metadata", "Tags").unwrap_or_default();
+        let mut tags: Vec<String> = old.split_whitespace().map(str::to_string).collect();
+        for name in line.split(", ") {
+            if Some(name) == host {
+                continue;
+            }
+            // A tag is one word: osu! writes a name with spaces with underscores.
+            let tag = name.split_whitespace().collect::<Vec<_>>().join("_");
+            if !tags.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+                tags.push(tag);
+            }
+        }
+        let new = tags.join(" ");
+        if new != old.trim() {
+            chart.set_key("Metadata", "Tags", &new);
+        }
+    }
+
     /// Saving in a session: the open difficulty's chart gets its credits, and every other
     /// difficulty of the session is written to its file in `dir` (found by its name, or a
-    /// new one named like the set's), with its credits. Returns how many others were written.
+    /// new `.osu` or `.tko` named like the set's), with its credits. Returns how many others
+    /// were written.
     pub fn save_with_credits(&self, ed: &mut Editor) -> Result<usize, String> {
-        let line = self.credits_line(self.sync.open(), &ed.chart);
-        if !line.is_empty() {
-            ed.chart.set_key("Metadata", CREDITS_KEY, &line);
-        }
+        self.credit(self.sync.open(), &mut ed.chart);
         let dir = ed.path.parent().map(Path::to_path_buf).unwrap_or_default();
         let files = super::connect::charts_in(&dir);
         let mut written = 0;
         for (diff, name, chart) in self.sync.others() {
             let mut chart = chart.clone();
-            let line = self.credits_line(diff, &chart);
-            if !line.is_empty() {
-                chart.set_key("Metadata", CREDITS_KEY, &line);
-            }
+            self.credit(diff, &mut chart);
             let path = files
                 .iter()
                 .find(|(_, text)| super::connect::version(text).as_deref() == Some(name))
                 .map(|(p, _)| p.clone())
                 .unwrap_or_else(|| {
-                    let file = format!("{} [{name}].osu", self.state.title);
+                    let ext = if chart.gimmick.is_some() {
+                        "tko"
+                    } else {
+                        "osu"
+                    };
+                    let file = format!("{} [{name}].{ext}", self.state.title);
                     dir.join(crate::download::safe_folder_name(&file))
                 });
             if path == ed.path {
@@ -775,12 +809,56 @@ pub(crate) mod tests {
             "anna, host",
             "six of anna's, five of the set's own"
         );
+        // A plain .osu: the mappers in osu!'s Tags (not the host, the set's Creator), and no
+        // key osu! doesn't know.
+        ed.chart.set_key("Metadata", "Tags", "taiko Anna");
+        ed.chart.set_key("Metadata", CREDITS_KEY, "stale");
         assert_eq!(s.save_with_credits(&mut ed).unwrap(), 1);
         ed.save().unwrap();
         let oni = std::fs::read_to_string(&ed.path).unwrap();
-        assert!(oni.contains("TaikoRsMappers:anna, host"), "{oni}");
+        assert!(
+            oni.contains("Tags:taiko Anna\r\n"),
+            "a name already tagged stays: {oni}"
+        );
+        assert!(!oni.contains(CREDITS_KEY), "{oni}");
         let other = std::fs::read_to_string(dir.join("Test [Anna's Muzukashii].osu")).unwrap();
-        assert!(other.contains("TaikoRsMappers:host"), "{other}");
+        assert!(
+            !other.contains(CREDITS_KEY) && !other.contains("Tags:"),
+            "the host's own: {other}"
+        );
+        // A .tko keeps the full list for the upload, and the tags too.
+        let mut tko = ed.chart.clone();
+        tko.remove_key("Metadata", "Tags");
+        tko.gimmick = Some(Default::default());
+        s.credit(0, &mut tko);
+        assert_eq!(
+            tko.get_key("Metadata", CREDITS_KEY).as_deref(),
+            Some("anna, host")
+        );
+        assert_eq!(tko.get_key("Metadata", "Tags").as_deref(), Some("anna"));
+        // A name with spaces is one tag.
+        s.state.participants[1].name = "anna maria".into();
+        let mut plain = ed.chart.clone();
+        plain.remove_key("Metadata", "Tags");
+        s.credit(0, &mut plain);
+        assert_eq!(
+            plain.get_key("Metadata", "Tags").as_deref(),
+            Some("anna_maria")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tko_difficulty_missing_from_the_folder_is_written_as_a_tko() {
+        let (mut s, mut ed) = session();
+        let dir = std::env::temp_dir().join(format!("taiko-rs-session-tko-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ed.path = dir.join("Test [Oni].osu");
+        s.sync.set_gimmick_for_tests(1, Default::default());
+        assert_eq!(s.save_with_credits(&mut ed).unwrap(), 1);
+        assert!(dir.join("Test [Anna's Muzukashii].tko").exists());
+        assert!(!dir.join("Test [Anna's Muzukashii].osu").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

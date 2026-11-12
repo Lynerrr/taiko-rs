@@ -664,6 +664,14 @@ impl Sync {
             .map(|(d, c)| (*d, self.names.get(d).map_or("", String::as_str), c))
     }
 
+    /// Gives a difficulty's confirmed chart a gimmick, as if it were a `.tko`.
+    #[cfg(test)]
+    pub fn set_gimmick_for_tests(&mut self, diff: u32, g: crate::tko::gimmick::Gimmick) {
+        if let Some(c) = self.docs.get_mut(&diff) {
+            c.gimmick = Some(g);
+        }
+    }
+
     /// The confirmed chart of a difficulty: everything the server ordered so far.
     #[cfg(test)]
     pub fn confirmed(&self, diff: u32) -> Option<&Chart> {
