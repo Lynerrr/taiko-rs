@@ -2036,6 +2036,45 @@ fn a_maps_text_and_pictures_are_drawn_while_their_clips_last() {
     assert_eq!(c.shapes[0].half, [36.0, 18.0], "as wide as its shape says");
 }
 
+#[test]
+fn an_animated_picture_plays_from_the_start_of_its_layer() {
+    use crate::tko::clips::{Clip, Show, Target};
+    draw_with_defaults();
+    let mut g = crate::tko::gimmick::Gimmick::default();
+    let layer = |file: &str, start: f64, end: f64, keep: bool| {
+        let mut clip = Clip::new(Target::Layer, start, end);
+        clip.keep = keep;
+        clip.layer.as_deref_mut().unwrap().show = Show::Picture { file: file.into() };
+        clip
+    };
+    // The same picture twice: the first layer drawn sets where it is.
+    g.clips = vec![
+        layer("FX.gif", 2000.0, 6000.0, true),
+        layer("fx.gif", 3000.0, 6000.0, false),
+        layer("still.png", 2000.0, 6000.0, false),
+    ];
+    let mut game = tko_game(Some(g), Mods::NONE);
+    let times = |game: &mut Play, t: f64| {
+        game.put_at(t);
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        game.draw_playfield(&mut c, 1.0);
+        c.picture_times
+    };
+    assert!(
+        times(&mut game, 1000.0).is_empty(),
+        "nothing before it starts"
+    );
+    let at = times(&mut game, 4500.0);
+    let fx = at.iter().find(|(n, _)| n == "fx.gif").unwrap().1;
+    assert!((fx - 2500.0).abs() < 1.0, "{at:?}");
+    assert_eq!(at.iter().filter(|(n, _)| n == "fx.gif").count(), 1);
+    // Kept past its end, it plays on.
+    let at = times(&mut game, 8000.0);
+    let fx = at.iter().find(|(n, _)| n == "fx.gif").unwrap().1;
+    assert!((fx - 6000.0).abs() < 1.0, "{at:?}");
+}
+
 /// A map's text and pictures are placed on the editor's 16:9 frame, from its middle: in a play
 /// area of another shape their sideways offset scales with its width, so they stay inside.
 #[test]

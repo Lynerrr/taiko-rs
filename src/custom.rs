@@ -19,12 +19,15 @@ pub const MAX_OSZ: usize = 40 << 20;
 const MAX_FILES: usize = 200;
 /// How deep into the folder the packer looks (storyboard elements sit in subfolders).
 const MAX_DEPTH: usize = 3;
-const SENDABLE: [&str; 14] = [
-    "osu", "tko", "osb", "mp3", "ogg", "wav", "flac", "m4a", "opus", "png", "jpg", "jpeg", "mp4",
-    "avi",
+/// GIF and WebP go along for the animated pictures of `.tko` effects.
+const SENDABLE: [&str; 16] = [
+    "osu", "tko", "osb", "mp3", "ogg", "wav", "flac", "m4a", "opus", "png", "jpg", "jpeg", "gif",
+    "webp", "mp4", "avi",
 ];
 /// Already compressed: keeping them as they are is faster and no bigger.
-const PACKED: [&str; 8] = ["mp3", "ogg", "m4a", "opus", "png", "jpg", "jpeg", "mp4"];
+const PACKED: [&str; 10] = [
+    "mp3", "ogg", "m4a", "opus", "png", "jpg", "jpeg", "gif", "webp", "mp4",
+];
 
 /// Where a set's page is on the website.
 pub fn page_url(id: u32) -> String {
@@ -504,6 +507,9 @@ mod tests {
         std::fs::write(dir.join("audio.mp3"), [1u8; 64]).unwrap();
         std::fs::write(dir.join("bg.png"), [2u8; 16]).unwrap();
         std::fs::write(dir.join("sb/star.png"), [3u8; 16]).unwrap();
+        // An effect's animated pictures go along.
+        std::fs::write(dir.join("fx.gif"), [4u8; 16]).unwrap();
+        std::fs::write(dir.join("sb/fx.webp"), [5u8; 16]).unwrap();
         std::fs::write(dir.join("notes.txt"), "mine").unwrap();
         write_sidecar(&dir, 7);
         let packed = pack(&dir).unwrap();
@@ -526,6 +532,8 @@ mod tests {
                 "a [Oni].osu",
                 "audio.mp3",
                 "bg.png",
+                "fx.gif",
+                "sb/fx.webp",
                 "sb/star.png"
             ]
         );

@@ -6515,6 +6515,22 @@ mod tests {
     }
 
     #[test]
+    fn a_video_dropped_on_the_editor_says_how_to_make_it_play() {
+        assert!(crate::pictures::is_video("Clip.MP4") && crate::pictures::is_video("a.webm"));
+        assert!(!crate::pictures::is_video("a.webp") && !crate::pictures::is_video("a.gif"));
+        let mut v = clips_view();
+        let dir = v.ed.path.parent().unwrap().to_path_buf();
+        v.drop_video(&dir.join("elsewhere/intro.mp4"));
+        assert!(
+            v.status.contains("intro.mp4: videos don't play"),
+            "{}",
+            v.status
+        );
+        assert!(v.status.contains("animated WebP"), "{}", v.status);
+        assert!(!dir.join("intro.mp4").exists(), "nothing copied");
+    }
+
+    #[test]
     fn a_picture_dropped_on_the_editor_goes_in_the_map_folder_and_on_the_picked_block() {
         use crate::tko::clips::Show;
         let mut v = clips_view();

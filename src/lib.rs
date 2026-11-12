@@ -4429,6 +4429,14 @@ impl State {
                         view.drop_picture(&path);
                         continue;
                     }
+                    if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
+                        && path
+                            .file_name()
+                            .is_some_and(|n| pictures::is_video(&n.to_string_lossy()))
+                    {
+                        view.drop_video(&path);
+                        continue;
+                    }
                     if self.scene.screen_mut::<EditorHome>().is_some() {
                         let rate = self.audio.as_ref().map(|a| a.rate);
                         let out = match self.scene.screen_mut::<EditorHome>() {
@@ -11045,8 +11053,11 @@ impl State {
         // The pictures the last frame drew, then the ones the renderer has for this one.
         self.avatars.update(&canvas.avatars_wanted);
         let picture_dir = self.picture_dir();
-        self.pictures
-            .update(picture_dir.as_deref(), &canvas.pictures_wanted);
+        self.pictures.update(
+            picture_dir.as_deref(),
+            &canvas.pictures_wanted,
+            &canvas.picture_times,
+        );
         canvas.clear(width);
         canvas.avatar_slots = self.avatars.slots();
         canvas.picture_slots = self.pictures.slots();
