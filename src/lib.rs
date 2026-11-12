@@ -6505,6 +6505,16 @@ impl State {
         }
         if self.scene.screen_is::<MapEditor>() && !self.social.open && self.splash.is_none() {
             let (vx, vy) = self.mouse_virtual();
+            // The game's own buttons drawn over the editor (the friends chip in its menu bar,
+            // notifications) take their clicks; everything else is the editor's.
+            if let Some(hit @ (hit::Hit::SocialToggle | hit::Hit::SocialNote(_))) =
+                self.hit_at(vx, vy)
+            {
+                if pressed {
+                    self.click(hit, window);
+                }
+                return;
+            }
             let keys = self.editor_keys();
             if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 if pressed {
