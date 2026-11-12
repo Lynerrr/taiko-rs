@@ -12,6 +12,7 @@ use crate::*;
 use std::fmt::Write as _;
 use std::io::{BufRead, Write as _};
 use std::sync::Mutex;
+use taiko_proto::mapping;
 
 // ---------------------------------------------------------------------------------------------
 // Wire format.
@@ -357,6 +358,142 @@ fn replies() -> Vec<Reply> {
         Reply::Scores(vec![online::OnlineScore::default()]),
         Reply::Profile(Box::default()),
         Reply::Score(Box::default()),
+        Reply::Account {
+            name: "a".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: Some(true),
+            features: Vec::new(),
+        },
+        Reply::Account {
+            name: "a".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: Some(true),
+            features: vec![mapping::FEATURE.into()],
+        },
+    ]
+}
+
+fn mapping_state() -> mapping::SessionState {
+    mapping::SessionState {
+        session: 9,
+        title: "Song".into(),
+        mode: mapping::Mode::Guest,
+        host: 1,
+        participants: vec![mapping::Participant {
+            id: 1,
+            name: "host".into(),
+            role: mapping::Role::Host,
+            colour: 0xF2D45C,
+            online: true,
+        }],
+        documents: vec![mapping::Document {
+            diff: 0,
+            name: "Oni".into(),
+            owner: Some(2),
+            parts: vec![mapping::Part {
+                from: 0.0,
+                to: 1000.0,
+                assignee: Some(2),
+            }],
+            locked: false,
+            accepted: false,
+        }],
+        comments: vec![mapping::Comment {
+            id: 1,
+            diff: 0,
+            time: 1000.0,
+            author: 1,
+            text: "01:00:000 (1) - too dense".into(),
+            resolved: false,
+        }],
+    }
+}
+
+fn mapping_op() -> mapping::MapOp {
+    mapping::MapOp::Composite(vec![
+        mapping::MapOp::InsertObjects(vec![mapping::Obj {
+            id: (2 << mapping::EPOCH_SHIFT) | 1,
+            line: "256,192,1000,1,0,0:0:0:0:".into(),
+            fake: false,
+            group: None,
+        }]),
+        mapping::MapOp::EditTiming {
+            before: vec![mapping::Line {
+                id: 1,
+                line: "0,500,4,1,0,100,1,0".into(),
+            }],
+            after: vec![mapping::Line {
+                id: 1,
+                line: "0,400,4,1,0,100,1,0".into(),
+            }],
+        },
+        mapping::MapOp::SetKey {
+            section: "Metadata".into(),
+            key: "Version".into(),
+            before: Some("Oni".into()),
+            after: Some("Guest's Oni".into()),
+        },
+    ])
+}
+
+fn mapping_ups() -> Vec<mapping::MapUp> {
+    vec![
+        mapping::MapUp::Op {
+            client_seq: 3,
+            diff: Some(0),
+            op: mapping_op(),
+        },
+        mapping::MapUp::Snapshot {
+            seq: 4,
+            part: 0,
+            parts: 1,
+            data: "{}".into(),
+        },
+        mapping::MapUp::Presence {
+            diff: 0,
+            time: 1500.0,
+            cursor: Some(1750.0),
+            selection: vec![5],
+        },
+        mapping::MapUp::Chat("hi".into()),
+        mapping::MapUp::Ping,
+    ]
+}
+
+fn mapping_downs() -> Vec<mapping::MapDown> {
+    vec![
+        mapping::MapDown::State(mapping_state()),
+        mapping::MapDown::Op(mapping::Sequenced {
+            seq: 5,
+            author: 2,
+            epoch: 2,
+            client_seq: 3,
+            diff: None,
+            op: mapping_op(),
+        }),
+        mapping::MapDown::Refused {
+            client_seq: 4,
+            why: "only the host changes the timing".into(),
+        },
+        mapping::MapDown::Presence {
+            who: 2,
+            diff: 0,
+            time: 1500.0,
+            cursor: None,
+            selection: Vec::new(),
+        },
+        mapping::MapDown::Chat {
+            who: 1,
+            text: "ok".into(),
+            at: 7,
+        },
+        mapping::MapDown::SnapshotWanted { seq: 2000 },
+        mapping::MapDown::Closed("the host closed the session".into()),
+        mapping::MapDown::Pong,
     ]
 }
 
@@ -396,6 +533,8 @@ fn every_message_keeps_its_wire_format() {
     wire(&mut out, "online: replies", &replies());
     wire(&mut out, "social: up", &ups());
     wire(&mut out, "social: down", &downs());
+    wire(&mut out, "mapping: up", &mapping_ups());
+    wire(&mut out, "mapping: down", &mapping_downs());
     assert_snapshot("network-wire-format", &out);
 }
 
@@ -430,6 +569,14 @@ fn messages_from_older_servers_still_read() {
     let act: net::DefenseAct =
         serde_json::from_str(r#"{"Buy":{"item":"Shield","at":1.0}}"#).unwrap();
     assert!(matches!(act, net::DefenseAct::Buy { until, .. } if until == 0.0));
+    // An account reply from a server before features: no mapping sessions, so the game never
+    // sends it anything about them.
+    let account: Reply =
+        serde_json::from_str(r#"{"Account":{"name":"a","token":"t","nominator":false}}"#).unwrap();
+    let Reply::Account { features, .. } = account else {
+        panic!("not an account");
+    };
+    assert!(features.is_empty() && !mapping::supported(&features));
     // A message this build doesn't know is skipped by the reader, not a disconnect: it just
     // doesn't parse as a ServerMsg.
     assert!(serde_json::from_str::<ServerMsg>(r#"{"FutureThing":{"x":1}}"#).is_err());

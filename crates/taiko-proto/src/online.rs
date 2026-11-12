@@ -1069,6 +1069,11 @@ pub enum Reply {
         /// Whether the account has an email (None: a server from before emails).
         #[serde(default)]
         email: Option<bool>,
+        /// What the server can do beyond the protocol every server speaks, such as
+        /// `mapping::FEATURE`. Servers from before it send none, and the game then never sends
+        /// them anything a feature brings.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        features: Vec<String>,
     },
     /// A code was mailed: where to ("g*****@gmail.com").
     CodeSent(String),

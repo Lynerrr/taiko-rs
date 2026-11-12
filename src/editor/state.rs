@@ -316,8 +316,9 @@ impl Editor {
     fn run_insert(&mut self, o: HitObject) -> u64 {
         self.history
             .run(&mut self.chart, Command::InsertObjects(vec![o]));
-        // The one just made is the one at its time (ids are handed out in order).
-        let id = self.chart.objects.iter().map(|o| o.id).max().unwrap_or(0);
+        // The one just made took the last id handed out (in a mapping session others' ids can
+        // be higher).
+        let id = self.chart.next_id() - 1;
         self.selection = BTreeSet::from([id]);
         id
     }
@@ -800,8 +801,8 @@ impl Editor {
             Command::InsertTiming(vec![p]),
             Chart::validate,
         )?;
-        // The new line sorts after any at its time, so it's the last one there.
-        Ok(self.chart.timing.iter().map(|p| p.id).max().unwrap_or(0))
+        // The new line took the last id handed out.
+        Ok(self.chart.next_id() - 1)
     }
 
     pub fn edit_timing(

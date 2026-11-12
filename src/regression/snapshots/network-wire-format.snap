@@ -84,6 +84,8 @@ room protocol 7 | online protocol 1 | pp version 3
 {"Scores":[{"player":"","map":"","map_hash":0,"score":0,"accuracy":0.0,"max_combo":0,"miss":0,"rate":0.0,"mods":[],"seed":null,"pp":null,"date":0,"great":0,"ok":0,"set_id":null,"stars":null,"id":0,"scroll_speed":null,"pp_version":0}]}
 {"Profile":{"name":"","joined":0,"plays":0,"pp":0.0,"rank":null,"top":[],"recent":[],"stats":{"ranked_score":0,"total_score":0,"accuracy":0.0,"total_hits":0,"max_combo":0,"ss":0,"s":0,"a":0},"firsts":[],"online":false,"play_ms":0,"medals":{"earned":0,"total":0,"dan":null,"rarest":[]},"relax":{"plays":0,"pp":0.0,"rank":null,"top":[]}}}
 {"Score":{"player":"","map":"","map_hash":0,"score":0,"accuracy":0.0,"max_combo":0,"miss":0,"rate":0.0,"mods":[],"seed":null,"pp":null,"date":0,"great":0,"ok":0,"set_id":null,"stars":null,"id":0,"scroll_speed":null,"pp_version":0}}
+{"Account":{"name":"a","token":"t","nominator":false,"email":true}}
+{"Account":{"name":"a","token":"t","nominator":false,"email":true,"features":["mapping/1"]}}
 == social: up
 {"Status":"Menus"}
 {"AddFriend":"friend"}
@@ -104,3 +106,18 @@ room protocol 7 | online protocol 1 | pp version 3
 {"Medals":[{"id":"","name":["","",""],"about":["","",""],"tier":0,"secret":false,"art":[]}]}
 {"GlobalChatDeleted":{"from":"x","at":5}}
 {"Groups":[["dev",["DEV"]]]}
+== mapping: up
+{"Op":{"client_seq":3,"diff":0,"op":{"Composite":[{"InsertObjects":[{"id":2199023255553,"line":"256,192,1000,1,0,0:0:0:0:"}]},{"EditTiming":{"before":[{"id":1,"line":"0,500,4,1,0,100,1,0"}],"after":[{"id":1,"line":"0,400,4,1,0,100,1,0"}]}},{"SetKey":{"section":"Metadata","key":"Version","before":"Oni","after":"Guest's Oni"}}]}}}
+{"Snapshot":{"seq":4,"part":0,"parts":1,"data":"{}"}}
+{"Presence":{"diff":0,"time":1500.0,"cursor":1750.0,"selection":[5]}}
+{"Chat":"hi"}
+"Ping"
+== mapping: down
+{"State":{"session":9,"title":"Song","mode":"Guest","host":1,"participants":[{"id":1,"name":"host","role":"Host","colour":15914076,"online":true}],"documents":[{"diff":0,"name":"Oni","owner":2,"parts":[{"from":0.0,"to":1000.0,"assignee":2}],"locked":false,"accepted":false}],"comments":[{"id":1,"diff":0,"time":1000.0,"author":1,"text":"01:00:000 (1) - too dense","resolved":false}]}}
+{"Op":{"seq":5,"author":2,"epoch":2,"client_seq":3,"diff":null,"op":{"Composite":[{"InsertObjects":[{"id":2199023255553,"line":"256,192,1000,1,0,0:0:0:0:"}]},{"EditTiming":{"before":[{"id":1,"line":"0,500,4,1,0,100,1,0"}],"after":[{"id":1,"line":"0,400,4,1,0,100,1,0"}]}},{"SetKey":{"section":"Metadata","key":"Version","before":"Oni","after":"Guest's Oni"}}]}}}
+{"Refused":{"client_seq":4,"why":"only the host changes the timing"}}
+{"Presence":{"who":2,"diff":0,"time":1500.0,"cursor":null,"selection":[]}}
+{"Chat":{"who":1,"text":"ok","at":7}}
+{"SnapshotWanted":{"seq":2000}}
+{"Closed":"the host closed the session"}
+"Pong"

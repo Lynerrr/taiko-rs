@@ -6,6 +6,10 @@
 
 pub mod chart;
 pub mod clips;
+// Reached from the editor once the game opens mapping sessions with a server that runs them
+// (`taiko_proto::mapping::FEATURE`); until then only its tests and the shared undo use it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub mod collab;
 pub mod fakes;
 pub mod follow;
 pub mod gimmicks;

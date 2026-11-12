@@ -7651,6 +7651,7 @@ impl State {
                             nominator,
                             admin,
                             email,
+                            ..
                         }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
