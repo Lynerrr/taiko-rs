@@ -27,6 +27,7 @@ mod chrome;
 mod clips;
 mod cmd;
 pub mod collab;
+mod collab_panel;
 mod curves;
 mod gizmo;
 mod help;
@@ -442,6 +443,14 @@ pub struct View {
     session_pick: taiko_proto::mapping::Mode,
     /// Where the session window was drawn last (clicks on it stay in it).
     session_win: [f32; 4],
+    /// Where the session panel's tips start in `tips`: over the panel, only those show.
+    panel_tips_from: usize,
+    /// How far the session panel's list is scrolled.
+    panel_scroll: f32,
+    /// The host's list of mappers open under a button, to give that thing to one of them.
+    give_pick: Option<collab::GivePick>,
+    /// A button of the session panel that asks for a second click, clicked once, and when.
+    armed: Option<(collab::Armed, Instant)>,
     /// The library entry being edited (its music is the track).
     pub entry: usize,
     pub track: Option<Arc<Track>>,
@@ -734,6 +743,10 @@ impl View {
             chat_seen: 0,
             session_pick: taiko_proto::mapping::Mode::Collab,
             session_win: [0.0; 4],
+            panel_tips_from: 0,
+            panel_scroll: 0.0,
+            give_pick: None,
+            armed: None,
             entry,
             track: None,
             track_rx: None,
@@ -2988,6 +3001,11 @@ impl View {
         }
         if self.sheet || self.modal.is_some() || self.tour.is_some() {
             return !keys.alt;
+        }
+        // Over the session's panel the wheel scrolls its list, and nothing under it.
+        if self.over_session_panel() {
+            self.scroll_session_panel(notches);
+            return true;
         }
         if self.windowed() && inside(self.layout.window, mx, my) {
             let n = notches.unsigned_abs() as usize * 3;

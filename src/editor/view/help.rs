@@ -189,7 +189,17 @@ impl View {
             return;
         }
         let (mx, my) = self.mouse;
-        let Some((_, text)) = self.tips.iter().rev().find(|(r, _)| inside(*r, mx, my)) else {
+        // Over the session's window, only its own tips: never those of what it covers.
+        let from = if self.over_session_panel() {
+            self.panel_tips_from.min(self.tips.len())
+        } else {
+            0
+        };
+        let Some((_, text)) = self.tips[from..]
+            .iter()
+            .rev()
+            .find(|(r, _)| inside(*r, mx, my))
+        else {
             return;
         };
         let lines = wrap(6.5, 200.0, text);

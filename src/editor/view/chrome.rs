@@ -648,6 +648,13 @@ impl View {
     pub(super) fn draw_overview(&mut self, c: &mut Canvas) {
         let [x, y, w, h] = self.layout.overview;
         let end = self.end_ms().max(1.0);
+        // Under the tips of the others' marks (see `draw_collab_overview`), which come later.
+        let tip = if self.collab.is_some() {
+            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks. In a mapping session the coloured lines are the others (hover one to see who) and the strip along the top shows the parts."
+        } else {
+            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks."
+        };
+        self.tips.push((self.layout.overview, tip.to_string()));
         c.rect(x, y, w, h, rgba(0x0e0e14, 1.0));
         let px = |t: f64| x + (t / end).clamp(0.0, 1.0) as f32 * w;
         // Kiai.
@@ -701,6 +708,8 @@ impl View {
                 c.rect(px(m.time) - 0.5, y, 1.5, h, rgba(super::MARK_COL, 1.0));
             }
         }
+        // In a session: the parts, and where the others are.
+        self.draw_collab_overview(c, end);
         // What the timeline shows, and the playhead.
         let (a, b) = (px(self.view_start), px(self.view_end()));
         c.round_rect(
@@ -718,11 +727,6 @@ impl View {
             h + 2.0,
             rgba(0xffffff, 1.0),
         );
-        self.tips.push((
-            self.layout.overview,
-            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks."
-                .to_string(),
-        ));
     }
 
     // ---- the status line ----

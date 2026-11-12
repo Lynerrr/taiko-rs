@@ -28,6 +28,8 @@ const CHAT_KEPT: usize = 200;
 pub enum Tab {
     #[default]
     People,
+    /// Who maps what: the difficulties (and the open one's parts in a collab).
+    Work,
     Chat,
     /// Review comments on the open difficulty.
     Notes,
@@ -250,16 +252,6 @@ impl Session {
         self.rights_of(self.me)
     }
 
-    /// Whether a mapper has been given anything to map yet: a part of the open collab
-    /// difficulty (an open part is everyone's), or a guest difficulty.
-    pub fn has_work(&self, who: u32) -> bool {
-        let open = self.sync.open();
-        self.state.documents.iter().any(|d| {
-            d.owner == Some(who)
-                || (d.diff == open && d.parts.iter().any(|p| p.assignee.is_none_or(|a| a == who)))
-        })
-    }
-
     /// Whether the open difficulty has open parts: every mapper maps there.
     pub fn free(&self) -> bool {
         let open = self.sync.open();
@@ -417,19 +409,7 @@ impl Session {
         for (diff, name, chart) in self.sync.others() {
             let mut chart = chart.clone();
             self.credit(diff, &mut chart);
-            let path = files
-                .iter()
-                .find(|(_, text)| super::connect::version(text).as_deref() == Some(name))
-                .map(|(p, _)| p.clone())
-                .unwrap_or_else(|| {
-                    let ext = if chart.gimmick.is_some() {
-                        "tko"
-                    } else {
-                        "osu"
-                    };
-                    let file = format!("{} [{name}].{ext}", self.state.title);
-                    dir.join(crate::download::safe_folder_name(&file))
-                });
+            let path = self.diff_path(&dir, &files, name, &chart);
             if path == ed.path {
                 continue;
             }
@@ -437,6 +417,41 @@ impl Session {
             written += 1;
         }
         Ok(written)
+    }
+
+    /// Where a difficulty of the session (`name`, its chart `chart`) is kept in the set's
+    /// folder `dir` (its charts `files`): the file of that name, or a new `.osu` or `.tko` named
+    /// like the set's.
+    pub fn diff_path(
+        &self,
+        dir: &Path,
+        files: &[(std::path::PathBuf, String)],
+        name: &str,
+        chart: &Chart,
+    ) -> std::path::PathBuf {
+        files
+            .iter()
+            .find(|(_, text)| super::connect::version(text).as_deref() == Some(name))
+            .map(|(p, _)| p.clone())
+            .unwrap_or_else(|| {
+                let ext = if chart.gimmick.is_some() {
+                    "tko"
+                } else {
+                    "osu"
+                };
+                let file = format!("{} [{name}].{ext}", self.state.title);
+                dir.join(crate::download::safe_folder_name(&file))
+            })
+    }
+
+    /// The difficulties `who` has work in: a guest difficulty given to them, or parts.
+    pub fn work_of(&self, who: u32) -> Vec<u32> {
+        self.state
+            .documents
+            .iter()
+            .filter(|d| d.owner == Some(who) || d.parts.iter().any(|p| p.assignee == Some(who)))
+            .map(|d| d.diff)
+            .collect()
     }
 
     /// Back on a resumed connection: `done` is the last of our ops the server had taken.

@@ -175,6 +175,21 @@ fn map_editor_alone_and_in_a_mapping_session() {
     // map anywhere, hanging under the menu bar.
     v.open_session_window();
     assert_snapshot("screen-map-editor-session-panel", &draw(&mut v));
+    // Who maps what: each guest difficulty with its mapper and state, and the host's list of
+    // mappers open under a difficulty's "Give" button.
+    use crate::editor::collab::session::Tab;
+    use crate::editor::view::collab::{CollabAct, GivePick};
+    v.press_session(CollabAct::Tab(Tab::Work));
+    v.press_session(CollabAct::Picker(GivePick::Diff(0)));
+    assert_snapshot("screen-map-editor-session-difficulties", &draw(&mut v));
+    // A collab: the open difficulty's parts, the button that gives the next one (with its
+    // list of mappers) and the switches for mapping anywhere and locking.
+    v.collab.as_mut().unwrap().state.mode = taiko_proto::mapping::Mode::Collab;
+    v.press_session(CollabAct::Picker(GivePick::Part));
+    assert_snapshot("screen-map-editor-session-parts", &draw(&mut v));
+    // The same seen by a mapper: what they may do, and no host's buttons.
+    v.collab.as_mut().unwrap().me = 2;
+    assert_snapshot("screen-map-editor-session-parts-mapper", &draw(&mut v));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
