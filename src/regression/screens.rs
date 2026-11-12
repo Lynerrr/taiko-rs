@@ -169,7 +169,12 @@ fn map_editor_alone_and_in_a_mapping_session() {
     session.by_author = true;
     v.ed = ed;
     v.collab = Some(Box::new(session));
+    // The session's panel is shut: only its menu-bar button, nothing over the preview.
     assert_snapshot("screen-map-editor-session", &draw(&mut v));
+    // Opened from that button: people, the host's buttons and the toggle that lets everyone
+    // map anywhere, hanging under the menu bar.
+    v.open_session_window();
+    assert_snapshot("screen-map-editor-session-panel", &draw(&mut v));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

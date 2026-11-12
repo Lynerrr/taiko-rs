@@ -8,7 +8,8 @@ use std::path::Path;
 use std::time::Instant;
 
 use taiko_proto::mapping::{
-    CREDITS_KEY, MapDown, MapUp, Participant, SessionState, SnapshotPieces, snapshot_lines,
+    CREDITS_KEY, MapDown, MapUp, Mode, Participant, Role, SessionState, SnapshotPieces,
+    snapshot_lines,
 };
 
 use super::super::chart::Chart;
@@ -83,6 +84,38 @@ pub struct Remote {
     pub seen: f64,
 }
 
+/// What we may edit in the open difficulty, judged as the server judges our edits.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Rights {
+    /// Everything: we host the session.
+    All,
+    /// The whole difficulty: the host gave it to us.
+    Diff,
+    /// Anywhere: the host let every mapper map the whole difficulty.
+    Free,
+    /// Inside these stretches of the song (ms, `from..to`): our parts of a collab difficulty,
+    /// and the open ones (anyone's) between the parts the host gave to people.
+    Parts(Vec<(f64, f64)>),
+    /// Nothing yet: the host hasn't given us a part of this collab difficulty.
+    NoPart,
+    /// Nothing here: the difficulty is someone else's (or nobody's yet); ours is named, if any.
+    NotOurs(Option<String>),
+    /// Nothing: the host locked the difficulty.
+    Locked,
+    /// Nothing: modders and viewers don't edit.
+    ReadOnly,
+}
+
+impl Rights {
+    /// Whether we may place notes anywhere in the open difficulty.
+    pub fn edits(&self) -> bool {
+        matches!(
+            self,
+            Rights::All | Rights::Free | Rights::Diff | Rights::Parts(_)
+        )
+    }
+}
+
 /// What a line from the server asks of the game besides what the session does itself.
 #[derive(Debug, PartialEq)]
 pub enum Notice {
@@ -109,6 +142,8 @@ pub struct Session {
     pub by_author: bool,
     /// What the panel shows.
     pub tab: Tab,
+    /// Chat lines heard in all (the kept ones are fewer), for the unread mark.
+    pub heard: u64,
     /// The last presence sent and when.
     sent: Option<(f64, Remote)>,
     /// A snapshot coming in parts (after a resume).
@@ -130,6 +165,7 @@ impl Session {
             follow: None,
             by_author: false,
             tab: Tab::People,
+            heard: 0,
             sent: None,
             pieces: SnapshotPieces::default(),
             done: 0,
@@ -158,6 +194,79 @@ impl Session {
             .iter()
             .find(|d| d.diff == diff)
             .map_or("?", |d| d.name.as_str())
+    }
+
+    /// What `who` may edit in the open difficulty, as the server's rules have it: the host
+    /// everything; a mapper a guest difficulty given to them, their parts of a collab one and
+    /// the open parts (nobody's: every mapper's); nobody but the host a locked difficulty;
+    /// modders and viewers nothing.
+    pub fn rights_of(&self, who: u32) -> Rights {
+        if who == self.state.host {
+            return Rights::All;
+        }
+        if self.participant(who).is_none_or(|p| p.role != Role::Mapper) {
+            return Rights::ReadOnly;
+        }
+        let open = self.sync.open();
+        let Some(doc) = self.state.documents.iter().find(|d| d.diff == open) else {
+            return Rights::NotOurs(None);
+        };
+        if doc.locked || doc.accepted {
+            return Rights::Locked;
+        }
+        if !doc.parts.is_empty() {
+            if doc.parts.iter().all(|p| p.assignee.is_none()) {
+                return Rights::Free;
+            }
+            let mine: Vec<(f64, f64)> = doc
+                .parts
+                .iter()
+                .filter(|p| p.assignee.is_none_or(|a| a == who))
+                .map(|p| (p.from, p.to))
+                .collect();
+            return if mine.is_empty() {
+                Rights::NoPart
+            } else {
+                Rights::Parts(mine)
+            };
+        }
+        if doc.owner == Some(who) {
+            return Rights::Diff;
+        }
+        match self.state.mode {
+            Mode::Collab => Rights::NoPart,
+            _ => Rights::NotOurs(
+                self.state
+                    .documents
+                    .iter()
+                    .find(|d| d.owner == Some(who))
+                    .map(|d| d.name.clone()),
+            ),
+        }
+    }
+
+    /// What we may edit in the open difficulty.
+    pub fn rights(&self) -> Rights {
+        self.rights_of(self.me)
+    }
+
+    /// Whether a mapper has been given anything to map yet: a part of the open collab
+    /// difficulty (an open part is everyone's), or a guest difficulty.
+    pub fn has_work(&self, who: u32) -> bool {
+        let open = self.sync.open();
+        self.state.documents.iter().any(|d| {
+            d.owner == Some(who)
+                || (d.diff == open && d.parts.iter().any(|p| p.assignee.is_none_or(|a| a == who)))
+        })
+    }
+
+    /// Whether the open difficulty has open parts: every mapper maps there.
+    pub fn free(&self) -> bool {
+        let open = self.sync.open();
+        self.state
+            .documents
+            .iter()
+            .any(|d| d.diff == open && d.parts.iter().any(|p| p.assignee.is_none()))
     }
 
     /// Whether a player in the session is away: online, but nothing of theirs moved for a while.
@@ -205,6 +314,7 @@ impl Session {
                 self.remotes.insert(who, r);
             }
             MapDown::Chat { who, text, .. } => {
+                self.heard += 1;
                 self.chat.push_back((who, text));
                 while self.chat.len() > CHAT_KEPT {
                     self.chat.pop_front();
