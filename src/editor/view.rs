@@ -26,6 +26,7 @@ use crate::video::FRAME_VW;
 mod chrome;
 mod clips;
 mod cmd;
+mod collab;
 mod curves;
 mod gizmo;
 mod help;
@@ -158,6 +159,8 @@ pub enum Btn {
     TwFilter(u8),
     /// The window's scroll bar track (a press starts the drag).
     TwBar,
+    /// The mapping session's panel.
+    Collab(collab::CollabAct),
 }
 
 #[derive(Clone, Copy)]
@@ -418,6 +421,8 @@ enum Modal {
 
 pub struct View {
     pub ed: Editor,
+    /// The mapping session the chart is edited in, if any (none while editing alone).
+    pub collab: Option<Box<super::collab::session::Session>>,
     /// The library entry being edited (its music is the track).
     pub entry: usize,
     pub track: Option<Arc<Track>>,
@@ -698,6 +703,7 @@ impl View {
         let ed = Editor::open(path)?;
         let mut v = View {
             ed,
+            collab: None,
             entry,
             track: None,
             track_rx: None,
@@ -1275,6 +1281,7 @@ impl View {
         self.modal_from = 0;
         self.refresh_game();
         self.sync_game(autoplay);
+        self.keep_to_followed();
         if self.windowed() {
             self.draw_palette(c);
             self.draw_timeline(c);
@@ -1296,6 +1303,7 @@ impl View {
             self.draw_palette(c);
             self.draw_timeline(c);
             self.draw_graph(c);
+            self.draw_participants(c);
         }
         self.draw_overview(c);
         self.draw_status(c);
@@ -1834,6 +1842,8 @@ impl View {
         }
         // The group the Motion page shapes, under its notes.
         self.draw_group_on_timeline(c, x, y + h);
+        // The others in a mapping session.
+        self.draw_collab_timeline(c, [x, y, w, h], cy);
         // The playhead.
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 1.0));
@@ -3248,6 +3258,7 @@ impl View {
             Btn::Man(act) => self.press_manual(act, audio),
             Btn::Snap(act) => self.press_snap(act),
             Btn::Menu(i) => self.menu = if self.menu == Some(i) { None } else { Some(i) },
+            Btn::Collab(act) => self.press_collab(act),
             Btn::TourNext => {
                 let at = self.tour.unwrap_or(0);
                 self.tour_goto(at + 1);

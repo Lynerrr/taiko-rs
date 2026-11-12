@@ -46,6 +46,22 @@ chart is made again without it.
 - **Snapshots** for the server's log are the confirmed charts' texts with their ids in the order
   the parser reads them back (`Sync::snapshot`), and who made each object.
 
+## On the editor's screen (`src/editor/view/collab.rs`, `collab::session`)
+
+`View::collab` holds the session (`None` while editing alone, and then nothing below is drawn
+or run). `Session` reads the server's lines: the session state, ops (into `Sync`), refusals,
+the others' places, chat and the end of the session.
+
+- **Participants panel** over the preview's top right corner: each player's colour, name and
+  role, the difficulty they are on when it isn't ours, *away* after a minute without moving,
+  *offline*. A click on someone follows them (the playhead and the view keep to theirs while
+  they are on our difficulty); a second click stops. The last row turns colouring by author on.
+- **Timeline**: the collab parts of the open difficulty as bars along the ruler in their
+  mapper's colour (grey for the host's), the others' playheads with their names, their pointers
+  (faint lines) and the notes they have selected (rings in their colour); with colouring by
+  author, a bar under each note in its maker's colour.
+- Our own place goes out at most every 100 ms and only when it moved (`Session::presence`).
+
 ## Tests
 
 `src/editor/collab/tests.rs` plays sessions in memory against a fake server that orders,
@@ -54,4 +70,7 @@ random interleavings of edits, undo/redo, sends, deliveries, dropped connections
 compaction (80 seeds) end with every game's charts equal to the server log's. Others cover
 per-player undo, refused edits outside a part, edits made offline, red lines reaching every
 difficulty, snapshots and the wire form of every command. The wire format of every mapping
-message is kept golden in `src/regression/network.rs`.
+message is kept golden in `src/regression/network.rs`; the editor's screen alone and in a
+session in `screen-map-editor` and `screen-map-editor-session`. `collab::session` and
+`view::collab` have their own tests (presences, throttling, following, refusals, chat, the
+panel's rows and clicks, nothing drawn alone).

@@ -29,6 +29,8 @@ use super::state::Editor;
 /// While dragging, at most one op this often (a later step of the drag replaces an unsent one).
 pub const DRAG_SEND_MS: f64 = 50.0;
 
+pub mod session;
+
 // ---- the wire form of a command ----
 
 pub fn obj(o: &HitObject) -> Obj {
@@ -488,6 +490,11 @@ impl Sync {
 
     pub fn last_seq(&self) -> u64 {
         self.last_seq
+    }
+
+    /// The difficulty the editor has open.
+    pub fn open(&self) -> u32 {
+        self.open
     }
 
     /// Who made an object of a difficulty, if the session knows.
