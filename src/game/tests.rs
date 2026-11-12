@@ -2346,6 +2346,52 @@ fn screen_effects_add_to_the_picture_and_never_change_judging() {
     assert_eq!(run(Some(effects_gimmick())), base);
 }
 
+#[test]
+fn the_lane_turns_see_through_however_far_the_playfield_is_zoomed_out() {
+    use crate::tko::gimmick::FieldProp;
+    use crate::tko::track::{Ease, Key};
+    draw_with_defaults();
+    // The widest shape left to see: the lane while it shows, a note once it's gone.
+    let widest = |zoom: f64, lane_fade: f64, flip: f64| {
+        let mut gimmick = crate::tko::gimmick::Gimmick::default();
+        for (p, v) in [
+            (FieldProp::Zoom, zoom),
+            (FieldProp::LaneFade, lane_fade),
+            (FieldProp::Flip, flip),
+        ] {
+            gimmick.key_field(
+                p,
+                Key {
+                    t: 0.0,
+                    v,
+                    ease: Ease::Linear,
+                },
+            );
+        }
+        let mut g = tko_game(Some(gimmick), Mods::NONE);
+        g.put_at(9000.0);
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        c.shapes
+            .iter()
+            .filter(|s| s.fill[3] > 0.01 || s.border[3] > 0.01)
+            .map(|s| s.half[0].abs().max(s.half[1].abs()))
+            .fold(0.0f32, f32::max)
+    };
+    for zoom in [1.0, 0.8, 0.6, 0.5, 0.3, -0.5] {
+        let shown = widest(zoom, 0.0, 0.0);
+        let gone = widest(zoom, 1.0, 0.0);
+        assert!(
+            gone < shown * 0.5,
+            "zoom {zoom}: the lane still shows ({gone} of {shown})"
+        );
+    }
+    // Turning over (a flip under way squeezes it) keeps it see-through too.
+    let shown = widest(1.0, 0.0, 0.4);
+    assert!(widest(1.0, 1.0, 0.4) < shown * 0.5);
+}
+
 /// Beats, hits and combos wired to motion.
 fn graph_gimmick() -> crate::tko::gimmick::Gimmick {
     use crate::tko::gimmick::{FieldProp, Group, NoteProp};

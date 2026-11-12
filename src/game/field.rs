@@ -2173,7 +2173,14 @@ impl Play {
         // list, which clips count by), and come back on top once the effects are on.
         let lifted = lift_shapes(c, &above_shapes);
         // A .tko map's trails, stretches and fringes turn and zoom with the playfield.
-        crate::tko::screen::local(c, start_shape, &tko_fx, pivot);
+        // What the playfield is sized by from here on, so the lane is still told from the notes
+        // once it is turned over or zoomed out.
+        let size = [fx, 1.0];
+        crate::tko::screen::local(c, start_shape, &tko_fx, pivot, size);
+        let size = [
+            size[0] * tko_fx.stretch_x * zoom,
+            size[1] * tko_fx.stretch_y * zoom,
+        ];
         if angle != 0.0 || zoom != 1.0 || dest != pivot {
             c.rotate_since(start_shape, pivot, angle, zoom, dest);
         }
@@ -2191,9 +2198,9 @@ impl Play {
             },
             to: home,
         };
-        crate::tko::screen::copies(c, start_shape, &tko_fx, [w / 2.0, home[1]], unmove);
+        crate::tko::screen::copies(c, start_shape, &tko_fx, [w / 2.0, home[1]], unmove, size);
         // Its tears, washes and flashes lie over the screen as it ends up.
-        crate::tko::screen::screen(c, start_shape, &tko_fx, vt);
+        crate::tko::screen::screen(c, start_shape, &tko_fx, vt, size);
         // Over them all, where the playfield took them, the notes drawn over every effect.
         if !lifted.is_empty() {
             let from = c.shapes.len();
