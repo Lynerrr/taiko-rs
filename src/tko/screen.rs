@@ -119,28 +119,42 @@ impl Unmove {
 /// Their lanes go behind everything of the playfield; the rest of them (notes, drum, hit target)
 /// over its lane but under its own notes, so a copy that overlaps the lane (one swaying to the
 /// side) still shows on it instead of hiding under it.
-pub fn copies<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, centre: [f32; 2], unmove: Unmove) {
+pub fn copies<H>(
+    c: &mut Canvas<H>,
+    start: usize,
+    fx: &FieldFx,
+    centre: [f32; 2],
+    unmove: Unmove,
+    size: [f32; 2],
+) {
     let end = c.shapes.len();
     if start >= end || fx.copies.iter().all(|k| k.show < 0.01) {
         return;
     }
     let w = c.width;
+    // Which shapes are the lane, told once as the playfield is: a copy's own zoom doesn't change
+    // what it is a copy of.
+    let panel: Vec<bool> = c.shapes[start..end]
+        .iter()
+        .map(|s| is_panel(s, w, size))
+        .collect();
     let mut budget = MAX_EXTRA_SHAPES;
     let (mut lanes, mut bodies) = (Vec::new(), Vec::new());
     for k in fx.copies.iter().filter(|k| k.show >= 0.01) {
         let show = k.show.clamp(0.0, 1.0);
         let lane = show * (1.0 - k.lane_fade.clamp(0.0, 1.0));
-        let mut part: Vec<Shape> = c.shapes[start..end]
+        let (mut part, part_panel): (Vec<Shape>, Vec<bool>) = c.shapes[start..end]
             .iter()
-            .filter(|s| lane >= 0.01 || !is_panel(s, w))
-            .copied()
-            .collect();
+            .zip(&panel)
+            .filter(|(_, p)| lane >= 0.01 || !**p)
+            .map(|(s, p)| (*s, *p))
+            .unzip();
         if part.len() > budget {
             break;
         }
         budget -= part.len();
-        for s in &mut part {
-            let a = if is_panel(s, w) { lane } else { show };
+        for (s, p) in part.iter_mut().zip(&part_panel) {
+            let a = if *p { lane } else { show };
             s.fill[3] *= a;
             s.border[3] *= a;
         }
@@ -154,8 +168,8 @@ pub fn copies<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, centre: [f32; 2]
             k.zoom,
             [centre[0] + k.x, centre[1] + k.y],
         );
-        for s in part {
-            if is_panel(&s, w) {
+        for (s, p) in part.into_iter().zip(part_panel) {
+            if p {
                 lanes.push(s);
             } else {
                 bodies.push(s);
@@ -163,11 +177,7 @@ pub fn copies<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, centre: [f32; 2]
         }
     }
     // Over the shapes the lane is made of.
-    let at = start
-        + c.shapes[start..end]
-            .iter()
-            .take_while(|s| is_panel(s, w))
-            .count();
+    let at = start + panel.iter().take_while(|p| **p).count();
     insert_at(c, at, bodies);
     insert_at(c, start, lanes);
 }
@@ -187,11 +197,16 @@ pub fn backdrop<H>(c: &mut Canvas<H>, fx: &FieldFx) {
     }
 }
 
-/// The lane and its like: shapes as wide or tall as the screen. Copies leave them out, or each one
-/// would lay its own dark lane over the notes.
-fn is_panel(s: &Shape, w: f32) -> bool {
-    s.half[0] >= 0.3 * w || s.half[1] >= 0.3 * VIRTUAL_HEIGHT
+/// The lane and its like: shapes drawn as wide or tall as the screen. Copies leave them out, or
+/// each one would lay its own dark lane over the notes. `size` is what the playfield was sized by
+/// since it was drawn (x, y): a lane zoomed out to half its width is still the lane.
+fn is_panel(s: &Shape, w: f32, size: [f32; 2]) -> bool {
+    s.half[0].abs() >= 0.3 * w * size[0].abs()
+        || s.half[1].abs() >= 0.3 * VIRTUAL_HEIGHT * size[1].abs()
 }
+
+/// Shapes as drawn: sized by nothing yet.
+pub const AS_DRAWN: [f32; 2] = [1.0, 1.0];
 
 fn fade(shapes: &mut [Shape], alpha: f32) {
     for s in shapes {
@@ -241,7 +256,7 @@ fn insert_at<H>(c: &mut Canvas<H>, at: usize, shapes: Vec<Shape>) {
 
 /// Stretching, trails, kaleidoscope and colour fringes of the shapes drawn since `start`, before
 /// the playfield is rotated and zoomed about `pivot` (the hit target).
-pub fn local<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, pivot: [f32; 2]) {
+pub fn local<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, pivot: [f32; 2], size: [f32; 2]) {
     if start >= c.shapes.len() || !has_local(fx) {
         return;
     }
@@ -249,6 +264,7 @@ pub fn local<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, pivot: [f32; 2]) 
     if fx.stretch_x != 1.0 || fx.stretch_y != 1.0 {
         c.stretch_since(start, pivot, fx.stretch_x, fx.stretch_y);
     }
+    let size = [size[0] * fx.stretch_x, size[1] * fx.stretch_y];
     let echo = fx.echo.clamp(0.0, MAX_ECHO as f32);
     let kaleido = fx.kaleido.clamp(0.0, MAX_KALEIDO as f32).round() as usize;
     let chroma = fx.chroma.clamp(0.0, 80.0);
@@ -257,7 +273,7 @@ pub fn local<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, pivot: [f32; 2]) 
     }
     let body: Vec<Shape> = c.shapes[start..]
         .iter()
-        .filter(|s| !is_panel(s, w))
+        .filter(|s| !is_panel(s, w, size))
         .copied()
         .collect();
     if body.is_empty() {
@@ -268,7 +284,7 @@ pub fn local<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, pivot: [f32; 2]) 
     let at = start
         + c.shapes[start..]
             .iter()
-            .take_while(|s| is_panel(s, w))
+            .take_while(|s| is_panel(s, w, size))
             .count();
     let mut behind: Vec<Shape> = Vec::new();
     // Trails: the furthest back first, so each nearer one lies over it.
@@ -343,7 +359,7 @@ pub fn hue_rgb(hue: f32) -> [f32; 3] {
 /// Tears, washes, vignette and flash over the shapes drawn since `start`, once the playfield is
 /// where it ends up. `t` is the game's clock, which picks what a glitch looks like (with the
 /// graph's seed, so a replay shows the same).
-pub fn screen<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, t: f64) {
+pub fn screen<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, t: f64, size: [f32; 2]) {
     if !has_screen(fx) {
         return;
     }
@@ -354,7 +370,7 @@ pub fn screen<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, t: f64) {
     let fade_lane = 1.0 - fx.lane_fade.clamp(0.0, 1.0);
     if (fade_all < 0.99 || fade_lane < 0.99) && start < c.shapes.len() {
         for s in &mut c.shapes[start..] {
-            let a = if is_panel(s, w) {
+            let a = if is_panel(s, w, size) {
                 fade_all * fade_lane
             } else {
                 fade_all
@@ -385,7 +401,7 @@ pub fn screen<H>(c: &mut Canvas<H>, start: usize, fx: &FieldFx, t: f64) {
                 .iter()
                 .filter(|s| {
                     let r = s.half[0].hypot(s.half[1]);
-                    !is_panel(s, w) && s.center[1] + r > y0 && s.center[1] - r < y1
+                    !is_panel(s, w, size) && s.center[1] + r > y0 && s.center[1] - r < y1
                 })
                 .map(|s| Shape {
                     center: [s.center[0] + shift, s.center[1]],
@@ -481,8 +497,8 @@ mod tests {
         let before: Vec<[f32; 2]> = c.shapes.iter().map(|s| s.center).collect();
         let fx = FieldFx::default();
         assert!(!has_local(&fx) && !has_screen(&fx));
-        local(&mut c, 0, &fx, PIVOT);
-        screen(&mut c, 0, &fx, 1234.0);
+        local(&mut c, 0, &fx, PIVOT, AS_DRAWN);
+        screen(&mut c, 0, &fx, 1234.0, AS_DRAWN);
         assert_eq!(c.shapes.len(), 6);
         assert_eq!(
             c.shapes.iter().map(|s| s.center).collect::<Vec<_>>(),
@@ -497,7 +513,7 @@ mod tests {
             echo: 3.0,
             ..FieldFx::default()
         };
-        local(&mut c, 0, &fx, PIVOT);
+        local(&mut c, 0, &fx, PIVOT, AS_DRAWN);
         assert_eq!(
             c.shapes.len(),
             1 + 5 + 3 * 5,
@@ -523,7 +539,7 @@ mod tests {
             echo_fade: 1.0,
             ..FieldFx::default()
         };
-        local(&mut c, 0, &fx, PIVOT);
+        local(&mut c, 0, &fx, PIVOT, AS_DRAWN);
         let alphas: Vec<f32> = c.shapes[1..3].iter().map(|s| s.fill[3]).collect();
         assert_eq!(alphas, [0.5, 1.0]);
     }
@@ -535,7 +551,7 @@ mod tests {
             kaleido: 4.0,
             ..FieldFx::default()
         };
-        local(&mut c, 0, &fx, PIVOT);
+        local(&mut c, 0, &fx, PIVOT, AS_DRAWN);
         assert_eq!(c.shapes.len(), 1 + 2 + 3 * 2);
         // Half a turn puts a note at the mirror point through the centre (320, 240).
         let want = [640.0 - 190.0, 240.0];
@@ -551,7 +567,7 @@ mod tests {
             chroma: 10.0,
             ..FieldFx::default()
         };
-        local(&mut c, 0, &fx, PIVOT);
+        local(&mut c, 0, &fx, PIVOT, AS_DRAWN);
         assert_eq!(c.shapes.len(), 1 + 3 + 6);
         let top = &c.shapes[4..];
         assert!(top.iter().all(|s| s.params[2] < -0.5), "added as light");
@@ -568,7 +584,7 @@ mod tests {
             stretch_y: 0.5,
             ..FieldFx::default()
         };
-        local(&mut c, 0, &fx, PIVOT);
+        local(&mut c, 0, &fx, PIVOT, AS_DRAWN);
         let n = &c.shapes[1];
         assert_eq!((n.half[0], n.half[1]), (36.0, 9.0));
     }
@@ -582,7 +598,7 @@ mod tests {
             chroma: 30.0,
             ..FieldFx::default()
         };
-        local(&mut c, 0, &fx, PIVOT);
+        local(&mut c, 0, &fx, PIVOT, AS_DRAWN);
         assert!(c.shapes.len() <= 1 + 2000 + MAX_EXTRA_SHAPES + 2000 * 2);
     }
 
@@ -595,7 +611,7 @@ mod tests {
         };
         let run = |t: f64| {
             let mut c = field(8);
-            screen(&mut c, 0, &fx, t);
+            screen(&mut c, 0, &fx, t, AS_DRAWN);
             c
         };
         let (a, b) = (run(5000.0), run(5000.0));
@@ -637,7 +653,13 @@ mod tests {
         for step in 0..40 {
             let mut c = field(8);
             let before = c.shapes.clone();
-            screen(&mut c, 0, &fx, 5000.0 + step as f64 * GLITCH_STEP_MS);
+            screen(
+                &mut c,
+                0,
+                &fx,
+                5000.0 + step as f64 * GLITCH_STEP_MS,
+                AS_DRAWN,
+            );
             assert_eq!(
                 c.shapes[..before.len()]
                     .iter()
@@ -652,7 +674,7 @@ mod tests {
             assert!(
                 c.shapes[before.len()..]
                     .iter()
-                    .all(|s| !is_panel(s, c.width)),
+                    .all(|s| !is_panel(s, c.width, AS_DRAWN)),
                 "step {step}: a panel-sized copy lies over the notes"
             );
         }
@@ -668,7 +690,7 @@ mod tests {
             flash: 1.0,
             ..FieldFx::default()
         };
-        screen(&mut c, 0, &fx, 0.0);
+        screen(&mut c, 0, &fx, 0.0, AS_DRAWN);
         let wash = &c.shapes[2];
         assert!(
             wash.fill[1] > wash.fill[0] && wash.fill[1] > wash.fill[2],
@@ -687,7 +709,7 @@ mod tests {
             lane_fade: 1.0,
             ..FieldFx::default()
         };
-        screen(&mut c, 0, &fx, 0.0);
+        screen(&mut c, 0, &fx, 0.0, AS_DRAWN);
         assert_eq!(c.shapes[0].fill[3], 0.0, "the lane is gone");
         assert_eq!(c.shapes[1].fill[3], 1.0, "the notes are kept");
         let mut c = field(2);
@@ -695,7 +717,7 @@ mod tests {
             fade: 0.75,
             ..FieldFx::default()
         };
-        screen(&mut c, 1, &fx, 0.0);
+        screen(&mut c, 1, &fx, 0.0, AS_DRAWN);
         assert_eq!(
             c.shapes[0].fill[3], 1.0,
             "what was drawn before is left alone"
@@ -720,7 +742,7 @@ mod tests {
             turn: 180.0,
             ..CopyFx::default()
         };
-        copies(&mut c, 0, &fx, [320.0, 240.0], Unmove::NONE);
+        copies(&mut c, 0, &fx, [320.0, 240.0], Unmove::NONE, AS_DRAWN);
         // The first copy's lane, the field's lane, the first copy's 2 notes and the third's,
         // then the field's own notes on top.
         assert_eq!(c.shapes.len(), 1 + 1 + 2 + 2 + 2);
@@ -740,8 +762,49 @@ mod tests {
             "the field's notes, on top"
         );
         let mut c = field(1);
-        copies(&mut c, 0, &FieldFx::default(), [320.0, 240.0], Unmove::NONE);
+        copies(
+            &mut c,
+            0,
+            &FieldFx::default(),
+            [320.0, 240.0],
+            Unmove::NONE,
+            AS_DRAWN,
+        );
         assert_eq!(c.shapes.len(), 2, "no copies, nothing added");
+    }
+
+    #[test]
+    fn a_zoomed_out_lane_is_still_the_lane() {
+        use super::super::runtime::CopyFx;
+        // The playfield zoomed out to 0.4: its lane is narrower than any lane as drawn.
+        let mut c = field(2);
+        c.rotate_since(0, PIVOT, 0.0, 0.4, PIVOT);
+        let fx = FieldFx {
+            lane_fade: 1.0,
+            ..FieldFx::default()
+        };
+        screen(&mut c, 0, &fx, 0.0, [0.4, 0.4]);
+        assert_eq!(c.shapes[0].fill[3], 0.0, "the lane is gone");
+        assert!(
+            c.shapes[1..].iter().all(|s| s.fill[3] == 1.0),
+            "the notes are kept"
+        );
+        // A copy zoomed out keeps its lane behind the field's, not over its notes.
+        let mut c = field(2);
+        let mut fx = FieldFx::default();
+        fx.copies[0] = CopyFx {
+            show: 1.0,
+            zoom: 0.4,
+            ..CopyFx::default()
+        };
+        copies(&mut c, 0, &fx, [320.0, 240.0], Unmove::NONE, AS_DRAWN);
+        assert_eq!(c.shapes.len(), 2 * 3);
+        assert!(
+            (c.shapes[0].half[0] - 0.4 * 320.0).abs() < 1e-3,
+            "the copy's lane first: {:?}",
+            c.shapes[0].half
+        );
+        assert_eq!(c.shapes[1].half[0], 320.0, "then the field's lane");
     }
 
     #[test]
@@ -764,7 +827,7 @@ mod tests {
             zoom: 1.0 / 1.5,
             to: home,
         };
-        copies(&mut c, 0, &fx, [320.0, 240.0], unmove);
+        copies(&mut c, 0, &fx, [320.0, 240.0], unmove, AS_DRAWN);
         // The copy's lane, the field's lane, the copy's note, the field's note.
         assert_eq!(c.shapes.len(), 4);
         let near =
@@ -797,7 +860,7 @@ mod tests {
             ..FieldFx::default()
         };
         assert!(has_screen(&fx));
-        screen(&mut c, 0, &fx, 0.0);
+        screen(&mut c, 0, &fx, 0.0, AS_DRAWN);
         // The whole hidden, then the lane and the note (left of the middle) in the left strip,
         // and the lane in the right.
         assert!(c.shapes[..2].iter().all(|s| s.fill[3] == 0.0));
@@ -821,7 +884,7 @@ mod tests {
             slices: 4.0,
             ..FieldFx::default()
         };
-        screen(&mut c, 0, &fx, 0.0);
+        screen(&mut c, 0, &fx, 0.0, AS_DRAWN);
         assert_eq!(c.shapes.len(), 2);
     }
 
@@ -833,7 +896,7 @@ mod tests {
             flash: 0.5,
             ..FieldFx::default()
         };
-        screen(&mut c, 0, &fx, 0.0);
+        screen(&mut c, 0, &fx, 0.0, AS_DRAWN);
         let n = c.shapes.len();
         assert_eq!(
             c.shapes[n - 2].fill,
