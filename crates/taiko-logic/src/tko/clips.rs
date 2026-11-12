@@ -349,6 +349,8 @@ pub struct LayerAt {
     pub pose: Pose,
     /// Pulses: how many times its size it is.
     pub scale: f64,
+    /// Ms since the clip began: where an animated picture is in its frames.
+    pub since: f64,
 }
 
 /// The shapes a lane can be bent into, by name: the Shapeshift mod's, in its order.
@@ -480,6 +482,8 @@ impl Clip {
         if t < self.start || (t > self.end && !self.keep) {
             return None;
         }
+        // An animation plays on while the layer is kept after its end.
+        let since = t - self.start;
         let t = t.min(self.end);
         let b = beat(self.start).max(1.0);
         let (fin, fout) = (self.fade_in * b, self.fade_out * b);
@@ -506,7 +510,7 @@ impl Clip {
         } else {
             (1.0 + self.value(t, moments, beat) / 100.0).max(0.0)
         };
-        Some(LayerAt { pose, scale })
+        Some(LayerAt { pose, scale, since })
     }
 
     pub fn value(&self, t: f64, moments: &[f64], beat: impl Fn(f64) -> f64) -> f64 {

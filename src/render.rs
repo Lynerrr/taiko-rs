@@ -2944,6 +2944,9 @@ pub struct Canvas<H> {
     pub picture_slots: std::sync::Arc<std::collections::HashMap<String, (u32, f32)>>,
     /// Map pictures drawn this frame (file names, lowercase), for the app to load.
     pub pictures_wanted: Vec<String>,
+    /// Where the animated ones are in their frames (ms since their layer began), by name; the
+    /// first layer to show a picture in a frame sets it.
+    pub picture_times: Vec<(String, f64)>,
 }
 
 // By hand: a derive would ask `H: Default` of the hit type.
@@ -2968,6 +2971,7 @@ impl<H> Default for Canvas<H> {
             avatars_wanted: Default::default(),
             picture_slots: Default::default(),
             pictures_wanted: Default::default(),
+            picture_times: Default::default(),
         }
     }
 }
@@ -3149,6 +3153,7 @@ impl<H> Canvas<H> {
         self.shapes.clear();
         self.avatars_wanted.clear();
         self.pictures_wanted.clear();
+        self.picture_times.clear();
         self.disc = None;
         self.glitch = None;
         self.hits.clear();
@@ -3555,6 +3560,15 @@ impl<H> Canvas<H> {
             angle,
         });
         true
+    }
+
+    /// Where an animated picture `file` is to be in its frames this frame: `since` ms into them
+    /// (they loop). A still picture leaves it be.
+    pub fn picture_time(&mut self, file: &str, since: f64) {
+        let key = file.to_ascii_lowercase();
+        if !self.picture_times.iter().any(|(k, _)| *k == key) {
+            self.picture_times.push((key, since));
+        }
     }
 
     pub fn avatar(&mut self, name: &str, x: f32, y: f32, r: f32, colour: u32, a: f32) {

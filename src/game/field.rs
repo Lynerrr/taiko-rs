@@ -400,6 +400,7 @@ impl Play {
             let tint = rgba(l.colour, p.alpha as f32);
             match &l.show {
                 Show::Picture { file } => {
+                    c.picture_time(file, at.since);
                     c.picture(file, x, y, h, angle, tint);
                 }
                 Show::Text { text } => {

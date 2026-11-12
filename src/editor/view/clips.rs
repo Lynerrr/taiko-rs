@@ -985,7 +985,7 @@ impl View {
             Show::Picture { file } => {
                 row.push(("<".to_string(), Btn::Fx(FxAct::Picture(-1)), false));
                 let label = if file.is_empty() {
-                    "no picture: put one in the map folder or drop it here".to_string()
+                    "no picture: drop a PNG, JPG, GIF or WebP here".to_string()
                 } else {
                     file.clone()
                 };
@@ -1284,7 +1284,18 @@ impl View {
         }
     }
 
-    /// The pictures in the edited map's folder.
+    /// A video dropped on the editor: it can't play in a map, so how to make it a picture that
+    /// can.
+    pub fn drop_video(&mut self, from: &std::path::Path) {
+        let name = from
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.status = format!(
+            "{name}: videos don't play in maps. Make it an animated WebP, which does: ffmpeg -i \"{name}\" -vf scale=512:-1 -loop 0 clip.webp"
+        );
+    }
+
     /// A picture dropped on the editor: copied into the map's folder (pictures travel with the
     /// map from there), and shown by the picked picture block, if one is picked.
     pub fn drop_picture(&mut self, from: &std::path::Path) {
