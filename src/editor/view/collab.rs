@@ -361,6 +361,28 @@ impl View {
         }
     }
 
+    /// What friends and the website see we're editing: the map, and in a session who we're
+    /// mapping it with. It travels in the activity's map text, so every server and older game
+    /// shows it as it is.
+    pub fn presence_label(&self) -> String {
+        let map = self.label();
+        let Some(s) = &self.collab else {
+            return map;
+        };
+        let with: Vec<&str> = s
+            .state
+            .participants
+            .iter()
+            .filter(|p| p.online && p.id != s.me)
+            .map(|p| p.name.as_str())
+            .collect();
+        if with.is_empty() {
+            map
+        } else {
+            format!("{map} (mapping with {})", with.join(", "))
+        }
+    }
+
     /// Hosting the session open here.
     pub fn hosting(&self) -> bool {
         self.collab
@@ -1426,5 +1448,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn friends_see_who_we_are_mapping_with() {
+        let alone = view(false);
+        assert!(!alone.presence_label().contains("mapping with"));
+        let mut v = view(true);
+        let map = v.label();
+        assert_eq!(
+            v.presence_label(),
+            format!("{map} (mapping with anna, bob)")
+        );
+        let s = v.collab.as_mut().unwrap();
+        for p in &mut s.state.participants {
+            p.online = p.id == 1;
+        }
+        assert_eq!(v.presence_label(), map, "nobody else online");
     }
 }

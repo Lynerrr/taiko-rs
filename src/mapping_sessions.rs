@@ -138,7 +138,8 @@ impl State {
         match ready {
             None => {
                 let pct = (j.connecting.progress() * 100.0).round() as u32;
-                self.toast(tr!("joining the mapping session... {pct}%", "マッピングセッションに参加中... {pct}%", "подключаюсь к совместному маппингу... {pct}%"; [] [pct]));
+                let stage = j.connecting.stage();
+                self.toast(tr!("mapping session: {stage}... {pct}%", "マッピングセッション: {stage}... {pct}%", "совместный маппинг: {stage}... {pct}%"; [] [stage, pct]));
             }
             Some(Err(why)) => {
                 self.mapping_join = None;

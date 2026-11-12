@@ -9719,7 +9719,7 @@ impl State {
                     map: self
                         .editor_back
                         .as_ref()
-                        .map(|v| v.label())
+                        .map(|v| v.presence_label())
                         .unwrap_or_default(),
                 }
             }

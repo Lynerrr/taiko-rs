@@ -268,6 +268,22 @@ impl Connecting {
         }
     }
 
+    /// What joining is waiting for, in words for the player.
+    pub fn stage(&self) -> String {
+        if self.joined.is_none() || self.state.is_none() {
+            return tr!("connecting", "接続中", "подключение").into();
+        }
+        if self.fetched < self.to_fetch {
+            let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
+            let (got, all) = (mb(self.fetched), mb(self.to_fetch));
+            return tr!("downloading the set's files {got}/{all} MB", "セットのファイルをダウンロード中 {got}/{all} MB", "скачиваю файлы сета {got}/{all} МБ"; [] [got, all]);
+        }
+        if self.snapshot.is_none() {
+            return tr!("getting the map", "マップを取得中", "получаю карту").into();
+        }
+        tr!("opening", "開いています", "открываю").into()
+    }
+
     /// How far along joining is, 0 to 1.
     pub fn progress(&self) -> f32 {
         let steps = [
@@ -628,10 +644,16 @@ mod tests {
         let snapshot = host_snapshot(&charts).unwrap();
         let songs = temp("songs");
         let mut c = Connecting::guest(songs.clone());
+        assert_eq!(c.stage(), "connecting");
         assert!(c.take(joined(2, 2, Vec::new())).unwrap().is_empty());
         let first = c.take(down(MapDown::State(state(&d)))).unwrap();
         assert!(matches!(&first[..], [MapUp::GetAsset { offset: 0, .. }]));
         assert_eq!(c.to_fetch, music.len() as u64 + 3);
+        assert!(
+            c.stage().starts_with("downloading the set's files 0.0/"),
+            "{}",
+            c.stage()
+        );
         let mut asks = Vec::new();
         for a in &d.assets {
             for part in served(&uploads, &a.sha256) {
@@ -642,6 +664,7 @@ mod tests {
             matches!(&asks[..], [MapUp::GetAsset { .. }]),
             "the next file"
         );
+        assert_eq!(c.stage(), "getting the map", "every file in");
         for up in snapshot_lines(5, &snapshot) {
             let MapUp::Snapshot {
                 seq,
@@ -667,6 +690,7 @@ mod tests {
         }))
         .unwrap();
         assert!(c.progress() >= 0.99);
+        assert_eq!(c.stage(), "opening");
         let r = c.ready().unwrap().unwrap();
         let folder = songs.join("1 Artist - Song");
         assert_eq!(std::fs::read(folder.join("audio.mp3")).unwrap(), music);

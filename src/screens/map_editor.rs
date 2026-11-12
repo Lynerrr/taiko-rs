@@ -56,7 +56,7 @@ impl Screen for MapEditor {
 
     fn friends_activity(&self) -> Option<online::Activity> {
         Some(online::Activity::Editing {
-            map: self.view.label(),
+            map: self.view.presence_label(),
         })
     }
 
