@@ -520,6 +520,7 @@ impl View {
         }
         ed.follow_timing = self.ed.follow_timing;
         self.ed = ed;
+        self.mark_stale();
         let mut session = Session::new(sync, r.state, r.me);
         for d in r.later {
             session.handle(&mut self.ed, d, 0.0);
@@ -606,6 +607,16 @@ impl View {
     /// out of step with the server, at once; the end of the session leaves the chart to edit
     /// alone.
     pub(super) fn take_link_events(&mut self, events: Vec<LinkEvent>, now: Instant) -> Vec<MapUp> {
+        let rev = self.ed.history.rev();
+        let out = self.link_events(events, now);
+        // The others' edits are in the chart: the preview shows them now, not on our next edit.
+        if self.ed.history.rev() != rev {
+            self.mark_stale_remote();
+        }
+        out
+    }
+
+    fn link_events(&mut self, events: Vec<LinkEvent>, now: Instant) -> Vec<MapUp> {
         let end = self.end_ms();
         let Some(s) = self.collab.as_mut() else {
             return Vec::new();
@@ -1590,6 +1601,52 @@ mod tests {
         );
         v.press(Btn::Collab(CollabAct::ByAuthor), Keys::default(), None);
         assert!(v.collab.as_ref().unwrap().by_author);
+    }
+
+    #[test]
+    fn the_others_edits_show_in_the_preview_without_an_edit_of_ours() {
+        use taiko_proto::mapping::{MapOp, Obj, Sequenced};
+        let mut v = view(true);
+        draw(&mut v);
+        let notes = |v: &View| v.game.as_ref().map_or(0, |g| g.map().notes.len());
+        let before = notes(&v);
+        assert!(before > 0 && v.stale.is_none(), "the preview is built");
+        let op = MapOp::InsertObjects(vec![Obj {
+            id: (2 << 40) | 1,
+            line: "256,192,3000,1,0,0:0:0:0:".into(),
+            fake: false,
+            group: None,
+        }]);
+        let down = |seq: u64| {
+            LinkEvent::Down(Box::new(MapDown::Op(Sequenced {
+                seq,
+                author: 2,
+                epoch: 2,
+                client_seq: seq,
+                diff: Some(0),
+                op: op.clone(),
+            })))
+        };
+        v.take_link_events(vec![down(1)], Instant::now());
+        assert!(v.ed.chart.objects.iter().any(|o| o.time == 3000.0));
+        assert!(v.stale.is_some(), "the preview is behind the chart");
+        // Their drags come many times a second: the preview catches up a moment later, as
+        // during a drag of ours.
+        draw(&mut v);
+        assert_eq!(
+            notes(&v),
+            before,
+            "not rebuilt on every line from the server"
+        );
+        v.stale = Some(Instant::now() - Duration::from_millis(200));
+        draw(&mut v);
+        assert_eq!(notes(&v), before + 1, "their note is in the preview");
+        assert!(v.stale.is_none());
+        // An edit of ours right after theirs shows at once.
+        v.take_link_events(vec![down(2)], Instant::now());
+        v.mark_stale();
+        draw(&mut v);
+        assert!(v.stale.is_none(), "ours is never held back");
     }
 
     #[test]
