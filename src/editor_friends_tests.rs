@@ -62,6 +62,51 @@ fn the_chip_sits_in_the_menu_bar_clear_of_the_title_and_toggles_the_panel() {
     assert!(!s.social.open);
 }
 
+/// Presses and lets go of the left button at the middle of `r` (virtual units), as a player does.
+fn mouse_click(s: &mut State, r: [f32; 4]) {
+    let k = s.window_h / crate::render::VIRTUAL_HEIGHT;
+    s.mouse_moved(
+        f64::from((r[0] + r[2] / 2.0) * k),
+        f64::from((r[1] + r[3] / 2.0) * k),
+    );
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+}
+
+#[test]
+fn the_chip_and_notifications_take_a_real_mouse_click_in_the_editor() {
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
+    let mut s = editing();
+    let chip = toggle_rect(&mut s).expect("a chip to click");
+    mouse_click(&mut s, chip);
+    assert!(s.social.open, "the mouse opens the panel");
+    s.social.close();
+    // A notification over the editor: clicking it opens the conversation it is about.
+    s.social.friends = vec![crate::online::Friend {
+        name: "ann".into(),
+        activity: None,
+    }];
+    s.social.notify(
+        "ann",
+        "hi",
+        0x4fb4ff,
+        social::NoteAction::Chat("ann".into()),
+    );
+    let mut c = Canvas::default();
+    s.build_frame(&mut c, Instant::now(), 853.3);
+    let note = s
+        .hits
+        .iter()
+        .find(|h| h.hit == crate::hit::Hit::SocialNote(0))
+        .map(|h| h.rect)
+        .expect("the notification is drawn");
+    mouse_click(&mut s, note);
+    assert!(s.social.open && s.social.notes.is_empty());
+}
+
 #[test]
 fn the_open_panel_leaves_editor_keys_alone_until_a_field_is_clicked() {
     crate::render::set_frame_theme(Some(crate::render::Theme {
