@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
-use taiko_proto::mapping::{MapDown, MapUp, Participant, SessionState};
+use taiko_proto::mapping::{
+    MapDown, MapUp, Participant, SessionState, SnapshotPieces, snapshot_lines,
+};
 
 use super::super::state::Editor;
 use super::{OutOfStep, Sync};
@@ -40,6 +42,8 @@ pub enum Notice {
     Refused(String),
     /// The session is over: why.
     Closed(String),
+    /// Lines to send back (our snapshot, when the server asks for one).
+    Send(Vec<MapUp>),
 }
 
 pub struct Session {
@@ -55,6 +59,10 @@ pub struct Session {
     pub by_author: bool,
     /// The last presence sent and when.
     sent: Option<(f64, Remote)>,
+    /// A snapshot coming in parts (after a resume).
+    pieces: SnapshotPieces,
+    /// The last of our ops the server had taken when we resumed (`Reply::Mapping::done`).
+    done: u64,
     /// What the session's clock counts from.
     started: Instant,
 }
@@ -70,6 +78,8 @@ impl Session {
             follow: None,
             by_author: false,
             sent: None,
+            pieces: SnapshotPieces::default(),
+            done: 0,
             started: Instant::now(),
         }
     }
@@ -159,14 +169,39 @@ impl Session {
                 }
             }
             MapDown::Closed(why) => return Some(Notice::Closed(why)),
+            // After a resume the server sends its snapshot when its log no longer holds what
+            // we missed.
+            MapDown::Snapshot {
+                seq,
+                part,
+                parts,
+                data,
+            } => {
+                let (seq, data) = self.pieces.add(seq, part, parts, data)?;
+                if self.sync.resync(ed, &data, seq, &[], self.done).is_err() {
+                    return Some(Notice::Resume);
+                }
+            }
+            // Asked for our state to shorten the log: only at the seq we are at (the server
+            // asks after sending us every op up to it).
+            MapDown::SnapshotWanted { seq } if seq == self.sync.last_seq() => {
+                let data = self.sync.snapshot().ok()?;
+                return Some(Notice::Send(snapshot_lines(seq, &data)));
+            }
             // Assets are fetched while joining, before the editor opens.
             MapDown::AssetPart { .. }
             | MapDown::Presence { .. }
-            | MapDown::Snapshot { .. }
             | MapDown::SnapshotWanted { .. }
             | MapDown::Pong => {}
         }
         None
+    }
+
+    /// Back on a resumed connection: `done` is the last of our ops the server had taken.
+    pub fn resumed(&mut self, ed: &mut Editor, done: u64) {
+        self.done = done;
+        self.pieces = SnapshotPieces::default();
+        self.sync.resumed(ed, done);
     }
 
     /// Our place to send, when it changed and the last one went at least `PRESENCE_MS` ago.
@@ -270,6 +305,8 @@ pub(crate) mod tests {
                 },
             ],
             comments: Vec::new(),
+            folder: String::new(),
+            assets: Vec::new(),
         }
     }
 
@@ -430,5 +467,58 @@ pub(crate) mod tests {
             s.handle(&mut ed, MapDown::Closed("bye".into()), 0.0),
             Some(Notice::Closed("bye".into()))
         );
+    }
+
+    #[test]
+    fn a_resume_drops_what_the_server_took_and_snapshots_come_and_go_at_our_seq() {
+        let (mut s, mut ed) = session();
+        ed.place_hit(4000.0, false).unwrap();
+        ed.place_hit(5000.0, false).unwrap();
+        s.sync.collect(&mut ed);
+        assert_eq!(s.sync.outgoing(0.0, false).len(), 2);
+        // The connection dropped; the server had taken our first op (it comes back with the
+        // ops we missed), not the second, which is sent again.
+        s.resumed(&mut ed, 1);
+        assert_eq!(s.sync.pending(), 1);
+        let again = s.sync.outgoing(100.0, false);
+        assert!(matches!(again[..], [MapUp::Op { client_seq: 2, .. }]));
+        assert!(!ed.chart.objects.iter().any(|o| o.time == 4000.0));
+        assert!(ed.chart.objects.iter().any(|o| o.time == 5000.0));
+        // The server's log no longer held what we missed: its snapshot, in parts.
+        let confirmed = s.sync.snapshot().unwrap();
+        let lines = snapshot_lines(7, &confirmed);
+        for up in lines {
+            let MapUp::Snapshot {
+                seq,
+                part,
+                parts,
+                data,
+            } = up
+            else {
+                panic!("a snapshot part");
+            };
+            let down = MapDown::Snapshot {
+                seq,
+                part,
+                parts,
+                data,
+            };
+            assert_eq!(s.handle(&mut ed, down, 0.0), None);
+        }
+        assert_eq!(s.sync.last_seq(), 7);
+        assert!(
+            ed.chart.objects.iter().any(|o| o.time == 5000.0),
+            "our pending op stays on top"
+        );
+        // Asked for a snapshot at the seq we are at: ours goes back; at another, nothing.
+        assert_eq!(
+            s.handle(&mut ed, MapDown::SnapshotWanted { seq: 6 }, 0.0),
+            None
+        );
+        let Some(Notice::Send(lines)) = s.handle(&mut ed, MapDown::SnapshotWanted { seq: 7 }, 0.0)
+        else {
+            panic!("our snapshot");
+        };
+        assert!(matches!(lines[0], MapUp::Snapshot { seq: 7, .. }));
     }
 }

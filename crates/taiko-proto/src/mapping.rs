@@ -253,6 +253,12 @@ pub struct SessionState {
     pub documents: Vec<Document>,
     #[serde(default)]
     pub comments: Vec<Comment>,
+    /// The set's folder name and files other than its charts, as the host opened it: a
+    /// joining game fetches the ones it doesn't have.
+    #[serde(default)]
+    pub folder: String,
+    #[serde(default)]
+    pub assets: Vec<AssetRef>,
 }
 
 /// Why `who` may not make `op` on difficulty `diff` (`None`: the set's shared red lines).
@@ -739,6 +745,8 @@ mod tests {
                 accepted: false,
             }],
             comments: Vec::new(),
+            folder: String::new(),
+            assets: Vec::new(),
         }
     }
 

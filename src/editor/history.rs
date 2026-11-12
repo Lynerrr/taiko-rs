@@ -393,6 +393,11 @@ impl History {
         self.rev += 1;
     }
 
+    /// The changes made here aren't shared any more (the session ended).
+    pub fn stop_sharing(&mut self) {
+        self.outbox = None;
+    }
+
     /// From now on the changes made here are shared (see `outbox`).
     pub fn share(&mut self) {
         self.outbox.get_or_insert_with(Vec::new);

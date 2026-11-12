@@ -80,6 +80,8 @@ pub enum Action {
     Mute,
     Lookup,
     CloseRoom,
+    /// Invites a friend to the mapping session we host.
+    Invite,
 }
 
 /// Where a player in the online list stands with us.
@@ -105,6 +107,8 @@ pub enum NoteAction {
     Global,
     /// Watches this friend's play.
     Watch(String),
+    /// Joins this mapping session (an invite).
+    Mapping(u64),
     None,
 }
 
@@ -123,6 +127,8 @@ pub const NOTE_SECS: f32 = 6.0;
 #[derive(Default)]
 pub struct Social {
     pub notes: Vec<Note>,
+    /// We host a mapping session in the editor: friends online get an invite button.
+    pub can_invite: bool,
     /// The friend list has been received since connecting (later changes notify).
     pub have_list: bool,
     pub conn: Option<online::Social>,
@@ -1801,6 +1807,10 @@ fn draw_rows(
                         }
                         _ => bx,
                     };
+                    if s.can_invite && f.activity.is_some() {
+                        bx = button(c, bx, by, "invite", Hit::SocialAction(i, Action::Invite), a)
+                            - 4.0;
+                    }
                 }
                 let unread = s.unread.get(&key(&f.name)).copied().unwrap_or(0);
                 if unread > 0 {

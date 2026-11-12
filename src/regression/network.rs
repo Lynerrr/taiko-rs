@@ -333,6 +333,7 @@ fn ups() -> Vec<Up> {
         Up::PlayEnd,
         Up::Ping,
         Up::GlobalChat("hello".into()),
+        Up::Features(vec![mapping::FEATURE.into()]),
     ]
 }
 
@@ -365,6 +366,13 @@ fn downs() -> Vec<Down> {
             at: 5,
         },
         Down::Groups(vec![("dev".into(), vec!["DEV".into()])]),
+        Down::MappingInvite {
+            from: "host".into(),
+            session: 9,
+            title: "Artist - Song".into(),
+            mode: mapping::Mode::Collab,
+        },
+        Down::MappingClosed { session: 9 },
     ]
 }
 
@@ -440,6 +448,12 @@ fn mapping_state() -> mapping::SessionState {
             author: 1,
             text: "01:00:000 (1) - too dense".into(),
             resolved: false,
+        }],
+        folder: "1 Artist - Song".into(),
+        assets: vec![mapping::AssetRef {
+            name: "audio.mp3".into(),
+            sha256: "ab".repeat(32),
+            size: 1024,
         }],
     }
 }
@@ -1211,4 +1225,236 @@ fn a_dropped_connection_mid_match_goes_back_to_the_menu() {
     );
     assert!(s.mp.is_none());
     assert!(!s.mp_status.is_empty(), "and says why");
+}
+
+/// A scripted mapping server for one game: answers `JoinMapping` for session 9 with a guest
+/// difficulty for player 2, the set's music, the snapshot and an op after it; then reads the
+/// game's lines until its first edit, and ends the session. Other connections (the account
+/// check, the social connection) are dropped. Hands back the game's lines.
+fn scripted_mapping_server(
+    listener: std::net::TcpListener,
+    music: Vec<u8>,
+) -> std::thread::JoinHandle<Vec<mapping::MapUp>> {
+    use crate::editor::collab::{connect::sha256_hex, host_snapshot};
+    use base64::Engine as _;
+    std::thread::spawn(move || {
+        loop {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let Ok(first) = online::read_line(&mut reader) else {
+                continue;
+            };
+            let Ok(env) = serde_json::from_str::<Envelope>(&first) else {
+                continue;
+            };
+            let Request::JoinMapping { session: 9, .. } = env.request else {
+                continue;
+            };
+            let send = |out: &mut std::net::TcpStream, d: mapping::MapDown| {
+                online::write_line(out, &d).unwrap();
+            };
+            online::write_line(
+                &mut out,
+                &Reply::Mapping {
+                    session: 9,
+                    epoch: 2,
+                    me: 2,
+                    needs: Vec::new(),
+                    done: 0,
+                },
+            )
+            .unwrap();
+            let mut state = mapping_state();
+            state.participants.push(mapping::Participant {
+                id: 2,
+                name: "anna".into(),
+                role: mapping::Role::Mapper,
+                colour: 0x5CC8F2,
+                online: true,
+            });
+            state.documents.push(mapping::Document {
+                diff: 1,
+                name: "Anna's Inner".into(),
+                owner: Some(2),
+                parts: Vec::new(),
+                locked: false,
+                accepted: false,
+            });
+            state.documents[0].owner = None;
+            state.documents[0].parts.clear();
+            state.assets = vec![mapping::AssetRef {
+                name: "audio.mp3".into(),
+                sha256: sha256_hex(&music),
+                size: music.len() as u64,
+            }];
+            send(&mut out, mapping::MapDown::State(state));
+            let charts = vec![
+                (
+                    "Oni".to_string(),
+                    crate::editor::chart::tests::MAP.to_string(),
+                ),
+                (
+                    "Anna's Inner".to_string(),
+                    crate::editor::chart::tests::MAP.replace("Oni", "Anna's Inner"),
+                ),
+            ];
+            let snapshot = host_snapshot(&charts).unwrap();
+            for up in mapping::snapshot_lines(4, &snapshot) {
+                let mapping::MapUp::Snapshot {
+                    seq,
+                    part,
+                    parts,
+                    data,
+                } = up
+                else {
+                    unreachable!()
+                };
+                send(
+                    &mut out,
+                    mapping::MapDown::Snapshot {
+                        seq,
+                        part,
+                        parts,
+                        data,
+                    },
+                );
+            }
+            // The host put a note in our difficulty just after the snapshot.
+            send(
+                &mut out,
+                mapping::MapDown::Op(mapping::Sequenced {
+                    seq: 5,
+                    author: 1,
+                    epoch: 1,
+                    client_seq: 7,
+                    diff: Some(1),
+                    op: mapping::MapOp::InsertObjects(vec![mapping::Obj {
+                        id: (1 << mapping::EPOCH_SHIFT) | 50,
+                        line: "256,192,7000,1,0,0:0:0:0:".into(),
+                        fake: false,
+                        group: None,
+                    }]),
+                }),
+            );
+            let mut seen = Vec::new();
+            loop {
+                let line = online::read_line(&mut reader).unwrap();
+                let up: mapping::MapUp = serde_json::from_str(&line).unwrap();
+                match &up {
+                    mapping::MapUp::GetAsset { sha256, offset } => {
+                        let from = *offset as usize;
+                        send(
+                            &mut out,
+                            mapping::MapDown::AssetPart {
+                                sha256: sha256.clone(),
+                                offset: *offset,
+                                total: music.len() as u64,
+                                data: base64::engine::general_purpose::STANDARD
+                                    .encode(&music[from..]),
+                            },
+                        );
+                    }
+                    mapping::MapUp::Op { .. } => {
+                        seen.push(up);
+                        send(
+                            &mut out,
+                            mapping::MapDown::Closed("the host ended it".into()),
+                        );
+                        return seen;
+                    }
+                    _ => {}
+                }
+                seen.push(up);
+            }
+        }
+    })
+}
+
+/// An invite to a mapping session, clicked: the game fetches the set's music and the snapshot
+/// from a scripted server, opens the editor on the difficulty given to it with the op that
+/// followed the snapshot, sends its own edit, and edits alone again when the session ends.
+#[test]
+fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let music: Vec<u8> = (0..5000u32).map(|i| (i % 253) as u8).collect();
+    let server = scripted_mapping_server(listener, music.clone());
+    let songs = Songs::new("mapping-join", &[]);
+    std::fs::create_dir_all(&songs.dir).unwrap();
+    let mut cfg = harness::config();
+    cfg.online_server = format!("127.0.0.1:{port}");
+    let mut s = state_with(cfg, Vec::new());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.songs_dir = songs.dir.clone();
+    s.cfg.online_token = "t".into();
+
+    // A server without the feature: the invite (were it sent) leads nowhere.
+    s.join_mapping(9);
+    assert!(s.mapping_join.is_none(), "nothing asked of a legacy server");
+    assert!(s.social_features().is_empty());
+
+    s.mapping_sessions = true;
+    assert_eq!(s.social_features(), vec![mapping::FEATURE.to_string()]);
+    s.social_down(Down::MappingInvite {
+        from: "host".into(),
+        session: 9,
+        title: "Artist - Song".into(),
+        mode: mapping::Mode::Guest,
+    });
+    let note = s
+        .social
+        .notes
+        .iter()
+        .position(|n| n.action == social::NoteAction::Mapping(9))
+        .expect("an invite to click");
+    assert!(s.social.notes[note].title.contains("host"));
+    s.click(crate::hit::Hit::SocialNote(note), None);
+    assert!(s.mapping_join.is_some(), "joining");
+    let joined = |s: &State| {
+        s.scene
+            .screen_as::<MapEditor>()
+            .is_some_and(|e| e.view.collab.is_some())
+    };
+    assert!(
+        wait_for(&mut s, &mut now, joined),
+        "the editor opens on the session"
+    );
+    let folder = songs.dir.join("1 Artist - Song");
+    assert_eq!(std::fs::read(folder.join("audio.mp3")).unwrap(), music);
+    {
+        let view = &mut s.scene.screen_mut::<MapEditor>().unwrap().view;
+        assert_eq!(
+            view.ed.path,
+            folder.join("Song [Anna's Inner].osu"),
+            "the guest difficulty given to us"
+        );
+        assert!(
+            view.ed.chart.objects.iter().any(|o| o.time == 7000.0),
+            "the op after the snapshot"
+        );
+        view.ed.place_hit(8000.0, false).unwrap();
+    }
+    let alone = |s: &State| {
+        s.scene
+            .screen_as::<MapEditor>()
+            .is_some_and(|e| e.view.collab.is_none())
+    };
+    assert!(wait_for(&mut s, &mut now, alone), "the session ends");
+    let seen = server.join().unwrap();
+    assert!(
+        seen.iter().any(|u| matches!(
+            u,
+            mapping::MapUp::Op {
+                client_seq: 1,
+                diff: Some(1),
+                ..
+            }
+        )),
+        "our edit went out: {seen:?}"
+    );
+    let view = &s.scene.screen_as::<MapEditor>().unwrap().view;
+    assert!(view.ed.chart.objects.iter().any(|o| o.time == 8000.0));
+    assert!(view.link.is_none() && view.relink.is_none());
 }

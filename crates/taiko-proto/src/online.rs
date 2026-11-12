@@ -865,6 +865,11 @@ pub enum Up {
     /// What an admin does from the game; anyone else is refused. The outcome comes back as a
     /// `Down::Notice`, or for questions as `Down::AdminOverview` / `Down::AdminLookup`.
     Admin(AdminOp),
+    /// What this game can take beyond the protocol every game speaks (such as
+    /// `mapping::FEATURE`), right after connecting. Sent only to a server that listed the
+    /// feature in `Reply::Account::features`; the server sends the messages a feature brings
+    /// only to connections that declared it.
+    Features(Vec<String>),
 }
 
 /// An admin's tools on the social connection (`Up::Admin`).
@@ -1073,6 +1078,18 @@ pub enum Down {
     AdminOverview(Box<AdminOverview>),
     /// For admins: the answer to `AdminOp::Lookup`.
     AdminLookup(Box<AdminLookup>),
+    /// `from` invites us to their mapping session (`Request::JoinMapping` to join). Only to
+    /// connections that declared `mapping::FEATURE`; the others get a chat line instead.
+    MappingInvite {
+        from: String,
+        session: u64,
+        title: String,
+        mode: crate::mapping::Mode,
+    },
+    /// A session we were invited to is over (or the invite was taken back).
+    MappingClosed {
+        session: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]

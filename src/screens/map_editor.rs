@@ -115,7 +115,13 @@ impl Screen for MapEditor {
         if view.account.as_ref() != token {
             view.account = token.cloned();
         }
+        view.sessions = state.mapping_ok();
         view.update(frame.now, state.audio.as_ref());
+        if view.take_session_request()
+            && let Some(dir) = view.ed.path.parent().map(Path::to_path_buf)
+        {
+            state.open_mapping(&dir);
+        }
         if let Some(speed) = view.take_rate_request() {
             self.out.reload = Some((view.entry, speed));
         }

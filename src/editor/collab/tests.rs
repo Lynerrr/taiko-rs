@@ -240,6 +240,8 @@ fn session() -> SessionState {
             },
         ],
         comments: Vec::new(),
+        folder: String::new(),
+        assets: Vec::new(),
     }
 }
 

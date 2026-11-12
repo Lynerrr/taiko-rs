@@ -29,6 +29,7 @@ use super::state::Editor;
 /// While dragging, at most one op this often (a later step of the drag replaces an unsent one).
 pub const DRAG_SEND_MS: f64 = 50.0;
 
+pub mod connect;
 pub mod session;
 
 // ---- the wire form of a command ----
@@ -503,6 +504,7 @@ impl Sync {
     }
 
     /// The confirmed chart of a difficulty: everything the server ordered so far.
+    #[cfg(test)]
     pub fn confirmed(&self, diff: u32) -> Option<&Chart> {
         self.docs.get(&diff)
     }
@@ -668,6 +670,18 @@ impl Sync {
         }
         self.rebuild(ed);
         Ok(())
+    }
+
+    /// Back on a resumed connection that the server answered with `done`, the last of our ops
+    /// it had taken: those are in its log already (and come back with the ops we missed) or
+    /// were refused, so they leave the pending list. The rest are sent again.
+    pub fn resumed(&mut self, ed: &mut Editor, done: u64) {
+        self.collect(ed);
+        self.pending.retain(|p| p.client_seq > done);
+        for p in &mut self.pending {
+            p.sent = false;
+        }
+        self.rebuild(ed);
     }
 
     /// The editor's chart made again: the confirmed one with our pending ops on top.

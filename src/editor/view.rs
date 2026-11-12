@@ -26,7 +26,7 @@ use crate::video::FRAME_VW;
 mod chrome;
 mod clips;
 mod cmd;
-mod collab;
+pub mod collab;
 mod curves;
 mod gizmo;
 mod help;
@@ -423,6 +423,14 @@ pub struct View {
     pub ed: Editor,
     /// The mapping session the chart is edited in, if any (none while editing alone).
     pub collab: Option<Box<super::collab::session::Session>>,
+    /// The session's connection, and how to connect again when it drops.
+    pub link: Option<taiko_proto::mapping::Link>,
+    pub relink: Option<collab::Relink>,
+    /// The server runs mapping sessions and we're logged in to it (set by the screen): the
+    /// editor offers to start one.
+    pub sessions: bool,
+    /// Starting a session was asked for (the screen takes it).
+    session_wanted: bool,
     /// The library entry being edited (its music is the track).
     pub entry: usize,
     pub track: Option<Arc<Track>>,
@@ -704,6 +712,10 @@ impl View {
         let mut v = View {
             ed,
             collab: None,
+            link: None,
+            relink: None,
+            sessions: false,
+            session_wanted: false,
             entry,
             track: None,
             track_rx: None,
@@ -1079,6 +1091,7 @@ impl View {
     // ---- loading and playing ----
 
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) {
+        self.pump_session(now);
         self.glide(now);
         self.edge_scroll(now);
         self.follow_seek(audio);

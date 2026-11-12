@@ -24,6 +24,35 @@ game doesn't know is passed over. The link reports `Joined`, every `Down` and `L
 reconnects by itself, since the resume needs the session's last seq. Snapshots go in 512 KiB
 parts (`snapshot_lines`, `SnapshotPieces`), keeping every line within protocol 1's 1 MiB.
 
+## Invites, joining and hosting (`src/mapping_sessions.rs`, `collab::connect`)
+
+- The game keeps whether the server listed `mapping/1` (`State::mapping_sessions`, cleared on
+  logging out). Only then does it send `Up::Features(["mapping/1"])` on connecting the social
+  side, show *Start mapping session* in the editor (over the preview's corner), and act on an
+  invite.
+- **Invites:** `Down::MappingInvite` is a notification ("X invites you to map"); clicking it
+  joins. `Down::MappingClosed` takes it away. The host invites friends from the friends panel:
+  while hosting a session in the editor, every friend online has an *invite* button
+  (`HostCmd::Invite`).
+- **Joining** (`connect::Connecting::guest`): `JoinMapping`, then the session's state, which
+  lists the set's folder and files by sha256. Files the Songs folder doesn't have yet (in a
+  folder of the set's name; a set already there is matched by hash) are fetched with
+  `GetAsset` one after another and checked against their hash; a name pointing outside the
+  set's folder ends the join. Then the snapshot and the ops after it. The editor opens on the
+  difficulty given to us (a guest difficulty we own, or one with a part of ours), else the
+  first; its chart file is written if the folder doesn't have it. Chat, presences and comments
+  that came meanwhile go to the session when it starts.
+- **Hosting** (`connect::Connecting::host`): *Start mapping session* reads the set's folder
+  (the `.osu` charts and every other file, within 40 MB a file and 200 MB in all), sends
+  `OpenMapping` with its description, uploads the files the server says it needs in 512 KiB
+  pieces, and answers the new session's `SnapshotWanted` with the snapshot of its charts. A
+  session the server already has (opened again) comes back like a join.
+- **In the session** (`View::pump_session`): every frame, the server's lines go to the session,
+  our new edits and our place go out. A lost connection is resumed (`ResumeMapping`) 2 s later,
+  and at once when out of step; edits made meanwhile stay pending and go out after it. The
+  server's `SnapshotWanted` at our seq is answered with our confirmed state. When the session
+  ends the chart stays in the editor to edit alone.
+
 ## Sync (`src/editor/collab.rs`)
 
 Every edit is a `history::Command` already. In a session the history keeps an outbox of the
@@ -84,4 +113,8 @@ difficulty, snapshots and the wire form of every command. The wire format of eve
 message is kept golden in `src/regression/network.rs`; the editor's screen alone and in a
 session in `screen-map-editor` and `screen-map-editor-session`. `collab::session` and
 `view::collab` have their own tests (presences, throttling, following, refusals, chat, the
-panel's rows and clicks, nothing drawn alone).
+panel's rows and clicks, nothing drawn alone, resuming, answering snapshots, the end of a
+session), and `collab::connect` hosting and joining against files on disk.
+`regression::network::an_invited_player_joins_a_mapping_session_and_edits_in_it` clicks an
+invite and joins a scripted server: the set fetched, the editor on the guest difficulty, an
+edit sent and the session's end.

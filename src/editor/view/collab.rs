@@ -1,12 +1,33 @@
 //! A mapping session on the editor's screen: who is in it (a panel over the preview's corner),
 //! where the others are on the timeline (their playheads, pointers and selections in their
 //! colours), the collab parts of the open difficulty along the ruler, and following someone.
-//! None of it is drawn, and nothing here runs, while editing alone.
+//! None of it is drawn, and nothing here runs, while editing alone. It also keeps the session's
+//! connection: what the server sends goes to the session, our edits and place go out, and a
+//! dropped connection is resumed.
 
-use super::{Btn, NOTE_R, RULER, View};
+use std::time::{Duration, Instant};
+
+use super::{Btn, Drag, NOTE_R, RULER, View};
+use crate::editor::collab::Sync;
+use crate::editor::collab::connect::Ready;
+use crate::editor::collab::session::{Notice, Session};
 use crate::hit::Canvas;
 use crate::render::rgba;
-use taiko_proto::mapping::Role;
+use taiko_proto::mapping::{HostCmd, Link, LinkEvent, MapUp, Role};
+use taiko_proto::online::Request;
+
+/// How to connect to the session again: the server, our token, the session and our epoch, and
+/// when to try next.
+pub struct Relink {
+    pub server: String,
+    pub token: String,
+    pub session: u64,
+    pub epoch: u32,
+    pub retry_at: Option<Instant>,
+}
+
+/// A dropped connection is tried again after this long.
+const RETRY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CollabAct {
@@ -14,6 +35,8 @@ pub enum CollabAct {
     Follow(u32),
     /// Colour the notes by who made them.
     ByAuthor,
+    /// Start a mapping session for this set (only offered by a server that runs them).
+    Start,
 }
 
 /// The participants panel's width and row height.
@@ -43,6 +66,10 @@ impl View {
     }
 
     pub(super) fn press_collab(&mut self, a: CollabAct) {
+        if a == CollabAct::Start {
+            self.session_wanted = true;
+            return;
+        }
         let Some(s) = self.collab.as_mut() else {
             return;
         };
@@ -55,7 +82,140 @@ impl View {
                 };
             }
             CollabAct::ByAuthor => s.by_author = !s.by_author,
+            CollabAct::Start => {}
         }
+    }
+
+    /// Starting a session was asked for: the screen opens it for the set.
+    pub fn take_session_request(&mut self) -> bool {
+        std::mem::take(&mut self.session_wanted)
+    }
+
+    /// Into a session the game just got into (`connect::Connecting`): the editor's chart is the
+    /// session's, and the connection is the session's from here on.
+    pub fn attach_session(&mut self, r: Ready, link: Link, relink: Relink) -> Result<(), String> {
+        let (mut sync, mut ed) = Sync::join(&r.data, r.seq, r.me, r.epoch, r.open, r.path)?;
+        for s in &r.tail {
+            sync.receive(&mut ed, s)
+                .map_err(|_| "the server's ops don't follow its snapshot".to_string())?;
+        }
+        ed.follow_timing = self.ed.follow_timing;
+        self.ed = ed;
+        let mut session = Session::new(sync, r.state, r.me);
+        for d in r.later {
+            session.handle(&mut self.ed, d, 0.0);
+        }
+        self.collab = Some(Box::new(session));
+        self.link = Some(link);
+        self.relink = Some(relink);
+        Ok(())
+    }
+
+    /// The host's say in the session (an invite, a part given to someone...).
+    pub fn send_host(&self, cmd: HostCmd) {
+        if let Some(l) = &self.link {
+            l.send(MapUp::Host(cmd));
+        }
+    }
+
+    /// Hosting the session open here.
+    pub fn hosting(&self) -> bool {
+        self.collab
+            .as_ref()
+            .is_some_and(|s| s.state.host == s.me && self.link.is_some())
+    }
+
+    /// Every frame in a session: what the connection reported, our edits and place sent, and a
+    /// dropped connection resumed.
+    pub(super) fn pump_session(&mut self, now: Instant) {
+        if self.collab.is_none() {
+            return;
+        }
+        let events = self.link.as_ref().map(Link::poll).unwrap_or_default();
+        let ups = self.take_link_events(events, now);
+        if let Some(l) = &self.link {
+            for up in ups {
+                l.send(up);
+            }
+        }
+        let resume = self.link.is_none()
+            && self
+                .relink
+                .as_ref()
+                .is_some_and(|r| r.retry_at.is_some_and(|at| now >= at));
+        if resume && let (Some(r), Some(s)) = (self.relink.as_mut(), self.collab.as_ref()) {
+            r.retry_at = None;
+            self.link = Some(Link::start(
+                r.server.clone(),
+                Request::ResumeMapping {
+                    token: r.token.clone(),
+                    session: r.session,
+                    epoch: r.epoch,
+                    last_seq: s.sync.last_seq(),
+                },
+            ));
+        }
+    }
+
+    /// What the connection reported, taken in: the lines to send back (our edits and place
+    /// among them while connected). A lost connection is tried again a little later; being
+    /// out of step with the server, at once; the end of the session leaves the chart to edit
+    /// alone.
+    pub(super) fn take_link_events(&mut self, events: Vec<LinkEvent>, now: Instant) -> Vec<MapUp> {
+        let Some(s) = self.collab.as_mut() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut retry = None;
+        let mut closed = None;
+        for ev in events {
+            let t = s.now();
+            match ev {
+                LinkEvent::Joined { done, .. } => s.resumed(&mut self.ed, done),
+                LinkEvent::Down(d) => match s.handle(&mut self.ed, *d, t) {
+                    Some(Notice::Resume) => retry = Some(now),
+                    Some(Notice::Refused(why)) => self.status = why,
+                    Some(Notice::Closed(why)) => {
+                        closed = Some(why);
+                        break;
+                    }
+                    Some(Notice::Send(lines)) => out.extend(lines),
+                    None => {}
+                },
+                LinkEvent::Lost(why) => {
+                    self.status = tr!("mapping session: connection lost ({why}), reconnecting", "マッピングセッション: 接続が切れました ({why})、再接続中", "совместный маппинг: связь потеряна ({why}), переподключаюсь"; [] [why]);
+                    retry = Some(now + RETRY);
+                }
+            }
+        }
+        if let Some(why) = closed {
+            self.collab = None;
+            self.link = None;
+            self.relink = None;
+            self.ed.history.stop_sharing();
+            self.status = tr!("the mapping session ended: {why}", "マッピングセッションが終了しました: {why}", "совместный маппинг закончен: {why}"; [] [why]);
+            return out;
+        }
+        if let Some(at) = retry {
+            self.link = None;
+            if let Some(r) = &mut self.relink {
+                r.retry_at = Some(at);
+            }
+            return out;
+        }
+        if self.link.is_none() {
+            return out;
+        }
+        let t = s.now();
+        s.sync.collect(&mut self.ed);
+        let dragging = !matches!(self.drag, Drag::None);
+        out.extend(s.sync.outgoing(t, dragging));
+        let [tx, ty, tw, th] = self.layout.timeline;
+        let (mx, my) = self.mouse;
+        let cursor = (mx >= tx && mx <= tx + tw && my >= ty && my <= ty + th)
+            .then_some(self.view_start + (mx - tx) as f64 * self.ms_per_px);
+        out.extend(s.presence(&self.ed, cursor, t));
+        out
     }
 
     /// The panel of who is in the session, over the preview's top right corner: each player's
@@ -63,6 +223,7 @@ impl View {
     /// are away. A click on someone follows them.
     pub(super) fn draw_participants(&mut self, c: &mut Canvas) {
         let Some(s) = self.collab.as_ref() else {
+            self.draw_start_session(c);
             return;
         };
         let now = s.now();
@@ -89,6 +250,13 @@ impl View {
             ),
             rows.iter().filter(|p| p.online).count()
         );
+        // Between connections: our edits wait to go out.
+        let title = if self.link.is_none() && self.relink.is_some() {
+            let n = s.sync.pending();
+            tr!("Offline · {n} unsent", "オフライン · 未送信 {n}", "Нет связи · не отпр.: {n}"; [] [n])
+        } else {
+            title
+        };
         c.text(
             x + 4.0,
             y + 3.0,
@@ -170,6 +338,38 @@ impl View {
             Btn::Collab(CollabAct::ByAuthor),
         ));
         self.buttons.extend(buttons);
+    }
+
+    /// Alone, on a server that runs mapping sessions: a button to start one for this set.
+    fn draw_start_session(&mut self, c: &mut Canvas) {
+        if !self.sessions || self.link.is_some() {
+            return;
+        }
+        let [px, py, pw, _] = self.layout.preview;
+        let label = tr!(
+            "Start mapping session",
+            "マッピングセッションを開始",
+            "Начать совместный маппинг"
+        );
+        let w = (Canvas::text_width(TEXT, label) + 10.0).min(PANEL_W);
+        let (x, y) = (px + pw - w - 4.0, py + 4.0);
+        c.round_rect(
+            [x, y],
+            [w, 12.0],
+            3.0,
+            rgba(0x0c0c14, 0.88),
+            rgba(0x4c6cdc, 1.0),
+            1.0,
+        );
+        c.text(
+            x + 5.0,
+            y + 3.0,
+            TEXT,
+            rgba(0xffffff, 0.92),
+            &Canvas::fit(TEXT, w - 10.0, label),
+        );
+        self.buttons
+            .push(([x, y, w, 12.0], Btn::Collab(CollabAct::Start)));
     }
 
     /// The others on the timeline, in their colours: the collab parts of the open difficulty on
@@ -337,5 +537,52 @@ mod tests {
         );
         v.press(Btn::Collab(CollabAct::ByAuthor), Keys::default(), None);
         assert!(v.collab.as_ref().unwrap().by_author);
+    }
+
+    #[test]
+    fn a_session_is_offered_only_by_a_server_that_runs_them() {
+        let mut v = view(false);
+        let c = draw(&mut v);
+        assert!(!has_text(&c, "Start mapping session"));
+        v.sessions = true;
+        let c = draw(&mut v);
+        assert!(has_text(&c, "Start mapping session"));
+        let acts: Vec<CollabAct> = collab_buttons(&v).iter().map(|r| r.1).collect();
+        assert_eq!(acts, vec![CollabAct::Start]);
+        v.press(Btn::Collab(CollabAct::Start), Keys::default(), None);
+        assert!(v.take_session_request());
+        assert!(!v.take_session_request(), "taken once");
+    }
+
+    #[test]
+    fn a_lost_connection_is_resumed_later_and_the_end_of_the_session_leaves_the_chart() {
+        let mut v = view(true);
+        v.relink = Some(Relink {
+            server: "127.0.0.1:9".into(),
+            token: "t".into(),
+            session: 9,
+            epoch: 1,
+            retry_at: None,
+        });
+        let now = Instant::now();
+        let out = v.take_link_events(vec![LinkEvent::Lost("reset".into())], now);
+        assert!(out.is_empty());
+        assert!(v.status.contains("reset"), "{}", v.status);
+        assert_eq!(v.relink.as_ref().unwrap().retry_at, Some(now + RETRY));
+        let c = draw(&mut v);
+        assert!(has_text(&c, "Offline · 0 unsent"));
+        // Asked for our snapshot at our seq: it goes back.
+        let seq = v.collab.as_ref().unwrap().sync.last_seq();
+        let wanted = LinkEvent::Down(Box::new(MapDown::SnapshotWanted { seq }));
+        let out = v.take_link_events(vec![wanted], now);
+        assert!(matches!(out[..], [MapUp::Snapshot { .. }]));
+        let objects = v.ed.chart.objects.len();
+        let closed = LinkEvent::Down(Box::new(MapDown::Closed("bye".into())));
+        v.take_link_events(vec![closed], now);
+        assert!(v.collab.is_none() && v.relink.is_none());
+        assert!(v.status.contains("bye"), "{}", v.status);
+        assert_eq!(v.ed.chart.objects.len(), objects, "the chart stays");
+        v.ed.place_hit(8000.0, false).unwrap();
+        assert!(v.ed.history.take_outgoing().is_empty(), "edits stay here");
     }
 }
