@@ -21,7 +21,8 @@ impl State {
         self.mapping_sessions && !self.cfg.online_token.is_empty()
     }
 
-    /// `from` invites us to their session: a notification that joins it when clicked.
+    /// `from` invites us to their session: a card in our conversation with them (accept or
+    /// decline it there), the message chime, and a notification that opens the conversation.
     pub(crate) fn mapping_invited(
         &mut self,
         from: String,
@@ -34,19 +35,59 @@ impl State {
             Mode::Review => tr!("a review", "レビュー", "ревью"),
             Mode::Collab => tr!("a collab", "コラボ", "коллаб"),
         };
+        let invite = social::MappingInvite {
+            from: from.clone(),
+            title: title.clone(),
+            mode,
+            state: social::InviteState::Open,
+        };
+        self.social.add_invite(session, invite, discord::unix_now());
+        let in_lobby = self.mp.is_some();
+        let viewing = self.social.open
+            && self.social.in_conversation(in_lobby)
+            && matches!(self.social.row(in_lobby), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| social::key(&f.name) == social::key(&from)));
+        if !viewing {
+            self.social.add_unread(&from, in_lobby);
+        }
+        if self.cfg.message_sound
+            && !self.playing()
+            && let Some(a) = &self.audio
+        {
+            a.sfx_at(audio::Sfx::Message, 1.0);
+        }
         self.social.notify(
             tr!("{from} invites you to map", "{from} からマッピングの招待", "{from} зовёт маппить"; [] [from]),
             format!("{what}: {title}"),
             0xC89CF2,
-            social::NoteAction::Mapping(session),
+            social::NoteAction::Chat(from),
         );
     }
 
-    /// A session we were invited to is over: its invite goes.
+    /// A session we were invited to is over: its card says so.
     pub(crate) fn mapping_closed(&mut self, session: u64) {
-        self.social
-            .notes
-            .retain(|n| n.action != social::NoteAction::Mapping(session));
+        if let Some(i) = self.social.invites.get_mut(&session)
+            && i.state == social::InviteState::Open
+        {
+            i.state = social::InviteState::Ended;
+        }
+    }
+
+    /// The invite's card answered: joins the session, or declines it (nothing is sent: the
+    /// host sees who came).
+    pub(crate) fn answer_mapping_invite(&mut self, session: u64, accept: bool) {
+        let Some(invite) = self.social.invites.get_mut(&session) else {
+            return;
+        };
+        if invite.state != social::InviteState::Open {
+            return;
+        }
+        if !accept {
+            invite.state = social::InviteState::Declined;
+            return;
+        }
+        invite.state = social::InviteState::Joined;
+        self.social.close();
+        self.join_mapping(session);
     }
 
     fn start_mapping(&mut self, request: online::Request, connecting: Connecting) {
@@ -122,6 +163,9 @@ impl State {
             return;
         };
         let mut failed = None;
+        for u in j.connecting.tick(std::time::Instant::now()) {
+            j.link.send(u);
+        }
         for ev in j.link.poll() {
             match j.connecting.take(ev) {
                 Ok(ups) => ups.into_iter().for_each(|u| j.link.send(u)),

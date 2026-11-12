@@ -12,7 +12,9 @@
 //! Applying an op only sets things (inserts what isn't there, removes what is, sets what is to
 //! its new value) and passes over what is gone, so the same ops in the same order give every
 //! game the same chart, however their own edits interleaved. Undo and redo take back only this
-//! player's steps, and only where nobody changed things since (`apply_guarded`).
+//! player's steps, and only where nobody changed things since (`apply_guarded`). A `.tko`'s
+//! gimmick is merged rather than replaced (`merged_gimmick`), so effects keyed by several
+//! players at once all stay.
 //!
 //! Nothing here runs outside a session: the single-player editor never builds a `Sync`, and the
 //! game only opens a session with a server that lists `mapping::FEATURE`.
@@ -25,6 +27,8 @@ use taiko_proto::mapping::{self, DocSnapshot, Line, MapOp, MapUp, Obj, Sequenced
 use super::chart::{Chart, HitObject, TimingPoint};
 use super::history::Command;
 use super::state::Editor;
+use crate::tko::gimmick::Gimmick;
+use serde_json::Value;
 
 /// While dragging, at most one op this often (a later step of the drag replaces an unsent one).
 pub const DRAG_SEND_MS: f64 = 50.0;
@@ -76,7 +80,7 @@ fn points(l: &[Line]) -> Result<Vec<TimingPoint>, String> {
     l.iter().map(point).collect()
 }
 
-fn gimmick(json: &str) -> Result<Box<crate::tko::gimmick::Gimmick>, String> {
+fn gimmick(json: &str) -> Result<Box<Gimmick>, String> {
     serde_json::from_str(json).map_err(|e| format!("unreadable gimmick: {e}"))
 }
 
@@ -175,8 +179,139 @@ pub fn apply_tolerant(cmd: &Command, c: &mut Chart) {
             }
         }
         Command::Composite(l) => l.iter().for_each(|x| apply_tolerant(x, c)),
+        Command::Gimmick { before, after } => {
+            // A chart with no gimmick yet takes one as from an empty gimmick.
+            let now = c.gimmick.clone().unwrap_or_default();
+            if let Some(g) = merged_gimmick(&now, before, after, false) {
+                c.gimmick = Some(g);
+                c.dirty = true;
+            }
+        }
         other => other.apply(c),
     }
+}
+
+/// A gimmick change made on `before` to `after`, applied to `now`, which others may have
+/// changed since: what the change touched goes in and the rest stays as `now` has it, so two
+/// players keying different effects at once both keep theirs. Where both changed the same
+/// value, `theirs_win` keeps `now`'s (an undo leaves others' work alone), otherwise the change
+/// wins (ops in the server's order: the same result in every game). `None`: nothing to change.
+pub fn merged_gimmick(
+    now: &Gimmick,
+    before: &Gimmick,
+    after: &Gimmick,
+    theirs_win: bool,
+) -> Option<Gimmick> {
+    if before == after {
+        return None;
+    }
+    if now == before {
+        return Some(after.clone());
+    }
+    let value = |g: &Gimmick| serde_json::to_value(g).ok();
+    let (Some(n), Some(b), Some(a)) = (value(now), value(before), value(after)) else {
+        return (!theirs_win).then(|| after.clone());
+    };
+    let mut g: Gimmick = serde_json::from_value(merge3(n, &b, &a, theirs_win)).ok()?;
+    g.sanitize();
+    (g != *now).then_some(g)
+}
+
+/// Three-way merge of JSON values: `now` with the change from `before` to `after` put in.
+/// Objects merge key by key; arrays of the same length element by element; keyframe lists
+/// (objects with a time `t`) as sets of keys, so keys added by two players are both kept.
+fn merge3(now: Value, before: &Value, after: &Value, theirs_win: bool) -> Value {
+    if before == after {
+        return now;
+    }
+    if now == *before {
+        return after.clone();
+    }
+    if now == *after {
+        return now;
+    }
+    match (now, before, after) {
+        (Value::Object(mut n), Value::Object(b), Value::Object(a)) => {
+            let keys: std::collections::BTreeSet<&String> = b.keys().chain(a.keys()).collect();
+            for k in keys {
+                match (b.get(k), a.get(k)) {
+                    (None, None) => {}
+                    (x, y) if x == y => {}
+                    (Some(x), None) => {
+                        // Taken out by the change, unless changed meanwhile and theirs wins.
+                        if !(theirs_win && n.get(k).is_some_and(|v| v != x)) {
+                            n.remove(k);
+                        }
+                    }
+                    (x, Some(y)) => {
+                        let merged = match n.remove(k) {
+                            // Made by both at once (a first key on one effect, say): as
+                            // if it had been there empty.
+                            Some(cur) => {
+                                let empty = match y {
+                                    Value::Object(_) => Value::Object(Default::default()),
+                                    Value::Array(_) => Value::Array(Vec::new()),
+                                    _ => Value::Null,
+                                };
+                                merge3(cur, x.unwrap_or(&empty), y, theirs_win)
+                            }
+                            None if theirs_win && x.is_some() => continue,
+                            None => y.clone(),
+                        };
+                        n.insert(k.clone(), merged);
+                    }
+                }
+            }
+            Value::Object(n)
+        }
+        (Value::Array(n), Value::Array(b), Value::Array(a))
+            if n.len() == b.len() && b.len() == a.len() =>
+        {
+            Value::Array(
+                n.into_iter()
+                    .zip(b.iter().zip(a))
+                    .map(|(n, (b, a))| merge3(n, b, a, theirs_win))
+                    .collect(),
+            )
+        }
+        (Value::Array(mut n), Value::Array(b), Value::Array(a)) if keyframes(b, a, &n) => {
+            n.retain(|x| a.contains(x) || !b.contains(x));
+            for x in a.iter().filter(|x| !b.contains(x)) {
+                if !n.contains(x) {
+                    n.push(x.clone());
+                }
+            }
+            // Sorted by time; one key to a moment, the change's where both have one.
+            let time = |x: &Value| x.get("t").and_then(Value::as_f64).unwrap_or(0.0);
+            n.sort_by(|x, y| time(x).total_cmp(&time(y)));
+            let mut out: Vec<Value> = Vec::with_capacity(n.len());
+            for x in n {
+                match out.last_mut() {
+                    Some(last) if time(last) == time(&x) => {
+                        if a.contains(&x) != theirs_win {
+                            *last = x;
+                        }
+                    }
+                    _ => out.push(x),
+                }
+            }
+            Value::Array(out)
+        }
+        (now, _, after) => {
+            if theirs_win {
+                now
+            } else {
+                after.clone()
+            }
+        }
+    }
+}
+
+/// Whether these are lists of keyframes: every element an object with a time `t`.
+fn keyframes(b: &[Value], a: &[Value], n: &[Value]) -> bool {
+    let key = |x: &Value| x.get("t").is_some_and(Value::is_number);
+    let all = b.iter().chain(a).chain(n);
+    all.clone().next().is_some() && all.into_iter().all(key)
 }
 
 fn same_object(a: &HitObject, b: &HitObject) -> bool {
@@ -244,8 +379,12 @@ pub fn apply_guarded(cmd: &Command, c: &mut Chart) -> Option<Command> {
             }
             kept(a).map(|after| Command::EditTiming { before: b, after })
         }
-        Command::Gimmick { before, .. } => {
-            (c.gimmick.as_ref() == Some(&**before)).then(|| cmd.clone())
+        Command::Gimmick { before, after } => {
+            let now = c.gimmick.clone().unwrap_or_default();
+            merged_gimmick(&now, before, after, true).map(|g| Command::Gimmick {
+                before: Box::new(now.clone()),
+                after: Box::new(g),
+            })
         }
         Command::SetKey {
             section,

@@ -1342,8 +1342,10 @@ fn scripted_mapping_server(
                 let line = online::read_line(&mut reader).unwrap();
                 let up: mapping::MapUp = serde_json::from_str(&line).unwrap();
                 match &up {
+                    // As the real server: one piece for each ask.
                     mapping::MapUp::GetAsset { sha256, offset } => {
-                        let from = *offset as usize;
+                        let from = (*offset as usize).min(music.len());
+                        let to = (from + mapping::ASSET_PIECE).min(music.len());
                         send(
                             &mut out,
                             mapping::MapDown::AssetPart {
@@ -1351,7 +1353,7 @@ fn scripted_mapping_server(
                                 offset: *offset,
                                 total: music.len() as u64,
                                 data: base64::engine::general_purpose::STANDARD
-                                    .encode(&music[from..]),
+                                    .encode(&music[from..to]),
                             },
                         );
                     }
@@ -1371,14 +1373,18 @@ fn scripted_mapping_server(
     })
 }
 
-/// An invite to a mapping session, clicked: the game fetches the set's music and the snapshot
+/// An invite to a mapping session, accepted on its card in the host's conversation: the game
+/// fetches the set's music piece by piece and the snapshot
 /// from a scripted server, opens the editor on the difficulty given to it with the op that
 /// followed the snapshot, sends its own edit, and edits alone again when the session ends.
 #[test]
 fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let music: Vec<u8> = (0..5000u32).map(|i| (i % 253) as u8).collect();
+    // Music longer than one piece, as any song is.
+    let music: Vec<u8> = (0..mapping::ASSET_PIECE as u32 * 2 + 5000)
+        .map(|i| (i % 253) as u8)
+        .collect();
     let server = scripted_mapping_server(listener, music.clone());
     let songs = Songs::new("mapping-join", &[]);
     std::fs::create_dir_all(&songs.dir).unwrap();
@@ -1403,15 +1409,28 @@ fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
         title: "Artist - Song".into(),
         mode: mapping::Mode::Guest,
     });
+    // The invite is a card in the conversation with the host (and a notification that opens
+    // that conversation); accepting it there joins.
     let note = s
         .social
         .notes
         .iter()
-        .position(|n| n.action == social::NoteAction::Mapping(9))
-        .expect("an invite to click");
+        .position(|n| n.action == social::NoteAction::Chat("host".into()))
+        .expect("a notification of the invite");
     assert!(s.social.notes[note].title.contains("host"));
-    s.click(crate::hit::Hit::SocialNote(note), None);
+    let line = s.social.chats["host"].last().unwrap().text.clone();
+    assert_eq!(line, social::invite_line(9));
+    assert!(matches!(
+        s.social.card_of(&line),
+        Some(social::Card::Invite(9, ref i)) if i.title == "Artist - Song"
+            && i.mode == mapping::Mode::Guest
+            && i.state == social::InviteState::Open
+    ));
+    assert_eq!(s.social.unread.get("host"), Some(&1));
+    s.click(crate::hit::Hit::MappingInvite(9, true), None);
     assert!(s.mapping_join.is_some(), "joining");
+    assert_eq!(s.social.invites[&9].state, social::InviteState::Joined);
+    s.click(crate::hit::Hit::MappingInvite(9, true), None);
     let joined = |s: &State| {
         s.scene
             .screen_as::<MapEditor>()

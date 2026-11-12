@@ -728,3 +728,114 @@ fn a_drag_goes_out_a_few_times_a_second() {
     // Whatever went out, the last state did.
     assert_eq!(host.sync.pending(), sent);
 }
+
+/// The test set as `.tko` charts with no effects yet.
+fn tko_files() -> Vec<(String, String)> {
+    let empty = crate::tko::gimmick::Gimmick::default();
+    files()
+        .into_iter()
+        .map(|(name, text)| (name, crate::tko::format::write(&text, &empty).unwrap()))
+        .collect()
+}
+
+#[test]
+fn tko_effects_and_fake_notes_reach_everyone_in_a_session() {
+    use super::super::keyframes::Subject;
+    use crate::tko::gimmick::FieldProp;
+    use crate::tko::track::{Ease, Key as TkoKey};
+    let data = host_snapshot(&tko_files()).unwrap();
+    let mut server = Server::new(session(), data, 2);
+    let mut host = Game::join(&server, 1, 1, 0);
+    let mut mapper = Game::join(&server, 2, 2, 0);
+    assert!(host.ed.is_tko() && mapper.ed.is_tko(), "opened as .tko");
+
+    let zoom = TkoKey {
+        t: 1000.0,
+        v: 1.5,
+        ease: Ease::Linear,
+    };
+    assert!(mapper.ed.key(Subject::Field(FieldProp::Zoom), zoom, false));
+    let id = mapper.ed.place_hit(3000.0, false).unwrap();
+    mapper.ed.selection = [id].into();
+    assert_eq!(mapper.ed.toggle_fake().unwrap(), (1, true));
+    let flash = TkoKey {
+        t: 2000.0,
+        v: 0.8,
+        ease: Ease::Step,
+    };
+    assert!(host.ed.key(Subject::Field(FieldProp::Flash), flash, false));
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert_eq!((host.sync.pending(), mapper.sync.pending()), (0, 0));
+
+    let text = host.ed.chart.to_text();
+    assert_eq!(text, mapper.ed.chart.to_text(), "the same .tko everywhere");
+    let replayed = server.replayed();
+    assert_eq!(
+        replayed[0].to_text(),
+        text,
+        "and as the server's log makes it"
+    );
+    // The file written reads back with every effect and the fake note.
+    let back = Chart::parse_tko(&text).unwrap();
+    let g = back.gimmick.as_ref().unwrap();
+    let keys = |p: FieldProp| g.field_track(p).map(|t| t.keys.clone()).unwrap_or_default();
+    assert_eq!(keys(FieldProp::Zoom), vec![zoom]);
+    assert_eq!(keys(FieldProp::Flash), vec![flash]);
+    assert!(
+        back.objects.iter().any(|o| o.time == 3000.0 && o.fake),
+        "the fake note"
+    );
+    // The other difficulty keeps its own (empty) effects.
+    assert!(replayed[1].gimmick.as_ref().unwrap().field.is_empty());
+}
+
+#[test]
+fn keys_two_players_add_to_one_effect_at_once_are_both_kept_and_undo_takes_back_only_yours() {
+    use super::super::keyframes::Subject;
+    use crate::tko::gimmick::FieldProp;
+    use crate::tko::track::{Ease, Key as TkoKey};
+    let data = host_snapshot(&tko_files()).unwrap();
+    let mut server = Server::new(session(), data, 2);
+    let mut host = Game::join(&server, 1, 1, 0);
+    let mut mapper = Game::join(&server, 2, 2, 0);
+    let key = |t: f64, v: f64| TkoKey {
+        t,
+        v,
+        ease: Ease::Linear,
+    };
+    let zoom = Subject::Field(FieldProp::Zoom);
+    // Both key the zoom before seeing each other's key.
+    assert!(host.ed.key(zoom, key(1000.0, 1.2), false));
+    assert!(mapper.ed.key(zoom, key(3000.0, 0.8), false));
+    assert!(
+        mapper
+            .ed
+            .key(Subject::Field(FieldProp::Flash), key(2000.0, 1.0), false)
+    );
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    let keys = |g: &Game, p: FieldProp| {
+        g.ed.gimmick()
+            .and_then(|g| g.field_track(p))
+            .map(|t| t.keys.clone())
+            .unwrap_or_default()
+    };
+    for g in [&host, &mapper] {
+        assert_eq!(
+            keys(g, FieldProp::Zoom),
+            vec![key(1000.0, 1.2), key(3000.0, 0.8)]
+        );
+        assert_eq!(keys(g, FieldProp::Flash), vec![key(2000.0, 1.0)]);
+    }
+    // The mapper takes back the flash: the host's zoom key stays.
+    assert!(mapper.ed.undo());
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    for g in [&host, &mapper] {
+        assert!(keys(g, FieldProp::Flash).is_empty());
+        assert_eq!(
+            keys(g, FieldProp::Zoom),
+            vec![key(1000.0, 1.2), key(3000.0, 0.8)]
+        );
+    }
+    assert_eq!(host.ed.chart.to_text(), mapper.ed.chart.to_text());
+    assert_eq!(server.replayed()[0].to_text(), host.ed.chart.to_text());
+}

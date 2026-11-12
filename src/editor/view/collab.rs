@@ -46,9 +46,11 @@ pub enum CollabAct {
     Follow(u32),
     /// Colour the notes by who made them.
     ByAuthor,
-    /// Start a mapping session for this set (only offered by a server that runs them): shows
-    /// the kinds of session to pick from, or hides them again.
+    /// The menu bar's "Mapping session" button (only on a server that runs them): opens the
+    /// session window, or closes it.
     Start,
+    /// Picks this kind of session in the window.
+    Pick(Mode),
     /// Start this kind of session.
     StartAs(Mode),
     /// What the panel shows.
@@ -131,6 +133,39 @@ fn mode_name(m: Mode) -> &'static str {
     }
 }
 
+/// What a kind of session is for, in a line or two.
+fn mode_about(m: Mode) -> &'static str {
+    match m {
+        Mode::Collab => tr!(
+            "One difficulty, mapped by several people: give each a part of the song.",
+            "一つの難易度を複数人で。各自に曲のパートを割り当てます。",
+            "Одна сложность на несколько человек: каждому своя часть песни."
+        ),
+        Mode::Guest => tr!(
+            "Each guest maps a difficulty of their own; timing stays yours.",
+            "ゲストがそれぞれ自分の難易度を作ります。タイミングはあなたのもの。",
+            "Каждый гость делает свою сложность, тайминг остаётся за тобой."
+        ),
+        Mode::Review => tr!(
+            "Modders leave comments on the timeline; only you edit.",
+            "モッダーがタイムラインにコメントを残し、編集はあなただけ。",
+            "Моддеры оставляют замечания на таймлайне, редактируешь только ты."
+        ),
+    }
+}
+
+/// A small triangle pointing down (up when `open`), centred on `x`, `y`.
+fn caret(c: &mut Canvas, x: f32, y: f32, open: bool) {
+    for i in 0..3 {
+        let row = (if open { 2 - i } else { i }) as f32;
+        let w = 5.0 - i as f32 * 2.0;
+        c.rect(x - w / 2.0, y - 1.5 + row, w, 1.0, rgba(0xd8d0ff, 1.0));
+    }
+}
+
+/// The colour of mapping sessions.
+const VIOLET: u32 = 0x8c7cf0;
+
 fn role_tag(r: Role) -> &'static str {
     match r {
         Role::Host => tr!("host", "ホスト", "хост"),
@@ -175,6 +210,10 @@ impl View {
         match a {
             CollabAct::Start => {
                 self.picking_mode = !self.picking_mode;
+                return;
+            }
+            CollabAct::Pick(mode) => {
+                self.session_pick = mode;
                 return;
             }
             CollabAct::StartAs(mode) => {
@@ -495,7 +534,6 @@ impl View {
     pub(super) fn draw_participants(&mut self, c: &mut Canvas) {
         let panel = self.panel_w();
         let Some(s) = self.collab.as_ref() else {
-            self.draw_start_session(c);
             return;
         };
         let [px, py, pw, _] = self.layout.preview;
@@ -905,51 +943,209 @@ impl View {
         self.buttons.push((r, Btn::Collab(CollabAct::Say(to))));
     }
 
-    /// Alone, on a server that runs mapping sessions: a button to start one for this set, and
-    /// once pressed the kinds of session to pick from.
-    fn draw_start_session(&mut self, c: &mut Canvas) {
-        if !self.sessions || self.link.is_some() {
-            return;
+    /// Opens the session window, as its button does.
+    #[cfg(test)]
+    pub fn open_session_window(&mut self) {
+        self.picking_mode = self.offers_session();
+    }
+
+    /// Whether the editor offers to start a session: alone, on a server that runs them.
+    fn offers_session(&self) -> bool {
+        self.sessions && self.link.is_none() && self.collab.is_none()
+    }
+
+    /// The menu bar's "Mapping session" button, its right edge at `right`: where it starts
+    /// (`None` when it isn't offered).
+    pub(super) fn draw_session_button(
+        &mut self,
+        c: &mut Canvas,
+        right: f32,
+        h: f32,
+    ) -> Option<f32> {
+        if !self.offers_session() {
+            self.picking_mode = false;
+            return None;
         }
-        let [px, py, pw, _] = self.layout.preview;
         let label = tr!(
-            "Start mapping session",
-            "マッピングセッションを開始",
-            "Начать совместный маппинг"
+            "Mapping session",
+            "マッピングセッション",
+            "Совместный маппинг"
         );
-        let w = (Canvas::text_width(TEXT, label) + 10.0).min(PANEL_W);
-        let (x, y) = (px + pw - w - 4.0, py + 4.0);
+        let w = Canvas::text_width(7.0, label) + 24.0;
+        let x = right - w;
+        let open = self.picking_mode;
+        let fill = if open {
+            0x3b3478
+        } else if c.hovered(x, 1.0, w, h - 2.0) {
+            0x2c2852
+        } else {
+            0x1d1b34
+        };
         c.round_rect(
-            [x, y],
-            [w, 12.0],
+            [x, 2.0],
+            [w, h - 4.0],
             3.0,
-            rgba(0x0c0c14, 0.88),
-            rgba(0x4c6cdc, 1.0),
+            rgba(fill, 1.0),
+            rgba(VIOLET, if open { 1.0 } else { 0.7 }),
             1.0,
         );
-        c.text(
-            x + 5.0,
-            y + 3.0,
-            TEXT,
-            rgba(0xffffff, 0.92),
-            &Canvas::fit(TEXT, w - 10.0, label),
+        // A pulse of the accent, as of someone live.
+        c.circle(x + 7.0, h / 2.0, 2.2, rgba(VIOLET, 1.0), rgba(0, 0.0), 0.0);
+        c.text(x + 12.0, 3.5, 7.0, rgba(0xffffff, 1.0), label);
+        caret(c, x + w - 7.0, h / 2.0, open);
+        self.buttons
+            .push(([x, 0.0, w, h], Btn::Collab(CollabAct::Start)));
+        Some(x)
+    }
+
+    /// The session window under its button: the kinds of session, each with what it is for,
+    /// and the button that starts the one picked.
+    pub(super) fn draw_session_window(&mut self, c: &mut Canvas) {
+        let Some(&(chip, _)) = self
+            .buttons
+            .iter()
+            .find(|(_, b)| *b == Btn::Collab(CollabAct::Start))
+        else {
+            return;
+        };
+        if !self.picking_mode {
+            return;
+        }
+        const W: f32 = 210.0;
+        const CARD: f32 = 31.0;
+        let x = (chip[0] + chip[2] - W).max(4.0);
+        let y = chip[1] + chip[3] + 2.0;
+        let intro = super::chrome::wrap(
+            5.5,
+            W - 16.0,
+            tr!(
+                "Open this set to your friends and edit it together, live. Everyone sees the others' notes, playheads and chat as they happen.",
+                "このセットをフレンドに開放して、リアルタイムで一緒に編集します。他の人のノーツ、再生位置、チャットがすぐに見えます。",
+                "Открой этот сет друзьям и редактируйте его вместе, вживую. Все сразу видят ноты, курсоры и чат друг друга."
+            ),
         );
-        let mut buttons = vec![([x, y, w, 12.0], Btn::Collab(CollabAct::Start))];
-        if self.picking_mode {
-            for (i, mode) in [Mode::Collab, Mode::Guest, Mode::Review]
-                .into_iter()
-                .enumerate()
-            {
-                let r = [x, y + 14.0 + i as f32 * 11.0, w, 10.0];
-                chip(
-                    c,
-                    &mut buttons,
-                    r,
-                    mode_name(mode),
-                    CollabAct::StartAs(mode),
+        let modes = [Mode::Collab, Mode::Guest, Mode::Review];
+        let h = 22.0 + intro.len() as f32 * 8.5 + 4.0 + modes.len() as f32 * (CARD + 3.0) + 30.0;
+        self.session_win = [x, y, W, h];
+        c.round_rect(
+            [x + 2.0, y + 3.0],
+            [W, h],
+            5.0,
+            rgba(0x000000, 0.45),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.round_rect(
+            [x, y],
+            [W, h],
+            5.0,
+            rgba(0x12121c, 0.98),
+            rgba(VIOLET, 0.85),
+            1.0,
+        );
+        c.rect(x + 1.0, y + 1.0, W - 2.0, 2.0, rgba(VIOLET, 0.9));
+        c.text(
+            x + 8.0,
+            y + 8.0,
+            8.0,
+            rgba(0xffffff, 1.0),
+            tr!("Map together", "一緒にマッピング", "Маппим вместе"),
+        );
+        let mut ty = y + 21.0;
+        for line in &intro {
+            c.text(x + 8.0, ty, 5.5, rgba(0xa8a8bc, 1.0), line);
+            ty += 8.5;
+        }
+        let mut cy = ty + 4.0;
+        let mut buttons = Vec::new();
+        for mode in modes {
+            let on = self.session_pick == mode;
+            let r = [x + 6.0, cy, W - 12.0, CARD];
+            let hot = c.hovered(r[0], r[1], r[2], r[3]);
+            c.round_rect(
+                [r[0], r[1]],
+                [r[2], r[3]],
+                4.0,
+                rgba(
+                    if on {
+                        0x2a2550
+                    } else if hot {
+                        0x1f1f2e
+                    } else {
+                        0x181824
+                    },
+                    1.0,
+                ),
+                rgba(if on { VIOLET } else { 0x2c2c3c }, 1.0),
+                1.0,
+            );
+            // The radio mark.
+            let (rx, ry) = (r[0] + 9.0, r[1] + 9.0);
+            c.circle(rx, ry, 3.5, rgba(0x0e0e16, 1.0), rgba(VIOLET, 1.0), 1.0);
+            if on {
+                c.circle(rx, ry, 1.8, rgba(VIOLET, 1.0), rgba(0, 0.0), 0.0);
+            }
+            c.text(
+                r[0] + 17.0,
+                r[1] + 5.5,
+                7.0,
+                rgba(0xffffff, 1.0),
+                mode_name(mode),
+            );
+            let about = super::chrome::wrap(5.0, r[2] - 22.0, mode_about(mode));
+            for (i, line) in about.iter().take(2).enumerate() {
+                c.text(
+                    r[0] + 17.0,
+                    r[1] + 15.0 + i as f32 * 7.0,
+                    5.0,
+                    rgba(0x9a9ab0, 1.0),
+                    line,
                 );
             }
+            buttons.push((r, Btn::Collab(CollabAct::Pick(mode))));
+            cy += CARD + 3.0;
         }
+        let fy = y + h - 22.0;
+        c.text(
+            x + 8.0,
+            fy + 5.0,
+            5.0,
+            rgba(0x7c7c92, 1.0),
+            &Canvas::fit(
+                5.0,
+                W - 60.0,
+                tr!(
+                    "then invite friends (F9)",
+                    "開始後にフレンドを招待 (F9)",
+                    "потом зови друзей (F9)"
+                ),
+            ),
+        );
+        let start = tr!("Start", "開始", "Начать");
+        let sw = Canvas::text_width(7.0, start) + 22.0;
+        let sr = [x + W - sw - 8.0, fy, sw, 15.0];
+        let hot = c.hovered(sr[0], sr[1], sr[2], sr[3]);
+        c.round_rect(
+            [sr[0], sr[1]],
+            [sr[2], sr[3]],
+            4.0,
+            rgba(if hot { 0x9a8cff } else { VIOLET }, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.text(sr[0] + 11.0, sr[1] + 4.0, 7.0, rgba(0x0e0e16, 1.0), start);
+        buttons.push((sr, Btn::Collab(CollabAct::StartAs(self.session_pick))));
+        let close = "x";
+        let cr = [x + W - 14.0, y + 5.0, 10.0, 10.0];
+        let hot = c.hovered(cr[0], cr[1], cr[2], cr[3]);
+        c.text(
+            cr[0] + 3.0,
+            cr[1] + 1.5,
+            7.0,
+            rgba(if hot { 0xffffff } else { 0x8a8aa0 }, 1.0),
+            close,
+        );
+        buttons.push((cr, Btn::Collab(CollabAct::Start)));
         self.buttons.extend(buttons);
     }
 
@@ -1146,36 +1342,72 @@ mod tests {
     fn a_session_is_offered_only_by_a_server_that_runs_them() {
         let mut v = view(false);
         let c = draw(&mut v);
-        assert!(!has_text(&c, "Start mapping session"));
+        assert!(!has_text(&c, "Mapping session"));
         v.sessions = true;
         let c = draw(&mut v);
-        assert!(has_text(&c, "Start mapping session"));
-        let acts: Vec<CollabAct> = collab_buttons(&v).iter().map(|r| r.1).collect();
-        assert_eq!(acts, vec![CollabAct::Start]);
-        // Pressed: the kinds of session to pick from.
+        assert!(has_text(&c, "Mapping session"), "a button in the menu bar");
+        let buttons = collab_buttons(&v);
+        assert_eq!(buttons.len(), 1);
+        assert!(
+            buttons[0].0[1] < 14.0,
+            "up in the menu bar, not over the preview"
+        );
+        // Pressed: the session window, with the kinds of session to pick from.
         v.press(Btn::Collab(CollabAct::Start), Keys::default(), None);
         let c = draw(&mut v);
+        assert!(has_text(&c, "Map together"));
         assert!(has_text(&c, "Guest difficulties"));
         let acts: Vec<CollabAct> = collab_buttons(&v).iter().map(|r| r.1).collect();
         assert_eq!(
             acts,
             vec![
                 CollabAct::Start,
+                CollabAct::Pick(Mode::Collab),
+                CollabAct::Pick(Mode::Guest),
+                CollabAct::Pick(Mode::Review),
                 CollabAct::StartAs(Mode::Collab),
-                CollabAct::StartAs(Mode::Guest),
-                CollabAct::StartAs(Mode::Review)
+                CollabAct::Start,
             ]
         );
-        assert_eq!(v.take_session_request(), None, "nothing picked yet");
         v.press(
-            Btn::Collab(CollabAct::StartAs(Mode::Review)),
+            Btn::Collab(CollabAct::Pick(Mode::Review)),
             Keys::default(),
             None,
         );
+        assert_eq!(v.take_session_request(), None, "nothing started yet");
+        draw(&mut v);
+        let start = collab_buttons(&v)
+            .into_iter()
+            .find(|(_, a)| matches!(a, CollabAct::StartAs(_)))
+            .unwrap();
+        assert_eq!(start.1, CollabAct::StartAs(Mode::Review), "the kind picked");
+        v.press(Btn::Collab(start.1), Keys::default(), None);
         assert_eq!(v.take_session_request(), Some(Mode::Review));
         assert_eq!(v.take_session_request(), None, "taken once");
         draw(&mut v);
-        assert_eq!(collab_buttons(&v).len(), 1, "the kinds are hidden again");
+        assert_eq!(collab_buttons(&v).len(), 1, "the window is closed again");
+    }
+
+    #[test]
+    fn the_session_window_closes_on_esc_and_on_a_click_elsewhere_but_not_on_itself() {
+        let mut v = view(false);
+        v.sessions = true;
+        draw(&mut v);
+        v.press(Btn::Collab(CollabAct::Start), Keys::default(), None);
+        draw(&mut v);
+        let [x, y, w, h] = v.session_win;
+        assert!(w > 0.0 && h > 0.0);
+        // A click on the window's empty space keeps it open and does nothing under it.
+        v.mouse_down(x + 3.0, y + h - 3.0, Keys::default(), None);
+        assert!(v.picking_mode);
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert!(!v.picking_mode, "Esc closes it");
+        v.press(Btn::Collab(CollabAct::Start), Keys::default(), None);
+        draw(&mut v);
+        let [px, py, pw, ph] = v.layout.preview;
+        v.mouse_down(px + 10.0, py + ph - 10.0, Keys::default(), None);
+        assert!(!v.picking_mode, "a click elsewhere closes it");
+        assert!(pw > 0.0);
     }
 
     #[test]

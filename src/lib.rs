@@ -8730,15 +8730,31 @@ impl State {
         c.hit(0.0, 0.0, c.width, 31.0, hit::Hit::TextField);
     }
 
-    /// `/np`'s line: the map on this screen, with its set's osu! link when it has one.
+    /// `/np`'s line: the map on this screen, how hard and long it is, and its set's osu! link
+    /// when it has one (shown as a card by this game, readable as text by older ones).
     fn now_playing(&self) -> Option<String> {
-        let e = self.library.get(self.offset_entry()?)?;
-        let name = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-        let set = e.set_id();
-        Some(match set {
-            Some(set) => format!("is playing {name} https://osu.ppy.sh/beatmapsets/{set}"),
-            None => format!("is playing {name}"),
-        })
+        let entry = self.offset_entry()?;
+        let e = self.library.get(entry)?;
+        let song = format!("{} - {}", e.meta.artist, e.meta.title);
+        let mut details = Vec::new();
+        if let Some(st) = self.map_stats(entry) {
+            if st.stars >= 0.0 {
+                details.push(format!("{:.2}*", st.stars));
+            }
+            if st.bpm > 0.0 {
+                details.push(format!("{:.0} BPM", st.bpm));
+            }
+            if st.length_ms > 0.0 {
+                let secs = (st.length_ms / 1000.0).round() as u32;
+                details.push(format!("{}:{:02}", secs / 60, secs % 60));
+            }
+        }
+        Some(social::now_playing_line(
+            &song,
+            &e.meta.version,
+            &details.join(" "),
+            e.set_id(),
+        ))
     }
 
     /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
@@ -12967,6 +12983,7 @@ impl State {
             }
             Hit::SocialToggle => self.toggle_social(),
             Hit::ChatMap(set) => self.open_chat_map(set),
+            Hit::MappingInvite(session, accept) => self.answer_mapping_invite(session, accept),
             Hit::ChatShot(id) => self.open_shot(id),
             Hit::SendShot => {
                 let row = self.social.row(self.mp.is_some());
@@ -13041,7 +13058,6 @@ impl State {
                             self.social.mark_read(self.mp.is_some());
                         }
                         social::NoteAction::Watch(name) => self.watch(name),
-                        social::NoteAction::Mapping(session) => self.join_mapping(session),
                         social::NoteAction::None => {}
                     }
                 }
