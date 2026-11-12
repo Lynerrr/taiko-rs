@@ -99,13 +99,15 @@ pub enum Field {
     FxText,
     /// A setting of Song setup.
     Meta(crate::editor::setup::Key),
+    /// A line for the mapping session: chat, or a review comment at the playhead.
+    Say(collab::Say),
 }
 
 impl Field {
     /// Typed as free text (`type_text`), not as a number.
     fn is_text(self) -> bool {
         match self {
-            Field::FxText => true,
+            Field::FxText | Field::Say(_) => true,
             Field::Meta(k) => k.is_text(),
             _ => false,
         }
@@ -430,7 +432,9 @@ pub struct View {
     /// editor offers to start one.
     pub sessions: bool,
     /// Starting a session was asked for (the screen takes it).
-    session_wanted: bool,
+    session_wanted: Option<taiko_proto::mapping::Mode>,
+    /// The kinds of session are shown to pick from.
+    picking_mode: bool,
     /// The library entry being edited (its music is the track).
     pub entry: usize,
     pub track: Option<Arc<Track>>,
@@ -715,7 +719,8 @@ impl View {
             link: None,
             relink: None,
             sessions: false,
-            session_wanted: false,
+            session_wanted: None,
+            picking_mode: false,
             entry,
             track: None,
             track_rx: None,
@@ -3157,7 +3162,7 @@ impl View {
         if let Field::Meta(k) = f {
             return self.step_setting(k, dir, keys);
         }
-        if f == Field::FxText {
+        if matches!(f, Field::FxText | Field::Say(_)) {
             return;
         }
         let ids = self.edit_targets(f);
@@ -3186,7 +3191,12 @@ impl View {
                 Field::Time => p.time += dir * k,
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
+                Field::S(_)
+                | Field::Fx(_)
+                | Field::Key(_)
+                | Field::FxText
+                | Field::Meta(_)
+                | Field::Say(_) => {}
             },
             false,
         );
@@ -3212,6 +3222,9 @@ impl View {
     }
 
     fn apply_typed(&mut self, f: Field, text: &str) {
+        if let Field::Say(to) = f {
+            return self.say(to, text);
+        }
         if f == Field::FxText {
             return self.layer_text_set(text);
         }
@@ -3260,7 +3273,12 @@ impl View {
                 Field::Time => p.time = v.round(),
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
+                Field::S(_)
+                | Field::Fx(_)
+                | Field::Key(_)
+                | Field::FxText
+                | Field::Meta(_)
+                | Field::Say(_) => {}
             },
             false,
         );
@@ -3414,6 +3432,7 @@ impl View {
         {
             let most = match f {
                 Field::Meta(k) => k.max_len(),
+                Field::Say(_) => collab::SAY_MAX,
                 _ => crate::tko::clips::MAX_TEXT,
             };
             if std::mem::take(&mut self.typing_fresh) && s.chars().any(|c| !c.is_control()) {
@@ -3487,6 +3506,17 @@ impl View {
                             k
                         };
                         self.type_setting(next);
+                    }
+                }
+                // Ctrl+T writes the playhead's time, which the others can click.
+                KeyCode::KeyT if keys.ctrl && matches!(f, Field::Say(_)) => {
+                    let at = crate::editor::collab::session::stamp(self.ed.time);
+                    if text.chars().count() + at.len() < collab::SAY_MAX {
+                        if !text.is_empty() && !text.ends_with(' ') {
+                            text.push(' ');
+                        }
+                        text.push_str(&at);
+                        text.push(' ');
                     }
                 }
                 // Words opened for typing go in one press, like selected text.

@@ -82,7 +82,7 @@ impl State {
     }
 
     /// Opens a session for the set in `dir`, as its host.
-    pub(crate) fn open_mapping(&mut self, dir: &Path) {
+    pub(crate) fn open_mapping(&mut self, dir: &Path, mode: Mode) {
         if !self.mapping_ok() || self.mapping_join.is_some() {
             return;
         }
@@ -97,7 +97,7 @@ impl State {
         let request = online::Request::OpenMapping {
             token,
             set: set.descriptor(),
-            mode: Mode::Collab,
+            mode,
         };
         self.start_mapping(request, Connecting::host(set));
         self.toast(

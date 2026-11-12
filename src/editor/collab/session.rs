@@ -22,6 +22,54 @@ pub const AWAY_MS: f64 = 60_000.0;
 /// Chat lines kept.
 const CHAT_KEPT: usize = 200;
 
+/// What the session panel shows below its title.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Tab {
+    #[default]
+    People,
+    Chat,
+    /// Review comments on the open difficulty.
+    Notes,
+}
+
+/// A map time as modders write it (`01:23:456`), which chat and comments turn into links.
+pub fn stamp(ms: f64) -> String {
+    let ms = ms.max(0.0).round() as u64;
+    format!("{:02}:{:02}:{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
+}
+
+/// The first map time written in `text` like `stamp` does (`mm:ss:mmm`, minutes of any length).
+pub fn first_stamp(text: &str) -> Option<f64> {
+    let b = text.as_bytes();
+    let digits = |from: usize, n: usize| {
+        (from + n <= b.len() && b[from..from + n].iter().all(u8::is_ascii_digit))
+            .then(|| text[from..from + n].parse::<u64>().ok())
+            .flatten()
+    };
+    for start in 0..b.len() {
+        if !b[start].is_ascii_digit() || (start > 0 && b[start - 1].is_ascii_digit()) {
+            continue;
+        }
+        let mut end = start;
+        while end < b.len() && b[end].is_ascii_digit() {
+            end += 1;
+        }
+        let (Some(min), true) = (digits(start, end - start), b.get(end) == Some(&b':')) else {
+            continue;
+        };
+        let (Some(sec), true) = (digits(end + 1, 2), b.get(end + 3) == Some(&b':')) else {
+            continue;
+        };
+        let Some(milli) = digits(end + 4, 3) else {
+            continue;
+        };
+        if sec < 60 && !b.get(end + 7).is_some_and(u8::is_ascii_digit) {
+            return Some((min * 60_000 + sec * 1000 + milli) as f64);
+        }
+    }
+    None
+}
+
 /// Another player's place in the editor.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Remote {
@@ -59,6 +107,8 @@ pub struct Session {
     pub follow: Option<u32>,
     /// Notes are drawn in the colour of who made them.
     pub by_author: bool,
+    /// What the panel shows.
+    pub tab: Tab,
     /// The last presence sent and when.
     sent: Option<(f64, Remote)>,
     /// A snapshot coming in parts (after a resume).
@@ -79,6 +129,7 @@ impl Session {
             chat: VecDeque::new(),
             follow: None,
             by_author: false,
+            tab: Tab::People,
             sent: None,
             pieces: SnapshotPieces::default(),
             done: 0,
@@ -376,6 +427,18 @@ pub(crate) mod tests {
             cursor: None,
             selection,
         }
+    }
+
+    #[test]
+    fn map_times_are_written_and_found_like_modders_write_them() {
+        assert_eq!(stamp(62_345.4), "01:02:345");
+        assert_eq!(stamp(-5.0), "00:00:000");
+        assert_eq!(stamp(3_725_007.0), "62:05:007");
+        assert_eq!(first_stamp("see 01:02:345 (1,2) - x"), Some(62_345.0));
+        assert_eq!(first_stamp("123:00:001"), Some(7_380_001.0));
+        assert_eq!(first_stamp("at 1:2:345, 12:61:000, 01:02:3456"), None);
+        assert_eq!(first_stamp("10:00 then 00:01:500"), Some(1500.0));
+        assert_eq!(first_stamp("nothing"), None);
     }
 
     #[test]

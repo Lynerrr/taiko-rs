@@ -117,10 +117,10 @@ impl Screen for MapEditor {
         }
         view.sessions = state.mapping_ok();
         view.update(frame.now, state.audio.as_ref());
-        if view.take_session_request()
+        if let Some(mode) = view.take_session_request()
             && let Some(dir) = view.ed.path.parent().map(Path::to_path_buf)
         {
-            state.open_mapping(&dir);
+            state.open_mapping(&dir, mode);
         }
         if let Some(speed) = view.take_rate_request() {
             self.out.reload = Some((view.entry, speed));
