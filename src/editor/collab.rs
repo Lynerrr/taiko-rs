@@ -907,6 +907,23 @@ impl Sync {
         ed.selection.retain(|id| chart.object(*id).is_some());
     }
 
+    /// Opens another difficulty of the session (`None` if there is no such one, or it is open
+    /// already): its chart as the server has it, with our pending ops on it on top. New ids go
+    /// on from `next_id`, our range being one for all difficulties. Our pending ops on the
+    /// difficulty we leave stay and go out as ever.
+    pub fn switch(&mut self, diff: u32, next_id: u64) -> Option<Chart> {
+        if diff == self.open {
+            return None;
+        }
+        let mut c = self.docs.get(&diff)?.clone();
+        self.open = diff;
+        for p in self.pending.iter().filter(|p| self.touches_open(p.diff)) {
+            apply_tolerant(&p.cmd, &mut c);
+        }
+        c.set_next_id(next_id);
+        Some(c)
+    }
+
     /// The confirmed state as a snapshot, at `last_seq` (what the server asks for to shorten
     /// its log).
     pub fn snapshot(&self) -> Result<SnapshotData, String> {

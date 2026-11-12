@@ -262,7 +262,9 @@ impl Cmd {
             Cmd::SnapStep(_) | Cmd::SnapTo(_) => {
                 "How finely the grid divides a beat. Notes you place land on it."
             }
-            Cmd::RateStep(_) | Cmd::RateFine(_) => "Plays the music slower, to place notes by ear.",
+            Cmd::RateStep(_) | Cmd::RateFine(_) => {
+                "Plays the music slower or faster, to place notes by ear."
+            }
             Cmd::Bookmark => "Marks the playhead so you can jump back to it.",
             Cmd::Unbookmark => "Removes the bookmark nearest the playhead.",
             Cmd::PrevBookmark | Cmd::NextBookmark => "Jumps to the neighbouring bookmark.",

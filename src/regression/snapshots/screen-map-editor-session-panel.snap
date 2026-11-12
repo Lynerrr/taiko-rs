@@ -5,9 +5,6 @@ text  125,4    Timing
 text  175,4    Help
 text  627,4     - Test [Oni]
 text  719,4    Mapping session · 3
-text  673,22   People
-text  731,22   Chat
-text  788,22   Notes 0
 text  385,23   0:00.000
 text   19,24   Compose
 text   98,24   Gimmicks
@@ -29,38 +26,44 @@ text  534,26   +
 text  632,26   +
 text  488,28   -
 text  585,28   -
-text  680,33   host (you)
-text  823,33   host
-text  680,45   anna
-text  761,45   GD
-text  786,45   kick
-text  726,46   mapper
 text  305,49   NOTES
-text  680,53   bob
-text  813,53   Anna...
-text  726,55   modder
-text  761,55   GD
-text  786,55   kick
+text  625,49   Guest difficulties
+text  777,50   End session
+text  836,51   x
+text  617,59   Test · 3 online
 text  305,65   Nothing selected
 text  637,65   THIS DIFFICULTY
-text  674,65   lock
-text  711,65   accept
-text  763,65   end session
-text  672,76   [x] everyone maps anywhere
+text  623,71   You're the host: you edit everything and give
 text  637,77   3 notes
+text  623,78   out the work. Invite friends with F9.
 text  305,83   New notes:
 text  370,84   Kat  W
 text  422,84   Big  E
-text  672,87   [x] colour by author
 text  638,88   1 don, 2 kat
+text  627,94   People 3
+text  684,94   Difficulties
+text  760,94   Chat
+text  799,94   Notes 0
 text  638,99   1 drumrolls, 1 dendens
 text  305,101  Click the lane to place a note on the grid. W makes the
+text  628,108  host (you)
 text  638,110  120.0 BPM at the playhead
 text  305,111  note in hand a kat (or a don again), E a big one. Click
+text  628,116  Host
 text  305,120  a placed note to give it that colour. Right click
 text  637,121  Length 0:21.000
+text  628,128  anna
 text  305,130  deletes.
+text  770,130  Mapper >
+text  819,130  Kick
 text  637,132  0 bookmarks
+text  628,134  Maps Anna's Muzukashii · 0:02
+text  628,144  bob
+text  770,148  Modder >
+text  819,148  Kick
+text  628,152  Modder: comments · Anna's...
+text  629,170  Colour notes by who placed them
+text  629,178  A mark under each note in its mapper's colour.
 text  286,211  0:00.000
 text  536,211  0:01.000
 text  660,211  anna
