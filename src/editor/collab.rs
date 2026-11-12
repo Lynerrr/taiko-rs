@@ -442,6 +442,16 @@ pub fn red_part(cmd: &Command) -> Option<Command> {
 }
 
 /// The inserted objects' ids.
+/// The ids of the objects and timing points `cmd` inserts.
+fn taken_ids(cmd: &Command, out: &mut Vec<u64>) {
+    match cmd {
+        Command::InsertObjects(l) => out.extend(l.iter().map(|o| o.id)),
+        Command::InsertTiming(l) => out.extend(l.iter().map(|p| p.id)),
+        Command::Composite(l) => l.iter().for_each(|x| taken_ids(x, out)),
+        _ => {}
+    }
+}
+
 fn inserted(cmd: &Command, out: &mut Vec<u64>) {
     match cmd {
         Command::InsertObjects(l) => out.extend(l.iter().map(|o| o.id)),
@@ -607,7 +617,15 @@ impl Sync {
             .get(&open)
             .ok_or("no such difficulty in the session")?
             .clone();
-        local.set_next_id(mapping::first_id(epoch));
+        // Our range starts at the epoch's first id, past any id of it the session holds
+        // already: a server that handed this epoch out before (to a player since kicked) left
+        // their notes with ids of it, and two notes sharing an id get each other's edits.
+        let held = data
+            .docs
+            .iter()
+            .flat_map(|d| d.object_ids.iter().chain(&d.timing_ids))
+            .copied();
+        local.set_next_id(s.past_ours(mapping::first_id(epoch), held));
         let mut ed = Editor::new(local, path);
         ed.history.share();
         Ok((s, ed))
@@ -630,6 +648,14 @@ impl Sync {
 
     pub fn last_seq(&self) -> u64 {
         self.last_seq
+    }
+
+    /// `next`, or past the highest of `ids` in our epoch's range when that is further on.
+    fn past_ours(&self, next: u64, ids: impl Iterator<Item = u64>) -> u64 {
+        let range = mapping::first_id(self.epoch)..mapping::first_id(self.epoch.saturating_add(1));
+        ids.filter(|id| range.contains(id))
+            .map(|id| id + 1)
+            .fold(next, u64::max)
     }
 
     /// The difficulty the editor has open.
@@ -763,6 +789,12 @@ impl Sync {
         // An op this game can't read is passed over by every game alike.
         let cmd = from_wire(&s.op).ok();
         if let Some(cmd) = &cmd {
+            // Ids of our range made by someone else (an earlier holder of our epoch, on a
+            // server that handed it out again) are never ours to give out after them.
+            let mut taken = Vec::new();
+            taken_ids(cmd, &mut taken);
+            let next = self.past_ours(ed.chart.next_id(), taken.into_iter());
+            ed.chart.set_next_id(next);
             let mut ids = Vec::new();
             inserted(cmd, &mut ids);
             for (&diff, chart) in &mut self.docs {

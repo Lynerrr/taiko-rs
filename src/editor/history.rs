@@ -358,6 +358,10 @@ pub struct History {
     /// session takes it to send. Undo and redo then only take back this player's own steps, as
     /// far as nobody changed them since.
     outbox: Option<Vec<Command>>,
+    /// Steps were made while sharing: others changed the chart around them, so after the
+    /// session too they are undone and redone only where the chart is still as they left it.
+    /// Taken back blindly, by id, an undo could hit another player's note.
+    guarded: bool,
 }
 
 impl History {
@@ -401,6 +405,7 @@ impl History {
     /// From now on the changes made here are shared (see `outbox`).
     pub fn share(&mut self) {
         self.outbox.get_or_insert_with(Vec::new);
+        self.guarded = true;
     }
 
     /// The changes made since the last call, in order (none outside a session).
@@ -459,7 +464,7 @@ impl History {
 
     pub fn undo(&mut self, chart: &mut Chart) -> bool {
         self.open = false;
-        if self.outbox.is_some() {
+        if self.guarded {
             return self.step_shared(chart, true);
         }
         let Some(cmd) = self.done.pop() else {
@@ -473,7 +478,7 @@ impl History {
 
     pub fn redo(&mut self, chart: &mut Chart) -> bool {
         self.open = false;
-        if self.outbox.is_some() {
+        if self.guarded {
             return self.step_shared(chart, false);
         }
         let Some(cmd) = self.undone.pop() else {
@@ -485,9 +490,9 @@ impl History {
         true
     }
 
-    /// Undo (`back`) or redo in a session: the step is taken back (or made again) only where
-    /// the chart still is as it left it (or found it), since others edit it too. A step nothing
-    /// is left of is passed over for the one before it.
+    /// Undo (`back`) or redo in a session, or of steps made in one: the step is taken back
+    /// (or made again) only where the chart still is as it left it (or found it), since others
+    /// edit it too. A step nothing is left of is passed over for the one before it.
     fn step_shared(&mut self, chart: &mut Chart, back: bool) -> bool {
         loop {
             let from = if back {

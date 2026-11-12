@@ -474,6 +474,9 @@ pub struct View {
     game_err: Option<String>,
     /// The chart changed at this moment and the preview hasn't caught up.
     stale: Option<Instant>,
+    /// Only others changed it (a mapping session): their drags come in many times a second,
+    /// so the preview catches up every so often, as during a drag of ours.
+    stale_remote: bool,
     /// Map ms the preview was last set to.
     shown: f64,
     playing: Option<(Instant, f64)>,
@@ -750,6 +753,7 @@ impl View {
             game: None,
             game_err: None,
             stale: Some(Instant::now()),
+            stale_remote: false,
             shown: f64::NAN,
             playing: None,
             last_played: 0.0,
@@ -1235,6 +1239,19 @@ impl View {
     // ---- the preview ----
 
     fn mark_stale(&mut self) {
+        self.stale_remote = false;
+        self.went_stale();
+    }
+
+    /// The chart changed by others in a mapping session: the preview shows it too.
+    pub(super) fn mark_stale_remote(&mut self) {
+        if self.stale.is_none() {
+            self.stale_remote = true;
+        }
+        self.went_stale();
+    }
+
+    fn went_stale(&mut self) {
         // The clicks are baked into the music from the timing as it was: bake them again.
         if self.metronome && self.playing.is_some() {
             self.reseek = true;
@@ -1249,10 +1266,11 @@ impl View {
             return;
         };
         let dragging = !matches!(self.drag, Drag::None);
-        if dragging && since.elapsed().as_millis() < 150 {
+        if (dragging || self.stale_remote) && since.elapsed().as_millis() < 150 {
             return;
         }
         self.stale = None;
+        self.stale_remote = false;
         match beatmap::from_text(&self.ed.chart.to_text()) {
             Ok(map) => {
                 let track = self.track.clone().unwrap_or_else(|| {

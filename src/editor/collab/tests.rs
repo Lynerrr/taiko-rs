@@ -448,6 +448,83 @@ fn has_note(ed: &Editor, t: f64) -> bool {
     ed.chart.objects.iter().any(|o| o.time == t)
 }
 
+/// The id of the note at `t`.
+fn id_at(ed: &Editor, t: f64) -> u64 {
+    ed.chart.objects.iter().find(|o| o.time == t).unwrap().id
+}
+
+#[test]
+fn a_join_on_an_epoch_handed_out_before_never_reuses_its_ids() {
+    // A server that gave epoch 2 out again (its player was kicked, and the next join took the
+    // number back): the notes of the first holder keep their ids in the session.
+    for compacted in [true, false] {
+        let (mut server, mut host, mut mapper) = pair();
+        mapper.ed.place_hit(3000.0, false).unwrap();
+        settle(&mut server, &mut [&mut host, &mut mapper]);
+        let old = id_at(&host.ed, 3000.0);
+        if compacted {
+            // In the snapshot the next join loads.
+            let data = host.sync.snapshot().unwrap();
+            server.compact(host.sync.last_seq(), data);
+        }
+        let mut again = Game::join(&server, 2, 2, 0);
+        // Or in the ops after it.
+        for s in server.log.clone() {
+            again.take(Msg::Op(s), &server);
+        }
+        assert!(has_note(&again.ed, 3000.0), "compacted: {compacted}");
+        again.ed.place_hit(5000.0, false).unwrap();
+        let new = id_at(&again.ed, 5000.0);
+        assert_ne!(new, old, "compacted: {compacted}");
+        assert_eq!(
+            new >> mapping::EPOCH_SHIFT,
+            2,
+            "still the epoch's own range"
+        );
+        // Undone, it takes back the new note, never the old one.
+        assert!(again.ed.undo());
+        assert!(has_note(&again.ed, 3000.0) && !has_note(&again.ed, 5000.0));
+    }
+}
+
+#[test]
+fn after_the_session_undo_still_leaves_what_others_changed_since() {
+    let (mut server, mut host, mut mapper) = pair();
+    mapper.ed.place_hit(3000.0, false).unwrap();
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    // The host moves the mapper's note on.
+    let before = host
+        .ed
+        .chart
+        .objects
+        .iter()
+        .find(|o| o.time == 3000.0)
+        .unwrap()
+        .clone();
+    let mut after = before.clone();
+    after.time = 3500.0;
+    host.ed.history.run(
+        &mut host.ed.chart,
+        Command::EditObjects {
+            before: vec![before],
+            after: vec![after],
+        },
+    );
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert!(has_note(&mapper.ed, 3500.0) && !has_note(&mapper.ed, 3000.0));
+    // The mapper is taken out of the session (kicked): the chart stays theirs to edit alone.
+    mapper.ed.history.stop_sharing();
+    // Their undo finds their note changed by someone else: it's left alone, as in the session.
+    assert!(!mapper.ed.undo(), "nothing of theirs left to take back");
+    assert!(has_note(&mapper.ed, 3500.0), "the host's note stays");
+    // What they do alone afterwards undoes as ever.
+    mapper.ed.place_hit(7000.0, false).unwrap();
+    assert!(mapper.ed.undo());
+    assert!(!has_note(&mapper.ed, 7000.0) && has_note(&mapper.ed, 3500.0));
+    assert!(mapper.ed.redo());
+    assert!(has_note(&mapper.ed, 7000.0));
+}
+
 #[test]
 fn undo_takes_back_only_your_own_edits() {
     let (mut server, mut host, mut mapper) = pair();
