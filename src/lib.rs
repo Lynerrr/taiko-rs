@@ -54,6 +54,7 @@ mod link;
 mod logo;
 mod mapguessr;
 mod mapinfo;
+mod mapping_sessions;
 mod medal_sound;
 mod medals;
 mod media;
@@ -501,6 +502,11 @@ struct State {
     pictures: pictures::Pictures,
     /// The account logged in is an admin (the server says so; it checks every admin action).
     admin: bool,
+    /// The server runs mapping sessions (`mapping::FEATURE` in its account reply); without it
+    /// the game never sends it anything about them.
+    mapping_sessions: bool,
+    /// Getting into a mapping session, until the editor opens on it.
+    mapping_join: Option<Box<mapping_sessions::MappingJoin>>,
     skin_loader: Option<skin::Loader>,
     skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
@@ -7411,6 +7417,8 @@ impl State {
         self.social = social::Social::default();
         self.select.nominator = false;
         self.admin = false;
+        self.mapping_sessions = false;
+        self.mapping_join = None;
         self.mp_menu.account = None;
         self.mp_menu.has_email = None;
         self.mp_menu.form = multiplayer::Form::Main;
@@ -7628,6 +7636,7 @@ impl State {
     /// The online server's side of the multiplayer menu: the saved login, account replies and
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
+        self.poll_mapping();
         self.poll_loved();
         self.poll_custom(Instant::now());
         let menu = &mut self.mp_menu;
@@ -7651,9 +7660,11 @@ impl State {
                             nominator,
                             admin,
                             email,
+                            features,
                         }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
+                            self.mapping_sessions = taiko_proto::mapping::supported(&features);
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name)
                                 || self.cfg.online_token != token;
@@ -9387,6 +9398,11 @@ impl State {
                     self.watch(f.name);
                 }
             }
+            (Row::Friend(k), Action::Invite) => {
+                if let Some(f) = self.social.friends.get(k).cloned() {
+                    self.invite_to_mapping(f.name);
+                }
+            }
             (Row::AdminPlayer(k), action) => {
                 let Some(p) = self
                     .social
@@ -9703,7 +9719,7 @@ impl State {
                     map: self
                         .editor_back
                         .as_ref()
-                        .map(|v| v.label())
+                        .map(|v| v.presence_label())
                         .unwrap_or_default(),
                 }
             }
@@ -9762,6 +9778,12 @@ impl State {
                     self.social.have_list = false;
                     self.social.sent_activity = None;
                     self.stream = None;
+                    let features = self.social_features();
+                    if !features.is_empty()
+                        && let Some(c) = &self.social.conn
+                    {
+                        c.send(online::Up::Features(features));
+                    }
                     if let Some(w) = self.scene.screen_as::<Watch>() {
                         let player = w.view.player.clone();
                         if let Some(c) = &self.social.conn {
@@ -9932,6 +9954,13 @@ impl State {
                 .notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
             Down::GlobalChatDeleted { from, at } => self.social.delete_global(&from, at),
             Down::Groups(list) => self.social.set_groups(list),
+            Down::MappingInvite {
+                from,
+                session,
+                title,
+                mode,
+            } => self.mapping_invited(from, session, title, mode),
+            Down::MappingClosed { session } => self.mapping_closed(session),
             Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
             Down::AdminLookup(l) => {
                 let now = discord::unix_now();
@@ -13012,6 +13041,7 @@ impl State {
                             self.social.mark_read(self.mp.is_some());
                         }
                         social::NoteAction::Watch(name) => self.watch(name),
+                        social::NoteAction::Mapping(session) => self.join_mapping(session),
                         social::NoteAction::None => {}
                     }
                 }

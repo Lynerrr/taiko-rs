@@ -204,7 +204,7 @@ impl Command {
 
     /// The command a drag step folds into: the same things edited again, so the whole drag is
     /// one undo.
-    fn merged(&self, later: &Command) -> Option<Command> {
+    pub(super) fn merged(&self, later: &Command) -> Option<Command> {
         match (self, later) {
             (
                 Command::EditObjects { before, after },
@@ -248,6 +248,42 @@ impl Command {
 }
 
 impl Command {
+    /// The command that takes this one back.
+    pub fn inverted(&self) -> Command {
+        match self {
+            Command::InsertObjects(l) => Command::RemoveObjects(l.clone()),
+            Command::RemoveObjects(l) => Command::InsertObjects(l.clone()),
+            Command::EditObjects { before, after } => Command::EditObjects {
+                before: after.clone(),
+                after: before.clone(),
+            },
+            Command::InsertTiming(l) => Command::RemoveTiming(l.clone()),
+            Command::RemoveTiming(l) => Command::InsertTiming(l.clone()),
+            Command::EditTiming { before, after } => Command::EditTiming {
+                before: after.clone(),
+                after: before.clone(),
+            },
+            Command::Gimmick { before, after } => Command::Gimmick {
+                before: after.clone(),
+                after: before.clone(),
+            },
+            Command::SetKey {
+                section,
+                key,
+                before,
+                after,
+            } => Command::SetKey {
+                section,
+                key,
+                before: after.clone(),
+                after: before.clone(),
+            },
+            Command::Composite(l) => {
+                Command::Composite(l.iter().rev().map(Command::inverted).collect())
+            }
+        }
+    }
+
     /// `self` then `later` as one edit of the same kind, whatever each touched: every thing as it
     /// was before the first of them that touched it, and as the last one left it.
     fn folded(&self, later: &Command) -> Option<Command> {
@@ -318,6 +354,10 @@ pub struct History {
     /// Counts every change to the chart (and every undo and redo), so a cache of something
     /// derived from the chart knows when it is out of date.
     rev: u64,
+    /// In a mapping session (`super::collab`): every change made here, in order, until the
+    /// session takes it to send. Undo and redo then only take back this player's own steps, as
+    /// far as nobody changed them since.
+    outbox: Option<Vec<Command>>,
 }
 
 impl History {
@@ -348,6 +388,26 @@ impl History {
         self.rev
     }
 
+    /// The chart changed by others (a mapping session's edits from the other players).
+    pub fn touch(&mut self) {
+        self.rev += 1;
+    }
+
+    /// The changes made here aren't shared any more (the session ended).
+    pub fn stop_sharing(&mut self) {
+        self.outbox = None;
+    }
+
+    /// From now on the changes made here are shared (see `outbox`).
+    pub fn share(&mut self) {
+        self.outbox.get_or_insert_with(Vec::new);
+    }
+
+    /// The changes made since the last call, in order (none outside a session).
+    pub fn take_outgoing(&mut self) -> Vec<Command> {
+        self.outbox.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
     /// Applies `cmd` and keeps it only if `check` passes on the chart it makes; otherwise takes
     /// it back and leaves the history as it was, the redo steps too.
     pub fn run_checked(
@@ -375,6 +435,9 @@ impl History {
     /// Keeps `cmd`, applied already, as the newest step.
     fn record(&mut self, cmd: Command, drag: bool) {
         self.rev += 1;
+        if let Some(out) = &mut self.outbox {
+            out.push(cmd.clone());
+        }
         if !self.undone.is_empty() {
             self.undone.clear();
             // The saved state was among the redo steps: it can't be reached by undoing now.
@@ -396,6 +459,9 @@ impl History {
 
     pub fn undo(&mut self, chart: &mut Chart) -> bool {
         self.open = false;
+        if self.outbox.is_some() {
+            return self.step_shared(chart, true);
+        }
         let Some(cmd) = self.done.pop() else {
             return false;
         };
@@ -407,6 +473,9 @@ impl History {
 
     pub fn redo(&mut self, chart: &mut Chart) -> bool {
         self.open = false;
+        if self.outbox.is_some() {
+            return self.step_shared(chart, false);
+        }
         let Some(cmd) = self.undone.pop() else {
             return false;
         };
@@ -414,6 +483,36 @@ impl History {
         self.rev += 1;
         self.done.push(cmd);
         true
+    }
+
+    /// Undo (`back`) or redo in a session: the step is taken back (or made again) only where
+    /// the chart still is as it left it (or found it), since others edit it too. A step nothing
+    /// is left of is passed over for the one before it.
+    fn step_shared(&mut self, chart: &mut Chart, back: bool) -> bool {
+        loop {
+            let from = if back {
+                &mut self.done
+            } else {
+                &mut self.undone
+            };
+            let Some(cmd) = from.pop() else {
+                return false;
+            };
+            let wanted = if back { cmd.inverted() } else { cmd.clone() };
+            let made = super::collab::apply_guarded(&wanted, chart);
+            if back {
+                self.undone.push(cmd);
+            } else {
+                self.done.push(cmd);
+            }
+            if let Some(made) = made {
+                self.rev += 1;
+                if let Some(out) = &mut self.outbox {
+                    out.push(made);
+                }
+                return true;
+            }
+        }
     }
 
     #[cfg(test)]

@@ -26,6 +26,7 @@ use crate::video::FRAME_VW;
 mod chrome;
 mod clips;
 mod cmd;
+pub mod collab;
 mod curves;
 mod gizmo;
 mod help;
@@ -98,13 +99,15 @@ pub enum Field {
     FxText,
     /// A setting of Song setup.
     Meta(crate::editor::setup::Key),
+    /// A line for the mapping session: chat, or a review comment at the playhead.
+    Say(collab::Say),
 }
 
 impl Field {
     /// Typed as free text (`type_text`), not as a number.
     fn is_text(self) -> bool {
         match self {
-            Field::FxText => true,
+            Field::FxText | Field::Say(_) => true,
             Field::Meta(k) => k.is_text(),
             _ => false,
         }
@@ -158,6 +161,8 @@ pub enum Btn {
     TwFilter(u8),
     /// The window's scroll bar track (a press starts the drag).
     TwBar,
+    /// The mapping session's panel.
+    Collab(collab::CollabAct),
 }
 
 #[derive(Clone, Copy)]
@@ -418,6 +423,18 @@ enum Modal {
 
 pub struct View {
     pub ed: Editor,
+    /// The mapping session the chart is edited in, if any (none while editing alone).
+    pub collab: Option<Box<super::collab::session::Session>>,
+    /// The session's connection, and how to connect again when it drops.
+    pub link: Option<taiko_proto::mapping::Link>,
+    pub relink: Option<collab::Relink>,
+    /// The server runs mapping sessions and we're logged in to it (set by the screen): the
+    /// editor offers to start one.
+    pub sessions: bool,
+    /// Starting a session was asked for (the screen takes it).
+    session_wanted: Option<taiko_proto::mapping::Mode>,
+    /// The kinds of session are shown to pick from.
+    picking_mode: bool,
     /// The library entry being edited (its music is the track).
     pub entry: usize,
     pub track: Option<Arc<Track>>,
@@ -698,6 +715,12 @@ impl View {
         let ed = Editor::open(path)?;
         let mut v = View {
             ed,
+            collab: None,
+            link: None,
+            relink: None,
+            sessions: false,
+            session_wanted: None,
+            picking_mode: false,
             entry,
             track: None,
             track_rx: None,
@@ -1073,6 +1096,7 @@ impl View {
     // ---- loading and playing ----
 
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) {
+        self.pump_session(now);
         self.glide(now);
         self.edge_scroll(now);
         self.follow_seek(audio);
@@ -1275,6 +1299,7 @@ impl View {
         self.modal_from = 0;
         self.refresh_game();
         self.sync_game(autoplay);
+        self.keep_to_followed();
         if self.windowed() {
             self.draw_palette(c);
             self.draw_timeline(c);
@@ -1296,6 +1321,7 @@ impl View {
             self.draw_palette(c);
             self.draw_timeline(c);
             self.draw_graph(c);
+            self.draw_participants(c);
         }
         self.draw_overview(c);
         self.draw_status(c);
@@ -1834,6 +1860,8 @@ impl View {
         }
         // The group the Motion page shapes, under its notes.
         self.draw_group_on_timeline(c, x, y + h);
+        // The others in a mapping session.
+        self.draw_collab_timeline(c, [x, y, w, h], cy);
         // The playhead.
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 1.0));
@@ -3057,6 +3085,11 @@ impl View {
         // What is still being typed counts, as a click elsewhere would have taken it.
         self.commit_typing();
         let was = self.ed.path.clone();
+        // In a mapping session: the credits, and the session's other difficulties too.
+        let others = match &self.collab {
+            Some(s) => s.save_with_credits(&mut self.ed)?,
+            None => 0,
+        };
         let kept = self.ed.save()?;
         let file = self
             .ed
@@ -3068,9 +3101,14 @@ impl View {
             self.renamed = Some((was, self.ed.path.clone()));
             return Ok(format!("saved as {file}"));
         }
-        Ok(match kept {
+        let saved = match kept {
             Some(why) => format!("saved {} ({why})", self.ed.path.display()),
             None => format!("saved {}", self.ed.path.display()),
+        };
+        Ok(if others > 0 {
+            format!("{saved} and {others} other difficulties of the session")
+        } else {
+            saved
         })
     }
 
@@ -3124,7 +3162,7 @@ impl View {
         if let Field::Meta(k) = f {
             return self.step_setting(k, dir, keys);
         }
-        if f == Field::FxText {
+        if matches!(f, Field::FxText | Field::Say(_)) {
             return;
         }
         let ids = self.edit_targets(f);
@@ -3153,7 +3191,12 @@ impl View {
                 Field::Time => p.time += dir * k,
                 Field::Sample => p.sample_set = (p.sample_set + dir as i32).rem_euclid(4),
                 Field::Index => p.sample_index = (p.sample_index + dir as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
+                Field::S(_)
+                | Field::Fx(_)
+                | Field::Key(_)
+                | Field::FxText
+                | Field::Meta(_)
+                | Field::Say(_) => {}
             },
             false,
         );
@@ -3179,6 +3222,9 @@ impl View {
     }
 
     fn apply_typed(&mut self, f: Field, text: &str) {
+        if let Field::Say(to) = f {
+            return self.say(to, text);
+        }
         if f == Field::FxText {
             return self.layer_text_set(text);
         }
@@ -3227,7 +3273,12 @@ impl View {
                 Field::Time => p.time = v.round(),
                 Field::Sample => p.sample_set = (v as i32).clamp(0, 3),
                 Field::Index => p.sample_index = (v as i32).max(0),
-                Field::S(_) | Field::Fx(_) | Field::Key(_) | Field::FxText | Field::Meta(_) => {}
+                Field::S(_)
+                | Field::Fx(_)
+                | Field::Key(_)
+                | Field::FxText
+                | Field::Meta(_)
+                | Field::Say(_) => {}
             },
             false,
         );
@@ -3248,6 +3299,7 @@ impl View {
             Btn::Man(act) => self.press_manual(act, audio),
             Btn::Snap(act) => self.press_snap(act),
             Btn::Menu(i) => self.menu = if self.menu == Some(i) { None } else { Some(i) },
+            Btn::Collab(act) => self.press_collab(act),
             Btn::TourNext => {
                 let at = self.tour.unwrap_or(0);
                 self.tour_goto(at + 1);
@@ -3380,6 +3432,7 @@ impl View {
         {
             let most = match f {
                 Field::Meta(k) => k.max_len(),
+                Field::Say(_) => collab::SAY_MAX,
                 _ => crate::tko::clips::MAX_TEXT,
             };
             if std::mem::take(&mut self.typing_fresh) && s.chars().any(|c| !c.is_control()) {
@@ -3453,6 +3506,17 @@ impl View {
                             k
                         };
                         self.type_setting(next);
+                    }
+                }
+                // Ctrl+T writes the playhead's time, which the others can click.
+                KeyCode::KeyT if keys.ctrl && matches!(f, Field::Say(_)) => {
+                    let at = crate::editor::collab::session::stamp(self.ed.time);
+                    if text.chars().count() + at.len() < collab::SAY_MAX {
+                        if !text.is_empty() && !text.ends_with(' ') {
+                            text.push(' ');
+                        }
+                        text.push_str(&at);
+                        text.push(' ');
                     }
                 }
                 // Words opened for typing go in one press, like selected text.

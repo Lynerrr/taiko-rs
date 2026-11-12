@@ -100,6 +100,73 @@ fn multiplayer_menu_download_and_editor_home() {
     assert_snapshot("screen-playfield-editor", &shot(&mut s, &mut now));
 }
 
+/// The map editor's screen on a small map, alone and in a mapping session (the participants'
+/// panel, another player's playhead and selection, collab parts on the ruler).
+#[test]
+fn map_editor_alone_and_in_a_mapping_session() {
+    use crate::editor::collab::session::tests::session;
+    use taiko_proto::mapping::{MapDown, Part};
+    let dir =
+        std::env::temp_dir().join(format!("taiko-rs-screen-map-editor-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("map.osu");
+    std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
+    let draw = |v: &mut editor::view::View| {
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        c.clear(WIDTH);
+        v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+        screen(&c, VOLATILE)
+    };
+    let mut v = editor::view::View::open(path.clone(), 0).unwrap();
+    assert_snapshot("screen-map-editor", &draw(&mut v));
+    let (mut session, mut ed) = session();
+    ed.path = path;
+    session.state.documents[0].parts = vec![
+        Part {
+            from: 0.0,
+            to: 2000.0,
+            assignee: Some(2),
+        },
+        Part {
+            from: 2000.0,
+            to: 12000.0,
+            assignee: None,
+        },
+    ];
+    let id = ed.chart.objects[1].id;
+    let now = session.now();
+    session.handle(
+        &mut ed,
+        MapDown::Presence {
+            who: 2,
+            diff: 0,
+            time: 1500.0,
+            cursor: Some(2000.0),
+            selection: vec![id],
+        },
+        now,
+    );
+    session.handle(
+        &mut ed,
+        MapDown::Presence {
+            who: 3,
+            diff: 1,
+            time: 500.0,
+            cursor: None,
+            selection: Vec::new(),
+        },
+        now,
+    );
+    session.by_author = true;
+    v.ed = ed;
+    v.collab = Some(Box::new(session));
+    assert_snapshot("screen-map-editor-session", &draw(&mut v));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn guide_pages() {
     let (mut s, _songs, mut now) = client("screen-guide");

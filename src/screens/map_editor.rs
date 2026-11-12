@@ -56,7 +56,7 @@ impl Screen for MapEditor {
 
     fn friends_activity(&self) -> Option<online::Activity> {
         Some(online::Activity::Editing {
-            map: self.view.label(),
+            map: self.view.presence_label(),
         })
     }
 
@@ -115,7 +115,13 @@ impl Screen for MapEditor {
         if view.account.as_ref() != token {
             view.account = token.cloned();
         }
+        view.sessions = state.mapping_ok();
         view.update(frame.now, state.audio.as_ref());
+        if let Some(mode) = view.take_session_request()
+            && let Some(dir) = view.ed.path.parent().map(Path::to_path_buf)
+        {
+            state.open_mapping(&dir, mode);
+        }
         if let Some(speed) = view.take_rate_request() {
             self.out.reload = Some((view.entry, speed));
         }

@@ -244,6 +244,16 @@ impl TimingPoint {
         )
     }
 
+    /// The line the file holds for it, without its ending: the line it was read from while it
+    /// is unchanged, its own otherwise (what a mapping session sends, so every copy of the
+    /// chart writes the same file).
+    pub fn file_line(&self) -> String {
+        match (&self.raw, self.untouched()) {
+            (Some(r), true) => r.line.trim_end_matches(['\r', '\n']).to_string(),
+            _ => self.to_line(""),
+        }
+    }
+
     /// Why this point can't be written, if it can't. Only checked for points that were changed
     /// (see `Chart::validate`): a map as authored may hold anything.
     pub fn problem(&self) -> Option<String> {
@@ -468,6 +478,14 @@ impl HitObject {
         self.raw.as_ref().is_some_and(|r| r.key == self.key())
     }
 
+    /// The line the file holds for it, without its ending (see `TimingPoint::file_line`).
+    pub fn file_line(&self) -> String {
+        match (&self.raw, self.untouched()) {
+            (Some(r), true) => r.line.trim_end_matches(['\r', '\n']).to_string(),
+            _ => self.to_line(""),
+        }
+    }
+
     pub fn parse(line: &str) -> Option<HitObject> {
         let t = line.trim();
         if t.is_empty() || t.starts_with("//") {
@@ -670,6 +688,48 @@ impl Chart {
         }
         chart.gimmick = Some(gimmick);
         Ok(chart)
+    }
+
+    /// A `.osu` or `.tko` text, as `read` tells them apart.
+    pub fn parse_file(text: &str) -> Result<Chart, String> {
+        if crate::tko::format::version_of(text).is_some() {
+            Chart::parse_tko(text)
+        } else {
+            Ok(Chart::parse(text))
+        }
+    }
+
+    /// Gives the timing points and hit objects these ids, in the order they are held (as the
+    /// text was read): a mapping session's snapshot names them so every copy agrees.
+    pub fn set_ids(&mut self, timing: &[u64], objects: &[u64]) -> Result<(), String> {
+        if timing.len() != self.timing.len() || objects.len() != self.objects.len() {
+            return Err(format!(
+                "the snapshot names {} timing points and {} objects, the chart has {} and {}",
+                timing.len(),
+                objects.len(),
+                self.timing.len(),
+                self.objects.len()
+            ));
+        }
+        for (p, id) in self.timing.iter_mut().zip(timing) {
+            p.id = *id;
+        }
+        for (o, id) in self.objects.iter_mut().zip(objects) {
+            o.id = *id;
+        }
+        let top = timing.iter().chain(objects).copied().max().unwrap_or(0);
+        self.next_id = self.next_id.max(top + 1);
+        Ok(())
+    }
+
+    /// The id `take_id` gives next.
+    pub fn next_id(&self) -> u64 {
+        self.next_id
+    }
+
+    /// New ids from `id` on: a mapping session gives each player's game its own range.
+    pub fn set_next_id(&mut self, id: u64) {
+        self.next_id = id;
     }
 
     pub fn take_id(&mut self) -> u64 {

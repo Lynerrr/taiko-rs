@@ -8,6 +8,7 @@
 #[macro_use]
 pub mod lang;
 pub mod changelog_entry;
+pub mod mapping;
 pub mod net;
 pub mod online;
 pub mod tls;

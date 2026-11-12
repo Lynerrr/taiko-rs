@@ -6,6 +6,7 @@
 
 pub mod chart;
 pub mod clips;
+pub mod collab;
 pub mod fakes;
 pub mod follow;
 pub mod gimmicks;
