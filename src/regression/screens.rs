@@ -122,6 +122,12 @@ fn map_editor_alone_and_in_a_mapping_session() {
     };
     let mut v = editor::view::View::open(path.clone(), 0).unwrap();
     assert_snapshot("screen-map-editor", &draw(&mut v));
+    // On a server that runs sessions: the menu bar's button, and the window it opens.
+    let mut offered = editor::view::View::open(path.clone(), 0).unwrap();
+    offered.sessions = true;
+    draw(&mut offered);
+    offered.open_session_window();
+    assert_snapshot("screen-map-editor-session-window", &draw(&mut offered));
     let (mut session, mut ed) = session();
     ed.path = path;
     session.state.documents[0].parts = vec![

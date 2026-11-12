@@ -433,8 +433,12 @@ pub struct View {
     pub sessions: bool,
     /// Starting a session was asked for (the screen takes it).
     session_wanted: Option<taiko_proto::mapping::Mode>,
-    /// The kinds of session are shown to pick from.
+    /// The session window (opened from the menu bar's "Mapping session" button) is open.
     picking_mode: bool,
+    /// The kind of session picked in that window.
+    session_pick: taiko_proto::mapping::Mode,
+    /// Where the session window was drawn last (clicks on it stay in it).
+    session_win: [f32; 4],
     /// The library entry being edited (its music is the track).
     pub entry: usize,
     pub track: Option<Arc<Track>>,
@@ -721,6 +725,8 @@ impl View {
             sessions: false,
             session_wanted: None,
             picking_mode: false,
+            session_pick: taiko_proto::mapping::Mode::Collab,
+            session_win: [0.0; 4],
             entry,
             track: None,
             track_rx: None,
@@ -2484,7 +2490,17 @@ impl View {
         } else {
             self.snap_pop.take().is_some()
         };
-        if let Some(b) = self.button_at(x, y) {
+        // The session window closes on a press outside it (its button toggles it itself);
+        // a press on it goes no further than it.
+        let on_window = self.picking_mode && inside(self.session_win, x, y);
+        let hit = self.button_at(x, y);
+        if self.picking_mode && !on_window && !matches!(hit, Some(Btn::Collab(_))) {
+            self.picking_mode = false;
+        }
+        if on_window && !matches!(hit, Some(Btn::Collab(_))) {
+            return;
+        }
+        if let Some(b) = hit {
             self.press(b, keys, audio);
             match b {
                 Btn::S(SAct::Hits | SAct::Snaps | SAct::Lines) => self.svt.drop = was,
@@ -3564,6 +3580,7 @@ impl View {
                 return KeyResult::Handled;
             }
             if self.menu.take().is_some()
+                || std::mem::take(&mut self.picking_mode)
                 || self.n_pick.take().is_some()
                 || self.snap_pop.take().is_some()
                 || self.svt.drop.take().is_some()

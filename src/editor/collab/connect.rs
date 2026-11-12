@@ -10,6 +10,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
@@ -24,6 +25,8 @@ use super::host_snapshot;
 /// limits, which a session's result goes through).
 pub const MAX_ASSET: u64 = 40 << 20;
 pub const MAX_ASSETS: u64 = 200 << 20;
+/// A piece of a file asked for and not come by then is asked for again.
+const ASK_AGAIN: Duration = Duration::from_secs(3);
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -62,13 +65,21 @@ fn local_path(dir: &Path, name: &str) -> Option<PathBuf> {
     Some(p)
 }
 
+/// A chart file: an `.osu`, or a `.tko` (an `.osu` with the client's effects on top).
 fn is_chart(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("osu"))
+        .is_some_and(|e| e.eq_ignore_ascii_case("osu") || e.eq_ignore_ascii_case("tko"))
 }
 
-/// The chart files in a folder: (path, text).
+/// Whether a chart's text is a `.tko`.
+pub fn is_tko_text(text: &str) -> bool {
+    crate::tko::format::version_of(text).is_some()
+}
+
+/// The chart files in a folder: (path, text), one per difficulty. A `.tko` made from an `.osu`
+/// keeps that `.osu` next to it under the same difficulty name; the `.tko` is the one mapped
+/// on, so it stands for the difficulty.
 pub fn charts_in(dir: &Path) -> Vec<(PathBuf, String)> {
     let mut out: Vec<(PathBuf, String)> = std::fs::read_dir(dir)
         .into_iter()
@@ -79,6 +90,14 @@ pub fn charts_in(dir: &Path) -> Vec<(PathBuf, String)> {
         .filter_map(|p| Some((p.clone(), std::fs::read_to_string(&p).ok()?)))
         .collect();
     out.sort();
+    let tko_names: Vec<String> = out
+        .iter()
+        .filter(|(_, text)| is_tko_text(text))
+        .filter_map(|(_, text)| version(text))
+        .collect();
+    out.retain(|(_, text)| {
+        is_tko_text(text) || version(text).is_none_or(|v| !tko_names.contains(&v))
+    });
     out
 }
 
@@ -106,7 +125,7 @@ impl HostSet {
             })
             .collect();
         if charts.is_empty() {
-            return Err("the set has no .osu difficulty".into());
+            return Err("the set has no .osu or .tko difficulty".into());
         }
         let mut assets = Vec::new();
         let mut total = 0;
@@ -235,6 +254,10 @@ pub struct Connecting {
     later: Vec<MapDown>,
     fetch: VecDeque<(AssetRef, PathBuf)>,
     got: Option<(AssetRef, PathBuf, Vec<u8>)>,
+    /// Since when the piece asked for last hasn't come (set on the first `tick` after asking).
+    waiting: Option<Instant>,
+    /// Asked again for a piece that didn't come: the host is still sending the set.
+    pub stalled: bool,
     /// Bytes of the set's files fetched so far, and to fetch in all.
     pub fetched: u64,
     pub to_fetch: u64,
@@ -263,6 +286,8 @@ impl Connecting {
             later: Vec::new(),
             fetch: VecDeque::new(),
             got: None,
+            waiting: None,
+            stalled: false,
             fetched: 0,
             to_fetch: 0,
         }
@@ -272,6 +297,14 @@ impl Connecting {
     pub fn stage(&self) -> String {
         if self.joined.is_none() || self.state.is_none() {
             return tr!("connecting", "接続中", "подключение").into();
+        }
+        if self.fetched < self.to_fetch && self.stalled {
+            return tr!(
+                "waiting for the host to send the set's files",
+                "ホストがセットのファイルを送るのを待っています",
+                "жду, пока хост отправит файлы сета"
+            )
+            .into();
         }
         if self.fetched < self.to_fetch {
             let mb = |b: u64| format!("{:.1}", b as f64 / 1_048_576.0);
@@ -367,8 +400,14 @@ impl Connecting {
                 }
                 self.fetched += bytes.len() as u64;
                 buf.extend_from_slice(&bytes);
+                self.waiting = None;
+                self.stalled = false;
+                // The server sends one piece for each ask: ask for the next one.
                 if (buf.len() as u64) < total {
-                    return Ok(Vec::new());
+                    return Ok(vec![MapUp::GetAsset {
+                        sha256: a.sha256.clone(),
+                        offset: buf.len() as u64,
+                    }]);
                 }
                 if sha256_hex(buf) != a.sha256 {
                     return Err(format!("{} came broken", a.name));
@@ -427,7 +466,28 @@ impl Connecting {
             offset: 0,
         };
         self.got = Some((a, path, Vec::new()));
+        self.waiting = None;
         Some(up)
+    }
+
+    /// Time passing: a piece asked for that hasn't come is asked for again. The server has
+    /// nothing to answer with until the host's upload of that file is complete (a guest can join
+    /// while the host is still sending), and it doesn't say so.
+    pub fn tick(&mut self, now: Instant) -> Vec<MapUp> {
+        let Some((a, _, buf)) = &self.got else {
+            self.waiting = None;
+            return Vec::new();
+        };
+        let since = *self.waiting.get_or_insert(now);
+        if now.duration_since(since) < ASK_AGAIN {
+            return Vec::new();
+        }
+        self.waiting = Some(now);
+        self.stalled = true;
+        vec![MapUp::GetAsset {
+            sha256: a.sha256.clone(),
+            offset: buf.len() as u64,
+        }]
     }
 
     /// Everything in: the session to open (once), with the chart files of the difficulties
@@ -463,7 +523,8 @@ impl Connecting {
         let path = match existing {
             Some((p, _)) => p,
             None => {
-                let name = format!("{} [{}].osu", state.title, doc.name);
+                let ext = if is_tko_text(&doc.text) { "tko" } else { "osu" };
+                let name = format!("{} [{}].{ext}", state.title, doc.name);
                 let p = dir.join(crate::download::safe_folder_name(&name));
                 if let Err(e) = std::fs::write(&p, &doc.text) {
                     return Some(Err(e.to_string()));
@@ -570,24 +631,23 @@ mod tests {
         LinkEvent::Down(Box::new(d))
     }
 
-    /// What the server makes of a host's upload: the pieces it would send a joining game.
-    fn served(ups: &[MapUp], sha: &str) -> Vec<MapDown> {
-        ups.iter()
-            .filter_map(|u| match u {
-                MapUp::Asset {
-                    sha256,
-                    offset,
-                    total,
-                    data,
-                } if sha256 == sha => Some(MapDown::AssetPart {
-                    sha256: sha256.clone(),
-                    offset: *offset,
-                    total: *total,
-                    data: data.clone(),
-                }),
-                _ => None,
-            })
-            .collect()
+    /// What the server answers a joining game's ask for a file from `offset` with: the one
+    /// piece of the host's upload that starts there.
+    fn answer(ups: &[MapUp], sha: &str, at: u64) -> Option<MapDown> {
+        ups.iter().find_map(|u| match u {
+            MapUp::Asset {
+                sha256,
+                offset,
+                total,
+                data,
+            } if sha256 == sha && *offset == at => Some(MapDown::AssetPart {
+                sha256: sha256.clone(),
+                offset: *offset,
+                total: *total,
+                data: data.clone(),
+            }),
+            _ => None,
+        })
     }
 
     #[test]
@@ -654,16 +714,22 @@ mod tests {
             "{}",
             c.stage()
         );
-        let mut asks = Vec::new();
-        for a in &d.assets {
-            for part in served(&uploads, &a.sha256) {
-                asks.extend(c.take(down(part)).unwrap());
-            }
+        // The server answers each ask with one piece, as the real one does.
+        let mut asks = first;
+        let mut answered = 0;
+        while let Some(ask) = asks.pop() {
+            let MapUp::GetAsset { sha256, offset } = ask else {
+                panic!("only asks for files while joining: {ask:?}")
+            };
+            let piece = answer(&uploads, &sha256, offset).expect("a piece the host sent");
+            answered += 1;
+            asks.extend(c.take(down(piece)).unwrap());
         }
-        assert!(
-            matches!(&asks[..], [MapUp::GetAsset { .. }]),
-            "the next file"
+        assert_eq!(
+            answered, 3,
+            "the music piece by piece (two), then the picture"
         );
+        assert_eq!(c.fetched, c.to_fetch);
         assert_eq!(c.stage(), "getting the map", "every file in");
         for up in snapshot_lines(5, &snapshot) {
             let MapUp::Snapshot {
@@ -738,6 +804,120 @@ mod tests {
             Connecting::guest(temp("lost"))
                 .take(LinkEvent::Lost("no route".into()))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn a_piece_that_doesnt_come_is_asked_for_again() {
+        let (dir, _) = host_dir();
+        let d = HostSet::read(&dir).unwrap().descriptor();
+        let mut c = Connecting::guest(temp("again"));
+        c.take(joined(2, 2, Vec::new())).unwrap();
+        let first = c.take(down(MapDown::State(state(&d)))).unwrap();
+        let [MapUp::GetAsset { sha256, offset: 0 }] = &first[..] else {
+            panic!("{first:?}")
+        };
+        // The host hasn't sent the file yet, so the server says nothing.
+        let t0 = Instant::now();
+        assert!(c.tick(t0).is_empty());
+        assert!(c.tick(t0 + Duration::from_secs(2)).is_empty());
+        let again = c.tick(t0 + Duration::from_secs(3));
+        assert!(
+            matches!(&again[..], [MapUp::GetAsset { sha256: s, offset: 0 }] if s == sha256),
+            "{again:?}"
+        );
+        assert!(
+            c.stage().starts_with("waiting for the host"),
+            "{}",
+            c.stage()
+        );
+        assert!(
+            c.tick(t0 + Duration::from_secs(4)).is_empty(),
+            "not every frame"
+        );
+        assert_eq!(c.tick(t0 + Duration::from_secs(6)).len(), 1);
+    }
+
+    /// A set made as a `.tko` from the start: no `.osu` in it at all.
+    fn tko_dir() -> PathBuf {
+        let dir = temp("tko").join("2 Artist - Song");
+        std::fs::create_dir_all(&dir).unwrap();
+        let map = MAP.replace("Title:Test", "Artist:Artist\r\nTitle:Song");
+        let tko = crate::tko::format::write(&map, &Default::default()).unwrap();
+        std::fs::write(dir.join("Artist - Song (host) [Oni].tko"), tko).unwrap();
+        std::fs::write(dir.join("audio.mp3"), b"mp3").unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_tko_only_set_opens_a_session_and_reaches_the_guest_as_a_tko() {
+        let dir = tko_dir();
+        let set = HostSet::read(&dir).expect("a .tko is a difficulty");
+        let d = set.descriptor();
+        assert_eq!(d.diffs, vec!["Oni".to_string()]);
+        assert_eq!(d.assets.len(), 1, "the chart is not sent as a file");
+        let snapshot = host_snapshot(&set.charts).unwrap();
+        let mut host = Connecting::host(set);
+        host.take(joined(1, 1, Vec::new())).unwrap();
+        let mut s = state(&d);
+        s.documents.truncate(1);
+        host.take(down(MapDown::State(s.clone()))).unwrap();
+        host.take(down(MapDown::SnapshotWanted { seq: 0 })).unwrap();
+        let r = host.ready().unwrap().unwrap();
+        assert_eq!(r.path, dir.join("Artist - Song (host) [Oni].tko"));
+
+        let songs = temp("tko-songs");
+        std::fs::create_dir_all(songs.join("2 Artist - Song")).unwrap();
+        std::fs::write(songs.join("2 Artist - Song/audio.mp3"), b"mp3").unwrap();
+        let mut guest = Connecting::guest(songs.clone());
+        guest.take(joined(2, 2, Vec::new())).unwrap();
+        assert!(guest.take(down(MapDown::State(s))).unwrap().is_empty());
+        for up in snapshot_lines(1, &snapshot) {
+            let MapUp::Snapshot {
+                seq,
+                part,
+                parts,
+                data,
+            } = up
+            else {
+                unreachable!()
+            };
+            guest
+                .take(down(MapDown::Snapshot {
+                    seq,
+                    part,
+                    parts,
+                    data,
+                }))
+                .unwrap();
+        }
+        let r = guest.ready().unwrap().unwrap();
+        assert_eq!(r.path.extension().unwrap(), "tko", "{}", r.path.display());
+        let text = std::fs::read_to_string(&r.path).unwrap();
+        assert!(is_tko_text(&text));
+    }
+
+    #[test]
+    fn a_tko_made_from_an_osu_stands_for_that_difficulty() {
+        let dir = tko_dir();
+        let map = MAP.replace("Title:Test", "Artist:Artist\r\nTitle:Song");
+        std::fs::write(dir.join("Artist - Song (host) [Oni].osu"), &map).unwrap();
+        std::fs::write(
+            dir.join("Artist - Song (host) [Kantan].osu"),
+            map.replace("Version:Oni", "Version:Kantan"),
+        )
+        .unwrap();
+        let charts = charts_in(&dir);
+        let names: Vec<String> = charts
+            .iter()
+            .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "Artist - Song (host) [Kantan].osu".to_string(),
+                "Artist - Song (host) [Oni].tko".to_string()
+            ]
         );
     }
 }

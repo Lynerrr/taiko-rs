@@ -523,9 +523,10 @@ pub enum MapDown {
 }
 
 /// Raw bytes of an asset per piece, and characters of snapshot JSON per part: both keep a line
-/// well under the protocol's 1 MiB.
+/// under the protocol's 1 MiB. A snapshot part is JSON again inside the line, where every quote
+/// and backslash of it is escaped once more, so a part can grow to twice its size there.
 pub const ASSET_PIECE: usize = 512 * 1024;
-pub const SNAPSHOT_PART: usize = 512 * 1024;
+pub const SNAPSHOT_PART: usize = 256 * 1024;
 
 /// A snapshot as the lines that carry it.
 pub fn snapshot_lines(seq: u64, data: &SnapshotData) -> Vec<MapUp> {
@@ -932,5 +933,34 @@ mod tests {
         assert!(!timing_is_red("0,-100"));
         assert_eq!(object_time("256,192,1234.5,1,0"), Some(1234.5));
         assert_eq!(timing_time("77,500"), Some(77.0));
+    }
+
+    #[test]
+    fn every_snapshot_line_fits_a_protocol_line_however_much_it_escapes() {
+        // A .tko's gimmick is JSON inside the chart text: its quotes are escaped once in the
+        // snapshot and again in the line that carries a part.
+        let gimmick = r#"{"t":1,"v":"\\"}"#.repeat(60_000);
+        let data = SnapshotData {
+            docs: vec![DocSnapshot {
+                diff: 0,
+                name: "Oni".into(),
+                text: format!("osu file format v14\r\n[Gimmick]\r\n{gimmick}"),
+                timing_ids: Vec::new(),
+                object_ids: Vec::new(),
+                authors: Vec::new(),
+            }],
+        };
+        let lines = snapshot_lines(3, &data);
+        assert!(lines.len() > 1);
+        let mut joined = String::new();
+        for up in &lines {
+            let line = serde_json::to_string(up).unwrap();
+            assert!(line.len() < 1 << 20, "a line of {} bytes", line.len());
+            let MapUp::Snapshot { data, .. } = up else {
+                unreachable!()
+            };
+            joined.push_str(data);
+        }
+        assert_eq!(serde_json::from_str::<SnapshotData>(&joined).unwrap(), data);
     }
 }

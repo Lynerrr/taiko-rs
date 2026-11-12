@@ -103,6 +103,9 @@ impl View {
             x += tw;
         }
         let mut right = w - 8.0;
+        if let Some(x) = self.draw_session_button(c, w - 6.0, h) {
+            right = x - 8.0;
+        }
         if self.ed.modified() {
             let mark = "unsaved changes";
             c.text_right(right, 3.5, 7.0, rgba(WARN, 1.0), mark);
