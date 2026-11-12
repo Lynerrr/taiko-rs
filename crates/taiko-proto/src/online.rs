@@ -1409,8 +1409,9 @@ pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpS
 
 /// What the social connection reports to the game.
 pub enum SocialEvent {
-    /// (Re)connected as this account: resend what we're doing.
-    Connected(String),
+    /// (Re)connected as this account, with the features the server listed in its reply:
+    /// resend what we're doing.
+    Connected(String, Vec<String>),
     Disconnected(String),
     /// The saved login is no longer valid.
     SessionExpired,
@@ -1457,8 +1458,8 @@ impl Social {
                         continue;
                     }
                 };
-                let name = match reply {
-                    Reply::Account { name, .. } => name,
+                let (name, features) = match reply {
+                    Reply::Account { name, features, .. } => (name, features),
                     Reply::Error(e) if e.contains("session") => {
                         let _ = events.send(SocialEvent::SessionExpired);
                         return;
@@ -1481,7 +1482,7 @@ impl Social {
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
                 // Whatever piled up while away is stale: the game resends its state on Connected.
                 while out.try_recv().is_ok() {}
-                let _ = events.send(SocialEvent::Connected(name));
+                let _ = events.send(SocialEvent::Connected(name, features));
                 let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
                 {
                     let (events, alive) = (events.clone(), alive.clone());

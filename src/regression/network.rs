@@ -1377,6 +1377,82 @@ fn scripted_mapping_server(
 /// fetches the set's music piece by piece and the snapshot
 /// from a scripted server, opens the editor on the difficulty given to it with the op that
 /// followed the snapshot, sends its own edit, and edits alone again when the session ends.
+/// The social connection declares `mapping/1` from its own reply, even while the account check
+/// started with it is still out: a game that waited for that check never declared it, and the
+/// server sent its invites as a plain notice with nothing to join from.
+#[test]
+fn the_social_link_declares_mapping_before_the_account_check_answers() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = std::sync::mpsc::channel::<Up>();
+    std::thread::spawn(move || {
+        // The account checks, held open and never answered.
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let Ok(first) = online::read_line(&mut reader) else {
+                continue;
+            };
+            let Ok(env) = serde_json::from_str::<Envelope>(&first) else {
+                continue;
+            };
+            match env.request {
+                Request::Connect { .. } => {
+                    online::write_line(
+                        &mut out,
+                        &Reply::Account {
+                            name: "me".into(),
+                            token: "t".into(),
+                            nominator: false,
+                            admin: false,
+                            email: Some(true),
+                            features: vec![mapping::FEATURE.into()],
+                        },
+                    )
+                    .unwrap();
+                    let tx = tx.clone();
+                    std::thread::spawn(move || {
+                        while let Ok(line) = online::read_line(&mut reader) {
+                            if let Ok(up) = serde_json::from_str::<Up>(&line) {
+                                let _ = tx.send(up);
+                            }
+                        }
+                    });
+                    held.push(out);
+                }
+                _ => held.push(out),
+            }
+        }
+    });
+    let mut cfg = harness::config();
+    cfg.online_server = format!("127.0.0.1:{port}");
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    let mut s = state_with(cfg, Vec::new());
+    let mut now = Instant::now();
+    assert!(!s.mapping_sessions, "nothing heard from the server yet");
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.social.connected),
+        "the social link connects"
+    );
+    assert!(
+        s.mp_menu.account_request.is_some(),
+        "the account check is still out"
+    );
+    assert!(s.mapping_sessions, "the social reply's features count");
+    let until = Instant::now() + Duration::from_secs(10);
+    let mut declared = false;
+    while !declared && Instant::now() < until {
+        frame(&mut s, now);
+        now += Duration::from_millis(16);
+        if let Ok(up) = rx.recv_timeout(Duration::from_millis(50)) {
+            declared = matches!(up, Up::Features(ref f) if f == &[mapping::FEATURE.to_string()]);
+        }
+    }
+    assert!(declared, "the game declares mapping/1 on the social link");
+}
+
 #[test]
 fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

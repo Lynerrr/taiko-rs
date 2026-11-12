@@ -9794,7 +9794,13 @@ impl State {
         };
         for event in conn.poll() {
             match event {
-                online::SocialEvent::Connected(name) => {
+                online::SocialEvent::Connected(name, features) => {
+                    // The social reply lists the server's features too: the account check
+                    // started with it may still be on its way, and a game that doesn't declare
+                    // `mapping/1` here gets invites as a plain notice it can't join from.
+                    if taiko_proto::mapping::supported(&features) {
+                        self.mapping_sessions = true;
+                    }
                     self.social.connected = true;
                     self.social.me = Some(name);
                     // The server resends the friend list and recent chat.
