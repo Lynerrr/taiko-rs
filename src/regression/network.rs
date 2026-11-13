@@ -402,6 +402,7 @@ fn replies() -> Vec<Reply> {
             email: Some(true),
             features: Vec::new(),
             terms: 0,
+            server: None,
         },
         Reply::Mapping {
             session: 9,
@@ -418,6 +419,7 @@ fn replies() -> Vec<Reply> {
             email: Some(true),
             features: vec![mapping::FEATURE.into()],
             terms: 0,
+            server: None,
         },
         Reply::Account {
             name: "a".into(),
@@ -427,6 +429,18 @@ fn replies() -> Vec<Reply> {
             email: Some(true),
             features: vec![online::TERMS_FEATURE.into()],
             terms: 1,
+            server: None,
+        },
+        // A server that moved, telling the game where it is now.
+        Reply::Account {
+            name: "a".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: Some(true),
+            features: Vec::new(),
+            terms: 0,
+            server: Some("tls://130.78.31.127:17801".into()),
         },
     ]
 }
@@ -1459,6 +1473,7 @@ fn the_social_link_declares_mapping_before_the_account_check_answers() {
                             email: Some(true),
                             features: vec![mapping::FEATURE.into()],
                             terms: 0,
+                            server: None,
                         },
                     )
                     .unwrap();
@@ -1654,4 +1669,132 @@ fn a_resume_the_server_refuses_is_reported_as_refused() {
         matches!(&events[..], [mapping::LinkEvent::Refused(why)] if why == "no such session"),
         "{events:?}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The server moving to another address.
+
+/// A server that answers every account check for `name` (with `moved_to` as where it says it
+/// is now), and holds every other connection open unanswered. Its address, and how many
+/// account checks it got.
+fn account_server(name: &str, moved_to: Option<String>) -> (String, Arc<AtomicUsize>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let checks = Arc::new(AtomicUsize::new(0));
+    let counted = checks.clone();
+    let name = name.to_string();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let Ok(line) = online::read_line(&mut reader) else {
+                continue;
+            };
+            match serde_json::from_str::<Envelope>(&line).map(|env| env.request) {
+                Ok(Request::WhoAmI { .. }) => {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    let _ = online::write_line(
+                        &mut out,
+                        &Reply::Account {
+                            name: name.clone(),
+                            token: "t".into(),
+                            nominator: false,
+                            admin: false,
+                            email: Some(true),
+                            features: Vec::new(),
+                            terms: 0,
+                            server: moved_to.clone(),
+                        },
+                    );
+                }
+                _ => held.push(out),
+            }
+        }
+    });
+    (address, checks)
+}
+
+/// A game logged in on `server` that takes every server for ours, as it does the real ones.
+fn logged_in_on(server: &str) -> State {
+    let mut cfg = harness::config();
+    cfg.online_server = server.into();
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    let mut s = state_with(cfg, Vec::new());
+    s.trusted_server = |_| true;
+    s
+}
+
+/// The server moved: its account reply says where it is now. The game checks that address
+/// answers for the same account, then makes it its server: settings, the lobby list and the
+/// social connection go there from then on.
+#[test]
+fn the_game_follows_its_server_to_the_address_it_moved_to() {
+    let (new, new_checks) = account_server("me", None);
+    let (old, _) = account_server("me", Some(new.clone()));
+    let mut s = logged_in_on(&old);
+    let mut now = Instant::now();
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.cfg.online_server == new),
+        "the game never moved to the new address"
+    );
+    assert!(
+        new_checks.load(Ordering::SeqCst) >= 1,
+        "the new address was checked first"
+    );
+    assert!(s.server_move.is_idle());
+    assert_eq!(s.cfg.online_user, "me", "still logged in");
+}
+
+/// A new address that doesn't answer, or answers for someone else, isn't followed: the game
+/// keeps its server (and asks again at the next login).
+#[test]
+fn the_game_stays_when_the_new_address_doesnt_answer_for_it() {
+    // Nothing listens there.
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("127.0.0.1:{}", listener.local_addr().unwrap().port())
+    };
+    let (stranger, stranger_checks) = account_server("someone-else", None);
+    for (to, checks) in [(closed, None), (stranger, Some(stranger_checks))] {
+        let (old, _) = account_server("me", Some(to));
+        let mut s = logged_in_on(&old);
+        let mut now = Instant::now();
+        assert!(
+            wait_for(&mut s, &mut now, |s| s.server_move.is_busy()),
+            "the new address is checked"
+        );
+        assert!(
+            wait_for(&mut s, &mut now, |s| s.server_move.is_idle()),
+            "the check ends"
+        );
+        if let Some(checks) = checks {
+            assert!(checks.load(Ordering::SeqCst) >= 1);
+        }
+        assert_eq!(s.cfg.online_server, old, "the game kept its server");
+    }
+}
+
+/// Only our own servers are listened to: one that isn't (a LAN server, or anything reached
+/// without our certificate) can't send the game, and its login, somewhere else.
+#[test]
+fn a_server_that_isnt_ours_cant_move_the_game() {
+    let (new, new_checks) = account_server("me", None);
+    let (old, old_checks) = account_server("me", Some(new));
+    let mut s = logged_in_on(&old);
+    s.trusted_server = online::is_official;
+    let mut now = Instant::now();
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.mp_menu.account_request.is_none()
+            && old_checks.load(Ordering::SeqCst) >= 1),
+        "the account check came back"
+    );
+    for _ in 0..20 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+    }
+    assert!(s.server_move.is_idle(), "nothing was checked");
+    assert_eq!(new_checks.load(Ordering::SeqCst), 0);
+    assert_eq!(s.cfg.online_server, old);
 }

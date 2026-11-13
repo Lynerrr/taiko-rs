@@ -393,6 +393,7 @@ fn terms_server_keeping(kept: Option<u32>) -> (String, std::sync::mpsc::Receiver
             .map(|_| vec![online::TERMS_FEATURE.into()])
             .unwrap_or_default(),
         terms: kept.unwrap_or(0),
+        server: None,
     };
     std::thread::spawn(move || {
         while let Ok((stream, _)) = listener.accept() {
