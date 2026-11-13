@@ -136,6 +136,11 @@ pub(crate) trait Screen: Any + Send {
     fn holds_game(&self) -> bool {
         false
     }
+    /// The scene it goes back to when it closes (an editor opened from the settings): a game
+    /// that scene keeps stays meanwhile (`State::drop_finished_play`).
+    fn back_scene(&self) -> Option<&Scene> {
+        None
+    }
     /// A calibration run: Some(true) the vsync compensation's, by sight.
     fn calibration(&self) -> Option<bool> {
         None

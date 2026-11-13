@@ -2308,13 +2308,23 @@ impl State {
         self.scene.screen().and_then(|s| s.calibration())
     }
 
-    /// Drops the game when its scene has gone (the settings over its pause menu keep it).
+    /// Drops the game when its scene has gone. The settings over its pause menu keep it, and so
+    /// does an editor opened from them (the playfield area's, the interface's): Esc goes back
+    /// through them to the pause menu.
     fn drop_finished_play(&mut self) {
-        let scene = self.behind_settings().unwrap_or(&self.scene);
-        let holds = scene.screen().is_some_and(|s| s.holds_game());
-        if !holds {
-            self.play = None;
+        let mut scene = &self.scene;
+        // The way back: an editor to the settings, the settings to what they were opened over.
+        for _ in 0..4 {
+            match scene.screen() {
+                Some(s) if s.holds_game() => return,
+                Some(s) if s.back_scene().is_some() => scene = s.back_scene().unwrap(),
+                Some(s) if s.settings() && self.behind.is_some() => {
+                    scene = self.behind.as_deref().unwrap();
+                }
+                _ => break,
+            }
         }
+        self.play = None;
     }
 
     /// A play (or calibration) is running, not paused.
