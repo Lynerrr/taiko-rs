@@ -316,6 +316,10 @@ fn requests() -> Vec<Request> {
             epoch: 2,
             last_seq: 40,
         },
+        Request::AcceptTerms {
+            token: "t".into(),
+            version: 1,
+        },
     ]
 }
 
@@ -397,6 +401,7 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: Vec::new(),
+            terms: 0,
         },
         Reply::Mapping {
             session: 9,
@@ -412,6 +417,16 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: vec![mapping::FEATURE.into()],
+            terms: 0,
+        },
+        Reply::Account {
+            name: "a".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: Some(true),
+            features: vec![online::TERMS_FEATURE.into()],
+            terms: 1,
         },
     ]
 }
@@ -1443,6 +1458,7 @@ fn the_social_link_declares_mapping_before_the_account_check_answers() {
                             admin: false,
                             email: Some(true),
                             features: vec![mapping::FEATURE.into()],
+                            terms: 0,
                         },
                     )
                     .unwrap();

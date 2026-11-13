@@ -67,6 +67,12 @@ pub enum Request {
     Logout {
         token: String,
     },
+    /// The player agreed to this version of the terms. Only for servers that list
+    /// [`TERMS_FEATURE`]; answered with the account, its `terms` now that version.
+    AcceptTerms {
+        token: String,
+        version: u32,
+    },
     ListRooms,
     /// Opens a lobby on the server and joins it as its host; `mapguessr`: one that plays
     /// mapguessr.
@@ -1138,6 +1144,15 @@ pub enum Down {
     },
 }
 
+/// What a server that keeps the players' agreement to the terms lists in
+/// `Reply::Account::features`; only those get `Request::AcceptTerms`.
+pub const TERMS_FEATURE: &str = "terms/1";
+
+/// Whether a server's features include keeping the agreement to the terms.
+pub fn keeps_terms(features: &[String]) -> bool {
+    features.iter().any(|f| f == TERMS_FEATURE)
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Reply {
     /// Logged in (or the token checked out): the account's name and a session token, and
@@ -1158,6 +1173,10 @@ pub enum Reply {
         /// them anything a feature brings.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         features: Vec<String>,
+        /// The version of the terms the server has the player agreeing to (0: none, or a
+        /// server that doesn't keep it: see [`TERMS_FEATURE`]).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        terms: u32,
     },
     /// A code was mailed: where to ("g*****@gmail.com").
     CodeSent(String),
