@@ -141,6 +141,8 @@ mp_address = 10.0.0.2:7777
 online_server = example.org:7800
 online_user = someone
 online_token = abc123
+# the version of the terms you agreed to (0: none yet)
+terms_version = 3
 # with vsync, draw notes where they'll be once the frame is on screen; ms added to that
 vsync_compensation = false
 vsync_tune_ms = -12

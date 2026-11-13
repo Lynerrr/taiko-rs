@@ -274,6 +274,8 @@ pub struct Config {
     pub online_server: String,
     pub online_user: String,
     pub online_token: String,
+    /// The version of the terms (`terms::VERSION`) agreed to on this computer: 0 for none.
+    pub terms_version: u32,
     /// Scale that suggestion to current UR (off: plain average of the last 40 hits).
     pub offset_hint_ur_scaled: bool,
     pub audio_buffer: u32,
@@ -517,6 +519,7 @@ impl Default for Config {
             online_server: crate::online::DEFAULT_SERVER.to_string(),
             online_user: String::new(),
             online_token: String::new(),
+            terms_version: 0,
             offset_hint_ur_scaled: true,
             audio_buffer: 256,
             show_fps: true,
@@ -1262,6 +1265,7 @@ impl Config {
                 "online_server" if !v.is_empty() => cfg.online_server = v.to_string(),
                 "online_user" => cfg.online_user = v.to_string(),
                 "online_token" => cfg.online_token = v.to_string(),
+                "terms_version" => cfg.terms_version = v.parse().unwrap_or(0),
                 "offset_hint_ur_scaled" => cfg.offset_hint_ur_scaled = v == "true",
                 "keys" => {
                     let keys: Vec<KeyCode> =
@@ -1725,6 +1729,10 @@ impl Config {
         out.push_str(&format!(
             "# online server (accounts, lobbies) and your saved login there\nonline_server = {}\nonline_user = {}\nonline_token = {}\n",
             self.online_server, self.online_user, self.online_token
+        ));
+        out.push_str(&format!(
+            "# the version of the terms you agreed to (0: none yet)\nterms_version = {}\n",
+            self.terms_version
         ));
         out.push_str(&format!(
             "# with vsync, draw notes where they'll be once the frame is on screen; ms added to that\nvsync_compensation = {}\nvsync_tune_ms = {:.0}\n",
