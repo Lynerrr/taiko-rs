@@ -180,6 +180,14 @@ impl Session {
         self.started.elapsed().as_secs_f64() * 1000.0
     }
 
+    /// Whether we may take this comment down: our own, or any as the host.
+    pub fn may_delete(&self, comment: u64) -> bool {
+        self.state
+            .comments
+            .iter()
+            .any(|k| k.id == comment && (k.author == self.me || self.state.host == self.me))
+    }
+
     pub fn participant(&self, who: u32) -> Option<&Participant> {
         self.state.participants.iter().find(|p| p.id == who)
     }
@@ -322,6 +330,9 @@ impl Session {
                 if let Some(k) = self.state.comments.iter_mut().find(|k| k.id == comment) {
                     k.resolved = resolved;
                 }
+            }
+            MapDown::CommentDeleted { comment } => {
+                self.state.comments.retain(|k| k.id != comment);
             }
             MapDown::Closed(why) => return Some(Notice::Closed(why)),
             // After a resume the server sends its snapshot when its log no longer holds what

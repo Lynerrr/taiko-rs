@@ -916,3 +916,27 @@ fn keys_two_players_add_to_one_effect_at_once_are_both_kept_and_undo_takes_back_
     assert_eq!(host.ed.chart.to_text(), mapper.ed.chart.to_text());
     assert_eq!(server.replayed()[0].to_text(), host.ed.chart.to_text());
 }
+
+#[test]
+fn a_refused_edit_never_comes_back_on_redo() {
+    let (mut server, mut host, mut mapper) = pair();
+    mapper.ed.place_hit(3000.0, false).unwrap();
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    // Outside the mapper's part: the server refuses it, and it is taken back.
+    mapper.ed.place_hit(8000.0, false).unwrap();
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert!(!has_note(&mapper.ed, 8000.0));
+    // Undo passes over it to their note in their part, and redo puts only that one back.
+    assert!(mapper.ed.undo());
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert!(!has_note(&host.ed, 3000.0) && !has_note(&mapper.ed, 3000.0));
+    assert!(mapper.ed.redo());
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert!(has_note(&host.ed, 3000.0) && has_note(&mapper.ed, 3000.0));
+    // The refused note isn't a redo step: Ctrl+Y has nothing more to do.
+    assert!(!mapper.ed.redo(), "the refused note came back on redo");
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    for g in [&host, &mapper] {
+        assert!(!has_note(&g.ed, 8000.0));
+    }
+}

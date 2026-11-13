@@ -16,6 +16,9 @@ pub(crate) struct Out {
     pub(crate) renamed: Option<(PathBuf, PathBuf)>,
     /// Maps that came into its folder or left it.
     pub(crate) folder_news: Option<folder_watch::Changes>,
+    /// A new difficulty of the set from the map at this path (of this library entry): with its
+    /// notes, or empty.
+    pub(crate) new_diff: Option<(PathBuf, usize, bool)>,
 }
 
 /// The map editor.
@@ -99,7 +102,10 @@ impl Screen for MapEditor {
         let keys = state.editor_keys();
         match view.key(code, repeat, keys, state.audio.as_ref()) {
             editor::view::KeyResult::Handled => {}
-            editor::view::KeyResult::Exit => state.show_select(),
+            editor::view::KeyResult::Exit => {
+                state.left_editor(view);
+                state.show_select();
+            }
             editor::view::KeyResult::Pass => {
                 state.handle_global_key(code, window);
             }
@@ -138,6 +144,15 @@ impl Screen for MapEditor {
             (state.cfg.editor_snap_presets, state.cfg.editor_snap_active) = view.snap_config();
             state.cfg.save();
         }
+        if view.take_chat_ping()
+            && state.cfg.message_sound
+            && let Some(a) = &state.audio
+        {
+            a.sfx_at(audio::Sfx::Message, 1.0);
+        }
+        if let Some(keep) = view.take_new_difficulty() {
+            self.out.new_diff = Some((view.ed.path.clone(), view.entry, keep));
+        }
         if let Some(from) = view.take_test_play() {
             self.out.test = Some((view.entry, from));
         }
@@ -156,6 +171,7 @@ impl Screen for MapEditor {
             state.cfg.save();
         }
         if view.take_exit() {
+            state.left_editor(view);
             // It may have been sent just frame.now: ask which sets are custom again.
             state.custom_asked = None;
             return Some(SongSelect::scene());

@@ -492,7 +492,9 @@ impl History {
 
     /// Undo (`back`) or redo in a session, or of steps made in one: the step is taken back
     /// (or made again) only where the chart still is as it left it (or found it), since others
-    /// edit it too. A step nothing is left of is passed over for the one before it.
+    /// edit it too. A step nothing is left of is passed over for the one before it, and dropped:
+    /// a step the server refused (a note outside our part) is gone already, and kept as a redo
+    /// step it would come back on Ctrl+Y, only to be refused again.
     fn step_shared(&mut self, chart: &mut Chart, back: bool) -> bool {
         loop {
             let from = if back {
@@ -504,19 +506,23 @@ impl History {
                 return false;
             };
             let wanted = if back { cmd.inverted() } else { cmd.clone() };
-            let made = super::collab::apply_guarded(&wanted, chart);
+            let Some(made) = super::collab::apply_guarded(&wanted, chart) else {
+                // The saved state was at or past this step: it can't be reached any more.
+                if back && self.saved.is_some_and(|s| s > self.done.len()) {
+                    self.saved = None;
+                }
+                continue;
+            };
             if back {
                 self.undone.push(cmd);
             } else {
                 self.done.push(cmd);
             }
-            if let Some(made) = made {
-                self.rev += 1;
-                if let Some(out) = &mut self.outbox {
-                    out.push(made);
-                }
-                return true;
+            self.rev += 1;
+            if let Some(out) = &mut self.outbox {
+                out.push(made);
             }
+            return true;
         }
     }
 

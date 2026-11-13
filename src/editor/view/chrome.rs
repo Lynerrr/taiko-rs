@@ -261,9 +261,57 @@ impl View {
             playing,
         );
         x += pw + 6.0;
-        let time = fmt_time(self.ed.time);
-        c.text(x, by + 6.0, 9.0, rgba(0xffffff, 1.0), &time);
-        x += Canvas::text_width(9.0, &time) + 12.0;
+        // The playhead's time: a click types a time to jump to; "copy" beside it copies it.
+        let typed = match &self.typing {
+            Some((Field::Playhead, t)) => Some(format!("{t}_")),
+            _ => None,
+        };
+        let shown = typed.clone().unwrap_or_else(|| fmt_time(self.ed.time));
+        let tw = Canvas::text_width(9.0, &shown).max(Canvas::text_width(9.0, "0:00.000"));
+        let r = [x - 3.0, by + 3.0, tw + 6.0, bh - 6.0];
+        let hot = c.hovered(r[0], r[1], r[2], r[3]);
+        if typed.is_some() || hot {
+            c.round_rect(
+                [r[0], r[1]],
+                [r[2], r[3]],
+                3.0,
+                rgba(0x1c1c2a, if typed.is_some() { 1.0 } else { 0.6 }),
+                rgba(if typed.is_some() { 0x8b7cff } else { 0x3c3c58 }, 1.0),
+                1.0,
+            );
+        }
+        c.text(x, by + 6.0, 9.0, rgba(0xffffff, 1.0), &shown);
+        self.buttons.push((r, Btn::Clock));
+        self.tips.push((
+            r,
+            "Click to type a time to jump to, then Enter: 1:23.456, 01:23:456 or ms. Ctrl+V pastes one, Ctrl+C copies it.".to_string(),
+        ));
+        x += tw + 5.0;
+        let label = "copy";
+        let cw = Canvas::text_width(5.5, label) + 6.0;
+        let cr = [x, by + 7.0, cw, 9.0];
+        let hot = c.hovered(cr[0], cr[1], cr[2], cr[3]);
+        c.round_rect(
+            [cr[0], cr[1]],
+            [cr[2], cr[3]],
+            2.0,
+            rgba(if hot { 0x34344a } else { 0x24243a }, 1.0),
+            rgba(0x3c3c58, 1.0),
+            1.0,
+        );
+        c.text(
+            cr[0] + 3.0,
+            cr[1] + 1.8,
+            5.5,
+            rgba(if hot { 0xffffff } else { 0xb8b8c8 }, 1.0),
+            label,
+        );
+        self.buttons.push((cr, Btn::CopyTime));
+        self.tips.push((
+            cr,
+            "Copies the time as osu! writes it for modding (01:23:456 - ); in a session's chat it is a link.".to_string(),
+        ));
+        x += cw + 10.0;
         if x + 100.0 < right {
             let snap = format!("1/{}", self.ed.snap);
             let tip = "Click to pick a snap or make your own snap presets; the wheel then steps only through the preset's snaps.";

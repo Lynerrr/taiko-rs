@@ -49,10 +49,38 @@ impl View {
         }
     }
 
+    /// The File menu's new difficulty: this one is saved first (the new one is made from the
+    /// file), then the screen makes it and opens it. Not in a mapping session: its difficulties
+    /// are the session's, and leaving here would leave it.
+    fn new_difficulty(&mut self, keep_notes: bool, audio: Option<&Engine>) {
+        if self.collab.is_some() {
+            self.status = "a new difficulty can't be made during a mapping session: the host's set is shared as it was opened".into();
+            return;
+        }
+        self.stop(audio);
+        if let Err(e) = self.save_file() {
+            self.status = format!("can't save: {e}");
+            return;
+        }
+        self.want_new_diff = Some(keep_notes);
+    }
+
     fn leave(&mut self, audio: Option<&Engine>) {
         self.stop(audio);
         // A value still being typed is a change to ask about (and to save), not one to lose.
         self.commit_typing();
+        // In a session our edits went out already, and the others' are only here: the whole
+        // set is saved as the session has it, and the game offers to go back in.
+        if self.collab.is_some() {
+            match self.save_file() {
+                Ok(_) => {
+                    self.left_session = self.session_to_return();
+                    self.exit = true;
+                }
+                Err(e) => self.status = format!("can't save: {e}"),
+            }
+            return;
+        }
         if self.ed.modified() {
             self.modal = Some(Modal::Leave);
         } else {
@@ -140,6 +168,7 @@ impl View {
             Cmd::SongSetup => self.open_setup(),
             Cmd::Upload => self.open_upload(),
             Cmd::Export => self.export(),
+            Cmd::NewDifficulty(keep) => self.new_difficulty(keep, audio),
             Cmd::OpenFolder => self.show = Some(self.ed.path.clone()),
             Cmd::Leave => self.leave(audio),
             Cmd::LeaveSave => {

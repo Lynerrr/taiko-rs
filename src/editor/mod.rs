@@ -30,24 +30,33 @@ pub mod wave;
 
 use std::path::{Path, PathBuf};
 
-/// A new, empty difficulty next to `source`: the same timing, music, storyboard and settings, no
-/// notes. Returns the new file. A name that's taken gets a number.
-pub fn new_difficulty(source: &Path) -> Result<PathBuf, String> {
+/// A new difficulty next to `source`: the same timing, music, storyboard and settings, and no
+/// notes, or (`keep_notes`) a copy of it, notes and animations too, as osu!stable makes one.
+/// Returns the new file. A name that's taken gets a number.
+pub fn new_difficulty(source: &Path, keep_notes: bool) -> Result<PathBuf, String> {
     let mut chart = chart::Chart::read(source)?;
-    chart.objects.clear();
-    // A .tko keeps its kind but not its animations: they were made for the notes that are gone.
-    if chart.gimmick.is_some() {
-        chart.gimmick = Some(Default::default());
+    if !keep_notes {
+        chart.objects.clear();
+        // A .tko keeps its kind but not its animations: they were made for the notes that are
+        // gone.
+        if chart.gimmick.is_some() {
+            chart.gimmick = Some(Default::default());
+        }
     }
     chart.dirty = true;
     let version = chart
         .get_key("Metadata", "Version")
         .unwrap_or_else(|| "New".into());
+    let first = if keep_notes {
+        format!("{version} (copy)")
+    } else {
+        "New difficulty".to_string()
+    };
     let name = |n: u32| {
         if n == 0 {
-            "New difficulty".to_string()
+            first.clone()
         } else {
-            format!("New difficulty {n}")
+            format!("{first} {n}")
         }
     };
     let dir = source.parent().unwrap_or(Path::new("."));
@@ -96,7 +105,7 @@ mod tests {
             crate::tko::format::write(chart::tests::MAP, &g).unwrap(),
         )
         .unwrap();
-        let made = new_difficulty(&src).unwrap();
+        let made = new_difficulty(&src, false).unwrap();
         let chart = chart::Chart::read(&made).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(made.extension().unwrap(), "tko");
@@ -110,8 +119,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let src = dir.join("Artist - Title (Mapper) [Oni].osu");
         std::fs::write(&src, chart::tests::MAP).unwrap();
-        let a = new_difficulty(&src).unwrap();
-        let b = new_difficulty(&src).unwrap();
+        let a = new_difficulty(&src, false).unwrap();
+        let b = new_difficulty(&src, false).unwrap();
         let (ca, cb) = (
             chart::Chart::read(&a).unwrap(),
             chart::Chart::read(&b).unwrap(),
@@ -135,5 +144,35 @@ mod tests {
             ca.get_key("General", "AudioFilename"),
             Some("audio.mp3".into())
         );
+    }
+
+    #[test]
+    fn a_copied_difficulty_keeps_the_notes_and_the_animations() {
+        let dir = std::env::temp_dir().join(format!("taiko-rs-copydiff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("Artist - Title (Mapper) [Oni].osu");
+        std::fs::write(&src, chart::tests::MAP).unwrap();
+        let original = chart::Chart::read(&src).unwrap();
+        let a = new_difficulty(&src, true).unwrap();
+        let b = new_difficulty(&src, true).unwrap();
+        let (ca, cb) = (
+            chart::Chart::read(&a).unwrap(),
+            chart::Chart::read(&b).unwrap(),
+        );
+        let name = a.file_name().unwrap().to_owned();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!original.objects.is_empty());
+        assert_eq!(ca.objects.len(), original.objects.len());
+        assert_eq!(ca.timing.len(), original.timing.len());
+        assert_eq!(
+            ca.get_key("Metadata", "Version").as_deref(),
+            Some("Oni (copy)")
+        );
+        assert_eq!(
+            cb.get_key("Metadata", "Version").as_deref(),
+            Some("Oni (copy) 1")
+        );
+        assert_eq!(ca.get_key("Metadata", "BeatmapID").as_deref(), Some("0"));
+        assert_eq!(name, "Artist - Title (Mapper) [Oni (copy)].osu");
     }
 }

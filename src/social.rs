@@ -643,15 +643,16 @@ impl Social {
         let me = self.me.clone().unwrap_or_default();
         let log = self.chats.entry(key(&invite.from)).or_default();
         let line = invite_line(session);
-        if !log.iter().any(|l| l.text == line) {
-            log.push(ChatLine {
-                from: invite.from.clone(),
-                to: me,
-                text: line,
-                at,
-                medal: None,
-            });
-        }
+        // Invited again (after leaving, say): the card comes anew at the bottom, open, where
+        // it is seen, not up among the old lines.
+        log.retain(|l| l.text != line);
+        log.push(ChatLine {
+            from: invite.from.clone(),
+            to: me,
+            text: line,
+            at,
+            medal: None,
+        });
         self.invites.insert(session, invite);
     }
 
@@ -3561,5 +3562,40 @@ mod tests {
                 .iter()
                 .any(|h| matches!(h.hit, Hit::MappingInvite(..)))
         );
+    }
+
+    #[test]
+    fn an_invite_again_after_leaving_comes_as_a_new_open_card_at_the_bottom() {
+        let mut s = Social {
+            me: Some("anna".into()),
+            friends: vec![friend("host", true)],
+            ..Default::default()
+        };
+        let invite = || MappingInvite {
+            from: "host".into(),
+            title: "USAO - Dynamite".into(),
+            mode: taiko_proto::mapping::Mode::Collab,
+            state: InviteState::Open,
+        };
+        s.add_invite(9, invite(), 100);
+        // Joined, left, and talked about it since.
+        s.invites.get_mut(&9).unwrap().state = InviteState::Joined;
+        s.chats.get_mut("host").unwrap().push(ChatLine {
+            from: "host".into(),
+            to: "anna".into(),
+            text: "come back?".into(),
+            at: 150,
+            medal: None,
+        });
+        s.add_invite(9, invite(), 200);
+        let log = &s.chats["host"];
+        assert_eq!(log.len(), 2, "one card still");
+        assert_eq!(
+            log.last().unwrap().text,
+            invite_line(9),
+            "the card at the bottom"
+        );
+        assert_eq!(log.last().unwrap().at, 200);
+        assert_eq!(s.invites[&9].state, InviteState::Open, "to accept again");
     }
 }
