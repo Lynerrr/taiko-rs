@@ -1,0 +1,31 @@
+# taiko.rs: terms and your data
+Version 1, 13 November 2026
+
+taiko.rs is a free game made by a small team. You only need an account to play online. By signing up you agree to these terms.
+
+## What we keep
+- Account: your name, email and password. The password is stored only as a hash; we never see the password itself.
+- Play: scores, replays, medals, friends, and the timing settings (offset, audio latency) a map was played with.
+- What you send: chat messages, your avatar, screenshots, maps.
+- Discord: your account ID, if you linked it.
+- Crash reports: what the game was doing when it crashed, your system and graphics card. Your computer's user name and folder paths are cut out. Kept for 30 days. Turn them off in Settings > Online.
+- IP address: used briefly to stop sign-up and login spam, then deleted.
+
+## Why
+To make logging in, leaderboards and pp, multiplayer and chat work; to email you codes; to catch cheaters; to fix crashes.
+
+## Who sees it
+Your name, avatar, profile, scores, replays and medals are public in the game and on the site. Nobody but us sees your email and password.
+
+Code emails are sent through Resend, so Resend sees your email address. If you linked Discord, Discord knows about the link. We don't share or sell your data to anyone else. No ads, no trackers.
+
+Your data is stored on our server in Poland.
+
+## Deleting your data
+Write to postmaster@auneu.space and we'll delete your account and everything tied to it.
+
+## Behaviour
+Don't cheat, don't harass people, and don't pass off someone else's maps or replays as yours. Breaking this can get your scores hidden or your account banned.
+
+## Changes
+If these terms change, the game will ask you to agree to the new version.
