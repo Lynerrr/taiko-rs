@@ -211,11 +211,16 @@ impl State {
     /// Every frame while getting into a session: what the connection says, and the editor
     /// opened on the session once everything is in.
     pub(crate) fn poll_mapping(&mut self) {
-        self.social.can_invite = self.mapping_ok()
-            && self
-                .scene
-                .screen_as::<MapEditor>()
-                .is_some_and(|e| e.view.hosting());
+        let view = self
+            .scene
+            .screen_as::<MapEditor>()
+            .map(|e| &e.view)
+            .filter(|_| self.mapping_ok());
+        self.social.can_invite = view.is_some_and(|v| v.hosting());
+        let back = view.map(|v| v.invite_back()).unwrap_or_default();
+        if self.social.invite_back != back {
+            self.social.invite_back = back;
+        }
         let Some(j) = &mut self.mapping_join else {
             return;
         };
@@ -289,10 +294,11 @@ impl State {
         }
     }
 
-    /// The host invites a friend to the session open in the editor.
+    /// Invites a friend to the session open in the editor: the host anyone, everyone else
+    /// someone who was in it and left.
     pub(crate) fn invite_to_mapping(&mut self, name: String) {
         if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
-            && view.hosting()
+            && view.can_invite(&name)
         {
             view.send_host(HostCmd::Invite(name.clone()));
             self.toast(
