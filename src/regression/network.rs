@@ -795,6 +795,41 @@ fn chat_and_names_are_cleaned_the_same() {
 }
 
 #[test]
+fn crash_reports_leave_without_the_players_names() {
+    let report = "--- taiko.rs crash at unix 1, build b (0.1.0, windows)\n\
+        thread main: panicked at src/editor/mod.rs:42:7:\n\
+        could not open C:\\Users\\Kowalski\\AppData\\Roaming\\taiko-rs\\scores.db\n\
+        also c:\\users\\kowalski\\Songs\\a.osu and C:/USERS/Kowalski/Songs/b.osu\n\
+        mac /Users/anna/Library/taiko-rs, linux /home/anna/.local/share/taiko-rs\n\
+        own folder D:\\KOWALSKI\\taiko-rs\\Songs, log: kowalski's map, not kowalskis\n\
+        cyrillic C:\\Users\\Ковальски\\x and D:\\ковальски\\y\n\
+        scene: Editor, map Artist - Title [Oni]\n";
+    let out = crate::app::crash::scrub_report(report, "Kowalski");
+    assert_eq!(
+        out,
+        "--- taiko.rs crash at unix 1, build b (0.1.0, windows)\n\
+        thread main: panicked at src/editor/mod.rs:42:7:\n\
+        could not open ~\\AppData\\Roaming\\taiko-rs\\scores.db\n\
+        also ~\\Songs\\a.osu and ~/Songs/b.osu\n\
+        mac ~/Library/taiko-rs, linux ~/.local/share/taiko-rs\n\
+        own folder D:\\<user>\\taiko-rs\\Songs, log: <user>'s map, not kowalskis\n\
+        cyrillic ~\\x and D:\\ковальски\\y\n\
+        scene: Editor, map Artist - Title [Oni]\n",
+        "user folders and the system user name are gone, the rest reads as before"
+    );
+    assert_eq!(
+        crate::app::crash::scrub_report("D:\\Ковальски\\y", "КОВАЛЬСКИ"),
+        "D:\\<user>\\y",
+        "a Cyrillic user name is found in any case"
+    );
+    assert_eq!(
+        crate::app::crash::scrub_report("ed is in the editor", "ed"),
+        "ed is in the editor",
+        "a name too short to tell from a word stays"
+    );
+}
+
+#[test]
 fn online_lines_are_framed_as_json_lines() {
     let mut buf = Vec::new();
     online::write_line(&mut buf, &Request::ListRooms).unwrap();
