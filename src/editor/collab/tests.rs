@@ -866,6 +866,50 @@ fn tko_effects_and_fake_notes_reach_everyone_in_a_session() {
     assert!(replayed[1].gimmick.as_ref().unwrap().field.is_empty());
 }
 
+/// "Make a .tko copy" in a session: the difficulty becomes a .tko for everyone, kept by the
+/// session's next edits, and saved as a .tko beside the .osu. A copy only one game knew was taken
+/// back by the next edit, and nobody could key effects.
+#[test]
+fn making_a_tko_in_a_session_makes_it_one_for_everyone() {
+    use super::super::keyframes::Subject;
+    use crate::tko::gimmick::FieldProp;
+    use crate::tko::track::{Ease, Key as TkoKey};
+    let (mut server, mut host, mut mapper) = pair();
+    assert!(!host.ed.is_tko() && !mapper.ed.is_tko());
+    let path = mapper.ed.make_tko_shared().unwrap();
+    assert_eq!(path, PathBuf::from("map.tko"));
+    assert!(mapper.ed.is_tko(), "at once here");
+    assert_eq!(mapper.ed.make_tko_shared(), Err("already a .tko".into()));
+    // Someone else's edit before ours reaches the server rebuilds the chart: it stays a .tko.
+    let id = host.ed.place_hit(6000.0, false).unwrap();
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert!(host.ed.chart.object(id).is_some() && mapper.ed.chart.object(id).is_some());
+    assert!(
+        mapper.ed.is_tko() && host.ed.is_tko(),
+        "a .tko for everyone"
+    );
+    assert_eq!(host.ed.path, PathBuf::from("map.tko"), "saved as a .tko");
+    assert!(
+        server.replayed()[0].gimmick.is_some(),
+        "and in the server's log"
+    );
+    assert!(
+        server.replayed()[1].gimmick.is_none(),
+        "the other difficulty stays a .osu"
+    );
+    // Effects can be keyed now, by both, and reach the other.
+    let zoom = TkoKey {
+        t: 1000.0,
+        v: 1.5,
+        ease: Ease::Linear,
+    };
+    assert!(mapper.ed.key(Subject::Field(FieldProp::Zoom), zoom, false));
+    settle(&mut server, &mut [&mut host, &mut mapper]);
+    assert_eq!(host.ed.chart.to_text(), mapper.ed.chart.to_text());
+    let g = host.ed.gimmick().unwrap();
+    assert_eq!(g.field_track(FieldProp::Zoom).unwrap().keys, vec![zoom]);
+}
+
 #[test]
 fn keys_two_players_add_to_one_effect_at_once_are_both_kept_and_undo_takes_back_only_yours() {
     use super::super::keyframes::Subject;

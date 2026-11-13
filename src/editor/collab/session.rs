@@ -440,19 +440,28 @@ impl Session {
         name: &str,
         chart: &Chart,
     ) -> std::path::PathBuf {
-        files
+        let ext = if chart.gimmick.is_some() {
+            "tko"
+        } else {
+            "osu"
+        };
+        let named: Vec<&std::path::PathBuf> = files
             .iter()
-            .find(|(_, text)| super::connect::version(text).as_deref() == Some(name))
-            .map(|(p, _)| p.clone())
-            .unwrap_or_else(|| {
-                let ext = if chart.gimmick.is_some() {
-                    "tko"
-                } else {
-                    "osu"
-                };
+            .filter(|(_, text)| super::connect::version(text).as_deref() == Some(name))
+            .map(|(p, _)| p)
+            .collect();
+        // A .tko never goes into the .osu it was made from: that stays an osu! map.
+        let same_kind = named
+            .iter()
+            .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)));
+        match (same_kind, named.first()) {
+            (Some(p), _) => (*p).clone(),
+            (None, Some(p)) => p.with_extension(ext),
+            (None, None) => {
                 let file = format!("{} [{name}].{ext}", self.state.title);
                 dir.join(crate::download::safe_folder_name(&file))
-            })
+            }
+        }
     }
 
     /// The difficulties `who` has work in: a guest difficulty given to them, or parts.
@@ -597,6 +606,30 @@ pub(crate) mod tests {
             cursor: None,
             selection,
         }
+    }
+
+    #[test]
+    fn a_difficulty_made_a_tko_is_saved_beside_its_osu_not_over_it() {
+        let (s, ed) = session();
+        let dir = PathBuf::from("set");
+        let osu = dir.join("Test [Oni].osu");
+        let files = vec![(osu.clone(), MAP.to_string())];
+        let mut chart = ed.chart.clone();
+        assert_eq!(s.diff_path(&dir, &files, "Oni", &chart), osu);
+        chart.gimmick = Some(Default::default());
+        assert_eq!(
+            s.diff_path(&dir, &files, "Oni", &chart),
+            dir.join("Test [Oni].tko")
+        );
+        // Once the .tko is there, that's where it goes; the .osu keeps the plain chart.
+        let tko = dir.join("Test [Oni].tko");
+        let files = vec![
+            (osu.clone(), MAP.to_string()),
+            (tko.clone(), MAP.to_string()),
+        ];
+        assert_eq!(s.diff_path(&dir, &files, "Oni", &chart), tko);
+        chart.gimmick = None;
+        assert_eq!(s.diff_path(&dir, &files, "Oni", &chart), osu);
     }
 
     #[test]
