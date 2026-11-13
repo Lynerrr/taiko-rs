@@ -1411,6 +1411,20 @@ fn assert_every_screen_fits() {
     s.scene = SongSelect::scene();
     check(&mut s, "mapguessr picking", &mut out);
 
+    // The terms, in every language, for signing up and for an account from before them.
+    for lang in crate::lang::Lang::ALL {
+        crate::lang::set(lang);
+        for purpose in [terms::Purpose::Register, terms::Purpose::Account] {
+            let view = terms::View::new(purpose);
+            check_draw(
+                &format!("terms {purpose:?} {}", lang.code()),
+                &mut out,
+                |c| view.draw(c),
+            );
+        }
+    }
+    crate::lang::set(crate::lang::Lang::En);
+
     // The startup warning is translated: it fits in every language.
     for lang in crate::lang::Lang::ALL {
         crate::lang::set(lang);

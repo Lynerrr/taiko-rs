@@ -470,6 +470,7 @@ mp_address = 10.0.0.2:7777
 online_server = example.org:7800
 online_user = someone
 online_token = abc123
+terms_version = 3
 vsync_compensation = false
 vsync_tune_ms = -12
 letterbox = true

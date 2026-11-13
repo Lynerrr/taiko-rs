@@ -1268,6 +1268,8 @@ impl State {
             pending_replay: None,
             changelog: None,
             pending_changelog,
+            terms: None,
+            terms_kept: None,
             pending_mods: Mods::NONE,
             mod_select: None,
             universe_setup: None,

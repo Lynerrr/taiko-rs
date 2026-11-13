@@ -316,6 +316,10 @@ fn requests() -> Vec<Request> {
             epoch: 2,
             last_seq: 40,
         },
+        Request::AcceptTerms {
+            token: "t".into(),
+            version: 1,
+        },
     ]
 }
 
@@ -397,6 +401,7 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: Vec::new(),
+            terms: 0,
         },
         Reply::Mapping {
             session: 9,
@@ -412,6 +417,16 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: vec![mapping::FEATURE.into()],
+            terms: 0,
+        },
+        Reply::Account {
+            name: "a".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: Some(true),
+            features: vec![online::TERMS_FEATURE.into()],
+            terms: 1,
         },
     ]
 }
@@ -792,6 +807,41 @@ fn chat_and_names_are_cleaned_the_same() {
     );
     let _ = writeln!(out, "map label = {}", map_info().label());
     assert_snapshot("network-text-cleaning", &out);
+}
+
+#[test]
+fn crash_reports_leave_without_the_players_names() {
+    let report = "--- taiko.rs crash at unix 1, build b (0.1.0, windows)\n\
+        thread main: panicked at src/editor/mod.rs:42:7:\n\
+        could not open C:\\Users\\Kowalski\\AppData\\Roaming\\taiko-rs\\scores.db\n\
+        also c:\\users\\kowalski\\Songs\\a.osu and C:/USERS/Kowalski/Songs/b.osu\n\
+        mac /Users/anna/Library/taiko-rs, linux /home/anna/.local/share/taiko-rs\n\
+        own folder D:\\KOWALSKI\\taiko-rs\\Songs, log: kowalski's map, not kowalskis\n\
+        cyrillic C:\\Users\\Ковальски\\x and D:\\ковальски\\y\n\
+        scene: Editor, map Artist - Title [Oni]\n";
+    let out = crate::app::crash::scrub_report(report, "Kowalski");
+    assert_eq!(
+        out,
+        "--- taiko.rs crash at unix 1, build b (0.1.0, windows)\n\
+        thread main: panicked at src/editor/mod.rs:42:7:\n\
+        could not open ~\\AppData\\Roaming\\taiko-rs\\scores.db\n\
+        also ~\\Songs\\a.osu and ~/Songs/b.osu\n\
+        mac ~/Library/taiko-rs, linux ~/.local/share/taiko-rs\n\
+        own folder D:\\<user>\\taiko-rs\\Songs, log: <user>'s map, not kowalskis\n\
+        cyrillic ~\\x and D:\\ковальски\\y\n\
+        scene: Editor, map Artist - Title [Oni]\n",
+        "user folders and the system user name are gone, the rest reads as before"
+    );
+    assert_eq!(
+        crate::app::crash::scrub_report("D:\\Ковальски\\y", "КОВАЛЬСКИ"),
+        "D:\\<user>\\y",
+        "a Cyrillic user name is found in any case"
+    );
+    assert_eq!(
+        crate::app::crash::scrub_report("ed is in the editor", "ed"),
+        "ed is in the editor",
+        "a name too short to tell from a word stays"
+    );
 }
 
 #[test]
@@ -1408,6 +1458,7 @@ fn the_social_link_declares_mapping_before_the_account_check_answers() {
                             admin: false,
                             email: Some(true),
                             features: vec![mapping::FEATURE.into()],
+                            terms: 0,
                         },
                     )
                     .unwrap();

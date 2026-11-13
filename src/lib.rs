@@ -110,6 +110,7 @@ mod store;
 mod stream;
 mod style;
 mod tact;
+mod terms;
 #[doc(hidden)]
 pub mod tko;
 mod ui;
@@ -459,6 +460,11 @@ struct State {
     changelog: Option<changelog::View>,
     /// Update notes being fetched without opening an overlay or intercepting input.
     pending_changelog: Option<changelog::View>,
+    /// The terms, open to be agreed to (shown whenever nothing is playing).
+    terms: Option<terms::View>,
+    /// The version of the terms the online server has this account agreeing to, when the
+    /// server keeps it (`online::TERMS_FEATURE`): a newer agreement here is sent to it.
+    terms_kept: Option<u32>,
     /// Online leaderboards fetched (by map hash and whether it's the Relax board: when, and the
     /// rows or why not), and the one being fetched.
     online_boards: std::collections::HashMap<(u64, bool), (Instant, Board)>,
@@ -7276,6 +7282,9 @@ impl State {
                             )
                             .into();
                             self.mp_menu.select(Row::Email);
+                        } else if self.cfg.terms_version < terms::VERSION {
+                            // Agreeing to the terms sends this on (`terms_answer`).
+                            self.terms = Some(terms::View::new(terms::Purpose::Register));
                         } else {
                             let code = code.filter(|_| menu.code_for == Some(CodeFor::Register));
                             self.mp_status = if code.is_some() {
@@ -7522,7 +7531,68 @@ impl State {
     }
 
     /// Forgets the saved online login.
+    /// The terms are on screen: open, and nothing playing under them.
+    fn terms_showing(&self) -> bool {
+        self.terms.is_some() && !self.in_song() && self.splash.is_none()
+    }
+
+    /// The open terms were agreed to, or not.
+    fn terms_answer(&mut self, answer: terms::Answer) {
+        let Some(view) = self.terms.take() else {
+            return;
+        };
+        match (answer, view.purpose) {
+            (terms::Answer::Agreed, purpose) => {
+                self.cfg.terms_version = terms::VERSION;
+                self.cfg.save();
+                self.send_terms();
+                // The sign-up the terms stopped goes on.
+                if purpose == terms::Purpose::Register
+                    && self.mp_menu.form == multiplayer::Form::Register
+                    && self.mp_menu.account.is_none()
+                {
+                    self.mp_menu.select(multiplayer::Row::Register);
+                    self.mp_menu_key(KeyCode::Enter, None);
+                }
+            }
+            (terms::Answer::Declined, terms::Purpose::Register) => {
+                self.mp_status = tr!(
+                    "an account needs the terms agreed to: SEND CODE shows them again",
+                    "アカウントには規約への同意が必要です: 「コードを送信」でもう一度表示します",
+                    "для аккаунта нужно согласиться с правилами: ОТПРАВИТЬ КОД покажет их снова"
+                )
+                .into();
+            }
+            (terms::Answer::Declined, terms::Purpose::Account) => self.sign_out(tr!(
+                "logged out: playing online needs the terms agreed to (they show again when you log in)",
+                "ログアウトしました: オンラインで遊ぶには規約への同意が必要です(ログインするとまた表示されます)",
+                "ты вышел: для онлайна нужно согласиться с правилами (они покажутся снова при входе)"
+            )),
+        }
+    }
+
+    /// Tells a server that keeps the agreement to the terms about a newer one made here. The
+    /// answer is only the account again, so nothing waits for it.
+    fn send_terms(&mut self) {
+        let Some(kept) = self.terms_kept else {
+            return;
+        };
+        let version = self.cfg.terms_version;
+        if version <= kept || self.cfg.online_token.is_empty() {
+            return;
+        }
+        self.terms_kept = Some(version);
+        let server = self.cfg.online_server.clone();
+        let token = self.cfg.online_token.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = online::call(&server, online::Request::AcceptTerms { token, version }) {
+                eprintln!("couldn't record the terms on the server: {e}");
+            }
+        });
+    }
+
     fn sign_out(&mut self, why: &str) {
+        self.terms_kept = None;
         self.social = social::Social::default();
         self.select.nominator = false;
         self.admin = false;
@@ -7771,6 +7841,7 @@ impl State {
                             admin,
                             email,
                             features,
+                            terms: terms_kept,
                         }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
@@ -7827,6 +7898,18 @@ impl State {
                             self.cfg.online_token = token;
                             self.cfg.save();
                             self.mp_menu.refresh(&self.cfg.online_server);
+                            // The server keeps the agreement: agreed on another install counts
+                            // here, and agreed here goes to the server.
+                            self.terms_kept = online::keeps_terms(&features).then_some(terms_kept);
+                            if self.terms_kept.is_some() && terms_kept > self.cfg.terms_version {
+                                self.cfg.terms_version = terms_kept;
+                                self.cfg.save();
+                            }
+                            self.send_terms();
+                            // An account from before the terms (or this version of them).
+                            if self.cfg.terms_version < terms::VERSION && self.terms.is_none() {
+                                self.terms = Some(terms::View::new(terms::Purpose::Account));
+                            }
                         }
                         Ok(online::Reply::CodeSent(to)) => {
                             menu.code_for = menu.asking.take();

@@ -67,6 +67,12 @@ pub enum Request {
     Logout {
         token: String,
     },
+    /// The player agreed to this version of the terms. Only for servers that list
+    /// [`TERMS_FEATURE`]; answered with the account, its `terms` now that version.
+    AcceptTerms {
+        token: String,
+        version: u32,
+    },
     ListRooms,
     /// Opens a lobby on the server and joins it as its host; `mapguessr`: one that plays
     /// mapguessr.
@@ -187,30 +193,76 @@ pub struct CrashReport {
 pub const MAX_CRASH_REPORT: usize = 24_000;
 
 /// `text` without the player's user folder in its paths: `C:\Users\Name\...` and
-/// `/home/name/...` become `~\...`, so a crash report says nothing about who sent it.
+/// `/home/name/...` become `~\...`, so a crash report says nothing about who sent it. Windows
+/// paths come in any case (`c:\users\name`), so the folders are found in any case too.
 pub fn scrub_paths(text: &str) -> String {
     let mut out = text.to_string();
-    for marker in ["\\Users\\", "/Users/", "/home/"] {
+    for marker in ["\\users\\", "/users/", "/home/"] {
+        // ASCII lowercasing keeps every byte where it was, so its offsets fit `out`.
+        let lower = out.to_ascii_lowercase();
         let mut cleaned = String::with_capacity(out.len());
-        let mut rest = out.as_str();
-        while let Some(i) = rest.find(marker) {
-            let after = &rest[i + marker.len()..];
-            let end = after
-                .find(['\\', '/', '\n', '"', '\''])
-                .unwrap_or(after.len());
+        let mut from = 0;
+        while let Some(found) = lower[from..].find(marker) {
+            let i = from + found;
+            let name = i + marker.len();
+            let end = name
+                + out[name..]
+                    .find(['\\', '/', '\n', '"', '\''])
+                    .unwrap_or(out.len() - name);
             // The drive before it goes too ("C:" of "C:\Users\...").
-            let mut head = &rest[..i];
+            let mut head = &out[from..i];
             if head.len() >= 2 && head.ends_with(':') {
                 head = &head[..head.len() - 2];
             }
             cleaned.push_str(head);
             cleaned.push('~');
-            rest = &after[end..];
+            from = end;
         }
-        cleaned.push_str(rest);
+        cleaned.push_str(&out[from..]);
         out = cleaned;
     }
     out
+}
+
+/// `text` without the system's user name anywhere it stands as a word of its own, in any case:
+/// it can still show outside the user folder (`D:\anna\taiko`, a log line). Names shorter than
+/// three letters are left alone, as they'd also hit ordinary words.
+pub fn scrub_user_name(text: &str, user: &str) -> String {
+    let user = user.trim();
+    if user.chars().count() < 3 {
+        return text.to_string();
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let starts_word = text[..i].chars().next_back().is_none_or(|c| !word(c));
+        if starts_word
+            && let Some(len) = starts_with_caseless(rest, user)
+            && rest[len..].chars().next().is_none_or(|c| !word(c))
+        {
+            out.push_str("<user>");
+            i += len;
+            continue;
+        }
+        let c = rest.chars().next().unwrap_or_default();
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
+}
+
+/// How many bytes of `text` spell `prefix` at its start, letters compared in any case.
+fn starts_with_caseless(text: &str, prefix: &str) -> Option<usize> {
+    let mut chars = text.char_indices();
+    for p in prefix.chars() {
+        let (_, c) = chars.next()?;
+        if !c.to_lowercase().eq(p.to_lowercase()) {
+            return None;
+        }
+    }
+    Some(chars.next().map_or(text.len(), |(at, _)| at))
 }
 
 /// What a replay's presses can't say about a play's timing: with it, how far off a play was can
@@ -1092,6 +1144,15 @@ pub enum Down {
     },
 }
 
+/// What a server that keeps the players' agreement to the terms lists in
+/// `Reply::Account::features`; only those get `Request::AcceptTerms`.
+pub const TERMS_FEATURE: &str = "terms/1";
+
+/// Whether a server's features include keeping the agreement to the terms.
+pub fn keeps_terms(features: &[String]) -> bool {
+    features.iter().any(|f| f == TERMS_FEATURE)
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Reply {
     /// Logged in (or the token checked out): the account's name and a session token, and
@@ -1112,6 +1173,10 @@ pub enum Reply {
         /// them anything a feature brings.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         features: Vec<String>,
+        /// The version of the terms the server has the player agreeing to (0: none, or a
+        /// server that doesn't keep it: see [`TERMS_FEATURE`]).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        terms: u32,
     },
     /// A code was mailed: where to ("g*****@gmail.com").
     CodeSent(String),

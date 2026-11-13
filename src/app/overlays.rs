@@ -23,6 +23,8 @@ pub(crate) enum Layer {
     /// The window's own: the volume (Alt+arrows, Alt+wheel, the wheel over its notes) and
     /// Ctrl+O for the settings.
     WindowKeys,
+    /// The terms, to be agreed to.
+    Terms,
     /// What's new.
     Changelog,
     /// A medal being earned: anything moves it on.
@@ -50,11 +52,12 @@ pub(crate) enum Layer {
 pub(crate) const OVER_EVERYTHING: [Layer; 3] = [Layer::Shot, Layer::Quit, Layer::Crash];
 
 /// Over the screens, top first.
-pub(crate) const OVER_SCREENS: [Layer; 14] = [
+pub(crate) const OVER_SCREENS: [Layer; 15] = [
     Layer::Splash,
     Layer::GuideBinding,
     Layer::Guide,
     Layer::WindowKeys,
+    Layer::Terms,
     Layer::Changelog,
     Layer::Unlock,
     Layer::Medals,
@@ -69,8 +72,9 @@ pub(crate) const OVER_SCREENS: [Layer; 14] = [
 
 /// The layers the wheel walks, top first, on every screen but the editor's (which take it
 /// before them, unless the friends overlay is open).
-pub(crate) const WHEEL_LAYERS: [Layer; 5] = [
+pub(crate) const WHEEL_LAYERS: [Layer; 6] = [
     Layer::WindowKeys,
+    Layer::Terms,
     Layer::Changelog,
     Layer::Medals,
     Layer::Social,
@@ -89,7 +93,7 @@ pub(crate) const BUTTON_LAYERS: [Layer; 6] = [
 ];
 
 /// The layers drawn under the toasts, bottom first.
-pub(crate) const DRAW_UNDER_TOASTS: [Layer; 7] = [
+pub(crate) const DRAW_UNDER_TOASTS: [Layer; 8] = [
     Layer::WindowKeys,
     Layer::Social,
     Layer::Guide,
@@ -97,6 +101,7 @@ pub(crate) const DRAW_UNDER_TOASTS: [Layer; 7] = [
     Layer::Medals,
     Layer::Unlock,
     Layer::Changelog,
+    Layer::Terms,
 ];
 
 /// The layers drawn over everything but the splash, bottom first.
@@ -190,6 +195,13 @@ impl State {
             Layer::Unlock => self.unlock.draw(canvas),
             Layer::Changelog => {
                 if let Some(view) = &self.changelog {
+                    view.draw(canvas);
+                }
+            }
+            Layer::Terms => {
+                if self.terms_showing()
+                    && let Some(view) = &self.terms
+                {
                     view.draw(canvas);
                 }
             }
@@ -368,6 +380,14 @@ impl State {
                 };
                 view.scroll_by(-notches * 3);
             }
+            Layer::Terms => {
+                if !self.terms_showing() {
+                    return false;
+                }
+                if let Some(view) = &mut self.terms {
+                    view.scroll_by(-notches * 3);
+                }
+            }
             Layer::Medals => {
                 let Some(view) = &mut self.medals else {
                     return false;
@@ -512,6 +532,21 @@ impl State {
                 }
             }
             Layer::WindowKeys => return self.window_key(code, repeat),
+            Layer::Terms => {
+                if !self.terms_showing() {
+                    return false;
+                }
+                let scrolls = matches!(
+                    code,
+                    KeyCode::ArrowUp | KeyCode::ArrowDown | KeyCode::PageUp | KeyCode::PageDown
+                );
+                // A held key doesn't answer: Enter held from the form mustn't agree.
+                if (!repeat || scrolls)
+                    && let Some(answer) = self.terms.as_mut().and_then(|v| v.key(code))
+                {
+                    self.terms_answer(answer);
+                }
+            }
             Layer::Changelog => {
                 let Some(view) = &mut self.changelog else {
                     return false;
@@ -1065,6 +1100,7 @@ mod tests {
             | Layer::GuideBinding
             | Layer::Guide
             | Layer::WindowKeys
+            | Layer::Terms
             | Layer::Changelog
             | Layer::Unlock
             | Layer::Medals
@@ -1076,7 +1112,7 @@ mod tests {
             | Layer::PresetNaming
             | Layer::ModSelect => 1,
         };
-        assert_eq!(all.iter().map(|&l| counted(l)).sum::<usize>(), 17);
+        assert_eq!(all.iter().map(|&l| counted(l)).sum::<usize>(), 18);
     }
 
     /// The overlays don't know which screen is under them: what differs by screen is asked of

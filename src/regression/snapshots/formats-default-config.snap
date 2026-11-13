@@ -132,6 +132,8 @@ mp_address =
 online_server = jashincraft.space:7800
 online_user =
 online_token =
+# the version of the terms you agreed to (0: none yet)
+terms_version = 0
 # with vsync, draw notes where they'll be once the frame is on screen; ms added to that
 vsync_compensation = true
 vsync_tune_ms = 0

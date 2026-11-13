@@ -365,3 +365,324 @@ fn selecting_simplified_chinese_localizes_settings_and_formatted_text() {
         "2 条本地成绩现已显示为 Don"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The terms.
+
+/// An account server that passes on each request it gets: a sign-up's first step is answered
+/// with a mailed code, a saved login with the account, and the rest are hung up on.
+fn terms_server() -> (String, std::sync::mpsc::Receiver<online::Request>) {
+    terms_server_keeping(None)
+}
+
+/// `terms_server`, keeping the agreement to the terms when `kept` is the version it starts
+/// with: it lists `online::TERMS_FEATURE` and answers `AcceptTerms` with the account.
+fn terms_server_keeping(kept: Option<u32>) -> (String, std::sync::mpsc::Receiver<online::Request>) {
+    use crate::online::{Envelope, Reply, Request};
+    let kept = std::sync::Arc::new(std::sync::Mutex::new(kept));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let account = |token: &String, kept: Option<u32>| Reply::Account {
+        name: "me".into(),
+        token: token.clone(),
+        nominator: false,
+        admin: false,
+        email: Some(true),
+        features: kept
+            .map(|_| vec![online::TERMS_FEATURE.into()])
+            .unwrap_or_default(),
+        terms: kept.unwrap_or(0),
+    };
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let Ok(line) = online::read_line(&mut reader) else {
+                continue;
+            };
+            let Ok(env) = serde_json::from_str::<Envelope>(&line) else {
+                continue;
+            };
+            let reply = match &env.request {
+                Request::Register { email, .. } => {
+                    Some(Reply::CodeSent(email.clone().unwrap_or_default()))
+                }
+                Request::WhoAmI { token } => Some(account(token, *kept.lock().unwrap())),
+                Request::AcceptTerms { token, version } if kept.lock().unwrap().is_some() => {
+                    *kept.lock().unwrap() = Some(*version);
+                    Some(account(token, Some(*version)))
+                }
+                _ => None,
+            };
+            let _ = tx.send(env.request);
+            if let Some(r) = reply {
+                let _ = online::write_line(&mut out, &r);
+            }
+        }
+    });
+    (addr, rx)
+}
+
+/// The next request of `kind` the server got, within a few seconds.
+fn next_request(
+    rx: &std::sync::mpsc::Receiver<online::Request>,
+    want: impl Fn(&online::Request) -> bool,
+) -> Option<online::Request> {
+    let until = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < until {
+        if let Ok(r) = rx.recv_timeout(Duration::from_millis(50))
+            && want(&r)
+        {
+            return Some(r);
+        }
+    }
+    None
+}
+
+#[test]
+fn signing_up_shows_the_terms_and_goes_on_once_they_are_agreed_to() {
+    use crate::multiplayer::{CodeFor, Form, Row};
+    let (server, rx) = terms_server();
+    let is_register = |r: &online::Request| matches!(r, online::Request::Register { .. });
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    let mut s = state_with(cfg, Vec::new());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    s.scene = crate::screens::mp_menu::MpMenu::scene();
+    s.mp_menu.open(Form::Register);
+    s.mp_menu.user = "newplayer".into();
+    s.mp_menu.password = "secret1".into();
+    s.mp_menu.email = "new@example.com".into();
+    s.mp_menu.select(Row::Register);
+
+    // SEND CODE: the terms come first, and nothing goes to the server.
+    press(&mut s, KeyCode::Enter, now);
+    assert_eq!(
+        s.terms.as_ref().map(|t| t.purpose),
+        Some(terms::Purpose::Register)
+    );
+    assert!(s.mp_menu.account_request.is_none(), "no sign-up sent yet");
+    now += FRAME;
+    let c = frame(&mut s, now);
+    assert!(
+        shows(&c, "taiko.rs: terms and your data"),
+        "the terms are drawn"
+    );
+    assert!(shows(&c, "I agree") && shows(&c, "Not now"));
+
+    // Enter still held from the form doesn't agree.
+    s.key(KeyCode::Enter, true, None, now, None);
+    assert!(s.terms.is_some(), "a held Enter doesn't answer");
+
+    // Not now: still no sign-up, and the way back is said.
+    press(&mut s, KeyCode::Escape, now);
+    assert!(s.terms.is_none());
+    assert_eq!(s.mp_menu.form, Form::Register, "the form stays");
+    assert!(s.mp_status.contains("SEND CODE shows them again"));
+    assert_eq!(s.cfg.terms_version, 0);
+    assert!(s.mp_menu.account_request.is_none());
+
+    // Again, and agreed: remembered, and the code is asked for at once.
+    press(&mut s, KeyCode::Enter, now);
+    assert!(s.terms.is_some(), "SEND CODE shows them again");
+    press(&mut s, KeyCode::Enter, now);
+    assert!(s.terms.is_none());
+    assert_eq!(s.cfg.terms_version, terms::VERSION);
+    let sent = next_request(&rx, is_register).expect("the sign-up went out");
+    assert!(matches!(
+        sent,
+        online::Request::Register { ref name, code: None, .. } if name == "newplayer"
+    ));
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.mp_menu.code_for
+            == Some(CodeFor::Register)),
+        "the code was sent"
+    );
+
+    // Making the account with the code doesn't ask again.
+    s.mp_menu.code = "123456".into();
+    s.mp_menu.select(Row::Register);
+    press(&mut s, KeyCode::Enter, now);
+    assert!(s.terms.is_none(), "agreed already");
+    assert!(next_request(&rx, is_register).is_some());
+}
+
+#[test]
+fn an_account_from_before_the_terms_agrees_once_or_is_logged_out() {
+    let start = |version: u32| {
+        let (server, _rx) = terms_server();
+        let mut cfg = harness::config();
+        cfg.online_server = server;
+        cfg.online_user = "me".into();
+        cfg.online_token = "t".into();
+        cfg.terms_version = version;
+        let mut s = state_with(cfg, Vec::new());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        assert!(
+            wait_for(&mut s, &mut now, |s| s.mp_menu.account_request.is_none()
+                && s.mp_menu.online.is_some()),
+            "the saved login is checked"
+        );
+        (s, now)
+    };
+
+    // Not agreed: logged out, the reason said.
+    let (mut s, now) = start(0);
+    assert_eq!(
+        s.terms.as_ref().map(|t| t.purpose),
+        Some(terms::Purpose::Account)
+    );
+    let c = frame(&mut s, now);
+    assert!(shows(&c, "Log out"), "saying no logs out, and says so");
+    press(&mut s, KeyCode::Escape, now);
+    assert!(s.terms.is_none());
+    assert!(s.mp_menu.account.is_none(), "logged out");
+    assert!(s.cfg.online_token.is_empty(), "the saved login is gone");
+    assert!(s.mp_status.contains("playing online needs the terms"));
+    assert_eq!(s.cfg.terms_version, 0);
+
+    // Agreed: stays logged in, and it's remembered.
+    let (mut s, _) = start(0);
+    assert!(s.terms.is_some());
+    press(&mut s, KeyCode::Enter, Instant::now());
+    assert!(s.terms.is_none());
+    assert_eq!(s.cfg.terms_version, terms::VERSION);
+    assert_eq!(s.mp_menu.account.as_deref(), Some("me"));
+    assert_eq!(s.cfg.online_token, "t");
+
+    // This version agreed to already: not asked again.
+    let (s, _) = start(terms::VERSION);
+    assert_eq!(s.mp_menu.account.as_deref(), Some("me"));
+    assert!(s.terms.is_none(), "asked once per version");
+}
+
+#[test]
+fn a_server_that_keeps_the_terms_hears_of_the_agreement_and_it_counts_on_every_install() {
+    let is_accept = |r: &online::Request| matches!(r, online::Request::AcceptTerms { .. });
+    let start = |kept: Option<u32>, version: u32| {
+        let (server, rx) = terms_server_keeping(kept);
+        let mut cfg = harness::config();
+        cfg.online_server = server;
+        cfg.online_user = "me".into();
+        cfg.online_token = "t".into();
+        cfg.terms_version = version;
+        let mut s = state_with(cfg, Vec::new());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        assert!(
+            wait_for(&mut s, &mut now, |s| s.mp_menu.account_request.is_none()
+                && s.mp_menu.online.is_some()),
+            "the saved login is checked"
+        );
+        (s, rx)
+    };
+
+    // Agreed in the game: the server is told which version.
+    let (mut s, rx) = start(Some(0), 0);
+    assert!(
+        s.terms.is_some(),
+        "asked, as the server has no agreement either"
+    );
+    assert!(
+        next_request(&rx, is_accept).is_none(),
+        "nothing before an answer"
+    );
+    press(&mut s, KeyCode::Enter, Instant::now());
+    assert!(matches!(
+        next_request(&rx, is_accept),
+        Some(online::Request::AcceptTerms { ref token, version }) if token == "t" && version == terms::VERSION
+    ));
+
+    // Agreed on another install: not asked again here, and remembered.
+    let (s, rx) = start(Some(terms::VERSION), 0);
+    assert!(s.terms.is_none(), "the server's agreement counts");
+    assert_eq!(s.cfg.terms_version, terms::VERSION);
+    assert!(next_request(&rx, is_accept).is_none(), "nothing to tell it");
+
+    // Agreed here before the server kept it: told at the next login, without asking.
+    let (s, rx) = start(Some(0), terms::VERSION);
+    assert!(s.terms.is_none());
+    assert!(next_request(&rx, is_accept).is_some());
+
+    // A server that doesn't keep it (the legacy one) never gets the request.
+    let (mut s, rx) = start(None, 0);
+    press(&mut s, KeyCode::Enter, Instant::now());
+    assert_eq!(s.cfg.terms_version, terms::VERSION);
+    assert!(next_request(&rx, is_accept).is_none());
+}
+
+#[test]
+fn the_terms_hold_up_in_every_language() {
+    let shape = |text: &str| {
+        terms::layout(text, 10_000.0)
+            .iter()
+            .map(|l| l.kind)
+            .collect::<Vec<_>>()
+    };
+    let english = shape(terms::ALL[0]);
+    assert_eq!(english.first(), Some(&terms::Kind::Title));
+    for text in terms::ALL {
+        assert_eq!(
+            shape(text),
+            english,
+            "every translation has the same headings and points:\n{text}"
+        );
+        // Line by line, as drawn: a Windows checkout ends them with \r\n.
+        let undrawable: String = text
+            .lines()
+            .flat_map(str::chars)
+            .filter(|&c| !crate::font::drawable(c))
+            .collect();
+        assert!(
+            undrawable.is_empty(),
+            "every letter can be drawn: {undrawable:?}"
+        );
+        assert!(text.contains("postmaster@auneu.space"), "where to ask");
+        assert!(
+            text.contains(&format!(" {}", terms::VERSION)),
+            "the version is in the text"
+        );
+    }
+}
+
+#[test]
+fn the_terms_break_lines_between_words_and_anywhere_in_japanese() {
+    let width = 20;
+    let room = width * crate::font::advance(' ');
+    let fits = |lines: &[String]| {
+        lines
+            .iter()
+            .all(|l| l.chars().map(crate::font::advance).sum::<usize>() <= room)
+    };
+    let en = terms::wrap("Your name, avatar, profile and scores are public.", width);
+    assert!(fits(&en), "{en:?}");
+    assert!(
+        en.iter().all(|l| !l.starts_with(' ') && !l.ends_with(' ')),
+        "{en:?}"
+    );
+    assert_eq!(
+        en.join(" "),
+        "Your name, avatar, profile and scores are public.",
+        "only spaces break English"
+    );
+    let ja = terms::wrap(
+        "taiko.rs は小さなチームが作っている無料のゲームです。アカウントはオンラインで遊ぶときだけ必要です。",
+        width,
+    );
+    assert!(fits(&ja), "{ja:?}");
+    assert!(
+        ja[0].starts_with("taiko.rs は"),
+        "the Latin word stays on the line with the Japanese after it: {ja:?}"
+    );
+    assert!(
+        ja.iter().skip(1).all(|l| !l.starts_with(['、', '。'])),
+        "no line starts with a closing mark: {ja:?}"
+    );
+    assert_eq!(
+        ja.concat().replace(' ', ""),
+        "taiko.rsは小さなチームが作っている無料のゲームです。アカウントはオンラインで遊ぶときだけ必要です。"
+    );
+}
