@@ -180,9 +180,11 @@ pub fn apply_tolerant(cmd: &Command, c: &mut Chart) {
         }
         Command::Composite(l) => l.iter().for_each(|x| apply_tolerant(x, c)),
         Command::Gimmick { before, after } => {
-            // A chart with no gimmick yet takes one as from an empty gimmick.
+            // A chart with no gimmick yet takes one as from an empty gimmick, and becomes a .tko
+            // even by the edit that changes nothing else (`Editor::make_tko_shared`).
+            let made = c.gimmick.is_none();
             let now = c.gimmick.clone().unwrap_or_default();
-            if let Some(g) = merged_gimmick(&now, before, after, false) {
+            if let Some(g) = merged_gimmick(&now, before, after, false).or(made.then_some(now)) {
                 c.gimmick = Some(g);
                 c.dirty = true;
             }
@@ -903,6 +905,10 @@ impl Sync {
 
     fn refresh(ed: &mut Editor) {
         ed.history.touch();
+        // Made a .tko by someone in the session: saved as one, beside the .osu.
+        if ed.chart.gimmick.is_some() {
+            ed.path = super::keyframes::tko_path(&ed.path);
+        }
         let chart = &ed.chart;
         ed.selection.retain(|id| chart.object(*id).is_some());
     }

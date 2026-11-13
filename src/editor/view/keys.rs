@@ -486,6 +486,24 @@ impl View {
                     self.mark_stale();
                 }
             }
+            // In a session, the difficulty becomes a .tko for everyone (a copy of our own would
+            // be taken back by the session's next edit).
+            KAct::MakeTko if self.collab.is_some() => match self.ed.make_tko_shared() {
+                Ok(p) => {
+                    let file = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.status = format!(
+                        "this difficulty is a .tko for everyone in the session now; it's saved as {file}, the .osu stays as it was"
+                    );
+                    if self.g_page != 4 {
+                        self.g_page = 2;
+                    }
+                    self.mark_stale();
+                }
+                Err(e) => self.status = e,
+            },
             KAct::MakeTko => match self.ed.make_tko() {
                 Ok(p) => {
                     self.status = format!("made {}", p.display());
