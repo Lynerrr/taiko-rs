@@ -14,7 +14,7 @@ pub(crate) struct MappingJoin {
     server: String,
     token: String,
     /// Going back into a session left earlier: offered again if it doesn't work out for now.
-    rejoin: Option<LeftSession>,
+    pub(crate) rejoin: Option<LeftSession>,
 }
 
 impl State {
@@ -86,7 +86,7 @@ impl State {
             token,
             session: left.session,
         };
-        let connecting = Connecting::rejoin(left.dir.clone());
+        let connecting = Connecting::rejoin(left.dir.clone(), left.diff);
         self.start_mapping(request, connecting);
         if let Some(j) = &mut self.mapping_join {
             j.rejoin = Some(left);
@@ -152,6 +152,15 @@ impl State {
     /// Joins the session we were invited to.
     pub(crate) fn join_mapping(&mut self, session: u64) {
         if !self.mapping_ok() || self.mapping_join.is_some() {
+            return;
+        }
+        // Invited back into the session we left: into the same set and difficulty.
+        if self
+            .left_mapping
+            .as_ref()
+            .is_some_and(|l| l.session == session)
+        {
+            self.rejoin_mapping();
             return;
         }
         let token = self.cfg.online_token.clone();

@@ -37,6 +37,7 @@ fn the_menus_offer_the_session_left_and_a_click_goes_back_into_it() {
         session: 9,
         title: "USAO - Dynamite".into(),
         dir,
+        diff: 1,
     });
     let c = frame(&mut s);
     assert!(
@@ -80,6 +81,7 @@ fn a_session_that_closes_or_another_one_takes_the_offer_away() {
             session: 9,
             title: "t".into(),
             dir: std::env::temp_dir(),
+            diff: 0,
         })
     };
     s.left_mapping = left();
@@ -91,6 +93,19 @@ fn a_session_that_closes_or_another_one_takes_the_offer_away() {
     s.left_mapping = left();
     s.join_mapping(12);
     assert!(s.left_mapping.is_none());
+    assert!(s.mapping_join.as_ref().is_some_and(|j| j.rejoin.is_none()));
+    s.mapping_join = None;
+    // An invite back into the one we left goes back as the bar does: same set, same difficulty.
+    s.left_mapping = left();
+    s.join_mapping(9);
+    assert!(s.left_mapping.is_none());
+    assert_eq!(
+        s.mapping_join
+            .as_ref()
+            .and_then(|j| j.rejoin.as_ref())
+            .map(|l| (l.session, l.diff)),
+        Some((9, 0))
+    );
     // Without a server that runs sessions, nothing is offered.
     let mut s = menus();
     s.left_mapping = left();

@@ -35,6 +35,8 @@ pub struct LeftSession {
     pub title: String,
     /// The set's folder here.
     pub dir: std::path::PathBuf,
+    /// The difficulty that was open: going back opens it again.
+    pub diff: u32,
 }
 
 /// A chat line out of sight shows under the session's button this long.
@@ -925,6 +927,7 @@ impl View {
             session: relink.session,
             title: s.state.title.clone(),
             dir: self.ed.path.parent()?.to_path_buf(),
+            diff: s.sync.open(),
         })
     }
 
