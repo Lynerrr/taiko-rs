@@ -104,7 +104,11 @@ impl Screen for MapEditor {
             editor::view::KeyResult::Handled => {}
             editor::view::KeyResult::Exit => {
                 state.left_editor(view);
+                let dir = view.ed.path.parent().map(Path::to_path_buf);
                 state.show_select();
+                if let Some(dir) = dir {
+                    state.left_editor_folder(&dir);
+                }
             }
             editor::view::KeyResult::Pass => {
                 state.handle_global_key(code, window);
@@ -172,6 +176,9 @@ impl Screen for MapEditor {
         }
         if view.take_exit() {
             state.left_editor(view);
+            if let Some(dir) = view.ed.path.parent().map(Path::to_path_buf) {
+                state.left_editor_folder(&dir);
+            }
             // It may have been sent just frame.now: ask which sets are custom again.
             state.custom_asked = None;
             return Some(SongSelect::scene());

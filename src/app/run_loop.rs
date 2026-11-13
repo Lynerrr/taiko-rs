@@ -672,6 +672,7 @@ impl App {
                 s.focused = true;
                 s.focus_seen = true;
                 s.apply_volume();
+                s.focus_back(Instant::now());
             }
             WindowEvent::ModifiersChanged(m) => {
                 let mut s = lock(&self.state);
@@ -1375,6 +1376,8 @@ impl State {
             presence_at: None,
             scan,
             scan_checking: false,
+            refreshing: None,
+            refreshed_at: None,
             last_shot: None,
             shot_upload: None,
             shot_view: None,

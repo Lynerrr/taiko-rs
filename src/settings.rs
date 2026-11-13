@@ -127,7 +127,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 136] = [
+pub const ITEMS: [(&str, Item); 137] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -203,6 +203,7 @@ pub const ITEMS: [(&str, Item); 136] = [
     ("INPUT", Item::Hotkey(32)),
     ("INPUT", Item::Hotkey(33)),
     ("INPUT", Item::Hotkey(34)),
+    ("INPUT", Item::Hotkey(35)),
     ("OFFSET", Item::Offset),
     ("OFFSET", Item::OffsetScale),
     ("OFFSET", Item::VisualOffset),
@@ -369,8 +370,8 @@ pub fn group_heading(item: Item) -> Option<&'static str> {
         ),
         Item::Hotkey(0) => tr!("In a song", "プレイ中", "В песне"),
         Item::Hotkey(6) => tr!("Song select", "選曲画面", "Выбор песни"),
-        Item::Hotkey(16) => tr!("Results", "リザルト", "Результаты"),
-        Item::Hotkey(19) => tr!("Anywhere", "どこでも", "Везде"),
+        Item::Hotkey(18) => tr!("Results", "リザルト", "Результаты"),
+        Item::Hotkey(21) => tr!("Anywhere", "どこでも", "Везде"),
         Item::VsyncCompensation => tr!("Vsync", "垂直同期", "Vsync"),
         Item::NoteColours => tr!("Colours", "色", "Цвета"),
         Item::Letterbox => tr!("Black bars", "黒帯", "Чёрные поля"),

@@ -131,6 +131,8 @@ impl Screen for SongSelect {
                     state.update_set(i);
                 }
             }
+            // `Hotkey::RefreshSongs`, on whatever key the player gave it.
+            () if code == KeyCode::F13 => state.refresh_library(true),
             () if code == KeyCode::F2 => {
                 if state.modifiers_shift {
                     state.select.random_back();
