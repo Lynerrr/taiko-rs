@@ -190,6 +190,11 @@ fn map_editor_alone_and_in_a_mapping_session() {
     // The same seen by a mapper: what they may do, and no host's buttons.
     v.collab.as_mut().unwrap().me = 2;
     assert_snapshot("screen-map-editor-session-parts-mapper", &draw(&mut v));
+    // A mapper the host gave no part yet, with the panel shut: the card over the timeline
+    // that says so, and its button that asks the host.
+    v.collab.as_mut().unwrap().state.documents[0].parts.clear();
+    v.press_session(CollabAct::Start);
+    assert_snapshot("screen-map-editor-session-no-part", &draw(&mut v));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
