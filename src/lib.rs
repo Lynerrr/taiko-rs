@@ -511,6 +511,12 @@ struct State {
     pictures: pictures::Pictures,
     /// The account logged in is an admin (the server says so; it checks every admin action).
     admin: bool,
+    /// Checking the address the server says it moved to (`Reply::Account::server`): the server
+    /// that said so and that address, once the address has answered for the same account.
+    server_move: Job<Option<(String, String)>>,
+    /// Which servers are ours, to be told by and moved to: `online::is_official` (only our
+    /// certificate gets through to them). The regression tests' servers are plain.
+    trusted_server: fn(&str) -> bool,
     /// The server runs mapping sessions (`mapping::FEATURE` in its account reply); without it
     /// the game never sends it anything about them.
     mapping_sessions: bool,
@@ -7722,7 +7728,7 @@ impl State {
         if due
             && self.custom_call.is_idle()
             && !self.library.is_empty()
-            && self.cfg.online_server == online::DEFAULT_SERVER
+            && online::is_official(&self.cfg.online_server)
         {
             self.custom_asked = Some(now);
             let mut folders: Vec<PathBuf> = self
@@ -7816,6 +7822,7 @@ impl State {
     /// The online server's side of the multiplayer menu: the saved login, account replies and
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
+        self.poll_server_move();
         self.poll_mapping();
         self.poll_loved();
         self.poll_custom(Instant::now());
@@ -7842,6 +7849,7 @@ impl State {
                             email,
                             features,
                             terms: terms_kept,
+                            server,
                         }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
@@ -7909,6 +7917,9 @@ impl State {
                             // An account from before the terms (or this version of them).
                             if self.cfg.terms_version < terms::VERSION && self.terms.is_none() {
                                 self.terms = Some(terms::View::new(terms::Purpose::Account));
+                            }
+                            if let Some(server) = server {
+                                self.follow_server(server);
                             }
                         }
                         Ok(online::Reply::CodeSent(to)) => {
@@ -7982,6 +7993,51 @@ impl State {
         {
             self.mp_menu.refresh(&self.cfg.online_server);
         }
+    }
+
+    /// The server says it moved to `server`: the game goes there once that address has
+    /// answered for the same account (`poll_server_move`). Only our servers are listened to and
+    /// followed (`trusted_server`), so no other server can send the game and its login away.
+    fn follow_server(&mut self, server: String) {
+        let from = self.cfg.online_server.clone();
+        let server = server.trim().to_string();
+        let trusted = self.trusted_server;
+        if server == from.trim()
+            || !trusted(&from)
+            || !trusted(&server)
+            || self.cfg.online_token.is_empty()
+            || self.server_move.is_busy()
+        {
+            return;
+        }
+        let token = self.cfg.online_token.clone();
+        let name = self.cfg.online_user.clone();
+        self.server_move =
+            Job::spawn(
+                move || match online::call(&server, online::Request::WhoAmI { token }) {
+                    Ok(online::Reply::Account { name: answered, .. }) if answered == name => {
+                        Some((from, server))
+                    }
+                    _ => None,
+                },
+            );
+    }
+
+    /// Goes to the address the server moved to, once it answered: saved as the game's server,
+    /// with the social connection and the lobby list on it. Nothing changes when it didn't
+    /// answer (the next login asks again), or when the server was changed meanwhile.
+    fn poll_server_move(&mut self) {
+        let Some(Some((from, server))) = self.server_move.poll() else {
+            return;
+        };
+        if self.cfg.online_server != from {
+            return;
+        }
+        eprintln!("the online server moved to {server}");
+        self.cfg.online_server = server;
+        self.cfg.save();
+        self.social = social::Social::default();
+        self.mp_menu.refresh(&self.cfg.online_server);
     }
 
     /// Installs the library once the background scan finishes.
@@ -9801,7 +9857,7 @@ impl State {
             Row::Global => ShotTo::Global,
             _ => return,
         };
-        if self.cfg.online_server != online::DEFAULT_SERVER || self.cfg.online_token.is_empty() {
+        if !online::is_official(&self.cfg.online_server) || self.cfg.online_token.is_empty() {
             self.toast("log in to send screenshots".into());
             return;
         }

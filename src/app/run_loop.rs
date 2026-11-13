@@ -1162,7 +1162,7 @@ impl State {
                 .as_ref()
                 .is_some_and(|r| send_crash_report(&cfg.online_server, r));
         // Pictures are on the website of our own server only (and kept on disk between runs).
-        let own_server = cfg.online_server == online::DEFAULT_SERVER;
+        let own_server = online::is_official(&cfg.online_server);
         let avatars = avatars::Avatars::new(
             own_server.then(|| online::WEBSITE.to_string()),
             config::cache_dir()
@@ -1326,6 +1326,8 @@ impl State {
             loved_asked: false,
             custom_call: Job::idle(),
             custom_asked: None,
+            server_move: Job::idle(),
+            trusted_server: online::is_official,
             folder_watch: None,
             editor_back: None,
             test_auto: false,
