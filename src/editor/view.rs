@@ -450,6 +450,11 @@ pub struct View {
     chat_popup: Option<(u32, String, Instant)>,
     /// A chat line came that wasn't in sight: the screen plays the message chime once.
     chat_ping: bool,
+    /// The last of our edits the session's server refused: why, and when. The timeline says so
+    /// in plain sight for a while, not only in the status line.
+    refused: Option<(String, Instant)>,
+    /// When we last asked the host in the chat for something to map (asked once a while only).
+    asked_host_at: Option<Instant>,
     /// The session we were in when the editor was left (not kicked, not ended): the game offers
     /// to go back to it.
     left_session: Option<collab::LeftSession>,
@@ -790,6 +795,8 @@ impl View {
             chat_seen: 0,
             chat_popup: None,
             chat_ping: false,
+            refused: None,
+            asked_host_at: None,
             left_session: None,
             session_pick: taiko_proto::mapping::Mode::Collab,
             session_win: [0.0; 4],
@@ -1972,6 +1979,8 @@ impl View {
         // The playhead.
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 1.0));
+        // Why we can't place notes here, in plain sight over the lane (and the playhead).
+        self.draw_rights_card(c, [x, y, w, h]);
         c.clip_since(start, x, y, w, h);
         self.tips.push((
             [x, y, w, RULER],
