@@ -695,6 +695,22 @@ impl View {
             .is_some_and(|s| s.state.host == s.me && self.link.is_some())
     }
 
+    /// Whether we may invite `name` to the session now (see `Session::may_invite`).
+    pub fn can_invite(&self, name: &str) -> bool {
+        self.link.is_some() && self.collab.as_ref().is_some_and(|s| s.may_invite(name))
+    }
+
+    /// Who left the session, to be invited back by anyone still in it (empty out of a session).
+    pub fn invite_back(&self) -> Vec<String> {
+        match (&self.collab, &self.link) {
+            (Some(s), Some(_)) => s
+                .left_participants()
+                .map(|p| crate::social::key(&p.name))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Every frame in a session: what the connection reported, our edits and place sent, and a
     /// dropped connection resumed.
     pub(super) fn pump_session(&mut self, now: Instant) {
