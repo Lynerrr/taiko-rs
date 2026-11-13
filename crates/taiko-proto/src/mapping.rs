@@ -459,6 +459,11 @@ pub enum MapUp {
         comment: u64,
         resolved: bool,
     },
+    /// Takes a comment down: its author, or the host. A server that doesn't know this line
+    /// passes over it, as it does every line it can't read.
+    DeleteComment {
+        comment: u64,
+    },
     Host(HostCmd),
     /// Host: a piece of an asset the server needs (base64 `data`, at most `ASSET_PIECE` bytes
     /// before encoding).
@@ -511,6 +516,10 @@ pub enum MapDown {
         comment: u64,
         resolved: bool,
         by: u32,
+    },
+    /// A comment taken down.
+    CommentDeleted {
+        comment: u64,
     },
     AssetPart {
         sha256: String,
@@ -962,5 +971,17 @@ mod tests {
             joined.push_str(data);
         }
         assert_eq!(serde_json::from_str::<SnapshotData>(&joined).unwrap(), data);
+    }
+
+    #[test]
+    fn taking_a_comment_down_reads_the_same_on_both_ends() {
+        let up = serde_json::to_string(&MapUp::DeleteComment { comment: 7 }).unwrap();
+        assert_eq!(up, r#"{"DeleteComment":{"comment":7}}"#);
+        let down = serde_json::to_string(&MapDown::CommentDeleted { comment: 7 }).unwrap();
+        assert_eq!(down, r#"{"CommentDeleted":{"comment":7}}"#);
+        assert_eq!(
+            serde_json::from_str::<MapDown>(&down).unwrap(),
+            MapDown::CommentDeleted { comment: 7 }
+        );
     }
 }

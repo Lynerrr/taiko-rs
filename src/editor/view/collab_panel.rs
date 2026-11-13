@@ -28,6 +28,8 @@ const SMALL: f32 = 5.0;
 const ROW: f32 = 18.0;
 /// A small button's height.
 const BTN_H: f32 = 10.0;
+/// A line of a chat message or a comment.
+const TALK_LINE: f32 = 7.0;
 /// A second click on a button that asks for one counts this long.
 pub(super) const ARMED_FOR: Duration = Duration::from_secs(4);
 
@@ -298,8 +300,11 @@ impl View {
     }
 
     /// The wheel over the panel scrolls its list.
+    /// The chat counts back from its newest line, so the wheel turns the other way there.
     pub(super) fn scroll_session_panel(&mut self, notches: i32) {
-        self.panel_scroll = (self.panel_scroll - notches as f32 * ROW).max(0.0);
+        let chat = self.collab.as_ref().is_some_and(|s| s.tab == Tab::Chat);
+        let step = notches as f32 * ROW * if chat { -1.0 } else { 1.0 };
+        self.panel_scroll = (self.panel_scroll - step).max(0.0);
     }
 
     /// The session's panel, under the mode bar on the right, its button `chip` up in the
@@ -549,7 +554,10 @@ impl View {
         if most > 0.0 {
             let track = body[3];
             let bar = (track * body[3] / used).max(8.0);
-            let at = body[1] + (track - bar) * (self.panel_scroll / most);
+            // The chat is scrolled back from its newest line, at the bottom.
+            let back = self.panel_scroll / most;
+            let frac = if tab == Tab::Chat { 1.0 - back } else { back };
+            let at = body[1] + (track - bar) * frac;
             c.rect(body[0] + body[2] - 2.5, at, 1.5, bar, rgba(0xffffff, 0.25));
         }
         self.buttons.extend(ui.buttons);
@@ -1122,9 +1130,7 @@ impl View {
         let [bx, by, bw, bh] = body;
         let x = bx + PAD - 1.0;
         let right = bx + bw - PAD + 1.0;
-        let line_h = 8.0;
-        let room = ((bh - 16.0) / line_h).floor().max(1.0) as usize;
-        let mut lines: Vec<TalkLine> = match to {
+        let lines: Vec<TalkLine> = match to {
             Say::Chat => s
                 .chat
                 .iter()
@@ -1175,59 +1181,151 @@ impl View {
             };
             c.text(x, by + 2.0, SMALL, rgba(GREY, 1.0), empty);
         }
-        // Chat: the newest lines; comments: the first ones (open ones lead).
-        if to == Say::Chat && lines.len() > room {
-            lines.drain(..lines.len() - room);
-        }
-        for (i, (colour, line, at, note)) in lines.into_iter().take(room).enumerate() {
-            let ly = by + 1.0 + i as f32 * line_h;
+        // Every message whole, wrapped to the panel. The chat keeps to its newest line (the
+        // wheel goes back in it), the comments read from the first (open ones lead).
+        let list_bottom = by + bh - 15.0;
+        let list_h = list_bottom - by;
+        let me_host = s.state.host == s.me;
+        let items: Vec<_> = lines
+            .into_iter()
+            .map(|(colour, line, at, note)| {
+                let text_w = if note.is_some() {
+                    right - x - 30.0
+                } else {
+                    right - x - 6.0
+                };
+                let wrapped = super::chrome::wrap(SMALL, text_w, &line);
+                let h = wrapped.len().max(1) as f32 * TALK_LINE + 2.0;
+                (colour, wrapped, at, note, text_w, h)
+            })
+            .collect();
+        let content: f32 = items.iter().map(|i| i.5).sum();
+        let most = (content - list_h).max(0.0);
+        let scroll = self.panel_scroll.min(most);
+        let mut iy = match to {
+            // Scrolled back by `scroll` from the newest line; a short chat starts at the top.
+            Say::Chat if content > list_h => list_bottom - content + scroll,
+            Say::Chat => by,
+            Say::Note => by - scroll,
+        };
+        let shown = |top: f32, h: f32| top >= by - 0.5 && top + h <= list_bottom + 0.5;
+        for (colour, wrapped, at, note, text_w, h) in items {
+            let top = iy;
+            iy += h;
             let alpha = if note.is_some_and(|(_, r)| r) {
                 0.45
             } else {
                 1.0
-            };
-            c.rect(x, ly + 1.0, 2.0, 5.0, rgba(colour, alpha));
-            let text_w = if note.is_some() {
-                right - x - 34.0
-            } else {
-                right - x - 4.0
             };
             let col = if at.is_some() && note.is_none() {
                 0x9ec8ff
             } else {
                 0xe0e0ea
             };
-            c.text(
-                x + 4.0,
-                ly,
-                SMALL,
-                rgba(col, alpha),
-                &Canvas::fit(SMALL, text_w, &line),
-            );
+            let mut any = false;
+            for (i, l) in wrapped.iter().enumerate() {
+                let ly = top + 1.0 + i as f32 * TALK_LINE;
+                if !shown(ly - 1.0, TALK_LINE) {
+                    continue;
+                }
+                any = true;
+                if i == 0 {
+                    c.rect(x, ly + 1.0, 2.0, 5.0, rgba(colour, alpha));
+                }
+                c.text(x + 4.0, ly, SMALL, rgba(col, alpha), l);
+            }
+            if !any {
+                continue;
+            }
             if let Some(at) = at {
+                let a = top.max(by);
+                let b = (top + h).min(list_bottom);
                 ui.push(
-                    [bx + 2.0, ly - 1.0, text_w + 6.0, line_h],
+                    [bx + 2.0, a, text_w + 6.0, b - a],
                     CollabAct::Seek(at as i64),
                 );
             }
-            if let Some((id, resolved)) = note {
-                ui.button(
-                    c,
-                    right - 28.0,
-                    ly - 1.5,
-                    28.0,
+            if let Some((id, resolved)) = note
+                && shown(top, BTN_H)
+            {
+                let tick = [right - 22.0, top, BTN_H, BTN_H];
+                self.draw_tick(c, ui, tick, resolved, CollabAct::Resolve(id));
+                ui.tip(
+                    tick,
                     if resolved {
-                        tr!("Reopen", "再開", "Вернуть")
+                        tr!(
+                            "Open again\nThe comment counts as not done yet.",
+                            "未解決に戻す\nコメントをまだ未解決にします。",
+                            "Вернуть\nЗамечание снова не сделано."
+                        )
                     } else {
-                        tr!("Done", "解決", "Готово")
-                    },
-                    Look::Plain,
-                    CollabAct::Resolve(id),
+                        tr!(
+                            "Done\nThe comment stays, dimmed, below the open ones.",
+                            "解決\nコメントは薄く表示され、未解決の下に残ります。",
+                            "Готово\nЗамечание остаётся, бледным, под открытыми."
+                        )
+                    }
+                    .to_string(),
                 );
+                if me_host || s.may_delete(id) {
+                    let del = [right - 10.0, top, BTN_H, BTN_H];
+                    let hot = c.hovered(del[0], del[1], del[2], del[3]);
+                    c.round_rect(
+                        [del[0], del[1]],
+                        [del[2], del[3]],
+                        2.0,
+                        rgba(if hot { 0x40242c } else { 0x24243a }, 1.0),
+                        rgba(if hot { RED } else { 0x3c3c58 }, 1.0),
+                        1.0,
+                    );
+                    c.text_centered(
+                        del[0] + del[2] / 2.0,
+                        del[1] + 2.0,
+                        SMALL,
+                        rgba(if hot { 0xffffff } else { 0xc8c8d8 }, 1.0),
+                        "x",
+                    );
+                    ui.push(del, CollabAct::DeleteNote(id));
+                    ui.tip(
+                        del,
+                        tr!(
+                            "Delete\nTakes the comment down for everyone.",
+                            "削除\n全員からコメントを消します。",
+                            "Удалить\nУбирает замечание у всех."
+                        )
+                        .to_string(),
+                    );
+                }
             }
         }
         self.draw_say(c, ui, [x, by + bh - 12.0, right - x, 10.0], to);
-        bh
+        content + (bh - list_h)
+    }
+
+    /// A small square that is ticked when `on`: a review comment's done mark.
+    fn draw_tick(&self, c: &mut Canvas, ui: &mut Ui, r: [f32; 4], on: bool, act: CollabAct) {
+        let hot = c.hovered(r[0], r[1], r[2], r[3]);
+        c.round_rect(
+            [r[0], r[1]],
+            [r[2], r[3]],
+            2.0,
+            rgba(
+                match (on, hot) {
+                    (true, _) => GREEN,
+                    (false, true) => 0x34344a,
+                    (false, false) => 0x24243a,
+                },
+                1.0,
+            ),
+            rgba(if on { GREEN } else { 0x5a5a78 }, 1.0),
+            1.0,
+        );
+        let ink = rgba(if on { 0x0e0e16 } else { 0x8a8aa0 }, 1.0);
+        c.rect(r[0] + 2.5, r[1] + 5.0, 1.5, 2.0, ink);
+        c.rect(r[0] + 3.5, r[1] + 6.0, 1.5, 1.5, ink);
+        c.rect(r[0] + 4.5, r[1] + 2.5, 1.5, 4.5, ink);
+        c.rect(r[0] + 5.5, r[1] + 2.0, 1.5, 1.5, ink);
+        ui.push(r, act);
     }
 
     /// The box to type a chat line or a comment in: what is typed, or a hint to click.

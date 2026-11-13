@@ -27,6 +27,19 @@ pub struct Relink {
     pub retry_at: Option<Instant>,
 }
 
+/// A session the editor was left in on purpose (not kicked, not ended): the game shows it in
+/// the menus and joins it again on a click, into the same folder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeftSession {
+    pub session: u64,
+    pub title: String,
+    /// The set's folder here.
+    pub dir: std::path::PathBuf,
+}
+
+/// A chat line out of sight shows under the session's button this long.
+pub(super) const CHAT_POPUP_FOR: Duration = Duration::from_secs(6);
+
 /// A dropped connection is tried again after this long.
 const RETRY: Duration = Duration::from_secs(2);
 
@@ -56,12 +69,16 @@ pub enum CollabAct {
     StartAs(Mode),
     /// What the panel shows.
     Tab(Tab),
+    /// Opens the panel on its chat (the popup of a new line).
+    ShowChat,
     /// Type a chat line or a comment.
     Say(Say),
     /// Go to this map time (ms), from a time written in chat or a comment.
     Seek(i64),
     /// Resolve a review comment, or open it again.
     Resolve(u64),
+    /// Take a review comment down (its author, or the host).
+    DeleteNote(u64),
     /// Host: the next role for this player (mapper, modder, viewer).
     Role(u32),
     /// Host: takes this player out of the session (on a second click).
@@ -413,6 +430,12 @@ impl View {
                 };
             }
             CollabAct::ByAuthor => s.by_author = !s.by_author,
+            CollabAct::ShowChat => {
+                s.tab = Tab::Chat;
+                self.picking_mode = true;
+                self.chat_popup = None;
+                self.panel_scroll = 0.0;
+            }
             CollabAct::Tab(t) => {
                 s.tab = t;
                 self.panel_scroll = 0.0;
@@ -425,6 +448,14 @@ impl View {
                         comment: id,
                         resolved,
                     });
+                }
+            }
+            // The server takes it down and tells everyone; it says no to others' comments.
+            CollabAct::DeleteNote(id) => {
+                if s.may_delete(id)
+                    && let Some(l) = &self.link
+                {
+                    l.send(MapUp::DeleteComment { comment: id });
                 }
             }
             _ => {}
@@ -745,11 +776,25 @@ impl View {
         let mut out = Vec::new();
         let mut retry = None;
         let mut closed = None;
+        let mut heard = s.heard;
         for ev in events {
             let t = s.now();
             match ev {
                 LinkEvent::Joined { done, .. } => s.resumed(&mut self.ed, done),
                 LinkEvent::Down(d) => match s.handle(&mut self.ed, *d, t) {
+                    // A line from someone else while the chat is out of sight: it shows under
+                    // the session's button, with the message chime.
+                    None if s.heard > heard => {
+                        heard = s.heard;
+                        let chat_in_sight = self.picking_mode && s.tab == Tab::Chat;
+                        if let Some((who, text)) = s.chat.back()
+                            && *who != s.me
+                            && !chat_in_sight
+                        {
+                            self.chat_popup = Some((*who, text.clone(), now));
+                            self.chat_ping = true;
+                        }
+                    }
                     Some(Notice::Resume) => retry = Some(now),
                     // Why, and what we may edit after all: a refused note is taken back, so
                     // the reason has to be plain.
@@ -779,12 +824,23 @@ impl View {
             }
         }
         if let Some(why) = closed {
+            // Everyone's work is saved here before the session goes: the map stays ours to go
+            // on with alone.
+            let saved = self.save_file();
             self.picking_mode = false;
             self.collab = None;
             self.link = None;
             self.relink = None;
+            self.chat_popup = None;
             self.ed.history.stop_sharing();
-            self.status = tr!("the mapping session ended: {why}", "マッピングセッションが終了しました: {why}", "совместный маппинг закончен: {why}"; [] [why]);
+            self.status = match saved {
+                Ok(_) => {
+                    tr!("the mapping session ended: {why}. The map is saved here; go on alone if you like", "マッピングセッションが終了しました: {why}。マップは保存済みです。このまま一人で続けられます", "совместный маппинг закончен: {why}. Карта сохранена, можно продолжать одному"; [] [why])
+                }
+                Err(e) => {
+                    tr!("the mapping session ended: {why}. Couldn't save the map: {e}", "マッピングセッションが終了しました: {why}。マップを保存できませんでした: {e}", "совместный маппинг закончен: {why}. Карту не сохранить: {e}"; [] [why, e])
+                }
+            };
             return out;
         }
         if let Some(at) = retry {
@@ -807,6 +863,69 @@ impl View {
             .then_some(self.view_start + (mx - tx) as f64 * self.ms_per_px);
         out.extend(s.presence(&self.ed, cursor, t));
         out
+    }
+
+    /// The last chat line that came out of sight, for a few seconds under the session's button
+    /// (`chip`): who said what. A click on it opens the chat.
+    fn draw_chat_popup(&mut self, c: &mut Canvas, chip: [f32; 4]) {
+        let Some(s) = self.collab.as_ref() else {
+            return;
+        };
+        let Some((who, text, at)) = &self.chat_popup else {
+            return;
+        };
+        if at.elapsed() >= CHAT_POPUP_FOR {
+            self.chat_popup = None;
+            return;
+        }
+        let name = s.participant(*who).map_or("?", |p| p.name.as_str());
+        let colour = s.colour(*who);
+        const W: f32 = 200.0;
+        let lines = super::chrome::wrap(5.5, W - 14.0, &format!("{name}: {text}"));
+        let lines = &lines[..lines.len().min(3)];
+        let h = 6.0 + lines.len() as f32 * 7.0;
+        let x = (chip[0] + chip[2] - W).max(4.0);
+        let y = chip[1] + chip[3] + 3.0;
+        let hot = c.hovered(x, y, W, h);
+        c.round_rect(
+            [x + 1.5, y + 2.0],
+            [W, h],
+            3.0,
+            rgba(0x000000, 0.45),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.round_rect(
+            [x, y],
+            [W, h],
+            3.0,
+            rgba(if hot { 0x22203e } else { 0x17162a }, 1.0),
+            rgba(VIOLET, 0.9),
+            1.0,
+        );
+        c.rect(x + 3.0, y + 3.0, 2.0, h - 6.0, rgba(colour, 1.0));
+        for (i, l) in lines.iter().enumerate() {
+            c.text(
+                x + 8.0,
+                y + 3.0 + i as f32 * 7.0,
+                5.5,
+                rgba(0xe8e8f2, 1.0),
+                l,
+            );
+        }
+        self.buttons
+            .push(([x, y, W, h], Btn::Collab(CollabAct::ShowChat)));
+    }
+
+    /// The session to offer going back to after leaving the editor in it.
+    pub(super) fn session_to_return(&self) -> Option<LeftSession> {
+        let s = self.collab.as_ref()?;
+        let relink = self.relink.as_ref()?;
+        Some(LeftSession {
+            session: relink.session,
+            title: s.state.title.clone(),
+            dir: self.ed.path.parent()?.to_path_buf(),
+        })
     }
 
     /// The session's name on its menu-bar button: who is online, or, between connections, how
@@ -927,10 +1046,14 @@ impl View {
             return;
         };
         if !self.picking_mode {
+            self.draw_chat_popup(c, chip);
             return;
         }
         if self.collab.is_some() {
             self.draw_session_panel(c, chip);
+            if self.collab.as_ref().is_some_and(|s| s.tab != Tab::Chat) {
+                self.draw_chat_popup(c, chip);
+            }
             return;
         }
         self.panel_tips_from = self.tips.len();
@@ -1762,7 +1885,8 @@ mod tests {
         );
         assert!(!shown.contains("UNDER"));
         draw(&mut v);
-        // The wheel scrolls a long chat, not the timeline under it, and stops at its end.
+        // The wheel scrolls a long chat, not the timeline under it, and stops at its end. The
+        // chat sits at its newest line: the wheel up goes back in it.
         let s = v.collab.as_mut().unwrap();
         let now = s.now();
         for i in 0..40 {
@@ -1780,16 +1904,16 @@ mod tests {
         draw(&mut v);
         let start = v.view_start;
         v.mouse = (x + w / 2.0, y + h / 2.0);
-        assert!(v.wheel(-3, Keys::default()));
+        assert!(v.wheel(3, Keys::default()));
         assert_eq!(v.view_start, start, "the timeline stays");
         assert!(v.panel_scroll > 0.0);
-        v.wheel(-1000, Keys::default());
+        v.wheel(1000, Keys::default());
         draw(&mut v);
         let most = v.panel_scroll;
-        v.wheel(-1, Keys::default());
+        v.wheel(1, Keys::default());
         draw(&mut v);
         assert_eq!(v.panel_scroll, most, "no further than the end");
-        v.wheel(1000, Keys::default());
+        v.wheel(-1000, Keys::default());
         assert_eq!(v.panel_scroll, 0.0);
     }
 
@@ -2168,5 +2292,195 @@ mod tests {
             p.online = p.id == 1;
         }
         assert_eq!(v.presence_label(), map, "nobody else online");
+    }
+
+    fn chat(v: &mut View, who: u32, text: &str) {
+        let line = LinkEvent::Down(Box::new(MapDown::Chat {
+            who,
+            text: text.into(),
+            at: 0,
+        }));
+        v.take_link_events(vec![line], Instant::now());
+    }
+
+    #[test]
+    fn a_long_chat_line_wraps_whole_and_the_chat_keeps_to_the_newest() {
+        let mut v = view(true);
+        let long = "the kiai at the drop needs more density, try 1/6 bursts there and keep the finishers on the downbeats";
+        chat(&mut v, 2, long);
+        v.picking_mode = true;
+        v.collab.as_mut().unwrap().tab = Tab::Chat;
+        let c = draw(&mut v);
+        assert!(has_words(&c, &format!("anna: {long}")), "every word shows");
+        // On lines that each fit the panel's text column.
+        let lines: Vec<&String> = c
+            .texts
+            .iter()
+            .map(|(_, t)| t)
+            .filter(|t| long.contains(t.trim_start_matches("anna: ").trim()))
+            .collect();
+        assert!(lines.len() >= 2, "wrapped, not cut: {lines:?}");
+        for t in &lines {
+            assert!(Canvas::text_width(5.0, t) <= v.session_win[2] - 12.0, "{t}");
+        }
+        // Many lines: the newest is in sight, the oldest scrolled away.
+        for i in 0..40 {
+            chat(&mut v, 3, &format!("line {i}"));
+        }
+        let c = draw(&mut v);
+        assert!(has_text(&c, "bob: line 39") && !has_text(&c, "bob: line 0"));
+        // The wheel goes back in it.
+        v.mouse = (v.session_win[0] + 20.0, v.session_win[1] + 60.0);
+        for _ in 0..40 {
+            v.scroll_session_panel(1);
+        }
+        let c = draw(&mut v);
+        assert!(has_text(&c, "bob: line 0") && !has_text(&c, "bob: line 39"));
+    }
+
+    #[test]
+    fn a_chat_line_out_of_sight_pops_up_with_the_chime_and_opens_the_chat() {
+        let mut v = view(true);
+        chat(&mut v, 2, "come look at 00:12:000");
+        assert!(v.take_chat_ping(), "the chime");
+        assert!(!v.take_chat_ping(), "once");
+        let c = draw(&mut v);
+        assert!(has_words(&c, "anna: come look at 00:12:000"));
+        let acts: Vec<CollabAct> = collab_buttons(&v).iter().map(|r| r.1).collect();
+        assert!(acts.contains(&CollabAct::ShowChat));
+        v.press(Btn::Collab(CollabAct::ShowChat), Keys::default(), None);
+        assert!(v.picking_mode && v.collab.as_ref().unwrap().tab == Tab::Chat);
+        assert!(v.chat_popup.is_none());
+        // In sight, or our own: no popup, no chime.
+        chat(&mut v, 3, "ok");
+        assert!(!v.take_chat_ping() && v.chat_popup.is_none());
+        v.picking_mode = false;
+        chat(&mut v, 1, "mine");
+        assert!(!v.take_chat_ping() && v.chat_popup.is_none());
+        // On another tab it pops up still.
+        v.picking_mode = true;
+        v.collab.as_mut().unwrap().tab = Tab::People;
+        chat(&mut v, 3, "hey");
+        assert!(v.take_chat_ping());
+        let c = draw(&mut v);
+        assert!(has_text(&c, "bob: hey"));
+    }
+
+    #[test]
+    fn comments_are_resolved_and_deleted_with_small_buttons() {
+        use taiko_proto::mapping::Comment;
+        let mut v = view(true);
+        let s = v.collab.as_mut().unwrap();
+        let now = s.now();
+        for (id, author) in [(1, 2), (2, 3)] {
+            s.handle(
+                &mut v.ed,
+                MapDown::Comment(Comment {
+                    id,
+                    diff: 0,
+                    time: 4000.0 + id as f64,
+                    author,
+                    text: format!("note {id}"),
+                    resolved: false,
+                }),
+                now,
+            );
+        }
+        // As anna (a mapper): only her own comment has a delete button.
+        v.collab.as_mut().unwrap().me = 2;
+        v.picking_mode = true;
+        v.collab.as_mut().unwrap().tab = Tab::Notes;
+        draw(&mut v);
+        let buttons = collab_buttons(&v);
+        let acts: Vec<CollabAct> = buttons.iter().map(|r| r.1).collect();
+        assert!(acts.contains(&CollabAct::DeleteNote(1)));
+        assert!(!acts.contains(&CollabAct::DeleteNote(2)));
+        assert!(acts.contains(&CollabAct::Resolve(1)) && acts.contains(&CollabAct::Resolve(2)));
+        for (r, a) in &buttons {
+            if matches!(a, CollabAct::DeleteNote(_) | CollabAct::Resolve(_)) {
+                assert!(r[2] <= 10.0 && r[3] <= 10.0, "small: {r:?}");
+            }
+        }
+        // As the host: every comment.
+        v.collab.as_mut().unwrap().me = 1;
+        draw(&mut v);
+        let acts: Vec<CollabAct> = collab_buttons(&v).iter().map(|r| r.1).collect();
+        assert!(acts.contains(&CollabAct::DeleteNote(2)));
+        // The server takes it down for everyone.
+        let gone = LinkEvent::Down(Box::new(MapDown::CommentDeleted { comment: 2 }));
+        v.take_link_events(vec![gone], Instant::now());
+        let c = draw(&mut v);
+        assert!(has_text(&c, "note 1") && !has_text(&c, "note 2"));
+    }
+
+    #[test]
+    fn leaving_the_editor_in_a_session_saves_the_set_and_offers_to_go_back() {
+        let mut v = view(true);
+        v.relink = Some(Relink {
+            server: "127.0.0.1:9".into(),
+            token: "t".into(),
+            session: 9,
+            epoch: 1,
+            retry_at: None,
+        });
+        v.ed.place_hit(8000.0, false).unwrap();
+        v.run(super::super::cmd::Cmd::Leave, None);
+        assert!(v.take_exit(), "no question: our edits went out already");
+        assert_eq!(v.modal, None);
+        let left = v.take_left_session().expect("offered");
+        assert_eq!(left.session, 9);
+        assert_eq!(left.title, v.collab.as_ref().unwrap().state.title);
+        assert_eq!(Some(left.dir.as_path()), v.ed.path.parent());
+        let saved = crate::editor::chart::Chart::read(&v.ed.path).unwrap();
+        assert!(saved.objects.iter().any(|o| o.time == 8000.0), "saved");
+        // Alone, leaving asks as ever and offers nothing.
+        let mut w = view(false);
+        w.ed.place_hit(8000.0, false).unwrap();
+        w.run(super::super::cmd::Cmd::Leave, None);
+        assert!(!w.take_exit() && w.take_left_session().is_none());
+    }
+
+    #[test]
+    fn a_session_that_ends_leaves_everyones_work_saved_here() {
+        let mut v = view(true);
+        // Someone else's note, only in the editor so far.
+        let mut note = v.ed.chart.objects[0].clone();
+        note.id = v.ed.chart.next_id() + 1000;
+        note.time = 9000.0;
+        v.ed.chart.objects.push(note);
+        let closed = LinkEvent::Down(Box::new(MapDown::Closed("idle".into())));
+        v.take_link_events(vec![closed], Instant::now());
+        assert!(v.collab.is_none());
+        assert!(v.status.contains("saved"), "{}", v.status);
+        let saved = crate::editor::chart::Chart::read(&v.ed.path).unwrap();
+        assert!(saved.objects.iter().any(|o| o.time == 9000.0));
+    }
+
+    #[test]
+    fn a_new_difficulty_is_asked_for_from_the_file_menu_but_not_in_a_session() {
+        let mut v = view(false);
+        v.ed.place_hit(8000.0, false).unwrap();
+        v.run(super::super::cmd::Cmd::NewDifficulty(true), None);
+        assert_eq!(v.take_new_difficulty(), Some(true));
+        assert!(
+            !v.ed.modified(),
+            "saved first: the copy is made from the file"
+        );
+        v.run(super::super::cmd::Cmd::NewDifficulty(false), None);
+        assert_eq!(v.take_new_difficulty(), Some(false));
+        let mut w = view(true);
+        w.run(super::super::cmd::Cmd::NewDifficulty(false), None);
+        assert_eq!(w.take_new_difficulty(), None);
+        assert!(w.status.contains("mapping session"), "{}", w.status);
+        let file: Vec<_> = super::super::menu::MENUS[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                super::super::menu::Item::Do(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert!(file.contains(&super::super::cmd::Cmd::NewDifficulty(false)));
+        assert!(file.contains(&super::super::cmd::Cmd::NewDifficulty(true)));
     }
 }

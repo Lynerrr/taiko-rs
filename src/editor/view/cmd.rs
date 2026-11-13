@@ -59,6 +59,8 @@ pub enum Cmd {
     SongSetup,
     Upload,
     Export,
+    /// A new difficulty of the set: with this one's notes (true), or empty with its timing.
+    NewDifficulty(bool),
     OpenFolder,
     Leave,
     // Edit.
@@ -137,6 +139,8 @@ impl Cmd {
             Cmd::SongSetup => "Song setup",
             Cmd::Upload => "Upload to taiko.rs",
             Cmd::Export => "Export map file",
+            Cmd::NewDifficulty(false) => "New difficulty (empty)",
+            Cmd::NewDifficulty(true) => "New difficulty (copy of this one)",
             Cmd::OpenFolder => "Open song folder",
             Cmd::Leave => "Exit editor",
             Cmd::Undo => "Undo",
@@ -214,6 +218,12 @@ impl Cmd {
             Cmd::Upload => "Sends the saved map to taiko.rs: public as CUSTOM, pp once approved.",
             Cmd::Export => {
                 "Saves the map and packs its set into one file to give to people: .rsz with a .tko in it (taiko.rs opens it with a double click), else .osz (osu! too)."
+            }
+            Cmd::NewDifficulty(false) => {
+                "Saves this one, then makes a new difficulty of the set with no notes: the same music, timing, storyboard and settings."
+            }
+            Cmd::NewDifficulty(true) => {
+                "Saves this one, then makes a new difficulty of the set from it, notes and all, to change into another."
             }
             Cmd::OpenFolder => {
                 "Shows the map's folder. Drop .osu or .tko files into it and they join the list at once."

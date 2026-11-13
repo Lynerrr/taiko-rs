@@ -272,6 +272,14 @@ impl Connecting {
         c
     }
 
+    /// Back into a session left earlier: the set is the one in `dir`, where we worked on it
+    /// (the host's own folder too), brought up to date.
+    pub fn rejoin(dir: PathBuf) -> Connecting {
+        let mut c = Connecting::guest(PathBuf::new());
+        c.dir = Some(dir);
+        c
+    }
+
     /// Anyone else, joining: the set goes in a folder in `songs` (or is found there).
     pub fn guest(songs: PathBuf) -> Connecting {
         Connecting {
@@ -366,7 +374,10 @@ impl Connecting {
                 };
                 self.state = Some(state);
                 if first && self.host.is_none() {
-                    let dir = self.songs.join(crate::download::safe_folder_name(&folder));
+                    let dir = match &self.dir {
+                        Some(dir) => dir.clone(),
+                        None => self.songs.join(crate::download::safe_folder_name(&folder)),
+                    };
                     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                     for a in assets {
                         let path = local_path(&dir, &a.name)
@@ -778,6 +789,41 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn going_back_into_a_session_uses_the_set_where_it_was_left() {
+        let (dir, _) = host_dir();
+        let set = HostSet::read(&dir).unwrap();
+        let d = set.descriptor();
+        let snapshot = host_snapshot(&set.charts).unwrap();
+        let mut c = Connecting::rejoin(dir.clone());
+        c.take(joined(4, 1, Vec::new())).unwrap();
+        assert!(
+            c.take(down(MapDown::State(state(&d)))).unwrap().is_empty(),
+            "every file is here already"
+        );
+        for up in snapshot_lines(7, &snapshot) {
+            let MapUp::Snapshot {
+                seq,
+                part,
+                parts,
+                data,
+            } = up
+            else {
+                unreachable!()
+            };
+            c.take(down(MapDown::Snapshot {
+                seq,
+                part,
+                parts,
+                data,
+            }))
+            .unwrap();
+        }
+        let r = c.ready().unwrap().unwrap();
+        assert_eq!(r.path.parent(), Some(dir.as_path()), "not a copy in Songs");
+        assert_eq!(r.seq, 7);
     }
 
     #[test]

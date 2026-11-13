@@ -102,13 +102,15 @@ pub enum Field {
     Meta(crate::editor::setup::Key),
     /// A line for the mapping session: chat, or a review comment at the playhead.
     Say(collab::Say),
+    /// The playhead's time, typed (or pasted) to jump there.
+    Playhead,
 }
 
 impl Field {
     /// Typed as free text (`type_text`), not as a number.
     fn is_text(self) -> bool {
         match self {
-            Field::FxText | Field::Say(_) => true,
+            Field::FxText | Field::Say(_) | Field::Playhead => true,
             Field::Meta(k) => k.is_text(),
             _ => false,
         }
@@ -117,6 +119,10 @@ impl Field {
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Btn {
+    /// The playhead's time by Play: type a time to jump to.
+    Clock,
+    /// Copies the playhead's time, the way osu! writes it for modding.
+    CopyTime,
     Resnap,
     /// A control of Timing > Snap notes to the grid.
     Rs(resnap::RsAct),
@@ -439,6 +445,14 @@ pub struct View {
     picking_mode: bool,
     /// The session chat lines read (`Session::heard` when the chat was last in sight).
     chat_seen: u64,
+    /// The last chat line from someone else that came while the chat was out of sight: who
+    /// said it, what, and when it came. It shows under the session's button for a while.
+    chat_popup: Option<(u32, String, Instant)>,
+    /// A chat line came that wasn't in sight: the screen plays the message chime once.
+    chat_ping: bool,
+    /// The session we were in when the editor was left (not kicked, not ended): the game offers
+    /// to go back to it.
+    left_session: Option<collab::LeftSession>,
     /// The kind of session picked in that window.
     session_pick: taiko_proto::mapping::Mode,
     /// Where the session window was drawn last (clicks on it stay in it).
@@ -509,6 +523,9 @@ pub struct View {
     setup_stars: Option<(u64, Option<f64>)>,
     /// A test play asked for: from this map time, or (None) from the start.
     want_test: Option<Option<f64>>,
+    /// A new difficulty of the set asked for from the File menu: with this one's notes (true)
+    /// or empty, keeping the timing (false). The screen makes it and opens it.
+    want_new_diff: Option<bool>,
     mouse: (f32, f32),
     pub width: f32,
     /// What the middle of the screen is for.
@@ -696,6 +713,36 @@ fn fmt_time(ms: f64) -> String {
     )
 }
 
+/// A map time as osu! writes it for modding (`01:23:456 - `), to paste where mappers talk.
+fn time_stamp(ms: f64) -> String {
+    format!("{} - ", crate::editor::collab::session::stamp(ms))
+}
+
+/// A time typed or pasted to jump to (ms): osu!'s `01:23:456` (as copied for modding, notes
+/// and all after it), `1:23.456` or `1:23` as shown by Play, or plain milliseconds (`83456`).
+fn parse_time(text: &str) -> Option<f64> {
+    if let Some(t) = crate::editor::collab::session::first_stamp(text) {
+        return Some(t);
+    }
+    let t = text.trim();
+    let (neg, t) = match t.strip_prefix('-') {
+        Some(rest) => (true, rest.trim()),
+        None => (false, t),
+    };
+    let ms = match t.split_once(':') {
+        Some((min, sec)) => {
+            let min: u64 = min.trim().parse().ok()?;
+            let sec: f64 = sec.trim().parse().ok()?;
+            if !(0.0..60.0).contains(&sec) {
+                return None;
+            }
+            min as f64 * 60_000.0 + sec * 1000.0
+        }
+        None => t.parse::<f64>().ok().filter(|v| v.is_finite())?,
+    };
+    Some(if neg { -ms } else { ms }.round())
+}
+
 fn inside(r: [f32; 4], x: f32, y: f32) -> bool {
     x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]
 }
@@ -741,6 +788,9 @@ impl View {
             session_wanted: None,
             picking_mode: false,
             chat_seen: 0,
+            chat_popup: None,
+            chat_ping: false,
+            left_session: None,
             session_pick: taiko_proto::mapping::Mode::Collab,
             session_win: [0.0; 4],
             panel_tips_from: 0,
@@ -783,6 +833,7 @@ impl View {
             typing_fresh: false,
             setup_stars: None,
             want_test: None,
+            want_new_diff: None,
             mouse: (0.0, 0.0),
             width: 853.0,
             mode: Mode::Compose,
@@ -907,6 +958,22 @@ impl View {
     /// A test play asked for (F5): where to start (None: the start).
     pub fn take_test_play(&mut self) -> Option<Option<f64>> {
         self.want_test.take()
+    }
+
+    /// A new difficulty asked for from the File menu: with this one's notes (true) or empty
+    /// (false). The chart was saved first, so the file holds what is on screen.
+    pub fn take_new_difficulty(&mut self) -> Option<bool> {
+        self.want_new_diff.take()
+    }
+
+    /// The session the editor was left in, once (see `left_session`).
+    pub fn take_left_session(&mut self) -> Option<collab::LeftSession> {
+        self.left_session.take()
+    }
+
+    /// A chat line came out of sight since the last call: the chime is due.
+    pub fn take_chat_ping(&mut self) -> bool {
+        std::mem::take(&mut self.chat_ping)
     }
 
     pub fn take_rate_request(&mut self) -> Option<f64> {
@@ -3251,7 +3318,8 @@ impl View {
                 | Field::Key(_)
                 | Field::FxText
                 | Field::Meta(_)
-                | Field::Say(_) => {}
+                | Field::Say(_)
+                | Field::Playhead => {}
             },
             false,
         );
@@ -3276,9 +3344,34 @@ impl View {
         }
     }
 
+    /// Copies a map time the way osu! writes it for modding (`01:23:456 - `): pasted in a
+    /// session's chat it is a link to that moment.
+    fn copy_time(&mut self, ms: f64) {
+        let stamp = time_stamp(ms);
+        self.status = if crate::clipboard::set(&stamp) {
+            format!("copied {stamp}")
+        } else {
+            "can't reach the clipboard".into()
+        };
+    }
+
     fn apply_typed(&mut self, f: Field, text: &str) {
         if let Field::Say(to) = f {
             return self.say(to, text);
+        }
+        if f == Field::Playhead {
+            match parse_time(text) {
+                Some(ms) => {
+                    self.ed.time = ms;
+                    self.follow(true);
+                    self.status = format!("at {}", fmt_time(ms));
+                }
+                None => {
+                    self.status =
+                        "not a time: write it like 1:23.456, 01:23:456 or in ms (83456)".into()
+                }
+            }
+            return;
         }
         if f == Field::FxText {
             return self.layer_text_set(text);
@@ -3333,7 +3426,8 @@ impl View {
                 | Field::Key(_)
                 | Field::FxText
                 | Field::Meta(_)
-                | Field::Say(_) => {}
+                | Field::Say(_)
+                | Field::Playhead => {}
             },
             false,
         );
@@ -3375,6 +3469,12 @@ impl View {
                 self.tw_scroll = 0;
             }
             Btn::Rs(a) => self.press_resnap(a),
+            Btn::Clock => {
+                self.commit_typing();
+                self.typing = Some((Field::Playhead, fmt_time(self.ed.time)));
+                self.typing_fresh = true;
+            }
+            Btn::CopyTime => self.copy_time(self.ed.time),
             Btn::Resnap => {
                 let n = self.ed.resnap_selected();
                 self.status = format!("resnapped {n}");
@@ -3488,6 +3588,7 @@ impl View {
             let most = match f {
                 Field::Meta(k) => k.max_len(),
                 Field::Say(_) => collab::SAY_MAX,
+                Field::Playhead => 40,
                 _ => crate::tko::clips::MAX_TEXT,
             };
             if std::mem::take(&mut self.typing_fresh) && s.chars().any(|c| !c.is_control()) {
@@ -3573,6 +3674,19 @@ impl View {
                         text.push_str(&at);
                         text.push(' ');
                     }
+                }
+                // Ctrl+V pastes (over words just opened, as typing would); Ctrl+C copies the
+                // time box's text.
+                KeyCode::KeyV if keys.ctrl && f.is_text() => {
+                    let pasted = crate::clipboard::get().unwrap_or_default();
+                    let pasted = pasted.lines().next().unwrap_or("").to_string();
+                    self.typing_fresh = fresh;
+                    self.type_text(&pasted);
+                }
+                KeyCode::KeyC if keys.ctrl && *f == Field::Playhead => {
+                    let t = parse_time(text).unwrap_or(self.ed.time);
+                    self.copy_time(t);
+                    self.typing_fresh = fresh;
                 }
                 // Words opened for typing go in one press, like selected text.
                 KeyCode::Backspace if fresh => text.clear(),
@@ -3779,6 +3893,66 @@ mod tests {
         v.view_start = 0.0;
         v.ms_per_px = 10.0;
         v
+    }
+
+    #[test]
+    fn a_time_is_read_as_osu_writes_it_as_play_shows_it_or_in_ms() {
+        assert_eq!(parse_time("01:23:456"), Some(83_456.0));
+        assert_eq!(parse_time("01:23:456 (1,2) - "), Some(83_456.0));
+        assert_eq!(parse_time("1:23.456"), Some(83_456.0));
+        assert_eq!(parse_time(" 1:23 "), Some(83_000.0));
+        assert_eq!(parse_time("83456"), Some(83_456.0));
+        assert_eq!(parse_time("-0:00.250"), Some(-250.0));
+        assert_eq!(parse_time("1:75.0"), None);
+        assert_eq!(parse_time("soon"), None);
+        assert_eq!(parse_time(""), None);
+        assert_eq!(parse_time(&fmt_time(62_345.0)), Some(62_345.0));
+    }
+
+    #[test]
+    fn the_time_by_play_takes_a_typed_time_and_copies_it() {
+        let mut v = view();
+        let mut c = Canvas::default();
+        c.clear(853.0);
+        c.audit = true;
+        v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+        assert!(v.buttons.iter().any(|(_, b)| *b == Btn::Clock));
+        assert!(v.buttons.iter().any(|(_, b)| *b == Btn::CopyTime));
+        assert!(c.texts.iter().any(|(_, t)| t == "copy"));
+        v.press(Btn::Clock, Keys::default(), None);
+        assert!(v.wants_text(), "typing a time");
+        let mut c = Canvas::default();
+        c.clear(853.0);
+        c.audit = true;
+        v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+        assert!(
+            c.texts.iter().any(|(_, t)| t == "0:00.000_"),
+            "the time to type over"
+        );
+        // The first key replaces it, as selected text.
+        v.type_text("1:02.345");
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert!(!v.wants_text());
+        assert_eq!(v.ed.time, 62_345.0);
+        // Nonsense leaves the playhead and says how to write one.
+        v.press(Btn::Clock, Keys::default(), None);
+        v.type_text("later");
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert_eq!(v.ed.time, 62_345.0);
+        assert!(v.status.contains("not a time"), "{}", v.status);
+        // Esc lets it be.
+        v.press(Btn::Clock, Keys::default(), None);
+        v.type_text("5");
+        v.key(KeyCode::Escape, false, Keys::default(), None);
+        assert_eq!(v.ed.time, 62_345.0);
+        // Copying: osu!'s modding form (the clipboard may be out of reach in a test).
+        assert_eq!(time_stamp(62_345.0), "01:02:345 - ");
+        v.press(Btn::CopyTime, Keys::default(), None);
+        assert!(
+            v.status == "copied 01:02:345 - " || v.status == "can't reach the clipboard",
+            "{}",
+            v.status
+        );
     }
 
     #[test]

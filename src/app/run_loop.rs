@@ -1295,6 +1295,7 @@ impl State {
             skin_map_seen: None,
             mapping_sessions: false,
             mapping_join: None,
+            left_mapping: None,
             focused: true,
             right_scroll: false,
             settings_level: None,

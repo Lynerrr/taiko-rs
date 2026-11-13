@@ -4,8 +4,8 @@
 
 use crate::*;
 use editor::collab::connect::{Connecting, HostSet, Ready};
-use editor::view::collab::Relink;
-use taiko_proto::mapping::{self, HostCmd, Link, Mode};
+use editor::view::collab::{LeftSession, Relink};
+use taiko_proto::mapping::{self, HostCmd, Link, LinkEvent, Mode};
 
 /// Getting into a session: the connection and how far along it is.
 pub(crate) struct MappingJoin {
@@ -13,6 +13,8 @@ pub(crate) struct MappingJoin {
     connecting: Connecting,
     server: String,
     token: String,
+    /// Going back into a session left earlier: offered again if it doesn't work out for now.
+    rejoin: Option<LeftSession>,
 }
 
 impl State {
@@ -63,8 +65,51 @@ impl State {
         );
     }
 
+    /// The editor was closed: the session it was left in, if any, is offered in the menus.
+    pub(crate) fn left_editor(&mut self, view: &mut editor::view::View) {
+        if let Some(left) = view.take_left_session() {
+            self.left_mapping = Some(left);
+        }
+    }
+
+    /// Back into the session we left (the menus' bar): joined again into the same folder. The
+    /// server lets in whoever is still in its list, so no new invite is needed.
+    pub(crate) fn rejoin_mapping(&mut self) {
+        if !self.mapping_ok() || self.mapping_join.is_some() {
+            return;
+        }
+        let Some(left) = self.left_mapping.take() else {
+            return;
+        };
+        let token = self.cfg.online_token.clone();
+        let request = online::Request::JoinMapping {
+            token,
+            session: left.session,
+        };
+        let connecting = Connecting::rejoin(left.dir.clone());
+        self.start_mapping(request, connecting);
+        if let Some(j) = &mut self.mapping_join {
+            j.rejoin = Some(left);
+        }
+        self.toast(
+            tr!(
+                "back to the mapping session...",
+                "マッピングセッションに戻っています...",
+                "возвращаюсь в совместный маппинг..."
+            )
+            .into(),
+        );
+    }
+
     /// A session we were invited to is over: its card says so.
     pub(crate) fn mapping_closed(&mut self, session: u64) {
+        if self
+            .left_mapping
+            .as_ref()
+            .is_some_and(|l| l.session == session)
+        {
+            self.left_mapping = None;
+        }
         if let Some(i) = self.social.invites.get_mut(&session)
             && i.state == social::InviteState::Open
         {
@@ -93,11 +138,14 @@ impl State {
     fn start_mapping(&mut self, request: online::Request, connecting: Connecting) {
         let server = self.cfg.online_server.clone();
         let token = self.cfg.online_token.clone();
+        // Another session (or the same one again) is what we're in now.
+        self.left_mapping = None;
         self.mapping_join = Some(Box::new(MappingJoin {
             link: Link::start(server.clone(), request),
             connecting,
             server,
             token,
+            rejoin: None,
         }));
     }
 
@@ -163,10 +211,13 @@ impl State {
             return;
         };
         let mut failed = None;
+        // The server said no (the session is over, or we were kicked): not worth offering again.
+        let mut refused = false;
         for u in j.connecting.tick(std::time::Instant::now()) {
             j.link.send(u);
         }
         for ev in j.link.poll() {
+            refused |= matches!(ev, LinkEvent::Refused(_));
             match j.connecting.take(ev) {
                 Ok(ups) => ups.into_iter().for_each(|u| j.link.send(u)),
                 Err(why) => {
@@ -186,7 +237,10 @@ impl State {
                 self.toast(tr!("mapping session: {stage}... {pct}%", "マッピングセッション: {stage}... {pct}%", "совместный маппинг: {stage}... {pct}%"; [] [stage, pct]));
             }
             Some(Err(why)) => {
-                self.mapping_join = None;
+                let rejoin = self.mapping_join.take().and_then(|j| j.rejoin);
+                if !refused {
+                    self.left_mapping = rejoin;
+                }
                 self.toast(tr!("couldn't get into the mapping session: {why}", "マッピングセッションに入れませんでした: {why}", "не удалось войти в совместный маппинг: {why}"; [] [why]));
             }
             Some(Ok(r)) => {

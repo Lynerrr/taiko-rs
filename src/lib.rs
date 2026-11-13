@@ -37,6 +37,8 @@ mod editor_friends_tests;
 #[cfg(test)]
 mod editor_test_play_tests;
 mod folder_watch;
+#[cfg(test)]
+mod mapping_rejoin_tests;
 use taiko_logic::font;
 mod game;
 use taiko_logic::genres;
@@ -507,6 +509,9 @@ struct State {
     mapping_sessions: bool,
     /// Getting into a mapping session, until the editor opens on it.
     mapping_join: Option<Box<mapping_sessions::MappingJoin>>,
+    /// The mapping session we left the editor in (not kicked, not ended): the menus offer to
+    /// go back to it.
+    left_mapping: Option<editor::view::collab::LeftSession>,
     skin_loader: Option<skin::Loader>,
     skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
@@ -1179,7 +1184,13 @@ impl State {
     /// A new, empty difficulty beside `entry`'s map (same timing, music and storyboard), opened.
     fn new_difficulty(&mut self, entry: usize) {
         let path = self.library[entry].path.clone();
-        match editor::new_difficulty(&path) {
+        self.new_difficulty_from(&path, entry, false);
+    }
+
+    /// A new difficulty beside the map at `path` (`entry`'s set), empty or with its notes
+    /// (`keep_notes`), opened in the editor.
+    pub(crate) fn new_difficulty_from(&mut self, path: &Path, entry: usize, keep_notes: bool) {
+        match editor::new_difficulty(path, keep_notes) {
             Ok(new) => {
                 self.toast(format!(
                     "made {}",
@@ -4102,6 +4113,72 @@ impl State {
         (scene.is_select() || scene.screen().is_some_and(|s| s.update_corner()))
             && self.mp.is_none()
             && self.splash.is_none()
+    }
+
+    /// In the menus while a mapping session we left goes on: a bar at the top saying so, a
+    /// click on it goes back in (the "x" forgets it).
+    fn draw_left_session(&mut self, c: &mut Canvas) {
+        let Some(left) = &self.left_mapping else {
+            return;
+        };
+        let menus = self.scene.is_select() || self.in_settings();
+        if !menus
+            || !self.mapping_ok()
+            || self.splash.is_some()
+            || self.changelog.is_some()
+            || self.player.is_some()
+        {
+            return;
+        }
+        let joining = self.mapping_join.is_some();
+        let title = &left.title;
+        let text = if joining {
+            tr!("going back to the mapping session {title}...", "マッピングセッション {title} に戻っています...", "возвращаюсь в совместный маппинг {title}..."; [] [title])
+        } else {
+            tr!("You're in the mapping session {title}  ·  click to go back", "マッピングセッション {title} に参加中  ·  クリックで戻る", "Ты в совместном маппинге {title}  ·  нажми, чтобы вернуться"; [] [title])
+        };
+        let text = Canvas::fit(7.0, (c.width - 120.0).max(100.0), &text);
+        let (y, h) = if mobile::active() {
+            (38.0, 30.0)
+        } else {
+            (20.0, 16.0)
+        };
+        let w = Canvas::text_width(7.0, &text) + 34.0;
+        let x = (c.width - w) / 2.0;
+        let hover = c.hovered(x, y, w - 14.0, h);
+        c.round_rect(
+            [x, y],
+            [w, h],
+            5.0,
+            rgba(if hover { 0x3b3478 } else { 0x26224a }, 0.97),
+            rgba(0x8b7cff, 1.0),
+            1.0,
+        );
+        c.circle(
+            x + 8.0,
+            y + h / 2.0,
+            2.5,
+            rgba(0x8b7cff, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.text(
+            x + 14.0,
+            y + (h - 7.0) / 2.0 + 1.0,
+            7.0,
+            rgba(0xffffff, 1.0),
+            &text,
+        );
+        c.hit(x, y, w - 14.0, h, hit::Hit::BackToSession);
+        let close_hover = c.hovered(x + w - 14.0, y, 14.0, h);
+        c.text(
+            x + w - 11.0,
+            y + (h - 7.0) / 2.0 + 0.5,
+            7.0,
+            rgba(if close_hover { 0xffffff } else { 0xa8a0d8 }, 1.0),
+            "x",
+        );
+        c.hit(x + w - 14.0, y, 14.0, h, hit::Hit::ForgetSession);
     }
 
     /// The badge top right while there's an update to install (menus only), and the restart
@@ -7437,6 +7514,7 @@ impl State {
         self.admin = false;
         self.mapping_sessions = false;
         self.mapping_join = None;
+        self.left_mapping = None;
         self.mp_menu.account = None;
         self.mp_menu.has_email = None;
         self.mp_menu.form = multiplayer::Form::Main;
@@ -11276,6 +11354,7 @@ impl State {
         let mut editor_folder: Option<PathBuf> = None;
         let mut editor_renamed: Option<(PathBuf, PathBuf)> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
+        let mut editor_new_diff: Option<(PathBuf, usize, bool)> = None;
         let mut home_out: Option<editor::home::Out> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
@@ -11527,6 +11606,7 @@ impl State {
                     editor_folder = out.folder;
                     editor_renamed = out.renamed;
                     folder_news = out.folder_news;
+                    editor_new_diff = out.new_diff;
                 }
             }
         }
@@ -11725,6 +11805,9 @@ impl State {
         if let Some((entry, from)) = editor_test {
             self.start_test_play(entry, from);
         }
+        if let Some((path, entry, keep)) = editor_new_diff {
+            self.new_difficulty_from(&path, entry, keep);
+        }
         if test_over {
             self.back_to_editor();
         }
@@ -11876,6 +11959,7 @@ impl State {
             }
         }
         self.draw_update(canvas);
+        self.draw_left_session(canvas);
         // Over everything so far (the top bar's buttons too); a dialog or a drop goes on top.
         // The idle screen's rays hear what the menu or player plays.
         if self.idle.amount() > 0.0 {
@@ -13011,6 +13095,8 @@ impl State {
             Hit::SocialToggle => self.toggle_social(),
             Hit::ChatMap(set) => self.open_chat_map(set),
             Hit::MappingInvite(session, accept) => self.answer_mapping_invite(session, accept),
+            Hit::BackToSession => self.rejoin_mapping(),
+            Hit::ForgetSession => self.left_mapping = None,
             Hit::ChatShot(id) => self.open_shot(id),
             Hit::SendShot => {
                 let row = self.social.row(self.mp.is_some());
