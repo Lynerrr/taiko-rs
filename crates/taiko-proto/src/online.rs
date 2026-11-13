@@ -15,6 +15,9 @@ pub const PROTOCOL: u32 = 1;
 pub const MAX_STATUS_MAPS: usize = 500;
 pub const DEFAULT_PORT: u16 = 7800;
 pub const DEFAULT_SERVER: &str = "jashincraft.space:7800";
+/// An address written `tls://host:port` is always encrypted and trusts only our certificate,
+/// whatever its host: the official server wherever it runs (see `Reply::Account::server`).
+pub const TLS_SCHEME: &str = "tls://";
 /// The website (profiles at /u/<name>).
 pub const WEBSITE: &str = "https://rstaiko.auneu.space";
 /// Longest request or reply line (a lobby list of a few hundred rooms fits easily).
@@ -1158,6 +1161,12 @@ pub enum Reply {
         /// them anything a feature brings.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         features: Vec<String>,
+        /// Where the game should reach the server from now on, as the game writes its server
+        /// (`online_server`): set when the server has moved. The game follows it only from an
+        /// official server to an official address (`is_official`), and only once that address
+        /// has answered. Servers from before it send none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server: Option<String>,
     },
     /// A code was mailed: where to ("g*****@gmail.com").
     CodeSent(String),
@@ -1385,25 +1394,49 @@ pub fn network_error(e: &std::io::Error) -> String {
     })
 }
 
-fn connect(server: &str) -> Result<TcpStream, String> {
+/// `server` split into its host and port, when it has one.
+fn host_and_port(server: &str) -> (&str, Option<u16>) {
+    match server.rsplit_once(':') {
+        Some((host, port)) => match port.parse::<u16>() {
+            Ok(port) => (host, Some(port)),
+            Err(_) => (server, None),
+        },
+        None => (server, None),
+    }
+}
+
+/// Whether `server` is ours: a connection to it is encrypted and only our certificate gets
+/// through, so the game's login, uploads and the server's word on where it moved are safe
+/// with it. That's our host name (any port), or any address written `tls://host:port`.
+pub fn is_official(server: &str) -> bool {
     let server = server.trim();
-    let has_port = server
-        .rsplit_once(':')
-        .is_some_and(|(_, p)| p.parse::<u16>().is_ok());
-    let host = if has_port {
-        server.rsplit_once(':').map_or(server, |(h, _)| h)
-    } else {
-        server
-    };
+    match server.strip_prefix(TLS_SCHEME) {
+        Some(address) => !host_and_port(address).0.is_empty(),
+        None => host_and_port(server)
+            .0
+            .eq_ignore_ascii_case(crate::tls::SERVER_HOST),
+    }
+}
+
+/// Where a connection to `server` goes, and whether it's encrypted (and then only our
+/// certificate is trusted, whatever the host).
+fn dial(server: &str) -> (bool, String) {
+    let server = server.trim();
+    if let Some(address) = server.strip_prefix(TLS_SCHEME) {
+        let (host, port) = host_and_port(address);
+        return (true, format!("{host}:{}", port.unwrap_or(crate::tls::PORT)));
+    }
+    let (host, port) = host_and_port(server);
     // The real server only ever encrypted, whatever port an older config has for it.
-    let secure = host.eq_ignore_ascii_case(crate::tls::SERVER_HOST);
-    let with_port = if secure {
-        format!("{host}:{}", crate::tls::PORT)
-    } else if has_port {
-        server.to_string()
+    if host.eq_ignore_ascii_case(crate::tls::SERVER_HOST) {
+        (true, format!("{host}:{}", crate::tls::PORT))
     } else {
-        format!("{server}:{DEFAULT_PORT}")
-    };
+        (false, format!("{host}:{}", port.unwrap_or(DEFAULT_PORT)))
+    }
+}
+
+fn connect(server: &str) -> Result<TcpStream, String> {
+    let (secure, with_port) = dial(server);
     let no_address = || {
         unreachable(tr!(
             "its address wasn't found. Check your internet",
@@ -1640,6 +1673,87 @@ mod tests {
         assert_eq!(clean_title("  ", "Lynerrr", false), "Lynerrr's lobby");
         assert_eq!(clean_title("", "Lynerrr", true), "Lynerrr's mapguessr");
         assert_eq!(clean_title("taiko\u{7}  night", "x", true), "taiko  night");
+    }
+
+    #[test]
+    fn our_server_is_reached_encrypted_wherever_it_runs() {
+        // Our host name: always the encrypted port, whatever port an older config has.
+        assert_eq!(
+            dial(DEFAULT_SERVER),
+            (true, "jashincraft.space:7801".into())
+        );
+        assert_eq!(
+            dial(" JashinCraft.space "),
+            (true, "JashinCraft.space:7801".into())
+        );
+        // A `tls://` address keeps its own port, and is encrypted whatever the host.
+        assert_eq!(
+            dial("tls://130.78.31.127:17801"),
+            (true, "130.78.31.127:17801".into())
+        );
+        assert_eq!(
+            dial("tls://game.example"),
+            (true, "game.example:7801".into())
+        );
+        // Anything else stays plain, on its own port or the default one.
+        assert_eq!(dial("192.168.1.5"), (false, "192.168.1.5:7800".into()));
+        assert_eq!(dial("example.org:9000"), (false, "example.org:9000".into()));
+
+        for ours in [
+            DEFAULT_SERVER,
+            "jashincraft.space",
+            "jashincraft.space:7801",
+            "tls://130.78.31.127:17801",
+            " tls://game.example ",
+        ] {
+            assert!(is_official(ours), "{ours} is ours");
+        }
+        for other in [
+            "",
+            "tls://",
+            "tls://:7801",
+            "127.0.0.1:7800",
+            "jashincraft.space.evil.example:7800",
+            "TLS://130.78.31.127:17801",
+        ] {
+            assert!(!is_official(other), "{other} isn't ours");
+        }
+    }
+
+    #[test]
+    fn a_moved_server_is_told_in_the_account_reply_and_older_ones_say_nothing() {
+        // A server from before it: no address, and none is sent back.
+        let old = r#"{"Account":{"name":"Lynerrr","token":"t","nominator":false}}"#;
+        let Reply::Account { server, .. } = serde_json::from_str(old).unwrap() else {
+            panic!("an account reply");
+        };
+        assert_eq!(server, None);
+        let stays = Reply::Account {
+            name: "Lynerrr".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: None,
+            features: Vec::new(),
+            server: None,
+        };
+        assert!(!serde_json::to_string(&stays).unwrap().contains("server"));
+
+        let moved = Reply::Account {
+            name: "Lynerrr".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: None,
+            features: Vec::new(),
+            server: Some("tls://130.78.31.127:17801".into()),
+        };
+        let line = serde_json::to_string(&moved).unwrap();
+        assert!(line.contains(r#""server":"tls://130.78.31.127:17801""#));
+        let Reply::Account { server, .. } = serde_json::from_str(&line).unwrap() else {
+            panic!("an account reply");
+        };
+        assert_eq!(server.as_deref(), Some("tls://130.78.31.127:17801"));
     }
 
     #[test]

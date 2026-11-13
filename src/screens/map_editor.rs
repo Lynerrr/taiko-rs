@@ -119,7 +119,7 @@ impl Screen for MapEditor {
     fn draw(&mut self, state: &mut State, canvas: &mut Canvas, frame: &Frame) -> Option<Scene> {
         let view = &mut self.view;
         // Uploading needs the game's account on our own server.
-        let token = (state.cfg.online_server == online::DEFAULT_SERVER
+        let token = (online::is_official(&state.cfg.online_server)
             && !state.cfg.online_token.is_empty())
         .then_some(&state.cfg.online_token);
         if view.account.as_ref() != token {

@@ -397,6 +397,7 @@ fn terms_server() -> (String, std::sync::mpsc::Receiver<online::Request>) {
                     admin: false,
                     email: Some(true),
                     features: Vec::new(),
+                    server: None,
                 }),
                 _ => None,
             };
