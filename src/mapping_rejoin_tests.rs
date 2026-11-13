@@ -41,7 +41,15 @@ fn the_menus_offer_the_session_left_and_a_click_goes_back_into_it() {
         c.texts
             .iter()
             .any(|(_, t)| t.contains("You're in the mapping session USAO - Dynamite")),
-        "the bar says so"
+        "the bar says so; drawn: {:?}, mapping_ok {}, select {}, splash {}, changelog {}, \
+         player {}, left {}",
+        c.texts.iter().map(|(_, t)| t).collect::<Vec<_>>(),
+        s.mapping_ok(),
+        s.scene.is_select(),
+        s.splash.is_some(),
+        s.changelog.is_some(),
+        s.player.is_some(),
+        s.left_mapping.is_some(),
     );
     let hits: Vec<Hit> = s.hits.iter().map(|h| h.hit).collect();
     assert!(hits.contains(&Hit::BackToSession) && hits.contains(&Hit::ForgetSession));
