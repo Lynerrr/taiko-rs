@@ -372,10 +372,29 @@ fn selecting_simplified_chinese_localizes_settings_and_formatted_text() {
 /// An account server that passes on each request it gets: a sign-up's first step is answered
 /// with a mailed code, a saved login with the account, and the rest are hung up on.
 fn terms_server() -> (String, std::sync::mpsc::Receiver<online::Request>) {
+    terms_server_keeping(None)
+}
+
+/// `terms_server`, keeping the agreement to the terms when `kept` is the version it starts
+/// with: it lists `online::TERMS_FEATURE` and answers `AcceptTerms` with the account.
+fn terms_server_keeping(kept: Option<u32>) -> (String, std::sync::mpsc::Receiver<online::Request>) {
     use crate::online::{Envelope, Reply, Request};
+    let kept = std::sync::Arc::new(std::sync::Mutex::new(kept));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
     let (tx, rx) = std::sync::mpsc::channel();
+    let account = |token: &String, kept: Option<u32>| Reply::Account {
+        name: "me".into(),
+        token: token.clone(),
+        nominator: false,
+        admin: false,
+        email: Some(true),
+        features: kept
+            .map(|_| vec![online::TERMS_FEATURE.into()])
+            .unwrap_or_default(),
+        terms: kept.unwrap_or(0),
+        server: None,
+    };
     std::thread::spawn(move || {
         while let Ok((stream, _)) = listener.accept() {
             let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
@@ -390,15 +409,11 @@ fn terms_server() -> (String, std::sync::mpsc::Receiver<online::Request>) {
                 Request::Register { email, .. } => {
                     Some(Reply::CodeSent(email.clone().unwrap_or_default()))
                 }
-                Request::WhoAmI { token } => Some(Reply::Account {
-                    name: "me".into(),
-                    token: token.clone(),
-                    nominator: false,
-                    admin: false,
-                    email: Some(true),
-                    features: Vec::new(),
-                    server: None,
-                }),
+                Request::WhoAmI { token } => Some(account(token, *kept.lock().unwrap())),
+                Request::AcceptTerms { token, version } if kept.lock().unwrap().is_some() => {
+                    *kept.lock().unwrap() = Some(*version);
+                    Some(account(token, Some(*version)))
+                }
                 _ => None,
             };
             let _ = tx.send(env.request);
@@ -543,6 +558,61 @@ fn an_account_from_before_the_terms_agrees_once_or_is_logged_out() {
     let (s, _) = start(terms::VERSION);
     assert_eq!(s.mp_menu.account.as_deref(), Some("me"));
     assert!(s.terms.is_none(), "asked once per version");
+}
+
+#[test]
+fn a_server_that_keeps_the_terms_hears_of_the_agreement_and_it_counts_on_every_install() {
+    let is_accept = |r: &online::Request| matches!(r, online::Request::AcceptTerms { .. });
+    let start = |kept: Option<u32>, version: u32| {
+        let (server, rx) = terms_server_keeping(kept);
+        let mut cfg = harness::config();
+        cfg.online_server = server;
+        cfg.online_user = "me".into();
+        cfg.online_token = "t".into();
+        cfg.terms_version = version;
+        let mut s = state_with(cfg, Vec::new());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        assert!(
+            wait_for(&mut s, &mut now, |s| s.mp_menu.account_request.is_none()
+                && s.mp_menu.online.is_some()),
+            "the saved login is checked"
+        );
+        (s, rx)
+    };
+
+    // Agreed in the game: the server is told which version.
+    let (mut s, rx) = start(Some(0), 0);
+    assert!(
+        s.terms.is_some(),
+        "asked, as the server has no agreement either"
+    );
+    assert!(
+        next_request(&rx, is_accept).is_none(),
+        "nothing before an answer"
+    );
+    press(&mut s, KeyCode::Enter, Instant::now());
+    assert!(matches!(
+        next_request(&rx, is_accept),
+        Some(online::Request::AcceptTerms { ref token, version }) if token == "t" && version == terms::VERSION
+    ));
+
+    // Agreed on another install: not asked again here, and remembered.
+    let (s, rx) = start(Some(terms::VERSION), 0);
+    assert!(s.terms.is_none(), "the server's agreement counts");
+    assert_eq!(s.cfg.terms_version, terms::VERSION);
+    assert!(next_request(&rx, is_accept).is_none(), "nothing to tell it");
+
+    // Agreed here before the server kept it: told at the next login, without asking.
+    let (s, rx) = start(Some(0), terms::VERSION);
+    assert!(s.terms.is_none());
+    assert!(next_request(&rx, is_accept).is_some());
+
+    // A server that doesn't keep it (the legacy one) never gets the request.
+    let (mut s, rx) = start(None, 0);
+    press(&mut s, KeyCode::Enter, Instant::now());
+    assert_eq!(s.cfg.terms_version, terms::VERSION);
+    assert!(next_request(&rx, is_accept).is_none());
 }
 
 #[test]

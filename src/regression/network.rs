@@ -316,6 +316,10 @@ fn requests() -> Vec<Request> {
             epoch: 2,
             last_seq: 40,
         },
+        Request::AcceptTerms {
+            token: "t".into(),
+            version: 1,
+        },
     ]
 }
 
@@ -397,6 +401,7 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: Vec::new(),
+            terms: 0,
             server: None,
         },
         Reply::Mapping {
@@ -413,6 +418,17 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: vec![mapping::FEATURE.into()],
+            terms: 0,
+            server: None,
+        },
+        Reply::Account {
+            name: "a".into(),
+            token: "t".into(),
+            nominator: false,
+            admin: false,
+            email: Some(true),
+            features: vec![online::TERMS_FEATURE.into()],
+            terms: 1,
             server: None,
         },
         // A server that moved, telling the game where it is now.
@@ -423,6 +439,7 @@ fn replies() -> Vec<Reply> {
             admin: false,
             email: Some(true),
             features: Vec::new(),
+            terms: 0,
             server: Some("tls://130.78.31.127:17801".into()),
         },
     ]
@@ -1455,6 +1472,7 @@ fn the_social_link_declares_mapping_before_the_account_check_answers() {
                             admin: false,
                             email: Some(true),
                             features: vec![mapping::FEATURE.into()],
+                            terms: 0,
                             server: None,
                         },
                     )
@@ -1685,6 +1703,7 @@ fn account_server(name: &str, moved_to: Option<String>) -> (String, Arc<AtomicUs
                             admin: false,
                             email: Some(true),
                             features: Vec::new(),
+                            terms: 0,
                             server: moved_to.clone(),
                         },
                     );

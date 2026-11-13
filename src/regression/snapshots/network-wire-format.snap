@@ -74,6 +74,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"protocol":1,"request":{"OpenMapping":{"token":"t","set":{"title":"Artist - Song","folder":"1 Artist - Song","diffs":["Oni","Muzukashii"],"assets":[{"name":"audio.mp3","sha256":"ab","size":3}]},"mode":"Guest"}}}
 {"protocol":1,"request":{"JoinMapping":{"token":"t","session":9}}}
 {"protocol":1,"request":{"ResumeMapping":{"token":"t","session":9,"epoch":2,"last_seq":40}}}
+{"protocol":1,"request":{"AcceptTerms":{"token":"t","version":1}}}
 == online: replies
 {"CodeSent":"a@b.c"}
 {"EmailLinked":"a@b.c"}
@@ -90,6 +91,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"Account":{"name":"a","token":"t","nominator":false,"email":true}}
 {"Mapping":{"session":9,"epoch":2,"me":2,"needs":["ab"],"done":0}}
 {"Account":{"name":"a","token":"t","nominator":false,"email":true,"features":["mapping/1"]}}
+{"Account":{"name":"a","token":"t","nominator":false,"email":true,"features":["terms/1"],"terms":1}}
 {"Account":{"name":"a","token":"t","nominator":false,"email":true,"server":"tls://130.78.31.127:17801"}}
 == social: up
 {"Status":"Menus"}

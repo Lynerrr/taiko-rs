@@ -8,6 +8,7 @@
 
 use std::time::{Duration, Instant};
 
+use super::strip::STRIP;
 use super::{Btn, Drag, Field, NOTE_R, RULER, View};
 use crate::editor::collab::Sync;
 use crate::editor::collab::connect::Ready;
@@ -42,6 +43,13 @@ pub struct LeftSession {
 /// A chat line out of sight shows under the session's button this long.
 pub(super) const CHAT_POPUP_FOR: Duration = Duration::from_secs(6);
 
+/// A refused edit keeps its reason over the timeline this long.
+pub(super) const REFUSED_FOR: Duration = Duration::from_secs(5);
+/// The card over the timeline shakes this long after a refused edit, to catch the eye.
+const SHAKE_FOR: f32 = 0.6;
+/// Asking the host again waits this long, so a few clicks don't flood the chat.
+const ASK_AGAIN_AFTER: Duration = Duration::from_secs(30);
+
 /// A dropped connection is tried again after this long.
 const RETRY: Duration = Duration::from_secs(2);
 
@@ -73,6 +81,11 @@ pub enum CollabAct {
     Tab(Tab),
     /// Opens the panel on its chat (the popup of a new line).
     ShowChat,
+    /// Opens the panel on who maps what (a click on the card that says we can't map here).
+    ShowWork,
+    /// Asks the host in the chat for something to map: a part, a difficulty, or the mapper's
+    /// role.
+    AskHost,
     /// Type a chat line or a comment.
     Say(Say),
     /// Go to this map time (ms), from a time written in chat or a comment.
@@ -330,6 +343,36 @@ pub(super) fn rights_text(s: &Session, end: f64) -> Option<(String, bool)> {
     Some((text, rights.edits()))
 }
 
+/// What the timeline says about our rights in the open difficulty.
+pub(super) struct RightsCard {
+    pub title: String,
+    pub body: String,
+    /// Its button: the label and what it does.
+    pub button: Option<(String, CollabAct)>,
+    /// Over the middle of the lane, where the notes go; otherwise a chip in its corner.
+    pub card: bool,
+}
+
+/// `s` with its first letter a capital (the server's reasons start small).
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+}
+
+/// A padlock centred on (`x`, `y`), `k` times its usual size.
+fn padlock(c: &mut Canvas, x: f32, y: f32, k: f32, col: u32) {
+    c.ring(x, y - 1.6 * k, 2.1 * k, rgba(col, 1.0), 0.9 * k);
+    c.round_rect(
+        [x - 3.0 * k, y - 0.8 * k],
+        [6.0 * k, 4.6 * k],
+        0.8 * k,
+        rgba(col, 1.0),
+        rgba(0, 0.0),
+        0.0,
+    );
+}
+
 impl View {
     /// Following someone: the playhead goes where theirs is, and the view with it.
     pub(super) fn keep_to_followed(&mut self) {
@@ -372,6 +415,10 @@ impl View {
             CollabAct::Say(to) => {
                 self.commit_typing();
                 self.typing = Some((Field::Say(to), String::new()));
+                return;
+            }
+            CollabAct::AskHost => {
+                self.ask_host();
                 return;
             }
             CollabAct::Seek(ms) => {
@@ -437,6 +484,12 @@ impl View {
                 self.picking_mode = true;
                 self.chat_popup = None;
                 self.panel_scroll = 0.0;
+            }
+            CollabAct::ShowWork => {
+                s.tab = Tab::Work;
+                self.picking_mode = true;
+                self.panel_scroll = 0.0;
+                self.give_pick = None;
             }
             CollabAct::Tab(t) => {
                 s.tab = t;
@@ -819,8 +872,9 @@ impl View {
                     Some(Notice::Refused(why)) => {
                         self.status = match rights_text(s, end) {
                             Some((rights, false)) => format!("{why}. {rights}"),
-                            _ => why,
-                        }
+                            _ => why.clone(),
+                        };
+                        self.refused = Some((why, now));
                     }
                     Some(Notice::Closed(why)) => {
                         closed = Some(why);
@@ -1223,6 +1277,31 @@ impl View {
         };
         let (from, to) = (self.view_start, self.view_end());
         let inside = |px: f32| px >= x && px <= x + w;
+        // Where we may place no notes, dimmed: all of it while we have nothing to map here,
+        // what's outside our parts otherwise.
+        let mut veil = |a: f64, b: f64| {
+            let (a, b) = (self.x_of(a).max(x), self.x_of(b).min(x + w));
+            if b > a {
+                c.rect(a, y + RULER, b - a, h - RULER - 1.0, rgba(0x000000, 0.5));
+            }
+        };
+        match s.rights() {
+            Rights::NoPart | Rights::NotOurs(_) => veil(from, to),
+            Rights::Parts(mut mine) => {
+                mine.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut at = from;
+                for (a, b) in mine {
+                    if a > at {
+                        veil(at, a.min(to));
+                    }
+                    at = at.max(b);
+                }
+                if at < to {
+                    veil(at, to);
+                }
+            }
+            _ => {}
+        }
         if let Some(doc) = s.state.documents.iter().find(|d| d.diff == s.sync.open()) {
             for part in &doc.parts {
                 if part.to < from || part.from > to {
@@ -1274,6 +1353,284 @@ impl View {
             let tw = Canvas::text_width(5.0, name) + 4.0;
             c.rect(px, y + 1.0, tw, 7.0, rgba(col, 0.9));
             c.text(px + 2.0, y + 2.0, 5.0, rgba(0x000000, 1.0), name);
+        }
+    }
+
+    /// The host's name, for what we tell or ask them.
+    fn host_name(&self) -> String {
+        self.collab
+            .as_ref()
+            .and_then(|s| s.participant(s.state.host))
+            .map_or_else(
+                || tr!("the host", "ホスト", "хост").to_string(),
+                |p| p.name.clone(),
+            )
+    }
+
+    /// What the timeline says about our rights, if anything: a card while we may place no
+    /// notes in the open difficulty (or one of our edits was just refused), a chip while we
+    /// only look on.
+    pub(super) fn rights_card(&self) -> Option<RightsCard> {
+        let s = self.collab.as_ref()?;
+        let refused = self
+            .refused
+            .as_ref()
+            .filter(|(_, at)| at.elapsed() < REFUSED_FOR)
+            .map(|(why, _)| capital(why));
+        let host = self.host_name();
+        let diff = s.diff_name(s.sync.open()).to_string();
+        let ask = || {
+            Some(
+                if self
+                    .asked_host_at
+                    .is_some_and(|t| t.elapsed() < ASK_AGAIN_AFTER)
+                {
+                    (
+                        tr!("Asked: see chat", "依頼済み: チャット", "Спросил: чат").to_string(),
+                        CollabAct::ShowChat,
+                    )
+                } else {
+                    (
+                        tr!("Ask {host}", "{host} に頼む", "Попросить {host}"; [] [host]),
+                        CollabAct::AskHost,
+                    )
+                },
+            )
+        };
+        let card = |title: String, body: String, button| RightsCard {
+            title,
+            body,
+            button,
+            card: true,
+        };
+        let chip = |title: String| RightsCard {
+            title,
+            body: String::new(),
+            button: None,
+            card: false,
+        };
+        let nothing_yet = || {
+            tr!(
+                "You can't place notes yet",
+                "まだノーツを置けません",
+                "Ты пока не можешь ставить ноты"
+            )
+            .to_string()
+        };
+        Some(match s.rights() {
+            Rights::NoPart => card(
+                nothing_yet(),
+                tr!("In a collab the host gives each mapper a part of the song, and {host} hasn't given you one. Ask for a part, or for everyone to map anywhere.", "コラボではホストが各マッパーに曲のパートを割り当てます。{host} はまだあなたにパートを割り当てていません。パートか、全員がどこでもマッピングできる設定を頼んでください。", "В коллабе хост выдаёт каждому мапперу часть песни, а {host} тебе её ещё не дал(а). Попроси часть или разрешить всем маппить где угодно."; [] [host]),
+                ask(),
+            ),
+            Rights::NotOurs(None) => card(
+                nothing_yet(),
+                tr!("Here the host gives each mapper a difficulty, and {host} hasn't given you one. Ask for one: it opens here once it's yours.", "ここではホストが各マッパーに難易度を割り当てます。{host} はまだあなたに割り当てていません。頼んでください。割り当てられるとここで開きます。", "Тут хост выдаёт каждому мапперу сложность, а {host} тебе её ещё не дал(а). Попроси: как только она твоя, она откроется здесь."; [] [host]),
+                ask(),
+            ),
+            Rights::NotOurs(Some(own)) => {
+                let open = s
+                    .state
+                    .documents
+                    .iter()
+                    .find(|d| d.owner == Some(s.me))
+                    .map(|d| d.diff);
+                card(
+                    tr!("{diff} isn't yours", "{diff} はあなたの担当ではありません", "{diff} не твоя"; [] [diff]),
+                    tr!("You map {own}: open it to place notes. Here you can look and chat.", "あなたの担当は {own} です。開くとノーツを置けます。ここでは見ることとチャットができます。", "Ты маппишь {own}: открой её, чтобы ставить ноты. Тут можно смотреть и писать в чат."; [] [own]),
+                    open.map(|d| {
+                        (
+                            tr!("Open {own}", "{own} を開く", "Открыть {own}"; [] [own]),
+                            CollabAct::OpenDiff(d),
+                        )
+                    }),
+                )
+            }
+            Rights::ReadOnly if refused.is_some() => {
+                let role = match s.participant(s.me).map(|p| p.role) {
+                    Some(Role::Modder) => tr!("a modder", "モッダー", "моддер"),
+                    _ => tr!("a viewer", "閲覧者", "зритель"),
+                };
+                card(
+                    tr!(
+                        "You can't place notes here",
+                        "ここではノーツを置けません",
+                        "Тут ты не можешь ставить ноты"
+                    )
+                    .to_string(),
+                    tr!("You're in as {role}: you chat and leave notes, only mappers place them. Ask {host} to make you a mapper.", "あなたは{role}として参加しています。チャットとコメントはできますが、ノーツを置けるのはマッパーだけです。{host} にマッパーにしてもらってください。", "Ты тут {role}: пишешь в чат и замечания, ноты ставят только мапперы. Попроси {host} сделать тебя маппером."; [] [role, host]),
+                    ask(),
+                )
+            }
+            Rights::ReadOnly => chip(
+                tr!(
+                    "View only: no notes",
+                    "閲覧のみ: ノーツ不可",
+                    "Только просмотр: без нот"
+                )
+                .to_string(),
+            ),
+            Rights::Locked if refused.is_some() => card(
+                tr!("{diff} is locked", "{diff} はロックされています", "{diff} закрыта"; [] [diff]),
+                tr!("The host locked it: only {host} edits it now.", "ホストがロックしました。今は {host} だけが編集できます。", "Хост закрыл её: сейчас её правит только {host}."; [] [host]),
+                None,
+            ),
+            Rights::Locked => {
+                chip(tr!("{diff} is locked", "{diff} はロック中", "{diff} закрыта"; [] [diff]))
+            }
+            // We map here, but that edit wasn't ours to make: why, and where we may.
+            rights => card(
+                refused?,
+                match rights {
+                    Rights::Parts(_) => rights_text(s, self.end_ms()).map(|(t, _)| t),
+                    _ => None,
+                }
+                .unwrap_or_default(),
+                None,
+            ),
+        })
+    }
+
+    /// Asks the host in the chat for something to map, once a while.
+    fn ask_host(&mut self) {
+        if self
+            .asked_host_at
+            .is_some_and(|t| t.elapsed() < ASK_AGAIN_AFTER)
+        {
+            return;
+        }
+        let Some(text) = self.ask_line() else {
+            return;
+        };
+        // Not connected: `say` tells so, and we may ask again once we are.
+        let connected = self.link.is_some();
+        self.say(Say::Chat, &text);
+        if connected {
+            let host = self.host_name();
+            self.asked_host_at = Some(Instant::now());
+            self.status = tr!("asked {host} in the session chat", "セッションのチャットで {host} に頼みました", "попросил(а) {host} в чате сессии"; [] [host]);
+        }
+    }
+
+    /// The chat line that asks the host for what we lack to map here (`None`: nothing to ask).
+    pub(super) fn ask_line(&self) -> Option<String> {
+        let s = self.collab.as_ref()?;
+        let host = self.host_name();
+        Some(match s.rights() {
+            Rights::NoPart => {
+                tr!("{host}, can you give me a part to map? Or let everyone map anywhere", "{host}さん、マッピングするパートをもらえますか？それとも全員どこでもマッピングできるようにしてもらえますか？", "{host}, дай мне часть, чтобы маппить? Или разреши всем маппить где угодно"; [] [host])
+            }
+            Rights::NotOurs(None) => {
+                tr!("{host}, can you give me a difficulty to map?", "{host}さん、マッピングする難易度をもらえますか？", "{host}, дай мне сложность, чтобы маппить?"; [] [host])
+            }
+            Rights::ReadOnly => {
+                tr!("{host}, can you make me a mapper? I'd like to place notes", "{host}さん、マッパーにしてもらえますか？ノーツを置きたいです", "{host}, сделай меня маппером? Хочу ставить ноты"; [] [host])
+            }
+            _ => return None,
+        })
+    }
+
+    /// The card over the timeline that says why we can't place notes here and what to do about
+    /// it (it shakes when an edit is refused), or the chip in the lane's corner while we only
+    /// look on. A click on it opens who maps what; its button does what it says.
+    pub(super) fn draw_rights_card(&mut self, c: &mut Canvas, [x, y, w, h]: [f32; 4]) {
+        let Some(card) = self.rights_card() else {
+            return;
+        };
+        let lane = y + RULER + STRIP;
+        if !card.card {
+            let cw = Canvas::text_width(5.5, &card.title) + 18.0;
+            let r = [x + w - cw - 4.0, lane + 3.0, cw, 11.0];
+            c.round_rect(
+                [r[0], r[1]],
+                [r[2], r[3]],
+                3.0,
+                rgba(0x241c0c, 0.92),
+                rgba(AMBER, 0.8),
+                1.0,
+            );
+            padlock(c, r[0] + 7.0, r[1] + 5.5, 0.8, AMBER);
+            c.text(r[0] + 12.0, r[1] + 2.8, 5.5, rgba(AMBER, 1.0), &card.title);
+            self.buttons.push((r, Btn::Collab(CollabAct::ShowWork)));
+            return;
+        }
+        let cw = (w - 24.0).min(420.0);
+        let button = card.button.map(|(label, act)| {
+            let bw = Canvas::text_width(6.5, &label) + 18.0;
+            (label, act, bw)
+        });
+        let text_w = cw - 32.0 - button.as_ref().map_or(0.0, |b| b.2 + 10.0);
+        let mut lines = super::chrome::wrap(5.5, text_w, &card.body);
+        lines.retain(|l| !l.is_empty());
+        lines.truncate(3);
+        let ch = 24.0 + lines.len().max(1) as f32 * 7.5;
+        let shake = self
+            .refused
+            .as_ref()
+            .map(|(_, at)| at.elapsed().as_secs_f32())
+            .filter(|&t| t < SHAKE_FOR);
+        let mut cx = x + (w - cw) / 2.0;
+        if let Some(t) = shake {
+            cx += (t * 45.0).sin() * 4.0 * (1.0 - t / SHAKE_FOR);
+        }
+        let cy = lane + ((y + h - lane - ch) / 2.0).max(2.0);
+        c.round_rect(
+            [cx + 2.0, cy + 3.0],
+            [cw, ch],
+            4.0,
+            rgba(0x000000, 0.5),
+            rgba(0, 0.0),
+            0.0,
+        );
+        let hot = c.hovered(cx, cy, cw, ch);
+        let fill = if shake.is_some() {
+            0x3a2c10
+        } else if hot {
+            0x231c12
+        } else {
+            0x1b1610
+        };
+        c.round_rect(
+            [cx, cy],
+            [cw, ch],
+            4.0,
+            rgba(fill, 0.97),
+            rgba(AMBER, 1.0),
+            if shake.is_some() { 1.5 } else { 1.0 },
+        );
+        c.rect(cx + 1.0, cy + 1.0, 2.5, ch - 2.0, rgba(AMBER, 1.0));
+        padlock(c, cx + 15.0, cy + ch / 2.0, 1.5, AMBER);
+        c.text(
+            cx + 26.0,
+            cy + 6.0,
+            7.5,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(7.5, text_w, &card.title),
+        );
+        for (i, l) in lines.iter().enumerate() {
+            c.text(
+                cx + 26.0,
+                cy + 18.0 + i as f32 * 7.5,
+                5.5,
+                rgba(0xd8d2c4, 1.0),
+                l,
+            );
+        }
+        self.buttons
+            .push(([cx, cy, cw, ch], Btn::Collab(CollabAct::ShowWork)));
+        if let Some((label, act, bw)) = button {
+            let r = [cx + cw - bw - 8.0, cy + (ch - 15.0) / 2.0, bw, 15.0];
+            let hot = c.hovered(r[0], r[1], r[2], r[3]);
+            c.round_rect(
+                [r[0], r[1]],
+                [r[2], r[3]],
+                4.0,
+                rgba(if hot { 0xffd894 } else { AMBER }, 1.0),
+                rgba(0, 0.0),
+                0.0,
+            );
+            c.text(r[0] + 9.0, r[1] + 4.0, 6.5, rgba(0x1a1408, 1.0), &label);
+            self.buttons.push((r, Btn::Collab(act)));
         }
     }
 }
@@ -2121,6 +2478,158 @@ mod tests {
         s.state.documents[1].owner = Some(2);
         let c = draw(&mut v);
         assert!(has_words(&c, "open Anna's Muzukashii"));
+    }
+
+    /// The dark veils over the timeline where we may place no notes: their left and right
+    /// edges.
+    fn veils(c: &Canvas) -> Vec<(f32, f32)> {
+        let veil = rgba(0x000000, 0.5);
+        c.shapes
+            .iter()
+            .filter(|s| s.fill == veil && s.border == veil)
+            .map(|s| (s.center[0] - s.half[0], s.center[0] + s.half[0]))
+            .collect()
+    }
+
+    #[test]
+    fn a_mapper_with_nothing_to_map_is_told_over_the_timeline_and_asks_the_host() {
+        let mut v = view(true);
+        let s = v.collab.as_mut().unwrap();
+        s.state.mode = Mode::Collab;
+        s.state.documents[1].owner = None;
+        s.me = 2;
+        // With the session's panel shut: a card over the notes' lane, not only a status line.
+        let c = draw(&mut v);
+        assert!(has_text(&c, "You can't place notes yet"));
+        assert!(has_words(&c, "host hasn't given you one"));
+        let ask = collab_buttons(&v)
+            .into_iter()
+            .find(|(_, a)| *a == CollabAct::AskHost)
+            .expect("a button that asks the host")
+            .0;
+        assert!(inside(v.layout.timeline, ask[0], ask[1]), "on the timeline");
+        let card = collab_buttons(&v)
+            .into_iter()
+            .find(|(_, a)| *a == CollabAct::ShowWork)
+            .expect("the card opens who maps what")
+            .0;
+        assert!(inside(v.layout.timeline, card[0], card[1]));
+        // The whole lane is dimmed: nothing of it is ours.
+        let [tx, _, tw, _] = v.layout.timeline;
+        assert_eq!(veils(&c), vec![(tx, tx + tw)]);
+        // The button asks the host in the chat for a part, or for everyone to map anywhere.
+        assert_eq!(
+            v.ask_line().as_deref(),
+            Some("host, can you give me a part to map? Or let everyone map anywhere")
+        );
+        // Not connected: nothing is sent, and the button stays to ask again.
+        v.press_collab(CollabAct::AskHost);
+        assert!(v.status.contains("not sent"), "{}", v.status);
+        assert!(v.asked_host_at.is_none());
+        // Once asked, the button opens the chat instead of asking again.
+        v.asked_host_at = Some(Instant::now());
+        let c = draw(&mut v);
+        assert!(has_text(&c, "Asked: see chat"));
+        assert!(
+            !collab_buttons(&v)
+                .iter()
+                .any(|(_, a)| *a == CollabAct::AskHost)
+        );
+        v.press_collab(CollabAct::ShowWork);
+        assert!(v.picking_mode);
+        assert_eq!(v.collab.as_ref().unwrap().tab, Tab::Work);
+        v.picking_mode = false;
+        // Given a part: no card, and only what's outside the part dimmed.
+        v.collab.as_mut().unwrap().state.documents[0].parts = vec![Part {
+            from: 1_000.0,
+            to: 2_000.0,
+            assignee: Some(2),
+        }];
+        let c = draw(&mut v);
+        assert!(!has_text(&c, "You can't place notes yet"));
+        assert_eq!(v.ask_line(), None);
+        let edges = veils(&c);
+        assert_eq!(edges.len(), 2, "{edges:?}");
+        assert_eq!(edges[0], (tx, v.x_of(1_000.0)));
+        assert_eq!(edges[1], (v.x_of(2_000.0), tx + tw));
+        // A note placed outside it is refused: why, in plain sight for a while, and where we
+        // may map instead.
+        let refused = LinkEvent::Down(Box::new(MapDown::Refused {
+            client_seq: 0,
+            why: "that note is in host's part".into(),
+        }));
+        v.take_link_events(vec![refused], Instant::now());
+        let c = draw(&mut v);
+        assert!(
+            has_text(&c, "That note is in host's part"),
+            "the card, not only the status line"
+        );
+        assert!(has_words(&c, "Your part: 0:01–0:02"));
+        let why = v.refused.as_ref().unwrap().0.clone();
+        v.refused = Some((why, Instant::now() - REFUSED_FOR));
+        let c = draw(&mut v);
+        assert!(!has_text(&c, "That note is in"), "gone after a while");
+    }
+
+    #[test]
+    fn modders_guests_and_locked_difficulties_say_why_no_notes_go_here() {
+        let mut v = view(true);
+        // bob, a modder: a chip in the corner while he looks on, not a card over the notes.
+        v.collab.as_mut().unwrap().me = 3;
+        let c = draw(&mut v);
+        assert!(has_text(&c, "View only: no notes"));
+        assert!(!has_text(&c, "You can't place notes here"));
+        assert!(veils(&c).is_empty(), "nothing dimmed for those who look on");
+        // A note he tries anyway: the card, and the host is asked to make him a mapper.
+        let refused = LinkEvent::Down(Box::new(MapDown::Refused {
+            client_seq: 0,
+            why: "you can't edit in this session".into(),
+        }));
+        v.take_link_events(vec![refused], Instant::now());
+        let c = draw(&mut v);
+        assert!(has_text(&c, "You can't place notes here"));
+        assert!(has_words(&c, "You're in as a modder"));
+        assert!(has_text(&c, "Ask host"));
+        assert_eq!(
+            v.ask_line().as_deref(),
+            Some("host, can you make me a mapper? I'd like to place notes")
+        );
+        // anna in guest difficulties, on the host's Oni: hers is a click away.
+        v.refused = None;
+        v.collab.as_mut().unwrap().me = 2;
+        let c = draw(&mut v);
+        assert!(has_text(&c, "Oni isn't yours"));
+        assert!(
+            collab_buttons(&v)
+                .iter()
+                .any(|(_, a)| *a == CollabAct::OpenDiff(1)),
+            "Open Anna's Muzukashii"
+        );
+        assert!(has_text(&c, "Open Anna's Muzukashii"));
+        assert_eq!(v.ask_line(), None, "nothing to ask for");
+        // Without a difficulty of her own: she asks for one.
+        v.collab.as_mut().unwrap().state.documents[1].owner = None;
+        let c = draw(&mut v);
+        assert!(has_text(&c, "You can't place notes yet"));
+        assert_eq!(
+            v.ask_line().as_deref(),
+            Some("host, can you give me a difficulty to map?")
+        );
+        // A locked difficulty: a chip, the card once an edit is refused.
+        let s = v.collab.as_mut().unwrap();
+        s.state.documents[0].locked = true;
+        let c = draw(&mut v);
+        assert!(has_text(&c, "Oni is locked"));
+        assert!(!has_words(&c, "only host edits it now"));
+        v.refused = Some(("Oni is locked".into(), Instant::now()));
+        let c = draw(&mut v);
+        assert!(has_words(&c, "only host edits it now"));
+        // The host edits everything: nothing of this.
+        v.refused = None;
+        v.collab.as_mut().unwrap().me = 1;
+        let c = draw(&mut v);
+        assert!(v.rights_card().is_none());
+        assert!(veils(&c).is_empty());
     }
 
     #[test]
