@@ -354,13 +354,13 @@ pub(super) fn crash_box_words(otherwise: &str) -> String {
 }
 
 /// Sends last time's crash report to the server in the background: true when it's on its way.
-/// The player's folder names are taken out first (`online::scrub_paths`).
+/// The player's folder names and system user name are taken out first (`scrub_report`).
 pub(crate) fn send_crash_report(server: &str, report: &str) -> bool {
     if update::BUILD.is_none() {
         // A local build's crashes are the developer's own, seen already.
         return false;
     }
-    let mut text = online::scrub_paths(report);
+    let mut text = scrub_report(report, &system_user_name());
     if text.len() > online::MAX_CRASH_REPORT {
         // The start (what crashed) and the end (the log's last lines) say most.
         let head: String = text.chars().take(online::MAX_CRASH_REPORT / 2).collect();
@@ -387,6 +387,20 @@ pub(crate) fn send_crash_report(server: &str, report: &str) -> bool {
         }
     });
     true
+}
+
+/// A crash report as it may leave the computer: no user folders in its paths
+/// (`online::scrub_paths`) and no system user name (`user`) anywhere else.
+pub(crate) fn scrub_report(report: &str, user: &str) -> String {
+    online::scrub_user_name(&online::scrub_paths(report), user)
+}
+
+/// Who is logged in to the system: `USERNAME` on Windows, `USER` or `LOGNAME` elsewhere.
+fn system_user_name() -> String {
+    ["USERNAME", "USER", "LOGNAME"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+        .unwrap_or_default()
 }
 
 /// The report of a crash last time that hasn't been offered yet (and forgets it).
