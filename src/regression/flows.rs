@@ -560,12 +560,15 @@ fn the_terms_hold_up_in_every_language() {
             english,
             "every translation has the same headings and points:\n{text}"
         );
+        // Line by line, as drawn: a Windows checkout ends them with \r\n.
+        let undrawable: String = text
+            .lines()
+            .flat_map(str::chars)
+            .filter(|&c| !crate::font::drawable(c))
+            .collect();
         assert!(
-            text.chars().all(|c| c == '\n' || crate::font::drawable(c)),
-            "every letter can be drawn: {:?}",
-            text.chars()
-                .filter(|&c| c != '\n' && !crate::font::drawable(c))
-                .collect::<String>()
+            undrawable.is_empty(),
+            "every letter can be drawn: {undrawable:?}"
         );
         assert!(text.contains("postmaster@auneu.space"), "where to ask");
         assert!(
