@@ -246,6 +246,8 @@ pub struct Connecting {
     songs: PathBuf,
     host: Option<HostSet>,
     dir: Option<PathBuf>,
+    /// The difficulty to open if the session has it: the one we were on when we left.
+    prefer: Option<u32>,
     joined: Option<(u64, u32, u32)>,
     state: Option<SessionState>,
     pieces: SnapshotPieces,
@@ -274,9 +276,10 @@ impl Connecting {
 
     /// Back into a session left earlier: the set is the one in `dir`, where we worked on it
     /// (the host's own folder too), brought up to date.
-    pub fn rejoin(dir: PathBuf) -> Connecting {
+    pub fn rejoin(dir: PathBuf, diff: u32) -> Connecting {
         let mut c = Connecting::guest(PathBuf::new());
         c.dir = Some(dir);
+        c.prefer = Some(diff);
         c
     }
 
@@ -286,6 +289,7 @@ impl Connecting {
             songs,
             host: None,
             dir: None,
+            prefer: None,
             joined: None,
             state: None,
             pieces: SnapshotPieces::default(),
@@ -513,12 +517,19 @@ impl Connecting {
         let dir = self.dir.clone()?;
         let state = self.state.take()?;
         let (seq, data) = self.snapshot.take()?;
-        let open = state
-            .documents
-            .iter()
-            .find(|d| d.owner == Some(me) || d.parts.iter().any(|p| p.assignee == Some(me)))
-            .or(state.documents.first())
-            .map_or(0, |d| d.diff);
+        // Back where we left, else on our own work, else the first difficulty.
+        let open = self
+            .prefer
+            .filter(|p| state.documents.iter().any(|d| d.diff == *p))
+            .or_else(|| {
+                state
+                    .documents
+                    .iter()
+                    .find(|d| d.owner == Some(me) || d.parts.iter().any(|p| p.assignee == Some(me)))
+                    .or(state.documents.first())
+                    .map(|d| d.diff)
+            })
+            .unwrap_or(0);
         let doc = data
             .docs
             .iter()
@@ -528,9 +539,17 @@ impl Connecting {
             return Some(Err("the session has no difficulty".into()));
         };
         let open = doc.diff;
-        let existing = charts_in(&dir)
+        // The file of that difficulty, of its kind: a .tko's, not the .osu it was made from.
+        let tko = is_tko_text(&doc.text);
+        let named: Vec<(PathBuf, String)> = charts_in(&dir)
             .into_iter()
-            .find(|(_, text)| version(text).as_deref() == Some(doc.name.as_str()));
+            .filter(|(_, text)| version(text).as_deref() == Some(doc.name.as_str()))
+            .collect();
+        let existing = named
+            .iter()
+            .find(|(_, text)| is_tko_text(text) == tko)
+            .or(named.first())
+            .cloned();
         let path = match existing {
             Some((p, _)) => p,
             None => {
@@ -797,7 +816,7 @@ mod tests {
         let set = HostSet::read(&dir).unwrap();
         let d = set.descriptor();
         let snapshot = host_snapshot(&set.charts).unwrap();
-        let mut c = Connecting::rejoin(dir.clone());
+        let mut c = Connecting::rejoin(dir.clone(), 0);
         c.take(joined(4, 1, Vec::new())).unwrap();
         assert!(
             c.take(down(MapDown::State(state(&d)))).unwrap().is_empty(),
@@ -824,6 +843,80 @@ mod tests {
         let r = c.ready().unwrap().unwrap();
         assert_eq!(r.path.parent(), Some(dir.as_path()), "not a copy in Songs");
         assert_eq!(r.seq, 7);
+    }
+
+    /// Back into a session, the editor opens on the difficulty we were on when we left, not
+    /// the first one with work of ours (a guest who had gone to another difficulty landed where
+    /// they couldn't map, as if their rights were gone).
+    #[test]
+    fn going_back_opens_the_difficulty_we_left_and_a_tko_its_own_file() {
+        let (dir, _) = host_dir();
+        let inner = MAP
+            .replace("Title:Test", "Artist:Artist\r\nTitle:Song")
+            .replace("Version:Oni", "Version:Anna's Inner");
+        std::fs::write(dir.join("Artist - Song (host) [Anna's Inner].osu"), &inner).unwrap();
+        // Anna (2) owns Anna's Inner; the documents in the set's order.
+        let open = |c: &mut Connecting| {
+            let set = HostSet::read(&dir).unwrap();
+            let mut s = state(&set.descriptor());
+            s.documents = set
+                .charts
+                .iter()
+                .enumerate()
+                .map(|(i, (name, _))| Document {
+                    diff: i as u32,
+                    name: name.clone(),
+                    owner: (name == "Anna's Inner").then_some(2),
+                    parts: Vec::new(),
+                    locked: false,
+                    accepted: false,
+                })
+                .collect();
+            let snapshot = host_snapshot(&set.charts).unwrap();
+            c.take(joined(4, 2, Vec::new())).unwrap();
+            c.take(down(MapDown::State(s))).unwrap();
+            for up in snapshot_lines(7, &snapshot) {
+                let MapUp::Snapshot {
+                    seq,
+                    part,
+                    parts,
+                    data,
+                } = up
+                else {
+                    unreachable!()
+                };
+                c.take(down(MapDown::Snapshot {
+                    seq,
+                    part,
+                    parts,
+                    data,
+                }))
+                .unwrap();
+            }
+            let r = c.ready().unwrap().unwrap();
+            let name = set.charts[r.open as usize].0.clone();
+            (name, r.path)
+        };
+        let diff = |name: &str| {
+            let set = HostSet::read(&dir).unwrap();
+            set.charts.iter().position(|(n, _)| n == name).unwrap() as u32
+        };
+        let (name, path) = open(&mut Connecting::rejoin(dir.clone(), diff("Oni")));
+        assert_eq!(name, "Oni", "where we were, not our own difficulty");
+        assert!(path.to_string_lossy().ends_with("[Oni].osu"));
+        // A difficulty the session no longer has: our own work, as on a first join.
+        let (name, _) = open(&mut Connecting::rejoin(dir.clone(), 99));
+        assert_eq!(name, "Anna's Inner");
+        // Beside the .osu, the session's .tko of that difficulty is the file it opens.
+        let tko = crate::tko::format::write(&inner, &Default::default()).unwrap();
+        std::fs::write(dir.join("Artist - Song (host) [Anna's Inner].tko"), &tko).unwrap();
+        let (name, path) = open(&mut Connecting::rejoin(dir.clone(), diff("Anna's Inner")));
+        assert_eq!(name, "Anna's Inner");
+        assert!(
+            path.to_string_lossy().ends_with("[Anna's Inner].tko"),
+            "{}",
+            path.display()
+        );
     }
 
     #[test]
