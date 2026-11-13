@@ -46,6 +46,10 @@ impl Screen for HudEdit {
         "HudEdit"
     }
 
+    fn back_scene(&self) -> Option<&Scene> {
+        Some(&self.back)
+    }
+
     fn activity(&self) -> &'static str {
         "interface editor"
     }

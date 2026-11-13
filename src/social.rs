@@ -213,6 +213,9 @@ pub struct Social {
     pub invites: HashMap<u64, MappingInvite>,
     /// We host a mapping session in the editor: friends online get an invite button.
     pub can_invite: bool,
+    /// We're in a mapping session in the editor but don't host it: these friends (keys) were in
+    /// it and left, and get an invite button to be called back.
+    pub invite_back: Vec<String>,
     /// The friend list has been received since connecting (later changes notify).
     pub have_list: bool,
     pub conn: Option<online::Social>,
@@ -1925,7 +1928,9 @@ fn draw_rows(
                         }
                         _ => bx,
                     };
-                    if s.can_invite && f.activity.is_some() {
+                    if (s.can_invite || s.invite_back.contains(&key(&f.name)))
+                        && f.activity.is_some()
+                    {
                         bx = button(c, bx, by, "invite", Hit::SocialAction(i, Action::Invite), a)
                             - 4.0;
                     }
@@ -3490,6 +3495,45 @@ mod tests {
         // Anything else stays a message.
         assert_eq!(now_playing_in("is playing with fire"), None);
         assert_eq!(now_playing_in("hi [x]"), None);
+    }
+
+    #[test]
+    fn in_a_session_we_dont_host_only_those_who_left_it_get_an_invite_button() {
+        let mut s = Social {
+            me: Some("anna".into()),
+            friends: vec![friend("host", true), friend("vic", true)],
+            // The host left the session anna stayed in; vic was never in it.
+            invite_back: vec![key("Host")],
+            open: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            s.rows(false),
+            vec![Row::AddFriend, Row::Friend(0), Row::Friend(1)]
+        );
+        let invites = |s: &Social| {
+            let mut c = Canvas {
+                audit: true,
+                ..Default::default()
+            };
+            c.clear(853.0);
+            draw(&mut c, s, true, None, 0, false, true, None);
+            c.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::SocialAction(_, Action::Invite)))
+                .map(|h| h.hit)
+                .collect::<Vec<_>>()
+        };
+        s.cursor = 1;
+        assert_eq!(invites(&s), vec![Hit::SocialAction(1, Action::Invite)]);
+        s.cursor = 2;
+        assert!(
+            invites(&s).is_empty(),
+            "someone new is the host's to invite"
+        );
+        // The host invites anyone.
+        s.can_invite = true;
+        assert_eq!(invites(&s), vec![Hit::SocialAction(2, Action::Invite)]);
     }
 
     #[test]

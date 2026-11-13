@@ -192,6 +192,24 @@ impl Session {
         self.state.participants.iter().find(|p| p.id == who)
     }
 
+    /// Those in the session who left it (offline), ourselves aside: anyone of us may invite
+    /// them back, the host too.
+    pub fn left_participants(&self) -> impl Iterator<Item = &Participant> {
+        self.state
+            .participants
+            .iter()
+            .filter(|p| !p.online && p.id != self.me)
+    }
+
+    /// Whether we may invite `name`: the host anyone, everyone else someone who left the
+    /// session, to call them back (the server lets the others invite no one new).
+    pub fn may_invite(&self, name: &str) -> bool {
+        self.state.host == self.me
+            || self
+                .left_participants()
+                .any(|p| crate::social::key(&p.name) == crate::social::key(name))
+    }
+
     /// A player's colour (0xRRGGBB); grey for someone the session doesn't list.
     pub fn colour(&self, who: u32) -> u32 {
         self.participant(who).map_or(0x9A9AA8, |p| p.colour)
@@ -440,19 +458,28 @@ impl Session {
         name: &str,
         chart: &Chart,
     ) -> std::path::PathBuf {
-        files
+        let ext = if chart.gimmick.is_some() {
+            "tko"
+        } else {
+            "osu"
+        };
+        let named: Vec<&std::path::PathBuf> = files
             .iter()
-            .find(|(_, text)| super::connect::version(text).as_deref() == Some(name))
-            .map(|(p, _)| p.clone())
-            .unwrap_or_else(|| {
-                let ext = if chart.gimmick.is_some() {
-                    "tko"
-                } else {
-                    "osu"
-                };
+            .filter(|(_, text)| super::connect::version(text).as_deref() == Some(name))
+            .map(|(p, _)| p)
+            .collect();
+        // A .tko never goes into the .osu it was made from: that stays an osu! map.
+        let same_kind = named
+            .iter()
+            .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)));
+        match (same_kind, named.first()) {
+            (Some(p), _) => (*p).clone(),
+            (None, Some(p)) => p.with_extension(ext),
+            (None, None) => {
                 let file = format!("{} [{name}].{ext}", self.state.title);
                 dir.join(crate::download::safe_folder_name(&file))
-            })
+            }
+        }
     }
 
     /// The difficulties `who` has work in: a guest difficulty given to them, or parts.
@@ -589,6 +616,23 @@ pub(crate) mod tests {
         (Session::new(sync, state(), 1), ed)
     }
 
+    #[test]
+    fn anyone_calls_back_who_left_and_only_the_host_invites_someone_new() {
+        let (mut s, _) = session();
+        assert!(s.may_invite("vic"), "the host invites anyone");
+        // anna, with the host gone: she may call the host back, nobody new and not herself.
+        s.me = 2;
+        s.state.participants[0].online = false;
+        assert!(s.may_invite("HOST"));
+        assert!(!s.may_invite("bob"), "bob is still in");
+        assert!(!s.may_invite("vic"));
+        assert!(!s.may_invite("anna"));
+        let left: Vec<&str> = s.left_participants().map(|p| p.name.as_str()).collect();
+        assert_eq!(left, vec!["host"]);
+        s.state.participants[2].online = false;
+        assert!(s.may_invite("bob"));
+    }
+
     fn presence(who: u32, diff: u32, time: f64, selection: Vec<u64>) -> MapDown {
         MapDown::Presence {
             who,
@@ -597,6 +641,30 @@ pub(crate) mod tests {
             cursor: None,
             selection,
         }
+    }
+
+    #[test]
+    fn a_difficulty_made_a_tko_is_saved_beside_its_osu_not_over_it() {
+        let (s, ed) = session();
+        let dir = PathBuf::from("set");
+        let osu = dir.join("Test [Oni].osu");
+        let files = vec![(osu.clone(), MAP.to_string())];
+        let mut chart = ed.chart.clone();
+        assert_eq!(s.diff_path(&dir, &files, "Oni", &chart), osu);
+        chart.gimmick = Some(Default::default());
+        assert_eq!(
+            s.diff_path(&dir, &files, "Oni", &chart),
+            dir.join("Test [Oni].tko")
+        );
+        // Once the .tko is there, that's where it goes; the .osu keeps the plain chart.
+        let tko = dir.join("Test [Oni].tko");
+        let files = vec![
+            (osu.clone(), MAP.to_string()),
+            (tko.clone(), MAP.to_string()),
+        ];
+        assert_eq!(s.diff_path(&dir, &files, "Oni", &chart), tko);
+        chart.gimmick = None;
+        assert_eq!(s.diff_path(&dir, &files, "Oni", &chart), osu);
     }
 
     #[test]

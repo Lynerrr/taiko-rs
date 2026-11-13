@@ -14,7 +14,7 @@ pub(crate) struct MappingJoin {
     server: String,
     token: String,
     /// Going back into a session left earlier: offered again if it doesn't work out for now.
-    rejoin: Option<LeftSession>,
+    pub(crate) rejoin: Option<LeftSession>,
 }
 
 impl State {
@@ -86,7 +86,7 @@ impl State {
             token,
             session: left.session,
         };
-        let connecting = Connecting::rejoin(left.dir.clone());
+        let connecting = Connecting::rejoin(left.dir.clone(), left.diff);
         self.start_mapping(request, connecting);
         if let Some(j) = &mut self.mapping_join {
             j.rejoin = Some(left);
@@ -154,6 +154,15 @@ impl State {
         if !self.mapping_ok() || self.mapping_join.is_some() {
             return;
         }
+        // Invited back into the session we left: into the same set and difficulty.
+        if self
+            .left_mapping
+            .as_ref()
+            .is_some_and(|l| l.session == session)
+        {
+            self.rejoin_mapping();
+            return;
+        }
         let token = self.cfg.online_token.clone();
         let songs = self.songs_dir.clone();
         self.start_mapping(
@@ -202,11 +211,16 @@ impl State {
     /// Every frame while getting into a session: what the connection says, and the editor
     /// opened on the session once everything is in.
     pub(crate) fn poll_mapping(&mut self) {
-        self.social.can_invite = self.mapping_ok()
-            && self
-                .scene
-                .screen_as::<MapEditor>()
-                .is_some_and(|e| e.view.hosting());
+        let view = self
+            .scene
+            .screen_as::<MapEditor>()
+            .map(|e| &e.view)
+            .filter(|_| self.mapping_ok());
+        self.social.can_invite = view.is_some_and(|v| v.hosting());
+        let back = view.map(|v| v.invite_back()).unwrap_or_default();
+        if self.social.invite_back != back {
+            self.social.invite_back = back;
+        }
         let Some(j) = &mut self.mapping_join else {
             return;
         };
@@ -280,10 +294,11 @@ impl State {
         }
     }
 
-    /// The host invites a friend to the session open in the editor.
+    /// Invites a friend to the session open in the editor: the host anyone, everyone else
+    /// someone who was in it and left.
     pub(crate) fn invite_to_mapping(&mut self, name: String) {
         if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
-            && view.hosting()
+            && view.can_invite(&name)
         {
             view.send_host(HostCmd::Invite(name.clone()));
             self.toast(

@@ -52,6 +52,7 @@ mod layout;
 #[cfg(test)]
 mod layout_tests;
 mod library;
+mod library_refresh;
 mod link;
 mod logo;
 mod mapguessr;
@@ -686,6 +687,11 @@ struct State {
     scan: Option<(Receiver<Scanned>, Arc<AtomicUsize>)>,
     /// The list is up from the cache, and the scan is checking it against the disk.
     scan_checking: bool,
+    /// The scan running is a look again (`library_refresh`): Some(true) when the player asked for
+    /// it, and is told what came of it.
+    refreshing: Option<bool>,
+    /// When the songs folders were last looked at again (`library_refresh`).
+    refreshed_at: Option<Instant>,
     /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
     /// there is no dialog.
     folder_pick: Job<Result<Option<PathBuf>, String>>,
@@ -1079,10 +1085,7 @@ impl State {
                 self.select.gone.insert(path);
             }
         }
-        if let Some(info) = &self.mapinfo {
-            info.extend(changed);
-            self.mapinfo_sorted = false;
-        }
+        self.maps_rewritten(changed);
         added.sort_by(|a, b| a.path.cmp(&b.path));
         let paths: Vec<PathBuf> = added.iter().map(|e| e.path.clone()).collect();
         let n = paths.len();
@@ -2308,13 +2311,23 @@ impl State {
         self.scene.screen().and_then(|s| s.calibration())
     }
 
-    /// Drops the game when its scene has gone (the settings over its pause menu keep it).
+    /// Drops the game when its scene has gone. The settings over its pause menu keep it, and so
+    /// does an editor opened from them (the playfield area's, the interface's): Esc goes back
+    /// through them to the pause menu.
     fn drop_finished_play(&mut self) {
-        let scene = self.behind_settings().unwrap_or(&self.scene);
-        let holds = scene.screen().is_some_and(|s| s.holds_game());
-        if !holds {
-            self.play = None;
+        let mut scene = &self.scene;
+        // The way back: an editor to the settings, the settings to what they were opened over.
+        for _ in 0..4 {
+            match scene.screen() {
+                Some(s) if s.holds_game() => return,
+                Some(s) if s.back_scene().is_some() => scene = s.back_scene().unwrap(),
+                Some(s) if s.settings() && self.behind.is_some() => {
+                    scene = self.behind.as_deref().unwrap();
+                }
+                _ => break,
+            }
         }
+        self.play = None;
     }
 
     /// A play (or calibration) is running, not paused.
@@ -4062,6 +4075,7 @@ impl State {
         });
         self.scan = Some(start_scan(inputs));
         self.scan_checking = false;
+        self.refreshing = None;
         self.select.scanning = Some(0);
         Ok(())
     }
@@ -7901,11 +7915,14 @@ impl State {
             Err(mpsc::TryRecvError::Disconnected) if self.scan_checking => {
                 self.scan = None;
                 self.scan_checking = false;
+                self.refreshing = None;
                 return;
             }
             Err(mpsc::TryRecvError::Disconnected) => Scanned::Done(Vec::new()),
         };
         match scanned {
+            // A look again (`refresh_library`): the list is up already.
+            Scanned::Cached(_) if self.scan_checking => {}
             Scanned::Cached(library) => {
                 self.use_library(library, None);
                 self.scan_checking = true;
@@ -7922,52 +7939,104 @@ impl State {
         }
     }
 
-    /// The scan's list against the one up from the cache: what's new joins the end and what's
-    /// changed takes its place, so the indices handed out stay good. What's gone takes the list
-    /// being rebuilt, which waits for a next launch if anything could be holding on to one.
-    fn check_library(&mut self, checked: Vec<Entry>) {
+    /// The scan's list against the one up: what's new joins the end and what's changed takes its
+    /// place, so the indices handed out stay good. What's gone takes the list being rebuilt, which
+    /// waits for a next launch if anything could be holding on to one. A map the scan doesn't
+    /// cover (one opened by itself) stays while its file is there.
+    fn check_library(&mut self, mut checked: Vec<Entry>) {
+        let refreshing = self.refreshing.take();
+        // Nothing where there were maps: the folder can't be reached just now (a drive
+        // unplugged), not every map deleted.
+        if refreshing.is_some() && checked.is_empty() && !self.library.is_empty() {
+            if refreshing == Some(true) {
+                self.toast(
+                    tr!(
+                        "the songs folder can't be read just now",
+                        "曲フォルダを今は読めません",
+                        "папку с песнями сейчас не прочитать"
+                    )
+                    .to_string(),
+                );
+            }
+            return;
+        }
         let index: std::collections::HashMap<PathBuf, usize> = self
             .library
             .iter()
             .enumerate()
             .map(|(i, e)| (e.path.clone(), i))
             .collect();
-        let gone = {
-            let there: std::collections::HashSet<&Path> =
-                checked.iter().map(|e| e.path.as_path()).collect();
-            self.library
-                .iter()
-                .any(|e| !there.contains(e.path.as_path()))
-        };
-        if gone && self.scene.is_select() && self.mp.is_none() {
+        // The scan's cache keeps a set while its folder's time holds, and a file rewritten in
+        // place doesn't move it: a map that differs from the list is read again from the disk.
+        for e in &mut checked {
+            let Some(&i) = index.get(&e.path) else {
+                continue;
+            };
+            let old = &self.library[i];
+            if (old.size, old.modified) != (e.size, e.modified)
+                && library::file_stats(&e.path) != (e.size, e.modified)
+                && let Some(meta) = beatmap::read_meta_file(&e.path)
+            {
+                *e = Entry::new(e.path.clone(), meta);
+            }
+        }
+        let there: std::collections::HashSet<PathBuf> =
+            checked.iter().map(|e| e.path.clone()).collect();
+        let gone: Vec<PathBuf> = self
+            .library
+            .iter()
+            .filter(|e| !there.contains(&e.path) && !e.path.is_file())
+            .map(|e| e.path.clone())
+            .collect();
+        if !gone.is_empty() && self.scene.is_select() && self.mp.is_none() {
             let selected = self
                 .select
                 .selected()
                 .and_then(|i| self.library.get(i))
                 .map(|e| e.path.clone());
+            let (mut added, mut changed) = (0, 0);
+            for e in &checked {
+                match index.get(&e.path).map(|&i| &self.library[i]) {
+                    None => added += 1,
+                    Some(old) if (old.size, old.modified) != (e.size, e.modified) => changed += 1,
+                    Some(_) => {}
+                }
+            }
+            let old = std::mem::take(&mut self.library);
+            checked.extend(
+                old.into_iter()
+                    .filter(|e| !there.contains(&e.path) && e.path.is_file()),
+            );
             self.use_library(checked, selected);
+            self.report_refresh(refreshing, added, changed, gone.len());
             return;
         }
+        for path in &gone {
+            self.select.gone.insert(path.clone());
+        }
         let mut fresh = Vec::new();
-        let mut changed = false;
+        let mut changed = Vec::new();
         for entry in checked {
             match index.get(&entry.path) {
                 Some(&i) => {
                     let old = &self.library[i];
-                    if old.size != entry.size || old.modified != entry.modified {
+                    if (old.size, old.modified) != (entry.size, entry.modified) {
+                        changed.push((i, entry.path.clone(), entry.modified, entry.size));
                         self.library[i] = entry;
-                        changed = true;
                     }
                 }
                 None => fresh.push(entry),
             }
         }
+        let (added, edited) = (fresh.len(), changed.len());
+        self.maps_rewritten(changed);
         if !fresh.is_empty() {
             self.append_maps(fresh);
-        } else if changed {
+        } else if edited > 0 || !gone.is_empty() {
             self.select.refilter(&self.library);
         }
         self.find_lobby_map();
+        self.report_refresh(refreshing, added, edited, gone.len());
     }
 
     /// `library` in place of the list, on `selected` if that's still there, else a random song.
@@ -12786,10 +12855,7 @@ impl State {
                 }
             }
         }
-        if let Some(info) = &self.mapinfo {
-            info.extend(changed);
-            self.mapinfo_sorted = false;
-        }
+        self.maps_rewritten(changed);
         let mut added: Vec<Entry> = fresh.into_values().collect();
         added.sort_by(|a, b| a.path.cmp(&b.path));
         self.append_maps(added);
