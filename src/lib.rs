@@ -462,6 +462,9 @@ struct State {
     pending_changelog: Option<changelog::View>,
     /// The terms, open to be agreed to (shown whenever nothing is playing).
     terms: Option<terms::View>,
+    /// The version of the terms the online server has this account agreeing to, when the
+    /// server keeps it (`online::TERMS_FEATURE`): a newer agreement here is sent to it.
+    terms_kept: Option<u32>,
     /// Online leaderboards fetched (by map hash and whether it's the Relax board: when, and the
     /// rows or why not), and the one being fetched.
     online_boards: std::collections::HashMap<(u64, bool), (Instant, Board)>,
@@ -7542,6 +7545,7 @@ impl State {
             (terms::Answer::Agreed, purpose) => {
                 self.cfg.terms_version = terms::VERSION;
                 self.cfg.save();
+                self.send_terms();
                 // The sign-up the terms stopped goes on.
                 if purpose == terms::Purpose::Register
                     && self.mp_menu.form == multiplayer::Form::Register
@@ -7567,7 +7571,28 @@ impl State {
         }
     }
 
+    /// Tells a server that keeps the agreement to the terms about a newer one made here. The
+    /// answer is only the account again, so nothing waits for it.
+    fn send_terms(&mut self) {
+        let Some(kept) = self.terms_kept else {
+            return;
+        };
+        let version = self.cfg.terms_version;
+        if version <= kept || self.cfg.online_token.is_empty() {
+            return;
+        }
+        self.terms_kept = Some(version);
+        let server = self.cfg.online_server.clone();
+        let token = self.cfg.online_token.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = online::call(&server, online::Request::AcceptTerms { token, version }) {
+                eprintln!("couldn't record the terms on the server: {e}");
+            }
+        });
+    }
+
     fn sign_out(&mut self, why: &str) {
+        self.terms_kept = None;
         self.social = social::Social::default();
         self.select.nominator = false;
         self.admin = false;
@@ -7816,6 +7841,7 @@ impl State {
                             admin,
                             email,
                             features,
+                            terms: terms_kept,
                         }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
@@ -7872,6 +7898,14 @@ impl State {
                             self.cfg.online_token = token;
                             self.cfg.save();
                             self.mp_menu.refresh(&self.cfg.online_server);
+                            // The server keeps the agreement: agreed on another install counts
+                            // here, and agreed here goes to the server.
+                            self.terms_kept = online::keeps_terms(&features).then_some(terms_kept);
+                            if self.terms_kept.is_some() && terms_kept > self.cfg.terms_version {
+                                self.cfg.terms_version = terms_kept;
+                                self.cfg.save();
+                            }
+                            self.send_terms();
                             // An account from before the terms (or this version of them).
                             if self.cfg.terms_version < terms::VERSION && self.terms.is_none() {
                                 self.terms = Some(terms::View::new(terms::Purpose::Account));
