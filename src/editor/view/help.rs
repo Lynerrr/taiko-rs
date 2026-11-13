@@ -189,7 +189,17 @@ impl View {
             return;
         }
         let (mx, my) = self.mouse;
-        let Some((_, text)) = self.tips.iter().rev().find(|(r, _)| inside(*r, mx, my)) else {
+        // Over the session's window, only its own tips: never those of what it covers.
+        let from = if self.over_session_panel() {
+            self.panel_tips_from.min(self.tips.len())
+        } else {
+            0
+        };
+        let Some((_, text)) = self.tips[from..]
+            .iter()
+            .rev()
+            .find(|(r, _)| inside(*r, mx, my))
+        else {
             return;
         };
         let lines = wrap(6.5, 200.0, text);
@@ -224,6 +234,7 @@ impl View {
     /// Everything that goes over the screen, in the order it stacks.
     pub(super) fn draw_overlays(&mut self, c: &mut Canvas) {
         self.draw_menu_drop(c);
+        self.draw_session_window(c);
         self.draw_svt_drop(c);
         self.draw_fx_drop(c);
         self.draw_snap_pop(c);

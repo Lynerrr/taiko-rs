@@ -2036,6 +2036,45 @@ fn a_maps_text_and_pictures_are_drawn_while_their_clips_last() {
     assert_eq!(c.shapes[0].half, [36.0, 18.0], "as wide as its shape says");
 }
 
+#[test]
+fn an_animated_picture_plays_from_the_start_of_its_layer() {
+    use crate::tko::clips::{Clip, Show, Target};
+    draw_with_defaults();
+    let mut g = crate::tko::gimmick::Gimmick::default();
+    let layer = |file: &str, start: f64, end: f64, keep: bool| {
+        let mut clip = Clip::new(Target::Layer, start, end);
+        clip.keep = keep;
+        clip.layer.as_deref_mut().unwrap().show = Show::Picture { file: file.into() };
+        clip
+    };
+    // The same picture twice: the first layer drawn sets where it is.
+    g.clips = vec![
+        layer("FX.gif", 2000.0, 6000.0, true),
+        layer("fx.gif", 3000.0, 6000.0, false),
+        layer("still.png", 2000.0, 6000.0, false),
+    ];
+    let mut game = tko_game(Some(g), Mods::NONE);
+    let times = |game: &mut Play, t: f64| {
+        game.put_at(t);
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        game.draw_playfield(&mut c, 1.0);
+        c.picture_times
+    };
+    assert!(
+        times(&mut game, 1000.0).is_empty(),
+        "nothing before it starts"
+    );
+    let at = times(&mut game, 4500.0);
+    let fx = at.iter().find(|(n, _)| n == "fx.gif").unwrap().1;
+    assert!((fx - 2500.0).abs() < 1.0, "{at:?}");
+    assert_eq!(at.iter().filter(|(n, _)| n == "fx.gif").count(), 1);
+    // Kept past its end, it plays on.
+    let at = times(&mut game, 8000.0);
+    let fx = at.iter().find(|(n, _)| n == "fx.gif").unwrap().1;
+    assert!((fx - 6000.0).abs() < 1.0, "{at:?}");
+}
+
 /// A map's text and pictures are placed on the editor's 16:9 frame, from its middle: in a play
 /// area of another shape their sideways offset scales with its width, so they stay inside.
 #[test]
@@ -2344,6 +2383,52 @@ fn screen_effects_add_to_the_picture_and_never_change_judging() {
     let base = run(None);
     assert!(base.0 > 20, "autoplay hits the notes: {base:?}");
     assert_eq!(run(Some(effects_gimmick())), base);
+}
+
+#[test]
+fn the_lane_turns_see_through_however_far_the_playfield_is_zoomed_out() {
+    use crate::tko::gimmick::FieldProp;
+    use crate::tko::track::{Ease, Key};
+    draw_with_defaults();
+    // The widest shape left to see: the lane while it shows, a note once it's gone.
+    let widest = |zoom: f64, lane_fade: f64, flip: f64| {
+        let mut gimmick = crate::tko::gimmick::Gimmick::default();
+        for (p, v) in [
+            (FieldProp::Zoom, zoom),
+            (FieldProp::LaneFade, lane_fade),
+            (FieldProp::Flip, flip),
+        ] {
+            gimmick.key_field(
+                p,
+                Key {
+                    t: 0.0,
+                    v,
+                    ease: Ease::Linear,
+                },
+            );
+        }
+        let mut g = tko_game(Some(gimmick), Mods::NONE);
+        g.put_at(9000.0);
+        let mut c = Canvas::default();
+        c.clear(853.3);
+        g.draw_playfield(&mut c, 1.0);
+        c.shapes
+            .iter()
+            .filter(|s| s.fill[3] > 0.01 || s.border[3] > 0.01)
+            .map(|s| s.half[0].abs().max(s.half[1].abs()))
+            .fold(0.0f32, f32::max)
+    };
+    for zoom in [1.0, 0.8, 0.6, 0.5, 0.3, -0.5] {
+        let shown = widest(zoom, 0.0, 0.0);
+        let gone = widest(zoom, 1.0, 0.0);
+        assert!(
+            gone < shown * 0.5,
+            "zoom {zoom}: the lane still shows ({gone} of {shown})"
+        );
+    }
+    // Turning over (a flip under way squeezes it) keeps it see-through too.
+    let shown = widest(1.0, 0.0, 0.4);
+    assert!(widest(1.0, 1.0, 0.4) < shown * 0.5);
 }
 
 /// Beats, hits and combos wired to motion.

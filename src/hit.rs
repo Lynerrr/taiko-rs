@@ -185,6 +185,11 @@ pub enum Hit {
     SocialDeleteChat(usize),
     /// A chat line naming a map set (`/np`): downloads it, or picks it in song select.
     ChatMap(u32),
+    /// An invite's card in a conversation: join the mapping session (true), or decline it.
+    MappingInvite(u64, bool),
+    /// The menus' bar of the mapping session left: back into it, or forget it.
+    BackToSession,
+    ForgetSession,
     /// A text field (a search box, the message box): on Android, tapping it brings up the
     /// on-screen keyboard.
     TextField,

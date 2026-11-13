@@ -1,7 +1,7 @@
 //! Editing a `.tko` chart's gimmick: keys on the playfield's and on groups of notes' tracks, and
 //! turning a plain `.osu` chart into a `.tko`. Every change is one undo step.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::history::Command;
 use super::state::Editor;
@@ -327,10 +327,42 @@ impl Editor {
         Ok(path)
     }
 
+    /// In a mapping session: the shared difficulty becomes a `.tko` for everyone, by an edit
+    /// that gives it an empty gimmick, instead of a copy only this game would know (the session
+    /// would take it back at its next edit). It is saved as a `.tko` beside the `.osu`, which
+    /// stays as it was.
+    pub fn make_tko_shared(&mut self) -> Result<PathBuf, String> {
+        if self.is_tko() {
+            return Err("already a .tko".into());
+        }
+        let empty = Box::new(Gimmick::default());
+        self.history.run(
+            &mut self.chart,
+            Command::Gimmick {
+                before: empty.clone(),
+                after: empty,
+            },
+        );
+        self.path = tko_path(&self.path);
+        Ok(self.path.clone())
+    }
+
     /// A key at `t` for `s` holding the value there now, with `ease`.
     pub fn key_here(&mut self, s: Subject, t: f64, ease: Ease) -> bool {
         let v = self.value_of(s, t);
         self.key(s, Key { t, v, ease }, false)
+    }
+}
+
+/// Where a difficulty that became a `.tko` is kept: its `.osu`'s name with `.tko`.
+pub fn tko_path(path: &Path) -> PathBuf {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("tko"))
+    {
+        path.to_path_buf()
+    } else {
+        path.with_extension("tko")
     }
 }
 

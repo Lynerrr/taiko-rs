@@ -147,6 +147,27 @@ pub enum Request {
     Medals {
         name: String,
     },
+    /// Collaborative mapping, only to a server that lists `mapping::FEATURE`: the host opens a
+    /// session for a map set (or resumes their open one for it), `Reply::Mapping`, then the
+    /// mapping stream (`mapping::MapUp` / `mapping::MapDown`) on the same connection.
+    OpenMapping {
+        token: String,
+        set: crate::mapping::SetDescriptor,
+        mode: crate::mapping::Mode,
+    },
+    /// Joins a session we were invited to (`Reply::Mapping`, then the mapping stream).
+    JoinMapping {
+        token: String,
+        session: u64,
+    },
+    /// Back in a session after a lost connection, as the same join (`epoch`), having every op
+    /// up to `last_seq`.
+    ResumeMapping {
+        token: String,
+        session: u64,
+        epoch: u32,
+        last_seq: u64,
+    },
     /// The game crashed last time: its report, sent on the next start (`Reply::Counted`),
     /// unless the player turned that off (Settings > Online > Send crash reports).
     CrashReport(Box<CrashReport>),
@@ -844,6 +865,11 @@ pub enum Up {
     /// What an admin does from the game; anyone else is refused. The outcome comes back as a
     /// `Down::Notice`, or for questions as `Down::AdminOverview` / `Down::AdminLookup`.
     Admin(AdminOp),
+    /// What this game can take beyond the protocol every game speaks (such as
+    /// `mapping::FEATURE`), right after connecting. Sent only to a server that listed the
+    /// feature in `Reply::Account::features`; the server sends the messages a feature brings
+    /// only to connections that declared it.
+    Features(Vec<String>),
 }
 
 /// An admin's tools on the social connection (`Up::Admin`).
@@ -1052,6 +1078,18 @@ pub enum Down {
     AdminOverview(Box<AdminOverview>),
     /// For admins: the answer to `AdminOp::Lookup`.
     AdminLookup(Box<AdminLookup>),
+    /// `from` invites us to their mapping session (`Request::JoinMapping` to join). Only to
+    /// connections that declared `mapping::FEATURE`; the others get a chat line instead.
+    MappingInvite {
+        from: String,
+        session: u64,
+        title: String,
+        mode: crate::mapping::Mode,
+    },
+    /// A session we were invited to is over (or the invite was taken back).
+    MappingClosed {
+        session: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1069,6 +1107,11 @@ pub enum Reply {
         /// Whether the account has an email (None: a server from before emails).
         #[serde(default)]
         email: Option<bool>,
+        /// What the server can do beyond the protocol every server speaks, such as
+        /// `mapping::FEATURE`. Servers from before it send none, and the game then never sends
+        /// them anything a feature brings.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        features: Vec<String>,
     },
     /// A code was mailed: where to ("g*****@gmail.com").
     CodeSent(String),
@@ -1094,6 +1137,18 @@ pub enum Reply {
         host_token: Option<u64>,
     },
     Error(String),
+    /// In a mapping session: which it is, our join (`epoch`, whose ids we make) and our id in it,
+    /// the set's files the server still needs from the host (by sha256), and on a resume the last
+    /// of our ops it took (`done`, by client sequence).
+    Mapping {
+        session: u64,
+        epoch: u32,
+        me: u32,
+        #[serde(default)]
+        needs: Vec<String>,
+        #[serde(default)]
+        done: u64,
+    },
     /// The play is on the leaderboards: its place on the map (if it's the player's best there),
     /// and the player's pp total and rank now.
     Submitted {
@@ -1354,8 +1409,9 @@ pub fn exchange(server: &str, request: Request) -> Result<(Reply, BufReader<TcpS
 
 /// What the social connection reports to the game.
 pub enum SocialEvent {
-    /// (Re)connected as this account: resend what we're doing.
-    Connected(String),
+    /// (Re)connected as this account, with the features the server listed in its reply:
+    /// resend what we're doing.
+    Connected(String, Vec<String>),
     Disconnected(String),
     /// The saved login is no longer valid.
     SessionExpired,
@@ -1402,8 +1458,8 @@ impl Social {
                         continue;
                     }
                 };
-                let name = match reply {
-                    Reply::Account { name, .. } => name,
+                let (name, features) = match reply {
+                    Reply::Account { name, features, .. } => (name, features),
                     Reply::Error(e) if e.contains("session") => {
                         let _ = events.send(SocialEvent::SessionExpired);
                         return;
@@ -1426,7 +1482,7 @@ impl Social {
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(20)));
                 // Whatever piled up while away is stale: the game resends its state on Connected.
                 while out.try_recv().is_ok() {}
-                let _ = events.send(SocialEvent::Connected(name));
+                let _ = events.send(SocialEvent::Connected(name, features));
                 let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
                 {
                     let (events, alive) = (events.clone(), alive.clone());

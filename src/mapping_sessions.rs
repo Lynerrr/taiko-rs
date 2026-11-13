@@ -1,0 +1,319 @@
+//! Mapping sessions from the game's side: whether the server runs them, invites, getting into
+//! one until the editor opens on it (`editor::collab::connect`), and the host inviting friends.
+//! A server that doesn't list `mapping::FEATURE` never hears of any of it.
+
+use crate::*;
+use editor::collab::connect::{Connecting, HostSet, Ready};
+use editor::view::collab::{LeftSession, Relink};
+use taiko_proto::mapping::{self, HostCmd, Link, LinkEvent, Mode};
+
+/// Getting into a session: the connection and how far along it is.
+pub(crate) struct MappingJoin {
+    link: Link,
+    connecting: Connecting,
+    server: String,
+    token: String,
+    /// Going back into a session left earlier: offered again if it doesn't work out for now.
+    pub(crate) rejoin: Option<LeftSession>,
+}
+
+impl State {
+    /// Whether the game speaks of mapping sessions: logged in to a server that runs them.
+    pub(crate) fn mapping_ok(&self) -> bool {
+        self.mapping_sessions && !self.cfg.online_token.is_empty()
+    }
+
+    /// `from` invites us to their session: a card in our conversation with them (accept or
+    /// decline it there), the message chime, and a notification that opens the conversation.
+    pub(crate) fn mapping_invited(
+        &mut self,
+        from: String,
+        session: u64,
+        title: String,
+        mode: Mode,
+    ) {
+        let what = match mode {
+            Mode::Guest => tr!("a guest difficulty", "ゲスト難易度", "гостевую сложность"),
+            Mode::Review => tr!("a review", "レビュー", "ревью"),
+            Mode::Collab => tr!("a collab", "コラボ", "коллаб"),
+        };
+        let invite = social::MappingInvite {
+            from: from.clone(),
+            title: title.clone(),
+            mode,
+            state: social::InviteState::Open,
+        };
+        self.social.add_invite(session, invite, discord::unix_now());
+        let in_lobby = self.mp.is_some();
+        let viewing = self.social.open
+            && self.social.in_conversation(in_lobby)
+            && matches!(self.social.row(in_lobby), social::Row::Friend(k) if self.social.friends.get(k).is_some_and(|f| social::key(&f.name) == social::key(&from)));
+        if !viewing {
+            self.social.add_unread(&from, in_lobby);
+        }
+        if self.cfg.message_sound
+            && !self.playing()
+            && let Some(a) = &self.audio
+        {
+            a.sfx_at(audio::Sfx::Message, 1.0);
+        }
+        self.social.notify(
+            tr!("{from} invites you to map", "{from} からマッピングの招待", "{from} зовёт маппить"; [] [from]),
+            format!("{what}: {title}"),
+            0xC89CF2,
+            social::NoteAction::Chat(from),
+        );
+    }
+
+    /// The editor was closed: the session it was left in, if any, is offered in the menus.
+    pub(crate) fn left_editor(&mut self, view: &mut editor::view::View) {
+        if let Some(left) = view.take_left_session() {
+            self.left_mapping = Some(left);
+        }
+    }
+
+    /// Back into the session we left (the menus' bar): joined again into the same folder. The
+    /// server lets in whoever is still in its list, so no new invite is needed.
+    pub(crate) fn rejoin_mapping(&mut self) {
+        if !self.mapping_ok() || self.mapping_join.is_some() {
+            return;
+        }
+        let Some(left) = self.left_mapping.take() else {
+            return;
+        };
+        let token = self.cfg.online_token.clone();
+        let request = online::Request::JoinMapping {
+            token,
+            session: left.session,
+        };
+        let connecting = Connecting::rejoin(left.dir.clone(), left.diff);
+        self.start_mapping(request, connecting);
+        if let Some(j) = &mut self.mapping_join {
+            j.rejoin = Some(left);
+        }
+        self.toast(
+            tr!(
+                "back to the mapping session...",
+                "マッピングセッションに戻っています...",
+                "возвращаюсь в совместный маппинг..."
+            )
+            .into(),
+        );
+    }
+
+    /// A session we were invited to is over: its card says so.
+    pub(crate) fn mapping_closed(&mut self, session: u64) {
+        if self
+            .left_mapping
+            .as_ref()
+            .is_some_and(|l| l.session == session)
+        {
+            self.left_mapping = None;
+        }
+        if let Some(i) = self.social.invites.get_mut(&session)
+            && i.state == social::InviteState::Open
+        {
+            i.state = social::InviteState::Ended;
+        }
+    }
+
+    /// The invite's card answered: joins the session, or declines it (nothing is sent: the
+    /// host sees who came).
+    pub(crate) fn answer_mapping_invite(&mut self, session: u64, accept: bool) {
+        let Some(invite) = self.social.invites.get_mut(&session) else {
+            return;
+        };
+        if invite.state != social::InviteState::Open {
+            return;
+        }
+        if !accept {
+            invite.state = social::InviteState::Declined;
+            return;
+        }
+        invite.state = social::InviteState::Joined;
+        self.social.close();
+        self.join_mapping(session);
+    }
+
+    fn start_mapping(&mut self, request: online::Request, connecting: Connecting) {
+        let server = self.cfg.online_server.clone();
+        let token = self.cfg.online_token.clone();
+        // Another session (or the same one again) is what we're in now.
+        self.left_mapping = None;
+        self.mapping_join = Some(Box::new(MappingJoin {
+            link: Link::start(server.clone(), request),
+            connecting,
+            server,
+            token,
+            rejoin: None,
+        }));
+    }
+
+    /// Joins the session we were invited to.
+    pub(crate) fn join_mapping(&mut self, session: u64) {
+        if !self.mapping_ok() || self.mapping_join.is_some() {
+            return;
+        }
+        // Invited back into the session we left: into the same set and difficulty.
+        if self
+            .left_mapping
+            .as_ref()
+            .is_some_and(|l| l.session == session)
+        {
+            self.rejoin_mapping();
+            return;
+        }
+        let token = self.cfg.online_token.clone();
+        let songs = self.songs_dir.clone();
+        self.start_mapping(
+            online::Request::JoinMapping { token, session },
+            Connecting::guest(songs),
+        );
+        self.toast(
+            tr!(
+                "joining the mapping session...",
+                "マッピングセッションに参加中...",
+                "подключаюсь к совместному маппингу..."
+            )
+            .into(),
+        );
+    }
+
+    /// Opens a session for the set in `dir`, as its host.
+    pub(crate) fn open_mapping(&mut self, dir: &Path, mode: Mode) {
+        if !self.mapping_ok() || self.mapping_join.is_some() {
+            return;
+        }
+        let set = match HostSet::read(dir) {
+            Ok(set) => set,
+            Err(e) => {
+                self.toast(tr!("can't start a mapping session: {e}", "マッピングセッションを開始できません: {e}", "не получилось начать совместный маппинг: {e}"; [] [e]));
+                return;
+            }
+        };
+        let token = self.cfg.online_token.clone();
+        let request = online::Request::OpenMapping {
+            token,
+            set: set.descriptor(),
+            mode,
+        };
+        self.start_mapping(request, Connecting::host(set));
+        self.toast(
+            tr!(
+                "starting the mapping session...",
+                "マッピングセッションを開始中...",
+                "начинаю совместный маппинг..."
+            )
+            .into(),
+        );
+    }
+
+    /// Every frame while getting into a session: what the connection says, and the editor
+    /// opened on the session once everything is in.
+    pub(crate) fn poll_mapping(&mut self) {
+        let view = self
+            .scene
+            .screen_as::<MapEditor>()
+            .map(|e| &e.view)
+            .filter(|_| self.mapping_ok());
+        self.social.can_invite = view.is_some_and(|v| v.hosting());
+        let back = view.map(|v| v.invite_back()).unwrap_or_default();
+        if self.social.invite_back != back {
+            self.social.invite_back = back;
+        }
+        let Some(j) = &mut self.mapping_join else {
+            return;
+        };
+        let mut failed = None;
+        // The server said no (the session is over, or we were kicked): not worth offering again.
+        let mut refused = false;
+        for u in j.connecting.tick(std::time::Instant::now()) {
+            j.link.send(u);
+        }
+        for ev in j.link.poll() {
+            refused |= matches!(ev, LinkEvent::Refused(_));
+            match j.connecting.take(ev) {
+                Ok(ups) => ups.into_iter().for_each(|u| j.link.send(u)),
+                Err(why) => {
+                    failed = Some(why);
+                    break;
+                }
+            }
+        }
+        let ready = match failed {
+            Some(why) => Some(Err(why)),
+            None => j.connecting.ready(),
+        };
+        match ready {
+            None => {
+                let pct = (j.connecting.progress() * 100.0).round() as u32;
+                let stage = j.connecting.stage();
+                self.toast(tr!("mapping session: {stage}... {pct}%", "マッピングセッション: {stage}... {pct}%", "совместный маппинг: {stage}... {pct}%"; [] [stage, pct]));
+            }
+            Some(Err(why)) => {
+                let rejoin = self.mapping_join.take().and_then(|j| j.rejoin);
+                if !refused {
+                    self.left_mapping = rejoin;
+                }
+                self.toast(tr!("couldn't get into the mapping session: {why}", "マッピングセッションに入れませんでした: {why}", "не удалось войти в совместный маппинг: {why}"; [] [why]));
+            }
+            Some(Ok(r)) => {
+                let Some(j) = self.mapping_join.take() else {
+                    return;
+                };
+                self.open_mapping_editor(r, *j);
+            }
+        }
+    }
+
+    fn open_mapping_editor(&mut self, r: Ready, j: MappingJoin) {
+        let Some(entry) = self.entry_for(&r.path) else {
+            self.toast(
+                tr!(
+                    "can't open the session's map",
+                    "セッションのマップを開けません",
+                    "не открыть карту сессии"
+                )
+                .into(),
+            );
+            return;
+        };
+        self.open_editor_at(r.path.clone(), entry);
+        let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() else {
+            return;
+        };
+        let relink = Relink {
+            server: j.server,
+            token: j.token,
+            session: r.session,
+            epoch: r.epoch,
+            retry_at: None,
+        };
+        if let Err(e) = view.attach_session(r, j.link, relink) {
+            self.toast(tr!("couldn't get into the mapping session: {e}", "マッピングセッションに入れませんでした: {e}", "не удалось войти в совместный маппинг: {e}"; [] [e]));
+        }
+    }
+
+    /// Invites a friend to the session open in the editor: the host anyone, everyone else
+    /// someone who was in it and left.
+    pub(crate) fn invite_to_mapping(&mut self, name: String) {
+        if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
+            && view.can_invite(&name)
+        {
+            view.send_host(HostCmd::Invite(name.clone()));
+            self.toast(
+                tr!("invited {name}", "{name} を招待しました", "{name} приглашён(а)"; [] [name]),
+            );
+        }
+    }
+
+    /// The features to declare on the social connection (none to a server that runs no
+    /// mapping sessions).
+    pub(crate) fn social_features(&self) -> Vec<String> {
+        if self.mapping_sessions {
+            vec![mapping::FEATURE.to_string()]
+        } else {
+            Vec::new()
+        }
+    }
+}

@@ -80,6 +80,8 @@ pub enum Action {
     Mute,
     Lookup,
     CloseRoom,
+    /// Invites a friend to the mapping session we host.
+    Invite,
 }
 
 /// Where a player in the online list stands with us.
@@ -120,9 +122,100 @@ pub struct Note {
 /// How long a notification stays up.
 pub const NOTE_SECS: f32 = 6.0;
 
+/// Where an invite to a mapping session stands for us.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum InviteState {
+    Open,
+    Joined,
+    Declined,
+    /// The host ended the session.
+    Ended,
+}
+
+/// An invite to a mapping session, as its card in the host's conversation shows it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct MappingInvite {
+    pub from: String,
+    pub title: String,
+    pub mode: taiko_proto::mapping::Mode,
+    pub state: InviteState,
+}
+
+/// The line an invite puts in the host's conversation: only ever kept here, never sent.
+pub fn invite_line(session: u64) -> String {
+    format!("{INVITE_LINK}{session}")
+}
+
+const INVITE_LINK: &str = "taiko-rs://mapping/";
+
+/// What a chat line shows as a card instead of text.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Card {
+    /// An invite to a mapping session (`session`).
+    Invite(u64, MappingInvite),
+    /// `/np`: a map someone is playing.
+    NowPlaying(NowPlaying),
+}
+
+/// A map shared with `/np`, as read back from its line.
+#[derive(Clone, PartialEq, Debug)]
+pub struct NowPlaying {
+    /// "Artist - Title".
+    pub song: String,
+    pub version: String,
+    /// What else the line says of it ("5.21* 180 BPM 3:12 +HD"), when it says.
+    pub details: Option<String>,
+    pub set: Option<u32>,
+}
+
+/// The `/np` line for a map: readable as text by any game, a card in this one.
+pub fn now_playing_line(song: &str, version: &str, details: &str, set: Option<u32>) -> String {
+    let mut line = format!("is playing {song} [{version}]");
+    if !details.is_empty() {
+        line.push_str(&format!(" ({details})"));
+    }
+    if let Some(set) = set {
+        line.push_str(&format!(" https://osu.ppy.sh/beatmapsets/{set}"));
+    }
+    line
+}
+
+/// A `/np` line read back (`now_playing_line`, older games' lines too).
+pub fn now_playing_in(text: &str) -> Option<NowPlaying> {
+    let rest = text.strip_prefix("is playing ")?;
+    let set = map_set_in(rest);
+    let rest = match rest.find(" https://") {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    let (rest, details) = match rest
+        .strip_suffix(')')
+        .and_then(|r| r.rfind(" (").map(|i| (r, i)))
+    {
+        Some((r, i)) if r[..i].ends_with(']') => (&r[..i], Some(r[i + 2..].to_string())),
+        _ => (rest, None),
+    };
+    let open = rest.rfind(" [")?;
+    let version = rest[open + 2..].strip_suffix(']')?;
+    let song = &rest[..open];
+    (!song.is_empty()).then(|| NowPlaying {
+        song: song.to_string(),
+        version: version.to_string(),
+        details: details.filter(|d| !d.is_empty()),
+        set,
+    })
+}
+
 #[derive(Default)]
 pub struct Social {
     pub notes: Vec<Note>,
+    /// Invites to mapping sessions we got, by session.
+    pub invites: HashMap<u64, MappingInvite>,
+    /// We host a mapping session in the editor: friends online get an invite button.
+    pub can_invite: bool,
+    /// We're in a mapping session in the editor but don't host it: these friends (keys) were in
+    /// it and left, and get an invite button to be called back.
+    pub invite_back: Vec<String>,
     /// The friend list has been received since connecting (later changes notify).
     pub have_list: bool,
     pub conn: Option<online::Social>,
@@ -536,6 +629,36 @@ impl Social {
     }
 
     /// Selects the conversation with `name` and shows it.
+    /// The card a chat line shows as, if any.
+    pub fn card_of(&self, text: &str) -> Option<Card> {
+        if let Some(id) = text.strip_prefix(INVITE_LINK) {
+            let session: u64 = id.parse().ok()?;
+            return self
+                .invites
+                .get(&session)
+                .map(|i| Card::Invite(session, i.clone()));
+        }
+        now_playing_in(text).map(Card::NowPlaying)
+    }
+
+    /// An invite to a mapping session: kept, and a card in the host's conversation.
+    pub fn add_invite(&mut self, session: u64, invite: MappingInvite, at: u64) {
+        let me = self.me.clone().unwrap_or_default();
+        let log = self.chats.entry(key(&invite.from)).or_default();
+        let line = invite_line(session);
+        // Invited again (after leaving, say): the card comes anew at the bottom, open, where
+        // it is seen, not up among the old lines.
+        log.retain(|l| l.text != line);
+        log.push(ChatLine {
+            from: invite.from.clone(),
+            to: me,
+            text: line,
+            at,
+            medal: None,
+        });
+        self.invites.insert(session, invite);
+    }
+
     pub fn select_friend(&mut self, name: &str, in_lobby: bool) {
         self.set_tab(Tab::Friends);
         if let Some(i) = self.friends.iter().position(|f| key(&f.name) == key(name))
@@ -655,6 +778,7 @@ impl Social {
                 Some(l.at),
                 false,
             )
+            .with_card(now_playing_in(&l.text).map(Card::NowPlaying))
         };
         let last: Vec<ChatEntry> = self.global.last().map(entry).into_iter().collect();
         let before = chat_rows(&last, chat_width(), banner_width()).len();
@@ -1302,6 +1426,7 @@ pub fn draw(
                                         Some(l.at),
                                         false,
                                     )
+                                    .with_card(s.card_of(&l.text))
                                 })
                                 .collect()
                         })
@@ -1328,6 +1453,7 @@ pub fn draw(
                                 None,
                                 false,
                             )
+                            .with_card(now_playing_in(text).map(Card::NowPlaying))
                         })
                         .collect()
                 }
@@ -1444,6 +1570,7 @@ pub fn draw(
                         Some(l.at),
                         s.mentions_me(&l.text),
                     )
+                    .with_card(now_playing_in(&l.text).map(Card::NowPlaying))
                 })
                 .collect();
             if lines.is_empty() && s.connected {
@@ -1801,6 +1928,12 @@ fn draw_rows(
                         }
                         _ => bx,
                     };
+                    if (s.can_invite || s.invite_back.contains(&key(&f.name)))
+                        && f.activity.is_some()
+                    {
+                        bx = button(c, bx, by, "invite", Hit::SocialAction(i, Action::Invite), a)
+                            - 4.0;
+                    }
                 }
                 let unread = s.unread.get(&key(&f.name)).copied().unwrap_or(0);
                 if unread > 0 {
@@ -2087,6 +2220,8 @@ struct ChatEntry {
     from: String,
     text: String,
     mine: bool,
+    /// Shown as a card instead of its text.
+    card: Option<Card>,
     /// The colour of the banner it sits on, when the server is saying it.
     banner: Option<u32>,
     /// When it was said (unix seconds), where known.
@@ -2110,10 +2245,16 @@ impl ChatEntry {
             from: from.to_string(),
             text,
             mine,
+            card: None,
             banner,
             at,
             mention,
         }
+    }
+
+    fn with_card(mut self, card: Option<Card>) -> Self {
+        self.card = card;
+        self
     }
 }
 
@@ -2130,6 +2271,8 @@ enum ChatKind {
     },
     /// A screenshot: click to see it.
     Shot(u128),
+    /// A card (an invite, a map shared with `/np`).
+    Card(Card),
     /// A row of the server's line on its banner; `ends`: its last.
     Banner { ends: bool },
 }
@@ -2154,6 +2297,8 @@ impl ChatRow {
                 ChatKind::Name { .. } => Canvas::text_height(CHAT_SIZE) + 3.0,
                 ChatKind::Text { .. } => Canvas::text_height(CHAT_SIZE) + 2.5,
                 ChatKind::Shot(_) => Canvas::text_height(CHAT_SIZE) + 8.0,
+                ChatKind::Card(Card::Invite(..)) => INVITE_CARD_H + 3.0,
+                ChatKind::Card(Card::NowPlaying(_)) => NP_CARD_H + 3.0,
                 ChatKind::Banner { ends } => {
                     Canvas::text_height(6.5) + if ends { 3.5 } else { 2.5 }
                 }
@@ -2201,6 +2346,17 @@ fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
                 entry,
             });
             gap = 1.0;
+        }
+        if let Some(card) = &line.card {
+            rows.push(ChatRow {
+                text: String::new(),
+                colour: 0xffffff,
+                kind: ChatKind::Card(card.clone()),
+                gap,
+                entry,
+            });
+            last = Some(line);
+            continue;
         }
         if let Some(id) = crate::shots::shot_in(&line.text) {
             rows.push(ChatRow {
@@ -2277,8 +2433,8 @@ fn chat_lines(
             ly += row.gap;
         }
         let h = row.height() - row.gap;
-        match row.kind {
-            ChatKind::Name { at } => {
+        match &row.kind {
+            &ChatKind::Name { at } => {
                 c.avatar(
                     &row.text,
                     inner + 7.5,
@@ -2306,7 +2462,7 @@ fn chat_lines(
                     }
                 }
             }
-            ChatKind::Text { set, mention } => {
+            &ChatKind::Text { set, mention } => {
                 if mention {
                     c.rect(inner, ly - 1.0, iw, h, rgba(accent(), 0.13 * a));
                     c.rect(inner, ly - 1.0, 2.0, h, rgba(accent(), a));
@@ -2322,7 +2478,11 @@ fn chat_lines(
                     c.hit(inner, ly - 1.0, iw, h, Hit::ChatMap(set));
                 }
             }
-            ChatKind::Shot(id) => {
+            ChatKind::Card(card) => {
+                let x = inner + 3.0 + MESSAGE_INDENT;
+                draw_card(c, card, [x, ly - 1.0, inner + iw - x, h - 3.0], a);
+            }
+            &ChatKind::Shot(id) => {
                 let x = inner + 3.0 + MESSAGE_INDENT;
                 let hint = tr!("click to view", "クリックで表示", "нажмите, чтобы открыть");
                 let w =
@@ -2343,7 +2503,7 @@ fn chat_lines(
                 c.text(tx, ly + 3.0, 6.0, rgba(SOFT_TEXT, a), hint);
                 c.hit(x, ly - 1.0, w, h - 1.0, Hit::ChatShot(id));
             }
-            ChatKind::Banner { ends } => {
+            &ChatKind::Banner { ends } => {
                 let bh = if ends { h - 1.0 } else { h };
                 c.rect(inner, ly - 1.5, iw, bh, rgba(row.colour, 0.16 * a));
                 c.rect(inner, ly - 1.5, 2.0, bh, rgba(row.colour, a));
@@ -2380,6 +2540,190 @@ fn chat_lines(
             rgba(SOFT_TEXT, a),
             &label,
         );
+    }
+}
+
+const INVITE_CARD_H: f32 = 56.0;
+const NP_CARD_H: f32 = 40.0;
+/// The colour of mapping sessions.
+const MAPPING_VIOLET: u32 = 0x8c7cf0;
+const NP_BLUE: u32 = 0x66ccff;
+
+/// A pill button with `label` on it, `fill` coloured; lighter while pointed at.
+fn pill(c: &mut Canvas, r: [f32; 4], label: &str, fill: u32, text: u32, hit: Hit, a: f32) {
+    let hot = c.hovered(r[0], r[1], r[2], r[3]);
+    c.round_rect(
+        [r[0], r[1]],
+        [r[2], r[3]],
+        r[3] / 2.0,
+        rgba(fill, if hot { a } else { 0.85 * a }),
+        rgba(0xffffff, if hot { 0.5 * a } else { 0.0 }),
+        1.0,
+    );
+    c.text_centered(
+        r[0] + r[2] / 2.0,
+        r[1] + (r[3] - 6.5) / 2.0,
+        6.5,
+        rgba(text, a),
+        label,
+    );
+    c.hit(r[0], r[1], r[2], r[3], hit);
+}
+
+/// A chat card in `r`: an invite to a mapping session (what to map, the kind of session,
+/// accept and decline), or a map shared with `/np` (the song, its difficulty, open it).
+fn draw_card(c: &mut Canvas, card: &Card, r: [f32; 4], a: f32) {
+    let [x, y, w, h] = r;
+    let accent = match card {
+        Card::Invite(..) => MAPPING_VIOLET,
+        Card::NowPlaying(_) => NP_BLUE,
+    };
+    c.round_rect(
+        [x, y],
+        [w, h],
+        5.0,
+        rgba(0x171528, a),
+        rgba(accent, 0.55 * a),
+        1.0,
+    );
+    c.rect(x + 1.0, y + 3.0, 2.5, h - 6.0, rgba(accent, a));
+    let tx = x + 9.0;
+    match card {
+        Card::Invite(session, invite) => {
+            let kind = match invite.mode {
+                taiko_proto::mapping::Mode::Collab => tr!("COLLAB", "コラボ", "КОЛЛАБ"),
+                taiko_proto::mapping::Mode::Guest => {
+                    tr!("GUEST DIFFICULTY", "ゲスト難易度", "ГОСТЕВАЯ СЛОЖНОСТЬ")
+                }
+                taiko_proto::mapping::Mode::Review => tr!("REVIEW", "レビュー", "РЕВЬЮ"),
+            };
+            let head = tr!(
+                "MAPPING INVITE",
+                "マッピングの招待",
+                "ПРИГЛАШЕНИЕ В МАППИНГ"
+            );
+            c.text(tx, y + 5.0, 5.5, rgba(accent, a), head);
+            let kx = tx + Canvas::text_width(5.5, head) + 6.0;
+            let kw = Canvas::text_width(5.0, kind) + 8.0;
+            if kx + kw < x + w - 6.0 {
+                c.round_rect(
+                    [kx, y + 3.5],
+                    [kw, 8.5],
+                    4.0,
+                    rgba(accent, 0.22 * a),
+                    rgba(accent, 0.6 * a),
+                    1.0,
+                );
+                c.text(kx + 4.0, y + 5.5, 5.0, rgba(0xe6e0ff, a), kind);
+            }
+            c.text(
+                tx,
+                y + 16.0,
+                8.0,
+                rgba(0xffffff, a),
+                &Canvas::fit(8.0, w - 18.0, &invite.title),
+            );
+            let from = invite.from.clone();
+            let sub = tr!("{from} asks you to map it together", "{from} が一緒にマッピングしようと誘っています", "{from} зовёт маппить вместе"; [] [from]);
+            c.text(
+                tx,
+                y + 28.0,
+                6.0,
+                rgba(SOFT_TEXT, a),
+                &Canvas::fit(6.0, w - 18.0, &sub),
+            );
+            let by = y + h - 17.0;
+            match invite.state {
+                InviteState::Open => {
+                    let accept = tr!("Accept", "参加", "Принять");
+                    let decline = tr!("Decline", "辞退", "Отклонить");
+                    let aw = Canvas::text_width(6.5, accept) + 22.0;
+                    let dw = Canvas::text_width(6.5, decline) + 18.0;
+                    pill(
+                        c,
+                        [tx, by, aw, 13.0],
+                        accept,
+                        accent,
+                        0x0e0e16,
+                        Hit::MappingInvite(*session, true),
+                        a,
+                    );
+                    pill(
+                        c,
+                        [tx + aw + 5.0, by, dw, 13.0],
+                        decline,
+                        0x2e2e40,
+                        0xdedeea,
+                        Hit::MappingInvite(*session, false),
+                        a,
+                    );
+                }
+                state => {
+                    let (what, col) = match state {
+                        InviteState::Joined => {
+                            (tr!("joined", "参加しました", "ты в сессии"), GREEN)
+                        }
+                        InviteState::Declined => {
+                            (tr!("declined", "辞退しました", "отклонено"), DIM_TEXT)
+                        }
+                        _ => (
+                            tr!(
+                                "the session has ended",
+                                "セッションは終了しました",
+                                "сессия закончилась"
+                            ),
+                            DIM_TEXT,
+                        ),
+                    };
+                    c.text(tx, by + 3.5, 6.5, rgba(col, a), what);
+                }
+            }
+        }
+        Card::NowPlaying(np) => {
+            c.text(
+                tx,
+                y + 5.0,
+                5.5,
+                rgba(accent, a),
+                tr!("NOW PLAYING", "プレイ中", "СЕЙЧАС ИГРАЕТ"),
+            );
+            let open = np.set.map(|set| {
+                let label = tr!("Open", "開く", "Открыть");
+                let bw = Canvas::text_width(6.5, label) + 18.0;
+                (set, label, bw)
+            });
+            let room = w - 18.0 - open.map_or(0.0, |o| o.2 + 6.0);
+            c.text(
+                tx,
+                y + 14.0,
+                7.5,
+                rgba(0xffffff, a),
+                &Canvas::fit(7.5, room, &np.song),
+            );
+            let mut line = format!("[{}]", np.version);
+            if let Some(d) = &np.details {
+                line.push_str("  ");
+                line.push_str(d);
+            }
+            c.text(
+                tx,
+                y + 26.0,
+                6.0,
+                rgba(SOFT_TEXT, a),
+                &Canvas::fit(6.0, room, &line),
+            );
+            if let Some((set, label, bw)) = open {
+                pill(
+                    c,
+                    [x + w - bw - 7.0, y + (h - 13.0) / 2.0, bw, 13.0],
+                    label,
+                    accent,
+                    0x0e0e16,
+                    Hit::ChatMap(set),
+                    a,
+                );
+            }
+        }
     }
 }
 
@@ -2678,6 +3022,7 @@ mod tests {
             text: text.into(),
             at: None,
             mine: false,
+            card: None,
             banner: None,
             mention: false,
         };
@@ -3113,5 +3458,188 @@ mod tests {
         assert_eq!(s.chat_scroll, 4);
         s.wheel(-10, false);
         assert_eq!(s.chat_scroll, 0);
+    }
+
+    #[test]
+    fn np_lines_read_back_as_cards_old_and_new() {
+        let line = now_playing_line(
+            "USAO - Dynamite",
+            "kaBOOM",
+            "7.12* 222 BPM 2:31",
+            Some(2474178),
+        );
+        assert_eq!(
+            line,
+            "is playing USAO - Dynamite [kaBOOM] (7.12* 222 BPM 2:31) https://osu.ppy.sh/beatmapsets/2474178"
+        );
+        assert_eq!(
+            now_playing_in(&line),
+            Some(NowPlaying {
+                song: "USAO - Dynamite".into(),
+                version: "kaBOOM".into(),
+                details: Some("7.12* 222 BPM 2:31".into()),
+                set: Some(2474178),
+            })
+        );
+        // From an older game: no details; a local map: no link.
+        let old = "is playing A - B (TV Size) [Oni] https://osu.ppy.sh/beatmapsets/5";
+        let np = now_playing_in(old).unwrap();
+        assert_eq!(
+            (np.song.as_str(), np.version.as_str()),
+            ("A - B (TV Size)", "Oni")
+        );
+        assert_eq!((np.details, np.set), (None, Some(5)));
+        let local = now_playing_line("A - B", "Inner Oni", "", None);
+        let np = now_playing_in(&local).unwrap();
+        assert_eq!((np.version.as_str(), np.set), ("Inner Oni", None));
+        // Anything else stays a message.
+        assert_eq!(now_playing_in("is playing with fire"), None);
+        assert_eq!(now_playing_in("hi [x]"), None);
+    }
+
+    #[test]
+    fn in_a_session_we_dont_host_only_those_who_left_it_get_an_invite_button() {
+        let mut s = Social {
+            me: Some("anna".into()),
+            friends: vec![friend("host", true), friend("vic", true)],
+            // The host left the session anna stayed in; vic was never in it.
+            invite_back: vec![key("Host")],
+            open: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            s.rows(false),
+            vec![Row::AddFriend, Row::Friend(0), Row::Friend(1)]
+        );
+        let invites = |s: &Social| {
+            let mut c = Canvas {
+                audit: true,
+                ..Default::default()
+            };
+            c.clear(853.0);
+            draw(&mut c, s, true, None, 0, false, true, None);
+            c.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::SocialAction(_, Action::Invite)))
+                .map(|h| h.hit)
+                .collect::<Vec<_>>()
+        };
+        s.cursor = 1;
+        assert_eq!(invites(&s), vec![Hit::SocialAction(1, Action::Invite)]);
+        s.cursor = 2;
+        assert!(
+            invites(&s).is_empty(),
+            "someone new is the host's to invite"
+        );
+        // The host invites anyone.
+        s.can_invite = true;
+        assert_eq!(invites(&s), vec![Hit::SocialAction(2, Action::Invite)]);
+    }
+
+    #[test]
+    fn an_invite_is_a_card_in_the_hosts_conversation_with_accept_and_decline() {
+        let mut s = Social {
+            me: Some("anna".into()),
+            friends: vec![friend("host", true)],
+            ..Default::default()
+        };
+        s.add_invite(
+            9,
+            MappingInvite {
+                from: "host".into(),
+                title: "USAO - Dynamite".into(),
+                mode: taiko_proto::mapping::Mode::Guest,
+                state: InviteState::Open,
+            },
+            100,
+        );
+        // Delivered twice (a reconnect): one card.
+        s.add_invite(
+            9,
+            MappingInvite {
+                from: "host".into(),
+                title: "USAO - Dynamite".into(),
+                mode: taiko_proto::mapping::Mode::Guest,
+                state: InviteState::Open,
+            },
+            101,
+        );
+        assert_eq!(s.chats["host"].len(), 1);
+        s.open = true;
+        s.select_friend("host", false);
+        let draw = |s: &Social| {
+            let mut c = Canvas {
+                audit: true,
+                ..Default::default()
+            };
+            c.clear(853.0);
+            draw(&mut c, s, true, None, 0, false, true, None);
+            c
+        };
+        let c = draw(&s);
+        let texts: Vec<&str> = c.texts.iter().map(|(_, t)| t.as_str()).collect();
+        for want in [
+            "MAPPING INVITE",
+            "GUEST DIFFICULTY",
+            "USAO - Dynamite",
+            "Accept",
+            "Decline",
+        ] {
+            assert!(
+                texts.iter().any(|t| t.contains(want)),
+                "{want} in {texts:?}"
+            );
+        }
+        assert!(
+            !texts.iter().any(|t| t.contains("taiko-rs://")),
+            "no raw link"
+        );
+        let hits: Vec<Hit> = c.hits.iter().map(|h| h.hit).collect();
+        assert!(hits.contains(&Hit::MappingInvite(9, true)));
+        assert!(hits.contains(&Hit::MappingInvite(9, false)));
+        // Answered: the card says so, and has no buttons any more.
+        s.invites.get_mut(&9).unwrap().state = InviteState::Declined;
+        let c = draw(&s);
+        assert!(c.texts.iter().any(|(_, t)| t == "declined"));
+        assert!(
+            !c.hits
+                .iter()
+                .any(|h| matches!(h.hit, Hit::MappingInvite(..)))
+        );
+    }
+
+    #[test]
+    fn an_invite_again_after_leaving_comes_as_a_new_open_card_at_the_bottom() {
+        let mut s = Social {
+            me: Some("anna".into()),
+            friends: vec![friend("host", true)],
+            ..Default::default()
+        };
+        let invite = || MappingInvite {
+            from: "host".into(),
+            title: "USAO - Dynamite".into(),
+            mode: taiko_proto::mapping::Mode::Collab,
+            state: InviteState::Open,
+        };
+        s.add_invite(9, invite(), 100);
+        // Joined, left, and talked about it since.
+        s.invites.get_mut(&9).unwrap().state = InviteState::Joined;
+        s.chats.get_mut("host").unwrap().push(ChatLine {
+            from: "host".into(),
+            to: "anna".into(),
+            text: "come back?".into(),
+            at: 150,
+            medal: None,
+        });
+        s.add_invite(9, invite(), 200);
+        let log = &s.chats["host"];
+        assert_eq!(log.len(), 2, "one card still");
+        assert_eq!(
+            log.last().unwrap().text,
+            invite_line(9),
+            "the card at the bottom"
+        );
+        assert_eq!(log.last().unwrap().at, 200);
+        assert_eq!(s.invites[&9].state, InviteState::Open, "to accept again");
     }
 }

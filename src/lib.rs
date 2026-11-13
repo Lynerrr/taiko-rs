@@ -37,6 +37,8 @@ mod editor_friends_tests;
 #[cfg(test)]
 mod editor_test_play_tests;
 mod folder_watch;
+#[cfg(test)]
+mod mapping_rejoin_tests;
 use taiko_logic::font;
 mod game;
 use taiko_logic::genres;
@@ -50,10 +52,12 @@ mod layout;
 #[cfg(test)]
 mod layout_tests;
 mod library;
+mod library_refresh;
 mod link;
 mod logo;
 mod mapguessr;
 mod mapinfo;
+mod mapping_sessions;
 mod medal_sound;
 mod medals;
 mod media;
@@ -501,6 +505,14 @@ struct State {
     pictures: pictures::Pictures,
     /// The account logged in is an admin (the server says so; it checks every admin action).
     admin: bool,
+    /// The server runs mapping sessions (`mapping::FEATURE` in its account reply); without it
+    /// the game never sends it anything about them.
+    mapping_sessions: bool,
+    /// Getting into a mapping session, until the editor opens on it.
+    mapping_join: Option<Box<mapping_sessions::MappingJoin>>,
+    /// The mapping session we left the editor in (not kicked, not ended): the menus offer to
+    /// go back to it.
+    left_mapping: Option<editor::view::collab::LeftSession>,
     skin_loader: Option<skin::Loader>,
     skin_key: Option<(skin::Key, std::sync::Weak<render::Atlas>)>,
     /// The playing map's folder when it carries skin images (they're in the loaded skin), and
@@ -675,6 +687,11 @@ struct State {
     scan: Option<(Receiver<Scanned>, Arc<AtomicUsize>)>,
     /// The list is up from the cache, and the scan is checking it against the disk.
     scan_checking: bool,
+    /// The scan running is a look again (`library_refresh`): Some(true) when the player asked for
+    /// it, and is told what came of it.
+    refreshing: Option<bool>,
+    /// When the songs folders were last looked at again (`library_refresh`).
+    refreshed_at: Option<Instant>,
     /// The Songs folder dialog while it is open: the folder picked (None = cancelled), or why
     /// there is no dialog.
     folder_pick: Job<Result<Option<PathBuf>, String>>,
@@ -1068,10 +1085,7 @@ impl State {
                 self.select.gone.insert(path);
             }
         }
-        if let Some(info) = &self.mapinfo {
-            info.extend(changed);
-            self.mapinfo_sorted = false;
-        }
+        self.maps_rewritten(changed);
         added.sort_by(|a, b| a.path.cmp(&b.path));
         let paths: Vec<PathBuf> = added.iter().map(|e| e.path.clone()).collect();
         let n = paths.len();
@@ -1173,7 +1187,13 @@ impl State {
     /// A new, empty difficulty beside `entry`'s map (same timing, music and storyboard), opened.
     fn new_difficulty(&mut self, entry: usize) {
         let path = self.library[entry].path.clone();
-        match editor::new_difficulty(&path) {
+        self.new_difficulty_from(&path, entry, false);
+    }
+
+    /// A new difficulty beside the map at `path` (`entry`'s set), empty or with its notes
+    /// (`keep_notes`), opened in the editor.
+    pub(crate) fn new_difficulty_from(&mut self, path: &Path, entry: usize, keep_notes: bool) {
+        match editor::new_difficulty(path, keep_notes) {
             Ok(new) => {
                 self.toast(format!(
                     "made {}",
@@ -2291,13 +2311,23 @@ impl State {
         self.scene.screen().and_then(|s| s.calibration())
     }
 
-    /// Drops the game when its scene has gone (the settings over its pause menu keep it).
+    /// Drops the game when its scene has gone. The settings over its pause menu keep it, and so
+    /// does an editor opened from them (the playfield area's, the interface's): Esc goes back
+    /// through them to the pause menu.
     fn drop_finished_play(&mut self) {
-        let scene = self.behind_settings().unwrap_or(&self.scene);
-        let holds = scene.screen().is_some_and(|s| s.holds_game());
-        if !holds {
-            self.play = None;
+        let mut scene = &self.scene;
+        // The way back: an editor to the settings, the settings to what they were opened over.
+        for _ in 0..4 {
+            match scene.screen() {
+                Some(s) if s.holds_game() => return,
+                Some(s) if s.back_scene().is_some() => scene = s.back_scene().unwrap(),
+                Some(s) if s.settings() && self.behind.is_some() => {
+                    scene = self.behind.as_deref().unwrap();
+                }
+                _ => break,
+            }
         }
+        self.play = None;
     }
 
     /// A play (or calibration) is running, not paused.
@@ -4045,6 +4075,7 @@ impl State {
         });
         self.scan = Some(start_scan(inputs));
         self.scan_checking = false;
+        self.refreshing = None;
         self.select.scanning = Some(0);
         Ok(())
     }
@@ -4096,6 +4127,72 @@ impl State {
         (scene.is_select() || scene.screen().is_some_and(|s| s.update_corner()))
             && self.mp.is_none()
             && self.splash.is_none()
+    }
+
+    /// In the menus while a mapping session we left goes on: a bar at the top saying so, a
+    /// click on it goes back in (the "x" forgets it).
+    fn draw_left_session(&mut self, c: &mut Canvas) {
+        let Some(left) = &self.left_mapping else {
+            return;
+        };
+        let menus = self.scene.is_select() || self.in_settings();
+        if !menus
+            || !self.mapping_ok()
+            || self.splash.is_some()
+            || self.changelog.is_some()
+            || self.player.is_some()
+        {
+            return;
+        }
+        let joining = self.mapping_join.is_some();
+        let title = &left.title;
+        let text = if joining {
+            tr!("going back to the mapping session {title}...", "マッピングセッション {title} に戻っています...", "возвращаюсь в совместный маппинг {title}..."; [] [title])
+        } else {
+            tr!("You're in the mapping session {title}  ·  click to go back", "マッピングセッション {title} に参加中  ·  クリックで戻る", "Ты в совместном маппинге {title}  ·  нажми, чтобы вернуться"; [] [title])
+        };
+        let text = Canvas::fit(7.0, (c.width - 120.0).max(100.0), &text);
+        let (y, h) = if mobile::active() {
+            (38.0, 30.0)
+        } else {
+            (20.0, 16.0)
+        };
+        let w = Canvas::text_width(7.0, &text) + 34.0;
+        let x = (c.width - w) / 2.0;
+        let hover = c.hovered(x, y, w - 14.0, h);
+        c.round_rect(
+            [x, y],
+            [w, h],
+            5.0,
+            rgba(if hover { 0x3b3478 } else { 0x26224a }, 0.97),
+            rgba(0x8b7cff, 1.0),
+            1.0,
+        );
+        c.circle(
+            x + 8.0,
+            y + h / 2.0,
+            2.5,
+            rgba(0x8b7cff, 1.0),
+            rgba(0, 0.0),
+            0.0,
+        );
+        c.text(
+            x + 14.0,
+            y + (h - 7.0) / 2.0 + 1.0,
+            7.0,
+            rgba(0xffffff, 1.0),
+            &text,
+        );
+        c.hit(x, y, w - 14.0, h, hit::Hit::BackToSession);
+        let close_hover = c.hovered(x + w - 14.0, y, 14.0, h);
+        c.text(
+            x + w - 11.0,
+            y + (h - 7.0) / 2.0 + 0.5,
+            7.0,
+            rgba(if close_hover { 0xffffff } else { 0xa8a0d8 }, 1.0),
+            "x",
+        );
+        c.hit(x + w - 14.0, y, 14.0, h, hit::Hit::ForgetSession);
     }
 
     /// The badge top right while there's an update to install (menus only), and the restart
@@ -4421,6 +4518,14 @@ impl State {
                             .is_some_and(|n| pictures::is_picture(&n.to_string_lossy()))
                     {
                         view.drop_picture(&path);
+                        continue;
+                    }
+                    if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>()
+                        && path
+                            .file_name()
+                            .is_some_and(|n| pictures::is_video(&n.to_string_lossy()))
+                    {
+                        view.drop_video(&path);
                         continue;
                     }
                     if self.scene.screen_mut::<EditorHome>().is_some() {
@@ -6499,6 +6604,16 @@ impl State {
         }
         if self.scene.screen_is::<MapEditor>() && !self.social.open && self.splash.is_none() {
             let (vx, vy) = self.mouse_virtual();
+            // The game's own buttons drawn over the editor (the friends chip in its menu bar,
+            // notifications) take their clicks; everything else is the editor's.
+            if let Some(hit @ (hit::Hit::SocialToggle | hit::Hit::SocialNote(_))) =
+                self.hit_at(vx, vy)
+            {
+                if pressed {
+                    self.click(hit, window);
+                }
+                return;
+            }
             let keys = self.editor_keys();
             if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
                 if pressed {
@@ -7411,6 +7526,9 @@ impl State {
         self.social = social::Social::default();
         self.select.nominator = false;
         self.admin = false;
+        self.mapping_sessions = false;
+        self.mapping_join = None;
+        self.left_mapping = None;
         self.mp_menu.account = None;
         self.mp_menu.has_email = None;
         self.mp_menu.form = multiplayer::Form::Main;
@@ -7628,6 +7746,7 @@ impl State {
     /// The online server's side of the multiplayer menu: the saved login, account replies and
     /// a lobby list kept fresh while the menu is open.
     fn poll_online(&mut self) {
+        self.poll_mapping();
         self.poll_loved();
         self.poll_custom(Instant::now());
         let menu = &mut self.mp_menu;
@@ -7651,9 +7770,11 @@ impl State {
                             nominator,
                             admin,
                             email,
+                            features,
                         }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
+                            self.mapping_sessions = taiko_proto::mapping::supported(&features);
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name)
                                 || self.cfg.online_token != token;
@@ -7794,11 +7915,14 @@ impl State {
             Err(mpsc::TryRecvError::Disconnected) if self.scan_checking => {
                 self.scan = None;
                 self.scan_checking = false;
+                self.refreshing = None;
                 return;
             }
             Err(mpsc::TryRecvError::Disconnected) => Scanned::Done(Vec::new()),
         };
         match scanned {
+            // A look again (`refresh_library`): the list is up already.
+            Scanned::Cached(_) if self.scan_checking => {}
             Scanned::Cached(library) => {
                 self.use_library(library, None);
                 self.scan_checking = true;
@@ -7815,52 +7939,104 @@ impl State {
         }
     }
 
-    /// The scan's list against the one up from the cache: what's new joins the end and what's
-    /// changed takes its place, so the indices handed out stay good. What's gone takes the list
-    /// being rebuilt, which waits for a next launch if anything could be holding on to one.
-    fn check_library(&mut self, checked: Vec<Entry>) {
+    /// The scan's list against the one up: what's new joins the end and what's changed takes its
+    /// place, so the indices handed out stay good. What's gone takes the list being rebuilt, which
+    /// waits for a next launch if anything could be holding on to one. A map the scan doesn't
+    /// cover (one opened by itself) stays while its file is there.
+    fn check_library(&mut self, mut checked: Vec<Entry>) {
+        let refreshing = self.refreshing.take();
+        // Nothing where there were maps: the folder can't be reached just now (a drive
+        // unplugged), not every map deleted.
+        if refreshing.is_some() && checked.is_empty() && !self.library.is_empty() {
+            if refreshing == Some(true) {
+                self.toast(
+                    tr!(
+                        "the songs folder can't be read just now",
+                        "曲フォルダを今は読めません",
+                        "папку с песнями сейчас не прочитать"
+                    )
+                    .to_string(),
+                );
+            }
+            return;
+        }
         let index: std::collections::HashMap<PathBuf, usize> = self
             .library
             .iter()
             .enumerate()
             .map(|(i, e)| (e.path.clone(), i))
             .collect();
-        let gone = {
-            let there: std::collections::HashSet<&Path> =
-                checked.iter().map(|e| e.path.as_path()).collect();
-            self.library
-                .iter()
-                .any(|e| !there.contains(e.path.as_path()))
-        };
-        if gone && self.scene.is_select() && self.mp.is_none() {
+        // The scan's cache keeps a set while its folder's time holds, and a file rewritten in
+        // place doesn't move it: a map that differs from the list is read again from the disk.
+        for e in &mut checked {
+            let Some(&i) = index.get(&e.path) else {
+                continue;
+            };
+            let old = &self.library[i];
+            if (old.size, old.modified) != (e.size, e.modified)
+                && library::file_stats(&e.path) != (e.size, e.modified)
+                && let Some(meta) = beatmap::read_meta_file(&e.path)
+            {
+                *e = Entry::new(e.path.clone(), meta);
+            }
+        }
+        let there: std::collections::HashSet<PathBuf> =
+            checked.iter().map(|e| e.path.clone()).collect();
+        let gone: Vec<PathBuf> = self
+            .library
+            .iter()
+            .filter(|e| !there.contains(&e.path) && !e.path.is_file())
+            .map(|e| e.path.clone())
+            .collect();
+        if !gone.is_empty() && self.scene.is_select() && self.mp.is_none() {
             let selected = self
                 .select
                 .selected()
                 .and_then(|i| self.library.get(i))
                 .map(|e| e.path.clone());
+            let (mut added, mut changed) = (0, 0);
+            for e in &checked {
+                match index.get(&e.path).map(|&i| &self.library[i]) {
+                    None => added += 1,
+                    Some(old) if (old.size, old.modified) != (e.size, e.modified) => changed += 1,
+                    Some(_) => {}
+                }
+            }
+            let old = std::mem::take(&mut self.library);
+            checked.extend(
+                old.into_iter()
+                    .filter(|e| !there.contains(&e.path) && e.path.is_file()),
+            );
             self.use_library(checked, selected);
+            self.report_refresh(refreshing, added, changed, gone.len());
             return;
         }
+        for path in &gone {
+            self.select.gone.insert(path.clone());
+        }
         let mut fresh = Vec::new();
-        let mut changed = false;
+        let mut changed = Vec::new();
         for entry in checked {
             match index.get(&entry.path) {
                 Some(&i) => {
                     let old = &self.library[i];
-                    if old.size != entry.size || old.modified != entry.modified {
+                    if (old.size, old.modified) != (entry.size, entry.modified) {
+                        changed.push((i, entry.path.clone(), entry.modified, entry.size));
                         self.library[i] = entry;
-                        changed = true;
                     }
                 }
                 None => fresh.push(entry),
             }
         }
+        let (added, edited) = (fresh.len(), changed.len());
+        self.maps_rewritten(changed);
         if !fresh.is_empty() {
             self.append_maps(fresh);
-        } else if changed {
+        } else if edited > 0 || !gone.is_empty() {
             self.select.refilter(&self.library);
         }
         self.find_lobby_map();
+        self.report_refresh(refreshing, added, edited, gone.len());
     }
 
     /// `library` in place of the list, on `selected` if that's still there, else a random song.
@@ -8719,15 +8895,31 @@ impl State {
         c.hit(0.0, 0.0, c.width, 31.0, hit::Hit::TextField);
     }
 
-    /// `/np`'s line: the map on this screen, with its set's osu! link when it has one.
+    /// `/np`'s line: the map on this screen, how hard and long it is, and its set's osu! link
+    /// when it has one (shown as a card by this game, readable as text by older ones).
     fn now_playing(&self) -> Option<String> {
-        let e = self.library.get(self.offset_entry()?)?;
-        let name = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
-        let set = e.set_id();
-        Some(match set {
-            Some(set) => format!("is playing {name} https://osu.ppy.sh/beatmapsets/{set}"),
-            None => format!("is playing {name}"),
-        })
+        let entry = self.offset_entry()?;
+        let e = self.library.get(entry)?;
+        let song = format!("{} - {}", e.meta.artist, e.meta.title);
+        let mut details = Vec::new();
+        if let Some(st) = self.map_stats(entry) {
+            if st.stars >= 0.0 {
+                details.push(format!("{:.2}*", st.stars));
+            }
+            if st.bpm > 0.0 {
+                details.push(format!("{:.0} BPM", st.bpm));
+            }
+            if st.length_ms > 0.0 {
+                let secs = (st.length_ms / 1000.0).round() as u32;
+                details.push(format!("{}:{:02}", secs / 60, secs % 60));
+            }
+        }
+        Some(social::now_playing_line(
+            &song,
+            &e.meta.version,
+            &details.join(" "),
+            e.set_id(),
+        ))
     }
 
     /// A map set named in the chat, clicked: picked in song select when we have it, else downloaded.
@@ -9387,6 +9579,11 @@ impl State {
                     self.watch(f.name);
                 }
             }
+            (Row::Friend(k), Action::Invite) => {
+                if let Some(f) = self.social.friends.get(k).cloned() {
+                    self.invite_to_mapping(f.name);
+                }
+            }
             (Row::AdminPlayer(k), action) => {
                 let Some(p) = self
                     .social
@@ -9703,7 +9900,7 @@ impl State {
                     map: self
                         .editor_back
                         .as_ref()
-                        .map(|v| v.label())
+                        .map(|v| v.presence_label())
                         .unwrap_or_default(),
                 }
             }
@@ -9752,7 +9949,13 @@ impl State {
         };
         for event in conn.poll() {
             match event {
-                online::SocialEvent::Connected(name) => {
+                online::SocialEvent::Connected(name, features) => {
+                    // The social reply lists the server's features too: the account check
+                    // started with it may still be on its way, and a game that doesn't declare
+                    // `mapping/1` here gets invites as a plain notice it can't join from.
+                    if taiko_proto::mapping::supported(&features) {
+                        self.mapping_sessions = true;
+                    }
                     self.social.connected = true;
                     self.social.me = Some(name);
                     // The server resends the friend list and recent chat.
@@ -9762,6 +9965,12 @@ impl State {
                     self.social.have_list = false;
                     self.social.sent_activity = None;
                     self.stream = None;
+                    let features = self.social_features();
+                    if !features.is_empty()
+                        && let Some(c) = &self.social.conn
+                    {
+                        c.send(online::Up::Features(features));
+                    }
                     if let Some(w) = self.scene.screen_as::<Watch>() {
                         let player = w.view.player.clone();
                         if let Some(c) = &self.social.conn {
@@ -9932,6 +10141,13 @@ impl State {
                 .notify("taiko.rs", text, 0x9a9ab0, NoteAction::None),
             Down::GlobalChatDeleted { from, at } => self.social.delete_global(&from, at),
             Down::Groups(list) => self.social.set_groups(list),
+            Down::MappingInvite {
+                from,
+                session,
+                title,
+                mode,
+            } => self.mapping_invited(from, session, title, mode),
+            Down::MappingClosed { session } => self.mapping_closed(session),
             Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
             Down::AdminLookup(l) => {
                 let now = discord::unix_now();
@@ -10984,8 +11200,11 @@ impl State {
         // The pictures the last frame drew, then the ones the renderer has for this one.
         self.avatars.update(&canvas.avatars_wanted);
         let picture_dir = self.picture_dir();
-        self.pictures
-            .update(picture_dir.as_deref(), &canvas.pictures_wanted);
+        self.pictures.update(
+            picture_dir.as_deref(),
+            &canvas.pictures_wanted,
+            &canvas.picture_times,
+        );
         canvas.clear(width);
         canvas.avatar_slots = self.avatars.slots();
         canvas.picture_slots = self.pictures.slots();
@@ -11204,6 +11423,7 @@ impl State {
         let mut editor_folder: Option<PathBuf> = None;
         let mut editor_renamed: Option<(PathBuf, PathBuf)> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
+        let mut editor_new_diff: Option<(PathBuf, usize, bool)> = None;
         let mut home_out: Option<editor::home::Out> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
@@ -11455,6 +11675,7 @@ impl State {
                     editor_folder = out.folder;
                     editor_renamed = out.renamed;
                     folder_news = out.folder_news;
+                    editor_new_diff = out.new_diff;
                 }
             }
         }
@@ -11653,6 +11874,9 @@ impl State {
         if let Some((entry, from)) = editor_test {
             self.start_test_play(entry, from);
         }
+        if let Some((path, entry, keep)) = editor_new_diff {
+            self.new_difficulty_from(&path, entry, keep);
+        }
         if test_over {
             self.back_to_editor();
         }
@@ -11804,6 +12028,7 @@ impl State {
             }
         }
         self.draw_update(canvas);
+        self.draw_left_session(canvas);
         // Over everything so far (the top bar's buttons too); a dialog or a drop goes on top.
         // The idle screen's rays hear what the menu or player plays.
         if self.idle.amount() > 0.0 {
@@ -12630,10 +12855,7 @@ impl State {
                 }
             }
         }
-        if let Some(info) = &self.mapinfo {
-            info.extend(changed);
-            self.mapinfo_sorted = false;
-        }
+        self.maps_rewritten(changed);
         let mut added: Vec<Entry> = fresh.into_values().collect();
         added.sort_by(|a, b| a.path.cmp(&b.path));
         self.append_maps(added);
@@ -12938,6 +13160,9 @@ impl State {
             }
             Hit::SocialToggle => self.toggle_social(),
             Hit::ChatMap(set) => self.open_chat_map(set),
+            Hit::MappingInvite(session, accept) => self.answer_mapping_invite(session, accept),
+            Hit::BackToSession => self.rejoin_mapping(),
+            Hit::ForgetSession => self.left_mapping = None,
             Hit::ChatShot(id) => self.open_shot(id),
             Hit::SendShot => {
                 let row = self.social.row(self.mp.is_some());

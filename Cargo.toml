@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Mapping sessions: a set's files are sent by sha256, in base64 pieces.
+base64 = "0.22"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 cpal = "0.18"
 # Unpacking the Linux release archive in the self-updater (already a dependency of zip).
@@ -13,6 +15,7 @@ pollster = "1.0.1"
 rosu-pp = "4"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.10"
 symphonia = { version = "0.6", features = ["mp3", "ogg", "vorbis", "wav", "pcm", "flac"] }
 # The game's rules, apart from the client (crates/taiko-logic).
 taiko-logic = { path = "crates/taiko-logic" }

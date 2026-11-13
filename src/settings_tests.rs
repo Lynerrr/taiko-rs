@@ -3007,3 +3007,51 @@ fn the_game_goes_with_its_song() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     assert!(s.play.is_none(), "the song has gone, and its game with it");
 }
+
+/// The playfield area's and the interface's editors, opened from the settings over a song's pause
+/// menu: closing them and the settings goes back to the paused song, not to a black screen.
+#[test]
+fn an_editor_opened_from_the_settings_over_a_song_goes_back_to_it() {
+    for hud in [false, true] {
+        let mut s = layout_tests::state();
+        s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+        s.play_when_scanned = false;
+        let map = beatmap::calibration_map(500.0, 4, 64);
+        s.play = Some(Box::new(Play::new(Game::new(
+            map,
+            Arc::new(Track {
+                samples: Vec::new(),
+                rate: 1.0,
+                stream: None,
+            }),
+            None,
+        ))));
+        s.scene = screens::play::PlayScreen::scene(0, None);
+        s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+        s.settings_anywhere();
+        if hud {
+            s.open_hud_editor();
+        } else {
+            s.open_layout_editor();
+        }
+        for _ in 0..3 {
+            s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+        }
+        assert!(
+            s.play.is_some(),
+            "the paused song stays behind the editor (hud {hud})"
+        );
+        if hud {
+            s.close_hud_editor();
+        } else {
+            s.key(KeyCode::Escape, false, None, Instant::now(), None);
+        }
+        assert!(s.in_settings(), "Esc goes back to the settings (hud {hud})");
+        s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+        s.close_settings();
+        assert!(
+            s.game().is_some_and(|g| g.paused().is_some()),
+            "and on to the song's pause menu (hud {hud})"
+        );
+    }
+}

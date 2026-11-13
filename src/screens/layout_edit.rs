@@ -25,6 +25,10 @@ impl Screen for LayoutEdit {
         "LayoutEdit"
     }
 
+    fn back_scene(&self) -> Option<&Scene> {
+        Some(&self.back)
+    }
+
     fn activity(&self) -> &'static str {
         "layout editor"
     }

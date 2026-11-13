@@ -129,6 +129,8 @@ pub enum Hotkey {
     Collections,
     /// Song select: put the selected difficulty in a collection.
     Collect,
+    /// Song select: look at the songs folders again for new and changed maps.
+    RefreshSongs,
     Pause,
     SkipIntro,
     QuickRetry,
@@ -149,7 +151,7 @@ const ANYWHERE: &[Place] = &[
 ];
 
 impl Hotkey {
-    pub const ALL: [Hotkey; 35] = [
+    pub const ALL: [Hotkey; 36] = [
         Hotkey::Pause,
         Hotkey::SkipIntro,
         Hotkey::QuickRetry,
@@ -167,6 +169,7 @@ impl Hotkey {
         Hotkey::Sort,
         Hotkey::Collections,
         Hotkey::Collect,
+        Hotkey::RefreshSongs,
         Hotkey::Retry,
         Hotkey::WatchReplay,
         Hotkey::ExportVideo,
@@ -220,6 +223,9 @@ impl Hotkey {
             Hotkey::Sort => const { &[Chord::ctrl(KeyS)] },
             Hotkey::Collections => const { &[Chord::ctrl(KeyL)] },
             Hotkey::Collect => const { &[Chord::ctrl(KeyK)] },
+            // No key unless the player gives it one (F5 is a preset key, Ctrl+R restarts a song):
+            // the handlers know it by a key no keyboard sends by accident.
+            Hotkey::RefreshSongs => const { &[Chord::plain(F13)] },
             Hotkey::Pause => const { &[Chord::plain(Escape)] },
             Hotkey::SkipIntro => const { &[Chord::plain(Space)] },
             Hotkey::QuickRetry => const { &[Chord::plain(Backquote)] },
@@ -238,9 +244,10 @@ impl Hotkey {
 
     /// The key it starts on. Applying the offset suggestion starts on none: O is right by the
     /// drum keys, and a stray press quietly moved the map's offset mid-song. It stays known by O
-    /// to the handlers, like any hotkey by its default.
+    /// to the handlers, like any hotkey by its default. Looking for new maps starts on none too:
+    /// the list keeps up by itself, and the obvious keys are taken.
     pub fn first_key(self) -> Option<Chord> {
-        (self != Hotkey::ApplyOffset).then(|| self.default())
+        (!matches!(self, Hotkey::ApplyOffset | Hotkey::RefreshSongs)).then(|| self.default())
     }
 
     /// Shift held with it does more of it, or the other way (Shift+F2 goes back, Shift + - / +
@@ -271,7 +278,8 @@ impl Hotkey {
             | Hotkey::Download
             | Hotkey::Sort
             | Hotkey::Collections
-            | Hotkey::Collect => &[Place::Select],
+            | Hotkey::Collect
+            | Hotkey::RefreshSongs => &[Place::Select],
             Hotkey::Pause | Hotkey::ApplyOffset | Hotkey::QuickRetry => {
                 &[Place::Play, Place::Paused]
             }
@@ -379,6 +387,11 @@ impl Hotkey {
                 "選曲: コレクションに入れる",
                 "Выбор песни: добавить в коллекцию"
             ),
+            Hotkey::RefreshSongs => tr!(
+                "Song select: look for new maps",
+                "選曲: 新しい譜面を探す",
+                "Выбор песни: искать новые карты"
+            ),
             Hotkey::Pause => tr!("Song: pause", "曲: ポーズ", "Песня: пауза"),
             Hotkey::SkipIntro => tr!(
                 "Song: skip intro",
@@ -448,6 +461,7 @@ impl Hotkey {
             Hotkey::Sort => "sort",
             Hotkey::Collections => "collections",
             Hotkey::Collect => "collect",
+            Hotkey::RefreshSongs => "refresh_songs",
             Hotkey::Pause => "pause",
             Hotkey::SkipIntro => "skip_intro",
             Hotkey::QuickRetry => "quick_retry",

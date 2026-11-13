@@ -103,6 +103,9 @@ impl View {
             x += tw;
         }
         let mut right = w - 8.0;
+        if let Some(x) = self.draw_session_button(c, w - 6.0, h) {
+            right = x - 8.0;
+        }
         if self.ed.modified() {
             let mark = "unsaved changes";
             c.text_right(right, 3.5, 7.0, rgba(WARN, 1.0), mark);
@@ -258,9 +261,57 @@ impl View {
             playing,
         );
         x += pw + 6.0;
-        let time = fmt_time(self.ed.time);
-        c.text(x, by + 6.0, 9.0, rgba(0xffffff, 1.0), &time);
-        x += Canvas::text_width(9.0, &time) + 12.0;
+        // The playhead's time: a click types a time to jump to; "copy" beside it copies it.
+        let typed = match &self.typing {
+            Some((Field::Playhead, t)) => Some(format!("{t}_")),
+            _ => None,
+        };
+        let shown = typed.clone().unwrap_or_else(|| fmt_time(self.ed.time));
+        let tw = Canvas::text_width(9.0, &shown).max(Canvas::text_width(9.0, "0:00.000"));
+        let r = [x - 3.0, by + 3.0, tw + 6.0, bh - 6.0];
+        let hot = c.hovered(r[0], r[1], r[2], r[3]);
+        if typed.is_some() || hot {
+            c.round_rect(
+                [r[0], r[1]],
+                [r[2], r[3]],
+                3.0,
+                rgba(0x1c1c2a, if typed.is_some() { 1.0 } else { 0.6 }),
+                rgba(if typed.is_some() { 0x8b7cff } else { 0x3c3c58 }, 1.0),
+                1.0,
+            );
+        }
+        c.text(x, by + 6.0, 9.0, rgba(0xffffff, 1.0), &shown);
+        self.buttons.push((r, Btn::Clock));
+        self.tips.push((
+            r,
+            "Click to type a time to jump to, then Enter: 1:23.456, 01:23:456 or ms. Ctrl+V pastes one, Ctrl+C copies it.".to_string(),
+        ));
+        x += tw + 5.0;
+        let label = "copy";
+        let cw = Canvas::text_width(5.5, label) + 6.0;
+        let cr = [x, by + 7.0, cw, 9.0];
+        let hot = c.hovered(cr[0], cr[1], cr[2], cr[3]);
+        c.round_rect(
+            [cr[0], cr[1]],
+            [cr[2], cr[3]],
+            2.0,
+            rgba(if hot { 0x34344a } else { 0x24243a }, 1.0),
+            rgba(0x3c3c58, 1.0),
+            1.0,
+        );
+        c.text(
+            cr[0] + 3.0,
+            cr[1] + 1.8,
+            5.5,
+            rgba(if hot { 0xffffff } else { 0xb8b8c8 }, 1.0),
+            label,
+        );
+        self.buttons.push((cr, Btn::CopyTime));
+        self.tips.push((
+            cr,
+            "Copies the time as osu! writes it for modding (01:23:456 - ); in a session's chat it is a link.".to_string(),
+        ));
+        x += cw + 10.0;
         if x + 100.0 < right {
             let snap = format!("1/{}", self.ed.snap);
             let tip = "Click to pick a snap or make your own snap presets; the wheel then steps only through the preset's snaps.";
@@ -645,6 +696,13 @@ impl View {
     pub(super) fn draw_overview(&mut self, c: &mut Canvas) {
         let [x, y, w, h] = self.layout.overview;
         let end = self.end_ms().max(1.0);
+        // Under the tips of the others' marks (see `draw_collab_overview`), which come later.
+        let tip = if self.collab.is_some() {
+            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks. In a mapping session the coloured lines are the others (hover one to see who) and the strip along the top shows the parts."
+        } else {
+            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks."
+        };
+        self.tips.push((self.layout.overview, tip.to_string()));
         c.rect(x, y, w, h, rgba(0x0e0e14, 1.0));
         let px = |t: f64| x + (t / end).clamp(0.0, 1.0) as f32 * w;
         // Kiai.
@@ -698,6 +756,8 @@ impl View {
                 c.rect(px(m.time) - 0.5, y, 1.5, h, rgba(super::MARK_COL, 1.0));
             }
         }
+        // In a session: the parts, and where the others are.
+        self.draw_collab_overview(c, end);
         // What the timeline shows, and the playhead.
         let (a, b) = (px(self.view_start), px(self.view_end()));
         c.round_rect(
@@ -715,11 +775,6 @@ impl View {
             h + 2.0,
             rgba(0xffffff, 1.0),
         );
-        self.tips.push((
-            self.layout.overview,
-            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks."
-                .to_string(),
-        ));
     }
 
     // ---- the status line ----
