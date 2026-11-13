@@ -8,6 +8,8 @@ use hit::Hit;
 /// never reaches a real server).
 fn menus() -> State {
     let mut s = crate::layout_tests::state();
+    // Stay in song select once the library is scanned, however the tests were started.
+    s.play_when_scanned = false;
     s.mapping_sessions = true;
     s.cfg.online_token = "t".into();
     s.cfg.online_server = "127.0.0.1:9".into();
