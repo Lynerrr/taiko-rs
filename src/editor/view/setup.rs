@@ -12,18 +12,20 @@ const ROWS: [[Option<Key>; 2]; 4] = [
     [Some(Key::ArtistUnicode), Some(Key::Artist)],
     [Some(Key::TitleUnicode), Some(Key::Title)],
     [Some(Key::Creator), Some(Key::Version)],
-    [Some(Key::Source), None],
+    [Some(Key::Source), Some(Key::BasedOn)],
 ];
 
 const NUMBERS: [Key; 3] = [Key::Hp, Key::Od, Key::BaseSv];
 
 /// Where Tab goes from `k` (Shift+Tab the other way): the text fields in the order they show.
-pub fn next_text(k: Key, back: bool) -> Key {
+/// The original mapper's box is there only for an `edit` of an osu! map.
+pub fn next_text(k: Key, back: bool, edit: bool) -> Key {
     let order: Vec<Key> = ROWS
         .iter()
         .flatten()
         .flatten()
         .copied()
+        .filter(|k| edit || *k != Key::BasedOn)
         .chain([Key::Tags])
         .collect();
     let at = order.iter().position(|o| *o == k).unwrap_or(0);
@@ -44,11 +46,26 @@ fn tail(size: f32, w: f32, s: &str) -> String {
     format!("..{}", String::from_iter(&cut))
 }
 
+// Only the regression suite (Linux only) opens it this way.
+#[cfg(all(test, target_os = "linux"))]
+impl View {
+    /// File > Song setup, as the menu opens it.
+    pub(crate) fn song_setup_for_tests(&mut self) {
+        self.open_setup();
+    }
+}
+
 impl View {
     /// File > Song setup.
     pub(super) fn open_setup(&mut self) {
         self.commit_typing();
         self.modal = Some(Modal::Setup);
+    }
+
+    /// Whether Song setup has the original mapper's box: the map came from osu!. Not in a
+    /// mapping session, whose ops carry song setup's other keys only (`mapping::KEYS`).
+    pub(super) fn names_original(&self) -> bool {
+        self.ed.osu_set().is_some() && self.collab.is_none()
     }
 
     /// The star rating of the map as it is now, worked out again after each change.
@@ -238,9 +255,12 @@ impl View {
         let col = (inner - gap) / 2.0;
         c.text(x0, ty, 7.5, rgba(accent(), 1.0), "Metadata");
         ty += 14.0;
+        let edit = self.names_original();
         for row in ROWS {
             for (i, k) in row.into_iter().enumerate() {
-                let Some(k) = k else { continue };
+                let Some(k) = k.filter(|k| edit || *k != Key::BasedOn) else {
+                    continue;
+                };
                 let fx = x0 + i as f32 * (col + gap);
                 c.text(fx, ty, small, rgba(DIM, 1.0), k.label());
                 self.setting_box(c, [fx, ty + 9.0, col, 16.0], k);

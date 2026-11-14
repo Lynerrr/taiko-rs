@@ -31,6 +31,39 @@ const PACKED: [&str; 10] = [
     "mp3", "ogg", "m4a", "opus", "png", "jpg", "jpeg", "gif", "webp", "mp4",
 ];
 
+/// The `[Metadata]` key that names the original mapper of an osu! map this one is an edit of.
+/// The server takes a map with an osu! `BeatmapSetID` only with it (the editor's Song setup
+/// writes it): the mapper's word that the file is their edit, not a copy.
+pub const BASED_ON_KEY: &str = "TaikoRsBasedOn";
+/// The longest original mapper name the server keeps.
+pub const MAX_ORIGINAL_MAPPER: usize = 64;
+
+/// The osu! set a map file's text names (a `BeatmapSetID` above 0), and the original mapper
+/// it credits under `BASED_ON_KEY`.
+pub fn edit_of(text: &str) -> (Option<u32>, Option<String>) {
+    let (mut section, mut set, mut mapper) = ("", None, None);
+    for line in text.lines() {
+        let line = line.trim_start_matches('\u{feff}').trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            section = name;
+        } else if section == "Metadata"
+            && let Some((key, value)) = line.split_once(':')
+        {
+            let value = value.trim();
+            match key.trim() {
+                "BeatmapSetID" if set.is_none() => {
+                    set = Some(value.parse::<u32>().ok().filter(|id| *id > 0))
+                }
+                key if key == BASED_ON_KEY && mapper.is_none() => {
+                    mapper = Some((!value.is_empty()).then(|| value.to_string()))
+                }
+                _ => {}
+            }
+        }
+    }
+    (set.flatten(), mapper.flatten())
+}
+
 /// Where a set's page is on the website.
 pub fn page_url(id: u32) -> String {
     format!("{WEBSITE}/c/{id}")
@@ -111,9 +144,10 @@ fn collect(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 
 /// Packs the folder: the taiko difficulties with enough notes, and everything else a map of
 /// the set needs (music, pictures, storyboard, hitsounds). Other modes' maps, backups
-/// (`.bak`, `.osu.old`) and the sidecar stay behind.
+/// (`.bak`, `.osu.old`) and the sidecar stay behind, and so do osu! maps that name no original
+/// mapper: only the mapper's own maps and edits go to the server.
 pub fn pack(folder: &Path) -> Result<Packed, String> {
-    pack_with(folder, MIN_NOTES, MAX_OSZ, "the server takes")
+    pack_with(folder, MIN_NOTES, MAX_OSZ, "the server takes", true)
 }
 
 /// The most a set exported to a file (`.rsz` or `.osz`) holds.
@@ -122,12 +156,19 @@ pub const MAX_EXPORT: usize = 300 << 20;
 /// Packs the folder for a file to give to people (`export`): every taiko difficulty with a
 /// note, and what they need.
 pub fn pack_export(folder: &Path) -> Result<Packed, String> {
-    pack_with(folder, 1, MAX_EXPORT, "a file holds")
+    pack_with(folder, 1, MAX_EXPORT, "a file holds", false)
 }
 
 /// `pack`, keeping the difficulties with at least `min_notes` notes, and at most `max` bytes
-/// in all (`who` says who takes no more: "the server takes").
-fn pack_with(folder: &Path, min_notes: usize, max: usize, who: &str) -> Result<Packed, String> {
+/// in all (`who` says who takes no more: "the server takes"). `own` leaves out the osu! maps
+/// that credit no original mapper.
+fn pack_with(
+    folder: &Path,
+    min_notes: usize,
+    max: usize,
+    who: &str,
+    own: bool,
+) -> Result<Packed, String> {
     let mut paths = Vec::new();
     collect(folder, 0, &mut paths);
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -147,6 +188,10 @@ fn pack_with(folder: &Path, min_notes: usize, max: usize, who: &str) -> Result<P
             }
             if notes < min_notes {
                 left_out.push(format!("{name} (fewer than {min_notes} notes)"));
+                continue;
+            }
+            if own && matches!(edit_of(&String::from_utf8_lossy(&bytes)), (Some(_), None)) {
+                left_out.push(format!("{name} (an osu! map, no original mapper named)"));
                 continue;
             }
             sent.push(name.clone());
@@ -549,6 +594,48 @@ mod tests {
             .read_to_end(&mut got)
             .unwrap();
         assert_eq!(got, std::fs::read(dir.join("a [Oni].osu")).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_edit_of_an_osu_map_goes_only_with_its_original_mapper_named() {
+        let osu = |version: &str, credit: &str| {
+            map(1, 20).replace(
+                "[HitObjects]",
+                &format!(
+                    "[Metadata]\r\nVersion:{version}\r\nBeatmapSetID:123\r\n{credit}\r\n[HitObjects]"
+                ),
+            )
+        };
+        assert_eq!(edit_of(&map(1, 20)), (None, None));
+        assert_eq!(edit_of(&osu("Oni", "")), (Some(123), None));
+        assert_eq!(edit_of(&osu("Oni", "TaikoRsBasedOn:  ")), (Some(123), None));
+        assert_eq!(
+            edit_of(&osu("Oni", "TaikoRsBasedOn: Someone Else ")),
+            (Some(123), Some("Someone Else".to_string()))
+        );
+        assert_eq!(
+            edit_of(
+                &map(1, 20).replace("[HitObjects]", "[Metadata]\nBeatmapSetID:-1\n[HitObjects]")
+            ),
+            (None, None)
+        );
+        let dir = folder("edit");
+        std::fs::write(
+            dir.join("a [Mine].osu"),
+            osu("Mine", "TaikoRsBasedOn:Someone"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("a [Theirs].osu"), osu("Theirs", "")).unwrap();
+        std::fs::write(dir.join("audio.mp3"), [1u8; 8]).unwrap();
+        let packed = pack(&dir).unwrap();
+        assert_eq!(packed.sent, ["a [Mine].osu"]);
+        assert_eq!(
+            packed.left_out,
+            ["a [Theirs].osu (an osu! map, no original mapper named)"]
+        );
+        // A file to give to people keeps the whole set.
+        assert_eq!(pack_export(&dir).unwrap().sent.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,0 +1,104 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  773,4     - Test [Oni]
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  534,24   1/4
+text  628,24   100%
+text  347,25   Play
+text  486,25   Snap
+text  578,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  562,26   +
+text  660,26   +
+text  454,27   copy
+text  516,28   -
+text  613,28   -
+text  305,49   NOTES
+text  305,65   Nothing selected
+text  637,65   THIS DIFFICULTY
+text  191,71   Song setup
+text  637,77   3 notes
+text  305,83   New notes:
+text  370,84   Kat  W
+text  422,84   Big  E
+text  191,86   This difficulty's names and settings. Ctrl+S saves them with the map; Ctrl+Z takes a
+text  638,88   1 don, 2 kat
+text  191,95   change back.
+text  638,99   1 drumrolls, 1 dendens
+text  305,101  Click the lane to place a note on the grid. W makes the
+text  638,110  120.0 BPM at the playhead
+text  191,111  Metadata
+text  305,111  note in hand a kat (or a don again), E a big one. Click
+text  305,120  a placed note to give it that colour. Right click
+text  637,121  Length 0:21.000
+text  191,125  Artist
+text  432,125  Artist (romanised)
+text  305,130  deletes.
+text  637,132  0 bookmarks
+text  196,138  empty
+text  437,138  empty
+text  191,155  Title
+text  432,155  Title (romanised)
+text  196,168  empty
+text  437,168  Test
+text  191,185  Mapper
+text  432,185  Difficulty name
+text  196,198  empty
+text  437,198  Oni
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  786,211  0:02.000
+text   21,214  1
+text  191,215  Source
+text  432,215  Original mapper (your edit of an osu! map)
+text  287,224  120 BPM
+text  196,228  empty
+text  437,228  Original Mapper
+text   10,234  Select
+text  191,245  Tags (words to find the map by)
+text   20,250  2
+text  196,258  empty
+text   14,269  Note
+text  191,275  Romanised: the names in plain Latin letters (filled in for you while both are the
+text  191,284  same).
+text   20,285  3
+text  191,300  Difficulty
+text   14,305  Roll
+text  191,314  HP drain
+text  351,314  Accuracy (OD)
+text  512,314  Base SV
+text   20,321  4
+text  215,327  5
+text  375,327  5
+text  537,327  1.4
+text  330,328  +
+text  491,328  +
+text  652,328  +
+text  196,330  -
+text  356,330  -
+text  517,330  -
+text   10,340  Denden
+text  191,346  Hit windows: great ±34.5 ms, ok ±79.5 ms. 0.30 stars. Base SV is how fast notes
+text  191,355  scroll at 1.0x SV; drumrolls keep their length when it changes.
+text  531,361  Slider velocity (read only here: edit it in Timing mode, F3)
+text   11,372  x2
+text  200,381  Done
+text  243,381  Enter keeps what you typed, Tab goes to the next box, Esc closes.
+text   11,393  x1
+text   11,414  x0.5
+text    8,447  0:00.000    1/4 snap    120.0 BPM    SV x1.00    5 notes
+text    8,460  Compose: place and edit notes. Hover anything for a tip.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save
