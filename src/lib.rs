@@ -2585,6 +2585,7 @@ impl State {
             Item::TrueNotes => on(c.true_notes),
             Item::CalmMaps => on(c.calm_maps),
             Item::DrumMenus => on(c.drum_menus),
+            Item::AltF4LeavesMap => on(c.alt_f4_leaves_map),
             Item::MapSkins => on(c.map_skins),
             Item::HideGreat => on(c.hide_great),
             Item::FailRestart => on(c.fail_restart),
@@ -2945,6 +2946,7 @@ impl State {
                 self.cfg.drum_menus = !self.cfg.drum_menus;
                 self.select_zone = drum_nav::Zone::List;
             }
+            Item::AltF4LeavesMap => self.cfg.alt_f4_leaves_map = !self.cfg.alt_f4_leaves_map,
             Item::MapSkins => self.cfg.map_skins = !self.cfg.map_skins,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::FailRestart => self.cfg.fail_restart = !self.cfg.fail_restart,
@@ -10917,6 +10919,22 @@ impl State {
                 }
             }
             ServerMsg::Welcome { .. } | ServerMsg::Pong { .. } => {}
+        }
+    }
+
+    /// A close request (the window's X, or Alt+F4 as the system sends it). With
+    /// `Config::alt_f4_leaves_map`, Alt held and a map running, it quits the map as the pause
+    /// menu's Quit does. Otherwise it asks to close the game.
+    fn close_requested(&mut self) {
+        if self.cfg.alt_f4_leaves_map
+            && self.modifiers_alt
+            && self.scene.song_play().is_some()
+            && self.play.is_some()
+            && !self.quit_asked
+        {
+            self.show_select();
+        } else {
+            self.ask_quit();
         }
     }
 

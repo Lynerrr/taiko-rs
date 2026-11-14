@@ -54,6 +54,7 @@ pub enum Item {
     TrueNotes,
     CalmMaps,
     DrumMenus,
+    AltF4LeavesMap,
     HideGreat,
     /// Sudden Death / Perfect fails start the map over (`Config::fail_restart`).
     FailRestart,
@@ -127,7 +128,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 137] = [
+pub const ITEMS: [(&str, Item); 138] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -166,6 +167,7 @@ pub const ITEMS: [(&str, Item); 137] = [
     ("INPUT", Item::Key(3)),
     ("INPUT", Item::TouchLayout),
     ("INPUT", Item::DrumMenus),
+    ("INPUT", Item::AltF4LeavesMap),
     ("INPUT", Item::PresetKey(0)),
     ("INPUT", Item::PresetKey(1)),
     ("INPUT", Item::Hotkey(0)),
@@ -550,6 +552,11 @@ impl Item {
                 "メニューで太鼓のキーを使う",
                 "Клавиши барабана в меню"
             ),
+            Item::AltF4LeavesMap => tr!(
+                "Alt+F4 leaves the map",
+                "Alt+F4で譜面を抜ける",
+                "Alt+F4 выходит из карты"
+            ),
             Item::CalmMaps => tr!(
                 "Reduce map effects",
                 "譜面の演出を控えめに",
@@ -773,6 +780,7 @@ impl Item {
             | Item::MenuGlitch
             | Item::BlackLane
             | Item::DrumMenus
+            | Item::AltF4LeavesMap
             | Item::MapSkins
             | Item::AutoplayLeftHanded
             | Item::HideGreat
@@ -990,6 +998,11 @@ impl Item {
                 "Song select, its mods and the pause menu follow the drum: the rims go up and down, either face picks. In song select Tab moves between the song list and the rows of buttons above and below it, and your drum keys don't type unless the search box is picked.",
                 "選曲、Mod選択、ポーズメニューを太鼓で操作します。フチで上下、面で決定。選曲ではTabで曲リストと上下のボタン列を移動します。検索欄を選んでいない間、太鼓のキーは文字を入力しません。",
                 "Выбор песни, его моды и меню паузы слушаются барабана: края двигают вверх и вниз, центр выбирает. В выборе песни Tab переключает между списком и рядами кнопок сверху и снизу, а клавиши барабана не печатают, пока не выбрано поле поиска."
+            ),
+            Item::AltF4LeavesMap => tr!(
+                "Like osu!stable: Alt+F4 while playing or watching a replay quits the map back to song select instead of closing the game. Anywhere else it closes the game as usual.",
+                "osu!stableと同じ: プレイ中やリプレイ観戦中のAlt+F4で、ゲームを閉じず選曲に戻ります。それ以外の画面では今まで通りゲームを閉じます。",
+                "Как в osu!stable: Alt+F4 во время игры или повтора выходит из карты в выбор песни, а не закрывает игру. В остальных местах игра закрывается как обычно."
             ),
             Item::MapSkins => tr!(
                 "Maps draw with the skin images in their own folder. Off: your skin everywhere. Right-click a song to turn one map's off.",

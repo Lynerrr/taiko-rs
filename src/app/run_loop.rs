@@ -592,7 +592,7 @@ impl App {
             self.set_cursor(self.cursor);
         }
         match event {
-            WindowEvent::CloseRequested => lock(&self.state).ask_quit(),
+            WindowEvent::CloseRequested => lock(&self.state).close_requested(),
             WindowEvent::HoveredFile(_) => lock(&self.state).file_drag(FileDrag::Hover),
             WindowEvent::HoveredFileCancelled => lock(&self.state).file_drag(FileDrag::Left),
             WindowEvent::DroppedFile(path) => {
