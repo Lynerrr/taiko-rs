@@ -657,6 +657,21 @@ mod tests {
         assert_eq!(s.presence_text(), own);
     }
 
+    /// A `.tko` map's pictures come from the room's map's folder in a match, as they do when
+    /// it is played alone (they were left out, only its text was drawn).
+    #[test]
+    fn a_match_shows_its_maps_pictures() {
+        let mut s = layout_tests::state();
+        s.library = vec![layout_tests::entry(0, 0, true)];
+        let mut room = layout_tests::session(false);
+        room.map_entry = Some(0);
+        s.mp = Some(room);
+        s.scene = screens::mp_play::MpPlay::scene();
+        let folder = s.library[0].path.parent().map(std::path::Path::to_path_buf);
+        assert!(folder.is_some());
+        assert_eq!(s.picture_dir(), folder);
+    }
+
     /// Going from one screen outside lib.rs to another is a change of screen, though both are
     /// `Scene::Other`: the new one fades in and its animations start over, as when each was a
     /// variant of its own.
