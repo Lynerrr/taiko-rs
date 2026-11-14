@@ -1105,7 +1105,7 @@ impl Config {
         let Some(path) = config_path() else {
             return Config::default();
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = read_settled(&path) else {
             return Config::default();
         };
         Config::parse_text(&text)
@@ -1878,8 +1878,45 @@ fn write_pending(pending: &mut std::collections::HashMap<PathBuf, String>) {
             &mut text,
             &std::fs::read_to_string(&path).unwrap_or_default(),
         );
-        let _ = std::fs::write(path, text);
+        write_whole(&path, &text);
     }
+}
+
+/// The file at `path` once nothing has written it for a moment (at most a few seconds). An
+/// update starts the new game while the old one still saves on its way out, and builds before
+/// `write_whole` emptied the file and wrote it again in place: read in between, the settings
+/// after the first lines came back as defaults, and the new game saved them so.
+fn read_settled(path: &Path) -> std::io::Result<String> {
+    const STILL: std::time::Duration = std::time::Duration::from_millis(300);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let text = std::fs::read_to_string(path)?;
+        let written = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok());
+        // A time in the future (a clock moved back) says nothing; don't wait on it.
+        if written.is_none_or(|ago| ago >= STILL) || std::time::Instant::now() >= until {
+            return Ok(text);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Puts `text` at `path` so that a reader sees the old file or the new one, never a part:
+/// written beside it, then renamed over it. Writing in place empties the file first, and a
+/// game starting right then (the one an update restarts, while the old one saves on its way
+/// out) read the first lines only, so every setting after them went back to its default.
+fn write_whole(path: &Path, text: &str) {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    // Two games (the old and the restarted one) may write at once: one file each.
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_ok() {
+        return;
+    }
+    // Windows refuses the rename while another program has the file open.
+    let _ = std::fs::remove_file(&tmp);
+    let _ = std::fs::write(path, text);
 }
 
 fn save_worker() -> mpsc::Sender<Save> {
@@ -1983,6 +2020,57 @@ mod tests {
         // From then on it's the new file, as it is.
         assert_eq!(load_map_offsets_in(&dir), first);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_save_never_shows_a_reader_half_a_config() {
+        let dir = std::env::temp_dir().join(format!("taiko-config-whole-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.txt");
+        let old = "keys = A, S, K, L\nskin = mine\nonline_token = abc\n";
+        std::fs::write(&path, old).unwrap();
+        // A game that opened the file just before the save (the one an update restarts).
+        let mut reader = std::fs::File::open(&path).unwrap();
+        write_pending(&mut std::collections::HashMap::from([(
+            path.clone(),
+            "keys = D, F, J, K\n".to_string(),
+        )]));
+        let mut seen = String::new();
+        std::io::Read::read_to_string(&mut reader, &mut seen).unwrap();
+        drop(reader);
+        // It reads the whole old file, not an emptied one or a mix.
+        #[cfg(unix)]
+        assert_eq!(seen, old);
+        // The new file is whole too, with what the old build kept and this one doesn't know.
+        let new = std::fs::read_to_string(&path).unwrap();
+        assert!(new.starts_with("keys = D, F, J, K\n"), "{new}");
+        let left: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["config.txt"], "no temporary file is left behind");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_config_is_read_once_an_older_game_has_finished_writing_it() {
+        let dir = std::env::temp_dir().join(format!("taiko-config-settled-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.txt");
+        let whole = "keys = A, S, K, L\nskin = mine\nonline_token = abc\n";
+        // An older game closing after an update: the file emptied and half written...
+        std::fs::write(&path, &whole[..18]).unwrap();
+        let writer = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                // ...and then the rest.
+                std::fs::write(&path, whole).unwrap();
+            })
+        };
+        assert_eq!(read_settled(&path).unwrap(), whole);
+        writer.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
