@@ -432,6 +432,7 @@ black_lane = true
 true_notes = true
 calm_maps = true
 drum_menus = true
+alt_f4_leaves_map = true
 hit_flash = false
 show_offset_hint = false
 offset_hint_ur_scaled = false
