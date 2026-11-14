@@ -1,0 +1,92 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  773,4     - Test [Oni]
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  534,24   1/4
+text  628,24   100%
+text  347,25   Play
+text  486,25   Snap
+text  578,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  562,26   +
+text  660,26   +
+text  454,27   copy
+text  516,28   -
+text  613,28   -
+text  305,49   NOTES
+text  305,65   Nothing selected
+text  637,65   THIS DIFFICULTY
+text  637,77   3 notes
+text  305,83   New notes:
+text  370,84   Kat  W
+text  422,84   Big  E
+text  638,88   1 don, 2 kat
+text  206,89   Upload to taiko.rs
+text  638,99   1 drumrolls, 1 dendens
+text  305,101  Click the lane to place a note on the grid. W makes the
+text  206,107  Sent before as set 12: this updates it. Approved difficulties stay as they are.
+text  638,110  120.0 BPM at the playhead
+text  305,111  note in hand a kat (or a don again), E a big one. Click
+text  305,120  a placed note to give it that colour. Right click
+text  637,121  Length 0:21.000
+text  206,125  OK
+text  228,125  Logged in to taiko.rs
+text  305,130  deletes.
+text  637,132  0 bookmarks
+text  206,139  OK
+text  228,139  Saved
+text  206,153  OK
+text  228,153  A taiko map
+text  208,167  !!
+text  228,167  Needs at least 10 notes (it has 5)
+text  208,181  !!
+text  228,181  Artist is empty: fill it in File > Song setup
+text  206,195  OK
+text  228,195  Title: Test
+text  208,209  !!
+text  228,209  Mapper name is empty: fill it in File > Song setup
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  786,211  0:02.000
+text   21,214  1
+text  208,223  !!
+text  228,223  The music file isn't in the map's folder
+text  287,224  120 BPM
+text   10,234  Select
+text  206,237  OK
+text  228,237  Your own map (no osu! set number)
+text   20,250  2
+text  228,251  No background picture: the page will show a plain colour (not requi...
+text  206,254  --
+text   14,269  Note
+text  206,271  OK
+text  228,271  Approved, kept as they were: Oni
+text   20,285  3
+text  210,293  The server didn't take it
+text   14,305  Roll
+text  211,306  Inscribed is approved, so it has to stay as it was: send your changes
+text  210,316  as a new difficulty (File > New difficulty), or ask an admin or a loved
+text   20,321  4
+text  210,326  nominator to take the approval back first
+text   10,340  Denden
+text  531,361  Slider velocity (read only here: edit it in Timing mode, F3)
+text  213,362  Close
+text   11,372  x2
+text   11,393  x1
+text   11,414  x0.5
+text    8,447  0:00.000    1/4 snap    120.0 BPM    SV x1.00    5 notes
+text    8,460  Compose: place and edit notes. Hover anything for a tip.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save

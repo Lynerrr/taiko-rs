@@ -336,3 +336,49 @@ fn the_map_editor_copies_and_pastes_map_times_like_osu() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Updating a set whose approved difficulty was changed: the upload window names it, offers to
+/// keep the changes as a new difficulty or to ask an admin, and can't send; a refusal from the
+/// server is shown whole, not cut to one line.
+#[test]
+fn the_upload_window_guards_approved_difficulties() {
+    use crate::custom::approved::{Approved, Kept};
+    let dir = std::env::temp_dir().join(format!("taiko-rs-screen-upload-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("map.osu");
+    std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
+    let draw = |v: &mut editor::view::View| {
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        c.clear(WIDTH);
+        v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+        screen(&c, VOLATILE)
+    };
+    let approved = |version: &str, hash| Approved {
+        version: version.into(),
+        hash,
+    };
+    let mut v = editor::view::View::open(path.clone(), 0).unwrap();
+    v.upload_window_for_tests(
+        12,
+        vec![
+            (approved("Oni", 1), Kept::Same),
+            (approved("Inscribed", 2), Kept::Changed(path.clone())),
+            (approved("Kantan", 3), Kept::Missing),
+        ],
+        None,
+    );
+    assert!(v.upload.approved_changed());
+    assert_snapshot("screen-map-editor-upload-approved", &draw(&mut v));
+    let mut refused = editor::view::View::open(path, 0).unwrap();
+    refused.upload_window_for_tests(
+        12,
+        vec![(approved("Oni", 1), Kept::Same)],
+        Some(Err("Inscribed is approved, so it has to stay as it was: send your changes as a new difficulty (File > New difficulty), or ask an admin or a loved nominator to take the approval back first".into())),
+    );
+    assert!(!refused.upload.approved_changed());
+    assert_snapshot("screen-map-editor-upload-refused", &draw(&mut refused));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -531,6 +531,9 @@ pub struct View {
     /// A new difficulty of the set asked for from the File menu: with this one's notes (true)
     /// or empty, keeping the timing (false). The screen makes it and opens it.
     want_new_diff: Option<bool>,
+    /// Another difficulty of the set to open: the upload window put the open file back to
+    /// what was approved, and its changes are in this one now.
+    want_open: Option<(std::path::PathBuf, Option<String>)>,
     mouse: (f32, f32),
     pub width: f32,
     /// What the middle of the screen is for.
@@ -635,7 +638,7 @@ pub struct View {
     /// A question that has to be answered before anything else.
     modal: Option<Modal>,
     /// The upload window's state.
-    upload: upload::UploadUi,
+    pub(crate) upload: upload::UploadUi,
     /// The manual's chapter and scroll.
     manual: manual::ManualUi,
     /// The game's token, when logged in to taiko.rs (set by the screen).
@@ -844,6 +847,7 @@ impl View {
             setup_stars: None,
             want_test: None,
             want_new_diff: None,
+            want_open: None,
             mouse: (0.0, 0.0),
             width: 853.0,
             mode: Mode::Compose,
@@ -975,6 +979,11 @@ impl View {
     /// (false). The chart was saved first, so the file holds what is on screen.
     pub fn take_new_difficulty(&mut self) -> Option<bool> {
         self.want_new_diff.take()
+    }
+
+    /// Another difficulty of the set to open instead of this one, and what to tell there.
+    pub fn take_open(&mut self) -> Option<(std::path::PathBuf, Option<String>)> {
+        self.want_open.take()
     }
 
     /// The session the editor was left in, once (see `left_session`).

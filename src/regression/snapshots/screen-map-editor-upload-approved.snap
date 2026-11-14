@@ -1,0 +1,98 @@
+text   11,4    File
+text   49,4    Edit
+text   87,4    View
+text  125,4    Timing
+text  175,4    Help
+text  773,4     - Test [Oni]
+text  385,23   0:00.000
+text   19,24   Compose
+text   98,24   Gimmicks
+text  185,24   Timing
+text  257,24   Effects
+text  534,24   1/4
+text  628,24   100%
+text  347,25   Play
+text  486,25   Snap
+text  578,25   Speed
+text  728,25   Undo
+text  769,25   Redo
+text  810,25   Save
+text   71,26   F1
+text  157,26   F2
+text  230,26   F3
+text  309,26   F4
+text  562,26   +
+text  660,26   +
+text  454,27   copy
+text  516,28   -
+text  613,28   -
+text  305,49   NOTES
+text  206,62   Upload to taiko.rs
+text  305,65   Nothing selected
+text  637,65   THIS DIFFICULTY
+text  637,77   3 notes
+text  206,80   Sent before as set 12: this updates it. Approved difficulties stay as they are.
+text  305,83   New notes:
+text  370,84   Kat  W
+text  422,84   Big  E
+text  638,88   1 don, 2 kat
+text  206,98   OK
+text  228,98   Logged in to taiko.rs
+text  638,99   1 drumrolls, 1 dendens
+text  305,101  Click the lane to place a note on the grid. W makes the
+text  638,110  120.0 BPM at the playhead
+text  305,111  note in hand a kat (or a don again), E a big one. Click
+text  206,112  OK
+text  228,112  Saved
+text  305,120  a placed note to give it that colour. Right click
+text  637,121  Length 0:21.000
+text  206,126  OK
+text  228,126  A taiko map
+text  305,130  deletes.
+text  637,132  0 bookmarks
+text  208,140  !!
+text  228,140  Needs at least 10 notes (it has 5)
+text  208,154  !!
+text  228,154  Artist is empty: fill it in File > Song setup
+text  206,168  OK
+text  228,168  Title: Test
+text  208,182  !!
+text  228,182  Mapper name is empty: fill it in File > Song setup
+text  208,196  !!
+text  228,196  The music file isn't in the map's folder
+text  206,210  OK
+text  228,210  Your own map (no osu! set number)
+text  286,211  0:00.000
+text  536,211  0:01.000
+text  786,211  0:02.000
+text   21,214  1
+text  228,224  No background picture: the page will show a plain colour (not requi...
+text  287,224  120 BPM
+text  206,227  --
+text   10,234  Select
+text   20,250  2
+text  210,252  Approved difficulties can't change
+text  210,265  Plays on an approved difficulty give pp, so an update has to bring it back
+text   14,269  Note
+text  210,274  exactly as it was approved. Keep your changes as a new difficulty, or ask an
+text  210,284  admin to take the approval back first.
+text   20,285  3
+text  210,298  OK
+text  232,298  Oni: as approved
+text   14,305  Roll
+text  212,310  !!
+text  233,310  Inscribed: changed since it was approved
+text   20,321  4
+text  212,322  !!
+text  232,322  Kantan: not in the folder
+text   10,340  Denden
+text  217,347  Keep my changes as a new difficulty
+text  447,347  Ask an admin on Discord
+text  531,361  Slider velocity (read only here: edit it in Timing mode, F3)
+text   11,372  x2
+text  213,389  Close
+text   11,393  x1
+text   11,414  x0.5
+text    8,447  0:00.000    1/4 snap    120.0 BPM    SV x1.00    5 notes
+text    8,460  Compose: place and edit notes. Hover anything for a tip.
+text  600,469  ? shortcuts   F1-F4 modes   F9 friends   Ctrl+S save
