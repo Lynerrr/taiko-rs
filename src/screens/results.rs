@@ -173,8 +173,8 @@ impl Screen for ResultsScreen {
     }
 }
 
-/// A play sent to the online leaderboards: what the server answered, or, when it never did,
-/// the play to send again (`score_outbox`).
+/// A play sent to the online leaderboards: what the server answered, or, when it never did or
+/// said to try later (`online::try_later`), the play to send again (`score_outbox`).
 pub(crate) enum Sent {
     Answered {
         reply: Result<online::Reply, String>,
@@ -240,6 +240,13 @@ fn send_play(unsent: score_outbox::Unsent, token: &str, again: bool) -> Sent {
         play: Box::new(unsent.play.clone()),
     };
     match online::exchange(&unsent.server, request) {
+        // Not taken just now (the server's database was out of reach): kept like a play it
+        // never answered, so the same key goes again.
+        Ok((online::Reply::Error(error), _)) if online::try_later(&error) => Sent::Unanswered {
+            error,
+            unsent: Box::new(unsent),
+            again,
+        },
         Ok((online::Reply::Error(e), _)) => Sent::Answered {
             reply: Err(e),
             key,
