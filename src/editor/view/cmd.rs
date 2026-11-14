@@ -231,8 +231,12 @@ impl Cmd {
             Cmd::Leave => "Back to song select.",
             Cmd::Undo => "Takes back the last change.",
             Cmd::Redo => "Does the undone change again.",
-            Cmd::Cut | Cmd::CopyNotes => "Keeps the selected notes to paste elsewhere.",
-            Cmd::Paste => "Puts the copied notes at the playhead.",
+            Cmd::Cut | Cmd::CopyNotes => {
+                "Keeps the selected notes to paste elsewhere and puts the first one's time on the clipboard as osu! writes it (01:23:456 - ). With nothing selected, copies the playhead's time."
+            }
+            Cmd::Paste => {
+                "Puts the copied notes at the playhead. A time copied elsewhere (01:23:456 - , as mappers write it) jumps there instead."
+            }
             Cmd::SelectAll => "Selects every note.",
             Cmd::SelectNone => "Lets go of the selection (Esc does too).",
             Cmd::Delete => "Removes the selected notes (right click removes one).",

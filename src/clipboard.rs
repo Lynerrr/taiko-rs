@@ -20,8 +20,25 @@ fn with_board<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Option<T>) -> Option
     f(board.as_mut()?)
 }
 
+// Tests: a clipboard of this thread's own instead of the system's (`fake_for_this_thread`),
+// so they neither depend on a desktop session nor touch the player's clipboard.
+#[cfg(test)]
+thread_local! {
+    static FAKE: std::cell::RefCell<Option<Option<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: from now on this thread's `get` and `set` use an empty clipboard of its own.
+#[cfg(test)]
+pub fn fake_for_this_thread() {
+    FAKE.with(|f| *f.borrow_mut() = Some(None));
+}
+
 /// The clipboard's text, if it has any.
 pub fn get() -> Option<String> {
+    #[cfg(test)]
+    if let Some(text) = FAKE.with(|f| f.borrow().clone()) {
+        return text;
+    }
     #[cfg(not(target_os = "android"))]
     if let Some(text) = with_board(|b| b.get_text().ok()) {
         return Some(text);
@@ -38,6 +55,15 @@ pub fn get() -> Option<String> {
 
 /// Puts `text` on the clipboard; false if there's none to put it on.
 pub fn set(text: &str) -> bool {
+    #[cfg(test)]
+    if FAKE.with(|f| {
+        let mut f = f.borrow_mut();
+        f.as_mut()
+            .map(|board| *board = Some(text.to_string()))
+            .is_some()
+    }) {
+        return true;
+    }
     #[cfg(not(target_os = "android"))]
     if with_board(|b| b.set_text(text).ok()).is_some() {
         return true;

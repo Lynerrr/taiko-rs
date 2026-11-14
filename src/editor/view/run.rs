@@ -208,9 +208,9 @@ impl View {
             Cmd::Cut if self.line_keys(false) => self.run(Cmd::CopyNotes, audio),
             Cmd::Cut if self.clip_mode() && self.picked().is_some() => self.copy_clips(true),
             Cmd::Cut => {
-                self.k_copied = None;
+                let first = self.first_selected_time();
                 let n = self.ed.cut();
-                self.status = format!("cut {n}");
+                self.copied_notes(n, first, "cut");
                 self.mark_stale();
             }
             Cmd::CopyNotes if self.line_keys(false) => {
@@ -223,15 +223,24 @@ impl View {
                 if self.keyframe_mode()
                     && (self.k_sel.is_some() || self.ed.selection.is_empty())
                     && self.copy_keys() => {}
+            // As in osu!: with nothing selected, the time is copied.
+            Cmd::CopyNotes if self.ed.selection.is_empty() => self.copy_time(t),
             Cmd::CopyNotes => {
-                self.k_copied = None;
+                let first = self.first_selected_time();
                 let n = self.ed.copy();
-                self.status = format!("copied {n}");
+                self.copied_notes(n, first, "copied");
             }
             Cmd::Paste if self.line_keys(true) => self.press_line_action(TAct::Paste),
             Cmd::Paste if self.clip_mode() && View::has_copied_clips() => self.paste_copied_clips(),
             Cmd::Paste if self.keyframe_mode() && self.k_copied.is_some() => self.paste_keys(),
             Cmd::Paste => {
+                // A time stamp copied elsewhere (a mapper's note, the chat): jump to it.
+                if let Some(to) = self.pasted_stamp() {
+                    self.stop(audio);
+                    self.set_time(to);
+                    self.status = format!("at {}", super::fmt_time(to));
+                    return;
+                }
                 let at = self.ed.snapped(t);
                 let n = self.ed.paste(at);
                 self.status = format!("pasted {n}");
