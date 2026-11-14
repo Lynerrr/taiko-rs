@@ -66,6 +66,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"protocol":1,"request":{"Replay":{"id":5}}}
 {"protocol":1,"request":{"Score":{"id":5}}}
 {"protocol":1,"request":{"SetStatuses":{"token":"t","maps":[[1,2]]}}}
+{"protocol":1,"request":{"SetStatuses":{"token":"t","maps":[[1,2]],"pp":true}}}
 {"protocol":1,"request":"LovedSets"}
 {"protocol":1,"request":"LovedMaps"}
 {"protocol":1,"request":{"SetLoved":{"token":"t","set":1,"loved":true,"version":"Oni"}}}
@@ -81,6 +82,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"LovedSets":[1,2]}
 {"LovedMaps":[[1,["Oni"]]]}
 {"SetStatuses":[[1,"ranked"]]}
+{"SetVerdicts":[{"set":1,"status":"ranked","pp":"yes"}]}
 "Counted"
 "LoggedOut"
 {"Error":"nope"}

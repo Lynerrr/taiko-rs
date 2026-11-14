@@ -549,6 +549,7 @@ impl Screen for PlayScreen {
                 Some("plays from a start point get no pp")
             } else if map_gives_pp(
                 &state.library[self.entry],
+                &state.pp_verdict,
                 &state.set_status,
                 &state.db_status,
                 &state.select.server_loved,

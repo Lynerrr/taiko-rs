@@ -573,6 +573,13 @@ struct State {
     set_status: std::collections::HashMap<u32, Option<String>>,
     set_status_tx: mpsc::Sender<(u32, Option<String>)>,
     set_status_rx: Receiver<(u32, Option<String>)>,
+    /// The server's word on whether a set's plays give pp (`Reply::SetVerdicts`); not here
+    /// while it hasn't said or is still checking. It goes before the status.
+    pp_verdict: std::collections::HashMap<u32, bool>,
+    pp_verdict_tx: mpsc::Sender<(u32, Option<bool>)>,
+    pp_verdict_rx: Receiver<(u32, Option<bool>)>,
+    /// When the server was last asked for each set's verdict as it was selected.
+    verdict_asked: std::collections::HashMap<u32, Instant>,
     /// What the mirrors said about sets, kept between runs (see `setstatus`), when it was last
     /// written, and when the list was last sorted again for new answers.
     status_cache: setstatus::Cache,
@@ -9244,6 +9251,7 @@ impl State {
             self.cfg.online_token.clone(),
         );
         let tx = self.set_status_tx.clone();
+        let verdict_tx = self.pp_verdict_tx.clone();
         std::thread::spawn(move || {
             let mut failed = 0;
             // The server looks up what it doesn't know in the background (some 45 maps a second):
@@ -9262,8 +9270,30 @@ impl State {
                         online::Request::SetStatuses {
                             token: token.clone(),
                             maps: chunk.to_vec(),
+                            pp: true,
                         },
                     ) {
+                        Ok(online::Reply::SetVerdicts(verdicts)) => {
+                            failed = 0;
+                            // A set the server is still checking is asked about again.
+                            let got: std::collections::HashSet<u32> = verdicts
+                                .iter()
+                                .filter(|v| !v.status.is_empty() && v.gives_pp().is_some())
+                                .map(|v| v.set)
+                                .collect();
+                            left.extend(
+                                chunk.iter().filter(|(set, _)| !got.contains(set)).copied(),
+                            );
+                            for v in verdicts {
+                                let status = (!v.status.is_empty()).then(|| v.status.clone());
+                                if status.is_some_and(|s| tx.send((v.set, Some(s))).is_err())
+                                    || verdict_tx.send((v.set, v.gives_pp())).is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                        // A server from before verdicts: the statuses alone.
                         Ok(online::Reply::SetStatuses(found)) => {
                             failed = 0;
                             let got: std::collections::HashSet<u32> =
@@ -9323,6 +9353,16 @@ impl State {
             }
             self.set_status.insert(set, status);
         }
+        while let Ok((set, verdict)) = self.pp_verdict_rx.try_recv() {
+            match verdict {
+                Some(gives) => {
+                    self.pp_verdict.insert(set, gives);
+                }
+                None => {
+                    self.pp_verdict.remove(&set);
+                }
+            }
+        }
         if self.status_sweep_due.is_some_and(|t| now >= t) {
             self.status_sweep_due = None;
             self.start_status_sweep();
@@ -9342,12 +9382,18 @@ impl State {
             self.status_resorted = now;
             self.select.refilter(&self.library);
         }
-        let set = self
-            .select
-            .selected()
-            .and_then(|i| self.library.get(i))
-            .and_then(Entry::set_id);
-        let Some(set) = set.filter(|s| !self.set_status.contains_key(s)) else {
+        let selected = self.select.selected().and_then(|i| self.library.get(i));
+        let map = selected.and_then(|e| e.meta.beatmap_id);
+        let set = selected.and_then(Entry::set_id);
+        let wants_verdict = |s: &u32| {
+            map.is_some()
+                && !self.pp_verdict.contains_key(s)
+                && self
+                    .verdict_asked
+                    .get(s)
+                    .is_none_or(|t| now.saturating_duration_since(*t) >= VERDICT_AGAIN)
+        };
+        let Some(set) = set.filter(|s| !self.set_status.contains_key(s) || wants_verdict(s)) else {
             self.status_wait = None;
             return;
         };
@@ -9363,6 +9409,13 @@ impl State {
             }
         }
         self.status_wait = None;
+        if let Some(map) = map.filter(|_| wants_verdict(&set)) {
+            self.verdict_asked.insert(set, now);
+            self.ask_verdict(set, map);
+        }
+        if self.set_status.contains_key(&set) {
+            return;
+        }
         self.set_status.insert(set, None);
         // Tests don't ask the internet.
         if cfg!(test) {
@@ -9371,6 +9424,44 @@ impl State {
         let tx = self.set_status_tx.clone();
         std::thread::spawn(move || {
             let _ = tx.send((set, download::set_status(set).ok()));
+        });
+    }
+
+    /// Asks the online server in the background whether plays on the selected set give pp
+    /// there (and its status): the server has the last word on pp. A server from before
+    /// verdicts answers the status alone.
+    fn ask_verdict(&self, set: u32, map: u32) {
+        // Tests don't ask the internet.
+        if cfg!(test) {
+            return;
+        }
+        let (server, token) = (
+            self.cfg.online_server.clone(),
+            self.cfg.online_token.clone(),
+        );
+        let (tx, verdict_tx) = (self.set_status_tx.clone(), self.pp_verdict_tx.clone());
+        std::thread::spawn(move || {
+            let request = online::Request::SetStatuses {
+                token,
+                maps: vec![(set, map)],
+                pp: true,
+            };
+            match online::call(&server, request) {
+                Ok(online::Reply::SetVerdicts(verdicts)) => {
+                    for v in verdicts.into_iter().filter(|v| v.set == set) {
+                        if !v.status.is_empty() {
+                            let _ = tx.send((set, Some(v.status.clone())));
+                        }
+                        let _ = verdict_tx.send((set, v.gives_pp()));
+                    }
+                }
+                Ok(online::Reply::SetStatuses(found)) => {
+                    for (s, status) in found.into_iter().filter(|(s, _)| *s == set) {
+                        let _ = tx.send((s, Some(status)));
+                    }
+                }
+                _ => {}
+            }
         });
     }
 
@@ -13771,6 +13862,8 @@ impl State {
 
 /// Rounds of asking the server about statuses it didn't have yet, and the wait between them.
 const STATUS_ROUNDS: usize = 60;
+/// How long until the server is asked again about a selected set it was still checking.
+const VERDICT_AGAIN: Duration = Duration::from_secs(30);
 const STATUS_ROUND_SECS: u64 = 45;
 
 /// Frames per second drawn while the window doesn't have the focus.
