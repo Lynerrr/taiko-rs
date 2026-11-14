@@ -1163,6 +1163,20 @@ pub const MOVING_FEATURE: &str = "moving/1";
 /// `Reply::Account::features`: a play it never answered can be sent to it again.
 pub const SUBMIT_KEY_FEATURE: &str = "submit-key/1";
 
+/// The errors a server answers a play with when it can't take it just now, not because of the
+/// play: its database was briefly out of reach (as during a deploy), or too many plays came at
+/// once. taiko-rs/web words its `ProgressionError::Unavailable` and `Throttled` so.
+const TRY_LATER_ERRORS: [&str; 2] = [
+    "progression is temporarily unavailable",
+    "too many plays at once, slow down",
+];
+
+/// Whether `Reply::Error(error)` to a `SubmitScore` means the play can go again later, with the
+/// same `operation_key`, rather than that the server refused it.
+pub fn try_later(error: &str) -> bool {
+    TRY_LATER_ERRORS.contains(&error)
+}
+
 /// What a server that keeps the players' agreement to the terms lists in
 /// `Reply::Account::features`; only those get `Request::AcceptTerms`.
 pub const TERMS_FEATURE: &str = "terms/1";
