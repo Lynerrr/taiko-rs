@@ -9,7 +9,12 @@
 //! - `status`: `r`anked `a`pproved `q`ualified `l`oved `p`ending `w`ip `g`raveyard `n`ot
 //!   submitted `u`nknown (a prefix of the word will do). osu!.db can't tell pending from
 //!   graveyard, so either matches both there. `status>=r` is ranked or better, as in osu!.
-//! - `creator` `mapper` `author`, `artist`, `title`, `diff` `version`: text the field contains.
+//! - `creator` `mapper` `author`, `artist`, `title`, `diff` `version`, `tag` `tags`, `source`:
+//!   text the field contains.
+//! - `id` `beatmapid` `bid`, `set` `setid` `beatmapset`: the osu! beatmap or set ID (exact, or
+//!   compared with `<` `>`). A bare number word also finds the map or set of that ID.
+//!
+//! A plain word is looked for in the name, the mapper, the osu! tags and the source.
 
 /// osu!.db's status codes (plus graveyard, which the mirrors know and osu!.db doesn't).
 pub const UNKNOWN: u8 = 0;
@@ -55,10 +60,16 @@ enum Num {
     Bpm,
     Length,
     Played,
+    /// The osu! beatmap ID; maps without one never match.
+    BeatmapId,
+    /// The osu! beatmap set ID.
+    SetId,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Field {
+    Tags,
+    Source,
     Creator,
     Artist,
     Title,
@@ -228,6 +239,14 @@ fn statuses(s: &str) -> Option<Vec<u8>> {
         .map(|(_, codes)| codes.to_vec())
 }
 
+/// An osu! ID: whole digits only.
+fn id(s: &str) -> Option<(f64, f64)> {
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    number(s)
+}
+
 fn cond(key: &str, op: Op, value: &str) -> Option<Cond> {
     let num = |key: Num, parsed: Option<(f64, f64)>| {
         parsed.map(|(value, tolerance)| Cond::Num {
@@ -252,11 +271,15 @@ fn cond(key: &str, op: Op, value: &str) -> Option<Cond> {
         "bpm" => num(Num::Bpm, number(value)),
         "length" | "len" => num(Num::Length, length(value)),
         "played" => num(Num::Played, number(value)),
+        "id" | "bid" | "beatmapid" | "mapid" => num(Num::BeatmapId, id(value)),
+        "set" | "setid" | "sid" | "beatmapset" | "beatmapsetid" => num(Num::SetId, id(value)),
         "status" => statuses(&value.to_lowercase()).map(|codes| Cond::Status { op, codes }),
         "creator" | "mapper" | "author" => text(Field::Creator),
         "artist" => text(Field::Artist),
         "title" => text(Field::Title),
         "diff" | "version" => text(Field::Version),
+        "tag" | "tags" => text(Field::Tags),
+        "source" => text(Field::Source),
         "collection" | "col" => match op {
             Op::Eq | Op::Ne if !value.is_empty() => Some(Cond::Collection {
                 negated: op == Op::Ne,
@@ -293,6 +316,8 @@ pub struct Text {
     pub artist: String,
     pub title: String,
     version: String,
+    tags: String,
+    source: String,
 }
 
 impl Text {
@@ -303,6 +328,8 @@ impl Text {
             artist: meta.artist.to_lowercase(),
             title: meta.title.to_lowercase(),
             version: meta.version.to_lowercase(),
+            tags: meta.tags.to_lowercase(),
+            source: meta.source.to_lowercase(),
         }
     }
 }
@@ -355,10 +382,15 @@ impl Query {
     }
 
     pub fn matches_text(&self, meta: &crate::beatmap::Meta, text: &Text, facts: &Facts) -> bool {
-        let words = self
-            .words
-            .iter()
-            .all(|w| text.label.contains(w.as_str()) || text.creator.contains(w.as_str()));
+        let words = self.words.iter().all(|w| {
+            let w = w.as_str();
+            text.label.contains(w)
+                || text.creator.contains(w)
+                || text.tags.contains(w)
+                || text.source.contains(w)
+                || w.parse::<u32>()
+                    .is_ok_and(|n| meta.beatmap_id == Some(n) || meta.set_id == Some(n))
+        });
         words
             && self.conds.iter().all(|c| match c {
                 Cond::Num {
@@ -374,6 +406,8 @@ impl Query {
                         Num::Bpm => facts.bpm,
                         Num::Length => facts.length_s,
                         Num::Played => facts.played_days,
+                        Num::BeatmapId => meta.beatmap_id.map(f64::from),
+                        Num::SetId => meta.set_id.map(f64::from),
                     };
                     have.is_some_and(|h| compare(*op, h, *value, *tolerance))
                 }
@@ -387,6 +421,8 @@ impl Query {
                         Field::Artist => &text.artist,
                         Field::Title => &text.title,
                         Field::Version => &text.version,
+                        Field::Tags => &text.tags,
+                        Field::Source => &text.source,
                     };
                     have.contains(value.as_str()) != *negated
                 }
@@ -561,6 +597,77 @@ mod tests {
         assert_eq!(Query::parse("ar=9").words, ["ar=9"]);
         assert_eq!(Query::parse("sr>abc").words, ["sr>abc"]);
         assert!(Query::parse("").is_empty());
+    }
+
+    fn tagged() -> Meta {
+        Meta {
+            tags: "Vocaloid Touhou  Speedcore".into(),
+            source: "Touhou Project".into(),
+            set_id: Some(456),
+            beatmap_id: Some(123),
+            ..meta()
+        }
+    }
+
+    fn hit_tagged(q: &str) -> bool {
+        Query::parse(q).matches(&tagged(), "Camellia - Ghost [Inner Oni]", &facts())
+    }
+
+    #[test]
+    fn words_find_tags_and_source() {
+        for q in [
+            "vocaloid",
+            "SPEEDCORE ghost",
+            "touhou",
+            "project",
+            "tag=vocal",
+            "tags:touhou",
+            "source=\"touhou proj\"",
+            "source!=anime",
+        ] {
+            assert!(hit_tagged(q), "{q}");
+        }
+        for q in ["anime", "tag=anime", "source=vocaloid", "tag!=touhou"] {
+            assert!(!hit_tagged(q), "{q}");
+        }
+        // A map without tags doesn't match them, and nothing breaks.
+        assert!(!hit("vocaloid") && !hit("source=touhou"));
+    }
+
+    #[test]
+    fn numbers_find_beatmap_and_set_ids() {
+        for q in [
+            "123",
+            "456",
+            "id=123",
+            "set=456",
+            "setid:456",
+            "bid=123",
+            "id<200",
+            "set>=456",
+            "ghost 123",
+        ] {
+            assert!(hit_tagged(q), "{q}");
+        }
+        // Exact: 12 is not 123, and a set ID isn't a map ID.
+        for q in ["12", "1234", "id=456", "set=123", "id>123", "id=abc"] {
+            assert!(!hit_tagged(q), "{q}");
+        }
+        // No ID known: no match, and the number is still text.
+        assert!(!hit("123") && !hit("id=1"));
+        let titled = Meta {
+            title: "Route 66".into(),
+            ..meta()
+        };
+        assert!(Query::parse("66").matches(&titled, "Camellia - Route 66 [Oni]", &facts()));
+    }
+
+    #[test]
+    fn a_cache_from_before_tags_still_loads() {
+        let old = r#"{"title":"T","artist":"A","creator":"C","version":"V","audio_file":"a.mp3","preview_time":0.0,"audio_lead_in":0.0,"mode":1,"od":5.0,"hp":5.0,"background":null,"slider_multiplier":1.4,"slider_tick_rate":1.0,"format_version":14,"set_id":7,"beatmap_id":8}"#;
+        let m: Meta = serde_json::from_str(old).unwrap();
+        assert!(m.tags.is_empty() && m.source.is_empty());
+        assert!(Query::parse("7").matches(&m, "A - T [V]", &facts()));
     }
 
     #[test]

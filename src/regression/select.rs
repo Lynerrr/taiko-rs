@@ -308,3 +308,48 @@ fn song_select_moves_through_songs_and_difficulties() {
     let _ = writeln!(out, "search cleared: {}", shown(&s));
     assert_snapshot("select-list-moves", &out);
 }
+
+#[test]
+fn song_select_search_finds_tags_source_and_ids() {
+    let mut lib = library();
+    for e in &mut lib {
+        let mut meta = e.meta.clone();
+        match meta.version.as_str() {
+            "Oni" => {
+                meta.tags = "Vocaloid Speedcore".into();
+                meta.source = "Touhou Project".into();
+                meta.beatmap_id = Some(9001);
+                meta.set_id = Some(4242);
+            }
+            "Easy" => {
+                meta.tags = "vocaloid".into();
+                meta.set_id = Some(4242);
+                meta.beatmap_id = Some(9000);
+            }
+            _ => {}
+        }
+        *e = Entry::from_parts(e.path.clone(), meta, e.size, e.modified);
+    }
+    let mut s = select(&lib);
+    let mut out = String::new();
+    for query in [
+        "vocaloid",
+        "speedcore zebra",
+        "touhou",
+        "tag=vocal",
+        "source=touhou",
+        "9001",
+        "4242",
+        "id=9000",
+        "set=4242",
+        "set=4243",
+        "id>9000",
+        "no tag here",
+    ] {
+        s.filter = query.into();
+        s.refilter(&lib);
+        let _ = writeln!(out, "search {query:?}:");
+        list(&mut out, &s, &lib);
+    }
+    assert_snapshot("select-search-tags-ids", &out);
+}
