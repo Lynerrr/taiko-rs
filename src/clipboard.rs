@@ -20,14 +20,15 @@ fn with_board<T>(f: impl FnOnce(&mut arboard::Clipboard) -> Option<T>) -> Option
     f(board.as_mut()?)
 }
 
-// Tests: a clipboard of this thread's own instead of the system's (`fake_for_this_thread`),
-// so they neither depend on a desktop session nor touch the player's clipboard.
+// Tests: every test thread has a clipboard of its own instead of the system's, so tests
+// neither depend on a desktop session (CI on Windows and macOS has one, Linux has none) nor
+// touch the player's clipboard.
 #[cfg(test)]
 thread_local! {
-    static FAKE: std::cell::RefCell<Option<Option<String>>> = const { std::cell::RefCell::new(None) };
+    static FAKE: std::cell::RefCell<Option<Option<String>>> = const { std::cell::RefCell::new(Some(None)) };
 }
 
-/// Tests: from now on this thread's `get` and `set` use an empty clipboard of its own.
+/// Tests: empties this thread's clipboard.
 #[cfg(test)]
 pub fn fake_for_this_thread() {
     FAKE.with(|f| *f.borrow_mut() = Some(None));

@@ -7843,7 +7843,13 @@ mod tests {
         v.key(KeyCode::Escape, false, Keys::default(), None);
         v.ed.select_all();
         v.key(KeyCode::KeyC, false, ctrl(), None);
-        assert_eq!(v.status, format!("copied {}", v.ed.chart.objects.len()));
+        assert_eq!(
+            v.status,
+            format!(
+                "copied {} (00:01:000 - on the clipboard)",
+                v.ed.chart.objects.len()
+            )
+        );
     }
 
     #[test]
