@@ -461,11 +461,15 @@ fn cache_dir() -> PathBuf {
     crate::config::cache_dir().unwrap_or_else(|| std::env::temp_dir().join("taiko-rs"))
 }
 
-/// A set of maps in one file: osu!'s `.osz`, or taiko.rs's own `.rsz` (the same zip, made for a
-/// set with `.tko` maps in it, and opened with taiko.rs rather than osu!).
+/// A set of maps in one file: osu!'s `.osz`, osu!lazer's `.olz` export (the same zip, files
+/// untouched), or taiko.rs's own `.rsz` (the same zip, made for a set with `.tko` maps in it, and
+/// opened with taiko.rs rather than osu!).
 pub fn is_map_archive(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|x| x.eq_ignore_ascii_case("osz") || x.eq_ignore_ascii_case("rsz"))
+    path.extension().is_some_and(|x| {
+        ["osz", "olz", "rsz"]
+            .iter()
+            .any(|e| x.eq_ignore_ascii_case(e))
+    })
 }
 
 /// taiko.rs's own map archive (`is_map_archive`).
@@ -479,7 +483,7 @@ pub fn extracted_dir() -> PathBuf {
     cache_dir().join("osz")
 }
 
-/// Extracts an `.osz` (or `.rsz`) once into the cache and returns the folder.
+/// Extracts an `.osz` (or `.olz`, `.rsz`) once into the cache and returns the folder.
 fn extract_osz(path: &Path) -> Result<PathBuf, String> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("map");
     let dest = extracted_dir().join(stem);
@@ -720,7 +724,7 @@ fn scan_cached(
             .map(|e| e.to_ascii_lowercase());
         match ext.as_deref() {
             Some("osu" | "tko") if input.is_file() => files.push((None, input.clone())),
-            Some("osz" | "rsz") if input.is_file() => match extract_osz(input) {
+            Some("osz" | "olz" | "rsz") if input.is_file() => match extract_osz(input) {
                 Ok(dir) => loose(&mut files, &dir),
                 Err(e) => eprintln!("{}: {e}", input.display()),
             },
@@ -758,7 +762,7 @@ fn scan_cached(
                     } else if is_map_file(&p) {
                         files.push((None, p));
                     } else if is_map_archive(&p) {
-                        // A Songs folder: also pick up .osz and .rsz files dropped into it.
+                        // A Songs folder: also pick up .osz, .olz and .rsz files dropped into it.
                         if let Ok(dir) = extract_osz(&p) {
                             loose(&mut files, &dir);
                         }
@@ -766,7 +770,7 @@ fn scan_cached(
                 }
             }
             _ => eprintln!(
-                "skipping {}: not a .osu, .tko, .osz, .rsz or folder",
+                "skipping {}: not a .osu, .tko, .osz, .olz, .rsz or folder",
                 input.display()
             ),
         }
@@ -1018,6 +1022,42 @@ pub(crate) fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// osu!lazer's `.olz` export is the same zip as an `.osz`: it is a map archive, it is read
+    /// and the game can be opened with it.
+    #[test]
+    fn an_olz_from_osu_lazer_is_read_like_an_osz() {
+        for name in ["a.olz", "a.OLZ", "a.osz", "a.rsz"] {
+            assert!(is_map_archive(Path::new(name)), "{name}");
+        }
+        assert!(!is_map_archive(Path::new("a.zip")));
+        assert!(!is_rsz(Path::new("a.olz")));
+        let root = std::env::temp_dir().join(format!("taiko-olz-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let osu = "osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:Lazer\nVersion:Oni\n\n[Difficulty]\nOverallDifficulty:5\n";
+        let mut found = Vec::new();
+        for ext in ["osz", "olz"] {
+            let archive = root.join(format!("set.{ext}"));
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+            zip.start_file("oni.osu", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut zip, osu.as_bytes()).unwrap();
+            zip.finish().unwrap();
+            assert!(is_library_input(&archive), "{ext} is scanned");
+            let cfg = Config::default();
+            assert_eq!(
+                startup_inputs(std::slice::from_ref(&archive), &cfg),
+                vec![archive.clone()]
+            );
+            found.push(crate::download::archive_maps(&archive).unwrap());
+        }
+        assert_eq!(found[0].len(), 1);
+        assert_eq!(found[0][0].0.title, "Lazer");
+        let hashes = |i: usize| found[i].iter().map(|m| m.1).collect::<Vec<_>>();
+        assert_eq!(hashes(0), hashes(1), "the same maps from either extension");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// A file the game was opened with that it can't read (an archive type it doesn't know, a
     /// path that isn't there) leaves the usual songs in place instead of an empty list.

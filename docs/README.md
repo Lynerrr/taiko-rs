@@ -66,7 +66,7 @@ Install `taiko-rs-android.apk` from the [releases](https://github.com/Lynerrr/ta
 (Android 8.0+, 64-bit ARM; allow installing from your browser or file manager when asked). To
 update, install the new APK over the old one.
 
-- **Maps**: open an `.osz` or a `.rsz` with taiko.rs (from a file manager, your browser's downloads, Telegram...)
+- **Maps**: open an `.osz`, an osu!lazer `.olz` or a `.rsz` with taiko.rs (from a file manager, your browser's downloads, Telegram...)
   or share it to taiko.rs, and it is imported; or get maps in **DOWNLOAD**. They live in
   `Android/data/io.github.lynerrr.taiko/files/taiko-rs/Songs` (reachable over USB), with the
   settings, scores and skins next to them. Uninstalling the app deletes that folder.
