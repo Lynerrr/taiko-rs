@@ -1483,6 +1483,7 @@ fn an_old_map_without_ids_in_its_file_goes_by_its_folders_set() {
     assert_eq!(
         map_gives_pp(
             &s.library[0],
+            &s.pp_verdict,
             &s.set_status,
             &s.db_status,
             &s.select.server_loved
@@ -1559,6 +1560,39 @@ fn scroll_speed_changes_between_songs_only() {
 }
 
 #[test]
+fn the_servers_pp_verdict_goes_before_the_status() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    s.library[0].meta.set_id = Some(2649444);
+    s.library[0].meta.beatmap_id = Some(5784001);
+    s.set_status.insert(2649444, Some("qualified".into()));
+    let gives = |s: &State| {
+        map_gives_pp(
+            &s.library[0],
+            &s.pp_verdict,
+            &s.set_status,
+            &s.db_status,
+            &s.select.server_loved,
+        )
+    };
+    assert_eq!(gives(&s), Some(false), "qualified gives none");
+    // The server has seen it ranked since.
+    s.pp_verdict_tx.send((2649444, Some(true))).unwrap();
+    s.poll_set_status(Instant::now());
+    assert_eq!(gives(&s), Some(true));
+    // Checking again: back to the status.
+    s.pp_verdict_tx.send((2649444, None)).unwrap();
+    s.poll_set_status(Instant::now());
+    assert_eq!(gives(&s), Some(false));
+    // And a set the server says gives none doesn't, whatever osu!.db thinks.
+    s.set_status.remove(&2649444);
+    s.db_status.insert(s.library[0].path.clone(), 4);
+    assert_eq!(gives(&s), Some(true));
+    s.pp_verdict.insert(2649444, false);
+    assert_eq!(gives(&s), Some(false));
+}
+
+#[test]
 fn sets_loved_on_the_server_count_as_loved() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
@@ -1569,6 +1603,7 @@ fn sets_loved_on_the_server_count_as_loved() {
     assert_eq!(
         map_gives_pp(
             &s.library[0],
+            &s.pp_verdict,
             &s.set_status,
             &s.db_status,
             &s.select.server_loved
@@ -1617,6 +1652,7 @@ fn sets_loved_on_the_server_count_as_loved() {
     let gives = |s: &State, i: usize| {
         map_gives_pp(
             &s.library[i],
+            &s.pp_verdict,
             &s.set_status,
             &s.db_status,
             &s.select.server_loved,

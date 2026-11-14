@@ -127,6 +127,10 @@ pub enum Request {
     SetStatuses {
         token: String,
         maps: Vec<(u32, u32)>,
+        /// Ask whether each set gives pp on the server too: the answer is then
+        /// `Reply::SetVerdicts`. Servers from before ignore it and answer `SetStatuses`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pp: bool,
     },
     /// The map sets loved on the server (`Reply::LovedSets`): they give pp there. Builds that
     /// know of single loved difficulties ask `LovedMaps`.
@@ -1186,6 +1190,30 @@ pub fn keeps_terms(features: &[String]) -> bool {
     features.iter().any(|f| f == TERMS_FEATURE)
 }
 
+/// One set of `Reply::SetVerdicts`: `{"set":1,"status":"ranked","pp":"yes"}`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SetVerdict {
+    pub set: u32,
+    /// Its status on osu!, as in `Reply::SetStatuses` ("missing" when osu! doesn't have it);
+    /// empty while the server doesn't know it.
+    #[serde(default)]
+    pub status: String,
+    /// "yes", "no", or "checking" (the server is looking the set up).
+    #[serde(default)]
+    pub pp: String,
+}
+
+impl SetVerdict {
+    /// Whether plays on the set give pp on the server; None while it's checking.
+    pub fn gives_pp(&self) -> Option<bool> {
+        match self.pp.as_str() {
+            "yes" => Some(true),
+            "no" => Some(false),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Reply {
     /// Logged in (or the token checked out): the account's name and a session token, and
@@ -1229,6 +1257,8 @@ pub enum Reply {
     /// (set ID, status on osu!) of the sets asked about that the server knows ("ranked",
     /// "loved", "graveyard"..., "missing" when osu! doesn't have it).
     SetStatuses(Vec<(u32, String)>),
+    /// `SetStatuses` asked with `pp`: each set asked about once, with whether it gives pp.
+    SetVerdicts(Vec<SetVerdict>),
     /// A `Played` play was counted.
     Counted,
     LoggedOut,
