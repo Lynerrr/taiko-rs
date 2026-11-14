@@ -166,6 +166,8 @@ pub fn state_with(cfg: Config, library: Vec<Entry>) -> State {
     s.window_w = 1920.0;
     s.window_h = 1080.0;
     s.mouse = (-1000.0, -1000.0);
+    // Not the player's own unsent plays, and none left behind for them.
+    s.score_outbox = crate::score_outbox::Outbox::at(None);
     s
 }
 

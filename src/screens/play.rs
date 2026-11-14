@@ -627,6 +627,7 @@ impl Screen for PlayScreen {
                         replay_version: replay.version,
                         inputs: replay.inputs.clone(),
                         rolls: Some(game.stats().roll_ticks),
+                        operation_key: None,
                         stars: None,
                         pp_version: online::PP_VERSION,
                         scroll_speed: Some(replay.scroll_speed),
@@ -651,6 +652,7 @@ impl Screen for PlayScreen {
                     state.submits.push(submit_score(
                         state.cfg.online_server.clone(),
                         state.cfg.online_token.clone(),
+                        state.cfg.online_user.clone(),
                         play,
                         e.path.clone(),
                         replay.pp_play(),
