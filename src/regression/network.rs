@@ -278,6 +278,12 @@ fn requests() -> Vec<Request> {
         Request::SetStatuses {
             token: "t".into(),
             maps: vec![(1, 2)],
+            pp: false,
+        },
+        Request::SetStatuses {
+            token: "t".into(),
+            maps: vec![(1, 2)],
+            pp: true,
         },
         Request::LovedSets,
         Request::LovedMaps,
@@ -389,6 +395,11 @@ fn replies() -> Vec<Reply> {
         Reply::LovedSets(vec![1, 2]),
         Reply::LovedMaps(vec![(1, vec!["Oni".into()])]),
         Reply::SetStatuses(vec![(1, "ranked".into())]),
+        Reply::SetVerdicts(vec![online::SetVerdict {
+            set: 1,
+            status: "ranked".into(),
+            pp: "yes".into(),
+        }]),
         Reply::Counted,
         Reply::LoggedOut,
         Reply::Error("nope".into()),
