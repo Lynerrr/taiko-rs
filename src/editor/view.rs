@@ -23,6 +23,7 @@ use crate::hit::Canvas;
 use crate::render::{accent, rgba};
 use crate::video::FRAME_VW;
 
+mod background;
 mod chrome;
 mod clips;
 mod cmd;
@@ -426,6 +427,8 @@ enum Modal {
     Setup,
     /// Timing > Snap notes to the grid.
     Resnap,
+    /// A picture dropped on the editor: make it the background?
+    Background,
 }
 
 pub struct View {
@@ -498,6 +501,10 @@ pub struct View {
     renamed: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// An export on its way: the file it wrote.
     export_rx: Option<Receiver<Result<std::path::PathBuf, String>>>,
+    /// A picture dropped on the editor, waiting for the answer to "make it the background?".
+    bg_ask: Option<std::path::PathBuf>,
+    /// The file dialog of File > Background picture on its way.
+    bg_pick: Option<background::Pick>,
     game: Option<Box<Play>>,
     game_err: Option<String>,
     /// The chart changed at this moment and the preview hasn't caught up.
@@ -826,6 +833,8 @@ impl View {
             show: None,
             renamed: None,
             export_rx: None,
+            bg_ask: None,
+            bg_pick: None,
             game: None,
             game_err: None,
             stale: Some(Instant::now()),
@@ -1220,6 +1229,7 @@ impl View {
             self.wave_rx = None;
         }
         self.poll_export();
+        self.poll_background_pick();
         if let Some(rx) = &self.track_rx
             && let Ok(result) = rx.try_recv()
         {
@@ -3865,6 +3875,14 @@ impl View {
             && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
         {
             self.apply_resnap();
+            return KeyResult::Handled;
+        }
+        // The background question takes Enter for yes.
+        if self.modal == Some(Modal::Background)
+            && !repeat
+            && matches!(code, KeyCode::Enter | KeyCode::NumpadEnter)
+        {
+            self.run(Cmd::BackgroundUse, audio);
             return KeyResult::Handled;
         }
         // Song setup takes back, redoes and saves its changes where they are made.
@@ -6829,9 +6847,21 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("first.png"), b"x").unwrap();
         std::fs::write(outside.join("egg.png"), b"x").unwrap();
-        // No picture block picked: it is only copied.
+        // No picture block picked: the editor asks, and it can be only copied.
         v.drop_picture(&outside.join("first.png"));
+        assert_eq!(v.modal, Some(Modal::Background));
+        assert!(
+            !dir.join("first.png").exists(),
+            "nothing copied before the answer"
+        );
+        press(&mut v, Btn::C(Cmd::BackgroundCopy));
+        assert_eq!(v.modal, None);
         assert!(dir.join("first.png").is_file());
+        assert_eq!(
+            v.ed.background().as_deref(),
+            Some("bg.png"),
+            "the background stays"
+        );
         // A picture block takes the first picture in the folder, then the dropped one.
         v.set_time(3000.0);
         put_fx(&mut v, preset("Picture"));
@@ -8051,6 +8081,123 @@ mod tests {
         }
         assert_eq!(v.ed.setting(Key::Version), "Oni");
         assert!(!v.ed.modified());
+    }
+
+    #[test]
+    fn a_picture_dropped_on_the_editor_becomes_the_background_once_confirmed() {
+        let mut v = view();
+        let dir = v.ed.path.parent().unwrap().to_path_buf();
+        let outside = dir.join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("cover.jpg"), b"jpeg").unwrap();
+        // Cancel: nothing happens.
+        v.drop_picture(&outside.join("cover.jpg"));
+        assert_eq!(v.modal, Some(Modal::Background));
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::C(Cmd::BackgroundUse))
+        );
+        press(&mut v, Btn::C(Cmd::Stay));
+        assert_eq!(v.modal, None);
+        assert!(!dir.join("cover.jpg").exists());
+        assert_eq!(v.ed.background().as_deref(), Some("bg.png"));
+        assert!(!v.ed.modified());
+        // Enter says yes: copied in and set, saved with the map.
+        v.drop_picture(&outside.join("cover.jpg"));
+        v.key(KeyCode::Enter, false, Keys::default(), None);
+        assert_eq!(v.modal, None);
+        assert!(dir.join("cover.jpg").is_file());
+        assert_eq!(v.ed.background().as_deref(), Some("cover.jpg"));
+        assert!(v.ed.modified());
+        v.run(Cmd::Save, None);
+        assert!(!v.ed.modified(), "{}", v.status);
+        let meta = crate::beatmap::read_meta_file(&v.ed.path).unwrap();
+        assert_eq!(meta.background.as_deref(), Some("cover.jpg"));
+    }
+
+    #[test]
+    fn a_dropped_gif_is_only_copied_never_made_the_background() {
+        let mut v = view();
+        let dir = v.ed.path.parent().unwrap().to_path_buf();
+        let outside = dir.join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("spin.gif"), b"gif").unwrap();
+        v.drop_picture(&outside.join("spin.gif"));
+        assert_eq!(v.modal, None);
+        assert!(dir.join("spin.gif").is_file());
+        assert_eq!(v.ed.background().as_deref(), Some("bg.png"));
+    }
+
+    #[test]
+    fn a_new_background_never_overwrites_another_picture_of_its_name() {
+        let mut v = view();
+        let dir = v.ed.path.parent().unwrap().to_path_buf();
+        std::fs::write(dir.join("bg.png"), b"the old one").unwrap();
+        let outside = dir.join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("bg.png"), b"a new one").unwrap();
+        assert_eq!(
+            v.ed.set_background_from(&outside.join("bg.png")).unwrap(),
+            "bg 2.png"
+        );
+        assert_eq!(std::fs::read(dir.join("bg.png")).unwrap(), b"the old one");
+        assert_eq!(std::fs::read(dir.join("bg 2.png")).unwrap(), b"a new one");
+        assert_eq!(v.ed.background().as_deref(), Some("bg 2.png"));
+        // The same picture again is the one already there; one from the folder is used as it is.
+        assert_eq!(
+            v.ed.set_background_from(&outside.join("bg.png")).unwrap(),
+            "bg 2.png"
+        );
+        assert_eq!(
+            v.ed.set_background_from(&dir.join("bg.png")).unwrap(),
+            "bg.png"
+        );
+        // A comma or quote can't be in the event: the copy is named without them.
+        std::fs::write(outside.join("a,b\"c.png"), b"x").unwrap();
+        assert_eq!(
+            v.ed.set_background_from(&outside.join("a,b\"c.png"))
+                .unwrap(),
+            "a_b_c.png"
+        );
+        let text = v.ed.chart.to_text();
+        assert_eq!(
+            crate::beatmap::read_meta_from(text.as_bytes())
+                .unwrap()
+                .background
+                .as_deref(),
+            Some("a_b_c.png")
+        );
+    }
+
+    #[test]
+    fn song_setup_shows_the_background_and_removes_it() {
+        let mut v = view();
+        press(&mut v, Btn::C(Cmd::SongSetup));
+        draw(&mut v);
+        for cmd in [Cmd::Background, Cmd::NoBackground] {
+            assert!(v.buttons.iter().any(|(_, b)| *b == Btn::C(cmd)), "{cmd:?}");
+        }
+        press(&mut v, Btn::C(Cmd::NoBackground));
+        assert_eq!(v.ed.background(), None);
+        assert!(v.ed.modified());
+        assert_eq!(v.modal, Some(Modal::Setup), "the window stays open");
+        draw(&mut v);
+        assert!(
+            !v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::C(Cmd::NoBackground))
+        );
+        v.run(Cmd::Save, None);
+        let text = std::fs::read_to_string(&v.ed.path).unwrap();
+        assert!(!text.contains("0,0,\""), "{text}");
+        assert!(
+            menu::MENUS[0]
+                .items
+                .iter()
+                .any(|i| matches!(i, menu::Item::Do(Cmd::Background)))
+        );
     }
 
     #[test]
