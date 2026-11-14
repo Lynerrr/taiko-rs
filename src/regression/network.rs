@@ -1273,6 +1273,47 @@ fn the_lobby_follows_the_room() {
     assert_snapshot("network-lobby", &log);
 }
 
+/// A chat line longer than the lobby's chat box wraps onto the lines under it: every word of it
+/// is on screen, none of it cut off with "...".
+#[test]
+fn a_long_lobby_chat_line_shows_whole() {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("mp-chat-wrap", maps::basics(), &room);
+    room.send(&room_msg(Some(lobby_map(&s)), false));
+    wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.map.is_some())
+    });
+    let line = "YO 2nd time this has happened to me in a row, the map just skipped to the end";
+    room.send(&ServerMsg::Chat {
+        from: "RubyDear".into(),
+        text: line.into(),
+    });
+    wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| !m.chat.is_empty())
+    });
+    let c = frame(&mut s, now);
+    let rows: Vec<&str> = c
+        .texts
+        .iter()
+        .map(|(_, t)| t.as_str())
+        .skip_while(|t| !t.starts_with(": YO"))
+        .collect();
+    assert!(!rows.is_empty(), "the chat line is drawn");
+    let mut words = line.split_whitespace();
+    for row in &rows {
+        for w in row.trim_start_matches(": ").split_whitespace() {
+            if words.clone().next() == Some(w) {
+                words.next();
+            }
+        }
+    }
+    assert_eq!(words.next(), None, "every word shows, in order: {rows:?}");
+    assert!(
+        rows.iter().all(|r| !r.contains("...")),
+        "nothing cut: {rows:?}"
+    );
+}
+
 #[test]
 fn a_dropped_connection_mid_match_goes_back_to_the_menu() {
     let room = FakeRoom::new();
