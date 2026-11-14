@@ -8154,12 +8154,21 @@ mod tests {
             v.ed.set_background_from(&dir.join("bg.png")).unwrap(),
             "bg.png"
         );
-        // A comma or quote can't be in the event: the copy is named without them.
-        std::fs::write(outside.join("a,b\"c.png"), b"x").unwrap();
+        // A comma or quote can't be in the event: the copy is named without them. (Windows
+        // has no quotes in file names.)
+        #[cfg(not(windows))]
+        {
+            std::fs::write(outside.join("a,b\"c.png"), b"x").unwrap();
+            assert_eq!(
+                v.ed.set_background_from(&outside.join("a,b\"c.png"))
+                    .unwrap(),
+                "a_b_c.png"
+            );
+        }
+        std::fs::write(outside.join("a,b.png"), b"y").unwrap();
         assert_eq!(
-            v.ed.set_background_from(&outside.join("a,b\"c.png"))
-                .unwrap(),
-            "a_b_c.png"
+            v.ed.set_background_from(&outside.join("a,b.png")).unwrap(),
+            "a_b.png"
         );
         let text = v.ed.chart.to_text();
         assert_eq!(
@@ -8167,7 +8176,7 @@ mod tests {
                 .unwrap()
                 .background
                 .as_deref(),
-            Some("a_b_c.png")
+            Some("a_b.png")
         );
     }
 
