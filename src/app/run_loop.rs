@@ -1146,6 +1146,7 @@ impl State {
         let library = Vec::new();
         let mut select = Select::new(&library);
         let (set_status_tx, set_status_rx) = mpsc::channel();
+        let (pp_verdict_tx, pp_verdict_rx) = mpsc::channel();
         let status_cache = setstatus::Cache::load();
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
         select.headings = cfg.song_headings;
@@ -1326,6 +1327,10 @@ impl State {
             status_sweep_due: None,
             set_status_tx,
             set_status_rx,
+            pp_verdict: Default::default(),
+            pp_verdict_tx,
+            pp_verdict_rx,
+            verdict_asked: Default::default(),
             loved_call: None,
             loved_asked: false,
             custom_call: Job::idle(),

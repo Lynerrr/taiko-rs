@@ -277,10 +277,11 @@ pub(crate) fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
 /// `path`; with a replay file, the whole play's stats from it; with an online score id, its
 /// replay fetched from `server` first (and saved, see `scores::save_online`).
 /// Whether plays on library map `e` give pp (only ranked, approved and loved ones do, as on
-/// osu!), from the mirrors' status else osu!.db's; None when it isn't known. The server has the
-/// last word.
+/// osu!): the online server's verdict (`pp_verdict`), else from the mirrors' status, else
+/// osu!.db's; None when it isn't known.
 pub(crate) fn map_gives_pp(
     e: &Entry,
+    pp_verdict: &std::collections::HashMap<u32, bool>,
     set_status: &std::collections::HashMap<u32, Option<String>>,
     db_status: &std::collections::HashMap<PathBuf, u8>,
     server_loved: &ui::ServerLoved,
@@ -291,6 +292,9 @@ pub(crate) fn map_gives_pp(
     // Loved on the online server (the set, or this difficulty): it gives pp there.
     if ui::loved_here(server_loved, e) {
         return Some(true);
+    }
+    if let Some(&gives) = pp_verdict.get(&set) {
+        return Some(gives);
     }
     if let Some(Some(s)) = set_status
         .get(&set)
