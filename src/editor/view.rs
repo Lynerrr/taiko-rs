@@ -3720,7 +3720,7 @@ impl View {
                     self.apply_typed(f, &text);
                     if let Field::Meta(k) = f {
                         let next = if k.is_text() {
-                            setup::next_text(k, keys.shift)
+                            setup::next_text(k, keys.shift, self.names_original())
                         } else {
                             k
                         };
@@ -7972,6 +7972,36 @@ mod tests {
             None,
         );
         assert!(v.sheet);
+    }
+
+    #[test]
+    fn song_setup_asks_an_osu_maps_edit_for_its_original_mapper() {
+        use crate::editor::setup::Key;
+        let named = |v: &View| {
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Edit(Field::Meta(Key::BasedOn)))
+        };
+        let mut v = view();
+        v.ed.chart.remove_key("Metadata", "BeatmapSetID");
+        press(&mut v, Btn::C(Cmd::SongSetup));
+        draw(&mut v);
+        assert!(!named(&v), "a mapper's own map has no such box");
+        // A map from osu!: the box is there, after Source on the way to Tags.
+        v.ed.chart.set_key("Metadata", "BeatmapSetID", "123");
+        draw(&mut v);
+        assert!(named(&v));
+        click_btn(&mut v, Btn::Edit(Field::Meta(Key::Source)));
+        v.key(KeyCode::Tab, false, Keys::default(), None);
+        assert!(matches!(v.typing, Some((Field::Meta(Key::BasedOn), _))));
+        v.type_text("Someone Else");
+        v.key(KeyCode::Tab, false, Keys::default(), None);
+        assert!(matches!(v.typing, Some((Field::Meta(Key::Tags), _))));
+        assert_eq!(v.ed.setting(Key::BasedOn), "Someone Else");
+        assert_eq!(
+            crate::custom::edit_of(&v.ed.chart.to_text()),
+            (Some(123), Some("Someone Else".to_string()))
+        );
     }
 
     #[test]

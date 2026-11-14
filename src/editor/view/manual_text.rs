@@ -389,7 +389,8 @@ The Recipe menu on the Nodes page drops a ready-made group of wired nodes. Chang
 File > Upload sends the saved map to taiko.rs.
 
 # What happens
-- A checklist first: you are logged in, the map is saved, a taiko map with at least 10 notes, artist / title / mapper are filled in, the music is in the folder, and it is your own map (no osu! BeatmapSetID).
+- A checklist first: you are logged in, the map is saved, a taiko map with at least 10 notes, artist / title / mapper are filled in, the music is in the folder, and it is your own map (no osu! BeatmapSetID) or your edit of an osu! map.
+- Your edit of an osu! map: name its original mapper in File > Song setup (the box shows for maps that came from osu!). The set's page then says which osu! set it is based on and by whom. Someone else's map as it is can't be sent; the other osu! difficulties in the folder stay behind.
 - Send packs the map's folder (every taiko difficulty with enough notes, the music, pictures, storyboard) and uploads it.
 - The set is public at once as CUSTOM: it shows in the website's CUSTOM tab and anyone can download it. Plays on it give no pp.
 - An admin or a loved nominator can approve it. APPROVED CUSTOM gives pp.
@@ -753,7 +754,8 @@ F4 Effects, страница Keyframes: анимация игрового пол
 File > Upload отправляет сохранённую карту на taiko.rs.
 
 # Что происходит
-- Сначала чек-лист: вы вошли в аккаунт, карта сохранена, это тайко-карта минимум с 10 нотами, заполнены исполнитель / название / маппер, музыка лежит в папке и это ваша собственная карта (без osu! BeatmapSetID).
+- Сначала чек-лист: вы вошли в аккаунт, карта сохранена, это тайко-карта минимум с 10 нотами, заполнены исполнитель / название / маппер, музыка лежит в папке и это ваша собственная карта (без osu! BeatmapSetID) или ваша правка osu!-карты.
+- Ваша правка osu!-карты: укажите автора оригинала в File > Song setup (поле видно у карт, пришедших из osu!). На странице сета будет написано, на каком osu!-сете он основан и чей он. Чужую карту без изменений отправить нельзя; остальные osu!-сложности из папки не отправляются.
 - Send упаковывает папку карты (все тайко-сложности с достаточным числом нот, музыку, картинки, сториборд) и загружает.
 - Сет сразу публичный со статусом CUSTOM: он виден во вкладке CUSTOM на сайте, его может скачать любой. Игры на нём не дают pp.
 - Админ или loved-номинатор может его одобрить. APPROVED CUSTOM даёт pp.
