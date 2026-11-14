@@ -10106,11 +10106,15 @@ impl State {
                     self.social.have_list = false;
                     self.social.sent_activity = None;
                     self.stream = None;
-                    let features = self.social_features();
-                    if !features.is_empty()
+                    let mut declared = self.social_features();
+                    // Told before the server moves us (`Down::Moving`), we reconnect quietly.
+                    if features.iter().any(|f| f == online::MOVING_FEATURE) {
+                        declared.push(online::MOVING_FEATURE.to_string());
+                    }
+                    if !declared.is_empty()
                         && let Some(c) = &self.social.conn
                     {
-                        c.send(online::Up::Features(features));
+                        c.send(online::Up::Features(declared));
                     }
                     if let Some(w) = self.scene.screen_as::<Watch>() {
                         let player = w.view.player.clone();
@@ -10289,6 +10293,8 @@ impl State {
                 mode,
             } => self.mapping_invited(from, session, title, mode),
             Down::MappingClosed { session } => self.mapping_closed(session),
+            // The social link acts on it itself: it reconnects without reporting a lost link.
+            Down::Moving => {}
             Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
             Down::AdminLookup(l) => {
                 let now = discord::unix_now();
