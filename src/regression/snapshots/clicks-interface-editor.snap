@@ -52,7 +52,7 @@ HudPreset(3) @103,367 -> HudEdit +"100" +"300" +"37" +"4" +"812" +"MISS" +4 more
 HudPreset(4) @103,381 -> HudEdit -"01234560" -"312pp" -"97.36%" -"HD" -"Score  -  Screen / Screen" -"offset looks good: +1.2 +-3.4 ms (UR 95, 120 hits)"
 HudButton(SavePreset) @44,398 -> HudEdit +"Layout 1" -"Delete" -"New" -"Save"
 HudButton(NewPreset) @103,398 -> HudEdit +"Layout 1" -"Delete" -"New" -"Save"
-HudButton(Copy) @59,415 -> HudEdit [toast "can't reach the clipboard"]
-HudButton(Paste) @148,415 -> HudEdit [toast "no layout on the clipboard"]
+HudButton(Copy) @59,415 -> HudEdit [toast "layout copied: paste it to share it"]
+HudButton(Paste) @148,415 -> HudEdit
 HudButton(ResetAll) @148,432 -> HudEdit
 HudButton(Done) @103,450 -> Select +"." +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +43 more -"+" -"-" -"01234560" -"100%" -"312pp" -"321" -39 more

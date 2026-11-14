@@ -295,3 +295,44 @@ fn every_screen_names_its_parts_in_every_language() {
     }
     lang::set(lang::Lang::En);
 }
+
+/// The map editor copies and pastes map times as osu! does: Ctrl+C with nothing selected puts
+/// the playhead's time on the clipboard (`01:02:345 - `), a mapper's stamp pasted with Ctrl+V
+/// moves the playhead there, and copied notes still paste as notes.
+#[test]
+fn the_map_editor_copies_and_pastes_map_times_like_osu() {
+    use crate::clipboard;
+    use editor::view::{Keys, View};
+    clipboard::fake_for_this_thread();
+    let dir = std::env::temp_dir().join(format!(
+        "taiko-rs-editor-time-stamps-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("map.osu");
+    std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
+    let mut v = View::open(path, 0).unwrap();
+    let ctrl = Keys {
+        ctrl: true,
+        ..Keys::default()
+    };
+    let notes = v.ed.chart.objects.len();
+    v.set_time(62_345.0);
+    v.key(KeyCode::KeyC, false, ctrl, None);
+    assert_eq!(clipboard::get().as_deref(), Some("01:02:345 - "));
+    clipboard::set("00:02:000 (3) - too loud");
+    v.key(KeyCode::KeyV, false, ctrl, None);
+    assert_eq!(v.ed.time, 2000.0);
+    assert_eq!(v.ed.chart.objects.len(), notes, "a stamp pastes no notes");
+    v.ed.select_all();
+    v.key(KeyCode::KeyC, false, ctrl, None);
+    assert_eq!(clipboard::get().as_deref(), Some("00:01:000 - "));
+    v.set_time(60_000.0);
+    v.key(KeyCode::KeyV, false, ctrl, None);
+    assert_eq!(
+        v.ed.chart.objects.len(),
+        notes * 2,
+        "copied notes still paste"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
