@@ -299,6 +299,8 @@ pub struct Config {
     pub calm_maps: bool,
     /// The drum keys move through song select and the pause menu (`drum_nav`).
     pub drum_menus: bool,
+    /// Alt+F4 in a map (playing or watching) leaves it for song select, as in osu!stable.
+    pub alt_f4_leaves_map: bool,
     /// The coloured flash on the hit target as notes are hit.
     pub hit_flash: bool,
     /// The interface's accent colour (`render::ACCENTS`, or any other).
@@ -548,6 +550,7 @@ impl Default for Config {
             true_notes: false,
             calm_maps: false,
             drum_menus: false,
+            alt_f4_leaves_map: false,
             hit_flash: true,
             accent: crate::render::DEFAULT_ACCENT,
             discord_presence: true,
@@ -1223,6 +1226,7 @@ impl Config {
                 "true_notes" => cfg.true_notes = v == "true",
                 "calm_maps" => cfg.calm_maps = v == "true",
                 "drum_menus" => cfg.drum_menus = v == "true",
+                "alt_f4_leaves_map" => cfg.alt_f4_leaves_map = v == "true",
                 "hit_flash" => cfg.hit_flash = v != "false",
                 "accent" => cfg.accent = crate::render::parse_accent(v).unwrap_or(cfg.accent),
                 "discord_presence" => cfg.discord_presence = v != "false",
@@ -1589,6 +1593,8 @@ impl Config {
              calm_maps = {}\n\
              # the drum keys move through song select and the pause menu\n\
              drum_menus = {}\n\
+             # Alt+F4 in a map goes back to song select (like osu!stable)\n\
+             alt_f4_leaves_map = {}\n\
              # the coloured flash on the hit target as notes are hit\n\
              hit_flash = {}\n\
              show_offset_hint = {}\n\
@@ -1654,6 +1660,7 @@ impl Config {
             self.true_notes,
             self.calm_maps,
             self.drum_menus,
+            self.alt_f4_leaves_map,
             self.hit_flash,
             self.show_offset_hint,
             self.offset_hint_ur_scaled,

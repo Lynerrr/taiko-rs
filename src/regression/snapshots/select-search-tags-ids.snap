@@ -1,0 +1,32 @@
+search "vocaloid":
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Oni]
+search "speedcore zebra":
+  # A
+    Alpha - Zebra Run [Oni]
+search "touhou":
+  # A
+    Alpha - Zebra Run [Oni]
+search "tag=vocal":
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Oni]
+search "source=touhou":
+  # A
+    Alpha - Zebra Run [Oni]
+search "9001":
+  # A
+    Alpha - Zebra Run [Oni]
+search "4242":
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Oni]
+search "id=9000":
+  # A
+    Alpha - Zebra Run [Easy]
+search "set=4242":
+  # A
+    Alpha - Zebra Run [Easy] | Alpha - Zebra Run [Oni]
+search "set=4243":
+search "id>9000":
+  # A
+    Alpha - Zebra Run [Oni]
+search "no tag here":

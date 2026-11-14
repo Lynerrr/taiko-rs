@@ -39,18 +39,16 @@ text   73,243  audio offset, calibra...
 text  235,258  Drum keys in menus
 text   73,269  AUDIO
 text   73,283  volume, latency
-text  225,284  Playfield presets
-text  235,306  Previous preset key
-text  791,306  F5
+text  235,288  Alt+F4 leaves the map
 text   73,309  VIDEO
+text  225,314  Playfield presets
 text   73,323  frame pacing, display
-text  235,336  Next preset key
-text  791,336  F6
+text  235,336  Previous preset key
+text  791,336  F5
 text   73,349  SKIN
-text  226,362  In a song
 text   73,363  notes, hit flash, colour
-text  235,384  Song: pause
-text  764,384  Escape
+text  235,366  Next preset key
+text  791,366  F6
 text   73,389  ONLINE
 text  233,396  Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.
 text   73,403  chat, notifications,...
@@ -78,8 +76,8 @@ hit   223,156   594x30   SettingRow(34)
 hit   223,186   594x30   SettingRow(35)
 hit   223,216   594x30   SettingRow(36)
 hit   223,246   594x30   SettingRow(37)
-hit   223,294   594x30   SettingRow(38)
+hit   223,276   594x30   SettingRow(38)
 hit   223,324   594x30   SettingRow(39)
-hit   223,372   594x8    SettingRow(40)
+hit   223,354   594x26   SettingRow(40)
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

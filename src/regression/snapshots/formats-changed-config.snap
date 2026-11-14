@@ -80,6 +80,8 @@ true_notes = false
 calm_maps = false
 # the drum keys move through song select and the pause menu
 drum_menus = false
+# Alt+F4 in a map goes back to song select (like osu!stable)
+alt_f4_leaves_map = false
 # the coloured flash on the hit target as notes are hit
 hit_flash = true
 show_offset_hint = true

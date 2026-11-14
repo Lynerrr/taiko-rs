@@ -687,3 +687,40 @@ fn the_terms_break_lines_between_words_and_anywhere_in_japanese() {
         "taiko.rsは小さなチームが作っている無料のゲームです。アカウントはオンラインで遊ぶときだけ必要です。"
     );
 }
+
+/// A close request as Alt+F4 sends it, with the key's modifier held.
+fn alt_f4(s: &mut State, alt: bool) {
+    s.modifiers_alt = alt;
+    s.close_requested();
+    s.modifiers_alt = false;
+}
+
+#[test]
+fn alt_f4_leaves_the_map_only_when_asked_to() {
+    // On: Alt+F4 in a map quits it to song select and the game keeps running.
+    let (mut s, _songs, mut now) = client("altf4-on", vec![maps::basics()]);
+    s.cfg.alt_f4_leaves_map = true;
+    start_selected(&mut s, &mut now);
+    run_until(&mut s, &mut now, FRAME, 300, |_| false);
+    assert_eq!(scene_name(&s), "Play");
+    // The window's X button, no Alt: asks to close as ever.
+    alt_f4(&mut s, false);
+    assert!(s.quit_asked && !s.quit, "X still asks to close");
+    s.quit_asked = false;
+    assert_eq!(scene_name(&s), "Play");
+    alt_f4(&mut s, true);
+    run_until(&mut s, &mut now, FRAME, 50, |s| scene_name(s) == "Select");
+    assert_eq!(scene_name(&s), "Select");
+    assert!(!s.quit && !s.quit_asked, "the game keeps running");
+    // Outside a map the same request closes the game as before.
+    alt_f4(&mut s, true);
+    assert!(s.quit_asked, "song select: asks to close");
+
+    // Off: Alt+F4 in a map asks to close as before.
+    let (mut s, _songs, mut now) = client("altf4-off", vec![maps::basics()]);
+    start_selected(&mut s, &mut now);
+    run_until(&mut s, &mut now, FRAME, 300, |_| false);
+    alt_f4(&mut s, true);
+    assert!(s.quit_asked, "off: asks to close");
+    assert_eq!(scene_name(&s), "Play");
+}

@@ -432,6 +432,7 @@ black_lane = true
 true_notes = true
 calm_maps = true
 drum_menus = true
+alt_f4_leaves_map = true
 hit_flash = false
 show_offset_hint = false
 offset_hint_ur_scaled = false
@@ -565,4 +566,30 @@ fn every_key_of_the_config_file_reads_back_what_was_saved() {
     if cfg!(target_os = "linux") {
         assert_snapshot("formats-every-key-config", &text);
     }
+}
+
+/// osu!lazer exports a set as `.olz`: the same zip as an `.osz`, files untouched. The game
+/// reads its maps as it does an `.osz`'s.
+#[test]
+fn an_olz_export_from_osu_lazer_holds_the_same_maps_as_an_osz() {
+    use std::io::Write as _;
+    let chart = maps::basics().text();
+    let dir = std::env::temp_dir().join(format!("taiko-regression-olz-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut read = Vec::new();
+    for ext in ["osz", "olz"] {
+        let archive = dir.join(format!("set.{ext}"));
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        zip.start_file("basics.osu", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(chart.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        assert!(crate::library::is_map_archive(&archive), ".{ext}");
+        let maps = crate::download::archive_maps(&archive).unwrap();
+        assert_eq!(maps.len(), 1, ".{ext} holds the chart");
+        read.push((maps[0].0.title.clone(), maps[0].1));
+    }
+    assert_eq!(read[0], read[1]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
