@@ -734,10 +734,24 @@ struct Updating {
     links: usize,
 }
 
-/// A server being updated as a play ends: it lists `SUBMIT_KEY_FEATURE` and `MOVING_FEATURE`,
-/// takes the first play sent and closes its connection without an answer, then moves the
-/// social link (`Down::Moving`). Every later play is stored once per key and answered.
+/// What `score_server` does with the first play sent to it.
+#[derive(Clone, Copy)]
+enum FirstPlay {
+    /// Stores it and closes the connection without an answer, then moves the social link
+    /// (`Down::Moving`): the server is being updated.
+    Vanishes,
+    /// Answers `Reply::Error` with this text and stores nothing.
+    Refused(&'static str),
+}
+
+/// A server being updated as a play ends (`FirstPlay::Vanishes`).
 fn updating_server() -> (String, std::sync::Arc<std::sync::Mutex<Updating>>) {
+    score_server(FirstPlay::Vanishes)
+}
+
+/// A server that lists `SUBMIT_KEY_FEATURE` and `MOVING_FEATURE` and does `first_play` with the
+/// first play sent. Every later play is stored once per key and answered.
+fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mutex<Updating>>) {
     use crate::online::{Down, Envelope, Reply, Request};
     use std::sync::{Arc, Mutex};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -793,20 +807,30 @@ fn updating_server() -> (String, std::sync::Arc<std::sync::Mutex<Updating>>) {
                         let first = {
                             let mut seen = seen.lock().unwrap();
                             seen.sent.push(key.clone());
-                            if let Some(k) = &key {
+                            let first = seen.sent.len() == 1;
+                            if let Some(k) = &key
+                                && !(first && matches!(first_play, FirstPlay::Refused(_)))
+                            {
                                 seen.stored.insert(k.clone());
                             }
-                            seen.sent.len() == 1
+                            first
                         };
-                        if first {
+                        match first_play {
                             // Stored, then gone before answering: the old copy stops and
                             // moves the game to the new one.
-                            let _ = out.shutdown(std::net::Shutdown::Both);
-                            if let Some(mut link) = first_link.lock().unwrap().take() {
-                                let _ = online::write_line(&mut link, &Down::Moving);
-                                let _ = link.shutdown(std::net::Shutdown::Both);
+                            FirstPlay::Vanishes if first => {
+                                let _ = out.shutdown(std::net::Shutdown::Both);
+                                if let Some(mut link) = first_link.lock().unwrap().take() {
+                                    let _ = online::write_line(&mut link, &Down::Moving);
+                                    let _ = link.shutdown(std::net::Shutdown::Both);
+                                }
+                                return;
                             }
-                            return;
+                            FirstPlay::Refused(error) if first => {
+                                let _ = online::write_line(&mut out, &Reply::Error(error.into()));
+                                return;
+                            }
+                            _ => {}
                         }
                         let _ = online::write_line(
                             &mut out,
@@ -901,5 +925,111 @@ fn a_score_the_server_never_answered_goes_again_once_it_is_back_and_counts_once(
             .iter()
             .any(|t| t == "online: an earlier score #1 on this map  |  100 pp, #7 overall"),
         "and that it counted: {toasts:?}"
+    );
+}
+
+/// Logs in to `server`, plays the map out without a miss and waits for the results.
+fn play_to_server(server: String, songs: &Songs) -> State {
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    cfg.terms_version = terms::VERSION;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.social.connected && s.submit_keys),
+        "the social link connects to a server that keeps plays once per key"
+    );
+    start_selected(&mut s, &mut now);
+    let map = harness::game(&s).unwrap().map().clone();
+    play_out(&mut s, &mut now, &maps::presses(&map, Player::Perfect));
+    s
+}
+
+/// Takes in the social link and the scores' answers until `done` (30 s at most), keeping what
+/// they toast (a frame on the made-up clock, ahead of the real one, would drop a toast as it
+/// draws).
+fn note_answers(s: &mut State, toasts: &mut Vec<String>, done: &dyn Fn(&State) -> bool) -> bool {
+    let until = Instant::now() + Duration::from_secs(30);
+    while !done(s) && Instant::now() < until {
+        s.poll_social();
+        s.poll_online_scores();
+        if let Some(t) = s.toast.take() {
+            toasts.push(t.text);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    done(s)
+}
+
+/// The server's database is briefly out of reach as a play ends (as during a deploy), and it
+/// answers "temporarily unavailable": the game keeps the play and sends it again with the same
+/// key. The server stores it once, the player hears it counted, and nothing is left to send.
+#[test]
+fn a_score_the_server_could_not_take_just_now_goes_again_and_counts_once() {
+    let (server, seen) = score_server(FirstPlay::Refused("progression is temporarily unavailable"));
+    let songs = Songs::new("score-try-later", &[maps::basics()]);
+    let mut s = play_to_server(server, &songs);
+    let mut toasts = Vec::new();
+    assert!(
+        note_answers(&mut s, &mut toasts, &|s| scene_name(s) == "Results"),
+        "the results come after the map"
+    );
+    let twice = |s: &State| seen.lock().unwrap().sent.len() >= 2 && s.submits.is_empty();
+    assert!(
+        note_answers(&mut s, &mut toasts, &twice),
+        "the play goes again: {:?}",
+        seen.lock().unwrap().sent
+    );
+    // A while longer: it doesn't go a third time.
+    let started = Instant::now();
+    note_answers(&mut s, &mut toasts, &|_| {
+        started.elapsed() > Duration::from_secs(1)
+    });
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.sent.len(), 2, "sent twice: {:?}", seen.sent);
+    assert!(seen.sent[0].is_some(), "with a key");
+    assert_eq!(seen.sent[0], seen.sent[1], "the same key both times");
+    assert_eq!(seen.stored.len(), 1, "stored once");
+    assert!(s.score_outbox.is_empty(), "nothing left to send");
+    assert!(
+        toasts.iter().any(|t| t
+            == "online: score not sent yet (progression is temporarily unavailable), \
+                it goes again once the server is back"),
+        "the player hears the score will go again: {toasts:?}"
+    );
+    assert!(
+        toasts
+            .iter()
+            .any(|t| t == "online: an earlier score #1 on this map  |  100 pp, #7 overall"),
+        "and that it counted: {toasts:?}"
+    );
+}
+
+/// A server that refuses the play itself: the game tells the player and doesn't send it again.
+#[test]
+fn a_score_the_server_refuses_is_not_sent_again() {
+    let (server, seen) = score_server(FirstPlay::Refused("that play doesn't add up"));
+    let songs = Songs::new("score-refused", &[maps::basics()]);
+    let mut s = play_to_server(server, &songs);
+    let mut toasts = Vec::new();
+    let answered = |s: &State| !seen.lock().unwrap().sent.is_empty() && s.submits.is_empty();
+    assert!(
+        note_answers(&mut s, &mut toasts, &answered),
+        "the play is sent and answered"
+    );
+    let started = Instant::now();
+    note_answers(&mut s, &mut toasts, &|_| {
+        started.elapsed() > Duration::from_secs(1)
+    });
+    assert_eq!(seen.lock().unwrap().sent.len(), 1, "sent once");
+    assert!(s.score_outbox.is_empty(), "nothing kept to send again");
+    assert!(
+        toasts
+            .iter()
+            .any(|t| t == "online: score not sent (that play doesn't add up)"),
+        "the player hears why: {toasts:?}"
     );
 }
