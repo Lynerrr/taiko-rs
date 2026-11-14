@@ -551,8 +551,8 @@ public class TaikoActivity extends NativeActivity {
     private String nameOf(Uri uri) {
         String name = documentName(uri);
         String lower = name.toLowerCase();
-        // taiko.rs's own .rsz is the same zip as an .osz.
-        if (lower.endsWith(".osz") || lower.endsWith(".rsz") || lower.endsWith(".zip")) {
+        // taiko.rs's own .rsz and osu!lazer's .olz are the same zip as an .osz.
+        if (lower.endsWith(".osz") || lower.endsWith(".olz") || lower.endsWith(".rsz") || lower.endsWith(".zip")) {
             name = name.substring(0, name.length() - 4);
         }
         return name.trim().isEmpty() ? "import " + System.currentTimeMillis() : name.trim();

@@ -4573,7 +4573,7 @@ impl State {
                             .file_name()
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
-                        self.toast(tr!("{file} isn't a map: drop .osz or .rsz files", "{file}は譜面ではありません: .oszか.rszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz или .rsz"; [] [file]));
+                        self.toast(tr!("{file} isn't a map: drop .osz, .olz or .rsz files", "{file}は譜面ではありません: .osz、.olz、.rszファイルをドロップしてください", "{file} — не карта: бросайте файлы .osz, .olz или .rsz"; [] [file]));
                     }
                 }
             }
@@ -4661,9 +4661,9 @@ impl State {
             2.5,
         );
         let drop = tr!(
-            "Drop .osz or .rsz maps to add them",
-            ".oszか.rszの譜面をドロップで追加",
-            "Бросьте карты .osz или .rsz, чтобы добавить"
+            "Drop .osz, .olz or .rsz maps to add them",
+            ".osz、.olz、.rszの譜面をドロップで追加",
+            "Бросьте карты .osz, .olz или .rsz, чтобы добавить"
         );
         canvas.text_centered(
             w / 2.0,
