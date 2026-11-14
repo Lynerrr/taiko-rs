@@ -1839,3 +1839,38 @@ fn a_server_that_isnt_ours_cant_move_the_game() {
     assert_eq!(new_checks.load(Ordering::SeqCst), 0);
     assert_eq!(s.cfg.online_server, old);
 }
+
+/// The lobby map's preview (P) opens over the lobby, stays up and goes back to the lobby.
+fn lobby_preview_stays(tag: &str, defense: Option<net::Defense>) {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest(tag, maps::basics(), &room);
+    let mut map = lobby_map(&s);
+    map.defense = defense;
+    room.send(&room_msg(Some(map), false));
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref().is_some_and(|m| m.map_entry.is_some())
+    }));
+    press(&mut s, KeyCode::KeyP, now);
+    assert_eq!(scene_name(&s), "Preview");
+    for _ in 0..120 {
+        now += Duration::from_millis(16);
+        frame(&mut s, now);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(scene_name(&s), "Preview", "the preview stays up");
+    // Past the fade between screens.
+    s.scene_since = now - Duration::from_secs(5);
+    press(&mut s, KeyCode::Escape, now);
+    assert_eq!(scene_name(&s), "Lobby", "Esc goes back to the lobby");
+    assert!(s.mp.is_some());
+}
+
+#[test]
+fn a_lobby_map_previews_and_goes_back_to_the_lobby() {
+    lobby_preview_stays("mp-preview", None);
+}
+
+#[test]
+fn a_defense_lobby_map_previews_and_goes_back_to_the_lobby() {
+    lobby_preview_stays("mp-preview-defense", Some(net::Defense::DEFAULT));
+}

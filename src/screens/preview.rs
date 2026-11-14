@@ -29,6 +29,18 @@ impl State {
         }));
     }
 
+    /// The preview opened by the screen up while it handles an event (`State::with_screen`):
+    /// the scene then is a stand-in, not a screen to go back to, so the screen says what to
+    /// go back to (`back`, a fresh one of itself).
+    pub(crate) fn open_preview_over(&mut self, back: Scene) {
+        if self.preview_target().is_none() {
+            return;
+        }
+        self.scene = Scene::Other(Box::new(Preview {
+            back: Box::new(back),
+        }));
+    }
+
     /// Back from the preview as Esc goes (the screen's own `close`), for the tests.
     #[cfg(test)]
     pub(crate) fn close_preview(&mut self) {
