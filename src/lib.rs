@@ -91,6 +91,7 @@ mod regression;
 mod render;
 #[cfg(test)]
 mod results_tests;
+mod score_outbox;
 mod scores;
 mod screens;
 use taiko_logic::library::search;
@@ -440,7 +441,15 @@ struct State {
     pp_backfill: Job<Vec<(PathBuf, f64)>>,
     pp_backfill_started: bool,
     /// Plays on their way to the online leaderboards.
-    submits: Vec<Receiver<Result<online::Reply, String>>>,
+    submits: Vec<Receiver<screens::results::Sent>>,
+    /// Plays the server never answered, to send again (`score_outbox`).
+    score_outbox: score_outbox::Outbox,
+    /// The keys of those on their way again.
+    resending: std::collections::HashSet<String>,
+    /// When the outbox may be tried again.
+    resend_at: Instant,
+    /// The server lists `online::SUBMIT_KEY_FEATURE`: an unsent play can go to it again.
+    submit_keys: bool,
     /// The logged-in player's own pp total and rank online (for the account badge and the
     /// results' total), whose they are, and the fetch of them.
     me: Option<(f64, Option<u32>)>,
@@ -10097,6 +10106,9 @@ impl State {
                     if taiko_proto::mapping::supported(&features) {
                         self.mapping_sessions = true;
                     }
+                    // Plays it never answered go again now (`resend_unsent`).
+                    self.submit_keys = features.iter().any(|f| f == online::SUBMIT_KEY_FEATURE);
+                    self.resend_at = Instant::now();
                     self.social.connected = true;
                     self.social.me = Some(name);
                     // The server resends the friend list and recent chat.
@@ -10106,11 +10118,15 @@ impl State {
                     self.social.have_list = false;
                     self.social.sent_activity = None;
                     self.stream = None;
-                    let features = self.social_features();
-                    if !features.is_empty()
+                    let mut declared = self.social_features();
+                    // Told before the server moves us (`Down::Moving`), we reconnect quietly.
+                    if features.iter().any(|f| f == online::MOVING_FEATURE) {
+                        declared.push(online::MOVING_FEATURE.to_string());
+                    }
+                    if !declared.is_empty()
                         && let Some(c) = &self.social.conn
                     {
-                        c.send(online::Up::Features(features));
+                        c.send(online::Up::Features(declared));
                     }
                     if let Some(w) = self.scene.screen_as::<Watch>() {
                         let player = w.view.player.clone();
@@ -10289,6 +10305,8 @@ impl State {
                 mode,
             } => self.mapping_invited(from, session, title, mode),
             Down::MappingClosed { session } => self.mapping_closed(session),
+            // The social link acts on it itself: it reconnects without reporting a lost link.
+            Down::Moving => {}
             Down::AdminOverview(o) => self.social.set_overview(*o, self.mp.is_some()),
             Down::AdminLookup(l) => {
                 let now = discord::unix_now();
@@ -12622,7 +12640,8 @@ impl State {
         }
     }
 
-    /// Plays sent to the online leaderboards, and the leaderboard being fetched.
+    /// Plays sent to the online leaderboards (and sent again when the server never answered),
+    /// and the leaderboard being fetched.
     fn poll_online_scores(&mut self) {
         let mut done = Vec::new();
         self.submits.retain(|rx| match rx.try_recv() {
@@ -12633,7 +12652,32 @@ impl State {
             Err(mpsc::TryRecvError::Empty) => true,
             Err(mpsc::TryRecvError::Disconnected) => false,
         });
-        for r in done {
+        for sent in done {
+            let (r, again) = match sent {
+                screens::results::Sent::Answered { reply, key, again } => {
+                    if let Some(key) = key {
+                        self.resending.remove(&key);
+                        self.score_outbox.remove(&key);
+                    }
+                    (reply, again)
+                }
+                screens::results::Sent::Unanswered {
+                    error,
+                    unsent,
+                    again,
+                } => {
+                    self.resending.remove(unsent.key());
+                    if again {
+                        // Still kept: tried again later.
+                        continue;
+                    }
+                    self.score_outbox.push(*unsent);
+                    self.toast(format!(
+                        "online: score not sent yet ({error}), it goes again once the server is back"
+                    ));
+                    continue;
+                }
+            };
             let text = match r {
                 Ok(online::Reply::Submitted {
                     relax,
@@ -12652,10 +12696,11 @@ impl State {
                     // + 0.0: servers before the fix sent a new player's pp as -0.0 ("-0 pp").
                     let pp = pp + 0.0;
                     *mine = Some((pp, rank));
-                    if let Some(results) = self
-                        .scene
-                        .screen_mut::<ResultsScreen>()
-                        .map(|r| &mut r.results)
+                    if !again
+                        && let Some(results) = self
+                            .scene
+                            .screen_mut::<ResultsScreen>()
+                            .map(|r| &mut r.results)
                         && results.opened.is_none()
                         && results.replay.is_some()
                     {
@@ -12672,15 +12717,18 @@ impl State {
                     let total = rank
                         .map(|r| format!("  |  {pp:.0} pp, #{r} overall{board}"))
                         .unwrap_or_default();
-                    format!("online: {place}{total}")
+                    let earlier = if again { "an earlier score " } else { "" };
+                    format!("online: {earlier}{place}{total}")
                 }
                 // Servers from before scores don't know the request.
                 Err(e) if e == "bad request" => "online: the server doesn't take scores yet".into(),
+                Err(e) if again => format!("online: an earlier score wasn't taken ({e})"),
                 Err(e) => format!("online: score not sent ({e})"),
                 Ok(_) => continue,
             };
             self.toast(text);
         }
+        self.resend_unsent();
         if let Some((map, rx)) = &self.board_fetch
             && let Ok(rows) = rx.try_recv()
         {
@@ -12693,6 +12741,30 @@ impl State {
             });
             self.online_boards.insert(*map, (Instant::now(), rows));
             self.board_fetch = None;
+        }
+    }
+
+    /// Sends the plays the server never answered again, once it says it keeps a play once per
+    /// key: right after the social link connects, then every half minute while any are left.
+    fn resend_unsent(&mut self) {
+        if self.score_outbox.is_empty()
+            || !self.submit_keys
+            || !self.social.connected
+            || !self.resending.is_empty()
+            || Instant::now() < self.resend_at
+        {
+            return;
+        }
+        self.resend_at = Instant::now() + Duration::from_secs(30);
+        let due = self
+            .score_outbox
+            .due(&self.cfg.online_server, &self.cfg.online_user);
+        for unsent in due {
+            self.resending.insert(unsent.key().to_string());
+            self.submits.push(screens::results::resend_score(
+                unsent,
+                self.cfg.online_token.clone(),
+            ));
         }
     }
 

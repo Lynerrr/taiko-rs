@@ -261,6 +261,7 @@ fn requests() -> Vec<Request> {
                 pp_version: online::PP_VERSION,
                 timing: None,
                 rolls: Some(12),
+                operation_key: None,
             }),
         },
         Request::MapScores {
@@ -377,6 +378,7 @@ fn downs() -> Vec<Down> {
             mode: mapping::Mode::Collab,
         },
         Down::MappingClosed { session: 9 },
+        Down::Moving,
     ]
 }
 
@@ -1710,6 +1712,106 @@ fn a_resume_the_server_refuses_is_reported_as_refused() {
         matches!(&events[..], [mapping::LinkEvent::Refused(why)] if why == "no such session"),
         "{events:?}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The server being updated under the social link.
+
+/// A social server that lists `moving/1`. Once the game declared it on the first connection,
+/// the server is updated: it closes that connection, after `Down::Moving` when `says_moving`.
+/// Returns its address and how many social connections it took.
+fn updated_social_server(says_moving: bool) -> (String, Arc<AtomicUsize>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let connects = Arc::new(AtomicUsize::new(0));
+    let counted = connects.clone();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let Ok(line) = online::read_line(&mut reader) else {
+                continue;
+            };
+            if !matches!(
+                serde_json::from_str::<Envelope>(&line).map(|env| env.request),
+                Ok(Request::Connect { .. })
+            ) {
+                held.push(out);
+                continue;
+            }
+            let _ = online::write_line(
+                &mut out,
+                &Reply::Account {
+                    name: "me".into(),
+                    token: "t".into(),
+                    nominator: false,
+                    admin: false,
+                    email: Some(true),
+                    features: vec![online::MOVING_FEATURE.into()],
+                    terms: 0,
+                    server: None,
+                },
+            );
+            if counted.fetch_add(1, Ordering::SeqCst) > 0 {
+                held.push(out);
+                continue;
+            }
+            // The first connection: wait for the game's features, then move it.
+            while let Ok(line) = online::read_line(&mut reader) {
+                if let Ok(Up::Features(features)) = serde_json::from_str::<Up>(&line) {
+                    assert!(
+                        features.iter().any(|f| f == online::MOVING_FEATURE),
+                        "the game declares moving/1: {features:?}"
+                    );
+                    break;
+                }
+            }
+            if says_moving {
+                let _ = online::write_line(&mut out, &Down::Moving);
+            }
+            let _ = out.shutdown(std::net::Shutdown::Both);
+        }
+    });
+    (address, connects)
+}
+
+/// Runs the game against an updated social server until its link is back on a second
+/// connection. Returns whether the red "offline" note showed on the way, and how long the
+/// move took.
+fn moved_social_link(says_moving: bool) -> (bool, Duration) {
+    let (server, connects) = updated_social_server(says_moving);
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    let mut s = state_with(cfg, Vec::new());
+    let mut now = Instant::now();
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.social.connected),
+        "the social link connects"
+    );
+    let started = Instant::now();
+    let mut offline = false;
+    let back = wait_for(&mut s, &mut now, |s| {
+        offline |= s.social.notes.iter().any(|note| note.title == "offline");
+        connects.load(Ordering::SeqCst) >= 2 && s.social.connected
+    });
+    assert!(back, "the social link reconnects");
+    (offline, started.elapsed())
+}
+
+#[test]
+fn a_server_update_moves_the_social_link_without_calling_it_lost() {
+    let (offline, took) = moved_social_link(true);
+    assert!(!offline, "no offline note for a move the server announced");
+    assert!(
+        took < Duration::from_secs(2),
+        "reconnects at once, took {took:?}"
+    );
+    // The same close without the announcement is a lost connection, as before.
+    let (offline, _) = moved_social_link(false);
+    assert!(offline, "an unannounced close still shows the offline note");
 }
 
 // ---------------------------------------------------------------------------------------------
