@@ -173,7 +173,7 @@ impl Screen for Lobby {
                 state.toast(text);
             }
             KeyCode::KeyT => state.focus_lobby_chat(),
-            KeyCode::KeyP if s.map_entry.is_some() => state.open_preview(),
+            KeyCode::KeyP if s.map_entry.is_some() => state.open_preview_over(Lobby::scene()),
             // Defense: C turns it on or off, 1-5 step its rules.
             KeyCode::KeyC
             | KeyCode::Digit1
