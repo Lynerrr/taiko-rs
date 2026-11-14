@@ -9,6 +9,8 @@ use std::time::Duration;
 use crate::download::{CustomSet, Diff, SetInfo};
 use crate::online::WEBSITE;
 
+pub mod approved;
+
 /// The file in a map's folder that keeps its number on the server.
 pub const SIDECAR: &str = "taiko-rs.custom";
 /// Fewest notes a difficulty needs to be sent (the server's rule too).

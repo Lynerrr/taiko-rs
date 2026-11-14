@@ -19,6 +19,9 @@ pub(crate) struct Out {
     /// A new difficulty of the set from the map at this path (of this library entry): with its
     /// notes, or empty.
     pub(crate) new_diff: Option<(PathBuf, usize, bool)>,
+    /// Another difficulty of the set to open (of this library entry's set), with the upload
+    /// window's note to show there.
+    pub(crate) open: Option<(PathBuf, usize, Option<String>)>,
 }
 
 /// The map editor.
@@ -156,6 +159,9 @@ impl Screen for MapEditor {
         }
         if let Some(keep) = view.take_new_difficulty() {
             self.out.new_diff = Some((view.ed.path.clone(), view.entry, keep));
+        }
+        if let Some((path, note)) = view.take_open() {
+            self.out.open = Some((path, view.entry, note));
         }
         if let Some(from) = view.take_test_play() {
             self.out.test = Some((view.entry, from));
