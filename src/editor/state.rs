@@ -39,6 +39,9 @@ pub struct Editor {
     /// Bookmarked moments (map ms, sorted), kept in the file's `[Editor]` section like stable's.
     pub bookmarks: Vec<f64>,
     bookmarks_changed: bool,
+    /// The background picture changed since the last save (it isn't an undo step: the picture
+    /// is copied into the folder at once).
+    background_changed: bool,
     clipboard: Vec<HitObject>,
     /// Timing lines copied, with their times relative to the first.
     line_clipboard: Vec<TimingPoint>,
@@ -84,6 +87,36 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// The name the picture at `from` takes in the map's folder `dir`: its own (without the commas
+/// and quotes the background event can't hold), unless another file has it; then `name 2.png`
+/// and so on. A file with the same bytes (or `from` itself) is used as it is.
+fn folder_name_for(from: &Path, dir: &Path) -> Result<String, String> {
+    let file = from
+        .file_name()
+        .map(|n| n.to_string_lossy().replace([',', '"'], "_"))
+        .filter(|n| !n.trim().is_empty())
+        .ok_or("the picture has no file name")?;
+    let bytes = std::fs::read(from).map_err(|e| format!("couldn't read {file}: {e}"))?;
+    let (stem, ext) = match file.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (file.clone(), String::new()),
+    };
+    for n in 1..1000 {
+        let name = if n == 1 {
+            file.clone()
+        } else {
+            format!("{stem} {n}{ext}")
+        };
+        let to = dir.join(&name);
+        if !to.exists() || same_file(&to, from) || std::fs::read(&to).is_ok_and(|b| b == bytes) {
+            return Ok(name);
+        }
+    }
+    Err(format!(
+        "too many pictures named {file} in the map's folder"
+    ))
+}
+
 /// `path` with `.bak` added, where a save keeps the file's first version.
 fn backup_of(path: &Path) -> PathBuf {
     let mut bak = path.as_os_str().to_owned();
@@ -121,6 +154,7 @@ impl Editor {
             kat: false,
             bookmarks,
             bookmarks_changed: false,
+            background_changed: false,
             clipboard: Vec::new(),
             line_clipboard: Vec::new(),
             gimmick: GimmickConfig::default(),
@@ -136,7 +170,7 @@ impl Editor {
     }
 
     pub fn modified(&self) -> bool {
-        self.history.modified() || self.bookmarks_changed
+        self.history.modified() || self.bookmarks_changed || self.background_changed
     }
 
     /// Writes the chart to its file. When the artist, title, mapper or difficulty name changed
@@ -154,6 +188,7 @@ impl Editor {
         self.chart.save(&self.path, true)?;
         self.history.mark_saved();
         self.bookmarks_changed = false;
+        self.background_changed = false;
         Ok(self.follow_name().err())
     }
 
@@ -191,6 +226,44 @@ impl Editor {
         self.path = target;
         self.named = named;
         Ok(())
+    }
+
+    // ---- the background picture ----
+
+    /// The background picture's file name, if the map has one.
+    pub fn background(&self) -> Option<String> {
+        self.chart.background()
+    }
+
+    /// Copies the picture at `from` into the map's folder and makes it the background. A file of
+    /// that name already there with other contents is kept: the copy gets a name of its own.
+    /// Returns the name it has in the folder.
+    pub fn set_background_from(&mut self, from: &Path) -> Result<String, String> {
+        let dir = self
+            .path
+            .parent()
+            .ok_or("the map has no folder")?
+            .to_path_buf();
+        let name = folder_name_for(from, &dir)?;
+        let to = dir.join(&name);
+        if !to.exists() {
+            std::fs::copy(from, &to).map_err(|e| format!("couldn't copy {name}: {e}"))?;
+        }
+        if self.chart.background().as_deref() != Some(name.as_str()) {
+            self.chart.set_background(Some(&name));
+            self.background_changed = true;
+        }
+        Ok(name)
+    }
+
+    /// Takes the background away (the picture stays in the folder). False when there was none.
+    pub fn clear_background(&mut self) -> bool {
+        if self.chart.background().is_none() {
+            return false;
+        }
+        self.chart.set_background(None);
+        self.background_changed = true;
+        true
     }
 
     // ---- bookmarks ----
