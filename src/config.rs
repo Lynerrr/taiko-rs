@@ -1907,7 +1907,7 @@ fn read_settled(path: &Path) -> std::io::Result<String> {
 /// written beside it, then renamed over it. Writing in place empties the file first, and a
 /// game starting right then (the one an update restarts, while the old one saves on its way
 /// out) read the first lines only, so every setting after them went back to its default.
-fn write_whole(path: &Path, text: &str) {
+pub(crate) fn write_whole(path: &Path, text: &str) {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     // Two games (the old and the restarted one) may write at once: one file each.
     let tmp = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));

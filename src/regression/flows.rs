@@ -724,3 +724,182 @@ fn alt_f4_leaves_the_map_only_when_asked_to() {
     assert!(s.quit_asked, "off: asks to close");
     assert_eq!(scene_name(&s), "Play");
 }
+
+/// What `updating_server` saw: the key of every play sent to it, the plays it stored (once per
+/// key) and how many social links it took.
+#[derive(Default)]
+struct Updating {
+    sent: Vec<Option<String>>,
+    stored: std::collections::HashSet<String>,
+    links: usize,
+}
+
+/// A server being updated as a play ends: it lists `SUBMIT_KEY_FEATURE` and `MOVING_FEATURE`,
+/// takes the first play sent and closes its connection without an answer, then moves the
+/// social link (`Down::Moving`). Every later play is stored once per key and answered.
+fn updating_server() -> (String, std::sync::Arc<std::sync::Mutex<Updating>>) {
+    use crate::online::{Down, Envelope, Reply, Request};
+    use std::sync::{Arc, Mutex};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let seen = Arc::new(Mutex::new(Updating::default()));
+    let first_link: Arc<Mutex<Option<std::net::TcpStream>>> = Arc::default();
+    let shared = seen.clone();
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let seen = shared.clone();
+            let first_link = first_link.clone();
+            std::thread::spawn(move || {
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut out = stream;
+                let Ok(line) = online::read_line(&mut reader) else {
+                    return;
+                };
+                let Ok(env) = serde_json::from_str::<Envelope>(&line) else {
+                    return;
+                };
+                let account = Reply::Account {
+                    name: "me".into(),
+                    token: "t".into(),
+                    nominator: false,
+                    admin: false,
+                    email: Some(true),
+                    features: vec![
+                        online::MOVING_FEATURE.into(),
+                        online::SUBMIT_KEY_FEATURE.into(),
+                    ],
+                    terms: 0,
+                    server: None,
+                };
+                match env.request {
+                    Request::Connect { .. } => {
+                        let _ = online::write_line(&mut out, &account);
+                        let first = {
+                            let mut seen = seen.lock().unwrap();
+                            seen.links += 1;
+                            seen.links == 1
+                        };
+                        if first {
+                            *first_link.lock().unwrap() = out.try_clone().ok();
+                        }
+                        // Held until the game or the server closes it.
+                        while online::read_line(&mut reader).is_ok() {}
+                    }
+                    Request::WhoAmI { .. } => {
+                        let _ = online::write_line(&mut out, &account);
+                    }
+                    Request::SubmitScore { play, .. } => {
+                        let key = play.operation_key.clone();
+                        let first = {
+                            let mut seen = seen.lock().unwrap();
+                            seen.sent.push(key.clone());
+                            if let Some(k) = &key {
+                                seen.stored.insert(k.clone());
+                            }
+                            seen.sent.len() == 1
+                        };
+                        if first {
+                            // Stored, then gone before answering: the old copy stops and
+                            // moves the game to the new one.
+                            let _ = out.shutdown(std::net::Shutdown::Both);
+                            if let Some(mut link) = first_link.lock().unwrap().take() {
+                                let _ = online::write_line(&mut link, &Down::Moving);
+                                let _ = link.shutdown(std::net::Shutdown::Both);
+                            }
+                            return;
+                        }
+                        let _ = online::write_line(
+                            &mut out,
+                            &Reply::Submitted {
+                                relax: false,
+                                map_rank: Some(1),
+                                pp: 100.0,
+                                rank: Some(7),
+                                medals: Vec::new(),
+                            },
+                        );
+                    }
+                    _ => {
+                        let _ = online::write_line(&mut out, &Reply::Error("bad request".into()));
+                    }
+                }
+            });
+        }
+    });
+    (addr, seen)
+}
+
+/// The server is updated as a play ends and never answers it: the game keeps the play and,
+/// once its social link is on the updated server, sends it again with the same key. The
+/// server stores it once, the player hears it counted, and nothing is left to send.
+#[test]
+fn a_score_the_server_never_answered_goes_again_once_it_is_back_and_counts_once() {
+    let (server, seen) = updating_server();
+    let songs = Songs::new("score-resend", &[maps::basics()]);
+    let mut cfg = harness::config();
+    cfg.online_server = server;
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    cfg.terms_version = terms::VERSION;
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.social.connected && s.submit_keys),
+        "the social link connects to a server that keeps plays once per key"
+    );
+    start_selected(&mut s, &mut now);
+    let map = harness::game(&s).unwrap().map().clone();
+    play_out(&mut s, &mut now, &maps::presses(&map, Player::Perfect));
+
+    // Takes in the social link and the scores' answers until `done`, keeping what they toast
+    // (a frame on the made-up clock, ahead of the real one, would drop a toast as it draws).
+    let mut toasts: Vec<String> = Vec::new();
+    let mut noting = |s: &mut State, done: &dyn Fn(&State) -> bool| {
+        let until = Instant::now() + Duration::from_secs(30);
+        while !done(s) && Instant::now() < until {
+            s.poll_social();
+            s.poll_online_scores();
+            if let Some(t) = s.toast.take() {
+                toasts.push(t.text);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        done(s)
+    };
+    assert!(
+        noting(&mut s, &|s| scene_name(s) == "Results"),
+        "the results come after the map"
+    );
+    let twice = |s: &State| seen.lock().unwrap().sent.len() >= 2 && s.submits.is_empty();
+    assert!(
+        noting(&mut s, &twice),
+        "the play goes again: {:?}",
+        seen.lock().unwrap().sent
+    );
+    // A while longer: it doesn't go a third time.
+    let started = Instant::now();
+    noting(&mut s, &|_| started.elapsed() > Duration::from_secs(1));
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.sent.len(), 2, "sent twice: {:?}", seen.sent);
+    assert!(seen.sent[0].is_some(), "with a key");
+    assert_eq!(seen.sent[0], seen.sent[1], "the same key both times");
+    assert_eq!(seen.stored.len(), 1, "stored once");
+    assert!(
+        seen.links >= 2,
+        "the social link moved to the updated server"
+    );
+    assert!(s.score_outbox.is_empty(), "nothing left to send");
+    assert!(
+        toasts
+            .iter()
+            .any(|t| t.starts_with("online: score not sent yet")),
+        "the player hears the score will go again: {toasts:?}"
+    );
+    assert!(
+        toasts
+            .iter()
+            .any(|t| t == "online: an earlier score #1 on this map  |  100 pp, #7 overall"),
+        "and that it counted: {toasts:?}"
+    );
+}

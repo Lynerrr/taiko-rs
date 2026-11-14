@@ -261,6 +261,7 @@ fn requests() -> Vec<Request> {
                 pp_version: online::PP_VERSION,
                 timing: None,
                 rolls: Some(12),
+                operation_key: None,
             }),
         },
         Request::MapScores {

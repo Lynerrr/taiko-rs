@@ -173,14 +173,32 @@ impl Screen for ResultsScreen {
     }
 }
 
-/// Sends a play to the online leaderboards on a background thread.
+/// A play sent to the online leaderboards: what the server answered, or, when it never did,
+/// the play to send again (`score_outbox`).
+pub(crate) enum Sent {
+    Answered {
+        reply: Result<online::Reply, String>,
+        key: Option<String>,
+        /// Sent again from the outbox, not from the results just shown.
+        again: bool,
+    },
+    Unanswered {
+        error: String,
+        unsent: Box<score_outbox::Unsent>,
+        again: bool,
+    },
+}
+
+/// Sends a play to the online leaderboards on a background thread, with a key of its own so
+/// it can go again should the server not answer.
 pub(crate) fn submit_score(
     server: String,
     token: String,
+    player: String,
     mut play: online::ScoreSubmit,
     path: PathBuf,
     params: pp::Play,
-) -> Receiver<Result<online::Reply, String>> {
+) -> Receiver<Sent> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         play.stars = stars::star_rating_played(
@@ -194,15 +212,50 @@ pub(crate) fn submit_score(
         play.md5 = std::fs::read(&path)
             .ok()
             .map(|bytes| download::md5_hex(&bytes));
-        let _ = tx.send(online::call(
-            &server,
-            online::Request::SubmitScore {
-                token,
-                play: Box::new(play),
-            },
-        ));
+        play.operation_key.get_or_insert_with(score_outbox::new_key);
+        let unsent = score_outbox::Unsent {
+            server,
+            player,
+            queued: score_outbox::unix_now(),
+            play,
+        };
+        let _ = tx.send(send_play(unsent, &token, false));
     });
     rx
+}
+
+/// Sends `unsent` again, on a background thread.
+pub(crate) fn resend_score(unsent: score_outbox::Unsent, token: String) -> Receiver<Sent> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(send_play(unsent, &token, true));
+    });
+    rx
+}
+
+fn send_play(unsent: score_outbox::Unsent, token: &str, again: bool) -> Sent {
+    let key = unsent.play.operation_key.clone();
+    let request = online::Request::SubmitScore {
+        token: token.to_string(),
+        play: Box::new(unsent.play.clone()),
+    };
+    match online::exchange(&unsent.server, request) {
+        Ok((online::Reply::Error(e), _)) => Sent::Answered {
+            reply: Err(e),
+            key,
+            again,
+        },
+        Ok((reply, _)) => Sent::Answered {
+            reply: Ok(reply),
+            key,
+            again,
+        },
+        Err(error) => Sent::Unanswered {
+            error,
+            unsent: Box::new(unsent),
+            again,
+        },
+    }
 }
 
 /// "Artist - Title [Version]  1.10x  +HDHR  from 1:23" for a results screen.
