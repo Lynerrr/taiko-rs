@@ -1296,24 +1296,10 @@ impl View {
         );
     }
 
-    /// A picture dropped on the editor: copied into the map's folder (pictures travel with the
-    /// map from there), and shown by the picked picture block, if one is picked.
+    /// A picture dropped on the editor. With a picture block picked, it is copied into the
+    /// map's folder (pictures travel with the map from there) and shown by that block; else the
+    /// editor asks whether it is to be the background.
     pub fn drop_picture(&mut self, from: &std::path::Path) {
-        let Some(dir) = self.ed.path.parent().map(std::path::Path::to_path_buf) else {
-            return;
-        };
-        let Some(name) = from.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-            return;
-        };
-        let to = dir.join(&name);
-        let same = to
-            .canonicalize()
-            .ok()
-            .is_some_and(|t| from.canonicalize().ok() == Some(t));
-        if !same && let Err(e) = std::fs::copy(from, &to) {
-            self.status = format!("couldn't copy {name} into the map's folder: {e}");
-            return;
-        }
         let picked = self.fx_sel.filter(|&id| {
             self.ed.clips().iter().any(|c| {
                 c.id == id
@@ -1322,22 +1308,37 @@ impl View {
                         .is_some_and(|l| matches!(l.show, Show::Picture { .. }))
             })
         });
-        match picked {
-            Some(id) => {
-                self.ed.set_clip(id, false, |c| {
-                    if let Some(l) = c.layer.as_deref_mut() {
-                        l.show = Show::Picture { file: name.clone() };
-                    }
-                });
-                self.status = format!("{name} is in the map's folder and on the picked block");
-                self.mark_stale();
+        let Some(id) = picked else {
+            self.dropped_loose_picture(from);
+            return;
+        };
+        let Some(name) = self.copy_picture_in(from) else {
+            return;
+        };
+        self.ed.set_clip(id, false, |c| {
+            if let Some(l) = c.layer.as_deref_mut() {
+                l.show = Show::Picture { file: name.clone() };
             }
-            None => {
-                self.status = format!(
-                    "{name} is in the map's folder: put a Picture from the Text & pictures tab to show it"
-                )
-            }
+        });
+        self.status = format!("{name} is in the map's folder and on the picked block");
+        self.mark_stale();
+    }
+
+    /// Copies a picture into the map's folder under its own name (one already there is
+    /// overwritten). The name, or `None` with the status saying why not.
+    pub(super) fn copy_picture_in(&mut self, from: &std::path::Path) -> Option<String> {
+        let dir = self.ed.path.parent().map(std::path::Path::to_path_buf)?;
+        let name = from.file_name().map(|n| n.to_string_lossy().into_owned())?;
+        let to = dir.join(&name);
+        let same = to
+            .canonicalize()
+            .ok()
+            .is_some_and(|t| from.canonicalize().ok() == Some(t));
+        if !same && let Err(e) = std::fs::copy(from, &to) {
+            self.status = format!("couldn't copy {name} into the map's folder: {e}");
+            return None;
         }
+        Some(name)
     }
 
     pub(super) fn map_pictures(&self) -> Vec<String> {

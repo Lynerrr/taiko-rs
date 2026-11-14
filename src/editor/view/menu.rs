@@ -31,6 +31,7 @@ pub const MENUS: &[Menu] = &[
             Do(Cmd::NewDifficulty(true)),
             Sep,
             Do(Cmd::SongSetup),
+            Do(Cmd::Background),
             Do(Cmd::Upload),
             Do(Cmd::Export),
             Do(Cmd::OpenFolder),
