@@ -11602,6 +11602,7 @@ impl State {
         let mut editor_renamed: Option<(PathBuf, PathBuf)> = None;
         let mut folder_news: Option<folder_watch::Changes> = None;
         let mut editor_new_diff: Option<(PathBuf, usize, bool)> = None;
+        let mut editor_open: Option<(PathBuf, usize, Option<String>)> = None;
         let mut home_out: Option<editor::home::Out> = None;
         let elapsed = now.duration_since(self.started).as_secs_f64() * 1000.0;
         // `TAIKO_EDIT=<a .osu>`: opens the map editor on it once the library has loaded (for
@@ -11854,6 +11855,7 @@ impl State {
                     editor_renamed = out.renamed;
                     folder_news = out.folder_news;
                     editor_new_diff = out.new_diff;
+                    editor_open = out.open;
                 }
             }
         }
@@ -12054,6 +12056,14 @@ impl State {
         }
         if let Some((path, entry, keep)) = editor_new_diff {
             self.new_difficulty_from(&path, entry, keep);
+        }
+        if let Some((path, entry, note)) = editor_open {
+            self.open_editor_at(path, entry);
+            if let (Some(note), Some(MapEditor { view, .. })) =
+                (note, self.scene.screen_mut::<MapEditor>())
+            {
+                view.show_upload_after_keep(note);
+            }
         }
         if test_over {
             self.back_to_editor();
