@@ -18,6 +18,9 @@ pub enum Key {
     /// The difficulty's name.
     Version,
     Source,
+    /// Who mapped the osu! map this one is an edit of (`custom::BASED_ON_KEY`): what lets an
+    /// edit of an osu! map be sent to taiko.rs.
+    BasedOn,
     Tags,
     Hp,
     Od,
@@ -48,6 +51,7 @@ impl Key {
             Key::Creator => "Creator",
             Key::Version => "Version",
             Key::Source => "Source",
+            Key::BasedOn => crate::custom::BASED_ON_KEY,
             Key::Tags => "Tags",
             Key::Hp => "HPDrainRate",
             Key::Od => "OverallDifficulty",
@@ -64,6 +68,7 @@ impl Key {
             Key::Creator => "Mapper",
             Key::Version => "Difficulty name",
             Key::Source => "Source",
+            Key::BasedOn => "Original mapper (your edit of an osu! map)",
             Key::Tags => "Tags",
             Key::Hp => "HP drain",
             Key::Od => "Accuracy (OD)",
@@ -77,7 +82,11 @@ impl Key {
 
     /// The most characters a text can have.
     pub fn max_len(self) -> usize {
-        if self == Key::Tags { 400 } else { 120 }
+        match self {
+            Key::Tags => 400,
+            Key::BasedOn => crate::custom::MAX_ORIGINAL_MAPPER,
+            _ => 120,
+        }
     }
 
     /// Lowest, highest and the value osu! reads when the line is missing.
@@ -101,6 +110,14 @@ fn tidy(k: Key, v: f64) -> f64 {
 }
 
 impl Editor {
+    /// The osu! set the map names (`BeatmapSetID` above 0): it came from osu!.
+    pub fn osu_set(&self) -> Option<u32> {
+        self.chart
+            .get_key("Metadata", "BeatmapSetID")
+            .and_then(|v| v.trim().parse().ok())
+            .filter(|id| *id > 0)
+    }
+
     /// The setting as it is now ("" for an empty text; a number missing from the file reads as
     /// osu!'s default).
     pub fn setting(&self, k: Key) -> String {
@@ -315,6 +332,41 @@ mod tests {
         );
         ed.history.undo(&mut ed.chart);
         assert_eq!(ed.chart.to_text(), text);
+    }
+
+    #[test]
+    fn the_original_mapper_of_an_edit_is_a_line_of_its_own() {
+        let mut ed = editor();
+        ed.chart.remove_key("Metadata", "BeatmapSetID");
+        assert_eq!(ed.osu_set(), None);
+        ed.chart.set_key("Metadata", "BeatmapSetID", "-1");
+        assert_eq!(ed.osu_set(), None, "a new map's -1 is no osu! set");
+        ed.chart.set_key("Metadata", "BeatmapSetID", "123");
+        assert_eq!(ed.osu_set(), Some(123));
+        let creator = ed.setting(Key::Creator);
+        ed.set_setting(Key::BasedOn, &"x".repeat(100)).unwrap();
+        assert_eq!(
+            ed.setting(Key::BasedOn).len(),
+            crate::custom::MAX_ORIGINAL_MAPPER
+        );
+        ed.set_setting(Key::BasedOn, " Original Mapper ").unwrap();
+        // What the upload reads from the saved file.
+        assert_eq!(
+            crate::custom::edit_of(&ed.chart.to_text()),
+            (Some(123), Some("Original Mapper".to_string()))
+        );
+        assert_eq!(
+            ed.setting(Key::Creator),
+            creator,
+            "the mapper's own name stays"
+        );
+        ed.history.undo(&mut ed.chart);
+        ed.history.undo(&mut ed.chart);
+        assert_eq!(ed.setting(Key::BasedOn), "");
+        assert_eq!(
+            crate::custom::edit_of(&ed.chart.to_text()),
+            (Some(123), None)
+        );
     }
 
     #[test]
