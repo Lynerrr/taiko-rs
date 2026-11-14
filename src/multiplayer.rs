@@ -1470,6 +1470,76 @@ pub fn next_fetch(
     }
 }
 
+/// The lobby chat's text size.
+const CHAT_SIZE: f32 = 6.5;
+/// How far a message's wrapped lines sit in from its first.
+const CHAT_INDENT: f32 = 8.0;
+/// The most lines one message takes in the lobby chat; past that it ends in "...".
+const CHAT_MESSAGE_ROWS: usize = 4;
+
+/// One line of the lobby chat as drawn.
+#[derive(Debug, PartialEq)]
+enum ChatRow {
+    /// A message's first line: who said it (by index into the chat), then the start of it.
+    First { from: usize, said: String },
+    /// The rest of a message, wrapped.
+    More(String),
+}
+
+/// The last `rows` lines of the lobby chat, oldest first, with long messages wrapped onto the
+/// lines under them instead of cut short. `room` is the line's width; `name_w` how wide a name
+/// is drawn. A message too long for `CHAT_MESSAGE_ROWS` lines ends in "...". When the oldest
+/// message shown doesn't fit whole, its end shows.
+fn chat_rows(
+    chat: &[(String, String)],
+    rows: usize,
+    room: f32,
+    name_w: impl Fn(&str) -> f32,
+) -> Vec<ChatRow> {
+    let mut out: Vec<ChatRow> = Vec::new();
+    for (k, (from, text)) in chat.iter().enumerate().rev() {
+        if out.len() >= rows {
+            break;
+        }
+        let said = format!(
+            ": {}",
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        );
+        let first_room = (room - name_w(from)).max(Canvas::char_width(CHAT_SIZE));
+        let first = Canvas::wrap_words(CHAT_SIZE, first_room, &said)
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let rest = said[first.len()..].trim_start();
+        let mut more = if rest.is_empty() {
+            Vec::new()
+        } else {
+            Canvas::wrap_words(CHAT_SIZE, room - CHAT_INDENT, rest)
+        };
+        if more.len() >= CHAT_MESSAGE_ROWS {
+            // The last line kept takes what's cut off, so `fit` ends it in "...".
+            let cut = more.split_off(CHAT_MESSAGE_ROWS - 2).join(" ");
+            more.push(Canvas::fit(
+                CHAT_SIZE,
+                room - CHAT_INDENT,
+                &format!("{cut} ..."),
+            ));
+        }
+        let mut message = vec![ChatRow::First {
+            from: k,
+            said: first,
+        }];
+        message.extend(more.into_iter().map(ChatRow::More));
+        for row in message.into_iter().rev() {
+            if out.len() < rows {
+                out.push(row);
+            }
+        }
+    }
+    out.reverse();
+    out
+}
+
 /// `download`: what's happening with the lobby map while it's fetched, and how far along it is.
 pub fn draw_lobby(
     c: &mut Canvas,
@@ -1932,18 +2002,24 @@ pub fn draw_lobby(
         c.hit(ix, iy, iw, ih, Hit::LobbyChat);
         let line_h = crate::mobile::pick(11.0, 18.0);
         let lines = ((ch - 30.0 - ih - 6.0) / line_h).max(0.0) as usize;
-        for (k, (from, text)) in s
-            .chat
-            .iter()
-            .skip(s.chat.len().saturating_sub(lines))
-            .enumerate()
-        {
-            // The name as chat shows it everywhere (tags and shimmer), then what they said.
-            let (ly, colour) = (cy + 26.0 + k as f32 * line_h, rgba(0xdedeea, 1.0));
-            let (x0, room) = (rx + 14.0, rw - 28.0);
-            let nw = crate::social::styled_name(c, x0, ly, 6.5, from, colour, room * 0.6);
-            let said = Canvas::fit(6.5, room - nw, &format!(": {text}"));
-            c.text(x0 + nw, ly, 6.5, colour, &said);
+        let (x0, room, colour) = (rx + 14.0, rw - 28.0, rgba(0xdedeea, 1.0));
+        let rows = chat_rows(&s.chat, lines, room, |name| {
+            crate::social::styled_name_width(name, CHAT_SIZE).min(room * 0.6)
+        });
+        for (k, row) in rows.iter().enumerate() {
+            let ly = cy + 26.0 + k as f32 * line_h;
+            match row {
+                // The name as chat shows it everywhere (tags and shimmer), then what they said.
+                ChatRow::First { from, said } => {
+                    let from = &s.chat[*from].0;
+                    let nw =
+                        crate::social::styled_name(c, x0, ly, CHAT_SIZE, from, colour, room * 0.6);
+                    c.text(x0 + nw, ly, CHAT_SIZE, colour, said);
+                }
+                ChatRow::More(said) => {
+                    c.text(x0 + CHAT_INDENT, ly, CHAT_SIZE, colour, said);
+                }
+            }
         }
     }
 
@@ -2534,6 +2610,79 @@ pub(crate) fn use_mod_settings(game: &mut Game, map: &net::MapInfo) {
 #[cfg(test)]
 mod fetch_tests {
     use super::*;
+
+    fn said(rows: &[ChatRow]) -> String {
+        rows.iter()
+            .map(|r| match r {
+                ChatRow::First { said, .. } => said.trim_start_matches(": ").to_string(),
+                ChatRow::More(s) => s.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn long_lobby_chat_lines_wrap_instead_of_being_cut() {
+        let line = "YO 2nd time this has happened to me in a row, the map just skipped";
+        let chat = vec![
+            ("Cranium".to_string(), "ya".to_string()),
+            ("RubyDear".to_string(), line.to_string()),
+        ];
+        let room = Canvas::text_width(CHAT_SIZE, "RubyDear: YO 2nd time this has ha");
+        let rows = chat_rows(&chat, 10, room, |n| Canvas::text_width(CHAT_SIZE, n));
+        assert_eq!(
+            rows[0],
+            ChatRow::First {
+                from: 0,
+                said: ": ya".into()
+            }
+        );
+        assert!(matches!(rows[1], ChatRow::First { from: 1, .. }));
+        assert!(rows.len() > 2, "the long line takes more than one row");
+        assert_eq!(said(&rows[1..]), line, "every word shows, none cut");
+        for r in &rows {
+            let (w, text) = match r {
+                ChatRow::First { from, said } => {
+                    (room - Canvas::text_width(CHAT_SIZE, &chat[*from].0), said)
+                }
+                ChatRow::More(s) => (room - CHAT_INDENT, s),
+            };
+            assert!(Canvas::text_width(CHAT_SIZE, text) <= w, "{text:?} fits");
+        }
+    }
+
+    #[test]
+    fn the_lobby_chat_shows_the_newest_rows_and_caps_a_flood() {
+        let room = Canvas::text_width(CHAT_SIZE, "someone: a b c d e f g");
+        let width = |n: &str| Canvas::text_width(CHAT_SIZE, n);
+        let flood = "word ".repeat(200);
+        let chat = vec![
+            ("old".to_string(), "first".to_string()),
+            ("spam".to_string(), flood.clone()),
+            ("new".to_string(), "last".to_string()),
+        ];
+        let rows = chat_rows(&chat, 100, room, width);
+        // The flood takes CHAT_MESSAGE_ROWS lines and ends in dots.
+        let flood_rows: Vec<_> = rows
+            .iter()
+            .skip_while(|r| !matches!(r, ChatRow::First { from: 1, .. }))
+            .take_while(|r| !matches!(r, ChatRow::First { from: 2, .. }))
+            .collect();
+        assert_eq!(flood_rows.len(), CHAT_MESSAGE_ROWS);
+        assert!(matches!(flood_rows.last(), Some(ChatRow::More(s)) if s.ends_with("...")));
+        // Short of room: the newest lines, the flood's end first.
+        let rows = chat_rows(&chat, 2, room, width);
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[0], ChatRow::More(s) if s.ends_with("...")));
+        assert_eq!(
+            rows[1],
+            ChatRow::First {
+                from: 2,
+                said: ": last".into()
+            }
+        );
+        assert!(chat_rows(&chat, 0, room, width).is_empty());
+    }
 
     #[test]
     fn a_missing_map_is_asked_for_once_and_falls_back_on_a_silent_host() {
