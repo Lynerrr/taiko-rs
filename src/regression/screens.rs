@@ -337,6 +337,41 @@ fn the_map_editor_copies_and_pastes_map_times_like_osu() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Song setup of a map that came from osu! (`BeatmapSetID`) has a box for the original mapper,
+/// whose name lets the mapper's edit be sent to taiko.rs; the mapper's own map has none.
+#[test]
+fn song_setup_asks_an_osu_maps_edit_for_its_original_mapper() {
+    let dir = std::env::temp_dir().join(format!("taiko-rs-screen-based-on-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let draw = |v: &mut editor::view::View| {
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        c.clear(WIDTH);
+        v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+        screen(&c, VOLATILE)
+    };
+    let own = dir.join("own.osu");
+    std::fs::write(&own, crate::editor::chart::tests::MAP).unwrap();
+    let mut v = editor::view::View::open(own, 0).unwrap();
+    v.song_setup_for_tests();
+    assert!(!draw(&mut v).contains("Original mapper"));
+    let edit = dir.join("edit.osu");
+    std::fs::write(
+        &edit,
+        crate::editor::chart::tests::MAP.replace(
+            "Version:Oni\r\n",
+            "Version:Oni\r\nBeatmapSetID:123\r\nTaikoRsBasedOn:Original Mapper\r\n",
+        ),
+    )
+    .unwrap();
+    let mut v = editor::view::View::open(edit, 0).unwrap();
+    v.song_setup_for_tests();
+    assert_snapshot("screen-map-editor-song-setup-based-on", &draw(&mut v));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Updating a set whose approved difficulty was changed: the upload window names it, offers to
 /// keep the changes as a new difficulty or to ask an admin, and can't send; a refusal from the
 /// server is shown whole, not cut to one line.

@@ -154,9 +154,11 @@ pub fn checks(path: &Path, saved: bool, logged_in: bool) -> Vec<Check> {
         return out;
     };
     let folder = path.parent().unwrap_or(Path::new("."));
-    let (mode, notes) = std::fs::read_to_string(path)
-        .map(|t| custom::mode_and_notes(&t))
-        .unwrap_or((None, 0));
+    // As the packer reads it: bytes, whatever their encoding.
+    let text = std::fs::read(path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    let (mode, notes) = custom::mode_and_notes(&text);
     out.push(check(
         mode == Some(1),
         true,
@@ -206,20 +208,25 @@ pub fn checks(path: &Path, saved: bool, logged_in: bool) -> Vec<Check> {
             "The music file isn't in the map's folder".to_string()
         },
     ));
-    let own = meta.set_id.is_none();
-    out.push(check(
-        own,
-        true,
-        if own {
-            "Your own map (no osu! set number)".to_string()
-        } else {
-            "The map names an osu! set (BeatmapSetID): only your own maps can be sent".to_string()
-        },
-    ));
-    if let Some(g) = std::fs::read_to_string(path)
-        .ok()
+    // An osu! map goes only as the mapper's edit, with the original mapper named.
+    out.push(match custom::edit_of(&text) {
+        (None, _) => check(true, true, "Your own map (no osu! set number)"),
+        (Some(set), Some(mapper)) => check(
+            true,
+            true,
+            format!("Your edit of osu! set {set}, mapped by {mapper}"),
+        ),
+        (Some(set), None) => check(
+            false,
+            true,
+            format!(
+                "osu! set {set}: to send your edit of it, name its mapper in File > Song setup"
+            ),
+        ),
+    });
+    if let Some(g) = Some(&text)
         .filter(|t| crate::tko::format::version_of(t).is_some())
-        .and_then(|t| crate::tko::format::read(&t).ok())
+        .and_then(|t| crate::tko::format::read(t).ok())
         .map(|p| p.gimmick)
     {
         out.extend(tko_checks(&g));
@@ -846,7 +853,7 @@ mod tests {
         assert!(bad.iter().any(|t| t.contains("Save the map")));
         assert!(bad.iter().any(|t| t.contains("at least 10 notes")));
         assert!(bad.iter().any(|t| t.contains("music")));
-        assert!(bad.iter().any(|t| t.contains("osu! set")));
+        assert!(bad.iter().any(|t| t.contains("osu! set 123")));
         let ui = UploadUi {
             checks: list,
             ..Default::default()
@@ -859,6 +866,32 @@ mod tests {
             .find(|c| c.text.contains("background"))
             .unwrap();
         assert!(!bg.ok && !bg.blocking);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_edit_of_an_osu_map_can_be_sent_once_its_mapper_is_named() {
+        let dir = folder("edit");
+        let path = dir.join("a [Oni].osu");
+        std::fs::write(dir.join("audio.mp3"), [1u8; 8]).unwrap();
+        std::fs::write(dir.join("bg.png"), [1u8; 8]).unwrap();
+        std::fs::write(&path, map(20, Some(123))).unwrap();
+        let list = checks(&path, true, true);
+        assert_eq!(
+            problems(&list),
+            ["osu! set 123: to send your edit of it, name its mapper in File > Song setup"]
+        );
+        let credited = map(20, Some(123)).replace(
+            "BeatmapSetID:",
+            &format!("{}:Someone Else\r\nBeatmapSetID:", custom::BASED_ON_KEY),
+        );
+        std::fs::write(&path, credited).unwrap();
+        let list = checks(&path, true, true);
+        assert!(problems(&list).is_empty(), "{:?}", problems(&list));
+        assert!(
+            list.iter()
+                .any(|c| c.ok && c.text == "Your edit of osu! set 123, mapped by Someone Else")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
