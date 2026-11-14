@@ -333,6 +333,10 @@ pub struct ScoreSubmit {
     /// Drumroll hits (none from older games).
     #[serde(default)]
     pub rolls: Option<u32>,
+    /// The same for every send of this play: a server listing `SUBMIT_KEY_FEATURE` stores it
+    /// once and answers a resend as it answered the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_key: Option<String>,
 }
 
 /// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat. 3: what
@@ -1154,6 +1158,10 @@ pub enum Down {
 /// What a server that says when it moves a connection (`Down::Moving`) lists in
 /// `Reply::Account::features`; the game declares it back with `Up::Features`.
 pub const MOVING_FEATURE: &str = "moving/1";
+
+/// What a server that stores a play once per `ScoreSubmit::operation_key` lists in
+/// `Reply::Account::features`: a play it never answered can be sent to it again.
+pub const SUBMIT_KEY_FEATURE: &str = "submit-key/1";
 
 /// What a server that keeps the players' agreement to the terms lists in
 /// `Reply::Account::features`; only those get `Request::AcceptTerms`.
