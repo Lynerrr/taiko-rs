@@ -1976,3 +1976,293 @@ fn a_lobby_map_previews_and_goes_back_to_the_lobby() {
 fn a_defense_lobby_map_previews_and_goes_back_to_the_lobby() {
     lobby_preview_stays("mp-preview-defense", Some(net::Defense::DEFAULT));
 }
+
+// Downloads from the mirrors: a mirror can keep serving a set as it was before osu! updated it
+// (osu.direct gave Marika - Soul Release with three empty placeholder difficulties and old Oni
+// files after the set was ranked), and its description of the set can be years old (catboy.best
+// still described that set as it was in 2019).
+
+/// The .osu text of a difficulty, different for each `version` and `notes`.
+fn mirror_osu(version: &str, notes: usize) -> Vec<u8> {
+    let mut text =
+        format!("osu file format v14\n\n[Metadata]\nVersion:{version}\n\n[HitObjects]\n");
+    for i in 0..notes {
+        let _ = writeln!(text, "256,192,{},1,0", 1000 + i * 250);
+    }
+    text.into_bytes()
+}
+
+/// An `.osz` holding `files` (name, contents).
+fn mirror_osz(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in files {
+        zip.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// A mirror's description of a set: when osu! last changed it, and each difficulty (beatmap
+/// ID, [Version], the .osu it has for it).
+fn mirror_json(last_updated: &str, maps: &[(u32, &str, &[u8])]) -> Vec<u8> {
+    let beatmaps: Vec<serde_json::Value> = maps
+        .iter()
+        .map(|(id, version, osu)| {
+            serde_json::json!({
+                "id": id,
+                "version": version,
+                "checksum": crate::download::md5_hex(osu),
+            })
+        })
+        .collect();
+    serde_json::to_vec(&serde_json::json!({
+        "last_updated": last_updated,
+        "beatmaps": beatmaps,
+    }))
+    .unwrap()
+}
+
+/// Mirrors on this machine: each path in `routes` answers with its body (JSON when it starts
+/// with `{`, else an archive), anything else with 404; every path asked for is passed on.
+fn mirror_server(
+    routes: Vec<(&'static str, Vec<u8>)>,
+) -> (String, std::sync::mpsc::Receiver<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+            // The rest of the request's head.
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+            }
+            let _ = tx.send(path.clone());
+            let reply = match routes.iter().find(|(p, _)| *p == path) {
+                Some((_, body)) => {
+                    let kind = if body.first() == Some(&b'{') {
+                        "application/json"
+                    } else {
+                        "application/octet-stream"
+                    };
+                    let mut r = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .into_bytes();
+                    r.extend_from_slice(body);
+                    r
+                }
+                None => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            };
+            let _ = out.write_all(&reply);
+        }
+    });
+    (base, rx)
+}
+
+/// The files in a set's folder: (name, contents), by name.
+type SetFiles = Vec<(String, Vec<u8>)>;
+
+/// What a download from mirrors `a` and `b` (in that order; each a description and an archive)
+/// unpacks: each file in the set's folder, the paths the mirrors were asked for in order, and
+/// whether any archive was left lying in the Songs folder.
+fn download_from_mirrors(
+    name: &str,
+    a: (Vec<u8>, Vec<u8>),
+    b: (Vec<u8>, Vec<u8>),
+) -> (SetFiles, Vec<String>, bool) {
+    let (base, asked) = mirror_server(vec![
+        ("/a/s/1", a.0),
+        ("/a/d/1", a.1),
+        ("/b/s/1", b.0),
+        ("/b/d/1", b.1),
+    ]);
+    let songs = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-mirrors-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&songs);
+    let sources = [
+        ("a", format!("{base}/a/d/1")),
+        ("b", format!("{base}/b/d/1")),
+    ];
+    let mut check = crate::download::Check::new(
+        vec![
+            ("a", format!("{base}/a/s/1")),
+            ("b", format!("{base}/b/s/1")),
+        ],
+        None,
+    );
+    let (done, total) = (
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    );
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let folder = crate::download::fetch(
+        &sources,
+        "1 Marika - Soul Release",
+        &songs,
+        &done,
+        &total,
+        &cancel,
+        Some(&mut check),
+    )
+    .unwrap();
+    let mut maps: Vec<(String, Vec<u8>)> = std::fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                std::fs::read(e.path()).unwrap(),
+            )
+        })
+        .collect();
+    maps.sort();
+    let left = std::fs::read_dir(&songs)
+        .unwrap()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().contains(".osz"));
+    let _ = std::fs::remove_dir_all(&songs);
+    (maps, asked.try_iter().collect(), left)
+}
+
+#[test]
+fn a_mirror_serving_an_old_version_of_a_set_is_passed_over_for_one_with_osus() {
+    let (oni, kantan) = (mirror_osu("Oni", 40), mirror_osu("Kantan", 12));
+    let (old_oni, empty_kantan) = (mirror_osu("Oni", 39), mirror_osu("Kantan", 0));
+    let current = [(1, "Oni", oni.as_slice()), (2, "Kantan", kantan.as_slice())];
+    let (maps, asked, left) = download_from_mirrors(
+        "old-archive",
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &old_oni), ("kantan.osu", &empty_kantan)]),
+        ),
+        (
+            mirror_json("2019-03-11T04:01:36Z", &[(1, "Oni", old_oni.as_slice())]),
+            mirror_osz(&[("oni.osu", &oni), ("kantan.osu", &kantan)]),
+        ),
+    );
+    assert_eq!(
+        maps,
+        vec![
+            ("kantan.osu".to_string(), kantan),
+            ("oni.osu".to_string(), oni)
+        ],
+        "the second mirror's current archive is the one unpacked"
+    );
+    // The first mirror's archive, its description, then every description (to be sure it's the
+    // archive that's old), then the second archive.
+    assert_eq!(asked, ["/a/d/1", "/a/s/1", "/a/s/1", "/b/s/1", "/b/d/1"]);
+    assert!(!left, "no archive is left in the Songs folder");
+}
+
+#[test]
+fn a_current_archive_from_the_first_mirror_is_taken_without_asking_the_second() {
+    let oni = mirror_osu("Oni", 40);
+    let (maps, asked, left) = download_from_mirrors(
+        "current",
+        (
+            mirror_json("2026-11-04T00:38:02Z", &[(1, "Oni", oni.as_slice())]),
+            mirror_osz(&[("oni.osu", &oni)]),
+        ),
+        (b"{}".to_vec(), Vec::new()),
+    );
+    assert_eq!(maps, vec![("oni.osu".to_string(), oni)]);
+    assert_eq!(asked, ["/a/d/1", "/a/s/1"]);
+    assert!(!left);
+}
+
+#[test]
+fn an_old_description_doesnt_make_a_current_archive_look_old() {
+    let (oni, old_oni) = (mirror_osu("Oni", 40), mirror_osu("Oni", 39));
+    let (maps, asked, _) = download_from_mirrors(
+        "old-description",
+        (
+            mirror_json("2019-03-11T04:01:36Z", &[(1, "Oni", old_oni.as_slice())]),
+            mirror_osz(&[("oni.osu", &oni)]),
+        ),
+        (
+            mirror_json("2026-11-04T00:38:02Z", &[(1, "Oni", oni.as_slice())]),
+            mirror_osz(&[("oni.osu", &old_oni)]),
+        ),
+    );
+    assert_eq!(maps, vec![("oni.osu".to_string(), oni)]);
+    // The second mirror's archive is never downloaded.
+    assert_eq!(asked, ["/a/d/1", "/a/s/1", "/a/s/1", "/b/s/1"]);
+}
+
+#[test]
+fn when_no_mirror_has_the_current_version_the_closest_archive_is_unpacked() {
+    let (oni, kantan) = (mirror_osu("Oni", 40), mirror_osu("Kantan", 12));
+    let (old_oni, empty_kantan) = (mirror_osu("Oni", 39), mirror_osu("Kantan", 0));
+    let current = [(1, "Oni", oni.as_slice()), (2, "Kantan", kantan.as_slice())];
+    let (maps, asked, left) = download_from_mirrors(
+        "none-current",
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &old_oni), ("kantan.osu", &empty_kantan)]),
+        ),
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &oni), ("kantan.osu", &empty_kantan)]),
+        ),
+    );
+    assert_eq!(
+        maps,
+        vec![
+            ("kantan.osu".to_string(), empty_kantan),
+            ("oni.osu".to_string(), oni)
+        ],
+        "the archive with one of osu!'s two files beats the one with none"
+    );
+    // Each mirror's archive is downloaded once: no loop over old archives.
+    assert_eq!(
+        asked.iter().filter(|p| p.contains("/d/")).count(),
+        2,
+        "{asked:?}"
+    );
+    assert!(!left);
+}
+
+#[test]
+fn the_newest_description_of_a_set_is_the_one_believed() {
+    let (oni, old_oni) = (mirror_osu("Oni", 40), mirror_osu("Oni", 39));
+    let (base, _) = mirror_server(vec![
+        (
+            "/a/s/1",
+            mirror_json("2019-03-11T04:01:36Z", &[(1, "Oni", old_oni.as_slice())]),
+        ),
+        (
+            "/b/s/1",
+            mirror_json("2026-11-04T00:38:02Z", &[(1, "Oni", oni.as_slice())]),
+        ),
+    ]);
+    let sources = [
+        ("a", format!("{base}/a/s/1")),
+        ("b", format!("{base}/b/s/1")),
+    ];
+    let md5 = |set: &crate::download::OnlineSet| set[&1].md5.clone();
+    assert_eq!(
+        md5(&crate::download::checksums_from(&sources, false).unwrap()),
+        crate::download::md5_hex(&old_oni),
+        "the first mirror's, when only the first is asked"
+    );
+    assert_eq!(
+        md5(&crate::download::checksums_from(&sources, true).unwrap()),
+        crate::download::md5_hex(&oni),
+        "the newest, when all are"
+    );
+}
