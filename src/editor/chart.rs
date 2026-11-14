@@ -614,6 +614,23 @@ fn ends_with_newline(s: &str) -> bool {
     s.ends_with('\n')
 }
 
+/// A background event line `0,0,"file",x,y`: the file, and what follows it (`,x,y`).
+fn background_event(line: &str) -> Option<(String, String)> {
+    let rest = line.trim().strip_prefix("0,0,")?;
+    let (name, after) = match rest.strip_prefix('"') {
+        Some(quoted) => {
+            let close = quoted.find('"')?;
+            (&quoted[..close], &quoted[close + 1..])
+        }
+        None => match rest.find(',') {
+            Some(comma) => (&rest[..comma], &rest[comma..]),
+            None => (rest, ""),
+        },
+    };
+    let name = name.trim();
+    (!name.is_empty()).then(|| (name.to_string(), after.to_string()))
+}
+
 impl Chart {
     pub fn parse(text: &str) -> Chart {
         let ending = if text.contains("\r\n") { "\r\n" } else { "\n" };
@@ -833,6 +850,90 @@ impl Chart {
 
     pub fn slider_multiplier(&self) -> f64 {
         self.number("Difficulty", "SliderMultiplier", 1.4)
+    }
+
+    /// The background picture's file (in the map's folder): the first `0,0,"file",x,y` event of
+    /// [Events], as the game and osu! read it.
+    pub fn background(&self) -> Option<String> {
+        let s = self.sections().into_iter().find(|s| s.name == "Events")?;
+        self.lines[s.header + 1..s.end]
+            .iter()
+            .find_map(|l| background_event(l).map(|(name, _)| name))
+    }
+
+    /// Makes `file` the background picture (`None`: no background). An event already there keeps
+    /// its offset; a new one goes at the top of [Events], which is made if there isn't one.
+    pub fn set_background(&mut self, file: Option<&str>) {
+        if self.background().as_deref() == file {
+            return;
+        }
+        let ending = self.ending;
+        let line_for = |name: &str, rest: &str, end: &str| format!("0,0,\"{name}\"{rest}{end}");
+        let Some(s) = self.sections().into_iter().find(|s| s.name == "Events") else {
+            let Some(file) = file else { return };
+            // Where osu! writes it: before the timing points (or the notes), else at the end.
+            let at = self
+                .sections()
+                .into_iter()
+                .find(|s| s.name == "TimingPoints" || s.name == "HitObjects")
+                .map(|s| s.header);
+            let block = [
+                format!("[Events]{ending}"),
+                format!("//Background and Video events{ending}"),
+                line_for(file, ",0,0", ending),
+                ending.to_string(),
+            ];
+            match at {
+                Some(at) => {
+                    self.lines.splice(at..at, block);
+                }
+                None => {
+                    if self.lines.last().is_some_and(|l| !ends_with_newline(l)) {
+                        let last = self.lines.len() - 1;
+                        self.lines[last].push_str(ending);
+                    }
+                    self.lines.push(ending.to_string());
+                    self.lines.extend(block.into_iter().take(3));
+                }
+            }
+            self.dirty = true;
+            return;
+        };
+        let found = (s.header + 1..s.end).find(|&i| background_event(&self.lines[i]).is_some());
+        match (found, file) {
+            (Some(i), Some(file)) => {
+                let line = &self.lines[i];
+                let end = if line.ends_with("\r\n") {
+                    "\r\n"
+                } else if line.ends_with('\n') {
+                    "\n"
+                } else {
+                    ""
+                };
+                let rest = background_event(line).map(|(_, r)| r).unwrap_or_default();
+                self.lines[i] = line_for(file, &rest, end);
+            }
+            (Some(i), None) => {
+                self.lines.remove(i);
+            }
+            (None, Some(file)) => {
+                // Under the "//Background and Video events" comment osu! writes, if it is there.
+                let mut at = s.header + 1;
+                if self
+                    .lines
+                    .get(at)
+                    .is_some_and(|l| at < s.end && l.trim().starts_with("//Background"))
+                {
+                    at += 1;
+                }
+                if !ends_with_newline(&self.lines[at - 1]) {
+                    self.lines[at - 1].push_str(ending);
+                }
+                self.lines.insert(at, line_for(file, ",0,0", ending));
+            }
+            (None, None) => return,
+        }
+        self.dirty = true;
     }
 
     // ---- editing ----
@@ -1135,6 +1236,83 @@ pub(crate) mod tests {
             let c = Chart::parse(text);
             assert_eq!(c.to_text(), text);
         }
+    }
+
+    #[test]
+    fn the_background_is_changed_in_place_keeping_its_offset() {
+        let mut c = Chart::parse(&MAP.replace("\"bg.png\",0,0", "\"bg.png\",12,-8"));
+        assert_eq!(c.background().as_deref(), Some("bg.png"));
+        c.set_background(Some("new one.jpg"));
+        let text = c.to_text();
+        assert!(
+            text.contains(
+                "//Background and Video events\r\n0,0,\"new one.jpg\",12,-8\r\n\r\n[TimingPoints]"
+            ),
+            "{text}"
+        );
+        assert_eq!(
+            Chart::parse(&text).background().as_deref(),
+            Some("new one.jpg")
+        );
+        // The game's own reader sees it too.
+        assert_eq!(
+            crate::beatmap::read_meta_from(text.as_bytes())
+                .unwrap()
+                .background
+                .as_deref(),
+            Some("new one.jpg")
+        );
+        c.set_background(None);
+        let text = c.to_text();
+        assert!(!text.contains("0,0,\""), "{text}");
+        assert_eq!(Chart::parse(&text).background(), None);
+        // Back again: under the comment osu! writes.
+        c.set_background(Some("bg.png"));
+        assert!(
+            c.to_text().contains(
+                "[Events]\r\n//Background and Video events\r\n0,0,\"bg.png\",0,0\r\n\r\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_background_is_added_to_a_map_without_one() {
+        // No [Events] at all: it is made before the timing points.
+        let none = MAP.replace(
+            "[Events]\r\n//Background and Video events\r\n0,0,\"bg.png\",0,0\r\n\r\n",
+            "",
+        );
+        let mut c = Chart::parse(&none);
+        assert_eq!(c.background(), None);
+        c.set_background(Some("pic.jpg"));
+        let text = c.to_text();
+        assert!(
+            text.contains(
+                "SliderTickRate:1\r\n\r\n[Events]\r\n//Background and Video events\r\n0,0,\"pic.jpg\",0,0\r\n\r\n[TimingPoints]\r\n"
+            ),
+            "{text}"
+        );
+        assert_eq!(
+            crate::beatmap::read_meta_from(text.as_bytes())
+                .unwrap()
+                .background
+                .as_deref(),
+            Some("pic.jpg")
+        );
+        // [Events] with storyboard lines but no background: it goes first.
+        let sb = MAP.replace(
+            "0,0,\"bg.png\",0,0\r\n",
+            "//Storyboard Layer 0 (Background)\r\n2,1000,2000\r\n",
+        );
+        let mut c = Chart::parse(&sb);
+        c.set_background(Some("pic.jpg"));
+        assert!(c.to_text().contains(
+            "//Background and Video events\r\n0,0,\"pic.jpg\",0,0\r\n//Storyboard Layer 0 (Background)\r\n2,1000,2000\r\n"
+        ));
+        // The same file again changes nothing.
+        let mut c = Chart::parse(MAP);
+        c.set_background(Some("bg.png"));
+        assert!(!c.dirty);
     }
 
     #[test]

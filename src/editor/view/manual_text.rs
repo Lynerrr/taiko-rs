@@ -84,6 +84,7 @@ File > Song setup changes the names and settings any time later: artist and titl
 - The window shows the hit windows of the OD and the star rating as you change them.
 - Base SV is how fast notes scroll at 1.0x SV. Changing it keeps every drumroll as long as it was.
 - Each change is one undo step; Ctrl+S saves them with the map.
+- Background picture: drop a .png or .jpg on the editor and say Set as background, or use File > Background picture (Choose... in this window). The picture is copied into the map's folder; Remove takes it off this difficulty. It isn't an undo step: Revert to last save brings back the old one.
 
 # The screen
 - Modes: F1 Compose (notes), F2 Gimmicks (stable tricks), F3 Timing (BPM and slider velocity), F4 Effects (effect clips, keyframes and nodes, .tko only).
@@ -449,6 +450,7 @@ File > Song setup меняет названия и настройки в люб�
 - В окне видны окна попадания для OD и звёзды, они пересчитываются сразу.
 - Base SV — скорость прокрутки нот при 1.0x SV. При её изменении длина каждого драмролла остаётся прежней.
 - Каждое изменение — один шаг отмены; Ctrl+S сохраняет их вместе с картой.
+- Фон: перетащите .png или .jpg в редактор и нажмите Set as background, или File > Background picture (Choose... в этом окне). Картинка копируется в папку карты; Remove убирает фон у этой сложности. Это не шаг отмены: старый фон возвращает Revert to last save.
 
 # Экран
 - Режимы: F1 Compose (ноты), F2 Gimmicks (трюки для stable), F3 Timing (BPM и скорость слайдеров), F4 Effects (эффекты-блоки, ключевые кадры и ноды, только .tko).

@@ -372,6 +372,30 @@ fn song_setup_asks_an_osu_maps_edit_for_its_original_mapper() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A picture dropped on the editor asks before it becomes the background: set it, only copy it
+/// into the folder (for the effects' picture blocks), or cancel.
+#[test]
+fn a_picture_dropped_on_the_editor_asks_to_be_the_background() {
+    let dir = std::env::temp_dir().join(format!("taiko-rs-screen-bg-ask-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("from")).unwrap();
+    let map = dir.join("map.osu");
+    std::fs::write(&map, crate::editor::chart::tests::MAP).unwrap();
+    std::fs::write(dir.join("from").join("cover.jpg"), b"jpeg").unwrap();
+    let mut v = editor::view::View::open(map, 0).unwrap();
+    v.drop_picture(&dir.join("from").join("cover.jpg"));
+    let mut c = Canvas {
+        audit: true,
+        ..Default::default()
+    };
+    c.clear(WIDTH);
+    v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+    assert_snapshot(
+        "screen-map-editor-background-question",
+        &screen(&c, VOLATILE),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Updating a set whose approved difficulty was changed: the upload window names it, offers to
 /// keep the changes as a new difficulty or to ask an admin, and can't send; a refusal from the
 /// server is shown whole, not cut to one line.

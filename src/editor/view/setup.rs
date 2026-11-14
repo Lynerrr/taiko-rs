@@ -226,6 +226,7 @@ impl View {
             + 14.0
             + 4.0 * 30.0
             + 30.0
+            + 30.0
             + lines(&note)
             + 6.0
             + 14.0
@@ -275,6 +276,8 @@ impl View {
             "Tags (words to find the map by)",
         );
         self.setting_box(c, [x0, ty + 9.0, inner, 16.0], Key::Tags);
+        ty += 30.0;
+        self.draw_background_row(c, x0, ty, inner);
         ty += 30.0;
         for l in &note {
             c.text(x0, ty, small, rgba(if latin { DIM } else { WARN }, 1.0), l);

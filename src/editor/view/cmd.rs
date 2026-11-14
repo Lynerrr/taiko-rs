@@ -57,6 +57,13 @@ pub enum Cmd {
     Save,
     Revert,
     SongSetup,
+    /// Picks a picture file for the background.
+    Background,
+    /// Takes the background away.
+    NoBackground,
+    // Answers to "make the dropped picture the background?".
+    BackgroundUse,
+    BackgroundCopy,
     Upload,
     Export,
     /// A new difficulty of the set: with this one's notes (true), or empty with its timing.
@@ -137,6 +144,10 @@ impl Cmd {
             Cmd::Save => "Save",
             Cmd::Revert => "Revert to last save",
             Cmd::SongSetup => "Song setup",
+            Cmd::Background => "Background picture...",
+            Cmd::NoBackground => "Remove",
+            Cmd::BackgroundUse => "Set as background",
+            Cmd::BackgroundCopy => "Only copy to the folder",
             Cmd::Upload => "Upload to taiko.rs",
             Cmd::Export => "Export map file",
             Cmd::NewDifficulty(false) => "New difficulty (empty)",
@@ -214,6 +225,18 @@ impl Cmd {
             Cmd::Revert => "Throws away every change since the last save.",
             Cmd::SongSetup => {
                 "Artist, title, mapper, difficulty name, source and tags, and HP drain, accuracy (OD) and base SV."
+            }
+            Cmd::Background => {
+                "Picks a picture for this difficulty's background and copies it into the map's folder. Dropping a picture on the editor does it too."
+            }
+            Cmd::NoBackground => {
+                "This difficulty has no background picture then (the file stays in the folder)."
+            }
+            Cmd::BackgroundUse => {
+                "Copies the picture into the map's folder and makes it this difficulty's background."
+            }
+            Cmd::BackgroundCopy => {
+                "Only copies the picture into the map's folder, for a Picture block of the effects."
             }
             Cmd::Upload => "Sends the saved map to taiko.rs: public as CUSTOM, pp once approved.",
             Cmd::Export => {
