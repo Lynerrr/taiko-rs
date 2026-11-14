@@ -608,6 +608,9 @@ pub struct View {
     m_strip_shown: usize,
     /// Keys copied with Ctrl+C on the key graph, for Ctrl+V.
     k_copied: Option<Vec<crate::tko::track::Key>>,
+    /// The time stamp put on the clipboard when notes were last copied or cut: while the
+    /// clipboard still holds it, Ctrl+V pastes those notes instead of jumping to the time.
+    copied_stamp: Option<String>,
     /// Effects being recorded live (keys 1..9): the shelf effect and where it started.
     fx_live: Vec<(usize, f64)>,
     k_ease: crate::tko::track::Ease,
@@ -883,6 +886,7 @@ impl View {
             m_strip: [0.0; 4],
             m_strip_shown: 0,
             k_copied: None,
+            copied_stamp: None,
             fx_live: Vec::new(),
             k_ease: crate::tko::track::Ease::Linear,
             k_frozen: None,
@@ -1518,6 +1522,14 @@ impl View {
             rgba(0x3a3a4e, 1.0),
             1.0,
         );
+    }
+
+    /// When the earliest selected note is, if any is selected.
+    fn first_selected_time(&self) -> Option<f64> {
+        self.selected_objects()
+            .iter()
+            .map(|o| o.time)
+            .min_by(f64::total_cmp)
     }
 
     fn selected_objects(&self) -> Vec<&HitObject> {
@@ -3364,6 +3376,39 @@ impl View {
         };
     }
 
+    /// Notes were copied or cut (`n` of them): as osu! does, the first one's time goes on the
+    /// clipboard too (`01:23:456 - `), to paste where mappers talk.
+    fn copied_notes(&mut self, n: usize, first: Option<f64>, verb: &str) {
+        self.k_copied = None;
+        let Some(first) = first.filter(|_| n > 0) else {
+            self.status = format!("{verb} 0");
+            return;
+        };
+        let stamp = time_stamp(first);
+        self.copied_stamp = crate::clipboard::set(&stamp).then(|| stamp.clone());
+        self.status = match self.copied_stamp {
+            Some(_) => format!("{verb} {n} ({stamp}on the clipboard)"),
+            None => format!("{verb} {n}"),
+        };
+    }
+
+    /// The time an osu! time stamp on the clipboard points at (`01:23:456 - `, or with notes
+    /// after it, as mappers paste it), unless it is the one put there when notes were copied:
+    /// then Ctrl+V pastes the notes.
+    fn pasted_stamp(&self) -> Option<f64> {
+        let text = crate::clipboard::get()?;
+        let line = text.lines().next()?.trim();
+        if self.copied_stamp.as_deref().map(str::trim) == Some(line) {
+            return None;
+        }
+        // The stamp has to open the line: a time inside other words isn't one to jump to.
+        let head: String = line
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == ':')
+            .collect();
+        crate::editor::collab::session::first_stamp(&head)
+    }
+
     fn apply_typed(&mut self, f: Field, text: &str) {
         if let Field::Say(to) = f {
             return self.say(to, text);
@@ -3916,6 +3961,59 @@ mod tests {
         assert_eq!(parse_time("soon"), None);
         assert_eq!(parse_time(""), None);
         assert_eq!(parse_time(&fmt_time(62_345.0)), Some(62_345.0));
+    }
+
+    #[test]
+    fn copy_and_paste_carry_map_times_as_osu_does() {
+        use crate::clipboard;
+        clipboard::fake_for_this_thread();
+        let mut v = view();
+        let notes = v.ed.chart.objects.len();
+        // Nothing selected: Ctrl+C copies the playhead's time, as osu! writes it.
+        v.set_time(62_345.0);
+        v.key(KeyCode::KeyC, false, ctrl(), None);
+        assert_eq!(clipboard::get().as_deref(), Some("01:02:345 - "));
+        // A mapper's stamp pasted: the playhead jumps there, no notes come in.
+        clipboard::set("00:01:500 (1,2) - this is off");
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        assert_eq!(v.ed.time, 1500.0, "{}", v.status);
+        assert_eq!(v.ed.chart.objects.len(), notes);
+        // Notes selected: they are kept to paste, and the first one's time goes on the
+        // clipboard; Ctrl+V then pastes the notes rather than jumping.
+        v.ed.selection =
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.time == 1500.0 || o.time == 2000.0)
+                .map(|o| o.id)
+                .collect();
+        v.key(KeyCode::KeyC, false, ctrl(), None);
+        assert_eq!(clipboard::get().as_deref(), Some("00:01:500 - "));
+        v.set_time(20_000.0);
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        assert_eq!(v.ed.chart.objects.len(), notes + 2, "{}", v.status);
+        assert_eq!(v.ed.time, 20_000.0);
+        // Words with a time somewhere in them aren't a stamp to jump to.
+        clipboard::set("check 00:01:000 again");
+        v.set_time(30_000.0);
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        assert_eq!(v.ed.chart.objects.len(), notes + 4);
+        // Cut works the same way: the notes cut paste back, the stamp doesn't jump.
+        v.ed.select_none();
+        v.ed.selection =
+            v.ed.chart
+                .objects
+                .iter()
+                .filter(|o| o.time >= 30_000.0)
+                .map(|o| o.id)
+                .collect();
+        v.key(KeyCode::KeyX, false, ctrl(), None);
+        assert_eq!(v.ed.chart.objects.len(), notes + 2);
+        assert_eq!(clipboard::get().as_deref(), Some("00:30:000 - "));
+        v.set_time(40_000.0);
+        v.key(KeyCode::KeyV, false, ctrl(), None);
+        assert_eq!(v.ed.chart.objects.len(), notes + 4);
+        assert_eq!(v.ed.time, 40_000.0);
     }
 
     #[test]
@@ -7745,7 +7843,13 @@ mod tests {
         v.key(KeyCode::Escape, false, Keys::default(), None);
         v.ed.select_all();
         v.key(KeyCode::KeyC, false, ctrl(), None);
-        assert_eq!(v.status, format!("copied {}", v.ed.chart.objects.len()));
+        assert_eq!(
+            v.status,
+            format!(
+                "copied {} (00:01:000 - on the clipboard)",
+                v.ed.chart.objects.len()
+            )
+        );
     }
 
     #[test]
