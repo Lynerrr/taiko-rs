@@ -460,13 +460,23 @@ fn run(stream: Weak<Stream>, mut pipeline: Pipeline, sample_rate: u32) {
             (told, last_told) = (stalls, Instant::now());
         }
         let head = s.head.load(Ordering::Relaxed);
+        // Past the song's end there's nothing to make: the callback plays silence there until
+        // the music is sent back into the song (the song select preview goes round again). Asked
+        // to start out there, the file can't seek to it.
+        if head >= s.frames.load(Ordering::Relaxed) {
+            drop(s);
+            std::thread::sleep(Duration::from_millis(4));
+            continue;
+        }
         let (from, to) = (s.from.load(Ordering::Relaxed), s.to.load(Ordering::Relaxed));
         if !started || head < from || head > to {
             s.restart(head);
             if let Err(e) = pipeline.start(head as usize) {
+                // The song can't be played on from here: it ends here, and a seek back into it
+                // starts it again. The thread stays for that.
                 eprintln!("stream: {e}");
                 s.frames.store(head, Ordering::Relaxed);
-                return;
+                continue;
             }
             started = true;
             continue;
@@ -487,9 +497,10 @@ fn run(stream: Weak<Stream>, mut pipeline: Pipeline, sample_rate: u32) {
                 }
             }
             Err(e) => {
+                // As where it can't start: the song ends here until it's started over.
                 eprintln!("stream: {e}");
                 s.frames.store(to, Ordering::Relaxed);
-                return;
+                pipeline.finished = true;
             }
         }
     }
@@ -754,5 +765,71 @@ mod tests {
         s.write(&[5.0, 6.0]);
         assert_eq!(s.read(500, &mut out), 1);
         assert_eq!(out[..2], [5.0, 6.0]);
+    }
+
+    /// Plays `s` the way the audio callback does from frame `at` until frame `until`, the song's
+    /// end or `secs` have passed; returns the frame it got to.
+    fn listen(s: &Stream, mut at: i64, until: i64, secs: f64) -> i64 {
+        let deadline = Instant::now() + Duration::from_secs_f64(secs);
+        let mut out = vec![0.0f32; 1024];
+        while at < until && Instant::now() < deadline {
+            s.want(at);
+            let want = (until - at).min(512) as usize;
+            let n = s.read(at, &mut out[..want * 2]);
+            if n == 0 {
+                if at >= s.frames() as i64 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            at += n as i64;
+        }
+        at
+    }
+
+    #[test]
+    fn a_song_that_played_to_its_end_plays_again_from_where_it_loops() {
+        // The song select preview: the music plays out and the callback's position runs on past
+        // the end, silent, until the preview sees it and sends it back to the preview point. With
+        // the window out of sight the preview doesn't look for a while, and the position gets
+        // seconds past the end. The thread, asked to start out there, failed to seek, quit, and
+        // the song went silent for good, held at the preview point.
+        let sr = 48000;
+        let bytes = wav(12.0, sr);
+        let source = Box::new(std::io::Cursor::new(bytes.clone()));
+        let len_ms = Reader::open(source, Some("wav")).unwrap().length_ms();
+        let track = stream_of(
+            bytes,
+            Some("wav".into()),
+            len_ms,
+            sr,
+            Speed::constant(1.0),
+            true,
+        )
+        .unwrap();
+        let s = track.stream.as_ref().unwrap();
+
+        let from = 9 * sr as i64;
+        let end = listen(s, from, i64::MAX, 10.0);
+        assert!(
+            end.abs_diff(12 * sr as i64) < 64,
+            "played on to the song's end, got to {end}"
+        );
+        assert_eq!(s.frames() as i64, end, "the end is known");
+
+        // Past the end for a few callbacks.
+        for past in [256, 512, 4096, 48000, 240000] {
+            s.want(end + past);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert_eq!(s.frames() as i64, end, "the song still ends where it does");
+
+        let again = listen(s, from, from + sr as i64, 5.0);
+        assert_eq!(
+            again,
+            from + sr as i64,
+            "a second of it again, from the loop point"
+        );
     }
 }
