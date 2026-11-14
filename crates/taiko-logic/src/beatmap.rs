@@ -125,6 +125,13 @@ pub struct Meta {
     /// The genres its tags name (`genres::of`).
     #[serde(default)]
     pub genres: u32,
+    /// The `Tags` line as written, for the search (osu! finds maps by them). Empty when the
+    /// map has none, and in a cache from before they were kept.
+    #[serde(default)]
+    pub tags: String,
+    /// The `Source` line (the game, show or album the song is from), for the search.
+    #[serde(default)]
+    pub source: String,
     /// The `.tko` format version of a map that uses client gimmicks; 0 for a plain chart.
     #[serde(default)]
     pub tko_version: u32,
@@ -480,7 +487,11 @@ fn parse_sections(text: &str, header_only: bool) -> (Meta, Body<'_>) {
                 Some(("ArtistUnicode", v)) if cyrillic(v) => meta.artist = v.to_owned(),
                 Some(("Creator", v)) => meta.creator = v.to_owned(),
                 Some(("Version", v)) => meta.version = v.to_owned(),
-                Some(("Tags", v)) => meta.genres = crate::genres::of(v),
+                Some(("Tags", v)) => {
+                    meta.genres = crate::genres::of(v);
+                    meta.tags = v.to_owned();
+                }
+                Some(("Source", v)) => meta.source = v.to_owned(),
                 Some(("TkoVersion", v)) => meta.tko_version = v.trim().parse().unwrap_or(0),
                 Some(("BeatmapSetID", v)) => {
                     meta.set_id = v.trim().parse().ok().filter(|&id: &u32| id > 0)

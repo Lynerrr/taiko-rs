@@ -564,7 +564,8 @@ struct CachedFolder {
 /// Named for what its maps hold: a new field needs every map read again, once.
 fn library_cache() -> PathBuf {
     let _ = std::fs::remove_file(cache_dir().join("library.json"));
-    cache_dir().join("library-v2.json")
+    let _ = std::fs::remove_file(cache_dir().join("library-v2.json"));
+    cache_dir().join("library-v3.json")
 }
 
 /// How the cache could be read, for the scan's log.
@@ -1206,7 +1207,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let songs = root.join("Songs");
         std::fs::create_dir_all(&songs).unwrap();
-        let cache = root.join("library-v2.json");
+        let cache = root.join("library-v3.json");
         (root, songs, cache)
     }
 
