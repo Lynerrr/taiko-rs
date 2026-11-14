@@ -116,6 +116,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"Groups":[["dev",["DEV"]]]}
 {"MappingInvite":{"from":"host","session":9,"title":"Artist - Song","mode":"Collab"}}
 {"MappingClosed":{"session":9}}
+"Moving"
 == mapping: up
 {"Op":{"client_seq":3,"diff":0,"op":{"Composite":[{"InsertObjects":[{"id":2199023255553,"line":"256,192,1000,1,0,0:0:0:0:"}]},{"EditTiming":{"before":[{"id":1,"line":"0,500,4,1,0,100,1,0"}],"after":[{"id":1,"line":"0,400,4,1,0,100,1,0"}]}},{"SetKey":{"section":"Metadata","key":"Version","before":"Oni","after":"Guest's Oni"}}]}}}
 {"Snapshot":{"seq":4,"part":0,"parts":1,"data":"{}"}}

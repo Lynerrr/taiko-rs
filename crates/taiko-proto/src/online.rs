@@ -1145,7 +1145,15 @@ pub enum Down {
     MappingClosed {
         session: u64,
     },
+    /// The server is being updated and closes this connection next: reconnect at once, to the
+    /// server that now takes connections, without calling it a lost connection. Only to
+    /// connections that declared `MOVING_FEATURE`.
+    Moving,
 }
+
+/// What a server that says when it moves a connection (`Down::Moving`) lists in
+/// `Reply::Account::features`; the game declares it back with `Up::Features`.
+pub const MOVING_FEATURE: &str = "moving/1";
 
 /// What a server that keeps the players' agreement to the terms lists in
 /// `Reply::Account::features`; only those get `Request::AcceptTerms`.
@@ -1581,16 +1589,24 @@ impl Social {
                 // Whatever piled up while away is stale: the game resends its state on Connected.
                 while out.try_recv().is_ok() {}
                 let _ = events.send(SocialEvent::Connected(name, features));
+                announced_down = false;
                 let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+                // Set by `Down::Moving`: the close that follows is the server's update, not a
+                // lost connection.
+                let moving = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 {
-                    let (events, alive) = (events.clone(), alive.clone());
+                    let (events, alive, moving) = (events.clone(), alive.clone(), moving.clone());
                     std::thread::spawn(move || {
                         let mut reader = reader;
                         while let Ok(line) = read_line(&mut reader) {
-                            if let Ok(d) = serde_json::from_str::<Down>(&line)
-                                && events.send(SocialEvent::Down(Box::new(d))).is_err()
-                            {
-                                break;
+                            match serde_json::from_str::<Down>(&line) {
+                                Ok(Down::Moving) => moving.store(true, Ordering::Relaxed),
+                                Ok(d) => {
+                                    if events.send(SocialEvent::Down(Box::new(d))).is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(_) => {}
                             }
                         }
                         alive.store(false, Ordering::Relaxed);
@@ -1624,6 +1640,11 @@ impl Social {
                     }
                 }
                 let _ = stream.shutdown(std::net::Shutdown::Both);
+                // Moved by the server: reconnect at once and say nothing. Should that fail,
+                // the failed attempt reports the connection as lost.
+                if moving.load(Ordering::Relaxed) {
+                    continue;
+                }
                 let _ = events.send(SocialEvent::Disconnected(
                     tr!(
                         "lost the connection",
