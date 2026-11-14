@@ -113,6 +113,10 @@ pub enum Cmd {
     Unbookmark,
     PrevBookmark,
     NextBookmark,
+    // The preview point (where song select plays the song from).
+    PreviewHere,
+    PreviewJump,
+    PreviewClear,
     // Effect marks (.tko).
     EffectMark,
     EffectUnmark,
@@ -199,6 +203,9 @@ impl Cmd {
             Cmd::Unbookmark => "Remove bookmark",
             Cmd::PrevBookmark => "Previous bookmark",
             Cmd::NextBookmark => "Next bookmark",
+            Cmd::PreviewHere => "Set preview point here",
+            Cmd::PreviewJump => "Go to preview point",
+            Cmd::PreviewClear => "Clear preview point",
             Cmd::EffectMark => "Add effect mark",
             Cmd::EffectUnmark => "Remove effect mark",
             Cmd::AddRed => "Add red line (BPM)",
@@ -305,6 +312,13 @@ impl Cmd {
             Cmd::Bookmark => "Marks the playhead so you can jump back to it.",
             Cmd::Unbookmark => "Removes the bookmark nearest the playhead.",
             Cmd::PrevBookmark | Cmd::NextBookmark => "Jumps to the neighbouring bookmark.",
+            Cmd::PreviewHere => {
+                "Song select plays the song from the playhead (the green P mark on the timeline)."
+            }
+            Cmd::PreviewJump => "Moves the playhead to the preview point.",
+            Cmd::PreviewClear => {
+                "No preview point: song select picks where to play the song from itself."
+            }
             Cmd::EffectMark => {
                 "Names this moment for the effects: a node can fire at it, or sweep from one mark to the next. .tko maps only."
             }

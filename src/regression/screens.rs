@@ -396,6 +396,28 @@ fn a_picture_dropped_on_the_editor_asks_to_be_the_background() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The preview point shows on the timeline as a green P (and on the whole-song bar).
+#[test]
+fn the_preview_point_shows_on_the_editor_timeline() {
+    let dir = std::env::temp_dir().join(format!("taiko-rs-screen-preview-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let map = dir.join("map.osu");
+    std::fs::write(
+        &map,
+        crate::editor::chart::tests::MAP.replace("Mode: 1\r\n", "PreviewTime: 1750\r\nMode: 1\r\n"),
+    )
+    .unwrap();
+    let mut v = editor::view::View::open(map, 0).unwrap();
+    let mut c = Canvas {
+        audit: true,
+        ..Default::default()
+    };
+    c.clear(WIDTH);
+    v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+    assert_snapshot("screen-map-editor-preview-point", &screen(&c, VOLATILE));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Updating a set whose approved difficulty was changed: the upload window names it, offers to
 /// keep the changes as a new difficulty or to ask an admin, and can't send; a refusal from the
 /// server is shown whole, not cut to one line.
