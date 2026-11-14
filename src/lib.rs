@@ -12997,7 +12997,7 @@ impl State {
         self.select.updates.insert(id, ui::SetUpdate::Checking);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = download::set_checksums(id).map(|online| {
+            let result = download::set_checksums(id).map(|mut online| {
                 let here: Vec<(Option<u32>, String, String, &PathBuf)> = maps
                     .iter()
                     .filter_map(|(bid, version, p)| {
@@ -13013,6 +13013,13 @@ impl State {
                     .iter()
                     .map(|(bid, version, md5, _)| (*bid, version.clone(), md5.clone()))
                     .collect();
+                // The first mirror's description of a set can be the old one: before saying
+                // there's a newer version, the newest description the mirrors have decides.
+                if download::outdated(&ids, &online)
+                    && let Ok(fresh) = download::freshest_checksums(id)
+                {
+                    online = fresh;
+                }
                 let edited = here
                     .iter()
                     .filter(|(_, _, md5, _)| !download::is_osus(md5, &online))

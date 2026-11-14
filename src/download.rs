@@ -823,6 +823,8 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
         Some(_) => vec![("taiko.rs", crate::custom::download_url(set.id))],
         None => mirror_sources(set.id),
     };
+    // An osu! set is checked against osu!'s MD5s; a taiko.rs custom set has none.
+    let mut check = set.custom.is_none().then(|| Check::set(set.id));
     std::thread::spawn(move || {
         let result = match cached.flatten() {
             Some(archive) => std::fs::create_dir_all(&songs)
@@ -831,7 +833,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
                     let dest = songs.join(&name);
                     extract(&archive, &dest).map(|()| dest)
                 }),
-            None => fetch(&sources, &name, &songs, &d, &t, &stop),
+            None => fetch(&sources, &name, &songs, &d, &t, &stop, check.as_mut()),
         };
         let _ = tx.send(result);
     });
@@ -883,8 +885,17 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
                 })
                 .map(|m| m.path)
                 .collect();
+            let mut check = Check::new(json_sources(id), Some(online));
             replacing(&replaced, || {
-                fetch(&mirror_sources(id), &name, songs, &d, &t, &stop)
+                fetch(
+                    &mirror_sources(id),
+                    &name,
+                    songs,
+                    &d,
+                    &t,
+                    &stop,
+                    Some(&mut check),
+                )
             })
         })();
         let _ = tx.send(result);
@@ -923,6 +934,10 @@ fn replacing<T>(old: &[PathBuf], get: impl FnOnce() -> Result<T, String>) -> Res
 struct ApiSetMaps {
     #[serde(default)]
     beatmaps: Vec<ApiChecksum>,
+    /// When osu! last changed the set, as the mirror saw it (ISO 8601): which mirror's copy of
+    /// the set is the newest.
+    #[serde(default)]
+    last_updated: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -935,6 +950,7 @@ struct ApiChecksum {
 }
 
 /// A difficulty of a set as osu! has it now.
+#[derive(Clone)]
 pub struct OnlineDiff {
     pub md5: String,
     /// Its [Version] (None: the mirror didn't say).
@@ -943,27 +959,58 @@ pub struct OnlineDiff {
 
 pub type OnlineSet = std::collections::HashMap<u32, OnlineDiff>;
 
+/// Where the mirrors describe osu! set `id` (name, URL of its JSON), in the order they're asked.
+fn json_sources(id: u32) -> Vec<(&'static str, String)> {
+    MIRRORS
+        .iter()
+        .map(|m| (m.name, format!("{}{id}", m.set)))
+        .collect()
+}
+
 /// Each difficulty of set `id` as osu! has it now, by beatmap ID (from the first mirror that
 /// answers).
 pub fn set_checksums(id: u32) -> Result<OnlineSet, String> {
     crate::offline::internet()?;
+    checksums_from(&json_sources(id), false)
+}
+
+/// `set_checksums`, from whichever mirror saw the newest version of the set: a mirror's
+/// description of a set can be years old (catboy.best still had one set as it was in 2019 after
+/// osu! updated and ranked it), so one that says a set here is out of date is checked against
+/// the others.
+pub fn freshest_checksums(id: u32) -> Result<OnlineSet, String> {
+    crate::offline::internet()?;
+    checksums_from(&json_sources(id), true)
+}
+
+/// A set's difficulties from `sources` (name, JSON URL): the first that answers, or with
+/// `freshest` every one asked and the newest kept (`last_updated`; one that doesn't say counts
+/// as the oldest).
+pub(crate) fn checksums_from(
+    sources: &[(&str, String)],
+    freshest: bool,
+) -> Result<OnlineSet, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
         .build()
         .into();
     let mut errors = Vec::new();
-    for m in &MIRRORS {
-        let reply = agent
-            .get(&format!("{}{id}", m.set))
-            .header("User-Agent", USER_AGENT)
-            .call()
-            .map_err(|e| e.to_string())
+    let mut best: Option<(Option<String>, OnlineSet)> = None;
+    for (name, url) in sources {
+        let reply = crate::offline::url(url)
+            .and_then(|()| {
+                agent
+                    .get(url)
+                    .header("User-Agent", USER_AGENT)
+                    .call()
+                    .map_err(|e| e.to_string())
+            })
             .and_then(|mut r| r.body_mut().read_to_string().map_err(|e| e.to_string()));
         match reply.and_then(|json| {
             serde_json::from_str::<ApiSetMaps>(&json).map_err(|e| format!("unexpected reply: {e}"))
         }) {
             Ok(set) if !set.beatmaps.is_empty() => {
-                return Ok(set
+                let online: OnlineSet = set
                     .beatmaps
                     .into_iter()
                     .filter_map(|b| {
@@ -975,13 +1022,109 @@ pub fn set_checksums(id: u32) -> Result<OnlineSet, String> {
                             },
                         ))
                     })
-                    .collect());
+                    .collect();
+                if !freshest {
+                    return Ok(online);
+                }
+                // ISO 8601 times in UTC sort as text.
+                if best.as_ref().is_none_or(|(at, _)| set.last_updated > *at) {
+                    best = Some((set.last_updated, online));
+                }
             }
-            Ok(_) => errors.push(format!("{}: no such set", m.name)),
-            Err(e) => errors.push(format!("{}: {e}", m.name)),
+            Ok(_) => errors.push(format!("{name}: no such set")),
+            Err(e) => errors.push(format!("{name}: {e}")),
         }
     }
-    Err(errors.join("; "))
+    best.map(|(_, online)| online)
+        .ok_or_else(|| errors.join("; "))
+}
+
+/// What a downloaded set is checked against: the MD5s osu! has for its difficulties, asked of
+/// the mirrors (`sources`, JSON URLs) only once an archive needs checking.
+pub(crate) struct Check {
+    sources: Vec<(&'static str, String)>,
+    online: Option<OnlineSet>,
+    asked: bool,
+    freshest: bool,
+}
+
+impl Check {
+    /// `known`: the set's difficulties if they were asked for already (an update has).
+    pub(crate) fn new(sources: Vec<(&'static str, String)>, known: Option<OnlineSet>) -> Self {
+        let asked = known.is_some();
+        Self {
+            sources,
+            online: known,
+            asked,
+            freshest: false,
+        }
+    }
+
+    /// For osu! set `id`, from the mirrors.
+    fn set(id: u32) -> Self {
+        Self::new(json_sources(id), None)
+    }
+
+    fn online(&mut self) -> Option<&OnlineSet> {
+        if !self.asked {
+            self.asked = true;
+            self.online = checksums_from(&self.sources, false).ok();
+        }
+        self.online.as_ref()
+    }
+
+    /// Asks every mirror and keeps the newest description of the set (once).
+    fn freshen(&mut self) {
+        if !self.freshest {
+            self.freshest = true;
+            if let Ok(online) = checksums_from(&self.sources, true) {
+                self.online = Some(online);
+            }
+        }
+    }
+
+    /// How many of `md5s` (an archive's `.osu` files) are osu!'s; None when that can't be told.
+    fn matching(&mut self, md5s: &[String]) -> Option<usize> {
+        let online = self.online()?;
+        Some(md5s.iter().filter(|m| is_osus(m, online)).count())
+    }
+
+    /// Whether an archive with these `.osu` files is the set as osu! has it now: every file is
+    /// one of osu!'s. When the first mirror's description says no, the others are asked too, in
+    /// case it's that description that's old. An archive with no `.osu`, or one that can't be
+    /// checked (no mirror describes the set), is taken as it is.
+    fn current(&mut self, md5s: &[String]) -> bool {
+        if md5s.is_empty() || self.matching(md5s).is_none_or(|n| n == md5s.len()) {
+            return true;
+        }
+        self.freshen();
+        self.matching(md5s).is_none_or(|n| n == md5s.len())
+    }
+}
+
+/// The MD5 of each `.osu` in an archive.
+fn archive_md5s(archive: &Path) -> Result<Vec<String>, String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
+    let mut md5s = Vec::new();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        if !entry.is_file()
+            || !entry
+                .name()
+                .is_ok_and(|n| n.to_ascii_lowercase().ends_with(".osu"))
+        {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry
+            .by_ref()
+            .take(16 << 20)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        md5s.push(md5_hex(&bytes));
+    }
+    Ok(md5s)
 }
 
 /// Whether a difficulty here (beatmap ID, [Version], the `.osu`'s MD5) is one of the set's own,
@@ -1070,14 +1213,18 @@ fn mirror_sources(id: u32) -> Vec<(&'static str, String)> {
 }
 
 /// Downloads the archive from the first of `sources` (name, URL) that has it and unpacks it
-/// into `songs`/`name`.
-fn fetch(
+/// into `songs`/`name`. With a `check`, an archive whose difficulties aren't osu!'s current ones
+/// (a mirror can keep serving a set as it was before an update: empty placeholder difficulties,
+/// old files) is set aside and the next mirror asked; when none has the current version, the
+/// archive with the most of osu!'s files is unpacked. Each mirror is asked once for that.
+pub(crate) fn fetch(
     sources: &[(&str, String)],
     name: &str,
     songs: &Path,
     done: &AtomicU64,
     total: &AtomicU64,
     cancel: &AtomicBool,
+    mut check: Option<&mut Check>,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(songs).map_err(|e| format!("{}: {e}", songs.display()))?;
     let dest = songs.join(name);
@@ -1085,6 +1232,13 @@ fn fetch(
     let mut errors: Vec<Option<String>> = vec![None; sources.len()];
     // A mirror that doesn't have the set (404) isn't asked again.
     let mut gone = vec![false; sources.len()];
+    // Archives of an older version of the set, kept in case no mirror has the current one.
+    let mut older: Vec<PathBuf> = Vec::new();
+    let forget = |older: &[PathBuf]| {
+        for p in older {
+            let _ = std::fs::remove_file(p);
+        }
+    };
     for round in 0..ROUNDS {
         if gone.iter().all(|&g| g) {
             break;
@@ -1104,14 +1258,31 @@ fn fetch(
             total.store(0, Ordering::Relaxed);
             if cancel.load(Ordering::Relaxed) {
                 let _ = std::fs::remove_file(&archive);
+                forget(&older);
                 return Err(CANCELLED.into());
             }
             match download_to(url, &archive, done, total, cancel) {
                 Ok(()) => {
+                    let current = match (check.as_deref_mut(), archive_md5s(&archive)) {
+                        (Some(check), Ok(md5s)) => check.current(&md5s),
+                        // Nothing to check against, or not an archive (unpacking says why).
+                        _ => true,
+                    };
+                    if !current {
+                        let kept = songs.join(format!("{name}.osz.{k}"));
+                        if std::fs::rename(&archive, &kept).is_ok() {
+                            older.push(kept);
+                        }
+                        (errors[k], gone[k]) = (Some("an older version of the set".into()), true);
+                        continue;
+                    }
                     let result = extract(&archive, &dest);
                     let _ = std::fs::remove_file(&archive);
                     match result {
-                        Ok(()) => return Ok(dest),
+                        Ok(()) => {
+                            forget(&older);
+                            return Ok(dest);
+                        }
                         Err(e) => (errors[k], gone[k]) = (Some(e), true),
                     }
                 }
@@ -1123,8 +1294,34 @@ fn fetch(
         }
     }
     if cancel.load(Ordering::Relaxed) {
+        forget(&older);
         return Err(CANCELLED.into());
     }
+    // No mirror has the current version: the closest of the older ones beats none.
+    if let Some(check) = check
+        && !older.is_empty()
+    {
+        let best = older
+            .iter()
+            .enumerate()
+            .max_by_key(|(i, p)| {
+                let matching = archive_md5s(p)
+                    .ok()
+                    .and_then(|md5s| check.matching(&md5s))
+                    .unwrap_or(0);
+                // On a tie the mirror asked first.
+                (matching, std::cmp::Reverse(*i))
+            })
+            .map(|(_, p)| p.clone());
+        let result = best
+            .map(|p| extract(&p, &dest))
+            .unwrap_or_else(|| Err("no archive".into()));
+        forget(&older);
+        if result.is_ok() {
+            return Ok(dest);
+        }
+    }
+    forget(&older);
     Err(sources
         .iter()
         .zip(errors)
@@ -2056,7 +2253,7 @@ mod tests {
         // Nothing listens there: asking would fail with another error, not "cancelled".
         let sources = [("nowhere", "http://127.0.0.1:9/set".to_string())];
         let started = std::time::Instant::now();
-        let got = fetch(&sources, "1 A - T", &songs, &done, &total, &cancel);
+        let got = fetch(&sources, "1 A - T", &songs, &done, &total, &cancel, None);
         assert_eq!(got, Err(CANCELLED.to_string()));
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(!songs.join("1 A - T").exists());
