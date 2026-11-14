@@ -28,7 +28,7 @@ fn widths() -> &'static [f32] {
     }
 }
 
-fn entry(set: usize, diff: usize, long: bool) -> Entry {
+pub(crate) fn entry(set: usize, diff: usize, long: bool) -> Entry {
     let meta = beatmap::Meta {
         title: if long {
             format!("Extremely Long Song Title That Goes On And On (Extended Mix Ver.) {set}")

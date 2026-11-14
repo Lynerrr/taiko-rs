@@ -4451,8 +4451,7 @@ impl State {
         self.request_skin(false);
     }
 
-    /// The folder a `.tko` map's pictures come from: the map played or edited.
-    // ponytail: multiplayer and spectating draw a map's text but not its pictures.
+    /// The folder a `.tko` map's pictures come from: the map played, watched or edited.
     fn picture_dir(&self) -> Option<PathBuf> {
         if let Some(e) = self.scene.screen_as::<MapEditor>() {
             return e.view.ed.path.parent().map(Path::to_path_buf);
@@ -4469,6 +4468,10 @@ impl State {
                     .map(Path::to_path_buf);
             }
             Scene::Other(s) if s.song_play().is_some() => s.song_play()?.0,
+            // A match, played or spectated: the room's map.
+            Scene::Other(s) if s.in_match() || s.spectating() => self.mp.as_ref()?.map_entry?,
+            // A friend's play: the library's copy of the map.
+            Scene::Other(s) if s.watching() => s.watched_map()?,
             Scene::Other(s) if s.settings() => match self.behind.as_deref() {
                 Some(b) if b.is_play() => b.song_play()?.0,
                 _ => return None,
