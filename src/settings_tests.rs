@@ -1527,6 +1527,8 @@ fn a_custom_maps_status_is_the_websites() {
 fn a_custom_map_is_not_checked_against_the_osu_set_it_was_made_from() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // CI builds (GITHUB_SHA set) can open on another screen first.
+    s.scene = SongSelect::scene();
     s.cfg.check_updates = true;
     let i = s.select.selected().unwrap();
     // A custom map made from an osu! set keeps its BeatmapSetID (website custom set 12).
@@ -1536,13 +1538,7 @@ fn a_custom_map_is_not_checked_against_the_osu_set_it_was_made_from() {
     assert_eq!(
         s.set_check_due.map(|d| d.0),
         Some(622136),
-        "an osu! set is checked (select {}, selected {:?} of {i}, set {:?}, checking {}, updates {:?}, custom {:?})",
-        s.scene.is_select(),
-        s.select.selected(),
-        s.library[i].set_id(),
-        s.set_check.is_some(),
-        s.select.updates.keys().collect::<Vec<_>>(),
-        s.select.custom_folder,
+        "an osu! set is checked"
     );
     s.set_check_due = None;
     let folder = s.library[i].path.parent().unwrap().to_path_buf();
