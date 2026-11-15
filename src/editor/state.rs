@@ -228,6 +228,47 @@ impl Editor {
         Ok(())
     }
 
+    // ---- the preview point ----
+
+    /// Where song select plays the song from (`[General] PreviewTime`, ms); `None` when it isn't
+    /// set (osu! writes -1, and the game picks a point itself).
+    pub fn preview_time(&self) -> Option<f64> {
+        self.chart
+            .get_key("General", "PreviewTime")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|t| t.is_finite() && *t >= 0.0)
+    }
+
+    /// Sets the preview point to `t` (a whole ms, as osu! writes it), or clears it (`None`):
+    /// one undo step. False when nothing changed.
+    pub fn set_preview(&mut self, t: Option<f64>) -> bool {
+        let after = match t {
+            Some(t) if t.is_finite() => (t.max(0.0).round() as i64).to_string(),
+            Some(_) => return false,
+            None => "-1".to_string(),
+        };
+        let before = self.chart.get_key("General", "PreviewTime");
+        let now = before
+            .as_deref()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .map(|v| if v < 0.0 { -1 } else { v.round() as i64 });
+        if now.map(|n| n.to_string()).as_deref() == Some(after.as_str())
+            || (now.is_none() && after == "-1")
+        {
+            return false;
+        }
+        self.history.run(
+            &mut self.chart,
+            Command::SetKey {
+                section: "General",
+                key: "PreviewTime",
+                before,
+                after: Some(after),
+            },
+        );
+        true
+    }
+
     // ---- the background picture ----
 
     /// The background picture's file name, if the map has one.

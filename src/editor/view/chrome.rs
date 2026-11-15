@@ -698,9 +698,9 @@ impl View {
         let end = self.end_ms().max(1.0);
         // Under the tips of the others' marks (see `draw_collab_overview`), which come later.
         let tip = if self.collab.is_some() {
-            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks. In a mapping session the coloured lines are the others (hover one to see who) and the strip along the top shows the parts."
+            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks, green is the preview point. In a mapping session the coloured lines are the others (hover one to see who) and the strip along the top shows the parts."
         } else {
-            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks."
+            "The whole song\nClick or drag to jump. Brown bars are the notes, orange is kiai, blue marks are bookmarks, green is the preview point."
         };
         self.tips.push((self.layout.overview, tip.to_string()));
         c.rect(x, y, w, h, rgba(0x0e0e14, 1.0));
@@ -750,6 +750,9 @@ impl View {
         }
         for b in &self.ed.bookmarks {
             c.rect(px(*b) - 0.5, y, 1.5, h, rgba(0x4f9dff, 1.0));
+        }
+        if let Some(p) = self.ed.preview_time() {
+            c.rect(px(p) - 0.5, y, 1.5, h, rgba(super::PREVIEW_COL, 1.0));
         }
         if let Some(g) = self.ed.gimmick() {
             for m in &g.marks {

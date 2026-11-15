@@ -434,6 +434,15 @@ impl View {
                     None => self.status = "no more bookmarks that way".into(),
                 }
             }
+            Cmd::PreviewHere => self.set_preview_here(t),
+            Cmd::PreviewJump => match self.ed.preview_time() {
+                Some(p) => {
+                    self.stop(audio);
+                    self.set_time(p);
+                }
+                None => self.status = "no preview point set".into(),
+            },
+            Cmd::PreviewClear => self.clear_preview(),
             Cmd::EffectMark => {
                 self.status = if !self.ed.is_tko() {
                     "Effect marks live in a .tko: make one on the Effects page first".into()
