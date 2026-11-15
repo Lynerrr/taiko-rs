@@ -58,8 +58,14 @@ impl State {
                 }
             }
             Out::Create(plan) => {
-                let _ = std::fs::create_dir_all(&self.songs_dir);
-                match editor::new_map::create(&plan, &self.songs_dir) {
+                // A map made here is taiko.rs's, so it goes into taiko.rs's own folder.
+                let _ = std::fs::create_dir_all(&self.custom_dir);
+                let made = editor::new_map::create(&plan, &self.custom_dir).inspect(|file| {
+                    if let Some(dir) = file.parent() {
+                        custom::mark_origin(dir, custom::Origin::Local);
+                    }
+                });
+                match made {
                     Ok(file) => match self.entry_for(&file) {
                         Some(entry) => {
                             self.toast(format!("made {}", plan.title));

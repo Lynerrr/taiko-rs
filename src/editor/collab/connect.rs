@@ -242,8 +242,10 @@ pub struct Ready {
 }
 
 pub struct Connecting {
-    /// Where a joining game puts the set (its Songs folder).
+    /// Where a joining game puts the set (taiko.rs's own custom maps folder).
     songs: PathBuf,
+    /// Where an older game put it (osu!'s Songs folder): a copy there is taken up again.
+    legacy: Option<PathBuf>,
     host: Option<HostSet>,
     dir: Option<PathBuf>,
     /// The difficulty to open if the session has it: the one we were on when we left.
@@ -283,10 +285,17 @@ impl Connecting {
         c
     }
 
+    /// A copy of the set an older game made in `songs` (osu!'s Songs folder) is found there.
+    pub fn found_in(mut self, songs: PathBuf) -> Connecting {
+        self.legacy = Some(songs);
+        self
+    }
+
     /// Anyone else, joining: the set goes in a folder in `songs` (or is found there).
     pub fn guest(songs: PathBuf) -> Connecting {
         Connecting {
             songs,
+            legacy: None,
             host: None,
             dir: None,
             prefer: None,
@@ -378,11 +387,19 @@ impl Connecting {
                 };
                 self.state = Some(state);
                 if first && self.host.is_none() {
+                    let name = crate::download::safe_folder_name(&folder);
                     let dir = match &self.dir {
                         Some(dir) => dir.clone(),
-                        None => self.songs.join(crate::download::safe_folder_name(&folder)),
+                        None => match self.legacy.as_ref().map(|l| l.join(&name)) {
+                            Some(old) if old.is_dir() => old,
+                            _ => self.songs.join(&name),
+                        },
                     };
+                    let fresh = !dir.exists();
                     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                    if fresh && dir.parent() == Some(self.songs.as_path()) {
+                        crate::custom::mark_origin(&dir, crate::custom::Origin::Collab);
+                    }
                     for a in assets {
                         let path = local_path(&dir, &a.name)
                             .ok_or_else(|| format!("a file name outside the set: {}", a.name))?;
@@ -720,6 +737,32 @@ mod tests {
         assert_eq!((r.session, r.epoch, r.me, r.open, r.seq), (9, 1, 1, 0, 0));
         assert_eq!(r.path, dir.join("Artist - Song (host) [Oni].osu"));
         assert!(c.ready().is_none(), "once");
+    }
+
+    #[test]
+    fn a_guest_copy_goes_to_the_custom_folder_unless_an_older_one_is_in_songs() {
+        use crate::custom::{Manifest, Origin, SIDECAR};
+        let (dir, _music) = host_dir();
+        let d = HostSet::read(&dir).unwrap().descriptor();
+        let (custom, songs) = (temp("guest-custom"), temp("guest-songs"));
+        let mut c = Connecting::guest(custom.clone()).found_in(songs.clone());
+        c.take(joined(2, 2, Vec::new())).unwrap();
+        c.take(down(MapDown::State(state(&d)))).unwrap();
+        let folder = custom.join("1 Artist - Song");
+        assert_eq!(c.dir.as_deref(), Some(folder.as_path()));
+        assert_eq!(
+            Manifest::read(&folder).and_then(|m| m.origin),
+            Some(Origin::Collab)
+        );
+        assert!(!songs.join("1 Artist - Song").exists());
+        // A copy an older game made in osu!'s Songs folder is taken up again, as it is.
+        let old = songs.join("1 Artist - Song");
+        std::fs::create_dir_all(&old).unwrap();
+        let mut again = Connecting::guest(custom).found_in(songs);
+        again.take(joined(3, 2, Vec::new())).unwrap();
+        again.take(down(MapDown::State(state(&d)))).unwrap();
+        assert_eq!(again.dir.as_deref(), Some(old.as_path()));
+        assert!(!old.join(SIDECAR).exists());
     }
 
     #[test]
