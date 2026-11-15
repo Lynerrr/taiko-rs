@@ -162,7 +162,7 @@ impl Screen for Lobby {
                 state.cfg.save();
                 let rate = state.cfg.mods.speed(state.cfg.rate, true).0;
                 if let Some(mut m) = s.map.clone() {
-                    let mods = state.cfg.mods.lobby(m.defense);
+                    let mods = state.cfg.mods.lobby(m.defense, m.host_mods);
                     m.rate = rate;
                     m.mods = mods.list();
                     (m.multiverse, m.shapeshift) = mod_settings(mods);
@@ -231,12 +231,51 @@ impl Screen for Lobby {
                         return;
                     }
                 };
-                // Defense takes the host's mods for everyone; an ordinary match, the speed's.
-                let mods = state.cfg.mods.lobby(m.defense);
+                // Defense takes the host's mods for everyone; an ordinary match, the speed's
+                // (or all of them, when the host took them).
+                let mods = state.cfg.mods.lobby(m.defense, m.host_mods);
                 m.mods = mods.list();
                 (m.multiverse, m.shapeshift) = mod_settings(mods);
                 s.client.send(net::ClientMsg::SelectMap(m));
                 state.toast(text);
+            }
+            // F: the host takes the mods for everyone, or gives them back (each player's own,
+            // starting from the ones the host had).
+            KeyCode::KeyF if s.is_host() && !s.in_match => {
+                let Some(mut m) = s.map.clone() else {
+                    state.toast("pick a map first (M)".into());
+                    return;
+                };
+                if m.defense.is_some() {
+                    state.toast(
+                        tr!(
+                            "in Defense the host always picks the mods",
+                            "ディフェンスでは常にホストがMODを選ぶ",
+                            "в Обороне моды всегда выбирает хост"
+                        )
+                        .into(),
+                    );
+                    return;
+                }
+                m.host_mods = !m.host_mods;
+                let mods = state.cfg.mods.lobby(m.defense, m.host_mods);
+                m.mods = mods.list();
+                (m.multiverse, m.shapeshift) = mod_settings(mods);
+                let text = if m.host_mods {
+                    tr!(
+                        "your mods are everyone's now (F: free mods)",
+                        "全員があなたのMODで遊ぶ (F: フリーMOD)",
+                        "теперь твои моды у всех (F: свободные моды)"
+                    )
+                } else {
+                    tr!(
+                        "free mods: everyone picks their own (F: yours for all)",
+                        "フリーMOD: 各自で選ぶ (F: 全員にあなたのMOD)",
+                        "свободные моды: каждый выбирает сам (F: твои у всех)"
+                    )
+                };
+                s.client.send(net::ClientMsg::SelectMap(m));
+                state.toast(text.into());
             }
             // The room: K types a new password, L steps how many players it takes.
             KeyCode::KeyK if s.is_host() && !s.in_match => s.edit_password = Some(String::new()),

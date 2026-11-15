@@ -39,6 +39,7 @@ fn map_info() -> net::MapInfo {
             hp: 5.0,
             creator: "mapper".into(),
         })),
+        host_mods: true,
     }
 }
 
@@ -1107,6 +1108,7 @@ fn lobby_map(s: &State) -> net::MapInfo {
         seed: None,
         defense: None,
         stats: None,
+        host_mods: false,
     }
 }
 
@@ -2276,4 +2278,95 @@ fn the_newest_description_of_a_set_is_the_one_believed() {
         crate::download::md5_hex(&oni),
         "the newest, when all are"
     );
+}
+
+/// The host takes the mods for everyone (F in the lobby): a guest's mod select shows the
+/// host's, the guest can't switch them, the room hears none of the guest's own and the match
+/// plays the host's. When the host gives them back, the ones the host had become the guest's
+/// own instead of vanishing. OD Override is a mod of a player's own like the rest (a play with
+/// it just isn't saved).
+#[test]
+fn the_host_picks_the_mods_for_everyone_and_gives_them_back() {
+    use crate::mods::{Mod, Mods};
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("mp-host-mods", maps::basics(), &room);
+    let mut log = String::new();
+    s.cfg.mods = Mods::parse("HD");
+    let mut map = lobby_map(&s);
+    map.host_mods = true;
+    map.mods = vec!["DT".into(), "HR".into(), "FL".into()];
+    room.send(&room_msg(Some(map.clone()), false));
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref()
+            .and_then(|m| m.map.as_ref())
+            .is_some_and(|m| m.host_mods)
+    }));
+    let _ = writeln!(log, "host's mods: shown {}", s.shown_mods().label());
+    s.toggle_mod(Mod::Easy);
+    let _ = writeln!(
+        log,
+        "guest switches EZ: own {} ({})",
+        s.cfg.mods.label(),
+        s.toast.as_ref().map_or("", |t| t.text.as_str())
+    );
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    assert!(
+        !room
+            .received()
+            .iter()
+            .any(|m| kind(m) == "Mods" && m.contains("HD")),
+        "the guest's own HD isn't told to the room"
+    );
+    let _ = writeln!(log, "the room hears none of the guest's own");
+    // The match plays the host's.
+    room.send(&ServerMsg::Prepare(map.clone()));
+    assert!(pump(&mut s, &mut now, &room, |m| matches!(
+        m,
+        ClientMsg::Loaded(true)
+    )));
+    room.send(&ServerMsg::Start {
+        at: room.clock() + 200.0,
+    });
+    assert!(wait_for(&mut s, &mut now, |s| harness::game(s).is_some()));
+    let _ = writeln!(
+        log,
+        "match plays: {}",
+        harness::game(&s).unwrap().mods().label()
+    );
+    // Back in the lobby, the host gives the mods back: the host's others are now ours.
+    s.scene = crate::screens::lobby::Lobby::scene();
+    s.play = None;
+    map.host_mods = false;
+    map.mods = vec!["DT".into()];
+    room.send(&room_msg(Some(map.clone()), false));
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.mp.as_ref()
+            .and_then(|m| m.map.as_ref())
+            .is_some_and(|m| !m.host_mods)
+    }));
+    let _ = writeln!(
+        log,
+        "free again: own {}, shown {}",
+        s.cfg.mods.label(),
+        s.shown_mods().label()
+    );
+    assert!(pump(&mut s, &mut now, &room, |m| matches!(
+        m,
+        ClientMsg::Mods(list) if list == &["HR", "FL"]
+    )));
+    let _ = writeln!(log, "the room hears them as the guest's own");
+    // OD Override goes with them, and to the match.
+    s.toggle_mod(Mod::OdOverride);
+    assert!(pump(&mut s, &mut now, &room, |m| matches!(
+        m,
+        ClientMsg::Mods(list) if list.iter().any(|a| a == "OV")
+    )));
+    let _ = writeln!(
+        log,
+        "with OV: shown {}, unranked {}",
+        s.shown_mods().label(),
+        s.shown_mods().unranked()
+    );
+    assert_snapshot("network-host-mods", &log);
 }

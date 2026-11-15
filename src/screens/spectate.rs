@@ -205,7 +205,7 @@ impl Screen for Spectate {
                     .and_then(|s| s.players.iter().find(|p| p.id == *id))
                     .map(|p| Mods::from_list(&p.mods).free())
                     .unwrap_or(Mods::NONE);
-                let mut mods = if v.map.defense.is_some() {
+                let mut mods = if crate::multiplayer::host_picks_mods(&v.map) {
                     v.mods
                 } else {
                     v.mods.shared().plus(own)

@@ -92,6 +92,11 @@ pub struct MapInfo {
     /// them too. None: an older host, or one still working them out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<Box<MapStats>>,
+    /// The host picks the mods for everyone: `mods` are all of the host's, and the players'
+    /// own don't play. False: free mods (each player's own, the speed the host's). Servers from
+    /// before drop it, and their rooms stay on free mods.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_mods: bool,
 }
 
 /// A lobby map's numbers, as the host's game has them: taiko stars and length and BPM at 1.0x
@@ -2636,6 +2641,7 @@ mod tests {
             defense: None,
 
             stats: None,
+            host_mods: false,
         }));
         thread::sleep(Duration::from_millis(100));
         // Any state change makes the room broadcast again, so we can inspect it.
@@ -2665,6 +2671,7 @@ mod tests {
             defense: None,
 
             stats: None,
+            host_mods: false,
         };
         a.send(ClientMsg::SelectMap(map.clone()));
         thread::sleep(Duration::from_millis(100));
@@ -2743,6 +2750,7 @@ mod tests {
                 ..Defense::DEFAULT
             }),
             stats: None,
+            host_mods: false,
         };
         a.send(ClientMsg::SelectMap(map));
         thread::sleep(Duration::from_millis(100));
@@ -2848,6 +2856,7 @@ mod tests {
             defense: None,
 
             stats: None,
+            host_mods: false,
         };
         a.send(ClientMsg::SelectMap(map));
         thread::sleep(Duration::from_millis(100));
