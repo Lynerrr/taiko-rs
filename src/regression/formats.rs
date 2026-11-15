@@ -366,6 +366,37 @@ fn the_config_file_reads_back_what_was_saved() {
     assert_eq!(back.idle_minutes, 5);
 }
 
+#[test]
+fn a_config_on_the_old_forwarder_moves_to_the_server_itself() {
+    // Every config saved before the move names the forwarder box: it reads back as the server
+    // it forwarded to, logged in as before, and is saved that way.
+    for old in [
+        "jashincraft.space:7800",
+        "jashincraft.space:7801",
+        "tls://jashincraft.space:7801",
+    ] {
+        let cfg = Config::parse_text(&format!(
+            "online_server = {old}\nonline_user = tester\nonline_token = abc\n"
+        ));
+        assert_eq!(cfg.online_server, crate::online::DEFAULT_SERVER, "{old}");
+        assert_eq!((&*cfg.online_user, &*cfg.online_token), ("tester", "abc"));
+        assert!(
+            cfg.to_text()
+                .contains("online_server = tls://130.78.31.127:17801\n"),
+            "{old} is saved moved"
+        );
+    }
+    // A server of your own stays where it is.
+    for own in [
+        "192.168.1.5:7800",
+        "example.org:7800",
+        "tls://game.example:17801",
+    ] {
+        let cfg = Config::parse_text(&format!("online_server = {own}\n"));
+        assert_eq!(cfg.online_server, own);
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn the_default_config_file_stays_the_same() {

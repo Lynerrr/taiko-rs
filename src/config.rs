@@ -1266,7 +1266,9 @@ impl Config {
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
                 "mp_address" => cfg.mp_address = v.to_string(),
-                "online_server" if !v.is_empty() => cfg.online_server = v.to_string(),
+                "online_server" if !v.is_empty() => {
+                    cfg.online_server = crate::online::moved_off_the_forwarder(v)
+                }
                 "online_user" => cfg.online_user = v.to_string(),
                 "online_token" => cfg.online_token = v.to_string(),
                 "terms_version" => cfg.terms_version = v.parse().unwrap_or(0),
