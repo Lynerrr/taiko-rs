@@ -362,7 +362,6 @@ struct EpicFx {
     burst: epic::Burst,
 }
 
-/// Custom sets known: map folder -> set number, and the numbers the server has approved.
 /// The custom maps' folders in the library (their set numbers), the sets approved, and the
 /// sets a folder has an older version of (None: the website couldn't be asked).
 type CustomKnown = (
