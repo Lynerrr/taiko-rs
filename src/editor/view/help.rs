@@ -266,6 +266,10 @@ impl View {
                 self.modal_from = self.buttons.len();
                 self.draw_resnap(c);
             }
+            Some(Modal::Background) => {
+                self.modal_from = self.buttons.len();
+                self.draw_background_question(c);
+            }
             None => {}
         }
         if self.tour.is_some() {
