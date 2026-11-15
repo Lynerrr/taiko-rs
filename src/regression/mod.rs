@@ -10,6 +10,7 @@ pub mod snapshot;
 
 mod clicks;
 mod collections;
+mod custom_maps;
 mod drawing;
 mod epic;
 mod flows;
