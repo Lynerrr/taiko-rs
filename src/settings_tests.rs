@@ -324,6 +324,7 @@ fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
         maps: Vec::new(),
         update: false,
         cancel: Arc::default(),
+        old_version: Arc::default(),
     });
     let mut v = WatchView::new("bob".into());
     v.play = Some(play);
@@ -339,6 +340,68 @@ fn watching_a_play_of_a_map_being_downloaded_shows_how_far_along_it_is() {
         "{:?}",
         c.texts.iter().map(|t| &t.1).collect::<Vec<_>>()
     );
+}
+
+/// What song select says once an update of set 7 ends with the set unpacked in its folder, the
+/// mirrors having had only an older version (`old`) or not.
+fn after_an_update(old: bool) -> (Option<ui::SetUpdate>, String) {
+    let dir = std::env::temp_dir().join(format!(
+        "taiko-rs-update-status-{old}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("Band - Song (me) [Oni].osu"),
+        "osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:Song\nArtist:Band\nVersion:Oni\nBeatmapID:1\nBeatmapSetID:7\n\n[HitObjects]\n256,192,1000,1,0\n",
+    )
+    .unwrap();
+    let mut s = layout_tests::state();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(Ok(dir.clone())).unwrap();
+    s.select.updates.insert(7, ui::SetUpdate::Updating);
+    s.downloads.push(download::Job {
+        set: download::SetInfo {
+            id: 7,
+            artist: "Band".into(),
+            title: "Song".into(),
+            creator: String::new(),
+            status: String::new(),
+            diffs: Vec::new(),
+            play_count: 0,
+            favourite_count: 0,
+            rating: 0.0,
+            ranked_date: String::new(),
+            custom: None,
+        },
+        done: Arc::default(),
+        total: Arc::default(),
+        rx,
+        maps: Vec::new(),
+        update: true,
+        cancel: Arc::default(),
+        old_version: Arc::new(AtomicBool::new(old)),
+    });
+    s.poll_downloads();
+    let _ = std::fs::remove_dir_all(&dir);
+    (
+        s.select.updates.get(&7).copied(),
+        s.toast.map(|t| t.text).unwrap_or_default(),
+    )
+}
+
+#[test]
+fn an_update_that_could_only_get_an_older_version_isnt_called_done() {
+    // Song select would offer it again on the next launch: it stays on offer and says why.
+    let (state, toast) = after_an_update(true);
+    assert_eq!(state, Some(ui::SetUpdate::Available));
+    assert_eq!(
+        toast,
+        "Band - Song: the mirrors only have an older version for now, try again later"
+    );
+    let (state, toast) = after_an_update(false);
+    assert_eq!(state, Some(ui::SetUpdate::UpToDate));
+    assert_eq!(toast, "updated Band - Song");
 }
 
 #[test]

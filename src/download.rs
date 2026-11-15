@@ -792,6 +792,9 @@ pub struct Job {
     pub update: bool,
     /// Set to stop the download: it then ends with [`CANCELLED`].
     pub cancel: Arc<AtomicBool>,
+    /// Set when what was unpacked is an older version of the set than osu! has: no mirror had
+    /// the current one, and osu! didn't hand over its changed files either.
+    pub old_version: Arc<AtomicBool>,
 }
 
 /// What a download stopped by [`Job::cancel`] ends with.
@@ -825,6 +828,8 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
     };
     // An osu! set is checked against osu!'s MD5s; a taiko.rs custom set has none.
     let mut check = set.custom.is_none().then(|| Check::set(set.id));
+    let old_version = Arc::new(AtomicBool::new(false));
+    let old = old_version.clone();
     std::thread::spawn(move || {
         let result = match cached.flatten() {
             Some(archive) => std::fs::create_dir_all(&songs)
@@ -835,6 +840,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
                 }),
             None => fetch(&sources, &name, &songs, &d, &t, &stop, check.as_mut()),
         };
+        old.store(check.is_some_and(|c| c.older), Ordering::Relaxed);
         let _ = tx.send(result);
     });
     Job {
@@ -845,6 +851,7 @@ pub fn start(set: SetInfo, songs: PathBuf) -> Job {
         maps: Vec::new(),
         update: false,
         cancel,
+        old_version,
     }
 }
 
@@ -867,6 +874,8 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
     let (d, t) = (done.clone(), total.clone());
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
+    let old_version = Arc::new(AtomicBool::new(false));
+    let old = old_version.clone();
     let id = set.id;
     std::thread::spawn(move || {
         let result = (|| {
@@ -877,16 +886,21 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
                 .to_string_lossy()
                 .into_owned();
             let online = set_checksums(id)?;
-            let replaced: Vec<PathBuf> = here
+            let own: Vec<LocalDiff> = here
                 .into_iter()
                 .filter(|m| {
                     std::fs::read(&m.path)
                         .is_ok_and(|bytes| is_own(m.id, &m.version, &md5_hex(&bytes), &online))
                 })
-                .map(|m| m.path)
                 .collect();
+            // Like osu! itself: only the files that changed, and no mirror asked at all.
+            match update_from_osu(&folder, &own, &online, OSU_FILES) {
+                Ok(()) => return Ok(folder.clone()),
+                Err(e) => eprintln!("set {id}: osu!'s own files didn't do ({e}), downloading it"),
+            }
+            let replaced: Vec<PathBuf> = own.into_iter().map(|m| m.path).collect();
             let mut check = Check::new(json_sources(id), Some(online));
-            replacing(&replaced, || {
+            let result = replacing(&replaced, || {
                 fetch(
                     &mirror_sources(id),
                     &name,
@@ -896,7 +910,9 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
                     &stop,
                     Some(&mut check),
                 )
-            })
+            });
+            old.store(check.older, Ordering::Relaxed);
+            result
         })();
         let _ = tx.send(result);
     });
@@ -908,6 +924,7 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
         maps: Vec::new(),
         update: true,
         cancel,
+        old_version,
     }
 }
 
@@ -1046,6 +1063,10 @@ pub(crate) struct Check {
     online: Option<OnlineSet>,
     asked: bool,
     freshest: bool,
+    /// Where osu!'s own `.osu` files are asked for (see [`OSU_FILES`]).
+    files: String,
+    /// What was unpacked is an older version of the set than osu! has (see [`fetch`]).
+    pub(crate) older: bool,
 }
 
 impl Check {
@@ -1057,7 +1078,16 @@ impl Check {
             online: known,
             asked,
             freshest: false,
+            files: OSU_FILES.to_string(),
+            older: false,
         }
+    }
+
+    /// Asks `base` for osu!'s own files instead of osu! (tests).
+    #[cfg(test)]
+    pub(crate) fn with_osu_files(mut self, base: impl Into<String>) -> Self {
+        self.files = base.into();
+        self
     }
 
     /// For osu! set `id`, from the mirrors.
@@ -1100,6 +1130,293 @@ impl Check {
         self.freshen();
         self.matching(md5s).is_none_or(|n| n == md5s.len())
     }
+}
+
+impl Check {
+    /// What makes an older archive of the set current (see [`Patch`]): osu!'s own files for the
+    /// difficulties it changed or added since, fetched from osu! (see [`osus_files`]).
+    fn patch(&mut self, archive: &Path) -> Result<Patch, String> {
+        let base = self.files.clone();
+        let online = self.online().ok_or("no description of the set")?.clone();
+        let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+        let mut zip =
+            zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
+        // Every file of the archive (see `file_key`), and each `.osu`: name, key, MD5, header.
+        let mut names = std::collections::HashSet::new();
+        let mut osus: Vec<(String, String, String, crate::beatmap::Meta)> = Vec::new();
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+            let Some(path) = entry.enclosed_name().filter(|_| entry.is_file()) else {
+                continue;
+            };
+            let key = file_key(&path.to_string_lossy());
+            if key.ends_with(".osu") {
+                if path.parent().is_some_and(|p| !p.as_os_str().is_empty()) {
+                    return Err("difficulties in a subfolder".into());
+                }
+                let mut bytes = Vec::new();
+                entry
+                    .by_ref()
+                    .take(16 << 20)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| e.to_string())?;
+                let meta = crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes));
+                let name = path.to_string_lossy().into_owned();
+                osus.push((name, key.clone(), md5_hex(&bytes), meta));
+            }
+            names.insert(key);
+        }
+        let have = osus.iter().map(|(_, _, md5, _)| md5.clone()).collect();
+        let fetched = osus_files(&online, &have, &|f| names.contains(f), &base)?;
+        let mut patch = Patch::default();
+        for (id, bytes) in fetched {
+            // The archive's old version of that difficulty makes way for it, under its name.
+            // Its [Version] as osu!'s file has it (a mirror's description can word it otherwise).
+            let version = crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes)).version;
+            let old = osus.iter().find(|(_, key, md5, meta)| {
+                !is_osus(md5, &online)
+                    && !patch.skip.contains(key)
+                    // By ID; one osu! doesn't know (a difficulty uploaded again) by its name.
+                    && match meta.beatmap_id.filter(|b| online.contains_key(b)) {
+                        Some(b) => b == id,
+                        None => same_version(&version, &meta.version),
+                    }
+            });
+            let name = match old {
+                Some((name, key, ..)) => {
+                    patch.skip.insert(key.clone());
+                    name.clone()
+                }
+                None => {
+                    let name = osu_file_name(&bytes);
+                    if names.contains(&file_key(&name)) {
+                        return Err(format!("{name} is in the archive already"));
+                    }
+                    name
+                }
+            };
+            patch.files.push((name, bytes));
+        }
+        Ok(patch)
+    }
+}
+
+/// An older archive of a set made current: its `.osu` files to leave out (old versions of
+/// difficulties osu! has changed since, by [`file_key`]) and osu!'s own files to put in.
+#[derive(Default)]
+struct Patch {
+    skip: std::collections::HashSet<String>,
+    files: Vec<(String, Vec<u8>)>,
+}
+
+/// Where osu! hands out each difficulty's current `.osu` by beatmap ID, without a login: what
+/// osu! itself updates a set with. The mirrors can keep a set as it was for weeks after osu!
+/// changed it, and a new player downloading a lot hits the one that doesn't (catboy.best)
+/// limiting downloads.
+const OSU_FILES: &str = "https://osu.ppy.sh/osu/";
+
+/// With more difficulties to bring than this, the whole archive is the quicker way.
+const MAX_OSU_FILES: usize = 24;
+
+/// How the files of a set are compared: maps name theirs in any case and with either slash.
+fn file_key(path: &str) -> String {
+    path.trim()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_lowercase()
+}
+
+/// The files a difficulty needs next to it: its music and its background (see [`file_key`]).
+fn needed_files(meta: &crate::beatmap::Meta) -> Vec<String> {
+    let audio = meta.audio_file.trim();
+    let mut out = Vec::new();
+    if !audio.is_empty() && !audio.eq_ignore_ascii_case("virtual") {
+        out.push(file_key(audio));
+    }
+    out.extend(
+        meta.background
+            .as_deref()
+            .filter(|b| !b.trim().is_empty())
+            .map(file_key),
+    );
+    out
+}
+
+/// Whether two [Version]s name the same difficulty.
+fn same_version(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// The name osu! gives a difficulty's file: `Artist - Title (Creator) [Version].osu`.
+fn osu_file_name(bytes: &[u8]) -> String {
+    let m = crate::beatmap::read_meta(&String::from_utf8_lossy(bytes));
+    let name = format!("{} - {} ({}) [{}]", m.artist, m.title, m.creator, m.version);
+    format!("{}.osu", safe_folder_name(&name))
+}
+
+/// osu!'s current files for the difficulties of a set (`online`) that aren't among `have` (the
+/// MD5s of the `.osu` files at hand), fetched from osu! itself (`base` + beatmap ID), in beatmap
+/// ID order. An error when that can't be done: too many, osu! doesn't answer or answers with
+/// another version than the set's description, or a file needs music or a background that
+/// `present` (by [`file_key`]) says isn't there.
+fn osus_files(
+    online: &OnlineSet,
+    have: &std::collections::HashSet<String>,
+    present: &dyn Fn(&str) -> bool,
+    base: &str,
+) -> Result<Vec<(u32, Vec<u8>)>, String> {
+    let mut wanted: Vec<(u32, &OnlineDiff)> = online
+        .iter()
+        .filter(|(_, d)| !have.contains(&d.md5))
+        .map(|(id, d)| (*id, d))
+        .collect();
+    if wanted.is_empty() {
+        return Err("no difficulty to bring".into());
+    }
+    if wanted.len() > MAX_OSU_FILES {
+        return Err(format!("{} difficulties to bring", wanted.len()));
+    }
+    wanted.sort_by_key(|(id, _)| *id);
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(15)))
+        .build()
+        .into();
+    let mut out = Vec::new();
+    for (id, diff) in wanted {
+        let url = format!("{base}{id}");
+        crate::offline::url(&url)?;
+        let bytes = agent
+            .get(&url)
+            .header("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|e| format!("difficulty {id}: {e}"))?
+            .body_mut()
+            .with_config()
+            .limit(16 << 20)
+            .read_to_vec()
+            .map_err(|e| format!("difficulty {id}: {e}"))?;
+        // osu! answers a difficulty it doesn't have with an empty file.
+        if md5_hex(&bytes) != diff.md5 {
+            return Err(format!(
+                "difficulty {id}: osu! has another version than the description says"
+            ));
+        }
+        let meta = crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes));
+        if let Some(missing) = needed_files(&meta).into_iter().find(|f| !present(f)) {
+            return Err(format!("difficulty {id} needs {missing}, which isn't here"));
+        }
+        out.push((id, bytes));
+    }
+    Ok(out)
+}
+
+/// Every file in a set's folder, by [`file_key`] (relative to it).
+fn folder_files(folder: &Path) -> std::collections::HashSet<String> {
+    fn walk(dir: &Path, prefix: &str, depth: u32, out: &mut std::collections::HashSet<String>) {
+        let Ok(read) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in read.flatten() {
+            let name = format!("{prefix}{}", e.file_name().to_string_lossy());
+            match e.file_type() {
+                Ok(t) if t.is_dir() && depth > 0 => {
+                    walk(&e.path(), &format!("{name}/"), depth - 1, out)
+                }
+                Ok(t) if t.is_file() => {
+                    out.insert(file_key(&name));
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::HashSet::new();
+    walk(folder, "", 4, &mut out);
+    out
+}
+
+/// Brings set folder `folder` up to date the way osu! does, without an archive: osu!'s current
+/// files (see [`osus_files`]) for the difficulties it changed or added, when the music and
+/// pictures they need are in the folder already. `own`: the set's own difficulties here (see
+/// [`is_own`]); an old one makes way for its new version, under its name, and so does the old
+/// file of a difficulty osu! has under a new ID now (uploaded again: same name, an ID osu!
+/// doesn't know). Home-made difficulties and edited copies stay as they are. An error (why)
+/// leaves the folder untouched.
+pub(crate) fn update_from_osu(
+    folder: &Path,
+    own: &[LocalDiff],
+    online: &OnlineSet,
+    base: &str,
+) -> Result<(), String> {
+    let present = folder_files(folder);
+    let mut have = std::collections::HashSet::new();
+    let mut taken = std::collections::HashSet::new();
+    // Each `.osu` here that isn't osu!'s file: path, beatmap ID, [Version].
+    let mut not_osus: Vec<(PathBuf, Option<u32>, String)> = Vec::new();
+    for e in std::fs::read_dir(folder)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
+        let path = e.path();
+        if path
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("osu"))
+            && let Ok(bytes) = std::fs::read(&path)
+        {
+            let md5 = md5_hex(&bytes);
+            if !is_osus(&md5, online) {
+                let meta = crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes));
+                not_osus.push((path.clone(), meta.beatmap_id, meta.version));
+            }
+            have.insert(md5);
+            taken.insert(file_key(&e.file_name().to_string_lossy()));
+        }
+    }
+    let fetched = osus_files(online, &have, &|f| present.contains(f), base)?;
+    // Where each goes: over the old version of that difficulty, else a file of its own.
+    let mut old = Vec::new();
+    let mut writes = Vec::new();
+    for (id, bytes) in fetched {
+        // Its [Version] as osu!'s file has it (a mirror's description can word it otherwise:
+        // osu.direct puts "[4K] " before a mania difficulty's).
+        let version = crate::beatmap::read_meta(&String::from_utf8_lossy(&bytes)).version;
+        let stale = not_osus.iter().find(|(path, file_id, file_version)| {
+            !old.contains(path)
+                && (own.iter().any(|d| d.path == *path && d.id == Some(id))
+                    // An older version of that difficulty: same ID and name. A copy with a rate
+                    // baked in keeps the ID under another name, and stays.
+                    || same_version(&version, file_version)
+                        && file_id.is_some_and(|b| b == id || b > 0 && !online.contains_key(&b)))
+        });
+        let path = match stale {
+            Some((path, ..)) => {
+                old.push(path.clone());
+                path.clone()
+            }
+            None => {
+                let name = osu_file_name(&bytes);
+                if !taken.insert(file_key(&name)) {
+                    return Err(format!("{name} is in the folder already"));
+                }
+                folder.join(name)
+            }
+        };
+        writes.push((path, bytes));
+    }
+    let written = std::cell::RefCell::new(Vec::new());
+    let result = replacing(&old, || {
+        for (path, bytes) in &writes {
+            std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+            written.borrow_mut().push(path.clone());
+        }
+        Ok(())
+    });
+    if result.is_err() {
+        // The new files that were written before it went wrong (the old ones are back).
+        for p in written.borrow().iter().filter(|p| !old.contains(p)) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    result
 }
 
 /// The MD5 of each `.osu` in an archive.
@@ -1269,6 +1586,32 @@ pub(crate) fn fetch(
                         _ => true,
                     };
                     if !current {
+                        // The difficulties osu! changed since, from osu! itself: the music and
+                        // pictures are the same, and the next mirror is often as old (or
+                        // limiting downloads).
+                        if let Some(check) = check.as_deref_mut() {
+                            match check.patch(&archive).and_then(|patch| {
+                                let tmp = partial_of(&dest);
+                                let keep = |p: &Path| {
+                                    not_runnable(p)
+                                        && !(p.parent() == Some(tmp.as_path())
+                                            && p.file_name().is_some_and(|n| {
+                                                patch.skip.contains(&file_key(&n.to_string_lossy()))
+                                            }))
+                                };
+                                extract_adding(&archive, &dest, &keep, &patch.files)
+                            }) {
+                                Ok(()) => {
+                                    let _ = std::fs::remove_file(&archive);
+                                    forget(&older);
+                                    return Ok(dest);
+                                }
+                                Err(e) => eprintln!(
+                                    "{name}: {} has an old version, and osu!'s own files didn't do: {e}",
+                                    sources[k].0
+                                ),
+                            }
+                        }
                         let kept = songs.join(format!("{name}.osz.{k}"));
                         if std::fs::rename(&archive, &kept).is_ok() {
                             older.push(kept);
@@ -1318,6 +1661,8 @@ pub(crate) fn fetch(
             .unwrap_or_else(|| Err("no archive".into()));
         forget(&older);
         if result.is_ok() {
+            eprintln!("{name}: no mirror has the current version, an older one was unpacked");
+            check.older = true;
             return Ok(dest);
         }
     }
@@ -1656,7 +2001,7 @@ pub fn receive(
                 // In a folder of its own: what the host sent doesn't touch what's there. Only a
                 // set's kinds of file: the host is just another player.
                 let dest = free_folder(&songs, &name);
-                extract_keeping(&archive, &dest, is_set_file).map(|_| dest)
+                extract_keeping(&archive, &dest, &is_set_file).map(|_| dest)
             });
             let _ = std::fs::remove_file(&archive);
             result
@@ -1672,6 +2017,7 @@ pub fn receive(
             maps: Vec::new(),
             update: false,
             cancel: Arc::default(),
+            old_version: Arc::default(),
         },
         feed,
     )
@@ -1729,6 +2075,7 @@ pub fn import(
         maps,
         update: false,
         cancel: Arc::default(),
+        old_version: Arc::default(),
     }
 }
 
@@ -1775,11 +2122,11 @@ const MAX_ENTRIES: usize = 20_000;
 /// `to` fail it (zip-slip), links aren't made, and programs and shortcuts are left out
 /// ([`is_runnable`]).
 pub fn unpack(archive: &Path, to: &Path) -> Result<(), String> {
-    unpack_keeping(archive, to, not_runnable)
+    unpack_keeping(archive, to, &not_runnable)
 }
 
 /// [`unpack`] with only the files `keep` takes.
-fn unpack_keeping(archive: &Path, to: &Path, keep: fn(&Path) -> bool) -> Result<(), String> {
+fn unpack_keeping(archive: &Path, to: &Path, keep: &dyn Fn(&Path) -> bool) -> Result<(), String> {
     let _ = std::fs::remove_dir_all(to);
     let result = unpack_within(archive, to, MAX_UNPACKED, keep);
     if result.is_err() {
@@ -1792,7 +2139,7 @@ fn unpack_within(
     archive: &Path,
     to: &Path,
     limit: u64,
-    keep: fn(&Path) -> bool,
+    keep: &dyn Fn(&Path) -> bool,
 ) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("not a beatmap archive ({e})"))?;
@@ -1865,13 +2212,34 @@ pub fn archive_maps(archive: &Path) -> Result<Vec<(crate::beatmap::Meta, u64)>, 
 /// A set that is already there gets the archive's files on top: what else is in its folder (a
 /// difficulty of your own) stays.
 fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
-    extract_keeping(archive, dest, not_runnable)
+    extract_keeping(archive, dest, &not_runnable)
 }
 
 /// [`extract`] with only the files `keep` takes.
-fn extract_keeping(archive: &Path, dest: &Path, keep: fn(&Path) -> bool) -> Result<(), String> {
+fn extract_keeping(
+    archive: &Path,
+    dest: &Path,
+    keep: &dyn Fn(&Path) -> bool,
+) -> Result<(), String> {
+    extract_adding(archive, dest, keep, &[])
+}
+
+/// [`extract_keeping`], with files of its own (`add`: name, contents) put in the set's folder
+/// next to the archive's.
+fn extract_adding(
+    archive: &Path,
+    dest: &Path,
+    keep: &dyn Fn(&Path) -> bool,
+    add: &[(String, Vec<u8>)],
+) -> Result<(), String> {
     let tmp = partial_of(dest);
     unpack_keeping(archive, &tmp, keep)?;
+    for (name, bytes) in add {
+        if let Err(e) = std::fs::write(tmp.join(name), bytes) {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Err(format!("{name}: {e}"));
+        }
+    }
     if dest.is_dir() {
         merge(&tmp, dest).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_dir_all(&tmp);
@@ -2107,9 +2475,9 @@ mod tests {
             &[("a/map.osu", &[b'x'; 600]), ("b.bin", &[b'y'; 600])],
         );
         let to = dir.join("set");
-        assert!(unpack_within(&archive, &to, 1200, not_runnable).is_ok());
+        assert!(unpack_within(&archive, &to, 1200, &not_runnable).is_ok());
         assert_eq!(std::fs::read(to.join("a/map.osu")).unwrap().len(), 600);
-        assert!(unpack_within(&archive, &dir.join("over"), 1199, not_runnable).is_err());
+        assert!(unpack_within(&archive, &dir.join("over"), 1199, &not_runnable).is_err());
         assert!(unpack(&archive, &to).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2200,7 +2568,7 @@ mod tests {
             ],
         );
         let dest = dir.join("Songs").join("set");
-        extract_keeping(&archive, &dest, is_set_file).unwrap();
+        extract_keeping(&archive, &dest, &is_set_file).unwrap();
         assert!(dest.join("map [Oni].osu").is_file());
         assert!(dest.join("audio.MP3").is_file());
         assert!(dest.join("sb/star.png").is_file());
