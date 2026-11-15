@@ -11,6 +11,7 @@ pub mod snapshot;
 mod clicks;
 mod collections;
 mod drawing;
+mod epic;
 mod flows;
 mod formats;
 mod gameplay;

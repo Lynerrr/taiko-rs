@@ -67,6 +67,8 @@ pub enum Category {
     Custom,
     /// osu! sets loved on the taiko.rs server (they give pp there), from the mirrors.
     LovedHere,
+    /// Maps marked EPIC on the taiko.rs server: osu! sets from the mirrors, and custom sets.
+    Epic,
 }
 
 impl Category {
@@ -83,9 +85,10 @@ impl Category {
 
     /// The categories of taiko.rs's own maps: the website's custom sets, and the osu! sets
     /// loved on the server.
-    pub const OURS: [Category; 3] = [
+    pub const OURS: [Category; 4] = [
         Category::CustomApproved,
         Category::LovedHere,
+        Category::Epic,
         Category::Custom,
     ];
 
@@ -112,6 +115,7 @@ impl Category {
             Category::CustomApproved => "Custom approved",
             Category::Custom => "All custom",
             Category::LovedHere => "Loved here",
+            Category::Epic => "EPIC",
         }
     }
 
@@ -125,9 +129,11 @@ impl Category {
             Category::Pending => &[0],
             Category::Wip => &[-1],
             Category::Graveyard => &[-2],
-            Category::Any | Category::CustomApproved | Category::Custom | Category::LovedHere => {
-                &[]
-            }
+            Category::Any
+            | Category::CustomApproved
+            | Category::Custom
+            | Category::LovedHere
+            | Category::Epic => &[],
         }
     }
 }
