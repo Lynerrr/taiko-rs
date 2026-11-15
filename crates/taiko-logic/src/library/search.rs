@@ -355,6 +355,12 @@ impl Text {
 }
 
 impl Query {
+    /// Whether the query asks about the EPIC mark (`Facts::epic`): working it out for every map
+    /// costs a search, so a client leaves it false when nothing asks.
+    pub fn asks_epic(&self) -> bool {
+        self.conds.iter().any(|c| matches!(c, Cond::Epic { .. }))
+    }
+
     pub fn parse(s: &str) -> Query {
         let mut q = Query::default();
         for t in tokens(s) {
@@ -602,6 +608,8 @@ mod tests {
             assert!(Query::parse(q).matches(&meta(), "", &epic), "{q}");
         }
         assert!(!Query::parse("status!=epic").matches(&meta(), "", &epic));
+        assert!(Query::parse("artist status!=e").asks_epic());
+        assert!(!Query::parse("epic status=r").asks_epic());
         assert!(!hit("status=epic"));
         assert!(hit("status!=epic"));
         // Only `=` and `!=` mean anything for a mark: the rest is a word to look for.

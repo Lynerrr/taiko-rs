@@ -536,6 +536,7 @@ impl Select {
         }
         let selected = self.visible.get(self.cursor).copied();
         let query = crate::search::Query::parse(&self.filter);
+        let asks_epic = query.asks_epic();
         let only = self
             .collection
             .and_then(|c| self.collections.get(c))
@@ -580,7 +581,7 @@ impl Select {
                     .filter(|&&t| t > 0)
                     .map(|&t| now.saturating_sub(t) as f64 / 86_400.0),
                 status: self.status_of(e),
-                epic: self.is_epic(e),
+                epic: asks_epic && self.is_epic(e),
             }
         };
         self.visible = library
@@ -3295,7 +3296,8 @@ impl ServerEpic {
     /// or this difficulty of it. `custom` is asked only when it can change the answer: a search
     /// asks this of every map, and finding a map's custom set hashes its whole path.
     pub fn covers(&self, e: &Entry, custom: impl FnOnce() -> Option<u32>) -> bool {
-        let in_set = loved_here(&self.sets, e);
+        // A map's set id may be read off its folder's name: not for an empty list.
+        let in_set = !self.sets.is_empty() && loved_here(&self.sets, e);
         if !in_set && self.custom.is_empty() {
             return false;
         }

@@ -219,8 +219,9 @@ fn only_an_admin_marks_maps_epic_and_the_server_hears_it() {
     );
 }
 
-/// A search asks every map whether it is EPIC; finding a map's custom set hashes its whole path,
-/// which made searching a third slower. It is looked up only when it can change the answer.
+/// Whether a map is EPIC is worked out only when a search asks (`status=epic`), and then its
+/// custom set is looked up only when it can change the answer: hashing every map's path made
+/// searching a third slower.
 #[test]
 fn a_search_looks_a_maps_custom_set_up_only_when_it_can_matter() {
     let (s, _songs, _now, i) = client("epic-lazy");
@@ -238,4 +239,6 @@ fn a_search_looks_a_maps_custom_set_up_only_when_it_can_matter() {
     );
     epic.custom.insert(3);
     assert!(epic.covers(e, || Some(3)));
+    assert!(crate::search::Query::parse("status=epic").asks_epic());
+    assert!(!crate::search::Query::parse("artist").asks_epic());
 }
