@@ -4718,6 +4718,9 @@ impl State {
         // A website set's archive (it names the set) goes into taiko.rs's own folder, whole,
         // unless an older copy of it is in osu!'s Songs folder: that one gets its files.
         let legacy_home = home.is_some_and(|d| !d.starts_with(&self.custom_dir));
+        let own_home = home
+            .filter(|d| d.starts_with(&self.custom_dir))
+            .map(Path::to_path_buf);
         let folder = home
             .filter(|d| d.parent() == Some(self.songs_dir.as_path()))
             .and_then(|d| d.file_name())
@@ -4736,6 +4739,7 @@ impl State {
                 updated: manifest.updated,
                 origin: Some(custom::Origin::Site),
                 name: download::safe_folder_name(name),
+                folder: own_home,
             };
             let job = download::import_custom(
                 archive,
@@ -12629,7 +12633,7 @@ impl State {
         self.browse.failed_jobs.retain(|(s, _)| !s.same(&set));
         // A website set goes into taiko.rs's own folder, an osu! set into osu!'s Songs folder.
         let job = match set.custom {
-            Some(_) => download::start_custom(set, self.custom_dir.clone(), false),
+            Some(_) => download::start_custom(set, self.custom_dir.clone(), None),
             None => download::start(set, self.songs_dir.clone()),
         };
         self.downloads.push(job);
@@ -13481,7 +13485,7 @@ impl State {
         // In taiko.rs's own folder the new version takes the old one's place whole; an older copy
         // in osu!'s Songs folder gets the archive's files over its own.
         let job = if folder.starts_with(&self.custom_dir) {
-            download::start_custom(set, self.custom_dir.clone(), true)
+            download::start_custom(set, self.custom_dir.clone(), Some(folder))
         } else {
             download::start_custom_update(set, folder)
         };

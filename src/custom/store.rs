@@ -38,6 +38,8 @@ pub struct Install {
     pub origin: Option<Origin>,
     /// Its folder's name, if it has none here yet (`SetInfo::folder_name`).
     pub name: String,
+    /// The folder to install it into (an update of that copy); None: the one holding the set.
+    pub folder: Option<PathBuf>,
 }
 
 /// One swap under way: `folder`'s version goes to `old` (if there was one), then `stage` takes
@@ -250,7 +252,12 @@ fn based_on(dir: &Path) -> Option<u32> {
 /// set's folder. If anything fails before the swap, nothing in `custom` has changed.
 pub fn install(custom: &Path, archive: &Path, set: &Install) -> Result<PathBuf, String> {
     std::fs::create_dir_all(custom).map_err(|e| format!("{}: {e}", custom.display()))?;
-    let folder = folder_of(custom, set.id).unwrap_or_else(|| free_name(custom, &set.name, set.id));
+    let folder = set
+        .folder
+        .clone()
+        .filter(|f| f.parent() == Some(custom))
+        .or_else(|| folder_of(custom, set.id))
+        .unwrap_or_else(|| free_name(custom, &set.name, set.id));
     let dir = set_versions(custom, set.id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let stage = dir.join(STAGE);
@@ -470,6 +477,7 @@ mod tests {
             updated: Some(1_763_251_200),
             origin: Some(Origin::Site),
             name: "c12 KNOWER - Time Traveler".into(),
+            folder: None,
         }
     }
 

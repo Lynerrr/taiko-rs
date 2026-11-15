@@ -970,7 +970,7 @@ pub fn start_custom_update(set: SetInfo, folder: PathBuf) -> Job {
 }
 
 /// What installing website set `set` says of it (`custom::store::Install`).
-fn custom_install(set: &SetInfo) -> crate::custom::store::Install {
+fn custom_install(set: &SetInfo, folder: Option<PathBuf>) -> crate::custom::store::Install {
     let custom = set.custom.clone().unwrap_or_default();
     crate::custom::store::Install {
         id: set.id,
@@ -978,14 +978,16 @@ fn custom_install(set: &SetInfo) -> crate::custom::store::Install {
         updated: (custom.updated > 0).then_some(custom.updated),
         origin: Some(crate::custom::Origin::Site),
         name: set.folder_name(),
+        folder,
     }
 }
 
 /// Downloads website set `set` (or takes the archive its preview fetched) and installs it whole
 /// into taiko.rs's own custom maps folder `custom` (`custom::store::install`), on a background
-/// thread: a first download, or (`update`) its newer version over the folder that has it. A
-/// failed download leaves the folder as it was. The job reports the set's folder.
-pub fn start_custom(set: SetInfo, custom: PathBuf, update: bool) -> Job {
+/// thread: a first download, or (`update`) its newer version over the folder that has it
+/// (`into`, else the one holding the set). A failed download leaves the folder as it was. The
+/// job reports the set's folder.
+pub fn start_custom(set: SetInfo, custom: PathBuf, update: Option<PathBuf>) -> Job {
     let (tx, rx) = mpsc::channel();
     let done = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(0));
@@ -994,7 +996,8 @@ pub fn start_custom(set: SetInfo, custom: PathBuf, update: bool) -> Job {
     let stop = cancel.clone();
     let cached = crate::custom::cached_archive(&set);
     let url = crate::custom::download_url(set.id);
-    let install = custom_install(&set);
+    let install = custom_install(&set, update.clone());
+    let update = update.is_some();
     std::thread::spawn(move || {
         let result = (|| {
             if let Some(archive) = cached {
