@@ -2278,11 +2278,34 @@ fn the_newest_description_of_a_set_is_the_one_believed() {
     );
 }
 
+/// Keeps what a slow link takes in ahead of it small (connections accepted inherit it): the
+/// system would otherwise take megabytes in at once (macOS does on loopback) and stand for a
+/// fast link, the backlog left in the sender's socket.
+#[cfg(unix)]
+fn small_receive_buffer(listener: &std::net::TcpListener) {
+    use std::os::fd::AsRawFd;
+    let value: libc::c_int = 64 * 1024;
+    // SAFETY: a valid socket, and a c_int option given with its size.
+    unsafe {
+        libc::setsockopt(
+            listener.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            (&value as *const libc::c_int).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn small_receive_buffer(_listener: &std::net::TcpListener) {}
+
 /// A way to `to` that carries what the client sends at about `bytes_per_s` (what comes back is
 /// passed straight on): a player on a slow upload. Takes one connection.
 fn slow_upload(to: String, bytes_per_s: usize) -> String {
     use std::io::Read as _;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    small_receive_buffer(&listener);
     let addr = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
         let Ok((mut client, _)) = listener.accept() else {
