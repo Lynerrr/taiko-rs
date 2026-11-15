@@ -934,6 +934,41 @@ pub fn start_update(set: SetInfo, folder: PathBuf, here: Vec<LocalDiff>) -> Job 
     }
 }
 
+/// Downloads custom set `set`'s newest version from the website into its folder `folder`: the
+/// archive's files take the place of those of the same name, and what else is in the folder (a
+/// difficulty of your own) stays.
+pub fn start_custom_update(set: SetInfo, folder: PathBuf) -> Job {
+    let (tx, rx) = mpsc::channel();
+    let done = Arc::new(AtomicU64::new(0));
+    let total = Arc::new(AtomicU64::new(0));
+    let (d, t) = (done.clone(), total.clone());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let sources = vec![("taiko.rs", crate::custom::download_url(set.id))];
+    std::thread::spawn(move || {
+        let result = (|| {
+            let songs = folder.parent().ok_or("no Songs folder")?;
+            let name = folder
+                .file_name()
+                .ok_or("no set folder")?
+                .to_string_lossy()
+                .into_owned();
+            fetch(&sources, &name, songs, &d, &t, &stop, None)
+        })();
+        let _ = tx.send(result);
+    });
+    Job {
+        set,
+        done,
+        total,
+        rx,
+        maps: Vec::new(),
+        update: true,
+        cancel,
+        old_version: Arc::default(),
+    }
+}
+
 /// Runs `get` (which brings the new files) with `old` set aside, not deleted, until it worked;
 /// if it fails they're put back.
 fn replacing<T>(old: &[PathBuf], get: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
