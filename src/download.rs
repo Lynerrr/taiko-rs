@@ -1000,6 +1000,8 @@ pub fn start_custom(set: SetInfo, custom: PathBuf, update: bool) -> Job {
             if let Some(archive) = cached {
                 return crate::custom::store::install(&custom, &archive, &install);
             }
+            // Not to be tried again (tests reach no website).
+            crate::offline::url(&url).map_err(|e| format!("taiko.rs: {e}"))?;
             let dir = crate::custom::store::set_versions(&custom, install.id);
             std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             let archive = dir.join("download.rsz.part");

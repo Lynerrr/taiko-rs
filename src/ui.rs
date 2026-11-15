@@ -1661,15 +1661,15 @@ impl Select {
         if let Some(version) = m.previous {
             let label = match version {
                 0 => tr!(
-                    "Back to the previous version",
+                    "Previous version",
                     "前のバージョンに戻す",
                     "Вернуть прошлую версию"
                 )
                 .to_string(),
                 v => tr!(
-                    "Back to the previous version (v{v})",
+                    "Previous version (v{v})",
                     "前のバージョン (v{v}) に戻す",
-                    "Вернуть прошлую версию (v{v})"; [] [v]
+                    "Прошлая версия (v{v})"; [] [v]
                 ),
             };
             items.push((fit(label), MenuAction::PreviousVersion));

@@ -491,6 +491,12 @@ fn preview_dir(set: &SetInfo) -> PathBuf {
         .join(format!("c{}-v{version}", set.id))
 }
 
+/// Where a preview of this version of the set keeps its archive (tests put one there).
+#[cfg(test)]
+pub fn preview_archive(set: &SetInfo) -> PathBuf {
+    preview_dir(set).join("set.osz")
+}
+
 /// The archive a preview of this version of the set already fetched, if there is one: the
 /// download takes it instead of asking the website again.
 pub fn cached_archive(set: &SetInfo) -> Option<PathBuf> {
