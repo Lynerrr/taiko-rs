@@ -2277,3 +2277,411 @@ fn the_newest_description_of_a_set_is_the_one_believed() {
         "the newest, when all are"
     );
 }
+
+/// A difficulty as osu! serves it: its beatmap ID, the music it plays and `notes` notes.
+fn osu_diff(id: u32, version: &str, audio: &str, notes: usize) -> Vec<u8> {
+    let mut text = format!(
+        "osu file format v14\n\n[General]\nAudioFilename: {audio}\nMode: 1\n\n[Metadata]\nTitle:Song\nArtist:Band\nCreator:me\nVersion:{version}\nBeatmapID:{id}\nBeatmapSetID:1\n\n[HitObjects]\n"
+    );
+    for i in 0..notes {
+        let _ = writeln!(text, "256,192,{},1,0", 1000 + i * 250);
+    }
+    text.into_bytes()
+}
+
+/// What a download unpacks when the first mirror (`a`: description, archive) may hold an old
+/// version of the set and osu! answers `osu` (beatmap ID, file) for its own files: the set's
+/// folder, the paths asked for in order, and whether it's flagged as an older version.
+fn download_with_osus_files(
+    name: &str,
+    a: (Vec<u8>, Vec<u8>),
+    b: (Vec<u8>, Vec<u8>),
+    osu: &[(u32, Vec<u8>)],
+) -> (SetFiles, Vec<String>, bool) {
+    let mut routes = vec![
+        ("/a/s/1", a.0),
+        ("/a/d/1", a.1),
+        ("/b/s/1", b.0),
+        ("/b/d/1", b.1),
+    ];
+    for (id, file) in osu {
+        let path: &'static str = Box::leak(format!("/osu/{id}").into_boxed_str());
+        routes.push((path, file.clone()));
+    }
+    let (base, asked) = mirror_server(routes);
+    let songs = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-osus-files-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&songs);
+    let sources = [
+        ("a", format!("{base}/a/d/1")),
+        ("b", format!("{base}/b/d/1")),
+    ];
+    let mut check = crate::download::Check::new(
+        vec![
+            ("a", format!("{base}/a/s/1")),
+            ("b", format!("{base}/b/s/1")),
+        ],
+        None,
+    )
+    .with_osu_files(format!("{base}/osu/"));
+    let (done, total) = (
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    );
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let folder = crate::download::fetch(
+        &sources,
+        "1 Band - Song",
+        &songs,
+        &done,
+        &total,
+        &cancel,
+        Some(&mut check),
+    )
+    .unwrap();
+    let mut files: SetFiles = std::fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                std::fs::read(e.path()).unwrap(),
+            )
+        })
+        .collect();
+    files.sort();
+    let left: Vec<String> = std::fs::read_dir(&songs)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains(".osz") || n.contains("partial"))
+        .collect();
+    assert!(left.is_empty(), "left in the Songs folder: {left:?}");
+    let _ = std::fs::remove_dir_all(&songs);
+    (files, asked.try_iter().collect(), check.older)
+}
+
+#[test]
+fn an_old_archive_is_made_current_with_osus_own_files_without_asking_the_next_mirror() {
+    let (oni, kantan) = (
+        osu_diff(1, "Oni", "audio.mp3", 40),
+        osu_diff(2, "Kantan", "audio.mp3", 12),
+    );
+    // As osu.direct had a set ranked a week before: the Oni before its last fix, the Kantan an
+    // empty placeholder.
+    let (old_oni, empty_kantan) = (
+        osu_diff(1, "Oni", "audio.mp3", 39),
+        osu_diff(2, "Kantan", "audio.mp3", 0),
+    );
+    let current = [(1, "Oni", oni.as_slice()), (2, "Kantan", kantan.as_slice())];
+    let (files, asked, older) = download_with_osus_files(
+        "patched",
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[
+                ("Band - Song (me) [Oni].osu", &old_oni),
+                ("Band - Song (me) [Kantan].osu", &empty_kantan),
+                ("audio.mp3", b"mp3"),
+            ]),
+        ),
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("never.osu", &oni)]),
+        ),
+        &[(1, oni.clone()), (2, kantan.clone())],
+    );
+    assert_eq!(
+        files,
+        vec![
+            ("Band - Song (me) [Kantan].osu".to_string(), kantan),
+            ("Band - Song (me) [Oni].osu".to_string(), oni),
+            ("audio.mp3".to_string(), b"mp3".to_vec()),
+        ],
+        "osu!'s files take the old ones' places, the music stays"
+    );
+    assert!(
+        !asked.iter().any(|p| p == "/b/d/1"),
+        "the second mirror's archive isn't needed: {asked:?}"
+    );
+    assert!(asked.iter().any(|p| p == "/osu/1") && asked.iter().any(|p| p == "/osu/2"));
+    assert!(!older);
+}
+
+#[test]
+fn osus_file_needing_music_the_archive_lacks_leaves_it_to_the_next_mirror() {
+    // The update brought new music: an old archive can't be made current with .osu files.
+    let oni = osu_diff(1, "Oni", "new.mp3", 40);
+    let old_oni = osu_diff(1, "Oni", "audio.mp3", 39);
+    let current = [(1, "Oni", oni.as_slice())];
+    let (files, asked, older) = download_with_osus_files(
+        "new-music",
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &old_oni), ("audio.mp3", b"old")]),
+        ),
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &oni), ("new.mp3", b"new")]),
+        ),
+        &[(1, oni.clone())],
+    );
+    assert_eq!(
+        files,
+        vec![
+            ("new.mp3".to_string(), b"new".to_vec()),
+            ("oni.osu".to_string(), oni),
+        ]
+    );
+    assert!(asked.iter().any(|p| p == "/b/d/1"), "{asked:?}");
+    assert!(!older);
+}
+
+#[test]
+fn an_empty_answer_from_osu_leaves_it_to_the_next_mirror() {
+    // osu! answers a difficulty it can't hand out with an empty file.
+    let oni = osu_diff(1, "Oni", "audio.mp3", 40);
+    let old_oni = osu_diff(1, "Oni", "audio.mp3", 39);
+    let current = [(1, "Oni", oni.as_slice())];
+    let (files, asked, older) = download_with_osus_files(
+        "empty-answer",
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &old_oni), ("audio.mp3", b"mp3")]),
+        ),
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &oni), ("audio.mp3", b"mp3")]),
+        ),
+        &[(1, Vec::new())],
+    );
+    assert_eq!(
+        files,
+        vec![
+            ("audio.mp3".to_string(), b"mp3".to_vec()),
+            ("oni.osu".to_string(), oni),
+        ]
+    );
+    assert!(asked.iter().any(|p| p == "/b/d/1"), "{asked:?}");
+    assert!(!older);
+}
+
+#[test]
+fn an_old_version_unpacked_for_want_of_a_current_one_is_said_to_be_old() {
+    // Song select would offer the update again on every launch: the game must not call it done.
+    let oni = osu_diff(1, "Oni", "audio.mp3", 40);
+    let old_oni = osu_diff(1, "Oni", "audio.mp3", 39);
+    let current = [(1, "Oni", oni.as_slice())];
+    let old_set = || {
+        (
+            mirror_json("2026-11-04T00:38:02Z", &current),
+            mirror_osz(&[("oni.osu", &old_oni), ("audio.mp3", b"mp3")]),
+        )
+    };
+    let (files, _, older) = download_with_osus_files("all-old", old_set(), old_set(), &[]);
+    assert_eq!(
+        files,
+        vec![
+            ("audio.mp3".to_string(), b"mp3".to_vec()),
+            ("oni.osu".to_string(), old_oni),
+        ]
+    );
+    assert!(older);
+}
+
+/// A set's folder for an update: each file (name, contents).
+fn set_folder(name: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-update-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (n, bytes) in files {
+        std::fs::write(dir.join(n), bytes).unwrap();
+    }
+    dir
+}
+
+fn online_set(maps: &[(u32, &str, &[u8])]) -> crate::download::OnlineSet {
+    maps.iter()
+        .map(|(id, version, osu)| {
+            (
+                *id,
+                crate::download::OnlineDiff {
+                    md5: crate::download::md5_hex(osu),
+                    version: Some(version.to_string()),
+                },
+            )
+        })
+        .collect()
+}
+
+fn folder_contents(dir: &std::path::Path) -> SetFiles {
+    let mut files: SetFiles = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| {
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                std::fs::read(e.path()).unwrap(),
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn an_update_takes_only_the_changed_files_from_osu_and_leaves_edits_alone() {
+    let (old_oni, oni) = (
+        osu_diff(1, "Oni", "audio.mp3", 39),
+        osu_diff(1, "Oni", "audio.mp3", 40),
+    );
+    let kantan = osu_diff(2, "Kantan", "audio.mp3", 12);
+    // A copy with a rate baked in keeps the original's IDs under another name.
+    let rate = osu_diff(1, "Oni 1.2x", "audio.mp3", 39);
+    let dir = set_folder(
+        "only-changed",
+        &[
+            ("Band - Song (me) [Oni].osu", &old_oni),
+            ("Band - Song (me) [Oni 1.2x].osu", &rate),
+            ("audio.mp3", b"mp3"),
+        ],
+    );
+    let (base, asked) = mirror_server(vec![("/osu/1", oni.clone()), ("/osu/2", kantan.clone())]);
+    let own = vec![crate::download::LocalDiff {
+        id: Some(1),
+        version: "Oni".into(),
+        path: dir.join("Band - Song (me) [Oni].osu"),
+    }];
+    let online = online_set(&[(1, "Oni", &oni), (2, "Kantan", &kantan)]);
+    crate::download::update_from_osu(&dir, &own, &online, &format!("{base}/osu/")).unwrap();
+    assert_eq!(
+        folder_contents(&dir),
+        vec![
+            ("Band - Song (me) [Kantan].osu".to_string(), kantan),
+            ("Band - Song (me) [Oni 1.2x].osu".to_string(), rate),
+            ("Band - Song (me) [Oni].osu".to_string(), oni),
+            ("audio.mp3".to_string(), b"mp3".to_vec()),
+        ],
+        "the old Oni is replaced in place, the rate copy stays, no .osu.old is left"
+    );
+    assert_eq!(asked.try_iter().collect::<Vec<_>>(), ["/osu/1", "/osu/2"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_update_needing_new_music_leaves_the_folder_as_it_was() {
+    let old_oni = osu_diff(1, "Oni", "audio.mp3", 39);
+    let oni = osu_diff(1, "Oni", "new.mp3", 40);
+    let dir = set_folder(
+        "new-music",
+        &[
+            ("Band - Song (me) [Oni].osu", &old_oni),
+            ("audio.mp3", b"mp3"),
+        ],
+    );
+    let before = folder_contents(&dir);
+    let (base, _) = mirror_server(vec![("/osu/1", oni.clone())]);
+    let own = vec![crate::download::LocalDiff {
+        id: Some(1),
+        version: "Oni".into(),
+        path: dir.join("Band - Song (me) [Oni].osu"),
+    }];
+    let online = online_set(&[(1, "Oni", &oni)]);
+    let got = crate::download::update_from_osu(&dir, &own, &online, &format!("{base}/osu/"));
+    assert!(got.is_err_and(|e| e.contains("new.mp3")));
+    assert_eq!(folder_contents(&dir), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_difficulty_uploaded_again_under_a_new_id_replaces_its_old_file_by_name() {
+    // Fractal Vertex: the archive's Endless Vortex still has the ID of the upload osu! deleted.
+    let vortex = osu_diff(5939066, "Endless Vortex", "audio.mp3", 40);
+    let old_vortex = osu_diff(5776969, "Endless Vortex", "audio.mp3", 39);
+    let current = [(5939066, "Endless Vortex", vortex.as_slice())];
+    let (files, asked, older) = download_with_osus_files(
+        "new-id",
+        (
+            mirror_json("2026-11-13T18:40:28Z", &current),
+            mirror_osz(&[
+                ("Band - Song (me) [Endless Vortex].osu", &old_vortex),
+                ("audio.mp3", b"mp3"),
+            ]),
+        ),
+        (
+            mirror_json("2026-11-13T18:40:28Z", &current),
+            mirror_osz(&[("never.osu", &vortex)]),
+        ),
+        &[(5939066, vortex.clone())],
+    );
+    assert_eq!(
+        files,
+        vec![
+            ("Band - Song (me) [Endless Vortex].osu".to_string(), vortex),
+            ("audio.mp3".to_string(), b"mp3".to_vec()),
+        ]
+    );
+    assert!(!asked.iter().any(|p| p == "/b/d/1"), "{asked:?}");
+    assert!(!older);
+}
+
+#[test]
+fn an_update_replaces_the_old_file_of_a_difficulty_uploaded_again_under_a_new_id() {
+    // TUYU - Kako ni Torawarete Iru: the folder's [Bow down] has the ID osu! deleted with it.
+    let old_bow = osu_diff(2250000, "Bow down", "audio.mp3", 39);
+    let bow = osu_diff(2589409, "Bow down", "audio.mp3", 40);
+    // A home-made difficulty without an ID, and one that's another set's, stay.
+    let mine = osu_diff(0, "Bow down", "audio.mp3", 10);
+    let dir = set_folder(
+        "uploaded-again",
+        &[
+            ("Band - Song (me) [Bow down].osu", &old_bow),
+            ("mine.osu", &mine),
+            ("audio.mp3", b"mp3"),
+        ],
+    );
+    let (base, _) = mirror_server(vec![("/osu/2589409", bow.clone())]);
+    let online = online_set(&[(2589409, "Bow down", &bow)]);
+    crate::download::update_from_osu(&dir, &[], &online, &format!("{base}/osu/")).unwrap();
+    assert_eq!(
+        folder_contents(&dir),
+        vec![
+            ("Band - Song (me) [Bow down].osu".to_string(), bow),
+            ("audio.mp3".to_string(), b"mp3".to_vec()),
+            ("mine.osu".to_string(), mine),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_update_goes_by_the_name_in_osus_file_not_the_mirrors_wording_of_it() {
+    // osu.direct calls a mania difficulty "[4K] Bow down"; its file says "Bow down".
+    let old_bow = osu_diff(2589409, "Bow down", "audio.mp3", 39);
+    let bow = osu_diff(2589409, "Bow down", "audio.mp3", 40);
+    let rate = osu_diff(2589409, "Bow down 1.2x", "audio.mp3", 39);
+    let dir = set_folder(
+        "mirror-wording",
+        &[
+            ("Band - Song (me) [Bow down].osu", &old_bow),
+            ("Band - Song (me) [Bow down 1.2x].osu", &rate),
+            ("audio.mp3", b"mp3"),
+        ],
+    );
+    let (base, _) = mirror_server(vec![("/osu/2589409", bow.clone())]);
+    let online = online_set(&[(2589409, "[4K] Bow down", &bow)]);
+    crate::download::update_from_osu(&dir, &[], &online, &format!("{base}/osu/")).unwrap();
+    assert_eq!(
+        folder_contents(&dir),
+        vec![
+            ("Band - Song (me) [Bow down 1.2x].osu".to_string(), rate),
+            ("Band - Song (me) [Bow down].osu".to_string(), bow),
+            ("audio.mp3".to_string(), b"mp3".to_vec()),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

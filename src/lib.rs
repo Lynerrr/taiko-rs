@@ -12968,19 +12968,34 @@ impl State {
         let mut finished = Vec::new();
         self.downloads.retain(|job| match job.rx.try_recv() {
             Ok(result) => {
-                finished.push((job.set.clone(), job.update, result));
+                let old = job.old_version.load(Ordering::Relaxed);
+                finished.push((job.set.clone(), job.update, old, result));
                 false
             }
             Err(mpsc::TryRecvError::Empty) => true,
             Err(mpsc::TryRecvError::Disconnected) => {
-                finished.push((job.set.clone(), job.update, Err("download stopped".into())));
+                finished.push((
+                    job.set.clone(),
+                    job.update,
+                    false,
+                    Err("download stopped".into()),
+                ));
                 false
             }
         });
-        for (set, update, result) in finished {
+        for (set, update, old, result) in finished {
             match result {
-                Ok(folder) if update => self.add_updated(&set, &folder),
-                Ok(folder) => self.add_downloaded(&set, &folder),
+                Ok(folder) if update => self.add_updated(&set, &folder, old),
+                Ok(folder) => {
+                    self.add_downloaded(&set, &folder);
+                    if old {
+                        // Said after the "downloaded" toast, so it's the one that stays.
+                        self.toast(format!(
+                            "{} - {}: the mirrors only have an older version for now",
+                            set.artist, set.title
+                        ));
+                    }
+                }
                 Err(e) if e == download::CANCELLED => {
                     if update {
                         self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
@@ -13181,7 +13196,8 @@ impl State {
 
     /// A set downloaded again (see `update_set`): its difficulties in the library are read anew in
     /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
-    fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
+    /// `old`: the mirrors had only an older version than osu!'s, so the set is still out of date.
+    fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path, old: bool) {
         let mut fresh: std::collections::HashMap<PathBuf, Entry> =
             library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0), &mut |_| {})
                 .into_iter()
@@ -13208,8 +13224,17 @@ impl State {
         let mut added: Vec<Entry> = fresh.into_values().collect();
         added.sort_by(|a, b| a.path.cmp(&b.path));
         self.append_maps(added);
-        self.select.updates.insert(set.id, ui::SetUpdate::UpToDate);
-        self.toast(format!("updated {} - {}", set.artist, set.title));
+        if old {
+            // Not "updated": song select would say so again on the next launch.
+            self.select.updates.insert(set.id, ui::SetUpdate::Available);
+            self.toast(format!(
+                "{} - {}: the mirrors only have an older version for now, try again later",
+                set.artist, set.title
+            ));
+        } else {
+            self.select.updates.insert(set.id, ui::SetUpdate::UpToDate);
+            self.toast(format!("updated {} - {}", set.artist, set.title));
+        }
     }
 
     /// Song select goes to the maps just added, whatever its filters. During a game they're only
