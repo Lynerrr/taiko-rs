@@ -5,7 +5,6 @@
 
 use super::harness::{self, *};
 use super::maps;
-use super::snapshot::assert_snapshot;
 use crate::hit::Hit;
 use crate::*;
 use std::io::{BufRead, Write as _};
@@ -107,7 +106,7 @@ fn an_epic_map_wears_its_mark_in_song_select() {
     assert!(shows(&c, "RANKED"), "next to the status");
     settle(&mut s, &mut now);
     now += Duration::from_millis(16);
-    assert_snapshot(
+    super::snapshot::assert_snapshot(
         "screen-song-select-epic",
         &screen(&frame(&mut s, now), super::screens::VOLATILE),
     );
@@ -218,4 +217,25 @@ fn only_an_admin_marks_maps_epic_and_the_server_hears_it() {
         items.contains(&format!("Take EPIC off [{version}]")),
         "{items:?}"
     );
+}
+
+/// A search asks every map whether it is EPIC; finding a map's custom set hashes its whole path,
+/// which made searching a third slower. It is looked up only when it can change the answer.
+#[test]
+fn a_search_looks_a_maps_custom_set_up_only_when_it_can_matter() {
+    let (s, _songs, _now, i) = client("epic-lazy");
+    let e = &s.library[i];
+    let mut epic = ui::ServerEpic::default();
+    let unasked = || -> Option<u32> { panic!("the custom set was looked up") };
+    assert!(!epic.covers(e, unasked), "nothing is marked");
+    epic.sets.insert(7, Vec::new());
+    assert!(!epic.covers(e, unasked), "another set is marked");
+    epic.sets.insert(42, Vec::new());
+    assert!(epic.covers(e, || None));
+    assert!(
+        !epic.covers(e, || Some(3)),
+        "in a custom set it goes by that set"
+    );
+    epic.custom.insert(3);
+    assert!(epic.covers(e, || Some(3)));
 }

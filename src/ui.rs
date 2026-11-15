@@ -673,7 +673,7 @@ impl Select {
 
     /// Whether map `e` is marked EPIC on the online server.
     pub fn is_epic(&self, e: &Entry) -> bool {
-        self.server_epic.covers(e, self.custom_id(e))
+        self.server_epic.covers(e, || self.custom_id(e))
     }
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
@@ -3292,11 +3292,16 @@ impl ServerEpic {
     }
 
     /// Whether map `e` is marked: its custom set (`custom`, when it's in one), or its osu! set,
-    /// or this difficulty of it.
-    pub fn covers(&self, e: &Entry, custom: Option<u32>) -> bool {
-        match custom {
+    /// or this difficulty of it. `custom` is asked only when it can change the answer: a search
+    /// asks this of every map, and finding a map's custom set hashes its whole path.
+    pub fn covers(&self, e: &Entry, custom: impl FnOnce() -> Option<u32>) -> bool {
+        let in_set = loved_here(&self.sets, e);
+        if !in_set && self.custom.is_empty() {
+            return false;
+        }
+        match custom() {
             Some(id) => self.custom.contains(&id),
-            None => loved_here(&self.sets, e),
+            None => in_set,
         }
     }
 }
