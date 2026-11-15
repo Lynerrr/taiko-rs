@@ -703,8 +703,42 @@ fn own_dir_in(folder: Option<&Path>, name: &str) -> Option<PathBuf> {
     Some(dir?.join(name))
 }
 
+/// taiko.rs's own folder of custom maps (website sets, editor maps, collab copies), apart from
+/// osu!'s Songs folder and always scanned. Tests never get the player's real one.
+pub fn custom_dir() -> PathBuf {
+    custom_dir_in(data_folder().as_deref()).unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("taiko-rs-no-custom-dir-{}", std::process::id()))
+    })
+}
+
+/// `custom_dir` with the data folder `folder` (None: the usual places): `Custom` beside the
+/// game's own `Songs` (on Android beside config.txt, as its `Songs` is). None in tests without a
+/// data folder.
+fn custom_dir_in(folder: Option<&Path>) -> Option<PathBuf> {
+    if let Some(d) = folder {
+        return Some(d.join(CUSTOM));
+    }
+    if cfg!(test) {
+        return None;
+    }
+    if cfg!(target_os = "android") {
+        return Some(user_dir(false)?.join(CUSTOM));
+    }
+    own_dir_in(None, CUSTOM)
+}
+
+/// The folders of taiko.rs's own custom maps (`custom_dir`) and of their kept older versions.
+pub const CUSTOM: &str = "Custom";
+pub const CUSTOM_VERSIONS: &str = "CustomVersions";
+
+/// Where older versions of the custom sets in `custom` are kept, and new ones are put together
+/// before they replace them: beside it, so on the same drive, and outside what's scanned.
+pub fn custom_versions_dir(custom: &Path) -> PathBuf {
+    custom.with_file_name(CUSTOM_VERSIONS)
+}
+
 /// The game's data with the data folder `folder` (None: the usual places), each where it'd be:
-/// the files next to config.txt, its own Songs and Skins, and the cache.
+/// the files next to config.txt, its own Songs and Skins, its custom maps and the cache.
 fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
     let base = folder.map(Path::to_path_buf).or_else(|| user_dir(false));
     let mut out: Vec<Option<PathBuf>> = [
@@ -725,6 +759,9 @@ fn data_paths(folder: Option<&Path>) -> Vec<Option<PathBuf>> {
     .collect();
     out.push(own_dir_in(folder, "Songs"));
     out.push(own_dir_in(folder, "Skins"));
+    let custom = custom_dir_in(folder);
+    out.push(custom.as_deref().map(custom_versions_dir));
+    out.push(custom);
     out.push(folder.map(|d| d.join("cache")).or_else(|| user_dir(true)));
     out
 }
@@ -2387,6 +2424,21 @@ mod tests {
     }
 
     #[test]
+    fn the_custom_maps_folder_is_game_data_and_never_the_players_own_in_tests() {
+        let folder = Path::new("/data/taiko");
+        let paths: Vec<PathBuf> = data_paths(Some(folder)).into_iter().flatten().collect();
+        assert!(paths.contains(&folder.join("Custom")));
+        assert!(paths.contains(&folder.join("CustomVersions")));
+        assert_eq!(
+            custom_versions_dir(&folder.join("Custom")),
+            folder.join("CustomVersions")
+        );
+        // Without a data folder, tests get a scratch path, not ~/.local/share/taiko-rs/Custom.
+        assert_eq!(custom_dir_in(None), None);
+        assert!(custom_dir().starts_with(std::env::temp_dir()) || data_folder().is_some());
+    }
+
+    #[test]
     fn game_data_moves_to_another_folder_and_nothing_is_overwritten() {
         use std::sync::atomic::AtomicU64;
         let root = std::env::temp_dir().join(format!("taiko-rs-data-test-{}", std::process::id()));
@@ -2401,6 +2453,8 @@ mod tests {
         file(from.join("Songs/1 map/map.osu"), "osu");
         file(from.join("Skins/mine/skin.ini"), "skin");
         file(from.join("cache/osz/x/y.osu"), "cache");
+        file(from.join("Custom/c12 a - b/b.tko"), "custom");
+        file(from.join("CustomVersions/12/v3/b.tko"), "older");
         let (done, total) = (AtomicU64::new(0), AtomicU64::new(0));
         move_data(Some(&from), Some(&to), &done, &total).unwrap();
         for (path, text) in [
@@ -2409,6 +2463,8 @@ mod tests {
             ("Songs/1 map/map.osu", "osu"),
             ("Skins/mine/skin.ini", "skin"),
             ("cache/osz/x/y.osu", "cache"),
+            ("Custom/c12 a - b/b.tko", "custom"),
+            ("CustomVersions/12/v3/b.tko", "older"),
         ] {
             assert_eq!(
                 std::fs::read_to_string(to.join(path)).unwrap(),

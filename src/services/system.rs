@@ -56,6 +56,23 @@ pub(crate) fn open_url(url: &str) -> bool {
         .is_ok()
 }
 
+/// Opens folder `dir` in the file manager; false if none could be started.
+pub(crate) fn open_folder(dir: &std::path::Path) -> bool {
+    let opener = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    offline::command(opener)
+        .arg(dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
 /// `file://` URI for a local path.
 #[cfg(not(windows))]
 pub(crate) fn file_uri(path: &std::path::Path) -> String {

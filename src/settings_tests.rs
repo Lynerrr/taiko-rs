@@ -1355,6 +1355,8 @@ fn moving_the_game_data_runs_in_the_background_then_switches_folders() {
     let old = root.join("old/taiko-rs");
     std::fs::create_dir_all(old.join("replays")).unwrap();
     std::fs::write(old.join("replays/1.json"), "replay").unwrap();
+    std::fs::create_dir_all(old.join("Custom/c12 a - b")).unwrap();
+    std::fs::write(old.join("Custom/c12 a - b/b.tko"), "custom").unwrap();
     std::fs::create_dir_all(root.join("drive")).unwrap();
     let mut s = layout_tests::state();
     s.cfg.data_folder = Some(old.clone());
@@ -1376,6 +1378,12 @@ fn moving_the_game_data_runs_in_the_background_then_switches_folders() {
         "replay"
     );
     assert!(!old.join("replays").exists());
+    // taiko.rs's own custom maps go along, and are looked for there from now on.
+    assert_eq!(
+        std::fs::read_to_string(new.join("Custom/c12 a - b/b.tko")).unwrap(),
+        "custom"
+    );
+    assert_eq!(s.custom_dir, new.join("Custom"));
     config::set_data_folder(None);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -3182,4 +3190,30 @@ fn an_editor_opened_from_the_settings_over_a_song_goes_back_to_it() {
             "and on to the song's pause menu (hud {hud})"
         );
     }
+}
+
+#[test]
+fn enter_on_the_taiko_rs_maps_folder_makes_it_and_says_where_it_is() {
+    let root = std::env::temp_dir().join(format!(
+        "taiko-rs-custom-folder-setting-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let mut s = layout_tests::state();
+    s.custom_dir = root.join("Custom");
+    s.open_settings();
+    s.settings_ui.cursor = settings::ITEMS
+        .iter()
+        .position(|(_, it)| *it == Item::CustomFolder)
+        .unwrap();
+    assert_eq!(settings::ITEMS[s.settings_ui.cursor].0, "LIBRARY");
+    s.key(KeyCode::Enter, false, None, Instant::now(), None);
+    assert!(s.custom_dir.is_dir(), "made to be opened");
+    // Tests start no file manager, so the folder is named instead.
+    let toast = s.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+    assert!(
+        toast.contains(&s.custom_dir.display().to_string()),
+        "{toast}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }
