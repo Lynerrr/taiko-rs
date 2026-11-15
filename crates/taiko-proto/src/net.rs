@@ -2173,6 +2173,13 @@ fn write_loop(
     }
 }
 
+/// The socket option for it: libc names it on Linux and Android only.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const NOTSENT_LOWAT: libc::c_int = libc::TCP_NOTSENT_LOWAT;
+/// macOS's, from <netinet/tcp.h>.
+#[cfg(target_vendor = "apple")]
+const NOTSENT_LOWAT: libc::c_int = 0x201;
+
 /// Keeps what the socket holds unsent small (see [`UNSENT_LIMIT`]), where the system can.
 #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn limit_unsent(stream: &TcpStream) {
@@ -2183,7 +2190,7 @@ fn limit_unsent(stream: &TcpStream) {
         libc::setsockopt(
             stream.as_raw_fd(),
             libc::IPPROTO_TCP,
-            libc::TCP_NOTSENT_LOWAT,
+            NOTSENT_LOWAT,
             (&value as *const libc::c_int).cast(),
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         );
