@@ -1,4 +1,4 @@
-screen main-menu: Select, 14 areas
+screen main-menu: Select, 15 areas
 MenuItem(0) @179,202 -> Select +"0:00 / 0:10" +"0:09" +"1 diff" +"1 songs, 1 maps  |  taiko only" +"200" +"3.08" +30 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -14 more
 MenuItem(1) @280,202 -> EditorHome +"Choose a song file...   [Enter]" +"Drop a song here: mp3, ogg, wav or flac" +"Esc: back to the menu" +"Go on with a map" +"MAP EDITOR" +"Make a new map" +5 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -16 more
 MenuItem(2) @381,202 -> MpMenu +"127.0.0.1:9   no connection" +"< BACK" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +6 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -13 more
@@ -11,5 +11,6 @@ Music(Prev) @273,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In son
 Music(Toggle) @303,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
 Music(Next) @333,449 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
 Music(Open) @363,449 -> Select +"+ on a song adds it" +"0:00" +"1 songs" +"< menu" +"All songs" +"D K song   F J pause   L love   Tab folders" +9 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -15 more
+MenuLogo @35,31 -> Select +"Running 1s   In songs 0s" -"Running 0s   In songs 0s"
 Changelog @808,9 -> Select +"Close" +"Running 1s   In songs 0s" +"Up/Down, wheel: scroll   Esc: close" +"What's new" +"blocked in tests: no programs, no internet" -"Running 0s   In songs 0s" -"log in" -"what's new"
 Account @740,9 -> MpMenu +"127.0.0.1:9   no connection" +"< BACK" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +6 more -"." -"1 maps in your library" -"DOWNLOAD" -"EDITOR" -"EXIT" -"MEDALS" -13 more
