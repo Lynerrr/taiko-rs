@@ -1148,6 +1148,8 @@ impl State {
         let (set_status_tx, set_status_rx) = mpsc::channel();
         let (pp_verdict_tx, pp_verdict_rx) = mpsc::channel();
         let status_cache = setstatus::Cache::load();
+        let custom_dir = config::custom_dir();
+        library::add_own_root(&custom_dir);
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
         select.headings = cfg.song_headings;
         select.mods_label = cfg.mods.label();
@@ -1236,7 +1238,7 @@ impl State {
             #[cfg(target_os = "android")]
             keyboard: android::Keyboard::default(),
             songs_dir,
-            custom_dir: config::custom_dir(),
+            custom_dir,
             installed_sets: None,
             lobby_lookup: Job::idle(),
             score_link: None,
