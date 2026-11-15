@@ -2403,25 +2403,12 @@ impl Select {
                     let (nr, ny) = (if open { 6.5 } else { 5.0 }, y + (rh - 4.0) / 2.0);
                     crate::style::note(c, 33.0, ny, nr, tag, open, 0.7);
                     // A song with a map marked EPIC: a prism stripe down its left edge, its title
-                    // in the shimmer with the word after it, and a spark round the open one.
+                    // in the shimmer, and a spark round the open one.
                     let epic = g.clone().any(|i| self.is_epic(&library[self.visible[i]]));
-                    let tag_w = if epic {
-                        Canvas::text_width(6.0, crate::epic::LABEL) + 6.0
-                    } else {
-                        0.0
-                    };
-                    let title = fit(e.meta.title.clone(), 10.0, lw - 110.0 - tag_w);
+                    let title = fit(e.meta.title.clone(), 10.0, lw - 110.0);
                     if epic {
                         crate::epic::stripe(c, 24.0, y + 3.0, rh - 10.0, 1.0);
-                        let tw = crate::epic::text(c, 44.0, y + 6.0, 10.0, &title, 1.0);
-                        crate::epic::text(
-                            c,
-                            44.0 + tw + 6.0,
-                            y + 8.0,
-                            6.0,
-                            crate::epic::LABEL,
-                            0.95,
-                        );
+                        crate::epic::text(c, 44.0, y + 6.0, 10.0, &title, 1.0);
                         if open {
                             crate::epic::spark_round(c, [24.0, y, lw, rh - 4.0], 1.0);
                         }

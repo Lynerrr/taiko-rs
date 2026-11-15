@@ -126,59 +126,79 @@ pub fn pill(c: &mut Canvas, x: f32, y: f32, a: f32, bump: f32) -> f32 {
     w
 }
 
-/// The music's spectrum round the pill at (`x`, `y`): blocks out of its edge as the idle
-/// screen's rays come out of the disc, the lows at the top middle, mirrored left and right, in
-/// the prism along the edge and whiter further out. Only over the top and round the ends, a
-/// crown: the line under the pill (the difficulty and its stars) sits close below it.
+/// The music's spectrum round the pill at (`x`, `y`), on the pixel grid like the idle screen's
+/// rays: an equaliser of columns over its top (the lows in the middle, mirrored left and right)
+/// and short rays straight out of its ends (the highs), in the prism and whiter further out.
+/// Nothing under it: the line under the pill (the difficulty and its stars) sits close below.
 pub fn aura(c: &mut Canvas, x: f32, y: f32, bands: &[f32], a: f32) {
-    let w = pill_width();
-    let r = PILL_H / 2.0;
-    let straight = w / 2.0 - r;
-    let (cx, cy) = (x + w / 2.0, y + r);
-    // From the top middle round to just past the end's middle.
-    let half = straight + 0.6 * std::f32::consts::PI * r;
-    let n = ((half / 2.8) as usize).max(6);
+    const COLUMN_STEP: f32 = 2.0;
+    const BLOCK_STEP: f32 = 2.0;
+    const GAP: f32 = 2.0;
+    /// The rows of rays out of each end, by how far from the middle.
+    const END_ROWS: [f32; 3] = [-3.0, 0.0, 3.0];
     let bands = &bands[..bands.len().min(AURA_BANDS)];
     if bands.is_empty() {
         return;
     }
-    let (block, step, gap) = (pixel_size(1.5), 2.3, 2.6);
+    let w = pill_width();
+    let r = PILL_H / 2.0;
+    let straight = w / 2.0 - r;
+    let (cx, cy) = (x + w / 2.0, y + r);
+    let block = pixel_size(1.5);
     let t = secs();
-    for k in 0..n {
-        let b0 = k * bands.len() / n;
-        let b1 = ((k + 1) * bands.len() / n).max(b0 + 1).min(bands.len());
-        let v = bands[b0..b1].iter().copied().fold(0.0, f32::max);
-        let blocks = (v * AURA_BLOCKS as f32).round() as usize;
-        if blocks == 0 {
-            continue;
-        }
-        // Along the right half of the edge, from the top middle round to the bottom middle.
-        let s = (k as f32 + 0.5) / n as f32 * half;
-        let (px, py, nx, ny) = if s < straight {
-            (cx + s, cy - r, 0.0, -1.0)
+    // The loudest of the bands from `from` to `to` (fractions of them).
+    let level = |from: f32, to: f32| {
+        let n = bands.len();
+        let b0 = ((from * n as f32) as usize).min(n - 1);
+        let b1 = ((to * n as f32) as usize).clamp(b0 + 1, n);
+        bands[b0..b1].iter().copied().fold(0.0, f32::max)
+    };
+    let mut put = |bx: f32, by: f32, u: f32, j: usize| {
+        let f = j as f32 / AURA_BLOCKS as f32;
+        let col = rgba(
+            crate::menu::tint(prism_at(u, t), 0xffffff, f * f * 0.8),
+            (0.9 - j as f32 * 0.16) * a,
+        );
+        c.rect(
+            snap_to_grid(bx - block / 2.0),
+            snap_to_grid(by - block / 2.0),
+            block,
+            block,
+            col,
+        );
+    };
+    // The columns over the top, out to where the ends curve down.
+    let columns = ((w / 2.0 - 1.0) / COLUMN_STEP) as usize;
+    let share = 0.75;
+    for k in 0..columns {
+        let d = (k as f32 + 0.5) * COLUMN_STEP;
+        let (from, to) = (k as f32 / columns as f32, (k + 1) as f32 / columns as f32);
+        let blocks = (level(from * share, to * share) * AURA_BLOCKS as f32).round() as usize;
+        // The pill's top at this distance from its middle (lower over the round ends).
+        let top = if d <= straight {
+            y
         } else {
-            let angle = -std::f32::consts::FRAC_PI_2 + (s - straight) / r;
-            let (sin, cos) = angle.sin_cos();
-            (cx + straight + cos * r, cy + sin * r, cos, sin)
+            let e = (d - straight).min(r);
+            cy - (r * r - e * e).sqrt()
         };
-        let u = k as f32 / n as f32;
+        let u = from * share;
         for j in 0..blocks.min(AURA_BLOCKS) {
-            let out = gap + j as f32 * step;
-            let f = j as f32 / AURA_BLOCKS as f32;
-            let col = rgba(
-                crate::menu::tint(prism_at(u, t), 0xffffff, f * f * 0.8),
-                (0.9 - j as f32 * 0.16) * a,
-            );
-            let (bx, by) = (px + nx * out, py + ny * out);
-            for x in [bx, 2.0 * cx - bx] {
-                c.rect(
-                    snap_to_grid(x - block / 2.0),
-                    snap_to_grid(by - block / 2.0),
-                    block,
-                    block,
-                    col,
-                );
-            }
+            let by = top - GAP - j as f32 * BLOCK_STEP;
+            put(cx + d, by, u, j);
+            put(cx - d, by, u, j);
+        }
+    }
+    // The rays out of the ends.
+    for (i, dy) in END_ROWS.iter().enumerate() {
+        let n = END_ROWS.len() as f32;
+        let from = share + (1.0 - share) * i as f32 / n;
+        let to = share + (1.0 - share) * (i + 1) as f32 / n;
+        let blocks = (level(from, to) * 3.0).round() as usize;
+        let reach = straight + (r * r - dy * dy).max(0.0).sqrt();
+        for j in 0..blocks.min(3) {
+            let out = reach + GAP + j as f32 * BLOCK_STEP;
+            put(cx + out, cy + dy, from, j);
+            put(cx - out, cy + dy, from, j);
         }
     }
 }

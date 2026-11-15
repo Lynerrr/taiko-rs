@@ -103,7 +103,7 @@ fn an_epic_map_wears_its_mark_in_song_select() {
     s.set_status.insert(42, Some("ranked".into()));
     s.select.server_epic.sets.insert(42, Vec::new());
     let c = frame(&mut s, now);
-    assert!(shows(&c, epic::LABEL), "the pill and the row's word");
+    assert!(shows(&c, epic::LABEL), "the pill");
     assert!(shows(&c, "RANKED"), "next to the status");
     settle(&mut s, &mut now);
     now += Duration::from_millis(16);
