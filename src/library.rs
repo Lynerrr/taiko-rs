@@ -23,6 +23,9 @@ pub struct Entry {
     /// use: hashing every file up front would make startup with a big library crawl.
     hash: OnceLock<u64>,
     text: crate::search::Text,
+    /// In taiko.rs's own custom maps folder (`is_own_map`): a taiko.rs map, whatever osu! set
+    /// its file names.
+    own: bool,
 }
 
 impl Entry {
@@ -37,6 +40,7 @@ impl Entry {
             &format!("{} - {} [{}]", meta.artist, meta.title, meta.version),
         );
         Entry {
+            own: is_own_map(&path),
             path,
             meta,
             size,
@@ -58,7 +62,12 @@ impl Entry {
     }
 
     /// The osu! beatmap set it belongs to: from the `.osu`, else its "123456 Artist - Title" folder.
+    /// None for a map in taiko.rs's own custom maps folder: a custom map made from an osu! set
+    /// keeps that set's IDs, but osu! has none of its difficulties.
     pub fn set_id(&self) -> Option<u32> {
+        if self.own {
+            return None;
+        }
         self.meta
             .set_id
             .or_else(|| {
@@ -67,6 +76,11 @@ impl Entry {
                     .and_then(crate::download::set_id_of_folder)
             })
             .filter(|&id| id > 0)
+    }
+
+    /// Whether it's in taiko.rs's own custom maps folder.
+    pub fn is_own(&self) -> bool {
+        self.own
     }
 
     pub fn hash(&self) -> u64 {
@@ -88,6 +102,28 @@ pub fn file_stats(path: &Path) -> (u64, u64) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     (md.len(), modified)
+}
+
+/// taiko.rs's own custom maps folders (`State::custom_dir`; a test has one of its own). Only
+/// ever added to, so a map read while another test runs is never taken for its own.
+static OWN_ROOTS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
+
+/// Makes `root` a folder of taiko.rs's own custom maps: maps read from now on in it are its own
+/// (`Entry::is_own`).
+pub fn add_own_root(root: &Path) {
+    let mut roots = OWN_ROOTS.write().unwrap_or_else(|e| e.into_inner());
+    if !roots.iter().any(|r| r == root) {
+        roots.push(root.to_path_buf());
+    }
+}
+
+/// Whether the map file at `path` is in a folder of taiko.rs's own custom maps.
+pub fn is_own_map(path: &Path) -> bool {
+    OWN_ROOTS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|r| path.starts_with(r))
 }
 
 /// The Songs folder picked in settings (None = look in the usual places).
@@ -1026,6 +1062,7 @@ pub(crate) fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
 /// exists, whatever the Songs folder setting says. It is kept out of the Songs folders (where
 /// osu! maps are downloaded and osu!.db is looked for).
 pub(crate) fn with_custom(mut inputs: Vec<PathBuf>, custom: &Path) -> Vec<PathBuf> {
+    add_own_root(custom);
     if custom.is_dir() && !inputs.iter().any(|i| i == custom) {
         inputs.push(custom.to_path_buf());
     }

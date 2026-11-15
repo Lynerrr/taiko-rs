@@ -692,7 +692,8 @@ impl Select {
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
     fn status_of(&self, e: &Entry) -> u8 {
-        if self.edited.contains(&e.path) {
+        // A map in taiko.rs's own folder is never osu!'s, nor an edited copy of osu!'s.
+        if self.edited.contains(&e.path) && !e.is_own() {
             return crate::search::NOT_SUBMITTED;
         }
         if let Some(id) = e.path.parent().and_then(|d| self.custom_folder.get(d)) {
@@ -701,6 +702,9 @@ impl Select {
             } else {
                 crate::search::CUSTOM
             };
+        }
+        if e.is_own() {
+            return crate::search::NOT_SUBMITTED;
         }
         match e.set_id() {
             Some(_) if loved_here(&self.server_loved, e) => crate::search::LOVED,

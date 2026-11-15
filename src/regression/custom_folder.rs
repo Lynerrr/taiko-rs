@@ -53,7 +53,7 @@ fn client(f: &Folders) -> (State, Instant) {
     let mut s = state_with(config(), Vec::new());
     s.songs_dir = f.songs.clone();
     s.song_dirs = vec![f.songs.clone()];
-    s.custom_dir = f.custom.clone();
+    s.set_custom_dir(f.custom.clone());
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     (s, now)
@@ -135,4 +135,106 @@ fn a_lobby_host_may_send_a_set_from_the_custom_folder() {
     // The folder itself, or one outside every root, is never a set to send.
     assert!(!download::is_set_folder(&f.custom, &roots));
     assert!(!download::is_set_folder(&f.root, &roots));
+}
+
+/// Custom set 12 in the custom maps folder, made from osu! set 622136 (whose IDs its chart
+/// keeps), with the manifest the website's archive brings when `id` is given.
+fn custom_set(f: &Folders, id: Option<u32>) -> PathBuf {
+    let path = put(&f.custom, "c12 Regression - Time Traveler", 1);
+    let text = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("BeatmapSetID:-1", "BeatmapSetID:622136");
+    std::fs::write(&path, text).unwrap();
+    if let Some(id) = id {
+        std::fs::write(
+            path.parent().unwrap().join(custom::SIDECAR),
+            format!("{{\"id\": {id}}}\n"),
+        )
+        .unwrap();
+    }
+    path
+}
+
+/// Song select over `f`, offline (the tests' server isn't the official one, and the website
+/// can't be asked), once the custom maps folder's manifests are read.
+fn offline_client(f: &Folders) -> (State, Instant, usize) {
+    let (mut s, mut now) = client(f);
+    s.cfg.check_updates = true;
+    refresh(&mut s, &mut now);
+    s.select.set_cursor(0);
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.custom_call.is_idle()
+            && s.custom_asked.is_some()),
+        "the manifests are read"
+    );
+    let i = s.select.selected().expect("the set is selected");
+    (s, now, i)
+}
+
+#[test]
+fn a_set_in_the_custom_folder_is_custom_and_epic_offline_by_its_manifest() {
+    let f = Folders::new("offline");
+    let path = custom_set(&f, Some(12));
+    let (mut s, _now, i) = offline_client(&f);
+    assert!(!online::is_official(&s.cfg.online_server));
+    assert_eq!(s.library[i].path, path);
+    assert!(s.library[i].is_own());
+    let folder = path.parent().unwrap().to_path_buf();
+    assert_eq!(s.select.custom_folder.get(&folder), Some(&12));
+    assert_eq!(s.map_status(i).map(|x| x.0), Some("CUSTOM"));
+    s.select.server_epic.custom.insert(12);
+    assert!(s.select.is_epic(&s.library[i]), "custom set 12 is EPIC");
+    // A mark song select had put on it by mistake doesn't make it nobody's.
+    s.select.edited.insert(path.clone());
+    assert_eq!(s.map_status(i).map(|x| x.0), Some("CUSTOM"));
+}
+
+#[test]
+fn a_custom_folder_set_made_from_an_osu_set_is_never_checked_against_it() {
+    let f = Folders::new("no-osu");
+    custom_set(&f, Some(12));
+    let (mut s, now, i) = offline_client(&f);
+    assert_eq!(s.library[i].meta.set_id, Some(622_136), "the file keeps it");
+    assert_eq!(s.library[i].set_id(), None, "but it isn't osu!'s");
+    s.poll_set_check(now);
+    s.poll_set_check(now + Duration::from_secs(2));
+    assert!(s.set_check_due.is_none() && s.set_check.is_none());
+    assert!(!s.select.updates.contains_key(&622_136));
+    // osu! set 622136 having a newer version is nothing to it.
+    s.select.updates.insert(622_136, ui::SetUpdate::Available);
+    assert_eq!(s.select.update_of(&s.library[i]), None);
+    // Its own: the website's.
+    s.select.custom_updates.insert(12, ui::SetUpdate::Available);
+    assert_eq!(
+        s.select.update_of(&s.library[i]),
+        Some(&ui::SetUpdate::Available)
+    );
+    // Loved or EPIC osu! set 622136 doesn't make it either.
+    s.select.server_epic.sets.insert(622_136, Vec::new());
+    assert!(!s.select.is_epic(&s.library[i]));
+}
+
+#[test]
+fn a_set_in_the_custom_folder_never_sent_is_not_submitted_and_not_osus() {
+    let f = Folders::new("local");
+    custom_set(&f, None);
+    let (mut s, now, i) = offline_client(&f);
+    assert!(s.select.custom_folder.is_empty());
+    assert_eq!(s.map_status(i).map(|x| x.0), Some("NOT SUBMITTED"));
+    s.poll_set_check(now);
+    s.poll_set_check(now + Duration::from_secs(2));
+    assert!(s.set_check_due.is_none() && s.set_check.is_none());
+}
+
+#[test]
+fn the_same_set_in_osus_songs_folder_is_still_checked_against_osu() {
+    // Outside taiko.rs's own folder nothing changes: no marker, an osu! set as before.
+    let f = Folders::new("legacy");
+    let path = put(&f.songs, "622136 Regression - Time Traveler", 1);
+    let (mut s, now, i) = offline_client(&f);
+    assert_eq!(s.library[i].path, path);
+    assert!(!s.library[i].is_own());
+    assert_eq!(s.library[i].set_id(), Some(622_136));
+    s.poll_set_check(now);
+    assert_eq!(s.set_check_due.map(|d| d.0), Some(622_136));
 }

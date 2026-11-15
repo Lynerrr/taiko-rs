@@ -4304,7 +4304,7 @@ impl State {
             Ok(()) => {
                 self.cfg.data_folder = m.to;
                 config::set_data_folder(self.cfg.data_folder.clone());
-                self.custom_dir = config::custom_dir();
+                self.set_custom_dir(config::custom_dir());
                 self.cfg.save();
                 let _ = self.set_songs_folder(self.cfg.songs_folder.clone());
                 let at = config::data_dir().map(|d| d.display().to_string()).unwrap_or_default();
@@ -8153,15 +8153,15 @@ impl State {
         let due = self.custom_asked.is_none_or(|t| {
             self.scene.is_select() && now.saturating_duration_since(t) >= CUSTOM_REFRESH
         });
-        if due
-            && self.custom_call.is_idle()
-            && !self.library.is_empty()
-            && online::is_official(&self.cfg.online_server)
-        {
+        // taiko.rs's own folder is known by its manifests offline too; the rest (copies in osu!'s
+        // Songs folder) only with the website to ask.
+        let official = online::is_official(&self.cfg.online_server);
+        if due && self.custom_call.is_idle() && !self.library.is_empty() {
             self.custom_asked = Some(now);
             let mut folders: Vec<PathBuf> = self
                 .library
                 .iter()
+                .filter(|e| official || e.is_own())
                 .filter_map(|e| e.path.parent().map(Path::to_path_buf))
                 .collect();
             folders.sort();
@@ -8171,6 +8171,9 @@ impl State {
                     .into_iter()
                     .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
                     .collect();
+                if !official {
+                    return (known, Vec::new(), None);
+                }
                 if known.is_empty() {
                     return (known, Vec::new(), Some(Vec::new()));
                 }
@@ -8213,8 +8216,16 @@ impl State {
                         }
                     }
                 }
-                self.select.custom_folder = folders;
-                self.select.custom_approved = approved.into_iter().collect();
+                if official {
+                    self.select.custom_folder = folders;
+                    self.select.custom_approved = approved.into_iter().collect();
+                } else {
+                    // Only taiko.rs's own folder was read.
+                    self.select
+                        .custom_folder
+                        .retain(|d, _| !library::is_own_map(d));
+                    self.select.custom_folder.extend(folders);
+                }
                 if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
                     self.select.refilter(&self.library);
                 }
@@ -9667,7 +9678,8 @@ impl State {
     /// can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let edited = self.select.edited.contains(&e.path);
+        // Never for a map in taiko.rs's own folder: osu! isn't asked about those.
+        let edited = self.select.edited.contains(&e.path) && !e.is_own();
         // As the song list has it (`Select::status_of`): an edited copy is nobody's.
         let custom = e
             .path

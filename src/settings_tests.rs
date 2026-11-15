@@ -3202,7 +3202,7 @@ fn enter_on_the_taiko_rs_maps_folder_makes_it_and_says_where_it_is() {
     ));
     let _ = std::fs::remove_dir_all(&root);
     let mut s = layout_tests::state();
-    s.custom_dir = root.join("Custom");
+    s.set_custom_dir(root.join("Custom"));
     s.open_settings();
     s.settings_ui.cursor = settings::ITEMS
         .iter()

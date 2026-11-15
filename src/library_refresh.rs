@@ -74,6 +74,12 @@ impl State {
         self.refreshed_at = Some(Instant::now());
     }
 
+    /// Uses `dir` as taiko.rs's own custom maps folder from now on (scanned at the next look).
+    pub(crate) fn set_custom_dir(&mut self, dir: PathBuf) {
+        library::add_own_root(&dir);
+        self.custom_dir = dir;
+    }
+
     /// What a library scan reads: the Songs folders, plus taiko.rs's own custom maps folder.
     pub(crate) fn scan_roots(&self) -> Vec<PathBuf> {
         library::with_custom(self.song_dirs.clone(), &self.custom_dir)
