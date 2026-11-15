@@ -3507,6 +3507,7 @@ dependencies = [
 name = "taiko-proto"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustls",
  "serde",
  "serde_json",

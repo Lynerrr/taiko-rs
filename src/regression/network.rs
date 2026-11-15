@@ -2370,3 +2370,245 @@ fn the_host_picks_the_mods_for_everyone_and_gives_them_back() {
     );
     assert_snapshot("network-host-mods", &log);
 }
+
+/// Keeps what a slow link takes in ahead of it small (on the listener, for the window the
+/// connection starts with, and on the connection): the
+/// system would otherwise take megabytes in at once (macOS does on loopback) and stand for a
+/// fast link, the backlog left in the sender's socket.
+#[cfg(unix)]
+fn small_receive_buffer(socket: &impl std::os::fd::AsRawFd) {
+    let value: libc::c_int = 64 * 1024;
+    // SAFETY: a valid socket, and a c_int option given with its size.
+    unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            (&value as *const libc::c_int).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn small_receive_buffer<T>(_socket: &T) {}
+
+/// A way to `to` that carries what the client sends at about `bytes_per_s` (what comes back is
+/// passed straight on): a player on a slow upload. Takes one connection.
+fn slow_upload(to: String, bytes_per_s: usize) -> String {
+    use std::io::Read as _;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    small_receive_buffer(&listener);
+    let addr = listener.local_addr().unwrap().to_string();
+    std::thread::spawn(move || {
+        let Ok((mut client, _)) = listener.accept() else {
+            return;
+        };
+        small_receive_buffer(&client);
+        let Ok(mut room) = std::net::TcpStream::connect(&to) else {
+            return;
+        };
+        let (Ok(mut back_from), Ok(mut back_to)) = (room.try_clone(), client.try_clone()) else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut back_from, &mut back_to);
+        });
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = client.read(&mut buf) {
+            if n == 0 || room.write_all(&buf[..n]).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs_f64(n as f64 / bytes_per_s as f64));
+        }
+    });
+    addr
+}
+
+/// Draws a frame of each client at `now` until `done` holds (true) or `limit` of real time
+/// passes (false).
+fn both_until(
+    a: &mut State,
+    b: &mut State,
+    now: &mut Instant,
+    limit: Duration,
+    mut done: impl FnMut(&State, &State) -> bool,
+) -> bool {
+    let until = Instant::now() + limit;
+    while Instant::now() < until {
+        if done(a, b) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+        *now += Duration::from_millis(16);
+        frame(a, *now);
+        frame(b, *now);
+    }
+    done(a, b)
+}
+
+/// A room with a host on a slow upload (1 MB/s: a 4 MB set takes about 5 s to send) and a
+/// guest, both in its lobby. The host has two maps, the first with a big song file; the guest
+/// has `guest_has` of them. Hands back (host, guest, both libraries, the frames' clock).
+fn slow_host_lobby(
+    tag: &str,
+    guest_has: &[maps::Chart],
+) -> (State, State, (Songs, Songs), Instant) {
+    let host_songs = Songs::new(&format!("{tag}-host"), &[maps::basics(), maps::big_notes()]);
+    let big_set = host_songs.paths[0].parent().unwrap().to_path_buf();
+    std::fs::write(big_set.join("audio.mp3"), vec![7u8; 4 << 20]).unwrap();
+    let guest_songs = Songs::new(&format!("{tag}-guest"), guest_has);
+    let mut h = state_with(harness::config(), host_songs.entries());
+    let mut g = state_with(harness::config(), guest_songs.entries());
+    h.song_dirs = vec![host_songs.dir.clone()];
+    h.songs_dir = host_songs.dir.clone();
+    g.song_dirs = vec![guest_songs.dir.clone()];
+    g.songs_dir = guest_songs.dir.clone();
+    let mut now = Instant::now();
+    ready(&mut h, &mut now);
+    ready(&mut g, &mut now);
+    let server = net::host(0, false).unwrap();
+    let room = format!("127.0.0.1:{}", server.port);
+    let link = slow_upload(room.clone(), 1 << 20);
+    let mut host = multiplayer::joined(
+        net::Client::connect(&link, "host", Some(server.token)).unwrap(),
+        "regression room",
+    );
+    host.server = Some(server);
+    h.mp = Some(host);
+    h.scene = crate::screens::lobby::Lobby::scene();
+    g.mp = Some(multiplayer::joined(
+        net::Client::connect(&room, "guest", None).unwrap(),
+        "regression room",
+    ));
+    g.scene = crate::screens::lobby::Lobby::scene();
+    let in_room = |s: &State| s.mp.as_ref().is_some_and(|m| m.players.len() == 2);
+    assert!(both_until(
+        &mut h,
+        &mut g,
+        &mut now,
+        Duration::from_secs(10),
+        |h, g| { in_room(h) && in_room(g) && h.mp.as_ref().unwrap().is_host() }
+    ));
+    (h, g, (host_songs, guest_songs), now)
+}
+
+/// The lobby map's title as a client has it.
+fn lobby_title(s: &State) -> Option<String> {
+    s.mp.as_ref()
+        .and_then(|m| m.map.as_ref())
+        .map(|m| m.title.clone())
+}
+
+/// The host picks the `i`th song of its list for the lobby (M, then Enter).
+fn pick_for_lobby(h: &mut State, i: usize, now: Instant) {
+    press(h, KeyCode::KeyM, now);
+    assert!(h.picking_lobby_map, "M opens the map picker");
+    h.select.set_cursor(i);
+    frame(h, now);
+    press(h, KeyCode::Enter, now);
+    assert_eq!(scene_name(h), "Lobby", "a pick goes back to the lobby");
+}
+
+/// The host picks the big map, which the guest doesn't have: the guest asks the host for its
+/// set, and its first part has arrived.
+fn guest_receiving_the_big_set(h: &mut State, g: &mut State, now: &mut Instant) {
+    pick_for_lobby(h, 0, *now);
+    assert!(
+        both_until(h, g, now, Duration::from_secs(10), |_, g| {
+            lobby_title(g).as_deref() == Some("basics") && g.host_transfer.is_some()
+        }),
+        "the guest gets the big set from the host"
+    );
+}
+
+/// The host picks a map the guest doesn't have, so the guest asks the host for its set and the
+/// host starts sending it on a slow upload. The host changes its mind: the new map reaches the
+/// room at once, not after the whole set has gone up, and the guest, who has the new map, isn't
+/// left waiting on the old one's transfer.
+#[test]
+fn the_host_changes_the_map_while_sending_a_set() {
+    let (mut h, mut g, _songs, mut now) = slow_host_lobby("mp-change", &[maps::big_notes()]);
+    let mut log = String::new();
+    guest_receiving_the_big_set(&mut h, &mut g, &mut now);
+    let _ = writeln!(
+        log,
+        "guest gets the first map from the host: {}",
+        g.host_transfer.is_some()
+    );
+    // The host picks the map the guest has, while the set is still going up.
+    pick_for_lobby(&mut h, 1, now);
+    let picked = Instant::now();
+    let arrived = both_until(&mut h, &mut g, &mut now, Duration::from_secs(10), |h, g| {
+        lobby_title(h).as_deref() == Some("big-notes")
+            && lobby_title(g).as_deref() == Some("big-notes")
+    });
+    let waited = picked.elapsed();
+    assert!(arrived, "the new map reaches the room");
+    assert!(
+        waited < Duration::from_millis(1500),
+        "the new map waited {waited:?} behind the set being sent"
+    );
+    let _ = writeln!(log, "the room has the new map within 1.5 s: true");
+    // The guest has it: no transfer left hanging on the old one, ready to play.
+    assert!(both_until(
+        &mut h,
+        &mut g,
+        &mut now,
+        Duration::from_secs(5),
+        |_, g| {
+            g.mp.as_ref()
+                .is_some_and(|m| m.have_map && m.me().is_some_and(|p| p.has_map))
+        }
+    ));
+    let _ = writeln!(
+        log,
+        "guest has the new map: true, still receiving the old one: {}",
+        g.host_transfer.is_some()
+    );
+    press(&mut g, KeyCode::Space, now);
+    assert!(
+        both_until(&mut h, &mut g, &mut now, Duration::from_secs(2), |h, _| {
+            h.mp.as_ref()
+                .is_some_and(|m| m.players.iter().any(|p| !p.host && p.ready))
+        }),
+        "the guest's Ready reaches the room at once too"
+    );
+    let _ = writeln!(log, "guest ready: true");
+    assert_snapshot("network-host-changes-map-mid-transfer", &log);
+}
+
+/// As above, but the guest doesn't have the new map either: the host stops sending the old set,
+/// and the guest asks for the new one at once and gets it, instead of after the old set has
+/// gone up (or never, waiting on it).
+#[test]
+fn a_new_lobby_map_comes_from_the_host_without_waiting_for_the_old_set() {
+    let (mut h, mut g, _songs, mut now) = slow_host_lobby("mp-change-both", &[]);
+    let mut log = String::new();
+    guest_receiving_the_big_set(&mut h, &mut g, &mut now);
+    pick_for_lobby(&mut h, 1, now);
+    let picked = Instant::now();
+    let have_new = |g: &State| {
+        lobby_title(g).as_deref() == Some("big-notes") && g.mp.as_ref().is_some_and(|m| m.have_map)
+    };
+    let got = both_until(&mut h, &mut g, &mut now, Duration::from_secs(15), |_, g| {
+        have_new(g)
+    });
+    let waited = picked.elapsed();
+    assert!(got, "the guest gets the new map from the host");
+    // The old set had about 4 s left to go up.
+    assert!(
+        waited < Duration::from_millis(2500),
+        "the new map came {waited:?} after it was picked: behind the old set"
+    );
+    let titles: Vec<&str> = g.library.iter().map(|e| e.meta.title.as_str()).collect();
+    let _ = writeln!(log, "guest got the new map in time: true");
+    let _ = writeln!(log, "guest's library: {titles:?}");
+    let _ = writeln!(
+        log,
+        "downloads left: {}, receiving: {}",
+        g.downloads.len(),
+        g.host_transfer.is_some()
+    );
+    assert_snapshot("network-new-lobby-map-skips-the-old-set", &log);
+}
