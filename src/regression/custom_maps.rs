@@ -148,3 +148,97 @@ fn an_older_custom_copy_is_offered_the_websites_version_not_osus() {
         Some(&ui::SetUpdate::UpToDate)
     );
 }
+
+#[test]
+fn the_websites_archive_puts_aside_the_old_versions_renamed_difficulty() {
+    let (mut s, _songs, mut now, i) = client("custom-renamed-diff");
+    let old = s.library[i].path.clone();
+    let folder = old.parent().unwrap().to_path_buf();
+    s.select.server_epic.custom.insert(CUSTOM_SET);
+
+    // The website's version renamed the difficulty, and its file is named otherwise.
+    let text = std::fs::read_to_string(&old).unwrap();
+    let version = s.library[i].meta.version.clone();
+    let renamed = text.replace(&format!("Version:{version}"), "Version:Go backwards (TKO)");
+    assert_ne!(renamed, text, "the difficulty is renamed");
+    let file = "Regression - Time Traveler [Go backwards].osu";
+    let archive = website_archive(
+        &std::env::temp_dir().join(format!(
+            "taiko-rs-regression-custom-renamed-{}",
+            std::process::id()
+        )),
+        file,
+        renamed.as_bytes(),
+    );
+    let name = archive.file_stem().unwrap().to_string_lossy().into_owned();
+    s.import_osz(archive, &name, true);
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.downloads.is_empty()),
+        "the archive is unpacked"
+    );
+
+    // Only the website's difficulty is in the set's folder and in the list, with the EPIC mark.
+    assert!(!old.exists(), "the old version's chart is put aside");
+    let mut aside = old.clone().into_os_string();
+    aside.push(format!(".{}", download::SET_ASIDE));
+    assert_eq!(
+        std::fs::read_to_string(std::path::PathBuf::from(aside)).unwrap(),
+        text,
+        "not deleted: renaming it back brings it back"
+    );
+    let listed: Vec<String> = s
+        .library
+        .iter()
+        .filter(|e| e.path.starts_with(&folder) && !s.select.gone.contains(&e.path))
+        .map(|e| e.meta.version.clone())
+        .collect();
+    assert_eq!(listed, ["Go backwards (TKO)"]);
+    let new = s
+        .library
+        .iter()
+        .position(|e| e.path == folder.join(file))
+        .expect("the new difficulty is listed");
+    assert_eq!(s.select.custom_folder.get(&folder), Some(&CUSTOM_SET));
+    assert!(s.select.is_epic(&s.library[new]));
+}
+
+#[test]
+fn opening_the_websites_archive_again_clears_an_old_version_left_behind() {
+    let (mut s, _songs, mut now, i) = client("custom-left-behind");
+    let current = s.library[i].path.clone();
+    let folder = current.parent().unwrap().to_path_buf();
+    s.select.custom_folder.insert(folder.clone(), CUSTOM_SET);
+    s.select.server_epic.custom.insert(CUSTOM_SET);
+    // An earlier import left the old version's chart next to the current one.
+    let old = folder.join("Regression - Time Traveler [Inner Oni].osu");
+    let text = std::fs::read_to_string(&current).unwrap();
+    std::fs::write(&old, format!("{text}\n// the old version\n")).unwrap();
+    let meta = crate::beatmap::read_meta_file(&old).unwrap();
+    s.library.push(Entry::new(old.clone(), meta));
+    s.select.refilter(&s.library);
+    assert!(
+        s.select.is_epic(s.library.last().unwrap()),
+        "both wore EPIC"
+    );
+
+    let archive = website_archive(
+        &std::env::temp_dir().join(format!(
+            "taiko-rs-regression-custom-left-behind-{}",
+            std::process::id()
+        )),
+        &current.file_name().unwrap().to_string_lossy(),
+        text.as_bytes(),
+    );
+    let name = archive.file_stem().unwrap().to_string_lossy().into_owned();
+    s.toast = None;
+    s.import_osz(archive, &name, true);
+    assert!(!s.downloads.is_empty(), "not \"already in your songs\"");
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.downloads.is_empty()),
+        "the archive is unpacked"
+    );
+    assert!(!old.exists(), "the old version's chart is put aside");
+    assert!(s.select.gone.contains(&old), "and leaves song select");
+    assert!(current.exists());
+    assert!(!s.select.gone.contains(&current));
+}
