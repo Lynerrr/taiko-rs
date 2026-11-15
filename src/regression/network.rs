@@ -883,6 +883,34 @@ fn online_lines_are_framed_as_json_lines() {
     assert!(matches!(back, Request::ListRooms));
 }
 
+#[test]
+fn the_encrypted_connection_does_not_name_the_server() {
+    // The first thing the game sends is the handshake's hello, in the clear. A VPN that reads a
+    // name there sends the connection to that name instead of the address dialed, which was the
+    // old forwarder: the game only saw "the connection dropped". So no name goes out.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let raw = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let client = std::thread::spawn(move || taiko_proto::tls::connect(raw).is_ok());
+    let (mut server, _) = listener.accept().unwrap();
+    server
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let mut header = [0u8; 5];
+    std::io::Read::read_exact(&mut server, &mut header).unwrap();
+    assert_eq!(header[0], 0x16, "a handshake record comes first");
+    let mut hello = vec![0u8; u16::from_be_bytes([header[3], header[4]]) as usize];
+    std::io::Read::read_exact(&mut server, &mut hello).unwrap();
+    assert_eq!(hello[0], 0x01, "and it's the client's hello");
+    let name = taiko_proto::tls::SERVER_HOST.as_bytes();
+    assert!(
+        !hello.windows(name.len()).any(|w| w == name),
+        "the hello names {}",
+        taiko_proto::tls::SERVER_HOST
+    );
+    drop(server);
+    assert!(!client.join().unwrap(), "no handshake without a server");
+}
+
 // ---------------------------------------------------------------------------------------------
 // A scripted room.
 

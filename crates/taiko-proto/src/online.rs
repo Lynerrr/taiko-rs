@@ -14,7 +14,9 @@ pub const PROTOCOL: u32 = 1;
 /// Most maps one `Request::SetStatuses` is answered for.
 pub const MAX_STATUS_MAPS: usize = 500;
 pub const DEFAULT_PORT: u16 = 7800;
-pub const DEFAULT_SERVER: &str = "jashincraft.space:7800";
+/// The official server, dialed straight. It used to be `jashincraft.space:7800`, a box that only
+/// forwarded to this one (`moved_off_the_forwarder`).
+pub const DEFAULT_SERVER: &str = "tls://130.78.31.127:17801";
 /// An address written `tls://host:port` is always encrypted and trusts only our certificate,
 /// whatever its host: the official server wherever it runs (see `Reply::Account::server`).
 pub const TLS_SCHEME: &str = "tls://";
@@ -1498,6 +1500,23 @@ pub fn is_official(server: &str) -> bool {
     }
 }
 
+/// The address a saved `online_server` is used as. `jashincraft.space` (any port, with or
+/// without `tls://`) was a box that only forwarded to the real server: some networks and VPNs
+/// can't get through it, so it's swapped for `DEFAULT_SERVER`. It's the same server behind it,
+/// so the saved login still holds. Any other address (a LAN server, one of your own) stays.
+pub fn moved_off_the_forwarder(server: &str) -> String {
+    let trimmed = server.trim();
+    let address = trimmed.strip_prefix(TLS_SCHEME).unwrap_or(trimmed);
+    if host_and_port(address)
+        .0
+        .eq_ignore_ascii_case(crate::tls::SERVER_HOST)
+    {
+        DEFAULT_SERVER.to_string()
+    } else {
+        server.to_string()
+    }
+}
+
 /// Where a connection to `server` goes, and whether it's encrypted (and then only our
 /// certificate is trusted, whatever the host).
 fn dial(server: &str) -> (bool, String) {
@@ -1772,9 +1791,10 @@ mod tests {
     fn our_server_is_reached_encrypted_wherever_it_runs() {
         // Our host name: always the encrypted port, whatever port an older config has.
         assert_eq!(
-            dial(DEFAULT_SERVER),
+            dial("jashincraft.space:7800"),
             (true, "jashincraft.space:7801".into())
         );
+        assert_eq!(dial(DEFAULT_SERVER), (true, "130.78.31.127:17801".into()));
         assert_eq!(
             dial(" JashinCraft.space "),
             (true, "JashinCraft.space:7801".into())
@@ -1811,6 +1831,32 @@ mod tests {
         ] {
             assert!(!is_official(other), "{other} isn't ours");
         }
+    }
+
+    #[test]
+    fn the_forwarder_address_is_swapped_for_the_server_itself() {
+        for forwarder in [
+            "jashincraft.space:7800",
+            "jashincraft.space",
+            " JashinCraft.space:7801 ",
+            "tls://jashincraft.space:7801",
+        ] {
+            assert_eq!(
+                moved_off_the_forwarder(forwarder),
+                DEFAULT_SERVER,
+                "{forwarder}"
+            );
+        }
+        for kept in [
+            DEFAULT_SERVER,
+            "tls://game.example:17801",
+            "192.168.1.5",
+            "example.org:7800",
+            "jashincraft.space.evil.example:7800",
+        ] {
+            assert_eq!(moved_off_the_forwarder(kept), kept, "{kept}");
+        }
+        assert!(is_official(DEFAULT_SERVER));
     }
 
     #[test]

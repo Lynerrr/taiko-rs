@@ -131,7 +131,7 @@ notify_requests = true
 mp_port = 7777
 mp_address =
 # online server (accounts, lobbies) and your saved login there
-online_server = jashincraft.space:7800
+online_server = tls://130.78.31.127:17801
 online_user =
 online_token =
 # the version of the terms you agreed to (0: none yet)

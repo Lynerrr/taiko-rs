@@ -18,7 +18,8 @@ use rustls::{
 
 /// The port the game's connections take, encrypted (`online::DEFAULT_PORT` is the old plain one).
 pub const PORT: u16 = 7801;
-/// The server these are for. Others (one of your own, on a LAN) stay plain.
+/// The name on the server's certificate. An address with this host (or written `tls://`) is
+/// encrypted; others (one of your own, on a LAN) stay plain.
 pub const SERVER_HOST: &str = "jashincraft.space";
 
 const CA: &[u8] = include_bytes!("../../../assets/server-ca.der");
@@ -39,9 +40,13 @@ fn client_config(ca: &[u8]) -> Result<Arc<ClientConfig>, String> {
     let builder = ClientConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|e| e.to_string())?;
-    Ok(Arc::new(
-        builder.with_root_certificates(roots).with_no_client_auth(),
-    ))
+    let mut config = builder.with_root_certificates(roots).with_no_client_auth();
+    // The certificate is still checked against SERVER_HOST, but the name isn't sent: VPNs that
+    // read it from the handshake send the connection to wherever that name points instead of the
+    // address dialed (the old forwarder, which has nothing on the server's port), and the game
+    // only sees the connection drop. The server has one certificate and doesn't need the name.
+    config.enable_sni = false;
+    Ok(Arc::new(config))
 }
 
 /// Encrypts a connection to the server, proving it's the server: the plain end, to use as the
