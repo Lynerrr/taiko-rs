@@ -136,7 +136,12 @@ pub(crate) fn run(
     let inputs = library::startup_inputs(&args, &cfg);
     let songs_dir = download_dir(&inputs);
     let songs_dirs_for_db: Vec<PathBuf> = inputs.iter().filter(|p| p.is_dir()).cloned().collect();
-    let scan = start_scan(inputs);
+    // A map or archive given on the command line is played or opened alone.
+    let scan = if args.iter().any(|a| inputs.contains(a)) {
+        start_scan(inputs)
+    } else {
+        start_scan(library::with_custom(inputs, &config::custom_dir()))
+    };
 
     let audio = match Engine::new(cfg.audio_buffer) {
         Ok(a) => {
