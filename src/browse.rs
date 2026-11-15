@@ -332,6 +332,17 @@ impl Browse {
     }
 
     /// Whether `set` is an osu! set loved on the taiko.rs server.
+    /// A set's status pill at (`x`, `y`), or the EPIC one in its place when an admin marked a map
+    /// of it EPIC: EPIC is a status of its own, as on the website and in the map feed. Returns its
+    /// width.
+    pub(crate) fn status_pill(&self, c: &mut Canvas, set: &SetInfo, x: f32, y: f32) -> f32 {
+        if self.is_epic(set) {
+            return epic_pill(c, x, y);
+        }
+        let (label, color) = status_look(set, self.is_loved_here(set));
+        pill(c, x, y, label, color)
+    }
+
     fn is_loved_here(&self, set: &SetInfo) -> bool {
         set.custom.is_none()
             && self
@@ -1000,11 +1011,7 @@ impl Browse {
                 &Canvas::fit(7.0, room, &by_line),
             );
             let ly = y + 30.0;
-            let (label, color) = status_look(set, self.is_loved_here(set));
-            let mut lx = tx2 + pill(c, tx2, ly, label, color) + 6.0;
-            if self.is_epic(set) {
-                lx += epic_pill(c, lx, ly) + 6.0;
-            }
+            let mut lx = tx2 + self.status_pill(c, set, tx2, ly) + 6.0;
             let chosen = selected.then(|| {
                 self.diff_choice
                     .get(&set.id)
