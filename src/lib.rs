@@ -4668,7 +4668,19 @@ impl State {
             .flat_map(|j| j.maps.iter().copied())
             .collect();
         let (fresh, home) = library::osz_news(&self.library, &pending, &maps);
-        if fresh == 0 {
+        // A custom set's folder still holding an older version's chart (one the archive doesn't
+        // have) is unpacked over all the same: the website's archive puts it aside.
+        let stale = home.is_some_and(|home| {
+            self.select.custom_folder.contains_key(home)
+                && self
+                    .library
+                    .iter()
+                    .filter(|e| {
+                        e.path.parent() == Some(home) && !self.select.gone.contains(&e.path)
+                    })
+                    .any(|e| !maps.iter().any(|m| m.1 == e.hash()))
+        });
+        if fresh == 0 && !stale {
             if temporary {
                 let _ = std::fs::remove_file(&archive);
             }
@@ -13454,12 +13466,19 @@ impl State {
             if !e.path.starts_with(folder) {
                 continue;
             }
-            if let Some(new) = scanned.remove(&e.path)
-                && (new.size, new.modified) != (e.size, e.modified)
-            {
-                *e = new;
-                self.select.edited.remove(&e.path);
-                changed.push((i, e.path.clone(), e.modified, e.size));
+            match scanned.remove(&e.path) {
+                Some(new) if (new.size, new.modified) != (e.size, e.modified) => {
+                    *e = new;
+                    self.select.edited.remove(&e.path);
+                    self.select.gone.remove(&e.path);
+                    changed.push((i, e.path.clone(), e.modified, e.size));
+                }
+                Some(_) => {}
+                // An older version's chart the website's archive put aside: not listed.
+                None if !e.path.exists() => {
+                    self.select.gone.insert(e.path.clone());
+                }
+                None => {}
             }
         }
         let rewritten = changed.len();

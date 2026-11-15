@@ -2282,12 +2282,47 @@ fn extract_adding(
         }
     }
     if dest.is_dir() {
+        if tmp.join(crate::custom::SIDECAR).is_file() {
+            set_aside_older_charts(&tmp, dest);
+        }
         merge(&tmp, dest).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_dir_all(&tmp);
     } else {
         std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The suffix a chart put aside by [`set_aside_older_charts`] gets: song select no longer
+/// lists it, and renaming it back brings it back.
+pub const SET_ASIDE: &str = "replaced";
+
+/// The website's archive of a custom set (unpacked in `new`) is the whole set: the charts in
+/// its folder `folder` the archive doesn't have are an older version's (a difficulty renamed
+/// since, or dropped), and would be listed next to the new ones, wearing the set's marks. They
+/// are renamed to `<file>.replaced`, not deleted: a mapper's unsent difficulty can come back.
+fn set_aside_older_charts(new: &Path, folder: &Path) {
+    let Ok(dir) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let chart = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("osu") || e.eq_ignore_ascii_case("tko"));
+        if !chart || !path.is_file() || new.join(entry.file_name()).exists() {
+            continue;
+        }
+        let mut aside = path.clone().into_os_string();
+        aside.push(".");
+        aside.push(SET_ASIDE);
+        let aside = PathBuf::from(aside);
+        let _ = std::fs::remove_file(&aside);
+        if let Err(e) = std::fs::rename(&path, &aside) {
+            eprintln!("{}: not put aside ({e})", path.display());
+        }
+    }
 }
 
 /// Moves everything in `from` into `into`, replacing files of the same name.
