@@ -38,7 +38,7 @@ impl Screen for SongSelect {
             repeat,
             text,
             window,
-            ..
+            at,
         } = key;
         // Any key closes the row menu; Esc does nothing else.
         if state.select.menu.take().is_some() && code == KeyCode::Escape {
@@ -95,7 +95,7 @@ impl Screen for SongSelect {
             if state.player.is_some() {
                 state.player_key(code, text);
             } else {
-                state.menu_key(code);
+                state.menu_key(code, at);
             }
             return;
         }
@@ -255,7 +255,7 @@ impl Screen for SongSelect {
                     ),
                     glitch: state.cfg.menu_glitch,
                 };
-                m.draw(canvas, &frame);
+                m.draw(canvas, &frame, &mut state.menu_eggs);
             }
         } else {
             // DT / HT show on the Mods button instead.

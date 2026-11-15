@@ -52,6 +52,8 @@ pub struct View {
     pub tab: usize,
     /// How far the page is scrolled, in rows.
     pub scroll: usize,
+    /// The unknown medals' question marks, poked (`eggs::Curiosity`).
+    pub egg: crate::eggs::Curiosity,
 }
 
 /// The tabs after the overview, in the server's order of sections.
@@ -142,7 +144,7 @@ pub fn small_badge(c: &mut Canvas, cx: f32, cy: f32, m: &MedalNote) {
 }
 
 /// A medal nobody has found: an empty ring and a question mark.
-fn mystery(c: &mut Canvas, cx: f32, cy: f32, scale: f32) {
+pub(crate) fn mystery_badge(c: &mut Canvas, cx: f32, cy: f32, scale: f32) {
     badge(
         c,
         [cx, cy],
@@ -227,7 +229,24 @@ impl View {
             state: State::Loading(rx),
             tab: 0,
             scroll: 0,
+            egg: Default::default(),
         }
+    }
+
+    /// A poke at the question mark of row `i` of this tab; true when it hatches.
+    pub fn poke(&mut self, i: usize) -> bool {
+        let State::Loaded(v) = &self.state else {
+            return false;
+        };
+        let Some(m) = self
+            .tab
+            .checked_sub(1)
+            .and_then(|section| of_section(v, section).get(i).copied())
+            .filter(|m| m.art.is_empty())
+        else {
+            return false;
+        };
+        self.egg.poke(&m.id, Instant::now())
     }
 
     pub fn poll(&mut self) {
@@ -431,7 +450,13 @@ impl View {
                     px + 16.0 + (i % 2) as f32 * (col_w + 8.0),
                     row_y,
                     col_w,
+                    &self.egg,
                 );
+                if m.art.is_empty() {
+                    let bx = px + 16.0 + (i % 2) as f32 * (col_w + 8.0) + 22.0;
+                    let by = row_y + 20.5;
+                    c.hit(bx - 14.0, by - 14.0, 28.0, 28.0, Hit::MedalMystery(i));
+                }
             }
             if rows.is_empty() {
                 c.text_centered(
@@ -462,8 +487,19 @@ impl View {
     }
 }
 
+/// How big a row's badge is (screen pixels per badge pixel).
+const MYSTERY_SCALE: f32 = 1.3;
+
 /// One medal: its badge, its name, what it takes and how it's going.
-fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32) {
+fn medal_row(
+    c: &mut Canvas,
+    m: &MedalRow,
+    players: u32,
+    x: f32,
+    y: f32,
+    w: f32,
+    egg: &crate::eggs::Curiosity,
+) {
     let lit = m.at.is_some();
     c.round_rect(
         [x, y],
@@ -473,9 +509,12 @@ fn medal_row(c: &mut Canvas, m: &MedalRow, players: u32, x: f32, y: f32, w: f32)
         rgba(0x2a2a38, 1.0),
         1.0,
     );
-    let scale = 1.3;
+    let scale = MYSTERY_SCALE;
     if m.art.is_empty() {
-        mystery(c, x + 22.0, y + 20.5, scale);
+        let at = [x + 22.0, y + 20.5];
+        if !egg.draw(c, &m.id, at, scale, Instant::now()) {
+            mystery_badge(c, at[0], at[1], scale);
+        }
     } else {
         badge(
             c,
@@ -577,7 +616,15 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
     for (i, m) in goals.iter().enumerate() {
         let y = top + 12.0 + i as f32 * row_h();
         if y + row_h() <= bottom {
-            medal_row(c, m, v.players, x, y, col_w);
+            medal_row(
+                c,
+                m,
+                v.players,
+                x,
+                y,
+                col_w,
+                &crate::eggs::Curiosity::UNTOUCHED,
+            );
         }
     }
     let right = x + col_w + 8.0;
@@ -602,7 +649,15 @@ fn overview(c: &mut Canvas, v: &MedalsView, x: f32, top: f32, w: f32, bottom: f3
     for (i, m) in latest.iter().take(NEXT_UP).enumerate() {
         let y = top + 12.0 + i as f32 * row_h();
         if y + row_h() <= bottom {
-            medal_row(c, m, v.players, right, y, col_w);
+            medal_row(
+                c,
+                m,
+                v.players,
+                right,
+                y,
+                col_w,
+                &crate::eggs::Curiosity::UNTOUCHED,
+            );
         }
     }
 }

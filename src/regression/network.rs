@@ -321,6 +321,11 @@ fn requests() -> Vec<Request> {
             map: None,
         },
         Request::Medals { name: "me".into() },
+        Request::ClientEvent {
+            token: "t".into(),
+            event: "ura_logo".into(),
+            key: "k".into(),
+        },
         Request::OpenMapping {
             token: "t".into(),
             set: mapping::SetDescriptor {

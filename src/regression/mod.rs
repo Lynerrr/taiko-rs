@@ -22,6 +22,7 @@ mod phone;
 mod pointer;
 mod scoring;
 mod screens;
+mod secrets;
 mod select;
 mod store;
 

@@ -173,6 +173,14 @@ pub enum Request {
     Medals {
         name: String,
     },
+    /// Something only the game sees, for the secret medals: an easter egg found in its menus,
+    /// or a habit (`ClientEvent::name`). Counted once per `key` (`Reply::Counted`); a medal it
+    /// earns comes as `Down::Medals`. A server that doesn't know it answers an error.
+    ClientEvent {
+        token: String,
+        event: String,
+        key: String,
+    },
     /// Collaborative mapping, only to a server that lists `mapping::FEATURE`: the host opens a
     /// session for a map set (or resumes their open one for it), `Reply::Mapping`, then the
     /// mapping stream (`mapping::MapUp` / `mapping::MapDown`) on the same connection.

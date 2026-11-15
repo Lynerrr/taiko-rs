@@ -630,7 +630,8 @@ impl Menu {
         k * k * (3.0 - 2.0 * k)
     }
 
-    pub fn draw(&mut self, c: &mut Canvas, f: &Frame) {
+    pub fn draw(&mut self, c: &mut Canvas, f: &Frame, eggs: &mut crate::eggs::MenuEggs) {
+        eggs.begin(c);
         self.clock += c.dt_ms;
         self.glitch = f.glitch;
         let target = self.index() as f32;
@@ -653,7 +654,7 @@ impl Menu {
         if let Some(ghosts) = &f.ghosts {
             crate::menu_notes::draw(c, ghosts, self.clock, self.kiai, self.kick(), self.universe);
         }
-        crate::settings::brand(c);
+        crate::settings::brand_with(c, |c, x, y, size| eggs.draw_logo(c, x, y, size));
         draw_session(c, f.session);
         self.draw_flashes(c);
         self.draw_panel(c);
@@ -679,6 +680,7 @@ impl Menu {
         if let Some(k) = spin.and_then(|(_, i)| self.spinning(i)) {
             c.glitch = Some([1.0 - k, (self.clock / GLITCH_MS) as u32 as f32 % 4096.0]);
         }
+        eggs.end(c);
         // Coming in out of black.
         let shown = if render::animations() {
             self.opacity()
@@ -1867,7 +1869,7 @@ mod tests {
             session: (0.0, 0.0),
             glitch: m.glitch,
         };
-        m.draw(&mut c, &f);
+        m.draw(&mut c, &f, &mut crate::eggs::MenuEggs::new(1));
         c
     }
 

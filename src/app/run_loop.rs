@@ -1170,7 +1170,10 @@ impl State {
                 .filter(|_| own_server)
                 .map(|d| d.join(avatars::DIR)),
         );
+        let menu_eggs = crate::eggs::MenuEggs::new(cfg.random_seed as u32);
         State {
+            menu_eggs,
+            again: Default::default(),
             avatars,
             pictures: pictures::Pictures::default(),
             admin: false,
@@ -1190,6 +1193,7 @@ impl State {
                 state: medals::State::Loaded(Box::new(view)),
                 tab: 0,
                 scroll: 0,
+                egg: Default::default(),
             }),
             unlock: {
                 let mut unlock = medals::Unlock::default();

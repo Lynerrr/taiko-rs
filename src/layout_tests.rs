@@ -671,6 +671,7 @@ fn assert_every_screen_fits() {
         state: medals::State::Loading(rx),
         tab: 0,
         scroll: 0,
+        egg: Default::default(),
     });
     check(&mut s, "medals loading", &mut out);
     for tab in 0..medals::TABS {
@@ -679,6 +680,7 @@ fn assert_every_screen_fits() {
             state: medals::State::Loaded(Box::new(view.clone())),
             tab,
             scroll: 0,
+            egg: Default::default(),
         });
         check(&mut s, &format!("medals, tab {tab}"), &mut out);
     }
@@ -687,6 +689,7 @@ fn assert_every_screen_fits() {
         state: medals::State::Failed("this server doesn't have medals yet".into()),
         tab: 0,
         scroll: 0,
+        egg: Default::default(),
     });
     check(&mut s, "medals failed", &mut out);
     s.medals = None;

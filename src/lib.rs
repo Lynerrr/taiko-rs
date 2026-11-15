@@ -36,6 +36,7 @@ mod editor;
 mod editor_friends_tests;
 #[cfg(test)]
 mod editor_test_play_tests;
+mod eggs;
 mod epic;
 mod folder_watch;
 #[cfg(test)]
@@ -117,6 +118,7 @@ mod terms;
 pub mod tko;
 mod ui;
 mod update;
+mod ura;
 mod video;
 mod volume;
 #[cfg(target_os = "linux")]
@@ -405,6 +407,10 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// Its easter eggs, which outlast it (`eggs`).
+    menu_eggs: eggs::MenuEggs,
+    /// One map started again and again, for a secret medal (`ura::Again`).
+    again: ura::Again,
     /// A screen just opened fades in: how long it has been showing (ms).
     screen_fade: Option<f32>,
     /// The screen last drawn, to fade in the next one.
@@ -1653,6 +1659,9 @@ impl State {
         let test = self.editor_back.as_ref().map(|v| v.ed.chart.to_text());
         if test.is_none() {
             self.record_play(entry);
+            if self.again.start(&self.library[entry].path) {
+                ura::report(&self.cfg, ura::Event::Again);
+            }
         }
         self.stop_audio();
         self.preview.show_background_for(&self.library[entry]);
@@ -2040,7 +2049,7 @@ impl State {
             && !self.picking_lobby_map
     }
 
-    fn menu_key(&mut self, code: KeyCode) {
+    fn menu_key(&mut self, code: KeyCode, at: Instant) {
         if self.modifiers_ctrl || self.main_menu.as_ref().is_none_or(menu::Menu::is_leaving) {
             return;
         }
@@ -2048,7 +2057,12 @@ impl State {
         let drum = self.cfg.keys.iter().position(|&k| k == code);
         // The player's own drum keys play the drum: the rims outside, the face inside.
         if let (Some(k), Some(m)) = (drum, self.main_menu.as_mut()) {
-            m.drum(k == 0 || k == 3, if k < 2 { -1 } else { 1 });
+            let (kat, side) = (k == 0 || k == 3, if k < 2 { -1 } else { 1 });
+            m.drum(kat, side);
+            // Both rims at once, again and again, turn the menu over.
+            if kat && self.menu_eggs.kat(side, at) {
+                ura::report(&self.cfg, ura::Event::Flip);
+            }
         }
         match (code, drum) {
             (KeyCode::Escape, _) => self.ask_quit(),
@@ -13664,6 +13678,21 @@ impl State {
             Hit::MedalTab(tab) => {
                 if let Some(view) = &mut self.medals {
                     view.set_tab(tab);
+                }
+            }
+            Hit::MedalMystery(i) => {
+                if self.medals.as_mut().is_some_and(|view| view.poke(i)) {
+                    ura::report(&self.cfg, ura::Event::Curious);
+                }
+            }
+            Hit::MenuLogo => {
+                if self.menu_eggs.tap_logo() {
+                    ura::report(&self.cfg, ura::Event::Logo);
+                }
+            }
+            Hit::StrayNote => {
+                if self.menu_eggs.catch_stray() {
+                    ura::report(&self.cfg, ura::Event::StrayNote);
                 }
             }
             Hit::Guide(action) => self.guide_action(action),

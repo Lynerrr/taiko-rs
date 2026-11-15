@@ -40,6 +40,44 @@ fn runs() -> &'static [PixelRun] {
     })
 }
 
+/// Where one of the logo's pixels goes and how it looks, for `draw_each`: moved by `offset`
+/// (units), turned by `angle` (radians) about its own centre, in `colour`.
+pub struct Pixel {
+    pub offset: [f32; 2],
+    pub angle: f32,
+    pub colour: [f32; 4],
+}
+
+/// Draws the logo like `draw`, but pixel by pixel: `place` gets each pixel's column, row and
+/// colour and says where it goes (None: not drawn). Easter eggs tear it and break it apart.
+pub fn draw_each(
+    c: &mut Canvas,
+    x: f32,
+    y: f32,
+    size: f32,
+    mut place: impl FnMut(u32, u32, [f32; 4]) -> Option<Pixel>,
+) {
+    let px = size / 32.0;
+    for &(rx, ry, len, col) in runs() {
+        for ix in rx..rx + len {
+            let Some(p) = place(ix, ry, col) else {
+                continue;
+            };
+            c.shapes.push(crate::render::Shape {
+                center: [
+                    x + (ix as f32 + 0.5) * px + p.offset[0],
+                    y + (ry as f32 + 0.5) * px + p.offset[1],
+                ],
+                half: [px / 2.0 + 0.1, px / 2.0 + 0.1],
+                fill: p.colour,
+                border: [0.0; 4],
+                params: [0.0; 4],
+                angle: p.angle,
+            });
+        }
+    }
+}
+
 /// Draws the logo `size` units square with its top left at (`x`, `y`).
 pub fn draw(c: &mut Canvas, x: f32, y: f32, size: f32) {
     let px = size / 32.0;

@@ -76,6 +76,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"protocol":1,"request":{"SetEpic":{"token":"t","map":{"Custom":7},"epic":true}}}
 {"protocol":1,"request":{"Played":{"token":"t","ms":1000}}}
 {"protocol":1,"request":{"Medals":{"name":"me"}}}
+{"protocol":1,"request":{"ClientEvent":{"token":"t","event":"ura_logo","key":"k"}}}
 {"protocol":1,"request":{"OpenMapping":{"token":"t","set":{"title":"Artist - Song","folder":"1 Artist - Song","diffs":["Oni","Muzukashii"],"assets":[{"name":"audio.mp3","sha256":"ab","size":3}]},"mode":"Guest"}}}
 {"protocol":1,"request":{"JoinMapping":{"token":"t","session":9}}}
 {"protocol":1,"request":{"ResumeMapping":{"token":"t","session":9,"epoch":2,"last_seq":40}}}

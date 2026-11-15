@@ -157,6 +157,9 @@ impl Screen for MapEditor {
         {
             a.sfx_at(audio::Sfx::Message, 1.0);
         }
+        for _ in 0..view.take_saves() {
+            crate::ura::report(&state.cfg, crate::ura::Event::MapSave);
+        }
         if let Some(keep) = view.take_new_difficulty() {
             self.out.new_diff = Some((view.ed.path.clone(), view.entry, keep));
         }
