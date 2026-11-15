@@ -293,6 +293,28 @@ fn requests() -> Vec<Request> {
             loved: true,
             version: Some("Oni".into()),
         },
+        Request::EpicMaps,
+        Request::SetEpic {
+            token: "t".into(),
+            map: online::EpicMap::Set {
+                set: 1,
+                version: Some("Oni".into()),
+            },
+            epic: true,
+        },
+        Request::SetEpic {
+            token: "t".into(),
+            map: online::EpicMap::Set {
+                set: 1,
+                version: None,
+            },
+            epic: false,
+        },
+        Request::SetEpic {
+            token: "t".into(),
+            map: online::EpicMap::Custom(7),
+            epic: true,
+        },
         Request::Played {
             token: "t".into(),
             ms: 1000,
@@ -394,6 +416,11 @@ fn replies() -> Vec<Reply> {
         Reply::EmailLinked("a@b.c".into()),
         Reply::LovedSets(vec![1, 2]),
         Reply::LovedMaps(vec![(1, vec!["Oni".into()])]),
+        Reply::EpicMaps(online::EpicList {
+            sets: vec![(1, vec![]), (2, vec!["Oni".into()])],
+            custom: vec![7],
+        }),
+        Reply::EpicMaps(online::EpicList::default()),
         Reply::SetStatuses(vec![(1, "ranked".into())]),
         Reply::SetVerdicts(vec![online::SetVerdict {
             set: 1,

@@ -9,6 +9,8 @@
 //! - `status`: `r`anked `a`pproved `q`ualified `l`oved `p`ending `w`ip `g`raveyard `n`ot
 //!   submitted `u`nknown (a prefix of the word will do). osu!.db can't tell pending from
 //!   graveyard, so either matches both there. `status>=r` is ranked or better, as in osu!.
+//!   `status=epic` (or `status!=epic`) goes by the taiko.rs EPIC mark instead, which a map has
+//!   on top of its status.
 //! - `creator` `mapper` `author`, `artist`, `title`, `diff` `version`, `tag` `tags`, `source`:
 //!   text the field contains.
 //! - `id` `beatmapid` `bid`, `set` `setid` `beatmapset`: the osu! beatmap or set ID (exact, or
@@ -95,6 +97,10 @@ enum Cond {
         op: Op,
         codes: Vec<u8>,
     },
+    /// Marked EPIC on taiko.rs (or not, when negated).
+    Epic {
+        negated: bool,
+    },
     Unplayed,
     /// In the collection named so (any case), or in none (`collection=none`): the client knows
     /// its collections and applies these itself (`Query::collections`).
@@ -122,6 +128,8 @@ pub struct Facts {
     /// Days since last played.
     pub played_days: Option<f64>,
     pub status: u8,
+    /// Marked EPIC on taiko.rs.
+    pub epic: bool,
 }
 
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -239,6 +247,12 @@ fn statuses(s: &str) -> Option<Vec<u8>> {
         .map(|(_, codes)| codes.to_vec())
 }
 
+/// Whether a typed status means the EPIC mark: a prefix of the word, none of osu!'s statuses
+/// starting with an e.
+fn is_epic_word(s: &str) -> bool {
+    !s.is_empty() && "epic".starts_with(&s.to_lowercase())
+}
+
 /// An osu! ID: whole digits only.
 fn id(s: &str) -> Option<(f64, f64)> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
@@ -273,6 +287,12 @@ fn cond(key: &str, op: Op, value: &str) -> Option<Cond> {
         "played" => num(Num::Played, number(value)),
         "id" | "bid" | "beatmapid" | "mapid" => num(Num::BeatmapId, id(value)),
         "set" | "setid" | "sid" | "beatmapset" | "beatmapsetid" => num(Num::SetId, id(value)),
+        "status" if is_epic_word(value) => match op {
+            Op::Eq | Op::Ne => Some(Cond::Epic {
+                negated: op == Op::Ne,
+            }),
+            _ => None,
+        },
         "status" => statuses(&value.to_lowercase()).map(|codes| Cond::Status { op, codes }),
         "creator" | "mapper" | "author" => text(Field::Creator),
         "artist" => text(Field::Artist),
@@ -335,6 +355,12 @@ impl Text {
 }
 
 impl Query {
+    /// Whether the query asks about the EPIC mark (`Facts::epic`): working it out for every map
+    /// costs a search, so a client leaves it false when nothing asks.
+    pub fn asks_epic(&self) -> bool {
+        self.conds.iter().any(|c| matches!(c, Cond::Epic { .. }))
+    }
+
     pub fn parse(s: &str) -> Query {
         let mut q = Query::default();
         for t in tokens(s) {
@@ -444,6 +470,7 @@ impl Query {
                         compare(*op, rank(facts.status), rank(codes[0]), 0.5)
                     }
                 },
+                Cond::Epic { negated } => facts.epic != *negated,
                 Cond::Unplayed => facts.played_days.is_none(),
                 Cond::Collection { .. } => true,
             })
@@ -474,6 +501,7 @@ mod tests {
             bpm: Some(180.0),
             played_days: Some(3.0),
             status: RANKED,
+            epic: false,
         }
     }
 
@@ -568,6 +596,27 @@ mod tests {
         };
         assert!(!Query::parse("status=p").matches(&meta(), "", &graveyard));
         assert!(Query::parse("status<r").matches(&meta(), "", &graveyard));
+    }
+
+    #[test]
+    fn epic_goes_by_the_mark_on_top_of_the_status() {
+        let epic = Facts {
+            epic: true,
+            ..facts()
+        };
+        for q in ["status=epic", "status=e", "STATUS:Ep", "status=r"] {
+            assert!(Query::parse(q).matches(&meta(), "", &epic), "{q}");
+        }
+        assert!(!Query::parse("status!=epic").matches(&meta(), "", &epic));
+        assert!(Query::parse("artist status!=e").asks_epic());
+        assert!(!Query::parse("epic status=r").asks_epic());
+        assert!(!hit("status=epic"));
+        assert!(hit("status!=epic"));
+        // Only `=` and `!=` mean anything for a mark: the rest is a word to look for.
+        assert!(!hit("status>epic"));
+        // A plain word still finds a name with it in.
+        let label = "Camellia - Epic Ghost [Inner Oni]";
+        assert!(Query::parse("epic").matches(&meta(), label, &facts()));
     }
 
     #[test]

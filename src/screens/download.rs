@@ -195,6 +195,11 @@ impl Screen for Download {
         let x = 24.0 + lw + 12.0;
         let pw = if phone { 0.0 } else { canvas.width - x - 24.0 };
         let stars = state.browse.selected_stars();
+        // Song select's flag doesn't carry over: the mark of the set selected here.
+        state.preview.epic = state
+            .browse
+            .selected()
+            .is_some_and(|set| state.browse.is_epic(set));
         if pw > 160.0 && state.browse.selected().is_some() {
             match state.preview.draw_panel(
                 canvas,

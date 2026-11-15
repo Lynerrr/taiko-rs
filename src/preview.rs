@@ -184,6 +184,11 @@ pub struct Preview {
     /// Room kept free at the right of the title line, for a button over the panel's corner
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
+    /// The map shown is marked EPIC on taiko.rs (set by the caller before `draw_panel`): its pill
+    /// goes next to the status.
+    pub epic: bool,
+    /// Where `draw_panel` put the EPIC pill (left, top), for the effects round it.
+    pub epic_at: Option<[f32; 2]>,
     /// How big the autoplay preview is drawn (`PREVIEW_SIZE`; 0 = full), and how much its height
     /// changes per unit of that (for dragging the panel's bottom edge).
     pub size: f32,
@@ -1153,24 +1158,36 @@ impl Preview {
             cy += body_step;
         }
         cy += 4.0;
-        // The status on osu! at the right of the mapper's line.
-        let status_w = match status.filter(|s| !s.0.is_empty()) {
-            Some((label, col)) => {
-                let lw = Canvas::text_width(7.0, label) + 12.0;
-                let sx = x + w - 14.0 - lw;
-                c.round_rect(
-                    [sx, cy],
-                    [lw, 13.0],
-                    6.5,
-                    rgba(col, 0.15),
-                    rgba(col, 0.9),
-                    1.0,
-                );
-                c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
-                lw + 8.0
-            }
-            None => 0.0,
+        // The EPIC mark at the very right of the mapper's line, bumping on the beat.
+        self.epic_at = None;
+        let epic_w = if self.epic {
+            let pw = crate::epic::pill_width();
+            let ex = x + w - 14.0 - pw;
+            crate::epic::pill(c, ex, cy, 1.0, crate::style::pulse());
+            self.epic_at = Some([ex, cy]);
+            pw + 8.0
+        } else {
+            0.0
         };
+        // The status on osu! left of it.
+        let status_w = epic_w
+            + match status.filter(|s| !s.0.is_empty()) {
+                Some((label, col)) => {
+                    let lw = Canvas::text_width(7.0, label) + 12.0;
+                    let sx = x + w - 14.0 - epic_w - lw;
+                    c.round_rect(
+                        [sx, cy],
+                        [lw, 13.0],
+                        6.5,
+                        rgba(col, 0.15),
+                        rgba(col, 0.9),
+                        1.0,
+                    );
+                    c.text_centered(sx + lw / 2.0, cy + 3.0, 7.0, rgba(col, 1.0), label);
+                    lw + 8.0
+                }
+                None => 0.0,
+            };
         // The heart, left of the status: whether the song's liked, and a click changes it.
         let heart_w = match liked {
             Some(liked) => {

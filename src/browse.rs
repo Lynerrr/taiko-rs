@@ -121,6 +121,9 @@ pub struct Browse {
     loved_progress: Option<Receiver<(Vec<SetInfo>, usize, usize)>>,
     /// How many loved sets are done of how many, while they load.
     loved_count: Option<(usize, usize)>,
+    /// The osu! sets with a map marked EPIC on the taiko.rs server, and the custom sets marked.
+    epic_sets: HashSet<u32>,
+    epic_custom: HashSet<u32>,
 }
 
 impl Default for Browse {
@@ -160,6 +163,8 @@ impl Default for Browse {
             loved_here: None,
             loved_progress: None,
             loved_count: None,
+            epic_sets: HashSet::new(),
+            epic_custom: HashSet::new(),
         }
     }
 }
@@ -192,6 +197,7 @@ impl Browse {
                 (_, Category::LovedHere) => {
                     "loading loved maps (slower the first time)...".to_string()
                 }
+                (_, Category::Epic) => "loading EPIC maps...".to_string(),
                 (Source::Osu, _) => format!("loading {what} taiko maps..."),
                 (Source::Ours, _) => format!("loading {what} maps from taiko.rs..."),
             }
@@ -209,12 +215,18 @@ impl Browse {
             .loved_here
             .as_ref()
             .map(|l| l.iter().copied().collect());
+        let epic: Vec<u32> = self.epic_sets.iter().copied().collect();
+        let epic_custom = self.epic_custom.clone();
         let (progress_tx, progress_rx) = mpsc::channel();
         self.loved_progress = (category == Category::LovedHere).then_some(progress_rx);
         self.loved_count = None;
         std::thread::spawn(move || {
             // The website and the loved list come all at once.
             let found = match (category, loved) {
+                // The osu! sets from the mirrors as the loved ones come, then the custom sets.
+                (Category::Epic, _) => {
+                    epic_sets(&epic, &epic_custom, &query, sort, desc).map(|sets| (sets, false))
+                }
                 (Category::LovedHere, None) => {
                     Err("the taiko.rs server hasn't said which maps are loved there yet".into())
                 }
@@ -295,6 +307,27 @@ impl Browse {
         self.loved_here = Some(sets);
         if self.category == Category::LovedHere && self.searched.is_some() {
             self.search_now();
+        }
+    }
+
+    /// Takes the maps the taiko.rs server marks EPIC: a set with any of them shows the mark.
+    pub fn set_epic(&mut self, epic: &crate::ui::ServerEpic) {
+        let sets: HashSet<u32> = epic.sets.keys().copied().collect();
+        if sets == self.epic_sets && epic.custom == self.epic_custom {
+            return;
+        }
+        self.epic_sets = sets;
+        self.epic_custom = epic.custom.clone();
+        if self.category == Category::Epic && self.searched.is_some() {
+            self.search_now();
+        }
+    }
+
+    /// Whether `set` (or a difficulty of it) is marked EPIC on the taiko.rs server.
+    pub fn is_epic(&self, set: &SetInfo) -> bool {
+        match set.custom {
+            Some(_) => self.epic_custom.contains(&set.id),
+            None => self.epic_sets.contains(&set.id),
         }
     }
 
@@ -648,6 +681,9 @@ impl Browse {
                 (Source::Ours, Category::LovedHere) => {
                     "osu! maps loved on taiko.rs (they give pp here), from the mirrors"
                 }
+                (Source::Ours, Category::Epic) => {
+                    "maps the taiko.rs admins marked EPIC: osu! sets from the mirrors, and custom maps"
+                }
                 (Source::Ours, _) => "custom maps from the taiko.rs website",
             },
         );
@@ -966,6 +1002,9 @@ impl Browse {
             let ly = y + 30.0;
             let (label, color) = status_look(set, self.is_loved_here(set));
             let mut lx = tx2 + pill(c, tx2, ly, label, color) + 6.0;
+            if self.is_epic(set) {
+                lx += epic_pill(c, lx, ly) + 6.0;
+            }
             let chosen = selected.then(|| {
                 self.diff_choice
                     .get(&set.id)
@@ -1354,6 +1393,45 @@ fn pill(c: &mut Canvas, x: f32, y: f32, label: &str, color: u32) -> f32 {
     w
 }
 
+/// The sets marked EPIC that match `query`: the osu! ones (`ids`) from the mirrors, then the
+/// custom ones (`custom`) from the website, each part in the order asked.
+fn epic_sets(
+    ids: &[u32],
+    custom: &HashSet<u32>,
+    query: &str,
+    sort: SortKey,
+    desc: bool,
+) -> Result<Vec<SetInfo>, String> {
+    let mut sets = if ids.is_empty() {
+        Vec::new()
+    } else {
+        download::loved_here(ids, query, sort, desc, &|_, _, _| {})?
+    };
+    if !custom.is_empty() {
+        let found = crate::custom::search(query, false, sort, desc)?;
+        sets.extend(found.into_iter().filter(|s| custom.contains(&s.id)));
+    }
+    Ok(sets)
+}
+
+/// The EPIC mark at (`x`, `y`), the size of the status pill: its word in the prism's shimmer,
+/// nothing moving round it (the list has many). Returns its width.
+fn epic_pill(c: &mut Canvas, x: f32, y: f32) -> f32 {
+    let label = crate::epic::LABEL;
+    let w = Canvas::text_width(5.5, label) + 8.0;
+    let edge = crate::epic::shimmer_at(0.5, crate::epic::secs());
+    c.round_rect(
+        [x, y],
+        [w, 10.0],
+        4.0,
+        rgba(crate::epic::prism(0.3), 0.16),
+        rgba(edge, 0.85),
+        1.0,
+    );
+    crate::epic::text(c, x + 4.0, y + 2.5, 5.5, label, 1.0);
+    w
+}
+
 /// The library entries of a custom set's preview, keyed by the difficulties the website lists
 /// (matched by name: the archive's files are named by the mapper).
 fn custom_entries(set: &SetInfo, dir: &std::path::Path) -> Vec<(DiffKey, Entry, Option<f32>)> {
@@ -1392,6 +1470,26 @@ mod tests {
             id,
             ..SetInfo::default()
         }
+    }
+
+    #[test]
+    fn a_set_with_an_epic_map_wears_the_mark_and_custom_sets_go_by_their_own_number() {
+        let mut b = Browse::default();
+        let mut epic = crate::ui::ServerEpic::default();
+        epic.sets.insert(3, vec!["Oni".into()]);
+        epic.custom.insert(5);
+        b.set_epic(&epic);
+        assert!(b.is_epic(&set(3)), "a difficulty of it is enough");
+        assert!(!b.is_epic(&set(5)), "osu! set 5 isn't custom set 5");
+        let custom = |id| SetInfo {
+            custom: Some(download::CustomSet::default()),
+            ..set(id)
+        };
+        assert!(b.is_epic(&custom(5)));
+        assert!(!b.is_epic(&custom(3)));
+        // A new list replaces the old.
+        b.set_epic(&crate::ui::ServerEpic::default());
+        assert!(!b.is_epic(&set(3)));
     }
 
     #[test]

@@ -70,6 +70,10 @@ room protocol 7 | online protocol 1 | pp version 3
 {"protocol":1,"request":"LovedSets"}
 {"protocol":1,"request":"LovedMaps"}
 {"protocol":1,"request":{"SetLoved":{"token":"t","set":1,"loved":true,"version":"Oni"}}}
+{"protocol":1,"request":"EpicMaps"}
+{"protocol":1,"request":{"SetEpic":{"token":"t","map":{"Set":{"set":1,"version":"Oni"}},"epic":true}}}
+{"protocol":1,"request":{"SetEpic":{"token":"t","map":{"Set":{"set":1}},"epic":false}}}
+{"protocol":1,"request":{"SetEpic":{"token":"t","map":{"Custom":7},"epic":true}}}
 {"protocol":1,"request":{"Played":{"token":"t","ms":1000}}}
 {"protocol":1,"request":{"Medals":{"name":"me"}}}
 {"protocol":1,"request":{"OpenMapping":{"token":"t","set":{"title":"Artist - Song","folder":"1 Artist - Song","diffs":["Oni","Muzukashii"],"assets":[{"name":"audio.mp3","sha256":"ab","size":3}]},"mode":"Guest"}}}
@@ -81,6 +85,8 @@ room protocol 7 | online protocol 1 | pp version 3
 {"EmailLinked":"a@b.c"}
 {"LovedSets":[1,2]}
 {"LovedMaps":[[1,["Oni"]]]}
+{"EpicMaps":{"sets":[[1,[]],[2,["Oni"]]],"custom":[7]}}
+{"EpicMaps":{}}
 {"SetStatuses":[[1,"ranked"]]}
 {"SetVerdicts":[{"set":1,"status":"ranked","pp":"yes"}]}
 "Counted"

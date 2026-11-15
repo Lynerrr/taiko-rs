@@ -322,6 +322,15 @@ impl Screen for SongSelect {
                 ),
                 None => None,
             };
+            // The map the panel shows, and whether it's marked EPIC (its pill by the status).
+            let shown_path = state
+                .preview_target()
+                .and_then(|i| state.library.get(i))
+                .map(|e| e.path.clone());
+            state.preview.epic = state
+                .preview_target()
+                .and_then(|i| state.library.get(i))
+                .is_some_and(|e| state.select.is_epic(e));
             if phone {
                 let status = state.select.selected().and_then(|i| state.map_status(i));
                 let liked = state
@@ -370,6 +379,32 @@ impl Screen for SongSelect {
                         state.frame_clip = Some(clip);
                     }
                     state.preview.title_room = 0.0;
+                    // An EPIC map: the music's spectrum round its pill, and on landing on it a
+                    // glint across the panel and sparks out of the pill.
+                    if let Some([ex, ey]) = state.preview.epic_at {
+                        let engine = state.audio.as_ref();
+                        let fx = &mut state.epic_fx;
+                        let sounding = !state.music_paused
+                            && state.preview.sounding(
+                                engine,
+                                Instant::now(),
+                                &mut fx.spectrum.samples,
+                            );
+                        let rate = engine.map_or(48_000, |a| a.rate);
+                        fx.spectrum.update(canvas.dt_ms, sounding, rate);
+                        crate::epic::aura(canvas, ex, ey, fx.spectrum.bands(), 1.0);
+                    }
+                    let fx = &mut state.epic_fx;
+                    fx.burst.show(
+                        shown_path.as_deref(),
+                        state.preview.epic,
+                        state.preview.epic_at,
+                        render::animations(),
+                    );
+                    // The panel as drawn: it shrinks to what it shows.
+                    let bottom = state.preview.panel_bottom.min(panel_top + panel_h);
+                    let panel = [x - t * step, panel_top, pw, bottom - panel_top];
+                    fx.burst.draw(canvas, panel, canvas.dt_ms);
                     // As the board's back button: 10 in from the frame, then the rows' scroll
                     // bar room (`board_tabs`, inside `pw - 28`).
                     let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);

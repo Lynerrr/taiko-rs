@@ -385,18 +385,34 @@ impl Spectrum {
     /// The rays: rows of blocks out of a disc of radius `disc_r` at (`cx`, `cy`), the lows at
     /// the top, mirrored left and right, at opacity `alpha`.
     pub fn draw_rays(&self, c: &mut Canvas, cx: f32, cy: f32, disc_r: f32, alpha: f32) {
+        self.draw_rays_in(c, cx, cy, disc_r, alpha, |_| crate::render::accent());
+    }
+
+    /// The bands now, the lows first (0 to 1 each).
+    pub fn bands(&self) -> &[f32] {
+        &self.bands
+    }
+
+    /// The rays in `colour` of each band's place (0 for the lows to 1), whiter further out.
+    pub fn draw_rays_in(
+        &self,
+        c: &mut Canvas,
+        cx: f32,
+        cy: f32,
+        disc_r: f32,
+        alpha: f32,
+        colour: impl Fn(f32) -> u32,
+    ) {
         let (block, step) = (pixel_size(BLOCK), pixel_size(BLOCK_STEP));
         for (band, &v) in self.bands.iter().enumerate() {
             let blocks = (v * MAX_BLOCKS as f32).round() as usize;
+            let base = colour(band as f32 / BANDS as f32);
             let angle = std::f32::consts::PI * (band as f32 + 0.5) / BANDS as f32;
             let (sin, cos) = angle.sin_cos();
             for b in 0..blocks {
                 let r = disc_r + 7.0 + b as f32 * step;
                 let t = b as f32 / MAX_BLOCKS as f32;
-                let col = rgba(
-                    crate::menu::tint(crate::render::accent(), 0xffffff, t * t),
-                    alpha,
-                );
+                let col = rgba(crate::menu::tint(base, 0xffffff, t * t), alpha);
                 for side in [-1.0, 1.0] {
                     let (x, y) = (
                         snap_to_grid(cx + side * sin * r),
