@@ -642,7 +642,7 @@ mod tests {
         journal_add(&p.custom, &s).unwrap();
         std::fs::rename(&folder, &old).unwrap();
         assert!(!folder.exists());
-        assert_eq!(recover(&p.custom), [s.clone()]);
+        assert_eq!(recover(&p.custom), std::slice::from_ref(&s));
         assert_eq!(names(&folder), ["a [Inner Oni].tko", SIDECAR]);
         assert!(read_journal(&p.custom).swaps.is_empty());
 

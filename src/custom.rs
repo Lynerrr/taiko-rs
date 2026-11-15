@@ -596,6 +596,15 @@ pub fn outdated(folder: &Path, site: &SiteSet) -> bool {
     if site.hashes.is_empty() {
         return false;
     }
+    // Installed (or sent) whole: the version it is is the charts its manifest lists.
+    if let Some(m) = Manifest::read(folder).filter(|m| !m.files.is_empty()) {
+        let have: Vec<u64> = m
+            .files
+            .values()
+            .filter_map(|h| u64::from_str_radix(h, 16).ok())
+            .collect();
+        return site.hashes.iter().any(|h| !have.contains(h));
+    }
     let Ok(dir) = std::fs::read_dir(folder) else {
         return false;
     };
@@ -945,6 +954,18 @@ mod tests {
         std::fs::write(dir.join("a [Mine].osu"), "home-made").unwrap();
         assert!(!outdated(&dir, &site(now + 3600)));
         assert!(!outdated(&dir, &SiteSet::default()));
+        // Installed whole: its manifest says which version it is, whatever the file times.
+        let mut m = Manifest {
+            id: Some(1),
+            ..Manifest::default()
+        };
+        m.add_file("a [Oni].tko", crate::net::map_hash(b"old version"));
+        m.write(&dir).unwrap();
+        assert!(outdated(&dir, &site(0)));
+        m.add_file("a [Oni].tko", new);
+        m.write(&dir).unwrap();
+        assert!(!outdated(&dir, &site(now + 3600)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
