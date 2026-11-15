@@ -163,6 +163,8 @@ pub fn state_with(cfg: Config, library: Vec<Entry>) -> State {
         false,
         false,
     );
+    // Like the Songs folder: none of the player's, and one named the same on every run.
+    s.custom_dir = PathBuf::from("/nonexistent/Custom");
     s.window_w = 1920.0;
     s.window_h = 1080.0;
     s.mouse = (-1000.0, -1000.0);
