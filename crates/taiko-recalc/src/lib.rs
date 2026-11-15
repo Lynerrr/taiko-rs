@@ -22,10 +22,11 @@ struct Line {
     score: OnlineScore,
 }
 
-/// What a play comes to now. Written as the server reads it.
+/// What a play comes to now. Written as the server reads it: no `pp` for a play that gets
+/// none any more (a mod being reworked).
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Recalculated {
-    pub pp: f64,
+    pub pp: Option<f64>,
     pub stars: Option<f64>,
 }
 
@@ -96,7 +97,12 @@ fn recalculate(s: &OnlineScore, path: &Path) -> Option<Recalculated> {
         seed: s.seed.unwrap_or(0),
         half,
     };
-    let pp = pp::play_pp(&map, &play)?;
+    // A play that gets no pp now is worked out all the same: it had some.
+    let pp = if pp::gives_pp(mods) {
+        Some(pp::play_pp(&map, &play)?)
+    } else {
+        None
+    };
     Some(Recalculated {
         pp,
         stars: stars::star_rating_played(
@@ -144,14 +150,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             unreadable += 1;
             continue;
         };
-        if (new.pp - sent).abs() >= 1.0 {
+        let now = new.pp.unwrap_or(0.0);
+        if (now - sent).abs() >= 1.0 {
             changes.push((
-                new.pp - sent,
+                now - sent,
                 line.id,
                 s.player.clone(),
                 s.mods.join(","),
                 sent,
-                new.pp,
+                now,
             ));
         }
         done.insert(line.id, new);
@@ -208,9 +215,14 @@ mod tests {
         let half = recalculate(&line.score, &path).unwrap();
         let full = stars::star_rating(text.as_bytes(), 1.0).unwrap();
         assert!(
-            half.stars.unwrap() < full && half.pp < 900.0,
+            half.stars.unwrap() < full && half.pp.unwrap() < 900.0,
             "{half:?}, {full}"
         );
+        // A mod being reworked: worked out, with no pp.
+        let mut tact = line.score.clone();
+        tact.mods = vec!["TC".into()];
+        let tact = recalculate(&tact, &path).unwrap();
+        assert!(tact.pp.is_none() && tact.stars.is_some(), "{tact:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

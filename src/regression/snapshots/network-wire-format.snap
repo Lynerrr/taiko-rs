@@ -1,4 +1,4 @@
-room protocol 7 | online protocol 1 | pp version 3
+room protocol 7 | online protocol 1 | pp version 4
 == room: client -> server
 {"Hello":{"name":"me","protocol":7,"host_token":7,"password":"pw"}}
 {"Hello":{"name":"me","protocol":7,"host_token":null}}
@@ -59,7 +59,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"protocol":1,"request":{"CreateRoom":{"token":"t","title":"room","mapguessr":false,"settings":{"password":"pw","slots":4}}}}
 {"protocol":1,"request":{"JoinRoom":{"token":"t","room":3}}}
 {"protocol":1,"request":{"Connect":{"token":"t"}}}
-{"protocol":1,"request":{"SubmitScore":{"token":"t","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true},"score":900000,"accuracy":0.99,"max_combo":300,"great":295,"ok":5,"miss":0,"pp":123.4,"date":1700000000,"replay_version":5,"inputs":[[1023.0,1]],"stars":5.25,"play_ms":120000,"scroll_speed":1.0,"md5":"abc","pp_version":3,"timing":null,"rolls":12}}}}
+{"protocol":1,"request":{"SubmitScore":{"token":"t","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true},"score":900000,"accuracy":0.99,"max_combo":300,"great":295,"ok":5,"miss":0,"pp":123.4,"date":1700000000,"replay_version":5,"inputs":[[1023.0,1]],"stars":5.25,"play_ms":120000,"scroll_speed":1.0,"md5":"abc","pp_version":4,"timing":null,"rolls":12}}}}
 {"protocol":1,"request":{"MapScores":{"map":1}}}
 {"protocol":1,"request":{"MapScores":{"map":1,"relax":true}}}
 {"protocol":1,"request":{"Profile":{"name":"me"}}}

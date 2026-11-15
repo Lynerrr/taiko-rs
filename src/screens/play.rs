@@ -543,6 +543,8 @@ impl Screen for PlayScreen {
                 Some("OD Override gets no pp")
             } else if game.mods().unranked() {
                 Some("Autoplay gets no pp")
+            } else if game.mods().in_rework() {
+                Some("mods being reworked give no pp for now")
             } else if failed {
                 Some("failed plays get no pp")
             } else if self.from.is_some() {

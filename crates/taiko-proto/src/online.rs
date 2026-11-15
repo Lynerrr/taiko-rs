@@ -344,8 +344,9 @@ pub struct ScoreSubmit {
 }
 
 /// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat. 3: what
-/// stacked mods add has a ceiling.
-pub const PP_VERSION: u32 = 3;
+/// stacked mods add has a ceiling. 4: the pp lab's rules (`pp::rules`): each mod's own value,
+/// memory, SV mods and rails as note speeds, stacked notes as one, mods being reworked unranked.
+pub const PP_VERSION: u32 = 4;
 /// From this one on, `NOTE_MODS` were worked out right.
 pub const NOTE_MODS_VERSION: u32 = 2;
 /// Mods that add nothing to pp by their multiplier: osu!'s the formula knows, and those that only
