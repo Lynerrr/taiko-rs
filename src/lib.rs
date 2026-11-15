@@ -13110,7 +13110,16 @@ impl State {
         let Some(id) = self.library[entry].set_id() else {
             return;
         };
-        if self.select.updates.contains_key(&id) {
+        // A custom map keeps the IDs of the osu! set it was made from, but osu! never has its
+        // difficulties: asking would call them edited (NOT SUBMITTED instead of CUSTOM) and offer
+        // the osu! set as their update. Until the custom folders are known, wait for them.
+        let custom_unknown = online::is_official(&self.cfg.online_server)
+            && (self.custom_asked.is_none() || self.custom_call.is_busy());
+        let custom = self.library[entry]
+            .path
+            .parent()
+            .is_some_and(|d| self.select.custom_folder.contains_key(d));
+        if custom || custom_unknown || self.select.updates.contains_key(&id) {
             return;
         }
         match self.set_check_due {
