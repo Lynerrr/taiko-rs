@@ -424,8 +424,21 @@ pub fn fetch_preview(set: &SetInfo) -> Result<PathBuf, String> {
     Ok(maps)
 }
 
-/// Which of these custom sets the website has approved; None when it can't be asked.
-pub fn approved_of(ids: &[u32]) -> Option<Vec<u32>> {
+/// A custom set as the website has it now.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SiteSet {
+    pub id: u32,
+    /// Approved: its plays give pp.
+    pub approved: bool,
+    /// Its difficulties' content hashes (`Entry::hash`): what a folder with this version of the
+    /// set has.
+    pub hashes: Vec<u64>,
+    /// Seconds since 1970 of its last upload.
+    pub updated: u64,
+}
+
+/// These custom sets as the website has them; None when it can't be asked.
+pub fn site_sets(ids: &[u32]) -> Option<Vec<SiteSet>> {
     crate::offline::internet().ok()?;
     let list: Vec<String> = ids.iter().map(u32::to_string).collect();
     let mut reply = ureq::get(format!("{WEBSITE}/api/custom?ids={}", list.join(",")))
@@ -435,18 +448,67 @@ pub fn approved_of(ids: &[u32]) -> Option<Vec<u32>> {
         .call()
         .ok()?;
     let text = reply.body_mut().read_to_string().ok()?;
-    approved_in(&text)
+    sets_in(&text)
 }
 
-fn approved_in(text: &str) -> Option<Vec<u32>> {
-    let sets: serde_json::Value = serde_json::from_str(text).ok()?;
+fn sets_in(text: &str) -> Option<Vec<SiteSet>> {
+    #[derive(serde::Deserialize)]
+    struct ApiDiff {
+        #[serde(default)]
+        hash: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct ApiSet {
+        id: u32,
+        #[serde(default)]
+        approved: bool,
+        #[serde(default)]
+        diffs: Vec<ApiDiff>,
+        #[serde(default)]
+        updated: u64,
+    }
+    let sets: Vec<ApiSet> = serde_json::from_str(text).ok()?;
     Some(
-        sets.as_array()?
-            .iter()
-            .filter(|s| s.get("approved").and_then(serde_json::Value::as_bool) == Some(true))
-            .filter_map(|s| s.get("id")?.as_u64().and_then(|i| u32::try_from(i).ok()))
+        sets.into_iter()
+            .map(|s| SiteSet {
+                id: s.id,
+                approved: s.approved,
+                hashes: s
+                    .diffs
+                    .iter()
+                    .filter_map(|d| u64::from_str_radix(&d.hash, 16).ok())
+                    .collect(),
+                updated: s.updated,
+            })
             .collect(),
     )
+}
+
+/// Whether the copy of custom set `site` in `folder` is an older version than the website's:
+/// a difficulty of the website's isn't in it, and nothing in it changed since the upload (a
+/// mapper's own folder they've gone on editing isn't old, it's ahead).
+pub fn outdated(folder: &Path, site: &SiteSet) -> bool {
+    if site.hashes.is_empty() {
+        return false;
+    }
+    let Ok(dir) = std::fs::read_dir(folder) else {
+        return false;
+    };
+    let mut hashes = Vec::new();
+    let mut newest = 0;
+    for entry in dir.flatten() {
+        let path = entry.path();
+        let ext = extension(&path);
+        if ext != "osu" && ext != "tko" {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        hashes.push(crate::net::map_hash(&bytes));
+        newest = newest.max(crate::library::file_stats(&path).1);
+    }
+    site.hashes.iter().any(|h| !hashes.contains(h)) && newest < site.updated
 }
 
 fn answer(text: &str) -> Result<Sent, String> {
@@ -661,9 +723,49 @@ mod tests {
     #[test]
     fn approved_sets_are_picked_from_the_list() {
         let text = r#"[{"id": 1, "approved": true}, {"id": 2, "approved": false}, {"id": 3, "approved": true}]"#;
-        assert_eq!(approved_in(text), Some(vec![1, 3]));
-        assert_eq!(approved_in("[]"), Some(vec![]));
-        assert_eq!(approved_in("oops"), None);
+        let approved = |sets: Vec<SiteSet>| -> Vec<u32> {
+            sets.iter().filter(|s| s.approved).map(|s| s.id).collect()
+        };
+        assert_eq!(sets_in(text).map(approved), Some(vec![1, 3]));
+        assert_eq!(sets_in("[]"), Some(vec![]));
+        assert_eq!(sets_in("oops"), None);
+    }
+
+    #[test]
+    fn a_sets_difficulties_are_known_by_their_hashes() {
+        let text = r#"[{"id":12,"diffs":[{"version":"Go backwards (TKO)","hash":"4afe7841b490d3f8","tko":true}],"updated":1794723058,"approved":true}]"#;
+        assert_eq!(
+            sets_in(text),
+            Some(vec![SiteSet {
+                id: 12,
+                approved: true,
+                hashes: vec![0x4afe_7841_b490_d3f8],
+                updated: 1_794_723_058,
+            }])
+        );
+    }
+
+    #[test]
+    fn an_older_copy_of_a_custom_set_is_outdated_and_a_mappers_newer_edit_is_not() {
+        let dir = folder("outdated");
+        std::fs::write(dir.join("a [Oni].tko"), "old version").unwrap();
+        let new = crate::net::map_hash(b"new version");
+        let now = crate::library::file_stats(&dir.join("a [Oni].tko")).1;
+        let site = |updated| SiteSet {
+            id: 1,
+            approved: true,
+            hashes: vec![new],
+            updated,
+        };
+        // Uploaded after this copy was made: an older version.
+        assert!(outdated(&dir, &site(now + 60)));
+        // The folder changed after the upload: the mapper's own edit, ahead of the site.
+        assert!(!outdated(&dir, &site(now - 60)));
+        // The copy has the website's difficulty: up to date, whatever else is in the folder.
+        std::fs::write(dir.join("a [Oni].tko"), "new version").unwrap();
+        std::fs::write(dir.join("a [Mine].osu"), "home-made").unwrap();
+        assert!(!outdated(&dir, &site(now + 3600)));
+        assert!(!outdated(&dir, &SiteSet::default()));
     }
 
     #[test]
