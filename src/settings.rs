@@ -70,6 +70,7 @@ pub enum Item {
     HiddenMaps,
     SongsFolder,
     DataFolder,
+    CustomFolder,
     MasterVolume,
     MusicVolume,
     UnfocusedVolume,
@@ -128,13 +129,14 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 138] = [
+pub const ITEMS: [(&str, Item); 139] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
     ("LIBRARY", Item::HiddenMaps),
     ("LIBRARY", Item::SongSelectLayout),
     ("LIBRARY", Item::DataFolder),
+    ("LIBRARY", Item::CustomFolder),
     ("LIBRARY", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
@@ -623,6 +625,11 @@ impl Item {
                 "ゲームデータのフォルダ",
                 "Папка данных игры"
             ),
+            Item::CustomFolder => tr!(
+                "taiko.rs maps folder",
+                "taiko.rsの譜面フォルダ",
+                "Папка карт taiko.rs"
+            ),
             Item::MasterVolume => tr!("Master volume", "全体の音量", "Общая громкость"),
             Item::MusicVolume => tr!("Music volume", "音楽の音量", "Громкость музыки"),
             Item::FxVolume => tr!("Hitsound volume", "ヒット音の音量", "Громкость хитсаундов"),
@@ -823,7 +830,8 @@ impl Item {
             | Item::Changelog
             | Item::KrokodilKoban
             | Item::SongSelectLayout
-            | Item::SkinFolder => Kind::Action,
+            | Item::SkinFolder
+            | Item::CustomFolder => Kind::Action,
         }
     }
 
@@ -1281,6 +1289,11 @@ impl Item {
                 "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
                 "スキンから描くものとその出どころ: 上のスキン、内蔵、または他のどれか (混ぜられます)。Enterでリスト。",
                 "Что берётся из скина и из какого: скин выше, встроенный или любой другой (можно смешивать). Enter: список."
+            ),
+            Item::CustomFolder => tr!(
+                "Enter: open the folder of taiko.rs's own maps (custom sets from the website, your editor maps), kept apart from osu!'s Songs folder.",
+                "Enter: taiko.rs独自の譜面 (サイトのカスタムセット、エディターの譜面) のフォルダを開く。osu!のSongsフォルダとは別です。",
+                "Enter: открыть папку карт самого taiko.rs (кастомные сеты с сайта, карты из редактора), отдельно от папки Songs osu!."
             ),
             Item::SkinFolder => tr!(
                 "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",

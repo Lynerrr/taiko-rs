@@ -36,12 +36,14 @@ text  235,240  Game data folder
 text  695,240  the usual places
 text   73,243  audio offset, calibra...
 text   73,269  AUDIO
-text  235,270  Screenshots
-text  743,270  Clipboard
+text  235,270  taiko.rs maps folder
+text  716,270  Enter to open
 text   73,283  volume, latency
-text  233,306  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
+text  235,300  Screenshots
+text  743,300  Clipboard
 text   73,309  VIDEO
 text   73,323  frame pacing, display
+text  233,336  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
 text   73,349  SKIN
 text   73,363  notes, hit flash, colour
 text   73,389  ONLINE
@@ -73,5 +75,6 @@ hit   223,168   594x30   SettingRow(3)
 hit   223,198   594x30   SettingRow(4)
 hit   223,228   594x30   SettingRow(5)
 hit   223,258   594x30   SettingRow(6)
+hit   223,288   594x30   SettingRow(7)
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

@@ -85,6 +85,9 @@ fn words(item: Item) -> &'static str {
             "song select list groups sort tabs flat difficulty список группы сортировка вкладки сложность"
         }
         Item::DataFolder => "save scores replays path сохранения рекорды реплеи путь",
+        Item::CustomFolder => {
+            "custom maps tko editor website folder кастомные карты редактор сайт папка"
+        }
         Item::Screenshots => "picture clipboard screen картинка буфер экран",
         Item::ChatFilter => "swear profanity мат цензура",
         Item::NotifyMessages

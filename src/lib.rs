@@ -444,8 +444,11 @@ struct State {
     /// Android: the on-screen keyboard (see `update_keyboard`).
     #[cfg(target_os = "android")]
     keyboard: android::Keyboard,
-    /// Where downloaded sets go.
+    /// Where downloaded osu! sets go.
     songs_dir: PathBuf,
+    /// taiko.rs's own folder of custom maps (`config::custom_dir`): always scanned, and kept apart
+    /// from osu!'s Songs folders.
+    custom_dir: PathBuf,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
@@ -2889,7 +2892,9 @@ impl State {
                 .get(i)
                 .map(|&p| self.skin_source_name(c.skin_parts.get(p)))
                 .unwrap_or_default(),
-            Item::SkinFolder => tr!("Enter to open", "Enterで開く", "Enter — открыть").into(),
+            Item::SkinFolder | Item::CustomFolder => {
+                tr!("Enter to open", "Enterで開く", "Enter — открыть").into()
+            }
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::NoteColours => c.note_colours.label().into(),
@@ -3208,7 +3213,7 @@ impl State {
                 self.load_skin();
             }
             // Acts on Enter in `settings_key`.
-            Item::SkinFolder => return,
+            Item::SkinFolder | Item::CustomFolder => return,
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
@@ -4088,6 +4093,7 @@ impl State {
             Ok(()) => {
                 self.cfg.data_folder = m.to;
                 config::set_data_folder(self.cfg.data_folder.clone());
+                self.custom_dir = config::custom_dir();
                 self.cfg.save();
                 let _ = self.set_songs_folder(self.cfg.songs_folder.clone());
                 let at = config::data_dir().map(|d| d.display().to_string()).unwrap_or_default();
@@ -4136,7 +4142,7 @@ impl State {
             )
             .into(),
         });
-        self.scan = Some(start_scan(inputs));
+        self.scan = Some(start_scan(library::with_custom(inputs, &self.custom_dir)));
         self.scan_checking = false;
         self.refreshing = None;
         self.select.scanning = Some(0);
@@ -4522,6 +4528,20 @@ impl State {
             .get(entry)
             .and_then(|e| e.path.parent())
             .map(Path::to_path_buf)
+    }
+
+    /// Opens taiko.rs's own custom maps folder in the file manager (made if it isn't there yet).
+    fn open_custom_folder(&mut self) {
+        let dir = self.custom_dir.clone();
+        let _ = std::fs::create_dir_all(&dir);
+        if !services::system::open_folder(&dir) {
+            let dir = dir.display();
+            self.toast(tr!(
+                "taiko.rs's maps are in {dir}",
+                "taiko.rsの譜面は{dir}にあります",
+                "карты taiko.rs лежат в {dir}"; [] [dir]
+            ));
+        }
     }
 
     fn open_skins_folder(&mut self) {
@@ -5117,6 +5137,11 @@ impl State {
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => {
                 self.open_skins_folder()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::CustomFolder =>
+            {
+                self.open_custom_folder()
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::HiddenMaps => {
                 if self.select.hidden.is_empty() {
@@ -12633,6 +12658,17 @@ impl State {
         }
     }
 
+    /// Where a lobby map's set folder must be for the host to send it: the Songs folders,
+    /// taiko.rs's own custom maps folder or an opened .osz's, never the folder a loose map happens
+    /// to be in (any player in the lobby can ask for it).
+    pub(crate) fn lobby_send_roots(&self) -> Vec<PathBuf> {
+        let mut roots = self.song_dirs.clone();
+        roots.push(self.songs_dir.clone());
+        roots.push(self.custom_dir.clone());
+        roots.push(library::extracted_dir());
+        roots
+    }
+
     /// Host: packs the lobby map's set folder and sends it to player `to`, on a thread.
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
@@ -12640,11 +12676,7 @@ impl State {
         let folder = s
             .map_entry
             .and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
-        // Only a set folder in the Songs folders (or an opened .osz's) is sent, never the folder
-        // a loose map happens to be in: any player in the lobby can ask for it.
-        let mut roots = self.song_dirs.clone();
-        roots.push(self.songs_dir.clone());
-        roots.push(library::extracted_dir());
+        let roots = self.lobby_send_roots();
         std::thread::spawn(move || {
             let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part }).is_ok();
             let error = |why: String| net::MapPart {

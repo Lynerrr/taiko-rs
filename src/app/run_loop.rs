@@ -1236,6 +1236,7 @@ impl State {
             #[cfg(target_os = "android")]
             keyboard: android::Keyboard::default(),
             songs_dir,
+            custom_dir: config::custom_dir(),
             installed_sets: None,
             lobby_lookup: Job::idle(),
             score_link: None,
