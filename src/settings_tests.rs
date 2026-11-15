@@ -1536,7 +1536,13 @@ fn a_custom_map_is_not_checked_against_the_osu_set_it_was_made_from() {
     assert_eq!(
         s.set_check_due.map(|d| d.0),
         Some(622136),
-        "an osu! set is checked"
+        "an osu! set is checked (select {}, selected {:?} of {i}, set {:?}, checking {}, updates {:?}, custom {:?})",
+        s.scene.is_select(),
+        s.select.selected(),
+        s.library[i].set_id(),
+        s.set_check.is_some(),
+        s.select.updates.keys().collect::<Vec<_>>(),
+        s.select.custom_folder,
     );
     s.set_check_due = None;
     let folder = s.library[i].path.parent().unwrap().to_path_buf();
