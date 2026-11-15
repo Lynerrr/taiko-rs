@@ -202,8 +202,12 @@ pub struct Select {
     pub custom_folder: std::collections::HashMap<std::path::PathBuf, u32>,
     /// Custom sets the server has approved.
     pub custom_approved: std::collections::HashSet<u32>,
+    /// The maps marked EPIC on the online server.
+    pub server_epic: ServerEpic,
     /// The account logged in is a loved nominator: the right-click menu can love sets.
     pub nominator: bool,
+    /// The account logged in is an admin: the right-click menu can mark maps EPIC.
+    pub admin: bool,
     /// The collections: the player's own (all of them), then osu!'s that have maps here.
     pub collections: Vec<Shown>,
     /// The collection shown (None: everything) and the open list's cursor.
@@ -450,7 +454,9 @@ impl Select {
             server_loved: ServerLoved::new(),
             custom_folder: std::collections::HashMap::new(),
             custom_approved: std::collections::HashSet::new(),
+            server_epic: ServerEpic::default(),
             nominator: false,
+            admin: false,
             collections: Vec::new(),
             collection: None,
             picker: None,
@@ -574,6 +580,7 @@ impl Select {
                     .filter(|&&t| t > 0)
                     .map(|&t| now.saturating_sub(t) as f64 / 86_400.0),
                 status: self.status_of(e),
+                epic: self.is_epic(e),
             }
         };
         self.visible = library
@@ -654,6 +661,19 @@ impl Select {
         (0..self.sections.len())
             .filter(|&s| self.section_open(s))
             .collect()
+    }
+
+    /// The taiko.rs custom set map `e` is in, if it's one.
+    fn custom_id(&self, e: &Entry) -> Option<u32> {
+        e.path
+            .parent()
+            .and_then(|d| self.custom_folder.get(d))
+            .copied()
+    }
+
+    /// Whether map `e` is marked EPIC on the online server.
+    pub fn is_epic(&self, e: &Entry) -> bool {
+        self.server_epic.covers(e, self.custom_id(e))
     }
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
@@ -1610,6 +1630,9 @@ impl Select {
                 ));
             }
         }
+        if self.admin {
+            items.extend(self.epic_items(&library[i], m.header));
+        }
         if let Some(id) = library[i].set_id() {
             let label = match self.updates.get(&id) {
                 Some(SetUpdate::Updating) => "Updating...".to_string(),
@@ -1644,6 +1667,75 @@ impl Select {
         items
     }
 
+    /// The admin's EPIC items for map `e` in the right-click menu (`header`: opened on its song).
+    fn epic_items(&self, e: &Entry, header: bool) -> Vec<(String, MenuAction)> {
+        // Cut as the rest of the menu is.
+        let fit = |s: String| {
+            if s.chars().count() > 30 {
+                s.chars().take(27).collect::<String>() + "..."
+            } else {
+                s
+            }
+        };
+        let version = &e.meta.version;
+        let mut items = Vec::new();
+        if let Some(id) = self.custom_id(e) {
+            let on = self.server_epic.custom.contains(&id);
+            items.push((
+                if on {
+                    "Take EPIC off this custom set".to_string()
+                } else {
+                    "Mark this custom set EPIC".to_string()
+                },
+                MenuAction::Epic(!on, false),
+            ));
+            return items;
+        }
+        let Some(set) = e.set_id() else {
+            return items;
+        };
+        match self.server_epic.sets.get(&set) {
+            Some(versions) if versions.is_empty() => items.push((
+                "Take EPIC off the whole set".into(),
+                MenuAction::Epic(false, false),
+            )),
+            Some(versions) if !header && covers(versions, version) => items.push((
+                fit(format!("Take EPIC off [{version}]")),
+                MenuAction::Epic(false, true),
+            )),
+            _ if !header => items.push((
+                fit(format!("Mark [{version}] EPIC")),
+                MenuAction::Epic(true, true),
+            )),
+            _ => {}
+        }
+        if self
+            .server_epic
+            .sets
+            .get(&set)
+            .is_none_or(|v| !v.is_empty())
+        {
+            items.push((
+                "Mark the whole set EPIC".into(),
+                MenuAction::Epic(true, false),
+            ));
+        }
+        items
+    }
+
+    /// What an `Epic` menu action marks: the menu's map's custom set, or its osu! set or just
+    /// its difficulty (`one`).
+    pub fn epic_target(&self, library: &[Entry], one: bool) -> Option<crate::online::EpicMap> {
+        let e = &library[self.menu_map()?];
+        if let Some(id) = self.custom_id(e) {
+            return Some(crate::online::EpicMap::Custom(id));
+        }
+        Some(crate::online::EpicMap::Set {
+            set: e.set_id()?,
+            version: one.then(|| e.meta.version.clone()),
+        })
+    }
+
     /// Hides the menu's map or its whole song, keeping the selection near where it was.
     /// Returns what was hidden, for a message.
     pub fn hide(&mut self, action: MenuAction, library: &[Entry]) -> Option<String> {
@@ -1668,6 +1760,7 @@ impl Select {
                 }
             }
             MenuAction::Love(..)
+            | MenuAction::Epic(..)
             | MenuAction::Like
             | MenuAction::MapSkin
             | MenuAction::Edit
@@ -2309,13 +2402,32 @@ impl Select {
                     };
                     let (nr, ny) = (if open { 6.5 } else { 5.0 }, y + (rh - 4.0) / 2.0);
                     crate::style::note(c, 33.0, ny, nr, tag, open, 0.7);
-                    c.text(
-                        44.0,
-                        y + 6.0,
-                        10.0,
-                        rgba(0xffffff, 1.0),
-                        &fit(e.meta.title.clone(), 10.0, lw - 110.0),
-                    );
+                    // A song with a map marked EPIC: a prism stripe down its left edge, its title
+                    // in the shimmer with the word after it, and a spark round the open one.
+                    let epic = g.clone().any(|i| self.is_epic(&library[self.visible[i]]));
+                    let tag_w = if epic {
+                        Canvas::text_width(6.0, crate::epic::LABEL) + 6.0
+                    } else {
+                        0.0
+                    };
+                    let title = fit(e.meta.title.clone(), 10.0, lw - 110.0 - tag_w);
+                    if epic {
+                        crate::epic::stripe(c, 24.0, y + 3.0, rh - 10.0, 1.0);
+                        let tw = crate::epic::text(c, 44.0, y + 6.0, 10.0, &title, 1.0);
+                        crate::epic::text(
+                            c,
+                            44.0 + tw + 6.0,
+                            y + 8.0,
+                            6.0,
+                            crate::epic::LABEL,
+                            0.95,
+                        );
+                        if open {
+                            crate::epic::spark_round(c, [24.0, y, lw, rh - 4.0], 1.0);
+                        }
+                    } else {
+                        c.text(44.0, y + 6.0, 10.0, rgba(0xffffff, 1.0), &title);
+                    }
                     // A row per difficulty: which one it is, rather than who mapped the set.
                     let one = self.split_difficulties();
                     let sub = if one {
@@ -3148,6 +3260,9 @@ pub enum MenuAction {
     /// Loved nominators: love the map set on the online server (false: take it back), just the
     /// menu's difficulty when the last is true.
     Love(u32, bool, bool),
+    /// Admins: mark the menu's map EPIC on the online server (false: take the mark back), just
+    /// its difficulty when the last is true (osu! sets only: a custom set is marked whole).
+    Epic(bool, bool),
     /// Download the song's set again, its newest version (replacing its difficulties).
     UpdateSong,
     /// Like the song, or not any more.
@@ -3171,6 +3286,32 @@ pub fn covers(versions: &[String], version: &str) -> bool {
         || versions
             .iter()
             .any(|v| v.trim().eq_ignore_ascii_case(version.trim()))
+}
+
+/// The maps marked EPIC on the online server: osu! sets with the difficulties marked (none: all
+/// of them), and custom sets.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServerEpic {
+    pub sets: ServerLoved,
+    pub custom: std::collections::HashSet<u32>,
+}
+
+impl ServerEpic {
+    pub fn from_list(list: crate::online::EpicList) -> ServerEpic {
+        ServerEpic {
+            sets: list.sets.into_iter().collect(),
+            custom: list.custom.into_iter().collect(),
+        }
+    }
+
+    /// Whether map `e` is marked: its custom set (`custom`, when it's in one), or its osu! set,
+    /// or this difficulty of it.
+    pub fn covers(&self, e: &Entry, custom: Option<u32>) -> bool {
+        match custom {
+            Some(id) => self.custom.contains(&id),
+            None => loved_here(&self.sets, e),
+        }
+    }
 }
 
 /// Whether map `e` is loved on the online server: its set, or this difficulty of it.
