@@ -12608,8 +12608,11 @@ impl State {
                     .and_then(|d| self.select.custom_folder.get(d))
                     == Some(&set.id)
             });
-            if let (true, Some(entry)) = (older, entry) {
-                self.update_set(entry);
+            if let (true, Some(entry)) = (older, entry)
+                && let Some(folder) = self.library[entry].path.parent().map(Path::to_path_buf)
+            {
+                // What the download tab knows of it (its version, the preview's archive) goes along.
+                self.start_custom_update(set, folder);
                 return;
             }
         }
@@ -13462,6 +13465,12 @@ impl State {
             }),
             ..download::SetInfo::default()
         };
+        self.start_custom_update(set, folder);
+    }
+
+    /// Downloads website set `set`'s newest version over its `folder`.
+    fn start_custom_update(&mut self, set: download::SetInfo, folder: PathBuf) {
+        let id = set.id;
         if self.downloads.iter().any(|j| j.set.same(&set)) {
             return;
         }

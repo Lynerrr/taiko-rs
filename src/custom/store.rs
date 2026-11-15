@@ -413,3 +413,314 @@ pub fn recover(custom: &Path) -> Vec<Swap> {
     }
     journal.swaps
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    /// A scratch place with a `Custom` folder (and so a `CustomVersions` beside it).
+    struct Place {
+        root: PathBuf,
+        custom: PathBuf,
+    }
+
+    impl Place {
+        fn new(tag: &str) -> Place {
+            let root = std::env::temp_dir().join(format!(
+                "taiko-rs-custom-store-{tag}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let custom = root.join("Custom");
+            std::fs::create_dir_all(&custom).unwrap();
+            Place { root, custom }
+        }
+
+        /// The website's archive of set 12 with these files and its marker.
+        fn archive(&self, name: &str, files: &[(&str, &str)]) -> PathBuf {
+            let path = self.root.join(format!("{name}.rsz"));
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            let options = zip::write::SimpleFileOptions::default();
+            for (file, text) in files {
+                zip.start_file(*file, options).unwrap();
+                zip.write_all(text.as_bytes()).unwrap();
+            }
+            zip.start_file(SIDECAR, options).unwrap();
+            zip.write_all(b"{\"id\": 12}\n").unwrap();
+            zip.finish().unwrap();
+            path
+        }
+
+        fn versions(&self) -> PathBuf {
+            set_versions(&self.custom, 12)
+        }
+    }
+
+    impl Drop for Place {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn set(version: u32) -> Install {
+        Install {
+            id: 12,
+            version: Some(version),
+            updated: Some(1_763_251_200),
+            origin: Some(Origin::Site),
+            name: "c12 KNOWER - Time Traveler".into(),
+        }
+    }
+
+    fn chart(name: &str) -> String {
+        format!("osu file format v14\n\n[Metadata]\nVersion:{name}\nBeatmapSetID:622136\n")
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        files_under(dir)
+            .iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect()
+    }
+
+    /// Makes `path` look changed after its install (file times have a second's grain).
+    fn later(path: &Path) {
+        let t = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    #[test]
+    fn a_first_install_is_the_whole_set_with_its_manifest() {
+        let p = Place::new("first");
+        let a = p.archive(
+            "v1",
+            &[("a [Oni].tko", &chart("Oni")), ("audio.mp3", "mp3")],
+        );
+        let folder = install(&p.custom, &a, &set(1)).unwrap();
+        assert_eq!(folder, p.custom.join("c12 KNOWER - Time Traveler"));
+        assert_eq!(names(&folder), ["a [Oni].tko", "audio.mp3", SIDECAR]);
+        let m = Manifest::read(&folder).unwrap();
+        assert_eq!(
+            (m.id, m.version, m.origin),
+            (Some(12), Some(1), Some(Origin::Site))
+        );
+        assert_eq!(m.based_on, Some(622_136));
+        assert_eq!(
+            m.file_hash("a [Oni].tko"),
+            Some(crate::net::map_hash(chart("Oni").as_bytes()))
+        );
+        assert!(m.installed.is_some());
+        assert!(old_versions(&p.versions()).is_empty(), "nothing older yet");
+        assert!(!p.versions().join(STAGE).exists());
+        assert!(read_journal(&p.custom).swaps.is_empty());
+    }
+
+    #[test]
+    fn an_update_with_a_renamed_difficulty_leaves_only_the_new_one() {
+        let p = Place::new("renamed");
+        let v1 = p.archive(
+            "v1",
+            &[("a [Oni].tko", &chart("Oni")), ("audio.mp3", "mp3")],
+        );
+        let folder = install(&p.custom, &v1, &set(1)).unwrap();
+        let v2 = p.archive(
+            "v2",
+            &[
+                ("a [Inner Oni].tko", &chart("Inner Oni")),
+                ("audio.mp3", "mp3"),
+            ],
+        );
+        assert_eq!(install(&p.custom, &v2, &set(2)).unwrap(), folder);
+        assert_eq!(names(&folder), ["a [Inner Oni].tko", "audio.mp3", SIDECAR]);
+        assert_eq!(Manifest::read(&folder).unwrap().version, Some(2));
+        // The version it replaced is kept whole.
+        let (old, m) = previous_version(&p.custom, &folder).unwrap();
+        assert_eq!(m.version, Some(1));
+        assert_eq!(names(&old), ["a [Oni].tko", "audio.mp3", SIDECAR]);
+    }
+
+    #[test]
+    fn a_mappers_own_difficulty_and_its_backup_go_along_to_every_new_version() {
+        let p = Place::new("own");
+        let v1 = p.archive("v1", &[("a [Oni].tko", &chart("Oni"))]);
+        let folder = install(&p.custom, &v1, &set(1)).unwrap();
+        std::fs::write(folder.join("a [Mine].osu"), chart("Mine")).unwrap();
+        std::fs::write(folder.join("a [Mine].osu.bak"), chart("Mine")).unwrap();
+        // The set's own chart edited by the player is theirs too, but the new version's wins.
+        std::fs::write(folder.join("a [Oni].tko"), chart("Oni edited")).unwrap();
+        later(&folder.join("a [Oni].tko"));
+        // A picture they put in after the install.
+        std::fs::create_dir_all(folder.join("sb")).unwrap();
+        std::fs::write(folder.join("sb/star.png"), "png").unwrap();
+        later(&folder.join("sb/star.png"));
+        let v2 = p.archive("v2", &[("a [Oni].tko", &chart("Oni v2"))]);
+        install(&p.custom, &v2, &set(2)).unwrap();
+        assert_eq!(
+            names(&folder),
+            [
+                "a [Mine].osu",
+                "a [Mine].osu.bak",
+                "a [Oni].tko",
+                "sb/star.png",
+                SIDECAR
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a [Oni].tko")).unwrap(),
+            chart("Oni v2")
+        );
+        let m = Manifest::read(&folder).unwrap();
+        assert!(!m.files.contains_key("a [Mine].osu"), "not the website's");
+        assert_eq!(m.own, ["a [Mine].osu", "a [Mine].osu.bak", "sb/star.png"]);
+        // And on to the next, though their times are older than that install now.
+        let v3 = p.archive("v3", &[("a [Oni].tko", &chart("Oni v3"))]);
+        install(&p.custom, &v3, &set(3)).unwrap();
+        assert_eq!(
+            names(&folder),
+            [
+                "a [Mine].osu",
+                "a [Mine].osu.bak",
+                "a [Oni].tko",
+                "sb/star.png",
+                SIDECAR
+            ]
+        );
+        // The player's edit of the old chart is kept with the version it was made on.
+        let v1_kept = std::fs::read_dir(p.versions()).unwrap().count();
+        assert_eq!(v1_kept, 1, "one older version kept");
+    }
+
+    #[test]
+    fn a_version_one_manifest_leaves_the_old_versions_charts_behind() {
+        // What the website's archive brought before installs listed their charts.
+        let p = Place::new("v1-manifest");
+        let folder = p.custom.join("c12 KNOWER - Time Traveler");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("a [Oni].tko"), chart("Oni")).unwrap();
+        std::fs::write(folder.join(SIDECAR), "{\"id\": 12}\n").unwrap();
+        let v2 = p.archive("v2", &[("a [Inner Oni].tko", &chart("Inner Oni"))]);
+        install(&p.custom, &v2, &set(2)).unwrap();
+        assert_eq!(names(&folder), ["a [Inner Oni].tko", SIDECAR]);
+    }
+
+    #[test]
+    fn a_failed_install_leaves_the_folder_as_it_was() {
+        let p = Place::new("failed");
+        let v1 = p.archive("v1", &[("a [Oni].tko", &chart("Oni"))]);
+        let folder = install(&p.custom, &v1, &set(1)).unwrap();
+        let before = names(&folder);
+        let broken = p.root.join("broken.rsz");
+        std::fs::write(&broken, "not a zip").unwrap();
+        assert!(install(&p.custom, &broken, &set(2)).is_err());
+        assert_eq!(names(&folder), before);
+        assert_eq!(Manifest::read(&folder).unwrap().version, Some(1));
+        assert!(old_versions(&p.versions()).is_empty());
+        assert!(!p.versions().join(STAGE).exists());
+    }
+
+    #[test]
+    fn a_crash_between_the_renames_is_finished_or_undone_at_the_next_start() {
+        let p = Place::new("crash");
+        let v1 = p.archive("v1", &[("a [Oni].tko", &chart("Oni"))]);
+        let folder = install(&p.custom, &v1, &set(1)).unwrap();
+        let v2 = p.archive("v2", &[("a [Inner Oni].tko", &chart("Inner Oni"))]);
+        // Cut off after the first rename: the new version waits, put together, in its stage.
+        let stage = p.versions().join(STAGE);
+        crate::download::unpack(&v2, &stage).unwrap();
+        let old = next_old(&p.versions());
+        let s = Swap {
+            folder: folder.clone(),
+            old: Some(old.clone()),
+            stage: stage.clone(),
+        };
+        journal_add(&p.custom, &s).unwrap();
+        std::fs::rename(&folder, &old).unwrap();
+        assert!(!folder.exists());
+        assert_eq!(recover(&p.custom), [s.clone()]);
+        assert_eq!(names(&folder), ["a [Inner Oni].tko", SIDECAR]);
+        assert!(read_journal(&p.custom).swaps.is_empty());
+
+        // Cut off with the new version gone too: the old one comes back.
+        let s = Swap {
+            folder: folder.clone(),
+            old: Some(old.clone()),
+            stage: stage.clone(),
+        };
+        std::fs::remove_dir_all(&folder).unwrap();
+        journal_add(&p.custom, &s).unwrap();
+        recover(&p.custom);
+        assert_eq!(names(&folder), ["a [Oni].tko", SIDECAR]);
+
+        // Cut off before the first rename: the half-made stage goes, the folder stays.
+        crate::download::unpack(&v2, &stage).unwrap();
+        journal_add(&p.custom, &s).unwrap();
+        recover(&p.custom);
+        assert!(!stage.exists());
+        assert_eq!(names(&folder), ["a [Oni].tko", SIDECAR]);
+        // A stage no journal names is a stopped install's.
+        crate::download::unpack(&v2, &stage).unwrap();
+        assert!(recover(&p.custom).is_empty());
+        assert!(!stage.exists());
+    }
+
+    #[test]
+    fn one_older_version_is_kept_and_going_back_can_be_undone() {
+        let p = Place::new("prune");
+        let mut folder = PathBuf::new();
+        for v in 1..=3 {
+            let a = p.archive(
+                &format!("v{v}"),
+                &[("a [Oni].tko", &chart(&format!("v{v}")))],
+            );
+            folder = install(&p.custom, &a, &set(v)).unwrap();
+        }
+        assert_eq!(old_versions(&p.versions()).len(), KEEP_VERSIONS);
+        let version = |f: &Path| Manifest::read(f).unwrap().version;
+        assert_eq!(
+            previous_version(&p.custom, &folder).map(|(_, m)| m.version),
+            Some(Some(2))
+        );
+        roll_back(&p.custom, &folder).unwrap();
+        assert_eq!(version(&folder), Some(2));
+        assert_eq!(
+            std::fs::read_to_string(folder.join("a [Oni].tko")).unwrap(),
+            chart("v2")
+        );
+        // The version it replaced is the one kept now.
+        assert_eq!(
+            previous_version(&p.custom, &folder).map(|(_, m)| m.version),
+            Some(Some(3))
+        );
+        roll_back(&p.custom, &folder).unwrap();
+        assert_eq!(version(&folder), Some(3));
+        assert_eq!(old_versions(&p.versions()).len(), 1);
+    }
+
+    #[test]
+    fn the_folder_that_has_the_set_keeps_it_and_another_sets_name_is_left_alone() {
+        let p = Place::new("names");
+        // Set 12 under another name (moved in by hand, or renamed).
+        let moved = p.custom.join("Time Traveler (mine)");
+        std::fs::create_dir_all(&moved).unwrap();
+        std::fs::write(moved.join(SIDECAR), "{\"id\": 12}").unwrap();
+        let a = p.archive("v1", &[("a [Oni].tko", &chart("Oni"))]);
+        assert_eq!(install(&p.custom, &a, &set(1)).unwrap(), moved);
+        // A map of the player's own under the name the set would get.
+        let p = Place::new("names-taken");
+        let taken = p.custom.join("c12 KNOWER - Time Traveler");
+        std::fs::create_dir_all(&taken).unwrap();
+        std::fs::write(taken.join("mine.osu"), chart("mine")).unwrap();
+        let a = p.archive("v1", &[("a [Oni].tko", &chart("Oni"))]);
+        assert_eq!(
+            install(&p.custom, &a, &set(1)).unwrap(),
+            p.custom.join("c12 KNOWER - Time Traveler (2)")
+        );
+        assert_eq!(names(&taken), ["mine.osu"], "untouched");
+    }
+}
