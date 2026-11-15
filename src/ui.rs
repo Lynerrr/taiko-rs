@@ -239,6 +239,8 @@ pub struct Select {
     pub favourites: std::collections::HashSet<String>,
     /// Sets checked for a newer version on osu! this session, by set ID.
     pub updates: std::collections::HashMap<u32, SetUpdate>,
+    /// Custom sets checked for a newer version on the website, by their number there.
+    pub custom_updates: std::collections::HashMap<u32, SetUpdate>,
     /// Difficulties an update took out of their set (renamed or dropped on osu!): not listed.
     pub gone: std::collections::HashSet<std::path::PathBuf>,
     /// Difficulties osu! doesn't have though their set is on it (edited copies: OD changed, a
@@ -454,6 +456,7 @@ impl Select {
             server_loved: ServerLoved::new(),
             custom_folder: std::collections::HashMap::new(),
             custom_approved: std::collections::HashSet::new(),
+            custom_updates: std::collections::HashMap::new(),
             server_epic: ServerEpic::default(),
             nominator: false,
             admin: false,
@@ -670,6 +673,15 @@ impl Select {
             .parent()
             .and_then(|d| self.custom_folder.get(d))
             .copied()
+    }
+
+    /// Whether a newer version of map `e`'s set is known of: on the website for a custom set
+    /// (whatever osu! set it was made from), else on osu!.
+    pub fn update_of(&self, e: &Entry) -> Option<&SetUpdate> {
+        match self.custom_id(e) {
+            Some(id) => self.custom_updates.get(&id),
+            None => e.set_id().and_then(|id| self.updates.get(&id)),
+        }
     }
 
     /// Whether map `e` is marked EPIC on the online server.
@@ -1634,8 +1646,8 @@ impl Select {
         if self.admin {
             items.extend(self.epic_items(&library[i], m.header));
         }
-        if let Some(id) = library[i].set_id() {
-            let label = match self.updates.get(&id) {
+        if library[i].set_id().is_some() || self.custom_id(&library[i]).is_some() {
+            let label = match self.update_of(&library[i]) {
                 Some(SetUpdate::Updating) => "Updating...".to_string(),
                 Some(SetUpdate::Available) => format!("Update {}", library[i].meta.title),
                 _ => format!("Download {} again", library[i].meta.title),
@@ -2438,7 +2450,7 @@ impl Select {
                     // A newer version on osu!: click (or Ctrl+Shift+U) to get it. Under the
                     // difficulty count (moved up for it), inside the row (not on one cut off at
                     // the list's end).
-                    let update = e.set_id().and_then(|id| self.updates.get(&id)).filter(|u| {
+                    let update = self.update_of(e).filter(|u| {
                         matches!(u, SetUpdate::Available | SetUpdate::Updating)
                             && y + rh - 4.0 <= bottom
                     });

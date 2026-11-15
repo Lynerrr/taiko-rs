@@ -362,8 +362,13 @@ struct EpicFx {
     burst: epic::Burst,
 }
 
-/// Custom sets known: map folder -> set number, and the numbers the server has approved.
-type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
+/// The custom maps' folders in the library (their set numbers), the sets approved, and the
+/// sets a folder has an older version of (None: the website couldn't be asked).
+type CustomKnown = (
+    std::collections::HashMap<PathBuf, u32>,
+    Vec<u32>,
+    Option<Vec<u32>>,
+);
 /// Receiving the lobby map from the host: where its parts go, and its download's progress.
 type HostTransfer = (
     std::sync::mpsc::Sender<Option<Vec<u8>>>,
@@ -7839,19 +7844,47 @@ impl State {
                     .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
                     .collect();
                 if known.is_empty() {
-                    return (known, Vec::new());
+                    return (known, Vec::new(), Some(Vec::new()));
                 }
                 let mut ids: Vec<u32> = known.values().copied().collect();
                 ids.sort_unstable();
                 ids.dedup();
                 // A failed answer keeps them listed as custom, not approved.
-                let approved = custom::approved_of(&ids).unwrap_or_default();
-                (known, approved)
+                let Some(sets) = custom::site_sets(&ids) else {
+                    return (known, Vec::new(), None);
+                };
+                let approved = sets.iter().filter(|s| s.approved).map(|s| s.id).collect();
+                let mut outdated: Vec<u32> = known
+                    .iter()
+                    .filter(|(dir, id)| {
+                        sets.iter()
+                            .find(|s| s.id == **id)
+                            .is_some_and(|s| custom::outdated(dir, s))
+                    })
+                    .map(|(_, id)| *id)
+                    .collect();
+                outdated.sort_unstable();
+                outdated.dedup();
+                (known, approved, Some(outdated))
             });
         }
         match self.custom_call.poll() {
             None => {}
-            Some((folders, approved)) => {
+            Some((folders, approved, outdated)) => {
+                if let Some(outdated) = outdated {
+                    // An update on its way keeps its state.
+                    let updates = &mut self.select.custom_updates;
+                    for &id in folders.values() {
+                        if updates.get(&id) != Some(&ui::SetUpdate::Updating) {
+                            let state = if outdated.contains(&id) {
+                                ui::SetUpdate::Available
+                            } else {
+                                ui::SetUpdate::UpToDate
+                            };
+                            updates.insert(id, state);
+                        }
+                    }
+                }
                 self.select.custom_folder = folders;
                 self.select.custom_approved = approved.into_iter().collect();
                 if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
@@ -12535,6 +12568,20 @@ impl State {
             Some(_) => self.select.custom_folder.values().any(|&id| id == set.id),
             None => self.installed_sets().contains(&set.id),
         };
+        if here && set.custom.is_some() {
+            // An older version of it here: the website's newer one goes over it.
+            let older = self.select.custom_updates.get(&set.id) == Some(&ui::SetUpdate::Available);
+            let entry = self.library.iter().position(|e| {
+                e.path
+                    .parent()
+                    .and_then(|d| self.select.custom_folder.get(d))
+                    == Some(&set.id)
+            });
+            if let (true, Some(entry)) = (older, entry) {
+                self.update_set(entry);
+                return;
+            }
+        }
         if here {
             self.toast(format!(
                 "{} - {} is already in your songs",
@@ -13165,7 +13212,7 @@ impl State {
                 }
                 Err(e) if e == download::CANCELLED => {
                     if update {
-                        self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
+                        self.set_update_state(&set, ui::SetUpdate::Unknown);
                     }
                     self.toast(format!(
                         "stopped downloading {} - {}",
@@ -13174,7 +13221,7 @@ impl State {
                 }
                 Err(e) => {
                     if update {
-                        self.select.updates.insert(set.id, ui::SetUpdate::Unknown);
+                        self.set_update_state(&set, ui::SetUpdate::Unknown);
                     } else if !set.diffs.is_empty() || set.custom.is_some() {
                         // A search result: the download tab offers to try it again.
                         let short: String = e.chars().take(60).collect();
@@ -13318,6 +13365,17 @@ impl State {
     /// difficulties are replaced; home-made ones and edited copies (rates) stay (`download::is_own`).
     fn update_set(&mut self, entry: usize) {
         let e = &self.library[entry];
+        // A custom set keeps the IDs of the osu! set it was made from: its newer version is the
+        // website's, never osu!'s.
+        if let Some((dir, &id)) = e
+            .path
+            .parent()
+            .and_then(|d| self.select.custom_folder.get_key_value(d))
+        {
+            let folder = dir.clone();
+            self.update_custom(entry, id, folder);
+            return;
+        }
         let (Some(id), Some(folder)) = (e.set_id(), e.path.parent().map(|p| p.to_path_buf()))
         else {
             self.toast("this map has no osu! set ID to update it by".into());
@@ -13361,6 +13419,42 @@ impl State {
             .push(download::start_update(set, folder, here));
     }
 
+    /// Downloads custom set `id`'s newest version from the website over its `folder` (where map
+    /// `entry` is): its files take the place of those of the same name, the rest stays.
+    fn update_custom(&mut self, entry: usize, id: u32, folder: PathBuf) {
+        let e = &self.library[entry];
+        let set = download::SetInfo {
+            id,
+            artist: e.meta.artist.clone(),
+            title: e.meta.title.clone(),
+            creator: e.meta.creator.clone(),
+            custom: Some(download::CustomSet {
+                approved: self.select.custom_approved.contains(&id),
+                ..download::CustomSet::default()
+            }),
+            ..download::SetInfo::default()
+        };
+        if self.downloads.iter().any(|j| j.set.same(&set)) {
+            return;
+        }
+        self.toast(format!("updating {} - {}...", set.artist, set.title));
+        self.select
+            .custom_updates
+            .insert(id, ui::SetUpdate::Updating);
+        self.downloads
+            .push(download::start_custom_update(set, folder));
+    }
+
+    /// Where song select keeps whether `set` has a newer version: the website's sets apart from
+    /// osu!'s (their numbers overlap).
+    fn set_update_state(&mut self, set: &download::SetInfo, state: ui::SetUpdate) {
+        let updates = match set.custom {
+            Some(_) => &mut self.select.custom_updates,
+            None => &mut self.select.updates,
+        };
+        updates.insert(set.id, state);
+    }
+
     /// A set downloaded again (see `update_set`): its difficulties in the library are read anew in
     /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
     /// `old`: the mirrors had only an older version than osu!'s, so the set is still out of date.
@@ -13393,13 +13487,13 @@ impl State {
         self.append_maps(added);
         if old {
             // Not "updated": song select would say so again on the next launch.
-            self.select.updates.insert(set.id, ui::SetUpdate::Available);
+            self.set_update_state(set, ui::SetUpdate::Available);
             self.toast(format!(
                 "{} - {}: the mirrors only have an older version for now, try again later",
                 set.artist, set.title
             ));
         } else {
-            self.select.updates.insert(set.id, ui::SetUpdate::UpToDate);
+            self.set_update_state(set, ui::SetUpdate::UpToDate);
             self.toast(format!("updated {} - {}", set.artist, set.title));
         }
     }
@@ -13418,17 +13512,31 @@ impl State {
 
     /// Adds a freshly downloaded set to the library (appended, so existing indices stay valid).
     fn add_downloaded(&mut self, set: &download::SetInfo, folder: &std::path::Path) {
-        let known: std::collections::HashSet<PathBuf> = self
-            .library
-            .iter()
-            .filter(|e| e.path.starts_with(folder))
-            .map(|e| e.path.clone())
-            .collect();
-        let fresh: Vec<Entry> =
+        let mut scanned: std::collections::HashMap<PathBuf, Entry> =
             library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0), &mut |_| {})
                 .into_iter()
-                .filter(|e| !known.contains(&e.path))
+                .map(|e| (e.path.clone(), e))
                 .collect();
+        // Files unpacked over ones of the same name (a newer version of the set imported over
+        // the old) are read anew in place: their old header and hash would stay otherwise, and
+        // plays would go to the old version's leaderboard.
+        let mut changed = Vec::new();
+        for (i, e) in self.library.iter_mut().enumerate() {
+            if !e.path.starts_with(folder) {
+                continue;
+            }
+            if let Some(new) = scanned.remove(&e.path)
+                && (new.size, new.modified) != (e.size, e.modified)
+            {
+                *e = new;
+                self.select.edited.remove(&e.path);
+                changed.push((i, e.path.clone(), e.modified, e.size));
+            }
+        }
+        let rewritten = changed.len();
+        self.maps_rewritten(changed);
+        let mut fresh: Vec<Entry> = scanned.into_values().collect();
+        fresh.sort_by(|a, b| a.path.cmp(&b.path));
         // Nothing new (unpacked over the same files): the set that's there is what was added.
         let maps = if fresh.is_empty() {
             main_maps(self.library.iter().filter(|e| e.path.starts_with(folder)))
@@ -13448,9 +13556,21 @@ impl State {
                 }
                 self.select.refilter(&self.library);
             }
-            None => {
-                self.installed_sets().insert(set.id);
-            }
+            // An archive from the website opened from the file manager: its marker says which
+            // custom set it is, so it isn't taken for the osu! set it was made from.
+            None => match custom::sidecar_id(folder) {
+                Some(id) => {
+                    self.select.custom_folder.insert(folder.to_path_buf(), id);
+                    self.select.custom_updates.remove(&id);
+                    self.select.edited.retain(|p| !p.starts_with(folder));
+                    // Whether it's approved, and whether it's the newest version, soon.
+                    self.custom_asked = None;
+                    self.select.refilter(&self.library);
+                }
+                None => {
+                    self.installed_sets().insert(set.id);
+                }
+            },
         }
         eprintln!(
             "downloaded set {} into {} ({n} maps)",
@@ -13475,6 +13595,7 @@ impl State {
         self.reveal_maps(maps);
         let text = lobby_note.unwrap_or_else(|| match set.artist.is_empty() {
             // An imported .osz: only its file name is known.
+            true if n == 0 && rewritten > 0 => format!("updated {}", set.title),
             true if n == 0 => format!("{} is already in the list", set.title),
             true => format!("imported {} ({n} maps)", set.title),
             false => format!("downloaded {} - {}", set.artist, set.title),
