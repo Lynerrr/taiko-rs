@@ -456,6 +456,8 @@ pub struct View {
     chat_popup: Option<(u32, String, Instant)>,
     /// A chat line came that wasn't in sight: the screen plays the message chime once.
     chat_ping: bool,
+    /// Saves the mapper asked for since the screen last looked, for a secret medal.
+    saves: u32,
     /// The last of our edits the session's server refused: why, and when. The timeline says so
     /// in plain sight for a while, not only in the status line.
     refused: Option<(String, Instant)>,
@@ -811,6 +813,7 @@ impl View {
             chat_seen: 0,
             chat_popup: None,
             chat_ping: false,
+            saves: 0,
             refused: None,
             asked_host_at: None,
             left_session: None,
@@ -1006,6 +1009,11 @@ impl View {
     /// A chat line came out of sight since the last call: the chime is due.
     pub fn take_chat_ping(&mut self) -> bool {
         std::mem::take(&mut self.chat_ping)
+    }
+
+    /// The saves asked for since the last call (`ura::Event::MapSave`).
+    pub fn take_saves(&mut self) -> u32 {
+        std::mem::take(&mut self.saves)
     }
 
     pub fn take_rate_request(&mut self) -> Option<f64> {
@@ -3313,7 +3321,10 @@ impl View {
 
     fn save(&mut self) {
         self.status = match self.save_file() {
-            Ok(said) => said,
+            Ok(said) => {
+                self.saves += 1;
+                said
+            }
             Err(e) => format!("can't save: {e}"),
         };
     }
@@ -7650,6 +7661,23 @@ mod tests {
         );
         assert_eq!(v.ed.bookmarks, [2000.0]);
         let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn every_save_that_went_through_counts_once_for_the_cartographer_medal() {
+        let mut v = view();
+        assert_eq!(v.take_saves(), 0);
+        v.save();
+        v.save();
+        assert_eq!(v.take_saves(), 2, "{}", v.status);
+        assert_eq!(v.take_saves(), 0);
+        // A save that fails isn't one.
+        let path = v.ed.path.clone();
+        v.ed.path = path.join("missing").join("map.osu");
+        v.save();
+        assert!(v.status.starts_with("can't save"), "{}", v.status);
+        assert_eq!(v.take_saves(), 0);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

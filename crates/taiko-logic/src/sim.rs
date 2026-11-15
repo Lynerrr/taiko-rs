@@ -88,8 +88,9 @@ pub const LANE_Y: f32 = 196.0;
 pub const LANE_H: f32 = 118.0;
 pub const NOTE_R: f32 = 31.0;
 pub const BIG_R: f32 = 46.0;
-/// Second key of a big note must land within this window of the first.
-pub(crate) const STRONG_WINDOW: f64 = 30.0;
+/// Second key of a big note must land within this window of the first (ms). The client's menu
+/// takes both rims as one hit by the same rule.
+pub const STRONG_WINDOW: f64 = 30.0;
 /// The combo break plays a little louder than a hitsound (about +1.6 dB): noticeable over the
 /// music without being jarring.
 pub(crate) const COMBO_BREAK_GAIN: f32 = 1.2;

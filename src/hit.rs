@@ -27,6 +27,12 @@ pub enum Hit {
     MenuItem(usize),
     /// A tab of the medals screen.
     MedalTab(usize),
+    /// An unknown medal's question mark on the medals screen (index into its medals): tapped
+    /// enough, it hatches (`medals::View::poke`).
+    MedalMystery(usize),
+    /// The main menu's logo, and the stray note crossing it (`eggs`).
+    MenuLogo,
+    StrayNote,
     /// Takes the song list back to the selection it was scrolled away from.
     ListBack,
     /// Song select's way out: the main menu, or back where it came from.
