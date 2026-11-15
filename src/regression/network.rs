@@ -2278,17 +2278,17 @@ fn the_newest_description_of_a_set_is_the_one_believed() {
     );
 }
 
-/// Keeps what a slow link takes in ahead of it small (connections accepted inherit it): the
+/// Keeps what a slow link takes in ahead of it small (on the listener, for the window the
+/// connection starts with, and on the connection): the
 /// system would otherwise take megabytes in at once (macOS does on loopback) and stand for a
 /// fast link, the backlog left in the sender's socket.
 #[cfg(unix)]
-fn small_receive_buffer(listener: &std::net::TcpListener) {
-    use std::os::fd::AsRawFd;
+fn small_receive_buffer(socket: &impl std::os::fd::AsRawFd) {
     let value: libc::c_int = 64 * 1024;
     // SAFETY: a valid socket, and a c_int option given with its size.
     unsafe {
         libc::setsockopt(
-            listener.as_raw_fd(),
+            socket.as_raw_fd(),
             libc::SOL_SOCKET,
             libc::SO_RCVBUF,
             (&value as *const libc::c_int).cast(),
@@ -2298,7 +2298,7 @@ fn small_receive_buffer(listener: &std::net::TcpListener) {
 }
 
 #[cfg(not(unix))]
-fn small_receive_buffer(_listener: &std::net::TcpListener) {}
+fn small_receive_buffer<T>(_socket: &T) {}
 
 /// A way to `to` that carries what the client sends at about `bytes_per_s` (what comes back is
 /// passed straight on): a player on a slow upload. Takes one connection.
@@ -2311,6 +2311,7 @@ fn slow_upload(to: String, bytes_per_s: usize) -> String {
         let Ok((mut client, _)) = listener.accept() else {
             return;
         };
+        small_receive_buffer(&client);
         let Ok(mut room) = std::net::TcpStream::connect(&to) else {
             return;
         };
