@@ -6,8 +6,8 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -105,6 +105,22 @@ pub struct MapStats {
     pub hp: f32,
     #[serde(default)]
     pub creator: String,
+}
+
+impl MapStats {
+    /// The same with every number that isn't one (a map without notes has an endless BPM) as
+    /// -1, "unknown": JSON has no such numbers, and the room drops a `SelectMap` it can't read.
+    pub fn finite(self) -> MapStats {
+        let known = |v: f32| if v.is_finite() { v } else { -1.0 };
+        MapStats {
+            stars: known(self.stars),
+            length_ms: known(self.length_ms),
+            bpm: known(self.bpm),
+            od: known(self.od),
+            hp: known(self.hp),
+            creator: self.creator,
+        }
+    }
 }
 
 /// Defense: the rules the host can change in the lobby, in the settings panel's order.
@@ -2036,6 +2052,10 @@ fn room_loop(
 
 pub struct Client {
     tx: Sender<ClientMsg>,
+    /// Big transfers (a map set's parts): they go out only while nothing else waits to.
+    bulk: SyncSender<(u64, ClientMsg)>,
+    /// Bumped when the lobby map we pick changes: what's still queued for the old one is dropped.
+    generation: Arc<AtomicU64>,
     /// Messages tagged with when they arrived, so ping round trips don't include poll delay.
     rx: Receiver<(Instant, ServerMsg)>,
     stream: TcpStream,
@@ -2075,6 +2095,147 @@ fn resolve(addr: &str) -> Result<std::net::SocketAddr, String> {
         .ok_or_else(|| tr!("can't resolve {addr}", "{addr}が見つかりません", "не удаётся найти {addr}"; [] [addr]))
 }
 
+/// Parts of a big transfer queued ahead of the socket. Few, so a message sent meanwhile isn't
+/// stuck behind many of them.
+const BULK_QUEUE: usize = 2;
+/// How long the writer waits for a message before looking at the big transfers again.
+const BULK_POLL: Duration = Duration::from_millis(10);
+/// Bytes the socket may hold that the network hasn't taken yet. Without a limit the system
+/// queues megabytes of a map set there on a slow upload, and a message written after them waits
+/// for all of it.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+const UNSENT_LIMIT: i32 = 64 * 1024;
+
+/// Sends a big transfer's messages (see [`Client::bulk_sender`]).
+#[derive(Clone)]
+pub struct BulkSender {
+    tx: SyncSender<(u64, ClientMsg)>,
+    generation: Arc<AtomicU64>,
+    mine: u64,
+}
+
+impl BulkSender {
+    /// False once it's no use going on: the lobby map changed, or the connection is gone.
+    pub fn send(&self, msg: ClientMsg) -> bool {
+        self.is_current() && self.tx.send((self.mine, msg)).is_ok() && self.is_current()
+    }
+
+    fn is_current(&self) -> bool {
+        self.generation.load(Ordering::SeqCst) == self.mine
+    }
+}
+
+/// The connection's writer: everything sent goes out in order, a big transfer's parts only
+/// while nothing else is waiting. Picking a map other than the last one picked drops the parts
+/// still queued (they were for the old map).
+fn write_loop(
+    writer: &mut TcpStream,
+    out: &Receiver<ClientMsg>,
+    bulk: &Receiver<(u64, ClientMsg)>,
+    generation: &AtomicU64,
+) {
+    let mut picked: Option<u64> = None;
+    // Another handle on the socket, to ask how much it holds.
+    let probe = writer.try_clone().ok();
+    let mut write = |msg: &ClientMsg| {
+        if let ClientMsg::SelectMap(m) = msg {
+            if picked.is_some_and(|h| h != m.hash) {
+                generation.fetch_add(1, Ordering::SeqCst);
+            }
+            picked = Some(m.hash);
+        }
+        send_line(writer, msg).is_ok()
+    };
+    loop {
+        match out.try_recv() {
+            Ok(msg) => {
+                if !write(&msg) {
+                    return;
+                }
+                continue;
+            }
+            Err(TryRecvError::Disconnected) => return,
+            Err(TryRecvError::Empty) => {}
+        }
+        let room = probe.as_ref().is_none_or(|p| backlog(p) <= BULK_BACKLOG);
+        if room && let Ok((made_for, msg)) = bulk.try_recv() {
+            if made_for == generation.load(Ordering::SeqCst) && !write(&msg) {
+                return;
+            }
+            continue;
+        }
+        match out.recv_timeout(BULK_POLL) {
+            Ok(msg) => {
+                if !write(&msg) {
+                    return;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => return,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+    }
+}
+
+/// macOS holds a blocking send back by the socket's whole buffer, not by TCP_NOTSENT_LOWAT
+/// (that only tells when it's writable): there a big transfer's next part waits until the
+/// socket holds at most this much (sent and not acknowledged yet, or not sent).
+const BULK_BACKLOG: usize = 512 * 1024;
+
+/// What the socket holds that the other end hasn't acknowledged, where only asking tells.
+#[cfg(target_vendor = "apple")]
+fn backlog(stream: &TcpStream) -> usize {
+    use std::os::fd::AsRawFd;
+    /// <sys/socket.h>'s SO_NWRITE.
+    const SO_NWRITE: libc::c_int = 0x1024;
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: a valid socket, and a c_int option given with its size.
+    let ok = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            SO_NWRITE,
+            (&mut value as *mut libc::c_int).cast(),
+            &mut len,
+        )
+    } == 0;
+    if ok { value.max(0) as usize } else { 0 }
+}
+
+/// Elsewhere the system keeps it small by itself (see [`limit_unsent`]).
+#[cfg(not(target_vendor = "apple"))]
+fn backlog(_stream: &TcpStream) -> usize {
+    0
+}
+
+/// The socket option for it: libc names it on Linux and Android only.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const NOTSENT_LOWAT: libc::c_int = libc::TCP_NOTSENT_LOWAT;
+/// macOS's, from <netinet/tcp.h>.
+#[cfg(target_vendor = "apple")]
+const NOTSENT_LOWAT: libc::c_int = 0x201;
+
+/// Keeps what the socket holds unsent small (see [`UNSENT_LIMIT`]), where the system can.
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+fn limit_unsent(stream: &TcpStream) {
+    use std::os::fd::AsRawFd;
+    let value: libc::c_int = UNSENT_LIMIT;
+    // SAFETY: a valid socket, and a c_int option given with its size.
+    unsafe {
+        libc::setsockopt(
+            stream.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            NOTSENT_LOWAT,
+            (&value as *const libc::c_int).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+}
+
+/// Windows sizes its send buffer to what the connection carries in flight by itself.
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
+fn limit_unsent(_stream: &TcpStream) {}
+
 impl Client {
     pub fn connect(addr: &str, name: &str, host_token: Option<u64>) -> Result<Client, String> {
         Client::connect_with(addr, name, host_token, None)
@@ -2111,14 +2272,12 @@ impl Client {
         let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
         let epoch = Instant::now();
 
+        limit_unsent(&writer);
         let (tx, out) = mpsc::channel::<ClientMsg>();
-        thread::spawn(move || {
-            for msg in out {
-                if send_line(&mut writer, &msg).is_err() {
-                    break;
-                }
-            }
-        });
+        let (bulk, bulk_out) = mpsc::sync_channel::<(u64, ClientMsg)>(BULK_QUEUE);
+        let generation = Arc::new(AtomicU64::new(0));
+        let current = generation.clone();
+        thread::spawn(move || write_loop(&mut writer, &out, &bulk_out, &current));
         let (inbox, rx) = mpsc::channel();
         thread::spawn(move || {
             let mut reader = reader;
@@ -2161,6 +2320,8 @@ impl Client {
         });
         Ok(Client {
             tx,
+            bulk,
+            generation,
             rx,
             stream,
             epoch,
@@ -2175,9 +2336,14 @@ impl Client {
         let _ = self.tx.send(msg);
     }
 
-    /// For sending from another thread (big transfers).
-    pub fn sender(&self) -> Sender<ClientMsg> {
-        self.tx.clone()
+    /// For sending a big transfer from another thread: its messages wait for everything sent
+    /// with [`Client::send`], and it stops when we pick another lobby map.
+    pub fn bulk_sender(&self) -> BulkSender {
+        BulkSender {
+            tx: self.bulk.clone(),
+            generation: self.generation.clone(),
+            mine: self.generation.load(Ordering::SeqCst),
+        }
     }
 
     /// Drains incoming messages, handling clock sync internally.
@@ -2221,6 +2387,47 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_map_without_notes_still_reaches_the_room() {
+        use super::{ClientMsg, MapInfo, MapStats};
+        let stats = MapStats {
+            stars: f32::NAN,
+            length_ms: 0.0,
+            bpm: f32::INFINITY,
+            od: 5.0,
+            hp: f32::NEG_INFINITY,
+            creator: "mapper".into(),
+        };
+        let pick = |stats: MapStats| {
+            let msg = ClientMsg::SelectMap(MapInfo {
+                hash: 1,
+                artist: "A".into(),
+                title: "T".into(),
+                version: "V".into(),
+                rate: 1.0,
+                from: None,
+                set_id: None,
+                mods: Vec::new(),
+                multiverse: None,
+                shapeshift: None,
+                seed: None,
+                defense: None,
+                stats: Some(Box::new(stats)),
+            });
+            serde_json::from_str::<ClientMsg>(&serde_json::to_string(&msg).unwrap()).is_ok()
+        };
+        assert!(
+            !pick(stats.clone()),
+            "JSON writes them as null, which doesn't read back"
+        );
+        assert!(pick(stats.clone().finite()));
+        let known = stats.finite();
+        assert_eq!(
+            (known.stars, known.length_ms, known.bpm, known.od, known.hp),
+            (-1.0, 0.0, -1.0, 5.0, -1.0)
+        );
+    }
+
     #[test]
     fn censor_stars_swearing_and_leaves_words_alone() {
         use super::censor;
