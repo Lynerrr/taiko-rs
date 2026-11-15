@@ -41,6 +41,7 @@ mod menu;
 mod motion;
 mod nodes;
 mod panel;
+mod preview;
 mod resnap;
 mod run;
 mod setup;
@@ -365,6 +366,8 @@ pub struct Layout {
 const METRONOME_BAKE_MS: f64 = 45_000.0;
 /// The colour of effect marks (.tko).
 pub(super) const MARK_COL: u32 = 0xB36BFF;
+/// The preview point's mark (where song select plays the song from).
+pub(super) const PREVIEW_COL: u32 = 0x5FD38A;
 /// How tall the ruler across the top of the timeline is.
 const RULER: f32 = 14.0;
 
@@ -1739,6 +1742,19 @@ impl View {
                 rgba(0x4f9dff, 0.5),
             );
             c.rect(bx - 0.5, y + 1.0, 6.0, 5.0, rgba(0x4f9dff, 1.0));
+        }
+        // The preview point: a green line and a P flag on the ruler.
+        if let Some(p) = self.ed.preview_time().filter(|p| *p >= from && *p <= to) {
+            let px = self.x_of(p);
+            c.rect(
+                px - 0.5,
+                lane_top,
+                1.0,
+                y + h - lane_top - 1.0,
+                rgba(PREVIEW_COL, 0.6),
+            );
+            c.rect(px - 0.5, y + 1.0, 8.0, 7.0, rgba(PREVIEW_COL, 1.0));
+            c.text(px + 1.5, y + 2.0, 5.5, rgba(0x0b1a10, 1.0), "P");
         }
         // Effect marks (.tko).
         let marks: Vec<f64> = self
@@ -4104,6 +4120,15 @@ mod tests {
         assert!(!v.save_for_export());
         assert!(v.status.starts_with("can't save"), "{}", v.status);
         let _ = std::fs::remove_dir_all(v.ed.path.parent().unwrap());
+    }
+
+    /// A frame with its texts kept (`Canvas::texts`).
+    fn audit_draw(v: &mut View) -> Canvas {
+        let mut c = Canvas::default();
+        c.clear(853.0);
+        c.audit = true;
+        v.draw(&mut c, 1.0, crate::autoplay::Settings::default());
+        c
     }
 
     fn draw(v: &mut View) -> Canvas {
@@ -8207,6 +8232,81 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i, menu::Item::Do(Cmd::Background)))
         );
+    }
+
+    #[test]
+    fn the_preview_point_is_set_at_the_playhead_jumped_to_undone_and_cleared() {
+        let mut v = view();
+        assert_eq!(v.ed.preview_time(), None);
+        v.set_time(2345.4);
+        v.run(Cmd::PreviewHere, None);
+        assert_eq!(v.ed.preview_time(), Some(2345.0));
+        assert!(v.ed.modified());
+        // Again at the same place: nothing to undo.
+        v.run(Cmd::PreviewHere, None);
+        assert!(v.status.contains("already"), "{}", v.status);
+        v.set_time(9000.0);
+        v.run(Cmd::PreviewJump, None);
+        assert_eq!(v.ed.time, 2345.0);
+        // The timeline and the whole-song bar show it.
+        let shot = audit_draw(&mut v);
+        assert!(shot.texts.iter().any(|(_, t)| t == "P"));
+        // One undo step.
+        v.run(Cmd::Undo, None);
+        assert_eq!(v.ed.preview_time(), None);
+        assert!(!v.ed.modified());
+        v.run(Cmd::Redo, None);
+        v.run(Cmd::Save, None);
+        let meta = crate::beatmap::read_meta_file(&v.ed.path).unwrap();
+        assert_eq!(meta.preview_time, 2345.0);
+        // Cleared: -1, as osu! writes "not set".
+        v.run(Cmd::PreviewClear, None);
+        assert_eq!(v.ed.preview_time(), None);
+        assert_eq!(
+            v.ed.chart.get_key("General", "PreviewTime").as_deref(),
+            Some("-1")
+        );
+        v.run(Cmd::PreviewClear, None);
+        assert_eq!(v.status, "no preview point set");
+        v.run(Cmd::PreviewJump, None);
+        assert_eq!(v.status, "no preview point set");
+        let timing = &menu::MENUS[3];
+        assert_eq!(timing.name, "Timing");
+        for cmd in [Cmd::PreviewHere, Cmd::PreviewJump, Cmd::PreviewClear] {
+            assert!(
+                timing
+                    .items
+                    .iter()
+                    .any(|i| matches!(i, menu::Item::Do(c) if *c == cmd)),
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn song_setup_sets_the_preview_point_to_the_playhead() {
+        let mut v = view();
+        v.set_time(1500.0);
+        press(&mut v, Btn::C(Cmd::SongSetup));
+        draw(&mut v);
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::C(Cmd::PreviewHere))
+        );
+        assert!(
+            !v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::C(Cmd::PreviewClear))
+        );
+        press(&mut v, Btn::C(Cmd::PreviewHere));
+        assert_eq!(v.ed.preview_time(), Some(1500.0));
+        assert_eq!(v.modal, Some(Modal::Setup), "the window stays open");
+        let shot = audit_draw(&mut v);
+        assert!(shot.texts.iter().any(|(_, t)| t == "0:01.500"));
+        for cmd in [Cmd::PreviewJump, Cmd::PreviewClear] {
+            assert!(v.buttons.iter().any(|(_, b)| *b == Btn::C(cmd)), "{cmd:?}");
+        }
     }
 
     #[test]
