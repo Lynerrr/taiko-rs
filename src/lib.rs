@@ -36,6 +36,7 @@ mod editor;
 mod editor_friends_tests;
 #[cfg(test)]
 mod editor_test_play_tests;
+mod epic;
 mod folder_watch;
 #[cfg(test)]
 mod mapping_rejoin_tests;
@@ -344,6 +345,23 @@ enum LovedAsk {
     /// A nominator loves a set (true) or takes it back, or just its difficulty named.
     Change(u32, bool, Option<String>),
 }
+/// What a call about the server's EPIC maps asked: the list, or an admin's mark (or taking it
+/// back), and what came of it.
+#[derive(Clone, Debug, PartialEq)]
+enum EpicAsk {
+    List,
+    Change(online::EpicMap, bool),
+}
+type EpicCall = (EpicAsk, Result<online::Reply, String>);
+
+/// The selected map's EPIC look in song select: the music's spectrum round its pill, and what
+/// landing on it sets off.
+#[derive(Default)]
+struct EpicFx {
+    spectrum: player::Spectrum,
+    burst: epic::Burst,
+}
+
 /// Custom sets known: map folder -> set number, and the numbers the server has approved.
 type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
 /// Receiving the lobby map from the host: where its parts go, and its download's progress.
@@ -599,6 +617,11 @@ struct State {
     /// way, for the message), and whether it's been asked since starting.
     loved_call: Option<LovedCall>,
     loved_asked: bool,
+    /// Asking the online server which maps are marked EPIC there (or an admin marking one), and
+    /// whether the list's been asked since starting (or logging in).
+    epic_call: Job<EpicCall>,
+    epic_asked: bool,
+    epic_fx: EpicFx,
     /// Asking the website which custom sets in the library are approved, and when it was last
     /// asked for this library (None: ask now).
     custom_call: Job<CustomKnown>,
@@ -901,13 +924,18 @@ impl State {
             && self.settings_ui.binding.is_none()
     }
 
-    /// The idle screen's song: the player's, or the one on this screen (title, artist).
-    fn idle_song(&self) -> Option<(String, String)> {
+    /// The idle screen's map: the player's, or the one on this screen.
+    fn idle_entry(&self) -> Option<&Entry> {
         let entry = match &self.player {
             Some(p) => p.list.entry(),
             None => self.offset_entry(),
         }?;
-        let e = self.library.get(entry)?;
+        self.library.get(entry)
+    }
+
+    /// The idle screen's song: the player's, or the one on this screen (title, artist).
+    fn idle_song(&self) -> Option<(String, String)> {
+        let e = self.idle_entry()?;
         Some((e.meta.title.clone(), e.meta.artist.clone()))
     }
 
@@ -7668,6 +7696,7 @@ impl State {
         self.social = social::Social::default();
         self.select.nominator = false;
         self.admin = false;
+        self.select.admin = false;
         self.mapping_sessions = false;
         self.mapping_join = None;
         self.left_mapping = None;
@@ -7832,6 +7861,63 @@ impl State {
         }
     }
 
+    /// Asks the online server which maps are marked EPIC there, or (an admin) marks one or
+    /// takes the mark back, in the background.
+    fn call_epic(&mut self, ask: EpicAsk) {
+        let request = match &ask {
+            EpicAsk::List => online::Request::EpicMaps,
+            EpicAsk::Change(map, epic) => online::Request::SetEpic {
+                token: self.cfg.online_token.clone(),
+                map: map.clone(),
+                epic: *epic,
+            },
+        };
+        let server = self.cfg.online_server.clone();
+        self.epic_call = Job::spawn(move || (ask, online::call(&server, request)));
+    }
+
+    /// The EPIC maps as the server has them, once it answers. A server from before the mark
+    /// answers the list with an error: then no map is EPIC, and nothing is said.
+    fn poll_epic(&mut self) {
+        if !self.epic_asked && self.epic_call.is_idle() {
+            self.epic_asked = true;
+            self.call_epic(EpicAsk::List);
+        }
+        let Some((ask, result)) = self.epic_call.poll() else {
+            return;
+        };
+        let list = match (result, ask) {
+            (Ok(online::Reply::EpicMaps(list)), EpicAsk::List) => list,
+            (Ok(online::Reply::EpicMaps(list)), EpicAsk::Change(map, on)) => {
+                let what = match &map {
+                    online::EpicMap::Set {
+                        set,
+                        version: Some(v),
+                    } => format!("[{v}] of set {set}"),
+                    online::EpicMap::Set { set, version: None } => format!("set {set}"),
+                    online::EpicMap::Custom(id) => format!("custom set {id}"),
+                };
+                self.toast(if on {
+                    format!("{what} is EPIC on taiko.rs now")
+                } else {
+                    format!("{what} isn't EPIC on taiko.rs any more")
+                });
+                list
+            }
+            (Err(e), EpicAsk::Change(..)) => {
+                self.toast(format!("couldn't: {e}"));
+                return;
+            }
+            _ => return,
+        };
+        let epic = ui::ServerEpic::from_list(list);
+        self.browse.set_epic(&epic);
+        self.select.server_epic = epic;
+        if !self.select.filter.is_empty() {
+            self.select.refilter(&self.library);
+        }
+    }
+
     /// The loved sets as the server has them, once it answers.
     fn poll_loved(&mut self) {
         if !self.loved_asked && self.loved_call.is_none() {
@@ -7891,6 +7977,7 @@ impl State {
         self.poll_server_move();
         self.poll_mapping();
         self.poll_loved();
+        self.poll_epic();
         self.poll_custom(Instant::now());
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
@@ -7919,6 +8006,8 @@ impl State {
                         }) => {
                             self.select.nominator = nominator;
                             self.admin = admin;
+                            self.select.admin = admin;
+                            self.epic_asked = false;
                             self.mapping_sessions = taiko_proto::mapping::supported(&features);
                             self.loved_asked = false;
                             let fresh = menu.account.as_deref() != Some(&name)
@@ -8254,10 +8343,12 @@ impl State {
         let played = std::mem::take(&mut self.select.played);
         let status = std::mem::take(&mut self.select.status);
         let server_loved = std::mem::take(&mut self.select.server_loved);
+        let server_epic = std::mem::take(&mut self.select.server_epic);
         let custom_folder = std::mem::take(&mut self.select.custom_folder);
         let custom_approved = std::mem::take(&mut self.select.custom_approved);
         self.custom_asked = None;
         let nominator = self.select.nominator;
+        let admin = self.select.admin;
         let sort = self.select.sort;
         self.select = Select::new(&self.library);
         self.select
@@ -8266,9 +8357,11 @@ impl State {
         self.select.played = played;
         self.select.status = status;
         self.select.server_loved = server_loved;
+        self.select.server_epic = server_epic;
         self.select.custom_folder = custom_folder;
         self.select.custom_approved = custom_approved;
         self.select.nominator = nominator;
+        self.select.admin = admin;
         self.select.sort = sort;
         self.select.headings = self.cfg.song_headings;
         self.select.mods_label = self.cfg.mods.label();
@@ -12378,10 +12471,12 @@ impl State {
                 .update(canvas.dt_ms, sounding, engine.map_or(48_000, |a| a.rate));
         }
         let song = self.idle_song();
+        let epic = self.idle_entry().is_some_and(|e| self.select.is_epic(e));
         self.idle.draw(
             canvas,
             self.preview.has_background,
             song.as_ref().map(|(t, a)| (t.as_str(), a.as_str())),
+            epic,
         );
         self.draw_drag_hover(canvas, now);
         self.draw_layers(&app::overlays::DRAW_ON_TOP, canvas, now);
@@ -12753,6 +12848,7 @@ impl State {
             ("a leaderboard", self.board_fetch.is_some()),
             ("a set's update check", self.set_check.is_some()),
             ("the loved list", self.loved_call.is_some()),
+            ("the EPIC list", self.epic_call.is_busy()),
             ("the custom maps' call", self.custom_call.is_busy()),
             ("osu!.db", self.osudb_rx.is_busy()),
             ("the pp backfill", self.pp_backfill.is_busy()),
@@ -13878,6 +13974,20 @@ impl State {
                         }
                     ));
                     self.call_loved(LovedAsk::Change(set, loved, version));
+                } else if let Some(ui::MenuAction::Epic(on, one)) = action {
+                    let target = self.select.epic_target(&self.library, one);
+                    self.select.menu = None;
+                    if let Some(map) = target {
+                        self.toast(format!(
+                            "{} on taiko.rs...",
+                            if on {
+                                "marking EPIC"
+                            } else {
+                                "taking EPIC off"
+                            }
+                        ));
+                        self.call_epic(EpicAsk::Change(map, on));
+                    }
                 } else if let Some(ui::MenuAction::Collect(whole)) = action {
                     self.start_collecting(whole);
                 } else if action == Some(ui::MenuAction::UpdateSong) {

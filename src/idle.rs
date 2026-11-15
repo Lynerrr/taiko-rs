@@ -103,7 +103,8 @@ impl Idle {
 
     /// Over a frame already drawn: fades everything in it by `amount`, then draws the disc
     /// (pictured: the renderer puts the background in it) and the song under it.
-    pub fn draw(&self, c: &mut Canvas, pictured: bool, song: Option<(&str, &str)>) {
+    /// `epic`: the song is marked EPIC on taiko.rs, and the rays play in its prism.
+    pub fn draw(&self, c: &mut Canvas, pictured: bool, song: Option<(&str, &str)>, epic: bool) {
         let a = self.amount();
         if a <= 0.0 {
             return;
@@ -125,7 +126,12 @@ impl Idle {
         if grow <= 0.0 {
             return;
         }
-        self.spectrum.draw_rays(c, x, DISC_Y, r, grow);
+        if epic {
+            self.spectrum
+                .draw_rays_in(c, x, DISC_Y, r, grow, crate::epic::ray);
+        } else {
+            self.spectrum.draw_rays(c, x, DISC_Y, r, grow);
+        }
         player::draw_disc_sized(c, x, DISC_Y, r, self.angle, pictured, grow);
         if pictured {
             c.disc = Some([x, DISC_Y, r * (player::DISC_RIM + 0.02), self.angle]);

@@ -148,6 +148,17 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         version: Option<String>,
     },
+    /// The maps marked EPIC on the server (`Reply::EpicMaps`): a mark the admins give maps
+    /// that are simply great, on top of their status. It changes nothing about pp. A server from
+    /// before it answers an error, and the game then shows no map as EPIC.
+    EpicMaps,
+    /// An admin marks a map EPIC, or takes the mark back (`Reply::EpicMaps`). The server checks
+    /// the token is an admin's: nobody else may, loved nominators neither.
+    SetEpic {
+        token: String,
+        map: EpicMap,
+        epic: bool,
+    },
     /// A play that isn't on the leaderboards (failed, quit, restarted, from a start point, in
     /// a lobby): it counts in the profile's play count, and `ms` of playing in its play time
     /// (`Reply::Counted`).
@@ -1193,6 +1204,28 @@ pub fn keeps_terms(features: &[String]) -> bool {
     features.iter().any(|f| f == TERMS_FEATURE)
 }
 
+/// What `Request::SetEpic` marks: an osu! set (the whole of it, or its difficulty `version`),
+/// or a set of taiko.rs custom maps (by its number there).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum EpicMap {
+    Set {
+        set: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+    },
+    Custom(u32),
+}
+
+/// `Reply::EpicMaps`: the osu! sets marked EPIC, each with the difficulties marked (names; none:
+/// the whole set), and the custom sets marked (all their difficulties).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct EpicList {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<(u32, Vec<String>)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom: Vec<u32>,
+}
+
 /// One set of `Reply::SetVerdicts`: `{"set":1,"status":"ranked","pp":"yes"}`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SetVerdict {
@@ -1257,6 +1290,8 @@ pub enum Reply {
     /// The map sets loved on the server, each with the difficulties loved (names; none: the
     /// whole set).
     LovedMaps(Vec<(u32, Vec<String>)>),
+    /// The maps marked EPIC on the server.
+    EpicMaps(EpicList),
     /// (set ID, status on osu!) of the sets asked about that the server knows ("ranked",
     /// "loved", "graveyard"..., "missing" when osu! doesn't have it).
     SetStatuses(Vec<(u32, String)>),
