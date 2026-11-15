@@ -1524,6 +1524,35 @@ fn a_custom_maps_status_is_the_websites() {
 }
 
 #[test]
+fn a_custom_map_is_not_checked_against_the_osu_set_it_was_made_from() {
+    let mut s = layout_tests::state();
+    s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
+    // CI builds (GITHUB_SHA set) can open on another screen first.
+    s.scene = SongSelect::scene();
+    s.cfg.check_updates = true;
+    let i = s.select.selected().unwrap();
+    // A custom map made from an osu! set keeps its BeatmapSetID (website custom set 12).
+    s.library[i].meta.set_id = Some(622136);
+    let now = Instant::now();
+    s.poll_set_check(now);
+    assert_eq!(
+        s.set_check_due.map(|d| d.0),
+        Some(622136),
+        "an osu! set is checked"
+    );
+    s.set_check_due = None;
+    let folder = s.library[i].path.parent().unwrap().to_path_buf();
+    s.select.custom_folder.insert(folder, 12);
+    s.select.custom_approved.insert(12);
+    s.poll_set_check(now);
+    s.poll_set_check(now + Duration::from_secs(2));
+    // osu! doesn't have its difficulties: asking would mark them edited (not submitted).
+    assert!(s.set_check_due.is_none() && s.set_check.is_none());
+    assert!(!s.select.updates.contains_key(&622136));
+    assert_eq!(s.map_status(i).map(|x| x.0), Some("CUSTOM APPROVED"));
+}
+
+#[test]
 fn scroll_speed_changes_between_songs_only() {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
