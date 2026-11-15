@@ -346,6 +346,11 @@ enum LovedAsk {
 }
 /// Custom sets known: map folder -> set number, and the numbers the server has approved.
 type CustomKnown = (std::collections::HashMap<PathBuf, u32>, Vec<u32>);
+/// Receiving the lobby map from the host: where its parts go, and its download's progress.
+type HostTransfer = (
+    std::sync::mpsc::Sender<Option<Vec<u8>>>,
+    Arc<std::sync::atomic::AtomicU64>,
+);
 
 /// Everything the input and render threads share. The render thread holds the lock only while
 /// building a frame (well under a millisecond) and never across a GPU wait, so key presses are
@@ -427,8 +432,9 @@ struct State {
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
     preview_remote: bool,
-    /// Receiving the lobby map from the host: where its parts go.
-    host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
+    /// Receiving the lobby map from the host: where its parts go, and its download's progress
+    /// (which tells its job in `downloads` apart).
+    host_transfer: Option<HostTransfer>,
     /// The lobby map was asked of the host: only then is what the host sends taken.
     host_map_asked: bool,
     /// When the host was asked for it.
@@ -6930,14 +6936,17 @@ impl State {
             .info
             .as_ref()
             .and_then(|i| i.lock().unwrap().get(entry).copied().flatten());
-        Some(Box::new(net::MapStats {
-            stars: info.map_or(-1.0, |i| i.stars),
-            length_ms: info.map_or(-1.0, |i| i.length_ms),
-            bpm: info.map_or(-1.0, |i| i.bpm),
-            od: e.meta.od as f32,
-            hp: e.meta.hp as f32,
-            creator: e.meta.creator.clone(),
-        }))
+        Some(Box::new(
+            net::MapStats {
+                stars: info.map_or(-1.0, |i| i.stars),
+                length_ms: info.map_or(-1.0, |i| i.length_ms),
+                bpm: info.map_or(-1.0, |i| i.bpm),
+                od: e.meta.od as f32,
+                hp: e.meta.hp as f32,
+                creator: e.meta.creator.clone(),
+            }
+            .finite(),
+        ))
     }
 
     fn pick_lobby_map(&mut self, entry: usize) {
@@ -10794,7 +10803,8 @@ impl State {
                     return;
                 }
                 let hash = map.as_ref().map(|m| m.hash);
-                if hash != s.reported_map {
+                let map_changed = hash != s.reported_map;
+                if map_changed {
                     s.reported_map = hash;
                     s.map_entry = map.as_ref().and_then(|m| find_map(library, m));
                     s.have_map = s.map_entry.is_some();
@@ -10812,6 +10822,10 @@ impl State {
                 {
                     self.scene = Lobby::scene();
                     self.toast("the match started without you (map didn't load in time)".into());
+                }
+                // The old map's set is no use any more: the new one is asked for straight away.
+                if map_changed {
+                    self.stop_host_transfer();
                 }
             }
             ServerMsg::Prepare(map) => {
@@ -12482,7 +12496,7 @@ impl State {
     /// Host: packs the lobby map's set folder and sends it to player `to`, on a thread.
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
-        let tx = s.client.sender();
+        let tx = s.client.bulk_sender();
         let folder = s
             .map_entry
             .and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
@@ -12492,7 +12506,8 @@ impl State {
         roots.push(self.songs_dir.clone());
         roots.push(library::extracted_dir());
         std::thread::spawn(move || {
-            let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part }).is_ok();
+            // Stops by itself when the host picks another map.
+            let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part });
             let error = |why: String| net::MapPart {
                 name: String::new(),
                 total: 0,
@@ -12544,8 +12559,7 @@ impl State {
         }
         if let Some(e) = part.error {
             // Fall back to the mirrors.
-            self.host_map_asked = false;
-            self.host_transfer = None;
+            self.stop_host_transfer();
             self.toast(format!(
                 "the host couldn't send it ({e}); trying the mirrors"
             ));
@@ -12582,10 +12596,13 @@ impl State {
                 m.hash,
                 self.songs_dir.clone(),
             );
+            // A transfer that's still going is given up for this one.
+            self.stop_host_transfer();
+            let done = job.done.clone();
             self.downloads.push(job);
-            self.host_transfer = Some(feed);
+            self.host_transfer = Some((feed, done));
         }
-        let Some(feed) = &self.host_transfer else {
+        let Some((feed, _)) = &self.host_transfer else {
             return;
         };
         match download::base64_decode(&part.data) {
@@ -12600,6 +12617,17 @@ impl State {
                 self.host_transfer = None;
             }
         }
+    }
+
+    /// Player: stops taking the lobby map from the host (the lobby moved on to another map, or
+    /// another transfer starts); its unfinished download leaves the list without a word.
+    fn stop_host_transfer(&mut self) {
+        if let Some((feed, done)) = self.host_transfer.take() {
+            drop(feed);
+            self.downloads.retain(|j| !Arc::ptr_eq(&j.done, &done));
+        }
+        self.host_map_asked = false;
+        self.host_asked_at = None;
     }
 
     /// A lobby map we don't have comes by itself: from the host, who has it whatever it is, and
