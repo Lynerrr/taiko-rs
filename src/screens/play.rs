@@ -596,6 +596,15 @@ impl Screen for PlayScreen {
                 if pp.is_none() && results.no_pp.is_none() {
                     results.no_pp = Some("the map couldn't be rated");
                 }
+                // What the secret medals look for in a whole play.
+                if self.from.is_none() && !game.mods().unranked() {
+                    crate::ura::whole_play(
+                        &state.cfg,
+                        replay.accuracy,
+                        game.mods().has(mods::Mod::NoFail),
+                        e.path.parent(),
+                    );
+                }
                 // Whole plays go to the online leaderboards too, when logged in.
                 if self.from.is_none()
                     && !state.cfg.online_token.is_empty()

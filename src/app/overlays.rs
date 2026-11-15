@@ -284,11 +284,13 @@ impl State {
                 if self.medals.is_none() {
                     return false;
                 }
-                // Its tabs and its Back button.
+                // Its tabs, its Back button and the unknown medals' question marks.
                 if pressed {
                     let (vx, vy) = self.mouse_virtual();
-                    if let Some(hit @ (hit::Hit::Key(_) | hit::Hit::MedalTab(_))) =
-                        self.hit_at(vx, vy)
+                    if let Some(
+                        hit
+                        @ (hit::Hit::Key(_) | hit::Hit::MedalTab(_) | hit::Hit::MedalMystery(_)),
+                    ) = self.hit_at(vx, vy)
                     {
                         self.click(hit, window);
                     }

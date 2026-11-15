@@ -2747,9 +2747,18 @@ fn split_help(text: &str, size: f32, max_w: f32) -> (String, String) {
     )
 }
 
+/// Where the top bar's logo is: left, top and size.
+pub const BRAND_LOGO: [f32; 3] = [22.0, 18.0, 26.0];
+
 /// The logo and the name, top left; returns where they end.
 pub fn brand(c: &mut Canvas) -> f32 {
-    crate::logo::draw(c, 22.0, 18.0, 26.0);
+    brand_with(c, crate::logo::draw)
+}
+
+/// `brand`, with the logo drawn by `logo` (at `BRAND_LOGO`): the main menu's can be broken.
+pub fn brand_with(c: &mut Canvas, logo: impl FnOnce(&mut Canvas, f32, f32, f32)) -> f32 {
+    let [x, y, size] = BRAND_LOGO;
+    logo(c, x, y, size);
     // The name like the wordmark: letters alternating white and red, "-rs" red.
     let mut tx = 54.0;
     for (i, ch) in "taiko.rs".chars().enumerate() {

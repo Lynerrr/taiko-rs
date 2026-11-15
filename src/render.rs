@@ -3676,6 +3676,31 @@ impl<H> Canvas<H> {
         rotate_shapes(&mut self.shapes[start..], pivot, angle, scale, dest);
     }
 
+    /// Turns everything drawn since `start` by `angle` about `pivot`: its shapes, and the hit
+    /// areas and clips with them, which keep their size and move with their centres (exact for
+    /// a half turn, close enough for a small one).
+    pub fn turn_since(&mut self, start: usize, pivot: [f32; 2], angle: f32) {
+        rotate_shapes(&mut self.shapes[start..], pivot, angle, 1.0, pivot);
+        let (sin, cos) = angle.sin_cos();
+        let turn = |[x, y, w, h]: [f32; 4]| {
+            let (cx, cy) = (x + w / 2.0 - pivot[0], y + h / 2.0 - pivot[1]);
+            [
+                pivot[0] + cx * cos - cy * sin - w / 2.0,
+                pivot[1] + cx * sin + cy * cos - h / 2.0,
+                w,
+                h,
+            ]
+        };
+        for h in self.hits.iter_mut().filter(|h| h.shape >= start) {
+            h.rect = turn(h.rect);
+        }
+        for (range, rect) in self.clips.iter_mut().filter(|(r, _)| r.start >= start) {
+            if range.start < range.end {
+                *rect = turn(*rect);
+            }
+        }
+    }
+
     /// Squeezes every shape drawn since `start` horizontally towards x = `cx` by `fx`; a negative
     /// `fx` flips them over (half circles swap sides).
     pub fn squash_x_since(&mut self, start: usize, cx: f32, fx: f32) {
