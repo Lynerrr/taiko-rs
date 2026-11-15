@@ -2135,6 +2135,8 @@ fn write_loop(
     generation: &AtomicU64,
 ) {
     let mut picked: Option<u64> = None;
+    // Another handle on the socket, to ask how much it holds.
+    let probe = writer.try_clone().ok();
     let mut write = |msg: &ClientMsg| {
         if let ClientMsg::SelectMap(m) = msg {
             if picked.is_some_and(|h| h != m.hash) {
@@ -2155,7 +2157,8 @@ fn write_loop(
             Err(TryRecvError::Disconnected) => return,
             Err(TryRecvError::Empty) => {}
         }
-        if let Ok((made_for, msg)) = bulk.try_recv() {
+        let room = probe.as_ref().is_none_or(|p| backlog(p) <= BULK_BACKLOG);
+        if room && let Ok((made_for, msg)) = bulk.try_recv() {
             if made_for == generation.load(Ordering::SeqCst) && !write(&msg) {
                 return;
             }
@@ -2171,6 +2174,38 @@ fn write_loop(
             Err(RecvTimeoutError::Timeout) => {}
         }
     }
+}
+
+/// macOS holds a blocking send back by the socket's whole buffer, not by TCP_NOTSENT_LOWAT
+/// (that only tells when it's writable): there a big transfer's next part waits until the
+/// socket holds at most this much (sent and not acknowledged yet, or not sent).
+const BULK_BACKLOG: usize = 512 * 1024;
+
+/// What the socket holds that the other end hasn't acknowledged, where only asking tells.
+#[cfg(target_vendor = "apple")]
+fn backlog(stream: &TcpStream) -> usize {
+    use std::os::fd::AsRawFd;
+    /// <sys/socket.h>'s SO_NWRITE.
+    const SO_NWRITE: libc::c_int = 0x1024;
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: a valid socket, and a c_int option given with its size.
+    let ok = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            SO_NWRITE,
+            (&mut value as *mut libc::c_int).cast(),
+            &mut len,
+        )
+    } == 0;
+    if ok { value.max(0) as usize } else { 0 }
+}
+
+/// Elsewhere the system keeps it small by itself (see [`limit_unsent`]).
+#[cfg(not(target_vendor = "apple"))]
+fn backlog(_stream: &TcpStream) -> usize {
+    0
 }
 
 /// The socket option for it: libc names it on Linux and Android only.
@@ -2195,28 +2230,7 @@ fn limit_unsent(stream: &TcpStream) {
             std::mem::size_of::<libc::c_int>() as libc::socklen_t,
         );
     }
-    // macOS holds a blocking send back only by the socket's whole buffer (the option above
-    // just tells when it's writable), and grows that buffer to megabytes by itself: a fixed
-    // one keeps a slow upload's backlog at about half a second's worth of a fast one.
-    #[cfg(target_vendor = "apple")]
-    {
-        let size: libc::c_int = APPLE_SEND_BUFFER;
-        // SAFETY: as above.
-        unsafe {
-            libc::setsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_SNDBUF,
-                (&size as *const libc::c_int).cast(),
-                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-            );
-        }
-    }
 }
-
-/// The room connection's send buffer on macOS (see [`limit_unsent`]).
-#[cfg(target_vendor = "apple")]
-const APPLE_SEND_BUFFER: i32 = 512 * 1024;
 
 /// Windows sizes its send buffer to what the connection carries in flight by itself.
 #[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
