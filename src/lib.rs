@@ -1401,11 +1401,19 @@ impl State {
             .iter()
             .find(|row| row.file == file)
             .and_then(|row| row.pp);
-        results.no_pp = mods.unranked().then_some(tr!(
-            "Autoplay gets no pp",
-            "Autoplayではppは付きません",
-            "Autoplay не даёт pp"
-        ));
+        results.no_pp = if mods.unranked() {
+            Some(tr!(
+                "Autoplay gets no pp",
+                "Autoplayではppは付きません",
+                "Autoplay не даёт pp"
+            ))
+        } else {
+            mods.in_rework().then_some(tr!(
+                "mods being reworked give no pp for now",
+                "調整中のModには今はppが付きません",
+                "моды на переработке пока не дают pp"
+            ))
+        };
         results.opened = Some(ui::Opened {
             player: r.player.clone(),
             date: r.date,
@@ -1594,11 +1602,19 @@ impl State {
         results.seed = score.seed;
         results.partial = true;
         results.pp = score.pp;
-        results.no_pp = mods.unranked().then_some(tr!(
-            "Autoplay gets no pp",
-            "Autoplayではppは付きません",
-            "Autoplay не даёт pp"
-        ));
+        results.no_pp = if mods.unranked() {
+            Some(tr!(
+                "Autoplay gets no pp",
+                "Autoplayではppは付きません",
+                "Autoplay не даёт pp"
+            ))
+        } else {
+            mods.in_rework().then_some(tr!(
+                "mods being reworked give no pp for now",
+                "調整中のModには今はppが付きません",
+                "моды на переработке пока не дают pp"
+            ))
+        };
         results.opened = Some(ui::Opened {
             player: score.player.clone(),
             date: score.date,
@@ -8406,7 +8422,7 @@ impl State {
         match &self.mp {
             // In Defense, or when the host took them, the host's mods are everyone's.
             Some(s) if self.host_picks_lobby_mods() => match s.map.as_ref() {
-                Some(m) if !s.is_host() => Mods::from_list(&m.mods),
+                Some(m) if !s.is_host() => Mods::from_list(&m.mods).playable(),
                 Some(m) => self.cfg.mods.lobby(m.defense, m.host_mods),
                 None => self.cfg.mods,
             },
@@ -10879,10 +10895,12 @@ impl State {
                         self.preview.show_background_for(&self.library[i]);
                         // The host's speed mods, and our own others; in Defense, or when the
                         // host took them, the host's all.
+                        // Not the mods taken out of the game, should a host's older game pick one.
                         let mods = if multiplayer::host_picks_mods(&map) {
-                            Mods::from_list(&map.mods)
+                            Mods::from_list(&map.mods).playable()
                         } else {
                             Mods::from_list(&map.mods)
+                                .playable()
                                 .shared()
                                 .plus(self.cfg.mods.free())
                         };

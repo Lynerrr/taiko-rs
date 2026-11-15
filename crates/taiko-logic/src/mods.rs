@@ -315,7 +315,6 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
             Alternate,
             WindUp,
             WindDown,
-            AllBig,
             OdOverride,
         ],
     ),
@@ -323,7 +322,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
         "SCROLL",
         0xFFD34D,
         &[
-            Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Drop, Gearbox, Roulette, Tact,
+            Accel, Brake, Wave, Pulse, Stutter, SvChaos, Crescendo, Gearbox, Roulette, Tact,
         ],
     ),
     (
@@ -338,8 +337,7 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
         "VISUAL",
         0xc77dff,
         &[
-            Sudden, Blink, Blackout, Spotlight, Colorless, Memory, Decoy, Party, Overtime, Liar,
-            Radar, Echo,
+            Sudden, Blink, Spotlight, Colorless, Decoy, Party, Overtime, Liar, Radar, Echo,
         ],
     ),
     (
@@ -353,11 +351,18 @@ pub const GROUPS: [(&str, u32, &[Mod]); 8] = [
         "PLAYFIELD",
         0xff5fa2,
         &[
-            Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Shatter, Cracked, Crumble, Portal,
-            Multiverse,
+            Mirror, Tilt, Spin, Mania, BarrelRoll, FlipFlop, Crumble, Portal, Multiverse,
         ],
     ),
 ];
+
+/// Mods taken out of the game: no column has them, and settings, presets and lobbies drop them
+/// (`Mods::playable`). Old plays and replays still read them, and pp count them as nothing.
+pub const REMOVED: [Mod; 6] = [AllBig, Blackout, Memory, Shatter, Cracked, Drop];
+
+/// Mods being reworked: they stay in the game, but a play with one gets no pp for now
+/// (`Mods::in_rework`).
+pub const REWORK: [Mod; 7] = [Portal, Multiverse, Mirror, Spin, SvChaos, Tact, Echo];
 
 /// The mods with settings of their own, in the order of the mod customization's tabs.
 const CUSTOMIZABLE: [Mod; 5] = [
@@ -1148,6 +1153,19 @@ impl Mods {
         self.has(Autoplay) || self.has(OdOverride)
     }
 
+    /// Whether a play gets no pp while some of its mods are being reworked (`REWORK`). Unlike
+    /// `unranked`, it is still saved and sent.
+    pub fn in_rework(self) -> bool {
+        REWORK.iter().any(|&m| self.has(m))
+    }
+
+    /// The mods without those taken out of the game (`REMOVED`): what a player can still pick.
+    pub fn playable(self) -> Mods {
+        REMOVED
+            .iter()
+            .fold(self, |all, &m| if all.has(m) { all.flip(m) } else { all })
+    }
+
     /// Whether a play goes on the Relax boards instead of the usual ones.
     pub fn relax(self) -> bool {
         self.has(Relax)
@@ -1470,7 +1488,10 @@ mod tests {
         let m = Mods::parse("hd, HR,xx");
         assert!(m.has(Hidden) && m.has(HardRock));
         assert_eq!(Mods::parse(&m.to_config()), m);
-        assert!(GROUPS.iter().map(|g| g.2.len()).sum::<usize>() == ALL.len());
+        // Every mod is in one column of the mod select, but those taken out of the game.
+        let columns: Vec<Mod> = GROUPS.iter().flat_map(|g| g.2.iter().copied()).collect();
+        assert_eq!(columns.len() + REMOVED.len(), ALL.len());
+        assert!(REMOVED.iter().all(|m| !columns.contains(m)));
     }
 
     #[test]
@@ -1564,9 +1585,10 @@ mod tests {
             }
             seen = Mods(seen.0 | m.0);
         }
-        // Every mod that can come up does, and the rest never do.
+        // Every mod that can come up does, and the rest (those taken out of the game too) never do.
         for x in ALL {
-            assert_eq!(seen.has(x), x.shuffle_cost().is_some(), "{}", x.name());
+            let can = x.shuffle_cost().is_some() && !REMOVED.contains(&x);
+            assert_eq!(seen.has(x), can, "{}", x.name());
         }
     }
 

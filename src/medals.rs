@@ -1449,6 +1449,7 @@ mod tests {
             .iter()
             .map(|g| g.2.iter().filter(|m| in_collection(m)).count())
             .sum();
-        assert_eq!(n, 74);
+        // The server's 74 but the six taken out of the game (`mods::REMOVED`).
+        assert_eq!(n, 68);
     }
 }

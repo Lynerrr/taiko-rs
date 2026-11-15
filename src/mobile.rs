@@ -1629,6 +1629,12 @@ impl State {
         crate::style::title(c, 6.0, 12.0, MEDIUM, 0xffffff, "MODS");
         let unsaved = if picked.unranked() {
             tr!("  (not saved)")
+        } else if picked.in_rework() {
+            tr!(
+                "  (no pp: being reworked)",
+                "  (ppなし：調整中)",
+                "  (без pp: на переработке)"
+            )
         } else {
             ""
         };

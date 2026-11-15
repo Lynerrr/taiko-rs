@@ -730,6 +730,8 @@ fn alt_f4_leaves_the_map_only_when_asked_to() {
 #[derive(Default)]
 struct Updating {
     sent: Vec<Option<String>>,
+    /// The pp each play was sent with.
+    pps: Vec<Option<f64>>,
     stored: std::collections::HashSet<String>,
     links: usize,
 }
@@ -742,6 +744,8 @@ enum FirstPlay {
     Vanishes,
     /// Answers `Reply::Error` with this text and stores nothing.
     Refused(&'static str),
+    /// Stores it and answers, like every later play.
+    Kept,
 }
 
 /// A server being updated as a play ends (`FirstPlay::Vanishes`).
@@ -807,6 +811,7 @@ fn score_server(first_play: FirstPlay) -> (String, std::sync::Arc<std::sync::Mut
                         let first = {
                             let mut seen = seen.lock().unwrap();
                             seen.sent.push(key.clone());
+                            seen.pps.push(play.pp);
                             let first = seen.sent.len() == 1;
                             if let Some(k) = &key
                                 && !(first && matches!(first_play, FirstPlay::Refused(_)))
@@ -930,7 +935,13 @@ fn a_score_the_server_never_answered_goes_again_once_it_is_back_and_counts_once(
 
 /// Logs in to `server`, plays the map out without a miss and waits for the results.
 fn play_to_server(server: String, songs: &Songs) -> State {
+    play_to_server_with(server, songs, crate::mods::Mods::NONE)
+}
+
+/// `play_to_server` with `mods` on.
+fn play_to_server_with(server: String, songs: &Songs, mods: crate::mods::Mods) -> State {
     let mut cfg = harness::config();
+    cfg.mods = mods;
     cfg.online_server = server;
     cfg.online_user = "me".into();
     cfg.online_token = "t".into();
@@ -1031,5 +1042,33 @@ fn a_score_the_server_refuses_is_not_sent_again() {
             .iter()
             .any(|t| t == "online: score not sent (that play doesn't add up)"),
         "the player hears why: {toasts:?}"
+    );
+}
+
+/// A play with a mod being reworked is sent like any other, without pp, and the results tell
+/// the player why it has none.
+#[test]
+fn a_play_with_a_mod_being_reworked_is_sent_without_pp() {
+    let (server, seen) = score_server(FirstPlay::Kept);
+    let songs = Songs::new("score-rework", &[maps::basics()]);
+    let mut s = play_to_server_with(server, &songs, crate::mods::Mods::parse("TC"));
+    let mut toasts = Vec::new();
+    let answered = |s: &State| !seen.lock().unwrap().sent.is_empty() && s.submits.is_empty();
+    assert!(
+        note_answers(&mut s, &mut toasts, &answered),
+        "the play is sent and answered"
+    );
+    assert_eq!(seen.lock().unwrap().pps, [None], "sent without pp");
+    let results = match s
+        .scene
+        .screen_as::<crate::screens::results::ResultsScreen>()
+    {
+        Some(r) => &r.results,
+        None => panic!("not on the results screen but {}", scene_name(&s)),
+    };
+    assert_eq!(results.pp, None);
+    assert_eq!(
+        results.no_pp,
+        Some("mods being reworked give no pp for now")
     );
 }
