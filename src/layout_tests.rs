@@ -218,6 +218,7 @@ pub(crate) fn session(mapguessr: bool) -> multiplayer::Session {
             hp: 10.0,
             creator: LONG_NAME.into(),
         })),
+        host_mods: false,
     });
     // A full lobby with a password.
     s.locked = true;
@@ -1326,7 +1327,7 @@ fn assert_every_screen_fits() {
         )
     });
 
-    let room = session(false);
+    let mut room = session(false);
     let player = net::Live {
         score: 1_234_567,
         combo: 1234,
@@ -1352,6 +1353,17 @@ fn assert_every_screen_fits() {
             Some(("asking the host for the map...".into(), None)),
         )
     });
+    // An ordinary match: the host's mods for everyone (a row of badges), then free mods.
+    let defense = room.map.as_mut().unwrap().defense.take();
+    room.map.as_mut().unwrap().host_mods = true;
+    check_draw("lobby, host's mods", &mut out, |c| {
+        multiplayer::draw_lobby(c, &room, true, None)
+    });
+    room.map.as_mut().unwrap().host_mods = false;
+    check_draw("lobby, free mods", &mut out, |c| {
+        multiplayer::draw_lobby(c, &room, true, None)
+    });
+    room.map.as_mut().unwrap().defense = defense;
     check_draw("match waiting", &mut out, |c| {
         multiplayer::draw_waiting(c, &room, None, false, Instant::now())
     });
@@ -2091,7 +2103,7 @@ fn in_defense_the_hosts_mods_are_everyones_and_a_guest_cant_change_them() {
         let m = room.map.as_mut().unwrap();
         m.defense = Some(net::Defense::DEFAULT);
         // As the host's game sends them.
-        m.mods = Mods::parse("DT,HD,AT").lobby(m.defense).list();
+        m.mods = Mods::parse("DT,HD,AT").lobby(m.defense, m.host_mods).list();
     }
     s.mp = Some(room);
     s.scene = crate::screens::lobby::Lobby::scene();

@@ -887,18 +887,24 @@ impl Mods {
         Mods(self.0 & SPEED.iter().fold(0, |bits, m| bits | m.bit()))
     }
 
-    /// The rest: each player's own in a lobby. Not OD Override: everyone's judged by the map's.
+    /// The rest: each player's own in a lobby. OD Override too: a play with it isn't saved
+    /// (see `unranked`), and the room lists it with the player's mods.
     pub fn free(self) -> Mods {
-        Mods(self.0 & !self.shared().0 & !Mod::OdOverride.bit())
+        Mods(self.0 & !self.shared().0)
     }
 
     /// What the host's mods make of the lobby's match: in an ordinary one just the speed's (the
-    /// others are each player's own), in Defense all of them but the ones a team can't have,
-    /// for everyone, so the whole team plays the same notes. With the Maze lane on, Maze is one
-    /// of them and any other rail it clashes with is dropped.
-    pub fn lobby(self, defense: Option<crate::defense::Defense>) -> Mods {
+    /// others are each player's own); with `host_picks` (the host took the mods for everyone)
+    /// all of them but Autoplay. In Defense all of them but the ones a team can't have, for
+    /// everyone, so the whole team plays the same notes. With the Maze lane on, Maze is one of
+    /// them and any other rail it clashes with is dropped.
+    pub fn lobby(self, defense: Option<crate::defense::Defense>, host_picks: bool) -> Mods {
         let Some(d) = defense else {
-            return self.shared();
+            return if host_picks {
+                Mods(self.0 & !Mod::Autoplay.bit())
+            } else {
+                self.shared()
+            };
         };
         let banned = DEFENSE_BANNED.iter().fold(0, |bits, m| bits | m.bit());
         let mut out = Mods(self.0 & !banned);
@@ -1585,8 +1591,18 @@ mod tests {
     fn a_lobby_plays_the_hosts_speed_and_in_defense_all_of_their_mods_but_banned_ones() {
         use crate::defense::Defense;
         let host = Mods::parse("DT,HD,HR,AT,SD,ZZ");
-        assert_eq!(host.lobby(None), Mods::parse("DT"), "ordinary: the speed's");
-        let lane = host.lobby(Some(Defense::DEFAULT));
+        assert_eq!(
+            host.lobby(None, false),
+            Mods::parse("DT"),
+            "ordinary: the speed's"
+        );
+        assert_eq!(
+            host.lobby(None, true),
+            Mods::parse("DT,HD,HR,SD,ZZ"),
+            "the host's for everyone: all but Autoplay"
+        );
+        let lane = host.lobby(Some(Defense::DEFAULT), false);
+        assert_eq!(host.lobby(Some(Defense::DEFAULT), true), lane);
         for m in [Mod::DoubleTime, Mod::Hidden, Mod::HardRock, Mod::Maze] {
             assert!(lane.has(m), "{} stays", m.acronym());
         }
@@ -1597,10 +1613,13 @@ mod tests {
                 m.acronym()
             );
         }
-        let own = host.lobby(Some(Defense {
-            maze: false,
-            ..Defense::DEFAULT
-        }));
+        let own = host.lobby(
+            Some(Defense {
+                maze: false,
+                ..Defense::DEFAULT
+            }),
+            false,
+        );
         assert!(
             own.has(Mod::Zigzag) && !own.has(Mod::Maze),
             "without the Maze lane the rail stays"
@@ -1609,14 +1628,15 @@ mod tests {
     }
 
     #[test]
-    fn od_override_replaces_the_od_and_stays_out_of_lobbies() {
+    fn od_override_replaces_the_od_and_is_a_players_own_in_lobbies() {
         let m = Mods::parse("OV");
         assert_eq!(m.od_with(3.0, 17.5), 17.5);
         // Over EZ, HR and Precise, and past the 10 they stop at.
         assert_eq!(Mods::parse("OV,HR,PR").od_with(3.0, 17.5), 17.5);
         assert_eq!(Mods::parse("OV,EZ").od_with(3.0, 17.5), 17.5);
-        assert!(!m.free().has(Mod::OdOverride) && !m.shared().has(Mod::OdOverride));
-        assert_eq!(Mods::parse("OV,HD").free(), Mods::parse("HD"));
+        // Each player's own, never the host's for everyone; a play with it isn't saved.
+        assert!(m.free().has(Mod::OdOverride) && !m.shared().has(Mod::OdOverride));
+        assert!(m.unranked() && Mods::parse("OV,HD").free().unranked());
         assert!(!Mod::OdOverride.defense_ok());
         assert_eq!(m.multiplier(), 1.0);
         // A shuffle mustn't make a play unsaved by chance.

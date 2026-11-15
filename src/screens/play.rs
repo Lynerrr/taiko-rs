@@ -616,6 +616,7 @@ impl Screen for PlayScreen {
                             defense: None,
 
                             stats: None,
+                            host_mods: false,
                         },
                         score: replay.score,
                         accuracy: replay.accuracy,
