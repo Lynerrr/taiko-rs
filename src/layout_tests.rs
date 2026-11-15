@@ -495,6 +495,7 @@ fn assert_every_screen_fits() {
         .collect();
     check(&mut s, "select updates", &mut out);
     s.select.menu = Some(ui::SongMenu {
+        previous: None,
         row: s.select.cursor(),
         header: true,
         skin: false,

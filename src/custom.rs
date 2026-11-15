@@ -10,6 +10,7 @@ use crate::download::{CustomSet, Diff, SetInfo};
 use crate::online::WEBSITE;
 
 pub mod approved;
+pub mod store;
 
 /// The file in a map's folder that keeps its number on the server.
 pub const SIDECAR: &str = "taiko-rs.custom";
@@ -111,6 +112,9 @@ pub struct Manifest {
     /// Seconds since 1970 of the install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed: Option<u64>,
+    /// Files of the player's own carried over from an older version (paths in the folder).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own: Vec<String>,
     /// Fields of a newer client, kept as they are.
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
@@ -137,7 +141,6 @@ impl Manifest {
     }
 
     /// The hash recorded for chart `name`, if the install brought it.
-    #[cfg(test)]
     pub fn file_hash(&self, name: &str) -> Option<u64> {
         u64::from_str_radix(self.files.get(name)?, 16).ok()
     }

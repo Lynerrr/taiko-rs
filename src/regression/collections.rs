@@ -464,6 +464,7 @@ mod in_song_select {
     fn menu_item(s: &mut State, starts: &str) {
         let row = s.select.cursor();
         s.select.menu = Some(ui::SongMenu {
+            previous: None,
             row,
             header: false,
             skin: false,
