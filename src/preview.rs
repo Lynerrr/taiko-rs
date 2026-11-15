@@ -185,7 +185,7 @@ pub struct Preview {
     /// (song select's way to the leaderboard); 0 elsewhere.
     pub title_room: f32,
     /// The map shown is marked EPIC on taiko.rs (set by the caller before `draw_panel`): its pill
-    /// goes next to the status.
+    /// stands in the status's place, EPIC being a status of its own.
     pub epic: bool,
     /// Where `draw_panel` put the EPIC pill (left, top), for the effects round it.
     pub epic_at: Option<[f32; 2]>,
@@ -1158,7 +1158,8 @@ impl Preview {
             cy += body_step;
         }
         cy += 4.0;
-        // The EPIC mark at the very right of the mapper's line, bumping on the beat.
+        // The EPIC mark at the very right of the mapper's line, bumping on the beat. It stands in
+        // the status's place, as on the website: the map's osu! status isn't shown with it.
         self.epic_at = None;
         let epic_w = if self.epic {
             let pw = crate::epic::pill_width();
@@ -1169,9 +1170,9 @@ impl Preview {
         } else {
             0.0
         };
-        // The status on osu! left of it.
+        // Otherwise the status on osu!.
         let status_w = epic_w
-            + match status.filter(|s| !s.0.is_empty()) {
+            + match status.filter(|s| !s.0.is_empty() && !self.epic) {
                 Some((label, col)) => {
                     let lw = Canvas::text_width(7.0, label) + 12.0;
                     let sx = x + w - 14.0 - epic_w - lw;

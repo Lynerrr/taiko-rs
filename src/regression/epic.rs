@@ -1,6 +1,6 @@
 //! Maps marked EPIC on taiko.rs: where the mark comes from (the server's list, none from a
-//! server that doesn't know it), how song select shows it (the pill by the status, the row's
-//! title and word), the search finding it, and an admin marking a map from the song menu while
+//! server that doesn't know it), how song select and the download list show it (the pill in the
+//! status's place, the row's title and word), the search finding it, and an admin marking a map from the song menu while
 //! nobody else is offered to.
 
 use super::harness::{self, *};
@@ -98,12 +98,14 @@ fn the_epic_list_comes_from_the_server_and_an_older_one_marks_none() {
 #[test]
 fn an_epic_map_wears_its_mark_in_song_select() {
     let (mut s, _songs, mut now, i) = client("epic-screen");
-    // Ranked on osu!: the status pill stays, the EPIC one goes at its right.
+    // Ranked on osu!, and without the mark it says so.
     s.set_status.insert(42, Some("ranked".into()));
+    assert!(shows(&frame(&mut s, now), "RANKED"), "the status");
+    // Marked EPIC: the EPIC pill stands in the status's place, as on the website.
     s.select.server_epic.sets.insert(42, Vec::new());
     let c = frame(&mut s, now);
     assert!(shows(&c, epic::LABEL), "the pill");
-    assert!(shows(&c, "RANKED"), "next to the status");
+    assert!(!shows(&c, "RANKED"), "no status beside it");
     settle(&mut s, &mut now);
     now += Duration::from_millis(16);
     super::snapshot::assert_snapshot(
@@ -122,6 +124,34 @@ fn an_epic_map_wears_its_mark_in_song_select() {
     s.select.custom_folder.insert(folder, 7);
     s.select.server_epic.custom.insert(7);
     assert!(s.select.is_epic(&s.library[i]));
+}
+
+/// The download list's row: a set's status, or EPIC in its place when a map of it is marked.
+#[test]
+fn the_download_list_shows_epic_in_a_sets_status_place() {
+    let mut b = browse::Browse::default();
+    let ranked = download::SetInfo {
+        id: 42,
+        status: "ranked".into(),
+        ..download::SetInfo::default()
+    };
+    let draw = |b: &browse::Browse| {
+        let mut c = Canvas {
+            audit: true,
+            ..Default::default()
+        };
+        let w = b.status_pill(&mut c, &ranked, 10.0, 10.0);
+        (c, w)
+    };
+    let (c, plain) = draw(&b);
+    assert!(shows(&c, "ranked") && !shows(&c, epic::LABEL));
+    let mut marked = ui::ServerEpic::default();
+    marked.sets.insert(42, vec!["Oni".into()]);
+    b.set_epic(&marked);
+    let (c, w) = draw(&b);
+    assert!(shows(&c, epic::LABEL), "the EPIC pill");
+    assert!(!shows(&c, "ranked"), "no status beside it");
+    assert!(w > 0.0 && w != plain);
 }
 
 #[test]
