@@ -13,6 +13,7 @@ mod collections;
 mod custom_folder;
 mod custom_install;
 mod custom_maps;
+mod custom_routing;
 mod drawing;
 mod epic;
 mod flows;
