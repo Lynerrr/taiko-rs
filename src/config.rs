@@ -233,6 +233,9 @@ pub struct Config {
     pub show_converts: bool,
     /// Song select lists songs under headings (`ui::Select::headings`).
     pub song_headings: bool,
+    /// Whether moving taiko.rs's maps out of osu!'s Songs folder was offered already (it's
+    /// offered once; Settings > Library does it any time).
+    pub custom_move_asked: bool,
     /// During songs, the background dims to black (and is black without one), rather than to
     /// the interface's grey.
     pub bg_dim_black: bool,
@@ -501,6 +504,7 @@ impl Default for Config {
             wheel_resizes_playfield: false,
             show_converts: false,
             song_headings: false,
+            custom_move_asked: false,
             bg_dim_black: true,
             interface_hidden: false,
             interface_hides: crate::hud::Parts::DEFAULT_HIDES,
@@ -868,7 +872,11 @@ fn size_of(p: &Path) -> u64 {
     }
 }
 
-fn copy_all(from: &Path, to: &Path, done: &std::sync::atomic::AtomicU64) -> std::io::Result<()> {
+pub(crate) fn copy_all(
+    from: &Path,
+    to: &Path,
+    done: &std::sync::atomic::AtomicU64,
+) -> std::io::Result<()> {
     if std::fs::symlink_metadata(from)?.is_dir() {
         std::fs::create_dir_all(to)?;
         for e in std::fs::read_dir(from)? {
@@ -1351,6 +1359,7 @@ impl Config {
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
+                "custom_move_asked" => cfg.custom_move_asked = v == "true",
                 "show_converts" => cfg.show_converts = v == "true",
                 "song_headings" => cfg.song_headings = v == "true",
                 "bg_dim_black" => cfg.bg_dim_black = v == "true",
@@ -1830,6 +1839,10 @@ impl Config {
         out.push_str(&format!(
             "# the mouse wheel resizes the playfield during play\nwheel_resizes_playfield = {}\n",
             self.wheel_resizes_playfield
+        ));
+        out.push_str(&format!(
+            "# moving taiko.rs's maps out of osu!'s Songs folder was offered already\ncustom_move_asked = {}\n",
+            self.custom_move_asked
         ));
         out.push_str(&format!(
             "# song select lists converts too\nshow_converts = {}\n",

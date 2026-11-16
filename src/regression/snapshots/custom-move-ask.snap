@@ -1,0 +1,10 @@
+text  203,144  Move taiko.rs maps out of osu!'s Songs folder?
+text  203,178  2 taiko.rs sets (4 KB) are in osu!'s Songs folder, where osu! lists them as its own.
+text  208,200  They go to the taiko.rs maps folder. Scores, replays and favourites stay.
+text  203,216  osu!'s own sets stay where they are. Settings > Library can move them back.
+text  325,236  Close osu! first for a clean move.
+text  340,284  Not now
+text  471,284  Move
+text  310,324  Left/Right choose   Enter   Esc not now
+hit   317,276   100x24   Key(Escape)
+hit   437,276   100x24   MoveCustomMaps

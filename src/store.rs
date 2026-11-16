@@ -256,6 +256,29 @@ impl Store {
         })
     }
 
+    /// The plays of maps whose folder moved (each `(from, to)`) follow them.
+    pub fn move_plays(&mut self, moves: &[(PathBuf, PathBuf)]) -> Result<(), String> {
+        let plays = self.plays()?;
+        self.transaction(|s| {
+            for (path, &at) in &plays {
+                let Some(new) = moves
+                    .iter()
+                    .find_map(|(from, to)| Some(to.join(path.strip_prefix(from).ok()?)))
+                else {
+                    continue;
+                };
+                s.conn
+                    .execute(
+                        "DELETE FROM plays WHERE path = ?1",
+                        params![path_text(path)],
+                    )
+                    .map_err(err)?;
+                s.add_play(&new, at)?;
+            }
+            Ok(())
+        })
+    }
+
     /// Replaces every play with `plays` (inside a transaction already open).
     pub(crate) fn write_plays(&self, plays: &HashMap<PathBuf, u64>) -> Result<(), String> {
         self.conn.execute("DELETE FROM plays", []).map_err(err)?;
@@ -618,6 +641,26 @@ mod tests {
         assert_eq!(v, VERSION + 1, "the newer file was changed");
         drop(conn);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plays_follow_their_maps_folder_when_it_moves() {
+        let mut s = Store::in_memory().unwrap();
+        let (from, to) = (
+            PathBuf::from("/osu/Songs/c12 A - B"),
+            PathBuf::from("/data/Custom/c12 A - B"),
+        );
+        s.add_play(&from.join("a [Oni].osu"), 10).unwrap();
+        s.add_play(Path::new("/osu/Songs/622136 C - D/x.osu"), 20)
+            .unwrap();
+        s.move_plays(&[(from, to.clone())]).unwrap();
+        let plays = s.plays().unwrap();
+        assert_eq!(plays.get(&to.join("a [Oni].osu")), Some(&10));
+        assert_eq!(
+            plays.get(Path::new("/osu/Songs/622136 C - D/x.osu")),
+            Some(&20)
+        );
+        assert_eq!(plays.len(), 2);
     }
 
     #[test]

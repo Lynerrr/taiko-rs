@@ -10,6 +10,7 @@ use crate::download::{CustomSet, Diff, SetInfo};
 use crate::online::WEBSITE;
 
 pub mod approved;
+pub mod migrate;
 pub mod store;
 
 /// The file in a map's folder that keeps its number on the server.

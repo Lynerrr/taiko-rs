@@ -64,6 +64,9 @@ pub fn config() -> Config {
         main_menu: false,
         // A new one is drawn from the clock on every start.
         random_seed: 1,
+        // Looking for taiko.rs's maps in the Songs folder runs in the background and would put
+        // its offer over any test's song select (`custom_migration` has its own tests).
+        custom_move_asked: true,
         ..Config::default()
     }
 }

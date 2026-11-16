@@ -143,6 +143,8 @@ impl State {
         roots.push(self.songs_dir.clone());
         roots.extend(self.cfg.songs.iter().cloned());
         roots.extend(library::song_inputs(&self.cfg));
+        // taiko.rs's own maps folder is one too: a map lying loose in it never takes it along.
+        roots.push(self.custom_dir.clone());
         let inside = roots
             .iter()
             .any(|r| folder.starts_with(r) && folder != r.as_path());

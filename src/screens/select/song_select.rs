@@ -604,6 +604,9 @@ impl Screen for SongSelect {
             if let Some(ask) = &state.select.deleting {
                 super::delete::draw_delete_ask(canvas, ask);
             }
+            if let Some(ask) = &state.select.moving {
+                super::move_custom::draw_move_ask(canvas, ask);
+            }
             if state.cfg.drum_menus {
                 state.select_rows = drum_nav::Rows::of(canvas);
                 state.select_zone = state.select_zone.within(&state.select_rows);

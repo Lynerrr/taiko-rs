@@ -76,7 +76,13 @@ pub fn backfill_pp(files: Vec<PathBuf>) -> std::sync::mpsc::Receiver<Vec<(PathBu
             .into_iter()
             .filter_map(|file| {
                 let r = load_replay(&file).ok()?;
-                let pp = crate::pp::play_pp(Path::new(&r.map_path), &r.pp_play())?;
+                // A map moved into taiko.rs's own folder since is found there.
+                let map = crate::custom::migrate::found_moved(
+                    Path::new(&r.map_path),
+                    &crate::config::custom_dir(),
+                )
+                .unwrap_or_else(|| PathBuf::from(&r.map_path));
+                let pp = crate::pp::play_pp(&map, &r.pp_play())?;
                 Some((file, pp))
             })
             .collect();

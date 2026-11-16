@@ -688,6 +688,10 @@ struct State {
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Job<Result<download::SetInfo, String>>,
+    /// Looking for, or moving, taiko.rs's maps in osu!'s Songs folder.
+    custom_move: Job<screens::select::move_custom::MoveJob>,
+    /// This game looked for them once already.
+    custom_move_looked: bool,
     /// A score a `taiko-rs://` link asked for, until its results screen opens.
     score_link: Option<ScoreLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -3072,6 +3076,9 @@ impl State {
             Item::SkinFolder | Item::CustomFolder => {
                 tr!("Enter to open", "Enterで開く", "Enter — открыть").into()
             }
+            Item::MoveCustomMaps | Item::MoveCustomBack => {
+                tr!("Enter to move", "Enterで移動", "Enter — перенести").into()
+            }
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::NoteColours => c.note_colours.label().into(),
@@ -3395,7 +3402,9 @@ impl State {
                 self.load_skin();
             }
             // Acts on Enter in `settings_key`.
-            Item::SkinFolder | Item::CustomFolder => return,
+            Item::SkinFolder | Item::CustomFolder | Item::MoveCustomMaps | Item::MoveCustomBack => {
+                return;
+            }
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
@@ -5434,6 +5443,16 @@ impl State {
                 if item == Item::CustomFolder =>
             {
                 self.open_custom_folder()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::MoveCustomMaps =>
+            {
+                self.look_for_custom_maps(true)
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::MoveCustomBack =>
+            {
+                self.move_custom_maps_back()
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => {
                 self.open_choices(item)
@@ -8404,6 +8423,7 @@ impl State {
         self.poll_loved();
         self.poll_epic();
         self.poll_custom(Instant::now());
+        self.poll_custom_move();
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
             menu.session_loaded = true;
@@ -11976,6 +11996,11 @@ impl State {
             self.delete_ask_key(code, repeat);
             return;
         }
+        // And the offer to move taiko.rs's maps out of osu!'s Songs folder.
+        if self.select.moving.is_some() && self.scene.is_select() {
+            self.move_ask_key(code, repeat);
+            return;
+        }
         // Key capture must see every key, before any shortcut can claim it.
         if self.settings_ui.dropdown.is_some() && !repeat {
             let nav = matches!(
@@ -14706,6 +14731,7 @@ impl State {
             }
             Hit::UpdateSet(i) => self.update_set(i),
             Hit::DeleteMaps => self.confirm_delete(),
+            Hit::MoveCustomMaps => self.confirm_custom_move(),
             Hit::SongMenu(k) => {
                 let action = self
                     .select

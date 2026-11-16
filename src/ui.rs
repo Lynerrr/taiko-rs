@@ -232,6 +232,8 @@ pub struct Select {
     /// A difficulty or a whole set asked to be deleted (right-click → Delete, the Delete key):
     /// the confirmation over song select.
     pub deleting: Option<DeleteAsk>,
+    /// Moving taiko.rs's maps out of osu!'s Songs folder, offered once over song select.
+    pub moving: Option<MoveAsk>,
     /// The folders of the maps whose own skin is turned off (right-click → Turn off skin).
     pub map_skins_off: std::collections::HashSet<String>,
     /// The right-click menu of a song list row.
@@ -474,6 +476,7 @@ impl Select {
             mods_label: String::new(),
             show_converts: !has_taiko,
             deleting: None,
+            moving: None,
             map_skins_off: crate::config::load_map_skins_off(),
             menu: None,
             updates: std::collections::HashMap::new(),
@@ -3153,6 +3156,17 @@ pub struct DeleteAsk {
     pub system_bin: bool,
     /// The Delete button has the keys; at first Cancel has.
     pub on_delete: bool,
+}
+
+/// Moving taiko.rs's maps out of osu!'s Songs folder, offered over song select.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MoveAsk {
+    /// What would move.
+    pub found: Vec<crate::custom::migrate::Found>,
+    pub sets: usize,
+    pub bytes: u64,
+    /// The Move button has the keys (it has at first).
+    pub on_move: bool,
 }
 
 /// The right-click menu of a song list row, opened where the pointer was (virtual units).

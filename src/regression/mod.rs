@@ -14,6 +14,7 @@ mod controls;
 mod custom_folder;
 mod custom_install;
 mod custom_maps;
+mod custom_migration;
 mod custom_routing;
 mod drawing;
 mod epic;

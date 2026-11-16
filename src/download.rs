@@ -2792,6 +2792,7 @@ mod tests {
             seed: None,
             defense: None,
             stats: None,
+            host_mods: false,
         };
         let site = lobby_set(&m, |h| (h == m.hash).then_some(12)).unwrap();
         assert_eq!(site.id, 12);

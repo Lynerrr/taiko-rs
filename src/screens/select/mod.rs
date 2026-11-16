@@ -3,6 +3,7 @@
 pub(crate) mod collections;
 pub(crate) mod delete;
 pub(crate) mod leaderboard;
+pub(crate) mod move_custom;
 pub(crate) mod presets;
 pub(crate) mod preview_chrome;
 pub(crate) mod song_select;

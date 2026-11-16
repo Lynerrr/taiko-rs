@@ -1261,6 +1261,8 @@ impl State {
             custom_dir,
             installed_sets: None,
             lobby_lookup: Job::idle(),
+            custom_move: Job::idle(),
+            custom_move_looked: false,
             score_link: None,
             preview_remote: false,
             host_transfer: None,
