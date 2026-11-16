@@ -5,9 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use rosu_pp::Difficulty;
-use rosu_pp::taiko::{TaikoGradualPerformance, TaikoPerformance, TaikoScoreState};
+use rosu_pp::taiko::{TaikoGradualPerformance, TaikoScoreState};
 
 use crate::mods::{Mod, Mods};
+
+mod rules;
+use rules::Hits;
+pub use rules::{Bonus, bonus, rail_factor};
 
 /// A finished play, as far as pp go.
 #[derive(Clone, Copy, Debug)]
@@ -95,22 +99,16 @@ pub fn custom_factor(mods: Mods) -> f64 {
         .min(MAX_CUSTOM_FACTOR)
 }
 
-/// The pp of a play on the map at `path`. None for Autoplay, or a map that can't be read.
+/// Whether plays with `mods` get pp at all: not Autoplay or OD Override, nor a mod being
+/// reworked.
+pub fn gives_pp(mods: Mods) -> bool {
+    !mods.unranked() && !mods.in_rework()
+}
+
+/// The pp of a play on the map at `path`. None for Autoplay, a mod being reworked, or a map that
+/// can't be read.
 pub fn play_pp(map: &[u8], p: &Play) -> Option<f64> {
-    if p.mods.unranked() {
-        return None;
-    }
-    let map = crate::stars::load_played(map, p.mods, p.seed, p.half)?;
-    let attrs = TaikoPerformance::new(&map)
-        .mods(formula_mods(p.mods, p.scroll_speed))
-        .clock_rate(p.rate)
-        .n300(p.great)
-        .n100(p.ok)
-        .misses(p.miss)
-        .combo(p.max_combo)
-        .calculate()
-        .ok()?;
-    Some(attrs.pp * custom_factor(p.mods))
+    breakdown(map, p).map(|b| b.pp)
 }
 
 /// The pp of a play, taken apart like osu!'s results screen does: the parts it is made of, and
@@ -131,49 +129,49 @@ pub struct Breakdown {
     pub max_combo: u32,
 }
 
-/// The breakdown of a play's pp (None where `play_pp` is None).
+/// The breakdown of a play's pp (None where `play_pp` is None): osu!'s formula on its map with
+/// stacked notes merged, as taiko.rs's rules have it (`rules`), times its mods' multiplier.
 pub fn breakdown(map: &[u8], p: &Play) -> Option<Breakdown> {
-    if p.mods.unranked() {
+    if !gives_pp(p.mods) {
         return None;
     }
-    let map = crate::stars::load_played(map, p.mods, p.seed, p.half)?;
-    let k = custom_factor(p.mods);
-    let base = TaikoPerformance::new(&map)
-        .mods(formula_mods(p.mods, p.scroll_speed))
-        .clock_rate(p.rate);
-    let attrs = base
-        .clone()
-        .n300(p.great)
-        .n100(p.ok)
-        .misses(p.miss)
-        .combo(p.max_combo)
-        .calculate()
-        .ok()?;
-    let max_combo = attrs.difficulty.max_combo;
-    let fc = base
-        .clone()
-        .n300(p.great + p.miss)
-        .n100(p.ok)
-        .misses(0)
-        .combo(max_combo)
-        .calculate()
-        .ok()?;
-    let ss = base
-        .n300(p.great + p.ok + p.miss)
-        .n100(0)
-        .misses(0)
-        .combo(max_combo)
-        .calculate()
-        .ok()?;
+    let b = bonus(p.mods);
+    let merged = rules::unstacked(map);
+    let (bytes, play) = match &merged {
+        Some((bytes, kept)) => (&bytes[..], rules::scaled(*p, *kept)),
+        None => (map, *p),
+    };
+    let counts = |great, ok, miss, combo| Hits::Counts {
+        great,
+        ok,
+        miss,
+        combo,
+    };
+    let hits = counts(play.great, play.ok, play.miss, play.max_combo);
+    let (parts, stars, combo) = rules::parts(bytes, &play, &b, hits)?;
+    let fc = counts(play.great + play.miss, play.ok, 0, combo);
+    let (fc, ..) = rules::parts(bytes, &play, &b, fc)?;
+    // The combo the map has as it's played, stacks and all.
+    let max_combo = match merged {
+        Some(_) => {
+            let map = crate::stars::load_played(map, p.mods, p.seed, p.half)?;
+            Difficulty::new()
+                .clock_rate(p.rate)
+                .calculate(&map)
+                .max_combo()
+        }
+        None => combo,
+    };
+    let k = b.factor;
     Some(Breakdown {
-        pp: attrs.pp * k,
-        difficulty: attrs.pp_difficulty * k,
-        accuracy: attrs.pp_acc * k,
-        if_fc: fc.pp * k,
-        if_ss: ss.pp * k,
-        ss_difficulty: ss.pp_difficulty * k,
-        ss_accuracy: ss.pp_acc * k,
-        stars: attrs.difficulty.stars,
+        pp: (parts[0] + parts[1]) * k,
+        difficulty: parts[0] * k,
+        accuracy: parts[1] * k,
+        if_fc: (fc[0] + fc[1]) * k,
+        if_ss: (parts[2] + parts[3]) * k,
+        ss_difficulty: parts[2] * k,
+        ss_accuracy: parts[3] * k,
+        stars,
         max_combo,
     })
 }
@@ -184,17 +182,27 @@ pub const POTENTIAL: [f64; 3] = [100.0, 99.0, 98.0];
 /// What a full combo of the map at `path` gives at each of `POTENTIAL`'s accuracies, with
 /// `mods` at `rate` and `scroll_speed` (None where `play_pp` would be None).
 pub fn potential(map: &[u8], rate: f64, mods: Mods, scroll_speed: f64) -> Option<[f64; 3]> {
-    if mods.unranked() {
+    if !gives_pp(mods) {
         return None;
     }
-    let map = crate::stars::load_played(map, mods, 0, Default::default())?;
-    let base = TaikoPerformance::new(&map)
-        .mods(formula_mods(mods, scroll_speed))
-        .clock_rate(rate)
-        .misses(0);
+    let b = bonus(mods);
+    let play = Play {
+        great: 0,
+        ok: 0,
+        miss: 0,
+        max_combo: 0,
+        rate,
+        mods,
+        scroll_speed,
+        seed: 0,
+        half: Default::default(),
+    };
+    let merged = rules::unstacked(map);
+    let bytes = merged.as_ref().map_or(map, |m| &m.0[..]);
     let mut out = [0.0; 3];
     for (pp, acc) in out.iter_mut().zip(POTENTIAL) {
-        *pp = base.clone().accuracy(acc).calculate().ok()?.pp * custom_factor(mods);
+        let (parts, ..) = rules::parts(bytes, &play, &b, Hits::Accuracy(acc))?;
+        *pp = (parts[0] + parts[1]) * b.factor;
     }
     Some(out)
 }
@@ -286,7 +294,10 @@ pub struct Live {
 type Counts = (u32, u32, u32, u32);
 
 impl Live {
-    /// None for Autoplay (it gets no pp). Its thread reads the map at `path` with `read`.
+    /// None for plays that get no pp (`gives_pp`). Its thread reads the map at `path` with
+    /// `read`. shortcut: it counts the notes of a stack apart and the note speeds' whole gain
+    /// with Maze (`rules`), so a play's pp can end below the last it showed; walk the merged map
+    /// and work the cut out alongside if that ever matters.
     pub fn start(
         path: PathBuf,
         read: crate::ReadFile,
@@ -296,18 +307,31 @@ impl Live {
         seed: u64,
         half_rule: crate::mods::HalfRule,
     ) -> Option<Live> {
-        if mods.unranked() {
+        if !gives_pp(mods) {
             return None;
         }
         let (tx, jobs) = mpsc::channel::<Counts>();
         let (done, rx) = mpsc::channel();
-        let formula = formula_mods(mods, scroll_speed);
-        let k = custom_factor(mods);
+        let b = bonus(mods);
+        let played = rules::formula_of(mods, &b.cancelled, b.memory);
+        let formula = formula_mods(played, scroll_speed);
+        let k = b.factor;
+        let play = Play {
+            great: 0,
+            ok: 0,
+            miss: 0,
+            max_combo: 0,
+            rate,
+            mods,
+            scroll_speed,
+            seed,
+            half: half_rule,
+        };
         std::thread::Builder::new()
             .name("live pp".into())
             .spawn(move || {
-                let Some(map) = read(&path)
-                    .and_then(|map| crate::stars::load_played(&map, mods, seed, half_rule))
+                let Some(map) =
+                    read(&path).and_then(|map| rules::formula_map(&map, &play, played, &b.sv))
                 else {
                     return;
                 };
@@ -404,6 +428,7 @@ impl Live {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rosu_pp::taiko::TaikoPerformance;
 
     #[test]
     fn own_mods_scale_pp_and_osu_ones_go_to_the_formula() {

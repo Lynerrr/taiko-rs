@@ -372,6 +372,11 @@ type CustomKnown = (
     Vec<u32>,
     Option<Vec<u32>>,
 );
+/// Receiving the lobby map from the host: where its parts go, and its download's progress.
+type HostTransfer = (
+    std::sync::mpsc::Sender<Option<Vec<u8>>>,
+    Arc<std::sync::atomic::AtomicU64>,
+);
 
 /// Everything the input and render threads share. The render thread holds the lock only while
 /// building a frame (well under a millisecond) and never across a GPU wait, so key presses are
@@ -462,8 +467,9 @@ struct State {
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
     preview_remote: bool,
-    /// Receiving the lobby map from the host: where its parts go.
-    host_transfer: Option<std::sync::mpsc::Sender<Option<Vec<u8>>>>,
+    /// Receiving the lobby map from the host: where its parts go, and its download's progress
+    /// (which tells its job in `downloads` apart).
+    host_transfer: Option<HostTransfer>,
     /// The lobby map was asked of the host: only then is what the host sends taken.
     host_map_asked: bool,
     /// When the host was asked for it.
@@ -1440,11 +1446,19 @@ impl State {
             .iter()
             .find(|row| row.file == file)
             .and_then(|row| row.pp);
-        results.no_pp = mods.unranked().then_some(tr!(
-            "Autoplay gets no pp",
-            "Autoplayではppは付きません",
-            "Autoplay не даёт pp"
-        ));
+        results.no_pp = if mods.unranked() {
+            Some(tr!(
+                "Autoplay gets no pp",
+                "Autoplayではppは付きません",
+                "Autoplay не даёт pp"
+            ))
+        } else {
+            mods.in_rework().then_some(tr!(
+                "mods being reworked give no pp for now",
+                "調整中のModには今はppが付きません",
+                "моды на переработке пока не дают pp"
+            ))
+        };
         results.opened = Some(ui::Opened {
             player: r.player.clone(),
             date: r.date,
@@ -1633,11 +1647,19 @@ impl State {
         results.seed = score.seed;
         results.partial = true;
         results.pp = score.pp;
-        results.no_pp = mods.unranked().then_some(tr!(
-            "Autoplay gets no pp",
-            "Autoplayではppは付きません",
-            "Autoplay не даёт pp"
-        ));
+        results.no_pp = if mods.unranked() {
+            Some(tr!(
+                "Autoplay gets no pp",
+                "Autoplayではppは付きません",
+                "Autoplay не даёт pp"
+            ))
+        } else {
+            mods.in_rework().then_some(tr!(
+                "mods being reworked give no pp for now",
+                "調整中のModには今はppが付きません",
+                "моды на переработке пока не дают pp"
+            ))
+        };
         results.opened = Some(ui::Opened {
             player: score.player.clone(),
             date: score.date,
@@ -7011,14 +7033,17 @@ impl State {
             .info
             .as_ref()
             .and_then(|i| i.lock().unwrap().get(entry).copied().flatten());
-        Some(Box::new(net::MapStats {
-            stars: info.map_or(-1.0, |i| i.stars),
-            length_ms: info.map_or(-1.0, |i| i.length_ms),
-            bpm: info.map_or(-1.0, |i| i.bpm),
-            od: e.meta.od as f32,
-            hp: e.meta.hp as f32,
-            creator: e.meta.creator.clone(),
-        }))
+        Some(Box::new(
+            net::MapStats {
+                stars: info.map_or(-1.0, |i| i.stars),
+                length_ms: info.map_or(-1.0, |i| i.length_ms),
+                bpm: info.map_or(-1.0, |i| i.bpm),
+                od: e.meta.od as f32,
+                hp: e.meta.hp as f32,
+                creator: e.meta.creator.clone(),
+            }
+            .finite(),
+        ))
     }
 
     fn pick_lobby_map(&mut self, entry: usize) {
@@ -7038,9 +7063,11 @@ impl State {
         let mut info = map_info(&self.library[entry], self.play_speed().0, self.cfg.mods);
         info.stats = self.map_stats(entry);
         info.seed = lobby_seed(Some(self.cfg.random_seed));
-        // Defense stays on (with its rules) from one map to the next.
+        // Defense stays on (with its rules) from one map to the next, and so does who picks
+        // the mods.
         info.defense = self.lobby_defense();
-        let lobby_mods = self.cfg.mods.lobby(info.defense);
+        info.host_mods = self.lobby_host_mods();
+        let lobby_mods = self.cfg.mods.lobby(info.defense, info.host_mods);
         info.mods = lobby_mods.list();
         (info.multiverse, info.shapeshift) = mod_settings(lobby_mods);
         if let Some(s) = &self.mp {
@@ -7055,6 +7082,24 @@ impl State {
             .as_ref()
             .and_then(|s| s.map.as_ref())
             .and_then(|m| m.defense)
+    }
+
+    /// The lobby host took the mods for everyone (outside Defense, which always has them).
+    fn lobby_host_mods(&self) -> bool {
+        self.mp
+            .as_ref()
+            .and_then(|s| s.map.as_ref())
+            .is_some_and(|m| m.host_mods)
+    }
+
+    /// In a lobby whose host picks every mod (Defense, or the host took them for everyone).
+    fn host_picks_lobby_mods(&self) -> bool {
+        self.in_lobby()
+            && self
+                .mp
+                .as_ref()
+                .and_then(|s| s.map.as_ref())
+                .is_some_and(multiplayer::host_picks_mods)
     }
 
     /// T or a click on the chat line: the keys go to a message until Enter or Esc.
@@ -8572,13 +8617,12 @@ impl State {
     /// everyone (which can't be switched here) on top of our own.
     fn shown_mods(&self) -> Mods {
         match &self.mp {
-            // In Defense the host's mods are everyone's.
-            Some(s) if self.in_lobby() && s.map.as_ref().is_some_and(|m| m.defense.is_some()) => {
-                match s.map.as_ref().filter(|_| !s.is_host()) {
-                    Some(m) => Mods::from_list(&m.mods),
-                    None => self.cfg.mods.lobby(self.lobby_defense()),
-                }
-            }
+            // In Defense, or when the host took them, the host's mods are everyone's.
+            Some(s) if self.host_picks_lobby_mods() => match s.map.as_ref() {
+                Some(m) if !s.is_host() => Mods::from_list(&m.mods).playable(),
+                Some(m) => self.cfg.mods.lobby(m.defense, m.host_mods),
+                None => self.cfg.mods,
+            },
             Some(s) if self.in_lobby() && !s.is_host() => {
                 let lobby = s
                     .map
@@ -8600,22 +8644,16 @@ impl State {
             ));
             return;
         }
-        // In Defense the host picks all of them, from the ones a team can have.
-        if self.in_lobby()
-            && let Some(s) = self.mp.as_ref().filter(|_| self.lobby_defense().is_some())
+        // In Defense, or when the host took them, the host picks all of them (in Defense
+        // from the ones a team can have).
+        if self.host_picks_lobby_mods()
+            && let Some(s) = self.mp.as_ref()
         {
             if !s.is_host() {
-                self.toast(
-                    tr!(
-                        "in Defense the host picks the mods",
-                        "ディフェンスではホストがMODを選ぶ",
-                        "в Обороне моды выбирает хост"
-                    )
-                    .into(),
-                );
+                self.toast(self.host_picks_mods_text().into());
                 return;
             }
-            if !m.defense_ok() {
+            if self.lobby_defense().is_some() && !m.defense_ok() {
                 self.toast(format!(
                     "{} {}",
                     m.acronym(),
@@ -8632,15 +8670,27 @@ impl State {
         self.mods_changed();
     }
 
+    /// Why a guest can't switch a mod: the host picks them all.
+    fn host_picks_mods_text(&self) -> &'static str {
+        if self.lobby_defense().is_some() {
+            tr!(
+                "in Defense the host picks the mods",
+                "ディフェンスではホストがMODを選ぶ",
+                "в Обороне моды выбирает хост"
+            )
+        } else {
+            tr!(
+                "the host picks the mods for everyone",
+                "ホストが全員のMODを選んでいる",
+                "моды за всех выбирает хост"
+            )
+        }
+    }
+
     /// Tells the room the mods we picked ourselves, if it doesn't have them.
     fn send_my_mods(&self) {
         let Some(s) = &self.mp else { return };
-        // Our own others don't play in Defense: the host's are the whole team's.
-        let mine = if self.lobby_defense().is_some() {
-            Vec::new()
-        } else {
-            self.cfg.mods.free().list()
-        };
+        let mine = multiplayer::own_lobby_mods(self.cfg.mods, s.map.as_ref());
         if s.me().is_some_and(|p| p.mods != mine) {
             s.client.send(net::ClientMsg::Mods(mine));
         }
@@ -8663,9 +8713,9 @@ impl State {
             && let Some(mut m) = s.map.clone()
         {
             m.rate = rate;
-            // Only the speed's: everyone picks their other mods themselves. In Defense, all of
-            // the host's (a team plays one set of notes).
-            let mods = self.cfg.mods.lobby(m.defense);
+            // Only the speed's: everyone picks their other mods themselves. In Defense, or when
+            // the host took them, all of the host's.
+            let mods = self.cfg.mods.lobby(m.defense, m.host_mods);
             m.mods = mods.list();
             (m.multiverse, m.shapeshift) = mod_settings(mods);
             m.seed = lobby_seed(Some(self.cfg.random_seed));
@@ -8771,15 +8821,8 @@ impl State {
             return;
         };
         let guest = self.in_lobby() && self.mp.as_ref().is_some_and(|s| !s.is_host());
-        if guest && self.lobby_defense().is_some() {
-            self.toast(
-                tr!(
-                    "in Defense the host picks the mods",
-                    "ディフェンスではホストがMODを選ぶ",
-                    "в Обороне моды выбирает хост"
-                )
-                .into(),
-            );
+        if guest && self.host_picks_lobby_mods() {
+            self.toast(self.host_picks_mods_text().into());
             return;
         }
         if guest {
@@ -10965,12 +11008,24 @@ impl State {
                 s.slots = slots;
                 let game_over = s.in_match && !in_match;
                 s.players = players;
+                // The host gave the mods back to everyone: the ones the host had picked become
+                // our own, instead of none.
+                let freed = s
+                    .map
+                    .as_ref()
+                    .filter(|old| old.host_mods && old.defense.is_none() && !s.is_host())
+                    .filter(|_| {
+                        map.as_ref()
+                            .is_some_and(|m| !m.host_mods && m.defense.is_none())
+                    })
+                    .map(|old| Mods::from_list(&old.mods).free());
+                if let Some(theirs) = freed {
+                    self.cfg.mods = self.cfg.mods.shared().plus(theirs);
+                    self.cfg.save();
+                    self.select.mods_label = self.cfg.mods.label();
+                }
                 // The room learns our own mods (on joining, and if it has others).
-                let mine = if map.as_ref().is_some_and(|m| m.defense.is_some()) {
-                    Vec::new()
-                } else {
-                    self.cfg.mods.free().list()
-                };
+                let mine = multiplayer::own_lobby_mods(self.cfg.mods, map.as_ref());
                 if !mapguessr && s.me().is_some_and(|p| p.mods != mine) {
                     s.client.send(net::ClientMsg::Mods(mine));
                 }
@@ -10991,7 +11046,8 @@ impl State {
                     return;
                 }
                 let hash = map.as_ref().map(|m| m.hash);
-                if hash != s.reported_map {
+                let map_changed = hash != s.reported_map;
+                if map_changed {
                     s.reported_map = hash;
                     s.map_entry = map.as_ref().and_then(|m| find_map(library, m));
                     s.have_map = s.map_entry.is_some();
@@ -11009,6 +11065,10 @@ impl State {
                 {
                     self.scene = Lobby::scene();
                     self.toast("the match started without you (map didn't load in time)".into());
+                }
+                // The old map's set is no use any more: the new one is asked for straight away.
+                if map_changed {
+                    self.stop_host_transfer();
                 }
             }
             ServerMsg::Prepare(map) => {
@@ -11030,11 +11090,14 @@ impl State {
                         self.stop_audio();
                         self.picking_lobby_map = false;
                         self.preview.show_background_for(&self.library[i]);
-                        // The host's speed mods, and our own others; in Defense the host's all.
-                        let mods = if map.defense.is_some() {
-                            Mods::from_list(&map.mods)
+                        // The host's speed mods, and our own others; in Defense, or when the
+                        // host took them, the host's all.
+                        // Not the mods taken out of the game, should a host's older game pick one.
+                        let mods = if multiplayer::host_picks_mods(&map) {
+                            Mods::from_list(&map.mods).playable()
                         } else {
                             Mods::from_list(&map.mods)
+                                .playable()
                                 .shared()
                                 .plus(self.cfg.mods.free())
                         };
@@ -11769,13 +11832,7 @@ impl State {
             self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
-            // As they'd play: a lobby leaves OD Override out.
-            let shown = self.shown_mods();
-            self.preview.mods = if self.mp.is_some() {
-                shown.shared().plus(shown.free())
-            } else {
-                shown
-            };
+            self.preview.mods = self.shown_mods();
             self.preview.update(
                 now,
                 entries,
@@ -12716,13 +12773,14 @@ impl State {
     /// Host: packs the lobby map's set folder and sends it to player `to`, on a thread.
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
-        let tx = s.client.sender();
+        let tx = s.client.bulk_sender();
         let folder = s
             .map_entry
             .and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
         let roots = self.lobby_send_roots();
         std::thread::spawn(move || {
-            let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part }).is_ok();
+            // Stops by itself when the host picks another map.
+            let send = |part: net::MapPart| tx.send(net::ClientMsg::MapFile { to, part });
             let error = |why: String| net::MapPart {
                 name: String::new(),
                 total: 0,
@@ -12774,8 +12832,7 @@ impl State {
         }
         if let Some(e) = part.error {
             // Fall back to the mirrors.
-            self.host_map_asked = false;
-            self.host_transfer = None;
+            self.stop_host_transfer();
             self.toast(format!(
                 "the host couldn't send it ({e}); trying the mirrors"
             ));
@@ -12812,10 +12869,13 @@ impl State {
                 m.hash,
                 self.songs_dir.clone(),
             );
+            // A transfer that's still going is given up for this one.
+            self.stop_host_transfer();
+            let done = job.done.clone();
             self.downloads.push(job);
-            self.host_transfer = Some(feed);
+            self.host_transfer = Some((feed, done));
         }
-        let Some(feed) = &self.host_transfer else {
+        let Some((feed, _)) = &self.host_transfer else {
             return;
         };
         match download::base64_decode(&part.data) {
@@ -12830,6 +12890,17 @@ impl State {
                 self.host_transfer = None;
             }
         }
+    }
+
+    /// Player: stops taking the lobby map from the host (the lobby moved on to another map, or
+    /// another transfer starts); its unfinished download leaves the list without a word.
+    fn stop_host_transfer(&mut self) {
+        if let Some((feed, done)) = self.host_transfer.take() {
+            drop(feed);
+            self.downloads.retain(|j| !Arc::ptr_eq(&j.done, &done));
+        }
+        self.host_map_asked = false;
+        self.host_asked_at = None;
     }
 
     /// A lobby map we don't have comes by itself: from the host, who has it whatever it is, and

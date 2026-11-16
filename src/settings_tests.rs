@@ -213,6 +213,7 @@ fn watched_play() -> online::SoloPlay {
             seed: None,
             defense: None,
             stats: None,
+            host_mods: false,
         },
         anti_mash: true,
     }
