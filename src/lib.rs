@@ -22,6 +22,8 @@ mod changelog;
 use taiko_proto::changelog_entry;
 mod clipboard;
 mod collections;
+mod text_fields;
+mod text_input;
 use taiko_logic::clock;
 mod config;
 mod cursor;
@@ -406,6 +408,7 @@ struct State {
     modifiers_shift: bool,
     modifiers_ctrl: bool,
     modifiers_alt: bool,
+    modifiers_super: bool,
     /// When the volume overlay was last poked (Alt + wheel).
     volume: volume::Overlay,
     volume_save_at: Option<Instant>,
@@ -442,6 +445,11 @@ struct State {
     updater: update::Updater,
     /// Clickable areas of the last frame drawn.
     hits: Vec<hit::HitBox>,
+    input_focus: Option<text_input::Field>,
+    text_input: text_input::TextInput,
+    input_regions: Vec<text_input::Region>,
+    input_drag: bool,
+    input_engaged: bool,
     browse: browse::Browse,
     downloads: Vec<download::Job>,
     /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
@@ -656,6 +664,7 @@ struct State {
     last_key: (KeyCode, Instant),
     /// The quick retry key being held in a song: which key, and since when.
     retry_hold: Option<(KeyCode, Instant)>,
+    pending_restart: Option<RestartDelay>,
     /// The menu screen showing as of the last frame (`menu_screen`), and when it last changed to
     /// another, for the glitch between them.
     menu_screen_seen: Option<u8>,
@@ -1310,6 +1319,16 @@ impl State {
         (rx, rate.map_or(48000.0, |r| r as f64))
     }
 
+    fn chord(&self, key: KeyCode) -> keys::Chord {
+        keys::Chord {
+            key,
+            ctrl: self.modifiers_ctrl,
+            shift: self.modifiers_shift,
+            alt: self.modifiers_alt,
+            super_key: self.modifiers_super,
+        }
+    }
+
     fn editor_keys(&self) -> editor::view::Keys {
         editor::view::Keys {
             shift: self.modifiers_shift,
@@ -1717,9 +1736,87 @@ impl State {
 
     /// Plays the map again, like starting it except that the intro is skipped.
     fn retry_from(&mut self, entry: usize, from: Option<f64>) {
+        if !self.cfg.instant_restart {
+            if self
+                .pending_restart
+                .as_ref()
+                .is_some_and(|r| r.released.is_some())
+            {
+                self.pending_restart = None;
+            }
+            if self.pending_restart.is_none() {
+                self.retry_hold = None;
+                self.pending_restart = Some(RestartDelay {
+                    entry,
+                    from,
+                    at: None,
+                    held: None,
+                    released: None,
+                });
+            }
+            return;
+        }
+        self.retry_now(entry, from);
+    }
+
+    fn retry_now(&mut self, entry: usize, from: Option<f64>) {
+        self.pending_restart = None;
         self.start_loading_from(entry, from);
         if let Some(l) = self.scene.screen_mut::<Loading>() {
             l.retry = true;
+        }
+    }
+
+    fn restart_delay_progress(&self, now: Instant) -> Option<f32> {
+        self.pending_restart.as_ref().map(|r| {
+            if let Some((at, alpha)) = r.released {
+                (alpha - now.saturating_duration_since(at).as_secs_f32() / 0.5).max(0.0)
+            } else {
+                r.at.map_or(0.0, |at| {
+                    (now.saturating_duration_since(at).as_secs_f32() / 2.0).min(1.0)
+                })
+            }
+        })
+    }
+
+    fn cancel_restart(&mut self) {
+        self.cancel_restart_at(Instant::now());
+    }
+
+    fn cancel_restart_at(&mut self, now: Instant) {
+        let alpha = self.restart_delay_progress(now).unwrap_or(0.0);
+        if let Some(r) = self
+            .pending_restart
+            .as_mut()
+            .filter(|r| r.released.is_none())
+        {
+            r.released = Some((now, alpha));
+        }
+    }
+
+    fn poll_restart_delay(&mut self, now: Instant) {
+        let Some(r) = self.pending_restart.as_mut() else {
+            return;
+        };
+        r.at.get_or_insert(now);
+        let target = (r.entry, r.from);
+        let still_here = self.scene.song_play() == Some(target)
+            || self
+                .scene
+                .screen_as::<ResultsScreen>()
+                .is_some_and(|s| (s.entry, s.from) == target);
+        if !still_here {
+            self.pending_restart = None;
+            return;
+        }
+        if r.released.is_some() {
+            if self.restart_delay_progress(now) == Some(0.0) {
+                self.pending_restart = None;
+            }
+            return;
+        }
+        if self.restart_delay_progress(now).is_some_and(|p| p >= 1.0) {
+            self.retry_now(target.0, target.1);
         }
     }
 
@@ -1970,7 +2067,7 @@ impl State {
 
     /// Puts a drum on `code`; false if that key is taken. In Settings and the guide alike.
     fn bind_drum_key(&mut self, slot: usize, code: KeyCode) -> bool {
-        if self.cfg.preset_keys.contains(&code) {
+        if self.cfg.preset_keys.contains(&keys::Chord::plain(code)) {
             self.toast(tr!("{} is a playfield preset key", "{}はプリセットのキーです", "{} — клавиша пресета поля"; [config::key_name(code)] []));
             return false;
         }
@@ -2570,6 +2667,7 @@ impl State {
     fn settings_type(&mut self, code: KeyCode, text: Option<&str>) -> bool {
         if !self.modifiers_ctrl
             && !self.modifiers_alt
+            && !self.modifiers_super
             && let Some(p) = self.settings_ui.choices.as_mut().filter(|p| p.searchable())
         {
             let mut query = p.search.clone();
@@ -2625,7 +2723,8 @@ impl State {
             || ui.binding.is_some()
             || ui.dropdown.is_some()
             || self.modifiers_ctrl
-            || self.modifiers_alt)
+            || self.modifiers_alt
+            || self.modifiers_super)
     }
 
     /// Whether - and + are letters of the settings search, not the offset keys: always on the
@@ -2680,7 +2779,7 @@ impl State {
                 }
             }
             Item::Key(i) => config::key_name(c.keys[i]),
-            Item::PresetKey(i) => config::key_name(c.preset_keys[i]),
+            Item::PresetKey(i) => c.preset_keys[i].name(),
             Item::Hotkey(i) => c
                 .hotkeys
                 .get(keys::Hotkey::ALL[i])
@@ -2713,6 +2812,7 @@ impl State {
             Item::MapSkins => on(c.map_skins),
             Item::HideGreat => on(c.hide_great),
             Item::FailRestart => on(c.fail_restart),
+            Item::InstantRestart => on(c.instant_restart),
             Item::HitFlash => on(c.hit_flash),
             Item::DiscordPresence => on(c.discord_presence),
             Item::CrashReports => on(c.send_crash_reports),
@@ -3078,6 +3178,7 @@ impl State {
             Item::MapSkins => self.cfg.map_skins = !self.cfg.map_skins,
             Item::HideGreat => self.cfg.hide_great = !self.cfg.hide_great,
             Item::FailRestart => self.cfg.fail_restart = !self.cfg.fail_restart,
+            Item::InstantRestart => self.cfg.instant_restart = !self.cfg.instant_restart,
             Item::HitFlash => self.cfg.hit_flash = !self.cfg.hit_flash,
             Item::DiscordPresence => self.cfg.discord_presence = !self.cfg.discord_presence,
             Item::CrashReports => {
@@ -5034,11 +5135,42 @@ impl State {
     }
 
     fn toggle_fullscreen(&mut self, window: Option<&Window>) {
+        self.fullscreen = window.map_or(!self.fullscreen, |w| w.fullscreen().is_none());
         if let Some(w) = window {
-            self.fullscreen = w.fullscreen().is_none();
             w.set_fullscreen(self.fullscreen.then_some(Fullscreen::Borderless(None)));
-            self.cfg.fullscreen = self.fullscreen;
-            self.cfg.save();
+        }
+        self.cfg.fullscreen = self.fullscreen;
+        self.cfg.save();
+    }
+
+    /// One control chord has one owner; drum keys keep their separate single-key bindings.
+    fn free_control_chord(&mut self, item: Item, chord: keys::Chord) {
+        let mut bumped = Vec::new();
+        for (i, h) in keys::Hotkey::ALL.iter().copied().enumerate() {
+            if item == Item::Hotkey(i) {
+                continue;
+            }
+            let occupied =
+                self.cfg.hotkeys.get(h).is_some_and(|c| {
+                    c == chord || (c == h.default() && h.defaults().contains(&chord))
+                });
+            if occupied {
+                self.cfg.hotkeys.set(h, None);
+                bumped.push(h.label().to_string());
+            }
+        }
+        for i in 0..self.cfg.preset_keys.len() {
+            if item != Item::PresetKey(i) && self.cfg.preset_keys[i] == chord {
+                self.cfg.preset_keys[i] = keys::Chord::plain(config::NO_KEY);
+                bumped.push(Item::PresetKey(i).label().to_string());
+            }
+        }
+        if item != Item::InterfaceKey && self.cfg.interface_key == chord {
+            self.cfg.interface_key = keys::Chord::plain(config::NO_KEY);
+            bumped.push(Item::InterfaceKey.label().to_string());
+        }
+        if !bumped.is_empty() {
+            self.toast(tr!("{}: key moved to {}", "{}: キーを{}に移動", "{}: клавиша перенесена в {}"; [bumped.join(", "), item.label()] []));
         }
     }
 
@@ -5081,16 +5213,21 @@ impl State {
                     | KeyCode::SuperLeft
                     | KeyCode::SuperRight
             );
-            if matches!(item, Item::InterfaceKey | Item::Hotkey(_)) && modifier {
+            if !matches!(item, Item::Key(_)) && modifier {
                 // Held for the key to come.
                 self.settings_ui.binding = Some(item);
                 return;
             }
-            if code == KeyCode::Delete {
+            let modified_control = !matches!(item, Item::Key(_)) && self.chord(code).modified();
+            if code == KeyCode::Delete && !modified_control {
                 match item {
                     Item::Key(slot) => self.cfg.keys[slot] = config::NO_KEY,
-                    Item::PresetKey(slot) => self.cfg.preset_keys[slot] = config::NO_KEY,
-                    Item::InterfaceKey => self.cfg.interface_key = (false, config::NO_KEY),
+                    Item::PresetKey(slot) => {
+                        self.cfg.preset_keys[slot] = keys::Chord::plain(config::NO_KEY)
+                    }
+                    Item::InterfaceKey => {
+                        self.cfg.interface_key = keys::Chord::plain(config::NO_KEY)
+                    }
                     Item::Hotkey(i) => {
                         self.cfg.hotkeys.set(keys::Hotkey::ALL[i], None);
                     }
@@ -5100,7 +5237,7 @@ impl State {
                 self.cfg.save();
                 return;
             }
-            if code != KeyCode::Escape {
+            if code != KeyCode::Escape || modified_control {
                 match item {
                     Item::Hotkey(i) => {
                         let h = keys::Hotkey::ALL[i];
@@ -5109,10 +5246,10 @@ impl State {
                             ctrl: self.modifiers_ctrl,
                             shift: self.modifiers_shift,
                             alt: self.modifiers_alt,
+                            super_key: self.modifiers_super,
                         };
                         if self.cfg.keys.contains(&code)
-                            && !chord.ctrl
-                            && !chord.alt
+                            && !chord.modified()
                             && h.places()
                                 .iter()
                                 .any(|p| matches!(p, keys::Place::Play | keys::Place::Paused))
@@ -5120,16 +5257,19 @@ impl State {
                             self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
+                        self.free_control_chord(item, chord);
                         if let Some(other) = self.cfg.hotkeys.set(h, Some(chord)) {
                             self.toast(tr!("{} now has no key ({} was its)", "{}はキーなしになりました ({}だったもの)", "у «{}» больше нет клавиши (была {})"; [other.label(), chord.name()] []));
                         }
                     }
                     Item::InterfaceKey => {
-                        if self.cfg.keys.contains(&code) && !self.modifiers_shift {
+                        if self.cfg.keys.contains(&code) && !self.chord(code).modified() {
                             self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
-                        self.cfg.interface_key = (self.modifiers_shift, code);
+                        let chord = self.chord(code);
+                        self.free_control_chord(item, chord);
+                        self.cfg.interface_key = chord;
                     }
                     Item::Key(slot) => {
                         if !self.bind_drum_key(slot, code) {
@@ -5137,14 +5277,13 @@ impl State {
                         }
                     }
                     Item::PresetKey(slot) => {
-                        if self.cfg.keys.contains(&code) {
+                        let chord = self.chord(code);
+                        if self.cfg.keys.contains(&code) && !chord.modified() {
                             self.toast(tr!("{} is a drum key", "{}は太鼓のキーです", "{} — клавиша барабана"; [config::key_name(code)] []));
                             return;
                         }
-                        if let Some(other) = self.cfg.preset_keys.iter().position(|&k| k == code) {
-                            self.cfg.preset_keys[other] = self.cfg.preset_keys[slot];
-                        }
-                        self.cfg.preset_keys[slot] = code;
+                        self.free_control_chord(item, chord);
+                        self.cfg.preset_keys[slot] = chord;
                     }
                     _ => {}
                 }
@@ -5594,12 +5733,33 @@ impl State {
 
     /// The quick retry key went down: the map restarts if it's still held in `RETRY_HOLD_MS`.
     fn hold_retry(&mut self) {
+        if !self.cfg.instant_restart {
+            self.restart_map();
+            return;
+        }
         self.retry_hold.get_or_insert(self.last_key);
     }
 
     /// A key came up.
     pub(crate) fn key_released(&mut self, code: KeyCode) {
-        if self.retry_hold.is_some_and(|(key, _)| key == code) {
+        self.key_released_at(code, Instant::now());
+    }
+
+    fn key_released_at(&mut self, code: KeyCode, now: Instant) {
+        if self.pending_restart.as_ref().is_some_and(|r| {
+            r.held
+                .is_some_and(|c| c.key == code || c.uses_modifier(code))
+        }) {
+            self.cancel_restart_at(now);
+        }
+        if self.retry_hold.is_some_and(|(key, _)| {
+            key == code
+                || self
+                    .cfg
+                    .hotkeys
+                    .get(keys::Hotkey::QuickRetry)
+                    .is_some_and(|chord| chord.uses_modifier(code))
+        }) {
             self.retry_hold = None;
         }
     }
@@ -5619,6 +5779,10 @@ impl State {
         if self.retry_progress(now).is_some_and(|t| t >= 1.0) {
             self.retry_hold = None;
             self.restart_map();
+            if let Some(r) = self.pending_restart.as_mut() {
+                r.held = self.cfg.hotkeys.get(keys::Hotkey::QuickRetry);
+                r.at = Some(now);
+            }
         }
     }
 
@@ -5657,7 +5821,7 @@ impl State {
                 0 => game.resume_after(delay, sound(&self.audio)),
                 1 => {
                     let (e, f) = (entry, from);
-                    self.retry_from(e, f);
+                    self.retry_now(e, f);
                 }
                 2 => self.open_dropdown(),
                 3 => self.open_settings(),
@@ -6420,7 +6584,19 @@ impl State {
             self.idle.input(now);
         }
         self.mouse = (x, y);
+        if self.text_input_drag() {
+            return CursorIcon::Text;
+        }
         let (vx, vy) = self.mouse_virtual();
+        if self.hit_at(vx, vy).is_none()
+            && self
+                .input_regions
+                .iter()
+                .any(|r| Some(r.field) == self.input_focus && r.contains(vx, vy))
+        {
+            self.hover = None;
+            return CursorIcon::Text;
+        }
         let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
         self.volume.point(vx, vy, width, Instant::now());
         // On the main menu, pointing at a note selects it (moving: a pointer left resting doesn't
@@ -6581,6 +6757,7 @@ impl State {
             self.hover = None;
             return match hit {
                 hit::Hit::SplitList => CursorIcon::EwResize,
+                _ if self.is_text_field(hit) => CursorIcon::Text,
                 _ => CursorIcon::Pointer,
             };
         }
@@ -6771,6 +6948,9 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if self.text_input_mouse(pressed) {
+            return;
+        }
         if self.layers_button(&[app::overlays::Layer::Shot], pressed, window) {
             return;
         }
@@ -9137,12 +9317,20 @@ impl State {
                 .is_some_and(|u| u.typing.is_some())
     }
 
-    /// Android: whether tapping `hit` is tapping a text field.
-    #[cfg(target_os = "android")]
+    /// Whether this hit area accepts text (also used by the phone keyboard).
     fn is_text_field(&self, hit: hit::Hit) -> bool {
         use hit::Hit;
         match hit {
-            Hit::TextField | Hit::SettingsSearch | Hit::ChoiceSearch | Hit::LobbyChat => true,
+            Hit::TextField
+            | Hit::SettingsSearch
+            | Hit::ChoiceSearch
+            | Hit::LobbyChat
+            | Hit::PlayerSearch => true,
+            Hit::SettingRow(i) => self.settings_ui.editing.as_ref().is_some_and(|edit| {
+                settings::ITEMS
+                    .get(i)
+                    .is_some_and(|(_, item)| *item == edit.item)
+            }),
             Hit::MpRow(i) => {
                 self.scene.screen_is::<MpMenu>()
                     && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action())
@@ -11434,8 +11622,52 @@ impl State {
             }
             return;
         }
+        if self
+            .pending_restart
+            .as_ref()
+            .is_some_and(|r| r.released.is_none())
+            && code == KeyCode::Escape
+            && !repeat
+        {
+            self.cancel_restart_at(at);
+            return;
+        }
         self.last_key = (code, at);
-        if self.select_zone_key(code, window) {
+        let pressed = self.chord(code);
+        // Window controls remain usable in text fields and overlays, except while assigning keys.
+        if self.settings_ui.binding.is_none()
+            && !(self.in_song() && self.cfg.keys.contains(&code) && !pressed.modified())
+            && (pressed.modified() || !keys::types_text(code))
+        {
+            let full = keys::Hotkey::Fullscreen.default();
+            let action = self.cfg.hotkeys.resolve(pressed, keys::Place::Other);
+            if matches!(action, keys::Resolved::As(c) if c == full)
+                || (action == keys::Resolved::Same
+                    && pressed == full
+                    && self.cfg.hotkeys.get(keys::Hotkey::Fullscreen) == Some(full))
+            {
+                if !repeat {
+                    self.toggle_fullscreen(window);
+                }
+                return;
+            }
+        }
+        if self.text_input_key(code, text, repeat) {
+            return;
+        }
+        if self.hotkey_place(code).is_some()
+            && ((self.in_song() && pressed == self.cfg.interface_key)
+                || (!self.in_settings()
+                    && !self
+                        .scene
+                        .screen()
+                        .is_some_and(|s| s.editor() || s.keeps_preset_keys())
+                    && self.cfg.preset_keys.contains(&pressed)))
+        {
+            self.key_inner(code, repeat, text, at, window);
+            return;
+        }
+        if !pressed.modified() && self.select_zone_key(code, window) {
             return;
         }
         if let Some(mapped) = self.drum_menu_key(code) {
@@ -11462,6 +11694,7 @@ impl State {
             ctrl: self.modifiers_ctrl,
             shift: self.modifiers_shift,
             alt: self.modifiers_alt,
+            super_key: self.modifiers_super,
         };
         match self
             .hotkey_place(code)
@@ -11474,19 +11707,30 @@ impl State {
                     self.modifiers_ctrl,
                     self.modifiers_shift,
                     self.modifiers_alt,
+                    self.modifiers_super,
                 );
                 (
                     self.modifiers_ctrl,
                     self.modifiers_shift,
                     self.modifiers_alt,
-                ) = (c.ctrl, c.shift, c.alt);
+                    self.modifiers_super,
+                ) = (c.ctrl, c.shift, c.alt, c.super_key);
                 self.key_inner(c.key, repeat, None, at, window);
                 (
                     self.modifiers_ctrl,
                     self.modifiers_shift,
                     self.modifiers_alt,
+                    self.modifiers_super,
                 ) = held;
             }
+        }
+        if let Some(r) = self
+            .pending_restart
+            .as_mut()
+            .filter(|r| r.released.is_none() && r.held.is_none())
+        {
+            r.held = Some(pressed);
+            r.at.get_or_insert(at);
         }
     }
 
@@ -11504,7 +11748,7 @@ impl State {
 
     /// What a drum key does in a menu with `Config::drum_menus`, as the key that does the same.
     fn drum_menu_key(&self, code: KeyCode) -> Option<KeyCode> {
-        if !self.cfg.drum_menus || self.modifiers_ctrl || self.modifiers_alt {
+        if !self.cfg.drum_menus || self.chord(code).modified() {
             return None;
         }
         let drum = self.cfg.keys.iter().position(|&k| k == code)?;
@@ -11580,13 +11824,26 @@ impl State {
             || self.settings_ui.choices.is_some()
             || self.mod_select.is_some()
             || self.customization_tab().is_some();
-        let plain = !self.modifiers_ctrl && !self.modifiers_alt;
+        let pressed = self.chord(code);
+        // Rebound global commands still reach their window handlers through modal screens.
+        // Plain letters remain text, and assigning a key always takes precedence.
+        if busy
+            && self.settings_ui.binding.is_none()
+            && (pressed.modified() || !keys::types_text(code))
+            && matches!(
+                self.cfg.hotkeys.resolve(pressed, keys::Place::Other),
+                keys::Resolved::As(_)
+            )
+        {
+            return Some(keys::Place::Other);
+        }
+        let plain = !self.modifiers_ctrl && !self.modifiers_alt && !self.modifiers_super;
         let settings_idle = self.in_settings()
             && self.settings_ui.search.is_empty()
             && !keys::starts_text(code)
             && !keys::is_sign(code);
         if busy
-            || (plain && self.in_song() && self.cfg.keys.contains(&code))
+            || (!self.chord(code).modified() && self.in_song() && self.cfg.keys.contains(&code))
             || (plain && self.in_settings() && keys::is_sign(code))
             || (plain && self.takes_text() && keys::types_text(code) && !settings_idle)
         {
@@ -11686,8 +11943,8 @@ impl State {
         if !repeat
             && self.in_song()
             && self.settings_ui.binding.is_none()
-            && (self.modifiers_shift, code) == self.cfg.interface_key
-            && !(self.cfg.keys.contains(&code) && !self.modifiers_shift)
+            && self.chord(code) == self.cfg.interface_key
+            && !(self.cfg.keys.contains(&code) && !self.chord(code).modified())
         {
             self.cfg.interface_hidden = !self.cfg.interface_hidden;
             self.cfg.save();
@@ -11706,7 +11963,11 @@ impl State {
                 .screen()
                 .is_some_and(|s| s.editor() || s.keeps_preset_keys())
             && self.settings_ui.dropdown.is_none()
-            && let Some(i) = self.cfg.preset_keys.iter().position(|&k| k == code)
+            && let Some(i) = self
+                .cfg
+                .preset_keys
+                .iter()
+                .position(|&k| k == self.chord(code))
         {
             self.cycle_preset(if i == 0 { -1 } else { 1 });
             return;
@@ -11809,6 +12070,9 @@ impl State {
             &canvas.picture_times,
         );
         canvas.clear(width);
+        canvas.input_editor = self
+            .sync_text_input()
+            .map(|field| (field, self.text_input.view()));
         canvas.avatar_slots = self.avatars.slots();
         canvas.picture_slots = self.pictures.slots();
         canvas.mouse = self.mouse_virtual();
@@ -11951,6 +12215,7 @@ impl State {
         self.poll_multiplayer();
         self.track_play();
         self.poll_retry(now);
+        self.poll_restart_delay(now);
         self.poll_replay_speed();
         // Paused in the fullscreen preview, and left it.
         if self.preview.held && !self.scene.screen_is::<Preview>() {
@@ -12350,12 +12615,15 @@ impl State {
                 canvas.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
                 let phone = mobile::active();
                 canvas.text_centered(w / 2.0, 160.0, 14.0, rgba(0xffffff, 1.0), "Random seed");
-                canvas.text_centered(
-                    w / 2.0,
-                    200.0,
+                canvas.input(
+                    text_input::Field::Random,
+                    [w / 2.0 - 180.0, 200.0, 360.0, 14.0],
                     12.0,
+                    input,
+                    "",
                     rgba(0xffffff, 1.0),
-                    &format!("{input}_"),
+                    false,
+                    true,
                 );
                 canvas.text_centered(
                     w / 2.0,
@@ -12489,7 +12757,9 @@ impl State {
         }
         if fail_restart {
             self.stop_audio();
-            self.restart_map();
+            if let Some((entry, from)) = self.scene.song_play() {
+                self.retry_now(entry, from);
+            }
         }
         if let Some((entry, speed)) = editor_reload {
             let (rx, rate) = self.spawn_track_loader(entry, speed);
@@ -12585,7 +12855,12 @@ impl State {
         }
         // Not during a song, where a pointer left there would hold it over the notes for good.
         // Holding quick retry: the screen goes dark on the way to the restart.
-        if let Some(t) = self.retry_progress(now) {
+        if let Some(t) = self.restart_delay_progress(now).or_else(|| {
+            self.cfg
+                .instant_restart
+                .then(|| self.retry_progress(now))
+                .flatten()
+        }) {
             canvas.rect(0.0, 0.0, canvas.width, 480.0, rgba(0x000000, t * 0.95));
         }
         self.draw_layers(&app::overlays::DRAW_UNDER_TOASTS, canvas, now);
@@ -12669,6 +12944,7 @@ impl State {
             }
         }
         self.draw_shot_view(canvas);
+        self.input_regions.clone_from(&canvas.input_regions);
         std::mem::swap(&mut self.hits, &mut canvas.hits);
         capture
     }
@@ -13016,7 +13292,7 @@ impl State {
         // The resume countdown ends at a wall-clock time (`Sim::resume_after`) that frames
         // reach as their time goes on.
         let resuming = self.game().is_some_and(|game| game.resuming().is_some());
-        self.preview.is_due() || resuming
+        self.preview.is_due() || resuming || self.pending_restart.is_some()
     }
 
     /// The background work still on its way, by name; empty when no thread works for the
@@ -13037,6 +13313,12 @@ impl State {
             ("the maps' analysis", info_pending),
             ("the song preview", !self.preview.is_idle()),
             ("a map loading", map_loading),
+            (
+                "the editor home",
+                self.scene
+                    .screen_as::<EditorHome>()
+                    .is_some_and(|s| s.home.is_busy()),
+            ),
             ("a leaderboard", self.board_fetch.is_some()),
             ("a set's update check", self.set_check.is_some()),
             ("the loved list", self.loved_call.is_some()),
@@ -13045,6 +13327,12 @@ impl State {
             ("osu!.db", self.osudb_rx.is_busy()),
             ("the pp backfill", self.pp_backfill.is_busy()),
             ("the player's profile", self.me_fetch.is_busy()),
+            (
+                "the medals",
+                self.medals
+                    .as_ref()
+                    .is_some_and(|v| matches!(v.state, medals::State::Loading(_))),
+            ),
             ("a score's submit", !self.submits.is_empty()),
             ("the lobby map's lookup", self.lobby_lookup.is_busy()),
             ("the folder dialog", self.folder_pick.is_busy()),
@@ -14373,9 +14661,19 @@ const STATUS_ROUND_SECS: u64 = 45;
 /// Frames per second drawn while the window doesn't have the focus.
 const UNFOCUSED_FPS: u32 = 30;
 
-/// How long the quick retry key is held for the map to restart (ms).
 /// How long the exit question takes to slide in.
 const QUIT_SLIDE_MS: f32 = 160.0;
+
+/// A manual restart waiting for its fade to finish.
+struct RestartDelay {
+    entry: usize,
+    from: Option<f64>,
+    at: Option<Instant>,
+    held: Option<keys::Chord>,
+    released: Option<(Instant, f32)>,
+}
+
+/// How long the quick retry key is held before requesting a restart (ms).
 const RETRY_HOLD_MS: f64 = 150.0;
 /// A replay's music made at another speed, and that speed.
 type ReplayMusic = Result<(Arc<Track>, f64), String>;

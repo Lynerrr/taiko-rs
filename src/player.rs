@@ -997,15 +997,33 @@ impl Player {
                 0x6f6f86,
             )
         } else {
-            (format!("{filter}_"), 0xffffff)
+            (filter.clone(), 0xffffff)
         };
-        c.text(
-            x0 + 7.0,
-            list_top() + (search_h - text_size) / 2.0,
-            text_size,
-            rgba(col, 1.0),
-            &Canvas::fit_end(text_size, list_w() - 14.0, &text),
-        );
+        if self.searching {
+            c.input(
+                crate::text_input::Field::PlayerSearch,
+                [
+                    x0 + 7.0,
+                    list_top() + (search_h - text_size) / 2.0,
+                    list_w() - 14.0,
+                    text_size + 2.0,
+                ],
+                text_size,
+                &filter,
+                "",
+                rgba(0xffffff, 1.0),
+                false,
+                true,
+            );
+        } else {
+            c.text(
+                x0 + 7.0,
+                list_top() + (search_h - text_size) / 2.0,
+                text_size,
+                rgba(col, 1.0),
+                &Canvas::fit_end(text_size, list_w() - 14.0, &text),
+            );
+        }
         c.hit(x0, list_top(), list_w(), search_h, Hit::PlayerSearch);
 
         let top = list_top() + search_h + 4.0;

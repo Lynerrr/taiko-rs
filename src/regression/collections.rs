@@ -544,6 +544,9 @@ mod in_song_select {
         type_text(&mut s, "WARM UP", now);
         press(&mut s, KeyCode::Enter, now);
         step(&mut s, now, &mut log, "a name taken already");
+        s.modifiers_ctrl = true;
+        press(&mut s, KeyCode::KeyA, now);
+        s.modifiers_ctrl = false;
         press(&mut s, KeyCode::Delete, now);
         type_text(&mut s, "dans", now);
         press(&mut s, KeyCode::Enter, now);

@@ -1074,7 +1074,7 @@ fn the_guide_rebinds_the_drum_like_settings_do() {
     // What Settings refuses, this does too.
     s.guide_action(guide::Action::Bind(2));
     let preset = s.cfg.preset_keys[0];
-    key(&mut s, preset);
+    key(&mut s, preset.key);
     assert_eq!(s.cfg.keys[2], d[2]);
 }
 
@@ -1837,7 +1837,8 @@ fn hotkeys_can_be_moved_and_removed() {
             key: KeyCode::KeyK,
             ctrl: true,
             shift: false,
-            alt: false
+            alt: false,
+            super_key: false
         })
     );
     s.key(KeyCode::Enter, false, None, now, None);
@@ -2672,7 +2673,7 @@ fn pointing_at_a_main_menu_note_selects_it() {
 }
 
 /// In a song of the test library, with `paused` or not.
-fn in_a_song(paused: bool) -> State {
+pub(crate) fn in_a_song(paused: bool) -> State {
     let mut s = layout_tests::state();
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.play_when_scanned = false;

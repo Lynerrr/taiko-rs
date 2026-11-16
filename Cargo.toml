@@ -31,6 +31,7 @@ winit = "0.30"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 fontdb = "0.24.0"
 fontdue = "0.9.5"
+unicode-segmentation = "1.13.3"
 
 # Drag and drop on Wayland, which winit 0.30 doesn't do: a data device of our own on winit's
 # connection (src/wayland_dnd.rs). The versions winit already uses.

@@ -3603,6 +3603,7 @@ dependencies = [
  "taiko-logic",
  "taiko-proto",
  "taiko-recalc",
+ "unicode-segmentation",
  "ureq",
  "wayland-backend",
  "wayland-client",

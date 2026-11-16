@@ -59,6 +59,7 @@ pub enum Item {
     HideGreat,
     /// Sudden Death / Perfect fails start the map over (`Config::fail_restart`).
     FailRestart,
+    InstantRestart,
     ChatFilter,
     MessageSound,
     NotifyPlaying,
@@ -129,7 +130,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 139] = [
+pub const ITEMS: [(&str, Item); 140] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -151,6 +152,7 @@ pub const ITEMS: [(&str, Item); 139] = [
     ("GAMEPLAY", Item::AutoplayStyle),
     ("GAMEPLAY", Item::AutoplayBinding),
     ("GAMEPLAY", Item::AutoplayLeftHanded),
+    ("GAMEPLAY", Item::InstantRestart),
     ("VIEW", Item::PlayfieldArea),
     ("VIEW", Item::InterfaceEditor),
     ("VIEW", Item::PlayfieldPreset),
@@ -570,6 +572,7 @@ impl Item {
                 "本当のノーツを表示",
                 "Показывать настоящие ноты"
             ),
+            Item::InstantRestart => tr!("Instant restart", "即時リトライ", "Мгновенный рестарт"),
             Item::FailRestart => tr!(
                 "Restart on SD/PF fail",
                 "SD/PF失敗で即リトライ",
@@ -789,6 +792,7 @@ impl Item {
             | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::FailRestart
+            | Item::InstantRestart
             | Item::TrueNotes
             | Item::CalmMaps
             | Item::HitFlash
@@ -929,9 +933,9 @@ impl Item {
                 "Что прячется вместе с интерфейсом. Enter открывает список; Enter или клик отмечает часть."
             ),
             Item::InterfaceKey => tr!(
-                "Enter, then press the key (with Shift or not) that shows / hides the interface in a song. Delete: none.",
-                "Enterを押してから、曲中にインターフェースを出し入れするキー (Shiftも可) を押す。Delete: なし。",
-                "Enter, затем клавиша (можно с Shift), что прячет / показывает интерфейс в песне. Delete: нет."
+                "Enter, then press a key or modifier combination to show / hide the interface in a song. Delete: none.",
+                "Enterを押してから、曲中にインターフェースを出し入れするキー (Ctrl / Alt / Shift / Superも可) を押す。Delete: なし。",
+                "Enter, затем клавиша (Ctrl / Alt / Shift / Super тоже можно), что прячет / показывает интерфейс в песне. Delete: нет."
             ),
             Item::Key(_) => tr!(
                 "Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.",
@@ -939,14 +943,14 @@ impl Item {
                 "Enter, затем новая клавиша (Delete: нет, Esc: отмена). Backspace: по умолчанию."
             ),
             Item::PresetKey(_) => tr!(
-                "Steps through playfield presets anywhere (also in game). Enter, then press a key. Delete: none.",
-                "どこでも (プレイ中も) プレイフィールドのプリセットを切り替えます。Enterの後にキー。Delete: なし。",
-                "Листает пресеты поля везде (и в игре). Enter, затем клавиша. Delete: нет."
+                "Steps through playfield presets anywhere (also in game). Enter, then press a key or modifier combination. Delete: none.",
+                "どこでも (プレイ中も) プレイフィールドのプリセットを切り替えます。Enterの後にキーか修飾キーの組み合わせ。Delete: なし。",
+                "Листает пресеты поля везде (и в игре). Enter, затем клавиша или комбинация с модификаторами. Delete: нет."
             ),
             Item::Hotkey(_) => tr!(
-                "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
-                "Enterの後に新しいキー (Ctrl / Alt / Shiftも可)。Delete: なし、Esc: 取消。Backspace: 初期設定。",
-                "Enter, затем новая клавиша, можно с Ctrl / Alt / Shift (Delete: нет, Esc: отмена). Backspace: исходная."
+                "Enter, then press the new key, Ctrl / Alt / Shift / Super (Cmd) too (Delete: none, Esc: cancel). Backspace: the default.",
+                "Enterの後に新しいキー (Ctrl / Alt / Shift / Super (Cmd)も可)。Delete: なし、Esc: 取消。Backspace: 初期設定。",
+                "Enter, затем новая клавиша, можно с Ctrl / Alt / Shift / Super (Cmd) (Delete: нет, Esc: отмена). Backspace: исходная."
             ),
             Item::UiFont => tr!(
                 "Choose an installed font, or the built-in pixel font. Missing characters use the built-in font.",
@@ -1042,6 +1046,11 @@ impl Item {
                 "Some .tko maps draw notes as another colour or size until just before the hit. On: every note shows what it is.",
                 "一部の.tko譜面は叩く直前までノーツを別の色や大きさで描きます。オン: すべてのノーツが本当の姿で表示されます。",
                 "Некоторые .tko-карты рисуют ноты другим цветом или размером почти до самого удара. Вкл.: каждая нота видна такой, какая она есть."
+            ),
+            Item::InstantRestart => tr!(
+                "On: restart immediately. Off: hold restart for two seconds while the screen darkens. Release to cancel and fade back in.",
+                "オン: 即座にリトライ。オフ: リトライを2秒間押し続けると暗転してリトライ。離すとキャンセルして明るさが戻ります。",
+                "Вкл: повтор сразу. Выкл: удерживайте рестарт две секунды до полного затемнения. Отпустите, чтобы отменить рестарт и плавно убрать затемнение."
             ),
             Item::FailRestart => tr!(
                 "When Sudden Death or Perfect fails a play, the map starts over straight away instead of going to the results.",
@@ -1260,7 +1269,11 @@ impl Item {
                 "起動のたびに新しいビルドを探してすぐに入れ (メニューにいるときに自動で再起動します)、選んだ曲のosu!での新しい版も探します。",
                 "Искать новую сборку при каждом запуске и сразу ставить её (игра перезапустится сама, когда вы в меню), а также новые версии выбранных песен на osu!."
             ),
-            Item::Fullscreen => tr!("Shortcut: F11.", "ショートカット: F11。", "Клавиша: F11."),
+            Item::Fullscreen => tr!(
+                "F11 or Alt+Enter. Rebind in Input > Fullscreen.",
+                "F11 または Alt+Enter。入力設定で変更できます。",
+                "F11 или Alt+Enter. Переназначение: Ввод > Полный экран."
+            ),
             Item::WindowSize => tr!(
                 "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
                 "Enter: サイズを選ぶ (入力も可)。左/右: 次のサイズ。ウィンドウの端のドラッグでも変えられます。",
@@ -1643,7 +1656,6 @@ impl Dropdown {
             self.follow = Follow::Stay;
         }
         self.rows.clear();
-        let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
             c.round_rect(
                 [bx + 8.0, ry],
@@ -1653,13 +1665,15 @@ impl Dropdown {
                 rgba(0xFFD34D, 1.0),
                 1.0,
             );
-            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
-            c.rect(
-                bx + 22.0 + caret_x(7.0, text, caret),
-                ry + 2.5,
-                1.0,
-                9.0,
+            c.input(
+                crate::text_input::Field::Resolution,
+                [bx + 22.0, ry + 3.5, (bw - 120.0).max(20.0), 9.0],
+                7.0,
+                text,
+                "",
                 rgba(0xFFD34D, 1.0),
+                false,
+                true,
             );
             c.text_right(
                 bx + bw - 22.0,
@@ -1977,24 +1991,15 @@ impl Choices {
         );
         c.hit(x, y, w, h, Hit::ChoiceSearch);
         let placeholder = tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...");
-        let text = if self.search.is_empty() {
-            placeholder
-        } else {
-            &self.search
-        };
-        c.text(
-            x + 8.0,
-            y + (h - size) / 2.0,
+        c.input(
+            crate::text_input::Field::FontSearch,
+            [x + 8.0, y + (h - size) / 2.0, w - 16.0, size + 2.0],
             size,
-            rgba(
-                if self.search.is_empty() {
-                    0x8a8aa0
-                } else {
-                    0xffffff
-                },
-                1.0,
-            ),
-            &Canvas::fit_end(size, w - 16.0, text),
+            &self.search,
+            placeholder,
+            rgba(0xffffff, 1.0),
+            false,
+            true,
         );
     }
 
@@ -2402,10 +2407,7 @@ impl SettingsUi {
             1.0,
         );
         let (text, col_text) = if searching {
-            (
-                Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)),
-                0xffffff,
-            )
+            (Canvas::fit_end(8.0, box_w - 18.0, &self.search), 0xffffff)
         } else {
             (
                 Canvas::fit(
@@ -2420,7 +2422,24 @@ impl SettingsUi {
                 0x6f6f86,
             )
         };
-        c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
+        if self.binding.is_none()
+            && self.editing.is_none()
+            && self.choices.is_none()
+            && self.dropdown.is_none()
+        {
+            c.input(
+                crate::text_input::Field::SettingsSearch,
+                [box_x + 9.0, TOP - 1.5, box_w - 18.0, 10.0],
+                8.0,
+                &self.search,
+                &text,
+                rgba(0xffffff, 1.0),
+                false,
+                true,
+            );
+        } else {
+            c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
+        }
         c.hit(box_x, TOP - 7.0, box_w, 19.0, Hit::SettingsSearch);
 
         let listing = if searching { RESULTS } else { section };
@@ -2649,28 +2668,15 @@ impl SettingsUi {
                 rgba(0xFFD34D, 1.0),
                 1.0,
             );
-            if edit.fresh && !text.is_empty() {
-                c.rect(
-                    right - 7.0 - tw,
-                    y + 7.0,
-                    tw + 2.0,
-                    ROW - 18.0,
-                    rgba(accent(), 0.45),
-                );
-            }
-            c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
-            // At the caret in the text (at the end when the start was cut off to fit).
-            let at = if text == edit.text {
-                caret_x(8.0, &text, edit.caret)
-            } else {
-                tw
-            };
-            c.rect(
-                right - 6.0 - tw + at,
-                y + 7.0,
-                1.0,
-                ROW - 18.0,
+            c.input(
+                crate::text_input::Field::Setting(edit.item),
+                [right - 6.0 - tw, y + 9.5, bw - 18.0, 10.0],
+                8.0,
+                &edit.text,
+                "",
                 rgba(0xFFD34D, 1.0),
+                false,
+                true,
             );
             return;
         }

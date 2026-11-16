@@ -2988,6 +2988,8 @@ impl<H> HitBox<H> {
 /// is (see `HitBox`).
 pub struct Canvas<H> {
     pub shapes: Vec<Shape>,
+    pub(crate) input_editor: Option<(crate::text_input::Field, crate::text_input::TextInput)>,
+    pub(crate) input_regions: Vec<crate::text_input::Region>,
     /// The music player's disc: centre, radius, angle (drawn under every shape, see `DISC_SHADER`).
     pub disc: Option<[f32; 4]>,
     /// The whole picture glitches this frame: how much (0 to 1) and a number picking how.
@@ -3031,6 +3033,8 @@ impl<H> Default for Canvas<H> {
     fn default() -> Self {
         Canvas {
             shapes: Default::default(),
+            input_editor: None,
+            input_regions: Vec::new(),
             disc: Default::default(),
             glitch: Default::default(),
             width: Default::default(),
@@ -3230,6 +3234,8 @@ pub fn rotate_shapes(
 impl<H> Canvas<H> {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
+        self.input_editor = None;
+        self.input_regions.clear();
         self.avatars_wanted.clear();
         self.pictures_wanted.clear();
         self.picture_times.clear();
@@ -3837,6 +3843,11 @@ impl<H> Canvas<H> {
             params: [r, 0.0, softness, 0.0],
             angle: 0.0,
         });
+    }
+
+    /// A visible insertion point, including an empty focused field.
+    pub fn caret(&mut self, x: f32, y: f32, size: f32, color: [f32; 4]) {
+        self.rect(x, y - 1.0, 1.0, Self::text_height(size) + 2.0, color);
     }
 
     /// Draws text with the built-in fonts; `size` is the glyph height. Returns the advance width.

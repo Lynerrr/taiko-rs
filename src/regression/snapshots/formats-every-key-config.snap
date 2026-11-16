@@ -76,6 +76,7 @@ kiai_effects = false
 hide_great = false
 # a play failed by Sudden Death or Perfect starts over at once
 fail_restart = true
+instant_restart = false
 # the lane and the drum's panel pure black
 black_lane = true
 # .tko notes drawn as what they are, whatever colour or size their map shows them as
