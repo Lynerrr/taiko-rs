@@ -211,3 +211,58 @@ fn double_click_selects_a_word_and_triple_click_selects_the_whole_line() {
     e.click(offset, false, at + Duration::from_millis(200));
     assert_eq!(e.selected(), e.text);
 }
+
+/// Song setup in the map editor (Discord: "can't use IME or keyboard shortcuts in the song setup
+/// menu"): its boxes let the input method in and edit at a caret like the game's other boxes,
+/// with arrows, Home/End, Ctrl+A, copy and paste.
+#[test]
+fn song_setup_boxes_take_the_input_method_arrows_and_shortcuts() {
+    use editor::setup::Key;
+    use editor::view::{Btn, Field as EdField, Keys, View};
+    clipboard::fake_for_this_thread();
+    let dir = std::env::temp_dir().join(format!("taiko-rs-setup-typing-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("map.osu");
+    std::fs::write(&path, crate::editor::chart::tests::MAP).unwrap();
+    let mut s = harness::state_with(harness::config(), Vec::new());
+    harness::frame(&mut s, Instant::now());
+    s.scene = MapEditor::scene(Box::new(View::open(path, 0).unwrap()));
+    assert!(
+        !s.takes_text(),
+        "the editor's keys are its own until a box is typed into"
+    );
+    s.scene.screen_mut::<MapEditor>().unwrap().view.press(
+        Btn::Edit(EdField::Meta(Key::Title)),
+        Keys::default(),
+        None,
+    );
+    assert!(s.takes_text(), "a Song setup box lets the input method in");
+    let title = |s: &State| {
+        s.scene
+            .screen_as::<MapEditor>()
+            .unwrap()
+            .view
+            .ed
+            .setting(Key::Title)
+    };
+    // The box opens with its text selected: End keeps it, Home goes before it.
+    press(&mut s, "End", None);
+    press(&mut s, "Digit1", Some("!"));
+    press(&mut s, "Home", None);
+    press(&mut s, "KeyA", Some("A "));
+    press(&mut s, "ArrowRight", None);
+    press(&mut s, "Delete", None);
+    harness::frame(&mut s, Instant::now());
+    press(&mut s, "Shift+End", None);
+    press(&mut s, "Ctrl+C", None);
+    assert_eq!(clipboard::get().as_deref(), Some("st!"));
+    // What the input method composes comes as text of its own (`Ime::Commit`).
+    press(&mut s, "Ctrl+A", None);
+    s.key(KeyCode::Lang1, false, Some("曲"), Instant::now(), None);
+    press(&mut s, "Ctrl+V", None);
+    harness::frame(&mut s, Instant::now());
+    press(&mut s, "Enter", None);
+    assert_eq!(title(&s), "曲st!");
+    assert!(!s.takes_text(), "Enter keeps the text and leaves the box");
+    let _ = std::fs::remove_dir_all(&dir);
+}

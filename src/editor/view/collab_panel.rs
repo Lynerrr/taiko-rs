@@ -1330,10 +1330,7 @@ impl View {
 
     /// The box to type a chat line or a comment in: what is typed, or a hint to click.
     fn draw_say(&self, c: &mut Canvas, ui: &mut Ui, r: [f32; 4], to: Say) {
-        let typed = match &self.typing {
-            Some((Field::Say(t), text)) if *t == to => Some(text.clone()),
-            _ => None,
-        };
+        let typed = self.typed_line(Field::Say(to));
         c.round_rect(
             [r[0], r[1]],
             [r[2], r[3]],
@@ -1343,7 +1340,7 @@ impl View {
             1.0,
         );
         let (text, col) = match typed {
-            Some(t) => (format!("{t}_"), 0xffffff),
+            Some(t) => (t, 0xffffff),
             None => (
                 match to {
                     Say::Chat => tr!(

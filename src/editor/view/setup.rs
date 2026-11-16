@@ -33,17 +33,49 @@ pub fn next_text(k: Key, back: bool, edit: bool) -> Key {
     order[if back { (at + n - 1) % n } else { (at + 1) % n }]
 }
 
-/// `s` cut from the front until it fits `w` (the end of what is being typed stays in sight).
-fn tail(size: f32, w: f32, s: &str) -> String {
-    if Canvas::text_width(size, s) <= w {
-        return s.to_string();
+/// Text being typed in a box `room` wide at (`x`, `y`): scrolled so the caret stays in sight,
+/// the selection shaded and the caret drawn (byte offsets, as `TextInput` keeps them).
+fn typed_box(
+    c: &mut Canvas,
+    [x, y, room]: [f32; 3],
+    size: f32,
+    text: &str,
+    caret: usize,
+    sel: std::ops::Range<usize>,
+) {
+    use unicode_segmentation::UnicodeSegmentation;
+    // Where each grapheme boundary falls, from the start of the text.
+    let mut stops = vec![(0, 0.0)];
+    let mut advance = 0.0;
+    for (i, g) in text.grapheme_indices(true) {
+        advance += Canvas::text_width(size, g);
+        stops.push((i + g.len(), advance));
     }
-    let mut cut: Vec<char> = s.chars().collect();
-    while !cut.is_empty() && Canvas::text_width(size, &format!("..{}", String::from_iter(&cut))) > w
-    {
-        cut.remove(0);
+    let at = |i: usize| stops.iter().find(|s| s.0 == i).map_or(advance, |s| s.1);
+    let scroll = (at(caret) - room + 2.0).max(0.0);
+    let start = stops
+        .iter()
+        .find(|s| s.1 >= scroll)
+        .map_or(text.len(), |s| s.0);
+    let left = at(start);
+    let end = stops
+        .iter()
+        .rev()
+        .find(|s| s.0 >= start && s.1 - left <= room)
+        .map_or(start, |s| s.0);
+    if !sel.is_empty() {
+        let a = (at(sel.start) - left).clamp(0.0, room);
+        let b = (at(sel.end) - left).clamp(0.0, room);
+        c.rect(
+            x + a - 1.0,
+            y - 1.5,
+            b - a + 2.0,
+            size + 3.0,
+            rgba(accent(), 0.45),
+        );
     }
-    format!("..{}", String::from_iter(&cut))
+    c.text(x, y, size, rgba(0xffffff, 1.0), &text[start..end]);
+    c.caret(x + at(caret) - left, y, size, rgba(0xffffff, 1.0));
 }
 
 // Only the regression suite (Linux only) opens it this way.
@@ -117,10 +149,9 @@ impl View {
 
     /// A box that shows a setting and takes a click to type into it.
     fn setting_box(&mut self, c: &mut Canvas, [x, y, w, h]: [f32; 4], k: Key) {
-        let typing = match &self.typing {
-            Some((Field::Meta(t), text)) if *t == k => Some(text.clone()),
-            _ => None,
-        };
+        let typing = self
+            .typed(Field::Meta(k))
+            .map(|(text, caret, sel)| (text.to_string(), caret, sel));
         let hover = c.hovered(x, y, w, h);
         let border = if typing.is_some() {
             accent()
@@ -140,22 +171,7 @@ impl View {
         let size = 7.0;
         let (tx, ty, room) = (x + 5.0, y + (h - size) / 2.0, w - 10.0);
         match typing {
-            Some(text) if self.typing_fresh => {
-                let shown = tail(size, room, &text);
-                let sw = Canvas::text_width(size, &shown);
-                c.rect(
-                    tx - 1.0,
-                    ty - 1.5,
-                    sw + 2.0,
-                    size + 3.0,
-                    rgba(accent(), 0.45),
-                );
-                c.text(tx, ty, size, rgba(0xffffff, 1.0), &shown);
-            }
-            Some(text) => {
-                let shown = tail(size, room, &format!("{text}_"));
-                c.text(tx, ty, size, rgba(0xffffff, 1.0), &shown);
-            }
+            Some((text, caret, sel)) => typed_box(c, [tx, ty, room], size, &text, caret, sel),
             None => {
                 let v = self.ed.setting(k);
                 if v.is_empty() {

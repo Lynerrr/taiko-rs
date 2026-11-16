@@ -973,12 +973,12 @@ impl View {
         ];
         match &layer.show {
             Show::Text { text } => {
-                let shown = match &self.typing {
-                    Some((Field::FxText, t)) if self.typing_fresh => {
+                let shown = match self.typed(Field::FxText) {
+                    Some((t, _, sel)) if !t.is_empty() && sel == (0..t.len()) => {
                         format!("{t}  (type to replace)")
                     }
-                    Some((Field::FxText, t)) => format!("{t}_"),
-                    _ => format!("{text}  (click to type)"),
+                    Some(_) => self.typed_line(Field::FxText).unwrap_or_default(),
+                    None => format!("{text}  (click to type)"),
                 };
                 row.push((shown, Btn::Edit(Field::FxText), self.typing.is_some()));
             }
