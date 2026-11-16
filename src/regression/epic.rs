@@ -184,7 +184,7 @@ fn only_an_admin_marks_maps_epic_and_the_server_hears_it() {
         s.select
             .menu_items(&s.library)
             .into_iter()
-            .map(|(label, _)| label)
+            .map(|it| it.label)
             .collect()
     };
     assert!(
@@ -209,12 +209,36 @@ fn only_an_admin_marks_maps_epic_and_the_server_hears_it() {
     s.cfg.online_token = "admin-token".into();
     s.select.admin = true;
     let version = s.library[i].meta.version.clone();
-    let items = labels(&s);
-    let mark = format!("Mark [{version}] EPIC");
-    assert!(items.contains(&mark), "{items:?}");
-    assert!(items.contains(&"Mark the whole set EPIC".to_string()));
+    // One EPIC row, a button for the difficulty and one for its whole set.
+    let epic = |s: &State| -> Vec<(usize, Option<ui::MenuScope>, bool, ui::MenuAction)> {
+        s.select
+            .menu_items(&s.library)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, it)| it.label == "EPIC")
+            .map(|(k, it)| (k, it.scope, it.on, it.action))
+            .collect()
+    };
+    let row = epic(&s);
+    assert_eq!(
+        row.iter()
+            .map(|&(_, s, on, a)| (s, on, a))
+            .collect::<Vec<_>>(),
+        [
+            (
+                Some(ui::MenuScope::Difficulty),
+                false,
+                ui::MenuAction::Epic(true, true)
+            ),
+            (
+                Some(ui::MenuScope::Set),
+                false,
+                ui::MenuAction::Epic(true, false)
+            ),
+        ]
+    );
 
-    let k = items.iter().position(|l| *l == mark).unwrap();
+    let k = row[0].0;
     s.click(Hit::SongMenu(k), None);
     assert!(wait_for(&mut s, &mut now, |s| s.epic_call.is_idle()));
     match heard.lock().unwrap().as_slice() {
@@ -243,10 +267,23 @@ fn only_an_admin_marks_maps_epic_and_the_server_hears_it() {
 
     // Marked now: the menu offers to take it off instead.
     open_menu(&mut s);
-    let items = labels(&s);
-    assert!(
-        items.contains(&format!("Take EPIC off [{version}]")),
-        "{items:?}"
+    let row = epic(&s);
+    assert_eq!(
+        row.iter()
+            .map(|&(_, s, on, a)| (s, on, a))
+            .collect::<Vec<_>>(),
+        [
+            (
+                Some(ui::MenuScope::Difficulty),
+                true,
+                ui::MenuAction::Epic(false, true)
+            ),
+            (
+                Some(ui::MenuScope::Set),
+                false,
+                ui::MenuAction::Epic(true, false)
+            ),
+        ]
     );
 }
 

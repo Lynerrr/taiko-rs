@@ -264,7 +264,7 @@ fn the_song_menu_offers_deleting_a_difficulty_and_its_set() {
         s.select
             .menu_items(&s.library)
             .iter()
-            .position(|(_, a)| *a == action)
+            .position(|it| it.action == action)
             .expect("the song menu offers it")
     };
 

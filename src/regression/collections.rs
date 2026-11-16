@@ -460,8 +460,8 @@ mod in_song_select {
         }
     }
 
-    /// The song menu's item `what` ("Collect ...") on the selected difficulty's row.
-    fn menu_item(s: &mut State, starts: &str) {
+    /// The song menu's item `action` on the selected difficulty's row.
+    fn menu_item(s: &mut State, action: ui::MenuAction) {
         let row = s.select.cursor();
         s.select.menu = Some(ui::SongMenu {
             previous: None,
@@ -475,8 +475,8 @@ mod in_song_select {
             .select
             .menu_items(&s.library)
             .iter()
-            .position(|(label, _)| label.starts_with(starts))
-            .unwrap_or_else(|| panic!("no {starts:?} in the song menu"));
+            .position(|it| it.action == action)
+            .unwrap_or_else(|| panic!("no {action:?} in the song menu"));
         s.click(Hit::SongMenu(k), None);
     }
 
@@ -516,7 +516,7 @@ mod in_song_select {
         step(&mut s, now, &mut log, "Ctrl+L with no collections yet");
         press(&mut s, KeyCode::Escape, now);
 
-        menu_item(&mut s, "Collect [");
+        menu_item(&mut s, ui::MenuAction::Collect(false));
         step(&mut s, now, &mut log, "Collect from the song menu");
         press(&mut s, KeyCode::Enter, now);
         step(&mut s, now, &mut log, "+ New collection");
@@ -525,7 +525,7 @@ mod in_song_select {
         step(&mut s, now, &mut log, "named and saved");
 
         select_version(&mut s, now, &second);
-        menu_item(&mut s, "Collect [");
+        menu_item(&mut s, ui::MenuAction::Collect(false));
         s.click(Hit::PickRow(0), None);
         step(
             &mut s,
@@ -534,7 +534,7 @@ mod in_song_select {
             "a second difficulty put in it with a click",
         );
 
-        menu_item(&mut s, "Collect [");
+        menu_item(&mut s, ui::MenuAction::Collect(false));
         press(&mut s, KeyCode::Enter, now);
         step(&mut s, now, &mut log, "put in again: taken out");
 

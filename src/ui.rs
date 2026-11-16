@@ -1571,96 +1571,61 @@ impl Select {
         off
     }
 
-    pub fn menu_items(&self, library: &[Entry]) -> Vec<(String, MenuAction)> {
+    /// The right-click menu's items, in drawing order. Items next to each other with the same
+    /// label and part share a row, each a button of its own for its scope (`MenuScope`).
+    pub fn menu_items(&self, library: &[Entry]) -> Vec<MenuItem> {
         let Some(m) = &self.menu else {
             return Vec::new();
         };
         let Some(&i) = self.visible.get(m.row) else {
             return Vec::new();
         };
-        let fit = |s: String| {
-            if s.chars().count() > 30 {
-                s.chars().take(27).collect::<String>() + "..."
-            } else {
-                s
-            }
-        };
+        let e = &library[i];
         let mut items = Vec::new();
-        let title = &library[i].meta.title;
-        let liked = self.is_liked(&library[i]);
-        items.push((
-            fit(if liked {
-                format!("Unlike {title}")
-            } else {
-                format!("Like {title}")
-            }),
+        let mut add = |label: String, scope, on, part, action| {
+            items.push(MenuItem {
+                label,
+                scope,
+                on,
+                part,
+                action,
+            })
+        };
+        let (own, online, delete) = (MenuPart::Own, MenuPart::Online, MenuPart::Delete);
+        let (one, set) = (Some(MenuScope::Difficulty), Some(MenuScope::Set));
+        let liked = self.is_liked(e);
+        add(
+            if liked { "Unlike" } else { "Like" }.into(),
+            None,
+            false,
+            own,
             MenuAction::Like,
-        ));
+        );
         if !m.header {
-            items.push((
-                fit(format!("Edit [{}]", library[i].meta.version)),
-                MenuAction::Edit,
-            ));
-            items.push((
-                fit(format!("New difficulty from [{}]", library[i].meta.version)),
+            add("Edit".into(), None, false, own, MenuAction::Edit);
+            add(
+                "New difficulty from this".into(),
+                None,
+                false,
+                own,
                 MenuAction::NewDifficulty,
-            ));
-        }
-        if !m.header {
-            items.push((
-                fit(format!("Collect [{}]", library[i].meta.version)),
+            );
+            add(
+                "Collect".into(),
+                one,
+                false,
+                own,
                 MenuAction::Collect(false),
-            ));
+            );
         }
-        items.push((
-            fit(format!("Collect {}", library[i].meta.title)),
-            MenuAction::Collect(true),
-        ));
-        if !m.header {
-            items.push((
-                tr!("Delete difficulty", "難易度を削除", "Удалить сложность").to_string(),
-                MenuAction::DeleteDifficulty,
-            ));
-        }
-        items.push((
-            tr!("Delete beatmapset", "譜面セットを削除", "Удалить мапсет").to_string(),
-            MenuAction::DeleteSet,
-        ));
-        if let Some(set) = library[i].set_id().filter(|_| self.nominator) {
-            let version = &library[i].meta.version;
-            match self.server_loved.get(&set) {
-                Some(versions) if versions.is_empty() => items.push((
-                    "Unlove on taiko.rs".into(),
-                    MenuAction::Love(set, false, false),
-                )),
-                Some(versions) if !m.header && covers(versions, version) => items.push((
-                    fit(format!("Unlove [{version}] on taiko.rs")),
-                    MenuAction::Love(set, false, true),
-                )),
-                _ if !m.header => items.push((
-                    fit(format!("Love [{version}] on taiko.rs (gives pp)")),
-                    MenuAction::Love(set, true, true),
-                )),
-                _ => {}
-            }
-            // The whole set: every difficulty, its rate edits too.
-            if self.server_loved.get(&set).is_none_or(|v| !v.is_empty()) {
-                items.push((
-                    "Love the whole set on taiko.rs".into(),
-                    MenuAction::Love(set, true, false),
-                ));
-            }
-        }
-        if self.admin {
-            items.extend(self.epic_items(&library[i], m.header));
-        }
-        if library[i].set_id().is_some() || self.custom_id(&library[i]).is_some() {
-            let label = match self.update_of(&library[i]) {
-                Some(SetUpdate::Updating) => "Updating...".to_string(),
-                Some(SetUpdate::Available) => format!("Update {}", library[i].meta.title),
-                _ => format!("Download {} again", library[i].meta.title),
+        add("Collect".into(), set, false, own, MenuAction::Collect(true));
+        if e.set_id().is_some() || self.custom_id(e).is_some() {
+            let label = match self.update_of(e) {
+                Some(SetUpdate::Updating) => "Updating...",
+                Some(SetUpdate::Available) => "Update",
+                _ => "Download again",
             };
-            items.push((fit(label), MenuAction::UpdateSong));
+            add(label.into(), None, false, own, MenuAction::UpdateSong);
         }
         if let Some(version) = m.previous {
             let label = match version {
@@ -1676,87 +1641,79 @@ impl Select {
                     "Прошлая версия (v{v})"; [] [v]
                 ),
             };
-            items.push((fit(label), MenuAction::PreviousVersion));
+            add(label, None, false, own, MenuAction::PreviousVersion);
         }
         if m.skin {
-            let off = library[i]
-                .path
-                .parent()
-                .is_some_and(|d| self.map_skin_off(d));
-            items.push((
-                if off {
-                    tr!(
-                        "Use this map's skin",
-                        "この譜面のスキンを使う",
-                        "Включить скин карты"
-                    )
-                } else {
-                    tr!(
-                        "Turn off this map's skin",
-                        "この譜面のスキンをオフ",
-                        "Выключить скин карты"
-                    )
-                }
-                .to_string(),
-                MenuAction::MapSkin,
-            ));
-        }
-        items
-    }
-
-    /// The admin's EPIC items for map `e` in the right-click menu (`header`: opened on its song).
-    fn epic_items(&self, e: &Entry, header: bool) -> Vec<(String, MenuAction)> {
-        // Cut as the rest of the menu is.
-        let fit = |s: String| {
-            if s.chars().count() > 30 {
-                s.chars().take(27).collect::<String>() + "..."
+            let off = e.path.parent().is_some_and(|d| self.map_skin_off(d));
+            let label = if off {
+                tr!(
+                    "Use this map's skin",
+                    "この譜面のスキンを使う",
+                    "Включить скин карты"
+                )
             } else {
-                s
+                tr!(
+                    "Turn off this map's skin",
+                    "この譜面のスキンをオフ",
+                    "Выключить скин карты"
+                )
+            };
+            add(label.to_string(), None, false, own, MenuAction::MapSkin);
+        }
+        if let Some(id) = e.set_id().filter(|_| self.nominator) {
+            // Loved whole, there's no one difficulty of it to take back.
+            let versions = self.server_loved.get(&id);
+            let whole = versions.is_some_and(|v| v.is_empty());
+            if !m.header && !whole {
+                let on = versions.is_some_and(|v| covers(v, &e.meta.version));
+                add(
+                    "Love".into(),
+                    one,
+                    on,
+                    online,
+                    MenuAction::Love(id, !on, true),
+                );
             }
-        };
-        let version = &e.meta.version;
-        let mut items = Vec::new();
-        if let Some(id) = self.custom_id(e) {
-            let on = self.server_epic.custom.contains(&id);
-            items.push((
-                if on {
-                    "Take EPIC off this custom set".to_string()
-                } else {
-                    "Mark this custom set EPIC".to_string()
-                },
-                MenuAction::Epic(!on, false),
-            ));
-            return items;
+            add(
+                "Love".into(),
+                set,
+                whole,
+                online,
+                MenuAction::Love(id, !whole, false),
+            );
         }
-        let Some(set) = e.set_id() else {
-            return items;
-        };
-        match self.server_epic.sets.get(&set) {
-            Some(versions) if versions.is_empty() => items.push((
-                "Take EPIC off the whole set".into(),
-                MenuAction::Epic(false, false),
-            )),
-            Some(versions) if !header && covers(versions, version) => items.push((
-                fit(format!("Take EPIC off [{version}]")),
-                MenuAction::Epic(false, true),
-            )),
-            _ if !header => items.push((
-                fit(format!("Mark [{version}] EPIC")),
-                MenuAction::Epic(true, true),
-            )),
-            _ => {}
+        if self.admin {
+            if let Some(id) = self.custom_id(e) {
+                // A custom set is marked whole.
+                let on = self.server_epic.custom.contains(&id);
+                add("EPIC".into(), set, on, online, MenuAction::Epic(!on, false));
+            } else if let Some(id) = e.set_id() {
+                let versions = self.server_epic.sets.get(&id);
+                let whole = versions.is_some_and(|v| v.is_empty());
+                if !m.header && !whole {
+                    let on = versions.is_some_and(|v| covers(v, &e.meta.version));
+                    add("EPIC".into(), one, on, online, MenuAction::Epic(!on, true));
+                }
+                add(
+                    "EPIC".into(),
+                    set,
+                    whole,
+                    online,
+                    MenuAction::Epic(!whole, false),
+                );
+            }
         }
-        if self
-            .server_epic
-            .sets
-            .get(&set)
-            .is_none_or(|v| !v.is_empty())
-        {
-            items.push((
-                "Mark the whole set EPIC".into(),
-                MenuAction::Epic(true, false),
-            ));
+        let label = tr!("Delete", "削除", "Удалить").to_string();
+        if !m.header {
+            add(
+                label.clone(),
+                one,
+                false,
+                delete,
+                MenuAction::DeleteDifficulty,
+            );
         }
+        add(label, set, false, delete, MenuAction::DeleteSet);
         items
     }
 
@@ -3228,6 +3185,66 @@ pub struct Naming {
     pub then: NameFor,
 }
 
+/// Which maps a song menu item acts on, when its row has a button for each.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MenuScope {
+    Difficulty,
+    Set,
+}
+
+impl MenuScope {
+    /// The words on its button.
+    pub fn label(self) -> &'static str {
+        match self {
+            MenuScope::Difficulty => tr!("difficulty", "難易度", "сложность"),
+            MenuScope::Set => tr!("whole set", "セット全体", "весь сет"),
+        }
+    }
+}
+
+/// The song menu's parts, drawn in this order with a line between them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MenuPart {
+    /// What the player does with the map on their computer.
+    Own,
+    /// What a loved nominator or an admin does with it on taiko.rs.
+    Online,
+    /// Deleting it, kept away from the rest at the bottom.
+    Delete,
+}
+
+/// One thing the song menu offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuItem {
+    /// Its row's words ("Collect"); the items sharing a row are told apart by `scope`.
+    pub label: String,
+    /// The button it is in its row, or none: the whole row is the item.
+    pub scope: Option<MenuScope>,
+    /// Already so for its scope (loved, EPIC): it takes that back.
+    pub on: bool,
+    pub part: MenuPart,
+    pub action: MenuAction,
+}
+
+/// The song menu's items grouped into rows: the ranges of `items` drawn on one row each.
+pub fn menu_rows(items: &[MenuItem]) -> Vec<std::ops::Range<usize>> {
+    let mut rows: Vec<std::ops::Range<usize>> = Vec::new();
+    for (k, it) in items.iter().enumerate() {
+        match rows.last_mut() {
+            Some(r)
+                if it.scope.is_some()
+                    && items[r.start].scope.is_some()
+                    && items[r.start].label == it.label
+                    && items[r.start].part == it.part =>
+            {
+                r.end = k + 1
+            }
+            _ => rows.push(k..k + 1),
+        }
+    }
+    rows
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuAction {
     /// Delete the menu's difficulty (asked first).
@@ -3323,15 +3340,51 @@ pub enum SetUpdate {
 }
 
 impl Select {
-    /// The right-click menu, next to the pointer and kept on screen.
-    fn draw_menu(&self, c: &mut Canvas, library: &[Entry]) {
+    /// The right-click menu, next to the pointer and kept on screen: the map's name once on top,
+    /// then a row per action, an action on the difficulty or the whole set with a button for each.
+    pub(crate) fn draw_menu(&self, c: &mut Canvas, library: &[Entry]) {
         // Sized for a thumb on a phone.
         let phone = crate::mobile::active();
-        let (row, size) = if phone { (44.0, 12.0) } else { (18.0, 7.0) };
         let Some(m) = &self.menu else { return };
+        let Some(&i) = self.visible.get(m.row) else {
+            return;
+        };
         let items = self.menu_items(library);
-        let bw = if phone { 340.0 } else { 200.0 };
-        let bh = items.len() as f32 * row + if phone { 12.0 } else { 26.0 };
+        let rows = menu_rows(&items);
+        let (mut row, size, pad): (f32, f32, f32) = if phone {
+            (44.0, 12.0, 10.0)
+        } else {
+            (18.0, 7.0, 6.0)
+        };
+        let (title_size, sub_size, head) = if phone {
+            (13.0, 10.0, 48.0)
+        } else {
+            (8.0, 6.0, 31.0)
+        };
+        // A line between parts, the online one with its name on it.
+        let (gap, caption) = if phone { (12.0, 24.0) } else { (7.0, 13.0) };
+        let bw = if phone { 380.0 } else { 236.0 };
+        let chip_w = [MenuScope::Difficulty, MenuScope::Set]
+            .iter()
+            .map(|s| Canvas::text_width(size, s.label()))
+            .fold(0.0, f32::max)
+            + pad * 2.0;
+        let part_gap = |p: MenuPart| match p {
+            MenuPart::Own => 0.0,
+            MenuPart::Online => caption,
+            MenuPart::Delete => gap,
+        };
+        let mut bh = head + 8.0;
+        let mut part = MenuPart::Own;
+        for r in &rows {
+            if items[r.start].part != part {
+                part = items[r.start].part;
+                bh += part_gap(part);
+            }
+        }
+        // An admin's menu on a phone has the most rows: they shrink to stay on screen.
+        row = row.min((464.0 - bh) / rows.len().max(1) as f32);
+        bh += row * rows.len() as f32;
         let x = m.x.min(c.width - bw - 8.0).max(8.0);
         let y = m.y.min(480.0 - bh - 8.0).max(8.0);
         c.round_rect(
@@ -3342,52 +3395,131 @@ impl Select {
             rgba(accent(), 0.8),
             1.5,
         );
-        for (k, (label, _)) in items.iter().enumerate() {
-            let ry = y + 6.0 + k as f32 * row;
-            if c.hovered(x + 4.0, ry, bw - 8.0, row - 2.0) {
-                c.round_rect(
-                    [x + 4.0, ry],
-                    [bw - 8.0, row - 2.0],
-                    4.0,
-                    rgba(0x34344a, 1.0),
-                    rgba(accent(), 1.0),
-                    1.0,
-                );
+        // The map's name, once for every row under it.
+        let e = &library[i];
+        let (title, sub) = if m.header {
+            (e.meta.title.clone(), e.meta.artist.clone())
+        } else {
+            (e.meta.title.clone(), format!("[{}]", e.meta.version))
+        };
+        let tw = bw - 24.0;
+        let top = y + if phone { 8.0 } else { 6.0 };
+        c.text(
+            x + 12.0,
+            top,
+            title_size,
+            rgba(0xffffff, 1.0),
+            &Canvas::fit(title_size, tw, &title),
+        );
+        c.text(
+            x + 12.0,
+            top + title_size + if phone { 6.0 } else { 3.0 },
+            sub_size,
+            rgba(0x9a9ab4, 1.0),
+            &Canvas::fit(sub_size, tw, &sub),
+        );
+        let mut ry = y + head;
+        c.rect(x + 8.0, ry - 2.0, bw - 16.0, 1.0, rgba(0x34344a, 1.0));
+        let mut part = MenuPart::Own;
+        for r in rows {
+            let first = &items[r.start];
+            if first.part != part {
+                part = first.part;
+                let line = ry + part_gap(part) / 2.0;
+                if part == MenuPart::Online {
+                    let label = "taiko.rs";
+                    let lw = Canvas::text_width(sub_size, label);
+                    c.text(
+                        x + 12.0,
+                        line - sub_size / 2.0,
+                        sub_size,
+                        rgba(0x7a7a96, 1.0),
+                        label,
+                    );
+                    let lx = x + 18.0 + lw;
+                    c.rect(lx, line, x + bw - 8.0 - lx, 1.0, rgba(0x34344a, 1.0));
+                } else {
+                    c.rect(x + 8.0, line, bw - 16.0, 1.0, rgba(0x34344a, 1.0));
+                }
+                ry += part_gap(part);
             }
-            c.hit(x + 4.0, ry, bw - 8.0, row - 2.0, Hit::SongMenu(k));
-            let colour = match items[k].1 {
-                MenuAction::DeleteDifficulty | MenuAction::DeleteSet => crate::style::DANGER,
-                _ => 0xffffff,
+            let danger = part == MenuPart::Delete;
+            let colour = if danger {
+                crate::style::DANGER
+            } else {
+                0xffffff
+            };
+            let (rx, rw, rh) = (x + 4.0, bw - 8.0, row - 2.0);
+            let text_y = ry + (rh - size) / 2.0;
+            if first.scope.is_none() {
+                if c.hovered(rx, ry, rw, rh) {
+                    c.round_rect(
+                        [rx, ry],
+                        [rw, rh],
+                        4.0,
+                        rgba(0x34344a, 1.0),
+                        rgba(accent(), 1.0),
+                        1.0,
+                    );
+                }
+                c.hit(rx, ry, rw, rh, Hit::SongMenu(r.start));
+                c.text(
+                    x + 12.0,
+                    text_y,
+                    size,
+                    rgba(colour, 1.0),
+                    &Canvas::fit(size, bw - 20.0, &first.label),
+                );
+                ry += row;
+                continue;
+            }
+            // The set's button on the right, the difficulty's left of it: in columns.
+            let right = x + bw - 8.0;
+            let chip_x = |s: MenuScope| match s {
+                MenuScope::Set => right - chip_w,
+                MenuScope::Difficulty => right - chip_w * 2.0 - 4.0,
             };
             c.text(
                 x + 12.0,
-                ry + (row - 2.0 - size) / 2.0,
+                text_y,
                 size,
                 rgba(colour, 1.0),
-                &Canvas::fit(size, bw - 20.0, label),
+                &Canvas::fit(size, right - chip_w * 2.0 - 8.0 - (x + 12.0), &first.label),
             );
-        }
-        if !phone {
-            let hint = if crate::map_trash::has_system_bin() {
-                tr!(
-                    "deleting: to the recycle bin, asked first",
-                    "削除: ごみ箱へ (確認あり)",
-                    "удаление: в корзину, с вопросом"
-                )
-            } else {
-                tr!(
-                    "deleting: to taiko.rs's Trash folder, asked first",
-                    "削除: taiko.rsのTrashフォルダへ (確認あり)",
-                    "удаление: в папку Trash taiko.rs, с вопросом"
-                )
-            };
-            c.text(
-                x + 12.0,
-                y + bh - 14.0,
-                6.0,
-                rgba(0x6f6f86, 1.0),
-                &Canvas::fit(6.0, bw - 24.0, hint),
-            );
+            for k in r {
+                let it = &items[k];
+                let Some(scope) = it.scope else { continue };
+                let (cx, cy, ch) = (chip_x(scope), ry + 1.0, rh - 2.0);
+                let hover = c.hovered(cx, cy, chip_w, ch);
+                // Lit in the colour its status shows in, not the accent: that can be red.
+                let lit = match it.action {
+                    MenuAction::Epic(..) => 0x9b7bff,
+                    _ => 0xff66aa,
+                };
+                let (fill, border) = match (it.on, hover, danger) {
+                    (true, false, _) => (rgba(lit, 0.85), rgba(lit, 1.0)),
+                    (true, true, _) => (rgba(lit, 0.55), rgba(0xffffff, 1.0)),
+                    (false, true, true) => (
+                        rgba(crate::style::DANGER, 0.3),
+                        rgba(crate::style::DANGER, 1.0),
+                    ),
+                    (false, true, false) => (rgba(0x34344a, 1.0), rgba(accent(), 1.0)),
+                    (false, false, true) => (rgba(0x1d1d27, 1.0), rgba(crate::style::DANGER, 0.55)),
+                    (false, false, false) => (rgba(0x1d1d27, 1.0), rgba(0x4a4a60, 1.0)),
+                };
+                c.round_rect([cx, cy], [chip_w, ch], 4.0, fill, border, 1.0);
+                c.hit(cx, cy, chip_w, ch, Hit::SongMenu(k));
+                let label = scope.label();
+                let lw = Canvas::text_width(size, label);
+                c.text(
+                    cx + (chip_w - lw) / 2.0,
+                    cy + (ch - size) / 2.0,
+                    size,
+                    rgba(if it.on { 0xffffff } else { colour }, 1.0),
+                    label,
+                );
+            }
+            ry += row;
         }
     }
 

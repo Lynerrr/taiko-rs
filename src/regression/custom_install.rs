@@ -192,8 +192,8 @@ fn a_website_set_is_downloaded_into_the_custom_folder_and_updated_whole() {
     assert!(
         items
             .iter()
-            .any(|(label, a)| *a == ui::MenuAction::PreviousVersion
-                && label == "Previous version (v1)"),
+            .any(|it| it.action == ui::MenuAction::PreviousVersion
+                && it.label == "Previous version (v1)"),
         "{items:?}"
     );
     s.select.menu = None;
