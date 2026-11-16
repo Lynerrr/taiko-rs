@@ -1656,7 +1656,6 @@ impl Dropdown {
             self.follow = Follow::Stay;
         }
         self.rows.clear();
-        let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
             c.round_rect(
                 [bx + 8.0, ry],
@@ -1666,13 +1665,15 @@ impl Dropdown {
                 rgba(0xFFD34D, 1.0),
                 1.0,
             );
-            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
-            c.rect(
-                bx + 22.0 + caret_x(7.0, text, caret),
-                ry + 2.5,
-                1.0,
-                9.0,
+            c.input(
+                crate::text_input::Field::Resolution,
+                [bx + 22.0, ry + 3.5, (bw - 120.0).max(20.0), 9.0],
+                7.0,
+                text,
+                "",
                 rgba(0xFFD34D, 1.0),
+                false,
+                true,
             );
             c.text_right(
                 bx + bw - 22.0,
@@ -1990,35 +1991,15 @@ impl Choices {
         );
         c.hit(x, y, w, h, Hit::ChoiceSearch);
         let placeholder = tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...");
-        let text = if self.search.is_empty() {
-            placeholder
-        } else {
-            &self.search
-        };
-        c.text(
-            x + 8.0,
-            y + (h - size) / 2.0,
+        c.input(
+            crate::text_input::Field::FontSearch,
+            [x + 8.0, y + (h - size) / 2.0, w - 16.0, size + 2.0],
             size,
-            rgba(
-                if self.search.is_empty() {
-                    0x8a8aa0
-                } else {
-                    0xffffff
-                },
-                1.0,
-            ),
-            &Canvas::fit_end(size, w - 16.0, text),
-        );
-        let at = if self.search.is_empty() {
-            0.0
-        } else {
-            Canvas::text_width(size, &Canvas::fit_end(size, w - 16.0, text))
-        };
-        c.caret(
-            x + 8.0 + at,
-            y + (h - size) / 2.0,
-            size,
+            &self.search,
+            placeholder,
             rgba(0xffffff, 1.0),
+            false,
+            true,
         );
     }
 
@@ -2441,18 +2422,23 @@ impl SettingsUi {
                 0x6f6f86,
             )
         };
-        c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
         if self.binding.is_none()
             && self.editing.is_none()
             && self.choices.is_none()
             && self.dropdown.is_none()
         {
-            let at = if searching {
-                Canvas::text_width(8.0, &text)
-            } else {
-                0.0
-            };
-            c.caret(box_x + 9.0 + at, TOP - 1.5, 8.0, rgba(0xffffff, 1.0));
+            c.input(
+                crate::text_input::Field::SettingsSearch,
+                [box_x + 9.0, TOP - 1.5, box_w - 18.0, 10.0],
+                8.0,
+                &self.search,
+                &text,
+                rgba(0xffffff, 1.0),
+                false,
+                true,
+            );
+        } else {
+            c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
         }
         c.hit(box_x, TOP - 7.0, box_w, 19.0, Hit::SettingsSearch);
 
@@ -2682,28 +2668,15 @@ impl SettingsUi {
                 rgba(0xFFD34D, 1.0),
                 1.0,
             );
-            if edit.fresh && !text.is_empty() {
-                c.rect(
-                    right - 7.0 - tw,
-                    y + 7.0,
-                    tw + 2.0,
-                    ROW - 18.0,
-                    rgba(accent(), 0.45),
-                );
-            }
-            c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
-            // At the caret in the text (at the end when the start was cut off to fit).
-            let at = if text == edit.text {
-                caret_x(8.0, &text, edit.caret)
-            } else {
-                tw
-            };
-            c.rect(
-                right - 6.0 - tw + at,
-                y + 7.0,
-                1.0,
-                ROW - 18.0,
+            c.input(
+                crate::text_input::Field::Setting(edit.item),
+                [right - 6.0 - tw, y + 9.5, bw - 18.0, 10.0],
+                8.0,
+                &edit.text,
+                "",
                 rgba(0xFFD34D, 1.0),
+                false,
+                true,
             );
             return;
         }

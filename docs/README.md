@@ -159,7 +159,10 @@ Existing key settings keep their meanings. Fullscreen retains F11 and adds Alt+E
 until the Fullscreen control is reassigned or disabled.
 
 Focused text fields show a vertical insertion caret even when empty; pointing at a text
-field uses the system I-beam pointer.
+field uses the system I-beam pointer. Left/Right and Home/End move the caret; Shift selects,
+and Ctrl+Left/Right (Option on macOS) moves by words. Click to place the caret or drag to
+select. Ctrl/Cmd+A/C/X/V select all, copy, cut and paste; Ctrl/Cmd+Z undoes changes and
+Ctrl/Cmd+Shift+Z redoes them. Long text scrolls to keep the caret visible.
 
 **Letterbox:** Settings > Video > *Letterbox* runs the whole game at a resolution of your own in
 fullscreen, black all round, moved anywhere on the screen. It lists every mode the monitor reports,

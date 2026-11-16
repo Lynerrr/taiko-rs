@@ -27,5 +27,6 @@ mod screens;
 mod secrets;
 mod select;
 mod store;
+mod text_fields;
 
 mod language_catalog;

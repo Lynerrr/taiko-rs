@@ -425,13 +425,26 @@ impl Setup {
             }
         };
         let col = if self.bad { 0xFF4B4B } else { col };
-        c.text(
-            px + 16.0,
-            line_y,
-            7.0,
-            rgba(col, 1.0),
-            &Canvas::fit_end(7.0, pw - 32.0, &line),
-        );
+        if let Some(Typing::Name(text) | Typing::Colours(text)) = &self.typing {
+            c.input(
+                crate::text_input::Field::Universe,
+                [px + 16.0, line_y, pw - 32.0, 9.0],
+                7.0,
+                text,
+                "",
+                rgba(col, 1.0),
+                false,
+                true,
+            );
+        } else {
+            c.text(
+                px + 16.0,
+                line_y,
+                7.0,
+                rgba(col, 1.0),
+                &Canvas::fit_end(7.0, pw - 32.0, &line),
+            );
+        }
 
         // Presets: the built-in ones and the player's, the one the universes are now lit; the
         // player's have an x to delete them.

@@ -22,6 +22,8 @@ mod changelog;
 use taiko_proto::changelog_entry;
 mod clipboard;
 mod collections;
+mod text_fields;
+mod text_input;
 use taiko_logic::clock;
 mod config;
 mod cursor;
@@ -443,6 +445,11 @@ struct State {
     updater: update::Updater,
     /// Clickable areas of the last frame drawn.
     hits: Vec<hit::HitBox>,
+    input_focus: Option<text_input::Field>,
+    text_input: text_input::TextInput,
+    input_regions: Vec<text_input::Region>,
+    input_drag: bool,
+    input_engaged: bool,
     browse: browse::Browse,
     downloads: Vec<download::Job>,
     /// Song select: the set being checked for a newer version on osu! (see `poll_set_check`),
@@ -6577,7 +6584,19 @@ impl State {
             self.idle.input(now);
         }
         self.mouse = (x, y);
+        if self.text_input_drag() {
+            return CursorIcon::Text;
+        }
         let (vx, vy) = self.mouse_virtual();
+        if self.hit_at(vx, vy).is_none()
+            && self
+                .input_regions
+                .iter()
+                .any(|r| Some(r.field) == self.input_focus && r.contains(vx, vy))
+        {
+            self.hover = None;
+            return CursorIcon::Text;
+        }
         let width = render::VIRTUAL_HEIGHT * self.window_w / self.window_h.max(1.0);
         self.volume.point(vx, vy, width, Instant::now());
         // On the main menu, pointing at a note selects it (moving: a pointer left resting doesn't
@@ -6929,6 +6948,9 @@ impl State {
     }
 
     fn mouse_button(&mut self, pressed: bool, window: Option<&Window>) {
+        if self.text_input_mouse(pressed) {
+            return;
+        }
         if self.layers_button(&[app::overlays::Layer::Shot], pressed, window) {
             return;
         }
@@ -9299,7 +9321,11 @@ impl State {
     fn is_text_field(&self, hit: hit::Hit) -> bool {
         use hit::Hit;
         match hit {
-            Hit::TextField | Hit::SettingsSearch | Hit::ChoiceSearch | Hit::LobbyChat => true,
+            Hit::TextField
+            | Hit::SettingsSearch
+            | Hit::ChoiceSearch
+            | Hit::LobbyChat
+            | Hit::PlayerSearch => true,
             Hit::SettingRow(i) => self.settings_ui.editing.as_ref().is_some_and(|edit| {
                 settings::ITEMS
                     .get(i)
@@ -11626,6 +11652,9 @@ impl State {
                 return;
             }
         }
+        if self.text_input_key(code, text, repeat) {
+            return;
+        }
         if self.hotkey_place(code).is_some()
             && ((self.in_song() && pressed == self.cfg.interface_key)
                 || (!self.in_settings()
@@ -12041,6 +12070,9 @@ impl State {
             &canvas.picture_times,
         );
         canvas.clear(width);
+        canvas.input_editor = self
+            .sync_text_input()
+            .map(|field| (field, self.text_input.view()));
         canvas.avatar_slots = self.avatars.slots();
         canvas.picture_slots = self.pictures.slots();
         canvas.mouse = self.mouse_virtual();
@@ -12583,12 +12615,15 @@ impl State {
                 canvas.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.85));
                 let phone = mobile::active();
                 canvas.text_centered(w / 2.0, 160.0, 14.0, rgba(0xffffff, 1.0), "Random seed");
-                canvas.text_centered(
-                    w / 2.0,
-                    200.0,
+                canvas.input(
+                    text_input::Field::Random,
+                    [w / 2.0 - 180.0, 200.0, 360.0, 14.0],
                     12.0,
+                    input,
+                    "",
                     rgba(0xffffff, 1.0),
-                    &format!("{input}_"),
+                    false,
+                    true,
                 );
                 canvas.text_centered(
                     w / 2.0,
@@ -12909,6 +12944,7 @@ impl State {
             }
         }
         self.draw_shot_view(canvas);
+        self.input_regions.clone_from(&canvas.input_regions);
         std::mem::swap(&mut self.hits, &mut canvas.hits);
         capture
     }

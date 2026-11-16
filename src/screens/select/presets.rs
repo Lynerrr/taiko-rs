@@ -107,10 +107,16 @@ pub(crate) fn draw_preset_naming(c: &mut Canvas, name: &str) {
         rgba(0xffffff, 1.0),
         &Canvas::fit(14.0, inner, "Name this preset"),
     );
-    let typed = format!("{name}_");
-    let size = Canvas::fit_size(12.0, 7.0, inner, &typed);
-    let typed = Canvas::fit(size, inner, &typed);
-    c.text_centered(w / 2.0, 196.0, size, rgba(0xffffff, 1.0), &typed);
+    c.input(
+        crate::text_input::Field::Preset,
+        [bx + 16.0, 196.0, inner, 14.0],
+        12.0,
+        name,
+        "",
+        rgba(0xffffff, 1.0),
+        false,
+        true,
+    );
     c.text_centered(
         w / 2.0,
         230.0,

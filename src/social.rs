@@ -1837,19 +1837,26 @@ fn draw_rows(
         let by = ry + (bh - button_h()) / 2.0;
         match *r {
             Row::AddFriend => {
-                // While typing, the end of the name stays in view.
-                let text = if sel {
-                    Canvas::fit_end(7.0, iw - 16.0, &format!("add friend: {}_", s.input))
+                if sel {
+                    c.input(
+                        crate::text_input::Field::Social,
+                        [inner + 9.0, ty, iw - 16.0, 9.0],
+                        7.0,
+                        &s.input,
+                        "+ add a friend (type their name)",
+                        rgba(0xffffff, a),
+                        false,
+                        true,
+                    );
                 } else {
-                    Canvas::fit(7.0, iw - 16.0, "+ add a friend (type their name)")
-                };
-                c.text(
-                    inner + 9.0,
-                    ty,
-                    7.0,
-                    rgba(if sel { 0xffffff } else { SOFT_TEXT }, a),
-                    &text,
-                );
+                    c.text(
+                        inner + 9.0,
+                        ty,
+                        7.0,
+                        rgba(SOFT_TEXT, a),
+                        &Canvas::fit(7.0, iw - 16.0, "+ add a friend (type their name)"),
+                    );
+                }
             }
             Row::Lobby => {
                 c.text(inner + 9.0, ty, 8.0, rgba(0x4fb4ff, a), "# lobby chat");
@@ -1977,20 +1984,33 @@ fn draw_rows(
                     } else {
                         0.0
                     };
-                c.text(
-                    inner + 9.0,
-                    ty,
-                    7.0,
-                    rgba(
-                        if sel || !s.input.is_empty() {
-                            0xffffff
-                        } else {
-                            SOFT_TEXT
-                        },
-                        a,
-                    ),
-                    &Canvas::fit_end(7.0, room, &text),
-                );
+                if sel {
+                    c.input(
+                        crate::text_input::Field::Social,
+                        [inner + 9.0, ty, room, 9.0],
+                        7.0,
+                        &s.input,
+                        "type a name",
+                        rgba(0xffffff, a),
+                        false,
+                        true,
+                    );
+                } else {
+                    c.text(
+                        inner + 9.0,
+                        ty,
+                        7.0,
+                        rgba(
+                            if sel || !s.input.is_empty() {
+                                0xffffff
+                            } else {
+                                SOFT_TEXT
+                            },
+                            a,
+                        ),
+                        &Canvas::fit_end(7.0, room, &text),
+                    );
+                }
                 if capped {
                     c.text_right(inner + iw - 8.0, ty + 0.5, 6.0, rgba(DIM_TEXT, a), &more);
                 }
@@ -2746,31 +2766,20 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
         rgba(if typing { accent() } else { 0x34344a }, a),
         1.0,
     );
-    let text = if typing {
-        s.input.clone()
+    let hint = if crate::mobile::active() {
+        hint.split(", Enter").next().unwrap_or(hint)
     } else {
-        // A phone's keyboard has its own button to send.
-        let cut = hint.split(", Enter").next().unwrap_or(hint);
-        (if crate::mobile::active() { cut } else { hint }).to_string()
+        hint
     };
-    let shown = Canvas::fit_end(7.0, iw - 14.0, &text);
-    c.text(
-        inner + 7.0,
-        input_y + (h - 7.0) / 2.0,
+    c.input(
+        crate::text_input::Field::Social,
+        [inner + 7.0, input_y + (h - 7.0) / 2.0, iw - 14.0, 9.0],
         7.0,
-        rgba(if typing { 0xffffff } else { 0x5a5a70 }, a),
-        &shown,
-    );
-    let caret = if typing {
-        Canvas::text_width(7.0, &shown)
-    } else {
-        0.0
-    };
-    c.caret(
-        inner + 7.0 + caret,
-        input_y + (h - 7.0) / 2.0,
-        7.0,
+        &s.input,
+        hint,
         rgba(0xffffff, a),
+        false,
+        true,
     );
     c.hit(inner, input_y, iw, h, Hit::TextField);
     // The last F12's, on its way to whoever this is with.

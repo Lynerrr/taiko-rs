@@ -2043,14 +2043,19 @@ impl Select {
             };
             (text, 0xffffff)
         };
-        c.text(left + 10.0, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
         if self.searching {
-            let at = if self.filter.is_empty() {
-                0.0
-            } else {
-                Canvas::text_width(10.0, &search)
-            };
-            c.caret(left + 10.0 + at, row + 7.0, 10.0, rgba(0xffffff, 1.0));
+            c.input(
+                crate::text_input::Field::SongSearch,
+                [left + 10.0, row + 7.0, room, 12.0],
+                10.0,
+                &self.filter,
+                "type to search...",
+                rgba(0xffffff, 1.0),
+                false,
+                true,
+            );
+        } else {
+            c.text(left + 10.0, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
         }
         c.hit(left, row, search_w, 24.0, Hit::TextField);
 

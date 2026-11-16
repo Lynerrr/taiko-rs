@@ -627,7 +627,7 @@ fn server_label(server: &str) -> &str {
 /// What a menu row shows: a text field (label left, its value or a placeholder right, a caret
 /// when selected), a stepper (label left, `< value >` right) or an action (its label centred).
 enum RowLook<'a> {
-    Field(&'a str, bool),
+    Field(crate::text_input::Field, &'a str, &'a str, bool),
     Stepper(&'a str),
     Action,
 }
@@ -659,26 +659,19 @@ fn menu_row(
     c.hit(x, y, w, h, Hit::MpRow(i));
     let ty = y + h / 2.0 - 4.5;
     match look {
-        RowLook::Field(value, placeholder) => {
+        RowLook::Field(field, value, hint, secret) => {
             c.text(x + 12.0, ty, 9.0, rgba(0x9a9ab0, 1.0), label);
-            // The value keeps clear of the label: a long one shows its end (where you type).
             let room = w - 34.0 - Canvas::text_width(9.0, label);
-            let shown = if sel {
-                format!("{value}_")
-            } else {
-                value.to_string()
-            };
-            let shown = if placeholder {
-                Canvas::fit(9.0, room, &shown)
-            } else {
-                Canvas::fit_end(9.0, room, &shown)
-            };
-            let colour = if placeholder && !sel {
-                0x55556a
-            } else {
-                0xffffff
-            };
-            c.text_right(x + w - 12.0, ty, 9.0, rgba(colour, 1.0), &shown);
+            c.input(
+                field,
+                [x + w - 12.0 - room, ty, room, 11.0],
+                9.0,
+                value,
+                hint,
+                rgba(0xffffff, 1.0),
+                secret,
+                sel,
+            );
         }
         RowLook::Stepper(value) => {
             c.text(x + 12.0, ty, 9.0, rgba(0x9a9ab0, 1.0), label);
@@ -813,13 +806,6 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
     for (i, r) in rows.iter().enumerate() {
         let sel = i == cursor;
         let label = menu.field_label(*r).unwrap_or("");
-        let field = |value: &str, hint: &'static str| -> (String, bool) {
-            if value.is_empty() {
-                (hint.to_string(), true)
-            } else {
-                (value.to_string(), false)
-            }
-        };
         match *r {
             Row::User => {
                 let hint = if menu.form == Form::Register {
@@ -827,19 +813,46 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 } else {
                     ""
                 };
-                let (v, ph) = field(&menu.user, hint);
-                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    col,
+                    rh,
+                    label,
+                    RowLook::Field(
+                        crate::text_input::Field::Account(0),
+                        &menu.user,
+                        hint,
+                        false,
+                    ),
+                );
                 y += step;
             }
             Row::Password => {
-                let stars = "*".repeat(menu.password.chars().count());
                 let hint = if menu.form == Form::Main {
                     ""
                 } else {
                     tr!("6 characters or more", "6文字以上", "от 6 символов")
                 };
-                let (v, ph) = field(&stars, hint);
-                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    col,
+                    rh,
+                    label,
+                    RowLook::Field(
+                        crate::text_input::Field::Account(1),
+                        &menu.password,
+                        hint,
+                        true,
+                    ),
+                );
                 y += step;
             }
             Row::Email => {
@@ -848,13 +861,41 @@ fn draw_account(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 } else {
                     tr!("your email", "あなたのメール", "твоя почта")
                 };
-                let (v, ph) = field(&menu.email, hint);
-                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    col,
+                    rh,
+                    label,
+                    RowLook::Field(
+                        crate::text_input::Field::Account(2),
+                        &menu.email,
+                        hint,
+                        false,
+                    ),
+                );
                 y += step;
             }
             Row::Code => {
-                let (v, ph) = field(&menu.code, tr!("6 digits", "6桁", "6 цифр"));
-                menu_row(c, sel, i, x, y, col, rh, label, RowLook::Field(&v, ph));
+                menu_row(
+                    c,
+                    sel,
+                    i,
+                    x,
+                    y,
+                    col,
+                    rh,
+                    label,
+                    RowLook::Field(
+                        crate::text_input::Field::Account(3),
+                        &menu.code,
+                        tr!("6 digits", "6桁", "6 цифр"),
+                        false,
+                    ),
+                );
                 y += step;
             }
             Row::LogIn => {
@@ -1198,15 +1239,6 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                 y += crate::mobile::pick(34.0, 48.0);
             }
             Row::NewPassword => {
-                let stars = "*".repeat(menu.new_password.chars().count());
-                let (v, ph) = if stars.is_empty() {
-                    (
-                        tr!("none: open to all", "なし: 誰でも", "нет: для всех").to_string(),
-                        true,
-                    )
-                } else {
-                    (stars, false)
-                };
                 menu_row(
                     c,
                     sel,
@@ -1216,7 +1248,12 @@ fn draw_lobbies(c: &mut Canvas, menu: &Menu, rows: &[Row], cursor: usize) {
                     fw,
                     crate::mobile::pick(28.0, 42.0),
                     tr!("Password", "パスワード", "Пароль"),
-                    RowLook::Field(&v, ph),
+                    RowLook::Field(
+                        crate::text_input::Field::Account(4),
+                        &menu.new_password,
+                        tr!("none: open to all", "なし: 誰でも", "нет: для всех"),
+                        true,
+                    ),
                 );
                 y += crate::mobile::pick(34.0, 48.0);
             }
@@ -1328,8 +1365,6 @@ fn draw_join_prompt(
         let sel = i == cursor;
         match *r {
             Row::JoinPassword => {
-                let stars = "*".repeat(menu.join_password.chars().count());
-                let ph = stars.is_empty();
                 menu_row(
                     c,
                     sel,
@@ -1339,7 +1374,12 @@ fn draw_join_prompt(
                     fw,
                     30.0,
                     tr!("Password", "パスワード", "Пароль"),
-                    RowLook::Field(&stars, ph),
+                    RowLook::Field(
+                        crate::text_input::Field::Account(5),
+                        &menu.join_password,
+                        "",
+                        true,
+                    ),
                 );
             }
             Row::JoinLocked => {
@@ -2008,13 +2048,31 @@ pub fn draw_lobby(
         let tx = x + crate::mobile::pick(30.0, 6.0);
         c.text(tx, ty, 7.5, rgba(0x9a9ab0, 1.0), label);
         let label_w = Canvas::text_width(7.5, label);
-        c.text_right(
-            x + w2 - 6.0,
-            ty,
-            7.5,
-            rgba(if editing { 0xFFD34D } else { 0xffffff }, 1.0),
-            &Canvas::fit(7.5, w2 - 46.0 - label_w, value),
-        );
+        if editing {
+            c.input(
+                crate::text_input::Field::LobbyPassword,
+                [
+                    tx + label_w + 10.0,
+                    ty,
+                    (w2 - 46.0 - label_w).max(12.0),
+                    9.5,
+                ],
+                7.5,
+                s.edit_password.as_deref().unwrap_or(""),
+                "",
+                rgba(0xFFD34D, 1.0),
+                true,
+                true,
+            );
+        } else {
+            c.text_right(
+                x + w2 - 6.0,
+                ty,
+                7.5,
+                rgba(if editing { 0xFFD34D } else { 0xffffff }, 1.0),
+                &Canvas::fit(7.5, w2 - 46.0 - label_w, value),
+            );
+        }
     }
 
     // The chat.
@@ -2061,16 +2119,16 @@ pub fn draw_lobby(
         );
         match &s.chat_input {
             Some(typed) => {
-                let room = iw - 16.0;
-                let shown = Canvas::fit_end(7.0, room, typed);
-                c.text(ix + 8.0, iy + text_y, 7.0, rgba(0xffffff, 1.0), &shown);
-                // The caret sits in the text when all of it fits, else at the end.
-                let at = if shown == *typed {
-                    crate::settings::caret_x(7.0, typed, s.chat_caret)
-                } else {
-                    Canvas::text_width(7.0, &shown)
-                };
-                c.rect(ix + 8.0 + at, iy + 3.0, 1.0, ih - 6.0, rgba(0xffffff, 1.0));
+                c.input(
+                    crate::text_input::Field::LobbyChat,
+                    [ix + 8.0, iy + text_y, iw - 16.0, 9.0],
+                    7.0,
+                    typed,
+                    "",
+                    rgba(0xffffff, 1.0),
+                    false,
+                    true,
+                );
             }
             None => {
                 c.text(

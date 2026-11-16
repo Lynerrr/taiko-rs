@@ -653,6 +653,9 @@ impl App {
                         // Typed like the on-screen keyboard's text (Android): a key with no
                         // meaning of its own, carrying each character.
                         let at = Instant::now();
+                        if s.text_input_key(KeyCode::Lang1, Some(&text), false) {
+                            return;
+                        }
                         for ch in text.chars().filter(|c| !c.is_control()) {
                             s.key(
                                 KeyCode::Lang1,
@@ -755,6 +758,7 @@ impl App {
                 s.ime_preedit.clear();
                 // The release may happen in another window.
                 s.retry_hold = None;
+                s.input_drag = false;
                 s.cancel_restart();
                 // The release may happen in another window.
                 s.right_scroll = false;
@@ -1237,6 +1241,11 @@ impl State {
             window_handle: None,
             updater,
             hits: Vec::new(),
+            input_focus: None,
+            text_input: Default::default(),
+            input_regions: Vec::new(),
+            input_drag: false,
+            input_engaged: false,
             browse: browse::Browse::default(),
             downloads: Vec::new(),
             set_check: None,
