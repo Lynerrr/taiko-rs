@@ -18,6 +18,12 @@ cargo test --locked --lib regression::
 cargo test --locked --lib regression::gameplay
 ```
 
+The `screens`, `phone` and `clicks` modules run only on Linux. Passing this suite on
+macOS or Windows does not check their golden files. Run UI snapshot checks on Linux
+(a Linux container works). For intended changes, bless on Linux, review the `.snap`
+diffs, then rerun without `TAIKO_BLESS`. The CI command is
+`cargo test --profile ci-test --locked --lib regression::`.
+
 ## What it covers
 
 | Module | What is checked |

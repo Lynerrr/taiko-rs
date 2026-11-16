@@ -528,6 +528,12 @@ impl Home {
 
     // ---- every frame ----
 
+    /// The regression harness must await these results before comparing settled screens.
+    #[cfg(test)]
+    pub(crate) fn is_busy(&self) -> bool {
+        self.dialog.is_some() || matches!(self.loading, Loading::Working(_))
+    }
+
     /// Moves things on: results of the decoding and of the dialog, the playhead.
     pub fn update(&mut self, now: Instant, audio: Option<&Engine>) -> Out {
         let mut out = Out::None;
@@ -2246,6 +2252,30 @@ mod tests {
             Out::Toast(message) if message == "blocked in tests: no programs, no internet"
         ));
         assert!(h.dialog.is_none());
+    }
+
+    #[test]
+    fn background_work_is_busy_until_the_dialog_and_decoder_answers_are_taken_in() {
+        let mut h = home();
+        let (tx, rx) = mpsc::channel();
+        h.loading = Loading::Working(rx);
+        assert!(h.is_busy());
+        h.update(Instant::now(), None);
+        assert!(h.is_busy());
+        tx.send(Err("decode failed".into())).unwrap();
+        h.update(Instant::now(), None);
+        assert!(!h.is_busy());
+        let (tx, rx) = mpsc::channel();
+        h.dialog = Some(Dialog {
+            kind: FileKind::Audio,
+            rx,
+        });
+        assert!(h.is_busy());
+        h.update(Instant::now(), None);
+        assert!(h.is_busy());
+        tx.send(Ok(None)).unwrap();
+        h.update(Instant::now(), None);
+        assert!(!h.is_busy());
     }
 
     fn home() -> Home {

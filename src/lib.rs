@@ -13313,6 +13313,12 @@ impl State {
             ("the maps' analysis", info_pending),
             ("the song preview", !self.preview.is_idle()),
             ("a map loading", map_loading),
+            (
+                "the editor home",
+                self.scene
+                    .screen_as::<EditorHome>()
+                    .is_some_and(|s| s.home.is_busy()),
+            ),
             ("a leaderboard", self.board_fetch.is_some()),
             ("a set's update check", self.set_check.is_some()),
             ("the loved list", self.loved_call.is_some()),
@@ -13321,6 +13327,12 @@ impl State {
             ("osu!.db", self.osudb_rx.is_busy()),
             ("the pp backfill", self.pp_backfill.is_busy()),
             ("the player's profile", self.me_fetch.is_busy()),
+            (
+                "the medals",
+                self.medals
+                    .as_ref()
+                    .is_some_and(|v| matches!(v.state, medals::State::Loading(_))),
+            ),
             ("a score's submit", !self.submits.is_empty()),
             ("the lobby map's lookup", self.lobby_lookup.is_busy()),
             ("the folder dialog", self.folder_pick.is_busy()),
