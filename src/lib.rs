@@ -6595,6 +6595,17 @@ impl State {
         if self.on_menu() {
             return;
         }
+        // The mapguessr host's rounds button: a right click counts down, as [ does.
+        if pressed
+            && self.mp.as_ref().is_some_and(|s| s.mapguessr)
+            && self.scene.screen_is::<Lobby>()
+            && !self.social.open
+            && let (vx, vy) = self.mouse_virtual()
+            && self.hit_at(vx, vy) == Some(hit::Hit::Key(KeyCode::BracketRight))
+        {
+            self.guessr_key(KeyCode::BracketLeft);
+            return;
+        }
         let free = self.splash.is_none()
             && self.select.picker.is_none()
             && self.settings_ui.dropdown.is_none();
@@ -7080,7 +7091,30 @@ impl State {
             return;
         };
         let in_game = s.in_match;
+        let digit = mapguessr::digit_of(code);
+        if !(digit.is_some() || code == KeyCode::Backspace) {
+            g.rounds_typed = false;
+        }
         match code {
+            // The host types the rounds: 2 then 5 is 25. A digit that would go past the most
+            // starts a new number.
+            _ if s.is_host() && !in_game && digit.is_some() => {
+                let d = digit.unwrap_or(0);
+                let longer = g.rounds * 10 + d;
+                let typed = if g.rounds_typed && longer <= mapguessr::MAX_ROUNDS {
+                    longer
+                } else {
+                    d
+                };
+                if typed >= 1 {
+                    g.rounds = typed;
+                    g.rounds_typed = true;
+                }
+            }
+            KeyCode::Backspace if s.is_host() && !in_game => {
+                g.rounds = (g.rounds / 10).max(1);
+                g.rounds_typed = true;
+            }
             KeyCode::KeyG
             | KeyCode::Tab
             | KeyCode::Space

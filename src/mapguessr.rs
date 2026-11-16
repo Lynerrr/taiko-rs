@@ -143,6 +143,8 @@ pub struct Guessr {
     pub last_guess: Option<String>,
     /// How many rounds the host will start the next game with.
     pub rounds: u32,
+    /// The host is typing the rounds: the next digit goes on the end of the number.
+    pub rounds_typed: bool,
 }
 
 impl Guessr {
@@ -538,7 +540,7 @@ pub fn draw_lobby(c: &mut Canvas, s: &Session, g: &mut Guessr, scroll_speed: f64
             "Spectate  (S)"
         };
         if s.is_host() {
-            let rounds = format!("{}  ([ ])", plural(g.rounds, "round", "rounds"));
+            let rounds = format!("{}  ([ ] 0-9)", plural(g.rounds, "round", "rounds"));
             c.button_row(
                 442.0,
                 &[
@@ -623,6 +625,25 @@ pub fn draw_picking(c: &mut Canvas, g: &mut Guessr, scroll_speed: f64, now: Inst
 
 fn plural(n: u32, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// The digit a key types, on the top row or the numpad.
+pub fn digit_of(code: KeyCode) -> Option<u32> {
+    use KeyCode::*;
+    let d = match code {
+        Digit0 | Numpad0 => 0,
+        Digit1 | Numpad1 => 1,
+        Digit2 | Numpad2 => 2,
+        Digit3 | Numpad3 => 3,
+        Digit4 | Numpad4 => 4,
+        Digit5 | Numpad5 => 5,
+        Digit6 | Numpad6 => 6,
+        Digit7 | Numpad7 => 7,
+        Digit8 | Numpad8 => 8,
+        Digit9 | Numpad9 => 9,
+        _ => return None,
+    };
+    Some(d)
 }
 
 #[cfg(test)]
