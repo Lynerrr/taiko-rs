@@ -300,7 +300,7 @@ fn a_clean_play_is_a_million_and_mods_go_above_or_below_it() {
         last = g.stats.score;
     }
     assert_eq!(g.stats.score, 1_000_000);
-    // Rolls and swells aren't part of it.
+    // Rolls and swells left alone add nothing to it, and take nothing off.
     g.set_time(g.end_time + 2000.0);
     assert_eq!(g.stats.score, 1_000_000);
     let mut hard = modded("HD,HR");
@@ -1378,4 +1378,166 @@ fn note_speeds_change_with_the_speed_mods_and_no_others() {
             .collect();
         assert!(off.is_empty(), "{}: {off:?}", m.acronym());
     }
+}
+
+/// Dons at 0 and 500, a finisher at 1000, a drumroll from 2500 to 3500, a big drumroll from
+/// 4500 to 5000, a swell of 6 hits from 6000 to 7000 and a don at 8000.
+fn bonus_map() -> beatmap::Beatmap {
+    let mut map = beatmap::calibration_map(500.0, 0, 15);
+    let base = map.notes[0].clone();
+    let at = |t: f64| beatmap::Note {
+        time: t,
+        end_time: t,
+        ..base.clone()
+    };
+    map.notes = vec![
+        at(0.0),
+        at(500.0),
+        beatmap::Note {
+            big: true,
+            ..at(1000.0)
+        },
+        beatmap::Note {
+            kind: Kind::Roll,
+            end_time: 3500.0,
+            tick_spacing: 125.0,
+            ..at(2500.0)
+        },
+        beatmap::Note {
+            kind: Kind::Roll,
+            big: true,
+            end_time: 5000.0,
+            tick_spacing: 125.0,
+            ..at(4500.0)
+        },
+        beatmap::Note {
+            kind: Kind::Swell,
+            end_time: 7000.0,
+            required_hits: 6,
+            ..at(6000.0)
+        },
+        at(8000.0),
+    ];
+    map
+}
+
+/// Plays `bonus_map`: every don GREAT, and the finisher with both hands, every drumroll tick and
+/// the swell when `bonus`.
+fn play_bonus_map(scoring: Scoring, bonus: bool) -> Game {
+    let mut g = Game::new(bonus_map(), Arc::new(Silence), None);
+    g.set_scoring(scoring);
+    g.press_time(1, 0.0, None);
+    g.press_time(1, 500.0, None);
+    g.press_time(1, 1000.0, None);
+    if bonus {
+        g.press_time(2, 1010.0, None);
+        for roll in [3, 4] {
+            let (start, ticks) = (g.map.notes[roll].time, g.state[roll].ticks.len());
+            for k in 0..ticks {
+                g.press_time(k % 2 + 1, start + 125.0 * k as f64, None);
+            }
+        }
+        for k in 0..6 {
+            g.press_time(
+                if k % 2 == 0 { 1 } else { 0 },
+                6100.0 + 100.0 * k as f64,
+                None,
+            );
+        }
+    }
+    g.press_time(1, 8000.0, None);
+    g.set_time(10_000.0);
+    g
+}
+
+#[test]
+fn lazer_scoring_puts_drumrolls_finishers_and_swells_on_top_of_the_million() {
+    let plain = play_bonus_map(Scoring::Lazer, false);
+    assert_eq!((plain.stats.great, plain.stats.miss), (4, 0));
+    assert_eq!(
+        plain.stats.score, 1_000_000,
+        "a clean play of the notes alone"
+    );
+    let full = play_bonus_map(Scoring::Lazer, true);
+    let (small, big) = (full.state[3].ticks.len(), full.state[4].ticks.len());
+    assert!(small > 0 && big > 0);
+    assert_eq!(
+        (
+            full.stats.great,
+            full.stats.miss,
+            full.stats.strong,
+            full.stats.swells
+        ),
+        (4, 0, 1, 1)
+    );
+    assert_eq!(full.stats.roll_ticks as usize, small + big);
+    // 350 for the finisher, 10 a tick, 160 a big tick, 50 for the swell (osu!lazer's).
+    let bonus = 350 + 10 * small as u64 + 160 * big as u64 + 50;
+    assert_eq!(full.stats.score, 1_000_000 + bonus);
+    // Standard scoring (replays of versions 3 to 5) still gives nothing for them.
+    assert_eq!(
+        play_bonus_map(Scoring::Standard, true).stats.score,
+        1_000_000
+    );
+}
+
+#[test]
+fn lazer_scoring_weighs_hits_by_log4_of_the_combo_after_them() {
+    let w = lazer_combo_weight;
+    assert_eq!((w(0), w(1), w(2)), (0.5, 0.5, 0.5), "a miss counts 0.5 too");
+    assert!((w(4) - 1.0).abs() < 1e-12 && (w(16) - 2.0).abs() < 1e-12);
+    assert!((w(400) - 400f64.ln() / 4f64.ln()).abs() < 1e-12);
+    assert_eq!(w(400), w(5000), "capped at a combo of 400");
+    // An OK costs only accuracy, a miss more; mods multiply the total.
+    let mut ok = modded("");
+    let first = ok.map.notes[0].time;
+    ok.press_at(1, first + 80.0, None);
+    play_all(&mut ok, 0.0);
+    let mut miss = modded("");
+    miss.set_time(first + 500.0);
+    play_all(&mut miss, 0.0);
+    assert!(ok.stats.ok == 1 && miss.stats.miss == 1);
+    assert!(miss.stats.score < ok.stats.score && ok.stats.score < 1_000_000);
+    let mut hard = modded("HD,HR");
+    play_all(&mut hard, 0.0);
+    assert_eq!(
+        hard.stats.score,
+        (1_000_000.0 * Mods::parse("HD,HR").multiplier()).round() as u64
+    );
+}
+
+#[test]
+fn a_swell_left_alone_drains_hp_with_lazer_scoring_only() {
+    let hp = |scoring| {
+        let mut g = Game::new(bonus_map(), Arc::new(Silence), None);
+        g.set_scoring(scoring);
+        for t in [0.0, 500.0, 1000.0] {
+            g.press_time(1, t, None);
+        }
+        g.set_time(7500.0);
+        (g.hp, g.hp_miss)
+    };
+    let ((lazer, hp_miss), (standard, _)) = (hp(Scoring::Lazer), hp(Scoring::Standard));
+    assert!(standard > 0.0);
+    assert!(
+        (standard - lazer - 0.65 * hp_miss).abs() < 1e-12,
+        "{standard} {lazer}"
+    );
+}
+
+#[test]
+fn a_map_with_no_notes_to_fill_hp_fails_only_old_replays() {
+    let mut map = bonus_map();
+    map.notes.retain(|n| n.kind == Kind::Swell);
+    let failed = |scoring| {
+        let mut g = Game::new(map.clone(), Arc::new(Silence), None);
+        g.set_scoring(scoring);
+        g.set_time(10_000.0);
+        g.failed()
+    };
+    assert!(!failed(Scoring::Lazer));
+    assert!(
+        failed(Scoring::Standard),
+        "versions 3 to 5 judged it as they did"
+    );
 }
