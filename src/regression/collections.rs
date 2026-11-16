@@ -657,6 +657,69 @@ mod in_song_select {
     }
 
     #[test]
+    fn the_collection_shown_is_kept_for_the_next_run() {
+        let charts = maps::all();
+        let songs = Songs::new("collections-kept", &charts);
+        let mut s = state_with(config(), songs.entries());
+        let mut now = Instant::now();
+        ready(&mut s, &mut now);
+        let refs = |s: &State, versions: &[&str]| -> Vec<collections::MapRef> {
+            s.library
+                .iter()
+                .filter(|e| versions.contains(&e.meta.version.as_str()))
+                .filter_map(collections::MapRef::of)
+                .collect()
+        };
+        let mine = refs(&s, &["basics", "stream"]);
+        let theirs = refs(&s, &["high-od"]);
+        let warm_up = collections::Collection {
+            name: "Warm Up".into(),
+            source: collections::Source::Local,
+            maps: mine,
+        };
+        let dans = collections::Collection {
+            name: "dans".into(),
+            source: collections::Source::Osu,
+            maps: theirs,
+        };
+        s.collections = vec![warm_up.clone(), dans.clone()];
+        s.show_collections(None);
+        assert_eq!(s.cfg.collection, "", "all songs until one is picked");
+
+        // Picked from the list (row 0 is all songs), it goes into config.txt.
+        s.open_collections();
+        s.pick_collection_row(2);
+        assert_eq!(s.cfg.collection, "osu:dans");
+        let text = s.cfg.to_text();
+        assert!(text.contains("\ncollection = osu:dans\n"), "{text}");
+
+        // The next run shows it again, once osu!'s collections are read (until then it stays
+        // kept, not forgotten).
+        let mut next = state_with(crate::config::Config::parse_text(&text), songs.entries());
+        ready(&mut next, &mut now);
+        next.collections = vec![warm_up.clone()];
+        next.show_collections(None);
+        assert_eq!(next.select.collection, None, "osu!'s aren't read yet");
+        assert_eq!(next.cfg.collection, "osu:dans", "and it's still kept");
+        next.collections = vec![warm_up, dans];
+        next.show_collections(None);
+        let shown = next
+            .select
+            .collection
+            .map(|k| next.select.collections[k].name.clone());
+        assert_eq!(shown.as_deref(), Some("dans"), "shown again");
+
+        // The player's own, and back to all songs.
+        next.open_collections();
+        next.pick_collection_row(1);
+        assert_eq!(next.cfg.collection, "own:Warm Up");
+        next.open_collections();
+        next.pick_collection_row(0);
+        assert_eq!(next.select.collection, None);
+        assert_eq!(next.cfg.collection, "", "all songs is kept too");
+    }
+
+    #[test]
     fn maps_moved_or_updated_are_followed_and_the_ones_not_here_counted_and_offered() {
         let charts = maps::all();
         let songs = Songs::new("collections-missing", &charts);
