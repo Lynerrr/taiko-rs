@@ -307,17 +307,44 @@ pub enum Scoring {
     /// Replays from before it (versions 1 and 2): points per hit that grow with the combo, plus
     /// drumrolls and swells, so a play's top score depended on the map.
     Classic,
-    /// Like osu!'s ScoreV2: a clean play of any map with no mods is 1,000,000, and the mods
-    /// multiply that. 700,000 comes from the hits weighted by the combo they were made at, 300,000
-    /// from accuracy (to the 10th power), each as far as the play has got. Drumrolls and swells
-    /// don't count.
+    /// Replays of versions 3 to 5: like osu!'s ScoreV2, a clean play of any map with no mods is
+    /// 1,000,000, and the mods multiply that. 700,000 comes from the hits weighted by the combo
+    /// they were made at, 300,000 from accuracy (to the 10th power), each as far as the play has
+    /// got. Drumrolls, swells and finishers don't count.
     Standard,
+    /// osu!lazer's taiko scoring (TaikoScoreProcessor, MIT): 250,000 from the hits weighted by
+    /// the combo after them (`lazer_combo_weight`), 750,000 from accuracy to the power of 3.6,
+    /// each as far as the play has got, plus bonus on top: 10 per drumroll tick (160 on a big
+    /// drumroll), 350 per finisher hit with both hands, 50 per swell cleared. The mods multiply
+    /// the lot. Its HP rules come with it: a swell not cleared drains HP, and a map with no
+    /// notes to fill HP can't fail on it.
+    Lazer,
 }
 
 /// What a hit is worth in the combo part of `Scoring::Standard`: later hits in a combo more.
 pub(crate) fn combo_weight(combo: u32) -> f64 {
     (combo as f64 + 1.0).sqrt()
 }
+
+/// What a hit is worth in the combo part of `Scoring::Lazer`, by the combo after it: log4 of it,
+/// within 0.5 and log4(400). Like osu!lazer, a miss (combo 0) still counts the 0.5.
+pub(crate) fn lazer_combo_weight(combo_after: u32) -> f64 {
+    let log = if combo_after == 0 {
+        f64::NEG_INFINITY
+    } else {
+        (combo_after as f64).ln() / 4f64.ln()
+    };
+    log.max(0.5).min(400f64.ln() / 4f64.ln())
+}
+
+/// `Scoring::Lazer`'s bonus points (osu!lazer's SmallBonus 10 and LargeBonus 50, finishers ×7
+/// and big drumroll ticks' extra ×3).
+pub(crate) const LAZER_ROLL_TICK: f64 = 10.0;
+pub(crate) const LAZER_BIG_ROLL_TICK: f64 = 10.0 + 50.0 * 3.0;
+pub(crate) const LAZER_STRONG: f64 = 50.0 * 7.0;
+pub(crate) const LAZER_SWELL: f64 = 50.0;
+/// osu!lazer's TaikoSwellJudgement: a swell not cleared takes this many `hp_miss` off.
+const LAZER_SWELL_MISS_HP: f64 = 0.65;
 
 pub(crate) struct StrongPending {
     pub(crate) note: usize,
@@ -452,8 +479,10 @@ pub struct Game {
     /// Standard scoring: the combo points a clean play of the part played gives, and how many
     /// notes it has. Worked out at the first hit (after the part skipped is known).
     score_basis: Option<(f64, u32)>,
-    /// Standard scoring: the combo points made so far.
+    /// Standard and lazer scoring: the combo points made so far.
     combo_points: f64,
+    /// Lazer scoring: the bonus points made so far (drumrolls, finishers, swells).
+    bonus_points: f64,
     /// Presses let off as extra hits since a note was last judged (`judge_nearest`).
     extra_taps: u32,
     /// Record presses (map time judged at, key) for a replay.
@@ -502,6 +531,8 @@ pub struct Game {
     hp_miss: f64,
     /// Started mid-map (a start point): too few notes to judge HP by, so only SD/PF fail.
     hp_exempt: bool,
+    /// The map has notes that fill HP. Lazer scoring: without any, HP can't fail the play.
+    hp_objects: bool,
     /// Failed by Sudden Death / Perfect: map time and when (the play ends a moment later).
     failed: Option<(f64, Instant)>,
     /// Seconds the FAILED sign stays before the play ends (shorter when it starts over by itself).
@@ -1036,12 +1067,12 @@ impl Game {
                 .map_or(500.0, |s| s.0)
         };
         // osu!lazer's TaikoHealthProcessor.
-        let hits = map
+        let hit_count = map
             .notes
             .iter()
             .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat) && !n.unhittable)
-            .count()
-            .max(1) as f64;
+            .count();
+        let hits = hit_count.max(1) as f64;
         let hp_drain = mods.hp(map.meta.hp);
         let hp_hit = 1.0 / (3.0 * hits * beatmap::difficulty_range(hp_drain, 0.5, 0.75, 0.98));
         let hp_miss = beatmap::difficulty_range(hp_drain, 0.0018, 0.0075, 0.0120);
@@ -1105,9 +1136,10 @@ impl Game {
             scroll_speed: 1.0,
             mute_hits: false,
             mash: Mash::Nearest,
-            scoring: Scoring::Standard,
+            scoring: Scoring::Lazer,
             score_basis: None,
             combo_points: 0.0,
+            bonus_points: 0.0,
             extra_taps: 0,
             record: false,
             log_inputs: false,
@@ -1131,6 +1163,7 @@ impl Game {
             hp_hit,
             hp_miss,
             hp_exempt: false,
+            hp_objects: hit_count > 0,
             failed: None,
             fail_linger: 1.6,
             last_hand: None,
@@ -1450,6 +1483,7 @@ impl Game {
             || (!self.mods.has(Mod::NoFail)
                 && !self.mods.has(Mod::Autoplay)
                 && !self.hp_exempt
+                && !(self.scoring == Scoring::Lazer && !self.hp_objects)
                 && self.hp < 0.5)
     }
 
@@ -1464,10 +1498,11 @@ impl Game {
         }
     }
 
-    /// Standard scoring after a hit or miss: the score of the play so far, mods included. `combo`
-    /// is the combo the note was judged at.
-    pub(crate) fn rescore(&mut self, judge: Judge, combo: u32) {
-        let (max_points, notes) = *self.score_basis.get_or_insert_with(|| {
+    /// Standard and lazer scoring: the combo points a clean play of the part played gives, and
+    /// how many notes it has.
+    fn score_basis(&mut self) -> (f64, u32) {
+        let scoring = self.scoring;
+        *self.score_basis.get_or_insert_with(|| {
             // Notes skipped by `skip_to` aren't part of the play.
             let n = self
                 .map
@@ -1480,8 +1515,57 @@ impl Game {
                         && st.judged_at != f64::NEG_INFINITY
                 })
                 .count() as u32;
-            (300.0 * (0..n).map(combo_weight).sum::<f64>(), n)
-        });
+            let max = if scoring == Scoring::Lazer {
+                300.0 * (1..=n).map(lazer_combo_weight).sum::<f64>()
+            } else {
+                300.0 * (0..n).map(combo_weight).sum::<f64>()
+            };
+            (max, n)
+        })
+    }
+
+    /// Lazer scoring after a hit or miss: like osu!lazer, every note judged adds GREAT's 300
+    /// times the weight of the combo after it to the combo part, an OK or a miss as well.
+    fn rescore_lazer(&mut self) {
+        self.combo_points += 300.0 * lazer_combo_weight(self.stats.combo);
+        self.lazer_total();
+    }
+
+    /// Lazer scoring: bonus points (a drumroll tick, a finisher, a swell). Nothing counts after
+    /// failing.
+    pub(crate) fn add_bonus(&mut self, points: f64) {
+        if self.scoring == Scoring::Lazer && self.failed.is_none() {
+            self.bonus_points += points;
+            self.lazer_total();
+        }
+    }
+
+    /// Lazer scoring: the score of the play so far (osu!lazer's TaikoScoreProcessor), rounded
+    /// before and after the mods' multiplier as there.
+    fn lazer_total(&mut self) {
+        let (max_points, notes) = self.score_basis();
+        let s = &self.stats;
+        let judged = (s.great + s.ok + s.miss).min(notes);
+        let combo_progress = if max_points > 0.0 {
+            (self.combo_points / max_points).min(1.0)
+        } else {
+            1.0
+        };
+        let accuracy_progress = if notes > 0 {
+            judged as f64 / notes as f64
+        } else {
+            1.0
+        };
+        let total = 250_000.0 * combo_progress
+            + 750_000.0 * s.accuracy().powf(3.6) * accuracy_progress
+            + self.bonus_points;
+        self.stats.score = (total.round() * self.score_mult).round() as u64;
+    }
+
+    /// Standard scoring after a hit or miss: the score of the play so far, mods included. `combo`
+    /// is the combo the note was judged at.
+    pub(crate) fn rescore(&mut self, judge: Judge, combo: u32) {
+        let (max_points, notes) = self.score_basis();
         self.combo_points += match judge {
             Judge::Great => 300.0 * combo_weight(combo),
             Judge::Ok => 150.0 * combo_weight(combo),
@@ -2015,6 +2099,7 @@ impl Game {
         self.stats = Stats::default();
         self.score_basis = None;
         self.combo_points = 0.0;
+        self.bonus_points = 0.0;
         self.presses = [f64::NEG_INFINITY; 4];
         self.last_judge = None;
         self.recent_errors.clear();
@@ -2118,6 +2203,10 @@ impl Game {
                 Kind::Swell => {
                     if !st.finished && t > n.end_time {
                         st.finished = true;
+                        // osu!lazer: a swell not cleared drains HP.
+                        if self.scoring == Scoring::Lazer && self.failed.is_none() {
+                            self.hp = (self.hp - LAZER_SWELL_MISS_HP * self.hp_miss).max(0.0);
+                        }
                     }
                 }
             }
@@ -2242,8 +2331,10 @@ impl Game {
                 self.stats.accuracy(),
             );
         }
-        if self.scoring == Scoring::Standard {
-            self.rescore(judge, combo_before);
+        match self.scoring {
+            Scoring::Standard => self.rescore(judge, combo_before),
+            Scoring::Lazer => self.rescore_lazer(),
+            Scoring::Classic => {}
         }
     }
 
@@ -2391,6 +2482,7 @@ impl Game {
                 self.strong = None;
                 self.stats.strong += 1;
                 self.add_score(300.0);
+                self.add_bonus(LAZER_STRONG);
                 self.quake_at = t;
                 return big;
             }
@@ -2414,6 +2506,9 @@ impl Game {
                     self.stats.swells += 1;
                 }
                 self.add_score(if done { 1100.0 } else { 100.0 });
+                if done {
+                    self.add_bonus(LAZER_SWELL);
+                }
             }
             if !to_note {
                 return normal;
@@ -2460,7 +2555,13 @@ impl Game {
                 *tick = true;
                 self.stats.roll_ticks += 1;
                 let points = if n.big { 200.0 } else { 100.0 };
+                let bonus = if n.big {
+                    LAZER_BIG_ROLL_TICK
+                } else {
+                    LAZER_ROLL_TICK
+                };
                 self.add_score(points);
+                self.add_bonus(bonus);
             }
         }
         normal
