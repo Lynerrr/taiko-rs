@@ -51,6 +51,9 @@ pick)
     fi
     # A release of dev to stable has the tree dev had then.
     dev_trees=$(git log --format=%T -n 300 refs/remotes/origin/dev)
+    # A change merged into dev and into stable through pull requests of its own has the same
+    # subject on both, only the pull request numbers at its end differ.
+    dev_subjects=$(git log --format=%s -n 300 refs/remotes/origin/dev | sed -E 's/( \(#[0-9]+\))+$//')
 
     git worktree add -q --detach "$RUNNER_TEMP/dev" refs/remotes/origin/dev
     cd "$RUNNER_TEMP/dev"
@@ -63,8 +66,16 @@ pick)
             echo "left alone (Dev-sync: skip): $subject"
             continue
         fi
-        if printf '%s\n' "$dev_trees" | grep -qx "$(git rev-parse "$c^{tree}")"; then
+        # Here-strings, not printf | grep -q: grep quits at the first match, printf may then die
+        # of SIGPIPE, and pipefail turns the match into a miss.
+        if grep -qxF -- "$(git rev-parse "$c^{tree}")" <<<"$dev_trees"; then
             echo "left alone (a release of dev): $subject"
+            continue
+        fi
+        # Merged into dev as well. Its change may not undo cleanly there (dev has moved code around
+        # it since), and a cherry-pick would then add its new code a second time.
+        if grep -qxF -- "$(printf '%s' "$subject" | sed -E 's/( \(#[0-9]+\))+$//')" <<<"$dev_subjects"; then
+            echo "left alone (dev has a commit with this subject): $subject"
             continue
         fi
         # Copied by hand already: its change undoes cleanly on dev.
