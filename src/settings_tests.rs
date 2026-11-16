@@ -470,8 +470,8 @@ fn map_skin_item(s: &State) -> Option<(usize, String)> {
         .menu_items(&s.library)
         .into_iter()
         .enumerate()
-        .find(|(_, (_, a))| *a == ui::MenuAction::MapSkin)
-        .map(|(k, (label, _))| (k, label))
+        .find(|(_, it)| it.action == ui::MenuAction::MapSkin)
+        .map(|(k, it)| (k, it.label))
 }
 
 #[test]
@@ -659,7 +659,7 @@ fn a_songs_menu_likes_it() {
     });
     let i = s.select.menu_map().unwrap();
     let items = s.select.menu_items(&s.library);
-    assert!(items[0].0.starts_with("Like") && items[0].1 == ui::MenuAction::Like);
+    assert!(items[0].label == "Like" && items[0].action == ui::MenuAction::Like);
     s.click(crate::hit::Hit::SongMenu(0), None);
     assert!(s.select.is_liked(&s.library[i]));
     assert!(s.select.menu.is_none());
@@ -1734,13 +1734,26 @@ fn sets_loved_on_the_server_count_as_loved() {
         !s.select
             .menu_items(&s.library)
             .iter()
-            .any(|(_, a)| matches!(a, ui::MenuAction::Love(..)))
+            .any(|it| matches!(it.action, ui::MenuAction::Love(..)))
     );
     s.select.nominator = true;
     let items = |s: &State| s.select.menu_items(&s.library);
-    assert!(items(&s).iter().any(
-        |(l, a)| l == "Unlove on taiko.rs" && *a == ui::MenuAction::Love(2275915, false, false)
-    ));
+    // Loved whole: its set's button is lit and takes it back, and no difficulty's is offered.
+    let love = |s: &State| -> Vec<(Option<ui::MenuScope>, bool, ui::MenuAction)> {
+        items(s)
+            .into_iter()
+            .filter(|it| it.label == "Love")
+            .map(|it| (it.scope, it.on, it.action))
+            .collect()
+    };
+    assert_eq!(
+        love(&s),
+        [(
+            Some(ui::MenuScope::Set),
+            true,
+            ui::MenuAction::Love(2275915, false, false)
+        )]
+    );
     // Just some difficulties loved: the others give no pp, and each can be loved alone.
     let version = s.library[0].meta.version.clone();
     let other = |s: &State| {
@@ -1772,25 +1785,37 @@ fn sets_loved_on_the_server_count_as_loved() {
     );
     assert_eq!(s.map_status(0).map(|x| x.0), Some("LOVED HERE"));
     assert_ne!(s.map_status(j).map(|x| x.0), Some("LOVED HERE"));
-    let menu = items(&s);
-    assert!(menu.iter().any(
-        |(l, a)| l.starts_with("Unlove [") && *a == ui::MenuAction::Love(2275915, false, true)
-    ));
-    assert!(
-        menu.iter()
-            .any(|(l, a)| l == "Love the whole set on taiko.rs"
-                && *a == ui::MenuAction::Love(2275915, true, false))
+    // This difficulty loved: its button is lit and takes it back; the set's loves the rest.
+    assert_eq!(
+        love(&s),
+        [
+            (
+                Some(ui::MenuScope::Difficulty),
+                true,
+                ui::MenuAction::Love(2275915, false, true)
+            ),
+            (
+                Some(ui::MenuScope::Set),
+                false,
+                ui::MenuAction::Love(2275915, true, false)
+            ),
+        ]
     );
     s.select.server_loved.clear();
-    let menu = items(&s);
-    assert!(
-        menu.iter().any(
-            |(l, a)| l.starts_with("Love [") && *a == ui::MenuAction::Love(2275915, true, true)
-        )
-    );
-    assert!(
-        menu.iter()
-            .any(|(_, a)| *a == ui::MenuAction::Love(2275915, true, false))
+    assert_eq!(
+        love(&s),
+        [
+            (
+                Some(ui::MenuScope::Difficulty),
+                false,
+                ui::MenuAction::Love(2275915, true, true)
+            ),
+            (
+                Some(ui::MenuScope::Set),
+                false,
+                ui::MenuAction::Love(2275915, true, false)
+            ),
+        ]
     );
 }
 
