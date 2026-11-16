@@ -1652,6 +1652,13 @@ fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
     let mut now = Instant::now();
     ready(&mut s, &mut now);
     s.songs_dir = songs.dir.clone();
+    // A guest's copy goes into taiko.rs's own folder, not osu!'s.
+    let custom = songs.dir.with_file_name(format!(
+        "{}-custom",
+        songs.dir.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&custom);
+    s.set_custom_dir(custom.clone());
     s.cfg.online_token = "t".into();
 
     // A server without the feature: the invite (were it sent) leads nowhere.
@@ -1698,8 +1705,9 @@ fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
         wait_for(&mut s, &mut now, joined),
         "the editor opens on the session"
     );
-    let folder = songs.dir.join("1 Artist - Song");
+    let folder = custom.join("1 Artist - Song");
     assert_eq!(std::fs::read(folder.join("audio.mp3")).unwrap(), music);
+    assert!(!songs.dir.join("1 Artist - Song").exists());
     {
         let view = &mut s.scene.screen_mut::<MapEditor>().unwrap().view;
         assert_eq!(
@@ -1740,6 +1748,7 @@ fn an_invited_player_joins_a_mapping_session_and_edits_in_it() {
     let view = &s.scene.screen_as::<MapEditor>().unwrap().view;
     assert!(view.ed.chart.objects.iter().any(|o| o.time == 8000.0));
     assert!(view.link.is_none() && view.relink.is_none());
+    let _ = std::fs::remove_dir_all(&custom);
 }
 
 /// Sessions live in the server's memory: after a restart, a resume is refused, and the link

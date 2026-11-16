@@ -156,6 +156,17 @@ pub fn sidecar_id(folder: &Path) -> Option<u32> {
     Manifest::read(folder)?.id
 }
 
+/// Records where set folder `folder` came from, unless its manifest says so already (a lobby
+/// host's copy keeps the website number its manifest has).
+pub fn mark_origin(folder: &Path, origin: Origin) {
+    let mut m = Manifest::read(folder).unwrap_or_default();
+    if m.origin.is_none() {
+        m.origin = Some(origin);
+        m.installed.get_or_insert_with(now_secs);
+        let _ = m.write(folder);
+    }
+}
+
 /// Records that `folder` was sent as version `sent.version` of website set `sent.id`, with its
 /// charts `charts` (file names) as they are now.
 pub fn mark_sent(folder: &Path, sent: &Sent, charts: &[String]) {
@@ -572,6 +583,32 @@ pub fn fetch_preview(set: &SetInfo) -> Result<PathBuf, String> {
     crate::download::unpack(&archive, &unpacking)?;
     std::fs::rename(&unpacking, &maps).map_err(|e| e.to_string())?;
     Ok(maps)
+}
+
+/// The website's custom set that has (or had, in an older version) the difficulty with content
+/// hash `hash`; None when it's none of them, or the website can't be asked.
+pub fn set_of_map(hash: u64) -> Option<u32> {
+    crate::offline::internet().ok()?;
+    let mut reply = ureq::get(format!("{WEBSITE}/api/custom/status?hashes={hash:x}"))
+        .config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .call()
+        .ok()?;
+    status_set(&reply.body_mut().read_to_string().ok()?, hash)
+}
+
+/// Of `/api/custom/status`'s answer (`{"<hex hash>": {"id": N, ...}}`), the set map `hash` is in.
+fn status_set(text: &str, hash: u64) -> Option<u32> {
+    let found: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(text).ok()?;
+    found
+        .iter()
+        .find(|(k, _)| u64::from_str_radix(k, 16).ok() == Some(hash))?
+        .1
+        .get("id")?
+        .as_u64()
+        .and_then(|id| u32::try_from(id).ok())
 }
 
 /// A custom set as the website has it now.
@@ -1049,6 +1086,19 @@ mod tests {
             ..site
         };
         assert!(outdated(&dir, &newer));
+    }
+
+    #[test]
+    fn the_websites_status_answer_names_a_maps_set() {
+        let text = r#"{"4afe7841b490d3f8": {"id": 12, "owner": "a", "approved": true},
+            "ff": {"id": 3, "owner": "b", "approved": false}}"#;
+        assert_eq!(status_set(text, 0x4afe_7841_b490_d3f8), Some(12));
+        // Hex without leading zeros, as the website writes it.
+        assert_eq!(status_set(text, 0xff), Some(3));
+        assert_eq!(status_set(text, 7), None);
+        assert_eq!(status_set("{}", 7), None);
+        assert_eq!(status_set("junk", 7), None);
+        assert_eq!(set_of_map(7), None, "tests ask no website");
     }
 
     #[test]

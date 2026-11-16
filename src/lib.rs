@@ -4932,8 +4932,17 @@ impl State {
         let own_home = home
             .filter(|d| d.starts_with(&self.custom_dir))
             .map(Path::to_path_buf);
+        // Any other taiko.rs custom set (a `.tko` in it, or our own `.rsz`) goes there too; a
+        // plain osu! archive into osu!'s Songs folder.
+        let own =
+            !legacy_home && (library::is_rsz(&archive) || download::is_custom_archive(&archive));
+        let root = if own {
+            self.custom_dir.clone()
+        } else {
+            self.songs_dir.clone()
+        };
         let folder = home
-            .filter(|d| d.parent() == Some(self.songs_dir.as_path()))
+            .filter(|d| d.parent() == Some(root.as_path()))
             .and_then(|d| d.file_name())
             .map(|n| n.to_string_lossy().into_owned());
         self.toast(
@@ -4966,9 +4975,10 @@ impl State {
         let job = download::import(
             archive,
             folder.as_deref().unwrap_or(name),
-            self.songs_dir.clone(),
+            root,
             temporary,
             maps.into_iter().map(|m| m.1).collect(),
+            own.then_some(custom::Origin::Import),
         );
         self.downloads.push(job);
     }
@@ -13145,6 +13155,13 @@ impl State {
         if self.lobby_lookup.is_busy() {
             return;
         }
+        // A taiko.rs custom map comes from the website: one made from an osu! set keeps that
+        // set's ID, and the osu! set by it never has the map.
+        if online::is_official(&self.cfg.online_server) {
+            self.lobby_lookup = Job::spawn(move || download::lobby_set(&m, custom::set_of_map));
+            self.toast("looking for the map...".into());
+            return;
+        }
         match m.set_id {
             Some(id) => self.start_download(download::SetInfo {
                 id,
@@ -13291,6 +13308,7 @@ impl State {
                 part.total,
                 m.hash,
                 self.songs_dir.clone(),
+                self.custom_dir.clone(),
             );
             // A transfer that's still going is given up for this one.
             self.stop_host_transfer();
@@ -13698,7 +13716,17 @@ impl State {
             }
         }
         match self.lobby_lookup.poll() {
-            Some(Ok(set)) => self.start_download(set),
+            Some(Ok(set)) => {
+                // The lobby's version isn't the one here: the website's goes over it.
+                if set.custom.is_some()
+                    && self.select.custom_folder.values().any(|&id| id == set.id)
+                {
+                    self.select
+                        .custom_updates
+                        .insert(set.id, ui::SetUpdate::Available);
+                }
+                self.start_download(set)
+            }
             Some(Err(e)) => self.toast(format!("download failed: {e}")),
             None => {}
         }
