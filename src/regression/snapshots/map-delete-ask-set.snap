@@ -1,77 +1,9 @@
-text  723,7    log in
-text  778,7    what's new
-text   12,10   0 fps  1000.00 ms  worst 0.0 ms  immediate
-text   54,24   t
-text   84,24   i
-text   95,24   k
-text  198,27   SONGS
-text  264,27   SETTINGS
-text  354,27   MULTIPLAYER
-text  467,27   DOWNLOAD
-text  551,27   Tab
-text  624,28   2 songs, 4 maps  |  taiko only
-text   68,29   a
-text  109,29   o
-text  136,29   r
-text  150,29   s
-text  125,35   .
-text   34,61   click to search (ctrl+f)...
-text  336,63   Sort: artist
-text  434,63   Mods
-text  494,66   rolls-and-swells
-text  721,71   Leaderboard >
-text  494,85   Regression
-text   44,92   sv-and-kiai
-text  416,97   1 diff
-text  494,104  mapped by tests
-text  731,104  NOT SUBMITTED
-text   44,106  Regression  |  mapped by tests
-text  495,123  [rolls-and-swells]
-text  781,123  1.03
-text   44,126  rolls-and-swells
-text  408,131  3 diffs
-text   44,140  Regression  |  mapped by tests
-text  494,141  OD
-text  514,141  5.0
-text  545,141  BPM
-text  573,141  120
-text  603,141  Length
-text  651,141  0:11
 text  289,144  Delete this beatmapset?
-text  494,153  Notes
-text  536,153  14
-text  559,153  Don
-text  586,153  8
-text  603,153  Kat
-text  630,153  6
-text  647,153  Rolls
-text  688,153  3
-text  705,153  Swells
-text  753,153  2
-text   56,160  rolls-and-swells
-text  431,160  1.03
-text  494,165  SS
-text  515,165  14pp
-text  552,165  99%
-text  580,165  14pp
-text  617,165  98%
-text  644,165  7pp
 text  278,178  Regression - rolls-and-swells
-text   56,182  big-notes
-text  431,182  1.93
-text   56,204  basics
-text  430,204  3.08
 text  215,208  Its 3 difficulties go with the whole folder: music, background and all.
 text  203,224  It goes to taiko.rs's Trash folder and can be brought back from there. Scores and replays stay.
 text  344,284  Cancel
 text  464,284  Delete
-text  490,297  0:00 / 0:12
-text  675,297  peak 8.0 notes/s at 0:10
-text  508,313  click / drag / wheel to scroll - play from where you stop
 text  313,324  Left/Right choose   Enter   Esc cancel
-text  641,421  Play
-text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort
 hit   317,276   100x24   Key(Escape)
 hit   437,276   100x24   DeleteMaps
-hit   771,2      74x14   Changelog
-hit   715,2      50x14   Account

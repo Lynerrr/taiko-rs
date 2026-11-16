@@ -96,12 +96,28 @@ fn toast(s: &mut State) -> String {
     s.toast.take().map(|t| t.text).unwrap_or_default()
 }
 
-/// The confirmation as drawn, with the temporary folder's name left out. Two frames: a frame
-/// hands its canvas the hit areas of the one before it.
+/// The confirmation as it draws itself. Over song select only its buttons and the top bar take
+/// clicks. The golden is the confirmation alone: the map panel behind it fills in its stats in
+/// the background, sooner or later, and made the whole screen's golden flaky.
 fn asked(s: &mut State, now: Instant) -> String {
+    // Two frames: a frame hands its canvas the hit areas of the one before it, and keeps its
+    // own in `State::hits`.
     frame(s, now);
-    let c = frame(s, now);
-    screen(&c, &["taiko-rs-regression-songs"])
+    frame(s, now);
+    let taking: Vec<String> = s.hits.iter().map(|h| format!("{:?}", h.hit)).collect();
+    assert_eq!(
+        taking,
+        ["Key(Escape)", "DeleteMaps", "Changelog", "Account"],
+        "nothing under the confirmation takes a click"
+    );
+    let ask = s.select.deleting.clone().expect("asked");
+    let mut c = crate::hit::Canvas {
+        audit: true,
+        width: WIDTH,
+        ..Default::default()
+    };
+    crate::screens::select::delete::draw_delete_ask(&mut c, &ask);
+    screen(&c, &[])
 }
 
 #[test]
