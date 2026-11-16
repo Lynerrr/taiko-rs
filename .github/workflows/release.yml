@@ -23,6 +23,12 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+# Tests aren't run here: Pre-merge ran them on every platform before the merge, and runs them again
+# on each push to stable. Here they only held up the release (2.5 minutes on Windows).
+#
+# Caches are saved from stable only; dev's builds read them (the default branch's caches are open
+# to every branch), and the repository's 10 GB keep both sets of caches otherwise.
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -30,9 +36,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-
-      - name: Test
-        run: cargo test --profile ci-test --locked --lib
+        with:
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/worktree-taiko-client' }}
 
       # Line tables in a .pdb beside the exe (not shipped): crash reports give each frame as
       # taiko-rs.exe+offset, and that build's .pdb turns them into files and lines (docs/ci.md).
@@ -96,12 +102,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/worktree-taiko-client' }}
 
       - name: Build dependencies
         run: sudo apt-get update && sudo apt-get install -y clang pkg-config libasound2-dev libpipewire-0.3-dev
-
-      - name: Test
-        run: cargo test --profile ci-test --locked --lib
 
       - name: Build
         run: cargo build --release --locked
@@ -118,8 +124,7 @@ jobs:
           name: linux
           path: taiko-rs-linux-x64.tar.gz
 
-  # A universal .app (macos/package.sh). Tests run in pre-merge.yml on macOS; a repeat here would
-  # only let the flaky network test there hold up the release for every platform.
+  # A universal .app (macos/package.sh).
   macos:
     runs-on: macos-latest
     steps:
@@ -128,6 +133,9 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/worktree-taiko-client' }}
 
       - name: Build and package
         run: macos/package.sh
@@ -151,6 +159,9 @@ jobs:
         with:
           targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust
+          save-if: ${{ github.ref == 'refs/heads/worktree-taiko-client' }}
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked

@@ -7,8 +7,11 @@ name: Perf gate
 # is accepted with the `perf-regression-ok` label; re-run the job after adding it.
 
 on:
-  pull_request:
-    paths:
+  # A push to stable only builds the head, to warm the cache the pull requests start from (one
+  # saved by a pull request is seen by that pull request alone).
+  push:
+    branches: [worktree-taiko-client]
+    paths: &client
       - "src/**"
       - "crates/**"
       - "Cargo.toml"
@@ -16,6 +19,8 @@ on:
       - "build.rs"
       - ".github/workflows/perf-gate.yml"
       - ".github/scripts/perf-gate.py"
+  pull_request:
+    paths: *client
   workflow_dispatch:
 
 permissions:
@@ -43,11 +48,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: perf-gate
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: Install Linux build dependencies
         run: sudo apt-get update && sudo apt-get install -y clang pkg-config libasound2-dev libpipewire-0.3-dev
 
+      - name: Warm the cache
+        if: github.event_name == 'push'
+        run: cargo test --profile perf-audit --locked --lib --no-run
+
       - name: Check out the base next to the head
+        if: github.event_name != 'push'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: git worktree add --detach "$RUNNER_TEMP/base" "${BASE_SHA:-HEAD~1}"
@@ -56,7 +67,10 @@ jobs:
       # head's (its dep-info names the files it read, and the base's were as new as ever), so
       # the gate measured the base against itself. The base's folder starts as a copy of the
       # cached one without the workspace's own crates, so only the dependencies are reused.
+      # Both build at once: with one codegen unit the game's crate compiles on one core, so
+      # one after the other left the runner's other cores idle for most of the ~15 minutes.
       - name: Build base and head
+        if: github.event_name != 'push'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
           BASE_TARGET: ${{ runner.temp }}/base-target
@@ -69,10 +83,22 @@ jobs:
               (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo clean --profile perf-audit -p "$crate")
             fi
           done
-          (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo test --profile perf-audit --locked --lib --no-run)
-          cargo test --profile perf-audit --locked --lib --no-run
+          (cd "$RUNNER_TEMP/base" && CARGO_TARGET_DIR="$BASE_TARGET" cargo test --profile perf-audit --locked --lib --no-run) > "$RUNNER_TEMP/base-build.log" 2>&1 &
+          base=$!
+          head=0
+          cargo test --profile perf-audit --locked --lib --no-run || head=$?
+          base_status=0
+          wait "$base" || base_status=$?
+          echo "::group::Base build"
+          cat "$RUNNER_TEMP/base-build.log"
+          echo "::endgroup::"
+          if [ "$base_status" != 0 ] || [ "$head" != 0 ]; then
+            echo "::error::build failed: base $base_status, head $head"
+            exit 1
+          fi
 
       - name: Run the audit, base and head in turns
+        if: github.event_name != 'push'
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
         run: |
@@ -86,6 +112,7 @@ jobs:
       # on a re-run of the same code). A slowdown has to hold over two more rounds, head first,
       # to fail: the lowest p50 of all five is compared.
       - name: Compare
+        if: github.event_name != 'push'
         id: compare
         continue-on-error: true
         env:
@@ -105,7 +132,7 @@ jobs:
           python3 .github/scripts/perf-gate.py --base perf-logs/base-*.log --head perf-logs/head-*.log
 
       - name: Upload the audit logs
-        if: always()
+        if: always() && github.event_name != 'push'
         uses: actions/upload-artifact@v4
         with:
           name: perf-logs

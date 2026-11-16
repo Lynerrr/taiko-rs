@@ -1,0 +1,84 @@
+name: Sync to dev
+
+# Bug fixes land on stable (worktree-taiko-client) first, and dev has to carry them too: a release
+# of dev to stable takes dev's tree, so whatever stable has and dev lacks would leave stable again
+# (#535, #529 and #528 nearly did). After each push to stable this copies the commits that came
+# since the last sync (the `dev-synced` tag) onto dev, checks the result with Pre-merge on Linux
+# (each commit already passed the full Pre-merge on stable), pushes dev and starts dev's release
+# build. .github/scripts/sync-to-dev.sh does the git side.
+#
+# Left alone: a commit already in dev (a release of dev, or one copied by hand) and one whose
+# message has a line `Dev-sync: skip`. A commit that doesn't apply to dev, one that changes
+# workflows (the Actions token may not push those) or a copy that fails the checks is left for a
+# person: the run opens (or adds to) the issue "Sync to dev needs a hand" and dev stays as it was.
+#
+# The Actions token's own pushes start no workflows, so dev's release build is started by hand
+# here, and no pull request is opened: its checks would never run.
+on:
+  push:
+    branches: [worktree-taiko-client]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+# One at a time, never cancelled: a run waiting behind another picks up its commits as well.
+concurrency:
+  group: sync-to-dev
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  pick:
+    name: Copy onto dev
+    if: github.ref == 'refs/heads/worktree-taiko-client'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      picked: ${{ steps.pick.outputs.picked }}
+      list: ${{ steps.pick.outputs.list }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: pick
+        run: bash .github/scripts/sync-to-dev.sh pick
+
+  checks:
+    name: Check the copies
+    needs: pick
+    if: needs.pick.outputs.picked == 'true'
+    uses: ./.github/workflows/pre-merge.yml
+    with:
+      ref: sync/dev
+      linux_only: true
+
+  land:
+    name: Push dev
+    needs: [pick, checks]
+    if: needs.pick.outputs.picked == 'true' && needs.checks.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: bash .github/scripts/sync-to-dev.sh land
+
+  failed:
+    name: Report failed checks
+    needs: [pick, checks]
+    if: always() && needs.pick.outputs.picked == 'true' && needs.checks.result != 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          LIST: ${{ needs.pick.outputs.list }}
+        run: bash .github/scripts/sync-to-dev.sh failed
