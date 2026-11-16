@@ -29,12 +29,43 @@ and test targets avoids building dependencies again for tests.
 
 The `Release build` workflow runs on pushes to the main/dev branches and manual dispatch,
 not on pull requests. Production release optimization, desktop packaging, and installer
-checks happen there, so PRs do not repeat the same tests/builds in two workflows.
+checks happen there, so PRs do not repeat the same tests/builds in two workflows. It runs no
+tests: Pre-merge ran them on every platform before the merge.
+
+## Build caches
+
+A cache saved by a pull request is only visible to that pull request, so before 2026-11-16 every
+pull request built all dependencies from nothing (`No cache found.` in each job), and their
+caches crowded the repository's 10 GB out. Now:
+
+- Pre-merge and the Perf gate also run on pushes to stable (`worktree-taiko-client`), and only
+  those runs save caches (`save-if`). The Perf gate's push run only builds the head.
+- Pull requests read stable's caches, pull requests into `dev` too: the default branch's caches
+  are open to every branch.
+- `Release build` saves its caches from stable only (`prefix-key: v1-rust`); dev's release
+  builds read them.
+
+## Sync to dev
+
+Bug fixes land on stable first, and dev has to carry them: a release of dev to stable takes dev's
+tree, so a fix only stable has would leave stable again. `.github/workflows/sync-to-dev.yml`
+runs after each push to stable and copies the stable commits since the `dev-synced` tag onto dev
+(`.github/scripts/sync-to-dev.sh`): it cherry-picks them, runs Pre-merge on Linux on the result
+(each commit already passed all platforms on stable), pushes dev, moves the tag and starts dev's
+release build. The Actions token's pushes start no workflows, hence the dispatch, and no pull
+request: its checks would never run.
+
+- Left alone: commits dev already has (a release of dev, a fix copied by hand) and commits with
+  a line `Dev-sync: skip` in their message.
+- Left for a person, in the issue "Sync to dev needs a hand": a commit that doesn't apply to dev,
+  one that changes `.github/workflows/` (the Actions token may not push workflows), and copies
+  that fail the checks. Dev stays as it was; copy those through a pull request into dev.
 
 ## Perf gate
 
 The `Perf gate` workflow (`.github/workflows/perf-gate.yml`) runs on pull requests that touch
-the client. It builds the pull request's base and head with the `perf-audit` profile, runs the
+the client. It builds the pull request's base and head with the `perf-audit` profile (at the
+same time: with one codegen unit each build keeps one core busy), runs the
 [performance audit](performance-audit.md) three times for each, in turns on the same runner, and
 compares them with `.github/scripts/perf-gate.py`:
 
