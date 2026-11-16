@@ -1,5 +1,5 @@
 //! The player's own data in one SQLite database, `taiko.db` in the data folder: local scores,
-//! when each map was last played, hidden maps, each map's own offset, the maps whose skin is
+//! when each map was last played, each map's own offset, the maps whose skin is
 //! off and the music player's favourites. These used to be text files of their own next to
 //! config.txt; `config.txt` itself stays a text file (players edit it by hand) and so do the
 //! replays (the database keeps their file names).
@@ -242,59 +242,24 @@ impl Store {
             .map_err(err)
     }
 
+    /// Forgets when the maps at `paths` were played (they were deleted).
+    pub fn forget_plays(&mut self, paths: &[PathBuf]) -> Result<(), String> {
+        self.transaction(|s| {
+            let mut q = s
+                .conn
+                .prepare("DELETE FROM plays WHERE path = ?1")
+                .map_err(err)?;
+            for p in paths {
+                q.execute(params![path_text(p)]).map_err(err)?;
+            }
+            Ok(())
+        })
+    }
+
     /// Replaces every play with `plays` (inside a transaction already open).
     pub(crate) fn write_plays(&self, plays: &HashMap<PathBuf, u64>) -> Result<(), String> {
         self.conn.execute("DELETE FROM plays", []).map_err(err)?;
         plays.iter().try_for_each(|(p, &at)| self.add_play(p, at))
-    }
-
-    // Hidden maps.
-
-    /// (Songs hidden by folder, difficulties hidden by file).
-    pub fn hidden(&self) -> Result<(HashSet<PathBuf>, HashSet<PathBuf>), String> {
-        let mut q = self
-            .conn
-            .prepare("SELECT kind, path FROM hidden")
-            .map_err(err)?;
-        let rows = q
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-            .map_err(err)?;
-        let (mut songs, mut maps) = (HashSet::new(), HashSet::new());
-        for row in rows {
-            let (kind, path) = row.map_err(err)?;
-            if kind == "song" {
-                songs.insert(PathBuf::from(path));
-            } else {
-                maps.insert(PathBuf::from(path));
-            }
-        }
-        Ok((songs, maps))
-    }
-
-    pub fn replace_hidden(
-        &mut self,
-        songs: &HashSet<PathBuf>,
-        maps: &HashSet<PathBuf>,
-    ) -> Result<(), String> {
-        self.transaction(|s| s.write_hidden(songs, maps))
-    }
-
-    pub(crate) fn write_hidden(
-        &self,
-        songs: &HashSet<PathBuf>,
-        maps: &HashSet<PathBuf>,
-    ) -> Result<(), String> {
-        self.conn.execute("DELETE FROM hidden", []).map_err(err)?;
-        let mut q = self
-            .conn
-            .prepare("INSERT INTO hidden (kind, path) VALUES (?1, ?2)")
-            .map_err(err)?;
-        for (kind, set) in [("song", songs), ("map", maps)] {
-            for p in set {
-                q.execute(params![kind, path_text(p)]).map_err(err)?;
-            }
-        }
-        Ok(())
     }
 
     // Each map's own offset.

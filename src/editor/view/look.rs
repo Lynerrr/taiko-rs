@@ -28,7 +28,7 @@ pub(super) const SOFT: u32 = 0xb4b4c6;
 const HEAD: u32 = 0x7c7c96;
 const RULE: u32 = 0x2a2a38;
 /// Deleting.
-pub(super) const DANGER: u32 = 0xff6b6b;
+pub(super) const DANGER: u32 = crate::style::DANGER;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Look {

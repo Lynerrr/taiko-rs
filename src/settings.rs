@@ -67,7 +67,6 @@ pub enum Item {
     NotifyRequests,
     ShowConverts,
     SongHeadings,
-    HiddenMaps,
     SongsFolder,
     DataFolder,
     MasterVolume,
@@ -128,11 +127,10 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 138] = [
+pub const ITEMS: [(&str, Item); 137] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
-    ("LIBRARY", Item::HiddenMaps),
     ("LIBRARY", Item::SongSelectLayout),
     ("LIBRARY", Item::DataFolder),
     ("LIBRARY", Item::Screenshots),
@@ -271,7 +269,7 @@ pub const ITEMS: [(&str, Item); 138] = [
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
-    ("LIBRARY", "Songs folder, hidden maps, data"),
+    ("LIBRARY", "Songs folder, song list, data"),
     ("GAMEPLAY", "speed, rate, interface, autoplay"),
     ("VIEW", "playfield, background"),
     ("INPUT", "drum keys, hotkeys, touch"),
@@ -312,9 +310,9 @@ pub fn section_name(s: usize) -> &'static str {
 pub fn section_summary(s: usize) -> &'static str {
     match SECTIONS.get(s).map_or("", |s| s.0) {
         "LIBRARY" => tr!(
-            "Songs folder, hidden maps, data",
-            "Songsフォルダ、非表示の譜面、データ",
-            "папка Songs, скрытые карты, данные"
+            "Songs folder, song list, data",
+            "Songsフォルダ、曲リスト、データ",
+            "папка Songs, список песен, данные"
         ),
         "GAMEPLAY" => tr!(
             "speed, rate, interface",
@@ -616,7 +614,6 @@ impl Item {
                 "曲リストの見出し",
                 "Заголовки в списке песен"
             ),
-            Item::HiddenMaps => tr!("Hidden maps", "非表示の譜面", "Скрытые карты"),
             Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
             Item::DataFolder => tr!(
                 "Game data folder",
@@ -818,7 +815,6 @@ impl Item {
             | Item::Guide
             | Item::Calibrate
             | Item::VsyncCalibrate
-            | Item::HiddenMaps
             | Item::Update
             | Item::Changelog
             | Item::KrokodilKoban
@@ -978,11 +974,6 @@ impl Item {
                 "Group songs under headings you open and close (stars, letters, BPM...). Off: one list in the sort's order; by difficulty, each difficulty on its own.",
                 "曲を開閉できる見出し (星、頭文字、BPMなど) ごとにまとめます。オフ: 並び順のまま一つのリストに。難易度順では難易度ごとに並べます。",
                 "Группировать песни под заголовками, которые открываются и закрываются (звёзды, буквы, BPM...). Выкл.: один список по сортировке; по сложности — каждая сложность отдельно."
-            ),
-            Item::HiddenMaps => tr!(
-                "Right-click a song to hide it here (files stay). Enter lists them all again.",
-                "曲を右クリックでここから隠せます (ファイルは残ります)。Enterで全て再表示。",
-                "Правый клик по песне прячет её здесь (файлы остаются). Enter показывает все снова."
             ),
             Item::SongsFolder => tr!(
                 "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",

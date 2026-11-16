@@ -57,6 +57,7 @@ mod library;
 mod library_refresh;
 mod link;
 mod logo;
+mod map_trash;
 mod mapguessr;
 mod mapinfo;
 mod mapping_sessions;
@@ -452,6 +453,8 @@ struct State {
     keyboard: android::Keyboard,
     /// Where downloaded sets go.
     songs_dir: PathBuf,
+    /// Where deleted maps go (`map_trash`): the system's recycle bin, else the game's own folder.
+    map_bin: map_trash::Bin,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
@@ -2664,7 +2667,6 @@ impl State {
             Item::NotifyRequests => on(c.notify_requests),
             Item::ShowConverts => on(self.select.show_converts),
             Item::SongHeadings => on(self.select.headings),
-            Item::HiddenMaps => self.select.hidden.describe(),
             Item::SongsFolder
                 if self.folder_pick.is_busy() && self.folder_pick_for == Item::SongsFolder =>
             {
@@ -3047,7 +3049,7 @@ impl State {
                 return;
             }
             // Act on Enter in `settings_key`.
-            Item::HiddenMaps | Item::SongsFolder | Item::DataFolder => return,
+            Item::SongsFolder | Item::DataFolder => return,
             Item::MasterVolume => {
                 self.cfg.master_volume =
                     (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0)
@@ -5131,22 +5133,6 @@ impl State {
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::SkinFolder => {
                 self.open_skins_folder()
-            }
-            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item == Item::HiddenMaps => {
-                if self.select.hidden.is_empty() {
-                    self.toast(
-                        tr!(
-                            "nothing is hidden: right-click a song in the list to hide it",
-                            "何も隠れていません: リストの曲を右クリックで隠せます",
-                            "ничего не скрыто: правый клик по песне в списке прячет её"
-                        )
-                        .into(),
-                    );
-                } else {
-                    let what = self.select.hidden.describe();
-                    self.select.unhide_all(&self.library);
-                    self.toast(tr!("{what} back in the song list", "{what}を曲リストに戻しました", "{what} снова в списке песен"; [] [what]));
-                }
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => {
                 self.open_choices(item)
@@ -11458,6 +11444,11 @@ impl State {
             self.collection_naming_key(code, text);
             return;
         }
+        // So does the question whether to delete a map.
+        if self.select.deleting.is_some() && self.scene.is_select() {
+            self.delete_ask_key(code, repeat);
+            return;
+        }
         // Key capture must see every key, before any shortcut can claim it.
         if self.settings_ui.dropdown.is_some() && !repeat {
             let nav = matches!(
@@ -12526,9 +12517,14 @@ impl State {
     }
 
     fn installed_sets(&mut self) -> &mut std::collections::HashSet<u32> {
-        let library = &self.library;
-        self.installed_sets
-            .get_or_insert_with(|| library.iter().filter_map(Entry::set_id).collect())
+        let (library, gone) = (&self.library, &self.select.gone);
+        self.installed_sets.get_or_insert_with(|| {
+            library
+                .iter()
+                .filter(|e| !gone.contains(&e.path))
+                .filter_map(Entry::set_id)
+                .collect()
+        })
     }
 
     /// Downloads a set unless it's already here or on its way.
@@ -14050,6 +14046,7 @@ impl State {
                 self.universe_action(action);
             }
             Hit::UpdateSet(i) => self.update_set(i),
+            Hit::DeleteMaps => self.confirm_delete(),
             Hit::SongMenu(k) => {
                 let action = self
                     .select
@@ -14127,8 +14124,15 @@ impl State {
                         });
                     }
                     self.select.menu = None;
-                } else if let Some(what) = action.and_then(|a| self.select.hide(a, &self.library)) {
-                    self.toast(format!("hid {what}: Settings > Hidden maps brings it back"));
+                } else if let Some(
+                    a @ (ui::MenuAction::DeleteDifficulty | ui::MenuAction::DeleteSet),
+                ) = action
+                {
+                    let entry = self.select.menu_map();
+                    self.select.menu = None;
+                    if let Some(i) = entry {
+                        self.ask_delete(i, a == ui::MenuAction::DeleteSet);
+                    }
                 }
             }
             // Like osu!: the first click selects, clicking the selected difficulty plays it.

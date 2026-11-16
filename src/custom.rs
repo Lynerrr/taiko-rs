@@ -83,6 +83,51 @@ pub fn write_sidecar(folder: &Path, id: u32) {
     let _ = std::fs::write(folder.join(SIDECAR), format!("{{\"id\": {id}}}\n"));
 }
 
+/// The marker's `deleted` list: content hashes of the difficulties the player deleted from the
+/// set (as 16 hex digits).
+const DELETED_KEY: &str = "deleted";
+
+/// Notes in the folder's marker (if it has one) that the player deleted the difficulty with
+/// content hash `hash`: the website still having it is no reason to call the set outdated and
+/// bring it back. Returns whether it was noted.
+pub fn note_deleted(folder: &Path, hash: u64) -> bool {
+    let path = folder.join(SIDECAR);
+    let Some(mut json) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .filter(serde_json::Value::is_object)
+    else {
+        return false;
+    };
+    let hex = serde_json::Value::String(format!("{hash:016x}"));
+    let list = json.as_object_mut().map(|o| {
+        o.entry(DELETED_KEY)
+            .or_insert_with(|| serde_json::json!([]))
+    });
+    match list.and_then(serde_json::Value::as_array_mut) {
+        Some(list) if list.contains(&hex) => return true,
+        Some(list) => list.push(hex),
+        None => return false,
+    }
+    std::fs::write(&path, format!("{json}\n")).is_ok()
+}
+
+/// The content hashes of the difficulties the player deleted from the set in `folder`.
+pub fn deleted(folder: &Path) -> Vec<u64> {
+    let Some(json) = std::fs::read_to_string(folder.join(SIDECAR))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+    else {
+        return Vec::new();
+    };
+    json.get(DELETED_KEY)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| u64::from_str_radix(v.as_str()?, 16).ok())
+        .collect()
+}
+
 /// `(mode, note count)` of a map file's text: the taiko ones are mode 1.
 pub fn mode_and_notes(text: &str) -> (Option<u8>, usize) {
     let (mut section, mut mode, mut notes) = ("", None, 0);
@@ -486,9 +531,17 @@ fn sets_in(text: &str) -> Option<Vec<SiteSet>> {
 
 /// Whether the copy of custom set `site` in `folder` is an older version than the website's:
 /// a difficulty of the website's isn't in it, and nothing in it changed since the upload (a
-/// mapper's own folder they've gone on editing isn't old, it's ahead).
+/// mapper's own folder they've gone on editing isn't old, it's ahead). A difficulty the player
+/// deleted (`note_deleted`) isn't missing.
 pub fn outdated(folder: &Path, site: &SiteSet) -> bool {
-    if site.hashes.is_empty() {
+    let deleted = deleted(folder);
+    let wanted: Vec<u64> = site
+        .hashes
+        .iter()
+        .copied()
+        .filter(|h| !deleted.contains(h))
+        .collect();
+    if wanted.is_empty() {
         return false;
     }
     let Ok(dir) = std::fs::read_dir(folder) else {
@@ -508,7 +561,7 @@ pub fn outdated(folder: &Path, site: &SiteSet) -> bool {
         hashes.push(crate::net::map_hash(&bytes));
         newest = newest.max(crate::library::file_stats(&path).1);
     }
-    site.hashes.iter().any(|h| !hashes.contains(h)) && newest < site.updated
+    wanted.iter().any(|h| !hashes.contains(h)) && newest < site.updated
 }
 
 fn answer(text: &str) -> Result<Sent, String> {
@@ -766,6 +819,36 @@ mod tests {
         std::fs::write(dir.join("a [Mine].osu"), "home-made").unwrap();
         assert!(!outdated(&dir, &site(now + 3600)));
         assert!(!outdated(&dir, &SiteSet::default()));
+    }
+
+    #[test]
+    fn a_difficulty_the_player_deleted_doesnt_make_the_set_outdated() {
+        let dir = folder("deleted-diff");
+        std::fs::write(dir.join("a [Oni].tko"), "oni").unwrap();
+        let (oni, easy) = (crate::net::map_hash(b"oni"), crate::net::map_hash(b"easy"));
+        let now = crate::library::file_stats(&dir.join("a [Oni].tko")).1;
+        let site = SiteSet {
+            id: 3,
+            approved: true,
+            hashes: vec![oni, easy],
+            updated: now + 60,
+        };
+        // Without a marker there's nowhere to note it.
+        assert!(!note_deleted(&dir, easy));
+        write_sidecar(&dir, 3);
+        assert!(outdated(&dir, &site), "[Easy] is missing");
+        assert!(note_deleted(&dir, easy));
+        assert!(note_deleted(&dir, easy), "noted once");
+        assert_eq!(deleted(&dir), vec![easy]);
+        assert_eq!(sidecar_id(&dir), Some(3), "the set number stays");
+        assert!(!outdated(&dir, &site), "the player deleted it");
+        // A difficulty the website added since still is news.
+        let hard = crate::net::map_hash(b"hard");
+        let newer = SiteSet {
+            hashes: vec![oni, easy, hard],
+            ..site
+        };
+        assert!(outdated(&dir, &newer));
     }
 
     #[test]

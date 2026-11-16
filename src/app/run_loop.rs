@@ -1240,6 +1240,7 @@ impl State {
             #[cfg(target_os = "android")]
             keyboard: android::Keyboard::default(),
             songs_dir,
+            map_bin: map_trash::Bin::for_game(),
             installed_sets: None,
             lobby_lookup: Job::idle(),
             score_link: None,
