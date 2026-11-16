@@ -32,12 +32,14 @@ text   73,203  太鼓のキー、ショートカット、タッチ
 text  235,210  ゲームデータのフォルダ
 text  750,210  いつもの場所
 text   73,229  オフセット
-text  235,240  スクリーンショット
-text  743,240  Clipboard
+text  235,240  taiko.rsの譜面フォルダ
+text  743,240  Enterで開く
 text   73,243  音声オフセット、調整
 text   73,269  オーディオ
-text  233,276  譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。
+text  235,270  スクリーンショット
+text  743,270  Clipboard
 text   73,283  音量、遅延
+text  233,306  譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。
 text   73,309  グラフィック
 text   73,323  フレーム、画面
 text   73,349  スキン
@@ -70,5 +72,6 @@ hit   223,138   594x30   SettingRow(2)
 hit   223,168   594x30   SettingRow(3)
 hit   223,198   594x30   SettingRow(4)
 hit   223,228   594x30   SettingRow(5)
+hit   223,258   594x30   SettingRow(6)
 hit   799,2      46x14   Changelog
 hit   747,2      46x14   Account
