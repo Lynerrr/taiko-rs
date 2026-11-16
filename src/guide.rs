@@ -85,8 +85,8 @@ fn both(cfg: &Config, a: Hotkey, b: Hotkey) -> String {
 fn both_presets(cfg: &Config) -> String {
     format!(
         "{} {}",
-        key_name(cfg.preset_keys[0]),
-        key_name(cfg.preset_keys[1])
+        cfg.preset_keys[0].name(),
+        cfg.preset_keys[1].name()
     )
 }
 

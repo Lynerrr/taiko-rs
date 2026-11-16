@@ -186,6 +186,8 @@ pub struct Config {
     pub screenshot_to: ScreenshotTo,
     /// The interface's language.
     pub language: crate::lang::Lang,
+    /// Empty selects the original pixel font; otherwise an installed family name.
+    pub ui_font: String,
     /// The global offset as osu! has it (its universal offset): positive brings the notes
     /// earlier. On `OffsetScale::Osu` this is what the player sets and `offset_ms` follows from
     /// it; on `Sound` it follows from `offset_ms`. What the player sees is `shown_offset`.
@@ -241,8 +243,8 @@ pub struct Config {
     pub hud: crate::hud::Layout,
     /// The player's own interface layouts.
     pub hud_presets: Vec<(String, crate::hud::Layout)>,
-    /// The interface toggle's key, with Shift or not.
-    pub interface_key: (bool, KeyCode),
+    /// The interface toggle's key and modifiers.
+    pub interface_key: crate::keys::Chord,
     /// 0 = uncapped. Only applies to mailbox/immediate; vsync paces itself.
     pub fps_cap: u32,
     /// Vsync only: wait this long after the previous frame before drawing the next, so the frame is
@@ -291,6 +293,8 @@ pub struct Config {
     pub hide_great: bool,
     /// A play failed by Sudden Death or Perfect starts over at once instead of showing results.
     pub fail_restart: bool,
+    /// Manual retries skip the two-second fade when enabled.
+    pub instant_restart: bool,
     /// The lane and the drum's panel drawn pure black.
     pub black_lane: bool,
     /// .tko notes drawn as what they are, whatever their map makes them show as.
@@ -376,7 +380,7 @@ pub struct Config {
     /// Left rim, left centre, right centre, right rim.
     pub keys: [KeyCode; 4],
     /// Previous / next playfield resolution preset.
-    pub preset_keys: [KeyCode; 2],
+    pub preset_keys: [crate::keys::Chord; 2],
     /// The commit of the build last started (what's new is shown when it changes), and whether
     /// there was a config to read (not the first start).
     pub last_build: String,
@@ -475,6 +479,7 @@ impl Default for Config {
                 ScreenshotTo::Clipboard
             },
             language: crate::lang::Lang::En,
+            ui_font: String::new(),
             // osu!'s default: a new player starts where an osu! player does.
             offset_osu_ms: 0.0,
             offset_scale: OffsetScale::Osu,
@@ -501,7 +506,7 @@ impl Default for Config {
             interface_hides: crate::hud::Parts::DEFAULT_HIDES,
             hud: crate::hud::Layout::default(),
             hud_presets: Vec::new(),
-            interface_key: (true, KeyCode::Tab),
+            interface_key: crate::keys::Chord::shift(KeyCode::Tab),
             fps_cap: 0,
             calibration_bpm: 120.0,
             playfield_area: Area::FULL,
@@ -549,6 +554,7 @@ impl Default for Config {
             autoplay: crate::autoplay::Settings::default(),
             hide_great: true,
             fail_restart: false,
+            instant_restart: true,
             black_lane: false,
             true_notes: false,
             calm_maps: false,
@@ -574,7 +580,10 @@ impl Default for Config {
             notify_mentions: true,
             notify_requests: true,
             keys: [KeyCode::KeyD, KeyCode::KeyF, KeyCode::KeyJ, KeyCode::KeyK],
-            preset_keys: [KeyCode::F5, KeyCode::F6],
+            preset_keys: [
+                crate::keys::Chord::plain(KeyCode::F5),
+                crate::keys::Chord::plain(KeyCode::F6),
+            ],
             hotkeys: crate::keys::Bindings::default(),
             song_list_share: LIST_SHARE.2,
             song_preview_size: PREVIEW_SIZE.1,
@@ -1099,8 +1108,8 @@ const KEY_NAMES: &[KeyCode] = &[
 pub const NO_KEY: KeyCode = KeyCode::F35;
 
 /// "Shift+Tab".
-pub fn interface_key_name((shift, k): (bool, KeyCode)) -> String {
-    format!("{}{}", if shift { "Shift+" } else { "" }, key_name(k))
+pub fn interface_key_name(chord: crate::keys::Chord) -> String {
+    chord.name()
 }
 
 pub fn key_name(k: KeyCode) -> String {
@@ -1263,6 +1272,7 @@ impl Config {
                 "autoplay_left_handed" => cfg.autoplay.left_handed = v == "true",
                 "hide_great" => cfg.hide_great = v != "false",
                 "fail_restart" => cfg.fail_restart = v == "true",
+                "instant_restart" => cfg.instant_restart = v == "true",
                 "black_lane" => cfg.black_lane = v == "true",
                 "true_notes" => cfg.true_notes = v == "true",
                 "calm_maps" => cfg.calm_maps = v == "true",
@@ -1323,8 +1333,10 @@ impl Config {
                     }
                 }
                 "preset_keys" => {
-                    let keys: Vec<KeyCode> =
-                        v.split(',').filter_map(|s| parse_key(s.trim())).collect();
+                    let keys: Vec<crate::keys::Chord> = v
+                        .split(',')
+                        .filter_map(|s| crate::keys::Chord::parse(s.trim()))
+                        .collect();
                     if let Ok(k) = keys.try_into() {
                         cfg.preset_keys = k;
                     }
@@ -1335,6 +1347,7 @@ impl Config {
                 "screenshot_to" => {
                     cfg.screenshot_to = ScreenshotTo::parse(v).unwrap_or(cfg.screenshot_to)
                 }
+                "ui_font" => cfg.ui_font = v.to_string(),
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
@@ -1346,12 +1359,8 @@ impl Config {
                 "hud_layout" => cfg.hud = crate::hud::Layout::parse(v).unwrap_or_default(),
                 "hud_preset" => cfg.hud_presets.extend(crate::hud::parse_preset(v)),
                 "interface_key" => {
-                    let (shift, name) = match v.strip_prefix("Shift+") {
-                        Some(rest) => (true, rest),
-                        None => (false, v),
-                    };
-                    if let Some(k) = parse_key(name) {
-                        cfg.interface_key = (shift, k);
+                    if let Some(chord) = crate::keys::Chord::parse(v) {
+                        cfg.interface_key = chord;
                     }
                 }
                 "last_build" => cfg.last_build = v.to_string(),
@@ -1575,6 +1584,8 @@ impl Config {
              screenshot_to = {}\n\
              # the interface's language: en, ja or ru\n\
              language = {}\n\
+             # installed font family; empty uses the built-in pixel font\n\
+             ui_font = {}\n\
              show_playfield_size = {}\n\
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
@@ -1632,6 +1643,7 @@ impl Config {
              hide_great = {}\n\
              # a play failed by Sudden Death or Perfect starts over at once\n\
              fail_restart = {}\n\
+             instant_restart = {}\n\
              # the lane and the drum's panel pure black\n\
              black_lane = {}\n\
              # .tko notes drawn as what they are, whatever colour or size their map shows them as\n\
@@ -1653,12 +1665,13 @@ impl Config {
             keys.join(", "),
             self.preset_keys
                 .iter()
-                .map(|k| key_name(*k))
+                .map(|k| k.name())
                 .collect::<Vec<_>>()
                 .join(", "),
             self.touch_layout.name(),
             self.screenshot_to.key(),
             self.language.code(),
+            self.ui_font.replace(['\r', '\n'], ""),
             self.show_playfield_size,
             self.saved_presets
                 .iter()
@@ -1704,6 +1717,7 @@ impl Config {
             self.kiai_effects,
             self.hide_great,
             self.fail_restart,
+            self.instant_restart,
             self.black_lane,
             self.true_notes,
             self.calm_maps,

@@ -57,6 +57,11 @@ request: its checks would never run.
 
 - Left alone: commits dev already has (a release of dev, a fix copied by hand) and commits with
   a line `Dev-sync: skip` in their message.
+- Golden files (`src/regression/snapshots`) list every screen's texts and so often conflict with
+  dev's own. A commit whose only conflicts are there keeps dev's side, the goldens are blessed
+  again on Linux, and after the checks the copies go to dev through a pull request (one branch
+  `sync/dev-<run>` per run) for a person to read the .snap diff, since a blessed golden needs a
+  review. Merge it soon: the next copies onto dev come without it.
 - Left for a person, in the issue "Sync to dev needs a hand": a commit that doesn't apply to dev,
   one that changes `.github/workflows/` (the Actions token may not push workflows), and copies
   that fail the checks. Dev stays as it was; copy those through a pull request into dev.

@@ -9,6 +9,8 @@ touch_layout = KDDK
 screenshot_to = clipboard
 # the interface's language: en, ja or ru
 language = en
+# installed font family; empty uses the built-in pixel font
+ui_font =
 show_playfield_size = true
 # your own playfield sizes (preset list, in this order)
 saved_presets =
@@ -74,6 +76,7 @@ kiai_effects = true
 hide_great = true
 # a play failed by Sudden Death or Perfect starts over at once
 fail_restart = false
+instant_restart = true
 # the lane and the drum's panel pure black
 black_lane = false
 # .tko notes drawn as what they are, whatever colour or size their map shows them as

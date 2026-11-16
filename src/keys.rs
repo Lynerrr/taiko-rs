@@ -14,6 +14,7 @@ pub struct Chord {
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    pub super_key: bool,
 }
 
 impl Chord {
@@ -23,6 +24,7 @@ impl Chord {
             ctrl: false,
             shift: false,
             alt: false,
+            super_key: false,
         }
     }
     const fn ctrl(key: KeyCode) -> Chord {
@@ -31,15 +33,39 @@ impl Chord {
             ctrl: true,
             shift: false,
             alt: false,
+            super_key: false,
         }
     }
-    const fn shift(key: KeyCode) -> Chord {
+    pub const fn shift(key: KeyCode) -> Chord {
         Chord {
             key,
             ctrl: false,
             shift: true,
             alt: false,
+            super_key: false,
         }
+    }
+
+    pub const fn alt(key: KeyCode) -> Chord {
+        Chord {
+            alt: true,
+            ..Self::plain(key)
+        }
+    }
+
+    pub fn uses_modifier(self, key: KeyCode) -> bool {
+        use KeyCode::*;
+        match key {
+            ControlLeft | ControlRight => self.ctrl,
+            ShiftLeft | ShiftRight => self.shift,
+            AltLeft | AltRight => self.alt,
+            SuperLeft | SuperRight => self.super_key,
+            _ => false,
+        }
+    }
+
+    pub fn modified(self) -> bool {
+        self.ctrl || self.shift || self.alt || self.super_key
     }
 
     /// "Ctrl+Shift+F3".
@@ -47,6 +73,7 @@ impl Chord {
         let mut s = String::new();
         for (on, m) in [
             (self.ctrl, "Ctrl+"),
+            (self.super_key, "Super+"),
             (self.alt, "Alt+"),
             (self.shift, "Shift+"),
         ] {
@@ -62,7 +89,12 @@ impl Chord {
         let mut rest = s.trim();
         loop {
             let lower = rest.to_ascii_lowercase();
-            if lower.starts_with("ctrl+") {
+            if ["super+", "meta+", "cmd+", "command+", "win+"]
+                .iter()
+                .any(|p| lower.starts_with(p))
+            {
+                c.super_key = true;
+            } else if lower.starts_with("ctrl+") {
                 c.ctrl = true;
             } else if lower.starts_with("alt+") {
                 c.alt = true;
@@ -83,6 +115,7 @@ impl Chord {
         self.key == pressed.key
             && self.ctrl == pressed.ctrl
             && self.alt == pressed.alt
+            && self.super_key == pressed.super_key
             && (self.shift == pressed.shift || (shift_free && !self.shift))
     }
 }
@@ -206,7 +239,15 @@ impl Hotkey {
             Hotkey::PresentMode => const { &[Chord::plain(F7)] },
             Hotkey::FpsCap => const { &[Chord::plain(F8)] },
             Hotkey::FpsOverlay => const { &[Chord::plain(F10)] },
-            Hotkey::Fullscreen => const { &[Chord::plain(F11)] },
+            Hotkey::Fullscreen => {
+                const {
+                    &[
+                        Chord::plain(F11),
+                        Chord::alt(Enter),
+                        Chord::alt(NumpadEnter),
+                    ]
+                }
+            }
             Hotkey::Quit => const { &[Chord::ctrl(KeyQ)] },
             Hotkey::Screenshot => const { &[Chord::plain(F12)] },
             Hotkey::Friends => const { &[Chord::plain(F9)] },
@@ -519,9 +560,23 @@ impl Bindings {
                 let shared = other.places().iter().any(|p| h.places().contains(p));
                 if other != h
                     && shared
-                    && self
-                        .get(other)
-                        .is_some_and(|o| o.fits(c, other.shift_free()) || c.fits(o, h.shift_free()))
+                    && self.get(other).is_some_and(|o| {
+                        let old = if o == other.default() {
+                            other.defaults()
+                        } else {
+                            std::slice::from_ref(&o)
+                        };
+                        let new = if c == h.default() {
+                            h.defaults()
+                        } else {
+                            std::slice::from_ref(&c)
+                        };
+                        old.iter().any(|o| {
+                            new.iter().any(|c| {
+                                o.fits(*c, other.shift_free()) || c.fits(*o, h.shift_free())
+                            })
+                        })
+                    })
                 {
                     self.0[other.index()] = None;
                     bumped = Some(other);
@@ -580,10 +635,31 @@ impl Bindings {
                 return Resolved::As(to);
             }
         }
+        for h in here() {
+            if self.get(h) == Some(h.default())
+                && h.defaults()
+                    .iter()
+                    .skip(1)
+                    .any(|d| d.fits(pressed, h.shift_free()))
+            {
+                let mut to = h.default();
+                to.shift |= h.shift_free() && pressed.shift;
+                return Resolved::As(to);
+            }
+        }
         if here().any(|h| {
             self.get(h) != Some(h.default())
                 && h.defaults().iter().any(|d| d.fits(pressed, h.shift_free()))
         }) {
+            return Resolved::Nothing;
+        }
+        // Unmatched modifiers must not fall through to the raw Enter/F11 window handlers.
+        if pressed.modified()
+            && Hotkey::Fullscreen
+                .defaults()
+                .iter()
+                .any(|d| d.key == pressed.key)
+        {
             return Resolved::Nothing;
         }
         Resolved::Same
@@ -635,6 +711,7 @@ mod tests {
             ctrl,
             shift,
             alt: false,
+            super_key: false,
         }
     }
 
@@ -648,6 +725,7 @@ mod tests {
                 ctrl: true,
                 shift: true,
                 alt: true,
+                super_key: false,
             },
         ] {
             assert_eq!(Chord::parse(&c.name()), Some(c), "{}", c.name());
@@ -658,7 +736,8 @@ mod tests {
                 key: KeyCode::F2,
                 ctrl: true,
                 shift: true,
-                alt: false
+                alt: false,
+                super_key: false
             })
         );
         assert_eq!(Chord::parse("Ctrl+"), None);

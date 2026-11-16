@@ -1,0 +1,11 @@
+text  575,34   FRIENDS
+text  639,34   PLAYERS
+text  703,34   CHAT
+text  575,57   connecting to the server...
+text  578,436  message everyone online, Enter to send
+text  605,461  Enter send  wheel or PgUp/PgDn scroll
+hit   563,24    290x450  SocialPanel
+hit   570,26     59x24   SocialTab(Friends)
+hit   634,26     59x24   SocialTab(Players)
+hit   698,26     38x24   SocialTab(Chat)
+hit   571,430   274x18   TextField

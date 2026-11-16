@@ -359,6 +359,8 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     /// The font's glyphs (`font::atlas`), for text quads.
     font_view: wgpu::TextureView,
+    font_texture: wgpu::Texture,
+    font_revision: u64,
     /// Profile pictures, a grid of `avatars::CELL` squares (`Renderer::set_avatar`).
     avatar_texture: wgpu::Texture,
     avatar_view: wgpu::TextureView,
@@ -829,6 +831,9 @@ fn shape_shader() -> String {
     SHADER
         .replace("SPRITE_COUNT", &SPRITES.to_string())
         .replace("SPRITE_LAST", &(SPRITES - 1).to_string())
+        .replace("CUSTOM_BASE", &format!("{:.1}", crate::system_font::BASE))
+        .replace("CUSTOM_WIDTH", &crate::system_font::WIDTH.to_string())
+        .replace("CUSTOM_HEIGHT", &crate::system_font::HEIGHT.to_string())
         .replace("FONT_COLS", &crate::font::ATLAS_COLS.to_string())
         .replace("FONT_CELL_W", &crate::font::CELL_W.to_string())
         .replace("CJK_BASE", &crate::font::CHINESE_BASE.to_string())
@@ -896,7 +901,11 @@ fn vs(@builtin(vertex_index) vi: u32, inst: Inst) -> VOut {
     out.half = half_px;
     out.fill = inst.fill;
     out.border = inst.border;
-    out.params = vec4<f32>(inst.params.xyz * g.px_per_unit, inst.params.w);
+    out.params = inst.params;
+    // Custom glyph dimensions address texture pixels, independently of screen scaling.
+    if (inst.params.w < CUSTOM_BASE) {
+        out.params = vec4<f32>(inst.params.xyz * g.px_per_unit, inst.params.w);
+    }
     if (inst.fill.a <= 0.0 && inst.border.a <= 0.0) {
         // Invisible (e.g. a fade at rest): no pixels at all.
         out.pos = vec4<f32>(-2.0, -2.0, 0.0, 1.0);
@@ -941,6 +950,18 @@ fn shade(in: VOut) -> vec4<f32> {
         let r = min(in.params.x, min(in.half.x, in.half.y));
         let cover = clamp(0.5 - sd_round_box(in.local, in.half, r), 0.0, 1.0);
         return t * in.fill.a * cover;
+    }
+    if (in.params.w >= CUSTOM_BASE) {
+        // The quad includes padding for shape anti-aliasing; it must not repeat edge texels.
+        if (any(abs(in.local) > in.half)) {
+            return vec4<f32>(0.0);
+        }
+        let slot = i32(round(in.params.w - CUSTOM_BASE));
+        let origin = vec2<i32>(slot % CUSTOM_WIDTH, i32(textureDimensions(font).y) - CUSTOM_HEIGHT + slot / CUSTOM_WIDTH);
+        let uv = clamp(in.local / (2.0 * in.half) + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
+        let pos = (vec2<f32>(origin) + vec2<f32>(1.0) + uv * in.params.xy) / vec2<f32>(textureDimensions(font));
+        let a = textureSampleLevel(font, samp, pos, 0.0).r * in.fill.a;
+        return vec4<f32>(in.fill.rgb * a, a);
     }
     if (in.params.w > 99.5) {
         // A character: how much of this pixel the font pixels under it cover (a box filter, so
@@ -1006,6 +1027,82 @@ fn shade(in: VOut) -> vec4<f32> {
     return vec4<f32>(color.rgb * color.a, color.a);
 }
 "#;
+
+fn make_font_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::TextureView, wgpu::Texture) {
+    let (w, h, mut px) = crate::font::atlas();
+    let h = h + crate::system_font::HEIGHT as u32;
+    px.resize(w as usize * h as usize, 0);
+    let size = wgpu::Extent3d {
+        width: w,
+        height: h,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("font"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        &px,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(w),
+            rows_per_image: Some(h),
+        },
+        size,
+    );
+    (
+        texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        texture,
+    )
+}
+
+fn upload_font_glyphs(queue: &wgpu::Queue, texture: &wgpu::Texture, last_revision: &mut u64) {
+    let height = texture.height() - crate::system_font::HEIGHT as u32;
+    for glyph in crate::system_font::uploads(*last_revision) {
+        *last_revision = (*last_revision).max(glyph.revision);
+        let m = glyph.metrics;
+        let (w, h) = (m.width + 2, m.height + 2);
+        let mut pixels = vec![0; w * h];
+        for row in 0..m.height {
+            let start = (row + 1) * w + 1;
+            pixels[start..start + m.width]
+                .copy_from_slice(&glyph.pixels[row * m.width..(row + 1) * m.width]);
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: (glyph.slot % crate::system_font::WIDTH) as u32,
+                    y: height + (glyph.slot / crate::system_font::WIDTH) as u32,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w as u32),
+                rows_per_image: Some(h as u32),
+            },
+            wgpu::Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+}
 
 impl Renderer {
     pub fn new(
@@ -1101,7 +1198,7 @@ impl Renderer {
                     binding: 4,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -1119,35 +1216,7 @@ impl Renderer {
                 },
             ],
         });
-        let font_view = {
-            let (w, h, px) = crate::font::atlas();
-            let size = wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            };
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("font"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            queue.write_texture(
-                texture.as_image_copy(),
-                &px,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(w),
-                    rows_per_image: Some(h),
-                },
-                size,
-            );
-            texture.create_view(&wgpu::TextureViewDescriptor::default())
-        };
+        let (font_view, font_texture) = make_font_texture(&device, &queue);
         let sprite_rects = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sprites"),
             size: (SPRITES * 16) as u64,
@@ -1458,6 +1527,8 @@ impl Renderer {
             sprite_rects,
             sampler,
             font_view,
+            font_texture,
+            font_revision: 0,
             avatar_texture,
             avatar_view,
             instances,
@@ -1944,6 +2015,10 @@ impl Renderer {
         }
     }
 
+    fn upload_font(&mut self) {
+        upload_font_glyphs(&self.queue, &self.font_texture, &mut self.font_revision);
+    }
+
     /// Render pixels per virtual unit for crisp text (`set_text_grid`) when drawing at half
     /// resolution.
     /// How much smaller the safe area draws the interface than the screen would: text picks its
@@ -2035,6 +2110,7 @@ impl Renderer {
     ) -> Option<(u32, u32, Vec<u8>)> {
         // What the shapes are drawn at: the game's size, or half of it to be scaled up after. Either
         // goes through an image of its own to get to its place on a black screen.
+        self.upload_font();
         let place = self.placed();
         let scaled = self.pixel_scale > 1 || place.is_some();
         let (gw, gh) = self.size();
@@ -2298,6 +2374,7 @@ impl Renderer {
         h: u32,
         clear: [f64; 3],
     ) -> Option<Vec<u8>> {
+        self.upload_font();
         let shapes = &shapes[..shapes.len().min(self.shape_limit())];
         let clips: Vec<(std::ops::Range<usize>, [f32; 4])> = clips
             .iter()
@@ -2911,6 +2988,8 @@ impl<H> HitBox<H> {
 /// is (see `HitBox`).
 pub struct Canvas<H> {
     pub shapes: Vec<Shape>,
+    pub(crate) input_editor: Option<(crate::text_input::Field, crate::text_input::TextInput)>,
+    pub(crate) input_regions: Vec<crate::text_input::Region>,
     /// The music player's disc: centre, radius, angle (drawn under every shape, see `DISC_SHADER`).
     pub disc: Option<[f32; 4]>,
     /// The whole picture glitches this frame: how much (0 to 1) and a number picking how.
@@ -2954,6 +3033,8 @@ impl<H> Default for Canvas<H> {
     fn default() -> Self {
         Canvas {
             shapes: Default::default(),
+            input_editor: None,
+            input_regions: Vec::new(),
             disc: Default::default(),
             glitch: Default::default(),
             width: Default::default(),
@@ -3141,8 +3222,10 @@ pub fn rotate_shapes(
         );
         sh.center = [dest[0] + x * cos - y * sin, dest[1] + x * sin + y * cos];
         sh.half = [sh.half[0] * scale, sh.half[1] * scale];
-        sh.params[0] *= scale;
-        sh.params[1] *= scale;
+        if sh.params[3] < crate::system_font::BASE {
+            sh.params[0] *= scale;
+            sh.params[1] *= scale;
+        }
         sh.params[2] *= scale;
         sh.angle += angle;
     }
@@ -3151,6 +3234,8 @@ pub fn rotate_shapes(
 impl<H> Canvas<H> {
     pub fn clear(&mut self, width: f32) {
         self.shapes.clear();
+        self.input_editor = None;
+        self.input_regions.clear();
         self.avatars_wanted.clear();
         self.pictures_wanted.clear();
         self.picture_times.clear();
@@ -3633,8 +3718,10 @@ impl<H> Canvas<H> {
                 anchor[1] + (sh.center[1] - anchor[1]) * scale + dy,
             ];
             sh.half = [sh.half[0] * scale, sh.half[1] * scale];
-            sh.params[0] *= scale;
-            sh.params[1] *= scale;
+            if sh.params[3] < crate::system_font::BASE {
+                sh.params[0] *= scale;
+                sh.params[1] *= scale;
+            }
             sh.params[2] *= scale;
         }
         for h in self.hits.iter_mut().filter(|h| h.shape > start) {
@@ -3758,10 +3845,83 @@ impl<H> Canvas<H> {
         });
     }
 
+    /// A visible insertion point, including an empty focused field.
+    pub fn caret(&mut self, x: f32, y: f32, size: f32, color: [f32; 4]) {
+        self.rect(x, y - 1.0, 1.0, Self::text_height(size) + 2.0, color);
+    }
+
     /// Draws text with the built-in fonts; `size` is the glyph height. Returns the advance width.
     /// On a text grid (`set_text_grid`) the glyphs may come out bigger: they stay centred on the
     /// line `size` would have taken.
     pub fn text(&mut self, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
+        use crate::system_font as custom;
+        if !custom::active() {
+            return self.pixel_text(x, y, size, color, s);
+        }
+        let first = self.shapes.len();
+        let texts = self.texts.len();
+        let mut cx = x;
+        let scale = custom::scale(size);
+        for ch in s.chars() {
+            if let Some(glyph) = custom::glyph_at(ch, size) {
+                let m = glyph.metrics;
+                let raster_scale = scale * glyph.design_scale;
+                let gx = custom::snap(cx + m.xmin as f32 * raster_scale);
+                let gy = custom::snap(
+                    y + custom::cap() * scale - (m.ymin as f32 + m.height as f32) * raster_scale,
+                );
+                if m.width > 0 && m.height > 0 {
+                    if self.audit {
+                        for row in 0..m.height {
+                            for col in 0..m.width {
+                                let alpha = glyph.pixels[row * m.width + col];
+                                if alpha > 0 {
+                                    let mut ink = color;
+                                    ink[3] *= alpha as f32 / 255.0;
+                                    self.rect(
+                                        gx + col as f32 * raster_scale,
+                                        gy + row as f32 * raster_scale,
+                                        raster_scale,
+                                        raster_scale,
+                                        ink,
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        let half = [
+                            m.width as f32 * raster_scale / 2.0,
+                            m.height as f32 * raster_scale / 2.0,
+                        ];
+                        self.shapes.push(Shape {
+                            center: [gx + half[0], gy + half[1]],
+                            half,
+                            fill: color,
+                            border: color,
+                            params: [
+                                m.width as f32,
+                                m.height as f32,
+                                0.0,
+                                custom::BASE + glyph.slot as f32,
+                            ],
+                            angle: 0.0,
+                        });
+                    }
+                }
+                cx += Self::custom_advance(size, ch);
+            } else {
+                self.pixel_text(cx, y, size, color, &ch.to_string());
+                cx += Self::custom_advance(size, ch);
+            }
+        }
+        if self.audit {
+            self.texts.truncate(texts);
+            self.texts.push((first..self.shapes.len(), s.to_string()));
+        }
+        cx - x
+    }
+
+    fn pixel_text(&mut self, x: f32, y: f32, size: f32, color: [f32; 4], s: &str) -> f32 {
         let px = font_px(size);
         let script = font_script();
         let x = snap_to_grid(x);
@@ -3860,16 +4020,39 @@ impl<H> Canvas<H> {
     }
 
     pub fn text_width(size: f32, s: &str) -> f32 {
+        if crate::system_font::active() {
+            return s.chars().map(|ch| Self::custom_advance(size, ch)).sum();
+        }
         text_units(s, font_script()) as f32 * font_px(size)
+    }
+
+    fn custom_advance(size: f32, ch: char) -> f32 {
+        crate::system_font::advance(ch).map_or_else(
+            || (font::columns(font::index_for(ch, font_script())) + 1) as f32 * font_px(size),
+            |advance| advance * crate::system_font::scale(size),
+        )
     }
 
     /// The advance of one Latin character of text `size` tall (Japanese takes 4/3 of it).
     pub fn char_width(size: f32) -> f32 {
+        if crate::system_font::active() {
+            return Self::custom_advance(size, 'M');
+        }
         font_px(size) * 6.0
     }
 
     /// The longest start of `s` (in bytes) that is at most `max_w` wide at `size`.
     pub fn fitting_prefix(size: f32, max_w: f32, s: &str) -> usize {
+        if crate::system_font::active() {
+            let mut width = 0.0;
+            for (at, ch) in s.char_indices() {
+                width += Self::custom_advance(size, ch);
+                if width > max_w + 1e-3 {
+                    return at;
+                }
+            }
+            return s.len();
+        }
         let room = (max_w / font_px(size) + 1e-3).floor() as usize;
         let mut w = 0;
         let script = font_script();
@@ -3917,7 +4100,11 @@ impl<H> Canvas<H> {
 
     /// How tall text `size` comes out (`size`, or more on a text grid).
     pub fn text_height(size: f32) -> f32 {
-        font_px(size) * 7.0
+        if crate::system_font::active() {
+            size
+        } else {
+            font_px(size) * 7.0
+        }
     }
 
     /// The size to draw text at so it comes out at most `max_h` tall: `size`, or on a text grid
@@ -4015,7 +4202,7 @@ impl<H> Canvas<H> {
             return size;
         }
         let grid = TEXT_GRID.with(std::cell::Cell::get);
-        if grid > 0.0 {
+        if grid > 0.0 && !crate::system_font::active() {
             // Font pixels come in whole render pixels: the biggest that fits.
             let per_px = max_w / text_units(s, font_script()).max(1) as f32;
             return ((per_px * grid).floor().max(1.0) / grid * 7.0).max(min);
@@ -4230,3 +4417,7 @@ mod shape_limit_tests {
         assert!((capacity * std::mem::size_of::<Shape>()) as u64 <= max);
     }
 }
+
+#[cfg(all(test, feature = "gpu-tests"))]
+#[path = "regression/font_gpu.rs"]
+mod font_gpu;

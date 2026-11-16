@@ -121,6 +121,8 @@ pub enum Hit {
     PickRowMore(usize),
     /// A row of a setting's list of choices.
     ChoiceRow(usize),
+    /// Search in the installed font picker.
+    ChoiceSearch,
     /// Multiverse setup: a universe's (row) colours, shape, speed or a mod (column).
     UniverseCell(usize, usize),
     /// Shapeshift setup: a choice (row, column) / move the selected shape earlier or later.

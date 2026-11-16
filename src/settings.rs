@@ -46,6 +46,7 @@ pub enum Item {
     TouchLayout,
     Screenshots,
     Language,
+    UiFont,
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
@@ -58,6 +59,7 @@ pub enum Item {
     HideGreat,
     /// Sudden Death / Perfect fails start the map over (`Config::fail_restart`).
     FailRestart,
+    InstantRestart,
     ChatFilter,
     MessageSound,
     NotifyPlaying,
@@ -128,7 +130,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 138] = [
+pub const ITEMS: [(&str, Item); 140] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -150,6 +152,7 @@ pub const ITEMS: [(&str, Item); 138] = [
     ("GAMEPLAY", Item::AutoplayStyle),
     ("GAMEPLAY", Item::AutoplayBinding),
     ("GAMEPLAY", Item::AutoplayLeftHanded),
+    ("GAMEPLAY", Item::InstantRestart),
     ("VIEW", Item::PlayfieldArea),
     ("VIEW", Item::InterfaceEditor),
     ("VIEW", Item::PlayfieldPreset),
@@ -256,6 +259,7 @@ pub const ITEMS: [(&str, Item); 138] = [
     ("ONLINE", Item::CrashReports),
     ("ONLINE", Item::KrokodilKoban),
     ("SYSTEM", Item::Language),
+    ("SYSTEM", Item::UiFont),
     ("SYSTEM", Item::Splash),
     ("SYSTEM", Item::EpilepsyWarning),
     ("SYSTEM", Item::IdleScreen),
@@ -534,6 +538,7 @@ impl Item {
             Item::Screenshots => tr!("Screenshots", "スクリーンショット", "Скриншоты"),
             // Also in English, so anyone who picked a language by mistake finds their way back.
             Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
+            Item::UiFont => tr!("Interface font", "表示フォント", "Шрифт интерфейса"),
             Item::ShowPlayfieldSize => tr!(
                 "Show playfield size",
                 "プレイフィールドのサイズを表示",
@@ -567,6 +572,7 @@ impl Item {
                 "本当のノーツを表示",
                 "Показывать настоящие ноты"
             ),
+            Item::InstantRestart => tr!("Instant restart", "即時リトライ", "Мгновенный рестарт"),
             Item::FailRestart => tr!(
                 "Restart on SD/PF fail",
                 "SD/PF失敗で即リトライ",
@@ -755,6 +761,7 @@ impl Item {
             | Item::Screenshots
             | Item::IdleScreen
             | Item::Language
+            | Item::UiFont
             | Item::AudioBuffer
             | Item::PresentMode
             | Item::Renderer
@@ -789,6 +796,7 @@ impl Item {
             | Item::AutoplayLeftHanded
             | Item::HideGreat
             | Item::FailRestart
+            | Item::InstantRestart
             | Item::TrueNotes
             | Item::CalmMaps
             | Item::HitFlash
@@ -929,9 +937,9 @@ impl Item {
                 "Что прячется вместе с интерфейсом. Enter открывает список; Enter или клик отмечает часть."
             ),
             Item::InterfaceKey => tr!(
-                "Enter, then press the key (with Shift or not) that shows / hides the interface in a song. Delete: none.",
-                "Enterを押してから、曲中にインターフェースを出し入れするキー (Shiftも可) を押す。Delete: なし。",
-                "Enter, затем клавиша (можно с Shift), что прячет / показывает интерфейс в песне. Delete: нет."
+                "Enter, then press a key or modifier combination to show / hide the interface in a song. Delete: none.",
+                "Enterを押してから、曲中にインターフェースを出し入れするキー (Ctrl / Alt / Shift / Superも可) を押す。Delete: なし。",
+                "Enter, затем клавиша (Ctrl / Alt / Shift / Super тоже можно), что прячет / показывает интерфейс в песне. Delete: нет."
             ),
             Item::Key(_) => tr!(
                 "Enter, then press the new key (Delete: none, Esc: cancel). Backspace: back to the default.",
@@ -939,14 +947,19 @@ impl Item {
                 "Enter, затем новая клавиша (Delete: нет, Esc: отмена). Backspace: по умолчанию."
             ),
             Item::PresetKey(_) => tr!(
-                "Steps through playfield presets anywhere (also in game). Enter, then press a key. Delete: none.",
-                "どこでも (プレイ中も) プレイフィールドのプリセットを切り替えます。Enterの後にキー。Delete: なし。",
-                "Листает пресеты поля везде (и в игре). Enter, затем клавиша. Delete: нет."
+                "Steps through playfield presets anywhere (also in game). Enter, then press a key or modifier combination. Delete: none.",
+                "どこでも (プレイ中も) プレイフィールドのプリセットを切り替えます。Enterの後にキーか修飾キーの組み合わせ。Delete: なし。",
+                "Листает пресеты поля везде (и в игре). Enter, затем клавиша или комбинация с модификаторами. Delete: нет."
             ),
             Item::Hotkey(_) => tr!(
-                "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
-                "Enterの後に新しいキー (Ctrl / Alt / Shiftも可)。Delete: なし、Esc: 取消。Backspace: 初期設定。",
-                "Enter, затем новая клавиша, можно с Ctrl / Alt / Shift (Delete: нет, Esc: отмена). Backspace: исходная."
+                "Enter, then press the new key, Ctrl / Alt / Shift / Super (Cmd) too (Delete: none, Esc: cancel). Backspace: the default.",
+                "Enterの後に新しいキー (Ctrl / Alt / Shift / Super (Cmd)も可)。Delete: なし、Esc: 取消。Backspace: 初期設定。",
+                "Enter, затем новая клавиша, можно с Ctrl / Alt / Shift / Super (Cmd) (Delete: нет, Esc: отмена). Backspace: исходная."
+            ),
+            Item::UiFont => tr!(
+                "Choose an installed font, or the built-in pixel font. Missing characters use the built-in font.",
+                "インストール済みフォントか内蔵ピクセルフォントを選択。足りない文字は内蔵フォントで表示します。",
+                "Выберите установленный шрифт или встроенный пиксельный. Недостающие символы рисуются встроенным шрифтом."
             ),
             Item::Language => tr!(
                 "The language of menus, settings and messages. Song titles stay as their maps have them.",
@@ -1032,6 +1045,11 @@ impl Item {
                 "Some .tko maps draw notes as another colour or size until just before the hit. On: every note shows what it is.",
                 "一部の.tko譜面は叩く直前までノーツを別の色や大きさで描きます。オン: すべてのノーツが本当の姿で表示されます。",
                 "Некоторые .tko-карты рисуют ноты другим цветом или размером почти до самого удара. Вкл.: каждая нота видна такой, какая она есть."
+            ),
+            Item::InstantRestart => tr!(
+                "On: restart immediately. Off: hold restart for two seconds while the screen darkens. Release to cancel and fade back in.",
+                "オン: 即座にリトライ。オフ: リトライを2秒間押し続けると暗転してリトライ。離すとキャンセルして明るさが戻ります。",
+                "Вкл: повтор сразу. Выкл: удерживайте рестарт две секунды до полного затемнения. Отпустите, чтобы отменить рестарт и плавно убрать затемнение."
             ),
             Item::FailRestart => tr!(
                 "When Sudden Death or Perfect fails a play, the map starts over straight away instead of going to the results.",
@@ -1250,7 +1268,11 @@ impl Item {
                 "起動のたびに新しいビルドを探してすぐに入れ (メニューにいるときに自動で再起動します)、選んだ曲のosu!での新しい版も探します。",
                 "Искать новую сборку при каждом запуске и сразу ставить её (игра перезапустится сама, когда вы в меню), а также новые версии выбранных песен на osu!."
             ),
-            Item::Fullscreen => tr!("Shortcut: F11.", "ショートカット: F11。", "Клавиша: F11."),
+            Item::Fullscreen => tr!(
+                "F11 or Alt+Enter. Rebind in Input > Fullscreen.",
+                "F11 または Alt+Enter。入力設定で変更できます。",
+                "F11 или Alt+Enter. Переназначение: Ввод > Полный экран."
+            ),
             Item::WindowSize => tr!(
                 "Enter: pick a size (or type one); Left/Right: the next size. Dragging the window's edges works too.",
                 "Enter: サイズを選ぶ (入力も可)。左/右: 次のサイズ。ウィンドウの端のドラッグでも変えられます。",
@@ -1638,7 +1660,6 @@ impl Dropdown {
             self.follow = Follow::Stay;
         }
         self.rows.clear();
-        let caret = self.caret;
         let text_input = |c: &mut Canvas, ry: f32, text: &str| {
             c.round_rect(
                 [bx + 8.0, ry],
@@ -1648,13 +1669,15 @@ impl Dropdown {
                 rgba(0xFFD34D, 1.0),
                 1.0,
             );
-            c.text(bx + 22.0, ry + 3.5, 7.0, rgba(0xFFD34D, 1.0), text);
-            c.rect(
-                bx + 22.0 + caret_x(7.0, text, caret),
-                ry + 2.5,
-                1.0,
-                9.0,
+            c.input(
+                crate::text_input::Field::Resolution,
+                [bx + 22.0, ry + 3.5, (bw - 120.0).max(20.0), 9.0],
+                7.0,
+                text,
+                "",
                 rgba(0xFFD34D, 1.0),
+                false,
+                true,
             );
             c.text_right(
                 bx + bw - 22.0,
@@ -1909,6 +1932,7 @@ pub struct Choices {
     /// Top right: how many skins are installed, the folder in use, ...
     pub note: String,
     pub cursor: usize,
+    pub search: String,
 }
 
 impl Choices {
@@ -1920,20 +1944,78 @@ impl Choices {
             current,
             note,
             cursor: current.unwrap_or(0),
+            search: String::new(),
         }
     }
 
+    pub fn searchable(&self) -> bool {
+        self.item == Item::UiFont
+    }
+
+    /// Indices stay in the original list, so selecting a filtered row picks the right family.
+    pub fn visible(&self) -> Vec<usize> {
+        let query = self.search.trim().to_lowercase();
+        self.names
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| !self.searchable() || name.to_lowercase().contains(&query))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    pub fn set_search(&mut self, text: String) {
+        self.search = text.chars().filter(|c| !c.is_control()).take(128).collect();
+        let visible = self.visible();
+        if !visible.contains(&self.cursor) {
+            self.cursor = visible.first().copied().unwrap_or(0);
+        }
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.visible().into_iter().find(|&i| i == self.cursor)
+    }
+
     pub fn move_cursor(&mut self, delta: i32) {
-        self.cursor = (self.cursor as i32 + delta).clamp(0, self.names.len() as i32 - 1) as usize;
+        let visible = self.visible();
+        if visible.is_empty() {
+            return;
+        }
+        let at = visible.iter().position(|&i| i == self.cursor).unwrap_or(0) as i32;
+        self.cursor = visible[(at + delta).clamp(0, visible.len() as i32 - 1) as usize];
+    }
+
+    pub fn draw_search(&self, c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, size: f32) {
+        c.round_rect(
+            [x, y],
+            [w, h],
+            4.0,
+            rgba(0x23232f, 1.0),
+            rgba(accent(), 0.8),
+            1.0,
+        );
+        c.hit(x, y, w, h, Hit::ChoiceSearch);
+        let placeholder = tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...");
+        c.input(
+            crate::text_input::Field::FontSearch,
+            [x + 8.0, y + (h - size) / 2.0, w - 16.0, size + 2.0],
+            size,
+            &self.search,
+            placeholder,
+            rgba(0xffffff, 1.0),
+            false,
+            true,
+        );
     }
 
     pub fn draw(&self, c: &mut Canvas) {
         const ROW: f32 = 18.0;
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.55));
-        let n = self.names.len();
+        let visible = self.visible();
+        let n = visible.len();
+        let search_h = if self.searchable() { 32.0 } else { 0.0 };
         let (bw, max_h) = ((w - 48.0).min(420.0), 380.0);
-        let bh = (n as f32 * ROW + 56.0).min(max_h);
+        let bh = (self.names.len().max(1) as f32 * ROW + 56.0 + search_h).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         c.round_rect(
             [bx, by],
@@ -1957,11 +2039,28 @@ impl Choices {
             rgba(0x6f6f86, 1.0),
             &Canvas::fit_end(7.0, bw - 38.0 - title_w, &self.note),
         );
-        let (top, view) = (by + 32.0, bh - 50.0);
-        let scroll =
-            (self.cursor as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
-        for (i, name) in self.names.iter().enumerate() {
-            let y = top + i as f32 * ROW - scroll;
+        if self.searchable() {
+            self.draw_search(c, bx + 12.0, by + 32.0, bw - 24.0, 24.0, 8.0);
+        }
+        let (top, view) = (by + 32.0 + search_h, bh - 50.0 - search_h);
+        let at = visible.iter().position(|&i| i == self.cursor).unwrap_or(0);
+        let scroll = (at as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
+        if visible.is_empty() {
+            c.text(
+                bx + 20.0,
+                top + 5.0,
+                8.0,
+                rgba(0x8a8aa0, 1.0),
+                tr!(
+                    "No fonts found",
+                    "フォントが見つかりません",
+                    "Шрифты не найдены"
+                ),
+            );
+        }
+        for (row, i) in visible.iter().copied().enumerate() {
+            let name = &self.names[i];
+            let y = top + row as f32 * ROW - scroll;
             if y < top - 1.0 || y + ROW > top + view + 1.0 {
                 continue;
             }
@@ -2003,11 +2102,19 @@ impl Choices {
                 );
             }
         }
-        let hint = tr!(
-            "Up/Down or mouse   Enter/click use   Esc close",
-            "上下かマウス   Enter/クリック 使う   Esc 閉じる",
-            "Вверх/вниз или мышь   Enter/клик выбрать   Esc закрыть"
-        );
+        let hint = if self.searchable() {
+            tr!(
+                "Type to search   Up/Down select   Enter use   Esc clear/close",
+                "入力で検索   上下で選択   Enter決定   Esc消去/閉じる",
+                "Введите название   Вверх/вниз выбрать   Enter применить   Esc очистить/закрыть"
+            )
+        } else {
+            tr!(
+                "Up/Down or mouse   Enter/click use   Esc close",
+                "上下かマウス   Enter/クリック 使う   Esc 閉じる",
+                "Вверх/вниз или мышь   Enter/клик выбрать   Esc закрыть"
+            )
+        };
         c.text_centered(
             w / 2.0,
             by + bh - 11.0,
@@ -2304,10 +2411,7 @@ impl SettingsUi {
             1.0,
         );
         let (text, col_text) = if searching {
-            (
-                Canvas::fit_end(8.0, box_w - 18.0, &format!("{}_", self.search)),
-                0xffffff,
-            )
+            (Canvas::fit_end(8.0, box_w - 18.0, &self.search), 0xffffff)
         } else {
             (
                 Canvas::fit(
@@ -2322,7 +2426,24 @@ impl SettingsUi {
                 0x6f6f86,
             )
         };
-        c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
+        if self.binding.is_none()
+            && self.editing.is_none()
+            && self.choices.is_none()
+            && self.dropdown.is_none()
+        {
+            c.input(
+                crate::text_input::Field::SettingsSearch,
+                [box_x + 9.0, TOP - 1.5, box_w - 18.0, 10.0],
+                8.0,
+                &self.search,
+                &text,
+                rgba(0xffffff, 1.0),
+                false,
+                true,
+            );
+        } else {
+            c.text(box_x + 9.0, TOP - 1.5, 8.0, rgba(col_text, 1.0), &text);
+        }
         c.hit(box_x, TOP - 7.0, box_w, 19.0, Hit::SettingsSearch);
 
         let listing = if searching { RESULTS } else { section };
@@ -2551,28 +2672,15 @@ impl SettingsUi {
                 rgba(0xFFD34D, 1.0),
                 1.0,
             );
-            if edit.fresh && !text.is_empty() {
-                c.rect(
-                    right - 7.0 - tw,
-                    y + 7.0,
-                    tw + 2.0,
-                    ROW - 18.0,
-                    rgba(accent(), 0.45),
-                );
-            }
-            c.text_right(right - 6.0, y + 9.5, 8.0, rgba(0xFFD34D, 1.0), &text);
-            // At the caret in the text (at the end when the start was cut off to fit).
-            let at = if text == edit.text {
-                caret_x(8.0, &text, edit.caret)
-            } else {
-                tw
-            };
-            c.rect(
-                right - 6.0 - tw + at,
-                y + 7.0,
-                1.0,
-                ROW - 18.0,
+            c.input(
+                crate::text_input::Field::Setting(edit.item),
+                [right - 6.0 - tw, y + 9.5, bw - 18.0, 10.0],
+                8.0,
+                &edit.text,
+                "",
                 rgba(0xFFD34D, 1.0),
+                false,
+                true,
             );
             return;
         }

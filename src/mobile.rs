@@ -339,6 +339,10 @@ pub struct Ui {
 }
 
 impl Ui {
+    pub(crate) fn reset_choices_scroll(&mut self) {
+        self.choices_open = false;
+    }
+
     fn scroll(&mut self, list: List) -> &mut Scroll {
         match list {
             List::Songs => &mut self.songs,
@@ -1542,8 +1546,16 @@ impl State {
             close,
             false,
         );
-        let (top, h) = (58.0, VIRTUAL_HEIGHT - 58.0 - 8.0);
-        let (names, current, cursor) = (p.names.clone(), p.current, p.cursor);
+        let search_h = if p.searchable() { 52.0 } else { 0.0 };
+        if p.searchable() {
+            p.draw_search(c, px + 12.0, 58.0, pw - 24.0, 44.0, SMALL);
+        }
+        let top = 58.0 + search_h;
+        let h = VIRTUAL_HEIGHT - top - 8.0;
+        let visible = p.visible();
+        let cursor = visible.iter().position(|&i| i == p.cursor).unwrap_or(0);
+        let names: Vec<_> = visible.iter().map(|&i| (i, p.names[i].clone())).collect();
+        let current = p.current;
         if !self.mob.choices_open {
             self.mob.choices_open = true;
             self.mob.choices = Scroll::default();
@@ -1556,8 +1568,22 @@ impl State {
         self.mob.regions.push(([px, top, pw, h], List::Choices));
         let scroll = self.mob.choices.pos;
         let start = c.shapes.len();
-        for (i, name) in names.iter().enumerate() {
-            let y = top + i as f32 * ROW_H - scroll;
+        if names.is_empty() {
+            c.text(
+                px + 16.0,
+                top + 16.0,
+                SMALL,
+                rgba(0x8a8aa0, 1.0),
+                tr!(
+                    "No fonts found",
+                    "フォントが見つかりません",
+                    "Шрифты не найдены"
+                ),
+            );
+        }
+        for (row, (i, name)) in names.iter().enumerate() {
+            let i = *i;
+            let y = top + row as f32 * ROW_H - scroll;
             if y > top + h || y + ROW_H < top {
                 continue;
             }
