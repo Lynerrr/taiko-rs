@@ -441,6 +441,7 @@ preset_keys = F7, F8
 touch_layout = DKKD
 screenshot_to = both
 language = ru
+ui_font = Abel
 show_playfield_size = false
 saved_presets = 1600x900, 1024x768
 preset_spots = 1600x900@0.1000/0.2000
@@ -646,4 +647,18 @@ fn an_olz_export_from_osu_lazer_holds_the_same_maps_as_an_osz() {
     }
     assert_eq!(read[0], read[1]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn installed_font_choice_survives_config_round_trip() {
+    assert!(Config::default().ui_font.is_empty());
+    assert!(Config::parse_text("language = en\n").ui_font.is_empty());
+    let c = Config::parse_text("ui_font = Abel\n");
+    assert_eq!(c.ui_font, "Abel");
+    assert_eq!(Config::parse_text(&c.to_text()).ui_font, "Abel");
+    let c = Config::parse_text("ui_font = Uninstalled Family\n");
+    assert_eq!(
+        Config::parse_text(&c.to_text()).ui_font,
+        "Uninstalled Family"
+    );
 }

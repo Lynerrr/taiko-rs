@@ -7,18 +7,21 @@ text 1023,77   >
 text  236,80   Language
 text  865,80   English
 text   14,133  GAMEPLAY
-text  236,142  Startup splash
+text  964,139  <
+text 1023,139  >
+text  238,142  Interface font
+text  854,142  built-in
 text   14,189  VIEW
-text  236,204  Epilepsy warning
+text  236,204  Startup splash
 text   16,245  INPUT
-text  964,263  <
-text 1023,263  >
-text  238,266  Idle screen
-text  782,266  After 2 minutes
+text  236,266  Epilepsy warning
 text   14,301  OFFSET
-text  236,328  Legacy menu
+text  964,325  <
+text 1023,325  >
+text  238,328  Idle screen
+text  782,328  After 2 minutes
 text   14,357  AUDIO
-text  236,390  Notes behind the main menu
+text  236,390  Legacy menu
 text   14,413  VIDEO
 text  236,436  The language of menus, settings and messages. Song titles stay as their maps
 text  236,455  have them.
@@ -37,9 +40,11 @@ hit   222,58    845x56   SettingRow(126)
 hit   947,64     50x44   SettingStep(126, -1)
 hit  1003,64     50x44   SettingStep(126, 1)
 hit   222,120   845x56   SettingRow(127)
+hit   947,126    50x44   SettingStep(127, -1)
+hit  1003,126    50x44   SettingStep(127, 1)
 hit   222,182   845x56   SettingRow(128)
 hit   222,244   845x56   SettingRow(129)
-hit   947,250    50x44   SettingStep(129, -1)
-hit  1003,250    50x44   SettingStep(129, 1)
 hit   222,306   845x56   SettingRow(130)
+hit   947,312    50x44   SettingStep(130, -1)
+hit  1003,312    50x44   SettingStep(130, 1)
 hit   222,368   845x54   SettingRow(131)

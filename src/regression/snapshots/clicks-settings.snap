@@ -12,7 +12,7 @@ SettingsSection(5) @122,279 -> Settings +"0%" +"100%" +"256 frames (5.3 ms)" +"3
 SettingsSection(6) @122,319 -> Settings +"<  immediate  >" +"Auto" +"Black bars" +"FPS cap" +"FPS overlay" +"Fullscreen" +11 more -"<  none found, Enter to pick  >" -"Clipboard" -"Game data folder" -"Hidden maps" -"LIBRARY" -"Screenshots" -8 more
 SettingsSection(7) @122,359 -> Settings +"#438ead" +"#eb452c" +"<  built-in  >" +"Beatmap skins" +"Colours" +"Don colour" +14 more -"<  none found, Enter to pick  >" -"Clipboard" -"Game data folder" -"Hidden maps" -"LIBRARY" -"Screenshots" -8 more
 SettingsSection(8) @122,399 -> Settings +"Chat filter" +"Discord status" +"Message sound" +"Notifications" +"Notify: chat mentions" +"Notify: friend online" +7 more -"<  none found, Enter to pick  >" -"Clipboard" -"Game data folder" -"Hidden maps" -"LIBRARY" -"Screenshots" -9 more
-SettingsSection(9) @122,439 -> Settings +"0%" +"<  English  >" +"After 2 minutes" +"Build channel" +"Enter to start" +"Epilepsy warning" +12 more -"<  none found, Enter to pick  >" -"Clipboard" -"Game data folder" -"Hidden maps" -"LIBRARY" -"Screenshots" -8 more
+SettingsSection(9) @122,439 -> Settings +"0%" +"<  English  >" +"After 2 minutes" +"Build channel" +"Enter to start" +"Epilepsy warning" +13 more -"<  none found, Enter to pick  >" -"Clipboard" -"Game data folder" -"Hidden maps" -"LIBRARY" -"Screenshots" -8 more
 SettingsSearch @697,65 -> Settings
 SettingRow(0) @520,93 -> Settings +"Browse..." +"Find osu!'s Songs folder automatically" +"Songs folder" +"Type a path" +"Up/Down or mouse   Enter/click use   Esc close" +"none found"
 SettingStep(0, -1) @596,93 -> Settings
