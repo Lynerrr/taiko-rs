@@ -177,6 +177,31 @@ fn keyboard_play_judges_like_the_replay_of_it() {
 }
 
 #[test]
+fn f12_takes_a_screenshot_over_the_mod_select_and_its_panels() {
+    let (mut s, _songs, now) = client("shot-over-mods", vec![maps::rolls_and_swells()]);
+    press(&mut s, KeyCode::F1, now);
+    assert!(s.mod_select.is_some(), "F1 opens the mod select");
+    press(&mut s, KeyCode::F12, now);
+    assert!(s.screenshot_due, "F12 over the mod select");
+    assert!(s.mod_select.is_some(), "and the mod select stays open");
+
+    s.screenshot_due = false;
+    s.open_customization(crate::mods::Mod::OdOverride);
+    assert!(s.customization_tab().is_some());
+    press(&mut s, KeyCode::F12, now);
+    assert!(s.screenshot_due, "F12 over a mod's customization");
+    assert!(s.customization_tab().is_some(), "which stays open");
+    s.od_setup = None;
+
+    s.screenshot_due = false;
+    press(&mut s, KeyCode::KeyS, now);
+    assert!(s.preset_naming.is_some(), "S names a preset");
+    press(&mut s, KeyCode::F12, now);
+    assert!(s.screenshot_due, "F12 while a preset is being named");
+    assert!(s.preset_naming.is_some(), "which goes on");
+}
+
+#[test]
 fn pausing_resuming_retrying_and_quitting() {
     let (mut s, _songs, mut now) = client("pause", vec![maps::basics()]);
     let mut log = String::new();
