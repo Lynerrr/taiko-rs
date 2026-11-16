@@ -86,6 +86,11 @@ impl Screen for MapEditor {
         true
     }
 
+    /// A name, a chat line or a text block's words: the input method (IME) is let in for them.
+    fn typing(&self) -> bool {
+        self.view.wants_text()
+    }
+
     fn key(&mut self, state: &mut State, key: Key) {
         let Key {
             code,

@@ -262,10 +262,7 @@ impl View {
         );
         x += pw + 6.0;
         // The playhead's time: a click types a time to jump to; "copy" beside it copies it.
-        let typed = match &self.typing {
-            Some((Field::Playhead, t)) => Some(format!("{t}_")),
-            _ => None,
-        };
+        let typed = self.typed_line(Field::Playhead);
         let shown = typed.clone().unwrap_or_else(|| fmt_time(self.ed.time));
         let tw = Canvas::text_width(9.0, &shown).max(Canvas::text_width(9.0, "0:00.000"));
         let r = [x - 3.0, by + 3.0, tw + 6.0, bh - 6.0];
