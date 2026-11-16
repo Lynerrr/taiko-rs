@@ -108,6 +108,16 @@ pub enum Field {
     Playhead,
 }
 
+/// The most characters free text box `f` takes.
+fn text_max(f: Field) -> usize {
+    match f {
+        Field::Meta(k) => k.max_len(),
+        Field::Say(_) => collab::SAY_MAX,
+        Field::Playhead => 40,
+        _ => crate::tko::clips::MAX_TEXT,
+    }
+}
+
 impl Field {
     /// Typed as free text (`type_text`), not as a number.
     fn is_text(self) -> bool {
@@ -536,6 +546,9 @@ pub struct View {
     typing: Option<(Field, String)>,
     /// A text block's words just opened for typing: the first key replaces them all.
     typing_fresh: bool,
+    /// The caret and selection in the free text being typed (`typing`), as the game's other
+    /// text boxes have them: arrows, Home/End, Ctrl+A, copy, cut and paste.
+    text_edit: Option<(Field, crate::text_input::TextInput)>,
     /// Song setup's star rating, as of a history revision.
     setup_stars: Option<(u64, Option<f64>)>,
     /// A test play asked for: from this map time, or (None) from the start.
@@ -859,6 +872,7 @@ impl View {
             sel_line: None,
             typing: None,
             typing_fresh: false,
+            text_edit: None,
             setup_stars: None,
             want_test: None,
             want_new_diff: None,
@@ -3680,26 +3694,123 @@ impl View {
         self.typing.as_ref().is_some_and(|(f, _)| f.is_text())
     }
 
-    /// Text typed while `wants_text`.
+    /// Text typed while `wants_text`: in at the caret, over what is selected.
     pub fn type_text(&mut self, s: &str) {
-        if let Some((f, text)) = &mut self.typing
-            && f.is_text()
-        {
-            let most = match f {
-                Field::Meta(k) => k.max_len(),
-                Field::Say(_) => collab::SAY_MAX,
-                Field::Playhead => 40,
-                _ => crate::tko::clips::MAX_TEXT,
-            };
-            if std::mem::take(&mut self.typing_fresh) && s.chars().any(|c| !c.is_control()) {
-                text.clear();
+        let Some(f) = self
+            .typing
+            .as_ref()
+            .map(|(f, _)| *f)
+            .filter(|f| f.is_text())
+        else {
+            return;
+        };
+        if let Some(e) = self.text_edit() {
+            e.insert(s, text_max(f), |_| true);
+        }
+        self.store_text_edit();
+    }
+
+    /// The caret and selection of the free text being typed, made afresh when another box
+    /// opens (all of it selected while it is `typing_fresh`).
+    fn text_edit(&mut self) -> Option<&mut crate::text_input::TextInput> {
+        let (f, text) = self.typing.as_ref().filter(|(f, _)| f.is_text())?;
+        let (f, text) = (*f, text.clone());
+        let fresh = std::mem::take(&mut self.typing_fresh);
+        let current = matches!(&self.text_edit, Some((ef, e)) if *ef == f && e.text == text);
+        if fresh || !current {
+            let mut e = crate::text_input::TextInput::new(text);
+            if fresh {
+                e.select_all();
             }
-            for ch in s.chars().filter(|c| !c.is_control()) {
-                if text.chars().count() < most {
-                    text.push(ch);
+            self.text_edit = Some((f, e));
+        }
+        self.text_edit.as_mut().map(|(_, e)| e)
+    }
+
+    /// Puts what `text_edit` holds back into the box being typed.
+    fn store_text_edit(&mut self) {
+        if let (Some((f, text)), Some((ef, e))) = (&mut self.typing, &self.text_edit)
+            && f == ef
+        {
+            text.clone_from(&e.text);
+        }
+    }
+
+    /// Box `f` while it is typed into: its text, the caret and the selection (byte offsets).
+    pub(super) fn typed(&self, f: Field) -> Option<(&str, usize, std::ops::Range<usize>)> {
+        let (_, text) = self.typing.as_ref().filter(|(tf, _)| *tf == f)?;
+        if self.typing_fresh {
+            return Some((text, text.len(), 0..text.len()));
+        }
+        Some(match &self.text_edit {
+            Some((ef, e)) if *ef == f && e.text == *text => (text, e.caret, e.selection()),
+            _ => (text, text.len(), text.len()..text.len()),
+        })
+    }
+
+    /// Box `f` as one line while it is typed into: its text with a mark where the caret is.
+    pub(super) fn typed_line(&self, f: Field) -> Option<String> {
+        let (text, caret, _) = self.typed(f)?;
+        Some(if caret == text.len() {
+            format!("{text}_")
+        } else {
+            format!("{}|{}", &text[..caret], &text[caret..])
+        })
+    }
+
+    /// A key while free text is typed: moving the caret, selecting and editing as in the game's
+    /// other text boxes. False for the keys the box itself answers (Enter, Esc, Tab...).
+    fn text_key(&mut self, code: KeyCode, repeat: bool, keys: Keys) -> bool {
+        let Some(f) = self
+            .typing
+            .as_ref()
+            .map(|(f, _)| *f)
+            .filter(|f| f.is_text())
+        else {
+            return false;
+        };
+        let most = text_max(f);
+        match code {
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape | KeyCode::Tab => return false,
+            // Ctrl+C in the time box copies the time the way osu! writes it.
+            KeyCode::KeyC if keys.ctrl && f == Field::Playhead => return false,
+            // Ctrl+T writes the playhead's time, which the others can click.
+            KeyCode::KeyT if keys.ctrl && matches!(f, Field::Say(_)) => {
+                let at = crate::editor::collab::session::stamp(self.ed.time);
+                if let Some(e) = self.text_edit() {
+                    let sel = e.selection();
+                    let kept =
+                        e.text[..sel.start].chars().count() + e.text[sel.end..].chars().count();
+                    let lead =
+                        if e.text[..sel.start].is_empty() || e.text[..sel.start].ends_with(' ') {
+                            ""
+                        } else {
+                            " "
+                        };
+                    let line = format!("{lead}{at} ");
+                    if kept + line.chars().count() <= most {
+                        e.insert(&line, most, |_| true);
+                    }
+                }
+            }
+            _ => {
+                let m = crate::text_input::Modifiers {
+                    ctrl: keys.ctrl,
+                    shift: keys.shift,
+                    alt: keys.alt,
+                    super_key: false,
+                };
+                let rules = crate::text_input::Rules {
+                    max: most,
+                    secret: false,
+                };
+                if let Some(e) = self.text_edit() {
+                    e.key(code, None, m, repeat, rules, |_| true);
                 }
             }
         }
+        self.store_text_edit();
+        true
     }
 
     pub fn key(
@@ -3741,6 +3852,9 @@ impl View {
             }
             return KeyResult::Handled;
         }
+        if self.text_key(code, repeat, keys) {
+            return KeyResult::Handled;
+        }
         if let Some((f, text)) = &mut self.typing {
             let fresh = std::mem::take(&mut self.typing_fresh);
             match code {
@@ -3764,32 +3878,12 @@ impl View {
                         self.type_setting(next);
                     }
                 }
-                // Ctrl+T writes the playhead's time, which the others can click.
-                KeyCode::KeyT if keys.ctrl && matches!(f, Field::Say(_)) => {
-                    let at = crate::editor::collab::session::stamp(self.ed.time);
-                    if text.chars().count() + at.len() < collab::SAY_MAX {
-                        if !text.is_empty() && !text.ends_with(' ') {
-                            text.push(' ');
-                        }
-                        text.push_str(&at);
-                        text.push(' ');
-                    }
-                }
-                // Ctrl+V pastes (over words just opened, as typing would); Ctrl+C copies the
-                // time box's text.
-                KeyCode::KeyV if keys.ctrl && f.is_text() => {
-                    let pasted = crate::clipboard::get().unwrap_or_default();
-                    let pasted = pasted.lines().next().unwrap_or("").to_string();
-                    self.typing_fresh = fresh;
-                    self.type_text(&pasted);
-                }
+                // Ctrl+C copies the time box's time the way osu! writes it.
                 KeyCode::KeyC if keys.ctrl && *f == Field::Playhead => {
                     let t = parse_time(text).unwrap_or(self.ed.time);
                     self.copy_time(t);
                     self.typing_fresh = fresh;
                 }
-                // Words opened for typing go in one press, like selected text.
-                KeyCode::Backspace if fresh => text.clear(),
                 // Ctrl+Backspace takes the last word.
                 KeyCode::Backspace if keys.ctrl => {
                     let kept = text.trim_end().len();
@@ -3800,18 +3894,7 @@ impl View {
                 KeyCode::Backspace => {
                     text.pop();
                 }
-                // Shift and the like before a letter keep the words selected.
-                KeyCode::ShiftLeft
-                | KeyCode::ShiftRight
-                | KeyCode::ControlLeft
-                | KeyCode::ControlRight
-                | KeyCode::AltLeft
-                | KeyCode::AltRight
-                    if fresh =>
-                {
-                    self.typing_fresh = true;
-                }
-                // Free text comes as text (`type_text`), not as keys.
+                // Free text is typed through `text_key` and `type_text`.
                 _ if f.is_text() => {}
                 KeyCode::Period | KeyCode::NumpadDecimal => text.push('.'),
                 KeyCode::Minus | KeyCode::NumpadSubtract => text.push('-'),
