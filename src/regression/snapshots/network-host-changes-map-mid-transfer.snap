@@ -1,0 +1,4 @@
+guest gets the first map from the host: true
+the room has the new map within 1.5 s: true
+guest has the new map: true, still receiving the old one: false
+guest ready: true

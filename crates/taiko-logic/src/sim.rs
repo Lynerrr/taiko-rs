@@ -670,6 +670,54 @@ impl Scroll {
     }
 }
 
+/// The mods that change how fast notes scroll by themselves (not where they show): the ones
+/// `note_speed_factors` works out per note.
+pub const SPEED_MODS: [Mod; 14] = [
+    Mod::ConstantSpeed,
+    Mod::AntiSv,
+    Mod::HyperSv,
+    Mod::Crescendo,
+    Mod::Drop,
+    Mod::Gearbox,
+    Mod::Roulette,
+    Mod::Swing,
+    Mod::SnapSpeed,
+    Mod::Split,
+    Mod::Leapfrog,
+    Mod::Even,
+    Mod::Wave,
+    Mod::SvChaos,
+];
+
+/// How many times as fast as the map has it each don and kat scrolls with `mods`, by the note's
+/// map time: what `setup::bake_speeds` does to the notes' own velocities, times the speed
+/// `Scroll::factor` gives them by time. Lets a pp calculator read a play's SV mods like the
+/// scroll speeds of osu!'s HR and EZ.
+pub fn note_speed_factors(map: &Beatmap, mods: Mods) -> Vec<(f64, f64)> {
+    let mut baked = map.clone();
+    setup::bake_speeds(&mut baked, mods);
+    let scroll = Scroll {
+        t: 0.0,
+        speed: 1.0,
+        lane: 1.0,
+        mods,
+        warp: 0.0,
+        live: 1.0,
+        shared: None,
+    };
+    map.notes
+        .iter()
+        .zip(&baked.notes)
+        .filter(|(n, _)| matches!(n.kind, Kind::Don | Kind::Kat))
+        .map(|(n, b)| {
+            (
+                n.time,
+                b.velocity / n.velocity.max(1e-9) * scroll.factor(n.time),
+            )
+        })
+        .collect()
+}
+
 /// 0 below `e0`, 1 above `e1`, smoothly in between.
 #[inline]
 pub fn smooth(e0: f64, e1: f64, x: f64) -> f64 {

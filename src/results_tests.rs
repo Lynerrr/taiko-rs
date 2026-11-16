@@ -145,6 +145,7 @@ fn an_online_score_fetches_its_replay() {
             defense: None,
 
             stats: None,
+            host_mods: false,
         };
         let reply = online::Reply::Replay(Box::new(online::OnlineReplay {
             version: 2,

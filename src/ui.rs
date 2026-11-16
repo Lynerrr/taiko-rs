@@ -2716,7 +2716,13 @@ pub fn draw_mod_select(
     );
     c.text(px + 16.0, py + 12.0, 12.0, rgba(0xffffff, 1.0), "MODS");
     let mult = mods.multiplier();
-    let rank = if mods.unranked() { "  (not saved)" } else { "" };
+    let rank = if mods.unranked() {
+        "  (not saved)"
+    } else if mods.in_rework() {
+        "  (no pp: being reworked)"
+    } else {
+        ""
+    };
     let score = format!("score x{mult:.2}{rank}");
     c.text_right(px + pw - 16.0, py + 14.0, 8.0, rgba(0xc8c8d8, 1.0), &score);
     let hint = "arrows + Space toggle   F / right-click favourite   S saves a preset, 1-9 apply   R shuffles   Backspace clears   C customize (Random, Multiverse, Shapeshift, Tact, OD Override)   F1 / Esc closes";

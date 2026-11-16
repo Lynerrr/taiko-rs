@@ -269,6 +269,28 @@ fn mod_lists_round_trip() {
         "config HD,HR,DT,FL = {}",
         Mods::parse("HD,HR,DT,FL").to_config()
     );
+    // Mods taken out of the game: old plays still read them, a player's settings drop them.
+    let gone = "HD,AB,BO,SH,CK,DR,AC";
+    let _ = writeln!(out, "replay {gone} = {}", Mods::parse(gone).label());
+    let cfg = crate::config::Config::parse_text(&format!(
+        "mods={gone}\nfavourite_mods=MM,HD\nmod_preset=1.5|{gone}|old\n"
+    ));
+    let _ = writeln!(
+        out,
+        "settings {gone} = {} | favourites {} | preset {}",
+        cfg.mods.label(),
+        cfg.favourite_mods.label(),
+        cfg.mod_presets
+            .first()
+            .map_or("-".into(), |p| p.mods.label())
+    );
+    let _ = writeln!(
+        out,
+        "rework TC {} | AC {} | taken out {}",
+        Mods::parse("TC").in_rework(),
+        Mods::parse("AC").in_rework(),
+        mods::REMOVED.map(Mod::acronym).join(",")
+    );
     assert_snapshot("formats-mod-lists", &out);
 }
 

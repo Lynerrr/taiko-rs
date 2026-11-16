@@ -1,8 +1,11 @@
 shuffle(1) = HRAC
-shuffle(2) = ABDRBO
-shuffle(3) = ABDRBO
-shuffle(4) = HTRDDRMC
-shuffle(5) = HTRDDRMC
-shuffle(6) = NFNBWUMCSSFF
+shuffle(2) = WDBRSP
+shuffle(3) = WDBRSP
+shuffle(4) = HTALBRMC
+shuffle(5) = HTALBRMC
+shuffle(6) = NFDCHRRDSSTL
 label HD,HR,DT,FL = HRDTHDFL
 config HD,HR,DT,FL = HR,DT,HD,FL
+replay HD,AB,BO,SH,CK,DR,AC = HDABACDRBOSHCK
+settings HD,AB,BO,SH,CK,DR,AC = HDAC | favourites HD | preset HDAC
+rework TC true | AC false | taken out AB,BO,MM,SH,CK,DR

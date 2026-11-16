@@ -10,9 +10,9 @@ cd "$(dirname "$0")/.."
 # The same as LSMinimumSystemVersion in Info.plist.
 export MACOSX_DEPLOYMENT_TARGET=11.0
 
-for target in aarch64-apple-darwin x86_64-apple-darwin; do
-    cargo build --release --locked --target "$target"
-done
+# One cargo for both: the game's crate builds with one codegen unit (one core each), so the two
+# targets build side by side instead of one after the other.
+cargo build --release --locked --target aarch64-apple-darwin --target x86_64-apple-darwin
 
 dist=target/macos
 app="$dist/taiko-rs.app"
