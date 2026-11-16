@@ -4703,7 +4703,7 @@ impl State {
             .iter()
             .flat_map(|j| j.maps.iter().copied())
             .collect();
-        let (fresh, home) = library::osz_news(&self.library, &pending, &maps);
+        let (fresh, home) = library::osz_news(&self.library, &self.select.gone, &pending, &maps);
         // A custom set's folder still holding an older version's chart (one the archive doesn't
         // have) is unpacked over all the same: the website's archive puts it aside.
         let stale = home.is_some_and(|home| {
