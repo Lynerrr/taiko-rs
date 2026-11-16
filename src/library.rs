@@ -645,6 +645,55 @@ fn save_cache(path: &Path, folders: Vec<CachedFolder>) {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: the library cache `forget_cached` changes on this thread (None: none at all, so
+    /// tests never touch the cache other tests scan with).
+    static TEST_CACHE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: the library cache `forget_cached` changes on this thread from now on.
+#[cfg(test)]
+pub fn set_test_cache(path: Option<PathBuf>) {
+    TEST_CACHE.with(|c| *c.borrow_mut() = path);
+}
+
+/// Maps deleted (`paths`, and the set `folder` if it went whole) leave the library cache at
+/// once, so the next start doesn't list them while the Songs folder is looked through.
+pub fn forget_cached(paths: &[PathBuf], folder: Option<&Path>) {
+    #[cfg(test)]
+    let cache = TEST_CACHE.with(|c| c.borrow().clone());
+    #[cfg(not(test))]
+    let cache = Some(library_cache());
+    if let Some(cache) = cache {
+        forget_in_cache(&cache, paths, folder);
+    }
+}
+
+fn forget_in_cache(cache_path: &Path, paths: &[PathBuf], folder: Option<&Path>) {
+    let (cache, state) = load_cache(cache_path);
+    if matches!(state, CacheState::Missing | CacheState::Unreadable(_)) {
+        return;
+    }
+    let gone = folder.map(folder_key);
+    let total = cache.len();
+    let mut folders: Vec<CachedFolder> = cache
+        .into_iter()
+        .filter(|(key, _)| Some(key) != gone.as_ref())
+        .map(|(_, f)| f)
+        .collect();
+    let mut changed = folders.len() != total;
+    for f in &mut folders {
+        let before = f.maps.len();
+        f.maps.retain(|m| !paths.contains(&m.path));
+        changed |= f.maps.len() != before;
+    }
+    if changed {
+        folders.sort_by(|a, b| a.dir.cmp(&b.dir));
+        save_cache(cache_path, folders);
+    }
+}
+
 /// Finds playable difficulties under `inputs`. `found` counts files read so far, for the UI.
 ///
 /// A Songs folder of tens of thousands of maps took over a minute just to list on a hard drive,
@@ -675,7 +724,7 @@ fn place(p: &Path) -> PathBuf {
     }
 }
 
-fn scan_cached(
+pub(crate) fn scan_cached(
     inputs: &[PathBuf],
     found: &AtomicUsize,
     cache_path: &Path,
@@ -1270,6 +1319,49 @@ mod tests {
         );
         let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
         (entries, log.lines().last().unwrap().to_string())
+    }
+
+    #[test]
+    fn deleted_maps_leave_the_cache_at_once() {
+        let (root, songs, cache) = songs_folder("forget");
+        add_map(&songs, "1 kept", "5");
+        add_map(&songs, "2 set", "5");
+        std::fs::write(
+            songs.join("2 set/easy.osu"),
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:2 set\nVersion:Easy\n",
+        )
+        .unwrap();
+        add_map(&songs, "3 gone", "5");
+        let (first, _) = quiet_scan(&songs, &cache);
+        assert_eq!(first.len(), 4);
+        let early = |cache: &Path| -> Vec<PathBuf> {
+            let mut maps: Vec<PathBuf> = load_cache(cache)
+                .0
+                .into_values()
+                .flat_map(|f| f.maps.into_iter().map(|m| m.path))
+                .collect();
+            maps.sort();
+            maps
+        };
+        // A difficulty: its folder stays cached without it.
+        let easy = songs.join("2 set/easy.osu");
+        forget_in_cache(&cache, std::slice::from_ref(&easy), None);
+        assert!(!early(&cache).contains(&easy));
+        assert_eq!(early(&cache).len(), 3);
+        // A whole set: its folder goes.
+        let set = songs.join("3 gone");
+        forget_in_cache(&cache, &[set.join("oni.osu")], Some(&set));
+        let left = early(&cache);
+        assert_eq!(
+            left,
+            [songs.join("1 kept/oni.osu"), songs.join("2 set/oni.osu")]
+        );
+        assert!(!load_cache(&cache).0.contains_key(&folder_key(&set)));
+        // Without a cache there's nothing to change, and none is made.
+        let none = root.join("none.json");
+        forget_in_cache(&none, &[easy], None);
+        assert!(!none.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

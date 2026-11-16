@@ -78,7 +78,7 @@ fn words(item: Item) -> &'static str {
             "color palette red blue цвет палитра красный синий"
         }
         Item::Language => "english japanese russian locale английский японский русский",
-        Item::SongsFolder | Item::ShowConverts | Item::HiddenMaps => {
+        Item::SongsFolder | Item::ShowConverts => {
             "library beatmaps maps osu stable библиотека карты песни"
         }
         Item::SongHeadings => {
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn the_start_of_a_name_beats_the_inside_of_one_and_those_beat_the_help() {
         assert_eq!(first("fps"), Some(Item::FpsCap));
-        assert_eq!(first("hidden"), Some(Item::HiddenMaps));
+        assert_eq!(first("songs"), Some(Item::SongsFolder));
     }
 
     #[test]

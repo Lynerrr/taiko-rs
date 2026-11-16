@@ -51,12 +51,6 @@ fn everything_written_reads_back_the_same_after_reopening() {
         (PathBuf::from("C:\\Songs\\2 б\\б [y].osu"), 1_700_000_200),
     ]
     .into();
-    let songs: HashSet<PathBuf> = [PathBuf::from("/songs/1 a")].into();
-    let maps: HashSet<PathBuf> = [
-        PathBuf::from("/songs/2 b/b [hard].osu"),
-        PathBuf::from("/songs/3 c/c [日本].osu"),
-    ]
-    .into();
     let offsets: HashMap<u64, f64> = [(u64::MAX, -12.5), (7, 3.0), (0, 0.25)].into();
     let skins_off: HashSet<String> = ["1 a".into(), "4 d (tab\tin name)".into()].into();
     let favourites: HashSet<String> = ["1 a/audio.mp3".into(), "2 б/song.ogg".into()].into();
@@ -72,7 +66,6 @@ fn everything_written_reads_back_the_same_after_reopening() {
             // An earlier play of the same map doesn't make it older.
             s.add_play(p, at - 50).unwrap();
         }
-        s.replace_hidden(&songs, &maps).unwrap();
         s.replace_map_offsets(&offsets).unwrap();
         s.replace_map_skins_off(&skins_off).unwrap();
         s.replace_favourites(&favourites).unwrap();
@@ -85,7 +78,6 @@ fn everything_written_reads_back_the_same_after_reopening() {
         "scores, in the order they were added"
     );
     assert_eq!(s.plays().unwrap(), plays);
-    assert_eq!(s.hidden().unwrap(), (songs, maps));
     assert_eq!(s.map_offsets().unwrap(), offsets);
     assert_eq!(s.map_skins_off().unwrap(), skins_off);
     assert_eq!(s.favourites().unwrap(), favourites);
@@ -101,6 +93,48 @@ fn everything_written_reads_back_the_same_after_reopening() {
     assert_eq!(s.map_offsets().unwrap(), [(7, -1.0)].into());
     assert!(s.favourites().unwrap().is_empty());
     assert_eq!(s.map_skins_off().unwrap(), skins_off);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_deleted_maps_plays_are_forgotten_and_the_rest_stay() {
+    let mut s = Store::in_memory().unwrap();
+    let (gone, kept) = (
+        PathBuf::from("/songs/1 a/a [x].osu"),
+        PathBuf::from("/songs/1 a/a [y].osu"),
+    );
+    s.add_play(&gone, 10).unwrap();
+    s.add_play(&kept, 20).unwrap();
+    s.forget_plays(std::slice::from_ref(&gone)).unwrap();
+    assert_eq!(s.plays().unwrap(), [(kept, 20)].into());
+    // Again, or a map never played: nothing to forget, no error.
+    s.forget_plays(&[gone, PathBuf::from("/never/played.osu")])
+        .unwrap();
+}
+
+/// Hiding maps from song select was taken out: a database that holds hidden maps from before
+/// opens as ever, and the rest of what it holds reads the same.
+#[test]
+fn a_database_with_maps_hidden_before_opens_and_reads_the_same() {
+    let dir = temp_dir("old-hidden");
+    let path = dir.join(store::FILE);
+    let play = PathBuf::from("/songs/1 a/a [x].osu");
+    {
+        let s = Store::open(&path).unwrap();
+        s.add_play(&play, 7).unwrap();
+    }
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO hidden (kind, path) VALUES ('song', '/songs/1 a'), ('map', '/songs/1 a/a [x].osu')",
+            [],
+        )
+        .unwrap();
+    }
+    let s = Store::open(&path).unwrap();
+    assert_eq!(s.version().unwrap(), store::VERSION);
+    assert_eq!(s.plays().unwrap(), [(play, 7)].into());
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -217,8 +251,6 @@ fn expected(dir: &Path) -> Files {
             (PathBuf::from("/songs/2 b/b [y].osu"), 1_700_000_300),
         ]
         .into(),
-        hidden_songs: [PathBuf::from("/songs/3 c")].into(),
-        hidden_maps: [PathBuf::from("/songs/2 b/b [hard].osu")].into(),
         map_offsets: [(0xaa, -12.5), (u64::MAX, 4.0)].into(),
         map_skins_off: ["1 a".into(), "3 c".into()].into(),
         favourites: ["1 a/audio.mp3".into(), "2 b/song.ogg".into()].into(),
@@ -314,18 +346,37 @@ fn a_second_launch_doesnt_bring_the_files_in_again() {
     let _ = std::fs::remove_dir_all(db.parent().unwrap());
 }
 
+/// Hidden maps were taken out: their old file is left alone, whatever it holds, and doesn't
+/// stand in the way of the rest.
+#[test]
+fn an_old_hidden_maps_file_is_left_out_of_the_import() {
+    let data = temp_dir("import-hidden");
+    old_files(&data);
+    std::fs::write(data.join("hidden.tsv"), b"song\t/songs/\xff\xfe\n").unwrap();
+    let mut s = Store::in_memory().unwrap();
+    assert!(import::import(&mut s, &data, 3).unwrap());
+    let back = import::read_store(&s, &data.join("replays")).unwrap();
+    assert_eq!(back, expected(&data));
+    assert_eq!(
+        std::fs::read(data.join("hidden.tsv")).unwrap(),
+        b"song\t/songs/\xff\xfe\n",
+        "the file stays as it was"
+    );
+    let _ = std::fs::remove_dir_all(&data);
+}
+
 #[test]
 fn a_file_that_cant_be_read_stops_the_import_and_keeps_nothing() {
     let data = temp_dir("import-bad");
     old_files(&data);
-    // Not text: the game took it for no hidden maps; the import doesn't guess.
-    std::fs::write(data.join("hidden.tsv"), b"song\t/songs/\xff\xfe\n").unwrap();
+    // Not text: the game took it for no favourites; the import doesn't guess.
+    std::fs::write(data.join("favourite-songs.txt"), b"1 a/\xff\xfe\n").unwrap();
     let before = snapshot_dir(&data);
     let db = temp_dir("import-bad-db").join(store::FILE);
 
     let mut s = Store::open(&db).unwrap();
     let e = import::import(&mut s, &data, 1).unwrap_err();
-    assert!(e.contains("hidden.tsv"), "{e}");
+    assert!(e.contains("favourite-songs.txt"), "{e}");
     assert!(!import::imported(&s).unwrap());
     assert_eq!(
         import::read_store(&s, &data.join("replays")).unwrap(),
@@ -335,13 +386,12 @@ fn a_file_that_cant_be_read_stops_the_import_and_keeps_nothing() {
     drop(s);
 
     // Mended: the next launch brings everything in.
-    std::fs::write(data.join("hidden.tsv"), "song\t/songs/3 c\n").unwrap();
+    std::fs::write(data.join("favourite-songs.txt"), "3 c/song.ogg\n").unwrap();
     let mut s = Store::open(&db).unwrap();
     assert!(import::import(&mut s, &data, 2).unwrap());
     let back = import::read_store(&s, &data.join("replays")).unwrap();
     assert_eq!(back.scores, expected(&data).scores);
-    assert_eq!(back.hidden_songs, [PathBuf::from("/songs/3 c")].into());
-    assert!(back.hidden_maps.is_empty());
+    assert_eq!(back.favourites, ["3 c/song.ogg".to_string()].into());
     drop(s);
     let _ = std::fs::remove_dir_all(&data);
     let _ = std::fs::remove_dir_all(db.parent().unwrap());

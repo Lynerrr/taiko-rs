@@ -16,7 +16,7 @@ text  125,35   .
 text  223,58   GAMEPLAY
 text  586,61   type to search...
 text   73,69   LIBRARY
-text   73,83   Songs folder, hidden...
+text   73,83   Songs folder, song li...
 text  235,90   Scroll speed
 text  729,90   <  1.00x  >
 text   73,109  GAMEPLAY
@@ -68,17 +68,17 @@ hit    37,342   170x34   SettingsSection(7)
 hit    37,382   170x34   SettingsSection(8)
 hit    37,422   170x34   SettingsSection(9)
 hit   577,55    240x19   SettingsSearch
-hit   223,78    594x30   SettingRow(7)
-hit   723,80     20x26   SettingStep(7, -1)
-hit   791,80     24x26   SettingStep(7, 1)
-hit   223,108   594x30   SettingRow(8)
-hit   223,138   594x30   SettingRow(9)
-hit   223,168   594x30   SettingRow(10)
-hit   223,198   594x30   SettingRow(11)
-hit   223,228   594x30   SettingRow(12)
-hit   223,258   594x30   SettingRow(13)
-hit   223,288   594x30   SettingRow(14)
-hit   223,336   594x30   SettingRow(15)
-hit   223,366   594x14   SettingRow(16)
+hit   223,78    594x30   SettingRow(6)
+hit   723,80     20x26   SettingStep(6, -1)
+hit   791,80     24x26   SettingStep(6, 1)
+hit   223,108   594x30   SettingRow(7)
+hit   223,138   594x30   SettingRow(8)
+hit   223,168   594x30   SettingRow(9)
+hit   223,198   594x30   SettingRow(10)
+hit   223,228   594x30   SettingRow(11)
+hit   223,258   594x30   SettingRow(12)
+hit   223,288   594x30   SettingRow(13)
+hit   223,336   594x30   SettingRow(14)
+hit   223,366   594x14   SettingRow(15)
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

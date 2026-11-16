@@ -2182,12 +2182,12 @@ fn added_maps_show_past_the_filters() {
     s.select.filter = "alpha".into();
     s.select.refilter(&s.library);
     assert_eq!(s.select.songs().len(), 1);
-    s.select.hidden.maps.insert(s.library[1].path.clone());
+    s.select.gone.insert(s.library[1].path.clone());
     let path = s.library[1].path.clone();
     s.select.reveal(&s.library, vec![path.clone()]);
-    assert_eq!(s.select.songs().len(), 1, "hidden stays hidden");
+    assert_eq!(s.select.songs().len(), 1, "a map that's gone stays out");
 
-    // The first of them hidden: the next one gets selected.
+    // The first of them gone: the next one gets selected.
     let next = s.library[2].path.clone();
     s.select.reveal(&s.library, vec![path, next]);
     assert_eq!(s.select.selected(), Some(2));

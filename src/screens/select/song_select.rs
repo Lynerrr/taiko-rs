@@ -177,6 +177,17 @@ impl Screen for SongSelect {
                 state.select.filter.clear();
                 state.select.refilter(&state.library);
             }
+            // In the search box Delete clears what's typed, as in the game's other boxes.
+            () if code == KeyCode::Delete && state.select.searching => {
+                state.select.filter.clear();
+                state.select.refilter(&state.library);
+            }
+            // The selected difficulty; with Shift, its whole set. Asked first.
+            () if code == KeyCode::Delete => {
+                if let Some(i) = state.select.selected() {
+                    state.ask_delete(i, state.modifiers_shift);
+                }
+            }
             () => match state.select.key(code, &state.library) {
                 SelectAction::Play(i) if state.picking_lobby_map => state.pick_lobby_map(i),
                 SelectAction::Play(i) if state.pick_to_edit => {
@@ -589,6 +600,9 @@ impl Screen for SongSelect {
             state.select.draw_popups(canvas, &state.library);
             if let Some(naming) = &state.select.naming {
                 super::collections::draw_collection_naming(canvas, naming);
+            }
+            if let Some(ask) = &state.select.deleting {
+                super::delete::draw_delete_ask(canvas, ask);
             }
             if state.cfg.drum_menus {
                 state.select_rows = drum_nav::Rows::of(canvas);

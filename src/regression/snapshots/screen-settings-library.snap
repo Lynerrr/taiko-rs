@@ -16,7 +16,7 @@ text  125,35   .
 text  223,58   LIBRARY
 text  586,61   type to search...
 text   73,69   LIBRARY
-text   73,83   Songs folder, hidden...
+text   73,83   Songs folder, song li...
 text  235,90   Songs folder
 text  592,90   <  none found, Enter to pick  >
 text   73,109  GAMEPLAY
@@ -25,21 +25,19 @@ text   73,123  speed, rate, interface
 text   73,149  VIEW
 text  235,150  Song list headings
 text   73,163  playfield, background
-text  235,180  Hidden maps
-text  777,182  none
+text  235,180  Song select layout
+text  757,180  default
 text   74,189  INPUT
 text   73,203  drum keys, hotkeys, t...
-text  235,210  Song select layout
-text  757,210  default
+text  235,210  Game data folder
+text  695,210  the usual places
 text   73,229  OFFSET
-text  235,240  Game data folder
-text  695,240  the usual places
+text  235,240  Screenshots
+text  743,240  Clipboard
 text   73,243  audio offset, calibra...
 text   73,269  AUDIO
-text  235,270  Screenshots
-text  743,270  Clipboard
+text  233,276  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
 text   73,283  volume, latency
-text  233,306  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
 text   73,309  VIDEO
 text   73,323  frame pacing, display
 text   73,349  SKIN
@@ -72,6 +70,5 @@ hit   223,138   594x30   SettingRow(2)
 hit   223,168   594x30   SettingRow(3)
 hit   223,198   594x30   SettingRow(4)
 hit   223,228   594x30   SettingRow(5)
-hit   223,258   594x30   SettingRow(6)
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

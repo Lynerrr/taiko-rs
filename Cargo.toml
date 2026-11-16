@@ -42,6 +42,9 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 # The clipboard (Ctrl+C / Ctrl+V, F12 screenshots): Windows, macOS, X11 and Wayland compositors
 # with data-control.
 arboard = { version = "3.7", default-features = false, features = ["wayland-data-control", "image-data"] }
+# Deleted maps go to the recycle bin (Windows), the Trash (macOS) or the freedesktop trash
+# (Linux); Android has none, so they go to a Trash folder of the game's own (`map_trash`).
+trash = { version = "5.3", default-features = false, features = ["freedesktop", "coinit_apartmentthreaded"] }
 
 # Media keys and the desktop's media controls (the music player).
 [target.'cfg(any(target_os = "linux", windows))'.dependencies]
