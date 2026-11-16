@@ -943,10 +943,11 @@ fn same_set(a: &Meta, b: &Meta) -> bool {
 }
 
 /// What unpacking an `.osz` (its difficulties: header and content hash) would add: how many of
-/// its difficulties are neither in the list with the same content nor in `pending` (on their
-/// way already), and the folder of the set if some of it is here.
+/// its difficulties are neither in the list with the same content (maps deleted this session,
+/// in `gone`, don't count) nor in `pending` (on their way already), and the folder of the set if some of it is here.
 pub fn osz_news<'a>(
     library: &'a [Entry],
+    gone: &std::collections::HashSet<PathBuf>,
     pending: &std::collections::HashSet<u64>,
     maps: &[(Meta, u64)],
 ) -> (usize, Option<&'a Path>) {
@@ -954,7 +955,12 @@ pub fn osz_news<'a>(
     let mut fresh = 0;
     for (meta, hash) in maps {
         let mut here = pending.contains(hash);
-        for e in library.iter().filter(|e| same_set(&e.meta, meta)) {
+        // A map deleted this session is still in the library (song select only leaves it out):
+        // dropped in again, it's new.
+        for e in library
+            .iter()
+            .filter(|e| same_set(&e.meta, meta) && !gone.contains(&e.path))
+        {
             home = home.or(e.path.parent());
             // Only same-named difficulties get hashed: reading every file would take a while.
             here = here || (e.meta.version == meta.version && e.hash() == *hash);
@@ -1164,9 +1170,15 @@ mod tests {
         let library = [Entry::new(set.join("oni.osu"), meta("Oni", Some(123)))];
         let hash = |b: &[u8]| crate::net::map_hash(b);
         let none = std::collections::HashSet::new();
+        let no_gone = std::collections::HashSet::new();
         // The same file: nothing new, and the set's folder is known.
         assert_eq!(
-            osz_news(&library, &none, &[(meta("Oni", Some(123)), hash(b"oni"))]),
+            osz_news(
+                &library,
+                &no_gone,
+                &none,
+                &[(meta("Oni", Some(123)), hash(b"oni"))]
+            ),
             (0, Some(set.as_path()))
         );
         // One more difficulty, and an updated Oni.
@@ -1174,18 +1186,24 @@ mod tests {
             (meta("Oni", Some(123)), hash(b"oni v2")),
             (meta("Muzukashii", Some(123)), hash(b"muzu")),
         ];
-        assert_eq!(osz_news(&library, &none, &maps).0, 2);
+        assert_eq!(osz_news(&library, &no_gone, &none, &maps).0, 2);
         // Dropped twice: the first one is still unpacking.
         let pending = maps.iter().map(|m| m.1).collect();
-        assert_eq!(osz_news(&library, &pending, &maps).0, 0);
+        assert_eq!(osz_news(&library, &no_gone, &pending, &maps).0, 0);
         // Unsubmitted maps (no set ID) match by artist, title and mapper.
         assert_eq!(
-            osz_news(&library, &none, &[(meta("Oni", None), hash(b"oni"))]),
+            osz_news(
+                &library,
+                &no_gone,
+                &none,
+                &[(meta("Oni", None), hash(b"oni"))]
+            ),
             (0, Some(set.as_path()))
         );
         assert_eq!(
             osz_news(
                 &library,
+                &no_gone,
                 &none,
                 &[(
                     Meta {
@@ -1194,6 +1212,18 @@ mod tests {
                     },
                     hash(b"oni")
                 )]
+            ),
+            (1, None)
+        );
+        // Deleted this session (still in the library, left out of song select): dropped in
+        // again, it's new.
+        let gone = std::collections::HashSet::from([set.join("oni.osu")]);
+        assert_eq!(
+            osz_news(
+                &library,
+                &gone,
+                &none,
+                &[(meta("Oni", Some(123)), hash(b"oni"))]
             ),
             (1, None)
         );

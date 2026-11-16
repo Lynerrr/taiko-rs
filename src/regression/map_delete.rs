@@ -311,3 +311,58 @@ fn a_custom_sets_deleted_difficulty_is_noted_in_its_marker() {
         "the website still having it doesn't bring it back"
     );
 }
+
+#[test]
+fn a_deleted_map_dropped_in_again_comes_back_at_once() {
+    use std::io::Write as _;
+    let set = set("delete-reimport");
+    let (mut s, mut now) = client(&set);
+    let path = set.paths[0].clone();
+    let bytes = std::fs::read(&path).unwrap();
+    select(&mut s, now, &path);
+    let hash = s.library[s.select.selected().unwrap()].hash();
+    press(&mut s, KeyCode::Delete, now);
+    press(&mut s, KeyCode::ArrowRight, now);
+    press(&mut s, KeyCode::Enter, now);
+    assert!(!path.exists() && !listed(&s, &path));
+    toast(&mut s);
+
+    // The same map as an .osz, dropped on the window in the same session.
+    let dir = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-reimport-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("Regression - again.osz");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+    zip.start_file(
+        path.file_name().unwrap().to_string_lossy(),
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(&bytes).unwrap();
+    zip.finish().unwrap();
+    s.import_osz(archive, "Regression - again", true);
+    assert!(
+        !toast(&mut s).contains("already in your songs"),
+        "the deleted copy doesn't count as one in the list"
+    );
+    assert!(!s.downloads.is_empty(), "it's unpacked");
+    assert!(
+        wait_for(&mut s, &mut now, |s| s.downloads.is_empty()),
+        "the archive is unpacked"
+    );
+    frame(&mut s, now);
+    let back = s
+        .select
+        .rows()
+        .iter()
+        .map(|&i| &s.library[i])
+        .find(|e| e.hash() == hash)
+        .map(|e| e.path.clone());
+    assert!(
+        back.as_ref().is_some_and(|p| p.is_file()),
+        "listed again without leaving song select"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
