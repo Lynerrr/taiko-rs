@@ -1,0 +1,31 @@
+text  112,66   basics
+text  113,77   [basics]
+text  112,96   Like
+text  112,114  Edit
+text  112,132  New difficulty from this
+text  112,150  Collect
+text  186,150  difficulty
+text  265,150  whole set
+text  112,168  Download again
+text  112,185  taiko.rs
+text  112,199  Love
+text  186,199  difficulty
+text  265,199  whole set
+text  112,217  EPIC
+text  186,217  difficulty
+text  265,217  whole set
+text  112,242  Delete
+text  186,242  difficulty
+text  265,242  whole set
+hit   104,91    228x16   SongMenu(0)
+hit   104,109   228x16   SongMenu(1)
+hit   104,127   228x16   SongMenu(2)
+hit   180,146    72x14   SongMenu(3)
+hit   256,146    72x14   SongMenu(4)
+hit   104,163   228x16   SongMenu(5)
+hit   180,195    72x14   SongMenu(6)
+hit   256,195    72x14   SongMenu(7)
+hit   180,213    72x14   SongMenu(8)
+hit   256,213    72x14   SongMenu(9)
+hit   180,238    72x14   SongMenu(10)
+hit   256,238    72x14   SongMenu(11)

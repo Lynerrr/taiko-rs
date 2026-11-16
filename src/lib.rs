@@ -14737,7 +14737,7 @@ impl State {
                     .select
                     .menu_items(&self.library)
                     .get(k)
-                    .map(|(_, a)| *a);
+                    .map(|it| it.action);
                 if let Some(ui::MenuAction::Love(set, loved, one)) = action {
                     let version = self
                         .select

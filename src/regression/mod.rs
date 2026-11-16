@@ -31,6 +31,7 @@ mod scoring;
 mod screens;
 mod secrets;
 mod select;
+mod song_menu;
 mod store;
 mod text_fields;
 
