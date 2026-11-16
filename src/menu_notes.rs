@@ -61,6 +61,20 @@ const PAST: f32 = 0.05;
 /// How long the notes take to come in with a new song (ms).
 const FADE_IN_MS: f32 = 900.0;
 
+/// The stray gold note's part in the routes (`eggs::StrayNote`): one of the song's own notes,
+/// turned gold, riding its route with the rest.
+#[derive(Default)]
+pub struct Gold {
+    /// A note wanted on this route: the next one to come onto it is picked.
+    pub want: Option<usize>,
+    /// The note picked: its route and map time.
+    pub note: Option<(usize, f64)>,
+    /// Whether it's drawn gold, rather than hidden (caught, bursting).
+    pub shown: bool,
+    /// Where it was drawn this frame; None while it isn't on its route.
+    pub at: Option<[f32; 2]>,
+}
+
 /// A point of route `route`: `along` 0 at its end (left) to 1 at its start, `secs` into the
 /// routes' drift, `swell` how much its waves are raised.
 fn route_point(route: &Route, along: f32, secs: f32, width: f32, swell: f32) -> [f32; 2] {
@@ -234,8 +248,17 @@ impl<'a> View<'a> {
 
 /// The routes and what's on them, under the menu. `clock` is the menu's (ms), `kiai` and `kick`
 /// how far into a kiai and what's left of its beat, and `shift` moves the universes along the
-/// routes, as a kiai does every few bars.
-pub fn draw(c: &mut Canvas, view: &View, clock: f32, kiai: f32, kick: f32, shift: usize) {
+/// routes, as a kiai does every few bars. `gold` picks and draws the stray gold note.
+pub fn draw(
+    c: &mut Canvas,
+    view: &View,
+    clock: f32,
+    kiai: f32,
+    kick: f32,
+    shift: usize,
+    gold: &mut Gold,
+) {
+    gold.at = None;
     let universes = multiverse::get();
     let (width, secs) = (c.width, clock / 1000.0);
     let swell = 1.0 + kiai * 0.35 + kick * 0.15;
@@ -249,6 +272,15 @@ pub fn draw(c: &mut Canvas, view: &View, clock: f32, kiai: f32, kick: f32, shift
             c.rect(x, y, 2.0, 2.0, rgba(universe.idle(), 0.09 * bright));
         }
         let ms = route.ms / universe.speed();
+        if gold.want == Some(k) {
+            // The next note to come on at the route's start, so it rides the whole way.
+            let next = view.notes.partition_point(|n| n.time <= view.time + ms);
+            if let Some(n) = view.notes.get(next) {
+                gold.want = None;
+                gold.note = Some((k, n.time));
+                gold.shown = true;
+            }
+        }
         let from = view
             .notes
             .partition_point(|n| n.time < view.time - ms * PAST as f64);
@@ -257,6 +289,13 @@ pub fn draw(c: &mut Canvas, view: &View, clock: f32, kiai: f32, kick: f32, shift
         for note in view.notes[from..until].iter().rev() {
             let along = ((note.time - view.time) / ms) as f32;
             let [x, y] = route_point(route, along, secs, width, swell);
+            if gold.note == Some((k, note.time)) {
+                if gold.shown && along >= 0.0 {
+                    gold.at = Some([x, y]);
+                    crate::eggs::draw_stray(c, x, y, clock, -1.0, 1.0);
+                }
+                continue;
+            }
             let ends = ((along + PAST) / PAST)
                 .min((1.0 - along) * 8.0)
                 .clamp(0.0, 1.0);
@@ -422,6 +461,7 @@ mod tests {
                 1.0,
                 0.5,
                 3,
+                &mut Gold::default(),
             );
             c.shapes.len()
         };

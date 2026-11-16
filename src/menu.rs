@@ -652,7 +652,15 @@ impl Menu {
         );
 
         if let Some(ghosts) = &f.ghosts {
-            crate::menu_notes::draw(c, ghosts, self.clock, self.kiai, self.kick(), self.universe);
+            crate::menu_notes::draw(
+                c,
+                ghosts,
+                self.clock,
+                self.kiai,
+                self.kick(),
+                self.universe,
+                &mut eggs.stray.gold,
+            );
         }
         crate::settings::brand_with(c, |c, x, y, size| eggs.draw_logo(c, x, y, size));
         draw_session(c, f.session);
