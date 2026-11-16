@@ -1,9 +1,9 @@
-room protocol 7 | online protocol 1 | pp version 3
+room protocol 7 | online protocol 1 | pp version 4
 == room: client -> server
 {"Hello":{"name":"me","protocol":7,"host_token":7,"password":"pw"}}
 {"Hello":{"name":"me","protocol":7,"host_token":null}}
 {"Ping":{"t":12.5}}
-{"SelectMap":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}}}
+{"SelectMap":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true}}
 {"HasMap":true}
 {"Ready":false}
 "StartMatch"
@@ -31,13 +31,13 @@ room protocol 7 | online protocol 1 | pp version 3
 {"Welcome":{"id":2}}
 {"Rejected":"full"}
 {"Pong":{"t":10.0,"server":20.0}}
-{"Room":{"players":[{"id":1,"name":"host","host":true,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]},{"id":2,"name":"me","host":false,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]}],"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"in_match":false,"mapguessr":false,"common":3,"team":{"lives":0,"max":0,"gold":0,"shield":0,"towers":0,"heals":0,"shields":0,"tower_buys":0},"locked":true,"slots":8}}
-{"Prepare":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}}}
+{"Room":{"players":[{"id":1,"name":"host","host":true,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]},{"id":2,"name":"me","host":false,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]}],"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true},"in_match":false,"mapguessr":false,"common":3,"team":{"lives":0,"max":0,"gold":0,"shield":0,"towers":0,"heals":0,"shields":0,"tower_buys":0},"locked":true,"slots":8}}
+{"Prepare":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true}}
 {"Start":{"at":5000.0}}
 {"Results":[{"id":1,"name":"host","host":true,"ready":true,"has_map":true,"status":"Lobby","live":{"score":123456,"combo":78,"accuracy":0.975,"miss":2,"progress":0.5,"great":70,"ok":6},"result":null,"spectator":false,"points":0,"guessed":false,"tries":0,"maps":null,"mods":[]}]}
 {"MapRequested":{"from":2}}
 {"MapFile":{"name":"123 Artist - Title","total":10,"offset":4,"data":"AAEC","error":null}}
-{"Spectate":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"at":100.0,"players":[[1,"host"]]}}
+{"Spectate":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true},"at":100.0,"players":[[1,"host"]]}}
 {"Inputs":{"from":1,"inputs":[[1000.0,0]],"anti_mash":true}}
 {"Skipped":{"from":1}}
 {"SkipVotes":{"votes":1,"of":2}}
@@ -59,7 +59,7 @@ room protocol 7 | online protocol 1 | pp version 3
 {"protocol":1,"request":{"CreateRoom":{"token":"t","title":"room","mapguessr":false,"settings":{"password":"pw","slots":4}}}}
 {"protocol":1,"request":{"JoinRoom":{"token":"t","room":3}}}
 {"protocol":1,"request":{"Connect":{"token":"t"}}}
-{"protocol":1,"request":{"SubmitScore":{"token":"t","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"score":900000,"accuracy":0.99,"max_combo":300,"great":295,"ok":5,"miss":0,"pp":123.4,"date":1700000000,"replay_version":6,"inputs":[[1023.0,1]],"stars":5.25,"play_ms":120000,"scroll_speed":1.0,"md5":"abc","pp_version":3,"timing":null,"rolls":12}}}}
+{"protocol":1,"request":{"SubmitScore":{"token":"t","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true},"score":900000,"accuracy":0.99,"max_combo":300,"great":295,"ok":5,"miss":0,"pp":123.4,"date":1700000000,"replay_version":6,"inputs":[[1023.0,1]],"stars":5.25,"play_ms":120000,"scroll_speed":1.0,"md5":"abc","pp_version":4,"timing":null,"rolls":12}}}}
 {"protocol":1,"request":{"MapScores":{"map":1}}}
 {"protocol":1,"request":{"MapScores":{"map":1,"relax":true}}}
 {"protocol":1,"request":{"Profile":{"name":"me"}}}
@@ -108,14 +108,14 @@ room protocol 7 | online protocol 1 | pp version 3
 {"RemoveFriend":"friend"}
 {"Watch":"friend"}
 "StopWatching"
-{"PlayStart":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"anti_mash":true}}
+{"PlayStart":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true},"anti_mash":true}}
 "PlayEnd"
 "Ping"
 {"GlobalChat":"hello"}
 {"Features":["mapping/1"]}
 == social: down
 {"Notice":"maintenance"}
-{"WatchStart":{"player":"friend","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"}},"anti_mash":true},"t":100.0,"paused":false,"inputs":[[50.0,1]]}}
+{"WatchStart":{"player":"friend","play":{"map":{"hash":18369548388820582401,"artist":"Artist","title":"Title","version":"Oni","rate":1.5,"from":30000.0,"set_id":123,"mods":["HD","DT"],"multiverse":"mirror","seed":99,"defense":{"lives":25,"bars":8,"tag_ins":2,"shop":true,"maze":true},"stats":{"stars":5.25,"length_ms":120000.0,"bpm":180.0,"od":6.0,"hp":5.0,"creator":"mapper"},"host_mods":true},"anti_mash":true},"t":100.0,"paused":false,"inputs":[[50.0,1]]}}
 {"WatchFrame":{"t":200.0,"paused":true,"inputs":[]}}
 {"WatchEnd":{"player":"friend"}}
 {"WatchStopped":"offline"}

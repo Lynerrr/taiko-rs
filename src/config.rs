@@ -1303,7 +1303,8 @@ impl Config {
                 "show_offset_hint" => cfg.show_offset_hint = v == "true",
                 "show_map_info" => cfg.show_map_info = v != "false",
                 "mp_scoreboard" => cfg.mp_scoreboard = v != "false",
-                "mods" => cfg.mods = Mods::parse(v),
+                // Mods taken out of the game don't come back from an old config.
+                "mods" => cfg.mods = Mods::parse(v).playable(),
                 "mp_name" if !v.is_empty() => cfg.mp_name = v.to_string(),
                 "mp_port" => cfg.mp_port = v.parse().unwrap_or(cfg.mp_port),
                 "mp_address" => cfg.mp_address = v.to_string(),
@@ -1388,11 +1389,12 @@ impl Config {
                 "shapeshift" => cfg.shapeshift = crate::shapeshift::Config::parse(v),
                 "tact" => cfg.tact = crate::tact::parse(v),
                 "od_override" => cfg.od_override = crate::od_override::parse(v),
-                "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v),
+                "favourite_mods" => cfg.favourite_mods = crate::mods::Mods::parse_set(v).playable(),
                 "mod_preset" => {
                     if cfg.mod_presets.len() < crate::mods::MAX_PRESETS
-                        && let Some(p) = crate::mods::Preset::parse(v)
+                        && let Some(mut p) = crate::mods::Preset::parse(v)
                     {
+                        p.mods = p.mods.playable();
                         cfg.mod_presets.push(p);
                     }
                 }

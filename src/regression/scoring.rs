@@ -92,6 +92,16 @@ fn pp_for_plays() {
             (Player::Skips(6), "HD"),
             (Player::Perfect, "WV,PY"),
             (Player::Perfect, "AT"),
+            // A mod being reworked: no pp.
+            (Player::Perfect, "TC"),
+            // A mod taken out of the game counts x1; AC is in a capped group.
+            (Player::Perfect, "BO,AC"),
+            // Hidden twice over: memory (HDFL), the game's own AC adds nothing.
+            (Player::Perfect, "SU,FL,AC"),
+            // SV mods go into osu!'s formula as note speeds.
+            (Player::Perfect, "SL,HR"),
+            // Maze: its lane as a note speed, and a tenth of what note speeds add.
+            (Player::Perfect, "MZ,SL"),
         ] {
             let mods = Mods::parse(mods);
             let list = mods.list();
@@ -121,7 +131,7 @@ fn pp_for_plays() {
                     mods.label()
                 },
                 opt(pp::play_pp(&path, &p), 3),
-                num(pp::custom_factor(mods), 4),
+                num(pp::bonus(mods).factor, 4),
                 b.map_or_else(
                     || "-".into(),
                     |b| format!(

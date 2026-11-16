@@ -177,6 +177,7 @@ mod tests {
                     seed: None,
                     defense: None,
                     stats: None,
+                    host_mods: false,
                 },
                 score: 1,
                 accuracy: 1.0,

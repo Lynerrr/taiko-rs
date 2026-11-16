@@ -1387,6 +1387,46 @@ fn half_row(c: &mut Canvas, sel: bool, i: usize, x: f32, y: f32, w: f32, label: 
 // ---------------------------------------------------------------------------------------------
 // Lobby
 
+/// Mods as small badges from `x` along `y`, each in its mod select column's colour (as on the
+/// results screen); ones past `room` are counted in a last badge. Hands back their width.
+fn mod_badges(c: &mut Canvas, x: f32, y: f32, mods: Mods, room: f32) -> f32 {
+    const SIZE: f32 = 6.5;
+    const H: f32 = 11.0;
+    const GAP: f32 = 3.0;
+    let colour = |m: mods::Mod| {
+        mods::GROUPS
+            .iter()
+            .find(|g| g.2.contains(&m))
+            .map_or(0xc8c8d8, |g| g.1)
+    };
+    let width = |label: &str| Canvas::text_width(SIZE, label) + 8.0;
+    let mut badge = |at: f32, label: &str, col: u32| {
+        let w = width(label);
+        c.round_rect([at, y], [w, H], 3.0, rgba(col, 0.2), rgba(col, 0.9), 1.0);
+        c.text_centered(
+            at + w / 2.0,
+            y + (H - SIZE) / 2.0,
+            SIZE,
+            rgba(col, 1.0),
+            label,
+        );
+        w
+    };
+    let list: Vec<mods::Mod> = mods.iter().collect();
+    let mut at = x;
+    for (k, &m) in list.iter().enumerate() {
+        let left = list.len() - k;
+        let more = format!("+{left}");
+        let need = width(m.acronym()) + if left > 1 { GAP + width(&more) } else { 0.0 };
+        if at - x + need > room && k > 0 {
+            at += badge(at, &more, 0x8a8aa0) + GAP;
+            break;
+        }
+        at += badge(at, m.acronym(), colour(m)) + GAP;
+    }
+    (at - x - GAP).max(0.0)
+}
+
 /// `map_chosen`: "no map" only means something once the host has picked one.
 fn status_text(p: &PlayerInfo, map_chosen: bool) -> (&'static str, u32) {
     match p.status {
@@ -1428,6 +1468,22 @@ pub fn draw_fetch_bar(c: &mut Canvas, x: f32, y: f32, w: f32, done: Option<f32>)
             rgba(0, 0.0),
             0.0,
         );
+    }
+}
+
+/// The host picks every mod of the lobby's match (Defense, or the host took them for
+/// everyone): the players' own don't play.
+pub fn host_picks_mods(m: &MapInfo) -> bool {
+    m.defense.is_some() || m.host_mods
+}
+
+/// The mods of ours the room is told we play with on `map`: our own, but none when the host
+/// picks them all (Defense, or the host took them for everyone).
+pub fn own_lobby_mods(mods: Mods, map: Option<&MapInfo>) -> Vec<String> {
+    if map.is_some_and(host_picks_mods) {
+        Vec::new()
+    } else {
+        mods.free().list()
     }
 }
 
@@ -1633,10 +1689,25 @@ pub fn draw_lobby(
                 rgba(0xffffff, 1.0),
                 &Canvas::fit(8.0, iw, &line.join("    ")),
             );
-            // Mods and where it starts.
+            // The match's mods as badges (who picks them first), then where it starts.
+            let mut mx = ix;
+            let forced = m.host_mods && m.defense.is_none();
+            if forced {
+                let label = tr!("HOST'S MODS", "ホストのMOD", "МОДЫ ХОСТА");
+                c.text(mx, top + 73.0, 7.0, rgba(accent(), 1.0), label);
+                mx += Canvas::text_width(7.0, label) + 6.0;
+            }
+            let played = Mods::from_list(&m.mods);
+            if played.iter().next().is_some() {
+                mx += mod_badges(c, mx, top + 71.0, played, ix + iw - mx) + 8.0;
+            } else if forced {
+                let none = tr!("none", "なし", "нет");
+                c.text(mx, top + 73.0, 7.0, rgba(0xffffff, 1.0), none);
+                mx += Canvas::text_width(7.0, none) + 8.0;
+            }
             let mut extra = Vec::new();
-            if !m.mods.is_empty() {
-                extra.push(format!("+{}", m.mods.concat()));
+            if !forced && m.defense.is_none() {
+                extra.push(tr!("free mods", "フリーMOD", "свободные моды").to_string());
             }
             if let Some(t) = m.from {
                 let (min, sec) = ((t / 1000.0) as u64 / 60, (t / 1000.0) as u64 % 60);
@@ -1646,11 +1717,11 @@ pub fn draw_lobby(
                 extra.push(tr!("DEFENSE co-op", "ディフェンス協力", "ОБОРОНА кооп").to_string());
             }
             c.text(
-                ix,
+                mx,
                 top + 73.0,
                 7.0,
                 rgba(0x9a9ab0, 1.0),
-                &Canvas::fit(7.0, iw, &extra.join("    ")),
+                &Canvas::fit(7.0, (ix + iw - mx).max(0.0), &extra.join("    ")),
             );
             // How it is for us: being fetched, missing, or there to preview.
             let (note, colour) = match (&download, have_map) {
@@ -1801,18 +1872,20 @@ pub fn draw_lobby(
         } else {
             format!("+{}", p.mods.concat())
         };
-        let under = if host && !me {
-            let (st, _) = status_text(p, s.map.is_some());
-            format!("{st}   {mods}")
-        } else {
-            mods
-        };
+        // The host's buttons take the status's place: it goes here, in its colour (ready in
+        // green) as everyone else sees it on the right.
+        let (mut ux, uy) = (x + 8.0, y + crate::mobile::pick(16.0, 25.0));
+        if host && !me {
+            let (st, colour) = status_text(p, s.map.is_some());
+            c.text(ux, uy, 6.0, rgba(colour, 1.0), st);
+            ux += Canvas::text_width(6.0, st) + 10.0;
+        }
         c.text(
-            x + 8.0,
-            y + crate::mobile::pick(16.0, 25.0),
+            ux,
+            uy,
             6.0,
             rgba(0x8a8aa0, 1.0),
-            &Canvas::fit(6.0, name_end - x - 12.0, &under),
+            &Canvas::fit(6.0, (name_end - ux - 4.0).max(0.0), &mods),
         );
     }
 
@@ -1851,6 +1924,19 @@ pub fn draw_lobby(
         mode.into(),
         Some(KeyCode::KeyC),
     ));
+    // Who picks the mods (in Defense always the host).
+    if let Some(m) = s.map.as_ref().filter(|m| m.defense.is_none()) {
+        let who = if m.host_mods {
+            tr!("host's for all", "全員ホストの", "хоста у всех")
+        } else {
+            tr!("free", "フリー", "свободные")
+        };
+        settings.push((
+            tr!("Mods", "MOD", "Моды").into(),
+            who.into(),
+            Some(KeyCode::KeyF),
+        ));
+    }
     if let Some(d) = defense {
         let keys = [
             KeyCode::Digit1,
@@ -1887,6 +1973,7 @@ pub fn draw_lobby(
         KeyCode::KeyK => "K",
         KeyCode::KeyL => "L",
         KeyCode::KeyC => "C",
+        KeyCode::KeyF => "F",
         KeyCode::BracketRight => "[ ]",
         KeyCode::Digit1 => "1",
         KeyCode::Digit2 => "2",
@@ -2088,7 +2175,7 @@ pub fn draw_lobby(
         } else if s.edit_password.is_some() {
             "type the new password   Enter save (empty: none)   Esc cancel"
         } else {
-            "T chat   S spectate   [ ] rate   C defense (1-5 its rules)   K password   L players   F1 mods   Tab songs"
+            "T chat   S spectate   [ ] rate   F host mods   C defense (1-5 its rules)   K password   L players   F1 mods   Tab songs"
         };
         c.text_centered(
             w / 2.0,
@@ -2121,7 +2208,8 @@ pub fn draw_lobby(
         } else {
             let mut buttons = vec![("Preview  (P)", Hit::Key(KeyCode::KeyP), false)];
             if !me_spectator {
-                // Everyone picks their own mods (the speed is the host's).
+                // Everyone picks their own mods (the speed is the host's), unless the host
+                // picks them all: then the mod select shows the host's.
                 buttons.push(("Mods  (F1)", Hit::Key(KeyCode::F1), false));
                 buttons.push((ready_label, Hit::Key(KeyCode::Space), true));
             }
@@ -2576,6 +2664,7 @@ pub(crate) fn map_info(e: &Entry, rate: f64, mods: Mods) -> net::MapInfo {
         rate,
         from: None,
         set_id: e.set_id(),
+        host_mods: false,
     }
 }
 
