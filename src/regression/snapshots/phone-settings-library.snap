@@ -19,10 +19,8 @@ text 1023,325  >
 text  236,328  Game data folder
 text  772,328  the usual places
 text   14,357  AUDIO
-text  964,387  <
-text 1023,387  >
-text  236,390  Screenshots
-text  844,390  Clipboard
+text  236,390  taiko.rs maps folder
+text  940,390  Tap to open
 text   14,413  VIDEO
 text  236,436  The folder your maps are in. Tap: browse, type a path, or go back to finding
 text  236,455  osu!'s.
@@ -47,5 +45,3 @@ hit   222,306   845x56   SettingRow(4)
 hit   947,312    50x44   SettingStep(4, -1)
 hit  1003,312    50x44   SettingStep(4, 1)
 hit   222,368   845x54   SettingRow(5)
-hit   947,374    50x44   SettingStep(5, -1)
-hit  1003,374    50x44   SettingStep(5, 1)

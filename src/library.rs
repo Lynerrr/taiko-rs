@@ -1016,6 +1016,16 @@ pub(crate) fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
     inputs
 }
 
+/// What the library scans: `inputs`, plus taiko.rs's own custom maps folder `custom` when it
+/// exists, whatever the Songs folder setting says. It is kept out of the Songs folders (where
+/// osu! maps are downloaded and osu!.db is looked for).
+pub(crate) fn with_custom(mut inputs: Vec<PathBuf>, custom: &Path) -> Vec<PathBuf> {
+    if custom.is_dir() && !inputs.iter().any(|i| i == custom) {
+        inputs.push(custom.to_path_buf());
+    }
+    inputs
+}
+
 /// What a library scan hands over: the list from the cache straight away, if there's one, then the
 /// list as it is on disk.
 pub(crate) enum Scanned {
