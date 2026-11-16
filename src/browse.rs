@@ -642,6 +642,13 @@ impl Browse {
         self.scroll_target -= notches as f32 * ROW * 1.5;
     }
 
+    pub fn set_query(&mut self, text: String) {
+        if self.query != text {
+            self.query = text;
+            self.edited = Some(Instant::now());
+        }
+    }
+
     pub fn type_text(&mut self, text: &str) {
         let before = self.query.len();
         self.query.extend(text.chars().filter(|c| !c.is_control()));
@@ -764,29 +771,20 @@ impl Browse {
             } else {
                 0.0
             };
-        let text = if self.query.is_empty() {
-            let hint = if self.category.is_custom() {
-                "search song, mapper, sender..."
-            } else {
-                "search artist, title, mapper..."
-            };
-            Canvas::fit(10.0, room, hint)
+        let hint = if self.category.is_custom() {
+            "search song, mapper, sender..."
         } else {
-            Canvas::fit_end(10.0, room, &format!("{}_", self.query))
+            "search artist, title, mapper..."
         };
-        c.text(
-            x0 + 10.0,
-            61.0,
+        c.input(
+            crate::text_input::Field::BrowseSearch,
+            [x0 + 10.0, 61.0, room, 12.0],
             10.0,
-            rgba(
-                if self.query.is_empty() {
-                    0x6f6f86
-                } else {
-                    0xffffff
-                },
-                1.0,
-            ),
-            &text,
+            &self.query,
+            hint,
+            rgba(0xffffff, 1.0),
+            false,
+            true,
         );
         c.hit(x0, 54.0, col, 24.0, Hit::TextField);
         if busy {

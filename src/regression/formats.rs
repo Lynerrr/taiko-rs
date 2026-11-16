@@ -483,6 +483,7 @@ collection = own:Warm Up
 kiai_effects = false
 hide_great = false
 fail_restart = true
+instant_restart = false
 black_lane = true
 true_notes = true
 calm_maps = true

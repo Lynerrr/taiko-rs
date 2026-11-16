@@ -5,7 +5,7 @@ Tab(2) @396,31 -> MpMenu +"127.0.0.1:9   no connection" +"An account plays onlin
 Tab(3) @498,31 -> Download +"Has leaderboard" +"Relevance" +"SORT" +"STATUS" +"Up/Down select   Left/Right difficulty   Enter download / play   Ctrl+Left/Right status   Ctrl+Up/Down sort   Ctrl+Tab osu! / taiko.rs" +"maps from catboy.best / osu.direct" +5 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
 ModsButton @446,66 -> Select +"* FAVOURITES" +"+ Save" +"AC" +"AL" +"AS" +"AT" +162 more
 SortList @372,66 -> Select +"Sort songs by" +"Up/Down or mouse   Enter/click sort   Esc close" +"artist" +"bpm" +"date added" +"difficulty" +7 more
-TextField @172,66 -> Select +"type to search..._" -"click to search (ctrl+f)..."
+TextField @172,66 -> Select +"type to search..." -"click to search (ctrl+f)..."
 SongHeader(0) @246,103 -> Play +"00000000" +"0pp" +"100.00%" +"1920x1080 (full screen)" -"." -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -44 more
 SongRow(0) @256,131 -> Play +"00000000" +"0pp" +"100.00%" +"1920x1080 (full screen)" -"." -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -44 more
 SelectLike @709,108 -> Select
@@ -14,4 +14,4 @@ BoardPage @760,74 -> Select +"< Preview" +"Local" +"No plays yet: finish one to 
 Key(Enter) @655,425 -> Play +"00000000" +"0pp" +"100.00%" +"1920x1080 (full screen)" -"." -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -44 more
 SplitList @476,245 -> Select
 Changelog @808,9 -> Select +"Close" +"Up/Down, wheel: scroll   Esc: close" +"What's new" +"blocked in tests: no programs, no internet" -"log in" -"what's new"
-Account @740,9 -> MpMenu +"127.0.0.1:9   no connection" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +"Name or email" +5 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more
+Account @740,9 -> MpMenu +"127.0.0.1:9   no connection" +"An account plays online: lobbies, friends, leaderboards." +"CREATE ACCOUNT" +"FORGOT PASSWORD?" +"LOG IN" +"Name or email" +4 more -"0:00 / 0:10" -"0:09" -"1 diff" -"1 songs, 1 maps  |  taiko only" -"200" -"3.08" -29 more

@@ -653,6 +653,9 @@ impl App {
                         // Typed like the on-screen keyboard's text (Android): a key with no
                         // meaning of its own, carrying each character.
                         let at = Instant::now();
+                        if s.text_input_key(KeyCode::Lang1, Some(&text), false) {
+                            return;
+                        }
                         for ch in text.chars().filter(|c| !c.is_control()) {
                             s.key(
                                 KeyCode::Lang1,
@@ -682,6 +685,7 @@ impl App {
                 s.modifiers_shift = m.state().shift_key();
                 s.modifiers_ctrl = m.state().control_key();
                 s.modifiers_alt = m.state().alt_key();
+                s.modifiers_super = m.state().super_key();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let mut s = lock(&self.state);
@@ -754,6 +758,8 @@ impl App {
                 s.ime_preedit.clear();
                 // The release may happen in another window.
                 s.retry_hold = None;
+                s.input_drag = false;
+                s.cancel_restart();
                 // The release may happen in another window.
                 s.right_scroll = false;
                 // Alt is released in the other window; don't keep it "held" here.
@@ -1217,6 +1223,7 @@ impl State {
             modifiers_shift: false,
             modifiers_ctrl: false,
             modifiers_alt: false,
+            modifiers_super: false,
             volume: volume::Overlay::new(),
             volume_save_at: None,
             splash,
@@ -1234,6 +1241,11 @@ impl State {
             window_handle: None,
             updater,
             hits: Vec::new(),
+            input_focus: None,
+            text_input: Default::default(),
+            input_regions: Vec::new(),
+            input_drag: false,
+            input_engaged: false,
             browse: browse::Browse::default(),
             downloads: Vec::new(),
             set_check: None,
@@ -1264,6 +1276,7 @@ impl State {
             session_play_ms: 0.0,
             last_key: (KeyCode::Escape, Instant::now()),
             retry_hold: None,
+            pending_restart: None,
             menu_screen_seen: None,
             menu_changed_at: None,
             replay_speed: 1.0,

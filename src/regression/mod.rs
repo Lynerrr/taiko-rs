@@ -10,6 +10,7 @@ pub mod snapshot;
 
 mod clicks;
 mod collections;
+mod controls;
 mod custom_folder;
 mod custom_maps;
 mod drawing;
@@ -28,5 +29,6 @@ mod screens;
 mod secrets;
 mod select;
 mod store;
+mod text_fields;
 
 mod language_catalog;

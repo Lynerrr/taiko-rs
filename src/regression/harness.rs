@@ -369,3 +369,28 @@ pub fn screen(c: &Canvas, volatile: &[&str]) -> String {
 pub fn shows(c: &Canvas, needle: &str) -> bool {
     c.texts.iter().any(|(_, s)| s.contains(needle))
 }
+
+#[test]
+fn a_pending_medals_request_keeps_the_client_busy_until_its_answer_is_drawn() {
+    let mut s = state_with(config(), Vec::new());
+    let now = Instant::now();
+    frame(&mut s, now);
+    let (tx, rx) = mpsc::channel();
+    s.medals = Some(crate::medals::View {
+        name: None,
+        state: crate::medals::State::Loading(rx),
+        tab: 0,
+        scroll: 0,
+        egg: Default::default(),
+    });
+    assert!(
+        s.busy().contains(&"the medals"),
+        "a stable loading label is still unfinished work"
+    );
+    tx.send(Err("test answer".into())).unwrap();
+    wait_idle_on(&mut s, now, WIDTH);
+    assert!(!s.busy().contains(&"the medals"));
+    assert!(
+        matches!(&s.medals.as_ref().unwrap().state,crate::medals::State::Failed(message) if message=="test answer")
+    );
+}
