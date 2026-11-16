@@ -87,6 +87,10 @@ pub enum Hit {
     SectionHeader(usize),
     /// An item of the song list's right-click menu.
     SongMenu(usize),
+    /// The confirmation's Delete button: the difficulty or set asked for goes.
+    DeleteMaps,
+    /// The offer's Move button: taiko.rs's maps move out of osu!'s Songs folder.
+    MoveCustomMaps,
     /// A song's "update available" (library index of one of its difficulties).
     UpdateSet(usize),
     /// A mod in the mod select (index into `mods::ALL`) / the song select's Mods button.

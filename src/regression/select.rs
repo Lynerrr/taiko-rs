@@ -6,7 +6,7 @@
 use super::snapshot::assert_snapshot;
 use crate::beatmap::Meta;
 use crate::library::Entry;
-use crate::ui::{Hidden, Select, SortMode};
+use crate::ui::{Select, SortMode};
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -180,11 +180,10 @@ fn by_version(library: &[Entry], version: &str) -> usize {
         .unwrap()
 }
 
-/// A fresh list over `library` with nothing hidden, liked or played (whatever this machine's
-/// data folder holds).
+/// A fresh list over `library` with nothing liked or played (whatever this machine's data
+/// folder holds).
 fn select(library: &[Entry]) -> Select {
     let mut s = Select::new(library);
-    s.hidden = Hidden::default();
     s.favourites.clear();
     s.played.clear();
     s.refilter(library);

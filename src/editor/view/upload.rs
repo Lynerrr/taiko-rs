@@ -423,7 +423,7 @@ impl View {
                 std::thread::spawn(move || {
                     let sent = custom::pack(&folder).and_then(|packed| {
                         custom::upload(&token, id, &packed.bytes).map(|s| {
-                            custom::write_sidecar(&folder, s.id);
+                            custom::mark_sent(&folder, &s, &packed.sent);
                             (s, packed.sent, packed.left_out)
                         })
                     });

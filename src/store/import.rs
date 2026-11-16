@@ -24,8 +24,6 @@ pub struct Files {
     /// without when it reads them, so nothing it shows depends on keeping them out).
     pub scores: Vec<ScoreRow>,
     pub plays: HashMap<PathBuf, u64>,
-    pub hidden_songs: HashSet<PathBuf>,
-    pub hidden_maps: HashSet<PathBuf>,
     pub map_offsets: HashMap<u64, f64>,
     pub map_skins_off: HashSet<String>,
     pub favourites: HashSet<String>,
@@ -54,10 +52,8 @@ pub fn read_files(data: &Path) -> Result<Files, String> {
     if let Some(text) = read(&data.join("plays.tsv"))? {
         files.plays = crate::library::parse_plays(&text);
     }
-    if let Some(text) = read(&data.join("hidden.tsv"))? {
-        let h = crate::ui::Hidden::parse(&text);
-        (files.hidden_songs, files.hidden_maps) = (h.songs, h.maps);
-    }
+    // `hidden.tsv` (maps hidden from song select, a feature since taken out) isn't brought
+    // in: what it hid just shows again. The file stays as it is.
     // As `config::load_map_offsets` takes them: the file with osu!'s sign, else the one from
     // before it turned round.
     if let Some(text) = read(&data.join(MAP_OFFSETS))? {
@@ -79,12 +75,9 @@ pub fn read_files(data: &Path) -> Result<Files, String> {
 
 /// What the database holds, read the same way (`replays`: the replays' folder).
 pub fn read_store(store: &Store, replays: &Path) -> Result<Files, String> {
-    let (hidden_songs, hidden_maps) = store.hidden()?;
     Ok(Files {
         scores: store.scores(replays)?,
         plays: store.plays()?,
-        hidden_songs,
-        hidden_maps,
         map_offsets: store.map_offsets()?,
         map_skins_off: store.map_skins_off()?,
         favourites: store.favourites()?,
@@ -107,7 +100,6 @@ pub fn import(store: &mut Store, data: &Path, now: u64) -> Result<bool, String> 
     store.transaction(|s| {
         s.write_scores(&files.scores)?;
         s.write_plays(&files.plays)?;
-        s.write_hidden(&files.hidden_songs, &files.hidden_maps)?;
         s.write_map_offsets(&files.map_offsets)?;
         s.write_names(super::Names::SkinsOff, &files.map_skins_off)?;
         s.write_names(super::Names::Favourites, &files.favourites)?;

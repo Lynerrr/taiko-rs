@@ -29,13 +29,29 @@ impl State {
             }
             return;
         }
-        if self.song_dirs.is_empty() {
+        let roots = self.scan_roots();
+        if roots.is_empty() {
             if asked {
                 self.toast(
                     tr!(
                         "there's no songs folder to look in",
                         "探す曲フォルダがありません",
                         "нет папки с песнями, где искать"
+                    )
+                    .to_string(),
+                );
+            }
+            return;
+        }
+        // A Songs folder gone (a drive unplugged): its maps stay listed rather than leave because
+        // taiko.rs's own folder still has some.
+        if roots.len() > self.song_dirs.len() && self.song_dirs.iter().any(|d| !d.is_dir()) {
+            if asked {
+                self.toast(
+                    tr!(
+                        "the songs folder can't be read just now",
+                        "曲フォルダを今は読めません",
+                        "папку с песнями сейчас не прочитать"
                     )
                     .to_string(),
                 );
@@ -52,10 +68,21 @@ impl State {
                 .to_string(),
             );
         }
-        self.scan = Some(library::start_scan(self.song_dirs.clone()));
+        self.scan = Some(library::start_scan(roots));
         self.scan_checking = true;
         self.refreshing = Some(asked);
         self.refreshed_at = Some(Instant::now());
+    }
+
+    /// Uses `dir` as taiko.rs's own custom maps folder from now on (scanned at the next look).
+    pub(crate) fn set_custom_dir(&mut self, dir: PathBuf) {
+        library::add_own_root(&dir);
+        self.custom_dir = dir;
+    }
+
+    /// What a library scan reads: the Songs folders, plus taiko.rs's own custom maps folder.
+    pub(crate) fn scan_roots(&self) -> Vec<PathBuf> {
+        library::with_custom(self.song_dirs.clone(), &self.custom_dir)
     }
 
     /// The window is in front again: sets may have been put into a songs folder meanwhile.

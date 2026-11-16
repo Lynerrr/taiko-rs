@@ -140,7 +140,14 @@ fn a_play_on_a_downloaded_custom_map_reports_nothing_of_its_own() {
     // A set from the site keeps its number in its folder, uploaded by this player or not: only
     // the server can tell whose it is, from the play it's sent.
     let (mut s, songs, mut now) = client("custom-not-own", vec![maps::basics()]);
-    crate::custom::write_sidecar(songs.paths[0].parent().unwrap(), 12);
+    std::fs::write(
+        songs.paths[0]
+            .parent()
+            .unwrap()
+            .join(crate::custom::SIDECAR),
+        "{\"id\": 12}\n",
+    )
+    .unwrap();
     s.cfg.online_token = "t".into();
     crate::ura::take_reported();
     start_selected(&mut s, &mut now);

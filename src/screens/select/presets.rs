@@ -33,7 +33,7 @@ pub(crate) fn draw_preset_deleting(c: &mut Canvas, k: usize, name: &str) {
         [bw, 164.0],
         10.0,
         rgba(0x15151d, 0.98),
-        rgba(0xff6b6b, 0.8),
+        rgba(style::DANGER, 0.8),
         1.5,
     );
     let title = format!("Delete preset {}?", k + 1);

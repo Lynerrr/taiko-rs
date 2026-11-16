@@ -1343,43 +1343,6 @@ fn play(g: &mut Game, presses: &[(f64, bool)]) {
     g.set_time(g.map.notes.last().unwrap().time + 1000.0);
 }
 
-#[test]
-fn note_speeds_change_with_the_speed_mods_and_no_others() {
-    let mut map = beatmap::calibration_map(500.0, 0, 64);
-    for (k, n) in map.notes.iter_mut().enumerate() {
-        n.kind = if k % 2 == 0 { Kind::Don } else { Kind::Kat };
-    }
-    let factors = |m: Mod| note_speed_factors(&map, Mods::NONE.flip(m));
-    // Split: dons faster, kats slower.
-    let split = factors(Mod::Split);
-    assert_eq!(split.len(), map.notes.len());
-    assert!(
-        split.iter().step_by(2).all(|f| (f.1 - 1.2).abs() < 1e-9),
-        "{split:?}"
-    );
-    assert!(
-        split
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .all(|f| (f.1 - 0.85).abs() < 1e-9)
-    );
-    // Wave swings the speed with time.
-    assert!(factors(Mod::Wave).iter().any(|f| (f.1 - 1.0).abs() > 0.05));
-    // A mod that isn't a speed mod leaves every note as fast as the map has it: a new speed mod
-    // belongs in SPEED_MODS.
-    for m in crate::mods::ALL
-        .into_iter()
-        .filter(|m| !SPEED_MODS.contains(m))
-    {
-        let off: Vec<_> = factors(m)
-            .into_iter()
-            .filter(|f| (f.1 - 1.0).abs() > 1e-9)
-            .collect();
-        assert!(off.is_empty(), "{}: {off:?}", m.acronym());
-    }
-}
-
 /// Dons at 0 and 500, a finisher at 1000, a drumroll from 2500 to 3500, a big drumroll from
 /// 4500 to 5000, a swell of 6 hits from 6000 to 7000 and a don at 8000.
 fn bonus_map() -> beatmap::Beatmap {
@@ -1540,4 +1503,41 @@ fn a_map_with_no_notes_to_fill_hp_fails_only_old_replays() {
         failed(Scoring::Standard),
         "versions 3 to 5 judged it as they did"
     );
+}
+
+#[test]
+fn note_speeds_change_with_the_speed_mods_and_no_others() {
+    let mut map = beatmap::calibration_map(500.0, 0, 64);
+    for (k, n) in map.notes.iter_mut().enumerate() {
+        n.kind = if k % 2 == 0 { Kind::Don } else { Kind::Kat };
+    }
+    let factors = |m: Mod| note_speed_factors(&map, Mods::NONE.flip(m));
+    // Split: dons faster, kats slower.
+    let split = factors(Mod::Split);
+    assert_eq!(split.len(), map.notes.len());
+    assert!(
+        split.iter().step_by(2).all(|f| (f.1 - 1.2).abs() < 1e-9),
+        "{split:?}"
+    );
+    assert!(
+        split
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .all(|f| (f.1 - 0.85).abs() < 1e-9)
+    );
+    // Wave swings the speed with time.
+    assert!(factors(Mod::Wave).iter().any(|f| (f.1 - 1.0).abs() > 0.05));
+    // A mod that isn't a speed mod leaves every note as fast as the map has it: a new speed mod
+    // belongs in SPEED_MODS.
+    for m in crate::mods::ALL
+        .into_iter()
+        .filter(|m| !SPEED_MODS.contains(m))
+    {
+        let off: Vec<_> = factors(m)
+            .into_iter()
+            .filter(|f| (f.1 - 1.0).abs() > 1e-9)
+            .collect();
+        assert!(off.is_empty(), "{}: {off:?}", m.acronym());
+    }
 }

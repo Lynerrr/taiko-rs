@@ -229,8 +229,11 @@ pub struct Select {
     /// The mods picked ("HDHR"), shown on the Mods button.
     pub mods_label: String,
     pub show_converts: bool,
-    /// Maps hidden from the list (right-click → Hide); the files stay where they are.
-    pub hidden: Hidden,
+    /// A difficulty or a whole set asked to be deleted (right-click → Delete, the Delete key):
+    /// the confirmation over song select.
+    pub deleting: Option<DeleteAsk>,
+    /// Moving taiko.rs's maps out of osu!'s Songs folder, offered once over song select.
+    pub moving: Option<MoveAsk>,
     /// The folders of the maps whose own skin is turned off (right-click → Turn off skin).
     pub map_skins_off: std::collections::HashSet<String>,
     /// The right-click menu of a song list row.
@@ -472,7 +475,8 @@ impl Select {
             rate_label: String::new(),
             mods_label: String::new(),
             show_converts: !has_taiko,
-            hidden: Hidden::load(),
+            deleting: None,
+            moving: None,
             map_skins_off: crate::config::load_map_skins_off(),
             menu: None,
             updates: std::collections::HashMap::new(),
@@ -590,7 +594,7 @@ impl Select {
         self.visible = library
             .iter()
             .enumerate()
-            .filter(|(_, e)| !self.hidden.contains(&e.path) && !self.gone.contains(&e.path))
+            .filter(|(_, e)| !self.gone.contains(&e.path))
             .filter(|&(i, e)| {
                 self.pinned.contains(&e.path)
                     || ((self.show_converts || e.meta.mode == 1)
@@ -691,7 +695,8 @@ impl Select {
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
     fn status_of(&self, e: &Entry) -> u8 {
-        if self.edited.contains(&e.path) {
+        // A map in taiko.rs's own folder is never osu!'s, nor an edited copy of osu!'s.
+        if self.edited.contains(&e.path) && !e.is_own() {
             return crate::search::NOT_SUBMITTED;
         }
         if let Some(id) = e.path.parent().and_then(|d| self.custom_folder.get(d)) {
@@ -700,6 +705,9 @@ impl Select {
             } else {
                 crate::search::CUSTOM
             };
+        }
+        if e.is_own() {
+            return crate::search::NOT_SUBMITTED;
         }
         match e.set_id() {
             Some(_) if loved_here(&self.server_loved, e) => crate::search::LOVED,
@@ -1153,7 +1161,7 @@ impl Select {
         self.refilter(library);
     }
 
-    /// Pins `maps` and goes to the first of them that shows (one may be hidden by hand).
+    /// Pins `maps` and goes to the first of them that shows (one may have gone).
     pub fn reveal(&mut self, library: &[Entry], maps: Vec<std::path::PathBuf>) {
         self.pin(library, maps.clone());
         if let Some(path) = maps
@@ -1522,8 +1530,8 @@ impl Select {
         self.visible.get(self.menu.as_ref()?.row).copied()
     }
 
-    /// The menu's items for its row: hide the difficulty (not on a song's own row), hide the song,
-    /// and get the song's newest version from osu! (a set that has an ID).
+    /// The menu's items for its row: delete the difficulty (not on a song's own row), delete the
+    /// set, and get the song's newest version from osu! (a set that has an ID).
     pub fn is_liked(&self, e: &Entry) -> bool {
         self.favourites.contains(&crate::playlist::favourite_key(e))
     }
@@ -1610,13 +1618,13 @@ impl Select {
         ));
         if !m.header {
             items.push((
-                fit(format!("Hide [{}]", library[i].meta.version)),
-                MenuAction::HideDifficulty,
+                tr!("Delete difficulty", "難易度を削除", "Удалить сложность").to_string(),
+                MenuAction::DeleteDifficulty,
             ));
         }
         items.push((
-            fit(format!("Hide {}", library[i].meta.title)),
-            MenuAction::HideSong,
+            tr!("Delete beatmapset", "譜面セットを削除", "Удалить мапсет").to_string(),
+            MenuAction::DeleteSet,
         ));
         if let Some(set) = library[i].set_id().filter(|_| self.nominator) {
             let version = &library[i].meta.version;
@@ -1653,6 +1661,22 @@ impl Select {
                 _ => format!("Download {} again", library[i].meta.title),
             };
             items.push((fit(label), MenuAction::UpdateSong));
+        }
+        if let Some(version) = m.previous {
+            let label = match version {
+                0 => tr!(
+                    "Previous version",
+                    "前のバージョンに戻す",
+                    "Вернуть прошлую версию"
+                )
+                .to_string(),
+                v => tr!(
+                    "Previous version (v{v})",
+                    "前のバージョン (v{v}) に戻す",
+                    "Прошлая версия (v{v})"; [] [v]
+                ),
+            };
+            items.push((fit(label), MenuAction::PreviousVersion));
         }
         if m.skin {
             let off = library[i]
@@ -1749,64 +1773,37 @@ impl Select {
         })
     }
 
-    /// Hides the menu's map or its whole song, keeping the selection near where it was.
-    /// Returns what was hidden, for a message.
-    pub fn hide(&mut self, action: MenuAction, library: &[Entry]) -> Option<String> {
-        let m = self.menu.take()?;
-        let &i = self.visible.get(m.row)?;
-        let g = *self.group_of.get(m.row)?;
-        let what = match action {
-            MenuAction::UpdateSong => return None,
-            MenuAction::HideDifficulty => {
-                self.hidden.maps.insert(library[i].path.clone());
-                format!("[{}]", library[i].meta.version)
-            }
-            MenuAction::HideSong => {
-                self.hidden
-                    .songs
-                    .insert(library[i].path.parent()?.to_path_buf());
-                let t = &library[i].meta.title;
-                if t.chars().count() > 30 {
-                    t.chars().take(27).collect::<String>() + "..."
-                } else {
-                    t.clone()
-                }
-            }
-            MenuAction::Love(..)
-            | MenuAction::Epic(..)
-            | MenuAction::Like
-            | MenuAction::MapSkin
-            | MenuAction::Edit
-            | MenuAction::NewDifficulty
-            | MenuAction::Collect(_) => return None,
-        };
-        self.hidden.save();
-        // The selection stays unless it was hidden: then another difficulty of that song, else
-        // the song that takes its place in the list.
+    /// Takes deleted maps (`paths`) out of the list, keeping the selection where it was unless
+    /// it went: then on another difficulty of its song, else the song that takes its place.
+    pub fn forget_maps(&mut self, paths: &[std::path::PathBuf], library: &[Entry]) {
+        let place = self.current_song();
         let current = self.visible.get(self.cursor).copied();
+        self.gone.extend(paths.iter().cloned());
+        for p in paths {
+            self.pinned.remove(p);
+            self.edited.remove(p);
+            self.played.remove(p);
+        }
         let stay = current
-            .filter(|&c| !self.hidden.contains(&library[c].path))
+            .filter(|&c| !self.gone.contains(&library[c].path))
             .or_else(|| {
                 let g = self.current_song()?;
                 self.groups[g]
                     .clone()
                     .map(|r| self.visible[r])
-                    .find(|&v| !self.hidden.contains(&library[v].path))
+                    .rev()
+                    .find(|&v| !self.gone.contains(&library[v].path))
             });
-        let place = self.current_song().unwrap_or(g);
         self.refilter(library);
         match stay.and_then(|v| self.visible.iter().position(|&x| x == v)) {
             Some(pos) => self.cursor = pos,
-            None => self.go_to_song(place as i64, library),
+            None => {
+                if let Some(g) = place {
+                    self.go_to_song(g as i64, library);
+                }
+            }
         }
-        Some(what)
-    }
-
-    /// Settings: lists everything that was hidden again.
-    pub fn unhide_all(&mut self, library: &[Entry]) {
-        self.hidden = Hidden::default();
-        self.hidden.save();
-        self.refilter(library);
+        self.open_cursor_section();
     }
 
     /// The scrollbar and osu!'s right-click scrolling: the pointer's height (`y`, virtual units)
@@ -3140,80 +3137,36 @@ pub fn draw_customization_tabs(c: &mut Canvas, tabs: &[crate::mods::Mod], open: 
     }
 }
 
-/// Maps hidden from the song list in taiko.rs only (osu! and the Songs folder are untouched):
-/// whole songs by folder, single difficulties by file. Kept in `hidden.tsv` in the config folder.
-#[derive(Default)]
-pub struct Hidden {
-    pub songs: std::collections::HashSet<std::path::PathBuf>,
-    pub maps: std::collections::HashSet<std::path::PathBuf>,
+/// A difficulty, or a whole set, asked to be deleted: what the confirmation says and does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeleteAsk {
+    /// The difficulties that go (library indices).
+    pub maps: Vec<usize>,
+    /// The set's whole folder goes (the set asked for, or its last difficulty).
+    pub whole: bool,
+    /// The whole set was asked for (not one difficulty).
+    pub set: bool,
+    /// The set's folder.
+    pub folder: std::path::PathBuf,
+    /// "Artist - Title [Oni]", or "Artist - Title" for a set.
+    pub name: String,
+    /// It's in osu!'s Songs folder: osu! loses it too.
+    pub osu: bool,
+    /// Deleted maps go to the system's recycle bin (else the game's own Trash folder).
+    pub system_bin: bool,
+    /// The Delete button has the keys; at first Cancel has.
+    pub on_delete: bool,
 }
 
-impl Hidden {
-    fn file() -> Option<std::path::PathBuf> {
-        crate::config::data_dir().map(|d| d.join("hidden.tsv"))
-    }
-
-    pub fn load() -> Hidden {
-        if let Some((songs, maps)) = crate::store::with(|s| s.hidden()) {
-            return Hidden { songs, maps };
-        }
-        let Some(text) = Self::file().and_then(|f| std::fs::read_to_string(f).ok()) else {
-            return Hidden::default();
-        };
-        Hidden::parse(&text)
-    }
-
-    /// Lines of `song<TAB>folder` or `map<TAB>file`.
-    pub fn parse(text: &str) -> Hidden {
-        let mut h = Hidden::default();
-        for line in text.lines() {
-            match line.split_once('\t') {
-                Some(("song", p)) => h.songs.insert(p.into()),
-                Some(("map", p)) => h.maps.insert(p.into()),
-                _ => false,
-            };
-        }
-        h
-    }
-
-    pub fn save(&self) {
-        let Some(file) = Self::file() else { return };
-        let mut text = String::new();
-        for p in &self.songs {
-            text += &format!("song\t{}\n", p.display());
-        }
-        for p in &self.maps {
-            text += &format!("map\t{}\n", p.display());
-        }
-        if let Err(e) = std::fs::write(&file, text) {
-            eprintln!("couldn't save {}: {e}", file.display());
-        }
-        crate::store::with(|s| s.replace_hidden(&self.songs, &self.maps));
-    }
-
-    pub fn contains(&self, path: &std::path::Path) -> bool {
-        self.maps.contains(path) || path.parent().is_some_and(|f| self.songs.contains(f))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.songs.is_empty() && self.maps.is_empty()
-    }
-
-    /// "2 songs, 1 difficulty" (settings value).
-    pub fn describe(&self) -> String {
-        let plural =
-            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-        match (self.songs.len(), self.maps.len()) {
-            (0, 0) => "none".into(),
-            (s, 0) => plural(s, "song", "songs"),
-            (0, m) => plural(m, "difficulty", "difficulties"),
-            (s, m) => format!(
-                "{}, {}",
-                plural(s, "song", "songs"),
-                plural(m, "difficulty", "difficulties")
-            ),
-        }
-    }
+/// Moving taiko.rs's maps out of osu!'s Songs folder, offered over song select.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MoveAsk {
+    /// What would move.
+    pub found: Vec<crate::custom::migrate::Found>,
+    pub sets: usize,
+    pub bytes: u64,
+    /// The Move button has the keys (it has at first).
+    pub on_move: bool,
 }
 
 /// The right-click menu of a song list row, opened where the pointer was (virtual units).
@@ -3223,6 +3176,9 @@ pub struct SongMenu {
     pub header: bool,
     /// The map has a skin of its own to turn off or on.
     pub skin: bool,
+    /// A custom set in taiko.rs's own folder with an older version kept: the website's version
+    /// number of that one (0: not known).
+    pub previous: Option<u32>,
     pub x: f32,
     pub y: f32,
 }
@@ -3274,8 +3230,10 @@ pub struct Naming {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MenuAction {
-    HideDifficulty,
-    HideSong,
+    /// Delete the menu's difficulty (asked first).
+    DeleteDifficulty,
+    /// Delete the menu's whole set (asked first).
+    DeleteSet,
     /// Loved nominators: love the map set on the online server (false: take it back), just the
     /// menu's difficulty when the last is true.
     Love(u32, bool, bool),
@@ -3284,6 +3242,8 @@ pub enum MenuAction {
     Epic(bool, bool),
     /// Download the song's set again, its newest version (replacing its difficulties).
     UpdateSong,
+    /// Put back the older version of a custom set kept in taiko.rs's own folder.
+    PreviousVersion,
     /// Like the song, or not any more.
     Like,
     /// Turn the map's own skin off, or back on.
@@ -3395,21 +3355,38 @@ impl Select {
                 );
             }
             c.hit(x + 4.0, ry, bw - 8.0, row - 2.0, Hit::SongMenu(k));
+            let colour = match items[k].1 {
+                MenuAction::DeleteDifficulty | MenuAction::DeleteSet => crate::style::DANGER,
+                _ => 0xffffff,
+            };
             c.text(
                 x + 12.0,
                 ry + (row - 2.0 - size) / 2.0,
                 size,
-                rgba(0xffffff, 1.0),
+                rgba(colour, 1.0),
                 &Canvas::fit(size, bw - 20.0, label),
             );
         }
         if !phone {
+            let hint = if crate::map_trash::has_system_bin() {
+                tr!(
+                    "deleting: to the recycle bin, asked first",
+                    "削除: ごみ箱へ (確認あり)",
+                    "удаление: в корзину, с вопросом"
+                )
+            } else {
+                tr!(
+                    "deleting: to taiko.rs's Trash folder, asked first",
+                    "削除: taiko.rsのTrashフォルダへ (確認あり)",
+                    "удаление: в папку Trash taiko.rs, с вопросом"
+                )
+            };
             c.text(
                 x + 12.0,
                 y + bh - 14.0,
                 6.0,
                 rgba(0x6f6f86, 1.0),
-                &Canvas::fit(6.0, bw - 24.0, "hiding: only in taiko.rs; files stay"),
+                &Canvas::fit(6.0, bw - 24.0, hint),
             );
         }
     }

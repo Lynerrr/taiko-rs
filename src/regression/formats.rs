@@ -539,6 +539,7 @@ data_folder = /games/taiko-data
 wheel_resizes_playfield = true
 show_converts = true
 song_headings = true
+custom_move_asked = true
 bg_dim_black = false
 interface_hidden = true
 interface_hides = score,combo,!pp,!scoreboard,!spectators,!ur,!counts

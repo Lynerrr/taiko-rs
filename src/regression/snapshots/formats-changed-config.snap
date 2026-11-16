@@ -156,6 +156,8 @@ window_size =
 data_folder =
 # the mouse wheel resizes the playfield during play
 wheel_resizes_playfield = false
+# moving taiko.rs's maps out of osu!'s Songs folder was offered already
+custom_move_asked = false
 # song select lists converts too
 show_converts = false
 # song select groups songs under headings (false: one list, by difficulty each difficulty on its own)

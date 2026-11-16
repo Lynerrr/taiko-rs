@@ -16,7 +16,7 @@ text  125,35   .
 text  225,58   INPUT
 text  586,61   type to search...
 text   73,69   LIBRARY
-text   73,83   Songs folder, hidden...
+text   73,83   Songs folder, song li...
 text  225,86   Drum
 text  235,108  Left rim (kat)
 text  798,108  D
@@ -70,14 +70,14 @@ hit    37,342   170x34   SettingsSection(7)
 hit    37,382   170x34   SettingsSection(8)
 hit    37,422   170x34   SettingsSection(9)
 hit   577,55    240x19   SettingsSearch
-hit   223,96    594x30   SettingRow(33)
-hit   223,126   594x30   SettingRow(34)
-hit   223,156   594x30   SettingRow(35)
-hit   223,186   594x30   SettingRow(36)
-hit   223,216   594x30   SettingRow(37)
-hit   223,246   594x30   SettingRow(38)
-hit   223,276   594x30   SettingRow(39)
-hit   223,324   594x30   SettingRow(40)
-hit   223,354   594x26   SettingRow(41)
+hit   223,96    594x30   SettingRow(35)
+hit   223,126   594x30   SettingRow(36)
+hit   223,156   594x30   SettingRow(37)
+hit   223,186   594x30   SettingRow(38)
+hit   223,216   594x30   SettingRow(39)
+hit   223,246   594x30   SettingRow(40)
+hit   223,276   594x30   SettingRow(41)
+hit   223,324   594x30   SettingRow(42)
+hit   223,354   594x26   SettingRow(43)
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

@@ -64,6 +64,9 @@ pub fn config() -> Config {
         main_menu: false,
         // A new one is drawn from the clock on every start.
         random_seed: 1,
+        // Looking for taiko.rs's maps in the Songs folder runs in the background and would put
+        // its offer over any test's song select (`custom_migration` has its own tests).
+        custom_move_asked: true,
         ..Config::default()
     }
 }
@@ -163,6 +166,8 @@ pub fn state_with(cfg: Config, library: Vec<Entry>) -> State {
         false,
         false,
     );
+    // Like the Songs folder: none of the player's, and one named the same on every run.
+    s.set_custom_dir(PathBuf::from("/nonexistent/Custom"));
     s.window_w = 1920.0;
     s.window_h = 1080.0;
     s.mouse = (-1000.0, -1000.0);

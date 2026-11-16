@@ -69,9 +69,13 @@ pub enum Item {
     NotifyRequests,
     ShowConverts,
     SongHeadings,
-    HiddenMaps,
     SongsFolder,
     DataFolder,
+    CustomFolder,
+    /// Moves taiko.rs's maps out of osu!'s Songs folder (`custom::migrate`).
+    MoveCustomMaps,
+    /// Moves them back.
+    MoveCustomBack,
     MasterVolume,
     MusicVolume,
     UnfocusedVolume,
@@ -130,13 +134,15 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 140] = [
+pub const ITEMS: [(&str, Item); 142] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
-    ("LIBRARY", Item::HiddenMaps),
     ("LIBRARY", Item::SongSelectLayout),
     ("LIBRARY", Item::DataFolder),
+    ("LIBRARY", Item::CustomFolder),
+    ("LIBRARY", Item::MoveCustomMaps),
+    ("LIBRARY", Item::MoveCustomBack),
     ("LIBRARY", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
@@ -275,7 +281,7 @@ pub const ITEMS: [(&str, Item); 140] = [
 
 /// The sections in order, with a one-line summary for the sidebar.
 pub const SECTIONS: [(&str, &str); 10] = [
-    ("LIBRARY", "Songs folder, hidden maps, data"),
+    ("LIBRARY", "Songs folder, song list, data"),
     ("GAMEPLAY", "speed, rate, interface, autoplay"),
     ("VIEW", "playfield, background"),
     ("INPUT", "drum keys, hotkeys, touch"),
@@ -316,9 +322,9 @@ pub fn section_name(s: usize) -> &'static str {
 pub fn section_summary(s: usize) -> &'static str {
     match SECTIONS.get(s).map_or("", |s| s.0) {
         "LIBRARY" => tr!(
-            "Songs folder, hidden maps, data",
-            "Songsフォルダ、非表示の譜面、データ",
-            "папка Songs, скрытые карты, данные"
+            "Songs folder, song list, data",
+            "Songsフォルダ、曲リスト、データ",
+            "папка Songs, список песен, данные"
         ),
         "GAMEPLAY" => tr!(
             "speed, rate, interface",
@@ -622,13 +628,25 @@ impl Item {
                 "曲リストの見出し",
                 "Заголовки в списке песен"
             ),
-            Item::HiddenMaps => tr!("Hidden maps", "非表示の譜面", "Скрытые карты"),
             Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
             Item::DataFolder => tr!(
                 "Game data folder",
                 "ゲームデータのフォルダ",
                 "Папка данных игры"
             ),
+            Item::CustomFolder => tr!(
+                "taiko.rs maps folder",
+                "taiko.rsの譜面フォルダ",
+                "Папка карт taiko.rs"
+            ),
+            Item::MoveCustomMaps => tr!(
+                "Move taiko.rs maps out of osu!",
+                "taiko.rsの譜面をosu!から移動",
+                "Перенести карты taiko.rs из osu!"
+            ),
+            Item::MoveCustomBack => {
+                tr!("Move them back to osu!", "osu!に戻す", "Вернуть их в osu!")
+            }
             Item::MasterVolume => tr!("Master volume", "全体の音量", "Общая громкость"),
             Item::MusicVolume => tr!("Music volume", "音楽の音量", "Громкость музыки"),
             Item::FxVolume => tr!("Hitsound volume", "ヒット音の音量", "Громкость хитсаундов"),
@@ -826,12 +844,14 @@ impl Item {
             | Item::Guide
             | Item::Calibrate
             | Item::VsyncCalibrate
-            | Item::HiddenMaps
             | Item::Update
             | Item::Changelog
             | Item::KrokodilKoban
             | Item::SongSelectLayout
-            | Item::SkinFolder => Kind::Action,
+            | Item::SkinFolder
+            | Item::CustomFolder
+            | Item::MoveCustomMaps
+            | Item::MoveCustomBack => Kind::Action,
         }
     }
 
@@ -991,11 +1011,6 @@ impl Item {
                 "Group songs under headings you open and close (stars, letters, BPM...). Off: one list in the sort's order; by difficulty, each difficulty on its own.",
                 "曲を開閉できる見出し (星、頭文字、BPMなど) ごとにまとめます。オフ: 並び順のまま一つのリストに。難易度順では難易度ごとに並べます。",
                 "Группировать песни под заголовками, которые открываются и закрываются (звёзды, буквы, BPM...). Выкл.: один список по сортировке; по сложности — каждая сложность отдельно."
-            ),
-            Item::HiddenMaps => tr!(
-                "Right-click a song to hide it here (files stay). Enter lists them all again.",
-                "曲を右クリックでここから隠せます (ファイルは残ります)。Enterで全て再表示。",
-                "Правый клик по песне прячет её здесь (файлы остаются). Enter показывает все снова."
             ),
             Item::SongsFolder => tr!(
                 "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
@@ -1303,6 +1318,21 @@ impl Item {
                 "What's drawn from a skin, and which: the skin above, built-in, or any other (mix them). Enter opens the list.",
                 "スキンから描くものとその出どころ: 上のスキン、内蔵、または他のどれか (混ぜられます)。Enterでリスト。",
                 "Что берётся из скина и из какого: скин выше, встроенный или любой другой (можно смешивать). Enter: список."
+            ),
+            Item::CustomFolder => tr!(
+                "Enter: open the folder of taiko.rs's own maps (custom sets from the website, your editor maps), kept apart from osu!'s Songs folder.",
+                "Enter: taiko.rs独自の譜面 (サイトのカスタムセット、エディターの譜面) のフォルダを開く。osu!のSongsフォルダとは別です。",
+                "Enter: открыть папку карт самого taiko.rs (кастомные сеты с сайта, карты из редактора), отдельно от папки Songs osu!."
+            ),
+            Item::MoveCustomMaps => tr!(
+                "Enter: move the website's custom sets, editor maps and .tko sets an older taiko.rs put in osu!'s Songs folder into the taiko.rs maps folder. osu!'s own sets stay; scores and replays follow.",
+                "Enter: 古いtaiko.rsがosu!のSongsフォルダに置いたカスタムセット、エディターの譜面、.tkoセットをtaiko.rsの譜面フォルダに移動します。osu!のセットはそのまま、スコアとリプレイはついてきます。",
+                "Enter: перенести кастомные сеты с сайта, карты из редактора и сеты .tko, которые старый taiko.rs положил в папку Songs osu!, в папку карт taiko.rs. Сеты osu! остаются, рекорды и реплеи переезжают вместе с картами."
+            ),
+            Item::MoveCustomBack => tr!(
+                "Enter: move what was moved out of osu!'s Songs folder back there.",
+                "Enter: osu!のSongsフォルダから移動したものを元に戻します。",
+                "Enter: вернуть перенесённое из папки Songs osu! обратно."
             ),
             Item::SkinFolder => tr!(
                 "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",

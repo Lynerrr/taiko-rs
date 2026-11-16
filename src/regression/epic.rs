@@ -171,6 +171,7 @@ fn only_an_admin_marks_maps_epic_and_the_server_hears_it() {
     let (mut s, _songs, mut now, i) = client("epic-menu");
     let open_menu = |s: &mut State| {
         s.select.menu = Some(ui::SongMenu {
+            previous: None,
             row: s.select.cursor(),
             header: false,
             skin: false,

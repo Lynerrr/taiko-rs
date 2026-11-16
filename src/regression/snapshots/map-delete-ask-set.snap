@@ -1,0 +1,9 @@
+text  289,144  Delete this beatmapset?
+text  278,178  Regression - rolls-and-swells
+text  215,208  Its 3 difficulties go with the whole folder: music, background and all.
+text  203,224  It goes to taiko.rs's Trash folder and can be brought back from there. Scores and replays stay.
+text  344,284  Cancel
+text  464,284  Delete
+text  313,324  Left/Right choose   Enter   Esc cancel
+hit   317,276   100x24   Key(Escape)
+hit   437,276   100x24   DeleteMaps

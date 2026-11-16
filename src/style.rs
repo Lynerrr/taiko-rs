@@ -14,6 +14,8 @@ const GLITCH_CYAN: u32 = 0x2a9fb5;
 /// A panel: the main menu's.
 pub const PANEL: u32 = 0x15151d;
 pub const PANEL_EDGE: u32 = 0x3a3a4e;
+/// What deletes: its button, its menu item, the edge of the box asking.
+pub const DANGER: u32 = 0xff6b6b;
 
 /// Once a frame: where the music is in its beat (`phase` 0 to 1, None: nothing playing) and
 /// whether it's in a kiai (the frame's `render::Theme`).
@@ -41,6 +43,42 @@ pub fn pulse() -> f32 {
 /// How far into a kiai: 0 to 1.
 pub fn kiai() -> f32 {
     render::theme().kiai
+}
+
+/// A button that deletes: red, and ringed in white while it has the keys (`focused`).
+pub fn danger_button(
+    c: &mut Canvas,
+    [x, y, w, h]: [f32; 4],
+    label: &str,
+    hit: crate::hit::Hit,
+    focused: bool,
+) {
+    let hover = c.hovered(x, y, w, h);
+    let bg = if hover { 0x5a2026 } else { 0x3a1519 };
+    let (border, width) = if focused {
+        (0xffffff, 2.0)
+    } else {
+        (DANGER, 1.0)
+    };
+    let radius = (h * 0.3).min(6.0);
+    c.round_rect(
+        [x, y],
+        [w, h],
+        radius,
+        rgba(bg, 1.0),
+        rgba(border, 1.0),
+        width,
+    );
+    let room = w - 8.0;
+    let size = Canvas::fit_size(9.0, 7.2, room, label);
+    c.text_centered(
+        x + w / 2.0,
+        y + (h - size) / 2.0,
+        size,
+        rgba(DANGER, 1.0),
+        &Canvas::fit(size, room, label),
+    );
+    c.hit(x, y, w, h, hit);
 }
 
 /// A dark panel with the main menu's rounded edge.

@@ -23,6 +23,9 @@ pub struct Entry {
     /// use: hashing every file up front would make startup with a big library crawl.
     hash: OnceLock<u64>,
     text: crate::search::Text,
+    /// In taiko.rs's own custom maps folder (`is_own_map`): a taiko.rs map, whatever osu! set
+    /// its file names.
+    own: bool,
 }
 
 impl Entry {
@@ -37,6 +40,7 @@ impl Entry {
             &format!("{} - {} [{}]", meta.artist, meta.title, meta.version),
         );
         Entry {
+            own: is_own_map(&path),
             path,
             meta,
             size,
@@ -58,7 +62,12 @@ impl Entry {
     }
 
     /// The osu! beatmap set it belongs to: from the `.osu`, else its "123456 Artist - Title" folder.
+    /// None for a map in taiko.rs's own custom maps folder: a custom map made from an osu! set
+    /// keeps that set's IDs, but osu! has none of its difficulties.
     pub fn set_id(&self) -> Option<u32> {
+        if self.own {
+            return None;
+        }
         self.meta
             .set_id
             .or_else(|| {
@@ -67,6 +76,11 @@ impl Entry {
                     .and_then(crate::download::set_id_of_folder)
             })
             .filter(|&id| id > 0)
+    }
+
+    /// Whether it's in taiko.rs's own custom maps folder.
+    pub fn is_own(&self) -> bool {
+        self.own
     }
 
     pub fn hash(&self) -> u64 {
@@ -88,6 +102,28 @@ pub fn file_stats(path: &Path) -> (u64, u64) {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     (md.len(), modified)
+}
+
+/// taiko.rs's own custom maps folders (`State::custom_dir`; a test has one of its own). Only
+/// ever added to, so a map read while another test runs is never taken for its own.
+static OWN_ROOTS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
+
+/// Makes `root` a folder of taiko.rs's own custom maps: maps read from now on in it are its own
+/// (`Entry::is_own`).
+pub fn add_own_root(root: &Path) {
+    let mut roots = OWN_ROOTS.write().unwrap_or_else(|e| e.into_inner());
+    if !roots.iter().any(|r| r == root) {
+        roots.push(root.to_path_buf());
+    }
+}
+
+/// Whether the map file at `path` is in a folder of taiko.rs's own custom maps.
+pub fn is_own_map(path: &Path) -> bool {
+    OWN_ROOTS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|r| path.starts_with(r))
 }
 
 /// The Songs folder picked in settings (None = look in the usual places).
@@ -645,6 +681,55 @@ fn save_cache(path: &Path, folders: Vec<CachedFolder>) {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: the library cache `forget_cached` changes on this thread (None: none at all, so
+    /// tests never touch the cache other tests scan with).
+    static TEST_CACHE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: the library cache `forget_cached` changes on this thread from now on.
+#[cfg(test)]
+pub fn set_test_cache(path: Option<PathBuf>) {
+    TEST_CACHE.with(|c| *c.borrow_mut() = path);
+}
+
+/// Maps deleted (`paths`, and the set `folder` if it went whole) leave the library cache at
+/// once, so the next start doesn't list them while the Songs folder is looked through.
+pub fn forget_cached(paths: &[PathBuf], folder: Option<&Path>) {
+    #[cfg(test)]
+    let cache = TEST_CACHE.with(|c| c.borrow().clone());
+    #[cfg(not(test))]
+    let cache = Some(library_cache());
+    if let Some(cache) = cache {
+        forget_in_cache(&cache, paths, folder);
+    }
+}
+
+fn forget_in_cache(cache_path: &Path, paths: &[PathBuf], folder: Option<&Path>) {
+    let (cache, state) = load_cache(cache_path);
+    if matches!(state, CacheState::Missing | CacheState::Unreadable(_)) {
+        return;
+    }
+    let gone = folder.map(folder_key);
+    let total = cache.len();
+    let mut folders: Vec<CachedFolder> = cache
+        .into_iter()
+        .filter(|(key, _)| Some(key) != gone.as_ref())
+        .map(|(_, f)| f)
+        .collect();
+    let mut changed = folders.len() != total;
+    for f in &mut folders {
+        let before = f.maps.len();
+        f.maps.retain(|m| !paths.contains(&m.path));
+        changed |= f.maps.len() != before;
+    }
+    if changed {
+        folders.sort_by(|a, b| a.dir.cmp(&b.dir));
+        save_cache(cache_path, folders);
+    }
+}
+
 /// Finds playable difficulties under `inputs`. `found` counts files read so far, for the UI.
 ///
 /// A Songs folder of tens of thousands of maps took over a minute just to list on a hard drive,
@@ -675,7 +760,7 @@ fn place(p: &Path) -> PathBuf {
     }
 }
 
-fn scan_cached(
+pub(crate) fn scan_cached(
     inputs: &[PathBuf],
     found: &AtomicUsize,
     cache_path: &Path,
@@ -894,10 +979,11 @@ fn same_set(a: &Meta, b: &Meta) -> bool {
 }
 
 /// What unpacking an `.osz` (its difficulties: header and content hash) would add: how many of
-/// its difficulties are neither in the list with the same content nor in `pending` (on their
-/// way already), and the folder of the set if some of it is here.
+/// its difficulties are neither in the list with the same content (maps deleted this session,
+/// in `gone`, don't count) nor in `pending` (on their way already), and the folder of the set if some of it is here.
 pub fn osz_news<'a>(
     library: &'a [Entry],
+    gone: &std::collections::HashSet<PathBuf>,
     pending: &std::collections::HashSet<u64>,
     maps: &[(Meta, u64)],
 ) -> (usize, Option<&'a Path>) {
@@ -905,7 +991,12 @@ pub fn osz_news<'a>(
     let mut fresh = 0;
     for (meta, hash) in maps {
         let mut here = pending.contains(hash);
-        for e in library.iter().filter(|e| same_set(&e.meta, meta)) {
+        // A map deleted this session is still in the library (song select only leaves it out):
+        // dropped in again, it's new.
+        for e in library
+            .iter()
+            .filter(|e| same_set(&e.meta, meta) && !gone.contains(&e.path))
+        {
             home = home.or(e.path.parent());
             // Only same-named difficulties get hashed: reading every file would take a while.
             here = here || (e.meta.version == meta.version && e.hash() == *hash);
@@ -964,6 +1055,17 @@ pub(crate) fn main_maps<'a>(maps: impl Iterator<Item = &'a Entry>) -> Vec<PathBu
 pub(crate) fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
     let mut inputs = song_dirs();
     inputs.extend(cfg.songs.iter().cloned());
+    inputs
+}
+
+/// What the library scans: `inputs`, plus taiko.rs's own custom maps folder `custom` when it
+/// exists, whatever the Songs folder setting says. It is kept out of the Songs folders (where
+/// osu! maps are downloaded and osu!.db is looked for).
+pub(crate) fn with_custom(mut inputs: Vec<PathBuf>, custom: &Path) -> Vec<PathBuf> {
+    add_own_root(custom);
+    if custom.is_dir() && !inputs.iter().any(|i| i == custom) {
+        inputs.push(custom.to_path_buf());
+    }
     inputs
 }
 
@@ -1105,9 +1207,15 @@ mod tests {
         let library = [Entry::new(set.join("oni.osu"), meta("Oni", Some(123)))];
         let hash = |b: &[u8]| crate::net::map_hash(b);
         let none = std::collections::HashSet::new();
+        let no_gone = std::collections::HashSet::new();
         // The same file: nothing new, and the set's folder is known.
         assert_eq!(
-            osz_news(&library, &none, &[(meta("Oni", Some(123)), hash(b"oni"))]),
+            osz_news(
+                &library,
+                &no_gone,
+                &none,
+                &[(meta("Oni", Some(123)), hash(b"oni"))]
+            ),
             (0, Some(set.as_path()))
         );
         // One more difficulty, and an updated Oni.
@@ -1115,18 +1223,24 @@ mod tests {
             (meta("Oni", Some(123)), hash(b"oni v2")),
             (meta("Muzukashii", Some(123)), hash(b"muzu")),
         ];
-        assert_eq!(osz_news(&library, &none, &maps).0, 2);
+        assert_eq!(osz_news(&library, &no_gone, &none, &maps).0, 2);
         // Dropped twice: the first one is still unpacking.
         let pending = maps.iter().map(|m| m.1).collect();
-        assert_eq!(osz_news(&library, &pending, &maps).0, 0);
+        assert_eq!(osz_news(&library, &no_gone, &pending, &maps).0, 0);
         // Unsubmitted maps (no set ID) match by artist, title and mapper.
         assert_eq!(
-            osz_news(&library, &none, &[(meta("Oni", None), hash(b"oni"))]),
+            osz_news(
+                &library,
+                &no_gone,
+                &none,
+                &[(meta("Oni", None), hash(b"oni"))]
+            ),
             (0, Some(set.as_path()))
         );
         assert_eq!(
             osz_news(
                 &library,
+                &no_gone,
                 &none,
                 &[(
                     Meta {
@@ -1135,6 +1249,18 @@ mod tests {
                     },
                     hash(b"oni")
                 )]
+            ),
+            (1, None)
+        );
+        // Deleted this session (still in the library, left out of song select): dropped in
+        // again, it's new.
+        let gone = std::collections::HashSet::from([set.join("oni.osu")]);
+        assert_eq!(
+            osz_news(
+                &library,
+                &gone,
+                &none,
+                &[(meta("Oni", Some(123)), hash(b"oni"))]
             ),
             (1, None)
         );
@@ -1270,6 +1396,49 @@ mod tests {
         );
         let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
         (entries, log.lines().last().unwrap().to_string())
+    }
+
+    #[test]
+    fn deleted_maps_leave_the_cache_at_once() {
+        let (root, songs, cache) = songs_folder("forget");
+        add_map(&songs, "1 kept", "5");
+        add_map(&songs, "2 set", "5");
+        std::fs::write(
+            songs.join("2 set/easy.osu"),
+            "osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:2 set\nVersion:Easy\n",
+        )
+        .unwrap();
+        add_map(&songs, "3 gone", "5");
+        let (first, _) = quiet_scan(&songs, &cache);
+        assert_eq!(first.len(), 4);
+        let early = |cache: &Path| -> Vec<PathBuf> {
+            let mut maps: Vec<PathBuf> = load_cache(cache)
+                .0
+                .into_values()
+                .flat_map(|f| f.maps.into_iter().map(|m| m.path))
+                .collect();
+            maps.sort();
+            maps
+        };
+        // A difficulty: its folder stays cached without it.
+        let easy = songs.join("2 set/easy.osu");
+        forget_in_cache(&cache, std::slice::from_ref(&easy), None);
+        assert!(!early(&cache).contains(&easy));
+        assert_eq!(early(&cache).len(), 3);
+        // A whole set: its folder goes.
+        let set = songs.join("3 gone");
+        forget_in_cache(&cache, &[set.join("oni.osu")], Some(&set));
+        let left = early(&cache);
+        assert_eq!(
+            left,
+            [songs.join("1 kept/oni.osu"), songs.join("2 set/oni.osu")]
+        );
+        assert!(!load_cache(&cache).0.contains_key(&folder_key(&set)));
+        // Without a cache there's nothing to change, and none is made.
+        let none = root.join("none.json");
+        forget_in_cache(&none, &[easy], None);
+        assert!(!none.exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

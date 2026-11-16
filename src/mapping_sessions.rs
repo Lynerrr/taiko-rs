@@ -164,11 +164,10 @@ impl State {
             return;
         }
         let token = self.cfg.online_token.clone();
-        let songs = self.songs_dir.clone();
-        self.start_mapping(
-            online::Request::JoinMapping { token, session },
-            Connecting::guest(songs),
-        );
+        // Into taiko.rs's own folder; a copy an older game put in osu!'s Songs folder is used.
+        let connecting =
+            Connecting::guest(self.custom_dir.clone()).found_in(self.songs_dir.clone());
+        self.start_mapping(online::Request::JoinMapping { token, session }, connecting);
         self.toast(
             tr!(
                 "joining the mapping session...",
