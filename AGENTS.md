@@ -80,6 +80,22 @@
 - Integrate changes into `worktree-taiko-client` only through a pull request after the required CI checks pass.
 - Requests to bypass this workflow do not waive the branch, pull request, or validation requirements.
 
+## Cleaning up after yourself
+
+- Once a branch's pull request is merged or closed, remove its worktree
+  (`git worktree remove <path>`) and delete the local branch. Do it in the same session
+  that merged it. Worktrees left behind pile up and fill the disk, because each one has its
+  own `target/`.
+- Before removing a worktree, run `git status` in it. Uncommitted work is never thrown away:
+  commit and push it, or save it as a patch outside the repository first.
+- Leave alone a worktree that another session is still working in. Signs of that are a
+  recent commit or change, or a process whose working directory is in it. Leave the main
+  checkout alone as well.
+- At the end of a task, also stop what it started (dev servers, headless compositors, game
+  instances, background builds) and delete its temporary files and build folders outside
+  the repository.
+- Pass these rules on to subagents that work in worktrees.
+
 ## graphify
 
 A graph of the code (who calls what, what references what) can live in `graphify-out/`. It is
