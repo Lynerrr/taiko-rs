@@ -186,6 +186,8 @@ pub struct Config {
     pub screenshot_to: ScreenshotTo,
     /// The interface's language.
     pub language: crate::lang::Lang,
+    /// Empty selects the original pixel font; otherwise an installed family name.
+    pub ui_font: String,
     /// The global offset as osu! has it (its universal offset): positive brings the notes
     /// earlier. On `OffsetScale::Osu` this is what the player sets and `offset_ms` follows from
     /// it; on `Sound` it follows from `offset_ms`. What the player sees is `shown_offset`.
@@ -475,6 +477,7 @@ impl Default for Config {
                 ScreenshotTo::Clipboard
             },
             language: crate::lang::Lang::En,
+            ui_font: String::new(),
             // osu!'s default: a new player starts where an osu! player does.
             offset_osu_ms: 0.0,
             offset_scale: OffsetScale::Osu,
@@ -1335,6 +1338,7 @@ impl Config {
                 "screenshot_to" => {
                     cfg.screenshot_to = ScreenshotTo::parse(v).unwrap_or(cfg.screenshot_to)
                 }
+                "ui_font" => cfg.ui_font = v.to_string(),
                 "language" => cfg.language = crate::lang::Lang::parse(v).unwrap_or(cfg.language),
                 "show_playfield_size" => cfg.show_playfield_size = v != "false",
                 "wheel_resizes_playfield" => cfg.wheel_resizes_playfield = v == "true",
@@ -1575,6 +1579,8 @@ impl Config {
              screenshot_to = {}\n\
              # the interface's language: en, ja or ru\n\
              language = {}\n\
+             # installed font family; empty uses the built-in pixel font\n\
+             ui_font = {}\n\
              show_playfield_size = {}\n\
              # your own playfield sizes (preset list, in this order)\n\
              saved_presets = {}\n\
@@ -1659,6 +1665,7 @@ impl Config {
             self.touch_layout.name(),
             self.screenshot_to.key(),
             self.language.code(),
+            self.ui_font.replace(['\r', '\n'], ""),
             self.show_playfield_size,
             self.saved_presets
                 .iter()

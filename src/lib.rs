@@ -113,6 +113,7 @@ mod stars;
 mod store;
 mod stream;
 mod style;
+mod system_font;
 mod tact;
 mod terms;
 #[doc(hidden)]
@@ -1341,6 +1342,9 @@ impl State {
         }
         let tx = ex.encoder.tx.clone()?;
         let (w, h) = ex.size;
+        system_font::set_pixel_scale(h as f32 / render::VIRTUAL_HEIGHT);
+        system_font::select(&self.cfg.ui_font);
+        system_font::begin_frame();
         ex.game.view.kiai_effects = kiai;
         let t = ex.game.speed().map(ex.view_time());
         ex.game.set_time(t);
@@ -2570,6 +2574,26 @@ impl State {
 
     /// Text typed on the settings screen goes into its search; true if it took the key.
     fn settings_type(&mut self, code: KeyCode, text: Option<&str>) -> bool {
+        if !self.modifiers_ctrl
+            && !self.modifiers_alt
+            && let Some(p) = self.settings_ui.choices.as_mut().filter(|p| p.searchable())
+        {
+            let mut query = p.search.clone();
+            match code {
+                KeyCode::Backspace => {
+                    query.pop();
+                }
+                KeyCode::Escape if !query.is_empty() => query.clear(),
+                KeyCode::Space => query.push(' '),
+                _ if text.is_some_and(|s| s.chars().any(|c| !c.is_control())) => {
+                    query.extend(text.unwrap().chars().filter(|c| !c.is_control()));
+                }
+                _ => return false,
+            }
+            p.set_search(query);
+            self.mob.reset_choices_scroll();
+            return true;
+        }
         let ui = &self.settings_ui;
         if !self.settings_types_keys() {
             return false;
@@ -2614,7 +2638,15 @@ impl State {
     /// settings screen (setting names have them: "Song select: speed -"), even as the first
     /// letter. The offset has its own row there; Ctrl still gives them to the hotkeys.
     fn settings_search_takes_text(&self) -> bool {
-        self.in_settings() && self.settings_types_keys()
+        self.in_settings()
+            && (self.settings_types_keys()
+                || (!self.modifiers_ctrl
+                    && !self.modifiers_alt
+                    && self
+                        .settings_ui
+                        .choices
+                        .as_ref()
+                        .is_some_and(Choices::searchable)))
     }
 
     fn search_settings(&mut self, text: String) {
@@ -2666,6 +2698,13 @@ impl State {
             Item::AutoplayLeftHanded => on(c.autoplay.left_handed),
             Item::Screenshots => c.screenshot_to.name().into(),
             Item::IdleScreen => idle::minutes_name(c.idle_minutes),
+            Item::UiFont => {
+                if c.ui_font.is_empty() {
+                    built_in_text().into()
+                } else {
+                    c.ui_font.clone()
+                }
+            }
             Item::Language => c.language.name().into(),
             Item::ShowPlayfieldSize => on(c.show_playfield_size),
             Item::WheelResize => on(c.wheel_resizes_playfield),
@@ -3000,6 +3039,10 @@ impl State {
                 self.cfg.idle_minutes =
                     idle::MINUTES[(i + dir).rem_euclid(idle::MINUTES.len() as i32) as usize];
             }
+            Item::UiFont => {
+                self.open_choices(item);
+                return;
+            }
             Item::Language => self.cfg.language = self.cfg.language.step(dir),
             Item::Accent => {
                 let n = render::ACCENTS.len() as i32;
@@ -3320,6 +3363,20 @@ impl State {
                     all.iter().position(|&l| l == c.touch_layout),
                     String::new(),
                 )
+            }
+            Item::UiFont => {
+                let mut names = vec![built_in_text().to_string()];
+                names.extend(system_font::families());
+                let current = if c.ui_font.is_empty() {
+                    Some(0)
+                } else {
+                    names
+                        .iter()
+                        .skip(1)
+                        .position(|n| n == &c.ui_font)
+                        .map(|i| i + 1)
+                };
+                (names, current, String::new())
             }
             Item::Language => {
                 let all = lang::Lang::ALL;
@@ -3650,6 +3707,21 @@ impl State {
             Item::IdleScreen => self.cfg.idle_minutes = idle::MINUTES[i],
             Item::AutoplayStyle => self.cfg.autoplay.style = autoplay::Style::ALL[i],
             Item::AutoplayBinding => self.cfg.autoplay.binding = i,
+            Item::UiFont => {
+                let family = if i == 0 { "" } else { name.as_str() };
+                if system_font::select(family) {
+                    self.cfg.ui_font = family.to_string();
+                } else {
+                    self.toast(
+                        tr!(
+                            "Could not load this font",
+                            "フォントを読み込めません",
+                            "Не удалось загрузить шрифт"
+                        )
+                        .into(),
+                    );
+                }
+            }
             Item::Language => self.cfg.language = lang::Lang::ALL[i],
             Item::PresentMode => {
                 self.cfg.present = self
@@ -5001,9 +5073,12 @@ impl State {
                 KeyCode::PageDown => p.move_cursor(8),
                 KeyCode::Home => p.move_cursor(-(p.names.len() as i32)),
                 KeyCode::End => p.move_cursor(p.names.len() as i32),
-                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
-                    let i = p.cursor;
-                    self.pick_choice(i);
+                KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                    if code != KeyCode::Space || !p.searchable() =>
+                {
+                    if let Some(i) = p.selected() {
+                        self.pick_choice(i);
+                    }
                 }
                 // From one part's skins, back to the parts.
                 KeyCode::Escape | KeyCode::Backspace if let Item::SkinPart(i) = p.item => {
@@ -6950,7 +7025,9 @@ impl State {
                 });
                 return;
             }
-            if self.settings_ui.choices.is_some() && !matches!(hit, Some(hit::Hit::ChoiceRow(_))) {
+            if self.settings_ui.choices.is_some()
+                && !matches!(hit, Some(hit::Hit::ChoiceRow(_) | hit::Hit::ChoiceSearch))
+            {
                 self.settings_ui.choices = None;
                 return;
             }
@@ -9024,6 +9101,12 @@ impl State {
     /// Somewhere text can be typed now (Ctrl+V pastes there).
     fn takes_text(&self) -> bool {
         self.social_keys()
+            || (self.in_settings()
+                && self
+                    .settings_ui
+                    .choices
+                    .as_ref()
+                    .is_some_and(Choices::searchable))
             || self.scene.screen().is_some_and(|s| s.typing())
             || self.settings_ui.editing.is_some()
             || self.player.as_ref().is_some_and(|p| p.searching)
@@ -9070,7 +9153,7 @@ impl State {
     fn is_text_field(&self, hit: hit::Hit) -> bool {
         use hit::Hit;
         match hit {
-            Hit::TextField | Hit::SettingsSearch | Hit::LobbyChat => true,
+            Hit::TextField | Hit::SettingsSearch | Hit::ChoiceSearch | Hit::LobbyChat => true,
             Hit::MpRow(i) => {
                 self.scene.screen_is::<MpMenu>()
                     && self.mp_menu.rows().get(i).is_some_and(|r| !r.is_action())
@@ -11670,6 +11753,8 @@ impl State {
         self.drop_finished_play();
         // Here too, so a new choice (or a test's) shows from the next frame on.
         lang::set(self.cfg.language);
+        system_font::select(&self.cfg.ui_font);
+        system_font::begin_frame();
         // What this frame is drawn with; the beat carries on from the last frame until
         // `style::set_beat` below.
         let last = render::theme();
@@ -14112,6 +14197,7 @@ impl State {
             Hit::PickRow(i) => self.pick_row(i),
             Hit::PickRowMore(i) => self.open_collection_menu(i.saturating_sub(1)),
             Hit::ChoiceRow(i) => self.pick_choice(i),
+            Hit::ChoiceSearch => {}
             Hit::SongsFolder => self.browse_songs_folder(),
             // Taken when pressed (`mouse_button`).
             Hit::SongScrollbar => {}

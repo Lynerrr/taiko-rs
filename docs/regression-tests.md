@@ -103,3 +103,22 @@ Golden files must never depend on time, the machine or the order tests run in:
 
 Before committing new golden files, run the suite several times: a test that passes once and
 fails the next time is a bug in the test.
+
+## GPU font rendering
+
+The regular suite needs no GPU. It checks text measurement, font selection and persistence,
+missing-glyph fallback, and that canvas scaling and rotation leave atlas coordinates unchanged.
+
+On a machine with a graphics adapter, also run:
+
+```sh
+cargo test --locked --features gpu-tests font_gpu -- --nocapture
+```
+
+This hardware check renders the production WGSL shader into an offscreen texture, using the
+production font texture and upload code. It compares the pixels against independently sampled
+CPU glyph bitmaps at screen scales 0.5, 1, 1.5, 2 and 3, combined with canvas scales 0.5, 1 and
+1.5, and repeats after switching fonts. A second check renders large titles with native-density
+glyphs at densities 1 through 4 and compares them with CPU rasters. A missing graphics adapter
+is an error for this check.
+Set `TAIKO_GPU_SHOTS` to an existing directory to save the GPU images for visual review.

@@ -15,6 +15,7 @@ mod custom_maps;
 mod drawing;
 mod epic;
 mod flows;
+mod font_search;
 mod formats;
 mod gameplay;
 mod glyphs;

@@ -115,6 +115,9 @@ fn words(item: Item) -> &'static str {
         Item::AutoplayStyle | Item::AutoplayBinding | Item::AutoplayLeftHanded => {
             "auto bot кдд авто бот"
         }
+        Item::UiFont => {
+            "font typeface system custom pixel шрифт системный свой пиксельный フォント"
+        }
         Item::TouchLayout => "phone android tablet телефон андроид планшет",
         Item::Key(_) | Item::PresetKey(_) | Item::Hotkey(_) => {
             "keybind binding shortcut hotkey бинд клавиша кнопка"

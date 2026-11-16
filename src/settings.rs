@@ -46,6 +46,7 @@ pub enum Item {
     TouchLayout,
     Screenshots,
     Language,
+    UiFont,
     ShowPlayfieldSize,
     WheelResize,
     KiaiEffects,
@@ -128,7 +129,7 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 138] = [
+pub const ITEMS: [(&str, Item); 139] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
@@ -256,6 +257,7 @@ pub const ITEMS: [(&str, Item); 138] = [
     ("ONLINE", Item::CrashReports),
     ("ONLINE", Item::KrokodilKoban),
     ("SYSTEM", Item::Language),
+    ("SYSTEM", Item::UiFont),
     ("SYSTEM", Item::Splash),
     ("SYSTEM", Item::EpilepsyWarning),
     ("SYSTEM", Item::IdleScreen),
@@ -534,6 +536,7 @@ impl Item {
             Item::Screenshots => tr!("Screenshots", "スクリーンショット", "Скриншоты"),
             // Also in English, so anyone who picked a language by mistake finds their way back.
             Item::Language => tr!("Language", "言語 (Language)", "Язык (Language)"),
+            Item::UiFont => tr!("Interface font", "表示フォント", "Шрифт интерфейса"),
             Item::ShowPlayfieldSize => tr!(
                 "Show playfield size",
                 "プレイフィールドのサイズを表示",
@@ -755,6 +758,7 @@ impl Item {
             | Item::Screenshots
             | Item::IdleScreen
             | Item::Language
+            | Item::UiFont
             | Item::AudioBuffer
             | Item::PresentMode
             | Item::Renderer
@@ -947,6 +951,11 @@ impl Item {
                 "Enter, then press the new key, Ctrl / Alt / Shift too (Delete: none, Esc: cancel). Backspace: the default.",
                 "Enterの後に新しいキー (Ctrl / Alt / Shiftも可)。Delete: なし、Esc: 取消。Backspace: 初期設定。",
                 "Enter, затем новая клавиша, можно с Ctrl / Alt / Shift (Delete: нет, Esc: отмена). Backspace: исходная."
+            ),
+            Item::UiFont => tr!(
+                "Choose an installed font, or the built-in pixel font. Missing characters use the built-in font.",
+                "インストール済みフォントか内蔵ピクセルフォントを選択。足りない文字は内蔵フォントで表示します。",
+                "Выберите установленный шрифт или встроенный пиксельный. Недостающие символы рисуются встроенным шрифтом."
             ),
             Item::Language => tr!(
                 "The language of menus, settings and messages. Song titles stay as their maps have them.",
@@ -1909,6 +1918,7 @@ pub struct Choices {
     /// Top right: how many skins are installed, the folder in use, ...
     pub note: String,
     pub cursor: usize,
+    pub search: String,
 }
 
 impl Choices {
@@ -1920,20 +1930,87 @@ impl Choices {
             current,
             note,
             cursor: current.unwrap_or(0),
+            search: String::new(),
         }
     }
 
+    pub fn searchable(&self) -> bool {
+        self.item == Item::UiFont
+    }
+
+    /// Indices stay in the original list, so selecting a filtered row picks the right family.
+    pub fn visible(&self) -> Vec<usize> {
+        let query = self.search.trim().to_lowercase();
+        self.names
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| !self.searchable() || name.to_lowercase().contains(&query))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    pub fn set_search(&mut self, text: String) {
+        self.search = text.chars().filter(|c| !c.is_control()).take(128).collect();
+        let visible = self.visible();
+        if !visible.contains(&self.cursor) {
+            self.cursor = visible.first().copied().unwrap_or(0);
+        }
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.visible().into_iter().find(|&i| i == self.cursor)
+    }
+
     pub fn move_cursor(&mut self, delta: i32) {
-        self.cursor = (self.cursor as i32 + delta).clamp(0, self.names.len() as i32 - 1) as usize;
+        let visible = self.visible();
+        if visible.is_empty() {
+            return;
+        }
+        let at = visible.iter().position(|&i| i == self.cursor).unwrap_or(0) as i32;
+        self.cursor = visible[(at + delta).clamp(0, visible.len() as i32 - 1) as usize];
+    }
+
+    pub fn draw_search(&self, c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, size: f32) {
+        c.round_rect(
+            [x, y],
+            [w, h],
+            4.0,
+            rgba(0x23232f, 1.0),
+            rgba(accent(), 0.8),
+            1.0,
+        );
+        c.hit(x, y, w, h, Hit::ChoiceSearch);
+        let placeholder = tr!("Search fonts...", "フォントを検索...", "Поиск шрифтов...");
+        let text = if self.search.is_empty() {
+            placeholder
+        } else {
+            &self.search
+        };
+        c.text(
+            x + 8.0,
+            y + (h - size) / 2.0,
+            size,
+            rgba(
+                if self.search.is_empty() {
+                    0x8a8aa0
+                } else {
+                    0xffffff
+                },
+                1.0,
+            ),
+            &Canvas::fit_end(size, w - 16.0, text),
+        );
     }
 
     pub fn draw(&self, c: &mut Canvas) {
         const ROW: f32 = 18.0;
         let w = c.width;
         c.rect(0.0, 0.0, w, 480.0, rgba(0x000000, 0.55));
-        let n = self.names.len();
+        let visible = self.visible();
+        let n = visible.len();
+        let search_h = if self.searchable() { 32.0 } else { 0.0 };
         let (bw, max_h) = ((w - 48.0).min(420.0), 380.0);
-        let bh = (n as f32 * ROW + 56.0).min(max_h);
+        let bh = (self.names.len().max(1) as f32 * ROW + 56.0 + search_h).min(max_h);
         let (bx, by) = ((w - bw) / 2.0, (480.0 - bh) / 2.0);
         c.round_rect(
             [bx, by],
@@ -1957,11 +2034,28 @@ impl Choices {
             rgba(0x6f6f86, 1.0),
             &Canvas::fit_end(7.0, bw - 38.0 - title_w, &self.note),
         );
-        let (top, view) = (by + 32.0, bh - 50.0);
-        let scroll =
-            (self.cursor as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
-        for (i, name) in self.names.iter().enumerate() {
-            let y = top + i as f32 * ROW - scroll;
+        if self.searchable() {
+            self.draw_search(c, bx + 12.0, by + 32.0, bw - 24.0, 24.0, 8.0);
+        }
+        let (top, view) = (by + 32.0 + search_h, bh - 50.0 - search_h);
+        let at = visible.iter().position(|&i| i == self.cursor).unwrap_or(0);
+        let scroll = (at as f32 * ROW - view / 2.0).clamp(0.0, (n as f32 * ROW - view).max(0.0));
+        if visible.is_empty() {
+            c.text(
+                bx + 20.0,
+                top + 5.0,
+                8.0,
+                rgba(0x8a8aa0, 1.0),
+                tr!(
+                    "No fonts found",
+                    "フォントが見つかりません",
+                    "Шрифты не найдены"
+                ),
+            );
+        }
+        for (row, i) in visible.iter().copied().enumerate() {
+            let name = &self.names[i];
+            let y = top + row as f32 * ROW - scroll;
             if y < top - 1.0 || y + ROW > top + view + 1.0 {
                 continue;
             }
@@ -2003,11 +2097,19 @@ impl Choices {
                 );
             }
         }
-        let hint = tr!(
-            "Up/Down or mouse   Enter/click use   Esc close",
-            "上下かマウス   Enter/クリック 使う   Esc 閉じる",
-            "Вверх/вниз или мышь   Enter/клик выбрать   Esc закрыть"
-        );
+        let hint = if self.searchable() {
+            tr!(
+                "Type to search   Up/Down select   Enter use   Esc clear/close",
+                "入力で検索   上下で選択   Enter決定   Esc消去/閉じる",
+                "Введите название   Вверх/вниз выбрать   Enter применить   Esc очистить/закрыть"
+            )
+        } else {
+            tr!(
+                "Up/Down or mouse   Enter/click use   Esc close",
+                "上下かマウス   Enter/クリック 使う   Esc 閉じる",
+                "Вверх/вниз или мышь   Enter/клик выбрать   Esc закрыть"
+            )
+        };
         c.text_centered(
             w / 2.0,
             by + bh - 11.0,
