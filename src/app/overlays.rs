@@ -20,8 +20,8 @@ pub(crate) enum Layer {
     GuideBinding,
     /// The guide.
     Guide,
-    /// The window's own: the volume (Alt+arrows, Alt+wheel, the wheel over its notes) and
-    /// Ctrl+O for the settings.
+    /// The window's own: the volume (Alt+arrows, Alt+wheel, the wheel over its notes),
+    /// Ctrl+O for the settings and F12 for a screenshot.
     WindowKeys,
     /// The terms, to be agreed to.
     Terms,
@@ -677,6 +677,14 @@ impl State {
         {
             if !repeat {
                 self.settings_anywhere();
+            }
+            return true;
+        }
+        // The screenshot, over the panels too (the mod select, its customization, a profile):
+        // they take every key, and they're what a player wants to show. A drum key stays one.
+        if code == KeyCode::F12 && !self.cfg.keys.contains(&code) {
+            if !repeat {
+                self.screenshot_due = true;
             }
             return true;
         }
