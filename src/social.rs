@@ -2747,7 +2747,7 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
         1.0,
     );
     let text = if typing {
-        format!("{}_", s.input)
+        s.input.clone()
     } else {
         // A phone's keyboard has its own button to send.
         let cut = hint.split(", Enter").next().unwrap_or(hint);
@@ -2760,6 +2760,17 @@ fn message_box(c: &mut Canvas, s: &Social, inner: f32, iw: f32, input_y: f32, hi
         7.0,
         rgba(if typing { 0xffffff } else { 0x5a5a70 }, a),
         &shown,
+    );
+    let caret = if typing {
+        Canvas::text_width(7.0, &shown)
+    } else {
+        0.0
+    };
+    c.caret(
+        inner + 7.0 + caret,
+        input_y + (h - 7.0) / 2.0,
+        7.0,
+        rgba(0xffffff, a),
     );
     c.hit(inner, input_y, iw, h, Hit::TextField);
     // The last F12's, on its way to whoever this is with.

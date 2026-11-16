@@ -2021,7 +2021,7 @@ impl Select {
             1.0,
         );
         let room = search_w - 20.0;
-        let caret = if self.searching { "_" } else { "" };
+        let caret = "";
         let (search, search_col) = if self.filter.is_empty() {
             let (long, short) = if self.searching {
                 ("type to search...", "search...")
@@ -2044,6 +2044,14 @@ impl Select {
             (text, 0xffffff)
         };
         c.text(left + 10.0, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
+        if self.searching {
+            let at = if self.filter.is_empty() {
+                0.0
+            } else {
+                Canvas::text_width(10.0, &search)
+            };
+            c.caret(left + 10.0 + at, row + 7.0, 10.0, rgba(0xffffff, 1.0));
+        }
         c.hit(left, row, search_w, 24.0, Hit::TextField);
 
         if let Some(n) = self.scanning {

@@ -3839,6 +3839,11 @@ impl<H> Canvas<H> {
         });
     }
 
+    /// A visible insertion point, including an empty focused field.
+    pub fn caret(&mut self, x: f32, y: f32, size: f32, color: [f32; 4]) {
+        self.rect(x, y - 1.0, 1.0, Self::text_height(size) + 2.0, color);
+    }
+
     /// Draws text with the built-in fonts; `size` is the glyph height. Returns the advance width.
     /// On a text grid (`set_text_grid`) the glyphs may come out bigger: they stay centred on the
     /// line `size` would have taken.

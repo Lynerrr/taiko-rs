@@ -143,14 +143,23 @@ Windows, `curl … | TAIKO_RS_CHANNEL=dev sh` on Linux).
 | Alt + wheel | overall volume (anywhere); move the pointer onto the music or hitsounds note to turn that one instead, without Alt, or pick it with Alt + Left/Right |
 | Alt + Up/Down | turns the volume picked like Alt + wheel (held, it keeps turning) |
 | no key by default: Settings > Input | apply the live offset suggestion to this map (with Shift: to the global offset) |
-| `` ` `` or Ctrl+R | restart map (Ctrl+R also works paused and on the results screen) |
+| `` ` `` or Ctrl+R | restart map; disable *Gameplay → Instant restart* to hold the shortcut for a two-second fade while play continues; releasing cancels and fades back in. The pause menu’s Restart button always restarts immediately |
 | Esc (song select) | clear search / quit |
 | - / = (Shift: ×5) | offset −/+ 1 ms: this map's own during a song or on its results, else the global one |
 | Ctrl + - / = (Shift: ×5) | visual offset −/+ 1 ms (notes drawn later / earlier; judging unchanged) |
 | F3 / F4 | scroll speed (1.00x = osu!'s) |
 | F7 | gameplay present mode: vsync → mailbox → immediate (menus stay on vsync by default) |
 | F8 | FPS cap for mailbox/immediate: unlimited, 2000, 1000, 500, 240, 144, 60 |
-| F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 is remembered) |
+| F10 / F11 | FPS overlay / fullscreen (the game starts fullscreen; F11 or Alt+Enter switches back to the previous window size) |
+
+Control bindings in Settings → Input accept Ctrl, Alt, Shift and Super (Cmd on macOS,
+Windows on Windows), including combinations of modifiers. The interface toggle and
+playfield preset controls support the same combinations. Don/Kat remain single keys.
+Existing key settings keep their meanings. Fullscreen retains F11 and adds Alt+Enter
+until the Fullscreen control is reassigned or disabled.
+
+Focused text fields show a vertical insertion caret even when empty; pointing at a text
+field uses the system I-beam pointer.
 
 **Letterbox:** Settings > Video > *Letterbox* runs the whole game at a resolution of your own in
 fullscreen, black all round, moved anywhere on the screen. It lists every mode the monitor reports,
@@ -163,7 +172,7 @@ first click selects a song or difficulty and clicking the selected difficulty pl
 rows select on the first click and toggle/open on the second, and `<` / `>` step values; the pause
 menu follows the pointer; results, calibration and the multiplayer menu, lobby and results have
 buttons (each shows its key). The pointer is a small pixel arrowhead in the game's colours (it turns
-red over anything clickable); during play it hides itself after a second without moving.
+red over buttons and becomes an I-beam over text fields); during play it hides itself after a second without moving.
 
 **Animations** (Settings → Video → *UI animations*, on by default): screens fade in, the tab and
 selection highlights glide, a song's difficulties slide open, settings scroll smoothly, the pause
