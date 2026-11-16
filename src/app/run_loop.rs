@@ -329,6 +329,9 @@ pub(super) fn render_loop(
             let mut s = lock(&state);
             h_build = Instant::now();
             // Video export frames above are drawn without the grid; the screen's frame with it.
+            crate::system_font::set_pixel_scale(
+                renderer.game_size().1 as f32 / render::VIRTUAL_HEIGHT,
+            );
             render::set_text_grid(renderer.text_grid());
             render::set_text_bias(renderer.text_bias());
             render::set_frame_time(Some(now));

@@ -1,0 +1,9 @@
+text  232,16   Interface font
+text  772,22   Close
+text  233,74   Arial Black
+text  237,130  Arial Black
+hit     0,0    1067x480  Key(Escape)
+hit   213,0     640x480  Overlay
+hit   749,6      96x44   Key(Escape)
+hit   225,58    616x44   ChoiceSearch
+hit   223,110   620x52   ChoiceRow(2)

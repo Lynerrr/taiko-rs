@@ -9,6 +9,8 @@ touch_layout = DKKD
 screenshot_to = both
 # the interface's language: en, ja or ru
 language = ru
+# installed font family; empty uses the built-in pixel font
+ui_font = Abel
 show_playfield_size = false
 # your own playfield sizes (preset list, in this order)
 saved_presets = 1600x900, 1024x768

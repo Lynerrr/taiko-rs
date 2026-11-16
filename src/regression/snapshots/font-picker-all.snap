@@ -1,0 +1,15 @@
+text  232,163  Interface font
+text  237,191  Search fonts...
+text  237,220  built-in
+text  237,238  Arial
+text  237,256  Arial Black
+text  237,274  Noto Sans
+text  575,274  current
+text  237,292  游ゴシック
+text  270,318  Type to search   Up/Down select   Enter use   Esc clear/close
+hit   229,183   396x24   ChoiceSearch
+hit   225,215   404x18   ChoiceRow(0)
+hit   225,233   404x18   ChoiceRow(1)
+hit   225,251   404x18   ChoiceRow(2)
+hit   225,269   404x18   ChoiceRow(3)
+hit   225,287   404x18   ChoiceRow(4)

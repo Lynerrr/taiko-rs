@@ -20,33 +20,34 @@ text   73,83   Songs folder, hidden...
 text  235,90   Language
 text  716,90   <  English  >
 text   73,109  GAMEPLAY
-text  235,120  Startup splash
+text  236,120  Interface font
+text  750,120  built-in
 text   73,123  speed, rate, interface
 text   73,149  VIEW
-text  235,150  Epilepsy warning
+text  235,150  Startup splash
 text   73,163  playfield, background
-text  236,180  Idle screen
-text  702,180  After 2 minutes
+text  235,180  Epilepsy warning
 text   74,189  INPUT
 text   73,203  drum keys, hotkeys, t...
-text  235,210  Legacy menu
+text  236,210  Idle screen
+text  702,210  After 2 minutes
 text   73,229  OFFSET
-text  235,240  Notes behind the main menu
+text  235,240  Legacy menu
 text   73,243  audio offset, calibra...
 text   73,269  AUDIO
-text  235,270  Menu lane notes dim
-text  791,270  0%
+text  235,270  Notes behind the main menu
 text   73,283  volume, latency
-text  235,300  First steps guide
-text  709,300  Enter to start
+text  235,300  Menu lane notes dim
+text  791,300  0%
 text   73,309  VIDEO
 text   73,323  frame pacing, display
-text  225,326  Updates
-text  235,348  Build channel
-text  764,348  stable
+text  235,330  First steps guide
+text  709,330  Enter to start
 text   73,349  SKIN
+text  225,356  Updates
 text   73,363  notes, hit flash, colour
-text  235,378  Update
+text  235,378  Build channel
+text  764,378  stable
 text   73,389  ONLINE
 text  233,396  The language of menus, settings and messages. Song titles stay as their maps have them.
 text   73,403  chat, notifications,...
@@ -77,9 +78,9 @@ hit   223,168   594x30   SettingRow(129)
 hit   223,198   594x30   SettingRow(130)
 hit   223,228   594x30   SettingRow(131)
 hit   223,258   594x30   SettingRow(132)
-hit   650,260   120x26   SettingLevel(132)
 hit   223,288   594x30   SettingRow(133)
-hit   223,336   594x30   SettingRow(134)
+hit   650,290   120x26   SettingLevel(133)
+hit   223,318   594x30   SettingRow(134)
 hit   223,366   594x14   SettingRow(135)
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account
