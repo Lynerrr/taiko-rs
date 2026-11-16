@@ -24,8 +24,6 @@ pub enum Event {
     Again,
     /// A map saved in the editor; counted each time.
     MapSave,
-    /// A clean play on a custom map the player uploaded.
-    OwnMap,
 }
 
 impl Event {
@@ -39,7 +37,6 @@ impl Event {
             Self::Deaf => "ura_deaf",
             Self::Again => "ura_again",
             Self::MapSave => "ura_map_save",
-            Self::OwnMap => "ura_own_map",
         }
     }
 
@@ -51,10 +48,8 @@ impl Event {
 
 /// Starts of one map in a row that make `Event::Again`.
 pub const AGAIN: u32 = 50;
-/// The least accuracy of a muted play (`Event::Deaf`) and of one on the player's own map
-/// (`Event::OwnMap`).
+/// The least accuracy of a muted play (`Event::Deaf`).
 const DEAF_ACCURACY: f64 = 0.95;
-const OWN_MAP_ACCURACY: f64 = 0.9;
 
 /// One map started again and again: which, and how many times in a row (restarts too).
 #[derive(Default)]
@@ -76,15 +71,12 @@ impl Again {
     }
 }
 
-/// A whole play passed (from the start, not Autoplay): played muted, or on a custom map this
-/// player uploaded (its folder keeps the upload's number, `custom::SIDECAR`).
-pub fn whole_play(cfg: &Config, accuracy: f64, no_fail: bool, folder: Option<&std::path::Path>) {
+/// A whole play passed (from the start, not Autoplay), played muted. A clean play on a custom
+/// map the player uploaded is the server's to see from the submitted play: a downloaded custom
+/// set keeps the same number in its folder (`custom::SIDECAR`) as an uploaded one.
+pub fn whole_play(cfg: &Config, accuracy: f64) {
     if cfg.music_volume * cfg.master_volume <= 0.0 && accuracy >= DEAF_ACCURACY {
         report(cfg, Event::Deaf);
-    }
-    let own = folder.and_then(crate::custom::sidecar_id).is_some();
-    if own && !no_fail && accuracy >= OWN_MAP_ACCURACY {
-        report(cfg, Event::OwnMap);
     }
 }
 
@@ -156,7 +148,6 @@ mod tests {
             Event::Deaf,
             Event::Again,
             Event::MapSave,
-            Event::OwnMap,
         ]
         .map(Event::name);
         // The server's `ClientEvent` list, word for word.
@@ -169,8 +160,7 @@ mod tests {
                 "ura_curious",
                 "ura_deaf",
                 "ura_again",
-                "ura_map_save",
-                "ura_own_map"
+                "ura_map_save"
             ]
         );
         let cfg = logged_in();
@@ -202,32 +192,20 @@ mod tests {
     }
 
     #[test]
-    fn muted_plays_and_plays_on_uploaded_maps() {
+    fn whole_plays_report_only_what_the_game_alone_sees() {
         take_reported();
-        let dir = std::env::temp_dir().join(format!("taiko-ura-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
         let mut cfg = logged_in();
-        whole_play(&cfg, 0.99, false, Some(&dir));
+        whole_play(&cfg, 0.99);
         assert_eq!(take_reported(), Vec::<Event>::new());
         cfg.music_volume = 0.0;
-        whole_play(&cfg, 0.94, false, Some(&dir));
+        whole_play(&cfg, 0.94);
         assert_eq!(take_reported(), Vec::<Event>::new());
-        whole_play(&cfg, 0.95, false, Some(&dir));
+        whole_play(&cfg, 0.95);
         assert_eq!(take_reported(), vec![Event::Deaf]);
         // Everything muted counts too.
         cfg.music_volume = 0.6;
         cfg.master_volume = 0.0;
-        whole_play(&cfg, 0.97, false, None);
+        whole_play(&cfg, 0.97);
         assert_eq!(take_reported(), vec![Event::Deaf]);
-        cfg.master_volume = 0.8;
-        // A map this player uploaded keeps the upload's number in its folder.
-        crate::custom::write_sidecar(&dir, 12);
-        whole_play(&cfg, 0.89, false, Some(&dir));
-        whole_play(&cfg, 0.99, true, Some(&dir));
-        assert_eq!(take_reported(), Vec::<Event>::new());
-        whole_play(&cfg, 0.9, false, Some(&dir));
-        assert_eq!(take_reported(), vec![Event::OwnMap]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

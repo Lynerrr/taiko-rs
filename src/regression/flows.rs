@@ -136,6 +136,22 @@ fn a_map_is_played_with_the_keyboard_from_song_select_to_the_results_and_back() 
 }
 
 #[test]
+fn a_play_on_a_downloaded_custom_map_reports_nothing_of_its_own() {
+    // A set from the site keeps its number in its folder, uploaded by this player or not: only
+    // the server can tell whose it is, from the play it's sent.
+    let (mut s, songs, mut now) = client("custom-not-own", vec![maps::basics()]);
+    crate::custom::write_sidecar(songs.paths[0].parent().unwrap(), 12);
+    s.cfg.online_token = "t".into();
+    crate::ura::take_reported();
+    start_selected(&mut s, &mut now);
+    let map = harness::game(&s).unwrap().map().clone();
+    play_out(&mut s, &mut now, &maps::presses(&map, Player::Perfect));
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Results"));
+    // Tests play muted, which is all the game itself has to tell.
+    assert_eq!(crate::ura::take_reported(), vec![crate::ura::Event::Deaf]);
+}
+
+#[test]
 fn keyboard_play_judges_like_the_replay_of_it() {
     // The same presses, live on the keyboard and played back as a replay: the same results.
     for (chart, player) in [
