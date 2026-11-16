@@ -8,9 +8,12 @@ name: Sync to dev
 # build. .github/scripts/sync-to-dev.sh does the git side.
 #
 # Left alone: a commit already in dev (a release of dev, or one copied by hand) and one whose
-# message has a line `Dev-sync: skip`. A commit that doesn't apply to dev, one that changes
-# workflows (the Actions token may not push those) or a copy that fails the checks is left for a
-# person: the run opens (or adds to) the issue "Sync to dev needs a hand" and dev stays as it was.
+# message has a line `Dev-sync: skip`. A commit that only conflicts in golden files
+# (src/regression/snapshots) keeps dev's side, the goldens are blessed again on Linux, and the
+# copies go to dev through a pull request so a person reads the .snap diff. A commit that doesn't
+# apply to dev otherwise, one that changes workflows (the Actions token may not push those) or a
+# copy that fails the checks is left for a person: the run opens (or adds to) the issue
+# "Sync to dev needs a hand" and dev stays as it was.
 #
 # The Actions token's own pushes start no workflows, so dev's release build is started by hand
 # here, and no pull request is opened: its checks would never run.
@@ -23,6 +26,7 @@ permissions:
   contents: write
   actions: write
   issues: write
+  pull-requests: write
 
 # One at a time, never cancelled: a run waiting behind another picks up its commits as well.
 concurrency:
@@ -33,6 +37,8 @@ env:
   GH_TOKEN: ${{ github.token }}
   GH_REPO: ${{ github.repository }}
   RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  # One branch per run: a pull request left open on it isn't overwritten by the next run.
+  BRANCH: sync/dev-${{ github.run_id }}
 
 jobs:
   pick:
@@ -42,6 +48,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       picked: ${{ steps.pick.outputs.picked }}
+      bless: ${{ steps.pick.outputs.bless }}
       list: ${{ steps.pick.outputs.list }}
     steps:
       - uses: actions/checkout@v4
@@ -50,30 +57,55 @@ jobs:
       - id: pick
         run: bash .github/scripts/sync-to-dev.sh pick
 
+  bless:
+    name: Bless the goldens again
+    needs: pick
+    if: needs.pick.outputs.bless == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_HUSKY_DONT_INSTALL_HOOKS: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pre-merge-desktop
+          save-if: false
+      - name: Install Linux build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang pkg-config libasound2-dev libpipewire-0.3-dev
+      - run: bash .github/scripts/sync-to-dev.sh bless
+
   checks:
     name: Check the copies
-    needs: pick
-    if: needs.pick.outputs.picked == 'true'
+    needs: [pick, bless]
+    if: always() && needs.pick.outputs.picked == 'true' && (needs.bless.result == 'success' || needs.bless.result == 'skipped')
     uses: ./.github/workflows/pre-merge.yml
     with:
-      ref: sync/dev
+      ref: sync/dev-${{ github.run_id }}
       linux_only: true
 
   land:
     name: Push dev
     needs: [pick, checks]
-    if: needs.pick.outputs.picked == 'true' && needs.checks.result == 'success'
+    # always(): the bless job before the checks is often skipped, which would skip this too.
+    if: always() && needs.pick.outputs.picked == 'true' && needs.checks.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - run: bash .github/scripts/sync-to-dev.sh land
+      - env:
+          BLESS: ${{ needs.pick.outputs.bless }}
+          LIST: ${{ needs.pick.outputs.list }}
+        run: bash .github/scripts/sync-to-dev.sh land
 
   failed:
     name: Report failed checks
-    needs: [pick, checks]
+    needs: [pick, bless, checks]
     if: always() && needs.pick.outputs.picked == 'true' && needs.checks.result != 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
