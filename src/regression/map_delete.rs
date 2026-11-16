@@ -255,6 +255,7 @@ fn the_song_menu_offers_deleting_a_difficulty_and_its_set() {
             row: s.select.cursor(),
             header: false,
             skin: false,
+            previous: None,
             x: 100.0,
             y: 100.0,
         });

@@ -12,6 +12,7 @@ mod clicks;
 mod collections;
 mod controls;
 mod custom_folder;
+mod custom_install;
 mod custom_maps;
 mod drawing;
 mod epic;

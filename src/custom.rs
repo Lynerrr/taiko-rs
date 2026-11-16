@@ -10,6 +10,7 @@ use crate::download::{CustomSet, Diff, SetInfo};
 use crate::online::WEBSITE;
 
 pub mod approved;
+pub mod store;
 
 /// The file in a map's folder that keeps its number on the server.
 pub const SIDECAR: &str = "taiko-rs.custom";
@@ -111,6 +112,9 @@ pub struct Manifest {
     /// Seconds since 1970 of the install.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed: Option<u64>,
+    /// Files of the player's own carried over from an older version (paths in the folder).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own: Vec<String>,
     /// Fields of a newer client, kept as they are.
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
@@ -137,7 +141,6 @@ impl Manifest {
     }
 
     /// The hash recorded for chart `name`, if the install brought it.
-    #[cfg(test)]
     pub fn file_hash(&self, name: &str) -> Option<u64> {
         u64::from_str_radix(self.files.get(name)?, 16).ok()
     }
@@ -181,7 +184,7 @@ pub fn now_secs() -> u64 {
 
 /// The marker's `deleted` list: content hashes of the difficulties the player deleted from the
 /// set (as 16 hex digits).
-const DELETED_KEY: &str = "deleted";
+pub(crate) const DELETED_KEY: &str = "deleted";
 
 /// Notes in the folder's marker (if it has one) that the player deleted the difficulty with
 /// content hash `hash`: the website still having it is no reason to call the set outdated and
@@ -533,6 +536,12 @@ fn preview_dir(set: &SetInfo) -> PathBuf {
         .join(format!("c{}-v{version}", set.id))
 }
 
+/// Where a preview of this version of the set keeps its archive (tests put one there).
+#[cfg(test)]
+pub fn preview_archive(set: &SetInfo) -> PathBuf {
+    preview_dir(set).join("set.osz")
+}
+
 /// The archive a preview of this version of the set already fetched, if there is one: the
 /// download takes it instead of asking the website again.
 pub fn cached_archive(set: &SetInfo) -> Option<PathBuf> {
@@ -639,6 +648,15 @@ pub fn outdated(folder: &Path, site: &SiteSet) -> bool {
         .collect();
     if wanted.is_empty() {
         return false;
+    }
+    // Installed (or sent) whole: the version it is is the charts its manifest lists.
+    if let Some(m) = Manifest::read(folder).filter(|m| !m.files.is_empty()) {
+        let have: Vec<u64> = m
+            .files
+            .values()
+            .filter_map(|h| u64::from_str_radix(h, 16).ok())
+            .collect();
+        return site.hashes.iter().any(|h| !have.contains(h));
     }
     let Ok(dir) = std::fs::read_dir(folder) else {
         return false;
@@ -989,6 +1007,18 @@ mod tests {
         std::fs::write(dir.join("a [Mine].osu"), "home-made").unwrap();
         assert!(!outdated(&dir, &site(now + 3600)));
         assert!(!outdated(&dir, &SiteSet::default()));
+        // Installed whole: its manifest says which version it is, whatever the file times.
+        let mut m = Manifest {
+            id: Some(1),
+            ..Manifest::default()
+        };
+        m.add_file("a [Oni].tko", crate::net::map_hash(b"old version"));
+        m.write(&dir).unwrap();
+        assert!(outdated(&dir, &site(0)));
+        m.add_file("a [Oni].tko", new);
+        m.write(&dir).unwrap();
+        assert!(!outdated(&dir, &site(now + 3600)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

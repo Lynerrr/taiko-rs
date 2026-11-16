@@ -1659,6 +1659,22 @@ impl Select {
             };
             items.push((fit(label), MenuAction::UpdateSong));
         }
+        if let Some(version) = m.previous {
+            let label = match version {
+                0 => tr!(
+                    "Previous version",
+                    "前のバージョンに戻す",
+                    "Вернуть прошлую версию"
+                )
+                .to_string(),
+                v => tr!(
+                    "Previous version (v{v})",
+                    "前のバージョン (v{v}) に戻す",
+                    "Прошлая версия (v{v})"; [] [v]
+                ),
+            };
+            items.push((fit(label), MenuAction::PreviousVersion));
+        }
         if m.skin {
             let off = library[i]
                 .path
@@ -3146,6 +3162,9 @@ pub struct SongMenu {
     pub header: bool,
     /// The map has a skin of its own to turn off or on.
     pub skin: bool,
+    /// A custom set in taiko.rs's own folder with an older version kept: the website's version
+    /// number of that one (0: not known).
+    pub previous: Option<u32>,
     pub x: f32,
     pub y: f32,
 }
@@ -3209,6 +3228,8 @@ pub enum MenuAction {
     Epic(bool, bool),
     /// Download the song's set again, its newest version (replacing its difficulties).
     UpdateSong,
+    /// Put back the older version of a custom set kept in taiko.rs's own folder.
+    PreviousVersion,
     /// Like the song, or not any more.
     Like,
     /// Turn the map's own skin off, or back on.

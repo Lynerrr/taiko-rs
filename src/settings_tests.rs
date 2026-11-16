@@ -455,6 +455,7 @@ fn on_a_map_with_a_skin(s: &mut State) -> std::path::PathBuf {
         .unwrap();
     s.library[i].path = dir.join("map.osu");
     s.select.menu = Some(ui::SongMenu {
+        previous: None,
         row: s.select.cursor(),
         header: true,
         skin: s.menu_has_skin(s.select.cursor()),
@@ -488,6 +489,7 @@ fn a_maps_skin_is_turned_off_and_back_on_from_its_menu() {
     assert_eq!(s.skin_map, None);
 
     s.select.menu = Some(ui::SongMenu {
+        previous: None,
         row: s.select.cursor(),
         header: false,
         skin: s.menu_has_skin(s.select.cursor()),
@@ -530,6 +532,7 @@ fn a_map_without_a_skin_offers_no_switch() {
     let row = s.select.cursor();
     assert!(!s.menu_has_skin(row));
     s.select.menu = Some(ui::SongMenu {
+        previous: None,
         row,
         header: true,
         skin: s.menu_has_skin(row),
@@ -647,6 +650,7 @@ fn a_songs_menu_likes_it() {
     s.build_frame(&mut Canvas::default(), Instant::now(), 853.3);
     s.scene = SongSelect::scene();
     s.select.menu = Some(ui::SongMenu {
+        previous: None,
         row: s.select.cursor(),
         header: true,
         skin: false,
@@ -1719,6 +1723,7 @@ fn sets_loved_on_the_server_count_as_loved() {
     s.select.filter.clear();
     s.select.refilter(&s.library);
     s.select.menu = Some(ui::SongMenu {
+        previous: None,
         row: 0,
         header: false,
         skin: false,

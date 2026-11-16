@@ -969,6 +969,141 @@ pub fn start_custom_update(set: SetInfo, folder: PathBuf) -> Job {
     }
 }
 
+/// What installing website set `set` says of it (`custom::store::Install`).
+fn custom_install(set: &SetInfo, folder: Option<PathBuf>) -> crate::custom::store::Install {
+    let custom = set.custom.clone().unwrap_or_default();
+    crate::custom::store::Install {
+        id: set.id,
+        version: (custom.version > 0).then_some(custom.version),
+        updated: (custom.updated > 0).then_some(custom.updated),
+        origin: Some(crate::custom::Origin::Site),
+        name: set.folder_name(),
+        folder,
+    }
+}
+
+/// Downloads website set `set` (or takes the archive its preview fetched) and installs it whole
+/// into taiko.rs's own custom maps folder `custom` (`custom::store::install`), on a background
+/// thread: a first download, or (`update`) its newer version over the folder that has it
+/// (`into`, else the one holding the set). A failed download leaves the folder as it was. The
+/// job reports the set's folder.
+pub fn start_custom(set: SetInfo, custom: PathBuf, update: Option<PathBuf>) -> Job {
+    let (tx, rx) = mpsc::channel();
+    let done = Arc::new(AtomicU64::new(0));
+    let total = Arc::new(AtomicU64::new(0));
+    let (d, t) = (done.clone(), total.clone());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let cached = crate::custom::cached_archive(&set);
+    let url = crate::custom::download_url(set.id);
+    let install = custom_install(&set, update.clone());
+    let update = update.is_some();
+    std::thread::spawn(move || {
+        let result = (|| {
+            if let Some(archive) = cached {
+                return crate::custom::store::install(&custom, &archive, &install);
+            }
+            // Not to be tried again (tests reach no website).
+            crate::offline::url(&url).map_err(|e| format!("taiko.rs: {e}"))?;
+            let dir = crate::custom::store::set_versions(&custom, install.id);
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let archive = dir.join("download.rsz.part");
+            let mut error = String::new();
+            for round in 0..ROUNDS {
+                if round > 0 {
+                    let until = std::time::Instant::now() + Duration::from_secs(5 * round);
+                    while std::time::Instant::now() < until && !stop.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+                if stop.load(Ordering::Relaxed) {
+                    let _ = std::fs::remove_file(&archive);
+                    return Err(CANCELLED.into());
+                }
+                d.store(0, Ordering::Relaxed);
+                t.store(0, Ordering::Relaxed);
+                match download_to(&url, &archive, &d, &t, &stop) {
+                    Ok(()) => {
+                        let result = crate::custom::store::install(&custom, &archive, &install);
+                        let _ = std::fs::remove_file(&archive);
+                        return result;
+                    }
+                    Err((e, retry)) => {
+                        let _ = std::fs::remove_file(&archive);
+                        error = format!("taiko.rs: {e}");
+                        if !retry {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error)
+        })();
+        let _ = tx.send(result);
+    });
+    Job {
+        set,
+        done,
+        total,
+        rx,
+        maps: Vec::new(),
+        update,
+        cancel,
+        old_version: Arc::default(),
+    }
+}
+
+/// Installs website set `install` from archive `archive` (one opened in the game, which names
+/// the set) whole into taiko.rs's own custom maps folder `custom`, on a background thread, like
+/// [`import`]. `temporary`: delete the archive whatever happens.
+pub fn import_custom(
+    archive: PathBuf,
+    name: &str,
+    custom: PathBuf,
+    install: crate::custom::store::Install,
+    temporary: bool,
+    maps: Vec<u64>,
+) -> Job {
+    let set = SetInfo {
+        id: install.id,
+        title: name.to_string(),
+        ..SetInfo::default()
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = crate::custom::store::install(&custom, &archive, &install);
+        if temporary || result.is_ok() {
+            let _ = std::fs::remove_file(&archive);
+        }
+        let _ = tx.send(result);
+    });
+    Job {
+        set,
+        done: Arc::default(),
+        total: Arc::default(),
+        rx,
+        maps,
+        update: false,
+        cancel: Arc::default(),
+        old_version: Arc::default(),
+    }
+}
+
+/// The manifest (`custom::SIDECAR`) an archive brings, if it has one: the website's archives of
+/// its sets do.
+pub fn archive_manifest(archive: &Path) -> Option<crate::custom::Manifest> {
+    let file = std::fs::File::open(archive).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut entry = zip.by_name(crate::custom::SIDECAR).ok()?;
+    let mut text = String::new();
+    entry
+        .by_ref()
+        .take(64 << 10)
+        .read_to_string(&mut text)
+        .ok()?;
+    crate::custom::Manifest::parse(&text)
+}
+
 /// Runs `get` (which brings the new files) with `old` set aside, not deleted, until it worked;
 /// if it fails they're put back.
 fn replacing<T>(old: &[PathBuf], get: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
