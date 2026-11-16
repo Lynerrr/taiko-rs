@@ -82,6 +82,65 @@ fn both_rims_at_once_ten_times_turn_the_main_menu_over() {
 }
 
 #[test]
+fn the_menu_s_stray_note_never_takes_a_button_s_click() {
+    // The main menu as it draws over a playing song: tests have no music, so its notes are
+    // given to it, and the animations it needs are on.
+    render::edit_frame_theme(|t| t.animations = true);
+    let notes: Vec<crate::menu_notes::Ghost> = (0..20_000)
+        .map(|i| crate::menu_notes::Ghost {
+            time: f64::from(i) * 120.0,
+            kat: i % 3 == 1,
+            big: i % 16 == 0,
+        })
+        .collect();
+    let mut menu = menu::Menu::new();
+    let mut eggs = crate::eggs::MenuEggs::new(3);
+    eggs.stray.come_now();
+    let (mut caught, mut seen) = (0, 0);
+    for k in 0..200_000 {
+        let time = f64::from(k) * 16.0;
+        let mut c = crate::hit::Canvas::default();
+        c.clear(WIDTH);
+        c.dt_ms = 16.0;
+        let frame = menu::Frame {
+            beat: Some((time % 500.0, 500.0)),
+            kiai: false,
+            ghosts: Some(crate::menu_notes::View::of(&notes, time)),
+            lane_dim: 0.0,
+            song: Some("Artist - Title"),
+            maps: 1,
+            paused: false,
+            session: (0.0, 0.0),
+            glitch: false,
+        };
+        menu.draw(&mut c, &frame, &mut eggs);
+        let Some(gold) = c.hits.iter().position(|h| h.hit == Hit::StrayNote) else {
+            continue;
+        };
+        seen += 1;
+        let [x, y, w, h] = c.hits[gold].rect;
+        for other in c.hits.iter().filter(|o| o.hit != Hit::StrayNote) {
+            let [ox, oy, ow, oh] = other.rect;
+            assert!(
+                x >= ox + ow || ox >= x + w || y >= oy + oh || oy >= y + h,
+                "the gold note at {:?} lies over {:?}",
+                c.hits[gold].rect,
+                other.hit
+            );
+        }
+        // Clicked a few frames after it can be: a player's reaction.
+        if seen % 20 == 0 {
+            caught += 1;
+            assert_eq!(eggs.catch_stray(), caught == 3, "catch {caught}");
+            if caught == 3 {
+                return;
+            }
+        }
+    }
+    panic!("only {caught} gold notes caught");
+}
+
+#[test]
 fn ten_quick_clicks_on_the_logo_break_it() {
     let mut now = Instant::now();
     let (mut s, _songs) = on_menu("logo", &mut now);

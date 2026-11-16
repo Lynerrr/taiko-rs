@@ -1,5 +1,5 @@
 //! The main menu's easter eggs, for the secret medals (`ura`): the logo that falls apart when
-//! it's tapped too much, the stray note among the background notes that runs from the pointer,
+//! it's tapped too much, the gold note among the background notes that has to be clicked,
 //! and the menu that turns over when both rims are hit at once. They live as long as the game
 //! runs, across visits to the menu (`State::menu_eggs`), so the menu stays upside down.
 
@@ -32,19 +32,17 @@ const PAIR_GAP: Duration = Duration::from_secs(2);
 const TWITCH_MS: f32 = 520.0;
 const TURN_MS: f32 = 1100.0;
 
-/// The stray note: how long it takes to cross the screen, how long before it comes (the first
-/// time and again, ms of menu), its size, how often it has to be caught, how close the pointer
-/// may come before it runs, how fast it runs (units per ms), how long a hop takes, and how long
-/// it waits for the next catch before it leaves.
-const FLY_MS: f64 = 9000.0;
+/// The stray note: how long before it comes (the first time, and again after a miss or a burst;
+/// ms of menu), how soon the next one comes once one is caught, its size, how many in a row it
+/// takes, and how long it may take to show before it's given up on (no song, notes off).
 const FIRST_MS: (f64, f64) = (40_000.0, 120_000.0);
 const AGAIN_MS: (f64, f64) = (90_000.0, 240_000.0);
+const NEXT_MS: (f64, f64) = (1_500.0, 4_000.0);
 const STRAY_R: f32 = 13.0;
 const CATCHES: u32 = 3;
-const SHY: f32 = 90.0;
-const RUN: f32 = 0.17;
-const HOP_MS: f64 = 260.0;
-const BORED_MS: f64 = 8000.0;
+const LOST_MS: f64 = 20_000.0;
+/// How long a catch short of the last bursts (ms).
+const CATCH_MS: f64 = 350.0;
 /// The confetti a caught note bursts into: pieces and how long they last (ms).
 const CONFETTI: u32 = 48;
 const CONFETTI_MS: f64 = 1500.0;
@@ -74,11 +72,12 @@ pub struct MenuEggs {
 impl MenuEggs {
     pub fn new(seed: u32) -> MenuEggs {
         let mut stray = StrayNote {
-            state: Stray::Waiting { at: 0.0 },
+            state: Stray::Waiting { at: 0.0, caught: 0 },
             rng: seed | 1,
             pos: [0.0; 2],
+            gold: Default::default(),
         };
-        stray.wait(FIRST_MS, 0.0);
+        stray.wait(FIRST_MS, 0.0, 0);
         MenuEggs {
             clock: 0.0,
             logo: LogoEgg::default(),
@@ -99,21 +98,14 @@ impl MenuEggs {
         self.logo.draw(c, self.clock, x, y, size);
     }
 
-    /// After the menu drew everything: the stray note over it, the logo's hit area, and the
-    /// whole menu turned as the flip has it.
+    /// After the menu drew everything: the logo's hit area, the stray note's (where no button
+    /// lies) and its burst, and the whole menu turned as the flip has it.
     pub fn end(&mut self, c: &mut Canvas) {
         let [x, y, size] = crate::settings::BRAND_LOGO;
         c.hit(x, y, size, size, Hit::MenuLogo);
         let pivot = [c.width / 2.0, VIRTUAL_HEIGHT / 2.0];
         let angle = self.flip.angle(self.clock);
-        // The pointer as the turned menu sees it.
-        let (sin, cos) = (-angle).sin_cos();
-        let (mx, my) = (c.mouse.0 - pivot[0], c.mouse.1 - pivot[1]);
-        let mouse = [
-            pivot[0] + mx * cos - my * sin,
-            pivot[1] + mx * sin + my * cos,
-        ];
-        self.stray.draw(c, self.clock, mouse);
+        self.stray.draw(c, self.clock);
         if angle != 0.0 {
             c.turn_since(self.start, pivot, angle);
         }
@@ -324,26 +316,24 @@ impl FlipEgg {
 }
 
 enum Stray {
-    /// Not here; comes at this time.
-    Waiting { at: f64 },
-    /// Crossing the screen since `since` at height `y`.
-    Flying { since: f64, y: f32 },
-    /// Caught `caught` times and running from the pointer; `hop` is a jump away (when, from,
-    /// to), `since` the last catch.
-    Fleeing {
-        caught: u32,
-        since: f64,
-        hop: Option<(f64, [f32; 2], [f32; 2])>,
-    },
-    /// Burst into confetti at `at`.
-    Popped { at: f64 },
+    /// Not here; comes at this time, `caught` in a row so far.
+    Waiting { at: f64, caught: u32 },
+    /// One of the song's notes on a route, gold, since `since`; `seen` once it showed.
+    Riding { caught: u32, since: f64, seen: bool },
+    /// Caught at `at`, the `caught`th in a row; the last bursts into confetti.
+    Popped { at: f64, caught: u32 },
 }
 
+/// The stray note: now and then one of the song's notes riding the menu's routes turns gold
+/// (`menu_notes::Gold`). Clicked before it reaches the end of its route, it bursts and the next
+/// comes soon after on another; missed, the run starts over. Three in a row make the egg.
 pub struct StrayNote {
     state: Stray,
     rng: u32,
     /// Where it was last drawn.
     pos: [f32; 2],
+    /// Its note on the routes.
+    pub gold: crate::menu_notes::Gold,
 }
 
 impl StrayNote {
@@ -354,123 +344,133 @@ impl StrayNote {
         (self.rng >> 8) as f32 / (1u32 << 24) as f32
     }
 
-    fn wait(&mut self, (lo, hi): (f64, f64), now: f64) {
+    fn wait(&mut self, (lo, hi): (f64, f64), now: f64, caught: u32) {
         let at = now + lo + (hi - lo) * f64::from(self.random());
-        self.state = Stray::Waiting { at };
+        self.state = Stray::Waiting { at, caught };
+        self.gold = Default::default();
     }
 
     /// Whether it's on the screen to be clicked.
     #[cfg(test)]
     pub fn shown(&self) -> bool {
-        matches!(self.state, Stray::Flying { .. } | Stray::Fleeing { .. })
+        matches!(self.state, Stray::Riding { seen: true, .. }) && self.gold.at.is_some()
+    }
+
+    /// How many were caught in a row.
+    #[cfg(test)]
+    pub fn caught(&self) -> u32 {
+        match self.state {
+            Stray::Waiting { caught, .. }
+            | Stray::Riding { caught, .. }
+            | Stray::Popped { caught, .. } => caught,
+        }
     }
 
     /// Brings it in now (tests, and the next frame).
     #[cfg(test)]
     pub fn come_now(&mut self) {
-        self.state = Stray::Waiting { at: f64::MIN };
+        let caught = self.caught();
+        self.state = Stray::Waiting {
+            at: f64::MIN,
+            caught,
+        };
     }
 
     fn click(&mut self, now: f64) -> bool {
-        let caught = match self.state {
-            Stray::Flying { .. } => 1,
-            Stray::Fleeing { caught, .. } => caught + 1,
-            _ => return false,
+        let Stray::Riding {
+            caught, seen: true, ..
+        } = self.state
+        else {
+            return false;
         };
-        if caught >= CATCHES {
-            self.state = Stray::Popped { at: now };
-            return true;
+        if self.gold.at.is_none() {
+            return false;
         }
-        let from = self.pos;
-        let (angle, dist) = (self.random() * 2.0 * PI, 140.0 + 80.0 * self.random());
-        let to = [from[0] + angle.cos() * dist, from[1] + angle.sin() * dist];
-        self.state = Stray::Fleeing {
-            caught,
-            since: now,
-            hop: Some((now, from, to)),
-        };
-        false
+        let caught = caught + 1;
+        self.state = Stray::Popped { at: now, caught };
+        self.gold.shown = false;
+        caught == CATCHES
     }
 
-    fn draw(&mut self, c: &mut Canvas, now: f64, mouse: [f32; 2]) {
-        let (w, h) = (c.width, VIRTUAL_HEIGHT);
-        let inside = |p: [f32; 2]| [p[0].clamp(40.0, w - 40.0), p[1].clamp(70.0, h - 50.0)];
-        let mut look = -1.0;
-        let mut squash = 1.0;
+    /// After the routes were drawn this frame (`menu_notes::draw`), over the rest of the menu:
+    /// what it does next, its burst, and its hit area where no button lies.
+    fn draw(&mut self, c: &mut Canvas, now: f64) {
         match self.state {
-            Stray::Waiting { at } => {
+            Stray::Waiting { at, caught } => {
                 // It's all movement: with animations off it doesn't come.
                 if now >= at && render::animations() {
-                    let y = 110.0 + (h - 220.0) * self.random();
-                    self.state = Stray::Flying { since: now, y };
+                    let route = (self.random() * 3.0) as usize % 3;
+                    self.gold = crate::menu_notes::Gold {
+                        want: Some(route),
+                        ..Default::default()
+                    };
+                    self.state = Stray::Riding {
+                        caught,
+                        since: now,
+                        seen: false,
+                    };
                 }
-                return;
             }
-            Stray::Flying { since, y } => {
-                let t = (now - since) as f32;
-                if t >= FLY_MS as f32 {
-                    return self.wait(AGAIN_MS, now);
-                }
-                let x = w + 30.0 - (w + 60.0) * t / FLY_MS as f32;
-                self.pos = [x, y + (t / 520.0).sin() * 26.0];
-            }
-            Stray::Fleeing {
+            Stray::Riding {
                 caught,
                 since,
-                ref mut hop,
-            } => {
-                if now - since > BORED_MS {
-                    return self.wait(AGAIN_MS, now);
-                }
-                if let Some((at, from, to)) = *hop {
-                    let k = ((now - at) / HOP_MS).min(1.0) as f32;
-                    let to = inside(to);
-                    let arc = (k * PI).sin() * 40.0;
-                    self.pos = [
-                        from[0] + (to[0] - from[0]) * k,
-                        from[1] + (to[1] - from[1]) * k - arc,
-                    ];
-                    squash = 1.0 + 0.25 * (k * PI).sin();
-                    look = (to[0] - from[0]).signum();
-                    if k >= 1.0 {
-                        *hop = None;
-                    }
-                } else {
-                    let (dx, dy) = (self.pos[0] - mouse[0], self.pos[1] - mouse[1]);
-                    let d = dx.hypot(dy);
-                    if d < SHY && d > 0.01 {
-                        // Faster the more often it's been caught.
-                        let speed = RUN * (1.0 + 0.3 * caught as f32) * c.dt_ms;
-                        let moved =
-                            inside([self.pos[0] + dx / d * speed, self.pos[1] + dy / d * speed]);
-                        look = (moved[0] - self.pos[0]).signum();
-                        self.pos = moved;
+                ref mut seen,
+            } => match self.gold.at {
+                Some(at) => {
+                    *seen = true;
+                    self.pos = at;
+                    let r = STRAY_R + 6.0;
+                    let area = [at[0] - r, at[1] - r, 2.0 * r, 2.0 * r];
+                    // Only on the screen (its route starts past the right edge), and never
+                    // over a button: a click there is the button's.
+                    let on_screen = (0.0..c.width).contains(&at[0]);
+                    if on_screen && !c.hits.iter().any(|h| overlap(h.rect, area)) {
+                        c.hit(area[0], area[1], area[2], area[3], Hit::StrayNote);
                     }
                 }
-            }
-            Stray::Popped { at } => {
+                // Gone past the end of its route: missed, the run starts over.
+                None if *seen => self.wait(AGAIN_MS, now, 0),
+                // It never came: no song, or the notes are off.
+                None if now - since > LOST_MS => self.wait(AGAIN_MS, now, caught),
+                None => {}
+            },
+            Stray::Popped { at, caught } => {
                 let t = (now - at) as f32;
-                if t >= CONFETTI_MS as f32 {
-                    return self.wait(AGAIN_MS, now);
+                if caught < CATCHES {
+                    if t >= CATCH_MS as f32 {
+                        return self.wait(NEXT_MS, now, caught);
+                    }
+                    return burst(c, self.pos, t / CATCH_MS as f32);
                 }
-                return confetti(c, self.pos, t, at as u32);
+                if t >= CONFETTI_MS as f32 {
+                    return self.wait(AGAIN_MS, now, 0);
+                }
+                confetti(c, self.pos, t, at as u32);
             }
         }
-        let [x, y] = self.pos;
-        c.hit(
-            x - STRAY_R - 6.0,
-            y - STRAY_R - 6.0,
-            2.0 * (STRAY_R + 6.0),
-            2.0 * (STRAY_R + 6.0),
-            Hit::StrayNote,
-        );
-        draw_stray(c, x, y, now as f32, look, squash);
     }
+}
+
+/// Whether two rectangles (x, y, w, h) overlap.
+fn overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+}
+
+/// A catch short of the last: a gold ring spreading out, `k` of the way.
+fn burst(c: &mut Canvas, [x, y]: [f32; 2], k: f32) {
+    c.ring(
+        x,
+        y,
+        STRAY_R + 22.0 * k,
+        rgba(GOLD, 1.0 - k),
+        3.0 * (1.0 - k) + 0.5,
+    );
+    c.glow(x, y, STRAY_R * (1.0 - k), 8.0, rgba(GOLD, 0.6 * (1.0 - k)));
 }
 
 /// The stray note: a gold don note with eyes looking where it goes, glinting, a few sparks
 /// behind it.
-fn draw_stray(c: &mut Canvas, x: f32, y: f32, now: f32, look: f32, squash: f32) {
+pub fn draw_stray(c: &mut Canvas, x: f32, y: f32, now: f32, look: f32, squash: f32) {
     let r = STRAY_R;
     for i in 0..4 {
         let k = i as f32 / 4.0;
@@ -786,30 +786,125 @@ mod tests {
         assert!((egg.angle(1e9) - PI).abs() < 1e-4);
     }
 
+    /// A frame of the menu at song time `time`: the routes of `notes`, then `buttons`, then
+    /// the eggs.
+    fn menu_frame(
+        eggs: &mut MenuEggs,
+        notes: &[crate::menu_notes::Ghost],
+        time: f64,
+        buttons: &[[f32; 4]],
+    ) -> Canvas {
+        let mut c = canvas(16.0);
+        eggs.begin(&c);
+        let view = crate::menu_notes::View::of(notes, time);
+        crate::menu_notes::draw(&mut c, &view, 0.0, 0.0, 0.0, 0, &mut eggs.stray.gold);
+        for (i, &[x, y, w, h]) in buttons.iter().enumerate() {
+            c.hit(x, y, w, h, Hit::MenuItem(i));
+        }
+        eggs.end(&mut c);
+        c
+    }
+
+    /// Frames from song time `*time` until the gold note can be clicked; None if it never can.
+    fn until_gold(
+        eggs: &mut MenuEggs,
+        notes: &[crate::menu_notes::Ghost],
+        time: &mut f64,
+    ) -> Option<Canvas> {
+        for _ in 0..2000 {
+            *time += 16.0;
+            let c = menu_frame(eggs, notes, *time, &[]);
+            if c.hits.iter().any(|h| h.hit == Hit::StrayNote) {
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    fn song() -> Vec<crate::menu_notes::Ghost> {
+        (0..4000)
+            .map(|i| crate::menu_notes::Ghost {
+                time: f64::from(i) * 150.0,
+                kat: i % 3 == 0,
+                big: false,
+            })
+            .collect()
+    }
+
     #[test]
-    fn the_stray_note_runs_until_caught_three_times_and_bursts() {
+    fn the_stray_note_is_caught_on_the_routes() {
         render::edit_frame_theme(|t| t.animations = true);
+        let notes = song();
         let mut eggs = MenuEggs::new(7);
-        let frame = |eggs: &mut MenuEggs| {
-            let mut c = canvas(16.0);
-            eggs.begin(&c);
-            eggs.end(&mut c);
-            c
-        };
+        let mut time = 0.0;
         assert!(!eggs.stray.shown());
         assert!(!eggs.catch_stray());
         eggs.stray.come_now();
-        frame(&mut eggs);
-        let c = frame(&mut eggs);
-        assert!(eggs.stray.shown());
-        assert!(c.hits.iter().any(|h| h.hit == Hit::StrayNote));
-        assert!(!eggs.catch_stray());
-        assert!(!eggs.catch_stray());
-        assert!(eggs.catch_stray());
-        assert!(!eggs.stray.shown());
-        let c = frame(&mut eggs);
+        for n in 1..=CATCHES {
+            let c = until_gold(&mut eggs, &notes, &mut time).expect("a gold note rides in");
+            assert!(eggs.stray.shown());
+            // It is one of the song's notes, where its route has it.
+            let (route, at) = eggs.stray.gold.note.unwrap();
+            assert!(route < 3);
+            assert!(notes.iter().any(|g| g.time == at));
+            let [x, y, w, _] = c
+                .hits
+                .iter()
+                .find(|h| h.hit == Hit::StrayNote)
+                .unwrap()
+                .rect;
+            assert!(x + w / 2.0 < c.width && x > 0.0 && y > 0.0, "on the screen");
+            assert_eq!(eggs.catch_stray(), n == CATCHES, "catch {n}");
+            assert!(!eggs.stray.shown());
+            assert!(!eggs.catch_stray(), "a burst one can't be caught again");
+        }
+        let c = menu_frame(&mut eggs, &notes, time, &[]);
         assert!(!c.hits.iter().any(|h| h.hit == Hit::StrayNote));
         assert!(c.shapes.len() >= CONFETTI as usize);
+    }
+
+    #[test]
+    fn the_stray_note_let_through_is_lost() {
+        render::edit_frame_theme(|t| t.animations = true);
+        let notes = song();
+        let mut eggs = MenuEggs::new(11);
+        let mut time = 0.0;
+        eggs.stray.come_now();
+        until_gold(&mut eggs, &notes, &mut time).unwrap();
+        assert!(!eggs.catch_stray());
+        assert_eq!(eggs.stray.caught(), 1);
+        until_gold(&mut eggs, &notes, &mut time).expect("the next comes soon");
+        // Left alone, it rides off the end of its route.
+        for _ in 0..1000 {
+            time += 16.0;
+            menu_frame(&mut eggs, &notes, time, &[]);
+        }
+        assert!(!eggs.stray.shown());
+        assert_eq!(eggs.stray.caught(), 0);
+    }
+
+    #[test]
+    fn the_stray_note_under_a_button_leaves_the_click_to_it() {
+        render::edit_frame_theme(|t| t.animations = true);
+        let notes = song();
+        let mut eggs = MenuEggs::new(5);
+        let mut time = 0.0;
+        eggs.stray.come_now();
+        until_gold(&mut eggs, &notes, &mut time).unwrap();
+        let everywhere = [0.0, 0.0, 854.0, VIRTUAL_HEIGHT];
+        let c = menu_frame(&mut eggs, &notes, time + 16.0, &[everywhere]);
+        assert!(eggs.stray.gold.at.is_some(), "still riding");
+        assert!(!c.hits.iter().any(|h| h.hit == Hit::StrayNote));
+    }
+
+    #[test]
+    fn the_stray_note_needs_the_menu_s_notes() {
+        render::edit_frame_theme(|t| t.animations = true);
+        let mut eggs = MenuEggs::new(9);
+        eggs.stray.come_now();
+        let mut time = 0.0;
+        assert!(until_gold(&mut eggs, &[], &mut time).is_none());
+        assert!(!eggs.catch_stray());
     }
 
     #[test]

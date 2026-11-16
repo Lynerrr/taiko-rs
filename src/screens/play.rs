@@ -596,12 +596,7 @@ impl Screen for PlayScreen {
                 }
                 // What the secret medals look for in a whole play.
                 if self.from.is_none() && !game.mods().unranked() {
-                    crate::ura::whole_play(
-                        &state.cfg,
-                        replay.accuracy,
-                        game.mods().has(mods::Mod::NoFail),
-                        e.path.parent(),
-                    );
+                    crate::ura::whole_play(&state.cfg, replay.accuracy);
                 }
                 // Whole plays go to the online leaderboards too, when logged in.
                 if self.from.is_none()
