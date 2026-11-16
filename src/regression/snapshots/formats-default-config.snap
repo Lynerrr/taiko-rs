@@ -67,6 +67,8 @@ check_updates = true
 resume_delay_ms = 1000
 # song select order: artist, title, difficulty, length, bpm, recently played, date added
 sort = artist
+# the collection song select shows (own:name or osu:name; empty: all songs)
+collection =
 kiai_effects = true
 # GREAT hits without their flash and label (only OKs and misses show)
 hide_great = true

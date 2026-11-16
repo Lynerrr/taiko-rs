@@ -341,6 +341,8 @@ pub struct Config {
     pub discord_app_id: String,
     /// Song select order (ui::SortMode name).
     pub sort: String,
+    /// The collection song select shows, as `own:<name>` or `osu:<name>` (empty: all songs).
+    pub collection: String,
     /// Countdown before play continues after the pause menu (ms).
     pub resume_delay_ms: f64,
     /// Menu animations (screen fades, sliding highlights, ...).
@@ -541,6 +543,7 @@ impl Default for Config {
             check_updates: true,
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
+            collection: String::new(),
             kiai_effects: true,
             menu_glitch: true,
             autoplay: crate::autoplay::Settings::default(),
@@ -1207,6 +1210,7 @@ impl Config {
                 "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
+                "collection" => cfg.collection = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
                 "menu_glitch" => cfg.menu_glitch = v != "false",
                 "autoplay_style" => {
@@ -1582,6 +1586,8 @@ impl Config {
              resume_delay_ms = {:.0}\n\
              # song select order: artist, title, difficulty, length, bpm, recently played, date added\n\
              sort = {}\n\
+             # the collection song select shows (own:name or osu:name; empty: all songs)\n\
+             collection = {}\n\
              kiai_effects = {}\n\
              # GREAT hits without their flash and label (only OKs and misses show)\n\
              hide_great = {}\n\
@@ -1655,6 +1661,7 @@ impl Config {
             self.check_updates,
             self.resume_delay_ms,
             self.sort,
+            self.collection,
             self.kiai_effects,
             self.hide_great,
             self.fail_restart,

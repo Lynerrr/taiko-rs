@@ -456,6 +456,7 @@ guide_seen = true
 check_updates = false
 resume_delay_ms = 1500
 sort = title
+collection = own:Warm Up
 kiai_effects = false
 hide_great = false
 fail_restart = true
