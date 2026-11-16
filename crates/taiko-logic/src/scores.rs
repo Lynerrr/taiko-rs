@@ -12,10 +12,10 @@ use crate::mods::{HalfRule, Mods};
 use crate::pp;
 use crate::sim::{Game, Mash, Scoring, Settings, Song, Stats, WindowRule, Windows};
 
-/// 5: judged with osu!'s hit windows, whole ms less a half (below: the OD's exact widths, see
+/// 6: scored with `Scoring::Lazer` (osu!lazer's taiko scoring and HP rules). 5: judged with osu!'s hit windows, whole ms less a half (below: the OD's exact widths, see
 /// `WindowRule`). 4: Half by `HalfRule::OnTheBeat`. 3: scored with `Scoring::Standard` (below:
 /// `Classic`). 2: judged with `Mash::Nearest` (1: with the `anti_mash` setting).
-const REPLAY_VERSION: u32 = 5;
+const REPLAY_VERSION: u32 = 6;
 
 /// A recorded play: the map time each drum key was judged at, plus what the judging depended
 /// on. Playing the inputs back through the same map reproduces the play exactly.
@@ -217,7 +217,9 @@ impl Replay {
 
     /// How its score was worked out.
     pub fn scoring(&self) -> Scoring {
-        if self.version >= 3 {
+        if self.version >= 6 {
+            Scoring::Lazer
+        } else if self.version >= 3 {
             Scoring::Standard
         } else {
             Scoring::Classic
@@ -369,7 +371,7 @@ mod replay_tests {
         let map = beatmap::calibration_map(500.0, 0, 64);
         let mut g = Game::new(map.clone(), Arc::new(Silent(1.0)), None);
         g.set_mash(Mash::Nearest);
-        g.set_scoring(Scoring::Standard);
+        g.set_scoring(Scoring::Lazer);
         g.set_window_rule(WindowRule::Osu);
         let times: Vec<f64> = g.map().notes.iter().map(|n| n.time).collect();
         let mut inputs = Vec::new();
