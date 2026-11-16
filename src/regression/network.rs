@@ -2041,6 +2041,76 @@ fn lobby_preview_stays(tag: &str, defense: Option<net::Defense>) {
 }
 
 #[test]
+fn the_mapguessr_host_types_the_rounds_and_right_clicks_them_down() {
+    let room = FakeRoom::new();
+    let (mut s, _songs, mut now) = guest("guessr-rounds", maps::basics(), &room);
+    room.send(&ServerMsg::Room {
+        players: vec![player(2, "me", true), player(1, "guest", false)],
+        map: None,
+        in_match: false,
+        mapguessr: true,
+        common: None,
+        team: None,
+        locked: false,
+        slots: 16,
+    });
+    assert!(wait_for(&mut s, &mut now, |s| {
+        s.guessr.is_some() && s.mp.as_ref().is_some_and(|m| m.mapguessr && m.is_host())
+    }));
+    let rounds = |s: &State| s.guessr.as_ref().map(|g| g.rounds);
+    assert_eq!(rounds(&s), Some(mapguessr::DEFAULT_ROUNDS));
+
+    press(&mut s, KeyCode::Digit2, now);
+    assert_eq!(rounds(&s), Some(2), "the first digit starts a new number");
+    press(&mut s, KeyCode::Numpad5, now);
+    assert_eq!(rounds(&s), Some(25), "the next goes on its end");
+    press(&mut s, KeyCode::Digit7, now);
+    assert_eq!(rounds(&s), Some(7), "past the most, a digit starts again");
+    press(&mut s, KeyCode::Digit0, now);
+    assert_eq!(
+        rounds(&s),
+        Some(7),
+        "70 is past the most and 0 rounds is none: it stays 7"
+    );
+    press(&mut s, KeyCode::Backspace, now);
+    assert_eq!(
+        rounds(&s),
+        Some(1),
+        "Backspace takes the last digit, down to 1"
+    );
+    press(&mut s, KeyCode::Digit0, now);
+    assert_eq!(rounds(&s), Some(10), "1 then 0 is 10");
+    press(&mut s, KeyCode::BracketRight, now);
+    press(&mut s, KeyCode::Digit3, now);
+    assert_eq!(
+        rounds(&s),
+        Some(3),
+        "after another key, a digit starts a new number"
+    );
+
+    // The rounds button: a left click counts up, a right click down.
+    now += Duration::from_millis(16);
+    frame(&mut s, now);
+    let button = s
+        .hits
+        .iter()
+        .find(|h| h.hit == crate::hit::Hit::Key(KeyCode::BracketRight))
+        .map(|h| h.rect)
+        .expect("the host has a rounds button");
+    let k = s.window_h / crate::render::VIRTUAL_HEIGHT;
+    s.mouse = (
+        f64::from((button[0] + button[2] / 2.0) * k),
+        f64::from((button[1] + button[3] / 2.0) * k),
+    );
+    s.right_button(true);
+    s.right_button(false);
+    assert_eq!(rounds(&s), Some(2), "a right click counts down");
+    s.mouse_button(true, None);
+    s.mouse_button(false, None);
+    assert_eq!(rounds(&s), Some(3), "a left click counts up");
+}
+
+#[test]
 fn a_lobby_map_previews_and_goes_back_to_the_lobby() {
     lobby_preview_stays("mp-preview", None);
 }
