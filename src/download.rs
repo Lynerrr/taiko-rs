@@ -969,6 +969,199 @@ pub fn start_custom_update(set: SetInfo, folder: PathBuf) -> Job {
     }
 }
 
+/// What installing website set `set` says of it (`custom::store::Install`).
+fn custom_install(set: &SetInfo, folder: Option<PathBuf>) -> crate::custom::store::Install {
+    let custom = set.custom.clone().unwrap_or_default();
+    crate::custom::store::Install {
+        id: set.id,
+        version: (custom.version > 0).then_some(custom.version),
+        updated: (custom.updated > 0).then_some(custom.updated),
+        origin: Some(crate::custom::Origin::Site),
+        name: set.folder_name(),
+        folder,
+    }
+}
+
+/// Downloads website set `set` (or takes the archive its preview fetched) and installs it whole
+/// into taiko.rs's own custom maps folder `custom` (`custom::store::install`), on a background
+/// thread: a first download, or (`update`) its newer version over the folder that has it
+/// (`into`, else the one holding the set). A failed download leaves the folder as it was. The
+/// job reports the set's folder.
+pub fn start_custom(set: SetInfo, custom: PathBuf, update: Option<PathBuf>) -> Job {
+    let (tx, rx) = mpsc::channel();
+    let done = Arc::new(AtomicU64::new(0));
+    let total = Arc::new(AtomicU64::new(0));
+    let (d, t) = (done.clone(), total.clone());
+    let cancel = Arc::new(AtomicBool::new(false));
+    let stop = cancel.clone();
+    let cached = crate::custom::cached_archive(&set);
+    let url = crate::custom::download_url(set.id);
+    let install = custom_install(&set, update.clone());
+    let update = update.is_some();
+    std::thread::spawn(move || {
+        let result = (|| {
+            if let Some(archive) = cached {
+                return crate::custom::store::install(&custom, &archive, &install);
+            }
+            // Not to be tried again (tests reach no website).
+            crate::offline::url(&url).map_err(|e| format!("taiko.rs: {e}"))?;
+            let dir = crate::custom::store::set_versions(&custom, install.id);
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let archive = dir.join("download.rsz.part");
+            let mut error = String::new();
+            for round in 0..ROUNDS {
+                if round > 0 {
+                    let until = std::time::Instant::now() + Duration::from_secs(5 * round);
+                    while std::time::Instant::now() < until && !stop.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+                if stop.load(Ordering::Relaxed) {
+                    let _ = std::fs::remove_file(&archive);
+                    return Err(CANCELLED.into());
+                }
+                d.store(0, Ordering::Relaxed);
+                t.store(0, Ordering::Relaxed);
+                match download_to(&url, &archive, &d, &t, &stop) {
+                    Ok(()) => {
+                        let result = crate::custom::store::install(&custom, &archive, &install);
+                        let _ = std::fs::remove_file(&archive);
+                        return result;
+                    }
+                    Err((e, retry)) => {
+                        let _ = std::fs::remove_file(&archive);
+                        error = format!("taiko.rs: {e}");
+                        if !retry {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error)
+        })();
+        let _ = tx.send(result);
+    });
+    Job {
+        set,
+        done,
+        total,
+        rx,
+        maps: Vec::new(),
+        update,
+        cancel,
+        old_version: Arc::default(),
+    }
+}
+
+/// Installs website set `install` from archive `archive` (one opened in the game, which names
+/// the set) whole into taiko.rs's own custom maps folder `custom`, on a background thread, like
+/// [`import`]. `temporary`: delete the archive whatever happens.
+pub fn import_custom(
+    archive: PathBuf,
+    name: &str,
+    custom: PathBuf,
+    install: crate::custom::store::Install,
+    temporary: bool,
+    maps: Vec<u64>,
+) -> Job {
+    let set = SetInfo {
+        id: install.id,
+        title: name.to_string(),
+        ..SetInfo::default()
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = crate::custom::store::install(&custom, &archive, &install);
+        if temporary || result.is_ok() {
+            let _ = std::fs::remove_file(&archive);
+        }
+        let _ = tx.send(result);
+    });
+    Job {
+        set,
+        done: Arc::default(),
+        total: Arc::default(),
+        rx,
+        maps,
+        update: false,
+        cancel: Arc::default(),
+        old_version: Arc::default(),
+    }
+}
+
+/// Where a lobby map we don't have comes from: the website for a taiko.rs custom map
+/// (`custom_set` names its set by the map's hash), else the osu! set its ID names, else the
+/// mirrors' set with its title and difficulty.
+pub(crate) fn lobby_set(
+    m: &net::MapInfo,
+    custom_set: impl FnOnce(u64) -> Option<u32>,
+) -> Result<SetInfo, String> {
+    let set = |id, custom| SetInfo {
+        id,
+        artist: m.artist.clone(),
+        title: m.title.clone(),
+        custom,
+        ..SetInfo::default()
+    };
+    if let Some(id) = custom_set(m.hash) {
+        return Ok(set(id, Some(CustomSet::default())));
+    }
+    if let Some(id) = m.set_id {
+        return Ok(set(id, None));
+    }
+    search(
+        &format!("{} {}", m.artist, m.title),
+        Category::Any,
+        SortKey::Relevance,
+        true,
+        0,
+    )
+    .and_then(|(sets, _)| {
+        sets.into_iter()
+            .find(|s| {
+                s.title.eq_ignore_ascii_case(&m.title)
+                    && s.diffs.iter().any(|d| d.version == m.version)
+            })
+            .ok_or_else(|| "not found on the mirrors".to_string())
+    })
+}
+
+/// Whether an archive is a taiko.rs custom set's: it has the website's marker
+/// (`custom::SIDECAR`) or a `.tko` chart (which only taiko.rs plays).
+pub fn is_custom_archive(archive: &Path) -> bool {
+    let Some(mut zip) = std::fs::File::open(archive)
+        .ok()
+        .and_then(|f| zip::ZipArchive::new(f).ok())
+    else {
+        return false;
+    };
+    (0..zip.len()).any(|i| {
+        zip.by_index_raw(i).is_ok_and(|e| {
+            let name = e
+                .name()
+                .map(|n| n.replace('\\', "/").to_ascii_lowercase())
+                .unwrap_or_default();
+            let file = name.rsplit('/').next().unwrap_or(&name).to_string();
+            file == crate::custom::SIDECAR || file.ends_with(".tko")
+        })
+    })
+}
+
+/// The manifest (`custom::SIDECAR`) an archive brings, if it has one: the website's archives of
+/// its sets do.
+pub fn archive_manifest(archive: &Path) -> Option<crate::custom::Manifest> {
+    let file = std::fs::File::open(archive).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut entry = zip.by_name(crate::custom::SIDECAR).ok()?;
+    let mut text = String::new();
+    entry
+        .by_ref()
+        .take(64 << 10)
+        .read_to_string(&mut text)
+        .ok()?;
+    crate::custom::Manifest::parse(&text)
+}
+
 /// Runs `get` (which brings the new files) with `old` set aside, not deleted, until it worked;
 /// if it fails they're put back.
 fn replacing<T>(old: &[PathBuf], get: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
@@ -2010,6 +2203,7 @@ pub fn receive(
     total: u64,
     map: u64,
     songs: PathBuf,
+    custom: PathBuf,
 ) -> (Job, Sender<Option<Vec<u8>>>) {
     let (feed, parts) = mpsc::channel::<Option<Vec<u8>>>();
     let (tx, rx) = mpsc::channel();
@@ -2040,9 +2234,17 @@ pub fn receive(
             drop(file);
             let result = holds_map(&archive, map).and_then(|_| {
                 // In a folder of its own: what the host sent doesn't touch what's there. Only a
-                // set's kinds of file: the host is just another player.
-                let dest = free_folder(&songs, &name);
-                extract_keeping(&archive, &dest, &is_set_file).map(|_| dest)
+                // set's kinds of file: the host is just another player. A taiko.rs custom set goes
+                // into taiko.rs's own folder, an osu! set into osu!'s Songs folder.
+                let own = is_custom_archive(&archive);
+                let root = if own { &custom } else { &songs };
+                std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+                let dest = free_folder(root, &name);
+                extract_keeping(&archive, &dest, &is_set_file)?;
+                if own {
+                    crate::custom::mark_origin(&dest, crate::custom::Origin::Lobby);
+                }
+                Ok(dest)
             });
             let _ = std::fs::remove_file(&archive);
             result
@@ -2075,6 +2277,7 @@ pub fn import(
     songs: PathBuf,
     temporary: bool,
     maps: Vec<u64>,
+    origin: Option<crate::custom::Origin>,
 ) -> Job {
     let name = safe_folder_name(name);
     let set = SetInfo {
@@ -2101,7 +2304,11 @@ pub fn import(
             .map_err(|e| e.to_string())
             .and_then(|_| {
                 let dest = songs.join(&name);
-                extract(&archive, &dest).map(|_| dest)
+                extract(&archive, &dest)?;
+                if let Some(origin) = origin {
+                    crate::custom::mark_origin(&dest, origin);
+                }
+                Ok(dest)
             });
         if temporary || result.is_ok() {
             let _ = std::fs::remove_file(&archive);
@@ -2545,6 +2752,58 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_sets_archive_is_told_by_its_marker_or_a_tko() {
+        let (dir, osu) = a_zip(
+            "kind-osu",
+            &[("a [Oni].osu", b"osu"), ("audio.mp3", b"mp3")],
+        );
+        assert!(!is_custom_archive(&osu));
+        assert_eq!(archive_manifest(&osu), None);
+        let (_, tko) = a_zip("kind-tko", &[("a [Oni].TKO", b"tko")]);
+        assert!(is_custom_archive(&tko));
+        let (_, marked) = a_zip(
+            "kind-marked",
+            &[
+                ("a [Oni].osu", b"osu"),
+                (crate::custom::SIDECAR, b"{\"id\": 12, \"version\": 3}"),
+            ],
+        );
+        assert!(is_custom_archive(&marked));
+        let m = archive_manifest(&marked).unwrap();
+        assert_eq!((m.id, m.version), (Some(12), Some(3)));
+        std::fs::write(dir.join("not.zip"), "x").unwrap();
+        assert!(!is_custom_archive(&dir.join("not.zip")));
+    }
+
+    #[test]
+    fn a_custom_lobby_map_comes_from_the_website_not_the_osu_set_its_id_names() {
+        let m = net::MapInfo {
+            hash: 0x4afe_7841_b490_d3f8,
+            artist: "KNOWER".into(),
+            title: "Time Traveler".into(),
+            version: "Inner Oni".into(),
+            rate: 1.0,
+            from: None,
+            // A custom map made from osu! set 622136 keeps its ID.
+            set_id: Some(622_136),
+            mods: Vec::new(),
+            multiverse: None,
+            shapeshift: None,
+            seed: None,
+            defense: None,
+            stats: None,
+            host_mods: false,
+        };
+        let site = lobby_set(&m, |h| (h == m.hash).then_some(12)).unwrap();
+        assert_eq!(site.id, 12);
+        assert!(site.custom.is_some(), "the website's set 12");
+        // A map the website doesn't know: the osu! set, as before.
+        let osu = lobby_set(&m, |_| None).unwrap();
+        assert_eq!(osu.id, 622_136);
+        assert!(osu.custom.is_none());
+    }
+
+    #[test]
     fn unpacking_stops_at_the_limit_and_leaves_nothing() {
         let (dir, archive) = a_zip(
             "limit",
@@ -2961,7 +3220,7 @@ mod tests {
             .unwrap();
         zip.write_all(b"map").unwrap();
         zip.finish().unwrap();
-        let unpacked = import(good.clone(), "good", songs.clone(), false, Vec::new())
+        let unpacked = import(good.clone(), "good", songs.clone(), false, Vec::new(), None)
             .rx
             .recv()
             .unwrap()
@@ -2972,16 +3231,23 @@ mod tests {
         let broken = root.join("broken.osz");
         std::fs::write(&broken, b"not a zip").unwrap();
         assert!(
-            import(broken.clone(), "broken", songs.clone(), false, Vec::new())
-                .rx
-                .recv()
-                .unwrap()
-                .is_err()
+            import(
+                broken.clone(),
+                "broken",
+                songs.clone(),
+                false,
+                Vec::new(),
+                None
+            )
+            .rx
+            .recv()
+            .unwrap()
+            .is_err()
         );
         assert!(broken.exists());
         // A temporary copy doesn't stay around either way.
         assert!(
-            import(broken.clone(), "broken", songs, true, Vec::new())
+            import(broken.clone(), "broken", songs, true, Vec::new(), None)
                 .rx
                 .recv()
                 .unwrap()

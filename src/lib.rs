@@ -688,6 +688,10 @@ struct State {
     status_wait: Option<(u32, Instant)>,
     /// Looking up the lobby map on the mirrors (it had no set ID).
     lobby_lookup: Job<Result<download::SetInfo, String>>,
+    /// Looking for, or moving, taiko.rs's maps in osu!'s Songs folder.
+    custom_move: Job<screens::select::move_custom::MoveJob>,
+    /// This game looked for them once already.
+    custom_move_looked: bool,
     /// A score a `taiko-rs://` link asked for, until its results screen opens.
     score_link: Option<ScoreLink>,
     /// Which screen was drawn last and since when, for the fade between screens.
@@ -3072,6 +3076,9 @@ impl State {
             Item::SkinFolder | Item::CustomFolder => {
                 tr!("Enter to open", "Enterで開く", "Enter — открыть").into()
             }
+            Item::MoveCustomMaps | Item::MoveCustomBack => {
+                tr!("Enter to move", "Enterで移動", "Enter — перенести").into()
+            }
             Item::Accent => render::accent_name(c.accent),
             Item::AccentHue => format!("#{:06x}", c.accent),
             Item::NoteColours => c.note_colours.label().into(),
@@ -3395,7 +3402,9 @@ impl State {
                 self.load_skin();
             }
             // Acts on Enter in `settings_key`.
-            Item::SkinFolder | Item::CustomFolder => return,
+            Item::SkinFolder | Item::CustomFolder | Item::MoveCustomMaps | Item::MoveCustomBack => {
+                return;
+            }
             Item::CalibrationBpm => {
                 let (lo, hi) = calibrate::BPM_RANGE;
                 self.cfg.calibration_bpm = (self.cfg.calibration_bpm + 5.0 * d).clamp(lo, hi);
@@ -4304,7 +4313,7 @@ impl State {
             Ok(()) => {
                 self.cfg.data_folder = m.to;
                 config::set_data_folder(self.cfg.data_folder.clone());
-                self.custom_dir = config::custom_dir();
+                self.set_custom_dir(config::custom_dir());
                 self.cfg.save();
                 let _ = self.set_songs_folder(self.cfg.songs_folder.clone());
                 let at = config::data_dir().map(|d| d.display().to_string()).unwrap_or_default();
@@ -4926,19 +4935,59 @@ impl State {
             self.toast(tr!("{name} is already in your songs", "{name}はもう曲の中にあります", "{name} уже есть среди ваших песен"; [] [name]));
             return;
         }
+        // A website set's archive (it names the set) goes into taiko.rs's own folder, whole,
+        // unless an older copy of it is in osu!'s Songs folder: that one gets its files.
+        let legacy_home = home.is_some_and(|d| !d.starts_with(&self.custom_dir));
+        let own_home = home
+            .filter(|d| d.starts_with(&self.custom_dir))
+            .map(Path::to_path_buf);
+        // Any other taiko.rs custom set (a `.tko` in it, or our own `.rsz`) goes there too; a
+        // plain osu! archive into osu!'s Songs folder.
+        let own =
+            !legacy_home && (library::is_rsz(&archive) || download::is_custom_archive(&archive));
+        let root = if own {
+            self.custom_dir.clone()
+        } else {
+            self.songs_dir.clone()
+        };
         let folder = home
-            .filter(|d| d.parent() == Some(self.songs_dir.as_path()))
+            .filter(|d| d.parent() == Some(root.as_path()))
             .and_then(|d| d.file_name())
             .map(|n| n.to_string_lossy().into_owned());
         self.toast(
             tr!("importing {name}...", "{name}を取り込み中...", "добавляем {name}..."; [] [name]),
         );
+        if let Some(id) = download::archive_manifest(&archive)
+            .and_then(|m| m.id.map(|id| (id, m)))
+            .filter(|_| !legacy_home)
+        {
+            let (id, manifest) = id;
+            let install = custom::store::Install {
+                id,
+                version: manifest.version,
+                updated: manifest.updated,
+                origin: Some(custom::Origin::Site),
+                name: download::safe_folder_name(name),
+                folder: own_home,
+            };
+            let job = download::import_custom(
+                archive,
+                name,
+                self.custom_dir.clone(),
+                install,
+                temporary,
+                maps.into_iter().map(|m| m.1).collect(),
+            );
+            self.downloads.push(job);
+            return;
+        }
         let job = download::import(
             archive,
             folder.as_deref().unwrap_or(name),
-            self.songs_dir.clone(),
+            root,
             temporary,
             maps.into_iter().map(|m| m.1).collect(),
+            own.then_some(custom::Origin::Import),
         );
         self.downloads.push(job);
     }
@@ -5394,6 +5443,16 @@ impl State {
                 if item == Item::CustomFolder =>
             {
                 self.open_custom_folder()
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::MoveCustomMaps =>
+            {
+                self.look_for_custom_maps(true)
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
+                if item == Item::MoveCustomBack =>
+            {
+                self.move_custom_maps_back()
             }
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space if item.kind() == Kind::List => {
                 self.open_choices(item)
@@ -6923,7 +6982,9 @@ impl State {
         match press {
             Some((x, y, Some(hit::Hit::SongRow(row)))) => {
                 let skin = self.menu_has_skin(row);
+                let previous = self.menu_previous(row);
                 self.select.menu = Some(ui::SongMenu {
+                    previous,
                     row,
                     header: false,
                     skin,
@@ -6933,7 +6994,9 @@ impl State {
             }
             Some((x, y, Some(hit::Hit::SongHeader(row)))) => {
                 let skin = self.menu_has_skin(row);
+                let previous = self.menu_previous(row);
                 self.select.menu = Some(ui::SongMenu {
+                    previous,
                     row,
                     header: true,
                     skin,
@@ -6944,6 +7007,15 @@ impl State {
             Some((_, y, Some(hit::Hit::SongScrollbar))) => self.select.scroll_to(y, &self.library),
             _ => {}
         }
+    }
+
+    /// Whether the song menu opened on `row` offers going back to an older version of its set:
+    /// a custom set in taiko.rs's own folder with one kept (its website version, 0 unknown).
+    fn menu_previous(&self, row: usize) -> Option<u32> {
+        let e = self.select.row_map(row).and_then(|i| self.library.get(i))?;
+        let folder = e.path.parent().filter(|_| e.is_own())?;
+        custom::store::previous_version(&self.custom_dir, folder)
+            .map(|(_, m)| m.version.unwrap_or(0))
     }
 
     /// Whether the song menu opened on `row` offers turning the map's own skin off: it has one,
@@ -8153,15 +8225,15 @@ impl State {
         let due = self.custom_asked.is_none_or(|t| {
             self.scene.is_select() && now.saturating_duration_since(t) >= CUSTOM_REFRESH
         });
-        if due
-            && self.custom_call.is_idle()
-            && !self.library.is_empty()
-            && online::is_official(&self.cfg.online_server)
-        {
+        // taiko.rs's own folder is known by its manifests offline too; the rest (copies in osu!'s
+        // Songs folder) only with the website to ask.
+        let official = online::is_official(&self.cfg.online_server);
+        if due && self.custom_call.is_idle() && !self.library.is_empty() {
             self.custom_asked = Some(now);
             let mut folders: Vec<PathBuf> = self
                 .library
                 .iter()
+                .filter(|e| official || e.is_own())
                 .filter_map(|e| e.path.parent().map(Path::to_path_buf))
                 .collect();
             folders.sort();
@@ -8171,6 +8243,9 @@ impl State {
                     .into_iter()
                     .filter_map(|d| custom::sidecar_id(&d).map(|id| (d, id)))
                     .collect();
+                if !official {
+                    return (known, Vec::new(), None);
+                }
                 if known.is_empty() {
                     return (known, Vec::new(), Some(Vec::new()));
                 }
@@ -8213,8 +8288,16 @@ impl State {
                         }
                     }
                 }
-                self.select.custom_folder = folders;
-                self.select.custom_approved = approved.into_iter().collect();
+                if official {
+                    self.select.custom_folder = folders;
+                    self.select.custom_approved = approved.into_iter().collect();
+                } else {
+                    // Only taiko.rs's own folder was read.
+                    self.select
+                        .custom_folder
+                        .retain(|d, _| !library::is_own_map(d));
+                    self.select.custom_folder.extend(folders);
+                }
                 if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
                     self.select.refilter(&self.library);
                 }
@@ -8340,6 +8423,7 @@ impl State {
         self.poll_loved();
         self.poll_epic();
         self.poll_custom(Instant::now());
+        self.poll_custom_move();
         let menu = &mut self.mp_menu;
         if !menu.session_loaded {
             menu.session_loaded = true;
@@ -9667,7 +9751,8 @@ impl State {
     /// can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
-        let edited = self.select.edited.contains(&e.path);
+        // Never for a map in taiko.rs's own folder: osu! isn't asked about those.
+        let edited = self.select.edited.contains(&e.path) && !e.is_own();
         // As the song list has it (`Select::status_of`): an edited copy is nobody's.
         let custom = e
             .path
@@ -11911,6 +11996,11 @@ impl State {
             self.delete_ask_key(code, repeat);
             return;
         }
+        // And the offer to move taiko.rs's maps out of osu!'s Songs folder.
+        if self.select.moving.is_some() && self.scene.is_select() {
+            self.move_ask_key(code, repeat);
+            return;
+        }
         // Key capture must see every key, before any shortcut can claim it.
         if self.settings_ui.dropdown.is_some() && !repeat {
             let nav = matches!(
@@ -13019,8 +13109,11 @@ impl State {
                     .and_then(|d| self.select.custom_folder.get(d))
                     == Some(&set.id)
             });
-            if let (true, Some(entry)) = (older, entry) {
-                self.update_set(entry);
+            if let (true, Some(entry)) = (older, entry)
+                && let Some(folder) = self.library[entry].path.parent().map(Path::to_path_buf)
+            {
+                // What the download tab knows of it (its version, the preview's archive) goes along.
+                self.start_custom_update(set, folder);
                 return;
             }
         }
@@ -13035,8 +13128,12 @@ impl State {
             return;
         }
         self.browse.failed_jobs.retain(|(s, _)| !s.same(&set));
-        let dir = self.songs_dir.clone();
-        self.downloads.push(download::start(set, dir));
+        // A website set goes into taiko.rs's own folder, an osu! set into osu!'s Songs folder.
+        let job = match set.custom {
+            Some(_) => download::start_custom(set, self.custom_dir.clone(), None),
+            None => download::start(set, self.songs_dir.clone()),
+        };
+        self.downloads.push(job);
     }
 
     /// Download tab: goes to song select on an installed result's maps.
@@ -13081,6 +13178,13 @@ impl State {
     /// Downloads the set a map someone else has comes from (mirrors: by set id, else a search).
     fn fetch_map(&mut self, m: net::MapInfo) {
         if self.lobby_lookup.is_busy() {
+            return;
+        }
+        // A taiko.rs custom map comes from the website: one made from an osu! set keeps that
+        // set's ID, and the osu! set by it never has the map.
+        if online::is_official(&self.cfg.online_server) {
+            self.lobby_lookup = Job::spawn(move || download::lobby_set(&m, custom::set_of_map));
+            self.toast("looking for the map...".into());
             return;
         }
         match m.set_id {
@@ -13229,6 +13333,7 @@ impl State {
                 part.total,
                 m.hash,
                 self.songs_dir.clone(),
+                self.custom_dir.clone(),
             );
             // A transfer that's still going is given up for this one.
             self.stop_host_transfer();
@@ -13636,7 +13741,17 @@ impl State {
             }
         }
         match self.lobby_lookup.poll() {
-            Some(Ok(set)) => self.start_download(set),
+            Some(Ok(set)) => {
+                // The lobby's version isn't the one here: the website's goes over it.
+                if set.custom.is_some()
+                    && self.select.custom_folder.values().any(|&id| id == set.id)
+                {
+                    self.select
+                        .custom_updates
+                        .insert(set.id, ui::SetUpdate::Available);
+                }
+                self.start_download(set)
+            }
             Some(Err(e)) => self.toast(format!("download failed: {e}")),
             None => {}
         }
@@ -13895,6 +14010,12 @@ impl State {
             }),
             ..download::SetInfo::default()
         };
+        self.start_custom_update(set, folder);
+    }
+
+    /// Downloads website set `set`'s newest version over its `folder`.
+    fn start_custom_update(&mut self, set: download::SetInfo, folder: PathBuf) {
+        let id = set.id;
         if self.downloads.iter().any(|j| j.set.same(&set)) {
             return;
         }
@@ -13902,8 +14023,14 @@ impl State {
         self.select
             .custom_updates
             .insert(id, ui::SetUpdate::Updating);
-        self.downloads
-            .push(download::start_custom_update(set, folder));
+        // In taiko.rs's own folder the new version takes the old one's place whole; an older copy
+        // in osu!'s Songs folder gets the archive's files over its own.
+        let job = if folder.starts_with(&self.custom_dir) {
+            download::start_custom(set, self.custom_dir.clone(), Some(folder))
+        } else {
+            download::start_custom_update(set, folder)
+        };
+        self.downloads.push(job);
     }
 
     /// Where song select keeps whether `set` has a newer version: the website's sets apart from
@@ -13920,6 +14047,63 @@ impl State {
     /// place (indices stay valid), ones it no longer has leave the list, new ones join it.
     /// `old`: the mirrors had only an older version than osu!'s, so the set is still out of date.
     fn add_updated(&mut self, set: &download::SetInfo, folder: &std::path::Path, old: bool) {
+        self.reread_set(folder);
+        if old {
+            // Not "updated": song select would say so again on the next launch.
+            self.set_update_state(set, ui::SetUpdate::Available);
+            self.toast(format!(
+                "{} - {}: the mirrors only have an older version for now, try again later",
+                set.artist, set.title
+            ));
+        } else {
+            self.set_update_state(set, ui::SetUpdate::UpToDate);
+            self.toast(format!("updated {} - {}", set.artist, set.title));
+        }
+    }
+
+    /// Puts back the older version kept of library map `entry`'s custom set (in taiko.rs's own
+    /// folder); the version it replaces is kept instead.
+    fn previous_version(&mut self, entry: usize) {
+        let e = &self.library[entry];
+        let Some(folder) = e.path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let title = e.meta.title.clone();
+        if self
+            .downloads
+            .iter()
+            .any(|j| j.set.custom.is_some() && custom::sidecar_id(&folder) == Some(j.set.id))
+        {
+            return;
+        }
+        match custom::store::roll_back(&self.custom_dir, &folder) {
+            Ok(()) => {
+                self.reread_set(&folder);
+                // Whether the website has a newer one than this, asked again.
+                if let Some(id) = custom::sidecar_id(&folder) {
+                    self.select.custom_folder.insert(folder.clone(), id);
+                    self.select.custom_updates.remove(&id);
+                }
+                self.custom_asked = None;
+                self.select.refilter(&self.library);
+                self.toast(tr!(
+                    "{title}: back to the previous version",
+                    "{title}: 前のバージョンに戻しました",
+                    "{title}: возвращена прошлая версия"; [] [title]
+                ));
+            }
+            Err(e) => self.toast(tr!(
+                "{title}: couldn't go back ({e})",
+                "{title}: 戻せませんでした ({e})",
+                "{title}: не удалось вернуть ({e})"; [] [title, e]
+            )),
+        }
+    }
+
+    /// Set folder `folder` changed whole (updated, or an older version put back): its
+    /// difficulties in the library are read anew in place (indices stay valid), ones it no longer
+    /// has leave the list, new ones join it.
+    fn reread_set(&mut self, folder: &std::path::Path) {
         let mut fresh: std::collections::HashMap<PathBuf, Entry> =
             library::scan(&[folder.to_path_buf()], &AtomicUsize::new(0), &mut |_| {})
                 .into_iter()
@@ -13946,17 +14130,6 @@ impl State {
         let mut added: Vec<Entry> = fresh.into_values().collect();
         added.sort_by(|a, b| a.path.cmp(&b.path));
         self.append_maps(added);
-        if old {
-            // Not "updated": song select would say so again on the next launch.
-            self.set_update_state(set, ui::SetUpdate::Available);
-            self.toast(format!(
-                "{} - {}: the mirrors only have an older version for now, try again later",
-                set.artist, set.title
-            ));
-        } else {
-            self.set_update_state(set, ui::SetUpdate::UpToDate);
-            self.toast(format!("updated {} - {}", set.artist, set.title));
-        }
     }
 
     /// Song select goes to the maps just added, whatever its filters. During a game they're only
@@ -14558,6 +14731,7 @@ impl State {
             }
             Hit::UpdateSet(i) => self.update_set(i),
             Hit::DeleteMaps => self.confirm_delete(),
+            Hit::MoveCustomMaps => self.confirm_custom_move(),
             Hit::SongMenu(k) => {
                 let action = self
                     .select
@@ -14599,6 +14773,11 @@ impl State {
                 } else if action == Some(ui::MenuAction::UpdateSong) {
                     if let Some(i) = self.select.menu_map() {
                         self.update_set(i);
+                    }
+                    self.select.menu = None;
+                } else if action == Some(ui::MenuAction::PreviousVersion) {
+                    if let Some(i) = self.select.menu_map() {
+                        self.previous_version(i);
                     }
                     self.select.menu = None;
                 } else if action == Some(ui::MenuAction::Edit) {

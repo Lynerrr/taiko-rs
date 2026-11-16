@@ -74,6 +74,8 @@ pub(crate) fn state() -> State {
         online_server: "127.0.0.1:9".into(),
         // Song select's headings, which most of these tests are about (one list is the default).
         song_headings: true,
+        // No offer to move taiko.rs's maps over song select.
+        custom_move_asked: true,
         ..Config::default()
     };
     if let Some(a) = std::env::var("TAIKO_LAYOUT_ACCENT")
@@ -496,6 +498,7 @@ fn assert_every_screen_fits() {
         .collect();
     check(&mut s, "select updates", &mut out);
     s.select.menu = Some(ui::SongMenu {
+        previous: None,
         row: s.select.cursor(),
         header: true,
         skin: false,

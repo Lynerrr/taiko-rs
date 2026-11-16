@@ -36,14 +36,18 @@ text  235,240  taiko.rsの譜面フォルダ
 text  743,240  Enterで開く
 text   73,243  音声オフセット、調整
 text   73,269  オーディオ
-text  235,270  スクリーンショット
-text  743,270  Clipboard
+text  235,270  taiko.rsの譜面をosu!から移動
+text  743,270  Enterで移動
 text   73,283  音量、遅延
-text  233,306  譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。
+text  235,300  osu!に戻す
+text  743,300  Enterで移動
 text   73,309  グラフィック
 text   73,323  フレーム、画面
+text  235,330  スクリーンショット
+text  743,330  Clipboard
 text   73,349  スキン
 text   73,363  ノーツ、ヒット時の光、色
+text  233,366  譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。
 text   73,389  オンライン
 text   73,403  チャット、通知、Discord
 text   73,429  システム
@@ -73,5 +77,7 @@ hit   223,168   594x30   SettingRow(3)
 hit   223,198   594x30   SettingRow(4)
 hit   223,228   594x30   SettingRow(5)
 hit   223,258   594x30   SettingRow(6)
+hit   223,288   594x30   SettingRow(7)
+hit   223,318   594x30   SettingRow(8)
 hit   799,2      46x14   Changelog
 hit   747,2      46x14   Account

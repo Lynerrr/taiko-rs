@@ -72,6 +72,10 @@ pub enum Item {
     SongsFolder,
     DataFolder,
     CustomFolder,
+    /// Moves taiko.rs's maps out of osu!'s Songs folder (`custom::migrate`).
+    MoveCustomMaps,
+    /// Moves them back.
+    MoveCustomBack,
     MasterVolume,
     MusicVolume,
     UnfocusedVolume,
@@ -130,13 +134,15 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 140] = [
+pub const ITEMS: [(&str, Item); 142] = [
     ("LIBRARY", Item::SongsFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
     ("LIBRARY", Item::SongSelectLayout),
     ("LIBRARY", Item::DataFolder),
     ("LIBRARY", Item::CustomFolder),
+    ("LIBRARY", Item::MoveCustomMaps),
+    ("LIBRARY", Item::MoveCustomBack),
     ("LIBRARY", Item::Screenshots),
     ("GAMEPLAY", Item::ScrollSpeed),
     ("GAMEPLAY", Item::Rate),
@@ -633,6 +639,14 @@ impl Item {
                 "taiko.rsの譜面フォルダ",
                 "Папка карт taiko.rs"
             ),
+            Item::MoveCustomMaps => tr!(
+                "Move taiko.rs maps out of osu!",
+                "taiko.rsの譜面をosu!から移動",
+                "Перенести карты taiko.rs из osu!"
+            ),
+            Item::MoveCustomBack => {
+                tr!("Move them back to osu!", "osu!に戻す", "Вернуть их в osu!")
+            }
             Item::MasterVolume => tr!("Master volume", "全体の音量", "Общая громкость"),
             Item::MusicVolume => tr!("Music volume", "音楽の音量", "Громкость музыки"),
             Item::FxVolume => tr!("Hitsound volume", "ヒット音の音量", "Громкость хитсаундов"),
@@ -835,7 +849,9 @@ impl Item {
             | Item::KrokodilKoban
             | Item::SongSelectLayout
             | Item::SkinFolder
-            | Item::CustomFolder => Kind::Action,
+            | Item::CustomFolder
+            | Item::MoveCustomMaps
+            | Item::MoveCustomBack => Kind::Action,
         }
     }
 
@@ -1307,6 +1323,16 @@ impl Item {
                 "Enter: open the folder of taiko.rs's own maps (custom sets from the website, your editor maps), kept apart from osu!'s Songs folder.",
                 "Enter: taiko.rs独自の譜面 (サイトのカスタムセット、エディターの譜面) のフォルダを開く。osu!のSongsフォルダとは別です。",
                 "Enter: открыть папку карт самого taiko.rs (кастомные сеты с сайта, карты из редактора), отдельно от папки Songs osu!."
+            ),
+            Item::MoveCustomMaps => tr!(
+                "Enter: move the website's custom sets, editor maps and .tko sets an older taiko.rs put in osu!'s Songs folder into the taiko.rs maps folder. osu!'s own sets stay; scores and replays follow.",
+                "Enter: 古いtaiko.rsがosu!のSongsフォルダに置いたカスタムセット、エディターの譜面、.tkoセットをtaiko.rsの譜面フォルダに移動します。osu!のセットはそのまま、スコアとリプレイはついてきます。",
+                "Enter: перенести кастомные сеты с сайта, карты из редактора и сеты .tko, которые старый taiko.rs положил в папку Songs osu!, в папку карт taiko.rs. Сеты osu! остаются, рекорды и реплеи переезжают вместе с картами."
+            ),
+            Item::MoveCustomBack => tr!(
+                "Enter: move what was moved out of osu!'s Songs folder back there.",
+                "Enter: osu!のSongsフォルダから移動したものを元に戻します。",
+                "Enter: вернуть перенесённое из папки Songs osu! обратно."
             ),
             Item::SkinFolder => tr!(
                 "Enter: open taiko.rs's Skins folder. Drop .osk files there, then pick them above.",

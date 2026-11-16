@@ -10,6 +10,8 @@ use crate::download::{CustomSet, Diff, SetInfo};
 use crate::online::WEBSITE;
 
 pub mod approved;
+pub mod migrate;
+pub mod store;
 
 /// The file in a map's folder that keeps its number on the server.
 pub const SIDECAR: &str = "taiko-rs.custom";
@@ -69,23 +71,132 @@ pub fn page_url(id: u32) -> String {
     format!("{WEBSITE}/c/{id}")
 }
 
-/// The set number the folder was sent as, if it was.
-pub fn sidecar_id(folder: &Path) -> Option<u32> {
-    let text = std::fs::read_to_string(folder.join(SIDECAR)).ok()?;
-    serde_json::from_str::<serde_json::Value>(&text)
-        .ok()?
-        .get("id")?
-        .as_u64()
-        .and_then(|id| u32::try_from(id).ok())
+/// Where a set in taiko.rs's own custom maps folder came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    /// Downloaded from the website (or its archive opened).
+    Site,
+    /// Made in the editor here.
+    Local,
+    /// A guest's copy of a collab mapping session's set.
+    Collab,
+    /// Sent by a lobby host.
+    Lobby,
+    /// Taken from an archive opened in the game.
+    Import,
 }
 
-pub fn write_sidecar(folder: &Path, id: u32) {
-    let _ = std::fs::write(folder.join(SIDECAR), format!("{{\"id\": {id}}}\n"));
+/// What `SIDECAR` says of its folder. Version 1 (what the website puts in its archives, and older
+/// clients wrote) is `{"id": N}` only; every other field is optional, so both read the same and
+/// what a reader doesn't know of is kept when it writes.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Manifest {
+    /// The set's number on the website; none for a set never sent there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<u32>,
+    /// The website's version of the set this folder holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    /// Seconds since 1970 of that version's upload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+    /// The osu! set it was made from, if any (for show: it is never asked about).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub based_on: Option<u32>,
+    /// The charts the install brought, by file name, with their content hash (`net::map_hash`,
+    /// 16 hex digits). A chart that isn't here is the player's own.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub files: std::collections::BTreeMap<String, String>,
+    /// Seconds since 1970 of the install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed: Option<u64>,
+    /// Files of the player's own carried over from an older version (paths in the folder).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own: Vec<String>,
+    /// Fields of a newer client, kept as they are.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Manifest {
+    /// The manifest in `folder`, if it has one that can be read.
+    pub fn read(folder: &Path) -> Option<Manifest> {
+        Manifest::parse(&std::fs::read_to_string(folder.join(SIDECAR)).ok()?)
+    }
+
+    pub fn parse(text: &str) -> Option<Manifest> {
+        serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
+    }
+
+    /// Writes it into `folder` whole (through a temporary file, so a crash never leaves half a
+    /// manifest).
+    pub fn write(&self, folder: &Path) -> std::io::Result<()> {
+        let mut text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        text.push('\n');
+        let part = folder.join(format!("{SIDECAR}.part"));
+        std::fs::write(&part, text)?;
+        std::fs::rename(&part, folder.join(SIDECAR))
+    }
+
+    /// The hash recorded for chart `name`, if the install brought it.
+    pub fn file_hash(&self, name: &str) -> Option<u64> {
+        u64::from_str_radix(self.files.get(name)?, 16).ok()
+    }
+
+    /// Records chart `name` with content hash `hash` as one the install brought.
+    pub fn add_file(&mut self, name: &str, hash: u64) {
+        self.files.insert(name.to_string(), format!("{hash:016x}"));
+    }
+}
+
+/// The set number the folder was sent as, if it was.
+pub fn sidecar_id(folder: &Path) -> Option<u32> {
+    Manifest::read(folder)?.id
+}
+
+/// Records where set folder `folder` came from, unless its manifest says so already (a lobby
+/// host's copy keeps the website number its manifest has).
+pub fn mark_origin(folder: &Path, origin: Origin) {
+    let mut m = Manifest::read(folder).unwrap_or_default();
+    if m.origin.is_none() {
+        m.origin = Some(origin);
+        m.installed.get_or_insert_with(now_secs);
+        let _ = m.write(folder);
+    }
+}
+
+/// Records that `folder` was sent as version `sent.version` of website set `sent.id`, with its
+/// charts `charts` (file names) as they are now.
+pub fn mark_sent(folder: &Path, sent: &Sent, charts: &[String]) {
+    let mut m = Manifest::read(folder).unwrap_or_default();
+    m.id = Some(sent.id);
+    m.version = Some(sent.version);
+    m.origin.get_or_insert(Origin::Local);
+    let now = now_secs();
+    m.updated = Some(now);
+    m.installed = Some(now);
+    m.files.clear();
+    for name in charts {
+        if let Ok(bytes) = std::fs::read(folder.join(name)) {
+            m.add_file(name, crate::net::map_hash(&bytes));
+        }
+    }
+    let _ = m.write(folder);
+}
+
+/// Seconds since 1970.
+pub fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// The marker's `deleted` list: content hashes of the difficulties the player deleted from the
 /// set (as 16 hex digits).
-const DELETED_KEY: &str = "deleted";
+pub(crate) const DELETED_KEY: &str = "deleted";
 
 /// Notes in the folder's marker (if it has one) that the player deleted the difficulty with
 /// content hash `hash`: the website still having it is no reason to call the set outdated and
@@ -437,6 +548,12 @@ fn preview_dir(set: &SetInfo) -> PathBuf {
         .join(format!("c{}-v{version}", set.id))
 }
 
+/// Where a preview of this version of the set keeps its archive (tests put one there).
+#[cfg(test)]
+pub fn preview_archive(set: &SetInfo) -> PathBuf {
+    preview_dir(set).join("set.osz")
+}
+
 /// The archive a preview of this version of the set already fetched, if there is one: the
 /// download takes it instead of asking the website again.
 pub fn cached_archive(set: &SetInfo) -> Option<PathBuf> {
@@ -467,6 +584,32 @@ pub fn fetch_preview(set: &SetInfo) -> Result<PathBuf, String> {
     crate::download::unpack(&archive, &unpacking)?;
     std::fs::rename(&unpacking, &maps).map_err(|e| e.to_string())?;
     Ok(maps)
+}
+
+/// The website's custom set that has (or had, in an older version) the difficulty with content
+/// hash `hash`; None when it's none of them, or the website can't be asked.
+pub fn set_of_map(hash: u64) -> Option<u32> {
+    crate::offline::internet().ok()?;
+    let mut reply = ureq::get(format!("{WEBSITE}/api/custom/status?hashes={hash:x}"))
+        .config()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .call()
+        .ok()?;
+    status_set(&reply.body_mut().read_to_string().ok()?, hash)
+}
+
+/// Of `/api/custom/status`'s answer (`{"<hex hash>": {"id": N, ...}}`), the set map `hash` is in.
+fn status_set(text: &str, hash: u64) -> Option<u32> {
+    let found: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(text).ok()?;
+    found
+        .iter()
+        .find(|(k, _)| u64::from_str_radix(k, 16).ok() == Some(hash))?
+        .1
+        .get("id")?
+        .as_u64()
+        .and_then(|id| u32::try_from(id).ok())
 }
 
 /// A custom set as the website has it now.
@@ -543,6 +686,15 @@ pub fn outdated(folder: &Path, site: &SiteSet) -> bool {
         .collect();
     if wanted.is_empty() {
         return false;
+    }
+    // Installed (or sent) whole: the version it is is the charts its manifest lists.
+    if let Some(m) = Manifest::read(folder).filter(|m| !m.files.is_empty()) {
+        let have: Vec<u64> = m
+            .files
+            .values()
+            .filter_map(|h| u64::from_str_radix(h, 16).ok())
+            .collect();
+        return site.hashes.iter().any(|h| !have.contains(h));
     }
     let Ok(dir) = std::fs::read_dir(folder) else {
         return false;
@@ -632,6 +784,13 @@ mod tests {
         text
     }
 
+    /// Records that `folder` is website set `id`, keeping the rest of its manifest.
+    fn write_sidecar(folder: &Path, id: u32) {
+        let mut m = Manifest::read(folder).unwrap_or_default();
+        m.id = Some(id);
+        m.write(folder).unwrap();
+    }
+
     fn folder(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("taiko-custom-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -654,6 +813,73 @@ mod tests {
         assert_eq!(sidecar_id(&dir), Some(42));
         std::fs::write(dir.join(SIDECAR), "junk").unwrap();
         assert_eq!(sidecar_id(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_manifest_reads_version_one_and_keeps_what_it_doesnt_know() {
+        // What the website puts in its archives.
+        let v1 = Manifest::parse("{\"id\": 12}\n").unwrap();
+        assert_eq!(v1.id, Some(12));
+        assert_eq!(v1.version, None);
+        assert!(v1.files.is_empty());
+        // A local set, never sent: no id at all.
+        assert_eq!(Manifest::parse("{\"origin\": \"local\"}").unwrap().id, None);
+        assert_eq!(Manifest::parse("junk"), None);
+        // Round trip, with a newer client's field kept.
+        let dir = folder("manifest");
+        let mut m = Manifest::parse("{\"id\": 12, \"later\": [1, 2]}").unwrap();
+        m.version = Some(4);
+        m.updated = Some(1_763_251_200);
+        m.origin = Some(Origin::Site);
+        m.based_on = Some(622_136);
+        m.installed = Some(1_763_300_000);
+        m.add_file("a [Inner Oni].tko", 0x4afe_7841_b490_d3f8);
+        m.write(&dir).unwrap();
+        let text = std::fs::read_to_string(dir.join(SIDECAR)).unwrap();
+        assert!(
+            text.contains("\"a [Inner Oni].tko\": \"4afe7841b490d3f8\""),
+            "{text}"
+        );
+        assert!(text.contains("\"origin\": \"site\""), "{text}");
+        let back = Manifest::read(&dir).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(back.rest.get("later"), Some(&serde_json::json!([1, 2])));
+        assert_eq!(
+            back.file_hash("a [Inner Oni].tko"),
+            Some(0x4afe_7841_b490_d3f8)
+        );
+        assert_eq!(back.file_hash("other.tko"), None);
+        assert!(!dir.join(format!("{SIDECAR}.part")).exists());
+        // Writing the id again keeps the rest.
+        write_sidecar(&dir, 13);
+        let again = Manifest::read(&dir).unwrap();
+        assert_eq!(again.id, Some(13));
+        assert_eq!(again.version, Some(4));
+        assert_eq!(again.files, m.files);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sent_folder_records_its_version_and_charts() {
+        let dir = folder("sent");
+        std::fs::write(dir.join("a [Oni].tko"), map(1, 20)).unwrap();
+        std::fs::write(dir.join("a [Mine].osu"), map(1, 20)).unwrap();
+        mark_sent(
+            &dir,
+            &Sent { id: 9, version: 3 },
+            &["a [Oni].tko".to_string()],
+        );
+        let m = Manifest::read(&dir).unwrap();
+        assert_eq!(
+            (m.id, m.version, m.origin),
+            (Some(9), Some(3), Some(Origin::Local))
+        );
+        assert_eq!(
+            m.file_hash("a [Oni].tko"),
+            Some(crate::net::map_hash(map(1, 20).as_bytes()))
+        );
+        assert_eq!(m.files.len(), 1, "only what went");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -819,6 +1045,18 @@ mod tests {
         std::fs::write(dir.join("a [Mine].osu"), "home-made").unwrap();
         assert!(!outdated(&dir, &site(now + 3600)));
         assert!(!outdated(&dir, &SiteSet::default()));
+        // Installed whole: its manifest says which version it is, whatever the file times.
+        let mut m = Manifest {
+            id: Some(1),
+            ..Manifest::default()
+        };
+        m.add_file("a [Oni].tko", crate::net::map_hash(b"old version"));
+        m.write(&dir).unwrap();
+        assert!(outdated(&dir, &site(0)));
+        m.add_file("a [Oni].tko", new);
+        m.write(&dir).unwrap();
+        assert!(!outdated(&dir, &site(now + 3600)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -849,6 +1087,19 @@ mod tests {
             ..site
         };
         assert!(outdated(&dir, &newer));
+    }
+
+    #[test]
+    fn the_websites_status_answer_names_a_maps_set() {
+        let text = r#"{"4afe7841b490d3f8": {"id": 12, "owner": "a", "approved": true},
+            "ff": {"id": 3, "owner": "b", "approved": false}}"#;
+        assert_eq!(status_set(text, 0x4afe_7841_b490_d3f8), Some(12));
+        // Hex without leading zeros, as the website writes it.
+        assert_eq!(status_set(text, 0xff), Some(3));
+        assert_eq!(status_set(text, 7), None);
+        assert_eq!(status_set("{}", 7), None);
+        assert_eq!(status_set("junk", 7), None);
+        assert_eq!(set_of_map(7), None, "tests ask no website");
     }
 
     #[test]

@@ -85,6 +85,9 @@ fn words(item: Item) -> &'static str {
             "song select list groups sort tabs flat difficulty список группы сортировка вкладки сложность"
         }
         Item::DataFolder => "save scores replays path сохранения рекорды реплеи путь",
+        Item::MoveCustomMaps | Item::MoveCustomBack => {
+            "custom maps move migrate osu songs folder кастомные карты перенести папка"
+        }
         Item::CustomFolder => {
             "custom maps tko editor website folder кастомные карты редактор сайт папка"
         }

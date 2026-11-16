@@ -232,6 +232,8 @@ pub struct Select {
     /// A difficulty or a whole set asked to be deleted (right-click → Delete, the Delete key):
     /// the confirmation over song select.
     pub deleting: Option<DeleteAsk>,
+    /// Moving taiko.rs's maps out of osu!'s Songs folder, offered once over song select.
+    pub moving: Option<MoveAsk>,
     /// The folders of the maps whose own skin is turned off (right-click → Turn off skin).
     pub map_skins_off: std::collections::HashSet<String>,
     /// The right-click menu of a song list row.
@@ -474,6 +476,7 @@ impl Select {
             mods_label: String::new(),
             show_converts: !has_taiko,
             deleting: None,
+            moving: None,
             map_skins_off: crate::config::load_map_skins_off(),
             menu: None,
             updates: std::collections::HashMap::new(),
@@ -692,7 +695,8 @@ impl Select {
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
     fn status_of(&self, e: &Entry) -> u8 {
-        if self.edited.contains(&e.path) {
+        // A map in taiko.rs's own folder is never osu!'s, nor an edited copy of osu!'s.
+        if self.edited.contains(&e.path) && !e.is_own() {
             return crate::search::NOT_SUBMITTED;
         }
         if let Some(id) = e.path.parent().and_then(|d| self.custom_folder.get(d)) {
@@ -701,6 +705,9 @@ impl Select {
             } else {
                 crate::search::CUSTOM
             };
+        }
+        if e.is_own() {
+            return crate::search::NOT_SUBMITTED;
         }
         match e.set_id() {
             Some(_) if loved_here(&self.server_loved, e) => crate::search::LOVED,
@@ -1654,6 +1661,22 @@ impl Select {
                 _ => format!("Download {} again", library[i].meta.title),
             };
             items.push((fit(label), MenuAction::UpdateSong));
+        }
+        if let Some(version) = m.previous {
+            let label = match version {
+                0 => tr!(
+                    "Previous version",
+                    "前のバージョンに戻す",
+                    "Вернуть прошлую версию"
+                )
+                .to_string(),
+                v => tr!(
+                    "Previous version (v{v})",
+                    "前のバージョン (v{v}) に戻す",
+                    "Прошлая версия (v{v})"; [] [v]
+                ),
+            };
+            items.push((fit(label), MenuAction::PreviousVersion));
         }
         if m.skin {
             let off = library[i]
@@ -3135,6 +3158,17 @@ pub struct DeleteAsk {
     pub on_delete: bool,
 }
 
+/// Moving taiko.rs's maps out of osu!'s Songs folder, offered over song select.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MoveAsk {
+    /// What would move.
+    pub found: Vec<crate::custom::migrate::Found>,
+    pub sets: usize,
+    pub bytes: u64,
+    /// The Move button has the keys (it has at first).
+    pub on_move: bool,
+}
+
 /// The right-click menu of a song list row, opened where the pointer was (virtual units).
 pub struct SongMenu {
     pub row: usize,
@@ -3142,6 +3176,9 @@ pub struct SongMenu {
     pub header: bool,
     /// The map has a skin of its own to turn off or on.
     pub skin: bool,
+    /// A custom set in taiko.rs's own folder with an older version kept: the website's version
+    /// number of that one (0: not known).
+    pub previous: Option<u32>,
     pub x: f32,
     pub y: f32,
 }
@@ -3205,6 +3242,8 @@ pub enum MenuAction {
     Epic(bool, bool),
     /// Download the song's set again, its newest version (replacing its difficulties).
     UpdateSong,
+    /// Put back the older version of a custom set kept in taiko.rs's own folder.
+    PreviousVersion,
     /// Like the song, or not any more.
     Like,
     /// Turn the map's own skin off, or back on.
