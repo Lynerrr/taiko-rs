@@ -53,11 +53,13 @@ impl State {
     /// Song select's list of `self.collections`: the player's own, then osu!'s with maps here.
     /// The one shown stays shown.
     pub(crate) fn list_collections(&mut self) {
+        // The one shown, else the one kept from the last run (osu!'s can come later).
         let shown = self
             .select
             .collection
             .and_then(|k| self.select.collections.get(k))
-            .map(|c| (c.name.clone(), c.own));
+            .map(|c| (c.name.clone(), c.own))
+            .or_else(|| kept_collection(&self.cfg.collection));
         // The player's own follow their maps when they're moved or updated.
         let finder = Finder::new(&self.library);
         let own = collections::own_len(&self.collections);
@@ -88,6 +90,33 @@ impl State {
                 .iter()
                 .position(|c| c.name == name && c.own == own)
         });
+        self.remember_collection();
+    }
+
+    /// Keeps the collection shown in config.txt for the next run. One that isn't here (yet:
+    /// osu!'s are read later) stays kept until another is picked.
+    pub(crate) fn remember_collection(&mut self) {
+        let Some(c) = self
+            .select
+            .collection
+            .and_then(|k| self.select.collections.get(k))
+        else {
+            return;
+        };
+        let kept = format!("{}:{}", if c.own { "own" } else { "osu" }, c.name);
+        if self.cfg.collection != kept {
+            self.cfg.collection = kept;
+            self.cfg.save();
+        }
+    }
+
+    /// Shows every song again from now on, and keeps that for the next run.
+    fn forget_collection(&mut self) {
+        self.select.collection = None;
+        if !self.cfg.collection.is_empty() {
+            self.cfg.collection.clear();
+            self.cfg.save();
+        }
     }
 
     /// Where song select's collection `k` is in `self.collections`.
@@ -176,6 +205,11 @@ impl State {
                     self.select.picker = Some(1);
                 } else {
                     self.select.pick_collection(i, &self.library);
+                    if self.select.collection.is_some() {
+                        self.remember_collection();
+                    } else {
+                        self.forget_collection();
+                    }
                 }
             }
             PickList::AddTo(maps) => {
@@ -353,7 +387,7 @@ impl State {
         };
         let name = self.collections[at].name.clone();
         if self.select.collection == Some(k) {
-            self.select.collection = None;
+            self.forget_collection();
         }
         Own(&mut self.collections).delete(at);
         self.collections_changed();
@@ -600,4 +634,16 @@ pub(crate) fn draw_collection_naming(c: &mut Canvas, naming: &Naming) {
         hit::Hit::Key(KeyCode::Escape),
         false,
     );
+}
+
+/// The collection kept in config.txt (`own:<name>` or `osu:<name>`): its name, and whether it's
+/// the player's own.
+fn kept_collection(kept: &str) -> Option<(String, bool)> {
+    let (source, name) = kept.split_once(':')?;
+    let own = match source {
+        "own" => true,
+        "osu" => false,
+        _ => return None,
+    };
+    (!name.is_empty()).then(|| (name.to_string(), own))
 }
