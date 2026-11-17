@@ -82,11 +82,22 @@ fn phone_results() {
         roll_ticks: 4,
         ..Default::default()
     };
-    let mut r = ui::Results::new(s.library[0].label(), stats, game::Windows::new(5.0));
+    let mut r = ui::Results::new(s.library[0].label(), stats.clone(), game::Windows::new(5.0));
     r.shown = now - Duration::from_secs(10);
     r.pp = Some(123.4);
     s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
     assert_snapshot("phone-results", &shot(&mut s, &mut now));
+    // Logged in, liked: the vote's panel right of the stats, the rows a thumb can hit.
+    let mut r = ui::Results::new(s.library[0].label(), stats, game::Windows::new(5.0));
+    r.shown = now - Duration::from_secs(10);
+    r.vote_on = Some(crate::online::PlayedMap {
+        hash: s.library[0].hash(),
+        name: s.library[0].label(),
+        set_id: None,
+    });
+    r.vote = Some(crate::online::MapVote::Like);
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    assert_snapshot("phone-results-vote", &shot(&mut s, &mut now));
 }
 
 /// During a song every finger hits the drum the moment it lands, the first one included: the
