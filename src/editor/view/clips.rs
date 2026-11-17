@@ -1064,9 +1064,9 @@ impl View {
             ],
         );
         let hint = if end {
-            "Drag the preview to place it at its end: Shift turns, Ctrl sizes."
+            "Drag the preview to place it at its end: Shift straight, Alt turns, Ctrl sizes."
         } else {
-            "Drag the preview to place it: Shift turns, Ctrl sizes."
+            "Drag the preview to place it: Shift straight, Alt turns, Ctrl sizes."
         };
         c.text(x, y, 5.5, rgba(DIM, 1.0), &Canvas::fit(5.5, inner, hint));
         y = self.heading(c, x, y + 10.0, inner, "When");

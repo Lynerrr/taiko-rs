@@ -334,6 +334,9 @@ enum Drag {
     PathPoint {
         group: usize,
         point: usize,
+        /// Where the point was when the drag began (playfield units): Shift keeps it level or
+        /// plumb with this.
+        from: [f64; 2],
     },
     /// A before-the-hit key of a group, moved on the Motion page's graph.
     BeforeKey {
@@ -2471,6 +2474,19 @@ impl View {
         }
         self.view_start = moved;
         self.mouse_move(mx, my, self.held);
+    }
+
+    /// The modifier keys changed with the pointer still: a drag that reads them follows.
+    pub fn keys_changed(&mut self, keys: Keys) {
+        let shift = self.held.shift != keys.shift;
+        self.held = keys;
+        if shift {
+            self.gizmo_keys_changed();
+            if let Drag::PathPoint { .. } = self.drag {
+                let (x, y) = self.mouse;
+                self.path_drag(x, y, keys);
+            }
+        }
     }
 
     pub fn mouse_move(&mut self, x: f32, y: f32, keys: Keys) {
@@ -6137,21 +6153,21 @@ mod tests {
         assert!((moved[0] - want[0]).abs() <= 1.0 && (moved[1] - want[1]).abs() <= 1.0);
         assert!(v.ed.undo());
         assert_eq!(points(&v)[0], PATHS0);
-        // With Shift the point keeps plumb over the drum, its only neighbour, however the mouse
-        // wanders off sideways; dragged far sideways it goes level with the drum instead.
+        // With Shift the point keeps plumb over where it was, however the mouse wanders off
+        // sideways; dragged further sideways than up or down it stays level with it instead
+        // (it doesn't jump onto the drum's line).
         let shift = Keys {
             shift: true,
             ..Keys::default()
         };
         v.mouse_down(hx, hy, Keys::default(), None);
         v.mouse_move(hx + 6.0, hy - 15.0, shift);
-        assert_eq!(points(&v)[0][0], 0.0, "{:?}", points(&v));
+        assert_eq!(points(&v)[0][0], PATHS0[0], "{:?}", points(&v));
         assert!(points(&v)[0][1] < PATHS0[1]);
-        let (dx, dy) = v.drum_in_preview();
-        v.mouse_move(dx - 60.0, dy - 4.0, shift);
-        v.mouse_up(dx - 60.0, dy - 4.0, shift);
-        assert_eq!(points(&v)[0][1], 0.0, "{:?}", points(&v));
-        assert!(points(&v)[0][0] < 0.0);
+        v.mouse_move(hx - 60.0, hy + 4.0, shift);
+        v.mouse_up(hx - 60.0, hy + 4.0, shift);
+        assert_eq!(points(&v)[0][1], PATHS0[1], "{:?}", points(&v));
+        assert!(points(&v)[0][0] < PATHS0[0]);
         assert!(v.ed.undo());
         assert_eq!(points(&v)[0], PATHS0);
         // A double click on the preview adds a point between the start and the drum.
@@ -6189,6 +6205,41 @@ mod tests {
     }
 
     const PATHS0: [f64; 2] = crate::editor::motion::PATHS[0].1[0];
+
+    #[test]
+    fn shift_keeps_a_dragged_path_point_level_or_plumb_with_its_start() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        draw(&mut v);
+        let ids: Vec<u64> = v.ed.chart.objects.iter().take(4).map(|o| o.id).collect();
+        v.ed.selection = ids.into_iter().collect();
+        draw(&mut v);
+        press(&mut v, Btn::M(MAct::UseSelection));
+        let g = v.m_group.unwrap();
+        let point = |v: &View| v.ed.path_of(g).unwrap().points[0];
+        let start = point(&v);
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        let (hx, hy) = v.path_handles()[0];
+        // Shift from the press: mostly up, so it stays plumb over where it was.
+        v.mouse_down(hx, hy, shift, None);
+        v.mouse_move(hx - 6.0, hy - 30.0, shift);
+        let p = point(&v);
+        assert_eq!(p[0], start[0], "plumb: {p:?} from {start:?}");
+        assert!(p[1] < start[1], "and up: {p:?}");
+        // Let go of Shift with the pointer still: free where the pointer is.
+        v.keys_changed(Keys::default());
+        assert_ne!(point(&v)[0], start[0], "free again");
+        // Pressed again mid-drag: back onto the line, not onto the lane.
+        v.keys_changed(shift);
+        assert_eq!(point(&v)[0], start[0]);
+        v.mouse_up(hx - 6.0, hy - 30.0, shift);
+        assert!(v.ed.undo(), "one undo step");
+        assert_eq!(point(&v), start);
+    }
 
     #[test]
     fn a_path_point_dragged_off_the_preview_can_be_picked_up_again() {
@@ -6617,21 +6668,21 @@ mod tests {
     }
 
     #[test]
-    fn shift_turns_and_ctrl_zooms_the_preview() {
+    fn alt_turns_and_ctrl_zooms_the_preview() {
         let mut v = clips_view();
         v.set_time(3000.0);
         let t = v.ed.snapped(3000.0);
-        let shift = Keys {
-            shift: true,
+        let alt = Keys {
+            alt: true,
             ..Keys::default()
         };
         // Pressed right of the target and taken below it: a quarter turn.
         let [fx, _, fw, fh] = v.layout.preview;
         let (px, py) = v.pivot_in_preview();
         let r = (fw.min(fh) / 4.0).min(fx + fw - px - 1.0);
-        v.mouse_down(px + r, py, shift, None);
-        v.mouse_move(px, py + r, shift);
-        v.mouse_up(px, py + r, shift);
+        v.mouse_down(px + r, py, alt, None);
+        v.mouse_move(px, py + r, alt);
+        v.mouse_up(px, py + r, alt);
         assert!((field(&v, FieldProp::Rotation, t) - 90.0).abs() <= 1.0);
         assert_eq!(field(&v, FieldProp::X, t), 0.0, "turning doesn't move it");
         let ctrl = Keys {
@@ -6643,6 +6694,64 @@ mod tests {
             (field(&v, FieldProp::Zoom, t) - 2.0).abs() < 0.02,
             "up 60 doubles it"
         );
+    }
+
+    #[test]
+    fn shift_drag_moves_the_preview_straight_and_doesnt_turn_it() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        let t = v.ed.snapped(3000.0);
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        gizmo_drag_by(&mut v, 12.0 * k, 35.0 * k, shift);
+        assert_eq!(
+            field(&v, FieldProp::Rotation, t),
+            0.0,
+            "Shift no longer turns"
+        );
+        assert_eq!(field(&v, FieldProp::X, t), 0.0, "straight down");
+        assert!((field(&v, FieldProp::Y, t) - 35.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn shift_held_mid_drag_keeps_the_preview_on_one_axis() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        let t = v.ed.snapped(3000.0);
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        let [fx, fy, fw, fh] = v.layout.preview;
+        let (x, y) = (fx + fw / 2.0, fy + fh / 2.0);
+        // Mostly sideways: Shift drops the small step down.
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_move(x + 30.0 * k, y + 8.0 * k, Keys::default());
+        assert!(
+            (field(&v, FieldProp::Y, t) - 8.0).abs() <= 1.0,
+            "free first"
+        );
+        v.keys_changed(shift);
+        assert!(
+            (field(&v, FieldProp::X, t) - 30.0).abs() <= 1.0,
+            "pressing Shift with the pointer still keeps the way it went"
+        );
+        assert_eq!(field(&v, FieldProp::Y, t), 0.0, "and snaps the other back");
+        assert_eq!(field(&v, FieldProp::Rotation, t), 0.0, "it doesn't turn");
+        // Turning mostly down with Shift still held: it goes straight down.
+        v.mouse_move(x + 6.0 * k, y + 25.0 * k, shift);
+        assert_eq!(field(&v, FieldProp::X, t), 0.0);
+        assert!((field(&v, FieldProp::Y, t) - 25.0).abs() <= 1.0);
+        // Let go of Shift: free again where the pointer is.
+        v.keys_changed(Keys::default());
+        assert!((field(&v, FieldProp::X, t) - 6.0).abs() <= 1.0);
+        v.mouse_up(x + 6.0 * k, y + 25.0 * k, Keys::default());
+        assert!(v.ed.undo());
+        assert_eq!(field(&v, FieldProp::Y, t), 0.0, "still one undo step");
     }
 
     #[test]
@@ -7403,6 +7512,29 @@ mod tests {
         v.clip_set(CF::Spin, 360.0);
         assert_eq!(picked_layer(&v).spin, 360.0);
         assert_eq!(picked_layer(&v).from.turn, 0.0, "the pose's turn stays");
+    }
+
+    #[test]
+    fn shift_mid_drag_places_a_picked_block_on_one_axis() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        put_fx(&mut v, preset("Text"));
+        draw(&mut v);
+        let from = picked_layer(&v).from;
+        let [fx, fy, fw, fh] = v.layout.preview;
+        let (x, y) = (fx + fw / 2.0, fy + fh / 2.0);
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_move(x + 5.0 * k, y + 40.0 * k, Keys::default());
+        v.keys_changed(Keys {
+            shift: true,
+            ..Keys::default()
+        });
+        v.mouse_up(x + 5.0 * k, y + 40.0 * k, Keys::default());
+        let l = picked_layer(&v);
+        assert_eq!(l.from.x, from.x, "straight down");
+        assert!((l.from.y - from.y - 40.0).abs() <= 1.0);
+        assert!(v.motion_keys().is_empty(), "no playfield keys");
     }
 
     #[test]

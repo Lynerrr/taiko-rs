@@ -225,7 +225,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - Text, Fly-in text and Pulsing text on the shelf put words on screen in the game's font. Click the words in the block's settings and type: the first key replaces them, Ctrl+Backspace takes a word.
 - Picture and Logo on the beat show an image from the map's folder: drop a .png or .jpg on the editor window (it is copied there and put on the picked picture block) or put it in the folder yourself. < and > go through them; click its name for a list of them all, with a look at each. It goes with the map in an .rsz.
 - Animated GIF, WebP and PNG pictures play, from the start of their block, looping. Videos don't: turn a clip into an animated WebP first, for example `ffmpeg -i clip.mp4 -vf scale=512:-1 -loop 0 clip.webp` (keep it short: a set is at most 40 MB).
-- With one picked, drag the preview to place it: Shift turns it, Ctrl sizes it. x, y, size, turn and opacity (0 invisible, 1 solid) can be typed too; with moves, a different opacity at its end fades it.
+- With one picked, drag the preview to place it: Shift keeps it on one axis, Alt turns it, Ctrl sizes it. x, y, size, turn and opacity (0 invisible, 1 solid) can be typed too; with moves, a different opacity at its end fades it.
 - moves: it glides from its start pose to a pose of its own at its end. Edit start pose and edit end pose choose which one the numbers and a drag change; the preview frames both, with a dotted path between them.
 - spin keeps it turning by that many degrees each beat (360 is a full turn a beat, minus turns the other way).
 - behind the notes puts it under the lane; the fades bring it in and out; pulses kicks it bigger on beats, notes or hits (the amount is percent).
@@ -234,7 +234,7 @@ F4 Effects opens on Clips: the simple way to make a .tko map do anything to the 
 - While the song plays, keys 1 to 9 record the effects of the shelf's open tab: press a key where it should start and again where it should end. Esc drops one being recorded.
 
 # Moving it by hand
-- Drag the preview: the playfield moves. Shift+drag turns it, Ctrl+drag zooms it (up grows, down shrinks).
+- Drag the preview: the playfield moves. Shift+drag keeps it on one axis, straight across or straight up and down (Shift can also be pressed mid-drag), Alt+drag turns it, Ctrl+drag zooms it (up grows, down shrinks).
 - Each drag leaves keys at the playhead, so move the playhead, drag, move it again, drag again: the playfield glides between them. Ctrl+Z undoes a whole drag.
 - The keys are the diamonds on the Motion strip above the rows. Click one to go there, right click it to take it away.
 
@@ -261,7 +261,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - Straight lane keeps the picked notes on a plain straight lane while clips bend the lane into a zigzag, a spiral or any other shape: as far from the drum and as fast as on it. With When, they can go onto it and back to the bent lane over a beat.
 - Whatever is picked is what the page shapes: click a group under Moving to pick its notes again. The groups stay on one line: when there are more than fit, the arrows (or the wheel over them) page through them, and their numbers say how many are hidden each way.
 - On the timeline a bar under the notes, with the group's name, shows which ones the page is shaping.
-- Shape it in the preview: drag a point to move it, double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
+- Shape it in the preview: drag a point to move it (Shift keeps it level or plumb with where it was), double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
 
 # How they move on it
 - A note is as far along the path as it would be along the lane: it comes in at the start when it would come in at the lane's end. Slider velocity still works, so slow notes are slow on the path too.
@@ -592,7 +592,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Text, Fly-in text и Pulsing text на полке выводят слова шрифтом игры. Кликните по словам в настройках блока и печатайте: первая клавиша заменяет их целиком, Ctrl+Backspace стирает слово.
 - Picture и Logo on the beat показывают картинку из папки карты: бросьте .png или .jpg на окно редактора (она скопируется туда и встанет в выбранный блок с картинкой) или положите её в папку сами. < и > листают их; клик по имени открывает список всех, с превью каждой. В .rsz картинка уезжает вместе с картой.
 - Анимированные GIF, WebP и PNG проигрываются с начала своего блока по кругу. Видео нет: сначала переделайте клип в анимированный WebP, например `ffmpeg -i clip.mp4 -vf scale=512:-1 -loop 0 clip.webp` (покороче: весь сет не больше 40 МБ).
-- Когда блок выбран, тащите превью, чтобы поставить его: Shift поворачивает, Ctrl меняет размер. x, y, size, turn и opacity (0 невидимо, 1 полностью) можно и набрать; с moves другая opacity в конце плавно его проявляет или гасит.
+- Когда блок выбран, тащите превью, чтобы поставить его: Shift держит его на одной оси, Alt поворачивает, Ctrl меняет размер. x, y, size, turn и opacity (0 невидимо, 1 полностью) можно и набрать; с moves другая opacity в конце плавно его проявляет или гасит.
 - moves: блок плавно едет от начальной позы к своей позе в конце. Edit start pose и edit end pose выбирают, какую из двух меняют числа и перетаскивание; превью обводит обе рамками с пунктиром между ними.
 - spin крутит его на столько градусов за долю (360 — полный оборот за долю, минус — в другую сторону).
 - behind the notes кладёт его под линию нот; затухания вводят и убирают его; pulses толкает его крупнее на долях, нотах или попаданиях (amount в процентах).
@@ -601,7 +601,7 @@ F4 Effects открывается на Clips: самый простой спос
 - Пока играет песня, клавиши 1-9 записывают эффекты открытой вкладки полки: нажмите клавишу там, где он начинается, и ещё раз там, где кончается. Esc отменяет запись.
 
 # Двигать руками
-- Тащите превью: поле едет. Shift+тащить поворачивает его, Ctrl+тащить меняет масштаб (вверх больше, вниз меньше).
+- Тащите превью: поле едет. Shift+тащить ведёт его по одной оси: ровно вбок или ровно вверх-вниз (Shift можно зажать и посреди движения), Alt+тащить поворачивает, Ctrl+тащить меняет масштаб (вверх больше, вниз меньше).
 - Каждое перетаскивание ставит ключи на плейхеде: передвиньте плейхед, потащите, передвиньте ещё, потащите снова, и поле плавно едет между ними. Ctrl+Z отменяет всё перетаскивание целиком.
 - Ключи это ромбики на полоске Motion над рядами. Клик по ромбику ведёт к нему, правый клик убирает его.
 
@@ -628,7 +628,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - Straight lane держит выделенные ноты на обычном прямом лайне, пока клипы гнут лайн в зигзаг, спираль или другую форму: на том же расстоянии от барабана и с той же скоростью. Через When они могут уйти на него и вернуться на изогнутый лайн за одну долю.
 - Страница всегда правит то, что выделено: клик по группе в Moving снова выделяет её ноты. Группы всегда в одну строку: если все не помещаются, стрелки (или колесо над ними) листают их, а числа на стрелках говорят, сколько скрыто с каждой стороны.
 - На таймлайне полоса под нотами с именем группы показывает, какие ноты сейчас правит страница.
-- Путь правится прямо на превью: тащите точку, двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
+- Путь правится прямо на превью: тащите точку (с Shift она идёт ровно по горизонтали или вертикали от того места, где была), двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
 
 # Как они по нему летят
 - Нота проходит такую же долю пути, какую прошла бы по лайну: появляется в начале пути, когда появилась бы в конце лайна. SV продолжает работать: медленные ноты медленные и на пути.
