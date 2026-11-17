@@ -251,8 +251,22 @@ enum Drag {
         from: (f32, f32),
         to: (f32, f32),
     },
+    /// Keys picked on the graph, dragged by key `index` of `View::k_base` (Ctrl: copies of
+    /// them), pressed at `down`; `moved` once the pointer left the press.
     Key {
         index: usize,
+        copy: bool,
+        down: (f32, f32),
+        moved: bool,
+    },
+    /// A box over the key graph to pick the keys in it: map ms and screen y; `add` (Shift or
+    /// Ctrl) keeps the keys picked.
+    KBox {
+        t0: f64,
+        y0: f32,
+        t1: f64,
+        y1: f32,
+        add: bool,
     },
     Node {
         id: u32,
@@ -573,6 +587,15 @@ pub struct View {
     k_group: usize,
     k_prop: usize,
     k_sel: Option<usize>,
+    /// Several keys picked on the graph (indices into the track, `k_sel` among them): they
+    /// move, copy, ease and delete together. Ignored when it doesn't hold `k_sel`.
+    k_many: Vec<usize>,
+    /// The track as it was when a drag of keys began, and the keys dragged in it: every step
+    /// of the drag is laid out from them.
+    k_base: Vec<crate::tko::track::Key>,
+    k_base_picked: Vec<usize>,
+    /// A key pressed that a click (no drag) takes in or out (Ctrl) or picks alone.
+    k_click: Option<usize>,
     /// The effect clip picked, the shelf effect a drag on a row draws, and whether the keyframe
     /// and node pages are shown.
     fx_sel: Option<u32>,
@@ -887,6 +910,10 @@ impl View {
             k_group: 0,
             k_prop: 0,
             k_sel: None,
+            k_many: Vec::new(),
+            k_base: Vec::new(),
+            k_base_picked: Vec::new(),
+            k_click: None,
             fx_sel: None,
             fx_armed: None,
             fx_tab: crate::editor::clips::Shelf::Move,
@@ -2519,7 +2546,7 @@ impl View {
             Drag::GBox { from, .. } => self.drag = Drag::GBox { from, to: (x, y) },
             Drag::Brush { .. } => self.brush_move(x, y, keys),
             Drag::Handle { end } => self.handle_drag(end, y),
-            Drag::Key { index } => self.key_graph_drag(index, x, y),
+            Drag::Key { .. } | Drag::KBox { .. } => self.key_graph_drag(x, y),
             Drag::FxNew { .. } | Drag::FxMove { .. } | Drag::FxEdge { .. } | Drag::FxBox { .. } => {
                 self.clip_rows_drag(x, y)
             }
@@ -2568,7 +2595,7 @@ impl View {
             | Drag::BeforeKey { .. } => {
                 return I::Grabbing;
             }
-            Drag::FxNew { .. } | Drag::FxBox { .. } => return I::Crosshair,
+            Drag::FxNew { .. } | Drag::FxBox { .. } | Drag::KBox { .. } => return I::Crosshair,
             Drag::Box { .. } | Drag::Place { .. } | Drag::Brush { .. } => return I::Crosshair,
             Drag::Handle { .. } => return I::NsResize,
             _ => {}
@@ -2978,7 +3005,7 @@ impl View {
 
     fn graph_down(&mut self, x: f32, y: f32, keys: Keys) {
         if self.keyframe_mode() {
-            return self.key_graph_down(x, y);
+            return self.key_graph_down(x, y, keys);
         }
         if self.clip_mode() {
             return self.clip_rows_down(x, y, keys);
@@ -3062,7 +3089,8 @@ impl View {
                 self.ed.end_drag();
                 self.pick_next_in_stack(anchor);
             }
-            Drag::Move { .. } | Drag::Resize { .. } | Drag::Key { .. } => {
+            Drag::Key { .. } | Drag::KBox { .. } => self.key_graph_up(drag),
+            Drag::Move { .. } | Drag::Resize { .. } => {
                 self.k_frozen = None;
                 self.ed.end_drag();
                 self.mark_stale();
@@ -5369,6 +5397,114 @@ mod tests {
         );
         press(&mut v, Btn::GFlag(GFlag::Hide));
         assert!(!v.ed.gimmick.hide_note);
+    }
+
+    #[test]
+    fn several_keys_are_picked_moved_copied_eased_and_deleted_together() {
+        use crate::tko::track::Ease;
+        let mut v = view();
+        press(&mut v, Btn::GPage(2));
+        draw(&mut v);
+        press(&mut v, Btn::K(KAct::MakeTko));
+        press(&mut v, Btn::K(KAct::Prop(3)));
+        draw(&mut v);
+        let g = v.layout.graph;
+        let track = |v: &View| v.ed.track_of(v.subject()).unwrap().keys.clone();
+        // Four keys, one click each.
+        for x in [300.0, 380.0, 460.0, 540.0] {
+            click(&mut v, x, g[1] + 30.0);
+        }
+        assert_eq!(track(&v).len(), 4);
+        draw(&mut v);
+        // A box over the first three picks them; the fourth stays out.
+        let k = Keys::default();
+        v.mouse_down(290.0, g[1] + 5.0, k, None);
+        v.mouse_move(470.0, g[3] + g[1] - 5.0, k);
+        draw(&mut v);
+        v.mouse_up(470.0, g[3] + g[1] - 5.0, k);
+        assert_eq!(v.picked_keys(), [0, 1, 2], "{}", v.status);
+        // Shift+click takes one out, and back in.
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        let at = |v: &View, i: usize| {
+            let key = track(v)[i];
+            (v.x_of(key.t), v.key_y(key.v, v.key_range()))
+        };
+        let (x1, y1) = at(&v, 1);
+        v.mouse_down(x1, y1, shift, None);
+        v.mouse_up(x1, y1, shift);
+        assert_eq!(v.picked_keys(), [0, 2]);
+        v.mouse_down(x1, y1, shift, None);
+        v.mouse_up(x1, y1, shift);
+        assert_eq!(v.picked_keys(), [0, 1, 2]);
+        // Dragging one moves all three by as much, as one undo step.
+        let before = track(&v);
+        let (x0, y0) = at(&v, 0);
+        v.mouse_down(x0, y0, k, None);
+        v.mouse_move(x0 + 30.0, y0, k);
+        v.mouse_move(x0 + 60.0, y0, k);
+        v.mouse_up(x0 + 60.0, y0, k);
+        let after = track(&v);
+        assert_eq!(after.len(), 4);
+        let dt = after[0].t - before[0].t;
+        assert!(dt > 0.0);
+        for i in 0..3 {
+            assert!((after[i].t - before[i].t - dt).abs() < 1e-6, "{after:?}");
+        }
+        assert_eq!(after[3].t, before[3].t, "the key not picked stays");
+        assert_eq!(v.picked_keys(), [0, 1, 2], "still picked after the move");
+        assert!(v.ed.undo());
+        assert_eq!(track(&v), before);
+        v.pick_keys(vec![0, 1, 2], Some(0));
+        // A click on one of them (no drag) picks it alone.
+        v.mouse_down(x1, y1, k, None);
+        v.mouse_up(x1, y1, k);
+        assert_eq!(v.picked_keys(), [1]);
+        // Ctrl+drag lays copies and leaves the originals.
+        v.pick_keys(vec![0, 1], Some(0));
+        let ctrl = Keys {
+            ctrl: true,
+            ..Keys::default()
+        };
+        v.mouse_down(x0, y0, ctrl, None);
+        v.mouse_move(x0 + 400.0, y0, ctrl);
+        v.mouse_up(x0 + 400.0, y0, ctrl);
+        assert_eq!(track(&v).len(), 6, "{:?}", track(&v));
+        assert_eq!(v.picked_keys().len(), 2, "the copies are picked");
+        assert!(v.ed.undo());
+        assert_eq!(track(&v), before);
+        // Ctrl+click takes a key in.
+        v.pick_keys(vec![0], Some(0));
+        let (x3, y3) = at(&v, 3);
+        v.mouse_down(x3, y3, ctrl, None);
+        v.mouse_up(x3, y3, ctrl);
+        assert_eq!(v.picked_keys(), [0, 3]);
+        // The ease picked goes on every key picked.
+        let cubic = Ease::ALL.iter().position(|e| *e == Ease::CubicOut).unwrap() as u8;
+        press(&mut v, Btn::K(KAct::SetEase(cubic)));
+        let eases: Vec<Ease> = track(&v).iter().map(|k| k.ease).collect();
+        assert_eq!(eases[0], Ease::CubicOut);
+        assert_eq!(eases[3], Ease::CubicOut);
+        assert_eq!(eases[1], before[1].ease);
+        // Ctrl+C / Ctrl+V lay both at the playhead, as far apart, and pick them.
+        v.run(Cmd::CopyNotes, None);
+        v.ed.time = 8000.0;
+        v.run(Cmd::Paste, None);
+        let now = track(&v);
+        assert_eq!(now.len(), 6, "{now:?}");
+        let laid: Vec<f64> = v.picked_keys().iter().map(|&i| now[i].t).collect();
+        let at0 = v.ed.snapped(8000.0);
+        assert_eq!(laid, [at0, at0 + (before[3].t - before[0].t)]);
+        // Ctrl+A picks every key of the track; Delete removes them all as one step.
+        v.run(Cmd::SelectAll, None);
+        assert_eq!(v.picked_keys().len(), 6);
+        v.run(Cmd::Delete, None);
+        assert!(v.ed.track_of(v.subject()).is_none_or(|t| t.is_empty()));
+        assert!(v.ed.undo());
+        assert_eq!(track(&v).len(), 6);
+        let _ = std::fs::remove_file(&v.ed.path);
     }
 
     #[test]

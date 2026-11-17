@@ -256,6 +256,13 @@ impl View {
                 self.sel_extra = all.into_iter().collect();
             }
             Cmd::SelectAll if self.clip_mode() => self.pick_all_clips(),
+            // With a key picked on the graph: every key of its track.
+            Cmd::SelectAll if self.keyframe_mode() && self.k_sel.is_some() => {
+                let n = self.ed.track_of(self.subject()).map_or(0, |t| t.keys.len());
+                let main = self.k_sel;
+                self.pick_keys((0..n).collect(), main);
+                self.status = format!("{n} keys picked");
+            }
             Cmd::SelectAll => self.ed.select_all(),
             Cmd::SelectNone if self.mode == Mode::Timing || self.tw => self.select_line(None),
             Cmd::SelectNone => self.ed.select_none(),
