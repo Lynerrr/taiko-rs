@@ -3170,3 +3170,68 @@ fn an_update_goes_by_the_name_in_osus_file_not_the_mirrors_wording_of_it() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A mirror that turns the game away (403, catboy.best's guard) is asked once per download, not
+/// again on every pass: asking again only keeps the guard shut, and the waits between passes
+/// held the error back for no gain.
+#[test]
+fn a_mirror_refusing_a_download_is_not_asked_again() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let (tx, asked) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut out = stream;
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                    break;
+                }
+            }
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+            let reply: &[u8] = if path.starts_with("/guard/") {
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            } else {
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            };
+            let _ = tx.send(path);
+            let _ = out.write_all(reply);
+        }
+    });
+    let songs = std::env::temp_dir().join(format!(
+        "taiko-rs-regression-mirror-403-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&songs);
+    let sources = [
+        ("none", format!("{base}/none/d/1")),
+        ("guard", format!("{base}/guard/d/1")),
+    ];
+    let (done, total) = (
+        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    );
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let started = std::time::Instant::now();
+    let result = crate::download::fetch(
+        &sources,
+        "1 Marika - Soul Release",
+        &songs,
+        &done,
+        &total,
+        &cancel,
+        None,
+    );
+    let _ = std::fs::remove_dir_all(&songs);
+    let err = result.unwrap_err();
+    assert!(err.contains("403"), "{err}");
+    let asked: Vec<String> = asked.try_iter().collect();
+    assert_eq!(asked, ["/none/d/1", "/guard/d/1"]);
+    // No pass after the first, so none of the waits between them.
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+}
