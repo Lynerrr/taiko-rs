@@ -6860,6 +6860,55 @@ mod tests {
         assert_eq!(v.picked().map(|c| c.id), Some(id), "the clip stays picked");
     }
 
+    #[test]
+    fn an_end_of_several_blocks_picked_resizes_them_all() {
+        let mut v = clips_view();
+        let a = clip_on(&mut v, 0, 1000.0, 2000.0);
+        let b = clip_on(&mut v, 1, 1500.0, 2000.0);
+        let lone = clip_on(&mut v, 2, 1000.0, 2000.0);
+        // On b's row a block a little after it: b stops there, a goes on.
+        let wall = clip_on(&mut v, 1, 2600.0, 3000.0);
+        v.pick_clips(&[a, b]);
+        draw(&mut v);
+        let span = |v: &View, id: u32| {
+            let c = v.ed.clip(id).unwrap();
+            (c.start, c.end)
+        };
+        let k = Keys::default();
+        let y = v.row_y(0) + v.row_h() / 2.0;
+        let to = v.x_of(3000.0);
+        v.mouse_down(v.x_of(2000.0) - 1.0, y, k, None);
+        v.mouse_move(v.x_of(2400.0), y, k);
+        v.mouse_move(to, y, k);
+        v.mouse_up(to, y, k);
+        let (a0, a1) = span(&v, a);
+        assert_eq!(a0, 1000.0, "the start stays");
+        assert!(a1 > 2900.0, "a grows to the pointer: {a1}");
+        assert_eq!(
+            span(&v, b),
+            (1500.0, 2600.0),
+            "b stops at the block after it"
+        );
+        assert_eq!(span(&v, lone), (1000.0, 2000.0), "a block not picked stays");
+        assert_eq!(span(&v, wall), (2600.0, 3000.0));
+        assert!(v.ed.undo(), "one undo step");
+        assert_eq!(span(&v, a), (1000.0, 2000.0));
+        assert_eq!(span(&v, b), (1500.0, 2000.0));
+        // Their starts, by as much; a can't go under a snap step long.
+        draw(&mut v);
+        let y = v.row_y(1) + v.row_h() / 2.0;
+        let at = v.x_of(1700.0);
+        v.mouse_down(v.x_of(1500.0) + 1.0, y, k, None);
+        v.mouse_move(v.x_of(1600.0), y, k);
+        v.mouse_move(at, y, k);
+        v.mouse_up(at, y, k);
+        let (b0, _) = span(&v, b);
+        let (a0, _) = span(&v, a);
+        assert!(b0 > 1600.0, "{b0}");
+        assert!((a0 - 1000.0 - (b0 - 1500.0)).abs() < 1e-6, "{a0} {b0}");
+        assert_eq!(v.fx_group().len(), 2, "both stay picked");
+    }
+
     fn sorted(mut ids: Vec<u32>) -> Vec<u32> {
         ids.sort();
         ids
