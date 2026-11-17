@@ -1070,6 +1070,10 @@ pub enum AdminOp {
     DeletePlay {
         id: u64,
     },
+    /// Deletes every play on map `map`'s board (a TJA chart's made up under a real song, say).
+    DeleteBoard {
+        map: u64,
+    },
     /// Sets a play's pp (None: back to what it was sent with).
     SetPp {
         id: u64,
