@@ -7,7 +7,7 @@ use crate::editor::keyframes::Subject;
 use crate::hit::Canvas;
 use crate::render::rgba;
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
-use crate::tko::track::Key;
+use crate::tko::track::{Ease, Key};
 
 const KEY: u32 = 0xFCB806;
 const KEY_ON: u32 = 0xFFFFFF;
@@ -25,7 +25,10 @@ pub enum KAct {
     /// A group of playfield properties (Move, Look, Clones).
     Tab(usize),
     KeyHere,
+    /// Opens the list of eases for the key picked (or for the next key placed).
     Ease,
+    /// An ease from that list, by its index in `Ease::ALL`.
+    SetEase(u8),
     DeleteKey,
     MakeTko,
 }
@@ -219,7 +222,12 @@ impl View {
         let ease = key.map_or(self.k_ease, |k| k.ease);
         let mut row = vec![
             ("Key here".to_string(), Btn::K(KAct::KeyHere), false),
-            (format!("Ease: {}", ease.label()), Btn::K(KAct::Ease), false),
+            (
+                format!("Ease: {}", ease.label()),
+                Btn::K(KAct::Ease),
+                self.fx_drop
+                    .is_some_and(|d| d.0 == super::clips::KEY_EASE_DROP),
+            ),
         ];
         if key.is_some() {
             row.push(("Delete key".to_string(), Btn::K(KAct::DeleteKey), false));
@@ -461,21 +469,25 @@ impl View {
                 }
             }
             KAct::Ease => {
+                let at = self
+                    .buttons
+                    .iter()
+                    .rev()
+                    .find(|(_, b)| *b == Btn::K(KAct::Ease))
+                    .map(|(r, _)| *r);
+                self.fx_drop = at.map(|r| (super::clips::KEY_EASE_DROP, r));
+            }
+            KAct::SetEase(i) => {
+                let Some(ease) = Ease::ALL.get(i as usize).copied() else {
+                    return;
+                };
+                self.k_ease = ease;
                 let s = self.subject();
-                match self
-                    .k_sel
-                    .and_then(|i| self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied())
+                if let Some(i) = self.k_sel
+                    && let Some(k) = self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied()
+                    && self.ed.move_key(s, i, Key { ease, ..k }, false)
                 {
-                    Some(k) => {
-                        let ease = k.ease.next();
-                        if let Some(i) = self.k_sel
-                            && self.ed.move_key(s, i, Key { ease, ..k }, false)
-                        {
-                            self.k_ease = ease;
-                            self.mark_stale();
-                        }
-                    }
-                    None => self.k_ease = self.k_ease.next(),
+                    self.mark_stale();
                 }
             }
             KAct::DeleteKey => {

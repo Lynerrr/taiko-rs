@@ -2685,6 +2685,9 @@ impl View {
                 Btn::S(SAct::Hits | SAct::Snaps | SAct::Lines) => self.svt.drop = was,
                 Btn::S(SAct::Drop(k)) if was.is_some_and(|d| d.0 == k) => self.svt.drop = None,
                 Btn::Fx(FxAct::Menu(k)) if fx_was.is_some_and(|d| d.0 == k) => self.fx_drop = None,
+                Btn::K(KAct::Ease) if fx_was.is_some_and(|d| d.0 == clips::KEY_EASE_DROP) => {
+                    self.fx_drop = None
+                }
                 _ => {}
             }
             return;
@@ -5372,6 +5375,7 @@ mod tests {
     fn the_keyframe_page_makes_a_tko_and_keys_a_track() {
         use crate::editor::keyframes::Subject;
         use crate::tko::gimmick::FieldProp;
+        use crate::tko::track::Ease;
         let mut v = view();
         press(&mut v, Btn::GPage(2));
         assert_eq!(v.mode, Mode::Effects);
@@ -5400,12 +5404,55 @@ mod tests {
         assert!(moved.t > keys[1].t);
         assert!(v.ed.undo());
         assert_eq!(v.ed.track_of(v.subject()).unwrap().keys[1].t, keys[1].t);
-        // The easing and value of the selected key, then deleting it.
+        // The easing of the selected key, picked from a list (every ease, Step too), then its
+        // value, then deleting it.
+        draw(&mut v);
         press(&mut v, Btn::K(KAct::Ease));
-        assert_ne!(
-            v.ed.track_of(v.subject()).unwrap().keys[1].ease,
-            keys[1].ease
+        assert!(
+            v.fx_drop.is_some_and(|d| d.0 == clips::KEY_EASE_DROP),
+            "Ease opens a list"
         );
+        draw(&mut v);
+        let offered: Vec<u8> = v
+            .buttons
+            .iter()
+            .filter_map(|(_, b)| match b {
+                Btn::K(KAct::SetEase(i)) => Some(*i),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(offered.len(), Ease::ALL.len(), "every ease, once");
+        assert_eq!(
+            v.ed.track_of(v.subject()).unwrap().keys[1].ease,
+            keys[1].ease,
+            "opening the list changes nothing"
+        );
+        let cubic = Ease::ALL.iter().position(|e| *e == Ease::CubicOut).unwrap() as u8;
+        let r = v
+            .buttons
+            .iter()
+            .find(|(_, b)| *b == Btn::K(KAct::SetEase(cubic)))
+            .unwrap()
+            .0;
+        click(&mut v, r[0] + 3.0, r[1] + 3.0);
+        assert!(v.fx_drop.is_none(), "it closes");
+        assert_eq!(
+            v.ed.track_of(v.subject()).unwrap().keys[1].ease,
+            Ease::CubicOut
+        );
+        // Pressing Ease again with the list open closes it.
+        draw(&mut v);
+        let r = v
+            .buttons
+            .iter()
+            .find(|(_, b)| *b == Btn::K(KAct::Ease))
+            .unwrap()
+            .0;
+        click(&mut v, r[0] + 3.0, r[1] + 3.0);
+        assert!(v.fx_drop.is_some());
+        draw(&mut v);
+        click(&mut v, r[0] + 3.0, r[1] + 3.0);
+        assert!(v.fx_drop.is_none(), "a second press closes it");
         press(&mut v, Btn::Inc(Field::Key(KF::Value)));
         assert!(v.ed.track_of(v.subject()).unwrap().keys[1].v > keys[1].v);
         // Its value typed, and Enter puts it in.
