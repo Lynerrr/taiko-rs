@@ -106,6 +106,8 @@ pub enum Field {
     Say(collab::Say),
     /// The playhead's time, typed (or pasted) to jump there.
     Playhead,
+    /// The name of a group of notes on the Motion page (double-click its button).
+    GroupName(usize),
 }
 
 /// The most characters free text box `f` takes.
@@ -114,6 +116,7 @@ fn text_max(f: Field) -> usize {
         Field::Meta(k) => k.max_len(),
         Field::Say(_) => collab::SAY_MAX,
         Field::Playhead => 40,
+        Field::GroupName(_) => crate::tko::gimmick::MAX_NAME,
         _ => crate::tko::clips::MAX_TEXT,
     }
 }
@@ -122,7 +125,7 @@ impl Field {
     /// Typed as free text (`type_text`), not as a number.
     fn is_text(self) -> bool {
         match self {
-            Field::FxText | Field::Say(_) | Field::Playhead => true,
+            Field::FxText | Field::Say(_) | Field::Playhead | Field::GroupName(_) => true,
             Field::Meta(k) => k.is_text(),
             _ => false,
         }
@@ -638,6 +641,9 @@ pub struct View {
     /// The last press in the preview while shaping a path, for the double click that adds a
     /// point.
     m_click: Option<(Instant, (f32, f32))>,
+    /// The group button last pressed on the Motion page, and when: pressed again soon, its name
+    /// is typed.
+    m_pick_at: Option<(Instant, usize)>,
     /// The Motion page's tab: 0 the path, 1 before the hit.
     m_tab: u8,
     /// The property the before-the-hit graph shows (in `motion::GRAPH_PROPS`).
@@ -934,6 +940,7 @@ impl View {
             m_group: None,
             m_copied: None,
             m_click: None,
+            m_pick_at: None,
             m_tab: 0,
             m_prop: 0,
             m_graph: [0.0; 4],
@@ -3396,7 +3403,7 @@ impl View {
         if let Field::Meta(k) = f {
             return self.step_setting(k, dir, keys);
         }
-        if matches!(f, Field::FxText | Field::Say(_)) {
+        if matches!(f, Field::FxText | Field::Say(_) | Field::GroupName(_)) {
             return;
         }
         let ids = self.edit_targets(f);
@@ -3431,7 +3438,8 @@ impl View {
                 | Field::FxText
                 | Field::Meta(_)
                 | Field::Say(_)
-                | Field::Playhead => {}
+                | Field::Playhead
+                | Field::GroupName(_) => {}
             },
             false,
         );
@@ -3521,6 +3529,9 @@ impl View {
         if f == Field::FxText {
             return self.layer_text_set(text);
         }
+        if let Field::GroupName(g) = f {
+            return self.group_renamed(g, text);
+        }
         if let Field::Meta(k) = f {
             return self.apply_setting(k, text);
         }
@@ -3572,7 +3583,8 @@ impl View {
                 | Field::FxText
                 | Field::Meta(_)
                 | Field::Say(_)
-                | Field::Playhead => {}
+                | Field::Playhead
+                | Field::GroupName(_) => {}
             },
             false,
         );
@@ -3681,6 +3693,7 @@ impl View {
             Btn::Dec(f) => self.change(f, -1.0, keys),
             Btn::Inc(f) => self.change(f, 1.0, keys),
             Btn::Edit(Field::Meta(k)) => self.type_setting(k),
+            Btn::Edit(Field::GroupName(g)) => self.rename_group(g),
             Btn::Edit(f) => {
                 if self.sel_line.is_some()
                     || matches!(f, Field::S(_) | Field::Key(_))
@@ -5989,6 +6002,66 @@ mod tests {
         draw(&mut v);
         assert!(picks(&v)[0].1 < next[0].1);
         assert_eq!(v.ed.time, 0.0);
+    }
+
+    #[test]
+    fn a_moving_group_is_renamed_by_a_double_click_on_its_button() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        let ids: Vec<u64> = v.ed.chart.objects.iter().take(3).map(|o| o.id).collect();
+        v.ed.selection = ids.into_iter().collect();
+        press(&mut v, Btn::M(MAct::UseSelection));
+        let name = |v: &View| v.ed.gimmick().unwrap().groups[0].name.clone();
+        let old = name(&v);
+        draw(&mut v);
+        let chip = |v: &View| {
+            v.buttons
+                .iter()
+                .find(|(_, b)| *b == Btn::M(MAct::Pick(0)))
+                .map(|(r, _)| *r)
+        };
+        let r = chip(&v).expect("the group's button");
+        assert!(
+            v.tips
+                .iter()
+                .any(|(tr, t)| *tr == r && t.contains("Double-click to rename")),
+            "its tip says how"
+        );
+        // One click picks it, and types nothing.
+        click(&mut v, r[0] + 3.0, r[1] + 3.0);
+        assert!(v.typing.is_none());
+        // A second one soon after types its name, ready to be typed over.
+        click(&mut v, r[0] + 3.0, r[1] + 3.0);
+        assert_eq!(v.typing, Some((Field::GroupName(0), old.clone())));
+        draw(&mut v);
+        assert!(chip(&v).is_none(), "the box stands in its place");
+        assert!(
+            v.buttons
+                .iter()
+                .any(|(_, b)| *b == Btn::Edit(Field::GroupName(0)))
+        );
+        v.type_text("Spin intro");
+        key(&mut v, KeyCode::Enter);
+        assert!(v.typing.is_none());
+        assert_eq!(name(&v), "Spin intro");
+        assert_eq!(v.status, "renamed to Spin intro");
+        draw(&mut v);
+        assert!(
+            v.buttons.iter().any(|(_, b)| *b == Btn::M(MAct::Pick(0))),
+            "the button is back, with its new name"
+        );
+        assert!(v.ed.undo(), "one undo step");
+        assert_eq!(name(&v), old);
+        // An empty name, or Esc, leaves it as it was.
+        v.rename_group(0);
+        v.type_text("   ");
+        key(&mut v, KeyCode::Enter);
+        assert_eq!(name(&v), old);
+        v.rename_group(0);
+        v.type_text("Nope");
+        key(&mut v, KeyCode::Escape);
+        assert_eq!(name(&v), old);
     }
 
     #[test]

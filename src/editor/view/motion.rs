@@ -335,6 +335,17 @@ impl View {
                 // Its notes picked on the timeline too, so what is shaped is what is picked.
                 self.m_group = Some(i);
                 self.ed.select_group(i);
+                // A second press soon after: its name is typed.
+                let now = Instant::now();
+                let double = self.m_pick_at.is_some_and(|(at, g)| {
+                    g == i && now.duration_since(at).as_millis() <= DOUBLE_MS
+                });
+                if double {
+                    self.m_pick_at = None;
+                    self.rename_group(i);
+                } else {
+                    self.m_pick_at = Some((now, i));
+                }
                 false
             }
             (MAct::Path(i), Some(g)) => self.ed.set_path_preset(g, i),
@@ -505,6 +516,39 @@ impl View {
         }
         self.m_scroll = (self.m_scroll - notches as f32 * 20.0).clamp(0.0, self.m_page_most);
         true
+    }
+
+    /// Starts typing a new name for group `g`, its name now ready to be typed over.
+    pub(super) fn rename_group(&mut self, g: usize) {
+        let Some(name) = self
+            .ed
+            .gimmick()
+            .and_then(|gm| gm.groups.get(g))
+            .map(|gr| gr.name.clone())
+        else {
+            return;
+        };
+        self.typing_fresh = !name.is_empty();
+        self.typing = Some((super::Field::GroupName(g), name));
+        self.status = "type its name, Enter to keep it, Esc to leave it as it was".into();
+    }
+
+    /// Group `g` takes the name typed (an empty one leaves it as it was).
+    pub(super) fn group_renamed(&mut self, g: usize, text: &str) {
+        let name = text.trim();
+        if name.is_empty() {
+            self.status = "a group needs a name: it keeps its old one".into();
+            return;
+        }
+        let name = name.to_string();
+        self.status = format!("renamed to {name}");
+        if self.ed.edit_gimmick(false, |gm| {
+            if let Some(gr) = gm.groups.get_mut(g) {
+                gr.name = name;
+            }
+        }) {
+            self.mark_stale();
+        }
     }
 
     /// On the timeline, under the notes, the group the Motion page shapes: a bracket under each
@@ -700,16 +744,29 @@ impl View {
         i: usize,
         current: Option<usize>,
     ) -> f32 {
+        // Its name being typed: the box in its place, wide enough for a name.
+        if let Some(typed) = self.typed_line(super::Field::GroupName(i)) {
+            let bw = (Canvas::text_width(7.0, &typed) + 10.0)
+                .max(80.0)
+                .min(w.max(44.0));
+            let text = Canvas::fit(7.0, bw - 8.0, &typed);
+            self.styled(
+                c,
+                [x, y, bw, CHIP_ROW - 2.0],
+                &text,
+                Btn::Edit(super::Field::GroupName(i)),
+                true,
+                Look::Field,
+            );
+            return x + bw + 3.0;
+        }
         // Never so narrow that its name is cut to nothing.
         let bw = (Canvas::text_width(7.0, label) + 10.0).min(w.max(44.0));
         let text = Canvas::fit(7.0, bw - 8.0, label);
-        self.button(
-            c,
-            [x, y, bw, CHIP_ROW - 2.0],
-            &text,
-            Btn::M(MAct::Pick(i)),
-            current == Some(i),
-        );
+        let r = [x, y, bw, CHIP_ROW - 2.0];
+        self.button(c, r, &text, Btn::M(MAct::Pick(i)), current == Some(i));
+        self.tips
+            .push((r, format!("{label}\nDouble-click to rename it")));
         x + bw + 3.0
     }
 
