@@ -344,6 +344,24 @@ fn requests() -> Vec<Request> {
                 scroll_speed: 1.2,
             }),
         },
+        Request::MapVote {
+            token: "t".into(),
+            map: online::PlayedMap {
+                hash: 0x1f3a,
+                name: "Artist - Song [Oni]".into(),
+                set_id: Some(1),
+            },
+            vote: Some(online::MapVote::Dislike),
+        },
+        Request::MapVote {
+            token: "t".into(),
+            map: online::PlayedMap {
+                hash: 0x1f3a,
+                name: "Artist - Song [Oni]".into(),
+                set_id: None,
+            },
+            vote: None,
+        },
         Request::Medals { name: "me".into() },
         Request::ClientEvent {
             token: "t".into(),

@@ -173,6 +173,15 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt: Option<PlayedAttempt>,
     },
+    /// The player likes or dislikes a map they played, or takes their say back (`vote` None),
+    /// for map recommendations (`Reply::Counted`). A server that doesn't know it answers an
+    /// error.
+    MapVote {
+        token: String,
+        map: PlayedMap,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vote: Option<MapVote>,
+    },
     /// Every medal, and how `name` stands with them (`Reply::Medals`); no name: just the list.
     Medals {
         name: String,
@@ -310,6 +319,14 @@ pub struct PlayTiming {
     /// The output latency the clock took off, and what the stream itself said it was.
     pub latency_ms: f64,
     pub reported_latency_ms: f64,
+}
+
+/// What a player said about a map they played (`Request::MapVote`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MapVote {
+    Like,
+    Dislike,
 }
 
 /// The map of a play off the leaderboards: nobody may have sent a score on it yet, so its name

@@ -8187,6 +8187,33 @@ impl State {
         });
     }
 
+    /// Tells the server what the player said about a map, in the background: a like, a
+    /// dislike, or (None) taking their say back.
+    fn send_vote(&self, map: online::PlayedMap, vote: Option<online::MapVote>) {
+        let Some(request) = self.vote_request(map, vote) else {
+            return;
+        };
+        let server = self.cfg.online_server.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = online::call(&server, request) {
+                eprintln!("sending the vote: {e}");
+            }
+        });
+    }
+
+    /// The request for `send_vote`, if there's anyone logged in to send it for.
+    fn vote_request(
+        &self,
+        map: online::PlayedMap,
+        vote: Option<online::MapVote>,
+    ) -> Option<online::Request> {
+        (!self.cfg.online_token.is_empty()).then(|| online::Request::MapVote {
+            token: self.cfg.online_token.clone(),
+            map,
+            vote,
+        })
+    }
+
     /// The live play's attempt as of this frame: where it is and its judgements. Its mods are
     /// read once, when it starts (they don't change during a play).
     fn follow_attempt(&mut self) {

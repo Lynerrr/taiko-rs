@@ -126,6 +126,16 @@ impl Screen for ResultsScreen {
                 ));
             }
             KeyCode::KeyR if state.modifiers_ctrl => state.retry_from(self.entry, self.from),
+            KeyCode::KeyL | KeyCode::KeyN if results.vote_on.is_some() => {
+                let vote = if code == KeyCode::KeyL {
+                    online::MapVote::Like
+                } else {
+                    online::MapVote::Dislike
+                };
+                if let Some((map, vote)) = results.toggle_vote(vote) {
+                    state.send_vote(map, vote);
+                }
+            }
             KeyCode::KeyV if results.replay.is_some() => {
                 if let Some(file) = results.replay.clone() {
                     state.open_video_editor(&file);

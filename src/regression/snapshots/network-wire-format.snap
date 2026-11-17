@@ -76,6 +76,8 @@ room protocol 7 | online protocol 1 | pp version 4
 {"protocol":1,"request":{"SetEpic":{"token":"t","map":{"Custom":7},"epic":true}}}
 {"protocol":1,"request":{"Played":{"token":"t","ms":1000}}}
 {"protocol":1,"request":{"Played":{"token":"t","ms":24000,"map":{"hash":7994,"name":"Artist - Song [Oni]","set_id":1},"attempt":{"ended":"quit","at_ms":36000,"length_ms":90000,"from_ms":12000,"great":80,"ok":10,"miss":10,"max_combo":50,"mods":["HR"],"rate":1.5,"scroll_speed":1.2}}}}
+{"protocol":1,"request":{"MapVote":{"token":"t","map":{"hash":7994,"name":"Artist - Song [Oni]","set_id":1},"vote":"dislike"}}}
+{"protocol":1,"request":{"MapVote":{"token":"t","map":{"hash":7994,"name":"Artist - Song [Oni]"}}}}
 {"protocol":1,"request":{"Medals":{"name":"me"}}}
 {"protocol":1,"request":{"ClientEvent":{"token":"t","event":"ura_logo","key":"k"}}}
 {"protocol":1,"request":{"OpenMapping":{"token":"t","set":{"title":"Artist - Song","folder":"1 Artist - Song","diffs":["Oni","Muzukashii"],"assets":[{"name":"audio.mp3","sha256":"ab","size":3}]},"mode":"Guest"}}}
