@@ -211,17 +211,22 @@ pub(crate) fn submit_score(
 ) -> Receiver<Sent> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        play.stars = stars::star_rating_played(
-            &path,
-            params.rate,
-            params.mods,
-            params.scroll_speed,
-            params.seed,
-            params.half,
-        );
-        play.md5 = std::fs::read(&path)
-            .ok()
-            .map(|bytes| download::md5_hex(&bytes));
+        if crate::tja_maps::is_course(&path) {
+            // A TJA chart's board checks the play on its chart, sent along: no file, no stars.
+            play.tja = crate::tja_maps::board(&path);
+        } else {
+            play.stars = stars::star_rating_played(
+                &path,
+                params.rate,
+                params.mods,
+                params.scroll_speed,
+                params.seed,
+                params.half,
+            );
+            play.md5 = std::fs::read(&path)
+                .ok()
+                .map(|bytes| download::md5_hex(&bytes));
+        }
         play.operation_key.get_or_insert_with(score_outbox::new_key);
         let unsent = score_outbox::Unsent {
             server,

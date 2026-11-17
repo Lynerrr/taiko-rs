@@ -1280,6 +1280,7 @@ impl State {
             resending: Default::default(),
             resend_at: Instant::now(),
             submit_keys: false,
+            tja_boards: false,
             session_play_ms: 0.0,
             last_key: (KeyCode::Escape, Instant::now()),
             retry_hold: None,

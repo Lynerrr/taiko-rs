@@ -617,11 +617,11 @@ impl Screen for PlayScreen {
                     crate::ura::whole_play(&state.cfg, replay.accuracy);
                 }
                 // Whole plays go to the online leaderboards too, when logged in; TJA charts'
-                // stay on this computer.
+                // only to a server with TJA boards, else they stay on this computer.
                 if self.from.is_none()
                     && !state.cfg.online_token.is_empty()
                     && !game.mods().unranked()
-                    && !e.is_tja()
+                    && (!e.is_tja() || state.tja_boards)
                 {
                     let m = &game.map().meta;
                     let play = online::ScoreSubmit {
@@ -654,6 +654,7 @@ impl Screen for PlayScreen {
                         inputs: replay.inputs.clone(),
                         rolls: Some(game.stats().roll_ticks),
                         operation_key: None,
+                        tja: None,
                         stars: None,
                         pp_version: online::PP_VERSION,
                         scroll_speed: Some(replay.scroll_speed),

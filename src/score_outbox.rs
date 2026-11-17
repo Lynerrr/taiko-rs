@@ -197,6 +197,7 @@ mod tests {
                 timing: None,
                 rolls: None,
                 operation_key: Some(key.into()),
+                tja: None,
             },
         }
     }
