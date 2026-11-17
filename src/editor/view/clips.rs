@@ -204,7 +204,7 @@ impl View {
         let n = self.fx_group().len();
         if n > 1 {
             let text = format!(
-                "{n} blocks picked: drag one to move them all (Ctrl+drag copies), Ctrl+C / Ctrl+V copy and paste at the playhead, Ctrl+D copies them after, Delete removes them. The settings below are the brightest one's."
+                "{n} blocks picked: drag one to move them all (Ctrl+drag copies), drag an end to resize them all, Ctrl+C / Ctrl+V copy and paste at the playhead, Ctrl+D copies them after, Delete removes them. The settings below are the brightest one's."
             );
             y = self.paragraph(c, x, y, inner, 6.0, 0xffffff, &text) + 2.0;
         }
@@ -2264,8 +2264,14 @@ impl View {
                             copy: false,
                         }
                     }
-                    Part::Start => Drag::FxEdge { id, end: false },
-                    Part::End => Drag::FxEdge { id, end: true },
+                    // An end of one of several picked: they all grow or shrink by as much.
+                    Part::Start | Part::End => {
+                        self.fx_orig = self.clip_places(&self.fx_group());
+                        Drag::FxEdge {
+                            id,
+                            end: part == Part::End,
+                        }
+                    }
                 };
             }
             None if self.fx_armed.is_some() => {
@@ -2321,6 +2327,16 @@ impl View {
                 }
                 if let Some(lane) = self.ed.clip(id).map(|c| c.lane) {
                     self.show_row(lane);
+                }
+            }
+            Drag::FxEdge { id, end } if self.fx_orig.len() > 1 => {
+                let Some(&(_, s0, e0, _)) = self.fx_orig.iter().find(|o| o.0 == id) else {
+                    return;
+                };
+                let d = t - if end { e0 } else { s0 };
+                let from = self.fx_orig.clone();
+                if self.ed.resize_clips(&from, end, d, true) {
+                    self.mark_stale();
                 }
             }
             Drag::FxEdge { id, end } => {
@@ -2392,6 +2408,7 @@ impl View {
                 self.fx_orig.clear();
             }
             Drag::FxEdge { .. } => {
+                self.fx_orig.clear();
                 self.ed.end_drag();
                 self.mark_stale();
             }

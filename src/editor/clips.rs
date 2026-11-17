@@ -1474,6 +1474,39 @@ impl Editor {
         })
     }
 
+    /// Moves the start (or the `end`) of blocks `from` (id, start, end, row as the drag began)
+    /// by `d` ms, as one undo step or part of the drag going on. Each stays a snap step long at
+    /// least and stops at the blocks either side of it on its row, as one block resized alone.
+    pub fn resize_clips(
+        &mut self,
+        from: &[(u32, f64, f64, u8)],
+        end: bool,
+        d: f64,
+        drag: bool,
+    ) -> bool {
+        let step = self.snap.max(1) as f64;
+        let sizes: Vec<(u32, f64, f64)> = from
+            .iter()
+            .map(|&(id, start, stop, _)| {
+                let (lo, hi) = self.clip_room(id);
+                let min = self.beat_at(if end { stop } else { start }) / step;
+                if end {
+                    (id, start, (stop + d).max(start + min).min(hi.max(stop)))
+                } else {
+                    (id, (start + d).min(stop - min).max(lo.min(start)), stop)
+                }
+            })
+            .collect();
+        self.edit_gimmick(drag, |g| {
+            for &(id, start, stop) in &sizes {
+                if let Some(c) = g.clips.iter_mut().find(|c| c.id == id) {
+                    c.start = start;
+                    c.end = stop;
+                }
+            }
+        })
+    }
+
     /// The moments clip `c` acts at that the chart alone decides (beats and notes; hits and
     /// misses only happen in play). `reds`: from `reds`.
     pub fn clip_moments(&self, c: &Clip, reds: &[(f64, f64)]) -> Vec<f64> {
