@@ -36,6 +36,26 @@ pub fn add_root(dir: &Path) {
     }
 }
 
+/// Whether `dir` is a TJA folder itself.
+pub fn is_root(dir: &Path) -> bool {
+    ROOTS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|r| r == dir)
+}
+
+/// The TJA folder `path` is in (the innermost, if one is in another).
+pub fn root_of(path: &Path) -> Option<PathBuf> {
+    ROOTS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|r| path.starts_with(r))
+        .max_by_key(|r| r.components().count())
+        .cloned()
+}
+
 /// Whether `path` is in a TJA folder, where `.tja` files are read.
 pub fn in_folder(path: &Path) -> bool {
     ROOTS
