@@ -504,6 +504,11 @@ fn a_player_logged_in_can_like_or_dislike_the_map_they_just_played() {
     assert_eq!(r.toggle_vote(Like).map(|v| v.1), Some(Some(Like)));
     assert_eq!(r.toggle_vote(Dislike).map(|v| v.1), Some(Some(Dislike)));
     assert_eq!(r.vote, Some(Dislike));
+    // The thumb pops from the moment of the vote.
+    assert!(
+        r.voted_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(5))
+    );
     // N on the screen takes the dislike back, L likes.
     s.key(KeyCode::KeyN, false, None, Instant::now(), None);
     assert_eq!(results_of(&mut s).vote, None);

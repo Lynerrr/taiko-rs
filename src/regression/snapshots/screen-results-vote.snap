@@ -2,27 +2,27 @@ text  283,24   Regression - basics [basics]
 text  397,80   A
 text  355,170  96.09%
 text  372,212  00912345
-text  646,244  Rate this map
+text  662,240  Rate this map
 text  257,260  GREAT  60
 text  457,260  UR      0.0
-text  665,269  Liked
-text  665,282  key L
 text  257,284  OK     3
 text  457,284  MEAN    +0.0 ms
 text  257,308  MISS   1
 text  457,308  DRUMROLL 4
-text  665,315  Not for me
-text  665,328  key N
+text  649,327  Like
+text  710,327  Not for me
 text  257,332  MAX COMBO  50
 text  457,332  BIG x2  0
+text  662,340  L
+text  746,340  N
 text  307,380  Windows: great +-34  ok +-80 ms
 text  299,430  Retry  (Enter)
 text  431,430  Song select  (Esc)
 text  344,455  scroll down: performance
 text  133,668  PERFORMANCE
 text  353,700  no pp for this play
-hit   617,260   148x38   Key(KeyL)
-hit   617,306   148x38   Key(KeyN)
+hit   623,258    84x82   Key(KeyL)
+hit   707,258    84x82   Key(KeyN)
 hit   285,424   124x20   Key(Enter)
 hit   417,424   151x20   Key(Escape)
 hit   320,450   213x18   Key(PageDown)
