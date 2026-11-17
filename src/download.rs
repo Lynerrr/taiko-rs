@@ -1752,8 +1752,9 @@ pub fn md5_hex(data: &[u8]) -> String {
 }
 
 /// Passes over the mirrors before a download gives up: osu.direct often answers 503 for a
-/// moment and catboy.best rate-limits (425), and the next try usually works.
-const ROUNDS: u64 = 3;
+/// moment and catboy.best rate-limits (425), and the next try usually works. The waits
+/// between passes (5, 10, 15 s) add up to the 30 s osu.direct's 503s ask for.
+const ROUNDS: u64 = 4;
 
 /// Where the mirrors give osu! set `id`.
 fn mirror_sources(id: u32) -> Vec<(&'static str, String)> {
@@ -1917,7 +1918,8 @@ pub(crate) fn download_to(
     total: &AtomicU64,
     cancel: &AtomicBool,
 ) -> Result<(), (String, bool)> {
-    crate::offline::url(url).map_err(|e| (e, true))?;
+    // Blocked in tests: no later pass would get through either.
+    crate::offline::url(url).map_err(|e| (e, false))?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(15)))
         .build()
@@ -1928,6 +1930,8 @@ pub(crate) fn download_to(
         .call()
         .map_err(|e| match e {
             ureq::Error::StatusCode(404) => ("doesn't have this set".to_string(), false),
+            // catboy.best's guard turning us away: asking again only keeps it shut.
+            ureq::Error::StatusCode(403) => (e.to_string(), false),
             e => (e.to_string(), true),
         })?;
     let body = response.body_mut();
