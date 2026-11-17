@@ -2473,6 +2473,15 @@ impl View {
         self.mouse_move(mx, my, self.held);
     }
 
+    /// The modifier keys changed with the pointer still: a drag that reads them follows.
+    pub fn keys_changed(&mut self, keys: Keys) {
+        let shift = self.held.shift != keys.shift;
+        self.held = keys;
+        if shift {
+            self.gizmo_keys_changed();
+        }
+    }
+
     pub fn mouse_move(&mut self, x: f32, y: f32, keys: Keys) {
         if (x - self.mouse.0).abs() + (y - self.mouse.1).abs() > 0.5 {
             self.moved_at = Instant::now();
@@ -6646,6 +6655,44 @@ mod tests {
     }
 
     #[test]
+    fn shift_held_mid_drag_keeps_the_preview_on_one_axis() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        let t = v.ed.snapped(3000.0);
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        let [fx, fy, fw, fh] = v.layout.preview;
+        let (x, y) = (fx + fw / 2.0, fy + fh / 2.0);
+        // Mostly sideways: Shift drops the small step down.
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_move(x + 30.0 * k, y + 8.0 * k, Keys::default());
+        assert!(
+            (field(&v, FieldProp::Y, t) - 8.0).abs() <= 1.0,
+            "free first"
+        );
+        v.keys_changed(shift);
+        assert!(
+            (field(&v, FieldProp::X, t) - 30.0).abs() <= 1.0,
+            "pressing Shift with the pointer still keeps the way it went"
+        );
+        assert_eq!(field(&v, FieldProp::Y, t), 0.0, "and snaps the other back");
+        assert_eq!(field(&v, FieldProp::Rotation, t), 0.0, "it doesn't turn");
+        // Turning mostly down with Shift still held: it goes straight down.
+        v.mouse_move(x + 6.0 * k, y + 25.0 * k, shift);
+        assert_eq!(field(&v, FieldProp::X, t), 0.0);
+        assert!((field(&v, FieldProp::Y, t) - 25.0).abs() <= 1.0);
+        // Let go of Shift: free again where the pointer is.
+        v.keys_changed(Keys::default());
+        assert!((field(&v, FieldProp::X, t) - 6.0).abs() <= 1.0);
+        v.mouse_up(x + 6.0 * k, y + 25.0 * k, Keys::default());
+        assert!(v.ed.undo());
+        assert_eq!(field(&v, FieldProp::Y, t), 0.0, "still one undo step");
+    }
+
+    #[test]
     fn the_motion_strip_goes_to_a_key_and_a_right_click_takes_it_away() {
         let mut v = clips_view();
         v.set_time(2000.0);
@@ -7403,6 +7450,29 @@ mod tests {
         v.clip_set(CF::Spin, 360.0);
         assert_eq!(picked_layer(&v).spin, 360.0);
         assert_eq!(picked_layer(&v).from.turn, 0.0, "the pose's turn stays");
+    }
+
+    #[test]
+    fn shift_mid_drag_places_a_picked_block_on_one_axis() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        put_fx(&mut v, preset("Text"));
+        draw(&mut v);
+        let from = picked_layer(&v).from;
+        let [fx, fy, fw, fh] = v.layout.preview;
+        let (x, y) = (fx + fw / 2.0, fy + fh / 2.0);
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        v.mouse_down(x, y, Keys::default(), None);
+        v.mouse_move(x + 5.0 * k, y + 40.0 * k, Keys::default());
+        v.keys_changed(Keys {
+            shift: true,
+            ..Keys::default()
+        });
+        v.mouse_up(x + 5.0 * k, y + 40.0 * k, Keys::default());
+        let l = picked_layer(&v);
+        assert_eq!(l.from.x, from.x, "straight down");
+        assert!((l.from.y - from.y - 40.0).abs() <= 1.0);
+        assert!(v.motion_keys().is_empty(), "no playfield keys");
     }
 
     #[test]

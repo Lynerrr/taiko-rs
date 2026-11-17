@@ -1342,6 +1342,14 @@ impl State {
         }
     }
 
+    /// Shift, Ctrl or Alt went down or up: the editor's drag in progress follows them.
+    pub(crate) fn editor_keys_changed(&mut self) {
+        let keys = self.editor_keys();
+        if let Some(MapEditor { view, .. }) = self.scene.screen_mut::<MapEditor>() {
+            view.keys_changed(keys);
+        }
+    }
+
     fn editor_keys(&self) -> editor::view::Keys {
         editor::view::Keys {
             shift: self.modifiers_shift,
