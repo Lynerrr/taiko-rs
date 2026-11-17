@@ -10793,6 +10793,17 @@ impl State {
         match admin::parse(text) {
             Ok(admin::Command::Op(op)) => self.admin_op(op),
             Ok(admin::Command::Watch(name)) => self.watch(name),
+            Ok(admin::Command::DeleteBoard(map)) => {
+                let map = map.or_else(|| {
+                    self.offset_entry()
+                        .and_then(|entry| self.library.get(entry))
+                        .map(|entry| entry.hash())
+                });
+                match map {
+                    Some(map) => self.admin_op(online::AdminOp::DeleteBoard { map }),
+                    None => self.toast("select a map, or give its hash: /delboard hash".into()),
+                }
+            }
             Ok(admin::Command::Help) => {
                 self.social.set_tab(social::Tab::Admin);
                 self.social.info = Some((

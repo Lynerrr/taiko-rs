@@ -237,9 +237,16 @@ fn a_tja_chart_cant_be_opened_in_the_editor() {
 struct Seen {
     plays: Vec<online::ScoreSubmit>,
     boards: Vec<u64>,
+    /// What an admin asked for on the social connection.
+    admin: Vec<online::AdminOp>,
 }
 
 fn tja_server() -> (String, std::sync::Arc<std::sync::Mutex<Seen>>) {
+    server_for(false)
+}
+
+/// `tja_server`, logging `admin` in as an admin or not.
+fn server_for(admin: bool) -> (String, std::sync::Arc<std::sync::Mutex<Seen>>) {
     use crate::online::{Envelope, Reply, Request};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -261,7 +268,7 @@ fn tja_server() -> (String, std::sync::Arc<std::sync::Mutex<Seen>>) {
                     name: "me".into(),
                     token: "t".into(),
                     nominator: false,
-                    admin: false,
+                    admin,
                     email: Some(true),
                     features: vec![
                         online::SUBMIT_KEY_FEATURE.into(),
@@ -273,7 +280,11 @@ fn tja_server() -> (String, std::sync::Arc<std::sync::Mutex<Seen>>) {
                 let reply = match env.request {
                     Request::Connect { .. } => {
                         let _ = online::write_line(&mut out, &account);
-                        while online::read_line(&mut reader).is_ok() {}
+                        while let Ok(line) = online::read_line(&mut reader) {
+                            if let Ok(online::Up::Admin(op)) = serde_json::from_str(&line) {
+                                seen.lock().unwrap().admin.push(op);
+                            }
+                        }
                         return;
                     }
                     Request::WhoAmI { .. } => account,
@@ -373,6 +384,49 @@ fn a_tja_play_goes_to_a_server_with_tja_boards_with_its_chart() {
         .unwrap();
     assert_eq!(results.results.no_pp, Some("TJA charts give no pp"));
     assert!(results.results.vote_on.is_none());
+}
+
+/// An admin's /delboard clears the selected map's board, a TJA course's by its chart hash;
+/// /delboard with a hash clears that map's.
+#[test]
+fn an_admin_clears_the_selected_tja_course_s_board() {
+    let f = Folders::new("delboard");
+    let (server, seen) = server_for(true);
+    let mut cfg = config();
+    cfg.online_server = server;
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    cfg.terms_version = terms::VERSION;
+    let (mut s, mut now) = client(&f, cfg);
+    put(&f.tja, "Song", "song.tja", CHART);
+    refresh(&mut s, &mut now);
+    let until = Instant::now() + Duration::from_secs(30);
+    while !(s.social.connected && s.admin) && Instant::now() < until {
+        s.poll_social();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(s.admin, "logged in as an admin");
+    let oni = s
+        .library
+        .iter()
+        .position(|e| e.meta.version == "Oni ★8")
+        .unwrap();
+    let hash = s.library[oni].hash();
+    let path = s.library[oni].path.clone();
+    s.select.select_path(&s.library, &path);
+    s.admin_command("/delboard");
+    s.admin_command("/delboard 00000000000000ff");
+    let sent = |s: &mut State, now: &mut Instant| {
+        wait_for(s, now, |_| seen.lock().unwrap().admin.len() >= 2)
+    };
+    assert!(sent(&mut s, &mut now), "both reach the server");
+    assert_eq!(
+        seen.lock().unwrap().admin,
+        [
+            online::AdminOp::DeleteBoard { map: hash },
+            online::AdminOp::DeleteBoard { map: 0xff },
+        ]
+    );
 }
 
 /// The playfield of TJA chart `text`'s course (no inputs, `mods`), drawn at each of `times`

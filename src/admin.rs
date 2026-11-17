@@ -9,11 +9,13 @@ pub enum Command {
     Op(AdminOp),
     /// Watch anyone's solo play, without them being told.
     Watch(String),
+    /// Clear a map's whole board: the map given by its hash, or else the selected one.
+    DeleteBoard(Option<u64>),
     Help,
 }
 
 /// The commands, for /help.
-pub const HELP: &str = "/ban /unban /kick /mute name 30m|2h|1d /unmute /rename old new /nominator name on|off /rmpfp /purge /lookup /watch /announce text /delplay id /pp id value|reset /roomkick room name /closeroom room";
+pub const HELP: &str = "/ban /unban /kick /mute name 30m|2h|1d /unmute /rename old new /nominator name on|off /rmpfp /purge /lookup /watch /announce text /delplay id /delboard [map hash] /pp id value|reset /roomkick room name /closeroom room";
 
 /// Whether `text` is meant as an admin command (else it's a chat line, `/np` included).
 pub fn is_command(text: &str) -> bool {
@@ -33,6 +35,7 @@ pub fn is_command(text: &str) -> bool {
             | "/watch"
             | "/announce"
             | "/delplay"
+            | "/delboard"
             | "/pp"
             | "/roomkick"
             | "/closeroom"
@@ -157,6 +160,14 @@ pub fn parse(text: &str) -> Result<Command, String> {
             need(1, "/delplay id")?;
             op(AdminOp::DeletePlay { id: id(0)? })
         }
+        "/delboard" => match args.first() {
+            None => Ok(Command::DeleteBoard(None)),
+            Some(hash) => u64::from_str_radix(hash.trim_start_matches("0x"), 16)
+                .ok()
+                .filter(|&map| map != 0)
+                .map(|map| Command::DeleteBoard(Some(map)))
+                .ok_or_else(|| format!("\"{hash}\" isn't a map hash (16 hex digits)")),
+        },
         "/pp" => {
             need(2, "/pp id value|reset")?;
             let pp = if args[1].eq_ignore_ascii_case("reset") {
@@ -284,6 +295,17 @@ mod tests {
         assert!(parse("/ban").unwrap_err().starts_with("usage"));
         assert!(parse("/mute troll forever").is_err());
         assert!(parse("/delplay x").is_err());
+        assert_eq!(parse("/delboard"), Ok(Command::DeleteBoard(None)));
+        assert_eq!(
+            parse("/delboard 00ab12cd34ef5678"),
+            Ok(Command::DeleteBoard(Some(0x00ab_12cd_34ef_5678)))
+        );
+        assert_eq!(
+            parse("/delboard 0xff"),
+            Ok(Command::DeleteBoard(Some(0xff)))
+        );
+        assert!(parse("/delboard nope").is_err());
+        assert!(parse("/delboard 0").is_err());
         assert!(parse("/frobnicate").is_err());
     }
 
