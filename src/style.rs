@@ -317,6 +317,40 @@ pub fn star_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f3
     let text = stars
         .map(|s| format!("{s:.2}"))
         .unwrap_or_else(|| "...".into());
+    rating_pill(c, right, y, size, stars, &text)
+}
+
+/// A map's rating pill: a TJA course's `level` (its charter's, "8" or "9.5") when it has one,
+/// else its star rating (`star_pill`).
+pub fn map_pill(
+    c: &mut Canvas,
+    right: f32,
+    y: f32,
+    size: f32,
+    level: Option<f32>,
+    stars: Option<f32>,
+) -> f32 {
+    match level {
+        Some(level) => rating_pill(c, right, y, size, Some(level), &level_text(level)),
+        None => star_pill(c, right, y, size, stars),
+    }
+}
+
+/// A TJA level as charters write it: whole, or with the fraction it was given.
+pub fn level_text(level: f32) -> String {
+    let text = format!("{level:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn rating_pill(
+    c: &mut Canvas,
+    right: f32,
+    y: f32,
+    size: f32,
+    stars: Option<f32>,
+    text: &str,
+) -> f32 {
+    let text = text.to_string();
     let tw = Canvas::text_width(size, &text);
     let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
     let x = right - w;

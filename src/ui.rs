@@ -583,7 +583,12 @@ impl Select {
         let facts = |i: usize, e: &Entry| {
             let known = info.as_ref().and_then(|v| v.get(i).copied().flatten());
             crate::search::Facts {
-                stars: known.map(|x| x.stars as f64),
+                // A TJA course by its charter's level, as it shows.
+                stars: e
+                    .meta
+                    .level
+                    .map(f64::from)
+                    .or(known.map(|x| x.stars as f64)),
                 length_s: known.map(|x| x.length_ms as f64 / 1000.0),
                 bpm: known.map(|x| x.bpm as f64),
                 played_days: self
@@ -743,7 +748,10 @@ impl Select {
         let value = |i: usize| -> f64 {
             let info = || info.as_ref().and_then(|v| v.get(i).copied().flatten());
             match self.sort {
-                SortMode::Difficulty => info().map(|x| x.stars as f64).unwrap_or(f64::NAN),
+                SortMode::Difficulty => match library[i].meta.level {
+                    Some(level) => level as f64,
+                    None => info().map(|x| x.stars as f64).unwrap_or(f64::NAN),
+                },
                 SortMode::Length => info().map(|x| x.length_ms as f64).unwrap_or(f64::NAN),
                 SortMode::Bpm => info().map(|x| x.bpm as f64).unwrap_or(f64::NAN),
                 SortMode::Hp => library[i].meta.hp,
@@ -2438,7 +2446,16 @@ impl Select {
                             .copied()
                             .filter(|v| v.is_finite())
                             .map(|v| v as f32);
-                        crate::style::star_pill(c, 24.0 + lw - 12.0, diffs_y - 1.0, 8.0, sorted_by);
+                        // A TJA course is ordered by its level, and shows it as its charter wrote it.
+                        let level = e.meta.level.filter(|_| self.sort == SortMode::Difficulty);
+                        crate::style::map_pill(
+                            c,
+                            24.0 + lw - 12.0,
+                            diffs_y - 1.0,
+                            8.0,
+                            level,
+                            sorted_by,
+                        );
                     } else {
                         c.text_right(
                             24.0 + lw - 12.0,
@@ -2508,11 +2525,12 @@ impl Select {
                     let col = if selected { 0xffffff } else { 0xc8c8d8 };
                     let convert = if e.meta.mode == 0 { "  (convert)" } else { "" };
                     let pill = if a > 0.6 {
-                        crate::style::star_pill(
+                        crate::style::map_pill(
                             c,
                             24.0 + lw - 10.0,
                             y + 6.0,
                             7.0,
+                            e.meta.level,
                             stars(self.visible[*i]),
                         )
                     } else {

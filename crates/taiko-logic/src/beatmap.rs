@@ -138,6 +138,10 @@ pub struct Meta {
     /// What its hit windows are made from: the OD, or a TJA course's arcade windows.
     #[serde(default)]
     pub windows: WindowSource,
+    /// A TJA course's `LEVEL`: the rating its charter gave it, shown in place of the star
+    /// rating. None for every other map.
+    #[serde(default)]
+    pub level: Option<f32>,
 }
 
 /// What a map's hit windows are made from (`sim::Windows::for_map`).

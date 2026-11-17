@@ -163,11 +163,19 @@ struct Header {
     wave: String,
     genre: String,
     maker: String,
+    /// `NOTESDESIGNERn`: who charted each course (by `CourseKind`'s number), from the
+    /// header before the courses.
+    designers: [String; 5],
+    /// Who charted this course: its own `NOTESDESIGNER`, else the one named before it.
+    designer: String,
+    /// Whether a `COURSE:` has been read: `NOTESDESIGNER` after one is that course's.
+    in_course: bool,
     bpm: Option<f64>,
     offset: f64,
     demo_start: f64,
     course: CourseKind,
-    level: u32,
+    /// `LEVEL:`; 0 when it has none. OpenTaiko writes some with a fraction (`9.5`).
+    level: f32,
     balloon: Vec<u32>,
     /// `BALLOONNOR` / `BALLOONEXP` / `BALLOONMAS`: per-branch lists that win over `BALLOON`.
     branch_balloon: [Option<Vec<u32>>; 3],
@@ -181,12 +189,15 @@ impl Default for Header {
             wave: String::new(),
             genre: String::new(),
             maker: String::new(),
+            designers: Default::default(),
+            designer: String::new(),
+            in_course: false,
             bpm: None,
             offset: 0.0,
             demo_start: 0.0,
             // TJAPlayer3 reads a chart with no COURSE as Oni.
             course: CourseKind::Oni,
-            level: 0,
+            level: 0.0,
             balloon: Vec::new(),
             branch_balloon: [None, None, None],
         }
@@ -317,7 +328,7 @@ pub fn parse(text: &str) -> Result<Song, String> {
         };
         courses.push(Course {
             kind: chart.header.course,
-            level: chart.header.level,
+            level: chart.header.level as u32,
             map,
             hash,
         });
@@ -397,17 +408,39 @@ fn read_header(h: &mut Header, key: &str, value: &str, warnings: &mut Warnings) 
         "COURSE" => match CourseKind::parse(value) {
             Some(kind) => {
                 h.course = kind;
-                h.level = 0;
+                h.level = 0.0;
+                h.designer = h.designers[kind as usize].clone();
+                h.in_course = true;
                 h.balloon.clear();
                 h.branch_balloon = [None, None, None];
             }
             None => warnings.add(format!("COURSE:{value} is not played: read as Oni")),
         },
-        "LEVEL" => h.level = value.parse().unwrap_or(0),
+        "LEVEL" => {
+            h.level = value
+                .parse::<f32>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(0.0)
+        }
         "BALLOON" => h.balloon = balloon_list(value),
         "BALLOONNOR" => h.branch_balloon[0] = Some(balloon_list(value)),
         "BALLOONEXP" => h.branch_balloon[1] = Some(balloon_list(value)),
         "BALLOONMAS" => h.branch_balloon[2] = Some(balloon_list(value)),
+        // As OpenTaiko reads it: before the courses, with a number, the charter of that course;
+        // without one, of every course; within a course, of that one, whatever number it has.
+        key if key.starts_with("NOTESDESIGNER") => {
+            let which = key["NOTESDESIGNER".len()..].parse::<usize>().ok();
+            match which {
+                _ if h.in_course => h.designer = value.to_string(),
+                Some(n) if n < h.designers.len() => h.designers[n] = value.to_string(),
+                Some(_) => warnings.add(format!("{key}: no such course, ignored")),
+                None => {
+                    h.designers = std::array::from_fn(|_| value.to_string());
+                    h.designer = value.to_string();
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -999,16 +1032,16 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         same
     });
 
-    let version = if h.level > 0 {
-        format!("{} ★{}", h.course.name(), h.level)
-    } else {
-        h.course.name().to_string()
-    };
     let meta = Meta {
         title: h.title.clone(),
         artist: h.subtitle.clone(),
-        creator: h.maker.clone(),
-        version,
+        creator: if h.designer.is_empty() {
+            h.maker.clone()
+        } else {
+            h.designer.clone()
+        },
+        version: h.course.name().to_string(),
+        level: (h.level > 0.0).then_some(h.level),
         audio_file: h.wave.clone(),
         preview_time: h.demo_start * 1000.0,
         genres: crate::genres::of(&h.genre),
