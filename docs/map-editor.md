@@ -168,14 +168,16 @@ Text and pictures are blocks too (*Text*, *Fly-in text*, *Pulsing text*, *Pictur
 beat* on the shelf). A text block's words are typed in its settings (click them), in the game's own
 font. A picture block shows an image from the map's folder (put a `.png` or `.jpg` there first;
 `<` `>` go through them), and it travels with the map in an `.rsz`. With a text or picture block
-picked, a drag in the preview places it (Shift turns it, Ctrl sizes it), and x, y, size, turn and
-*opacity* (0 invisible, 1 solid) can be typed. *moves* gives it a pose of its own at its end (*at its start* / *at its end*
+picked, a drag in the preview places it (Shift keeps it on one axis, Alt turns it, Ctrl sizes
+it), and x, y, size, turn and *opacity* (0 invisible, 1 solid) can be typed. *moves* gives it a pose of its own at its end (*at its start* / *at its end*
 choose which one the drag and the numbers change), and it glides between the two by the block's
 easing. *behind the notes* puts it under the lane, *colour* tints it, the fades bring it in and out,
 and *pulses every few beats* / *on notes* / *on hits* kick it bigger by the amount (percent).
 
-The preview can be moved by hand on this page: drag it to move the playfield, Shift+drag to turn
-it around the hit target, Ctrl+drag to zoom it (up grows it, down shrinks it). Each drag sets keys
+The preview can be moved by hand on this page: drag it to move the playfield, Shift+drag to move
+it straight across or straight up and down (like Shift in a picture editor; Shift can also be
+pressed mid-drag, and the drag snaps onto the axis it went further along), Alt+drag to turn it
+around the hit target, Ctrl+drag to zoom it (up grows it, down shrinks it). Each drag sets keys
 at the playhead (snapped to the grid) and undoes in one step. The keys show as diamonds on the
 *Motion* strip above the rows: click one to go there, right click it to take that moment's keys
 away. They are the playfield's keyframes, so the Keyframes page edits them too.

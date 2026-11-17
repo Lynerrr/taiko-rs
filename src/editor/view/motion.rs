@@ -1645,7 +1645,7 @@ impl View {
                 c,
                 self.layout.preview,
                 &[
-                    "drag a point: move it (Shift: straight)",
+                    "drag a point: move it (Shift: level or plumb)",
                     "double click: add one",
                     "right click: take it away",
                 ],
@@ -1665,7 +1665,16 @@ impl View {
             return false;
         };
         if let Some(point) = self.handle_near(x, y) {
-            self.drag = Drag::PathPoint { group: g, point };
+            let from = self
+                .ed
+                .path_of(g)
+                .and_then(|p| p.points.get(point).copied())
+                .unwrap_or_else(|| self.path_point_at(x, y));
+            self.drag = Drag::PathPoint {
+                group: g,
+                point,
+                from,
+            };
             self.m_click = None;
             return true;
         }
@@ -1719,17 +1728,15 @@ impl View {
         }
     }
 
-    /// Moves the point being dragged; with Shift held it lines up with a neighbour (the point
-    /// before it, or the one after: the drum for the last), level or plumb, whichever is closer.
+    /// Moves the point being dragged; with Shift held only level or plumb from where it was
+    /// when the drag began, whichever way it went further (like Shift in a picture editor).
     pub(super) fn path_drag(&mut self, x: f32, y: f32, keys: Keys) {
-        let Drag::PathPoint { group, point } = self.drag else {
+        let Drag::PathPoint { group, point, from } = self.drag else {
             return;
         };
         let mut p = self.path_point_at(x, y);
-        if keys.shift
-            && let Some(path) = self.ed.path_of(group)
-        {
-            p = straightened(p, &path.points, point);
+        if keys.shift {
+            p = straightened(p, from);
         }
         if self.ed.edit_path(group, true, |path| {
             if let Some(q) = path.points.get_mut(point) {
@@ -1763,22 +1770,14 @@ impl View {
     }
 }
 
-/// `p` for point `i` of a path of `points` (playfield units, the drum at 0, 0), moved onto the
-/// level or plumb line through a neighbour, the one it is nearest: the point before it, or the one
-/// after (the drum, after the last).
-fn straightened(p: [f64; 2], points: &[[f64; 2]], i: usize) -> [f64; 2] {
-    let before = i.checked_sub(1).and_then(|j| points.get(j));
-    let after = points.get(i + 1).copied().unwrap_or([0.0, 0.0]);
-    before
-        .into_iter()
-        .copied()
-        .chain([after])
-        .flat_map(|n| [[p[0], n[1]], [n[0], p[1]]])
-        .min_by(|a, b| {
-            let d = |q: &[f64; 2]| (q[0] - p[0]).abs() + (q[1] - p[1]).abs();
-            d(a).total_cmp(&d(b))
-        })
-        .unwrap_or(p)
+/// `p` kept on the level or plumb line through `from`: the axis it moved further along stays,
+/// the other goes back to `from`.
+fn straightened(p: [f64; 2], from: [f64; 2]) -> [f64; 2] {
+    if (p[0] - from[0]).abs() >= (p[1] - from[1]).abs() {
+        [p[0], from[1]]
+    } else {
+        [from[0], p[1]]
+    }
 }
 
 #[cfg(test)]
@@ -1786,16 +1785,14 @@ mod tests {
     use super::straightened;
 
     #[test]
-    fn shift_lines_a_path_point_up_with_its_nearest_neighbour() {
-        let pts = [[300.0, -100.0], [120.0, -40.0], [50.0, -10.0]];
-        // The middle point near level with the one before: it goes level with it.
-        assert_eq!(straightened([200.0, -95.0], &pts, 1), [200.0, -100.0]);
-        // Near plumb under the one after: it goes plumb.
-        assert_eq!(straightened([53.0, -70.0], &pts, 1), [50.0, -70.0]);
-        // The last point lines up with the drum.
-        assert_eq!(straightened([90.0, 4.0], &pts, 2), [90.0, 0.0]);
-        assert_eq!(straightened([-3.0, 80.0], &pts, 2), [0.0, 80.0]);
-        // The first has only the one after it.
-        assert_eq!(straightened([310.0, -38.0], &pts, 0), [310.0, -40.0]);
+    fn shift_keeps_a_path_point_level_or_plumb_with_where_it_started() {
+        let from = [120.0, -40.0];
+        // Mostly sideways: it stays level, wherever the neighbours or the lane are.
+        assert_eq!(straightened([200.0, -55.0], from), [200.0, -40.0]);
+        // Mostly up or down: it stays plumb.
+        assert_eq!(straightened([110.0, 30.0], from), [120.0, 30.0]);
+        // Not snapped onto the lane (y 0) or the drum (x 0) on its own.
+        assert_eq!(straightened([125.0, -4.0], from), [120.0, -4.0]);
+        assert_eq!(straightened([4.0, -42.0], from), [4.0, -40.0]);
     }
 }
