@@ -615,3 +615,162 @@ fn a_board_chart_no_file_gives_is_refused() {
     );
     assert_ne!(easy.hash(), good.hash());
 }
+
+/// How the map's gimmick draws its notes moving (TJA scroll gimmicks), if it has one.
+fn motion(c: &Course) -> Option<&crate::tko::gimmick::Motion> {
+    c.map.gimmick.as_deref().map(|g| &g.motion)
+}
+
+/// The shared scroll's speed keys: (time, speed).
+fn lane_keys(c: &Course) -> Vec<(f64, f64)> {
+    c.map
+        .gimmick
+        .as_deref()
+        .map(|g| g.scroll.keys.iter().map(|k| (k.t, k.v)).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_chart_without_scroll_gimmicks_has_no_gimmick() {
+    let c = one(&chart(
+        120.0,
+        "1,\n#SCROLL 2\n#BPMCHANGE 240\n1,\n#DELAY 0.5\n1,",
+    ));
+    assert!(c.map.gimmick.is_none());
+}
+
+#[test]
+fn bmscroll_steps_the_whole_lane_with_the_bpm() {
+    let c = one(&chart(
+        120.0,
+        "#BMSCROLL\n1,\n#BPMCHANGE 240\n#SCROLL 3\n1,\n#BPMCHANGE 60\n1,",
+    ));
+    // Bars of 2000 ms at 120, 1000 at 240.
+    close(&times(&c), &[0.0, 2000.0, 3000.0]);
+    assert_eq!(lane_keys(&c), [(0.0, 1.0), (2000.0, 2.0), (3000.0, 0.5)]);
+    let m = motion(&c).expect("a gimmick");
+    assert!(m.map_clock, "TJA times aren't moved like an .osu's");
+    // #SCROLL is left out: every note at the song's BPM, the lane does the rest.
+    let drawn: Vec<f64> = m.notes.iter().map(|n| n.velocity).collect();
+    close(&drawn, &[velocity(120.0, 1.0); 3]);
+    // The board's own velocities are what normal mode gives.
+    assert!((c.map.notes[1].velocity - velocity(240.0, 3.0)).abs() < 1e-12);
+}
+
+#[test]
+fn a_delay_stops_a_lane_scrolled_by_beats() {
+    let c = one(&chart(120.0, "#BMSCROLL\n1,\n#DELAY 0.5\n1,"));
+    close(&times(&c), &[0.0, 2500.0]);
+    assert_eq!(lane_keys(&c), [(0.0, 1.0), (2000.0, 0.0), (2500.0, 1.0)]);
+    let table =
+        crate::tko::scroll::ScrollTable::new(&c.map.gimmick.as_ref().unwrap().scroll).unwrap();
+    assert_eq!(table.x(2000.0), table.x(2400.0), "frozen through the delay");
+    // In normal mode a delay only moves the notes.
+    let normal = one(&chart(120.0, "#SUDDEN 1 1\n1,\n#DELAY 0.5\n1,"));
+    assert!(lane_keys(&normal).is_empty());
+}
+
+#[test]
+fn hbscroll_keeps_each_notes_scroll_and_its_side() {
+    let c = one(&chart(
+        120.0,
+        "#HBSCROLL\n1,\n#SCROLL 2\n#BPMCHANGE 240\n1,\n#SCROLL -0.5\n1,",
+    ));
+    assert_eq!(lane_keys(&c), [(0.0, 1.0), (2000.0, 2.0)]);
+    let drawn: Vec<f64> = motion(&c)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.velocity)
+        .collect();
+    // At the song's BPM times #SCROLL; a negative one comes from the left.
+    close(
+        &drawn,
+        &[
+            velocity(120.0, 1.0),
+            velocity(120.0, 2.0),
+            -velocity(120.0, 0.5),
+        ],
+    );
+    // A negative #SCROLL in normal mode comes from the left too, at its own speed, with no
+    // shared scroll; the warning it had is gone.
+    let song = parse(&chart(120.0, "1,\n#SCROLL -2\n1,")).unwrap();
+    let normal = &song.courses[0];
+    assert!(lane_keys(normal).is_empty());
+    let drawn: Vec<f64> = motion(normal)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.velocity)
+        .collect();
+    close(&drawn, &[velocity(120.0, 1.0), -velocity(120.0, 2.0)]);
+    assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+}
+
+#[test]
+fn nmscroll_goes_back_to_scrolling_by_time() {
+    let c = one(&chart(
+        120.0,
+        "#BMSCROLL\n1,\n#BPMCHANGE 240\n#NMSCROLL\n#SCROLL 2\n1,",
+    ));
+    assert_eq!(lane_keys(&c), [(0.0, 1.0), (2000.0, 1.0)]);
+    let drawn: Vec<f64> = motion(&c)
+        .unwrap()
+        .notes
+        .iter()
+        .map(|n| n.velocity)
+        .collect();
+    close(&drawn, &[velocity(120.0, 1.0), velocity(240.0, 2.0)]);
+}
+
+#[test]
+fn sudden_sets_when_each_note_shows_up_and_starts_moving() {
+    let c = one(&chart(
+        120.0,
+        "#SUDDEN 3 2\n1,\n#SUDDEN 0 0\n1,\n#SUDDEN 1.5 0\n5008,\n#SUDDEN 0.0004 1\n1,\n#SUDDEN 0.3 inf\n5008,",
+    ));
+    let m = &motion(&c).unwrap().notes;
+    let shown: Vec<(f64, f64, f64, bool)> = m
+        .iter()
+        .map(|n| (n.t, n.show, n.wait, n.hide_long))
+        .collect();
+    let inf = f64::INFINITY;
+    assert_eq!(
+        shown,
+        [
+            (0.0, 3000.0, 2000.0, false),
+            // #SUDDEN 0 0: off.
+            (2000.0, inf, inf, false),
+            // Only the first number: TJAPlayer3 never drew rolls then.
+            (4000.0, 1500.0, inf, true),
+            // Under a millisecond is off, as OpenTaiko reads it.
+            (6000.0, inf, 1000.0, false),
+            // `inf`: moving all along, and the rolls drawn.
+            (8000.0, 300.0, inf, false),
+        ]
+    );
+    assert!(lane_keys(&c).is_empty(), "no shared scroll in normal mode");
+}
+
+/// Scroll gimmicks only change how notes are drawn: the board (leaderboards, local scores) and
+/// what is judged stay the chart's.
+#[test]
+fn scroll_gimmicks_leave_the_board_as_it_is() {
+    let body =
+        "1020,\n#BPMCHANGE 200\n#SCROLL 1.5\n1111,\n#DELAY 0.25\n#SCROLL -1\n5008,\n#GOGOSTART\n2,";
+    let base = one(&chart(150.0, body));
+    let with = |extra: &str| one(&chart(150.0, &format!("{extra}\n{body}")));
+    for extra in [
+        "#BMSCROLL",
+        "#HBSCROLL",
+        "#SUDDEN 2 1",
+        "#HBSCROLL\n#SUDDEN 1 0",
+    ] {
+        let c = with(extra);
+        assert_eq!(c.hash, base.hash, "{extra}");
+        let board = BoardChart::of(c.kind, &c.map);
+        assert_eq!(board, BoardChart::of(base.kind, &base.map), "{extra}");
+        assert_eq!(board.hash(), c.hash, "{extra}");
+        assert!(c.map.gimmick.is_some(), "{extra}");
+    }
+}

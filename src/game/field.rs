@@ -119,8 +119,8 @@ impl View {
         let min_velocity = map
             .notes
             .iter()
-            .map(|n| n.velocity)
-            .chain(map.barlines.iter().map(|b| b.velocity))
+            .map(|n| n.velocity.abs())
+            .chain(map.barlines.iter().map(|b| b.velocity.abs()))
             .fold(f64::INFINITY, f64::min)
             .max(1e-6);
         let sections = if mods.has(Mod::Roulette) {
@@ -153,7 +153,7 @@ impl View {
         };
         let min_velocity = decoys
             .iter()
-            .map(|n| n.velocity)
+            .map(|n| n.velocity.abs())
             .fold(min_velocity, f64::min);
         let focus_switches = if mods.has(Mod::Multiverse) {
             focus_switches(map)
@@ -717,7 +717,11 @@ impl Play {
         // its last object included (owner, 2026-10-28).
         // Keep the global bound for special objects and barlines; ordinary-note blocks also
         // have conservative local bounds so one distant slow note does not widen every scan.
-        let lookahead = if scroll.shared.is_some() {
+        // Notes waiting to start moving (a TJA chart's #SUDDEN) sit on the lane long before they
+        // would have scrolled onto it.
+        let far_notes_near =
+            scroll.shared.is_some() || self.game.tko().is_some_and(|rt| rt.holds_notes());
+        let lookahead = if far_notes_near {
             // Frozen or running backwards, notes far off in time may be near: look well ahead
             // and let the lane's ends hide the rest.
             SHARED_LOOKAHEAD_MS
@@ -741,7 +745,7 @@ impl Play {
             if self.game.map().notes[block.range.start].time - vt > lookahead {
                 break;
             }
-            if block.regular && !mods.has(Mod::Liar) && scroll.shared.is_none() {
+            if block.regular && !mods.has(Mod::Liar) && !far_notes_near {
                 let reach = (lane_len + BIG_R) as f64
                     / (block.min_velocity * scroll.speed * scroll.min_factor())
                     + warp.abs();
@@ -766,6 +770,10 @@ impl Play {
         // sliding to its real place on the way in.
         let note_s = |i: usize| -> f32 {
             let n = &self.game.map().notes[i];
+            // Waiting to start moving (#SUDDEN): where it will start from.
+            if let Some(then) = self.game.tko().and_then(|rt| rt.note_waits(i, vt)) {
+                return scroll.x_as_of(n.time, n.velocity, then) - HIT_X;
+            }
             let s = s_of(n.time, n.velocity);
             match self.view.lies.get(i) {
                 Some(&lie) if lie != n.time => {

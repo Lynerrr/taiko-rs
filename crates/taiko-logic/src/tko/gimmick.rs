@@ -628,6 +628,93 @@ pub struct Gimmick {
     /// playfield, and with effects on a group they are in.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub above: Vec<f64>,
+    /// How a chart read from another format draws its notes moving (a TJA chart's scroll modes
+    /// and `#SUDDEN`): built by its reader, never in a .tko file.
+    #[serde(skip)]
+    pub motion: Motion,
+}
+
+/// How a chart's notes are drawn moving beyond their own velocity (see `Gimmick::motion`): only
+/// the drawing, never when a note is hit. A note or barline it doesn't list moves as it always
+/// does.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Motion {
+    /// Its times are the map's own, not `OSU_TIMING_MS` before them like a .tko map's (a TJA
+    /// chart isn't moved to where osu! plays its music): the whole gimmick is read on that clock.
+    pub map_clock: bool,
+    /// Per note, ascending by time.
+    pub notes: Vec<NoteMotion>,
+    /// Per barline, ascending: its time and the velocity it is drawn with (below 0 from the
+    /// left).
+    pub barlines: Vec<(f64, f64)>,
+}
+
+/// How one note is drawn moving (see [`Motion`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NoteMotion {
+    /// The note's time, to find it by.
+    pub t: f64,
+    /// The velocity it is drawn with instead of its own (osu!px per ms); below 0 it comes from
+    /// the left.
+    pub velocity: f64,
+    /// How long before its hit it shows up (ms; infinite: all along).
+    pub show: f64,
+    /// How long before its hit it starts moving (ms; infinite: all along). Until then it waits
+    /// where it will be at that moment. Rolls and balloons always move.
+    pub wait: f64,
+    /// A roll or balloon is never drawn (TJAPlayer3's `#SUDDEN a 0`, which OpenTaiko keeps).
+    pub hide_long: bool,
+}
+
+impl NoteMotion {
+    /// Drawn as the note always is but at `velocity`.
+    pub fn moving(t: f64, velocity: f64) -> NoteMotion {
+        NoteMotion {
+            t,
+            velocity,
+            show: f64::INFINITY,
+            wait: f64::INFINITY,
+            hide_long: false,
+        }
+    }
+}
+
+/// How far a listed time may be from a note's.
+const SAME_MS: f64 = 0.5;
+
+/// The entry of `list` (ascending by `time_of`) at time `t`.
+fn at_time<T>(list: &[T], t: f64, time_of: impl Fn(&T) -> f64) -> Option<&T> {
+    let i = list.partition_point(|x| time_of(x) < t - SAME_MS);
+    list.get(i).filter(|x| (time_of(x) - t).abs() <= SAME_MS)
+}
+
+impl Motion {
+    pub fn is_empty(&self) -> bool {
+        self.notes.is_empty() && self.barlines.is_empty()
+    }
+
+    /// The motion of the note at time `t` (the gimmick's clock).
+    pub fn note_at(&self, t: f64) -> Option<&NoteMotion> {
+        at_time(&self.notes, t, |n| n.t)
+    }
+
+    /// Gives `map`'s notes and barlines the velocities they are drawn with, before the mods
+    /// bend them; `shift`: how far the map's times are ahead of the gimmick's.
+    pub fn apply(&self, map: &mut crate::beatmap::Beatmap, shift: f64) {
+        if self.is_empty() {
+            return;
+        }
+        for n in &mut map.notes {
+            if let Some(m) = self.note_at(n.time - shift) {
+                n.velocity = m.velocity;
+            }
+        }
+        for b in &mut map.barlines {
+            if let Some(&(_, v)) = at_time(&self.barlines, b.time - shift, |b| b.0) {
+                b.velocity = v;
+            }
+        }
+    }
 }
 
 /// How many fake notes a map may have.
@@ -666,6 +753,7 @@ impl Gimmick {
             && self.scroll.is_empty()
             && self.fakes.is_empty()
             && self.above.is_empty()
+            && self.motion.is_empty()
     }
 
     /// Whether the note at chart time `t` is drawn over every effect (see `above`).

@@ -66,10 +66,11 @@ pub fn focus_switches(map: &Beatmap) -> Vec<FocusSwitch> {
 pub(crate) fn main_velocity(map: &Beatmap) -> f64 {
     // Counted to 4 decimals; the first exact velocity of the most common one is the answer.
     let mut counts: std::collections::HashMap<i64, (usize, f64)> = std::collections::HashMap::new();
+    // By speed: a note coming from the left (velocity below 0) moves as fast the other way.
     for n in &map.notes {
         counts
-            .entry((n.velocity * 10_000.0).round() as i64)
-            .or_insert((0, n.velocity))
+            .entry((n.velocity.abs() * 10_000.0).round() as i64)
+            .or_insert((0, n.velocity.abs()))
             .0 += 1;
     }
     counts
@@ -88,12 +89,14 @@ pub(crate) fn bake_speeds(map: &mut Beatmap, mods: Mods) {
     let sections = roulette_sections(map);
     let bars = map.barlines.clone();
     let cps = map.control_points.clone();
-    // By map time, for notes and barlines alike.
+    // By map time, for notes and barlines alike; on the speed, so one coming from the left
+    // (velocity below 0) keeps coming from there.
     let at = |v: f64, t: f64| -> f64 {
+        let side = if v < 0.0 { -1.0 } else { 1.0 };
         let mut v = if mods.has(Mod::ConstantSpeed) {
             main
         } else {
-            v
+            v.abs()
         };
         if mods.has(Mod::AntiSv) {
             v = (main * main / v).clamp(main / 10.0, main * 10.0);
@@ -124,7 +127,7 @@ pub(crate) fn bake_speeds(map: &mut Beatmap, mods: Mods) {
         if mods.has(Mod::Swing) {
             v *= 1.0 + 0.15 * (std::f64::consts::TAU * cp.beat_phase(t)).cos();
         }
-        v
+        side * v
     };
     for b in &mut map.barlines {
         b.velocity = at(b.velocity, b.time);
