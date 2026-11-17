@@ -503,6 +503,9 @@ struct State {
     resend_at: Instant,
     /// The server lists `online::SUBMIT_KEY_FEATURE`: an unsent play can go to it again.
     submit_keys: bool,
+    /// The server lists `online::TJA_BOARDS_FEATURE`: TJA plays go to its leaderboards, and
+    /// song select shows them.
+    tja_boards: bool,
     /// The logged-in player's own pp total and rank online (for the account badge and the
     /// results' total), whose they are, and the fetch of them.
     me: Option<(f64, Option<u32>)>,
@@ -8281,6 +8284,12 @@ impl State {
         }
     }
 
+    /// Whether plays on `e` go to the online leaderboards and song select shows its online
+    /// board: every map's do, a TJA chart's only on a server with TJA boards.
+    pub(crate) fn has_online_board(&self, e: &Entry) -> bool {
+        !e.is_tja() || self.tja_boards
+    }
+
     /// Whether the live play is of a TJA chart (`Entry::is_tja`).
     fn live_is_tja(&self) -> bool {
         self.behind_settings()
@@ -11056,6 +11065,7 @@ impl State {
                     }
                     // Plays it never answered go again now (`resend_unsent`).
                     self.submit_keys = features.iter().any(|f| f == online::SUBMIT_KEY_FEATURE);
+                    self.tja_boards = features.iter().any(|f| f == online::TJA_BOARDS_FEATURE);
                     self.resend_at = Instant::now();
                     self.social.connected = true;
                     self.social.me = Some(name);

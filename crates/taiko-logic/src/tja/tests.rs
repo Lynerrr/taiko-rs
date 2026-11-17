@@ -526,3 +526,92 @@ fn letters_opentaiko_doesnt_have_are_blanks() {
     close(&times(&song.courses[0]), &[0.0, 4000.0 / 3.0]);
     assert!(song.warnings.iter().any(|w| w.contains("'E'")));
 }
+
+/// A course's board chart goes over the wire and back to the very chart the game played.
+#[test]
+fn a_board_chart_reads_back_to_the_chart_played() {
+    let c = one(&chart(
+        150.0,
+        "1020,\n#GOGOSTART\n#SCROLL 2\n3400,\n#GOGOEND\n5000,\n0008,\n#BPMCHANGE 200\n7000,\n0080,",
+    ));
+    let board = BoardChart::of(c.kind, &c.map);
+    assert_eq!(board.hash(), c.hash);
+    let sent: BoardChart = serde_json::from_str(&serde_json::to_string(&board).unwrap()).unwrap();
+    assert_eq!(sent, board);
+    let played = sent.beatmap().unwrap();
+    assert_eq!(BoardChart::of(c.kind, &played), board);
+    assert_eq!(played.meta.windows, c.map.meta.windows);
+    assert_eq!(played.notes.len(), c.map.notes.len());
+    for (a, b) in played.notes.iter().zip(&c.map.notes) {
+        assert_eq!(
+            (
+                a.time,
+                a.end_time,
+                a.kind,
+                a.big,
+                a.velocity,
+                a.tick_spacing,
+                a.required_hits
+            ),
+            (
+                b.time,
+                b.end_time,
+                b.kind,
+                b.big,
+                b.velocity,
+                b.tick_spacing,
+                b.required_hits
+            )
+        );
+    }
+    let kiai = |m: &Beatmap| {
+        m.control_points
+            .iter()
+            .map(|p| (p.time, p.kiai))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(kiai(&played), kiai(&c.map));
+}
+
+/// Anything that changes how a chart plays or scores gives another board, gogo time included.
+#[test]
+fn gogo_time_and_bar_lines_are_part_of_the_hash() {
+    let base = one(JAPANESE).hash;
+    let gogo = JAPANESE.replace("#START\n", "#START\n#GOGOSTART\n");
+    assert_ne!(one(&gogo).hash, base, "gogo time scores more");
+    let no_bars = JAPANESE.replace("#START\n", "#START\n#BARLINEOFF\n");
+    assert_ne!(one(&no_bars).hash, base);
+}
+
+/// What a server is sent isn't trusted: a chart no TJA file gives is refused.
+#[test]
+fn a_board_chart_no_file_gives_is_refused() {
+    let good = BoardChart::of(CourseKind::Oni, &one(JAPANESE).map);
+    assert!(good.beatmap().is_ok());
+    let broken = |change: fn(&mut BoardChart)| {
+        let mut b = good.clone();
+        change(&mut b);
+        b.beatmap().is_err()
+    };
+    assert!(broken(|b| b.course = 9));
+    assert!(broken(|b| b.notes.clear()));
+    assert!(broken(|b| b.points.clear()));
+    assert!(broken(|b| b.notes[0].0 = f64::NAN));
+    assert!(broken(|b| b.notes[0].2 = 4));
+    assert!(broken(|b| b.notes[0].4 = 0.0));
+    assert!(broken(|b| b.notes[1].1 = b.notes[1].0 - 1.0));
+    assert!(broken(|b| b.notes.swap(0, 1)));
+    assert!(broken(|b| b.points[0].2 = -1.0));
+    assert!(broken(|b| {
+        let n = b.notes[0];
+        b.notes = vec![n; MAX_ITEMS + 1];
+    }));
+    // Easy plays with the wide windows, Oni the narrow ones.
+    let mut easy = good.clone();
+    easy.course = CourseKind::Easy as u8;
+    assert_eq!(
+        easy.beatmap().unwrap().meta.windows,
+        crate::beatmap::WindowSource::Arcade { narrow: false }
+    );
+    assert_ne!(easy.hash(), good.hash());
+}

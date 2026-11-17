@@ -419,6 +419,11 @@ pub struct ScoreSubmit {
     /// once and answers a resend as it answered the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_key: Option<String>,
+    /// A TJA chart's play, to a server listing `TJA_BOARDS_FEATURE`: the course's chart as its
+    /// board knows it (notes and timing only, no file), which the server checks against
+    /// `map.hash` and plays the replay back on, then forgets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tja: Option<taiko_logic::tja::BoardChart>,
 }
 
 /// 1: on the notes `NOTE_MODS` leave, not the whole map. 2: Half keeps to the beat. 3: what
@@ -1245,6 +1250,11 @@ pub const MOVING_FEATURE: &str = "moving/1";
 /// What a server that stores a play once per `ScoreSubmit::operation_key` lists in
 /// `Reply::Account::features`: a play it never answered can be sent to it again.
 pub const SUBMIT_KEY_FEATURE: &str = "submit-key/1";
+
+/// What a server with leaderboards for TJA charts lists in `Reply::Account::features`: it takes
+/// plays with `ScoreSubmit::tja`, keyed by the chart's hash (`BoardChart::hash`). TJA plays
+/// stay on this computer with a server that doesn't.
+pub const TJA_BOARDS_FEATURE: &str = "tja-boards/1";
 
 /// The errors a server answers a play with when it can't take it just now, not because of the
 /// play: its database was briefly out of reach (as during a deploy), or too many plays came at

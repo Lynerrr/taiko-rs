@@ -8,6 +8,7 @@ use super::harness::*;
 use super::maps::{self, Player};
 use crate::*;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Two courses (Oni written first, as charters often do), Japanese-style header.
 const CHART: &str = "TITLE:Regression TJA\nSUBTITLE:--Tester\nBPM:120\nWAVE:song.ogg\nOFFSET:-1\n\nCOURSE:Oni\nLEVEL:8\nBALLOON:7\n#START\n1020,\n3040,\n7008,\n#END\n\nCOURSE:Easy\nLEVEL:2\n#START\n1000,\n1000,\n#END\n";
@@ -228,4 +229,148 @@ fn a_tja_chart_cant_be_opened_in_the_editor() {
     s.open_editor(oni);
     assert_eq!(scene_name(&s), "Select", "the editor doesn't open");
     assert!(s.toast.as_ref().is_some_and(|t| t.text.contains("TJA")));
+}
+
+/// A server with TJA boards: it lists `TJA_BOARDS_FEATURE`, keeps every play it is sent and the
+/// boards asked for, and answers them.
+#[derive(Default)]
+struct Seen {
+    plays: Vec<online::ScoreSubmit>,
+    boards: Vec<u64>,
+}
+
+fn tja_server() -> (String, std::sync::Arc<std::sync::Mutex<Seen>>) {
+    use crate::online::{Envelope, Reply, Request};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Seen::default()));
+    let shared = seen.clone();
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let seen = shared.clone();
+            std::thread::spawn(move || {
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut out = stream;
+                let Ok(line) = online::read_line(&mut reader) else {
+                    return;
+                };
+                let Ok(env) = serde_json::from_str::<Envelope>(&line) else {
+                    return;
+                };
+                let account = Reply::Account {
+                    name: "me".into(),
+                    token: "t".into(),
+                    nominator: false,
+                    admin: false,
+                    email: Some(true),
+                    features: vec![
+                        online::SUBMIT_KEY_FEATURE.into(),
+                        online::TJA_BOARDS_FEATURE.into(),
+                    ],
+                    terms: 0,
+                    server: None,
+                };
+                let reply = match env.request {
+                    Request::Connect { .. } => {
+                        let _ = online::write_line(&mut out, &account);
+                        while online::read_line(&mut reader).is_ok() {}
+                        return;
+                    }
+                    Request::WhoAmI { .. } => account,
+                    Request::SubmitScore { play, .. } => {
+                        seen.lock().unwrap().plays.push(*play);
+                        Reply::Submitted {
+                            relax: false,
+                            map_rank: Some(1),
+                            pp: 0.0,
+                            rank: None,
+                            medals: Vec::new(),
+                        }
+                    }
+                    Request::MapScores { map, .. } => {
+                        seen.lock().unwrap().boards.push(map);
+                        Reply::Scores(Vec::new())
+                    }
+                    _ => Reply::Error("bad request".into()),
+                };
+                let _ = online::write_line(&mut out, &reply);
+            });
+        }
+    });
+    (addr, seen)
+}
+
+/// On a server with TJA boards a TJA play goes to the course's board, keyed by its chart hash
+/// and sent with the chart the server checks it on (notes and timing, no file); song select
+/// shows that board.
+#[test]
+fn a_tja_play_goes_to_a_server_with_tja_boards_with_its_chart() {
+    let f = Folders::new("boards");
+    let (server, seen) = tja_server();
+    let mut cfg = config();
+    cfg.online_server = server;
+    cfg.online_user = "me".into();
+    cfg.online_token = "t".into();
+    cfg.terms_version = terms::VERSION;
+    let (mut s, mut now) = client(&f, cfg);
+    put(&f.tja, "Song", "song.tja", CHART);
+    refresh(&mut s, &mut now);
+    let until = Instant::now() + Duration::from_secs(30);
+    while !(s.social.connected && s.tja_boards) && Instant::now() < until {
+        s.poll_social();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(s.tja_boards, "the server says it has TJA boards");
+    let oni = s
+        .library
+        .iter()
+        .position(|e| e.meta.version == "Oni ★8")
+        .unwrap();
+    let hash = s.library[oni].hash();
+    let path = s.library[oni].path.clone();
+    s.select.select_path(&s.library, &path);
+    s.board_online = true;
+    // Its board shown, on the panel's other page.
+    s.mob.flip_board();
+    let asked = |s: &mut State, now: &mut Instant| {
+        wait_for(s, now, |_| seen.lock().unwrap().boards.contains(&hash))
+    };
+    assert!(
+        asked(&mut s, &mut now),
+        "song select asks for the course's board"
+    );
+    start_selected(&mut s, &mut now);
+    let map = super::harness::game(&s).unwrap().map().clone();
+    play_out(&mut s, &mut now, &maps::presses(&map, Player::Perfect));
+    assert!(wait_for(&mut s, &mut now, |s| scene_name(s) == "Results"));
+    assert!(wait_for(&mut s, &mut now, |_| !seen
+        .lock()
+        .unwrap()
+        .plays
+        .is_empty()));
+    let play = seen.lock().unwrap().plays.remove(0);
+    assert_eq!(play.map.hash, hash);
+    assert_eq!(play.map.set_id, None);
+    assert_eq!((play.great, play.miss), (4, 0));
+    assert!(!play.inputs.is_empty(), "with its replay");
+    assert_eq!(
+        (play.md5.as_deref(), play.stars),
+        (None, None),
+        "no file to tell of"
+    );
+    let chart = play.tja.expect("the chart goes with it");
+    assert_eq!(chart.hash().short(), hash, "the chart is the board's");
+    let sent = chart.beatmap().expect("a chart the server can play");
+    assert_eq!(sent.notes.len(), map.notes.len());
+    assert_eq!(
+        sent.meta.windows,
+        beatmap::WindowSource::Arcade { narrow: true }
+    );
+    // Still no pp, and nothing to vote on.
+    let results = s
+        .scene
+        .screen_as::<screens::results::ResultsScreen>()
+        .unwrap();
+    assert_eq!(results.results.no_pp, Some("TJA charts give no pp"));
+    assert!(results.results.vote_on.is_none());
 }

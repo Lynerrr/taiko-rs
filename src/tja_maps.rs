@@ -108,6 +108,13 @@ pub fn load(path: &Path) -> Result<Beatmap, String> {
     course(path).map(|c| c.map)
 }
 
+/// A course's chart as its online board knows it, sent with its plays.
+pub fn board(path: &Path) -> Option<taiko_logic::tja::BoardChart> {
+    course(path)
+        .ok()
+        .map(|c| taiko_logic::tja::BoardChart::of(c.kind, &c.map))
+}
+
 /// What a course's local scores and replays are kept by: its chart hash (the same for every
 /// copy of the chart, whatever the file's encoding or comments), 0 when it can't be read.
 pub fn hash(path: &Path) -> u64 {

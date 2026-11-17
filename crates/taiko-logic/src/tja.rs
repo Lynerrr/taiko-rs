@@ -10,9 +10,10 @@
 
 use std::collections::HashSet;
 
-use sha2::{Digest, Sha256};
+use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note};
 
-use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note, WindowSource};
+mod board;
+pub use board::{BoardChart, MAX_ITEMS};
 
 /// The osu! slider multiplier a TJA chart scrolls like: one beat at `#SCROLL 1` covers the
 /// distance an osu! taiko map with SliderMultiplier 1.4 covers.
@@ -23,14 +24,11 @@ const TAIKO_VELOCITY_MULTIPLIER: f64 = 1.4;
 pub const DEFAULT_BALLOON_HITS: u32 = 5;
 /// The slowest scroll a note gets: `#SCROLL 0` (notes standing still) would never arrive.
 const MIN_SCROLL: f64 = 0.01;
-/// What `chart_hash` hashes first: a new normalization gets a new tag, so old and new hashes
-/// never mix.
-const HASH_TAG: &[u8] = b"taiko.rs tja chart v1\n";
 
 /// A chart's difficulty.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CourseKind {
-    // The values go into `chart_hash`: never renumber them.
+    // The values go into `BoardChart::hash` and over the wire: never renumber them.
     Easy = 0,
     Normal = 1,
     Hard = 2,
@@ -107,7 +105,7 @@ pub struct Course {
     /// `LEVEL:`, the stars the chart shows.
     pub level: u32,
     pub map: Beatmap,
-    /// Identifies the chart however the file was written (see `chart_hash`).
+    /// Identifies the chart however the file was written (`BoardChart::hash`).
     pub hash: ChartHash,
 }
 
@@ -292,7 +290,23 @@ pub fn parse(text: &str) -> Result<Song, String> {
             ));
             continue;
         }
-        let hash = chart_hash(chart.header.course, &map.notes);
+        // Played as its board chart reads back, so a server playing a replay on the chart
+        // it was sent plays the very chart this game did.
+        let board = BoardChart::of(chart.header.course, &map);
+        let hash = board.hash();
+        let map = match board.beatmap() {
+            Ok(played) => Beatmap {
+                meta: map.meta,
+                ..played
+            },
+            Err(why) => {
+                warnings.add(format!(
+                    "the {} chart can't go on a leaderboard: {why}",
+                    chart.header.course.name()
+                ));
+                map
+            }
+        };
         courses.push(Course {
             kind: chart.header.course,
             level: chart.header.level,
@@ -766,18 +780,9 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         version,
         audio_file: h.wave.clone(),
         preview_time: h.demo_start * 1000.0,
-        mode: 1,
-        od: 5.0,
-        hp: 5.0,
-        slider_multiplier: SLIDER_MULTIPLIER,
-        slider_tick_rate: 1.0,
-        format_version: 14,
         genres: crate::genres::of(&h.genre),
         tags: h.genre.clone(),
-        windows: WindowSource::Arcade {
-            narrow: h.course.narrow_windows(),
-        },
-        ..Default::default()
+        ..board::meta(h.course)
     };
     Beatmap {
         meta,
@@ -942,31 +947,6 @@ fn note(
         'F' => warnings.add("ADLib notes (F) are not supported: skipped"),
         _ => warnings.add(format!("unknown note {c:?}: skipped")),
     }
-}
-
-/// The hash a chart is known by (leaderboards, local scores, the upload check). It covers what
-/// a play depends on: the course (its hit windows), each note's kind, size, times, pops and
-/// speed; times to 1/100 ms and speeds to 1e-6, so float noise can't split a board.
-pub fn chart_hash(kind: CourseKind, notes: &[Note]) -> ChartHash {
-    let q = |v: f64, scale: f64| ((v * scale).round() as i64).to_le_bytes();
-    let mut h = Sha256::new();
-    h.update(HASH_TAG);
-    h.update([kind.id()]);
-    h.update((notes.len() as u64).to_le_bytes());
-    for n in notes {
-        let k = match n.kind {
-            Kind::Don => 0u8,
-            Kind::Kat => 1,
-            Kind::Roll => 2,
-            Kind::Swell => 3,
-        };
-        h.update([k, n.big as u8]);
-        h.update(q(n.time, 100.0));
-        h.update(q(n.end_time, 100.0));
-        h.update(n.required_hits.to_le_bytes());
-        h.update(q(n.velocity, 1e6));
-    }
-    ChartHash(h.finalize().into())
 }
 
 #[cfg(test)]
