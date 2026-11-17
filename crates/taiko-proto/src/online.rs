@@ -168,6 +168,10 @@ pub enum Request {
         /// Which map, for the profile's most played (from games that send it).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         map: Option<PlayedMap>,
+        /// How it ended and where, for map recommendations (sent with its map). A server that
+        /// doesn't keep attempts ignores it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attempt: Option<PlayedAttempt>,
     },
     /// Every medal, and how `name` stands with them (`Reply::Medals`); no name: just the list.
     Medals {
@@ -317,6 +321,42 @@ pub struct PlayedMap {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set_id: Option<u32>,
+}
+
+/// How a play off the leaderboards ended, and how far it got (`Request::Played`): what map
+/// recommendations learn from (maps given up on, failed or started over, and where).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlayedAttempt {
+    pub ended: AttemptEnd,
+    /// Map time reached when it ended (ms).
+    pub at_ms: u64,
+    /// Map time of the map's end (ms): how far `at_ms` is into it.
+    pub length_ms: u64,
+    /// The start point it was played from, if not the beginning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_ms: Option<u64>,
+    pub great: u32,
+    pub ok: u32,
+    pub miss: u32,
+    pub max_combo: u32,
+    pub mods: Vec<String>,
+    pub rate: f64,
+    pub scroll_speed: f64,
+}
+
+/// What ended a play off the leaderboards.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AttemptEnd {
+    /// Played to the end, but not kept (unranked mods, a start point...).
+    Finished,
+    Failed,
+    /// Left before the end.
+    Quit,
+    /// Started over: the retry key, or retry from the pause menu.
+    Restarted,
+    /// A multiplayer match, finished or left.
+    Match,
 }
 
 /// A play sent to the server: what the leaderboards show, and the replay's presses (kept so

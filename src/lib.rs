@@ -663,6 +663,9 @@ struct State {
     /// left some other way: then it's counted on the server as played (`Request::Played`), with
     /// the map it was on.
     playing: Option<(f64, Option<online::PlayedMap>)>,
+    /// How the live play stands as of the last frame, for the server to learn how it ended
+    /// (`Request::Played`'s attempt).
+    play_attempt: Option<LiveAttempt>,
     /// Time in songs since the game started (ms), pauses left out.
     session_play_ms: f64,
     /// The key last pressed, as it is on the keyboard (a rebound one arrives as its default),
@@ -8161,7 +8164,7 @@ impl State {
 
     /// Follows the live play; once it's gone without going to the leaderboards (failed, quit,
     /// restarted, from a start point, a lobby match), tells the server it was played, for the
-    /// profile's play count and play time.
+    /// profile's play count and play time, and how it ended.
     fn track_play(&mut self) {
         if let Some(ms) = self.live_play_ms() {
             let (before, map) = match self.playing.take() {
@@ -8170,31 +8173,100 @@ impl State {
             };
             self.session_play_ms += (ms - before).max(0.0);
             self.playing = Some((ms, map));
+            self.follow_attempt();
             return;
         }
-        let Some((ms, map)) = self.playing.take() else {
+        let Some(request) = self.played_request() else {
             return;
         };
-        // A start that's left at once isn't a play.
-        if ms < 1000.0 || self.cfg.online_token.is_empty() {
-            return;
-        }
-        let (server, token) = (
-            self.cfg.online_server.clone(),
-            self.cfg.online_token.clone(),
-        );
+        let server = self.cfg.online_server.clone();
         std::thread::spawn(move || {
-            if let Err(e) = online::call(
-                &server,
-                online::Request::Played {
-                    token,
-                    ms: ms as u64,
-                    map,
-                },
-            ) {
+            if let Err(e) = online::call(&server, request) {
                 eprintln!("counting the play: {e}");
             }
         });
+    }
+
+    /// The live play's attempt as of this frame: where it is and its judgements. Its mods are
+    /// read once, when it starts (they don't change during a play).
+    fn follow_attempt(&mut self) {
+        let scene = self.behind_settings().unwrap_or(&self.scene);
+        let from = scene.song_play().and_then(|(_, from)| from);
+        let in_match = scene.screen().is_some_and(|s| s.in_match());
+        let Some(g) = self.play.as_deref() else {
+            return;
+        };
+        let st = g.stats();
+        let ms = |t: f64| t.max(0.0) as u64;
+        let live = self.play_attempt.get_or_insert_with(|| LiveAttempt {
+            attempt: online::PlayedAttempt {
+                ended: online::AttemptEnd::Quit,
+                at_ms: 0,
+                length_ms: 0,
+                from_ms: None,
+                great: 0,
+                ok: 0,
+                miss: 0,
+                max_combo: 0,
+                mods: g.mods().list(),
+                rate: g.rate(),
+                scroll_speed: g.scroll_speed(),
+            },
+            failed: false,
+            failed_early: false,
+            in_match: false,
+        });
+        let a = &mut live.attempt;
+        a.at_ms = ms(g.time());
+        a.length_ms = ms(g.end_time());
+        a.from_ms = from.map(ms);
+        (a.great, a.ok, a.miss, a.max_combo) = (st.great, st.ok, st.miss, st.max_combo);
+        live.failed = g.failed();
+        live.failed_early = g.failed_early();
+        live.in_match = in_match;
+    }
+
+    /// The live play is over: what to tell the server about it, if anything (a start left at
+    /// once isn't a play, and a logged-out player has nobody to tell).
+    fn played_request(&mut self) -> Option<online::Request> {
+        let attempt = self.play_attempt.take();
+        let (ms, map) = self.playing.take()?;
+        if ms < 1000.0 || self.cfg.online_token.is_empty() {
+            return None;
+        }
+        let attempt = attempt.filter(|_| map.is_some()).map(|live| {
+            let ended = self.attempt_end(&live);
+            online::PlayedAttempt {
+                ended,
+                ..live.attempt
+            }
+        });
+        Some(online::Request::Played {
+            token: self.cfg.online_token.clone(),
+            ms: ms as u64,
+            map,
+            attempt,
+        })
+    }
+
+    /// How the play that was live ended, by where the game went from it.
+    fn attempt_end(&self, live: &LiveAttempt) -> online::AttemptEnd {
+        let scene = self.behind_settings().unwrap_or(&self.scene);
+        if live.in_match {
+            online::AttemptEnd::Match
+        } else if live.failed_early {
+            online::AttemptEnd::Failed
+        } else if scene.screen_as::<Loading>().is_some_and(|l| l.retry) {
+            online::AttemptEnd::Restarted
+        } else if scene.screen_is::<ResultsScreen>() {
+            if live.failed {
+                online::AttemptEnd::Failed
+            } else {
+                online::AttemptEnd::Finished
+            }
+        } else {
+            online::AttemptEnd::Quit
+        }
     }
 
     /// Asks the online server which map sets (and difficulties) are loved there, or loves one
@@ -14878,6 +14950,19 @@ const UNFOCUSED_FPS: u32 = 30;
 
 /// How long the exit question takes to slide in.
 const QUIT_SLIDE_MS: f32 = 160.0;
+
+/// The live play as of the last frame (`State::play_attempt`): the attempt sent once it's over,
+/// with what decides how it ended.
+#[derive(Clone, Debug)]
+struct LiveAttempt {
+    /// Its `ended` is filled in at the end (`State::attempt_end`).
+    attempt: online::PlayedAttempt,
+    /// It would fail if it ended now (or failed early).
+    failed: bool,
+    /// Sudden Death / Perfect failed it: a fail, whatever comes next (it may start over).
+    failed_early: bool,
+    in_match: bool,
+}
 
 /// A manual restart waiting for its fade to finish.
 struct RestartDelay {
