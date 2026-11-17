@@ -4163,9 +4163,11 @@ impl Results {
         c.hit(x0, cy, cw, ch, Hit::Key(key));
     }
 
-    /// Like and Not for me, right of the stats: two big pixel thumbs, no frames. Until the
-    /// player says, they bob (out of step) to be seen; under the pointer one grows. The one
-    /// chosen pops and throws pixels out in its colour, and stays big; the other goes grey.
+    /// Like and Not for me, right of the stats, in the main menu's look: one panel, the two
+    /// answers on it as rows, each a pixel thumb (outlined and white like the menu's notes, its
+    /// cuff in the answer's colour) and its name. Under the pointer a row lights up faintly; the
+    /// answer given gets the selector over a tint of its colour, its thumb pops and throws pixels
+    /// out, and the other answer goes grey.
     fn draw_vote(&self, c: &mut Canvas, cx: f32) {
         use crate::online::MapVote::{Dislike, Like};
         if self.vote_on.is_none() {
@@ -4176,73 +4178,113 @@ impl Results {
             return;
         }
         let phone = crate::mobile::active();
-        let px = if phone { 2.4 } else { 2.0 };
-        let icon = THUMB.len() as f32 * px;
-        let spread = icon + if phone { 44.0 } else { 36.0 };
-        // The pair's middle: right of the stats, kept on screen.
-        let mid = (cx + 280.0).min(c.width - 16.0 - icon / 2.0 - spread / 2.0);
-        let cy = 290.0;
-        c.text_centered(
-            mid,
-            cy - icon / 2.0 - 26.0,
-            8.0,
-            rgba(0x9a9ab0, a),
-            "Rate this map",
+        let (full_w, row_h, label): (f32, f32, f32) = if phone {
+            (196.0, 44.0, 13.0)
+        } else {
+            (172.0, 34.0, 10.0)
+        };
+        // Right of the stats, level with them and kept on screen. Where the answers' names
+        // would run into the stats (a narrow window), the thumbs and keys alone.
+        let at = |w: f32| (cx + VOTE_FROM_MIDDLE).min(c.width - 16.0 - w);
+        let named = at(full_w) >= cx + STATS_RIGHT_END;
+        let pw = if named { full_w } else { 84.0 };
+        let (x, y) = (at(pw), 250.0);
+        let ph = 36.0 + 2.0 * row_h + 4.0;
+        let start = c.shapes.len();
+        crate::style::panel(c, x, y, pw, ph);
+        let title = "Rate this map";
+        let size = Canvas::fit_size(9.0, 6.0, pw - 16.0, title);
+        crate::style::title(
+            c,
+            x + pw / 2.0 - Canvas::text_width(size, title) / 2.0,
+            y + 11.0 + (9.0 - size) / 2.0,
+            size,
+            0xffffff,
+            title,
         );
-        let t = self.shown.elapsed().as_secs_f32();
+        c.rect(x + 12.0, y + 28.0, pw - 24.0, 1.0, rgba(0x2a2a38, 1.0));
         let since = self.voted_at.map(|v| v.elapsed().as_secs_f32() * 1000.0);
         let rows = [
-            (Like, 0x5ee07a, "Like", "L"),
-            (Dislike, 0xff5a5a, "Not for me", "N"),
+            (Like, 0x5ee07a, "Like", "L", KeyCode::KeyL),
+            (Dislike, 0xff5a5a, "Not for me", "N", KeyCode::KeyN),
         ];
-        for (i, (vote, col, label, key_name)) in rows.into_iter().enumerate() {
-            let x = mid + (i as f32 - 0.5) * spread;
+        let (rx, rw) = (x + 8.0, pw - 16.0);
+        let mut icons = Vec::new();
+        for (i, (vote, col, name, key_name, key)) in rows.into_iter().enumerate() {
+            let ry = y + 34.0 + i as f32 * row_h;
+            let rh = row_h - 4.0;
             let chosen = self.vote == Some(vote);
             let other = self.vote.is_some() && !chosen;
-            let (hx, hy, hw, hh) = (x - spread / 2.0, cy - icon / 2.0 - 8.0, spread, icon + 34.0);
-            // The page may be scrolled: the pointer is over where the thumb is drawn.
-            let hover = self.scroll < 1.0 && c.hovered(hx, hy - self.scroll, hw, hh);
-            let bob = if self.vote.is_none() {
-                2.0 * (t * 3.0 + i as f32 * std::f32::consts::PI).sin()
-            } else {
-                0.0
-            };
-            let mut scale: f32 = if chosen || hover { 1.15 } else { 1.0 };
+            // The page may be scrolled: the pointer is over where the row is drawn.
+            let hover = self.scroll < 1.0 && c.hovered(rx, ry - self.scroll, rw, rh);
+            if chosen {
+                c.round_rect(
+                    [rx, ry],
+                    [rw, rh],
+                    7.0,
+                    rgba(col, 0.14 + 0.05 * crate::style::pulse()),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+                crate::style::selector(c, "vote", [rx - 3.0, ry - 3.0, rw + 6.0, rh + 6.0]);
+            } else if hover {
+                c.round_rect(
+                    [rx, ry],
+                    [rw, rh],
+                    7.0,
+                    rgba(0x262634, 0.6),
+                    rgba(0, 0.0),
+                    0.0,
+                );
+            }
+            c.hit(rx, ry, rw, rh, Hit::Key(key));
+            let mut unit = if chosen || hover { 1.0 } else { 0.85 };
+            if phone {
+                unit *= 1.3;
+            }
             if chosen && let Some(ms) = since.filter(|ms| *ms < 320.0) {
-                scale += 0.3 * (1.0 - ms / 320.0).powi(2);
+                unit *= 1.0 + 0.35 * (1.0 - ms / 320.0).powi(2);
             }
-            let look = if other {
-                Look::Grey(0.35 * a)
-            } else {
-                Look::Colour(col, a)
-            };
-            pixel_thumb(c, x, cy + bob, px * scale, vote == Dislike, look);
-            if chosen && let Some(ms) = since.filter(|ms| *ms < 600.0) {
-                burst(c, x, cy, ms / 600.0, col);
-            }
+            let look = if other { Look::Grey } else { Look::Colour(col) };
+            let (ix, iy) = (rx + if phone { 24.0 } else { 18.0 }, ry + rh / 2.0);
+            icons.push((ix, iy, unit, vote == Dislike, look, chosen.then_some(col)));
             let text_col = if other {
-                rgba(0x5a5a6a, a)
+                0x5a5a6a
             } else if chosen || hover {
-                rgba(0xffffff, a)
+                0xffffff
             } else {
-                rgba(col, a)
+                0xa8a8bc
             };
-            let ly = cy + icon / 2.0 + 13.0;
-            c.text_centered(x, ly, 9.0, text_col, label);
-            if !phone {
-                c.text_centered(x, ly + 13.0, 7.0, rgba(0x6a6a80, a), key_name);
+            if named {
+                let tx = rx + if phone { 50.0 } else { 38.0 };
+                let room = rw - (tx - rx) - 16.0;
+                c.text(
+                    tx,
+                    ry + (rh - label) / 2.0,
+                    label,
+                    rgba(text_col, 1.0),
+                    &Canvas::fit(label, room, name),
+                );
             }
-            c.hit(
-                hx,
-                hy,
-                hw,
-                hh,
-                Hit::Key(if vote == Like {
-                    KeyCode::KeyL
-                } else {
-                    KeyCode::KeyN
-                }),
-            );
+            if !phone {
+                let kw = Canvas::text_width(7.0, key_name);
+                c.text(
+                    rx + rw - 8.0 - kw,
+                    ry + (rh - 7.0) / 2.0,
+                    7.0,
+                    rgba(0x6a6a80, 1.0),
+                    key_name,
+                );
+            }
+        }
+        c.fade_since(start, a, 1.0);
+        // The thumbs over their rows, drawn at the screen's own alpha (their pixels overlap a
+        // little when solid, which a fade would show).
+        for (ix, iy, unit, down, look, burst_col) in icons {
+            pixel_thumb(c, ix, iy, crate::render::pixel_size(unit), down, look, a);
+            if let (Some(col), Some(ms)) = (burst_col, since.filter(|ms| *ms < 600.0)) {
+                burst(c, ix, iy, ms / 600.0, col);
+            }
         }
     }
 
@@ -4469,9 +4511,14 @@ impl Results {
     }
 }
 
-/// A thumbs up in pixels, shaded like an emoji: `O` the outline, `H` light, `Y` the hand,
-/// `S` its shade, `D` the creases between the fingers, `h` / `C` / `c` the sleeve lit, plain
-/// and shaded (in the vote's colour). Turned half a turn it is the thumbs down.
+/// How far right of the screen's middle the vote panel starts, and where the stats' right column
+/// ends (its widest line, "MEAN    +0.0 ms", drawn from 30 right of the middle).
+const VOTE_FROM_MIDDLE: f32 = 205.0;
+const STATS_RIGHT_END: f32 = 195.0;
+
+/// A thumbs up in pixels: `O` the outline, `H` light, `Y` the hand, `S` its shade, `D` the
+/// creases between the fingers, `h` / `C` / `c` the cuff lit, plain and shaded (in the vote's
+/// colour). Turned half a turn it is the thumbs down.
 const THUMB: [&str; 24] = [
     "..........OOOO............",
     ".........OHHHSO...........",
@@ -4499,96 +4546,110 @@ const THUMB: [&str; 24] = [
     ".OOOOO.OOOOOOOOOOOOOOO....",
 ];
 
-/// How a thumb is drawn: in its colours (the sleeve in the vote's), or all grey.
-#[derive(Clone, Copy)]
+/// How a thumb is drawn: white like the menu's notes with its cuff in `colour`, or all grey.
+#[derive(Clone, Copy, PartialEq)]
 enum Look {
-    Colour(u32, f32),
-    Grey(f32),
+    Colour(u32),
+    Grey,
 }
 
-/// Draws `THUMB` centred on (`x`, `y`) in `px`-sized pixels, upside down for a thumbs down,
-/// over its own shadow.
-fn pixel_thumb(c: &mut Canvas, x: f32, y: f32, px: f32, down: bool, look: Look) {
-    let (w, h) = (THUMB[0].len(), THUMB.len());
-    let (x0, y0) = (x - w as f32 * px / 2.0, y - h as f32 * px / 2.0);
-    let a = match look {
-        Look::Colour(_, a) | Look::Grey(a) => a,
-    };
-    let colour = |ch: u8| match (ch, look) {
-        (b'O', _) => 0x2a1606,
-        (b'H', Look::Colour(..)) => 0xffeca8,
-        (b'Y', Look::Colour(..)) => 0xffcc4d,
-        (b'S', Look::Colour(..)) => 0xe89c2e,
-        (b'D', Look::Colour(..)) => 0xc07418,
-        (b'C', Look::Colour(sleeve, _)) => sleeve,
-        (b'h', Look::Colour(sleeve, _)) => lighter(sleeve),
-        (b'c', Look::Colour(sleeve, _)) => darker(sleeve),
-        (b'H' | b'h', _) => 0x9a9aa6,
-        (b'Y' | b'C', _) => 0x7a7a86,
-        _ => 0x5a5a66,
-    };
-    // Each row in runs: one strip per run of a colour (of anything, for the shadow), so the
-    // pixels show no seams between them at any size. Solid strips overlap a little to close
-    // the last of them; see-through ones can't (the overlaps would show darker).
-    let seal = if a >= 0.99 { 0.5 } else { 0.0 };
-    for shadow in [true, false] {
-        for (r, row) in THUMB.iter().enumerate() {
-            let row = row.as_bytes();
-            let mut k0 = 0;
-            while k0 < w {
-                let same = |ch: u8| {
-                    if shadow {
-                        (ch == b'.') == (row[k0] == b'.')
-                    } else {
-                        ch == row[k0]
-                    }
-                };
-                let k1 = k0 + row[k0..].iter().take_while(|&&ch| same(ch)).count() - 1;
-                if row[k0] != b'.' {
-                    let (gx, gy) = if down {
-                        (w - 1 - k1, h - 1 - r)
-                    } else {
-                        (k0, r)
-                    };
-                    let (off, hex, alpha, extra) = if shadow {
-                        (px * 0.8, 0x000000, 0.45 * a, 0.0)
-                    } else {
-                        (0.0, colour(row[k0]), a, seal)
-                    };
-                    c.rect(
-                        x0 + gx as f32 * px + off,
-                        y0 + gy as f32 * px + off,
-                        (k1 - k0 + 1) as f32 * px + extra,
-                        px + extra,
-                        rgba(hex, alpha),
-                    );
-                }
-                k0 = k1 + 1;
-            }
-        }
+/// The colour of the sprite letter `ch` in `look`; the main menu's notes' palette: a dark
+/// outline, white lit top left and shaded bottom right.
+fn thumb_colour(ch: u8, look: Look) -> u32 {
+    use crate::menu::tint;
+    match (ch, look) {
+        (b'O', _) => 0x0f0f16,
+        (b'H', Look::Colour(_)) => 0xffffff,
+        (b'Y', Look::Colour(_)) => 0xececf4,
+        (b'S', Look::Colour(_)) => 0xc8c8d8,
+        (b'D', Look::Colour(_)) => 0x9a9ab0,
+        (b'C', Look::Colour(cuff)) => cuff,
+        (b'h', Look::Colour(cuff)) => tint(cuff, 0xffffff, 0.3),
+        (b'c', Look::Colour(cuff)) => tint(cuff, 0x000000, 0.28),
+        (b'H' | b'h', Look::Grey) => 0x6a6a7a,
+        (b'Y' | b'C', Look::Grey) => 0x5a5a6a,
+        _ => 0x46465a,
     }
 }
 
-/// `hex` halfway to white.
-fn lighter(hex: u32) -> u32 {
-    let ch = |shift: u32| ((((hex >> shift) & 0xff) + 0xff) / 2) << shift;
-    ch(16) | ch(8) | ch(0)
-}
+/// The rows of the thumb glitched like the menu's notes: (row, how many pixels the red goes out
+/// on the left and the cyan on the right).
+const THUMB_GLITCH: [(usize, usize); 3] = [(9, 1), (13, 2), (19, 1)];
 
-/// `hex` at two thirds of its brightness.
-fn darker(hex: u32) -> u32 {
-    let ch = |shift: u32| (((hex >> shift) & 0xff) * 2 / 3) << shift;
-    ch(16) | ch(8) | ch(0)
+/// Draws `THUMB` centred on (`x`, `y`) in `px`-sized pixels, upside down for a thumbs down, at
+/// `alpha`. In colour it has the logo's red and cyan glitch down its sides.
+fn pixel_thumb(c: &mut Canvas, x: f32, y: f32, px: f32, down: bool, look: Look, alpha: f32) {
+    let (w, h) = (THUMB[0].len(), THUMB.len());
+    let (x0, y0) = (
+        crate::render::snap_to_grid(x - w as f32 * px / 2.0),
+        crate::render::snap_to_grid(y - h as f32 * px / 2.0),
+    );
+    // Each row in runs of one colour, one strip each. Solid strips overlap a little so no seams
+    // show at any size; see-through ones can't (the overlaps would show darker).
+    let seal = if alpha >= 0.99 { 0.5 } else { 0.0 };
+    let row_at = |r: usize| -> Vec<u8> {
+        let row = THUMB[if down { h - 1 - r } else { r }].as_bytes();
+        if down {
+            row.iter().rev().copied().collect()
+        } else {
+            row.to_vec()
+        }
+    };
+    for r in 0..h {
+        let row = row_at(r);
+        let mut k0 = 0;
+        while k0 < w {
+            let k1 = k0 + row[k0..].iter().take_while(|&&ch| ch == row[k0]).count();
+            if row[k0] != b'.' {
+                c.rect(
+                    x0 + k0 as f32 * px,
+                    y0 + r as f32 * px,
+                    (k1 - k0) as f32 * px + seal,
+                    px + seal,
+                    rgba(thumb_colour(row[k0], look), alpha),
+                );
+            }
+            k0 = k1;
+        }
+    }
+    if look == Look::Grey {
+        return;
+    }
+    for (r, out) in THUMB_GLITCH {
+        let r = if down { h - 1 - r } else { r };
+        let row = row_at(r);
+        let (Some(left), Some(right)) = (
+            row.iter().position(|&ch| ch != b'.'),
+            row.iter().rposition(|&ch| ch != b'.'),
+        ) else {
+            continue;
+        };
+        let yy = y0 + r as f32 * px;
+        c.rect(
+            x0 + (left as f32 - out as f32) * px,
+            yy,
+            out as f32 * px,
+            px,
+            rgba(0x9f2137, alpha),
+        );
+        c.rect(
+            x0 + (right + 1) as f32 * px,
+            yy,
+            out as f32 * px,
+            px,
+            rgba(0x2a9fb5, alpha),
+        );
+    }
 }
 
 /// Pixels thrown out from (`x`, `y`) when a vote is cast, `t` from 0 to 1 over their flight:
 /// in the vote's colour and white, slowing and fading as they go.
 fn burst(c: &mut Canvas, x: f32, y: f32, t: f32, col: u32) {
     let e = 1.0 - (1.0 - t).powi(3);
-    for k in 0..12 {
-        let angle = k as f32 * std::f32::consts::TAU / 12.0 + 0.26;
-        let dist = 30.0 + 34.0 * e + if k % 2 == 0 { 8.0 } else { 0.0 };
-        let size = 4.0 * (1.0 - 0.5 * t);
+    for k in 0..10 {
+        let angle = k as f32 * std::f32::consts::TAU / 10.0 + 0.26;
+        let dist = 16.0 + 18.0 * e + if k % 2 == 0 { 4.0 } else { 0.0 };
+        let size = 3.0 * (1.0 - 0.5 * t);
         let hex = if k % 3 == 0 { 0xffffff } else { col };
         c.rect(
             x + angle.cos() * dist - size / 2.0,
@@ -4613,10 +4674,74 @@ fn chevron(c: &mut Canvas, x: f32, y: f32, down: bool, col: [f32; 4]) {
 
 #[cfg(test)]
 mod thumb_tests {
-    use super::THUMB;
+    use super::*;
+
+    /// The vote panel is right of the stats, clear of every line of them, and on screen: on a
+    /// wide screen, a 16:9 one and the narrowest window (where it shows the thumbs alone).
+    #[test]
+    fn the_vote_stays_clear_of_the_stats_on_every_width() {
+        let stats = crate::game::Stats {
+            great: 1234,
+            ok: 567,
+            miss: 89,
+            max_combo: 1890,
+            roll_ticks: 321,
+            strong: 456,
+            ..Default::default()
+        };
+        for width in [1066.0, 853.3, 640.0] {
+            let mut r = Results::new("map".into(), stats.clone(), crate::game::Windows::new(5.0));
+            r.shown = std::time::Instant::now() - std::time::Duration::from_secs(10);
+            r.vote_on = Some(crate::online::PlayedMap {
+                hash: 1,
+                name: "map".into(),
+                set_id: None,
+            });
+            let mut c = Canvas {
+                width,
+                audit: true,
+                ..Default::default()
+            };
+            r.draw(&mut c);
+            let votes: Vec<[f32; 4]> = c
+                .hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::Key(KeyCode::KeyL | KeyCode::KeyN)))
+                .map(|h| h.rect)
+                .collect();
+            assert_eq!(votes.len(), 2, "at {width}");
+            let lines = [
+                "GREAT",
+                "OK ",
+                "MISS",
+                "MAX COMBO",
+                "UR ",
+                "MEAN",
+                "DRUMROLL",
+                "BIG x2",
+            ];
+            for (range, text) in &c.texts {
+                if !lines.iter().any(|l| text.starts_with(l)) {
+                    continue;
+                }
+                let right = c.shapes[range.clone()]
+                    .iter()
+                    .map(|s| s.center[0] + s.half[0])
+                    .fold(f32::MIN, f32::max);
+                for v in &votes {
+                    assert!(
+                        right < v[0],
+                        "at {width}: {text:?} runs to {right}, the vote from {}",
+                        v[0]
+                    );
+                    assert!(v[0] + v[2] <= width, "at {width}: the vote off screen");
+                }
+            }
+        }
+    }
 
     /// The vote thumb is drawn row by row from the first row's width: every row has it, and
-    /// only the sprite's letters are in it.
+    /// only the sprite's letters are in it; the glitched rows are in it.
     #[test]
     fn the_vote_thumb_is_a_whole_sprite() {
         let w = THUMB[0].len();
@@ -4624,5 +4749,6 @@ mod thumb_tests {
             assert_eq!(row.len(), w, "{row}");
             assert!(row.bytes().all(|ch| b".OHYSDChc".contains(&ch)), "{row}");
         }
+        assert!(THUMB_GLITCH.iter().all(|&(r, _)| r < THUMB.len()));
     }
 }
