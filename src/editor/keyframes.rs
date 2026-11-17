@@ -212,6 +212,110 @@ impl Editor {
         })
     }
 
+    /// Lays `s`'s track out as `base` with its keys `picked` moved by `dt` ms and `dv` (with
+    /// `keep`, copies of them move and the originals stay), as one undo step or part of the drag
+    /// going on. Starting from `base` every time lets a drag pass over other keys and give them
+    /// back. Returns where the moved keys are now, as indices into the track.
+    #[allow(clippy::too_many_arguments)]
+    pub fn shift_keys(
+        &mut self,
+        s: Subject,
+        base: &[Key],
+        picked: &[usize],
+        dt: f64,
+        dv: f64,
+        keep: bool,
+        drag: bool,
+    ) -> Vec<usize> {
+        let (lo, hi) = s.range();
+        // Nothing goes before the map starts: the earliest moved key stops at 0.
+        let first = picked
+            .iter()
+            .filter_map(|&i| base.get(i).map(|k| k.t))
+            .fold(f64::INFINITY, f64::min);
+        let dt = if first.is_finite() {
+            dt.max(-first)
+        } else {
+            dt
+        };
+        let moved: Vec<Key> = picked
+            .iter()
+            .filter_map(|&i| base.get(i))
+            .map(|k| Key {
+                t: k.t + dt,
+                v: (k.v + dv).clamp(lo, hi),
+                ease: k.ease,
+            })
+            .filter(|k| k.t.is_finite() && k.v.is_finite())
+            .collect();
+        self.edit_gimmick(drag, |g| {
+            let Some(track) = track_mut(g, s) else { return };
+            track.keys.clear();
+            for (i, k) in base.iter().enumerate() {
+                if keep || !picked.contains(&i) {
+                    track.set(*k);
+                }
+            }
+            // Set last, so a moved key wins over one it lands on.
+            for k in &moved {
+                track.set(*k);
+            }
+        });
+        self.key_indices(s, &moved)
+    }
+
+    /// Where keys like `keys` (by time) are on `s`'s track now.
+    pub fn key_indices(&self, s: Subject, keys: &[Key]) -> Vec<usize> {
+        let Some(tr) = self.track_of(s) else {
+            return Vec::new();
+        };
+        let mut at: Vec<usize> = keys.iter().filter_map(|k| tr.near(k.t, 1e-6)).collect();
+        at.sort_unstable();
+        at.dedup();
+        at
+    }
+
+    /// Changes keys `picked` of `s` with `f` (a new time moves the key), as one undo step.
+    pub fn edit_keys(&mut self, s: Subject, picked: &[usize], f: impl Fn(Key) -> Key) -> bool {
+        let (lo, hi) = s.range();
+        self.edit_gimmick(false, |g| {
+            let Some(track) = track_mut(g, s) else { return };
+            let changed: Vec<Key> = picked
+                .iter()
+                .filter_map(|&i| track.keys.get(i).copied())
+                .map(&f)
+                .collect();
+            let mut gone: Vec<usize> = picked.to_vec();
+            gone.sort_unstable();
+            gone.dedup();
+            for &i in gone.iter().rev() {
+                track.remove(i);
+            }
+            for k in changed {
+                if k.t.is_finite() && k.v.is_finite() {
+                    track.set(Key {
+                        t: k.t.max(0.0),
+                        v: k.v.clamp(lo, hi),
+                        ..k
+                    });
+                }
+            }
+        })
+    }
+
+    /// Removes keys `picked` of `s`, as one undo step.
+    pub fn remove_keys(&mut self, s: Subject, picked: &[usize]) -> bool {
+        let mut gone: Vec<usize> = picked.to_vec();
+        gone.sort_unstable();
+        gone.dedup();
+        self.edit_gimmick(false, |g| {
+            let Some(track) = track_mut(g, s) else { return };
+            for &i in gone.iter().rev() {
+                track.remove(i);
+            }
+        })
+    }
+
     pub fn remove_key(&mut self, s: Subject, index: usize) -> bool {
         self.edit_gimmick(false, |g| {
             match s {
@@ -354,6 +458,15 @@ impl Editor {
     }
 }
 
+/// The track of `s` in `g`, to change (`None`: a group that isn't there).
+fn track_mut(g: &mut Gimmick, s: Subject) -> Option<&mut crate::tko::track::Track> {
+    match s {
+        Subject::Field(p) => Some(g.field_track_mut(p)),
+        Subject::Group(i, p) => g.groups.get_mut(i).map(|group| group.track_mut(p)),
+        Subject::Scroll => Some(&mut g.scroll),
+    }
+}
+
 /// Where a difficulty that became a `.tko` is kept: its `.osu`'s name with `.tko`.
 pub fn tko_path(path: &Path) -> PathBuf {
     if path
@@ -447,6 +560,62 @@ mod tests {
         assert_eq!(e.track_of(zoom).unwrap().keys.len(), 1);
         assert!(e.undo());
         assert!(e.track_of(zoom).is_none());
+    }
+
+    #[test]
+    fn keys_picked_move_together_and_give_back_a_key_they_pass_over() {
+        let mut e = tko_editor();
+        let zoom = Subject::Field(FieldProp::Zoom);
+        for (t, v) in [(1000.0, 1.0), (2000.0, 2.0), (3000.0, 1.5), (4000.0, 1.0)] {
+            e.key(zoom, key(t, v), false);
+        }
+        let base = e.track_of(zoom).unwrap().keys.clone();
+        // Keys 0 and 1 dragged right: first onto key 2 (it gives way), then past it.
+        let at = e.shift_keys(zoom, &base, &[0, 1], 1000.0, 0.0, false, true);
+        let times: Vec<f64> = e.track_of(zoom).unwrap().keys.iter().map(|k| k.t).collect();
+        assert_eq!(times, [2000.0, 3000.0, 4000.0]);
+        assert_eq!(
+            e.track_of(zoom).unwrap().keys[1].v,
+            2.0,
+            "the moved key wins"
+        );
+        assert_eq!(at, [0, 1]);
+        let at = e.shift_keys(zoom, &base, &[0, 1], 1500.0, 0.5, false, true);
+        e.end_drag();
+        let keys = e.track_of(zoom).unwrap().keys.clone();
+        let times: Vec<f64> = keys.iter().map(|k| k.t).collect();
+        assert_eq!(times, [2500.0, 3000.0, 3500.0, 4000.0]);
+        assert_eq!(keys[1].v, 1.5, "the key passed over is back");
+        assert_eq!((keys[0].v, keys[2].v), (1.5, 2.5));
+        assert_eq!(at, [0, 2]);
+        // The whole drag is one undo step.
+        assert!(e.undo());
+        assert_eq!(e.track_of(zoom).unwrap().keys, base);
+        // Copies leave the originals; nothing goes before the map starts.
+        e.shift_keys(zoom, &base, &[0, 1], -5000.0, 0.0, true, false);
+        let times: Vec<f64> = e.track_of(zoom).unwrap().keys.iter().map(|k| k.t).collect();
+        assert_eq!(times, [0.0, 1000.0, 2000.0, 3000.0, 4000.0]);
+        // Several eased and removed in one step each.
+        let base = e.track_of(zoom).unwrap().keys.clone();
+        assert!(e.edit_keys(zoom, &[1, 3], |k| Key {
+            ease: Ease::CubicOut,
+            ..k
+        }));
+        let eases: Vec<Ease> = e
+            .track_of(zoom)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.ease)
+            .collect();
+        assert_eq!(eases[1], Ease::CubicOut);
+        assert_eq!(eases[3], Ease::CubicOut);
+        assert_eq!(eases[2], base[2].ease);
+        assert!(e.remove_keys(zoom, &[3, 1, 3]));
+        let times: Vec<f64> = e.track_of(zoom).unwrap().keys.iter().map(|k| k.t).collect();
+        assert_eq!(times, [0.0, 2000.0, 4000.0]);
+        assert!(e.undo());
+        assert_eq!(e.track_of(zoom).unwrap().keys.len(), 5);
     }
 
     #[test]

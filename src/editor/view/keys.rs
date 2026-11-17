@@ -2,10 +2,10 @@
 //! playfield or a group of notes, pick a property, and add, drag, ease and delete keys on its
 //! track the way an animation track is edited in a video editor.
 
-use super::{Btn, Drag, Mode, View, fmt_time, inside};
+use super::{Btn, Drag, Keys, Mode, View, fmt_time, inside};
 use crate::editor::keyframes::Subject;
 use crate::hit::Canvas;
-use crate::render::rgba;
+use crate::render::{accent, rgba};
 use crate::tko::gimmick::{FieldProp, NoteProp, PropGroup};
 use crate::tko::track::{Ease, Key};
 
@@ -92,6 +92,30 @@ impl View {
                 NoteProp::ALL[self.k_prop.min(NoteProp::ALL.len() - 1)],
             )
         }
+    }
+
+    /// The keys picked on the graph, in track order: several, the one, or none.
+    pub(super) fn picked_keys(&self) -> Vec<usize> {
+        let n = self.ed.track_of(self.subject()).map_or(0, |t| t.keys.len());
+        let Some(sel) = self.k_sel.filter(|&i| i < n) else {
+            return Vec::new();
+        };
+        if self.k_many.contains(&sel) {
+            let mut all: Vec<usize> = self.k_many.iter().copied().filter(|&i| i < n).collect();
+            all.sort_unstable();
+            all.dedup();
+            all
+        } else {
+            vec![sel]
+        }
+    }
+
+    /// Picks keys `at` (indices into the track), `main` the one the fields show.
+    pub(super) fn pick_keys(&mut self, at: Vec<usize>, main: Option<usize>) {
+        self.k_sel = main
+            .filter(|m| at.contains(m))
+            .or_else(|| at.last().copied());
+        self.k_many = if at.len() > 1 { at } else { Vec::new() };
     }
 
     /// Whether the graph under the timeline is the keyframe graph.
@@ -220,6 +244,7 @@ impl View {
             .k_sel
             .and_then(|i| self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied());
         let ease = key.map_or(self.k_ease, |k| k.ease);
+        let picked = self.picked_keys().len();
         let mut row = vec![
             ("Key here".to_string(), Btn::K(KAct::KeyHere), false),
             (
@@ -230,7 +255,12 @@ impl View {
             ),
         ];
         if key.is_some() {
-            row.push(("Delete key".to_string(), Btn::K(KAct::DeleteKey), false));
+            let label = if picked > 1 {
+                format!("Delete {picked} keys")
+            } else {
+                "Delete key".to_string()
+            };
+            row.push((label, Btn::K(KAct::DeleteKey), false));
         }
         let end = self.row(c, x, y, &row);
         // The picked key's value and time: click one to type it, - and + step it.
@@ -247,14 +277,17 @@ impl View {
         }
         y += 20.0;
         let hint = match key {
+            Some(_) if picked > 1 => format!(
+                "{picked} keys picked: drag one to move them all (Ctrl+drag copies)   Ctrl+C / Ctrl+V copy and paste at the playhead   Delete removes them   a value typed goes on all of them"
+            ),
             Some(k) => format!(
-                "key at {}: {}   click a number to type it   drag snaps to {}, Shift: free   Ctrl+C / Ctrl+V: copy keys",
+                "key at {}: {}   click a number to type it   drag snaps to {}, Shift: free   Shift / Ctrl+click picks more, drag on empty space boxes them   Ctrl+C / Ctrl+V: copy keys",
                 fmt_time(k.t),
                 trim_num(k.v),
                 trim_num(nice_step(self.key_range().1 - self.key_range().0)),
             ),
             None => {
-                "click the graph below to add a key, drag to move it, right-click to delete   Ctrl+C / Ctrl+V: copy all keys"
+                "click the graph below to add a key, drag a box to pick several, drag a key to move it, right-click to delete   Ctrl+C / Ctrl+V: copy all keys"
                     .into()
             }
         };
@@ -308,6 +341,37 @@ impl View {
                 let Some(k) = self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied() else {
                     return;
                 };
+                let picked = self.picked_keys();
+                if picked.len() > 1 {
+                    // A value typed goes on every key picked; a time moves them all with
+                    // the one shown.
+                    let base = self
+                        .ed
+                        .track_of(s)
+                        .map(|t| t.keys.clone())
+                        .unwrap_or_default();
+                    let main = picked.iter().position(|&p| p == i);
+                    let at = if f == KF::Value {
+                        if !self.ed.edit_keys(s, &picked, |key| Key { v, ..key }) {
+                            return;
+                        }
+                        self.ed.key_indices(
+                            s,
+                            &picked
+                                .iter()
+                                .filter_map(|&p| base.get(p))
+                                .copied()
+                                .collect::<Vec<_>>(),
+                        )
+                    } else {
+                        self.ed
+                            .shift_keys(s, &base, &picked, v.max(0.0) - k.t, 0.0, false, false)
+                    };
+                    let main = main.and_then(|m| at.get(m).copied());
+                    self.pick_keys(at, main);
+                    self.mark_stale();
+                    return;
+                }
                 let key = if f == KF::Value {
                     Key { v, ..k }
                 } else {
@@ -315,6 +379,7 @@ impl View {
                 };
                 if self.ed.move_key(s, i, key, false) {
                     self.k_sel = self.ed.track_of(s).and_then(|tr| tr.near(key.t, 0.0));
+                    self.k_many.clear();
                     self.mark_stale();
                 }
             }
@@ -340,6 +405,23 @@ impl View {
                 else {
                     return;
                 };
+                let picked = self.picked_keys();
+                if f == KF::Value && picked.len() > 1 {
+                    // Every key picked goes up or down by the step, each from its own value.
+                    let (lo, hi) = self.key_range();
+                    let dv = dir * nice_step(hi - lo) * k;
+                    let base = self
+                        .ed
+                        .track_of(s)
+                        .map(|t| t.keys.clone())
+                        .unwrap_or_default();
+                    let main = picked.iter().position(|&p| Some(p) == self.k_sel);
+                    let at = self.ed.shift_keys(s, &base, &picked, 0.0, dv, false, false);
+                    let main = main.and_then(|m| at.get(m).copied());
+                    self.pick_keys(at, main);
+                    self.mark_stale();
+                    return;
+                }
                 let v = if f == KF::Value {
                     let (lo, hi) = self.key_range();
                     let step = nice_step(hi - lo) * k;
@@ -364,16 +446,22 @@ impl View {
         }
     }
 
-    /// Ctrl+C on the key graph: the key picked, or with none every key of the track. False
+    /// Ctrl+C on the key graph: the keys picked, or with none every key of the track. False
     /// when there is nothing to copy (so notes are copied instead).
     pub(super) fn copy_keys(&mut self) -> bool {
         let s = self.subject();
+        let picked = self.picked_keys();
         let Some(tr) = self.ed.track_of(s) else {
             return false;
         };
-        let keys: Vec<Key> = match self.k_sel {
-            Some(i) => tr.keys.get(i).copied().into_iter().collect(),
-            None => tr.keys.clone(),
+        let keys: Vec<Key> = if picked.is_empty() {
+            tr.keys.clone()
+        } else {
+            picked
+                .iter()
+                .filter_map(|&i| tr.keys.get(i))
+                .copied()
+                .collect()
         };
         if keys.is_empty() {
             return false;
@@ -399,7 +487,17 @@ impl View {
         if self.ed.paste_keys(s, &keys, at) {
             let first = keys.first().map_or(0.0, |k| k.t);
             let last = keys.last().map_or(0.0, |k| k.t);
-            self.k_sel = self.ed.track_of(s).and_then(|tr| tr.near(at, 0.0));
+            // The keys laid are picked, to drag them on from there.
+            let laid: Vec<Key> = keys
+                .iter()
+                .map(|k| Key {
+                    t: at + (k.t - first),
+                    ..*k
+                })
+                .collect();
+            let picked = self.ed.key_indices(s, &laid);
+            let main = self.ed.track_of(s).and_then(|tr| tr.near(at, 0.0));
+            self.pick_keys(picked, main);
             if keys.len() > 1 {
                 self.set_time(at + (last - first));
             }
@@ -464,6 +562,7 @@ impl View {
             KAct::KeyHere => {
                 let (s, t) = (self.subject(), self.ed.time);
                 if self.ed.key_here(s, t, self.k_ease) {
+                    self.k_many.clear();
                     self.k_sel = self.ed.track_of(s).and_then(|tr| tr.near(t, 0.0));
                     self.mark_stale();
                 }
@@ -483,18 +582,19 @@ impl View {
                 };
                 self.k_ease = ease;
                 let s = self.subject();
-                if let Some(i) = self.k_sel
-                    && let Some(k) = self.ed.track_of(s).and_then(|t| t.keys.get(i)).copied()
-                    && self.ed.move_key(s, i, Key { ease, ..k }, false)
-                {
+                let picked = self.picked_keys();
+                if !picked.is_empty() && self.ed.edit_keys(s, &picked, |k| Key { ease, ..k }) {
                     self.mark_stale();
                 }
             }
             KAct::DeleteKey => {
                 let s = self.subject();
-                if let Some(i) = self.k_sel.take()
-                    && self.ed.remove_key(s, i)
-                {
+                let picked = self.picked_keys();
+                self.pick_keys(Vec::new(), None);
+                if !picked.is_empty() && self.ed.remove_keys(s, &picked) {
+                    if picked.len() > 1 {
+                        self.status = format!("deleted {} keys", picked.len());
+                    }
                     self.mark_stale();
                 }
             }
@@ -610,13 +710,14 @@ impl View {
             c.rect(px, self.key_y(v, r) - 0.5, 2.0, 1.5, rgba(KEY, 0.9));
             px += 2.0;
         }
+        let picked = self.picked_keys();
         if let Some(t) = self.ed.track_of(s) {
             for (i, k) in t.keys.iter().enumerate() {
                 let kx = self.x_of(k.t);
                 if kx < x - 6.0 || kx > x + w + 6.0 {
                     continue;
                 }
-                let on = self.k_sel == Some(i);
+                let on = picked.contains(&i);
                 c.circle(
                     kx,
                     self.key_y(k.v, r),
@@ -627,10 +728,27 @@ impl View {
                 );
             }
         }
+        // A box picking keys.
+        if let Drag::KBox { t0, y0, t1, y1, .. } = self.drag {
+            let (a, b) = (self.x_of(t0.min(t1)), self.x_of(t0.max(t1)));
+            let (top, bottom) = (y0.min(y1), y0.max(y1));
+            c.rect(a, top, b - a, bottom - top, rgba(accent(), 0.12));
+            for (rx, ry, rw, rh) in [
+                (a, top, b - a, 1.0),
+                (a, bottom - 1.0, b - a, 1.0),
+                (a, top, 1.0, bottom - top),
+                (b - 1.0, top, 1.0, bottom - top),
+            ] {
+                c.rect(rx, ry, rw, rh, rgba(accent(), 0.8));
+            }
+        }
         let px = self.x_of(self.ed.time);
         c.rect(px - 0.75, y + 1.0, 1.5, h - 2.0, rgba(0xffffff, 0.8));
         c.clip_since(start, x, y, w, h);
-        let hint = format!("{}: click add   drag move   right-click delete", s.name());
+        let hint = format!(
+            "{}: click add   drag move   drag on empty: box   Shift/Ctrl+click: pick more   right-click delete",
+            s.name()
+        );
         c.text(
             x + w - 4.0 - Canvas::text_width(6.0, &hint),
             y + 3.0,
@@ -669,16 +787,214 @@ impl View {
         }
     }
 
-    pub(super) fn key_graph_down(&mut self, x: f32, y: f32) {
-        let s = self.subject();
+    /// A press on the key graph. On a key: Shift or Ctrl+click takes it in or out of the keys
+    /// picked, a drag moves the keys picked together (Ctrl: copies of them). On empty space: a
+    /// click lays a key there, a drag boxes keys to pick (Shift or Ctrl: added to the others).
+    pub(super) fn key_graph_down(&mut self, x: f32, y: f32, keys: Keys) {
         self.k_frozen = Some(self.key_range());
-        let r = self.k_frozen.unwrap_or((0.0, 1.0));
-        if let Some(i) = self.key_near(x, y) {
-            self.k_sel = Some(i);
-            self.drag = Drag::Key { index: i };
+        self.k_click = None;
+        let add = keys.shift || keys.ctrl;
+        let Some(i) = self.key_near(x, y) else {
+            let t = self.t_at(x);
+            self.drag = Drag::KBox {
+                t0: t,
+                y0: y,
+                t1: t,
+                y1: y,
+                add,
+            };
+            return;
+        };
+        let mut group = self.picked_keys();
+        if keys.ctrl {
+            // Ctrl, as on the clips: a drag drags copies of the keys picked (of this one alone
+            // when it isn't one of them); a click takes it in or out.
+            if !group.contains(&i) {
+                group = vec![i];
+            }
+            self.k_click = Some(i);
+            self.start_key_drag(i, group, true, (x, y));
             return;
         }
-        let t = self.ed.snapped(self.t_at(x));
+        if keys.shift {
+            if let Some(k) = group.iter().position(|&g| g == i) {
+                group.remove(k);
+                let main = group.last().copied();
+                self.pick_keys(group, main);
+                self.k_frozen = None;
+                return;
+            }
+            group.push(i);
+            group.sort_unstable();
+            self.pick_keys(group.clone(), Some(i));
+        } else if group.len() > 1 && group.contains(&i) {
+            // One of several picked: they move together, and a click picks it alone.
+            self.k_sel = Some(i);
+            self.k_click = Some(i);
+        } else {
+            group = vec![i];
+            self.pick_keys(group.clone(), Some(i));
+        }
+        self.start_key_drag(i, group, false, (x, y));
+    }
+
+    /// A drag of keys `group` by key `index` begins: the track as it is now is what each step
+    /// of it is laid out from.
+    fn start_key_drag(&mut self, index: usize, group: Vec<usize>, copy: bool, down: (f32, f32)) {
+        let s = self.subject();
+        self.k_base = self
+            .ed
+            .track_of(s)
+            .map(|t| t.keys.clone())
+            .unwrap_or_default();
+        self.k_base_picked = group;
+        self.drag = Drag::Key {
+            index,
+            copy,
+            down,
+            moved: false,
+        };
+    }
+
+    pub(super) fn key_graph_drag(&mut self, x: f32, y: f32) {
+        match self.drag {
+            Drag::KBox { t0, y0, add, .. } => {
+                self.drag = Drag::KBox {
+                    t0,
+                    y0,
+                    t1: self.t_at(x),
+                    y1: y,
+                    add,
+                };
+            }
+            Drag::Key {
+                index,
+                copy,
+                down,
+                moved,
+            } => {
+                if !moved && (x - down.0).abs() < 3.0 && (y - down.1).abs() < 3.0 {
+                    return;
+                }
+                self.drag = Drag::Key {
+                    index,
+                    copy,
+                    down,
+                    moved: true,
+                };
+                self.k_click = None;
+                let s = self.subject();
+                let r = self.k_frozen.unwrap_or_else(|| self.key_range());
+                let Some(grabbed) = self.k_base.get(index).copied() else {
+                    return;
+                };
+                let t = self.ed.snapped(self.t_at(x)).max(0.0);
+                let v = self.graph_snap(self.y_key(y, r), r);
+                let base = std::mem::take(&mut self.k_base);
+                let group = self.k_base_picked.clone();
+                let at =
+                    self.ed
+                        .shift_keys(s, &base, &group, t - grabbed.t, v - grabbed.v, copy, true);
+                self.k_base = base;
+                let main = group
+                    .iter()
+                    .position(|&g| g == index)
+                    .and_then(|m| at.get(m).copied());
+                self.pick_keys(at, main);
+                self.mark_stale();
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn key_graph_up(&mut self, drag: Drag) {
+        self.k_frozen = None;
+        match drag {
+            Drag::Key {
+                index, copy, moved, ..
+            } => {
+                self.k_base.clear();
+                self.k_base_picked.clear();
+                if moved {
+                    self.ed.end_drag();
+                    self.mark_stale();
+                    if copy {
+                        let n = self.picked_keys().len();
+                        self.status = format!("copied {n} key{}", if n == 1 { "" } else { "s" });
+                    }
+                    return;
+                }
+                if self.k_click.take() != Some(index) {
+                    return;
+                }
+                let mut group = self.picked_keys();
+                if copy {
+                    // Ctrl and a click: in or out of the keys picked.
+                    if let Some(k) = group.iter().position(|&g| g == index) {
+                        group.remove(k);
+                        let main = group.last().copied();
+                        self.pick_keys(group, main);
+                    } else {
+                        group.push(index);
+                        group.sort_unstable();
+                        self.pick_keys(group, Some(index));
+                    }
+                } else {
+                    self.pick_keys(vec![index], Some(index));
+                }
+            }
+            Drag::KBox {
+                t0,
+                y0,
+                t1,
+                y1,
+                add,
+            } => {
+                let click = (self.x_of(t1) - self.x_of(t0)).abs() < 3.0 && (y1 - y0).abs() < 3.0;
+                if click {
+                    if !add {
+                        self.key_at_point(self.x_of(t0), y0);
+                    }
+                    return;
+                }
+                let s = self.subject();
+                let r = self.key_range();
+                let (a, b) = (t0.min(t1), t0.max(t1));
+                let (top, bottom) = (y0.min(y1), y0.max(y1));
+                let hit: Vec<usize> = self.ed.track_of(s).map_or(Vec::new(), |tr| {
+                    tr.keys
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, k)| {
+                            let ky = self.key_y(k.v, r);
+                            k.t >= a && k.t <= b && ky >= top - 3.0 && ky <= bottom + 3.0
+                        })
+                        .map(|(i, _)| i)
+                        .collect()
+                });
+                let mut at = if add { self.picked_keys() } else { Vec::new() };
+                for i in hit {
+                    if !at.contains(&i) {
+                        at.push(i);
+                    }
+                }
+                at.sort_unstable();
+                let main = self.k_sel.filter(|m| add && at.contains(m));
+                let n = at.len();
+                self.pick_keys(at, main);
+                if n > 1 {
+                    self.status = format!("{n} keys picked");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A key laid where the graph was clicked, picked alone.
+    fn key_at_point(&mut self, x: f32, y: f32) {
+        let s = self.subject();
+        let r = self.key_range();
+        let t = self.ed.snapped(self.t_at(x)).max(0.0);
         let v = self.graph_snap(self.y_key(y, r), r);
         if self.ed.key(
             s,
@@ -689,32 +1005,8 @@ impl View {
             },
             false,
         ) {
-            self.k_sel = self.ed.track_of(s).and_then(|tr| tr.near(t, 0.0));
-            if let Some(i) = self.k_sel {
-                self.drag = Drag::Key { index: i };
-            }
-            self.mark_stale();
-        } else {
-            self.k_frozen = None;
-        }
-    }
-
-    pub(super) fn key_graph_drag(&mut self, index: usize, x: f32, y: f32) {
-        let s = self.subject();
-        let r = self.k_frozen.unwrap_or_else(|| self.key_range());
-        let Some(old) = self.ed.track_of(s).and_then(|t| t.keys.get(index)).copied() else {
-            return;
-        };
-        let t = self.ed.snapped(self.t_at(x)).max(0.0);
-        let v = self.graph_snap(self.y_key(y, r), r);
-        if self.ed.move_key(s, index, Key { t, v, ..old }, true) {
-            let now = self
-                .ed
-                .track_of(s)
-                .and_then(|tr| tr.near(t, 0.0))
-                .unwrap_or(index);
-            self.k_sel = Some(now);
-            self.drag = Drag::Key { index: now };
+            let at = self.ed.track_of(s).and_then(|tr| tr.near(t, 0.0));
+            self.pick_keys(at.into_iter().collect(), at);
             self.mark_stale();
         }
     }
@@ -726,7 +1018,7 @@ impl View {
         if let Some(i) = self.key_near(x, y) {
             let s = self.subject();
             if self.ed.remove_key(s, i) {
-                self.k_sel = None;
+                self.pick_keys(Vec::new(), None);
                 self.mark_stale();
             }
         }
