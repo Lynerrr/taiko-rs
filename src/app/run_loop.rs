@@ -1370,6 +1370,7 @@ impl State {
             editor_back: None,
             test_auto: false,
             playing: None,
+            play_attempt: None,
             status_wait: None,
             scene_kind: None,
             scene_since: Instant::now(),
