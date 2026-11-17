@@ -5372,40 +5372,20 @@ mod tests {
     }
 
     #[test]
-    fn the_keyframe_page_makes_a_tko_and_keys_a_track() {
-        use crate::editor::keyframes::Subject;
-        use crate::tko::gimmick::FieldProp;
+    fn a_keys_ease_is_picked_from_a_list_not_cycled() {
         use crate::tko::track::Ease;
         let mut v = view();
         press(&mut v, Btn::GPage(2));
-        assert_eq!(v.mode, Mode::Effects);
         draw(&mut v);
-        assert!(!v.ed.is_tko());
-        // A click on a plain chart's graph still means a green line, not a key.
         press(&mut v, Btn::K(KAct::MakeTko));
-        assert!(v.ed.is_tko(), "{}", v.status);
-        assert!(v.ed.path.extension().is_some_and(|e| e == "tko"));
         press(&mut v, Btn::K(KAct::Prop(3)));
-        assert_eq!(v.subject(), Subject::Field(FieldProp::Zoom));
         draw(&mut v);
-        // Click the graph twice: two keys on the zoom track.
         let g = v.layout.graph;
         click(&mut v, 300.0, g[1] + 20.0);
         click(&mut v, 500.0, g[1] + 50.0);
         let keys = v.ed.track_of(v.subject()).unwrap().keys.clone();
-        assert_eq!(keys.len(), 2);
-        assert!(keys[0].t < keys[1].t);
         assert_eq!(v.k_sel, Some(1));
-        // Drag the second key: one undo step.
-        v.mouse_down(500.0, g[1] + 50.0, Keys::default(), None);
-        v.mouse_move(560.0, g[1] + 30.0, Keys::default());
-        v.mouse_up(560.0, g[1] + 30.0, Keys::default());
-        let moved = v.ed.track_of(v.subject()).unwrap().keys[1];
-        assert!(moved.t > keys[1].t);
-        assert!(v.ed.undo());
-        assert_eq!(v.ed.track_of(v.subject()).unwrap().keys[1].t, keys[1].t);
-        // The easing of the selected key, picked from a list (every ease, Step too), then its
-        // value, then deleting it.
+        // Ease opens a list of every ease, Step too.
         draw(&mut v);
         press(&mut v, Btn::K(KAct::Ease));
         assert!(
@@ -5453,6 +5433,63 @@ mod tests {
         draw(&mut v);
         click(&mut v, r[0] + 3.0, r[1] + 3.0);
         assert!(v.fx_drop.is_none(), "a second press closes it");
+        // With no key picked, the ease picked is the next key's.
+        v.k_sel = None;
+        let step = Ease::ALL.iter().position(|e| *e == Ease::Step).unwrap() as u8;
+        press(&mut v, Btn::K(KAct::SetEase(step)));
+        assert_eq!(v.k_ease, Ease::Step);
+        press(&mut v, Btn::K(KAct::KeyHere));
+        assert!(
+            v.ed.track_of(v.subject())
+                .unwrap()
+                .keys
+                .iter()
+                .any(|k| k.ease == Ease::Step)
+        );
+        let _ = std::fs::remove_file(&v.ed.path);
+    }
+
+    #[test]
+    fn the_keyframe_page_makes_a_tko_and_keys_a_track() {
+        use crate::editor::keyframes::Subject;
+        use crate::tko::gimmick::FieldProp;
+        use crate::tko::track::Ease;
+        let mut v = view();
+        press(&mut v, Btn::GPage(2));
+        assert_eq!(v.mode, Mode::Effects);
+        draw(&mut v);
+        assert!(!v.ed.is_tko());
+        // A click on a plain chart's graph still means a green line, not a key.
+        press(&mut v, Btn::K(KAct::MakeTko));
+        assert!(v.ed.is_tko(), "{}", v.status);
+        assert!(v.ed.path.extension().is_some_and(|e| e == "tko"));
+        press(&mut v, Btn::K(KAct::Prop(3)));
+        assert_eq!(v.subject(), Subject::Field(FieldProp::Zoom));
+        draw(&mut v);
+        // Click the graph twice: two keys on the zoom track.
+        let g = v.layout.graph;
+        click(&mut v, 300.0, g[1] + 20.0);
+        click(&mut v, 500.0, g[1] + 50.0);
+        let keys = v.ed.track_of(v.subject()).unwrap().keys.clone();
+        assert_eq!(keys.len(), 2);
+        assert!(keys[0].t < keys[1].t);
+        assert_eq!(v.k_sel, Some(1));
+        // Drag the second key: one undo step.
+        v.mouse_down(500.0, g[1] + 50.0, Keys::default(), None);
+        v.mouse_move(560.0, g[1] + 30.0, Keys::default());
+        v.mouse_up(560.0, g[1] + 30.0, Keys::default());
+        let moved = v.ed.track_of(v.subject()).unwrap().keys[1];
+        assert!(moved.t > keys[1].t);
+        assert!(v.ed.undo());
+        assert_eq!(v.ed.track_of(v.subject()).unwrap().keys[1].t, keys[1].t);
+        // The easing of the selected key (from the list, see the test below), then its value,
+        // then deleting it.
+        let cubic = Ease::ALL.iter().position(|e| *e == Ease::CubicOut).unwrap() as u8;
+        press(&mut v, Btn::K(KAct::SetEase(cubic)));
+        assert_eq!(
+            v.ed.track_of(v.subject()).unwrap().keys[1].ease,
+            Ease::CubicOut
+        );
         press(&mut v, Btn::Inc(Field::Key(KF::Value)));
         assert!(v.ed.track_of(v.subject()).unwrap().keys[1].v > keys[1].v);
         // Its value typed, and Enter puts it in.
