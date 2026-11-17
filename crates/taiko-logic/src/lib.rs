@@ -16,6 +16,7 @@ pub mod calibrate;
 pub mod clock;
 pub mod defense;
 pub mod difficulty;
+pub mod fingerprint;
 pub mod font;
 pub mod genres;
 pub mod library;
