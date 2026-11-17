@@ -434,6 +434,16 @@ fn an_admin_clears_the_selected_tja_course_s_board() {
 /// The playfield of TJA chart `text`'s course (no inputs, `mods`), drawn at each of `times`
 /// (map ms): where its small dons are along the lane, nearest first.
 fn dons_drawn(text: &str, mods: &[&str], times: &[f64]) -> Vec<Vec<f32>> {
+    dons_drawn_played(text, Vec::new(), mods, times)
+}
+
+/// The same, played with `inputs` (map ms, key).
+fn dons_drawn_played(
+    text: &str,
+    inputs: Vec<(f64, u8)>,
+    mods: &[&str],
+    times: &[f64],
+) -> Vec<Vec<f32>> {
     use crate::game::{Look, Play, set_frame_look};
     use crate::hit::Canvas;
     crate::render::set_frame_theme(Some(crate::render::Theme {
@@ -443,7 +453,7 @@ fn dons_drawn(text: &str, mods: &[&str], times: &[f64]) -> Vec<Vec<f32>> {
     set_frame_look(Some(Look::default()));
     crate::render::set_frame_time(Some(Instant::now()));
     let map = taiko_logic::tja::parse(text).unwrap().courses.remove(0).map;
-    let r = super::gameplay::replay(Vec::new(), mods, scores::new_version());
+    let r = super::gameplay::replay(inputs, mods, scores::new_version());
     let game = scores::replay_game(&map, &super::gameplay::silent_track(r.rate), &r);
     let mut play = Play::new(game);
     times
@@ -589,6 +599,48 @@ fn drawn_at(text: &str, t: f64) -> (Vec<(f32, f32)>, crate::hit::Canvas) {
     (dons, c)
 }
 
+/// A negative #SCROLL brings a note in from the left over the drum panel: it isn't hidden under
+/// it until the last few steps before the drum, as it was (a player's report: notes "way more
+/// sudden" than they should be, without any #SUDDEN). A note passing the drum the usual way
+/// still slides under the panel.
+#[test]
+fn a_note_from_the_left_comes_in_over_the_drum_panel() {
+    let text = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0,\n#SCROLL -1\n1,\n#END\n";
+    // The note is at 2000; 300 ms ahead it is far left of the drum, where the panel is.
+    let (dons, c) = drawn_at(text, 1700.0);
+    assert_eq!(dons.len(), 1, "{dons:?}");
+    let x = dons[0].0;
+    assert!(
+        x < taiko_logic::sim::HIT_X - 100.0,
+        "coming from the left, over where the panel is: {x}"
+    );
+    let panel = c
+        .shapes
+        .iter()
+        .position(|s| {
+            (s.center[0] - crate::game::PANEL_W / 2.0).abs() < 0.5
+                && (s.half[0] - crate::game::PANEL_W / 2.0).abs() < 0.5
+                && s.fill[3] > 0.99
+        })
+        .expect("the drum panel");
+    let note = c
+        .shapes
+        .iter()
+        .position(|s| (s.half[0] - 31.0).abs() < 0.5 && (s.center[0] - x).abs() < 0.01)
+        .unwrap();
+    assert!(
+        note > panel,
+        "drawn over the panel: note {note}, panel {panel}"
+    );
+    // It still lands on the drum on time.
+    let (dons, _) = drawn_at(text, 2000.0);
+    assert!(
+        dons.iter()
+            .any(|d| (d.0 - taiko_logic::sim::HIT_X).abs() < 0.05),
+        "{dons:?}"
+    );
+}
+
 /// #JPOSSCROLL slides the hit target, either way and up or down, and the notes still meet it on
 /// time; OpenTaiko's 60 px are 40 virtual units here.
 #[test]
@@ -612,6 +664,52 @@ fn jposscroll_moves_the_hit_target_and_notes_meet_it() {
     let left = still.replace("0,\n1,", "#JPOSSCROLL 0 -30 1\n0,\n1,");
     let (l, _) = drawn_at(&left, 2000.0);
     assert!((l[0].0 - home[0].0 + 20.0).abs() < 0.05, "{l:?}");
+}
+
+/// Notes coming in from the left over the drum panel and hit notes flying out of the drum go with
+/// a target #JPOSSCROLL moved, like every other note.
+#[test]
+fn notes_over_the_panel_and_hit_ones_follow_the_moved_target() {
+    let still = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0,\n#SCROLL -1\n1,\n#END\n";
+    let moved = still.replace("0,\n#SCROLL", "#JPOSSCROLL 0 60+30i 1\n0,\n#SCROLL");
+    // From the left, 300 ms before its hit.
+    let (home, _) = drawn_at(still, 1700.0);
+    let (there, _) = drawn_at(&moved, 1700.0);
+    assert_eq!(home.len(), 1, "{home:?}");
+    assert_eq!(there.len(), 1, "{there:?}");
+    let (dx, dy) = (there[0].0 - home[0].0, there[0].1 - home[0].1);
+    assert!(
+        (dx - 40.0).abs() < 0.05 && (dy - 20.0).abs() < 0.05,
+        "moved with the target: {dx}, {dy}"
+    );
+    // Hit, it flies up out of the moved drum.
+    let f = dons_drawn_played(&moved, vec![(2000.0, 1)], &[], &[2005.0]);
+    assert!(
+        f[0].iter()
+            .any(|&x| (x - taiko_logic::sim::HIT_X - 40.0).abs() < 0.05),
+        "{f:?}"
+    );
+}
+
+/// With #JPOSSCROLL putting the target in the middle of the screen, notes come in from both
+/// sides with as much lead (a player's video: from the left they popped up right next to the
+/// target, cut off where the drum's home place would have been 191 units away).
+#[test]
+fn a_target_moved_to_the_middle_gets_notes_from_the_left_as_early_as_from_the_right() {
+    let right = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n#JPOSSCROLL 0 400 1\n0,\n1,\n#END\n";
+    let left = right.replace("0,\n1,", "0,\n#SCROLL -1\n1,");
+    // OpenTaiko's 400 px are 266.67 units; the note is at 2000, 750 ms (294 units) away.
+    let target = taiko_logic::sim::HIT_X + 400.0 * 2.0 / 3.0;
+    let (r, _) = drawn_at(right, 1250.0);
+    let (l, _) = drawn_at(&left, 1250.0);
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!(l.len(), 1, "drawn from the left too: {l:?}");
+    let ahead = r[0].0 - target;
+    assert!(ahead > 290.0, "{ahead}");
+    assert!(
+        (target - l[0].0 - ahead).abs() < 0.05,
+        "as far left as the other is right: {l:?} {r:?}"
+    );
 }
 
 /// #LYRIC lines show under the lane from their time until the next one.
