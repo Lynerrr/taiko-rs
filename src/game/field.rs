@@ -1371,9 +1371,13 @@ impl Play {
         }
         // Notes flying in on a .tko approach path, drawn over the drum panel after it: a path
         // from behind the drum starts under the panel, where they'd be hidden most of the way.
+        // The same for notes coming in from the left.
         // (lane distance, fake, index, flow, colour, alpha, motion)
         let mut on_path: Vec<(f32, bool, usize, u8, u32, f32, NoteFx)> = Vec::new();
         let over_panel = |fx: &NoteFx| !crossfire && fx.path.is_some_and(|p| p[2] > 0.0);
+        // Notes coming in from the left (a TJA chart's negative #SCROLL) go over the panel too:
+        // under it they'd only show the last few steps before the drum, sprung on the player.
+        let from_left = |vel: f64, s: f32| !crossfire && vel < 0.0 && s < 0.0;
         // The shapes of notes a .tko map draws over every effect: lifted over them at the end.
         let mut above_shapes: Vec<std::ops::Range<usize>> = Vec::new();
         // A .tko map's fake notes, under the real ones: drawn like them, never judged, gone when
@@ -1396,7 +1400,7 @@ impl Play {
             nfx.path = self.tko().and_then(|rt| rt.fake_path(k, vt, s, lane_len));
             if a > 0.01 && !nfx.hidden {
                 let col = if n.kind == Kind::Kat { kat } else { don };
-                if over_panel(&nfx) {
+                if over_panel(&nfx) || from_left(n.velocity, s) {
                     on_path.push((s, true, k, 1, col, a, nfx));
                 } else {
                     let from = c.shapes.len();
@@ -1507,7 +1511,7 @@ impl Play {
                                 nfx.path = self.tko().and_then(|r| r.note_path(i, vt, s, lane_len));
                                 if a > 0.01 && !nfx.hidden {
                                     let a = if theirs.is_some() { 0.3 * a } else { a };
-                                    if over_panel(&nfx) {
+                                    if over_panel(&nfx) || from_left(n.velocity, s) {
                                         on_path.push((
                                             s,
                                             false,
@@ -1954,6 +1958,8 @@ impl Play {
         } else {
             draw_drum(c, self.game.presses().map(flash), uni.don(), uni.kat())
         };
+        // Notes over the panel and ones flying out of the drum go with a moved hit target too.
+        let over_lane = c.shapes.len();
         // Back to front, as they were met.
         for (s, fake, k, flow, col, a, nfx) in on_path {
             let n = if fake {
@@ -1983,6 +1989,9 @@ impl Play {
             } else if !skin_note(c, HIT_X, y, r, big, col, 1.0 - p) {
                 c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
             }
+        }
+        if drum != 0.0 || drum_y != 0.0 {
+            c.transform_since(over_lane, [0.0, 0.0], 1.0, drum, drum_y);
         }
         // Moved off the drum, it's drawn with the rest of the interface.
         if self.game.stats().combo >= 2
