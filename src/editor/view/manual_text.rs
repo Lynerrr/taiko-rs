@@ -261,7 +261,7 @@ F4 Effects, Motion page (.tko maps): notes you pick fly in along a path you draw
 - Straight lane keeps the picked notes on a plain straight lane while clips bend the lane into a zigzag, a spiral or any other shape: as far from the drum and as fast as on it. With When, they can go onto it and back to the bent lane over a beat.
 - Whatever is picked is what the page shapes: click a group under Moving to pick its notes again. The groups stay on one line: when there are more than fit, the arrows (or the wheel over them) page through them, and their numbers say how many are hidden each way.
 - On the timeline a bar under the notes, with the group's name, shows which ones the page is shaping.
-- Shape it in the preview: drag a point to move it, double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
+- Shape it in the preview: drag a point to move it (Shift keeps it level or plumb with where it was), double click to add one, right click to take one away. The white point is where notes come in; the drum always ends the path.
 
 # How they move on it
 - A note is as far along the path as it would be along the lane: it comes in at the start when it would come in at the lane's end. Slider velocity still works, so slow notes are slow on the path too.
@@ -628,7 +628,7 @@ F4 Effects, страница Motion (.tko-карты): выбранные нот
 - Straight lane держит выделенные ноты на обычном прямом лайне, пока клипы гнут лайн в зигзаг, спираль или другую форму: на том же расстоянии от барабана и с той же скоростью. Через When они могут уйти на него и вернуться на изогнутый лайн за одну долю.
 - Страница всегда правит то, что выделено: клик по группе в Moving снова выделяет её ноты. Группы всегда в одну строку: если все не помещаются, стрелки (или колесо над ними) листают их, а числа на стрелках говорят, сколько скрыто с каждой стороны.
 - На таймлайне полоса под нотами с именем группы показывает, какие ноты сейчас правит страница.
-- Путь правится прямо на превью: тащите точку, двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
+- Путь правится прямо на превью: тащите точку (с Shift она идёт ровно по горизонтали или вертикали от того места, где была), двойной клик добавляет новую, правый клик убирает. Белая точка: откуда ноты прилетают; заканчивается путь всегда на барабане.
 
 # Как они по нему летят
 - Нота проходит такую же долю пути, какую прошла бы по лайну: появляется в начале пути, когда появилась бы в конце лайна. SV продолжает работать: медленные ноты медленные и на пути.

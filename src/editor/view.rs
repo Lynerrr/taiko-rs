@@ -334,6 +334,9 @@ enum Drag {
     PathPoint {
         group: usize,
         point: usize,
+        /// Where the point was when the drag began (playfield units): Shift keeps it level or
+        /// plumb with this.
+        from: [f64; 2],
     },
     /// A before-the-hit key of a group, moved on the Motion page's graph.
     BeforeKey {
@@ -2479,6 +2482,10 @@ impl View {
         self.held = keys;
         if shift {
             self.gizmo_keys_changed();
+            if let Drag::PathPoint { .. } = self.drag {
+                let (x, y) = self.mouse;
+                self.path_drag(x, y, keys);
+            }
         }
     }
 
@@ -6146,21 +6153,21 @@ mod tests {
         assert!((moved[0] - want[0]).abs() <= 1.0 && (moved[1] - want[1]).abs() <= 1.0);
         assert!(v.ed.undo());
         assert_eq!(points(&v)[0], PATHS0);
-        // With Shift the point keeps plumb over the drum, its only neighbour, however the mouse
-        // wanders off sideways; dragged far sideways it goes level with the drum instead.
+        // With Shift the point keeps plumb over where it was, however the mouse wanders off
+        // sideways; dragged further sideways than up or down it stays level with it instead
+        // (it doesn't jump onto the drum's line).
         let shift = Keys {
             shift: true,
             ..Keys::default()
         };
         v.mouse_down(hx, hy, Keys::default(), None);
         v.mouse_move(hx + 6.0, hy - 15.0, shift);
-        assert_eq!(points(&v)[0][0], 0.0, "{:?}", points(&v));
+        assert_eq!(points(&v)[0][0], PATHS0[0], "{:?}", points(&v));
         assert!(points(&v)[0][1] < PATHS0[1]);
-        let (dx, dy) = v.drum_in_preview();
-        v.mouse_move(dx - 60.0, dy - 4.0, shift);
-        v.mouse_up(dx - 60.0, dy - 4.0, shift);
-        assert_eq!(points(&v)[0][1], 0.0, "{:?}", points(&v));
-        assert!(points(&v)[0][0] < 0.0);
+        v.mouse_move(hx - 60.0, hy + 4.0, shift);
+        v.mouse_up(hx - 60.0, hy + 4.0, shift);
+        assert_eq!(points(&v)[0][1], PATHS0[1], "{:?}", points(&v));
+        assert!(points(&v)[0][0] < PATHS0[0]);
         assert!(v.ed.undo());
         assert_eq!(points(&v)[0], PATHS0);
         // A double click on the preview adds a point between the start and the drum.
@@ -6198,6 +6205,41 @@ mod tests {
     }
 
     const PATHS0: [f64; 2] = crate::editor::motion::PATHS[0].1[0];
+
+    #[test]
+    fn shift_keeps_a_dragged_path_point_level_or_plumb_with_its_start() {
+        use motion::MAct;
+        let mut v = clips_view();
+        press(&mut v, Btn::GPage(motion::PAGE));
+        draw(&mut v);
+        let ids: Vec<u64> = v.ed.chart.objects.iter().take(4).map(|o| o.id).collect();
+        v.ed.selection = ids.into_iter().collect();
+        draw(&mut v);
+        press(&mut v, Btn::M(MAct::UseSelection));
+        let g = v.m_group.unwrap();
+        let point = |v: &View| v.ed.path_of(g).unwrap().points[0];
+        let start = point(&v);
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        let (hx, hy) = v.path_handles()[0];
+        // Shift from the press: mostly up, so it stays plumb over where it was.
+        v.mouse_down(hx, hy, shift, None);
+        v.mouse_move(hx - 6.0, hy - 30.0, shift);
+        let p = point(&v);
+        assert_eq!(p[0], start[0], "plumb: {p:?} from {start:?}");
+        assert!(p[1] < start[1], "and up: {p:?}");
+        // Let go of Shift with the pointer still: free where the pointer is.
+        v.keys_changed(Keys::default());
+        assert_ne!(point(&v)[0], start[0], "free again");
+        // Pressed again mid-drag: back onto the line, not onto the lane.
+        v.keys_changed(shift);
+        assert_eq!(point(&v)[0], start[0]);
+        v.mouse_up(hx - 6.0, hy - 30.0, shift);
+        assert!(v.ed.undo(), "one undo step");
+        assert_eq!(point(&v), start);
+    }
 
     #[test]
     fn a_path_point_dragged_off_the_preview_can_be_picked_up_again() {
