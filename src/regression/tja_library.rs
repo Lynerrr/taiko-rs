@@ -689,6 +689,27 @@ fn notes_over_the_panel_and_hit_ones_follow_the_moved_target() {
     );
 }
 
+/// With #JPOSSCROLL putting the target in the middle of the screen, notes come in from both
+/// sides with as much lead (a player's video: from the left they popped up right next to the
+/// target, cut off where the drum's home place would have been 191 units away).
+#[test]
+fn a_target_moved_to_the_middle_gets_notes_from_the_left_as_early_as_from_the_right() {
+    let right = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n#JPOSSCROLL 0 400 1\n0,\n1,\n#END\n";
+    let left = right.replace("0,\n1,", "0,\n#SCROLL -1\n1,");
+    // OpenTaiko's 400 px are 266.67 units; the note is at 2000, 750 ms (294 units) away.
+    let target = taiko_logic::sim::HIT_X + 400.0 * 2.0 / 3.0;
+    let (r, _) = drawn_at(right, 1250.0);
+    let (l, _) = drawn_at(&left, 1250.0);
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!(l.len(), 1, "drawn from the left too: {l:?}");
+    let ahead = r[0].0 - target;
+    assert!(ahead > 290.0, "{ahead}");
+    assert!(
+        (target - l[0].0 - ahead).abs() < 0.05,
+        "as far left as the other is right: {l:?} {r:?}"
+    );
+}
+
 /// #LYRIC lines show under the lane from their time until the next one.
 #[test]
 fn lyrics_show_under_the_lane() {

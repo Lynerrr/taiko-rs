@@ -727,12 +727,16 @@ impl Play {
         // would have scrolled onto it.
         let far_notes_near =
             scroll.shared.is_some() || self.game.tko().is_some_and(|rt| rt.holds_notes());
+        // The lane in s either way from the drum: right to its end, left to the screen's edge,
+        // which a target moved right (#JPOSSCROLL, a .tko drum) puts further away.
+        let left_edge = -HIT_X - drum;
+        let reach_len = lane_len.max(-left_edge);
         let lookahead = if far_notes_near {
             // Frozen or running backwards, notes far off in time may be near: look well ahead
             // and let the lane's ends hide the rest.
             SHARED_LOOKAHEAD_MS
         } else {
-            (lane_len + BIG_R) as f64
+            (reach_len + BIG_R) as f64
                 / (self.view.min_velocity * scroll.speed * scroll.min_factor())
                 + warp.abs()
         };
@@ -752,7 +756,7 @@ impl Play {
                 break;
             }
             if block.regular && !mods.has(Mod::Liar) && !far_notes_near {
-                let reach = (lane_len + BIG_R) as f64
+                let reach = (reach_len + BIG_R) as f64
                     / (block.min_velocity * scroll.speed * scroll.min_factor())
                     + warp.abs();
                 if self.game.map().notes[block.range.start].time - vt.max(t) > reach
@@ -1117,7 +1121,7 @@ impl Play {
             let shown = if crossfire {
                 s > 0.0
             } else {
-                s > PANEL_W - HIT_X
+                s + drum > PANEL_W - HIT_X
             };
             if shown && s < lane_len + 2.0 {
                 for s in if crossfire { vec![s, -s] } else { vec![s] } {
@@ -1147,7 +1151,7 @@ impl Play {
                 break;
             }
             let s = s_of(time, vel);
-            if s > PANEL_W - HIT_X && s < lane_len + 30.0 {
+            if s + drum > PANEL_W - HIT_X && s < lane_len + 30.0 {
                 let col = if k > 1.0 {
                     0xff5a3d
                 } else if k < 1.0 {
@@ -1336,7 +1340,7 @@ impl Play {
         // Notes, back to front so earlier notes sit on top. A window's leave it under the drum.
         // Hit ones fly out of the drum over its panel, so they're drawn after it.
         let mut flying: Vec<(f32, bool, u32)> = Vec::new();
-        let behind = |r: f32| if boxed { r - HIT_X } else { -HIT_X - r };
+        let behind = |r: f32| if boxed { r - HIT_X } else { left_edge - r };
         let on_lane = |s: f32, r: f32| s > behind(r) && s < lane_len + r;
         // On one ms, a fake slider sits over the don/kat it's stacked on (and, with the map's
         // own spinner-warning, a swell head too).
@@ -1609,7 +1613,7 @@ impl Play {
                         Some((s, d, _)) => (s - d, s + d),
                         None => (at(n.time - n.fake_len), at(n.end_time + n.fake_len)),
                     };
-                    if s1 < -HIT_X - r || s0 > lane_len + r {
+                    if s1 < left_edge - r || s0 > lane_len + r {
                         continue;
                     }
                     let (s0, s1) = if boxed {
