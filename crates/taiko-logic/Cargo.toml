@@ -13,6 +13,9 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # Star ratings and pp, as osu! works them out.
 rosu-pp = "4"
+# .tja charts: Shift-JIS files, and the chart hash leaderboards key by.
+encoding_rs = "0.8"
+sha2 = "0.10"
 
 [features]
 # For the tests of the crates using this one: the helpers its own tests have.

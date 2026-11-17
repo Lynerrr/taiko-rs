@@ -1,0 +1,504 @@
+use super::*;
+
+/// A one-course chart at `bpm` with `body` between #START and #END.
+fn chart(bpm: f64, body: &str) -> String {
+    format!("TITLE:Test\nBPM:{bpm}\nOFFSET:0\nCOURSE:Oni\nLEVEL:8\n\n#START\n{body}\n#END\n")
+}
+
+fn one(text: &str) -> Course {
+    let mut song = parse(text).expect("parses");
+    assert_eq!(song.courses.len(), 1, "{:?}", song.warnings);
+    song.courses.remove(0)
+}
+
+fn times(c: &Course) -> Vec<f64> {
+    c.map.notes.iter().map(|n| n.time).collect()
+}
+
+fn close(a: &[f64], b: &[f64]) {
+    assert_eq!(a.len(), b.len(), "{a:?} vs {b:?}");
+    for (x, y) in a.iter().zip(b) {
+        assert!((x - y).abs() < 1e-6, "{a:?} vs {b:?}");
+    }
+}
+
+#[test]
+fn a_bar_splits_into_its_symbols() {
+    let c = one(&chart(120.0, "1020,\n3400,"));
+    close(&times(&c), &[0.0, 1000.0, 2000.0, 2500.0]);
+    let kinds: Vec<(Kind, bool)> = c.map.notes.iter().map(|n| (n.kind, n.big)).collect();
+    assert_eq!(
+        kinds,
+        [
+            (Kind::Don, false),
+            (Kind::Kat, false),
+            (Kind::Don, true),
+            (Kind::Kat, true)
+        ]
+    );
+    let bars: Vec<f64> = c.map.barlines.iter().map(|b| b.time).collect();
+    close(&bars, &[0.0, 2000.0]);
+}
+
+#[test]
+fn offset_moves_the_first_bar() {
+    // OFFSET is where the music is when the first bar starts, negated.
+    let late = one(&chart(120.0, "1,").replace("OFFSET:0", "OFFSET:-1.5"));
+    close(&times(&late), &[1500.0]);
+    let early = one(&chart(120.0, "1,").replace("OFFSET:0", "OFFSET:2"));
+    close(&times(&early), &[-2000.0]);
+}
+
+#[test]
+fn a_bar_can_span_lines_and_an_empty_bar_still_lasts() {
+    let c = one(&chart(120.0, "10\n10,\n,\n1,"));
+    close(&times(&c), &[0.0, 1000.0, 4000.0]);
+}
+
+#[test]
+fn hundreds_of_bpm_changes_dont_drift() {
+    // osz2tja truncated time to whole ms at each change: 240 changes drifted up to 240 ms.
+    let (a, b) = (151.3, 97.7);
+    let mut body = String::new();
+    for i in 0..240 {
+        let bpm = if i % 2 == 0 { a } else { b };
+        body += &format!("#BPMCHANGE {bpm}\n1,\n");
+    }
+    body += "1,";
+    let c = one(&chart(a, &body));
+    let last = *times(&c).last().unwrap();
+    let exact = 120.0 * (240_000.0 / a + 240_000.0 / b);
+    assert!((last - exact).abs() < 1e-6, "{last} vs {exact}");
+}
+
+#[test]
+fn tuplets_land_where_they_are_written() {
+    // 7 and 5 symbols in a 4/4 bar at 120 BPM (2000 ms).
+    let c = one(&chart(120.0, "1111111,\n11111,"));
+    let mut want: Vec<f64> = (0..7).map(|i| i as f64 * 2000.0 / 7.0).collect();
+    want.extend((0..5).map(|i| 2000.0 + i as f64 * 400.0));
+    close(&times(&c), &want);
+}
+
+#[test]
+fn measure_sets_the_bar_length() {
+    let c = one(&chart(
+        120.0,
+        "#MEASURE 7/8\n1000000,\n#MEASURE 5/16\n10000,\n#MEASURE 4/4\n1,",
+    ));
+    // 7/8 at 120 BPM: 1750 ms; 5/16: 625 ms.
+    close(&times(&c), &[0.0, 1750.0, 2375.0]);
+}
+
+#[test]
+fn delay_shifts_everything_after_it() {
+    let c = one(&chart(120.0, "1,\n#DELAY 0.123\n1,\n1,"));
+    close(&times(&c), &[0.0, 2123.0, 4123.0]);
+    // Mid-bar, from where it stands.
+    let mid = one(&chart(120.0, "11\n#DELAY 0.25\n11,"));
+    close(&times(&mid), &[0.0, 500.0, 1250.0, 1750.0]);
+}
+
+#[test]
+fn a_negative_delay_keeps_notes_in_time_order() {
+    let c = one(&chart(120.0, "1,\n#DELAY -2.5\n2,"));
+    close(&times(&c), &[-500.0, 0.0]);
+    assert_eq!(c.map.notes[0].kind, Kind::Kat);
+}
+
+#[test]
+fn a_bpm_change_mid_bar_applies_from_its_place() {
+    let c = one(&chart(120.0, "11\n#BPMCHANGE 240\n11,\n1,"));
+    close(&times(&c), &[0.0, 500.0, 1000.0, 1250.0, 1500.0]);
+}
+
+#[test]
+fn speed_follows_bpm_and_scroll() {
+    let c = one(&chart(
+        120.0,
+        "1,\n#SCROLL 2\n1,\n#BPMCHANGE 240\n#SCROLL 0.5\n1,\n#SCROLL 1+3i\n1,",
+    ));
+    let v: Vec<f64> = c.map.notes.iter().map(|n| n.velocity).collect();
+    assert!((v[1] / v[0] - 2.0).abs() < 1e-9);
+    // 240 BPM at 0.5 scrolls as 120 at 1.
+    assert!((v[2] / v[0] - 1.0).abs() < 1e-9);
+    // The complex scroll's real part.
+    assert!((v[3] / v[0] - 2.0).abs() < 1e-9);
+    assert!((v[0] - velocity(120.0, 1.0)).abs() < 1e-12);
+    // At SliderMultiplier 1.4 a beat of 500 ms covers 196 osu!px.
+    assert!((v[0] * 500.0 - 196.0).abs() < 1e-9);
+}
+
+#[test]
+fn rolls_and_balloons() {
+    let text = chart(120.0, "5008,\n7008,\n9008,\n6000,\n0080,")
+        .replace("LEVEL:8", "LEVEL:8\nBALLOON:12,30");
+    let c = one(&text);
+    let n = &c.map.notes;
+    assert_eq!(n.len(), 4);
+    assert_eq!((n[0].kind, n[0].big), (Kind::Roll, false));
+    assert!((n[0].end_time - 1500.0).abs() < 1e-9);
+    // 120 BPM: 1/8 beat.
+    assert!((n[0].tick_spacing - 62.5).abs() < 1e-9);
+    assert_eq!((n[1].kind, n[1].required_hits), (Kind::Swell, 12));
+    assert_eq!((n[2].kind, n[2].required_hits), (Kind::Swell, 30));
+    // A big roll over a bar line.
+    assert_eq!((n[3].kind, n[3].big), (Kind::Roll, true));
+    assert!((n[3].time - 6000.0).abs() < 1e-9);
+    assert!((n[3].end_time - 9000.0).abs() < 1e-9);
+}
+
+#[test]
+fn missing_balloon_counts_fall_back() {
+    let song = parse(&chart(120.0, "7008,")).unwrap();
+    assert_eq!(
+        song.courses[0].map.notes[0].required_hits,
+        DEFAULT_BALLOON_HITS
+    );
+    assert!(song.warnings.iter().any(|w| w.contains("BALLOON")));
+}
+
+#[test]
+fn courses_come_apart_with_their_own_fields() {
+    let text = "TITLE:Two\nSUBTITLE:--Someone\nBPM:150\nWAVE:song.ogg\nDEMOSTART:12.5\n\
+        COURSE:Oni\nLEVEL:9\nBALLOON:20\n#START\n7008,\n#END\n\
+        COURSE:0\nLEVEL:2\nBALLOON:4\n#START\n7008,\n#END\n";
+    let song = parse(text).unwrap();
+    assert_eq!(song.title, "Two");
+    assert_eq!(song.subtitle, "Someone");
+    assert_eq!(song.wave, "song.ogg");
+    let got: Vec<(CourseKind, u32, u32)> = song
+        .courses
+        .iter()
+        .map(|c| (c.kind, c.level, c.map.notes[0].required_hits))
+        .collect();
+    assert_eq!(got, [(CourseKind::Easy, 2, 4), (CourseKind::Oni, 9, 20)]);
+    let m = &song.courses[1].map.meta;
+    assert_eq!(m.version, "Oni ★9");
+    assert_eq!(m.audio_file, "song.ogg");
+    assert_eq!(m.preview_time, 12_500.0);
+    assert_eq!(m.mode, 1);
+    assert_ne!(song.courses[0].hash, song.courses[1].hash);
+}
+
+#[test]
+fn only_the_master_branch_is_played() {
+    let text = chart(
+        120.0,
+        "1,\n#BRANCHSTART p,50,80\n#N\n7008,\n#E\n7008,\n#M\n7008,\n#BRANCHEND\n7008,",
+    )
+    .replace("LEVEL:8", "LEVEL:8\nBALLOON:1,2,3,4");
+    let c = one(&text);
+    let n = &c.map.notes;
+    assert_eq!(n.len(), 3);
+    close(&times(&c), &[0.0, 2000.0, 4000.0]);
+    // BALLOON: counts through every branch: the master one is the third.
+    assert_eq!(n[1].required_hits, 3);
+    assert_eq!(n[2].required_hits, 4);
+}
+
+#[test]
+fn per_branch_balloon_lists_win() {
+    let text = chart(
+        120.0,
+        "#BRANCHSTART p,50,80\n#N\n7008,\n#E\n7008,\n#M\n7008,\n7008,",
+    )
+    .replace("LEVEL:8", "LEVEL:8\nBALLOON:1,2,3,4\nBALLOONMAS:40,41");
+    let n = one(&text).map.notes;
+    assert_eq!(
+        n.iter().map(|n| n.required_hits).collect::<Vec<_>>(),
+        [40, 41]
+    );
+}
+
+#[test]
+fn a_balloon_list_as_long_as_each_branch_is_read_per_branch() {
+    // Official charts often list one branch's balloons: common ones, then the branch's.
+    let text = chart(
+        120.0,
+        "7008,\n#BRANCHSTART p,0,0\n#N\n7008,\n#E\n7008,\n#M\n7008,",
+    )
+    .replace("LEVEL:8", "LEVEL:8\nBALLOON:39,4");
+    let n = one(&text).map.notes;
+    assert_eq!(
+        n.iter().map(|n| n.required_hits).collect::<Vec<_>>(),
+        [39, 4]
+    );
+}
+
+#[test]
+fn a_head_inside_an_open_balloon_takes_no_count() {
+    // A kusudama written 9090: the second 9 is a blank, as in OpenTaiko.
+    let text = chart(120.0, "9090,\n0008,\n7008,").replace("LEVEL:8", "LEVEL:8\nBALLOON:10,20");
+    let n = one(&text).map.notes;
+    assert_eq!(n.len(), 2);
+    assert!((n[0].end_time - 3500.0).abs() < 1e-9);
+    assert_eq!(
+        n.iter().map(|n| n.required_hits).collect::<Vec<_>>(),
+        [10, 20]
+    );
+}
+
+#[test]
+fn a_branch_section_without_master_plays_expert() {
+    let c = one(&chart(
+        120.0,
+        "#BRANCHSTART r,5,10\n#N\n1,\n#E\n2,\n#BRANCHEND\n1,",
+    ));
+    assert_eq!(c.map.notes[0].kind, Kind::Kat);
+    close(&times(&c), &[0.0, 2000.0]);
+}
+
+#[test]
+fn unknown_things_are_warnings() {
+    let song = parse(&chart(
+        120.0,
+        "#JPOSSCROLL 1 100 0\n1C2F,\n#WHATEVER\nBALLOON:3\n1,",
+    ))
+    .unwrap();
+    let c = &song.courses[0];
+    close(&times(c), &[0.0, 1000.0, 2000.0]);
+    for w in ["#JPOSSCROLL", "bombs", "ADLib", "#WHATEVER", "header line"] {
+        assert!(
+            song.warnings.iter().any(|x| x.contains(w)),
+            "{w}: {:?}",
+            song.warnings
+        );
+    }
+}
+
+#[test]
+fn style_double_falls_back_to_p1() {
+    let text = "BPM:120\nCOURSE:Oni\nSTYLE:Double\n#START P1\n1,\n#END\n#START P2\n2,\n#END\n";
+    let c = one(text);
+    assert_eq!(c.map.notes[0].kind, Kind::Don);
+    let single = format!("{text}STYLE:Single\n#START\n3,\n#END\n");
+    assert!(one(&single).map.notes[0].big);
+}
+
+#[test]
+fn no_notes_is_an_error() {
+    assert!(parse("TITLE:x\nBPM:120\n").is_err());
+    assert!(parse(&chart(120.0, "0000,")).is_err());
+}
+
+#[test]
+fn gogo_is_kiai() {
+    let c = one(&chart(120.0, "1,\n#GOGOSTART\n1,\n#GOGOEND\n1,"));
+    let kiai = |t: f64| crate::beatmap::control_point_at(&c.map.control_points, t).kiai;
+    assert!(!kiai(100.0) && kiai(2100.0) && !kiai(4100.0));
+}
+
+#[test]
+fn barlines_can_be_turned_off() {
+    let c = one(&chart(120.0, "1,\n#BARLINEOFF\n1,\n#BARLINEON\n1,"));
+    let bars: Vec<f64> = c.map.barlines.iter().map(|b| b.time).collect();
+    close(&bars, &[0.0, 4000.0]);
+}
+
+const JAPANESE: &str = "TITLE:さくらんぼ\nSUBTITLE:--テスト\nBPM:120\nOFFSET:0\nCOURSE:Oni\n\
+    LEVEL:7\n#START\n1020,\n#END\n";
+
+#[test]
+fn shift_jis_and_utf8_read_alike() {
+    let (sjis, _, bad) = encoding_rs::SHIFT_JIS.encode(JAPANESE);
+    assert!(!bad);
+    let mut bom = b"\xEF\xBB\xBF".to_vec();
+    bom.extend_from_slice(JAPANESE.as_bytes());
+    let songs: Vec<Song> = [JAPANESE.as_bytes(), &sjis[..], &bom[..]]
+        .iter()
+        .map(|b| parse_bytes(b).unwrap())
+        .collect();
+    for s in &songs {
+        assert_eq!(s.title, "さくらんぼ");
+        assert_eq!(s.subtitle, "テスト");
+        assert_eq!(s.courses[0].hash, songs[0].courses[0].hash);
+    }
+}
+
+#[test]
+fn the_hash_ignores_how_the_file_is_written() {
+    let base = one(JAPANESE).hash;
+    let rewritten = "// a comment\nCOURSE:oni\nBPM: 120\nLEVEL:7\nTITLE:other title\n\n\
+        #START\n  10 // half\n20,\n#END\n";
+    assert_eq!(one(rewritten).hash, base);
+    // A note moved, a kind changed, another course: another chart.
+    assert_ne!(one(&JAPANESE.replace("1020", "1002")).hash, base);
+    assert_ne!(one(&JAPANESE.replace("1020", "1010")).hash, base);
+    assert_ne!(
+        one(&JAPANESE.replace("COURSE:Oni", "COURSE:Hard")).hash,
+        base
+    );
+    assert_eq!(base.hex().len(), 64);
+}
+
+/// Notes of an official fumen `.bin` (the arcade's own chart format), from the branch `branch`
+/// (0 normal, 1 expert, 2 master): (time ms, kind, big, end ms, pops). Layout as tja2fumen
+/// documents it (MIT): a 520-byte header ending in the bar count, then per bar BPM, offset,
+/// flags and three branches of 24-byte notes (rolls 8 bytes more).
+fn read_fumen(bytes: &[u8], branch: usize) -> Vec<(f64, Kind, bool, f64, u32)> {
+    let bars_le = u32::from_le_bytes(bytes[512..516].try_into().unwrap());
+    let bars_be = u32::from_be_bytes(bytes[512..516].try_into().unwrap());
+    let be = bars_be < bars_le;
+    let at = std::cell::Cell::new(520usize);
+    let take = |n: usize| {
+        let mut b = [0u8; 4];
+        let end = (at.get() + n).min(bytes.len());
+        let got = &bytes[at.get().min(end)..end];
+        b[..got.len()].copy_from_slice(got);
+        at.set(at.get() + n);
+        b
+    };
+    let u = |b: [u8; 4]| {
+        if be {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        }
+    };
+    let f = |b: [u8; 4]| f32::from_bits(u(b)) as f64;
+    let half = |b: [u8; 4], hi: bool| {
+        let (x, y) = if be {
+            (
+                u16::from_be_bytes([b[0], b[1]]),
+                u16::from_be_bytes([b[2], b[3]]),
+            )
+        } else {
+            (
+                u16::from_le_bytes([b[0], b[1]]),
+                u16::from_le_bytes([b[2], b[3]]),
+            )
+        };
+        if hi { y } else { x }
+    };
+    let mut out = Vec::new();
+    for _ in 0..bars_le.min(bars_be) {
+        if at.get() >= bytes.len() {
+            break;
+        }
+        let bpm = f(take(4));
+        let offset = f(take(4));
+        for _ in 0..8 {
+            take(4);
+        }
+        for b in 0..3 {
+            let count = half(take(4), false);
+            take(4);
+            for _ in 0..count {
+                let ty = u(take(4));
+                let pos = f(take(4));
+                take(4);
+                take(4);
+                let pops = half(take(4), false) as u32;
+                let duration = f(take(4));
+                if matches!(ty, 0x6 | 0x9 | 0x62) {
+                    take(4);
+                    take(4);
+                }
+                if b != branch {
+                    continue;
+                }
+                let t = offset + 240_000.0 / bpm + pos;
+                let (kind, big) = match ty {
+                    0x1..=0x3 => (Kind::Don, false),
+                    0x4 | 0x5 => (Kind::Kat, false),
+                    0x6 | 0x62 => (Kind::Roll, false),
+                    0x7 | 0xb => (Kind::Don, true),
+                    0x8 | 0xd => (Kind::Kat, true),
+                    0x9 => (Kind::Roll, true),
+                    0xa | 0xc => (Kind::Swell, false),
+                    _ => continue,
+                };
+                let pops = if kind == Kind::Swell { pops } else { 0 };
+                out.push((t, kind, big, t + duration, pops));
+            }
+        }
+    }
+    out
+}
+
+/// Every `.tja` in `TAIKO_TJA_FUMEN` against the official fumens beside it (`<name>_m.bin` for
+/// Oni and so on), Master branch. Local only: the charts are Bandai Namco's and stay out of the
+/// repository. `TAIKO_TJA_FUMEN=dir cargo test -p taiko-logic tja::tests::fumen -- --ignored`
+#[test]
+#[ignore]
+fn fumen_corpus_matches_official_timing() {
+    let dir = std::path::PathBuf::from(std::env::var("TAIKO_TJA_FUMEN").expect("TAIKO_TJA_FUMEN"));
+    let mut charts = 0;
+    let mut worst = 0.0f64;
+    let mut failures = Vec::new();
+    let mut roll_ends = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "tja") {
+            continue;
+        }
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        let song = parse_bytes(&std::fs::read(&path).unwrap()).unwrap();
+        for course in &song.courses {
+            let suffix = match course.kind {
+                CourseKind::Easy => "e",
+                CourseKind::Normal => "n",
+                CourseKind::Hard => "h",
+                CourseKind::Oni => "m",
+                CourseKind::Edit => "x",
+            };
+            let Ok(bin) = std::fs::read(dir.join(format!("{stem}_{suffix}.bin"))) else {
+                continue;
+            };
+            let mut official = read_fumen(&bin, 2);
+            if official.is_empty() {
+                official = read_fumen(&bin, 0);
+            }
+            charts += 1;
+            let ours = &course.map.notes;
+            let name = format!("{stem} {}", course.kind.name());
+            // The 2/4 bars of KAGEKIYO's official Ura chart have notes past the end of the bar,
+            // which TJA can't write (tja2fumen skips those bars too): up to 10 ms allowed there.
+            let allowed = if name == "genpe Ura Oni" { 10.0 } else { 1.0 };
+            if ours.len() != official.len() {
+                failures.push(format!(
+                    "{name}: {} notes, official {}",
+                    ours.len(),
+                    official.len()
+                ));
+                continue;
+            }
+            for (n, o) in ours.iter().zip(&official) {
+                let d = (n.time - o.0).abs();
+                if allowed == 1.0 {
+                    worst = worst.max(d);
+                }
+                if d > allowed || n.kind != o.1 || n.big != o.2 {
+                    failures.push(format!(
+                        "{name}: ours {:.3} {:?}{} vs official {:.3} {:?}{}",
+                        n.time,
+                        n.kind,
+                        if n.big { " big" } else { "" },
+                        o.0,
+                        o.1,
+                        if o.2 { " big" } else { "" }
+                    ));
+                    break;
+                }
+                if n.kind == Kind::Swell && n.required_hits != o.4 {
+                    failures.push(format!(
+                        "{name}: balloon at {:.0}: {} pops, official {}",
+                        n.time, n.required_hits, o.4
+                    ));
+                    break;
+                }
+                // Roll ends are only counted: TJA charters place them by eye, so they are often
+                // a division off the official chart (tja2fumen doesn't check them either).
+                if n.kind != Kind::Don && n.kind != Kind::Kat && (n.end_time - o.3).abs() > 1.0 {
+                    roll_ends += 1;
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{charts} charts, worst note time difference {worst:.4} ms, {roll_ends} roll ends off"
+    );
+    assert!(charts > 0, "no chart with a fumen beside it");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
