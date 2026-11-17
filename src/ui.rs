@@ -4031,6 +4031,7 @@ impl Results {
                 text,
             );
         }
+        self.draw_vote(c, cx);
         let hint = if let Some(o) = &self.opened {
             let place = if o.online { "online" } else { "local" };
             format!(
@@ -4106,16 +4107,6 @@ impl Results {
             ));
             buttons.push(("Export video  (V)", Hit::Key(KeyCode::KeyV), false));
         }
-        if self.vote_on.is_some() {
-            use crate::online::MapVote::{Dislike, Like};
-            let (like, dislike) = match self.vote {
-                Some(Like) => ("Liked  (L)", "Not for me  (N)"),
-                Some(Dislike) => ("Like  (L)", "Not for me: noted  (N)"),
-                None => ("Like  (L)", "Not for me  (N)"),
-            };
-            buttons.push((like, Hit::Key(KeyCode::KeyL), self.vote == Some(Like)));
-            buttons.push((dislike, Hit::Key(KeyCode::KeyN), self.vote == Some(Dislike)));
-        }
         let back = if self.opened.is_some() {
             "Back  (Esc)"
         } else {
@@ -4166,6 +4157,116 @@ impl Results {
             chevron(c, ax, cy + ch / 2.0 + bob, down, rgba(pink, a));
         }
         c.hit(x0, cy, cw, ch, Hit::Key(key));
+    }
+
+    /// Like and Not for me on their own, right of the stats, in green and red with a pixel
+    /// thumb each: the chosen one lit and the other dimmed. Until the player says, their
+    /// borders glow in and out so they're seen.
+    fn draw_vote(&self, c: &mut Canvas, cx: f32) {
+        use crate::online::MapVote::{Dislike, Like};
+        if self.vote_on.is_none() {
+            return;
+        }
+        let a = progress(self.shown + std::time::Duration::from_millis(800), 300.0);
+        if a <= 0.0 {
+            return;
+        }
+        let phone = crate::mobile::active();
+        let (bw, bh, gap) = if phone {
+            (160.0, 46.0, 8.0)
+        } else {
+            (148.0, 38.0, 8.0)
+        };
+        let x = (cx + 190.0).min(c.width - 16.0 - bw);
+        let y0 = 302.0 - bh - gap / 2.0;
+        c.text_centered(
+            x + bw / 2.0,
+            y0 - 16.0,
+            8.0,
+            rgba(0x9a9ab0, a),
+            "Rate this map",
+        );
+        let t = self.shown.elapsed().as_secs_f32();
+        let glow = if self.vote.is_none() {
+            0.5 + 0.5 * (t * 3.0).sin()
+        } else {
+            0.0
+        };
+        let rows = [
+            (Like, 0x5ee07a, "Like", "Liked", KeyCode::KeyL, "L"),
+            (
+                Dislike,
+                0xff5a5a,
+                "Not for me",
+                "Not for me",
+                KeyCode::KeyN,
+                "N",
+            ),
+        ];
+        for (i, (vote, col, label, chosen_label, key, key_name)) in rows.into_iter().enumerate() {
+            let y = y0 + i as f32 * (bh + gap);
+            let chosen = self.vote == Some(vote);
+            let other = self.vote.is_some() && !chosen;
+            // The page may be scrolled: the pointer is over where the button is drawn.
+            let hover = self.scroll < 1.0 && c.hovered(x, y - self.scroll, bw, bh);
+            let fade = if other { 0.45 } else { 1.0 } * a;
+            let fill = if chosen {
+                rgba(col, 0.32 * a)
+            } else if hover {
+                rgba(col, 0.18 * fade)
+            } else {
+                rgba(0x1d1d27, 0.95 * fade)
+            };
+            let border = if chosen || hover {
+                1.0
+            } else {
+                0.55 + 0.45 * glow
+            };
+            c.round_rect(
+                [x, y],
+                [bw, bh],
+                6.0,
+                fill,
+                rgba(col, border * fade),
+                if chosen { 2.5 } else { 1.5 },
+            );
+            let px = if phone { 2.4 } else { 2.0 };
+            let (iw, ih) = (THUMB[0].len() as f32 * px, THUMB.len() as f32 * px);
+            pixel_thumb(
+                c,
+                x + 10.0,
+                y + (bh - ih) / 2.0,
+                px,
+                vote == Dislike,
+                col,
+                fade,
+            );
+            let tx = x + 10.0 + iw + 8.0;
+            let size = if phone { 11.0 } else { 9.0 };
+            let text = if chosen { chosen_label } else { label };
+            let ty = if phone {
+                y + (bh - size) / 2.0
+            } else {
+                y + bh / 2.0 - size - 1.0
+            };
+            c.text(
+                tx,
+                ty,
+                size,
+                rgba(if chosen || hover { 0xffffff } else { col }, fade),
+                &Canvas::fit(size, x + bw - 6.0 - tx, text),
+            );
+            if !phone {
+                c.text(
+                    tx,
+                    y + bh / 2.0 + 3.0,
+                    7.0,
+                    rgba(0x8a8aa0, fade),
+                    &format!("key {key_name}"),
+                );
+            }
+            c.hit(x, y, bw, bh, Hit::Key(key));
+        }
     }
 
     /// The mods (and a speed of the player's own) as badges under the title, each in its mod
@@ -4392,6 +4493,40 @@ impl Results {
 }
 
 /// A small arrow head at (`x`, `y`), pointing down (`down`) or up.
+/// A thumbs up in pixels, as the vote buttons draw it: `#` the outline, `+` the hand, `c` the
+/// sleeve (in the button's colour). Turned half a turn it is the thumbs down.
+const THUMB: [&str; 12] = [
+    ".......##......",
+    "......#++#.....",
+    "......#++#.....",
+    ".....#+++#.....",
+    "....#++++#.....",
+    "cc.#+++++######",
+    "cc.#++++++++++#",
+    "cc.#+++++######",
+    "cc.#++++++++++#",
+    "cc.#+++++######",
+    "cc.#+++++++++#.",
+    "cc..#########..",
+];
+
+/// Draws `THUMB` from (`x`, `y`) in `px`-sized pixels, upside down for a thumbs down.
+fn pixel_thumb(c: &mut Canvas, x: f32, y: f32, px: f32, down: bool, sleeve: u32, a: f32) {
+    let (w, h) = (THUMB[0].len(), THUMB.len());
+    for (r, row) in THUMB.iter().enumerate() {
+        for (k, ch) in row.bytes().enumerate() {
+            let col = match ch {
+                b'#' => 0x6b3f10,
+                b'+' => 0xffcc4d,
+                b'c' => sleeve,
+                _ => continue,
+            };
+            let (gx, gy) = if down { (w - 1 - k, h - 1 - r) } else { (k, r) };
+            c.rect(x + gx as f32 * px, y + gy as f32 * px, px, px, rgba(col, a));
+        }
+    }
+}
+
 fn chevron(c: &mut Canvas, x: f32, y: f32, down: bool, col: [f32; 4]) {
     let tip = if down { -1.0 } else { 1.0 };
     for side in [-1.0f32, 1.0] {
