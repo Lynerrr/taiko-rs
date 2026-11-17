@@ -104,7 +104,12 @@ impl Details {
     }
 }
 
-type LoadedMap = (usize, Result<Beatmap, String>, Option<(Vec<f64>, f64, f64)>);
+type LoadedMap = (
+    usize,
+    Result<Beatmap, String>,
+    Option<(Vec<f64>, f64, f64)>,
+    [f32; 2],
+);
 type StatCell = (&'static str, String, f32);
 type StatRow<'a> = Vec<&'a StatCell>;
 
@@ -143,6 +148,9 @@ pub struct Preview {
     /// The entry whose autoplay has been ready: its music played.
     ready_for: Option<usize>,
     game: Option<Play>,
+    /// How far up and down (virtual units) the autoplay box shows: easing from the first band
+    /// to the second (the lane, or all a .tko map moves out of it) since the instant.
+    reach: ([f32; 2], [f32; 2], Option<Instant>),
     last_time: f64,
     bg_path: Option<PathBuf>,
     /// New background for the renderer: `Some(None)` clears it.
@@ -470,7 +478,8 @@ impl Preview {
                     })
                     .ok()
                     .flatten();
-                    (i, map, curve)
+                    let reach = map.as_ref().map(tko_reach).unwrap_or_else(|_| lane_reach());
+                    (i, map, curve, reach)
                 });
                 if !self.own_background {
                     self.show_background_for(e);
@@ -565,7 +574,7 @@ impl Preview {
             }
         }
 
-        if let Some((i, result, curve)) = self.map_rx.poll()
+        if let Some((i, result, curve, reach)) = self.map_rx.poll()
             && Some(i) == self.requested
             && let Ok(map) = result
         {
@@ -579,6 +588,9 @@ impl Preview {
                 (!map.too_wild_to_preview()).then(|| new_preview_game(&map, self.requested_rate.0));
             self.last_time = f64::NEG_INFINITY;
             self.map = Some((i, map, details, graph));
+            if reach != self.reach.1 {
+                self.reach = (self.shown_reach(), reach, Some(Instant::now()));
+            }
         }
         if let Some((path, img)) = self.bg_rx.poll()
             && Some(&path) == self.bg_path.as_ref()
@@ -737,6 +749,19 @@ impl Preview {
 
     /// Jumps the preview music (and the autoplay) to map time `t`, and remembers it as the
     /// start point (the blue flag): wherever you last scrolled to is where "Play from" starts.
+    /// The band the autoplay box shows now (see `reach`).
+    fn shown_reach(&self) -> [f32; 2] {
+        let (from, to, at) = self.reach;
+        let Some(at) = at else {
+            return lane_reach();
+        };
+        let p = crate::render::progress(at, 400.0);
+        [
+            from[0] + (to[0] - from[0]) * p,
+            from[1] + (to[1] - from[1]) * p,
+        ]
+    }
+
     pub fn seek(&mut self, t: f64, engine: Option<&Engine>) {
         if let Some(t) = self.seek_music(t, engine) {
             self.marker = self.audio.as_ref().map(|s| (s.path.clone(), t));
@@ -1135,6 +1160,14 @@ impl Preview {
         // The lane fills the panel's width (at the size chosen), however little room the details
         // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
         let k = k_full * wanted;
+        // A .tko map that moves things off the lane gets a taller box, as far as the room left
+        // under the panel goes (both ends drawn in alike when it doesn't all fit).
+        let [top, bottom] = self.shown_reach();
+        let extra = (bottom - top - band_h) * k;
+        let room = (h - head - band_h * k - after_box).max(0.0);
+        let fit = if extra > room { room / extra } else { 1.0 };
+        let band_top = band_top - (band_top - top) * fit;
+        let band_h = band_h + (bottom - top - band_h) * fit;
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
         self.panel_bottom = y + h;
@@ -1535,6 +1568,112 @@ fn draw_play_button(
     Some([bx, y, bw, bh])
 }
 
+/// The lane's band (top, bottom; virtual units): all the autoplay box shows of a plain map.
+pub(crate) fn lane_reach() -> [f32; 2] {
+    let (top, h) = game::lane_only();
+    [top, top + h]
+}
+
+/// How far up and down (virtual units, within the 480 tall screen) anything of `map` is drawn
+/// over the song: the lane's band, widened by where a .tko map moves, turns, zooms or copies the
+/// playfield, flies its notes and puts its pictures and text. Worked out once, when the map is
+/// picked, so the box doesn't change size as it plays.
+pub(crate) fn tko_reach(map: &Beatmap) -> [f32; 2] {
+    use crate::game::{BIG_R, HIT_X, LANE_Y};
+    let mut reach = lane_reach();
+    if map.gimmick.is_none() || map.notes.is_empty() {
+        return reach;
+    }
+    let mut g = Game::new(
+        map.clone(),
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+    );
+    let Some(rt) = g.tko_mut() else {
+        return reach;
+    };
+    let calm = crate::tko::calm();
+    let full = [0.0, VIRTUAL_HEIGHT];
+    let notes = &map.notes;
+    let end = notes.iter().map(|n| n.end_time).fold(0.0, f64::max) + 1000.0;
+    // The lane's far end swings furthest: as wide as the box ever shows.
+    let lane_w = SIXTEEN_NINE;
+    let mut t = notes[0].time - 3000.0;
+    while t < end && reach != full {
+        rt.prepare(t);
+        let fx = rt.field_with(t, calm);
+        // The playfield before it is moved: the lane, and the notes coming down it.
+        let mut local = lane_reach();
+        let first = notes.partition_point(|n| n.time < t);
+        for (i, n) in notes.iter().enumerate().skip(first) {
+            if n.time - t > 2500.0 {
+                break;
+            }
+            let Some(nfx) = rt.note(i, t).filter(|f| !f.hidden && f.opacity > 0.01) else {
+                continue;
+            };
+            // shortcut: how far along the lane a note is, guessed from its time (not its scroll
+            // speed); upgrade if notes on paths or swirls are under-measured.
+            let s = ((n.time - t) * 0.5) as f32;
+            let mut y = LANE_Y + nfx.dy + s * nfx.swirl.to_radians().sin();
+            if let Some(p) = rt.note_path(i, t, s, lane_w) {
+                y += p[1] * p[2];
+            }
+            let r = BIG_R * nfx.scale * nfx.stretch_y.abs();
+            local = [local[0].min(y - r), local[1].max(y + r)];
+        }
+        // Where that goes, turned and zoomed about the drum and moved: the playfield, its trail
+        // and its copies.
+        let pivot = [HIT_X, LANE_Y];
+        let mut place = |turn: f32, zoom: f32, sy: f32, dy: f32| {
+            let (sin, cos) = turn.to_radians().sin_cos();
+            for x in [0.0, lane_w] {
+                for y in local {
+                    let (px, py) = (x - pivot[0], (y - pivot[1]) * sy);
+                    let y = pivot[1] + (px * sin + py * cos) * zoom + dy;
+                    reach = [reach[0].min(y), reach[1].max(y)];
+                }
+            }
+        };
+        place(fx.rotation, fx.zoom, fx.stretch_y, fx.y);
+        for k in 1..=(fx.echo.clamp(0.0, 8.0).ceil() as i32) {
+            let k = k as f32;
+            place(
+                fx.rotation + fx.echo_rot * k,
+                fx.zoom * fx.echo_zoom.clamp(0.5, 1.5).powf(k),
+                fx.stretch_y,
+                fx.y + fx.echo_y * k,
+            );
+        }
+        for c in fx.copies.iter().filter(|c| c.show > 0.01) {
+            place(c.turn, c.zoom, 1.0, c.y);
+        }
+        if fx.slices >= 2.0 {
+            reach = [reach[0] - fx.slice_y.abs(), reach[1] + fx.slice_y.abs()];
+        }
+        // A kaleidoscope or a bent lane goes all over.
+        if fx.kaleido >= 1.5 || (fx.lane_shape > 0 && fx.lane_bend > 0.001) {
+            reach = full;
+        }
+        // Pictures and text, placed on the screen.
+        for (_, at) in rt.layers(t) {
+            let p = at.pose;
+            if p.alpha >= 0.01 {
+                let half = (p.size * at.scale / 2.0) as f32;
+                let y = p.y as f32;
+                reach = [reach[0].min(y - half), reach[1].max(y + half)];
+            }
+        }
+        reach = [reach[0].max(0.0), reach[1].min(VIRTUAL_HEIGHT)];
+        t += 100.0;
+    }
+    reach
+}
+
 fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
     // No samples: the preview only borrows the music's clock; `rate` maps it to map time.
     let mut g = Game::new(
@@ -1601,6 +1740,39 @@ mod beat_tests {
         p.ready_for = Some(0);
         assert!(draw(&mut p).0);
         assert!(p.graph_rect.is_some());
+    }
+
+    #[test]
+    fn a_map_reaching_off_the_lane_grows_the_box_into_the_room_below() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let mut p = Preview {
+            seen: Some(0),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            ..Default::default()
+        };
+        let box_h = |p: &mut Preview, h: f32| {
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            p.draw_panel(
+                &mut c, &library, 500.0, 40.0, 340.0, h, 1.0, None, None, None, None,
+            );
+            p.box_rect.unwrap()[3]
+        };
+        let plain = box_h(&mut p, 1000.0);
+        // Picked long ago: no easing left.
+        let lane = lane_reach();
+        let at = Instant::now() - Duration::from_secs(5);
+        p.reach = (lane, [lane[0] - 40.0, lane[1] + 60.0], Some(at));
+        let tall = box_h(&mut p, 1000.0);
+        let k = plain / (lane[1] - lane[0]);
+        assert!((tall - plain - 100.0 * k).abs() < 0.5, "{plain} -> {tall}");
+        // No room under the panel: the lane's height, no more.
+        let cramped = box_h(&mut p, 0.0);
+        assert!((cramped - plain).abs() < 0.5, "{plain} -> {cramped}");
     }
 
     #[test]
