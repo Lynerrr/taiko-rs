@@ -3820,6 +3820,10 @@ pub struct Results {
     pub mods: crate::mods::Mods,
     pub rate: Option<f64>,
     pub seed: Option<u64>,
+    /// The map the player can like or dislike here (their own play, logged in), and what
+    /// they said on this screen.
+    pub vote_on: Option<crate::online::PlayedMap>,
+    pub vote: Option<crate::online::MapVote>,
 }
 
 /// How far down the results scroll: the pp start a screen below them.
@@ -3828,6 +3832,17 @@ pub const RESULTS_SCROLL: f32 = 456.0;
 const RESULTS_VIEW: f32 = 416.0;
 
 impl Results {
+    /// Says `vote` about the map, or takes it back when it's what was said already: the map
+    /// and the player's say on it now (None: no say), or None when there's nothing to vote on.
+    pub fn toggle_vote(
+        &mut self,
+        vote: crate::online::MapVote,
+    ) -> Option<(crate::online::PlayedMap, Option<crate::online::MapVote>)> {
+        let map = self.vote_on.clone()?;
+        self.vote = (self.vote != Some(vote)).then_some(vote);
+        Some((map, self.vote))
+    }
+
     /// A results screen with nothing but the essentials filled in.
     pub fn new(title: String, stats: Stats, windows: Windows) -> Results {
         Results {
@@ -3854,6 +3869,8 @@ impl Results {
             mods: crate::mods::Mods::NONE,
             rate: None,
             seed: None,
+            vote_on: None,
+            vote: None,
         }
     }
 
@@ -4088,6 +4105,16 @@ impl Results {
                 self.opened.is_some(),
             ));
             buttons.push(("Export video  (V)", Hit::Key(KeyCode::KeyV), false));
+        }
+        if self.vote_on.is_some() {
+            use crate::online::MapVote::{Dislike, Like};
+            let (like, dislike) = match self.vote {
+                Some(Like) => ("Liked  (L)", "Not for me  (N)"),
+                Some(Dislike) => ("Like  (L)", "Not for me: noted  (N)"),
+                None => ("Like  (L)", "Not for me  (N)"),
+            };
+            buttons.push((like, Hit::Key(KeyCode::KeyL), self.vote == Some(Like)));
+            buttons.push((dislike, Hit::Key(KeyCode::KeyN), self.vote == Some(Dislike)));
         }
         let back = if self.opened.is_some() {
             "Back  (Esc)"

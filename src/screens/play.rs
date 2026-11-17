@@ -513,6 +513,19 @@ impl Screen for PlayScreen {
             results.seed = Some(game.seed());
             results.watched = game.replay_of().clone();
             results.failed = failed;
+            // The player's own play, logged in: they can say whether the map is for them.
+            let own = game.replay().is_none()
+                && !state.auto
+                && !game.mods().has(mods::Mod::Autoplay)
+                && state.editor_back.is_none();
+            if own && !state.cfg.online_token.is_empty() {
+                let e = &state.library[self.entry];
+                results.vote_on = Some(online::PlayedMap {
+                    hash: e.hash(),
+                    name: e.label(),
+                    set_id: e.set_id(),
+                });
+            }
             // The song plays on under the results (not after a fail that stopped it),
             // from the preview point again once it ends.
             if !game.failed_early() && state.audio.is_some() {

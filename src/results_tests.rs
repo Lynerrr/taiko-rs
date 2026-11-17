@@ -429,3 +429,105 @@ fn a_sudden_death_fail_starts_the_map_over_when_asked() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The results of a Sudden Death play failed on its first miss, by a player logged in or not.
+fn failed_results(name: &str, logged_in: bool) -> State {
+    let (_dir, path) = map(name);
+    let mut s = crate::layout_tests::state();
+    s.cfg.mods = Mods::parse("SD");
+    s.cfg.fail_restart = false;
+    // Nothing reaches a real server from here.
+    s.cfg.online_server = "127.0.0.1:9".into();
+    if logged_in {
+        s.cfg.online_token = "t".into();
+    }
+    let meta = beatmap::Meta {
+        mode: 1,
+        ..Default::default()
+    };
+    let (tx, rx) = mpsc::channel();
+    tx.send(Scanned::Done(vec![library::Entry::new(path, meta)]))
+        .unwrap();
+    s.scan = Some((rx, Arc::new(AtomicUsize::new(0))));
+    s.play_when_scanned = false;
+    s.poll_scan();
+    s.start_loading_from(0, None);
+    let frame = |s: &mut State| {
+        let mut c = Canvas::default();
+        s.build_frame(&mut c, Instant::now(), 853.0);
+    };
+    let until = Instant::now() + Duration::from_secs(10);
+    while !s.scene.is_play() && Instant::now() < until {
+        frame(&mut s);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let Some(game) = s.play.as_deref_mut() else {
+        panic!("the play never started");
+    };
+    let t = game.map().notes[2].time + 500.0;
+    game.set_time(t);
+    game.set_fail_linger(0.0);
+    while s.scene.is_play() && Instant::now() < until {
+        frame(&mut s);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(
+        s.scene
+            .screen_is::<crate::screens::results::ResultsScreen>()
+    );
+    s
+}
+
+fn results_of(s: &mut State) -> &mut ui::Results {
+    &mut s
+        .scene
+        .screen_mut::<crate::screens::results::ResultsScreen>()
+        .expect("on the results")
+        .results
+}
+
+#[test]
+fn a_player_logged_in_can_like_or_dislike_the_map_they_just_played() {
+    let mut s = failed_results("vote-logged-in", true);
+    let label = s.library[0].label();
+    let hash = s.library[0].hash();
+    let r = results_of(&mut s);
+    let on = r
+        .vote_on
+        .clone()
+        .expect("their own play, even failed, can be voted on");
+    assert_eq!((on.hash, on.name.as_str()), (hash, label.as_str()));
+    use online::MapVote::{Dislike, Like};
+    // Again takes it back; the other one replaces it.
+    assert_eq!(r.toggle_vote(Like).map(|v| v.1), Some(Some(Like)));
+    assert_eq!(r.toggle_vote(Like).map(|v| v.1), Some(None));
+    assert_eq!(r.toggle_vote(Like).map(|v| v.1), Some(Some(Like)));
+    assert_eq!(r.toggle_vote(Dislike).map(|v| v.1), Some(Some(Dislike)));
+    assert_eq!(r.vote, Some(Dislike));
+    // N on the screen takes the dislike back, L likes.
+    s.key(KeyCode::KeyN, false, None, Instant::now(), None);
+    assert_eq!(results_of(&mut s).vote, None);
+    s.key(KeyCode::KeyL, false, None, Instant::now(), None);
+    assert_eq!(results_of(&mut s).vote, Some(Like));
+    match s.vote_request(on.clone(), Some(Like)) {
+        Some(online::Request::MapVote { token, map, vote }) => {
+            assert_eq!((token.as_str(), map, vote), ("t", on, Some(Like)));
+        }
+        other => panic!("not a vote: {other:?}"),
+    }
+}
+
+#[test]
+fn a_player_logged_out_has_nobody_to_tell_what_they_think_of_the_map() {
+    let mut s = failed_results("vote-logged-out", false);
+    let r = results_of(&mut s);
+    assert!(r.vote_on.is_none());
+    assert!(r.toggle_vote(online::MapVote::Like).is_none());
+    assert!(r.vote.is_none());
+    let map = online::PlayedMap {
+        hash: 1,
+        name: "m".into(),
+        set_id: None,
+    };
+    assert!(s.vote_request(map, None).is_none());
+}
