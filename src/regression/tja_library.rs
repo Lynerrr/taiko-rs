@@ -411,7 +411,7 @@ fn an_admin_clears_the_selected_tja_course_s_board() {
     let oni = s
         .library
         .iter()
-        .position(|e| e.meta.version == "Oni ★8")
+        .position(|e| e.meta.version == "Oni")
         .unwrap();
     let hash = s.library[oni].hash();
     let path = s.library[oni].path.clone();
