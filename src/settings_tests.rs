@@ -2924,6 +2924,109 @@ fn time_in_songs_adds_up_over_plays_and_the_play_knows_its_map() {
     assert_eq!(next.session_play_ms, 3000.0);
 }
 
+/// How the play that's in a song ends, by where the game goes from it: the request the
+/// server is sent, if any.
+fn ended_play(
+    pass: bool,
+    logged_in: bool,
+    leave: fn(&mut State),
+) -> Option<(u64, Option<online::PlayedAttempt>)> {
+    let mut s = in_a_song(false);
+    if logged_in {
+        s.cfg.online_token = "t".into();
+    }
+    if let (true, Some(play)) = (s.scene.is_play(), s.play.as_deref_mut()) {
+        let game = &mut play.game;
+        if pass {
+            taiko_logic::sim::testing::play_all(game, 0.0);
+        }
+        game.put_at(1500.0);
+        game.set_played_ms(30_000.0);
+    }
+    s.track_play();
+    leave(&mut s);
+    match s.played_request() {
+        Some(online::Request::Played { ms, attempt, .. }) => Some((ms, attempt)),
+        Some(other) => panic!("not a play: {other:?}"),
+        None => None,
+    }
+}
+
+#[test]
+fn a_play_off_the_leaderboards_tells_the_server_how_it_ended_and_how_far_it_got() {
+    let quit = |s: &mut State| s.scene = SongSelect::scene();
+    let (ms, attempt) = ended_play(false, true, quit).expect("a play is counted");
+    let attempt = attempt.expect("with how it ended, since its map is known");
+    assert_eq!(ms, 30_000);
+    assert_eq!(attempt.ended, online::AttemptEnd::Quit);
+    assert_eq!(attempt.at_ms, 1500);
+    assert!(attempt.length_ms > attempt.at_ms);
+    assert_eq!((attempt.from_ms, attempt.rate), (None, 1.0));
+
+    let ended = |pass, leave| ended_play(pass, true, leave).unwrap().1.unwrap().ended;
+    let results = |s: &mut State| {
+        let r = ui::Results::new(
+            "map".into(),
+            game::Stats::default(),
+            game::Windows::new(5.0),
+        );
+        s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    };
+    assert_eq!(ended(false, results), online::AttemptEnd::Failed);
+    assert_eq!(ended(true, results), online::AttemptEnd::Finished);
+    let retry = |s: &mut State| {
+        s.scene = Loading::scene(Job::idle(), "map".into(), 0, None);
+        if let Some(l) = s.scene.screen_mut::<Loading>() {
+            l.retry = true;
+        }
+    };
+    assert_eq!(ended(false, retry), online::AttemptEnd::Restarted);
+
+    // Nobody to tell while logged out, and a start left at once isn't a play.
+    assert_eq!(ended_play(false, false, quit), None);
+    let mut s = in_a_song(false);
+    s.cfg.online_token = "t".into();
+    s.track_play();
+    s.scene = SongSelect::scene();
+    assert!(s.played_request().is_none());
+    assert!(s.play_attempt.is_none(), "the next play starts afresh");
+}
+
+#[test]
+fn a_match_ends_as_a_match_and_a_sudden_death_fail_as_a_fail_whatever_follows() {
+    let s = in_a_song(false);
+    let live = LiveAttempt {
+        attempt: online::PlayedAttempt {
+            ended: online::AttemptEnd::Quit,
+            at_ms: 0,
+            length_ms: 0,
+            from_ms: None,
+            great: 0,
+            ok: 0,
+            miss: 0,
+            max_combo: 0,
+            mods: Vec::new(),
+            rate: 1.0,
+            scroll_speed: 1.0,
+        },
+        failed: true,
+        failed_early: true,
+        in_match: true,
+    };
+    assert_eq!(s.attempt_end(&live), online::AttemptEnd::Match);
+    // Sudden Death / Perfect: a fail, even when the map starts over by itself.
+    let mut s = s;
+    s.scene = Loading::scene(Job::idle(), "map".into(), 0, None);
+    if let Some(l) = s.scene.screen_mut::<Loading>() {
+        l.retry = true;
+    }
+    let solo = LiveAttempt {
+        in_match: false,
+        ..live
+    };
+    assert_eq!(s.attempt_end(&solo), online::AttemptEnd::Failed);
+}
+
 #[test]
 fn the_website_button_goes_to_the_site_whatever_the_map() {
     assert_eq!(map_url(0x1f3a), "https://rstaiko.auneu.space/m/1f3a");

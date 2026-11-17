@@ -251,7 +251,7 @@ fn playing_paused_and_the_results() {
         roll_ticks: 4,
         ..Default::default()
     };
-    let mut r = ui::Results::new(s.library[0].label(), stats, game::Windows::new(5.0));
+    let mut r = ui::Results::new(s.library[0].label(), stats.clone(), game::Windows::new(5.0));
     r.shown = now - Duration::from_secs(10);
     r.pp = Some(123.4);
     s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
@@ -266,6 +266,17 @@ fn playing_paused_and_the_results() {
     r.no_pp = Some("failed plays get no pp");
     s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
     assert_snapshot("screen-results-failed", &shot(&mut s, &mut now));
+    // A play of their own, logged in: they can like the map or say it isn't for them.
+    let mut r = ui::Results::new(s.library[0].label(), stats, game::Windows::new(5.0));
+    r.shown = now - Duration::from_secs(10);
+    r.vote_on = Some(online::PlayedMap {
+        hash: s.library[0].hash(),
+        name: s.library[0].label(),
+        set_id: None,
+    });
+    r.vote = Some(online::MapVote::Like);
+    s.scene = crate::screens::results::ResultsScreen::scene(Box::new(r), 0, None);
+    assert_snapshot("screen-results-vote", &shot(&mut s, &mut now));
 }
 
 #[test]

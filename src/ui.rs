@@ -3820,6 +3820,12 @@ pub struct Results {
     pub mods: crate::mods::Mods,
     pub rate: Option<f64>,
     pub seed: Option<u64>,
+    /// The map the player can like or dislike here (their own play, logged in), and what
+    /// they said on this screen.
+    pub vote_on: Option<crate::online::PlayedMap>,
+    pub vote: Option<crate::online::MapVote>,
+    /// When the player last voted here (the thumb's pop and burst).
+    pub voted_at: Option<std::time::Instant>,
 }
 
 /// How far down the results scroll: the pp start a screen below them.
@@ -3828,6 +3834,18 @@ pub const RESULTS_SCROLL: f32 = 456.0;
 const RESULTS_VIEW: f32 = 416.0;
 
 impl Results {
+    /// Says `vote` about the map, or takes it back when it's what was said already: the map
+    /// and the player's say on it now (None: no say), or None when there's nothing to vote on.
+    pub fn toggle_vote(
+        &mut self,
+        vote: crate::online::MapVote,
+    ) -> Option<(crate::online::PlayedMap, Option<crate::online::MapVote>)> {
+        let map = self.vote_on.clone()?;
+        self.vote = (self.vote != Some(vote)).then_some(vote);
+        self.voted_at = Some(std::time::Instant::now());
+        Some((map, self.vote))
+    }
+
     /// A results screen with nothing but the essentials filled in.
     pub fn new(title: String, stats: Stats, windows: Windows) -> Results {
         Results {
@@ -3854,6 +3872,9 @@ impl Results {
             mods: crate::mods::Mods::NONE,
             rate: None,
             seed: None,
+            vote_on: None,
+            vote: None,
+            voted_at: None,
         }
     }
 
@@ -4014,6 +4035,7 @@ impl Results {
                 text,
             );
         }
+        self.draw_vote(c, cx);
         let hint = if let Some(o) = &self.opened {
             let place = if o.online { "online" } else { "local" };
             format!(
@@ -4139,6 +4161,89 @@ impl Results {
             chevron(c, ax, cy + ch / 2.0 + bob, down, rgba(pink, a));
         }
         c.hit(x0, cy, cw, ch, Hit::Key(key));
+    }
+
+    /// Like and Not for me, right of the stats: two big pixel thumbs, no frames. Until the
+    /// player says, they bob (out of step) to be seen; under the pointer one grows. The one
+    /// chosen pops and throws pixels out in its colour, and stays big; the other goes grey.
+    fn draw_vote(&self, c: &mut Canvas, cx: f32) {
+        use crate::online::MapVote::{Dislike, Like};
+        if self.vote_on.is_none() {
+            return;
+        }
+        let a = progress(self.shown + std::time::Duration::from_millis(800), 300.0);
+        if a <= 0.0 {
+            return;
+        }
+        let phone = crate::mobile::active();
+        let px = if phone { 2.4 } else { 2.0 };
+        let icon = THUMB.len() as f32 * px;
+        let spread = icon + if phone { 44.0 } else { 36.0 };
+        // The pair's middle: right of the stats, kept on screen.
+        let mid = (cx + 280.0).min(c.width - 16.0 - icon / 2.0 - spread / 2.0);
+        let cy = 290.0;
+        c.text_centered(
+            mid,
+            cy - icon / 2.0 - 26.0,
+            8.0,
+            rgba(0x9a9ab0, a),
+            "Rate this map",
+        );
+        let t = self.shown.elapsed().as_secs_f32();
+        let since = self.voted_at.map(|v| v.elapsed().as_secs_f32() * 1000.0);
+        let rows = [
+            (Like, 0x5ee07a, "Like", "L"),
+            (Dislike, 0xff5a5a, "Not for me", "N"),
+        ];
+        for (i, (vote, col, label, key_name)) in rows.into_iter().enumerate() {
+            let x = mid + (i as f32 - 0.5) * spread;
+            let chosen = self.vote == Some(vote);
+            let other = self.vote.is_some() && !chosen;
+            let (hx, hy, hw, hh) = (x - spread / 2.0, cy - icon / 2.0 - 8.0, spread, icon + 34.0);
+            // The page may be scrolled: the pointer is over where the thumb is drawn.
+            let hover = self.scroll < 1.0 && c.hovered(hx, hy - self.scroll, hw, hh);
+            let bob = if self.vote.is_none() {
+                2.0 * (t * 3.0 + i as f32 * std::f32::consts::PI).sin()
+            } else {
+                0.0
+            };
+            let mut scale: f32 = if chosen || hover { 1.15 } else { 1.0 };
+            if chosen && let Some(ms) = since.filter(|ms| *ms < 320.0) {
+                scale += 0.3 * (1.0 - ms / 320.0).powi(2);
+            }
+            let look = if other {
+                Look::Grey(0.35 * a)
+            } else {
+                Look::Colour(col, a)
+            };
+            pixel_thumb(c, x, cy + bob, px * scale, vote == Dislike, look);
+            if chosen && let Some(ms) = since.filter(|ms| *ms < 600.0) {
+                burst(c, x, cy, ms / 600.0, col);
+            }
+            let text_col = if other {
+                rgba(0x5a5a6a, a)
+            } else if chosen || hover {
+                rgba(0xffffff, a)
+            } else {
+                rgba(col, a)
+            };
+            let ly = cy + icon / 2.0 + 13.0;
+            c.text_centered(x, ly, 9.0, text_col, label);
+            if !phone {
+                c.text_centered(x, ly + 13.0, 7.0, rgba(0x6a6a80, a), key_name);
+            }
+            c.hit(
+                hx,
+                hy,
+                hw,
+                hh,
+                Hit::Key(if vote == Like {
+                    KeyCode::KeyL
+                } else {
+                    KeyCode::KeyN
+                }),
+            );
+        }
     }
 
     /// The mods (and a speed of the player's own) as badges under the title, each in its mod
@@ -4364,6 +4469,137 @@ impl Results {
     }
 }
 
+/// A thumbs up in pixels, shaded like an emoji: `O` the outline, `H` light, `Y` the hand,
+/// `S` its shade, `D` the creases between the fingers, `h` / `C` / `c` the sleeve lit, plain
+/// and shaded (in the vote's colour). Turned half a turn it is the thumbs down.
+const THUMB: [&str; 24] = [
+    "..........OOOO............",
+    ".........OHHHSO...........",
+    "........OHYYYSO...........",
+    "........OHYYYSO...........",
+    "........OHYYYSO...........",
+    ".......OHYYYYSO...........",
+    ".......OHYYYYSO...........",
+    ".......OHYYYYSOOOOOOOOO...",
+    ".OOOOOOHYYYYYYHHHHHHHHSO..",
+    "OhhhhOHYYYYYYYYYYYYYYYSO..",
+    "OhCCCOYYYYYYYYYYYYYYYYSO..",
+    "OhCCCOYYYYYDDDDDDDDDDOOO..",
+    "OhCCCOYYYYYYYYYYYYYYYYHSO.",
+    "OhCCCOYYYYYYYYYYYYYYYYYSO.",
+    "OhCCCOYYYYYYYYYYYYYYYYSSO.",
+    "OhCCCOYYYYYDDDDDDDDDDOOO..",
+    "OhCCCOYYYYYYYYYYYYYYYYSO..",
+    "OhCCCOYYYYYYYYYYYYYYYYSO..",
+    "OhCCCOYYYYYYYYYYYYYYYSSO..",
+    "OhCCCOYYYYYDDDDDDDDDOOO...",
+    "OhCCCOYYYYYYYYYYYYYYYSO...",
+    "OhCCCOSYYYYYYYYYYYYYYSO...",
+    "OhccccOHSSSSSSSSSSSSSSO...",
+    ".OOOOO.OOOOOOOOOOOOOOO....",
+];
+
+/// How a thumb is drawn: in its colours (the sleeve in the vote's), or all grey.
+#[derive(Clone, Copy)]
+enum Look {
+    Colour(u32, f32),
+    Grey(f32),
+}
+
+/// Draws `THUMB` centred on (`x`, `y`) in `px`-sized pixels, upside down for a thumbs down,
+/// over its own shadow.
+fn pixel_thumb(c: &mut Canvas, x: f32, y: f32, px: f32, down: bool, look: Look) {
+    let (w, h) = (THUMB[0].len(), THUMB.len());
+    let (x0, y0) = (x - w as f32 * px / 2.0, y - h as f32 * px / 2.0);
+    let a = match look {
+        Look::Colour(_, a) | Look::Grey(a) => a,
+    };
+    let colour = |ch: u8| match (ch, look) {
+        (b'O', _) => 0x2a1606,
+        (b'H', Look::Colour(..)) => 0xffeca8,
+        (b'Y', Look::Colour(..)) => 0xffcc4d,
+        (b'S', Look::Colour(..)) => 0xe89c2e,
+        (b'D', Look::Colour(..)) => 0xc07418,
+        (b'C', Look::Colour(sleeve, _)) => sleeve,
+        (b'h', Look::Colour(sleeve, _)) => lighter(sleeve),
+        (b'c', Look::Colour(sleeve, _)) => darker(sleeve),
+        (b'H' | b'h', _) => 0x9a9aa6,
+        (b'Y' | b'C', _) => 0x7a7a86,
+        _ => 0x5a5a66,
+    };
+    // Each row in runs: one strip per run of a colour (of anything, for the shadow), so the
+    // pixels show no seams between them at any size. Solid strips overlap a little to close
+    // the last of them; see-through ones can't (the overlaps would show darker).
+    let seal = if a >= 0.99 { 0.5 } else { 0.0 };
+    for shadow in [true, false] {
+        for (r, row) in THUMB.iter().enumerate() {
+            let row = row.as_bytes();
+            let mut k0 = 0;
+            while k0 < w {
+                let same = |ch: u8| {
+                    if shadow {
+                        (ch == b'.') == (row[k0] == b'.')
+                    } else {
+                        ch == row[k0]
+                    }
+                };
+                let k1 = k0 + row[k0..].iter().take_while(|&&ch| same(ch)).count() - 1;
+                if row[k0] != b'.' {
+                    let (gx, gy) = if down {
+                        (w - 1 - k1, h - 1 - r)
+                    } else {
+                        (k0, r)
+                    };
+                    let (off, hex, alpha, extra) = if shadow {
+                        (px * 0.8, 0x000000, 0.45 * a, 0.0)
+                    } else {
+                        (0.0, colour(row[k0]), a, seal)
+                    };
+                    c.rect(
+                        x0 + gx as f32 * px + off,
+                        y0 + gy as f32 * px + off,
+                        (k1 - k0 + 1) as f32 * px + extra,
+                        px + extra,
+                        rgba(hex, alpha),
+                    );
+                }
+                k0 = k1 + 1;
+            }
+        }
+    }
+}
+
+/// `hex` halfway to white.
+fn lighter(hex: u32) -> u32 {
+    let ch = |shift: u32| ((((hex >> shift) & 0xff) + 0xff) / 2) << shift;
+    ch(16) | ch(8) | ch(0)
+}
+
+/// `hex` at two thirds of its brightness.
+fn darker(hex: u32) -> u32 {
+    let ch = |shift: u32| (((hex >> shift) & 0xff) * 2 / 3) << shift;
+    ch(16) | ch(8) | ch(0)
+}
+
+/// Pixels thrown out from (`x`, `y`) when a vote is cast, `t` from 0 to 1 over their flight:
+/// in the vote's colour and white, slowing and fading as they go.
+fn burst(c: &mut Canvas, x: f32, y: f32, t: f32, col: u32) {
+    let e = 1.0 - (1.0 - t).powi(3);
+    for k in 0..12 {
+        let angle = k as f32 * std::f32::consts::TAU / 12.0 + 0.26;
+        let dist = 30.0 + 34.0 * e + if k % 2 == 0 { 8.0 } else { 0.0 };
+        let size = 4.0 * (1.0 - 0.5 * t);
+        let hex = if k % 3 == 0 { 0xffffff } else { col };
+        c.rect(
+            x + angle.cos() * dist - size / 2.0,
+            y + angle.sin() * dist - size / 2.0,
+            size,
+            size,
+            rgba(hex, 1.0 - t),
+        );
+    }
+}
+
 /// A small arrow head at (`x`, `y`), pointing down (`down`) or up.
 fn chevron(c: &mut Canvas, x: f32, y: f32, down: bool, col: [f32; 4]) {
     let tip = if down { -1.0 } else { 1.0 };
@@ -4371,6 +4607,22 @@ fn chevron(c: &mut Canvas, x: f32, y: f32, down: bool, col: [f32; 4]) {
         c.rect(x + side * 2.0 - 3.0, y - 0.9, 6.0, 1.8, col);
         if let Some(sh) = c.shapes.last_mut() {
             sh.angle = side * tip * std::f32::consts::FRAC_PI_4;
+        }
+    }
+}
+
+#[cfg(test)]
+mod thumb_tests {
+    use super::THUMB;
+
+    /// The vote thumb is drawn row by row from the first row's width: every row has it, and
+    /// only the sprite's letters are in it.
+    #[test]
+    fn the_vote_thumb_is_a_whole_sprite() {
+        let w = THUMB[0].len();
+        for row in THUMB {
+            assert_eq!(row.len(), w, "{row}");
+            assert!(row.bytes().all(|ch| b".OHYSDChc".contains(&ch)), "{row}");
         }
     }
 }
