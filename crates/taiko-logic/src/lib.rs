@@ -28,6 +28,7 @@ pub mod shapeshift;
 pub mod sim;
 pub mod stars;
 pub mod tact;
+pub mod tja;
 pub mod tko;
 
 #[cfg(test)]
