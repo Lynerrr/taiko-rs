@@ -374,3 +374,123 @@ fn a_tja_play_goes_to_a_server_with_tja_boards_with_its_chart() {
     assert_eq!(results.results.no_pp, Some("TJA charts give no pp"));
     assert!(results.results.vote_on.is_none());
 }
+
+/// The playfield of TJA chart `text`'s course (no inputs, `mods`), drawn at each of `times`
+/// (map ms): where its small dons are along the lane, nearest first.
+fn dons_drawn(text: &str, mods: &[&str], times: &[f64]) -> Vec<Vec<f32>> {
+    use crate::game::{Look, Play, set_frame_look};
+    use crate::hit::Canvas;
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
+    set_frame_look(Some(Look::default()));
+    crate::render::set_frame_time(Some(Instant::now()));
+    let map = taiko_logic::tja::parse(text).unwrap().courses.remove(0).map;
+    let r = super::gameplay::replay(Vec::new(), mods, scores::new_version());
+    let game = scores::replay_game(&map, &super::gameplay::silent_track(r.rate), &r);
+    let mut play = Play::new(game);
+    times
+        .iter()
+        .map(|&t| {
+            play.game.set_time(t);
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            play.draw_playfield(&mut c, 1.0);
+            // A small don's face: a circle of its radius in the don colour.
+            let mut xs: Vec<f32> = c
+                .shapes
+                .iter()
+                .filter(|s| {
+                    (s.half[0] - 31.0).abs() < 0.5
+                        && s.fill[3] > 0.5
+                        && s.fill[0] > 0.8
+                        && s.fill[1] < 0.4
+                        && s.fill[2] < 0.4
+                })
+                .map(|s| s.center[0])
+                .collect();
+            xs.sort_by(f32::total_cmp);
+            xs
+        })
+        .collect()
+}
+
+/// A beat apart at 120 BPM, then at 60 from 2000 ms.
+const SLOWING: &str =
+    "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0001,\n#BPMCHANGE 60\n1111,\n#END\n";
+
+/// #HBSCROLL scrolls the whole lane by beats: once the BPM halves, every note on screen moves
+/// half as fast, the one charted at 120 too, and they stay a beat apart. In normal mode a note
+/// keeps the speed it was charted at.
+#[test]
+fn hbscroll_slows_every_note_on_screen_when_the_bpm_drops() {
+    let hb = SLOWING.replace("#START\n", "#START\n#HBSCROLL\n");
+    // 50 ms before 2000 (the change) and after it; the notes at 1500 (charted at 120), 2000
+    // and 3000 (at 60).
+    let at = [1600.0, 1650.0, 2100.0, 2150.0];
+    let f = dons_drawn(&hb, &[], &at);
+    assert!(f.iter().all(|xs| xs.len() >= 2), "{f:?}");
+    // Before the change: the notes at 2000 and 3000 a beat apart, moving together.
+    let (before, after) = (f[0][0] - f[1][0], f[2][0] - f[3][0]);
+    assert!(
+        (f[0][1] - f[0][0] - (f[1][1] - f[1][0])).abs() < 0.05,
+        "{f:?}"
+    );
+    assert!(
+        (f[2][1] - f[2][0] - (f[3][1] - f[3][0])).abs() < 0.05,
+        "{f:?}"
+    );
+    let beat = f[0][1] - f[0][0];
+    assert!(
+        (f[2][1] - f[2][0] - beat).abs() < 0.05,
+        "a beat is as long on screen at either BPM: {f:?}"
+    );
+    assert!(
+        (before / after - 2.0).abs() < 0.01,
+        "half as fast after the change: {before} then {after}"
+    );
+    // Normal mode: the note at 3000 moves as fast before the change as after it.
+    let n = dons_drawn(SLOWING, &[], &at);
+    let far = |xs: &Vec<f32>| *xs.last().unwrap();
+    let (before, after) = (far(&n[0]) - far(&n[1]), far(&n[2]) - far(&n[3]));
+    assert!(
+        before > 0.0 && (before - after).abs() < 0.05,
+        "{before} then {after}: {n:?}"
+    );
+    // Each note still reaches the drum on time.
+    let on_time = dons_drawn(&hb, &[], &[3000.0]);
+    assert!(
+        on_time[0]
+            .iter()
+            .any(|&x| (x - taiko_logic::sim::HIT_X).abs() < 0.05),
+        "{on_time:?}"
+    );
+}
+
+/// #SUDDEN 1 0.5: a note isn't drawn until a second before its hit, then waits where it will be
+/// half a second before it, and moves from there like any other.
+#[test]
+fn a_sudden_note_shows_up_late_and_waits_to_move() {
+    let text =
+        "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0,\n#SUDDEN 1 0.5\n1,\n#END\n";
+    let plain = text.replace("#SUDDEN 1 0.5\n", "");
+    // The note is at 2000.
+    let f = dons_drawn(text, &[], &[900.0, 1100.0, 1400.0, 1700.0, 2000.0]);
+    assert!(f[0].is_empty(), "not drawn before a second ahead: {f:?}");
+    assert_eq!(f[1].len(), 1, "{f:?}");
+    assert_eq!(f[1], f[2], "still while it waits");
+    let p = dons_drawn(&plain, &[], &[1500.0, 1700.0]);
+    assert!(
+        (f[1][0] - p[0][0]).abs() < 0.05,
+        "it waits where it will be half a second before its hit: {f:?} {p:?}"
+    );
+    assert!(
+        (f[3][0] - p[1][0]).abs() < 0.05,
+        "then it moves like any note"
+    );
+    assert!((f[4][0] - taiko_logic::sim::HIT_X).abs() < 0.05);
+    // With the scroll mods on top it still shows up late and lands on time.
+    let m = dons_drawn(text, &["HD", "AC", "CS"], &[900.0, 2000.0]);
+    assert!(m[0].is_empty(), "{m:?}");
+}

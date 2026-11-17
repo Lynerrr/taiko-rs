@@ -7,10 +7,17 @@
 //! Commands take effect where they stand in the bar.
 //!
 //! Only the Master branch of a branching chart is read (playing branches is a task of its own).
+//!
+//! How notes are drawn moving beyond their own velocity (`#BMSCROLL` / `#HBSCROLL`, `#SUDDEN`,
+//! a negative `#SCROLL`) goes in the map's gimmick (`Gimmick::motion` and its shared scroll),
+//! never in its board chart: it changes how a chart looks, not how it plays or scores.
 
 use std::collections::HashSet;
 
 use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note};
+use crate::tko::gimmick::{Gimmick, Motion, NoteMotion};
+use crate::tko::scroll::MAX_SPEED;
+use crate::tko::track::{Ease, Key, Track};
 
 mod board;
 pub use board::{BoardChart, MAX_ITEMS};
@@ -297,6 +304,7 @@ pub fn parse(text: &str) -> Result<Song, String> {
         let map = match board.beatmap() {
             Ok(played) => Beatmap {
                 meta: map.meta,
+                gimmick: map.gimmick,
                 ..played
             },
             Err(why) => {
@@ -630,6 +638,8 @@ struct OpenRoll {
     velocity: f64,
     tick_spacing: f64,
     hits: u32,
+    /// How it is drawn moving: as its head says.
+    motion: NoteMotion,
 }
 
 /// Where the chart is while it's read.
@@ -642,11 +652,51 @@ struct Cursor {
     gogo: bool,
     barlines: bool,
     beat_origin: f64,
+    mode: ScrollMode,
+    /// `#SUDDEN`: how long before its hit a note shows up and starts moving (ms; infinite: all
+    /// along).
+    show: f64,
+    wait: f64,
+    /// Rolls and balloons aren't drawn: TJAPlayer3 hides them when only the first `#SUDDEN`
+    /// number is set, and OpenTaiko kept that.
+    hide_long: bool,
+}
+
+/// How notes scroll, as OpenTaiko places them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollMode {
+    /// By time: each note at its own BPM × `#SCROLL`, fixed (osu! SV).
+    Normal,
+    /// `#BMSCROLL`: by beats, the whole lane at the BPM of the moment (a change speeds up or
+    /// slows every note at once, and none overtakes another); `#SCROLL` is left out, and a
+    /// `#DELAY` stops the lane.
+    Beats,
+    /// `#HBSCROLL`: by beats like `#BMSCROLL`, with each note's `#SCROLL` on top.
+    BeatsScrolled,
 }
 
 impl Cursor {
     fn velocity(&self) -> f64 {
         velocity(self.bpm, self.scroll)
+    }
+
+    /// The velocity a note here is drawn with (below 0 from the left), `reference` the BPM a
+    /// beat-scrolled lane goes at speed 1 at.
+    fn drawn_velocity(&self, reference: f64) -> f64 {
+        let side = if self.scroll < 0.0 { -1.0 } else { 1.0 };
+        match self.mode {
+            ScrollMode::Normal => side * self.velocity(),
+            ScrollMode::Beats => velocity(reference, 1.0),
+            ScrollMode::BeatsScrolled => side * velocity(reference, self.scroll),
+        }
+    }
+
+    /// How fast a lane scrolled by beats moves here: at the reference BPM, 1.
+    fn lane_speed(&self, reference: f64) -> f64 {
+        match self.mode {
+            ScrollMode::Normal => 1.0,
+            _ => (self.bpm / reference).clamp(-MAX_SPEED, MAX_SPEED),
+        }
     }
 
     fn control_point(&self) -> ControlPoint {
@@ -658,6 +708,73 @@ impl Cursor {
             kiai: self.gogo,
             volume: 1.0,
         }
+    }
+
+    fn motion(&self, t: f64, reference: f64) -> NoteMotion {
+        NoteMotion {
+            t,
+            velocity: self.drawn_velocity(reference),
+            show: self.show,
+            wait: self.wait,
+            hide_long: self.hide_long,
+        }
+    }
+}
+
+/// How a chart's notes are drawn moving, gathered while it's read (see `Gimmick::motion`).
+struct Drawing {
+    /// The song's BPM: a lane scrolled by beats moves at speed 1 at it, as fast as a note at
+    /// `#SCROLL 1` does by time.
+    reference: f64,
+    /// The lane's speed over the song (the shared scroll) for the beat-scrolled modes; 1 while
+    /// the chart scrolls by time.
+    speed: Track,
+    /// A beat-scrolled mode was on somewhere.
+    by_beats: bool,
+    notes: Vec<NoteMotion>,
+    barlines: Vec<(f64, f64)>,
+}
+
+impl Drawing {
+    /// The lane's speed from here on.
+    fn key(&mut self, cur: &Cursor) {
+        self.key_at(cur.time, cur.lane_speed(self.reference));
+    }
+
+    fn key_at(&mut self, t: f64, v: f64) {
+        self.speed.set(Key {
+            t,
+            v,
+            ease: Ease::Step,
+        });
+    }
+
+    /// What the map's gimmick gets: None when every note is drawn as its board chart says.
+    fn gimmick(mut self) -> Option<Gimmick> {
+        let plain =
+            |n: &NoteMotion| n.velocity >= 0.0 && n.show.is_infinite() && n.wait.is_infinite();
+        if !self.by_beats
+            && self.notes.iter().all(plain)
+            && self.barlines.iter().all(|b| b.1 >= 0.0)
+        {
+            return None;
+        }
+        // A negative #DELAY can set later notes before earlier ones.
+        self.notes.sort_by(|a, b| a.t.total_cmp(&b.t));
+        self.barlines.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Some(Gimmick {
+            scroll: if self.by_beats {
+                self.speed
+            } else {
+                Track::default()
+            },
+            motion: Motion {
+                map_clock: true,
+                notes: self.notes,
+                barlines: self.barlines,
+            },
+            ..Default::default()
+        })
     }
 }
 
@@ -676,11 +793,23 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         gogo: false,
         barlines: true,
         beat_origin: start,
+        mode: ScrollMode::Normal,
+        show: f64::INFINITY,
+        wait: f64::INFINITY,
+        hide_long: false,
     };
     let mut notes: Vec<Note> = Vec::new();
     let mut barlines: Vec<Barline> = Vec::new();
     let mut points: Vec<ControlPoint> = vec![cur.control_point()];
     let mut roll: Option<OpenRoll> = None;
+    let mut drawing = Drawing {
+        reference: bpm,
+        speed: Track::default(),
+        by_beats: false,
+        notes: Vec::new(),
+        barlines: Vec::new(),
+    };
+    drawing.key(&cur);
 
     // A bar: commands and note symbols in order, each symbol with its balloon pops if any.
     enum Step<'a> {
@@ -722,31 +851,34 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         cur.beat_origin = cur.time;
         points.push(cur.control_point());
         let mut barline_due = true;
-        let put_barline = |cur: &Cursor, barlines: &mut Vec<Barline>| {
+        let put_barline = |cur: &Cursor, barlines: &mut Vec<Barline>, drawing: &mut Drawing| {
             if cur.barlines {
                 barlines.push(Barline {
                     time: cur.time,
                     velocity: cur.velocity(),
                 });
+                drawing
+                    .barlines
+                    .push((cur.time, cur.drawn_velocity(drawing.reference)));
             }
         };
         for step in bar {
             match *step {
                 Step::Command(name, arg) => {
-                    apply(name, arg, &mut cur, &mut points, warnings);
+                    apply(name, arg, &mut cur, &mut points, &mut drawing, warnings);
                 }
                 Step::Symbol(c, pops) => {
                     if barline_due {
-                        put_barline(&cur, &mut barlines);
+                        put_barline(&cur, &mut barlines, &mut drawing);
                         barline_due = false;
                     }
-                    note(c, pops, &cur, &mut roll, &mut notes, warnings);
+                    note(c, pops, &cur, &mut roll, &mut notes, &mut drawing, warnings);
                     cur.time += 240_000.0 / cur.bpm * cur.measure / divisions as f64;
                 }
             }
         }
         if barline_due {
-            put_barline(&cur, &mut barlines);
+            put_barline(&cur, &mut barlines, &mut drawing);
         }
         if divisions == 0 {
             cur.time += 240_000.0 / cur.bpm * cur.measure;
@@ -790,7 +922,7 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         barlines,
         control_points: points,
         first_velocity: velocity(bpm, 1.0),
-        gimmick: None,
+        gimmick: drawing.gimmick().map(std::sync::Arc::new),
         fakes: Vec::new(),
     }
 }
@@ -800,6 +932,7 @@ fn apply(
     arg: &str,
     cur: &mut Cursor,
     points: &mut Vec<ControlPoint>,
+    drawing: &mut Drawing,
     warnings: &mut Warnings,
 ) {
     let number = |w: &mut Warnings| match arg.parse::<f64>() {
@@ -815,6 +948,7 @@ fn apply(
                 cur.bpm = bpm;
                 cur.beat_origin = cur.time;
                 points.push(cur.control_point());
+                drawing.key(cur);
             }
             Some(_) => warnings.add(format!("#BPMCHANGE {arg}: not above 0, ignored")),
             None => {}
@@ -830,9 +964,6 @@ fn apply(
         }
         "SCROLL" => match scroll_value(arg) {
             Some(v) if v.is_finite() => {
-                if v < 0.0 {
-                    warnings.add("negative #SCROLL: played at the same speed from the right");
-                }
                 cur.scroll = v;
                 points.push(cur.control_point());
             }
@@ -840,9 +971,46 @@ fn apply(
         },
         "DELAY" => {
             if let Some(s) = number(warnings) {
+                // Scrolled by beats, the lane stops for it.
+                if cur.mode != ScrollMode::Normal && s > 0.0 {
+                    drawing.key_at(cur.time, 0.0);
+                }
                 cur.time += s * 1000.0;
                 cur.beat_origin = cur.time;
                 points.push(cur.control_point());
+                drawing.key(cur);
+            }
+        }
+        "NMSCROLL" | "BMSCROLL" | "HBSCROLL" => {
+            cur.mode = match name {
+                "BMSCROLL" => ScrollMode::Beats,
+                "HBSCROLL" => ScrollMode::BeatsScrolled,
+                _ => ScrollMode::Normal,
+            };
+            drawing.by_beats |= cur.mode != ScrollMode::Normal;
+            drawing.key(cur);
+        }
+        "SUDDEN" => {
+            let mut parts = arg
+                .split_whitespace()
+                // `inf` too, as OpenTaiko reads it: all along.
+                .map(|v| v.parse::<f64>().ok().filter(|v| !v.is_nan()));
+            match (parts.next().flatten(), parts.next().flatten()) {
+                (Some(show), Some(wait)) => {
+                    // Under a millisecond is off, as OpenTaiko reads it.
+                    let set = |s: f64| (s * 1000.0).trunc().abs() >= 1.0;
+                    let ms = |s: f64| {
+                        if set(s) && s.is_finite() {
+                            s * 1000.0
+                        } else {
+                            f64::INFINITY
+                        }
+                    };
+                    cur.show = ms(show);
+                    cur.wait = ms(wait);
+                    cur.hide_long = set(show) && !set(wait);
+                }
+                _ => warnings.add(format!("#SUDDEN {arg}: not two numbers, ignored")),
             }
         }
         "GOGOSTART" | "GOGOEND" => {
@@ -862,8 +1030,10 @@ fn note(
     cur: &Cursor,
     roll: &mut Option<OpenRoll>,
     notes: &mut Vec<Note>,
+    drawing: &mut Drawing,
     warnings: &mut Warnings,
 ) {
+    let before = notes.len();
     let hit = |kind: Kind, big: bool| Note {
         time: cur.time,
         end_time: cur.time,
@@ -886,6 +1056,7 @@ fn note(
                 kind,
                 big,
                 velocity: cur.velocity(),
+                motion: cur.motion(cur.time, drawing.reference),
                 tick_spacing: if kind == Kind::Roll {
                     tick_spacing(cur.bpm)
                 } else {
@@ -927,25 +1098,32 @@ fn note(
             roll,
         ),
         '8' => match roll.take() {
-            Some(r) => notes.push(Note {
-                time: r.time,
-                end_time: cur.time.max(r.time),
-                kind: r.kind,
-                big: r.big,
-                velocity: r.velocity,
-                tick_spacing: r.tick_spacing,
-                required_hits: r.hits,
-                fake_len: 0.0,
-                fake_fades: false,
-                fake_length: 0.0,
-                tiny: false,
-                unhittable: false,
-            }),
+            Some(r) => {
+                drawing.notes.push(r.motion);
+                notes.push(Note {
+                    time: r.time,
+                    end_time: cur.time.max(r.time),
+                    kind: r.kind,
+                    big: r.big,
+                    velocity: r.velocity,
+                    tick_spacing: r.tick_spacing,
+                    required_hits: r.hits,
+                    fake_len: 0.0,
+                    fake_fades: false,
+                    fake_length: 0.0,
+                    tiny: false,
+                    unhittable: false,
+                });
+            }
             None => warnings.add("a roll end (8) with no roll: skipped"),
         },
         'C' => warnings.add("bombs (C) are not supported: skipped"),
         'F' => warnings.add("ADLib notes (F) are not supported: skipped"),
         _ => warnings.add(format!("unknown note {c:?}: skipped")),
+    }
+    // A don or kat put down here (a roll's comes with its end).
+    if notes.len() > before && c != '8' {
+        drawing.notes.push(cur.motion(cur.time, drawing.reference));
     }
 }
 

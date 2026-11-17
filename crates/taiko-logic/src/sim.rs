@@ -408,7 +408,7 @@ impl NoteBlock {
                 range: i * 128..i * 128 + notes.len(),
                 min_velocity: notes
                     .iter()
-                    .map(|n| n.velocity)
+                    .map(|n| n.velocity.abs())
                     .fold(f64::INFINITY, f64::min)
                     .max(1e-6),
                 last_end: notes
@@ -718,11 +718,29 @@ impl Scroll {
     /// Screen x of something at map time `time` scrolling at `velocity`.
     #[inline]
     pub fn x(&self, time: f64, velocity: f64) -> f32 {
-        let v = velocity * self.speed * self.factor(time);
         let ahead = match &self.shared {
             Some((table, shift, now)) => table.x(time - shift) - now,
             None => time - self.t,
         };
+        self.x_ahead(time, velocity, ahead)
+    }
+
+    /// The same as it was at game time `then` (a note waiting to start moving holds that
+    /// place); the mods bend it as they do now.
+    #[inline]
+    pub fn x_as_of(&self, time: f64, velocity: f64, then: f64) -> f32 {
+        let ahead = match &self.shared {
+            Some((table, shift, _)) => table.x(time - shift) - table.x(then - shift),
+            None => time - then,
+        };
+        self.x_ahead(time, velocity, ahead)
+    }
+
+    /// Screen x of something at map time `time` scrolling at `velocity` that is `ahead` ms
+    /// (as far as the song scrolls) from the drum.
+    #[inline]
+    fn x_ahead(&self, time: f64, velocity: f64, ahead: f64) -> f32 {
+        let v = velocity * self.speed * self.factor(time);
         // Pulse / Stutter shift the time of far notes; near the drum the shift fades out, so
         // a note always reaches it exactly on time.
         let near = (ahead * v / self.lane).clamp(0.0, 1.0);
@@ -1023,6 +1041,14 @@ impl Game {
         seed: u64,
         half: crate::mods::HalfRule,
     ) -> Game {
+        // A gimmick on the map's own clock (a TJA chart's) isn't read OSU_TIMING_MS early.
+        let shift = match &map.gimmick {
+            Some(g) if g.motion.map_clock => 0.0,
+            _ => beatmap::OSU_TIMING_MS,
+        };
+        if let Some(g) = map.gimmick.clone() {
+            g.motion.apply(&mut map, shift);
+        }
         apply_to_map(&mut map, mods, seed, half);
         let tko = map.gimmick.clone().map(|g| {
             let beats: Vec<crate::tko::runtime::BeatSection> = map
@@ -1046,7 +1072,7 @@ impl Game {
                     },
                     big: n.big,
                 }),
-                beatmap::OSU_TIMING_MS,
+                shift,
                 &beats,
             )
         });
