@@ -82,7 +82,11 @@ impl State {
 
     /// What a library scan reads: the Songs folders, plus taiko.rs's own custom maps folder.
     pub(crate) fn scan_roots(&self) -> Vec<PathBuf> {
-        library::with_custom(self.song_dirs.clone(), &self.custom_dir)
+        library::with_custom(
+            self.song_dirs.clone(),
+            &self.custom_dir,
+            self.tja_dir.as_deref(),
+        )
     }
 
     /// The window is in front again: sets may have been put into a songs folder meanwhile.

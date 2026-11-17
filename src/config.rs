@@ -410,6 +410,8 @@ pub struct Config {
     pub map_skins: bool,
     /// The Songs folder picked in settings, scanned instead of looking for osu! installs.
     pub songs_folder: Option<PathBuf>,
+    /// The folder of TJA charts picked in settings (None: `Tja` beside `Custom`, `tja_dir`).
+    pub tja_folder: Option<PathBuf>,
     /// Multiverse's universes: each playfield's colours, note shape, speed and mods.
     pub universes: [crate::multiverse::Universe; crate::multiverse::COUNT],
     /// The player's Multiverse presets.
@@ -600,6 +602,7 @@ impl Default for Config {
             skin_parts: Default::default(),
             map_skins: true,
             songs_folder: None,
+            tja_folder: None,
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
@@ -742,6 +745,15 @@ fn custom_dir_in(folder: Option<&Path>) -> Option<PathBuf> {
     }
     own_dir_in(None, CUSTOM)
 }
+
+/// The default folder of TJA charts: `Tja` beside `Custom` (`custom_dir`); None in tests
+/// without a data folder.
+pub fn tja_dir() -> Option<PathBuf> {
+    Some(custom_dir_in(data_folder().as_deref())?.with_file_name(TJA))
+}
+
+/// The default folder of TJA charts (`tja_dir`).
+pub const TJA: &str = "Tja";
 
 /// The folders of taiko.rs's own custom maps (`custom_dir`) and of their kept older versions.
 pub const CUSTOM: &str = "Custom";
@@ -1398,6 +1410,7 @@ impl Config {
                 "skin_part" => cfg.skin_parts.parse(v),
                 "map_skins" => cfg.map_skins = v != "false",
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
+                "tja_folder" => cfg.tja_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "multiverse" => cfg.universes = crate::multiverse::parse(v),
                 "multiverse_preset" => cfg
                     .universe_presets
@@ -1922,6 +1935,14 @@ impl Config {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         out.push_str(&format!("# Songs folder to scan instead of finding osu!'s (empty = find it)\nsongs_folder = {folder}\n"));
+        let tja = self
+            .tja_folder
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "# folder of TJA charts (empty = Tja beside Custom)\ntja_folder = {tja}\n"
+        ));
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {
             out.push_str(&format!("songs = {}\n", s.display()));

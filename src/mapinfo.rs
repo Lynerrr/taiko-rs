@@ -103,7 +103,10 @@ fn save_cache(cache: &Cache) {
 }
 
 /// Star rating (taiko, converts included), drain length and BPM of one map.
-fn analyze(path: &Path) -> Option<Info> {
+pub(crate) fn analyze(path: &Path) -> Option<Info> {
+    if crate::tja_maps::is_course(path) {
+        return Info::of_chart(&crate::tja_maps::load(path).ok()?);
+    }
     Info::of(&std::fs::read(path).ok()?)
 }
 

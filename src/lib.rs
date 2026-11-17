@@ -118,6 +118,7 @@ mod style;
 mod system_font;
 mod tact;
 mod terms;
+mod tja_maps;
 #[doc(hidden)]
 pub mod tko;
 mod ui;
@@ -472,6 +473,8 @@ struct State {
     /// taiko.rs's own folder of custom maps (`config::custom_dir`): always scanned, and kept apart
     /// from osu!'s Songs folders.
     custom_dir: PathBuf,
+    /// Where TJA charts are read from and imported to (`tja_maps`).
+    tja_dir: Option<PathBuf>,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
@@ -1246,6 +1249,17 @@ impl State {
 
     /// Opens the map editor on library entry `entry`.
     fn open_editor(&mut self, entry: usize) {
+        if self.library[entry].is_tja() {
+            self.toast(
+                tr!(
+                    "TJA charts can't be opened in the editor",
+                    "TJA譜面はエディターで開けません",
+                    "TJA-чарты нельзя открыть в редакторе"
+                )
+                .into(),
+            );
+            return;
+        }
         let path = self.library[entry].path.clone();
         self.open_editor_at(path, entry);
     }
@@ -2861,6 +2875,15 @@ impl State {
             {
                 picking_text().into()
             }
+            Item::TjaFolder
+                if self.folder_pick.is_busy() && self.folder_pick_for == Item::TjaFolder =>
+            {
+                picking_text().into()
+            }
+            Item::TjaFolder => match (&c.tja_folder, &self.tja_dir) {
+                (Some(dir), _) | (None, Some(dir)) => short_path(dir),
+                (None, None) => tr!("none", "なし", "нет").into(),
+            },
             Item::DataFolder
                 if self.folder_pick.is_busy() && self.folder_pick_for == Item::DataFolder =>
             {
@@ -3248,7 +3271,7 @@ impl State {
                 return;
             }
             // Act on Enter in `settings_key`.
-            Item::SongsFolder | Item::DataFolder => return,
+            Item::SongsFolder | Item::TjaFolder | Item::DataFolder => return,
             Item::MasterVolume => {
                 self.cfg.master_volume =
                     (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0)
@@ -3798,6 +3821,26 @@ impl State {
                 };
                 (names, None, note)
             }
+            Item::TjaFolder => {
+                let mut names = vec![
+                    type_path(),
+                    tr!(
+                        "Tja beside the taiko.rs maps",
+                        "taiko.rs譜面の隣のTja",
+                        "Tja рядом с картами taiko.rs"
+                    )
+                    .to_string(),
+                ];
+                if !cfg!(target_os = "android") {
+                    names.insert(0, browse_text());
+                }
+                let note = self
+                    .tja_dir
+                    .as_ref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default();
+                (names, None, note)
+            }
             Item::DataFolder => {
                 let mut names = vec![
                     type_path(),
@@ -3967,6 +4010,23 @@ impl State {
                 }
                 return;
             }
+            Item::TjaFolder => {
+                let i = if cfg!(target_os = "android") {
+                    i + 1
+                } else {
+                    i
+                };
+                match i {
+                    0 => self.browse_folder(Item::TjaFolder),
+                    1 => self.start_edit(Item::TjaFolder),
+                    _ => {
+                        if let Err(e) = self.set_tja_folder(None) {
+                            self.toast(e);
+                        }
+                    }
+                }
+                return;
+            }
             _ => return,
         }
         multiverse::set_note_colours(self.cfg.note_colours);
@@ -4004,6 +4064,11 @@ impl State {
                 .or(self.song_dirs.first())
                 .map(|d| d.display().to_string())
                 .unwrap_or_default(),
+            Item::TjaFolder => self
+                .tja_dir
+                .as_ref()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default(),
             Item::DataFolder => config::data_dir()
                 .map(|d| d.display().to_string())
                 .unwrap_or_default(),
@@ -4021,7 +4086,10 @@ impl State {
         let Some(edit) = &mut self.settings_ui.editing else {
             return;
         };
-        let max = if matches!(edit.item, Item::SongsFolder | Item::DataFolder) {
+        let max = if matches!(
+            edit.item,
+            Item::SongsFolder | Item::TjaFolder | Item::DataFolder
+        ) {
             400
         } else {
             12
@@ -4165,16 +4233,16 @@ impl State {
                     multiverse::Colours::own(don, typed)
                 };
             }
-            Item::SongsFolder | Item::DataFolder => {
+            Item::SongsFolder | Item::TjaFolder | Item::DataFolder => {
                 let t = text.trim().trim_matches('"');
                 let path = match (t.strip_prefix("~/"), std::env::var_os("HOME")) {
                     (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
                     _ => PathBuf::from(t),
                 };
-                return if item == Item::SongsFolder {
-                    self.set_songs_folder(Some(path))
-                } else {
-                    self.move_data_to(Some(path))
+                return match item {
+                    Item::SongsFolder => self.set_songs_folder(Some(path)),
+                    Item::TjaFolder => self.set_tja_folder(Some(path)),
+                    _ => self.move_data_to(Some(path)),
                 };
             }
             _ => return Ok(()),
@@ -4198,6 +4266,8 @@ impl State {
         self.folder_pick_for = item;
         let current = if item == Item::DataFolder {
             config::data_dir()
+        } else if item == Item::TjaFolder {
+            self.tja_dir.clone()
         } else {
             self.cfg
                 .songs_folder
@@ -4221,10 +4291,10 @@ impl State {
         let item = self.folder_pick_for;
         match picked {
             Ok(Some(dir)) => {
-                let done = if item == Item::DataFolder {
-                    self.move_data_to(Some(dir))
-                } else {
-                    self.set_songs_folder(Some(dir))
+                let done = match item {
+                    Item::DataFolder => self.move_data_to(Some(dir)),
+                    Item::TjaFolder => self.set_tja_folder(Some(dir)),
+                    _ => self.set_songs_folder(Some(dir)),
                 };
                 if let Err(e) = done {
                     self.toast(e);
@@ -4345,6 +4415,22 @@ impl State {
     }
 
     /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
+    /// Reads TJA charts from `folder` from now on (None: `Tja` beside the taiko.rs maps), and
+    /// looks through the library again.
+    fn set_tja_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
+        if let Some(f) = folder.as_ref().filter(|f| !f.is_dir()) {
+            let dir = f.display();
+            return Err(
+                tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка"; [] [dir]),
+            );
+        }
+        self.cfg.tja_folder = folder.clone();
+        self.cfg.save();
+        self.tja_dir = crate::tja_maps::folder_for(folder.as_deref());
+        self.refresh_library(false);
+        Ok(())
+    }
+
     fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
         if self.behind_settings().is_some_and(|prev| prev.is_play()) {
             return Err(tr!(
@@ -4383,7 +4469,11 @@ impl State {
             )
             .into(),
         });
-        self.scan = Some(start_scan(library::with_custom(inputs, &self.custom_dir)));
+        self.scan = Some(start_scan(library::with_custom(
+            inputs,
+            &self.custom_dir,
+            self.tja_dir.as_deref(),
+        )));
         self.scan_checking = false;
         self.refreshing = None;
         self.select.scanning = Some(0);
@@ -4883,6 +4973,10 @@ impl State {
                         .unwrap_or_default();
                     if library::is_map_archive(&path) {
                         self.import_osz(path, &name, false);
+                    } else if crate::tja_maps::is_tja_file(&path)
+                        || crate::tja_maps::holds_tja(&path)
+                    {
+                        self.import_tja(&path, &name);
                     } else {
                         let file = path
                             .file_name()
@@ -4892,6 +4986,21 @@ impl State {
                     }
                 }
             }
+        }
+    }
+
+    /// Copies a dropped TJA chart (or a folder holding one) into the TJA folder, then looks for
+    /// it there.
+    fn import_tja(&mut self, from: &Path, name: &str) {
+        let Some(root) = self.tja_dir.clone() else {
+            return;
+        };
+        match crate::tja_maps::import(from, &root) {
+            Ok(_) => {
+                self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
+                self.refresh_library(false);
+            }
+            Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
         }
     }
 
@@ -7398,6 +7507,20 @@ impl State {
 
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
+        // A TJA chart stays on this computer: the others have no way to it, and the server
+        // isn't told about it.
+        if self.library[entry].is_tja() {
+            self.toast(
+                tr!(
+                    "TJA charts can't be played in multiplayer yet",
+                    "TJA譜面はまだマルチプレイで遊べません",
+                    "TJA-чарты пока нельзя играть в мультиплеере"
+                )
+                .into(),
+            );
+            self.scene = Lobby::scene();
+            return;
+        }
         if let (Some(s), Some(g)) = (self.mp.as_ref().filter(|s| s.mapguessr), &mut self.guessr) {
             let e = &self.library[entry];
             if g.can_guess(s) {
@@ -8158,6 +8281,15 @@ impl State {
         }
     }
 
+    /// Whether the live play is of a TJA chart (`Entry::is_tja`).
+    fn live_is_tja(&self) -> bool {
+        self.behind_settings()
+            .unwrap_or(&self.scene)
+            .song_play()
+            .and_then(|p| self.library.get(p.0))
+            .is_some_and(Entry::is_tja)
+    }
+
     /// The map of the live play, as the server is told it.
     fn live_map(&self) -> Option<online::PlayedMap> {
         let entry = self
@@ -8184,6 +8316,12 @@ impl State {
     /// restarted, from a start point, a lobby match), tells the server it was played, for the
     /// profile's play count and play time, and how it ended.
     fn track_play(&mut self) {
+        // A TJA chart's play stays on this computer.
+        if self.live_is_tja() {
+            self.playing = None;
+            self.play_attempt = None;
+            return;
+        }
         if let Some(ms) = self.live_play_ms() {
             let (before, map) = match self.playing.take() {
                 Some(playing) => playing,
@@ -9868,6 +10006,9 @@ impl State {
     /// can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
+        if e.is_tja() {
+            return Some(("TJA", ui::TJA_COLOUR));
+        }
         // Never for a map in taiko.rs's own folder: osu! isn't asked about those.
         let edited = self.select.edited.contains(&e.path) && !e.is_own();
         // As the song list has it (`Select::status_of`): an edited copy is nobody's.

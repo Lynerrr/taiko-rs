@@ -34,5 +34,6 @@ mod select;
 mod song_menu;
 mod store;
 mod text_fields;
+mod tja_library;
 
 mod language_catalog;

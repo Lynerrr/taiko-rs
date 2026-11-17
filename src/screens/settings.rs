@@ -184,12 +184,12 @@ impl Screen for SettingsScreen {
         } else {
             settings::tab_bar(canvas, 1, if from_game { "game paused" } else { "" });
             let searching = !state.settings_ui.search.is_empty();
-            let footer = if state
-                .settings_ui
-                .editing
-                .as_ref()
-                .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
-            {
+            let footer = if state.settings_ui.editing.as_ref().is_some_and(|e| {
+                matches!(
+                    e.item,
+                    Item::SongsFolder | Item::TjaFolder | Item::DataFolder
+                )
+            }) {
                 "type the folder's path   Ctrl+V paste   Enter set   Esc cancel".to_string()
             } else if state.settings_ui.editing.is_some() {
                 "type a value   Enter set   Esc cancel".to_string()

@@ -266,12 +266,12 @@ impl State {
             Field::Social | Field::LobbyChat => 200,
             Field::FontSearch => 128,
             Field::Setting(_) => {
-                if self
-                    .settings_ui
-                    .editing
-                    .as_ref()
-                    .is_some_and(|e| matches!(e.item, Item::SongsFolder | Item::DataFolder))
-                {
+                if self.settings_ui.editing.as_ref().is_some_and(|e| {
+                    matches!(
+                        e.item,
+                        Item::SongsFolder | Item::TjaFolder | Item::DataFolder
+                    )
+                }) {
                     400
                 } else {
                     12

@@ -200,4 +200,6 @@ favourite_mods =
 note_colours = classic
 # Songs folder to scan instead of finding osu!'s (empty = find it)
 songs_folder =
+# folder of TJA charts (empty = Tja beside Custom)
+tja_folder =
 # extra song folders / .osz files, one per line

@@ -30,6 +30,8 @@ pub const LOVED: u8 = 7;
 /// Made in the editor and sent to taiko.rs: public, no pp; and once approved there, with pp.
 pub const CUSTOM: u8 = 8;
 pub const CUSTOM_APPROVED: u8 = 9;
+/// A TJA chart's course: played on this computer only.
+pub const TJA: u8 = 10;
 
 /// The status code for the mirrors' status name.
 pub fn status_code(name: &str) -> Option<u8> {
@@ -223,7 +225,7 @@ fn length(s: &str) -> Option<(f64, f64)> {
 
 /// The codes a typed status (a prefix of its name) stands for.
 fn statuses(s: &str) -> Option<Vec<u8>> {
-    let names: [(&str, &[u8]); 11] = [
+    let names: [(&str, &[u8]); 12] = [
         ("ranked", &[RANKED]),
         ("approved", &[APPROVED]),
         ("qualified", &[QUALIFIED]),
@@ -236,6 +238,7 @@ fn statuses(s: &str) -> Option<Vec<u8>> {
         ("unknown", &[UNKNOWN]),
         ("custom", &[CUSTOM, CUSTOM_APPROVED]),
         ("customapproved", &[CUSTOM_APPROVED]),
+        ("tja", &[TJA]),
     ];
     let s = s.replace([' ', '_', '-'], "");
     if s.is_empty() {
