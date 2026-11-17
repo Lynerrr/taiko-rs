@@ -23,6 +23,8 @@ use crate::tko::track::Ease;
 
 /// Rows of clips shown at once (more scroll).
 pub(super) const ROWS: u8 = 6;
+/// The `fx_drop` kind of the keyframe page's ease list (0-2 are the clip picked's menus).
+pub(super) const KEY_EASE_DROP: u8 = 3;
 thread_local! {
     /// Blocks copied with Ctrl+C or Ctrl+X: kept while the game runs, so they paste into
     /// another map too.
@@ -2484,12 +2486,24 @@ impl View {
         let Some((kind, at)) = self.fx_drop else {
             return;
         };
+        if kind == KEY_EASE_DROP {
+            if !self.keyframe_mode() {
+                self.fx_drop = None;
+                return;
+            }
+            let s = self.subject();
+            let now = self
+                .k_sel
+                .and_then(|i| self.ed.track_of(s).and_then(|t| t.keys.get(i)))
+                .map_or(self.k_ease, |k| k.ease);
+            return self.draw_ease_drop(c, at, now, true);
+        }
         let Some(clip) = self.picked().cloned().filter(|_| self.clip_mode()) else {
             self.fx_drop = None;
             return;
         };
         if kind == 1 {
-            return self.draw_ease_drop(c, at, clip.ease);
+            return self.draw_ease_drop(c, at, clip.ease, false);
         }
         if kind == 2 {
             let now = match clip.layer.as_deref().map(|l| &l.show) {
@@ -2695,13 +2709,15 @@ impl View {
         }
     }
 
-    fn draw_ease_drop(&mut self, c: &mut Canvas, at: [f32; 4], now: Ease) {
+    /// The list of eases under the button at `at`: for keys (`keys`, Step among them) or for
+    /// the clip picked.
+    fn draw_ease_drop(&mut self, c: &mut Canvas, at: [f32; 4], now: Ease, keys: bool) {
         // Step is for keyframes: a clip with it would do nothing.
         let eases: Vec<(usize, Ease)> = Ease::ALL
             .iter()
             .copied()
             .enumerate()
-            .filter(|(_, e)| *e != Ease::Step)
+            .filter(|(_, e)| keys || *e != Ease::Step)
             .collect();
         let w = eases
             .iter()
@@ -2742,7 +2758,12 @@ impl View {
                 rgba(if on { 0xffffff } else { 0xd8d8e8 }, 1.0),
                 e.label(),
             );
-            self.buttons.push((r, Btn::Fx(FxAct::SetEase(i as u8))));
+            let b = if keys {
+                Btn::K(super::keys::KAct::SetEase(i as u8))
+            } else {
+                Btn::Fx(FxAct::SetEase(i as u8))
+            };
+            self.buttons.push((r, b));
         }
     }
 }

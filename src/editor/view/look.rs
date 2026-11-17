@@ -78,6 +78,7 @@ pub(super) fn look_of(b: Btn) -> Look {
             KAct::NewGroup | KAct::SelectGroup | KAct::KeyHere => Look::Action,
             KAct::DeleteGroup | KAct::DeleteKey => Look::Danger,
             KAct::Ease => Look::Drop,
+            KAct::SetEase(_) => Look::Plain,
             KAct::MakeTko => Look::Primary,
         },
         Btn::N(a) => match a {
