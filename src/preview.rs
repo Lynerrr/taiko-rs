@@ -1282,11 +1282,13 @@ impl Preview {
         }
         // What's over the panel goes last, on the way out with a lane or without.
         let tip = od_hovered.map(|at| {
-            let od = self.mods.od_with(e.meta.od, crate::od_override::get());
-            (
-                at,
-                crate::game::Windows::new(od).at_rate(self.requested_rate.0),
-            )
+            let windows = crate::game::Windows::for_map(
+                &e.meta,
+                self.mods,
+                crate::od_override::get(),
+                crate::game::WindowRule::Osu,
+            );
+            (at, windows.at_rate(self.requested_rate.0))
         });
         let Some(game) = self.game.as_mut().filter(|_| loaded && playing) else {
             if let Some((at, windows)) = tip {

@@ -118,6 +118,49 @@ fn plays_judge_with_osus_windows_and_old_replays_with_their_own() {
 }
 
 #[test]
+fn tja_charts_judge_with_their_courses_arcade_windows() {
+    let map = |course: &str| {
+        let text = format!("BPM:120\nOFFSET:-3\nCOURSE:{course}\n#START\n1,\n#END\n");
+        crate::tja::parse(&text).unwrap().courses.remove(0).map
+    };
+    let judged = |course: &str, mods: &str, off: f64| {
+        let m = map(course);
+        let t = m.notes[0].time + off;
+        let mut g = Game::with_mods(m, Arc::new(Silence), None, Mods::parse(mods));
+        g.press_at(1, t, None);
+        (g.stats.great, g.stats.ok)
+    };
+    assert_eq!(judged("Oni", "", 24.0), (1, 0));
+    assert_eq!(judged("Oni", "", 26.0), (0, 1));
+    assert_eq!(judged("Oni", "", -75.0), (0, 1));
+    assert_eq!(judged("Easy", "", 41.0), (1, 0));
+    assert_eq!(judged("Easy", "", 107.0), (0, 1));
+    // HR: x0.83, so 22 ms is still a great and 24 no longer.
+    assert_eq!(judged("Oni", "HR", 21.0), (1, 0));
+    assert_eq!(judged("Oni", "HR", 23.0), (0, 1));
+    // The OD changes nothing, and osu! maps keep the OD's windows.
+    let w = |m: &Beatmap, mods: &str| {
+        let w = Windows::for_map(&m.meta, Mods::parse(mods), 7.0, WindowRule::Osu);
+        (w.great, w.ok, w.miss)
+    };
+    let mut oni = map("Oni");
+    let before = w(&oni, "HR");
+    oni.meta.od = 9.0;
+    assert_eq!(w(&oni, "HR"), before);
+    let osu = game().map.clone();
+    for mods in ["", "HR", "EZ", "PR", "OV"] {
+        assert_eq!(
+            w(&osu, mods),
+            {
+                let n = Windows::new(Mods::parse(mods).od_with(osu.meta.od, 7.0));
+                (n.great, n.ok, n.miss)
+            },
+            "{mods}"
+        );
+    }
+}
+
+#[test]
 fn play_time_leaves_out_pauses_and_the_resume_countdown() {
     let mut g = game();
     let t0 = Instant::now();
