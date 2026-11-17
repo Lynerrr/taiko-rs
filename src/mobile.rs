@@ -930,7 +930,12 @@ impl State {
         const TAB_H: f32 = 42.0;
         const ROW_H: f32 = 60.0;
         panel(c, x, y, w, h);
-        let online = self.board_online;
+        // TJA charts have no online boards yet: their scores stay here.
+        let online = self.board_online
+            && !self
+                .select
+                .selected()
+                .is_some_and(|i| self.library[i].is_tja());
         let tab_w = 104.0;
         let (ty, inner) = (y + 8.0, w - 16.0);
         let local = Hit::BoardTab(false);

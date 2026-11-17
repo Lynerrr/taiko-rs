@@ -70,6 +70,8 @@ pub enum Item {
     ShowConverts,
     SongHeadings,
     SongsFolder,
+    /// The folder TJA charts are read from (`tja_maps::folder`).
+    TjaFolder,
     DataFolder,
     CustomFolder,
     /// Moves taiko.rs's maps out of osu!'s Songs folder (`custom::migrate`).
@@ -134,8 +136,9 @@ pub enum Item {
     AccentHue,
 }
 
-pub const ITEMS: [(&str, Item); 142] = [
+pub const ITEMS: [(&str, Item); 143] = [
     ("LIBRARY", Item::SongsFolder),
+    ("LIBRARY", Item::TjaFolder),
     ("LIBRARY", Item::ShowConverts),
     ("LIBRARY", Item::SongHeadings),
     ("LIBRARY", Item::SongSelectLayout),
@@ -629,6 +632,7 @@ impl Item {
                 "Заголовки в списке песен"
             ),
             Item::SongsFolder => tr!("Songs folder", "Songsフォルダ", "Папка Songs"),
+            Item::TjaFolder => tr!("TJA charts folder", "TJA譜面フォルダ", "Папка TJA-чартов"),
             Item::DataFolder => tr!(
                 "Game data folder",
                 "ゲームデータのフォルダ",
@@ -792,6 +796,7 @@ impl Item {
             | Item::LetterboxSize
             | Item::Accent
             | Item::SongsFolder
+            | Item::TjaFolder
             | Item::DataFolder => Kind::List,
             Item::RateKeepPitch
             | Item::LiveOffset
@@ -1016,6 +1021,11 @@ impl Item {
                 "The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.",
                 "譜面のあるフォルダ。Enter: 参照、パスを入力、またはosu!のものを探すに戻す。",
                 "Папка с вашими картами. Enter: обзор, ввести путь или снова искать папку osu!."
+            ),
+            Item::TjaFolder => tr!(
+                "Where your .tja charts are read from (and dropped ones are copied to). They play here only: no online scores yet. Enter: browse, type a path, or go back to Tja beside the taiko.rs maps.",
+                ".tja譜面を読み込むフォルダ (ドロップした譜面のコピー先)。このPCでのみ遊べます: オンラインスコアはまだありません。Enter: 参照、パスを入力、またはtaiko.rs譜面の隣のTjaに戻す。",
+                "Откуда читаются чарты .tja (и куда копируются брошенные в окно). Играются только здесь: онлайн-рекордов пока нет. Enter: обзор, ввести путь или вернуть Tja рядом с картами taiko.rs."
             ),
             Item::DataFolder => tr!(
                 "Replays, scores, videos, downloaded maps, skins and caches. Enter: move them to another folder or drive.",

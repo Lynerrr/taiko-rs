@@ -20,35 +20,37 @@ text   73,83   Songs folder, song li...
 text  235,90   Songs folder
 text  592,90   <  none found, Enter to pick  >
 text   73,109  GAMEPLAY
-text  235,120  Show osu!standard converts
+text  235,120  TJA charts folder
+text  777,122  none
 text   73,123  speed, rate, interface
 text   73,149  VIEW
-text  235,150  Song list headings
+text  235,150  Show osu!standard converts
 text   73,163  playfield, background
-text  235,180  Song select layout
-text  757,180  default
+text  235,180  Song list headings
 text   74,189  INPUT
 text   73,203  drum keys, hotkeys, t...
-text  235,210  Game data folder
-text  695,210  the usual places
+text  235,210  Song select layout
+text  757,210  default
 text   73,229  OFFSET
-text  235,240  taiko.rs maps folder
-text  716,240  Enter to open
+text  235,240  Game data folder
+text  695,240  the usual places
 text   73,243  audio offset, calibra...
 text   73,269  AUDIO
-text  235,270  Move taiko.rs maps out of osu!
-text  716,270  Enter to move
+text  235,270  taiko.rs maps folder
+text  716,270  Enter to open
 text   73,283  volume, latency
-text  235,300  Move them back to osu!
+text  235,300  Move taiko.rs maps out of osu!
 text  716,300  Enter to move
 text   73,309  VIDEO
 text   73,323  frame pacing, display
-text  235,330  Screenshots
-text  743,330  Clipboard
+text  235,330  Move them back to osu!
+text  716,330  Enter to move
 text   73,349  SKIN
+text  235,360  Screenshots
+text  743,360  Clipboard
 text   73,363  notes, hit flash, colour
-text  233,366  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
 text   73,389  ONLINE
+text  233,396  The folder your maps are in. Enter: browse, type a path, or go back to finding osu!'s.
 text   73,403  chat, notifications,...
 text   73,429  SYSTEM
 text   74,443  language, startup, up...
@@ -79,5 +81,6 @@ hit   223,228   594x30   SettingRow(5)
 hit   223,258   594x30   SettingRow(6)
 hit   223,288   594x30   SettingRow(7)
 hit   223,318   594x30   SettingRow(8)
+hit   223,348   594x30   SettingRow(9)
 hit   771,2      74x14   Changelog
 hit   715,2      50x14   Account

@@ -446,7 +446,8 @@ impl Screen for SongSelect {
                         }
                         state.board_rect =
                             Some([x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW]);
-                        if state.board_online {
+                        // TJA charts have no online boards yet: their scores stay here.
+                        if state.board_online && !state.library[i].is_tja() {
                             let board = state.online_board(hash, relax).cloned();
                             let total = board
                                 .as_ref()

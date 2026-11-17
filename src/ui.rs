@@ -407,6 +407,9 @@ fn initial(name: &str) -> String {
     }
 }
 
+/// What TJA charts are marked with (`Entry::is_tja`).
+pub(crate) const TJA_COLOUR: u32 = 0xff8a3d;
+
 /// A status section's heading and colour in the song list.
 fn status_heading(code: u8) -> (&'static str, u32) {
     use crate::search::*;
@@ -419,6 +422,7 @@ fn status_heading(code: u8) -> (&'static str, u32) {
         NOT_SUBMITTED => ("Not submitted", 0x8a8aa0),
         CUSTOM => ("taiko.rs custom", 0x9b6cff),
         CUSTOM_APPROVED => ("Custom, approved", 0x4fd1b0),
+        TJA => ("TJA charts", TJA_COLOUR),
         _ => ("Status not known yet", 0x8a8aa0),
     }
 }
@@ -695,6 +699,9 @@ impl Select {
 
     /// A map's status on osu! (`search`'s codes), loved here counting as loved.
     fn status_of(&self, e: &Entry) -> u8 {
+        if e.is_tja() {
+            return crate::search::TJA;
+        }
         // A map in taiko.rs's own folder is never osu!'s, nor an edited copy of osu!'s.
         if self.edited.contains(&e.path) && !e.is_own() {
             return crate::search::NOT_SUBMITTED;

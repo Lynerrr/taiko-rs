@@ -62,6 +62,17 @@ impl CourseKind {
         }
     }
 
+    /// One word for it, what `parse` reads back: in a path (`song.tja#oni`).
+    pub fn slug(self) -> &'static str {
+        match self {
+            CourseKind::Easy => "easy",
+            CourseKind::Normal => "normal",
+            CourseKind::Hard => "hard",
+            CourseKind::Oni => "oni",
+            CourseKind::Edit => "edit",
+        }
+    }
+
     /// Judged with the arcade's narrow windows (Hard and up) rather than the wide ones (Easy,
     /// Normal).
     pub fn narrow_windows(self) -> bool {

@@ -216,6 +216,8 @@ mod_preset = 1.5|HR,HD|Speedy
 note_colours = neon
 # Songs folder to scan instead of finding osu!'s (empty = find it)
 songs_folder = /games/osu/Songs
+# folder of TJA charts (empty = Tja beside Custom)
+tja_folder = /games/tja
 # extra song folders / .osz files, one per line
 songs = /games/more-songs
 songs = /games/one.osz

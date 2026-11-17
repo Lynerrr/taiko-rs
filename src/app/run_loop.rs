@@ -1160,6 +1160,7 @@ impl State {
         let status_cache = setstatus::Cache::load();
         let custom_dir = config::custom_dir();
         library::add_own_root(&custom_dir);
+        let tja_dir = crate::tja_maps::folder_for(cfg.tja_folder.as_deref());
         select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
         select.headings = cfg.song_headings;
         select.mods_label = cfg.mods.label();
@@ -1260,6 +1261,7 @@ impl State {
             songs_dir,
             map_bin: map_trash::Bin::for_game(),
             custom_dir,
+            tja_dir,
             installed_sets: None,
             lobby_lookup: Job::idle(),
             custom_move: Job::idle(),

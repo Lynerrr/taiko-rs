@@ -569,6 +569,7 @@ favourite_mods = DT,HD
 mod_preset = 1.5|HR,HD|Speedy
 note_colours = neon
 songs_folder = /games/osu/Songs
+tja_folder = /games/tja
 songs = /games/more-songs
 songs = /games/one.osz
 ";

@@ -280,7 +280,13 @@ pub(crate) fn results_title(m: &beatmap::Meta, from: Option<f64>) -> String {
     let part = from
         .map(|t| format!("  from {}", fmt_time(t)))
         .unwrap_or_default();
-    format!("{} - {} [{}]{part}", m.artist, m.title, m.version)
+    // A TJA chart says so: its scores stay on this computer.
+    let tja = if matches!(m.windows, beatmap::WindowSource::Arcade { .. }) {
+        "  · TJA"
+    } else {
+        ""
+    };
+    format!("{} - {} [{}]{part}{tja}", m.artist, m.title, m.version)
 }
 
 /// A results screen's background work (`ui::Detail`): the pp breakdown of `play` on the map at
