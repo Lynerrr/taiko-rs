@@ -1,5 +1,6 @@
-//! Moving the playfield by hand in the preview (F4 Effects, .tko maps): a drag moves it, with
-//! Shift it turns, with Ctrl it zooms, and each writes keys at the playhead, the way an
+//! Moving the playfield by hand in the preview (F4 Effects, .tko maps): a drag moves it (with
+//! Shift held, at the press or later, only along one axis), with Alt it turns, with Ctrl it
+//! zooms, and each writes keys at the playhead, the way an
 //! animation program records what is done to a picture. The keys go on the playfield's own
 //! tracks (the Keyframes page edits them too) and show as diamonds over the clip rows, where a
 //! click on one goes there and a right click takes that moment's keys away.
@@ -30,6 +31,16 @@ const MOTION: [FieldProp; 4] = [
     FieldProp::Rotation,
     FieldProp::Zoom,
 ];
+
+/// A move by `(dx, dy)`; with `lock` only along the axis it went further on, like Shift in a
+/// picture editor: the other axis goes back to where the drag started.
+fn straight((dx, dy): (f32, f32), lock: bool) -> (f32, f32) {
+    match lock {
+        false => (dx, dy),
+        true if dx.abs() >= dy.abs() => (dx, 0.0),
+        true => (0.0, dy),
+    }
+}
 
 /// How close (units) to a diamond a click takes it.
 const NEAR: f32 = 4.0;
@@ -95,11 +106,17 @@ impl View {
             c.rect(px - 13.0, py - 0.5, 26.0, 1.0, rgba(accent(), a * 0.8));
             c.rect(px - 0.5, py - 13.0, 1.0, 26.0, rgba(accent(), a * 0.8));
             let hint: &[&str] = if self.picked_layer().is_some() {
-                &["drag: place it", "Shift: turn", "Ctrl: size"]
+                &[
+                    "drag: place it",
+                    "Shift: straight",
+                    "Alt: turn",
+                    "Ctrl: size",
+                ]
             } else {
                 &[
                     "drag: move",
-                    "Shift: turn",
+                    "Shift: straight",
+                    "Alt: turn",
                     "Ctrl: zoom",
                     "(keys at the playhead)",
                 ]
@@ -158,7 +175,7 @@ impl View {
         if !self.gizmo_on() || !inside(self.layout.preview, x, y) {
             return false;
         }
-        let grip = if keys.shift {
+        let grip = if keys.alt {
             Grip::Turn
         } else if keys.ctrl {
             Grip::Zoom
@@ -201,10 +218,13 @@ impl View {
         let k = self.preview_scale().max(1e-3);
         let round = |v: f64, to: f64| (v / to).round() * to;
         let keys: Vec<(FieldProp, f64)> = match grip {
-            Grip::Move => vec![
-                (FieldProp::X, round(bx + ((x - from.0) / k) as f64, 1.0)),
-                (FieldProp::Y, round(by + ((y - from.1) / k) as f64, 1.0)),
-            ],
+            Grip::Move => {
+                let (dx, dy) = straight((x - from.0, y - from.1), self.held.shift);
+                vec![
+                    (FieldProp::X, round(bx + (dx / k) as f64, 1.0)),
+                    (FieldProp::Y, round(by + (dy / k) as f64, 1.0)),
+                ]
+            }
             Grip::Turn => {
                 let (px, py) = self.pivot_in_preview();
                 let angle = |(ax, ay): (f32, f32)| (ay - py).atan2(ax - px).to_degrees() as f64;
@@ -246,6 +266,18 @@ impl View {
         }
         if changed {
             self.mark_stale();
+        }
+    }
+
+    /// Shift pressed or let go mid-drag: a move snaps onto one axis (or off it) where the
+    /// pointer already is, without waiting for it to move.
+    pub(super) fn gizmo_keys_changed(&mut self) {
+        if let Drag::Gizmo {
+            grip: Grip::Move, ..
+        } = self.drag
+        {
+            let (x, y) = self.mouse;
+            self.gizmo_drag(x, y);
         }
     }
 

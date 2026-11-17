@@ -686,6 +686,7 @@ impl App {
                 s.modifiers_ctrl = m.state().control_key();
                 s.modifiers_alt = m.state().alt_key();
                 s.modifiers_super = m.state().super_key();
+                s.editor_keys_changed();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let mut s = lock(&self.state);
