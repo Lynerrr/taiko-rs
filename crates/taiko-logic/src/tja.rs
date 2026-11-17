@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use sha2::{Digest, Sha256};
 
-use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note};
+use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note, WindowSource};
 
 /// The osu! slider multiplier a TJA chart scrolls like: one beat at `#SCROLL 1` covers the
 /// distance an osu! taiko map with SliderMultiplier 1.4 covers.
@@ -763,6 +763,9 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         format_version: 14,
         genres: crate::genres::of(&h.genre),
         tags: h.genre.clone(),
+        windows: WindowSource::Arcade {
+            narrow: h.course.narrow_windows(),
+        },
         ..Default::default()
     };
     Beatmap {

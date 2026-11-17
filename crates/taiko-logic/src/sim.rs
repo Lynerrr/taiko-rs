@@ -230,6 +230,11 @@ pub struct Windows {
     pub miss: f64,
 }
 
+/// A TJA chart's great/ok/miss windows in ms on Hard, Oni and Ura Oni (OpenTaiko's timing zones).
+const ARCADE_NARROW: [f64; 3] = [25.0, 75.0, 108.0];
+/// The same on Easy and Normal.
+const ARCADE_WIDE: [f64; 3] = [42.0, 108.0, 125.0];
+
 /// How wide the hit windows are made from the OD.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WindowRule {
@@ -256,6 +261,40 @@ impl Windows {
             great: width(od, 50.0, 35.0, 20.0),
             ok: width(od, 120.0, 80.0, 50.0),
             miss: width(od, 135.0, 95.0, 70.0),
+        }
+    }
+
+    /// The windows `map` is judged with under `mods` (`od_override` for OD Override): from its
+    /// OD as `rule` makes them, or a TJA chart's arcade windows.
+    pub fn for_map(
+        meta: &beatmap::Meta,
+        mods: Mods,
+        od_override: f64,
+        rule: WindowRule,
+    ) -> Windows {
+        match meta.windows {
+            beatmap::WindowSource::Od => {
+                Windows::with_rule(mods.od_with(meta.od, od_override), rule)
+            }
+            beatmap::WindowSource::Arcade { narrow } => {
+                Windows::arcade(narrow, mods.od_with(5.0, od_override))
+            }
+        }
+    }
+
+    /// A TJA chart's windows, as OpenTaiko has them: great/ok/miss ±25/75/108 ms on Hard and up,
+    /// ±42/108/125 on Easy and Normal. `od` is what the mods make of OD 5, and all three scale by
+    /// what it does to osu!'s great window there (HR ×0.83, EZ ×1.21), so their ratios stay.
+    /// OpenTaiko judges whole ms with the bounds in, so a window is its width and half a ms,
+    /// compared with <=, as `judged_window_ms` does it for osu!.
+    pub fn arcade(narrow: bool, od: f64) -> Windows {
+        let [great, ok, miss] = if narrow { ARCADE_NARROW } else { ARCADE_WIDE };
+        let scale = beatmap::great_ms(od) / beatmap::great_ms(5.0);
+        let width = |w: f64| w * scale + 0.5;
+        Windows {
+            great: width(great),
+            ok: width(ok),
+            miss: width(miss),
         }
     }
 
@@ -1102,7 +1141,12 @@ impl Game {
         Game {
             seed,
             half,
-            windows: Windows::new(mods.od(map.meta.od)),
+            windows: Windows::for_map(
+                &map.meta,
+                mods,
+                crate::od_override::DEFAULT,
+                WindowRule::Osu,
+            ),
             map,
             clock: GameClock::new(track_start, audio.is_some()),
             state,
@@ -1195,7 +1239,7 @@ impl Game {
         self.tact = s.tact;
         self.od_override = s.od_override;
         self.log = s.log;
-        self.windows = Windows::new(self.mods.od_with(self.map.meta.od, s.od_override));
+        self.windows = Windows::for_map(&self.map.meta, self.mods, s.od_override, WindowRule::Osu);
         self
     }
 
@@ -2405,8 +2449,7 @@ impl Game {
 
     /// Judges with the hit windows `rule` makes (a replay's own, see `Replay::window_rule`).
     pub fn set_window_rule(&mut self, rule: WindowRule) {
-        self.windows =
-            Windows::with_rule(self.mods.od_with(self.map.meta.od, self.od_override), rule);
+        self.windows = Windows::for_map(&self.map.meta, self.mods, self.od_override, rule);
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses

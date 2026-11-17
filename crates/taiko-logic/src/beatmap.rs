@@ -135,6 +135,20 @@ pub struct Meta {
     /// The `.tko` format version of a map that uses client gimmicks; 0 for a plain chart.
     #[serde(default)]
     pub tko_version: u32,
+    /// What its hit windows are made from: the OD, or a TJA course's arcade windows.
+    #[serde(default)]
+    pub windows: WindowSource,
+}
+
+/// What a map's hit windows are made from (`sim::Windows::for_map`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum WindowSource {
+    /// The OD, as osu! makes them.
+    #[default]
+    Od,
+    /// A TJA chart's arcade windows: the narrow ones (Hard and up) or the wide ones (Easy,
+    /// Normal).
+    Arcade { narrow: bool },
 }
 
 #[derive(Clone, Debug)]

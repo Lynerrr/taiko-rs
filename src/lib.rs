@@ -1473,7 +1473,12 @@ impl State {
         let mut results = Results::new(
             results_title(&e.meta, None),
             stats,
-            game::Windows::new(e.meta.od),
+            game::Windows::for_map(
+                &e.meta,
+                Mods::default(),
+                crate::od_override::DEFAULT,
+                game::WindowRule::Osu,
+            ),
         );
         results.set_mods(mods, r.rate);
         results.seed = Some(r.seed);
@@ -1679,7 +1684,12 @@ impl State {
         let mut results = Results::new(
             results_title(&e.meta, None),
             stats,
-            game::Windows::new(e.meta.od),
+            game::Windows::for_map(
+                &e.meta,
+                Mods::default(),
+                crate::od_override::DEFAULT,
+                game::WindowRule::Osu,
+            ),
         );
         results.set_mods(mods, score.rate);
         results.seed = score.seed;
