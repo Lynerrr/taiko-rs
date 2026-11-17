@@ -502,3 +502,27 @@ fn fumen_corpus_matches_official_timing() {
     assert!(charts > 0, "no chart with a fumen beside it");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn a_fuse_roll_is_a_balloon_and_takes_a_count() {
+    // OpenTaiko reads D as a balloon: it takes the next BALLOON: value, so the balloons after
+    // it keep theirs.
+    let text = chart(120.0, "D008,\n7008,").replace("LEVEL:8", "LEVEL:8\nBALLOON:10,20");
+    let song = parse(&text).unwrap();
+    let n = &song.courses[0].map.notes;
+    assert_eq!(
+        n.iter()
+            .map(|n| (n.kind, n.required_hits))
+            .collect::<Vec<_>>(),
+        [(Kind::Swell, 10), (Kind::Swell, 20)]
+    );
+    assert!(song.warnings.iter().any(|w| w.contains("fuse")));
+}
+
+#[test]
+fn letters_opentaiko_doesnt_have_are_blanks() {
+    // E is no note in OpenTaiko: skipped, its division still lasts.
+    let song = parse(&chart(120.0, "1E2,")).unwrap();
+    close(&times(&song.courses[0]), &[0.0, 4000.0 / 3.0]);
+    assert!(song.warnings.iter().any(|w| w.contains("'E'")));
+}

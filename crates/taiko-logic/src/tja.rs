@@ -30,12 +30,13 @@ const HASH_TAG: &[u8] = b"taiko.rs tja chart v1\n";
 /// A chart's difficulty.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CourseKind {
-    Easy,
-    Normal,
-    Hard,
-    Oni,
+    // The values go into `chart_hash`: never renumber them.
+    Easy = 0,
+    Normal = 1,
+    Hard = 2,
+    Oni = 3,
     /// Ura Oni.
-    Edit,
+    Edit = 4,
 }
 
 impl CourseKind {
@@ -403,9 +404,9 @@ enum Item<'a> {
 const BRANCHES: [&str; 3] = ["N", "E", "M"];
 
 /// Whether a symbol is a balloon head (and, when it starts one, takes the next `BALLOON:`
-/// value).
+/// value). D, OpenTaiko's fuse roll, is a balloon there and takes one too.
 fn is_balloon(c: char) -> bool {
-    matches!(c, '7' | '9')
+    matches!(c, '7' | '9' | 'D')
 }
 
 /// Whether a symbol starts a roll or balloon.
@@ -879,12 +880,27 @@ fn note(
         '0' => {}
         '1' => notes.push(hit(Kind::Don, false)),
         '2' => notes.push(hit(Kind::Kat, false)),
-        // Big notes; A/B are the two-player joint ones, E and G OpenTaiko's coloured doubles.
-        '3' | 'A' | 'E' => notes.push(hit(Kind::Don, true)),
-        '4' | 'B' | 'G' => notes.push(hit(Kind::Kat, true)),
-        // Rolls; D is OpenTaiko's fuse roll, H and I its big and small coloured ones.
-        '5' | 'D' | 'I' => start(Kind::Roll, false, 0, roll),
+        // Big notes; A/B are the two-player joint ones.
+        '3' | 'A' => notes.push(hit(Kind::Don, true)),
+        '4' | 'B' => notes.push(hit(Kind::Kat, true)),
+        // OpenTaiko's Kadon, hit with Don and Ka at once: there is no such note here.
+        'G' => {
+            warnings.add("Kadon notes (G) are played as big Ka");
+            notes.push(hit(Kind::Kat, true));
+        }
+        // Rolls; H and I are OpenTaiko's big and small coloured ones.
+        '5' | 'I' => start(Kind::Roll, false, 0, roll),
         '6' | 'H' => start(Kind::Roll, true, 0, roll),
+        // D is OpenTaiko's fuse roll: a balloon with a bomb at its end, played as a balloon.
+        'D' => {
+            warnings.add("fuse rolls (D) are played as balloons");
+            start(
+                Kind::Swell,
+                false,
+                pops.unwrap_or(DEFAULT_BALLOON_HITS),
+                roll,
+            );
+        }
         '7' | '9' => start(
             Kind::Swell,
             false,
