@@ -64,7 +64,9 @@ pub(super) enum Look {
 pub(super) fn look_of(b: Btn) -> Look {
     match b {
         Btn::GPage(_) => Look::Tab,
-        Btn::Edit(Field::Fx(_) | Field::Key(_) | Field::FxText) => Look::Field,
+        Btn::Edit(Field::Fx(_) | Field::Key(_) | Field::FxText | Field::GroupName(_)) => {
+            Look::Field
+        }
         Btn::Dec(Field::Fx(_) | Field::Key(_)) | Btn::Inc(Field::Fx(_) | Field::Key(_)) => {
             Look::Step
         }
