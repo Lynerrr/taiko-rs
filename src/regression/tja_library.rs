@@ -494,3 +494,75 @@ fn a_sudden_note_shows_up_late_and_waits_to_move() {
     let m = dons_drawn(text, &["HD", "AC", "CS"], &[900.0, 2000.0]);
     assert!(m[0].is_empty(), "{m:?}");
 }
+
+/// The hit target's place and the small dons' along and across the lane at `t` (map ms) in
+/// TJA chart `text`.
+fn drawn_at(text: &str, t: f64) -> (Vec<(f32, f32)>, crate::hit::Canvas) {
+    use crate::game::{Look, Play, set_frame_look};
+    use crate::hit::Canvas;
+    crate::render::set_frame_theme(Some(crate::render::Theme {
+        animations: false,
+        ..crate::render::Theme::default()
+    }));
+    set_frame_look(Some(Look::default()));
+    crate::render::set_frame_time(Some(Instant::now()));
+    let map = taiko_logic::tja::parse(text).unwrap().courses.remove(0).map;
+    let r = super::gameplay::replay(Vec::new(), &[], scores::new_version());
+    let game = scores::replay_game(&map, &super::gameplay::silent_track(r.rate), &r);
+    let mut play = Play::new(game);
+    play.game.set_time(t);
+    // Auditing, so its texts are kept to look for.
+    let mut c = Canvas {
+        audit: true,
+        ..Canvas::default()
+    };
+    c.clear(853.3);
+    play.draw_playfield(&mut c, 1.0);
+    let dons = c
+        .shapes
+        .iter()
+        .filter(|s| {
+            (s.half[0] - 31.0).abs() < 0.5
+                && s.fill[3] > 0.5
+                && s.fill[0] > 0.8
+                && s.fill[1] < 0.4
+                && s.fill[2] < 0.4
+        })
+        .map(|s| (s.center[0], s.center[1]))
+        .collect();
+    (dons, c)
+}
+
+/// #JPOSSCROLL slides the hit target, either way and up or down, and the notes still meet it on
+/// time; OpenTaiko's 60 px are 40 virtual units here.
+#[test]
+fn jposscroll_moves_the_hit_target_and_notes_meet_it() {
+    let still = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0,\n1,\n#END\n";
+    let moved = still.replace("0,\n1,", "#JPOSSCROLL 0 60+30i 1\n0,\n1,");
+    let (home, _) = drawn_at(still, 2000.0);
+    let (there, _) = drawn_at(&moved, 2000.0);
+    assert_eq!(home.len(), 1, "{home:?}");
+    assert_eq!(there.len(), 1, "{there:?}");
+    let (dx, dy) = (there[0].0 - home[0].0, there[0].1 - home[0].1);
+    assert!(
+        (dx - 40.0).abs() < 0.05 && (dy - 20.0).abs() < 0.05,
+        "on the moved target at its hit: {dx}, {dy}"
+    );
+    // Half a second before: half a second of lane from the moved target.
+    let (before, _) = drawn_at(still, 1500.0);
+    let (moved_before, _) = drawn_at(&moved, 1500.0);
+    assert!((moved_before[0].0 - before[0].0 - 40.0).abs() < 0.05);
+    // Leftwards too, which a .tko map's drum can't go.
+    let left = still.replace("0,\n1,", "#JPOSSCROLL 0 -30 1\n0,\n1,");
+    let (l, _) = drawn_at(&left, 2000.0);
+    assert!((l[0].0 - home[0].0 + 20.0).abs() < 0.05, "{l:?}");
+}
+
+/// #LYRIC lines show under the lane from their time until the next one.
+#[test]
+fn lyrics_show_under_the_lane() {
+    let text = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0,\n#LYRIC Sing along\n1,\n#LYRIC\n1,\n#END\n";
+    assert!(!shows(&drawn_at(text, 1500.0).1, "Sing along"));
+    assert!(shows(&drawn_at(text, 2500.0).1, "Sing along"));
+    assert!(!shows(&drawn_at(text, 4500.0).1, "Sing along"), "cleared");
+}

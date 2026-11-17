@@ -647,6 +647,14 @@ pub struct Motion {
     /// Per barline, ascending: its time and the velocity it is drawn with (below 0 from the
     /// left).
     pub barlines: Vec<(f64, f64)>,
+    /// How far the hit target has moved from its place, in virtual units right and down (a TJA
+    /// chart's `#JPOSSCROLL`): everything on the lane goes with it, so notes still meet it on
+    /// time.
+    pub judge_x: Track,
+    pub judge_y: Track,
+    /// Lines of text shown under the lane from their time on (`#LYRIC`), ascending; an empty one
+    /// clears the last.
+    pub lyrics: Vec<(f64, String)>,
 }
 
 /// How one note is drawn moving (see [`Motion`]).
@@ -690,7 +698,23 @@ fn at_time<T>(list: &[T], t: f64, time_of: impl Fn(&T) -> f64) -> Option<&T> {
 
 impl Motion {
     pub fn is_empty(&self) -> bool {
-        self.notes.is_empty() && self.barlines.is_empty()
+        self.notes.is_empty()
+            && self.barlines.is_empty()
+            && self.judge_x.is_empty()
+            && self.judge_y.is_empty()
+            && self.lyrics.is_empty()
+    }
+
+    /// Where the hit target has moved at time `t` (see `judge_x`).
+    pub fn judge_at(&self, t: f64) -> (f64, f64) {
+        (self.judge_x.value(t, 0.0), self.judge_y.value(t, 0.0))
+    }
+
+    /// The line of text shown at time `t` (see `lyrics`).
+    pub fn lyric_at(&self, t: f64) -> Option<&str> {
+        let i = self.lyrics.partition_point(|l| l.0 <= t);
+        let line = self.lyrics.get(i.checked_sub(1)?)?.1.as_str();
+        (!line.is_empty()).then_some(line)
     }
 
     /// The motion of the note at time `t` (the gimmick's clock).
