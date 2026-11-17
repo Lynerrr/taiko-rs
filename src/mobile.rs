@@ -1256,7 +1256,8 @@ impl State {
                 }
                 let found = self.stars.get(i, rate);
                 let py = dy + (DIFF_H - SMALL - 6.0) / 2.0;
-                let pill = crate::style::star_pill(c, dx + dw - 10.0, py, SMALL, found);
+                let level = self.library[i].meta.level;
+                let pill = crate::style::map_pill(c, dx + dw - 10.0, py, SMALL, level, found);
                 let name = &self.library[i].meta.version;
                 let name = Canvas::fit(MEDIUM, dw - pill - 34.0, name);
                 let ny = dy + (DIFF_H - MEDIUM) / 2.0;

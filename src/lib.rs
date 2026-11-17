@@ -9922,7 +9922,9 @@ impl State {
         let song = format!("{} - {}", e.meta.artist, e.meta.title);
         let mut details = Vec::new();
         if let Some(st) = self.map_stats(entry) {
-            if st.stars >= 0.0 {
+            if let Some(level) = e.meta.level {
+                details.push(format!("level {}", crate::style::level_text(level)));
+            } else if st.stars >= 0.0 {
                 details.push(format!("{:.2}*", st.stars));
             }
             if st.bpm > 0.0 {

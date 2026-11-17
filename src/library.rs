@@ -614,7 +614,15 @@ struct CachedFolder {
     dir: PathBuf,
     modified: u128,
     maps: Vec<CachedMap>,
+    /// What its TJA courses were read as (`TJA_READ`); 0 in a cache from before.
+    #[serde(default)]
+    tja: u32,
 }
+
+/// How TJA courses are read: when it goes up, a cached folder holding one is read again (and
+/// only those, a whole osu! library staying as it is). 1: the course's own charter and its
+/// `LEVEL` apart from its name.
+const TJA_READ: u32 = 1;
 
 /// Named for what its maps hold: a new field needs every map read again, once.
 fn library_cache() -> PathBuf {
@@ -665,6 +673,9 @@ fn load_cache(path: &Path) -> (std::collections::HashMap<PathBuf, CachedFolder>,
     };
     let folders = folders
         .into_iter()
+        .filter(|f| {
+            f.tja >= TJA_READ || !f.maps.iter().any(|m| crate::tja_maps::is_course(&m.path))
+        })
         .map(|f| (folder_key(&f.dir), f))
         .collect();
     (folders, state)
@@ -931,6 +942,7 @@ pub(crate) fn scan_cached(
             dir,
             modified,
             maps: Vec::new(),
+            tja: TJA_READ,
         })
         .collect();
     let mut maps: Vec<CachedMap> = kept.iter().flat_map(|f| f.maps.iter().cloned()).collect();
@@ -1434,6 +1446,59 @@ mod tests {
             cache,
             &mut |_| {},
         );
+        let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
+        (entries, log.lines().last().unwrap().to_string())
+    }
+
+    /// A TJA folder cached as an older game read its courses (no `tja` mark, the level in the
+    /// name) is read again; an osu! set in the same cache is not.
+    #[test]
+    fn tja_courses_cached_the_old_way_are_read_again() {
+        let (root, songs, cache) = songs_folder("tja-read");
+        add_map(&songs, "1 osu set", "5");
+        let tja = root.join("Tja");
+        std::fs::create_dir_all(tja.join("Song")).unwrap();
+        std::fs::write(
+            tja.join("Song/song.tja"),
+            "TITLE:T\nBPM:120\nMAKER:Team\nNOTESDESIGNER3:Oni Person\nCOURSE:Oni\nLEVEL:8\n#START\n1,\n#END\n",
+        )
+        .unwrap();
+        crate::tja_maps::add_root(&tja);
+        let found = AtomicUsize::new(0);
+        let scan = || scan_cached(&[songs.clone(), tja.clone()], &found, &cache, &mut |_| {});
+        let course = |entries: &[Entry]| {
+            let e = entries.iter().find(|e| e.is_tja()).expect("the course");
+            (e.meta.version.clone(), e.meta.level, e.meta.creator.clone())
+        };
+        let now = ("Oni".to_string(), Some(8.0), "Oni Person".to_string());
+        assert_eq!(course(&scan()), now);
+        // As a cache from before this game read levels and charters had it.
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
+        for folder in json.as_array_mut().unwrap() {
+            folder.as_object_mut().unwrap().remove("tja");
+            for map in folder["maps"].as_array_mut().unwrap() {
+                let meta = map["meta"].as_object_mut().unwrap();
+                if meta["version"] == "Oni" && meta["title"] == "T" {
+                    meta.insert("version".into(), "Oni ★8".into());
+                    meta.insert("creator".into(), "Team".into());
+                    meta.remove("level");
+                }
+            }
+        }
+        std::fs::write(&cache, serde_json::to_vec(&json).unwrap()).unwrap();
+        let (entries, log) = quiet_scan_all(&[songs.clone(), tja.clone()], &cache);
+        assert_eq!(course(&entries), now);
+        assert!(
+            log.contains("1 unchanged") && log.contains("1 not in it"),
+            "only the TJA folder is read again: {log}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn quiet_scan_all(inputs: &[PathBuf], cache: &Path) -> (Vec<Entry>, String) {
+        let found = AtomicUsize::new(0);
+        let entries = scan_cached(inputs, &found, cache, &mut |_| {});
         let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
         (entries, log.lines().last().unwrap().to_string())
     }

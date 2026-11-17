@@ -174,7 +174,8 @@ fn courses_come_apart_with_their_own_fields() {
         .collect();
     assert_eq!(got, [(CourseKind::Easy, 2, 4), (CourseKind::Oni, 9, 20)]);
     let m = &song.courses[1].map.meta;
-    assert_eq!(m.version, "Oni ★9");
+    assert_eq!(m.version, "Oni");
+    assert_eq!(m.level, Some(9.0));
     assert_eq!(m.audio_file, "song.ogg");
     assert_eq!(m.preview_time, 12_500.0);
     assert_eq!(m.mode, 1);
@@ -837,5 +838,88 @@ fn judge_moves_and_lyrics_leave_the_board_as_it_is() {
     assert_eq!(
         BoardChart::of(c.kind, &c.map),
         BoardChart::of(base.kind, &base.map)
+    );
+}
+
+/// One course of each kind named, each a bar of one don.
+fn courses(header: &str, per_course: &[(&str, &str)]) -> Song {
+    let mut text = format!("TITLE:Who\nBPM:120\n{header}");
+    for (course, lines) in per_course {
+        text += &format!("COURSE:{course}\n{lines}#START\n1,\n#END\n");
+    }
+    parse(&text).unwrap()
+}
+
+fn charters(song: &Song) -> Vec<(CourseKind, &str)> {
+    song.courses
+        .iter()
+        .map(|c| (c.kind, c.map.meta.creator.as_str()))
+        .collect()
+}
+
+#[test]
+fn notes_designers_name_each_courses_charter() {
+    // Numbered before the courses: that course's; within a course, that one's whatever its
+    // number; none: MAKER.
+    let song = courses(
+        "MAKER:Team\nNOTESDESIGNER3:Oni Person\nNOTESDESIGNER0:Easy Person\n",
+        &[
+            ("Oni", ""),
+            ("Easy", ""),
+            ("Hard", "NOTESDESIGNER0:Hard Person\n"),
+            ("Normal", ""),
+        ],
+    );
+    assert_eq!(
+        charters(&song),
+        [
+            (CourseKind::Easy, "Easy Person"),
+            (CourseKind::Normal, "Team"),
+            (CourseKind::Hard, "Hard Person"),
+            (CourseKind::Oni, "Oni Person"),
+        ]
+    );
+    // Unnumbered before the courses: every course's.
+    let song = courses(
+        "MAKER:Team\nNOTESDESIGNER:Everyone\nNOTESDESIGNER4:Ura Person\n",
+        &[("Oni", ""), ("Edit", "")],
+    );
+    assert_eq!(
+        charters(&song),
+        [
+            (CourseKind::Oni, "Everyone"),
+            (CourseKind::Edit, "Ura Person")
+        ]
+    );
+    assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+    // A course number there is no course for.
+    let song = courses("NOTESDESIGNER7:Nobody\n", &[("Oni", "")]);
+    assert!(song.warnings.iter().any(|w| w.contains("NOTESDESIGNER7")));
+}
+
+#[test]
+fn level_is_kept_apart_from_the_course_name() {
+    let song = courses(
+        "",
+        &[
+            ("Oni", "LEVEL:9.5\n"),
+            ("Hard", "LEVEL:7\n"),
+            ("Normal", "LEVEL:lots\n"),
+            ("Easy", ""),
+        ],
+    );
+    let got: Vec<(&str, Option<f32>, u32)> = song
+        .courses
+        .iter()
+        .map(|c| (c.map.meta.version.as_str(), c.map.meta.level, c.level))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("Easy", None, 0),
+            ("Normal", None, 0),
+            ("Hard", Some(7.0), 7),
+            ("Oni", Some(9.5), 9),
+        ]
     );
 }

@@ -104,7 +104,9 @@ fn a_tja_file_is_one_set_with_a_difficulty_per_course() {
         "easiest first, one entry per course"
     );
     let versions: Vec<&str> = tja.iter().map(|e| e.meta.version.as_str()).collect();
-    assert_eq!(versions, ["Easy ★2", "Oni ★8"]);
+    assert_eq!(versions, ["Easy", "Oni"], "the level isn't in the name");
+    let levels: Vec<Option<f32>> = tja.iter().map(|e| e.meta.level).collect();
+    assert_eq!(levels, [Some(2.0), Some(8.0)]);
     for e in &tja {
         assert_eq!(e.meta.title, "Regression TJA");
         assert_eq!(e.meta.artist, "Tester");
@@ -118,7 +120,7 @@ fn a_tja_file_is_one_set_with_a_difficulty_per_course() {
     let oni = s
         .library
         .iter()
-        .position(|e| e.meta.version == "Oni ★8")
+        .position(|e| e.meta.version == "Oni")
         .unwrap();
     assert_eq!(s.map_status(oni).map(|x| x.0), Some("TJA"));
     let map = beatmap::load(&s.library[oni].path).unwrap();
@@ -132,7 +134,7 @@ fn a_tja_file_is_one_set_with_a_difficulty_per_course() {
     let easy = s
         .library
         .iter()
-        .position(|e| e.meta.version == "Easy ★2")
+        .position(|e| e.meta.version == "Easy")
         .unwrap();
     assert_ne!(s.library[oni].hash(), s.library[easy].hash());
     let copy = put(
@@ -174,7 +176,7 @@ fn a_tja_play_stays_on_this_computer() {
     let oni = s
         .library
         .iter()
-        .position(|e| e.meta.version == "Oni ★8")
+        .position(|e| e.meta.version == "Oni")
         .unwrap();
     let path = s.library[oni].path.clone();
     s.select.select_path(&s.library, &path);
@@ -335,7 +337,7 @@ fn a_tja_play_goes_to_a_server_with_tja_boards_with_its_chart() {
     let oni = s
         .library
         .iter()
-        .position(|e| e.meta.version == "Oni ★8")
+        .position(|e| e.meta.version == "Oni")
         .unwrap();
     let hash = s.library[oni].hash();
     let path = s.library[oni].path.clone();
@@ -409,7 +411,7 @@ fn an_admin_clears_the_selected_tja_course_s_board() {
     let oni = s
         .library
         .iter()
-        .position(|e| e.meta.version == "Oni ★8")
+        .position(|e| e.meta.version == "Oni")
         .unwrap();
     let hash = s.library[oni].hash();
     let path = s.library[oni].path.clone();
@@ -619,4 +621,63 @@ fn lyrics_show_under_the_lane() {
     assert!(!shows(&drawn_at(text, 1500.0).1, "Sing along"));
     assert!(shows(&drawn_at(text, 2500.0).1, "Sing along"));
     assert!(!shows(&drawn_at(text, 4500.0).1, "Sing along"), "cleared");
+}
+
+/// A TJA course shows its charter's LEVEL where maps show their star rating (as it was written:
+/// "10", "1.5"), and by difficulty the list goes by it, whatever the star rating says.
+#[test]
+fn a_tja_course_shows_and_sorts_by_its_level() {
+    let f = Folders::new("level");
+    let chart = |title: &str, level: &str| {
+        format!(
+            "TITLE:{title}\nBPM:120\nWAVE:song.ogg\nCOURSE:Oni\nLEVEL:{level}\n#START\n1,\n#END\n"
+        )
+    };
+    put(&f.tja, "Top", "top.tja", &chart("Top Level", "10"));
+    put(&f.tja, "Low", "low.tja", &chart("Low Level", "1.5"));
+    let (mut s, mut now) = client(&f, config());
+    refresh(&mut s, &mut now);
+    let top = s
+        .library
+        .iter()
+        .position(|e| e.meta.title == "Top Level")
+        .unwrap();
+    let low = s
+        .library
+        .iter()
+        .position(|e| e.meta.title == "Low Level")
+        .unwrap();
+    // Star ratings the other way round from the levels.
+    let rated = |i: usize| (if i == top { 0.5 } else { 9.25 }) as f32;
+    let mut info = vec![None; s.library.len()];
+    for i in [top, low] {
+        info[i] = Some(crate::mapinfo::Info {
+            stars: rated(i),
+            length_ms: 60_000.0,
+            bpm: 120.0,
+        });
+    }
+    s.select.info = Some(std::sync::Arc::new(std::sync::Mutex::new(info)));
+    s.select.set_sort(ui::SortMode::Difficulty, &s.library);
+    let order: Vec<usize> = s.select.songs().into_iter().flatten().collect();
+    assert_eq!(order, [low, top], "by level, not by star rating");
+    // Both open, so each shows its own row.
+    let mut c = Canvas {
+        audit: true,
+        ..Canvas::default()
+    };
+    c.clear(853.3);
+    s.select
+        .draw(&mut c, &s.library, 16.0, "", &|i| Some(rated(i)), &|_| None);
+    let pills: Vec<&str> = c
+        .texts
+        .iter()
+        .map(|t| t.1.as_str())
+        .filter(|t| t.parse::<f32>().is_ok())
+        .collect();
+    assert!(pills.contains(&"10") && pills.contains(&"1.5"), "{pills:?}");
+    assert!(
+        !pills.iter().any(|p| *p == "0.50" || *p == "9.25"),
+        "no star rating for them: {pills:?}"
+    );
 }
