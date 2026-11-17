@@ -1,5 +1,5 @@
-//! Moving the playfield by hand in the preview (F4 Effects, .tko maps): a drag moves it (Shift
-//! held while it moves keeps it on one axis), with Shift pressed first it turns, with Ctrl it
+//! Moving the playfield by hand in the preview (F4 Effects, .tko maps): a drag moves it (with
+//! Shift held, at the press or later, only along one axis), with Alt it turns, with Ctrl it
 //! zooms, and each writes keys at the playhead, the way an
 //! animation program records what is done to a picture. The keys go on the playfield's own
 //! tracks (the Keyframes page edits them too) and show as diamonds over the clip rows, where a
@@ -108,15 +108,15 @@ impl View {
             let hint: &[&str] = if self.picked_layer().is_some() {
                 &[
                     "drag: place it",
-                    "then Shift: straight",
-                    "Shift first: turn",
+                    "Shift: straight",
+                    "Alt: turn",
                     "Ctrl: size",
                 ]
             } else {
                 &[
                     "drag: move",
-                    "then Shift: straight",
-                    "Shift first: turn",
+                    "Shift: straight",
+                    "Alt: turn",
                     "Ctrl: zoom",
                     "(keys at the playhead)",
                 ]
@@ -175,7 +175,7 @@ impl View {
         if !self.gizmo_on() || !inside(self.layout.preview, x, y) {
             return false;
         }
-        let grip = if keys.shift {
+        let grip = if keys.alt {
             Grip::Turn
         } else if keys.ctrl {
             Grip::Zoom

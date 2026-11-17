@@ -6626,21 +6626,21 @@ mod tests {
     }
 
     #[test]
-    fn shift_turns_and_ctrl_zooms_the_preview() {
+    fn alt_turns_and_ctrl_zooms_the_preview() {
         let mut v = clips_view();
         v.set_time(3000.0);
         let t = v.ed.snapped(3000.0);
-        let shift = Keys {
-            shift: true,
+        let alt = Keys {
+            alt: true,
             ..Keys::default()
         };
         // Pressed right of the target and taken below it: a quarter turn.
         let [fx, _, fw, fh] = v.layout.preview;
         let (px, py) = v.pivot_in_preview();
         let r = (fw.min(fh) / 4.0).min(fx + fw - px - 1.0);
-        v.mouse_down(px + r, py, shift, None);
-        v.mouse_move(px, py + r, shift);
-        v.mouse_up(px, py + r, shift);
+        v.mouse_down(px + r, py, alt, None);
+        v.mouse_move(px, py + r, alt);
+        v.mouse_up(px, py + r, alt);
         assert!((field(&v, FieldProp::Rotation, t) - 90.0).abs() <= 1.0);
         assert_eq!(field(&v, FieldProp::X, t), 0.0, "turning doesn't move it");
         let ctrl = Keys {
@@ -6652,6 +6652,26 @@ mod tests {
             (field(&v, FieldProp::Zoom, t) - 2.0).abs() < 0.02,
             "up 60 doubles it"
         );
+    }
+
+    #[test]
+    fn shift_drag_moves_the_preview_straight_and_doesnt_turn_it() {
+        let mut v = clips_view();
+        v.set_time(3000.0);
+        let t = v.ed.snapped(3000.0);
+        let k = v.layout.preview[2] / crate::video::FRAME_VW;
+        let shift = Keys {
+            shift: true,
+            ..Keys::default()
+        };
+        gizmo_drag_by(&mut v, 12.0 * k, 35.0 * k, shift);
+        assert_eq!(
+            field(&v, FieldProp::Rotation, t),
+            0.0,
+            "Shift no longer turns"
+        );
+        assert_eq!(field(&v, FieldProp::X, t), 0.0, "straight down");
+        assert!((field(&v, FieldProp::Y, t) - 35.0).abs() <= 1.0);
     }
 
     #[test]
