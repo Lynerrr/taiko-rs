@@ -630,6 +630,79 @@ fn scroll_value(arg: &str) -> Option<f64> {
     }
 }
 
+/// A number as OpenTaiko writes positions: real (`5`), imaginary (`3i`, `-i`) or both
+/// (`5-3i`), as (real, imaginary).
+fn complex_value(arg: &str) -> Option<(f64, f64)> {
+    let arg = arg.trim();
+    let Some(body) = arg.strip_suffix(['i', 'I']) else {
+        return arg
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite())
+            .map(|v| (v, 0.0));
+    };
+    let finite = |v: f64| v.is_finite().then_some(v);
+    let part = |s: &str| match s.trim() {
+        "" | "+" => Some(1.0),
+        "-" => Some(-1.0),
+        s => s.parse::<f64>().ok().and_then(finite),
+    };
+    // Where the imaginary part starts: its sign, not one of an exponent.
+    let split = body
+        .char_indices()
+        .rev()
+        .filter(|&(i, c)| i > 0 && matches!(c, '+' | '-') && !body[..i].ends_with(['e', 'E']))
+        .map(|(i, _)| i)
+        .next();
+    match split {
+        Some(i) => Some((
+            body[..i].trim().parse::<f64>().ok().and_then(finite)?,
+            part(&body[i..])?,
+        )),
+        None => Some((0.0, part(body)?)),
+    }
+}
+
+/// Where `#JPOSSCROLL`s take the hit target over the song, right and down. As OpenTaiko plays
+/// them: in time order, each from where the last left it, and one cut short by the next goes only
+/// as far as it got.
+fn judge_tracks(moves: &mut [JudgeMove]) -> (Track, Track) {
+    moves.sort_by(|a, b| a.t.total_cmp(&b.t));
+    let (mut tx, mut ty) = (Track::default(), Track::default());
+    let (mut x, mut y) = (0.0, 0.0);
+    for i in 0..moves.len() {
+        let m = moves[i];
+        let dt = match moves.get(i + 1) {
+            Some(next) if m.dt > 0.0 && next.t - m.t < m.dt => (next.t - m.t).max(0.0),
+            _ => m.dt,
+        };
+        let rate = if m.dt > 0.0 { dt / m.dt } else { 1.0 };
+        let (to_x, to_y) = (x + m.dx * rate, y + m.dy * rate);
+        for (track, from, to) in [(&mut tx, x, to_x), (&mut ty, y, to_y)] {
+            track.set(Key {
+                t: m.t,
+                v: from,
+                ease: Ease::Linear,
+            });
+            track.set(Key {
+                t: m.t + dt,
+                v: to,
+                ease: Ease::Step,
+            });
+        }
+        (x, y) = (to_x, to_y);
+    }
+    // A way it never moves needs no track.
+    let still = |t: &Track| t.keys.iter().all(|k| k.v == 0.0);
+    if still(&tx) {
+        tx = Track::default();
+    }
+    if still(&ty) {
+        ty = Track::default();
+    }
+    (tx, ty)
+}
+
 /// A roll or balloon whose end (`8`) is still to come.
 struct OpenRoll {
     time: f64,
@@ -733,7 +806,24 @@ struct Drawing {
     by_beats: bool,
     notes: Vec<NoteMotion>,
     barlines: Vec<(f64, f64)>,
+    /// `#JPOSSCROLL`s as written, in virtual units.
+    moves: Vec<JudgeMove>,
+    /// `#LYRIC` lines.
+    lyrics: Vec<(f64, String)>,
 }
+
+/// One `#JPOSSCROLL`: from time `t`, the hit target moves (`dx`, `dy`) over `dt` ms, at an
+/// even pace.
+#[derive(Clone, Copy, Debug)]
+struct JudgeMove {
+    t: f64,
+    dt: f64,
+    dx: f64,
+    dy: f64,
+}
+
+/// OpenTaiko's pixels (of its 1280-wide screen) in this game's virtual units (853⅓ across).
+const JUDGE_PX: f64 = 2.0 / 3.0;
 
 impl Drawing {
     /// The lane's speed from here on.
@@ -756,9 +846,13 @@ impl Drawing {
         if !self.by_beats
             && self.notes.iter().all(plain)
             && self.barlines.iter().all(|b| b.1 >= 0.0)
+            && self.moves.is_empty()
+            && self.lyrics.is_empty()
         {
             return None;
         }
+        let (judge_x, judge_y) = judge_tracks(&mut self.moves);
+        self.lyrics.sort_by(|a, b| a.0.total_cmp(&b.0));
         // A negative #DELAY can set later notes before earlier ones.
         self.notes.sort_by(|a, b| a.t.total_cmp(&b.t));
         self.barlines.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -772,6 +866,9 @@ impl Drawing {
                 map_clock: true,
                 notes: self.notes,
                 barlines: self.barlines,
+                judge_x,
+                judge_y,
+                lyrics: self.lyrics,
             },
             ..Default::default()
         })
@@ -808,6 +905,8 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         by_beats: false,
         notes: Vec::new(),
         barlines: Vec::new(),
+        moves: Vec::new(),
+        lyrics: Vec::new(),
     };
     drawing.key(&cur);
 
@@ -990,6 +1089,36 @@ fn apply(
             drawing.by_beats |= cur.mode != ScrollMode::Normal;
             drawing.key(cur);
         }
+        "JPOSSCROLL" => {
+            let mut parts = arg.split_whitespace();
+            let dt = parts
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite());
+            let d = parts.next().and_then(complex_value);
+            // Direction 0 (the default) moves it the way notes go, the other way from what is
+            // written.
+            let side = match parts.next().map(str::parse::<i64>) {
+                Some(Ok(0)) | None => -1.0,
+                Some(Ok(_)) => 1.0,
+                Some(Err(_)) => {
+                    warnings.add(format!("#JPOSSCROLL {arg}: not a direction, ignored"));
+                    return;
+                }
+            };
+            match (dt, d) {
+                (Some(dt), Some((dx, dy))) => drawing.moves.push(JudgeMove {
+                    t: cur.time,
+                    dt: (dt * 1000.0).max(0.0),
+                    dx: side * dx * JUDGE_PX,
+                    dy: side * dy * JUDGE_PX,
+                }),
+                _ => warnings.add(format!(
+                    "#JPOSSCROLL {arg}: not a time and a distance, ignored"
+                )),
+            }
+        }
+        "LYRIC" => drawing.lyrics.push((cur.time, arg.to_string())),
         "SUDDEN" => {
             let mut parts = arg
                 .split_whitespace()

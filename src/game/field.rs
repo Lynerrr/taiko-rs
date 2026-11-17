@@ -663,11 +663,17 @@ impl Play {
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w, lane, mods);
         // A .tko map's moving drum: the hit target slides along a straight lane and everything
         // on the lane goes with it, so notes still meet it on time.
+        // A TJA chart's #JPOSSCROLL moves it either way, and up or down, the same way.
+        let (judge_x, judge_y) = match (&rail, self.game.tko()) {
+            (None, Some(rt)) => rt.judge(vt),
+            _ => (0.0, 0.0),
+        };
         let drum = if rail.is_none() {
-            tko_fx.drum.clamp(0.0, (lane_len - 2.0 * BIG_R).max(0.0))
+            tko_fx.drum.clamp(0.0, (lane_len - 2.0 * BIG_R).max(0.0)) + judge_x as f32
         } else {
             0.0
         };
+        let drum_y = judge_y as f32;
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
         // left edge (the drum) along the lane, with room for the judgements.
         let (band_top, band_h) = lane_band();
@@ -1912,8 +1918,8 @@ impl Play {
             }
         }
 
-        if drum > 0.0 {
-            c.transform_since(lane_shapes, [0.0, 0.0], 1.0, drum, 0.0);
+        if drum != 0.0 || drum_y != 0.0 {
+            c.transform_since(lane_shapes, [0.0, 0.0], 1.0, drum, drum_y);
         }
 
         // Flashlight / Spotlight / Blackout: dark everywhere but a circle around the drum.
@@ -2027,7 +2033,7 @@ impl Play {
                         * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
                     upright.push((
                         HIT_X + drum,
-                        LANE_Y - h / 2.0 - age * 0.02,
+                        LANE_Y + drum_y - h / 2.0 - age * 0.02,
                         h,
                         rgba(self.view.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
                         Upright::Image(sprite),
@@ -2035,7 +2041,7 @@ impl Play {
                 } else {
                     texts.push((
                         HIT_X + drum,
-                        lane_top - 30.0 - age * 0.02,
+                        lane_top + drum_y - 30.0 - age * 0.02,
                         15.0,
                         rgba(
                             self.view.hud.colour(Part::Judgements).unwrap_or(j.color()),
@@ -2217,6 +2223,13 @@ impl Play {
             if angle != 0.0 || zoom != 1.0 || dest != pivot {
                 c.rotate_since(from, pivot, angle, zoom, dest);
             }
+        }
+        // A TJA chart's #LYRIC line, under the lane where the playfield usually is, upright
+        // whatever moves it.
+        if let Some(line) = self.game.tko().and_then(|rt| rt.lyric(vt)) {
+            let y = band_top + band_h + LYRIC_GAP;
+            c.text_centered(w / 2.0 + 1.0, y + 1.0, LYRIC_SIZE, rgba(0, 0.8), line);
+            c.text_centered(w / 2.0, y, LYRIC_SIZE, rgba(WHITE, 1.0), line);
         }
         let [x0, y0, x1, y1] = local_zone;
         let (x0, x1) = (flip_x(x0).min(flip_x(x1)), flip_x(x0).max(flip_x(x1)));
@@ -3359,6 +3372,9 @@ pub(super) fn lane_stretch(rail: bool, len: f32, w: f32) -> f64 {
 
 /// How far ahead (ms) notes are looked for under a shared scroll, which may hold far notes near.
 pub(super) const SHARED_LOOKAHEAD_MS: f64 = 30_000.0;
+/// A TJA chart's lyrics: their size, and how far under the lane band they sit.
+const LYRIC_SIZE: f32 = 13.0;
+const LYRIC_GAP: f32 = 6.0;
 
 /// Pulse / Stutter's time shift of far notes at map time `t` (see `Scroll::warp`): Pulse makes
 /// them jump forward on each beat, Stutter hold, then catch up.

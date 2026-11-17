@@ -251,14 +251,10 @@ fn a_branch_section_without_master_plays_expert() {
 
 #[test]
 fn unknown_things_are_warnings() {
-    let song = parse(&chart(
-        120.0,
-        "#JPOSSCROLL 1 100 0\n1C2F,\n#WHATEVER\nBALLOON:3\n1,",
-    ))
-    .unwrap();
+    let song = parse(&chart(120.0, "#BGAON 1 0\n1C2F,\n#WHATEVER\nBALLOON:3\n1,")).unwrap();
     let c = &song.courses[0];
     close(&times(c), &[0.0, 1000.0, 2000.0]);
-    for w in ["#JPOSSCROLL", "bombs", "ADLib", "#WHATEVER", "header line"] {
+    for w in ["#BGAON", "bombs", "ADLib", "#WHATEVER", "header line"] {
         assert!(
             song.warnings.iter().any(|x| x.contains(w)),
             "{w}: {:?}",
@@ -773,4 +769,73 @@ fn scroll_gimmicks_leave_the_board_as_it_is() {
         assert_eq!(board.hash(), c.hash, "{extra}");
         assert!(c.map.gimmick.is_some(), "{extra}");
     }
+}
+
+#[test]
+fn complex_numbers_read_as_opentaiko_writes_them() {
+    assert_eq!(complex_value("5"), Some((5.0, 0.0)));
+    assert_eq!(complex_value("-10i"), Some((0.0, -10.0)));
+    assert_eq!(complex_value("5-3i"), Some((5.0, -3.0)));
+    assert_eq!(complex_value("-2+1i"), Some((-2.0, 1.0)));
+    assert_eq!(complex_value("1e2+i"), Some((100.0, 1.0)));
+    assert_eq!(complex_value("2e-1-i"), Some((0.2, -1.0)));
+    assert_eq!(complex_value("x"), None);
+    assert_eq!(complex_value("inf"), None);
+}
+
+#[test]
+fn jposscroll_moves_the_hit_target_at_an_even_pace() {
+    // 240 BPM: bars of 1000 ms. OpenTaiko's 30 px are 20 virtual units here.
+    let c = one(&chart(
+        240.0,
+        "#JPOSSCROLL 0.5 30 1\n1,\n#JPOSSCROLL 0 -30i 1\n1,\n#JPOSSCROLL 2 15 0\n1,\n#JPOSSCROLL 0 0 1\n1,",
+    ));
+    let m = motion(&c).expect("a gimmick");
+    let at = |t: f64| {
+        let (x, y) = m.judge_at(t);
+        ((x * 1000.0).round() / 1000.0, (y * 1000.0).round() / 1000.0)
+    };
+    assert_eq!(at(-100.0), (0.0, 0.0));
+    assert_eq!(at(250.0), (10.0, 0.0), "half way");
+    assert_eq!(at(900.0), (20.0, 0.0));
+    // At once, and up: an imaginary distance moves it vertically.
+    assert_eq!(at(1000.0), (20.0, -20.0));
+    // Direction 0 goes the other way; cut short by the next move after half its time.
+    assert_eq!(at(2500.0), (17.5, -20.0));
+    assert_eq!(at(3000.0), (15.0, -20.0));
+    assert_eq!(at(9000.0), (15.0, -20.0), "it stays where the cut left it");
+    assert!(
+        parse(&chart(240.0, "#JPOSSCROLL 1 30 1\n1,"))
+            .unwrap()
+            .warnings
+            .is_empty()
+    );
+}
+
+#[test]
+fn lyrics_show_from_their_time_until_the_next() {
+    let c = one(&chart(
+        120.0,
+        "#LYRIC Hello world\n1,\n#LYRIC 歌詞\n1,\n#LYRIC\n1,",
+    ));
+    let m = motion(&c).expect("a gimmick");
+    assert_eq!(m.lyric_at(-1.0), None);
+    assert_eq!(m.lyric_at(0.0), Some("Hello world"));
+    assert_eq!(m.lyric_at(2500.0), Some("歌詞"));
+    assert_eq!(m.lyric_at(4000.0), None, "an empty one clears it");
+}
+
+#[test]
+fn judge_moves_and_lyrics_leave_the_board_as_it_is() {
+    let body = "1020,\n#BPMCHANGE 200\n1111,\n5008,";
+    let base = one(&chart(150.0, body));
+    let c = one(&chart(
+        150.0,
+        &format!("#JPOSSCROLL 1 100+20i 1\n#LYRIC la la\n{body}"),
+    ));
+    assert_eq!(c.hash, base.hash);
+    assert_eq!(
+        BoardChart::of(c.kind, &c.map),
+        BoardChart::of(base.kind, &base.map)
+    );
 }

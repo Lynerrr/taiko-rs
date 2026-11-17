@@ -1354,6 +1354,17 @@ impl Runtime {
         self.holds
     }
 
+    /// How far the hit target has moved at game time `t`, right and down (`#JPOSSCROLL`).
+    #[inline]
+    pub fn judge(&self, t: f64) -> (f64, f64) {
+        self.gimmick.motion.judge_at(t - self.shift)
+    }
+
+    /// The line of text shown under the lane at game time `t` (`#LYRIC`).
+    pub fn lyric(&self, t: f64) -> Option<&str> {
+        self.gimmick.motion.lyric_at(t - self.shift)
+    }
+
     /// The game time note `i` is drawn as of at game time `t`: earlier than `t` while it
     /// waits to start moving (`#SUDDEN`), where it will be once it does; None while it moves.
     pub fn note_waits(&self, i: usize, t: f64) -> Option<f64> {
