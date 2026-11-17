@@ -27,6 +27,7 @@ mod map_delete;
 mod network;
 mod phone;
 mod pointer;
+mod preview_reach;
 mod scoring;
 mod screens;
 mod secrets;
