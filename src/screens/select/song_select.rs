@@ -414,8 +414,13 @@ impl Screen for SongSelect {
                     let start = canvas.shapes.len();
                     // The way to the leaderboard is where the way back is on the board (its
                     // header's top right), so the mouse stays put going back and forth.
-                    let label = tr!("Leaderboard >", "ランキング >", "Рейтинг >");
-                    let bw = Canvas::text_width(7.0, label) + 24.0;
+                    let label = tr!("Leaderboard", "ランキング", "Рейтинг");
+                    let legacy_label = format!("{label} >");
+                    let bw = if state.select.legacy {
+                        Canvas::text_width(7.0, &legacy_label) + 24.0
+                    } else {
+                        style::icon_button_width(label, None, 7.0)
+                    };
                     state.preview.title_room = bw + 10.0;
                     if let Some(clip) = state.preview.draw_panel(
                         canvas,
@@ -463,7 +468,21 @@ impl Screen for SongSelect {
                     // bar room (`board_tabs`, inside `pw - 28`).
                     let (bx, by) = (x - t * step + pw - 18.0 - bw, panel_top + 10.0);
                     let hit = hit::Hit::BoardPage;
-                    canvas.button(bx, by, bw, 20.0, label, 7.0, hit, false);
+                    if state.select.legacy {
+                        canvas.button(bx, by, bw, 20.0, &legacy_label, 7.0, hit, false);
+                    } else {
+                        let at = [bx + 6.0, by + 10.0];
+                        style::icon_button(
+                            canvas,
+                            at,
+                            &style::PODIUM,
+                            label,
+                            None,
+                            7.0,
+                            false,
+                            hit,
+                        );
+                    }
                     canvas.clip_since(start, clip[0], clip[1], clip[2], clip[3]);
                 } else {
                     state.preview.hide_panel();
@@ -549,34 +568,63 @@ impl Screen for SongSelect {
                     tr!("Play", "プレイ", "Играть")
                 };
                 let mods = &state.select.mods_label;
-                let mods_label = if mods.is_empty() {
-                    tr!("Mods", "Mod", "Моды").to_string()
-                } else {
-                    format!("{}: {mods}", tr!("Mods", "Mod", "Моды"))
-                };
-                let random = tr!("Random", "ランダム", "Случайная");
-                // (label, hit, lit, share of the width). The Legacy layout has Mods on top.
-                let mut buttons = vec![
-                    (
-                        mods_label.as_str(),
-                        hit::Hit::ModsButton,
-                        !mods.is_empty(),
-                        1.0,
-                    ),
-                    (random, hit::Hit::Key(KeyCode::F2), false, 1.0),
-                    (play, hit::Hit::Key(KeyCode::Enter), true, 1.3),
-                ];
+                let (by, bh) = (panel_end - PAGE_BUTTON_H, PAGE_BUTTON_H);
                 if state.select.legacy {
-                    buttons.drain(..2);
-                }
-                let total: f32 = buttons.iter().map(|b| b.3).sum();
-                let unit = (panel_w - 8.0 * (buttons.len() as f32 - 1.0)) / total;
-                let (mut bx, by) = (panel_x, panel_end - PAGE_BUTTON_H);
-                for (label, hit, lit, share) in buttons {
-                    let bw = unit * share;
-                    let label = Canvas::fit(8.0, bw - 12.0, label);
-                    canvas.button(bx, by, bw, PAGE_BUTTON_H, &label, 8.0, hit, lit);
-                    bx += bw + 8.0;
+                    // The Legacy layout keeps its one button.
+                    let label = Canvas::fit(8.0, panel_w - 12.0, play);
+                    let hit = hit::Hit::Key(KeyCode::Enter);
+                    canvas.button(panel_x, by, panel_w, bh, &label, 8.0, hit, true);
+                } else {
+                    // The main menu's look: Mods and Random as bare icons, Play as the end of
+                    // the lane they sit on, lit and running off the screen.
+                    let play_x = panel_x + panel_w - (panel_w * 0.32).max(96.0);
+                    let mid = by + bh / 2.0;
+                    let mods_word = tr!("Mods", "Mod", "Моды");
+                    // The mods that are on, two letters each, after the word.
+                    let on: Vec<&str> = (0..mods.len() / 2)
+                        .filter_map(|i| mods.get(i * 2..i * 2 + 2))
+                        .collect();
+                    let mods_label = if on.is_empty() {
+                        mods_word.to_string()
+                    } else {
+                        format!("{mods_word} {}", on.join(" "))
+                    };
+                    let mut bx = panel_x + 6.0;
+                    let room = play_x - bx - style::icon_button_width("", None, 8.0) - 6.0;
+                    let mods_label = Canvas::fit(8.0, room, &mods_label);
+                    bx += style::icon_button(
+                        canvas,
+                        [bx, mid],
+                        &style::SPARK,
+                        &mods_label,
+                        None,
+                        8.0,
+                        !mods.is_empty(),
+                        hit::Hit::ModsButton,
+                    );
+                    let random = tr!("Random", "ランダム", "Случайная");
+                    if bx + 16.0 + style::icon_button_width(random, None, 8.0) < play_x {
+                        // The menu's small mark between two notes.
+                        canvas.rect(bx + 3.0, mid - 2.0, 4.0, 4.0, render::rgba(0x6a6a88, 0.8));
+                        style::icon_button(
+                            canvas,
+                            [bx + 16.0, mid],
+                            &style::DICE,
+                            random,
+                            None,
+                            8.0,
+                            false,
+                            hit::Hit::Key(KeyCode::F2),
+                        );
+                    }
+                    let hit = hit::Hit::Key(KeyCode::Enter);
+                    style::lane_end_button(
+                        canvas,
+                        "select-play",
+                        [play_x, by - 2.0, bh + 4.0],
+                        play,
+                        hit,
+                    );
                 }
                 // The song list's right edge: the gap between the list's box (`ui`, ending
                 // at 28 + lw) and the panel (from 36 + lw), the grip in its middle.
