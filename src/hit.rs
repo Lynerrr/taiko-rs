@@ -47,7 +47,7 @@ pub enum Hit {
     Music(crate::player::Control),
     MusicBar,
     /// The player: its search box, a song (index into the list's tracks), its `+`, a row of the
-    /// queue, the volume, a speed mod (`player::Speed::ALL`) and the pitch (resets it).
+    /// queue, the volume, Daycore, the speed (back to 1x) and keeping the pitch.
     PlayerSearch,
     PlayerRow(usize),
     /// Its heart on a song, the folders button, and a folder (index into `Playlist::folders`).
@@ -55,19 +55,20 @@ pub enum Hit {
     /// A screenshot in the chat (`shots::shot_in`), and the button that sends one.
     ChatShot(u128),
     SendShot,
+    /// A run of medal lines in the chat: opens or closes it (`Social::toggle_medal_run`).
+    ChatMedals(u64),
     /// Song select's heart on the song it's showing.
     SelectLike,
     /// The song preview's autoplay box, seek graph and play button. It only marks the preview as
     /// the topmost thing there, so whatever is drawn over it takes the click instead.
     Preview,
     /// A phone's speed panel: opens it, closes it, moves the speed by hundredths or sets it, flips
-    /// keeping the pitch, moves the pitch by semitones.
+    /// keeping the pitch.
     RateOpen,
     RateClose,
     RateStep(i32),
     RateSet(i32),
     RateKeepPitch,
-    PitchStep(i32),
     /// The upright player: the list comes up or goes.
     PlayerList,
     /// A phone's song select: slides between the preview and the leaderboard.
@@ -77,8 +78,9 @@ pub enum Hit {
     PlayerQueue(usize),
     PlayerUnqueue(usize),
     PlayerVolume,
-    PlayerSpeed(usize),
-    PlayerPitch,
+    PlayerDaycore,
+    PlayerRate,
+    PlayerKeepPitch,
     /// A row of the song list (index into its visible list): a difficulty, or a song's own row
     /// (pointing at its first difficulty).
     SongRow(usize),
@@ -115,8 +117,15 @@ pub enum Hit {
     /// A download tab result row / its Download button.
     DlRow(usize),
     DlGet(usize),
-    /// Song select: next sort mode / open the collection list / a row of that list.
+    /// Song select: the sort and filter panel (on a phone, the sort list) / open the collection
+    /// list / a row of that list.
     SortList,
+    /// Something in song select's sort and filter panel.
+    Lens(crate::ui::LensItem),
+    /// A source tab over song select's list (`ui::Source::ALL` index).
+    SongSource(usize),
+    /// A filter's token in song select's search box: takes the filter off.
+    LensToken(crate::ui::Token),
     CollectionPick,
     PickRow(usize),
     /// The "..." on a collection's row: what can be done with it.

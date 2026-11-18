@@ -165,12 +165,12 @@ impl View {
             rgba(0xffffff, 1.0),
             tr!("What's new", "更新内容", "Что нового"),
         );
-        let about = match (self.after_update, crate::update::BUILD) {
+        let about = match (self.after_update, crate::update::this_build()) {
             (true, Some(b)) => {
-                tr!("updated to {}", "{}に更新しました", "обновлено до {}"; [crate::update::short(b)] [])
+                tr!("updated to {}", "{}に更新しました", "обновлено до {}"; [b] [])
             }
             (false, Some(b)) => {
-                tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; [crate::update::short(b)] [])
+                tr!("this build: {}", "このビルド: {}", "эта сборка: {}"; [b] [])
             }
             (_, None) => tr!(
                 "a local build: the latest changes",

@@ -377,6 +377,10 @@ pub struct Runtime {
     /// Per group: its approach path laid out, if it has one.
     /// The shared scroll, summed up; None when the map has none.
     scroll: Option<Arc<ScrollTable>>,
+    /// Per note: how it is drawn moving (`Gimmick::motion`), when the gimmick says.
+    motion_of: Vec<Option<super::gimmick::NoteMotion>>,
+    /// Some of them wait to start moving.
+    holds: bool,
     paths: Vec<Option<PathTable>>,
 }
 
@@ -455,6 +459,13 @@ impl Runtime {
             })
             .collect();
         let above_of = times.iter().map(|&t| gimmick.is_above(t)).collect();
+        let motion_of: Vec<Option<super::gimmick::NoteMotion>> = times
+            .iter()
+            .map(|&t| gimmick.motion.note_at(t).copied())
+            .collect();
+        let holds = motion_of
+            .iter()
+            .any(|m| m.is_some_and(|m| m.wait.is_finite()));
         let fake_above = gimmick
             .fakes
             .iter()
@@ -518,6 +529,8 @@ impl Runtime {
             fake_group_of,
             above_of,
             fake_above,
+            motion_of,
+            holds,
         };
         rt.rebuild(false);
         rt
@@ -1258,7 +1271,42 @@ impl Runtime {
     /// from the drum, and how far it is off the lane onto the path. None off any path.
     #[inline]
     pub fn note_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
+        // A TJA note coming in some other way than along the lane: straight from it, as far as
+        // it is along the lane.
+        if let Some([dx, dy]) = self.motion_of.get(i).copied().flatten().and_then(|m| m.dir) {
+            return Some([s * dx as f32, s * dy as f32, 1.0]);
+        }
         self.path_of(self.group_of(i)?, t, s, lane)
+    }
+
+    /// The way note `i` comes in, when not along the lane (a TJA chart's complex `#SCROLL` or
+    /// `#DIRECTION`): a unit vector from the drum, right and down.
+    #[inline]
+    pub fn note_dir(&self, i: usize) -> Option<[f64; 2]> {
+        self.motion_of.get(i).copied().flatten()?.dir
+    }
+
+    /// Note `i` scrolls by its own time, not with the shared scroll (see `NoteMotion::timed`).
+    #[inline]
+    pub fn note_timed(&self, i: usize) -> bool {
+        self.motion_of
+            .get(i)
+            .copied()
+            .flatten()
+            .is_some_and(|m| m.timed)
+    }
+
+    /// The barline at map time `time` scrolls by its own time (see `Motion::timed_barlines`).
+    #[inline]
+    pub fn barline_timed(&self, time: f64) -> bool {
+        self.gimmick.motion.barline_timed(time - self.shift)
+    }
+
+    /// The way the barline at map time `time` comes in, when not along the lane (a TJA chart's
+    /// complex `#SCROLL` or `#DIRECTION`): a unit vector from the drum, right and down.
+    #[inline]
+    pub fn barline_dir(&self, time: f64) -> Option<[f64; 2]> {
+        self.gimmick.motion.barline_dir(time - self.shift)
     }
 
     fn path_of(&self, gi: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
@@ -1312,10 +1360,54 @@ impl Runtime {
         let gi = self.group_of(i);
         let above = self.above_of.get(i).copied().unwrap_or(false);
         let fx = Self::lifted(self.fx_of(gi, n.time, t, above), above);
-        if n.class == NoteClass::Long {
-            return fx;
+        let fx = if n.class == NoteClass::Long {
+            fx
+        } else {
+            self.with_lie(fx, gi, n.class == NoteClass::Kat, n.big, n.time, t)
+        };
+        if self.unshown(i, t) {
+            return Some(NoteFx {
+                hidden: true,
+                ..fx.unwrap_or_default()
+            });
         }
-        self.with_lie(fx, gi, n.class == NoteClass::Kat, n.big, n.time, t)
+        fx
+    }
+
+    /// Note `i` isn't drawn yet at game time `t`, by its motion (`#SUDDEN`).
+    fn unshown(&self, i: usize, t: f64) -> bool {
+        let (Some(Some(m)), Some(n)) = (self.motion_of.get(i), self.notes.get(i)) else {
+            return false;
+        };
+        (m.hide_long && n.class == NoteClass::Long) || t - self.shift < n.time - m.show
+    }
+
+    /// Some notes wait to start moving (`#SUDDEN`), on the lane long before they would have
+    /// scrolled onto it.
+    #[inline]
+    pub fn holds_notes(&self) -> bool {
+        self.holds
+    }
+
+    /// How far the hit target has moved at game time `t`, right and down (`#JPOSSCROLL`).
+    #[inline]
+    pub fn judge(&self, t: f64) -> (f64, f64) {
+        self.gimmick.motion.judge_at(t - self.shift)
+    }
+
+    /// The line of text shown under the lane at game time `t` (`#LYRIC`).
+    pub fn lyric(&self, t: f64) -> Option<&str> {
+        self.gimmick.motion.lyric_at(t - self.shift)
+    }
+
+    /// The game time note `i` is drawn as of at game time `t`: earlier than `t` while it
+    /// waits to start moving (`#SUDDEN`), where it will be once it does; None while it moves.
+    pub fn note_waits(&self, i: usize, t: f64) -> Option<f64> {
+        let (Some(Some(m)), Some(n)) = (self.motion_of.get(i), self.notes.get(i)) else {
+            return None;
+        };
+        let start = n.time - m.wait;
+        (n.class != NoteClass::Long && t - self.shift < start).then_some(start + self.shift)
     }
 
     /// `fx` of a note drawn over every effect (`above`) says so, even when nothing moves it.

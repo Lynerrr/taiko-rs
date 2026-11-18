@@ -1908,6 +1908,42 @@ fn tko_game(gimmick: Option<crate::tko::gimmick::Gimmick>, mods: Mods) -> Play {
     Play::new(Game::with_seed(map, track, None, mods, 42))
 }
 
+/// A .tko map's drum moved right: a note that passed it unhit goes on left of it to the panel,
+/// like it does past a drum in its home place, rather than vanishing in the open lane where the
+/// home place's cut would have been.
+#[test]
+fn a_moved_drum_lets_passed_notes_go_on_to_the_left() {
+    use crate::tko::gimmick::FieldProp;
+    use crate::tko::track::{Ease, Key};
+    let mut gm = crate::tko::gimmick::Gimmick::default();
+    gm.key_field(
+        FieldProp::Drum,
+        Key {
+            t: 0.0,
+            v: 300.0,
+            ease: Ease::Linear,
+        },
+    );
+    let mut g = tko_game(Some(gm), Mods::NONE);
+    // The calibration map's notes go 0.392 units a ms: the one at 4000, unhit, is 250 units past
+    // the drum at 4637.8 (191 is where a drum in its home place cuts notes off).
+    g.put_at(4637.8);
+    let mut c = Canvas::default();
+    c.clear(853.3);
+    g.draw_playfield(&mut c, 1.0);
+    let xs: Vec<f32> = c
+        .shapes
+        .iter()
+        .filter(|s| (s.half[0] - NOTE_R).abs() < 0.5 && s.fill[3] > 0.3)
+        .map(|s| s.center[0])
+        .collect();
+    let past = HIT_X + 300.0 - 250.0;
+    assert!(
+        xs.iter().any(|&x| (x - past).abs() < 1.0),
+        "the passed note, 250 units left of the moved drum: {xs:?}"
+    );
+}
+
 fn some_gimmick() -> crate::tko::gimmick::Gimmick {
     use crate::tko::gimmick::{FieldProp, Group, NoteProp};
     use crate::tko::track::{Ease, Key};

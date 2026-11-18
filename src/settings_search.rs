@@ -78,6 +78,7 @@ fn words(item: Item) -> &'static str {
             "color palette red blue цвет палитра красный синий"
         }
         Item::Language => "english japanese russian locale английский японский русский",
+        Item::TjaFolder => "tja taiko jiro opentaiko charts folder чарты папка",
         Item::SongsFolder | Item::ShowConverts => {
             "library beatmaps maps osu stable библиотека карты песни"
         }

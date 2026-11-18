@@ -1160,8 +1160,8 @@ impl State {
         let status_cache = setstatus::Cache::load();
         let custom_dir = config::custom_dir();
         library::add_own_root(&custom_dir);
-        select.sort = ui::SortMode::parse(&cfg.sort).unwrap_or(ui::SortMode::Artist);
-        select.headings = cfg.song_headings;
+        let tja_dir = crate::tja_maps::folder_for(cfg.tja_folder.as_deref());
+        select.read_lenses(&cfg);
         select.mods_label = cfg.mods.label();
         select.played = load_plays();
         let updater = update::Updater::new(cfg.check_updates);
@@ -1260,6 +1260,7 @@ impl State {
             songs_dir,
             map_bin: map_trash::Bin::for_game(),
             custom_dir,
+            tja_dir,
             installed_sets: None,
             lobby_lookup: Job::idle(),
             custom_move: Job::idle(),
@@ -1278,6 +1279,8 @@ impl State {
             resending: Default::default(),
             resend_at: Instant::now(),
             submit_keys: false,
+            tja_boards: false,
+            tja_lobby_files: false,
             session_play_ms: 0.0,
             last_key: (KeyCode::Escape, Instant::now()),
             retry_hold: None,

@@ -26,6 +26,8 @@ pub struct Entry {
     /// In taiko.rs's own custom maps folder (`is_own_map`): a taiko.rs map, whatever osu! set
     /// its file names.
     own: bool,
+    /// A TJA course (`song.tja#oni`): worked out once, song select asks for every map.
+    tja: bool,
 }
 
 impl Entry {
@@ -41,6 +43,7 @@ impl Entry {
         );
         Entry {
             own: is_own_map(&path),
+            tja: crate::tja_maps::is_course(&path),
             path,
             meta,
             size,
@@ -65,7 +68,8 @@ impl Entry {
     /// None for a map in taiko.rs's own custom maps folder: a custom map made from an osu! set
     /// keeps that set's IDs, but osu! has none of its difficulties.
     pub fn set_id(&self) -> Option<u32> {
-        if self.own {
+        // Nor for a TJA chart: its folder's name (`12345 Song`) isn't an osu! set's.
+        if self.own || self.tja {
             return None;
         }
         self.meta
@@ -78,21 +82,72 @@ impl Entry {
             .filter(|&id| id > 0)
     }
 
+    /// What song select groups its set by: the folder of an osu! or taiko.rs map (a set to a
+    /// folder), the chart file of a TJA course (a song to a file: a pack often keeps many songs'
+    /// `.tja` files in one folder).
+    pub fn set_key(&self) -> &Path {
+        match self.chart_file() {
+            Some(file) => file,
+            None => folder_of(&self.path),
+        }
+    }
+
+    /// The file it's read from: a TJA course's `.tja` (its path names no file), else its path.
+    pub fn file(&self) -> &Path {
+        self.chart_file().unwrap_or(&self.path)
+    }
+
+    /// A TJA course's chart file: its path up to the `#` before the course. Not kept apart, so
+    /// a library of many thousand maps isn't any bigger for it.
+    fn chart_file(&self) -> Option<&Path> {
+        if !self.tja {
+            return None;
+        }
+        let path = self.path.to_str()?;
+        path.rfind('#').map(|at| Path::new(&path[..at]))
+    }
+
     /// Whether it's in taiko.rs's own custom maps folder.
     pub fn is_own(&self) -> bool {
         self.own
     }
 
     pub fn hash(&self) -> u64 {
-        *self
-            .hash
-            .get_or_init(|| crate::net::map_hash(&std::fs::read(&self.path).unwrap_or_default()))
+        *self.hash.get_or_init(|| {
+            if self.is_tja() {
+                return crate::tja_maps::hash(&self.path);
+            }
+            crate::net::map_hash(&std::fs::read(&self.path).unwrap_or_default())
+        })
     }
+
+    /// A course of a TJA chart (`tja_maps`): played here only, never sent to the server.
+    pub fn is_tja(&self) -> bool {
+        self.tja
+    }
+}
+
+/// The folder `path` is in, as `Path::parent` has it: cut at the last separator, since
+/// `parent` takes the whole path apart into components and song select asks this of every row
+/// on each refilter (`Entry::set_key`). A file at the top of a drive or of `/` goes the long way.
+pub fn folder_of(path: &Path) -> &Path {
+    if let Some(s) = path
+        .to_str()
+        .filter(|s| !s.ends_with(std::path::is_separator))
+        && let Some(at) = s.rfind(std::path::is_separator)
+        && s[..at].contains(std::path::is_separator)
+        && !s[..at].ends_with(std::path::is_separator)
+    {
+        return Path::new(&s[..at]);
+    }
+    path.parent().unwrap_or(Path::new(""))
 }
 
 /// (size, modified as Unix seconds) of a file.
 pub fn file_stats(path: &Path) -> (u64, u64) {
-    let Ok(md) = std::fs::metadata(path) else {
+    // A TJA course: its chart file's.
+    let file = crate::tja_maps::split(path).map(|(file, _)| file);
+    let Ok(md) = std::fs::metadata(file.as_deref().unwrap_or(path)) else {
         return (0, 0);
     };
     let modified = md
@@ -577,10 +632,45 @@ pub(crate) fn collect_map_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) 
             if depth > 0 {
                 collect_map_files(&p, depth - 1, out);
             }
-        } else if is_map_file(&p) {
+        } else if is_map_file(&p) || is_tja_here(&p) {
             out.push(p);
         }
     }
+}
+
+/// How many folders down from the TJA folder charts are looked for: deeper than any pack goes,
+/// and a folder linked into itself still ends.
+const TJA_DEPTH: u32 = 12;
+
+/// The folders from `dir` down (`depth` more levels) holding a `.tja` file, `dir` first.
+fn tja_folders(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut below = Vec::new();
+    let mut holds = false;
+    for e in rd.flatten() {
+        let p = e.path();
+        if is_dir(&e) {
+            below.push(p);
+        } else {
+            holds = holds || is_tja_here(&p);
+        }
+    }
+    if holds {
+        out.push(dir.to_path_buf());
+    }
+    if depth > 0 {
+        below.sort();
+        for p in below {
+            tja_folders(&p, depth - 1, out);
+        }
+    }
+}
+
+/// A `.tja` file in the TJA folder, the only place they're read from.
+fn is_tja_here(p: &Path) -> bool {
+    crate::tja_maps::is_tja_file(p) && crate::tja_maps::in_folder(p)
 }
 
 /// A map as the last scan read it.
@@ -599,7 +689,15 @@ struct CachedFolder {
     dir: PathBuf,
     modified: u128,
     maps: Vec<CachedMap>,
+    /// What its TJA courses were read as (`TJA_READ`); 0 in a cache from before.
+    #[serde(default)]
+    tja: u32,
 }
+
+/// How TJA courses are read: when it goes up, a cached folder holding one is read again (and
+/// only those, a whole osu! library staying as it is). 1: the course's own charter and its
+/// `LEVEL` apart from its name. 2: its pictures (`BGIMAGE`, `PREIMAGE`).
+const TJA_READ: u32 = 2;
 
 /// Named for what its maps hold: a new field needs every map read again, once.
 fn library_cache() -> PathBuf {
@@ -650,6 +748,9 @@ fn load_cache(path: &Path) -> (std::collections::HashMap<PathBuf, CachedFolder>,
     };
     let folders = folders
         .into_iter()
+        .filter(|f| {
+            f.tja >= TJA_READ || !f.maps.iter().any(|m| crate::tja_maps::is_course(&m.path))
+        })
         .map(|f| (folder_key(&f.dir), f))
         .collect();
     (folders, state)
@@ -780,8 +881,20 @@ pub(crate) fn scan_cached(
     let (mut cache, cache_state) = load_cache(cache_path);
     let cached_folders = cache.len();
     let keys: Vec<PathBuf> = inputs.iter().map(|i| folder_key(i)).collect();
-    // A folder of what's being scanned: the rest stay cached, but aren't ours to show or drop.
-    let scanned = |dir: &Path| dir.parent().is_some_and(|p| keys.contains(&folder_key(p)));
+    // A folder of what's being scanned: the rest stay cached, but aren't ours to show or drop. In
+    // a TJA folder, one any number of folders down.
+    let tja_keys: Vec<PathBuf> = inputs
+        .iter()
+        .filter(|i| crate::tja_maps::is_root(i))
+        .map(|i| folder_key(i))
+        .collect();
+    let scanned = |dir: &Path| {
+        dir.parent().is_some_and(|p| keys.contains(&folder_key(p)))
+            || dir
+                .ancestors()
+                .skip(1)
+                .any(|p| tja_keys.contains(&folder_key(p)))
+    };
     let loaded_ms = started.elapsed().as_millis();
     let cached: Vec<CachedMap> = cache
         .values()
@@ -817,34 +930,48 @@ pub(crate) fn scan_cached(
                 let Ok(rd) = std::fs::read_dir(input) else {
                     continue;
                 };
+                let tja_root = crate::tja_maps::is_root(input);
                 for e in rd.flatten() {
                     let p = e.path();
                     if is_dir(&e) {
-                        // The folder's own time: the copy Windows lists with the parent lags it.
-                        let modified = std::fs::metadata(&p)
-                            .ok()
-                            .and_then(|m| m.modified().ok())
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map_or(0, |d| d.as_nanos());
-                        let was = cache.remove(&folder_key(&p));
-                        match was {
-                            Some(f) if f.modified == modified && modified != 0 => {
-                                found.fetch_add(f.maps.len(), Ordering::Relaxed);
-                                kept.push(f);
-                            }
-                            was => {
-                                if was.is_some() {
-                                    moved += 1;
-                                } else {
-                                    unseen += 1;
+                        // In the TJA folder charts can be any number of folders down (a pack, its
+                        // genres, then the songs): each folder holding one is a set of its own.
+                        // Elsewhere, a set folder and the folders in it.
+                        let sets: Vec<(PathBuf, u32)> = if tja_root {
+                            let mut sets = Vec::new();
+                            tja_folders(&p, TJA_DEPTH, &mut sets);
+                            sets.into_iter().map(|d| (d, 0)).collect()
+                        } else {
+                            vec![(p, 1)]
+                        };
+                        for (p, depth) in sets {
+                            // The folder's own time: the copy Windows lists with the parent lags it.
+                            let modified = std::fs::metadata(&p)
+                                .ok()
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map_or(0, |d| d.as_nanos());
+                            let was = cache.remove(&folder_key(&p));
+                            match was {
+                                Some(f) if f.modified == modified && modified != 0 => {
+                                    found.fetch_add(f.maps.len(), Ordering::Relaxed);
+                                    kept.push(f);
                                 }
-                                let mut found = Vec::new();
-                                collect_map_files(&p, 1, &mut found);
-                                files.extend(found.into_iter().map(|f| (Some(walked.len()), f)));
-                                walked.push((p, modified));
+                                was => {
+                                    if was.is_some() {
+                                        moved += 1;
+                                    } else {
+                                        unseen += 1;
+                                    }
+                                    let mut found = Vec::new();
+                                    collect_map_files(&p, depth, &mut found);
+                                    files
+                                        .extend(found.into_iter().map(|f| (Some(walked.len()), f)));
+                                    walked.push((p, modified));
+                                }
                             }
                         }
-                    } else if is_map_file(&p) {
+                    } else if is_map_file(&p) || is_tja_here(&p) {
                         files.push((None, p));
                     } else if is_map_archive(&p) {
                         // A Songs folder: also pick up .osz, .olz and .rsz files dropped into it.
@@ -864,22 +991,34 @@ pub(crate) fn scan_cached(
     files.dedup_by(|a, b| a.1 == b.1);
     let walked_ms = started.elapsed().as_millis();
 
-    let read = |(dir, path): &(Option<usize>, PathBuf)| -> Option<(Option<usize>, CachedMap)> {
+    let read = |(dir, path): &(Option<usize>, PathBuf)| -> Vec<(Option<usize>, CachedMap)> {
         // One malformed map must not take the whole scan down with it.
-        let meta = std::panic::catch_unwind(|| beatmap::read_meta_file(path))
-            .ok()
-            .flatten();
+        let maps = std::panic::catch_unwind(|| {
+            if crate::tja_maps::is_tja_file(path) {
+                // A TJA file: an entry per course.
+                crate::tja_maps::entries(path).unwrap_or_default()
+            } else {
+                beatmap::read_meta_file(path)
+                    .map(|meta| vec![(path.clone(), meta)])
+                    .unwrap_or_default()
+            }
+        })
+        .unwrap_or_default();
         found.fetch_add(1, Ordering::Relaxed);
         let (size, modified) = file_stats(path);
-        Some((
-            *dir,
-            CachedMap {
-                path: path.clone(),
-                meta: meta?,
-                size,
-                modified,
-            },
-        ))
+        maps.into_iter()
+            .map(|(path, meta)| {
+                (
+                    *dir,
+                    CachedMap {
+                        path,
+                        meta,
+                        size,
+                        modified,
+                    },
+                )
+            })
+            .collect()
     };
     // Reading headers is I/O-bound: spread it over a thread per core.
     let threads = std::thread::available_parallelism()
@@ -890,7 +1029,7 @@ pub(crate) fn scan_cached(
     let read: Vec<(Option<usize>, CachedMap)> = std::thread::scope(|s| {
         let handles: Vec<_> = files
             .chunks(chunk)
-            .map(|part| s.spawn(move || part.iter().filter_map(read).collect::<Vec<_>>()))
+            .map(|part| s.spawn(move || part.iter().flat_map(read).collect::<Vec<_>>()))
             .collect();
         handles
             .into_iter()
@@ -904,6 +1043,7 @@ pub(crate) fn scan_cached(
             dir,
             modified,
             maps: Vec::new(),
+            tja: TJA_READ,
         })
         .collect();
     let mut maps: Vec<CachedMap> = kept.iter().flat_map(|f| f.maps.iter().cloned()).collect();
@@ -947,7 +1087,7 @@ fn entries_of(maps: Vec<CachedMap>) -> Vec<Entry> {
             (
                 e.meta.artist.to_lowercase(),
                 e.meta.title.to_lowercase(),
-                e.path.parent().map(|p| p.to_path_buf()),
+                e.set_key().to_path_buf(),
             )
         };
         key(a).cmp(&key(b)).then(a.size.cmp(&b.size))
@@ -1058,13 +1198,26 @@ pub(crate) fn song_inputs(cfg: &Config) -> Vec<PathBuf> {
     inputs
 }
 
-/// What the library scans: `inputs`, plus taiko.rs's own custom maps folder `custom` when it
+/// What the library scans: `inputs`, plus taiko.rs's own custom maps folder `custom` and the
+/// TJA charts' folder `tja` when they exist (`custom` when it
 /// exists, whatever the Songs folder setting says. It is kept out of the Songs folders (where
 /// osu! maps are downloaded and osu!.db is looked for).
-pub(crate) fn with_custom(mut inputs: Vec<PathBuf>, custom: &Path) -> Vec<PathBuf> {
+pub(crate) fn with_custom(
+    mut inputs: Vec<PathBuf>,
+    custom: &Path,
+    tja: Option<&Path>,
+) -> Vec<PathBuf> {
     add_own_root(custom);
     if custom.is_dir() && !inputs.iter().any(|i| i == custom) {
         inputs.push(custom.to_path_buf());
+    }
+    // The TJA charts' folder too (`tja_maps`), made if it isn't there yet.
+    if let Some(tja) = tja {
+        crate::tja_maps::add_root(tja);
+        let _ = std::fs::create_dir_all(tja);
+        if tja.is_dir() && !inputs.iter().any(|i| i == tja) {
+            inputs.push(tja.to_path_buf());
+        }
     }
     inputs
 }
@@ -1123,6 +1276,31 @@ pub(crate) fn find_score_map(library: &[Entry], s: &online::OnlineScore) -> Opti
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_maps_folder_is_its_parent_however_it_is_found() {
+        use std::path::Path;
+        for path in [
+            "/home/p/Songs/1 A - B/a.osu",
+            "Songs/1 A - B/b [Oni].osu",
+            "/a//b/c.osu",
+            "/c.osu",
+            "c.osu",
+            "/x/y/z/",
+        ] {
+            let path = Path::new(path);
+            assert_eq!(
+                super::folder_of(path),
+                path.parent().unwrap_or(Path::new("")),
+                "{path:?}"
+            );
+        }
+        #[cfg(windows)]
+        for path in [r"C:\Songs\1 A - B\a.osu", r"C:\a.osu", "C:/Songs/x/a.osu"] {
+            let path = Path::new(path);
+            assert_eq!(super::folder_of(path), path.parent().unwrap(), "{path:?}");
+        }
+    }
+
     use super::*;
 
     /// osu!lazer's `.olz` export is the same zip as an `.osz`: it is a map archive, it is read
@@ -1394,6 +1572,59 @@ mod tests {
             cache,
             &mut |_| {},
         );
+        let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
+        (entries, log.lines().last().unwrap().to_string())
+    }
+
+    /// A TJA folder cached as an older game read its courses (no `tja` mark, the level in the
+    /// name) is read again; an osu! set in the same cache is not.
+    #[test]
+    fn tja_courses_cached_the_old_way_are_read_again() {
+        let (root, songs, cache) = songs_folder("tja-read");
+        add_map(&songs, "1 osu set", "5");
+        let tja = root.join("Tja");
+        std::fs::create_dir_all(tja.join("Song")).unwrap();
+        std::fs::write(
+            tja.join("Song/song.tja"),
+            "TITLE:T\nBPM:120\nMAKER:Team\nNOTESDESIGNER3:Oni Person\nCOURSE:Oni\nLEVEL:8\n#START\n1,\n#END\n",
+        )
+        .unwrap();
+        crate::tja_maps::add_root(&tja);
+        let found = AtomicUsize::new(0);
+        let scan = || scan_cached(&[songs.clone(), tja.clone()], &found, &cache, &mut |_| {});
+        let course = |entries: &[Entry]| {
+            let e = entries.iter().find(|e| e.is_tja()).expect("the course");
+            (e.meta.version.clone(), e.meta.level, e.meta.creator.clone())
+        };
+        let now = ("Oni".to_string(), Some(8.0), "Oni Person".to_string());
+        assert_eq!(course(&scan()), now);
+        // As a cache from before this game read levels and charters had it.
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
+        for folder in json.as_array_mut().unwrap() {
+            folder.as_object_mut().unwrap().remove("tja");
+            for map in folder["maps"].as_array_mut().unwrap() {
+                let meta = map["meta"].as_object_mut().unwrap();
+                if meta["version"] == "Oni" && meta["title"] == "T" {
+                    meta.insert("version".into(), "Oni ★8".into());
+                    meta.insert("creator".into(), "Team".into());
+                    meta.remove("level");
+                }
+            }
+        }
+        std::fs::write(&cache, serde_json::to_vec(&json).unwrap()).unwrap();
+        let (entries, log) = quiet_scan_all(&[songs.clone(), tja.clone()], &cache);
+        assert_eq!(course(&entries), now);
+        assert!(
+            log.contains("1 unchanged") && log.contains("1 not in it"),
+            "only the TJA folder is read again: {log}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn quiet_scan_all(inputs: &[PathBuf], cache: &Path) -> (Vec<Entry>, String) {
+        let found = AtomicUsize::new(0);
+        let entries = scan_cached(inputs, &found, cache, &mut |_| {});
         let log = std::fs::read_to_string(cache.with_file_name("library-scan.log")).unwrap();
         (entries, log.lines().last().unwrap().to_string())
     }

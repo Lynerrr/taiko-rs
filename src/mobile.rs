@@ -735,11 +735,6 @@ impl State {
             Hit::RateStep(by) => self.set_rate(rate + by as f64 / 100.0, keep),
             Hit::RateSet(to) => self.set_rate(to as f64 / 100.0, keep),
             Hit::RateKeepPitch => self.set_rate(rate, !keep),
-            Hit::PitchStep(by) => {
-                if let Some(p) = &mut self.player {
-                    p.move_pitch(by);
-                }
-            }
             _ => {}
         }
     }
@@ -749,7 +744,7 @@ impl State {
         active() && self.mob.rate_open
     }
 
-    /// The speed panel, over song select or the player: steps, presets and the pitch.
+    /// The speed panel, over song select or the player: steps, presets and keeping the pitch.
     pub(crate) fn draw_mobile_rate(&mut self, c: &mut Canvas) {
         let shown = self.scene.is_select() && !(self.on_menu() && self.player.is_none());
         if !self.mob.rate_open || !shown || self.mod_select.is_some() {
@@ -765,14 +760,12 @@ impl State {
             (SMALL, MEDIUM, 48.0)
         };
         let (rate, keep) = self.rate_now();
-        let semitones = self.player.as_ref().map(|p| p.semitones);
         let w = c.width;
         c.rect(0.0, 0.0, w, VIRTUAL_HEIGHT, rgba(0x000000, 0.6));
         c.hit(0.0, 0.0, w, VIRTUAL_HEIGHT, Hit::RateClose);
         let pw = w.min(460.0);
         let gap = row * 0.2;
-        let rows = if semitones.is_some() { 5.0 } else { 4.0 };
-        let ph = rows * (row + gap) + gap + 8.0;
+        let ph = 4.0 * (row + gap) + gap + 8.0;
         let (px, py) = ((w - pw) / 2.0, (VIRTUAL_HEIGHT - ph) / 2.0);
         c.round_rect(
             [px, py],
@@ -860,26 +853,6 @@ impl State {
         let white = rgba(0xffffff, 1.0);
         c.circle(knob, sy + sh / 2.0, sh / 2.0 - 3.0, white, white, 0.0);
         c.hit(ix, y, iw, row, Hit::RateKeepPitch);
-        y += row + gap;
-        if let Some(semitones) = semitones {
-            c.text(ix, ty(y, text), text, rgba(0xc8c8d8, 1.0), tr!("Pitch"));
-            let bw = iw * 0.2;
-            let right = ix + iw;
-            c.button(
-                right - 2.0 * bw - iw * 0.2,
-                y,
-                bw,
-                row,
-                "-",
-                big,
-                Hit::PitchStep(-1),
-                true,
-            );
-            let mid = right - bw - iw * 0.1;
-            let label = format!("{semitones:+}");
-            c.text_centered(mid, ty(y, text), text, rgba(0xffffff, 1.0), &label);
-            c.button(right - bw, y, bw, row, "+", big, Hit::PitchStep(1), true);
-        }
     }
 
     /// Song select's right side, two pages side by side: the preview, and the leaderboard the
@@ -930,7 +903,12 @@ impl State {
         const TAB_H: f32 = 42.0;
         const ROW_H: f32 = 60.0;
         panel(c, x, y, w, h);
-        let online = self.board_online;
+        // TJA charts have online boards only on a server with TJA boards.
+        let online = self.board_online
+            && self
+                .select
+                .selected()
+                .is_none_or(|i| self.has_online_board(&self.library[i]));
         let tab_w = 104.0;
         let (ty, inner) = (y + 8.0, w - 16.0);
         let local = Hit::BoardTab(false);
@@ -1251,7 +1229,8 @@ impl State {
                 }
                 let found = self.stars.get(i, rate);
                 let py = dy + (DIFF_H - SMALL - 6.0) / 2.0;
-                let pill = crate::style::star_pill(c, dx + dw - 10.0, py, SMALL, found);
+                let level = self.library[i].meta.level;
+                let pill = crate::style::map_pill(c, dx + dw - 10.0, py, SMALL, level, found);
                 let name = &self.library[i].meta.version;
                 let name = Canvas::fit(MEDIUM, dw - pill - 34.0, name);
                 let ny = dy + (DIFF_H - MEDIUM) / 2.0;

@@ -30,6 +30,8 @@ pub const LOVED: u8 = 7;
 /// Made in the editor and sent to taiko.rs: public, no pp; and once approved there, with pp.
 pub const CUSTOM: u8 = 8;
 pub const CUSTOM_APPROVED: u8 = 9;
+/// A TJA chart's course: played on this computer only.
+pub const TJA: u8 = 10;
 
 /// The status code for the mirrors' status name.
 pub fn status_code(name: &str) -> Option<u8> {
@@ -223,7 +225,7 @@ fn length(s: &str) -> Option<(f64, f64)> {
 
 /// The codes a typed status (a prefix of its name) stands for.
 fn statuses(s: &str) -> Option<Vec<u8>> {
-    let names: [(&str, &[u8]); 11] = [
+    let names: [(&str, &[u8]); 12] = [
         ("ranked", &[RANKED]),
         ("approved", &[APPROVED]),
         ("qualified", &[QUALIFIED]),
@@ -236,6 +238,7 @@ fn statuses(s: &str) -> Option<Vec<u8>> {
         ("unknown", &[UNKNOWN]),
         ("custom", &[CUSTOM, CUSTOM_APPROVED]),
         ("customapproved", &[CUSTOM_APPROVED]),
+        ("tja", &[TJA]),
     ];
     let s = s.replace([' ', '_', '-'], "");
     if s.is_empty() {
@@ -380,6 +383,17 @@ impl Query {
         self.words.is_empty() && self.conds.is_empty()
     }
 
+    /// Whether `matches_text` reads its `Facts`: without such filters (words, text fields,
+    /// collections) any facts do.
+    pub fn needs_facts(&self) -> bool {
+        self.conds.iter().any(|c| {
+            matches!(
+                c,
+                Cond::Num { .. } | Cond::Status { .. } | Cond::Epic { .. } | Cond::Unplayed
+            )
+        })
+    }
+
     /// The `collection=` filters (`!=` when negated), for the caller to apply: `matches_text`
     /// lets everything through them.
     pub fn collections(&self) -> impl Iterator<Item = (&InCollection, bool)> {
@@ -481,6 +495,32 @@ impl Query {
 mod tests {
     use super::*;
     use crate::beatmap::Meta;
+
+    #[test]
+    fn only_filters_on_numbers_status_epic_or_plays_need_the_maps_facts() {
+        for (typed, needs) in [
+            ("", false),
+            ("artist title", false),
+            ("artist=camellia creator=nyanko", false),
+            ("collection=\"warm up\"", false),
+            ("stars>5", true),
+            ("length<90 bpm>200", true),
+            ("status=ranked", true),
+            ("status=epic", true),
+            ("unplayed", true),
+            ("artist stars<3", true),
+        ] {
+            assert_eq!(Query::parse(typed).needs_facts(), needs, "{typed:?}");
+        }
+        // Words alone match the same with no facts at all.
+        let meta = Meta {
+            artist: "Camellia".into(),
+            title: "Ghost".into(),
+            ..Default::default()
+        };
+        let q = Query::parse("camellia");
+        assert!(q.matches(&meta, "Camellia - Ghost", &Facts::default()));
+    }
 
     fn meta() -> Meta {
         Meta {

@@ -64,7 +64,8 @@ pub fn analyze(map: &Beatmap) -> Graph {
     let mut last_dt: Option<f64> = None;
     let mut last_kat: Option<bool> = None;
     let mut run = 0u32;
-    for n in &map.notes {
+    // ADLibs and bombs aren't there to be hit.
+    for n in map.notes.iter().filter(|n| !n.extra()) {
         let t = n.time;
         if let Some(prev) = last_t {
             // Sections passed with no notes still show the decaying strain.
@@ -132,7 +133,7 @@ pub fn analyze(map: &Beatmap) -> Graph {
     let hits: Vec<f64> = map
         .notes
         .iter()
-        .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat))
+        .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat) && !n.extra())
         .map(|n| n.time)
         .collect();
     let (mut peak_nps, mut peak_nps_at, mut j) = (0usize, start, 0usize);
@@ -208,6 +209,7 @@ mod tests {
             fake_length: 0.0,
             tiny: false,
             unhittable: false,
+            special: crate::beatmap::Special::None,
         }
     }
 
@@ -245,6 +247,7 @@ mod tests {
             control_points,
             first_velocity: 0.0,
             fakes: Vec::new(),
+            branching: None,
             gimmick: None,
         }
     }

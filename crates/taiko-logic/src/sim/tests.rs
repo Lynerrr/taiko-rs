@@ -118,6 +118,49 @@ fn plays_judge_with_osus_windows_and_old_replays_with_their_own() {
 }
 
 #[test]
+fn tja_charts_judge_with_their_courses_arcade_windows() {
+    let map = |course: &str| {
+        let text = format!("BPM:120\nOFFSET:-3\nCOURSE:{course}\n#START\n1,\n#END\n");
+        crate::tja::parse(&text).unwrap().courses.remove(0).map
+    };
+    let judged = |course: &str, mods: &str, off: f64| {
+        let m = map(course);
+        let t = m.notes[0].time + off;
+        let mut g = Game::with_mods(m, Arc::new(Silence), None, Mods::parse(mods));
+        g.press_at(1, t, None);
+        (g.stats.great, g.stats.ok)
+    };
+    assert_eq!(judged("Oni", "", 24.0), (1, 0));
+    assert_eq!(judged("Oni", "", 26.0), (0, 1));
+    assert_eq!(judged("Oni", "", -75.0), (0, 1));
+    assert_eq!(judged("Easy", "", 41.0), (1, 0));
+    assert_eq!(judged("Easy", "", 107.0), (0, 1));
+    // HR: x0.83, so 22 ms is still a great and 24 no longer.
+    assert_eq!(judged("Oni", "HR", 21.0), (1, 0));
+    assert_eq!(judged("Oni", "HR", 23.0), (0, 1));
+    // The OD changes nothing, and osu! maps keep the OD's windows.
+    let w = |m: &Beatmap, mods: &str| {
+        let w = Windows::for_map(&m.meta, Mods::parse(mods), 7.0, WindowRule::Osu);
+        (w.great, w.ok, w.miss)
+    };
+    let mut oni = map("Oni");
+    let before = w(&oni, "HR");
+    oni.meta.od = 9.0;
+    assert_eq!(w(&oni, "HR"), before);
+    let osu = game().map.clone();
+    for mods in ["", "HR", "EZ", "PR", "OV"] {
+        assert_eq!(
+            w(&osu, mods),
+            {
+                let n = Windows::new(Mods::parse(mods).od_with(osu.meta.od, 7.0));
+                (n.great, n.ok, n.miss)
+            },
+            "{mods}"
+        );
+    }
+}
+
+#[test]
 fn play_time_leaves_out_pauses_and_the_resume_countdown() {
     let mut g = game();
     let t0 = Instant::now();
@@ -1312,6 +1355,72 @@ fn hits(g: &mut Game, errors: &[f64], offset: f64) {
         .extend(std::iter::repeat_n(offset, errors.len()));
 }
 
+#[test]
+fn notes_under_a_long_roll_are_missed_once_and_not_looked_at_again() {
+    let mut g = stream(100.0);
+    let mut map = g.map.clone();
+    let first = map.notes[0].clone();
+    // A roll from before the stream to after it: it holds the cursor back the whole time.
+    map.notes.insert(
+        0,
+        beatmap::Note {
+            time: 1999.0,
+            end_time: 6000.0,
+            kind: Kind::Roll,
+            tick_spacing: 100.0,
+            ..first
+        },
+    );
+    g = Game::with_mods(map, Arc::new(Silence), None, Mods::parse("NF"));
+    // The dons and kats whose hit window has gone by at `t`.
+    let gone = |g: &Game, t: f64| {
+        (g.map.notes.iter())
+            .filter(|n| n.judged() && t - n.time > g.windows.ok)
+            .count() as u32
+    };
+    let t = 2000.0 + 10.0 * 100.0 + 500.0;
+    g.set_time(t);
+    let missed = gone(&g, t);
+    assert!(missed > 10, "{missed}");
+    assert_eq!(g.stats().miss, missed, "the notes whose window went by");
+    assert_eq!(g.cursor, 0, "the roll is still going");
+    assert_eq!(
+        g.expire_open[0], 0,
+        "the roll stays in play behind the scan"
+    );
+    assert!(
+        g.expire_open[1..]
+            .iter()
+            .all(|&i| t - g.map.notes[i].time <= g.windows.ok),
+        "and the notes that can still be hit, nothing else: {:?}",
+        g.expire_open
+    );
+    g.set_time(t);
+    assert_eq!(g.stats().miss, missed, "nothing is missed twice");
+    g.set_time(2000.0 + 23.0 * 100.0 + 500.0);
+    assert_eq!(g.stats().miss, 24);
+    g.set_time(6100.0);
+    assert_eq!(
+        g.cursor,
+        g.map.notes.len(),
+        "the roll over, every note is behind"
+    );
+    assert!(g.expire_open.is_empty());
+}
+
+#[test]
+fn a_note_in_its_hit_window_stays_in_play_until_it_is_missed() {
+    let mut g = stream(100.0);
+    g.set_time(2000.0 + 10.0);
+    assert_eq!(g.expire_open, [0], "the first note can still be hit");
+    assert_eq!(g.stats().miss, 0);
+    g.set_time(2000.0 + 400.0);
+    assert!(g.stats().miss > 0 && g.expire_open.len() <= 2);
+    // Played again from the start, every note is looked at anew.
+    g.rewind();
+    assert_eq!((g.expire_scan, g.expire_open.len()), (0, 0));
+}
+
 /// A stream of alternating dons and kats, `spacing` ms apart, at OD 5.
 fn stream(spacing: f64) -> Game {
     let notes = (0..24)
@@ -1328,6 +1437,7 @@ fn stream(spacing: f64) -> Game {
             fake_length: 0.0,
             tiny: false,
             unhittable: false,
+            special: crate::beatmap::Special::None,
         })
         .collect();
     let mut map = beatmap::calibration_map(500.0, 4, 1);
@@ -1540,4 +1650,131 @@ fn note_speeds_change_with_the_speed_mods_and_no_others() {
             .collect();
         assert!(off.is_empty(), "{}: {off:?}", m.acronym());
     }
+}
+
+/// A one-course Oni TJA chart at 120 BPM (a bar is 2 s), `body` between #START and #END.
+fn tja_game(body: &str) -> Game {
+    let text = format!("TITLE:T\nBPM:120\nOFFSET:0\nCOURSE:Oni\nLEVEL:8\n\n#START\n{body}\n#END\n");
+    let mut song = crate::tja::parse(&text).expect("parses");
+    Game::new(song.courses.remove(0).map, Arc::new(Silence), None)
+}
+
+/// Presses `key` at each time, then plays the chart to its end.
+fn press_through(g: &mut Game, presses: &[(f64, usize)]) {
+    for &(t, key) in presses {
+        g.set_time(t - 1.0);
+        g.press_at(key, t, None);
+    }
+    let end = g.end_time + 2000.0;
+    g.set_time(end);
+}
+
+#[test]
+fn a_bomb_hit_breaks_the_combo_and_one_let_by_costs_nothing() {
+    // Dons at 0, 1000 and 2000, a bomb at 500.
+    let dons = [(0.0, 1), (1000.0, 1), (2000.0, 1)];
+    let mut hit = tja_game("1C10,\n1,");
+    press_through(&mut hit, &[dons[0], (500.0, 1), dons[1], dons[2]]);
+    let s = &hit.stats;
+    assert_eq!((s.great, s.miss, s.bombs, s.max_combo), (3, 0, 1, 2));
+    assert_eq!(s.accuracy(), 1.0, "a bomb is no note to hit");
+    // It drains HP as a miss does.
+    let mut hp = tja_game("1C10,\n1,");
+    hp.set_time(-1.0);
+    hp.press_at(1, 0.0, None);
+    let before = hp.hp;
+    hp.set_time(499.0);
+    hp.press_at(1, 500.0, None);
+    assert!(hp.hp < before, "{} after {before}", hp.hp);
+    // Either colour sets it off.
+    let mut rim = tja_game("1C10,\n1,");
+    press_through(&mut rim, &[dons[0], (500.0, 0), dons[1], dons[2]]);
+    assert_eq!(rim.stats.bombs, 1);
+    let mut by = tja_game("1C10,\n1,");
+    press_through(&mut by, &dons);
+    let s = &by.stats;
+    assert_eq!((s.great, s.miss, s.bombs, s.max_combo), (3, 0, 0, 3));
+    // A full combo past it scores as much as the chart without it.
+    let mut plain = tja_game("1010,\n1,");
+    press_through(&mut plain, &dons);
+    assert_eq!(by.stats.score, plain.stats.score);
+    // Sudden Death fails on one.
+    let map = hit.map.clone();
+    let mut sd = Game::with_mods(map, Arc::new(Silence), None, crate::mods::Mods::parse("SD"));
+    press_through(&mut sd, &[dons[0], (500.0, 1)]);
+    assert!(sd.failed.is_some());
+}
+
+#[test]
+fn an_adlib_hit_is_a_bonus_and_one_let_by_no_miss() {
+    let dons = [(0.0, 1), (1000.0, 1), (2000.0, 1)];
+    let mut hit = tja_game("1F10,\n1,");
+    press_through(&mut hit, &[dons[0], (520.0, 0), dons[1], dons[2]]);
+    let s = &hit.stats;
+    assert_eq!((s.great, s.miss, s.adlib, s.max_combo), (3, 0, 1, 3));
+    let mut by = tja_game("1F10,\n1,");
+    press_through(&mut by, &dons);
+    assert_eq!(
+        (by.stats.miss, by.stats.adlib, by.stats.max_combo),
+        (0, 0, 3)
+    );
+    assert!(hit.stats.score > by.stats.score, "the bonus");
+    // A press nearer the don (at 0) than the ADLib (at 250) goes to the don.
+    let mut near = tja_game("1F000000,");
+    press_through(&mut near, &[(20.0, 1)]);
+    assert_eq!((near.stats.great + near.stats.ok, near.stats.adlib), (1, 0));
+}
+
+#[test]
+fn a_kadon_takes_either_colour_and_the_other_one_after_for_the_finisher() {
+    for first in [0, 1] {
+        let other = if first == 0 { 2 } else { 3 };
+        let mut g = tja_game("G,");
+        press_through(&mut g, &[(0.0, first), (10.0, other)]);
+        assert_eq!(
+            (g.stats.great, g.stats.strong),
+            (1, 1),
+            "{first} then {other}"
+        );
+        // The same colour with the other hand is no finisher on it.
+        let same = if first == 0 { 3 } else { 2 };
+        let mut g = tja_game("G,");
+        press_through(&mut g, &[(0.0, first), (10.0, same)]);
+        assert_eq!(
+            (g.stats.great, g.stats.strong),
+            (1, 0),
+            "{first} then {same}"
+        );
+    }
+}
+
+#[test]
+fn a_fuse_balloon_not_popped_blows_up() {
+    // 5 pops (no BALLOON:), from 0 to 1500; a don at 2000.
+    let mut by = tja_game("D008,\n1,");
+    press_through(&mut by, &[(2000.0, 1)]);
+    assert_eq!((by.stats.bombs, by.stats.swells, by.stats.great), (1, 0, 1));
+    let mut popped = tja_game("D008,\n1,");
+    let pops: Vec<(f64, usize)> = (0..6).map(|k| (100.0 + 100.0 * k as f64, k % 2)).collect();
+    press_through(&mut popped, &[pops, vec![(2000.0, 1)]].concat());
+    assert_eq!((popped.stats.bombs, popped.stats.swells), (0, 1));
+    // A plain balloon left alone doesn't.
+    let mut plain = tja_game("7008,\n1,");
+    press_through(&mut plain, &[(2000.0, 1)]);
+    assert_eq!(plain.stats.bombs, 0);
+}
+
+#[test]
+fn autoplay_leaves_bombs_and_adlibs_and_plays_a_kadon_whole() {
+    let mut g = tja_game("1C2F,\nG,\n1,");
+    for k in 0..600 {
+        g.time = k as f64 * 10.0;
+        g.autoplay(None);
+        g.expire(g.time);
+    }
+    let s = &g.stats;
+    assert_eq!(
+        (s.great, s.miss, s.bombs, s.adlib, s.strong),
+        (4, 0, 0, 0, 1)
+    );
 }

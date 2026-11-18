@@ -90,7 +90,7 @@ pub(crate) fn draw_preview_chrome(
             tr!("< BACK", "< 戻る", "< НАЗАД")
         };
         settings::back_button(c, 0.0, back, hit::Hit::Key(KeyCode::Escape));
-        let pill = crate::style::star_pill(c, c.width, 14.0, 12.0, stars);
+        let pill = crate::style::map_pill(c, c.width, 14.0, 12.0, e.meta.level, stars);
         let title = format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version);
         let room = c.width - 112.0 - pill - 12.0;
         c.text(
@@ -121,7 +121,7 @@ pub(crate) fn draw_preview_chrome(
         1.0,
     );
     c.text(41.0, 23.0, 8.0, rgba(0xffffff, 1.0), tag);
-    let pill = crate::style::star_pill(c, c.width - 36.0, 22.0, 8.0, stars);
+    let pill = crate::style::map_pill(c, c.width - 36.0, 22.0, 8.0, e.meta.level, stars);
     let back = if lobby {
         tr!("Lobby  (Esc)", "ロビー  (Esc)", "Лобби  (Esc)")
     } else {

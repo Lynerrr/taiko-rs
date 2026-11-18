@@ -119,8 +119,8 @@ impl View {
         let min_velocity = map
             .notes
             .iter()
-            .map(|n| n.velocity)
-            .chain(map.barlines.iter().map(|b| b.velocity))
+            .map(|n| n.velocity.abs())
+            .chain(map.barlines.iter().map(|b| b.velocity.abs()))
             .fold(f64::INFINITY, f64::min)
             .max(1e-6);
         let sections = if mods.has(Mod::Roulette) {
@@ -153,7 +153,7 @@ impl View {
         };
         let min_velocity = decoys
             .iter()
-            .map(|n| n.velocity)
+            .map(|n| n.velocity.abs())
             .fold(min_velocity, f64::min);
         let focus_switches = if mods.has(Mod::Multiverse) {
             focus_switches(map)
@@ -663,11 +663,17 @@ impl Play {
         let (rail, lane_len, rail_drop, rail_zoom) = self.rail_at(vt, w, lane, mods);
         // A .tko map's moving drum: the hit target slides along a straight lane and everything
         // on the lane goes with it, so notes still meet it on time.
+        // A TJA chart's #JPOSSCROLL moves it either way, and up or down, the same way.
+        let (judge_x, judge_y) = match (&rail, self.game.tko()) {
+            (None, Some(rt)) => rt.judge(vt),
+            _ => (0.0, 0.0),
+        };
         let drum = if rail.is_none() {
-            tko_fx.drum.clamp(0.0, (lane_len - 2.0 * BIG_R).max(0.0))
+            tko_fx.drum.clamp(0.0, (lane_len - 2.0 * BIG_R).max(0.0)) + judge_x as f32
         } else {
             0.0
         };
+        let drum_y = judge_y as f32;
         // Where it's played before the whole-playfield moves (x0, y0, x1, y1): from the screen's
         // left edge (the drum) along the lane, with room for the judgements.
         let (band_top, band_h) = lane_band();
@@ -713,16 +719,28 @@ impl Play {
         };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
+        // The same for note `i`, which may scroll by its own time under a shared scroll (a TJA
+        // note read in #NMSCROLL among ones scrolled by beats).
+        let timed = |i: usize| self.game.tko().is_some_and(|rt| rt.note_timed(i));
+        let note_s_at = |i: usize, time: f64, vel: f64| scroll.x_of(time, vel, timed(i)) - HIT_X;
         // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
         // its last object included (owner, 2026-10-28).
         // Keep the global bound for special objects and barlines; ordinary-note blocks also
         // have conservative local bounds so one distant slow note does not widen every scan.
-        let lookahead = if scroll.shared.is_some() {
+        // Notes waiting to start moving (a TJA chart's #SUDDEN) sit on the lane long before they
+        // would have scrolled onto it.
+        let far_notes_near =
+            scroll.shared.is_some() || self.game.tko().is_some_and(|rt| rt.holds_notes());
+        // The lane in s either way from the drum: right to its end, left to the screen's edge,
+        // which a target moved right (#JPOSSCROLL, a .tko drum) puts further away.
+        let left_edge = -HIT_X - drum;
+        let reach_len = lane_len.max(-left_edge);
+        let lookahead = if far_notes_near {
             // Frozen or running backwards, notes far off in time may be near: look well ahead
             // and let the lane's ends hide the rest.
             SHARED_LOOKAHEAD_MS
         } else {
-            (lane_len + BIG_R) as f64
+            (reach_len + BIG_R) as f64
                 / (self.view.min_velocity * scroll.speed * scroll.min_factor())
                 + warp.abs()
         };
@@ -741,8 +759,8 @@ impl Play {
             if self.game.map().notes[block.range.start].time - vt > lookahead {
                 break;
             }
-            if block.regular && !mods.has(Mod::Liar) && scroll.shared.is_none() {
-                let reach = (lane_len + BIG_R) as f64
+            if block.regular && !mods.has(Mod::Liar) && !far_notes_near {
+                let reach = (reach_len + BIG_R) as f64
                     / (block.min_velocity * scroll.speed * scroll.min_factor())
                     + warp.abs();
                 if self.game.map().notes[block.range.start].time - vt.max(t) > reach
@@ -759,6 +777,10 @@ impl Play {
                 if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
                     continue;
                 }
+                // A branching TJA chart's notes off the branch played aren't there.
+                if !self.game.on_path(i) {
+                    continue;
+                }
                 self.view.visible.push(i);
             }
         }
@@ -766,10 +788,14 @@ impl Play {
         // sliding to its real place on the way in.
         let note_s = |i: usize| -> f32 {
             let n = &self.game.map().notes[i];
-            let s = s_of(n.time, n.velocity);
+            // Waiting to start moving (#SUDDEN): where it will start from.
+            if let Some(then) = self.game.tko().and_then(|rt| rt.note_waits(i, vt)) {
+                return scroll.x_as_of(n.time, n.velocity, then, timed(i)) - HIT_X;
+            }
+            let s = note_s_at(i, n.time, n.velocity);
             match self.view.lies.get(i) {
                 Some(&lie) if lie != n.time => {
-                    let fake = s_of(lie, n.velocity);
+                    let fake = note_s_at(i, lie, n.velocity);
                     s + (fake - s) * smooth(0.3, 0.55, (s / lane_len) as f64) as f32
                 }
                 _ => s,
@@ -973,6 +999,15 @@ impl Play {
         };
         let mut edge_col = rgba(0x3a3a4e, 1.0);
         let mut skin_lane_tint = rgba(WHITE, 1.0);
+        // A branching TJA chart's lane takes its branch's colour, as in the arcade, where the
+        // branch starts.
+        let branch = self.game.branch().map(|b| {
+            let fade = ((vt - b.since) / BRANCH_FADE_MS).clamp(0.0, 1.0) as f32;
+            (b.at(vt), if vt >= b.since { fade } else { 1.0 })
+        });
+        if let Some((b, k)) = branch.filter(|&(b, _)| b != taiko_logic::branch::NORMAL) {
+            lane_col = tint(lane_col, BRANCH_COLS[usize::from(b)], BRANCH_TINT * k);
+        }
         if radar {
             lane_col = if in_kiai {
                 rgba(0x17150d, 1.0)
@@ -1099,11 +1134,28 @@ impl Play {
             if b.time - vt > lookahead {
                 break;
             }
-            let s = s_of(b.time, b.velocity);
+            let timed = self.game.tko().is_some_and(|rt| rt.barline_timed(b.time));
+            let s = scroll.x_of(b.time, b.velocity, timed) - HIT_X;
+            // A TJA barline coming in some other way: straight from the drum that way, lying
+            // across it.
+            let way = if crossfire {
+                None
+            } else {
+                self.game.tko().and_then(|rt| rt.barline_dir(b.time))
+            };
+            if let Some([dx, dy]) = way {
+                if s > -LANE_H && s < lane_len + 2.0 {
+                    let (hx, hy, ..) = place(0.0, 0.0);
+                    let (x, y) = (hx + s * dx as f32, hy + s * dy as f32);
+                    let a = (-dy as f32).atan2(dx as f32);
+                    lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
+                }
+                continue;
+            }
             let shown = if crossfire {
                 s > 0.0
             } else {
-                s > PANEL_W - HIT_X
+                s + drum > PANEL_W - HIT_X
             };
             if shown && s < lane_len + 2.0 {
                 for s in if crossfire { vec![s, -s] } else { vec![s] } {
@@ -1133,7 +1185,7 @@ impl Play {
                 break;
             }
             let s = s_of(time, vel);
-            if s > PANEL_W - HIT_X && s < lane_len + 30.0 {
+            if s + drum > PANEL_W - HIT_X && s < lane_len + 30.0 {
                 let col = if k > 1.0 {
                     0xff5a3d
                 } else if k < 1.0 {
@@ -1322,7 +1374,7 @@ impl Play {
         // Notes, back to front so earlier notes sit on top. A window's leave it under the drum.
         // Hit ones fly out of the drum over its panel, so they're drawn after it.
         let mut flying: Vec<(f32, bool, u32)> = Vec::new();
-        let behind = |r: f32| if boxed { r - HIT_X } else { -HIT_X - r };
+        let behind = |r: f32| if boxed { r - HIT_X } else { left_edge - r };
         let on_lane = |s: f32, r: f32| s > behind(r) && s < lane_len + r;
         // On one ms, a fake slider sits over the don/kat it's stacked on (and, with the map's
         // own spinner-warning, a swell head too).
@@ -1357,9 +1409,13 @@ impl Play {
         }
         // Notes flying in on a .tko approach path, drawn over the drum panel after it: a path
         // from behind the drum starts under the panel, where they'd be hidden most of the way.
+        // The same for notes coming in from the left.
         // (lane distance, fake, index, flow, colour, alpha, motion)
         let mut on_path: Vec<(f32, bool, usize, u8, u32, f32, NoteFx)> = Vec::new();
         let over_panel = |fx: &NoteFx| !crossfire && fx.path.is_some_and(|p| p[2] > 0.0);
+        // Notes coming in from the left (a TJA chart's negative #SCROLL) go over the panel too:
+        // under it they'd only show the last few steps before the drum, sprung on the player.
+        let from_left = |vel: f64, s: f32| !crossfire && vel < 0.0 && s < 0.0;
         // The shapes of notes a .tko map draws over every effect: lifted over them at the end.
         let mut above_shapes: Vec<std::ops::Range<usize>> = Vec::new();
         // A .tko map's fake notes, under the real ones: drawn like them, never judged, gone when
@@ -1382,7 +1438,7 @@ impl Play {
             nfx.path = self.tko().and_then(|rt| rt.fake_path(k, vt, s, lane_len));
             if a > 0.01 && !nfx.hidden {
                 let col = if n.kind == Kind::Kat { kat } else { don };
-                if over_panel(&nfx) {
+                if over_panel(&nfx) || from_left(n.velocity, s) {
                     on_path.push((s, true, k, 1, col, a, nfx));
                 } else {
                     let from = c.shapes.len();
@@ -1407,7 +1463,22 @@ impl Play {
             let r = if n.big { BIG_R } else { NOTE_R };
             match n.kind {
                 Kind::Don | Kind::Kat => {
-                    let col = if n.kind == Kind::Don { don } else { kat };
+                    let col = match n.special {
+                        beatmap::Special::Kadon => KADON,
+                        beatmap::Special::Bomb => BOMB,
+                        beatmap::Special::Adlib => ADLIB,
+                        _ if n.kind == Kind::Don => don,
+                        _ => kat,
+                    };
+                    // An ADLib is hidden until it's hit (then it flies up like any hit note).
+                    if n.special == beatmap::Special::Adlib && st.judged().is_none() {
+                        continue;
+                    }
+                    // A bomb hit is gone in a burst round the drum.
+                    if n.special == beatmap::Special::Bomb && st.judged().is_some() {
+                        burst(c, t - st.judged_at());
+                        continue;
+                    }
                     match st.judged() {
                         // Hit: the note flies up out of the drum (unless the interface toggle hides it).
                         Some(Judge::Great | Judge::Ok)
@@ -1493,7 +1564,7 @@ impl Play {
                                 nfx.path = self.tko().and_then(|r| r.note_path(i, vt, s, lane_len));
                                 if a > 0.01 && !nfx.hidden {
                                     let a = if theirs.is_some() { 0.3 * a } else { a };
-                                    if over_panel(&nfx) {
+                                    if over_panel(&nfx) || from_left(n.velocity, s) {
                                         on_path.push((
                                             s,
                                             false,
@@ -1573,7 +1644,7 @@ impl Play {
                     let live = fake && pop.is_none();
                     let lands = n.time - n.fake_len;
                     let shift = if live { fake_freeze(n, vt) } else { 0.0 };
-                    let at = |time: f64| s_of(time + shift, n.velocity);
+                    let at = |time: f64| note_s_at(i, time + shift, n.velocity);
                     let s0 = pop.map_or_else(|| at(n.time), |p| p.0);
                     let mut fake_a = pop.map_or(1.0, |p| p.2);
                     let landed = live && vt >= lands;
@@ -1591,7 +1662,7 @@ impl Play {
                         Some((s, d, _)) => (s - d, s + d),
                         None => (at(n.time - n.fake_len), at(n.end_time + n.fake_len)),
                     };
-                    if s1 < -HIT_X - r || s0 > lane_len + r {
+                    if s1 < left_edge - r || s0 > lane_len + r {
                         continue;
                     }
                     let (s0, s1) = if boxed {
@@ -1605,7 +1676,21 @@ impl Play {
                         fade_in(s0) * fake_a
                     };
                     let body_r = r * 0.86;
-                    if bent {
+                    // A TJA roll coming in some other way than along the lane (#DIRECTION, a
+                    // complex #SCROLL): straight from the drum that way, as its notes come.
+                    let way_at = self
+                        .game
+                        .tko()
+                        .and_then(|rt| rt.note_dir(i))
+                        .map(|[dx, dy]| {
+                            let (hx, hy, ..) = place(0.0, 0.0);
+                            move |s: f32| (hx + s * dx as f32, hy + s * dy as f32)
+                        });
+                    if let Some(way_at) = &way_at {
+                        for (rr, col) in [(body_r + 2.5, rgba(WHITE, a)), (body_r, rgba(ROLL, a))] {
+                            segment(c, way_at(s0), way_at(s1), rr, col);
+                        }
+                    } else if bent {
                         // The body follows the lane in short pieces (none across a portal). Where
                         // a body already lies, another adds nothing to see: gimmick maps stack
                         // hundreds along a long rail, millions of pieces a frame, more than a
@@ -1692,17 +1777,24 @@ impl Play {
                     // thousands on screen, more than a frame can hold.
                     let mut drawn_at = None;
                     for (k, hit) in st.ticks().iter().enumerate() {
-                        let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
+                        let ts = note_s_at(i, n.time + k as f64 * n.tick_spacing, n.velocity);
                         let apart = drawn_at.is_none_or(|at| ts - at >= TICK_GAP);
                         if !hit && ts > s0 && ts <= s1 && ts < lane_len && apart {
                             drawn_at = Some(ts);
-                            let (x, y, ..) = place(ts, 0.0);
+                            let (x, y) = match &way_at {
+                                Some(way_at) => way_at(ts),
+                                None => {
+                                    let (x, y, ..) = place(ts, 0.0);
+                                    (x, y)
+                                }
+                            };
                             if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(WHITE, a)) {
                                 c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
                             }
                         }
                     }
                     let (x, y, _, size) = place(s0, 0.0);
+                    let (x, y) = way_at.as_ref().map_or((x, y), |way_at| way_at(s0));
                     if !skin_note(c, x, y, r * size, n.big, ROLL, a) {
                         c.circle(
                             x,
@@ -1715,7 +1807,12 @@ impl Play {
                     }
                 }
                 Kind::Swell => {
+                    let fuse = n.special == beatmap::Special::Fuse;
                     if st.finished() {
+                        // A fuse balloon not popped blows up.
+                        if fuse && st.judged() == Some(Judge::Miss) {
+                            burst(c, t - st.judged_at());
+                        }
                         if st.judged() == Some(Judge::Great) {
                             let p = ((t - st.judged_at()) / 300.0).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
@@ -1731,7 +1828,7 @@ impl Play {
                         continue;
                     }
                     if vt < n.time {
-                        let s = s_of(n.time, n.velocity);
+                        let s = note_s_at(i, n.time, n.velocity);
                         let preempt =
                             stable_preempt(self.game.map().first_velocity * mods.scroll());
                         let a = note_alpha(s)
@@ -1739,6 +1836,14 @@ impl Play {
                             * swell_fade(preempt, n.time - vt);
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
+                            // A TJA balloon comes the way its notes do (#DIRECTION).
+                            let (x, y) = match self.game.tko().and_then(|rt| rt.note_dir(i)) {
+                                Some([dx, dy]) => {
+                                    let (hx, hy, ..) = place(0.0, 0.0);
+                                    (hx + s * dx as f32, hy + s * dy as f32)
+                                }
+                                None => (x, y),
+                            };
                             let r = r * size;
                             // A map shipping its own spinner-warning draws its swells as small notes.
                             let drawn =
@@ -1753,10 +1858,13 @@ impl Play {
                                     );
                                     true
                                 } else {
-                                    c.sprite(Sprite::SpinnerWarning, x, y, r, rgba(WHITE, a))
+                                    // A fuse balloon in the bomb's colours.
+                                    let tint = if fuse { FUSE } else { WHITE };
+                                    c.sprite(Sprite::SpinnerWarning, x, y, r, rgba(tint, a))
                                 };
                             if !drawn {
-                                c.circle(x, y, r, rgba(SWELL, a), rgba(WHITE, a), r * 0.1);
+                                let fill = if fuse { BOMB } else { SWELL };
+                                c.circle(x, y, r, rgba(fill, a), rgba(WHITE, a), r * 0.1);
                                 c.ring(x, y, r * 0.55, rgba(WHITE, 0.8 * a), 3.0);
                             }
                         }
@@ -1855,7 +1963,11 @@ impl Play {
                         (s, ROLL, if memory_over { 0.0 } else { pa })
                     }
                     Kind::Roll if !(n.fake_len > 0.0 && vt >= n.time - n.fake_len) => {
-                        let s = s_of(n.time, n.velocity);
+                        let s = note_s_at(i, n.time, n.velocity);
+                        // Its flash goes with a TJA roll coming in some other way.
+                        if let Some([dx, dy]) = self.game.tko().and_then(|rt| rt.note_dir(i)) {
+                            fx.path = Some([s * dx as f32, s * dy as f32, 1.0]);
+                        }
                         (s, ROLL, if memory_over { 0.0 } else { fade_in(s) })
                     }
                     _ => continue,
@@ -1904,8 +2016,8 @@ impl Play {
             }
         }
 
-        if drum > 0.0 {
-            c.transform_since(lane_shapes, [0.0, 0.0], 1.0, drum, 0.0);
+        if drum != 0.0 || drum_y != 0.0 {
+            c.transform_since(lane_shapes, [0.0, 0.0], 1.0, drum, drum_y);
         }
 
         // Flashlight / Spotlight / Blackout: dark everywhere but a circle around the drum.
@@ -1940,6 +2052,8 @@ impl Play {
         } else {
             draw_drum(c, self.game.presses().map(flash), uni.don(), uni.kat())
         };
+        // Notes over the panel and ones flying out of the drum go with a moved hit target too.
+        let over_lane = c.shapes.len();
         // Back to front, as they were met.
         for (s, fake, k, flow, col, a, nfx) in on_path {
             let n = if fake {
@@ -1969,6 +2083,9 @@ impl Play {
             } else if !skin_note(c, HIT_X, y, r, big, col, 1.0 - p) {
                 c.circle(HIT_X, y, r, rgba(col, 1.0 - p), rgba(WHITE, 1.0 - p), 3.0);
             }
+        }
+        if drum != 0.0 || drum_y != 0.0 {
+            c.transform_since(over_lane, [0.0, 0.0], 1.0, drum, drum_y);
         }
         // Moved off the drum, it's drawn with the rest of the interface.
         if self.game.stats().combo >= 2
@@ -2019,7 +2136,7 @@ impl Play {
                         * (1.0 + 0.12 * (1.0 - age / 90.0).max(0.0));
                     upright.push((
                         HIT_X + drum,
-                        LANE_Y - h / 2.0 - age * 0.02,
+                        LANE_Y + drum_y - h / 2.0 - age * 0.02,
                         h,
                         rgba(self.view.hud.colour(Part::Judgements).unwrap_or(WHITE), a),
                         Upright::Image(sprite),
@@ -2027,7 +2144,7 @@ impl Play {
                 } else {
                     texts.push((
                         HIT_X + drum,
-                        lane_top - 30.0 - age * 0.02,
+                        lane_top + drum_y - 30.0 - age * 0.02,
                         15.0,
                         rgba(
                             self.view.hud.colour(Part::Judgements).unwrap_or(j.color()),
@@ -2210,6 +2327,27 @@ impl Play {
                 c.rotate_since(from, pivot, angle, zoom, dest);
             }
         }
+        // A branching TJA chart's branch, under the lane at its left.
+        if let Some((b, k)) = branch {
+            let y = band_top + band_h + LYRIC_GAP;
+            let name = taiko_logic::branch::NAMES[usize::from(b)].to_uppercase();
+            let col = mix(WHITE, BRANCH_COLS[usize::from(b)], 0.6);
+            c.text(
+                BRANCH_LABEL_X + 1.0,
+                y + 1.0,
+                LYRIC_SIZE,
+                rgba(0, 0.8 * k),
+                &name,
+            );
+            c.text(BRANCH_LABEL_X, y, LYRIC_SIZE, rgba(col, k), &name);
+        }
+        // A TJA chart's #LYRIC line, under the lane where the playfield usually is, upright
+        // whatever moves it.
+        if let Some(line) = self.game.tko().and_then(|rt| rt.lyric(vt)) {
+            let y = band_top + band_h + LYRIC_GAP;
+            c.text_centered(w / 2.0 + 1.0, y + 1.0, LYRIC_SIZE, rgba(0, 0.8), line);
+            c.text_centered(w / 2.0, y, LYRIC_SIZE, rgba(WHITE, 1.0), line);
+        }
         let [x0, y0, x1, y1] = local_zone;
         let (x0, x1) = (flip_x(x0).min(flip_x(x1)), flip_x(x0).max(flip_x(x1)));
         self.view.zone = Some(turned_box(
@@ -2336,6 +2474,8 @@ impl Play {
             .take_while(|n| n.time < next + next_len - 1.0)
         {
             let col = match n.kind {
+                // ADLibs are hidden, and bombs aren't there to hit.
+                _ if n.extra() => continue,
                 Kind::Don => uni.don(),
                 Kind::Kat => uni.kat(),
                 _ => continue,
@@ -3303,6 +3443,39 @@ pub(super) const KIAI_FLASH_REACH: f64 = 2.625;
 pub(super) const ROLL: u32 = 0xFCB806;
 
 pub(super) const SWELL: u32 = 0xF39A2B;
+/// A TJA Kadon (either colour hits it): OpenTaiko's purple.
+pub(super) const KADON: u32 = 0xA24BD8;
+/// A TJA bomb, and a fuse balloon's body.
+pub(super) const BOMB: u32 = 0x34343E;
+/// A fuse balloon's tint over the skin's balloon.
+pub(super) const FUSE: u32 = 0xE0503C;
+/// A TJA ADLib once it's hit (unhit, it isn't drawn).
+pub(super) const ADLIB: u32 = 0xE8E8F0;
+/// How long a bomb's burst round the drum lasts, in ms.
+const BURST_MS: f64 = 350.0;
+
+/// A bomb going off at the drum `ago` ms ago: a red ring widening and fading, with an orange
+/// one inside it.
+fn burst(c: &mut Canvas, ago: f64) {
+    let p = (ago / BURST_MS) as f32;
+    if !(0.0..1.0).contains(&p) {
+        return;
+    }
+    c.ring(
+        HIT_X,
+        LANE_Y,
+        30.0 + 60.0 * p,
+        rgba(FUSE, 1.0 - p),
+        8.0 * (1.0 - p) + 1.0,
+    );
+    c.ring(
+        HIT_X,
+        LANE_Y,
+        20.0 + 30.0 * p,
+        rgba(SWELL, 0.8 * (1.0 - p)),
+        4.0 * (1.0 - p) + 1.0,
+    );
+}
 
 pub(super) const WHITE: u32 = 0xFFFFFF;
 
@@ -3351,6 +3524,16 @@ pub(super) fn lane_stretch(rail: bool, len: f32, w: f32) -> f64 {
 
 /// How far ahead (ms) notes are looked for under a shared scroll, which may hold far notes near.
 pub(super) const SHARED_LOOKAHEAD_MS: f64 = 30_000.0;
+/// A branching TJA chart's branches' lane colours (Normal, Expert, Master), how far the lane
+/// goes to them, how fast, and where the branch's name sits.
+const BRANCH_COLS: [u32; 3] = [0x20202b, 0x3b7fd0, 0xb04ad8];
+const BRANCH_TINT: f32 = 0.35;
+const BRANCH_FADE_MS: f64 = 250.0;
+const BRANCH_LABEL_X: f32 = 10.0;
+
+/// A TJA chart's lyrics: their size, and how far under the lane band they sit.
+const LYRIC_SIZE: f32 = 13.0;
+const LYRIC_GAP: f32 = 6.0;
 
 /// Pulse / Stutter's time shift of far notes at map time `t` (see `Scroll::warp`): Pulse makes
 /// them jump forward on each beat, Stutter hold, then catch up.

@@ -30,6 +30,21 @@ pub enum Kind {
     Swell,
 }
 
+/// OpenTaiko's notes beyond osu!'s (in TJA charts), each on the kind it plays nearest to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Special {
+    #[default]
+    None,
+    /// `G`, a big don-and-ka: either colour hits it, and the other colour after makes it big.
+    Kadon,
+    /// `F`, a hidden note: hitting it is a bonus, missing it costs nothing.
+    Adlib,
+    /// `C`, a bomb: hitting it breaks the combo and drains HP; let by, it costs nothing.
+    Bomb,
+    /// `D`, a balloon with a fuse: not popped by its end, it blows up like a bomb hit.
+    Fuse,
+}
+
 #[derive(Clone, Debug)]
 pub struct Note {
     pub time: f64,
@@ -58,6 +73,29 @@ pub struct Note {
     pub tiny: bool,
     /// A don/kat right before a slider of length NaN: stable can't hit it (owner, 2026-10-28).
     pub unhittable: bool,
+    /// A TJA chart's OpenTaiko note (see `Special`): `None` for every other.
+    pub special: Special,
+}
+
+impl Note {
+    /// An ADLib or a bomb: a don/kat that is never a hit or a miss, and no part of the combo, the
+    /// accuracy or the score a play can get.
+    #[inline]
+    pub fn extra(&self) -> bool {
+        matches!(self.special, Special::Adlib | Special::Bomb)
+    }
+
+    /// A don or kat the play judges: a hit or a miss, part of the combo and the accuracy.
+    #[inline]
+    pub fn judged(&self) -> bool {
+        matches!(self.kind, Kind::Don | Kind::Kat) && !self.unhittable && !self.extra()
+    }
+
+    /// Whether a press of colour `kat` is this note's colour (a Kadon is either).
+    #[inline]
+    pub fn takes(&self, kat: bool) -> bool {
+        self.special == Special::Kadon || (self.kind == Kind::Kat) == kat
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -135,6 +173,24 @@ pub struct Meta {
     /// The `.tko` format version of a map that uses client gimmicks; 0 for a plain chart.
     #[serde(default)]
     pub tko_version: u32,
+    /// What its hit windows are made from: the OD, or a TJA course's arcade windows.
+    #[serde(default)]
+    pub windows: WindowSource,
+    /// A TJA course's `LEVEL`: the rating its charter gave it, shown in place of the star
+    /// rating. None for every other map.
+    #[serde(default)]
+    pub level: Option<f32>,
+}
+
+/// What a map's hit windows are made from (`sim::Windows::for_map`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum WindowSource {
+    /// The OD, as osu! makes them.
+    #[default]
+    Od,
+    /// A TJA chart's arcade windows: the narrow ones (Hard and up) or the wide ones (Easy,
+    /// Normal).
+    Arcade { narrow: bool },
 }
 
 #[derive(Clone, Debug)]
@@ -151,6 +207,9 @@ pub struct Beatmap {
     pub gimmick: Option<std::sync::Arc<crate::tko::gimmick::Gimmick>>,
     /// A `.tko` map's fake notes: drawn like notes, never judged (see `Gimmick::fakes`).
     pub fakes: Vec<Note>,
+    /// A branching TJA chart's branches: `notes` holds every branch's, and this says whose
+    /// each is (see `crate::branch`). None for every other map.
+    pub branching: Option<std::sync::Arc<crate::branch::Branching>>,
 }
 
 impl Meta {
@@ -372,6 +431,7 @@ pub fn from_text(text: &str) -> Result<Beatmap, String> {
         first_velocity: 0.0,
         gimmick,
         fakes: Vec::new(),
+        branching: None,
     };
     convert(&mut map, body);
     if map.notes.is_empty() {
@@ -393,6 +453,7 @@ pub fn parse_raw(text: &str) -> Beatmap {
         first_velocity: 0.0,
         gimmick: None,
         fakes: Vec::new(),
+        branching: None,
     };
     convert(&mut map, body);
     map
@@ -423,6 +484,26 @@ impl Beatmap {
         for cp in &mut self.control_points {
             cp.time += ms;
             cp.beat_origin += ms;
+        }
+        if let Some(b) = &mut self.branching {
+            std::sync::Arc::make_mut(b).shift(ms);
+        }
+    }
+
+    /// The chart as branch `branch` plays it from the start to the end (`crate::branch`
+    /// numbers): what its length, note count and stars are told from. The map itself when it
+    /// doesn't branch.
+    pub fn branch_path(&self, branch: u8) -> Beatmap {
+        let Some(b) = &self.branching else {
+            return self.clone();
+        };
+        Beatmap {
+            notes: (self.notes.iter().enumerate())
+                .filter(|&(i, _)| b.plays(i, |_| branch))
+                .map(|(_, n)| n.clone())
+                .collect(),
+            branching: None,
+            ..self.clone()
         }
     }
 }
@@ -718,6 +799,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                     fake_length: (-raw_length).max(0.0) * spans as f64,
                     tiny: raw_length <= 0.1,
                     unhittable: false,
+                    special: crate::beatmap::Special::None,
                 });
             }
         } else if ty & 8 != 0 {
@@ -742,6 +824,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 fake_length: 0.0,
                 tiny: false,
                 unhittable: false,
+                special: crate::beatmap::Special::None,
             });
         } else if ty & 1 != 0 {
             notes.push(hit(time, sound, velocity));
@@ -825,6 +908,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
         first_velocity: velocity,
         gimmick: None,
         fakes: Vec::new(),
+        branching: None,
     }
 }
 
@@ -843,6 +927,7 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
         fake_length: 0.0,
         tiny: false,
         unhittable: false,
+        special: crate::beatmap::Special::None,
     }
 }
 

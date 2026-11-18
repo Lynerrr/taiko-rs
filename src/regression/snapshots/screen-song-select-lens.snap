@@ -1,0 +1,187 @@
+text  723,7    log in
+text  778,7    what's new
+text   54,24   t
+text   84,24   i
+text   95,24   k
+text  198,27   SONGS
+text  264,27   SETTINGS
+text  354,27   MULTIPLAYER
+text  467,27   DOWNLOAD
+text  551,27   Tab
+text  624,28   7 songs, 7 maps  |  taiko only
+text   68,29   a
+text  109,29   o
+text  136,29   r
+text  150,29   s
+text  125,35   .
+text   34,61   click to search (ctrl+f)...
+text  336,63   Sort: artist
+text  434,63   Mods
+text  494,66   basics
+text  721,71   Leaderboard >
+text  494,85   Regression
+text   44,92   basics
+text   32,93   SORT BY
+text  176,93   THEN BY
+text  300,93   FILTER
+text  416,97   1 diff
+text  494,104  mapped by tests
+text  731,104  NOT SUBMITTED
+text   44,106  Regression  |  mapped by tests
+text  300,106  stars (click a bar, then another)
+text  531,108  any
+text   47,110  artist
+text  191,110  as sorted
+text  495,123  [basics]
+text  780,123  3.08
+text   47,125  title
+text  191,125  title
+text   56,126  basics
+text  430,126  3.08
+text   47,140  difficulty
+text  191,140  artist
+text  494,141  OD
+text  514,141  5.0
+text  545,141  BPM
+text  572,141  200
+text  603,141  Length
+text  651,141  0:09
+text   44,148  big-notes
+text  416,153  1 diff
+text  494,153  Notes
+text  535,153  64
+text  559,153  Don
+text  586,153  32
+text  610,153  Kat
+text  637,153  32
+text  310,154  1
+text  334,154  2
+text  359,154  3
+text  384,154  4
+text  408,154  5
+text  433,154  6
+text  458,154  7
+text  483,154  8
+text  508,154  9
+text  529,154  10+
+text   48,155  length
+text  191,155  stars
+text   44,162  Regression  |  mapped by tests
+text  494,165  SS
+text  514,165  93pp
+text  552,165  99%
+text  579,165  82pp
+text  617,165  98%
+text  644,165  69pp
+text   47,170  bpm
+text  192,170  length
+text  301,170  length (minutes)
+text   44,182  rolls-and-swells
+text  306,183  < 1.5
+text  369,183  1.5-3
+text  431,183  3-5
+text  494,183  5+
+text  352,184  7
+text  414,184  0
+text  477,184  0
+text  539,184  0
+text   47,185  hp
+text  191,185  BPM
+text  416,187  1 diff
+text   44,196  Regression  |  mapped by tests
+text   47,200  od
+text  191,200  date added
+text  300,202  status
+text   47,215  status
+text  192,215  last played
+text  306,215  Local
+text   44,216  sv-and-kiai
+text  339,216  7
+text  416,221  1 diff
+text   44,230  Regression  |  mapped by tests
+text   47,230  recently played
+text  191,230  ascending
+text  306,238  not played yet
+text  431,238  reset
+text   47,245  date added
+text   44,250  stream
+text  416,255  1 diff
+text   47,260  folder
+text   44,264  Regression  |  mapped by tests
+text   47,275  headings: off
+text   45,284  low-od
+text  416,289  1 diff
+text   32,296  7 songs in all sources
+text  320,296  arrows move  Enter pick  Esc or Ctrl+S close
+text  490,297  0:00 / 0:10
+text  675,297  peak 7.0 notes/s at 0:01
+text   44,298  Regression  |  mapped by tests
+text  508,313  click / drag / wheel to scroll - play from where you stop
+text   44,318  high-od
+text  416,323  1 diff
+text   44,332  Regression  |  mapped by tests
+text  641,421  Play
+text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort and filter
+hit   188,20     59x22   Tab(0)
+hit   254,20     82x22   Tab(1)
+hit   344,20    105x22   Tab(2)
+hit   457,20     82x22   Tab(3)
+hit   424,56     44x20   ModsButton
+hit   326,56     92x20   SortList
+hit    24,54    296x24   TextField
+hit    24,86    444x34   SongHeader(0)
+hit    44,120   424x22   SongRow(0)
+hit    24,142   444x34   SongHeader(1)
+hit    24,176   444x34   SongHeader(2)
+hit    24,210   444x34   SongHeader(3)
+hit    24,244   444x34   SongHeader(4)
+hit    24,278   444x34   SongHeader(5)
+hit    24,312   444x34   SongHeader(6)
+hit     4,86     20x354  SongScrollbar
+hit   701,101    16x13   SelectLike
+hit   490,183   330x61   Preview
+hit   488,250   334x44   Preview
+hit   709,64    102x20   BoardPage
+hit   480,414   350x22   Key(Enter)
+hit   472,221     8x48   SplitList
+hit    20,84    538x228  Lens(Panel)
+hit    32,106   132x14   Lens(Sort(0))
+hit    32,121   132x14   Lens(Sort(1))
+hit    32,136   132x14   Lens(Sort(2))
+hit    32,151   132x14   Lens(Sort(3))
+hit    32,166   132x14   Lens(Sort(4))
+hit    32,181   132x14   Lens(Sort(5))
+hit    32,196   132x14   Lens(Sort(6))
+hit    32,211   132x14   Lens(Sort(7))
+hit    32,226   132x14   Lens(Sort(8))
+hit    32,241   132x14   Lens(Sort(9))
+hit    32,256   132x14   Lens(Sort(10))
+hit    32,271   132x14   Lens(Headings)
+hit   176,106   112x14   Lens(Order(0))
+hit   176,121   112x14   Lens(Order(1))
+hit   176,136   112x14   Lens(Order(2))
+hit   176,151   112x14   Lens(Order(3))
+hit   176,166   112x14   Lens(Order(4))
+hit   176,181   112x14   Lens(Order(5))
+hit   176,196   112x14   Lens(Order(6))
+hit   176,211   112x14   Lens(Order(7))
+hit   176,226   112x14   Lens(Desc)
+hit   300,116    22x46   Lens(Star(0))
+hit   325,116    22x46   Lens(Star(1))
+hit   350,116    22x46   Lens(Star(2))
+hit   375,116    22x46   Lens(Star(3))
+hit   400,116    22x46   Lens(Star(4))
+hit   425,116    22x46   Lens(Star(5))
+hit   449,116    22x46   Lens(Star(6))
+hit   474,116    22x46   Lens(Star(7))
+hit   499,116    22x46   Lens(Star(8))
+hit   524,116    22x46   Lens(Star(9))
+hit   300,179    59x14   Lens(Length(0))
+hit   363,179    59x14   Lens(Length(1))
+hit   425,179    59x14   Lens(Length(2))
+hit   488,179    59x14   Lens(Length(3))
+hit   300,211    46x14   Lens(Status(3))
+hit   300,234   121x14   Lens(Unplayed)
+hit   425,234   121x14   Lens(Reset)
+hit   771,2      74x14   Changelog
+hit   715,2      50x14   Account

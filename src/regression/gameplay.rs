@@ -372,6 +372,81 @@ fn judgement_boundaries_match_the_windows() {
     assert_snapshot("gameplay-judgement-boundaries", &out);
 }
 
+/// A TJA chart of `course` with one don, 3 s in.
+fn tja_one(course: &str) -> Beatmap {
+    let text = format!("TITLE:one\nBPM:120\nOFFSET:-3\nCOURSE:{course}\n\n#START\n1,\n#END\n");
+    let mut song = taiko_logic::tja::parse(&text).expect("parses");
+    song.courses.remove(0).map
+}
+
+/// How a TJA chart's single don is judged `offset` ms off, replayed with `mods`.
+fn judge_tja(map: &Beatmap, mods: &[&str], offset: f64) -> Option<Judge> {
+    let t = map.notes[0].time + offset;
+    let g = play_replay(map, &replay(vec![(t, 1)], mods, scores::new_version()), 8.0);
+    let s = g.stats();
+    match (s.great, s.ok, s.miss) {
+        (1, 0, 0) => Some(Judge::Great),
+        (0, 1, 0) => Some(Judge::Ok),
+        (0, 0, 1) => Some(Judge::Miss),
+        _ => None,
+    }
+}
+
+#[test]
+fn tja_charts_judge_with_arcade_windows() {
+    let mut out = String::new();
+    let show = |w: Windows| format!("{} {} {}", num(w.great, 3), num(w.ok, 3), num(w.miss, 3));
+    for course in ["Easy", "Normal", "Hard", "Oni", "Edit"] {
+        let meta = tja_one(course).meta;
+        let _ = write!(out, "{course:<6}");
+        for m in ["", "HR", "EZ", "PR", "DT", "HT"] {
+            let w = Windows::for_map(
+                &meta,
+                Mods::parse(m),
+                crate::od_override::DEFAULT,
+                WindowRule::Osu,
+            );
+            let _ = write!(
+                out,
+                " | {:<2} {}",
+                if m.is_empty() { "NM" } else { m },
+                show(w)
+            );
+        }
+        for od in [2.0, 8.0] {
+            let w = Windows::for_map(&meta, Mods::parse("OV"), od, WindowRule::Osu);
+            let _ = write!(out, " | OV{od} {}", show(w));
+        }
+        out.push('\n');
+    }
+    // Played: runs of the same judgement over -160..160 ms in 0.5 ms steps.
+    for course in ["Normal", "Oni"] {
+        let map = tja_one(course);
+        for mods in [&[][..], &["HR"], &["EZ"], &["DT"]] {
+            let mut runs: Vec<(f64, f64, Option<Judge>)> = Vec::new();
+            for k in -320..=320 {
+                let off = k as f64 * 0.5;
+                let j = judge_tja(&map, mods, off);
+                match runs.last_mut() {
+                    Some(r) if r.2 == j => r.1 = off,
+                    _ => runs.push((off, off, j)),
+                }
+            }
+            let _ = write!(out, "{course} {mods:?}:");
+            for (a, b, j) in runs {
+                let _ = write!(out, " [{a}..{b}] {j:?};");
+            }
+            out.push('\n');
+        }
+    }
+    // Oni: +24 ms is a great, +26 an ok; Easy: +41 a great.
+    let oni = tja_one("Oni");
+    assert_eq!(judge_tja(&oni, &[], 24.0), Some(Judge::Great));
+    assert_eq!(judge_tja(&oni, &[], 26.0), Some(Judge::Ok));
+    assert_eq!(judge_tja(&tja_one("Easy"), &[], 41.0), Some(Judge::Great));
+    assert_snapshot("gameplay-tja-windows", &out);
+}
+
 #[test]
 fn autoplay_hits_everything() {
     let mut out = String::new();

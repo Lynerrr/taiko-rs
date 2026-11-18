@@ -21,7 +21,7 @@ fn client(tag: &str, charts: Vec<maps::Chart>) -> (State, Songs, Instant) {
 }
 
 /// From song select: Enter, then waits for the map to load.
-fn start_selected(s: &mut State, now: &mut Instant) {
+pub(super) fn start_selected(s: &mut State, now: &mut Instant) {
     press(s, KeyCode::Enter, *now);
     assert!(
         matches!(scene_name(s), "Loading" | "Play"),
@@ -36,7 +36,7 @@ fn start_selected(s: &mut State, now: &mut Instant) {
 
 /// Plays the rest of the map in `Play` with `presses` (map time, drum key 0-3) on the keyboard,
 /// frame by frame, until the scene changes.
-fn play_out(s: &mut State, now: &mut Instant, presses: &[(f64, u8)]) {
+pub(super) fn play_out(s: &mut State, now: &mut Instant, presses: &[(f64, u8)]) {
     let keys = s.cfg.keys;
     let mut next = 0;
     for _ in 0..200_000 {

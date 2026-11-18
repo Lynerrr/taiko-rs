@@ -45,6 +45,10 @@ caches crowded the repository's 10 GB out. Now:
 - `Release build` saves its caches from stable only (`prefix-key: v1-rust`); dev's release
   builds read them.
 
+## Version numbers
+
+How builds are numbered and how a version is released: [releasing.md](releasing.md).
+
 ## Sync to dev
 
 Bug fixes land on stable first, and dev has to carry them: a release of dev to stable takes dev's

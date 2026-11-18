@@ -55,6 +55,25 @@ fn song_select() {
 }
 
 #[test]
+fn song_select_sort_and_filter() {
+    let (mut s, _songs, mut now) = client("screen-select-lens");
+    // Ctrl+S: the sort and filter panel over the list.
+    s.modifiers_ctrl = true;
+    press(&mut s, KeyCode::KeyS, now);
+    s.modifiers_ctrl = false;
+    assert!(s.select.lens_ui.is_some());
+    assert_snapshot("screen-song-select-lens", &shot(&mut s, &mut now));
+    // A filter picked: its token in the search box, the button lit with how many are on.
+    s.select.lens_pick(ui::LensItem::Unplayed, &s.library);
+    s.select.lens_ui = None;
+    assert_snapshot("screen-song-select-filtered", &shot(&mut s, &mut now));
+    // Filters that leave nothing: how to get the maps back, not where to find maps.
+    s.select.lens_pick(ui::LensItem::Status(0), &s.library);
+    assert!(s.select.song_groups().is_empty());
+    assert_snapshot("screen-song-select-filtered-out", &shot(&mut s, &mut now));
+}
+
+#[test]
 fn main_menu() {
     let (mut s, _songs, mut now) = client("screen-menu");
     s.cfg.main_menu = true;

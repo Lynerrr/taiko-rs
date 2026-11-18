@@ -346,8 +346,18 @@ pub struct Config {
     pub notify_requests: bool,
     /// Discord application whose name the status shows (empty = the built-in one).
     pub discord_app_id: String,
-    /// Song select order (ui::SortMode name).
+    /// Song select order (ui::SortMode name): the lens of all sources' list, with
+    /// `song_headings` and `song_order`.
     pub sort: String,
+    /// The order under each heading of all sources' list (`ui::Order` name), and `desc` after it
+    /// for the other way round.
+    pub song_order: String,
+    /// The source song select lists (`ui::Source` name).
+    pub song_source: String,
+    /// Each other source's lens (`ui::Lens::text`; empty: the one it starts with).
+    pub lens_osu: String,
+    pub lens_tja: String,
+    pub lens_own: String,
     /// The collection song select shows, as `own:<name>` or `osu:<name>` (empty: all songs).
     pub collection: String,
     /// Countdown before play continues after the pause menu (ms).
@@ -410,6 +420,8 @@ pub struct Config {
     pub map_skins: bool,
     /// The Songs folder picked in settings, scanned instead of looking for osu! installs.
     pub songs_folder: Option<PathBuf>,
+    /// The folder of TJA charts picked in settings (None: `Tja` beside `Custom`, `tja_dir`).
+    pub tja_folder: Option<PathBuf>,
     /// Multiverse's universes: each playfield's colours, note shape, speed and mods.
     pub universes: [crate::multiverse::Universe; crate::multiverse::COUNT],
     /// The player's Multiverse presets.
@@ -552,6 +564,11 @@ impl Default for Config {
             check_updates: true,
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
+            song_order: "sort".into(),
+            song_source: "all".into(),
+            lens_osu: String::new(),
+            lens_tja: String::new(),
+            lens_own: String::new(),
             collection: String::new(),
             kiai_effects: true,
             menu_glitch: true,
@@ -600,6 +617,7 @@ impl Default for Config {
             skin_parts: Default::default(),
             map_skins: true,
             songs_folder: None,
+            tja_folder: None,
             universes: crate::multiverse::defaults(),
             universe_presets: Vec::new(),
             shapeshift: Default::default(),
@@ -742,6 +760,15 @@ fn custom_dir_in(folder: Option<&Path>) -> Option<PathBuf> {
     }
     own_dir_in(None, CUSTOM)
 }
+
+/// The default folder of TJA charts: `Tja` beside `Custom` (`custom_dir`); None in tests
+/// without a data folder.
+pub fn tja_dir() -> Option<PathBuf> {
+    Some(custom_dir_in(data_folder().as_deref())?.with_file_name(TJA))
+}
+
+/// The default folder of TJA charts (`tja_dir`).
+pub const TJA: &str = "Tja";
 
 /// The folders of taiko.rs's own custom maps (`custom_dir`) and of their kept older versions.
 pub const CUSTOM: &str = "Custom";
@@ -1264,6 +1291,11 @@ impl Config {
                 "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
+                "song_order" => cfg.song_order = v.to_string(),
+                "song_source" => cfg.song_source = v.to_string(),
+                "lens_osu" => cfg.lens_osu = v.to_string(),
+                "lens_tja" => cfg.lens_tja = v.to_string(),
+                "lens_own" => cfg.lens_own = v.to_string(),
                 "collection" => cfg.collection = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
                 "menu_glitch" => cfg.menu_glitch = v != "false",
@@ -1398,6 +1430,7 @@ impl Config {
                 "skin_part" => cfg.skin_parts.parse(v),
                 "map_skins" => cfg.map_skins = v != "false",
                 "songs_folder" => cfg.songs_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
+                "tja_folder" => cfg.tja_folder = (!v.is_empty()).then(|| PathBuf::from(v)),
                 "multiverse" => cfg.universes = crate::multiverse::parse(v),
                 "multiverse_preset" => cfg
                     .universe_presets
@@ -1849,6 +1882,10 @@ impl Config {
             self.show_converts
         ));
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
+        out.push_str(&format!(
+            "# song select's order under each heading (sort, title, artist, stars, length, bpm, added, played; desc after it: the other way round)\nsong_order = {}\n# the source song select lists: all, osu, tja or own (taiko.rs's maps)\nsong_source = {}\n# each source's sort, order, direction and headings (empty: the one it starts with)\nlens_osu = {}\nlens_tja = {}\nlens_own = {}\n",
+            self.song_order, self.song_source, self.lens_osu, self.lens_tja, self.lens_own
+        ));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
             "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators, ur, counts; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",
@@ -1922,6 +1959,14 @@ impl Config {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         out.push_str(&format!("# Songs folder to scan instead of finding osu!'s (empty = find it)\nsongs_folder = {folder}\n"));
+        let tja = self
+            .tja_folder
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "# folder of TJA charts (empty = Tja beside Custom)\ntja_folder = {tja}\n"
+        ));
         out.push_str("# extra song folders / .osz files, one per line\n");
         for s in &self.songs {
             out.push_str(&format!("songs = {}\n", s.display()));

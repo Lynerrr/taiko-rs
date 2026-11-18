@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::beatmap::{self, Beatmap, Kind};
+use crate::beatmap::{self, Beatmap, Kind, Special};
 use crate::calibrate;
 use crate::clock::GameClock;
 use crate::defense::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
@@ -71,7 +71,9 @@ pub trait Audio {
     fn position_ms(&self, now: Instant) -> Option<f64>;
 }
 
+mod branches;
 mod control;
+pub use branches::BranchNow;
 mod rails;
 mod read;
 mod setup;
@@ -147,6 +149,10 @@ pub struct Stats {
     pub roll_ticks: u32,
     pub swells: u32,
     pub strong: u32,
+    /// TJA ADLibs hit.
+    pub adlib: u32,
+    /// TJA bombs hit, and fuse balloons let blow up.
+    pub bombs: u32,
     pub errors: Vec<f64>,
     /// Audio offset in effect when each error was measured, so suggestions stay right after the
     /// offset changes mid-song.
@@ -230,6 +236,11 @@ pub struct Windows {
     pub miss: f64,
 }
 
+/// A TJA chart's great/ok/miss windows in ms on Hard, Oni and Ura Oni (OpenTaiko's timing zones).
+const ARCADE_NARROW: [f64; 3] = [25.0, 75.0, 108.0];
+/// The same on Easy and Normal.
+const ARCADE_WIDE: [f64; 3] = [42.0, 108.0, 125.0];
+
 /// How wide the hit windows are made from the OD.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WindowRule {
@@ -256,6 +267,40 @@ impl Windows {
             great: width(od, 50.0, 35.0, 20.0),
             ok: width(od, 120.0, 80.0, 50.0),
             miss: width(od, 135.0, 95.0, 70.0),
+        }
+    }
+
+    /// The windows `map` is judged with under `mods` (`od_override` for OD Override): from its
+    /// OD as `rule` makes them, or a TJA chart's arcade windows.
+    pub fn for_map(
+        meta: &beatmap::Meta,
+        mods: Mods,
+        od_override: f64,
+        rule: WindowRule,
+    ) -> Windows {
+        match meta.windows {
+            beatmap::WindowSource::Od => {
+                Windows::with_rule(mods.od_with(meta.od, od_override), rule)
+            }
+            beatmap::WindowSource::Arcade { narrow } => {
+                Windows::arcade(narrow, mods.od_with(5.0, od_override))
+            }
+        }
+    }
+
+    /// A TJA chart's windows, as OpenTaiko has them: great/ok/miss ±25/75/108 ms on Hard and up,
+    /// ±42/108/125 on Easy and Normal. `od` is what the mods make of OD 5, and all three scale by
+    /// what it does to osu!'s great window there (HR ×0.83, EZ ×1.21), so their ratios stay.
+    /// OpenTaiko judges whole ms with the bounds in, so a window is its width and half a ms,
+    /// compared with <=, as `judged_window_ms` does it for osu!.
+    pub fn arcade(narrow: bool, od: f64) -> Windows {
+        let [great, ok, miss] = if narrow { ARCADE_NARROW } else { ARCADE_WIDE };
+        let scale = beatmap::great_ms(od) / beatmap::great_ms(5.0);
+        let width = |w: f64| w * scale + 0.5;
+        Windows {
+            great: width(great),
+            ok: width(ok),
+            miss: width(miss),
         }
     }
 
@@ -369,7 +414,7 @@ impl NoteBlock {
                 range: i * 128..i * 128 + notes.len(),
                 min_velocity: notes
                     .iter()
-                    .map(|n| n.velocity)
+                    .map(|n| n.velocity.abs())
                     .fold(f64::INFINITY, f64::min)
                     .max(1e-6),
                 last_end: notes
@@ -421,6 +466,10 @@ pub struct Game {
     clock: GameClock,
     state: Vec<NoteState>,
     cursor: usize,
+    /// `expire` has looked at every note before this one: those still in play (a long roll
+    /// holding the cursor back, a note in its hit window) are in `expire_open`, in order.
+    expire_scan: usize,
+    expire_open: Vec<usize>,
     stats: Stats,
     windows: Windows,
     /// Gameplay time (ms) of the current frame.
@@ -571,6 +620,8 @@ pub struct Game {
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
     universes: Option<[Universe; multiverse::COUNT]>,
+    /// A branching chart's branches as played (see `branches`).
+    branches: Option<branches::BranchRun>,
 }
 
 /// Overtime: how long (ms) he stays on screen.
@@ -679,11 +730,40 @@ impl Scroll {
     /// Screen x of something at map time `time` scrolling at `velocity`.
     #[inline]
     pub fn x(&self, time: f64, velocity: f64) -> f32 {
-        let v = velocity * self.speed * self.factor(time);
         let ahead = match &self.shared {
             Some((table, shift, now)) => table.x(time - shift) - now,
             None => time - self.t,
         };
+        self.x_ahead(time, velocity, ahead)
+    }
+
+    /// The same, `timed`: by its own time even under the shared scroll (see
+    /// `NoteMotion::timed`).
+    #[inline]
+    pub fn x_of(&self, time: f64, velocity: f64, timed: bool) -> f32 {
+        if timed {
+            self.x_ahead(time, velocity, time - self.t)
+        } else {
+            self.x(time, velocity)
+        }
+    }
+
+    /// The same as it was at game time `then` (a note waiting to start moving holds that
+    /// place); the mods bend it as they do now.
+    #[inline]
+    pub fn x_as_of(&self, time: f64, velocity: f64, then: f64, timed: bool) -> f32 {
+        let ahead = match &self.shared {
+            Some((table, shift, _)) if !timed => table.x(time - shift) - table.x(then - shift),
+            _ => time - then,
+        };
+        self.x_ahead(time, velocity, ahead)
+    }
+
+    /// Screen x of something at map time `time` scrolling at `velocity` that is `ahead` ms
+    /// (as far as the song scrolls) from the drum.
+    #[inline]
+    fn x_ahead(&self, time: f64, velocity: f64, ahead: f64) -> f32 {
+        let v = velocity * self.speed * self.factor(time);
         // Pulse / Stutter shift the time of far notes; near the drum the shift fades out, so
         // a note always reaches it exactly on time.
         let near = (ahead * v / self.lane).clamp(0.0, 1.0);
@@ -984,6 +1064,14 @@ impl Game {
         seed: u64,
         half: crate::mods::HalfRule,
     ) -> Game {
+        // A gimmick on the map's own clock (a TJA chart's) isn't read OSU_TIMING_MS early.
+        let shift = match &map.gimmick {
+            Some(g) if g.motion.map_clock => 0.0,
+            _ => beatmap::OSU_TIMING_MS,
+        };
+        if let Some(g) = map.gimmick.clone() {
+            g.motion.apply(&mut map, shift);
+        }
         apply_to_map(&mut map, mods, seed, half);
         let tko = map.gimmick.clone().map(|g| {
             let beats: Vec<crate::tko::runtime::BeatSection> = map
@@ -1007,7 +1095,7 @@ impl Game {
                     },
                     big: n.big,
                 }),
-                beatmap::OSU_TIMING_MS,
+                shift,
                 &beats,
             )
         });
@@ -1067,10 +1155,11 @@ impl Game {
                 .map_or(500.0, |s| s.0)
         };
         // osu!lazer's TaikoHealthProcessor.
-        let hit_count = map
-            .notes
-            .iter()
-            .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat) && !n.unhittable)
+        // A branching chart's on the Normal branch, which plays the fewest.
+        let hit_count = (map.notes.iter().enumerate())
+            .filter(|&(i, n)| {
+                n.judged() && map.branching.as_ref().is_none_or(|b| b.plays(i, |_| 0))
+            })
             .count();
         let hits = hit_count.max(1) as f64;
         let hp_drain = mods.hp(map.meta.hp);
@@ -1099,14 +1188,21 @@ impl Game {
         };
         let shapeshift = shapeshift::Config::default();
         let shape_order = shape_order(&map, mods, shapeshift);
-        Game {
+        let mut game = Game {
             seed,
             half,
-            windows: Windows::new(mods.od(map.meta.od)),
+            windows: Windows::for_map(
+                &map.meta,
+                mods,
+                crate::od_override::DEFAULT,
+                WindowRule::Osu,
+            ),
             map,
             clock: GameClock::new(track_start, audio.is_some()),
             state,
             cursor: 0,
+            expire_scan: 0,
+            expire_open: Vec::new(),
             stats: Stats::default(),
             time: start,
             start,
@@ -1183,7 +1279,10 @@ impl Game {
             shape_order,
             universes: None,
             defense: None,
-        }
+            branches: None,
+        };
+        game.start_branches();
+        game
     }
 
     /// Plays with the player's own settings: what Shapeshift and Tact play with and the OD
@@ -1195,7 +1294,7 @@ impl Game {
         self.tact = s.tact;
         self.od_override = s.od_override;
         self.log = s.log;
-        self.windows = Windows::new(self.mods.od_with(self.map.meta.od, s.od_override));
+        self.windows = Windows::for_map(&self.map.meta, self.mods, s.od_override, WindowRule::Osu);
         self
     }
 
@@ -1509,11 +1608,7 @@ impl Game {
                 .notes
                 .iter()
                 .zip(&self.state)
-                .filter(|(n, st)| {
-                    matches!(n.kind, Kind::Don | Kind::Kat)
-                        && !n.unhittable
-                        && st.judged_at != f64::NEG_INFINITY
-                })
+                .filter(|(n, st)| n.judged() && st.judged_at != f64::NEG_INFINITY)
                 .count() as u32;
             let max = if scoring == Scoring::Lazer {
                 300.0 * (1..=n).map(lazer_combo_weight).sum::<f64>()
@@ -1631,6 +1726,7 @@ impl Game {
         let upto = self.last_frame_time.min(self.time);
         self.last_frame_time = self.time;
         self.expire(upto);
+        self.pick_branches(upto);
         self.play_combo_break(audio);
         self.play_scares(audio);
         self.outro_skipped || self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
@@ -1665,11 +1761,9 @@ impl Game {
     pub(crate) fn auto_keys(&mut self) -> &[Vec<usize>] {
         let style = self.autoplay_style;
         if self.auto_plan.as_ref().is_none_or(|(s, _)| *s != style) {
+            // Autoplay lets ADLibs and bombs be.
             let hits: Vec<usize> = (0..self.map.notes.len())
-                .filter(|&i| {
-                    matches!(self.map.notes[i].kind, Kind::Don | Kind::Kat)
-                        && !self.map.notes[i].unhittable
-                })
+                .filter(|&i| self.map.notes[i].judged())
                 .collect();
             let notes: Vec<(f64, bool, bool)> = hits
                 .iter()
@@ -1682,10 +1776,20 @@ impl Game {
                 })
                 .collect();
             let mut plan = vec![Vec::new(); self.map.notes.len()];
-            for (&i, keys) in
+            for (&i, mut keys) in
                 hits.iter()
                     .zip(crate::autoplay::note_keys(&notes, self.main_beat, style))
             {
+                // A Kadon is played as written: a rim, then a centre with the other hand.
+                if self.map.notes[i].special == Special::Kadon && keys.len() == 2 {
+                    if keys[0] < 2 {
+                        keys[0] = 0;
+                        keys[1] = 2;
+                    } else {
+                        keys[0] = 3;
+                        keys[1] = 1;
+                    }
+                }
                 plan[i] = keys;
             }
             self.auto_plan = Some((style, plan));
@@ -1716,7 +1820,7 @@ impl Game {
             let (time, kind) = (n.time, n.kind);
             let st = &self.state[i];
             match kind {
-                Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
+                Kind::Don | Kind::Kat if st.judged.is_none() && n.judged() => {
                     for (j, key) in self.auto_keys()[i].clone().into_iter().enumerate() {
                         self.auto_hit(key, time, audio, (i, j));
                     }
@@ -1769,7 +1873,7 @@ impl Game {
             let (time, kind, big) = (n.time, n.kind, n.big);
             let st = &self.state[i];
             match kind {
-                Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
+                Kind::Don | Kind::Kat if st.judged.is_none() && n.judged() => {
                     let keys = self.auto_keys()[i].clone();
                     for (j, &key) in keys.iter().enumerate() {
                         if !self.auto_sched.insert((i, j)) {
@@ -1835,7 +1939,7 @@ impl Game {
         notes[notes.partition_point(|m| m.time < n.time)..]
             .iter()
             .take_while(|m| m.time <= n.end_time)
-            .any(|m| matches!(m.kind, Kind::Don | Kind::Kat) && !m.unhittable)
+            .any(|m| m.judged())
     }
 
     /// `id`: the note and key slot (or roll tick) this press is, to tell whether its sound went
@@ -2096,6 +2200,7 @@ impl Game {
             };
         }
         self.cursor = 0;
+        self.rescan_expiry();
         self.stats = Stats::default();
         self.score_basis = None;
         self.combo_points = 0.0;
@@ -2115,6 +2220,7 @@ impl Game {
             *next = 0;
         }
         self.time = self.start;
+        self.start_branches();
     }
 
     /// Replays: the map time of every note the whole replay misses, judged ahead from the
@@ -2176,41 +2282,23 @@ impl Game {
     }
 
     pub fn expire(&mut self, t: f64) {
-        for i in self.cursor..self.map.notes.len() {
-            let n = &self.map.notes[i];
-            if n.time > t {
-                break;
+        // Each note up to `t` once, then only those still in play: a long roll holds the cursor
+        // back for its whole length, and the notes under it are not looked at again every frame.
+        let mut open = std::mem::take(&mut self.expire_open);
+        open.retain(|&i| {
+            self.expire_note(i, t);
+            !self.expired(i, t)
+        });
+        let mut i = self.expire_scan.max(self.cursor);
+        while i < self.map.notes.len() && self.map.notes[i].time <= t {
+            self.expire_note(i, t);
+            if !self.expired(i, t) {
+                open.push(i);
             }
-            // A tower takes it for us: a GREAT, on time.
-            if self.tower_takes(i) {
-                let at = n.time;
-                self.apply(i, Judge::Great, at, None);
-                continue;
-            }
-            let st = &mut self.state[i];
-            match n.kind {
-                // One before a NaN slider is never judged, not even a miss (owner, 2026-10-28).
-                Kind::Don | Kind::Kat => {
-                    if st.judged.is_none() && !n.unhittable && t - n.time > self.windows.ok {
-                        self.apply(i, Judge::Miss, t, None);
-                    }
-                }
-                Kind::Roll => {
-                    if t > n.end_time + n.tick_spacing / 2.0 {
-                        st.finished = true;
-                    }
-                }
-                Kind::Swell => {
-                    if !st.finished && t > n.end_time {
-                        st.finished = true;
-                        // osu!lazer: a swell not cleared drains HP.
-                        if self.scoring == Scoring::Lazer && self.failed.is_none() {
-                            self.hp = (self.hp - LAZER_SWELL_MISS_HP * self.hp_miss).max(0.0);
-                        }
-                    }
-                }
-            }
+            i += 1;
         }
+        self.expire_scan = i;
+        self.expire_open = open;
         if self
             .strong
             .as_ref()
@@ -2218,19 +2306,73 @@ impl Game {
         {
             self.strong = None;
         }
-        while self.cursor < self.map.notes.len() {
-            let st = &self.state[self.cursor];
-            let n = &self.map.notes[self.cursor];
-            let done = match n.kind {
-                Kind::Don | Kind::Kat => {
-                    st.judged.is_some() || (n.unhittable && t - n.time > self.windows.ok)
-                }
-                Kind::Roll | Kind::Swell => st.finished,
-            };
-            if !done {
-                break;
-            }
+        while self.cursor < self.map.notes.len() && self.expired(self.cursor, t) {
             self.cursor += 1;
+        }
+    }
+
+    /// `expire` looks at every note from the cursor again (notes came back into play).
+    pub(crate) fn rescan_expiry(&mut self) {
+        self.expire_scan = self.cursor;
+        self.expire_open.clear();
+    }
+
+    /// Note `i` has nothing more to happen at `t`: the cursor passes it, `expire` lets it be.
+    fn expired(&self, i: usize, t: f64) -> bool {
+        let (n, st) = (&self.map.notes[i], &self.state[i]);
+        match n.kind {
+            Kind::Don | Kind::Kat => {
+                st.judged.is_some()
+                    || st.finished
+                    || ((n.unhittable || n.extra()) && t - n.time > self.windows.ok)
+            }
+            Kind::Roll | Kind::Swell => st.finished,
+        }
+    }
+
+    /// What `t` does to note `i` (at or before it): a miss, a roll or swell over.
+    fn expire_note(&mut self, i: usize, t: f64) {
+        let n = &self.map.notes[i];
+        // A tower takes it for us: a GREAT, on time.
+        if self.tower_takes(i) {
+            let at = n.time;
+            self.apply(i, Judge::Great, at, None);
+            return;
+        }
+        let st = &mut self.state[i];
+        match n.kind {
+            // An ADLib or a bomb let by is no miss: it's just gone.
+            Kind::Don | Kind::Kat if n.extra() => {
+                if t - n.time > self.windows.ok {
+                    st.finished = true;
+                }
+            }
+            // One before a NaN slider is never judged, not even a miss (owner, 2026-10-28).
+            Kind::Don | Kind::Kat => {
+                if st.judged.is_none() && !n.unhittable && t - n.time > self.windows.ok {
+                    self.apply(i, Judge::Miss, t, None);
+                }
+            }
+            Kind::Roll => {
+                if t > n.end_time + n.tick_spacing / 2.0 {
+                    st.finished = true;
+                }
+            }
+            Kind::Swell => {
+                if !st.finished && t > n.end_time {
+                    st.finished = true;
+                    let (fuse, end) = (n.special == Special::Fuse && !n.unhittable, n.end_time);
+                    if fuse {
+                        // A fuse balloon not popped blows up.
+                        st.judged = Some(Judge::Miss);
+                        st.judged_at = end;
+                        self.explode(end);
+                    } else if self.scoring == Scoring::Lazer && self.failed.is_none() {
+                        // osu!lazer: a swell not cleared drains HP.
+                        self.hp = (self.hp - LAZER_SWELL_MISS_HP * self.hp_miss).max(0.0);
+                    }
+                }
+            }
         }
     }
 
@@ -2249,6 +2391,12 @@ impl Game {
         if self.failed.is_some() {
             return;
         }
+        // A note let go by counts when its last chance went, however late the frame saw it.
+        let counted_at = match error {
+            None if judge == Judge::Miss => t.min(self.map.notes[i].time + self.windows.ok),
+            _ => t,
+        };
+        self.count_for_branches(counted_at, i, Some(judge));
         let combo_mult = 1.0 + self.stats.combo.min(100) as f64 / 100.0;
         let combo_before = self.stats.combo;
         match judge {
@@ -2405,8 +2553,7 @@ impl Game {
 
     /// Judges with the hit windows `rule` makes (a replay's own, see `Replay::window_rule`).
     pub fn set_window_rule(&mut self, rule: WindowRule) {
-        self.windows =
-            Windows::with_rule(self.mods.od_with(self.map.meta.od, self.od_override), rule);
+        self.windows = Windows::for_map(&self.map.meta, self.mods, self.od_override, rule);
     }
 
     /// Replays without audio: jumps to map time `t` (forwards only), judging the recorded presses
@@ -2419,6 +2566,7 @@ impl Game {
         }
         self.feed_replay(None);
         self.expire(t);
+        self.pick_branches(t);
         self.play_combo_break(None);
         self.play_scares(None);
     }
@@ -2471,14 +2619,18 @@ impl Game {
         let normal = if kat { Sound::Kat } else { Sound::Don };
         let big = if kat { Sound::BigKat } else { Sound::BigDon };
         self.expire(t);
+        // Branch points before the press are passed first, live or played back at any pace.
+        self.pick_branches(t);
 
         if let Some(s) = &self.strong {
             let other_hand = (s.key < 2) != (key < 2);
-            if s.kat == kat
-                && other_hand
-                && (t - s.at).abs() <= STRONG_WINDOW
-                && self.state[s.note].judged.is_some()
-            {
+            // A Kadon's second hit is the other colour, either hand.
+            let second = if self.map.notes[s.note].special == Special::Kadon {
+                s.kat != kat
+            } else {
+                s.kat == kat && other_hand
+            };
+            if second && (t - s.at).abs() <= STRONG_WINDOW && self.state[s.note].judged.is_some() {
                 self.strong = None;
                 self.stats.strong += 1;
                 self.add_score(300.0);
@@ -2509,8 +2661,21 @@ impl Game {
                 if done {
                     self.add_bonus(LAZER_SWELL);
                 }
+                self.count_for_branches(t, i, None);
             }
             if !to_note {
+                return normal;
+            }
+        }
+
+        // An ADLib or a bomb nearer the press than the next note takes it, either colour.
+        if let Some(e) = self.extra_near(t) {
+            let at = self.map.notes[e].time;
+            let nearer = self
+                .next_hittable(t)
+                .is_none_or(|i| (t - at).abs() < (t - self.map.notes[i].time).abs());
+            if nearer {
+                self.hit_extra(e, t);
                 return normal;
             }
         }
@@ -2520,7 +2685,7 @@ impl Game {
                 Mash::Nearest => self.judge_nearest(i, kat, t),
                 legacy => {
                     let n = &self.map.notes[i];
-                    let wrong = (n.kind == Kind::Kat) != kat;
+                    let wrong = !n.takes(kat);
                     let judge = if wrong {
                         Judge::Miss
                     } else {
@@ -2563,6 +2728,8 @@ impl Game {
                 self.add_score(points);
                 self.add_bonus(bonus);
             }
+            // A branch condition counts every hit, as the arcade does, not just the ticks.
+            self.count_for_branches(t, i, None);
         }
         normal
     }
@@ -2593,7 +2760,7 @@ impl Game {
     /// after it is a note off, and alternating colours turn the rest of a stream into misses.
     pub(crate) fn judge_nearest(&mut self, i: usize, kat: bool, t: f64) -> Option<(usize, Judge)> {
         let notes = &self.map.notes;
-        let colour = |k: usize| (notes[k].kind == Kind::Kat) == kat;
+        let colour = |k: usize| notes[k].takes(kat);
         let err = |k: usize| t - notes[k].time;
         let ok = self.windows.ok;
         if colour(i) && err(i).abs() <= ok {
@@ -2618,6 +2785,64 @@ impl Game {
         aimed.then_some((i, Judge::Miss))
     }
 
+    /// The ADLib or bomb nearest `t` still there to hit, within the OK window of it.
+    pub(crate) fn extra_near(&self, t: f64) -> Option<usize> {
+        let ok = self.windows.ok;
+        let mut best: Option<usize> = None;
+        for i in self.cursor..self.map.notes.len() {
+            let n = &self.map.notes[i];
+            if n.time - t > ok {
+                break;
+            }
+            let st = &self.state[i];
+            if n.extra()
+                && !n.unhittable
+                && !st.finished
+                && st.judged.is_none()
+                && (t - n.time).abs() <= ok
+                && best.is_none_or(|b| (t - n.time).abs() < (t - self.map.notes[b].time).abs())
+            {
+                best = Some(i);
+            }
+        }
+        best
+    }
+
+    /// A press at `t` on ADLib or bomb `i`: an ADLib's bonus, or a bomb going off.
+    pub(crate) fn hit_extra(&mut self, i: usize, t: f64) {
+        let bomb = self.map.notes[i].special == Special::Bomb;
+        let st = &mut self.state[i];
+        st.finished = true;
+        st.judged = Some(if bomb { Judge::Miss } else { Judge::Great });
+        st.judged_at = t;
+        if self.failed.is_some() {
+            return;
+        }
+        if bomb {
+            self.explode(t);
+        } else {
+            self.stats.adlib += 1;
+            self.add_score(300.0);
+            self.add_bonus(LAZER_STRONG);
+        }
+    }
+
+    /// A bomb going off at `t` (hit, or a fuse balloon not popped): the combo breaks, with its
+    /// sound whatever its length, and HP drains as for a miss. Accuracy is untouched: a bomb is
+    /// no note to hit.
+    pub(crate) fn explode(&mut self, t: f64) {
+        if self.failed.is_some() {
+            return;
+        }
+        self.stats.bombs += 1;
+        self.stats.combo = 0;
+        self.combo_break = Some(t);
+        self.hp = (self.hp - self.hp_miss).clamp(0.0, 1.0);
+        if self.mods.has(Mod::SuddenDeath) || self.mods.has(Mod::Perfect) {
+            self.fail(t);
+        }
+    }
+
     /// The first unjudged don/kat after note `i` whose miss window has opened.
     pub(crate) fn next_unjudged(&self, i: usize, t: f64) -> Option<usize> {
         for k in i + 1..self.map.notes.len() {
@@ -2625,10 +2850,7 @@ impl Game {
             if n.time - t > self.windows.miss {
                 return None;
             }
-            if matches!(n.kind, Kind::Don | Kind::Kat)
-                && self.state[k].judged.is_none()
-                && !n.unhittable
-            {
+            if n.judged() && self.state[k].judged.is_none() {
                 return Some(k);
             }
         }
@@ -2642,7 +2864,7 @@ impl Game {
             if t - n.time > 2.0 * self.windows.miss {
                 return None;
             }
-            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[k].judged.is_some() {
+            if n.judged() && self.state[k].judged.is_some() {
                 return Some(k);
             }
         }
@@ -2656,11 +2878,9 @@ impl Game {
             if n.time - t > self.windows.miss {
                 return None;
             }
-            // An unhittable note (before a NaN slider) lets presses through and is never judged.
-            if matches!(n.kind, Kind::Don | Kind::Kat)
-                && self.state[i].judged.is_none()
-                && !n.unhittable
-            {
+            // An unhittable note (before a NaN slider) lets presses through and is never judged;
+            // ADLibs and bombs are `extra_near`'s.
+            if n.judged() && self.state[i].judged.is_none() {
                 return Some(i);
             }
         }
@@ -2672,7 +2892,7 @@ impl Game {
     pub(crate) fn note_under_swell(&self, t: f64, kat: Option<bool>) -> Option<usize> {
         self.next_hittable(t).filter(|&i| {
             let n = &self.map.notes[i];
-            kat.is_none_or(|k| (n.kind == Kind::Kat) == k) && self.timing(t - n.time) != Judge::Miss
+            kat.is_none_or(|k| n.takes(k)) && self.timing(t - n.time) != Judge::Miss
         })
     }
 

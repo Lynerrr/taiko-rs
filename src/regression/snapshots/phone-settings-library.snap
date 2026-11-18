@@ -7,20 +7,22 @@ text 1023,77   >
 text  236,80   Songs folder
 text  700,80   none found, Tap to pick
 text   14,133  GAMEPLAY
-text  236,142  Show osu!standard converts
+text  964,139  <
+text 1023,139  >
+text  236,142  TJA charts folder
+text  896,145  none
 text   14,189  VIEW
-text  236,204  Song list headings
+text  236,204  Show osu!standard converts
 text   16,245  INPUT
-text  236,266  Song select layout
-text  981,266  default
+text  236,266  Song list headings
 text   14,301  OFFSET
-text  964,325  <
-text 1023,325  >
-text  236,328  Game data folder
-text  772,328  the usual places
+text  236,328  Song select layout
+text  981,328  default
 text   14,357  AUDIO
-text  236,390  taiko.rs maps folder
-text  940,390  Tap to open
+text  964,387  <
+text 1023,387  >
+text  236,390  Game data folder
+text  772,390  the usual places
 text   14,413  VIDEO
 text  236,436  The folder your maps are in. Tap: browse, type a path, or go back to finding
 text  236,455  osu!'s.
@@ -39,9 +41,11 @@ hit   222,58    845x56   SettingRow(0)
 hit   947,64     50x44   SettingStep(0, -1)
 hit  1003,64     50x44   SettingStep(0, 1)
 hit   222,120   845x56   SettingRow(1)
+hit   947,126    50x44   SettingStep(1, -1)
+hit  1003,126    50x44   SettingStep(1, 1)
 hit   222,182   845x56   SettingRow(2)
 hit   222,244   845x56   SettingRow(3)
 hit   222,306   845x56   SettingRow(4)
-hit   947,312    50x44   SettingStep(4, -1)
-hit  1003,312    50x44   SettingStep(4, 1)
 hit   222,368   845x54   SettingRow(5)
+hit   947,374    50x44   SettingStep(5, -1)
+hit  1003,374    50x44   SettingStep(5, 1)

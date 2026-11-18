@@ -46,6 +46,7 @@ mod mapping_rejoin_tests;
 use taiko_logic::font;
 mod game;
 use taiko_logic::genres;
+mod backdrop;
 mod guide;
 mod hit;
 mod hud;
@@ -118,6 +119,7 @@ mod style;
 mod system_font;
 mod tact;
 mod terms;
+mod tja_maps;
 #[doc(hidden)]
 pub mod tko;
 mod ui;
@@ -472,6 +474,8 @@ struct State {
     /// taiko.rs's own folder of custom maps (`config::custom_dir`): always scanned, and kept apart
     /// from osu!'s Songs folders.
     custom_dir: PathBuf,
+    /// Where TJA charts are read from and imported to (`tja_maps`).
+    tja_dir: Option<PathBuf>,
     /// Beatmap set IDs in the library (built when first needed).
     installed_sets: Option<std::collections::HashSet<u32>>,
     /// Whether the preview currently shows Download tab entries.
@@ -500,6 +504,12 @@ struct State {
     resend_at: Instant,
     /// The server lists `online::SUBMIT_KEY_FEATURE`: an unsent play can go to it again.
     submit_keys: bool,
+    /// The server lists `online::TJA_BOARDS_FEATURE`: TJA plays go to its leaderboards, and
+    /// song select shows them.
+    tja_boards: bool,
+    /// The server lists `online::TJA_LOBBY_FILES_FEATURE`: as a lobby host we send our TJA
+    /// charts to the players without them.
+    pub(crate) tja_lobby_files: bool,
     /// The logged-in player's own pp total and rank online (for the account badge and the
     /// results' total), whose they are, and the fetch of them.
     me: Option<(f64, Option<u32>)>,
@@ -1246,6 +1256,17 @@ impl State {
 
     /// Opens the map editor on library entry `entry`.
     fn open_editor(&mut self, entry: usize) {
+        if self.library[entry].is_tja() {
+            self.toast(
+                tr!(
+                    "TJA charts can't be opened in the editor",
+                    "TJA譜面はエディターで開けません",
+                    "TJA-чарты нельзя открыть в редакторе"
+                )
+                .into(),
+            );
+            return;
+        }
         let path = self.library[entry].path.clone();
         self.open_editor_at(path, entry);
     }
@@ -1473,7 +1494,12 @@ impl State {
         let mut results = Results::new(
             results_title(&e.meta, None),
             stats,
-            game::Windows::new(e.meta.od),
+            game::Windows::for_map(
+                &e.meta,
+                Mods::default(),
+                crate::od_override::DEFAULT,
+                game::WindowRule::Osu,
+            ),
         );
         results.set_mods(mods, r.rate);
         results.seed = Some(r.seed);
@@ -1679,7 +1705,12 @@ impl State {
         let mut results = Results::new(
             results_title(&e.meta, None),
             stats,
-            game::Windows::new(e.meta.od),
+            game::Windows::for_map(
+                &e.meta,
+                Mods::default(),
+                crate::od_override::DEFAULT,
+                game::WindowRule::Osu,
+            ),
         );
         results.set_mods(mods, score.rate);
         results.seed = score.seed;
@@ -1933,10 +1964,10 @@ impl State {
     }
 
     /// The share of the volume heard with the focus where it is: less while another window has
-    /// it.
+    /// it, unless that's the player playing music to listen to while doing something else.
     fn focus_level(&self) -> f32 {
         // A phone's other apps aren't beside it: the music plays on at its own volume.
-        if self.focused || mobile::active() {
+        if self.focused || mobile::active() || self.player.is_some() {
             1.0
         } else {
             self.cfg.unfocused_volume
@@ -2263,8 +2294,9 @@ impl State {
                 self.music_favourite(now);
             }
             (KeyCode::Tab, _) => p.folders_open = !p.folders_open,
-            (KeyCode::BracketLeft, _) => p.move_pitch(-1),
-            (KeyCode::BracketRight, _) => p.move_pitch(1),
+            // As in song select, but the player's own speed: the game's stays as it is.
+            (KeyCode::BracketLeft, _) => p.step_rate(-1, self.modifiers_shift),
+            (KeyCode::BracketRight, _) => p.step_rate(1, self.modifiers_shift),
             (KeyCode::ArrowUp, _) => p.scroll_by(-1),
             (KeyCode::ArrowDown, _) => p.scroll_by(1),
             (KeyCode::ArrowLeft, _) => self.music_seek_by(-MUSIC_SEEK_MS),
@@ -2291,6 +2323,7 @@ impl State {
                 if self.media.is_none() && !cfg!(test) {
                     self.media = Some(media::Media::start(self.window_handle));
                 }
+                self.apply_volume();
             }
             player::Control::Shuffle => {
                 if let Some(p) = &mut self.player {
@@ -2335,6 +2368,8 @@ impl State {
         if let Some(m) = &self.media {
             m.stopped();
         }
+        // Out of the player, the music is quieter again without the focus.
+        self.apply_volume();
     }
 
     /// Plays this track of the player's list.
@@ -2851,6 +2886,15 @@ impl State {
             {
                 picking_text().into()
             }
+            Item::TjaFolder
+                if self.folder_pick.is_busy() && self.folder_pick_for == Item::TjaFolder =>
+            {
+                picking_text().into()
+            }
+            Item::TjaFolder => match (&c.tja_folder, &self.tja_dir) {
+                (Some(dir), _) | (None, Some(dir)) => short_path(dir),
+                (None, None) => tr!("none", "なし", "нет").into(),
+            },
             Item::DataFolder
                 if self.folder_pick.is_busy() && self.folder_pick_for == Item::DataFolder =>
             {
@@ -2937,7 +2981,7 @@ impl State {
             Item::MenuNotes => on(c.menu_notes),
             Item::CheckUpdates => on(c.check_updates),
             Item::Update => {
-                let build = update::BUILD.map(update::short);
+                let build = update::this_build();
                 match (self.updater.status(), build) {
                     (_, None) => tr!(
                         "local build (no updates)",
@@ -2954,8 +2998,7 @@ impl State {
                     (update::Status::UpToDate, Some(b)) => {
                         tr!("{b}, up to date", "{b}、最新です", "{b}, последняя"; [] [b])
                     }
-                    (update::Status::Available { commit, .. }, Some(b)) => {
-                        let new = update::short(&commit);
+                    (update::Status::Available { name: new, .. }, Some(b)) => {
                         tr!("{b} -> {new}, Enter to install", "{b} -> {new}、Enterでインストール", "{b} -> {new}, Enter — установить"; [] [b, new])
                     }
                     (update::Status::Downloading, _) => {
@@ -3233,12 +3276,12 @@ impl State {
             Item::SongHeadings => {
                 self.select
                     .set_headings(!self.select.headings, &self.library);
-                self.cfg.song_headings = self.select.headings;
+                self.select.write_lenses(&mut self.cfg);
                 self.cfg.save();
                 return;
             }
             // Act on Enter in `settings_key`.
-            Item::SongsFolder | Item::DataFolder => return,
+            Item::SongsFolder | Item::TjaFolder | Item::DataFolder => return,
             Item::MasterVolume => {
                 self.cfg.master_volume =
                     (self.cfg.master_volume + 0.05 * dir as f32).clamp(0.0, 1.0)
@@ -3788,6 +3831,26 @@ impl State {
                 };
                 (names, None, note)
             }
+            Item::TjaFolder => {
+                let mut names = vec![
+                    type_path(),
+                    tr!(
+                        "Tja beside the taiko.rs maps",
+                        "taiko.rs譜面の隣のTja",
+                        "Tja рядом с картами taiko.rs"
+                    )
+                    .to_string(),
+                ];
+                if !cfg!(target_os = "android") {
+                    names.insert(0, browse_text());
+                }
+                let note = self
+                    .tja_dir
+                    .as_ref()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default();
+                (names, None, note)
+            }
             Item::DataFolder => {
                 let mut names = vec![
                     type_path(),
@@ -3957,6 +4020,23 @@ impl State {
                 }
                 return;
             }
+            Item::TjaFolder => {
+                let i = if cfg!(target_os = "android") {
+                    i + 1
+                } else {
+                    i
+                };
+                match i {
+                    0 => self.browse_folder(Item::TjaFolder),
+                    1 => self.start_edit(Item::TjaFolder),
+                    _ => {
+                        if let Err(e) = self.set_tja_folder(None) {
+                            self.toast(e);
+                        }
+                    }
+                }
+                return;
+            }
             _ => return,
         }
         multiverse::set_note_colours(self.cfg.note_colours);
@@ -3994,6 +4074,11 @@ impl State {
                 .or(self.song_dirs.first())
                 .map(|d| d.display().to_string())
                 .unwrap_or_default(),
+            Item::TjaFolder => self
+                .tja_dir
+                .as_ref()
+                .map(|d| d.display().to_string())
+                .unwrap_or_default(),
             Item::DataFolder => config::data_dir()
                 .map(|d| d.display().to_string())
                 .unwrap_or_default(),
@@ -4011,7 +4096,10 @@ impl State {
         let Some(edit) = &mut self.settings_ui.editing else {
             return;
         };
-        let max = if matches!(edit.item, Item::SongsFolder | Item::DataFolder) {
+        let max = if matches!(
+            edit.item,
+            Item::SongsFolder | Item::TjaFolder | Item::DataFolder
+        ) {
             400
         } else {
             12
@@ -4155,16 +4243,16 @@ impl State {
                     multiverse::Colours::own(don, typed)
                 };
             }
-            Item::SongsFolder | Item::DataFolder => {
+            Item::SongsFolder | Item::TjaFolder | Item::DataFolder => {
                 let t = text.trim().trim_matches('"');
                 let path = match (t.strip_prefix("~/"), std::env::var_os("HOME")) {
                     (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
                     _ => PathBuf::from(t),
                 };
-                return if item == Item::SongsFolder {
-                    self.set_songs_folder(Some(path))
-                } else {
-                    self.move_data_to(Some(path))
+                return match item {
+                    Item::SongsFolder => self.set_songs_folder(Some(path)),
+                    Item::TjaFolder => self.set_tja_folder(Some(path)),
+                    _ => self.move_data_to(Some(path)),
                 };
             }
             _ => return Ok(()),
@@ -4188,6 +4276,8 @@ impl State {
         self.folder_pick_for = item;
         let current = if item == Item::DataFolder {
             config::data_dir()
+        } else if item == Item::TjaFolder {
+            self.tja_dir.clone()
         } else {
             self.cfg
                 .songs_folder
@@ -4211,10 +4301,10 @@ impl State {
         let item = self.folder_pick_for;
         match picked {
             Ok(Some(dir)) => {
-                let done = if item == Item::DataFolder {
-                    self.move_data_to(Some(dir))
-                } else {
-                    self.set_songs_folder(Some(dir))
+                let done = match item {
+                    Item::DataFolder => self.move_data_to(Some(dir)),
+                    Item::TjaFolder => self.set_tja_folder(Some(dir)),
+                    _ => self.set_songs_folder(Some(dir)),
                 };
                 if let Err(e) = done {
                     self.toast(e);
@@ -4335,6 +4425,22 @@ impl State {
     }
 
     /// Scans `folder` for maps from now on (None: look for osu!'s again) and rescans the library.
+    /// Reads TJA charts from `folder` from now on (None: `Tja` beside the taiko.rs maps), and
+    /// looks through the library again.
+    fn set_tja_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
+        if let Some(f) = folder.as_ref().filter(|f| !f.is_dir()) {
+            let dir = f.display();
+            return Err(
+                tr!("{dir} isn't a folder", "{dir}はフォルダではありません", "{dir} — не папка"; [] [dir]),
+            );
+        }
+        self.cfg.tja_folder = folder.clone();
+        self.cfg.save();
+        self.tja_dir = crate::tja_maps::folder_for(folder.as_deref());
+        self.refresh_library(false);
+        Ok(())
+    }
+
     fn set_songs_folder(&mut self, folder: Option<PathBuf>) -> Result<(), String> {
         if self.behind_settings().is_some_and(|prev| prev.is_play()) {
             return Err(tr!(
@@ -4373,7 +4479,11 @@ impl State {
             )
             .into(),
         });
-        self.scan = Some(start_scan(library::with_custom(inputs, &self.custom_dir)));
+        self.scan = Some(start_scan(library::with_custom(
+            inputs,
+            &self.custom_dir,
+            self.tja_dir.as_deref(),
+        )));
         self.scan_checking = false;
         self.refreshing = None;
         self.select.scanning = Some(0);
@@ -4394,9 +4504,9 @@ impl State {
             return;
         }
         match self.updater.status() {
-            update::Status::Available { commit, .. } => {
+            update::Status::Available { name, .. } => {
                 self.updater.install();
-                self.toast_download(&commit);
+                self.toast_download(&name);
             }
             update::Status::Checking | update::Status::Downloading | update::Status::Installed => {}
             _ => {
@@ -4413,8 +4523,8 @@ impl State {
         }
     }
 
-    fn toast_download(&mut self, commit: &str) {
-        let build = update::short(commit);
+    /// Says the build called `build` (`Status::Available::name`) is on its way.
+    fn toast_download(&mut self, build: &str) {
         self.toast(
             tr!("downloading {build}...", "{build}をダウンロード中...", "загрузка {build}..."; [] [build]),
         );
@@ -4509,8 +4619,8 @@ impl State {
             && self.guide.page.is_none()
         {
             let badge = match self.updater.status() {
-                update::Status::Available { commit, .. } => {
-                    Canvas::text_width(7.0, &update_badge(&commit)) + 20.0
+                update::Status::Available { name, .. } => {
+                    Canvas::text_width(7.0, &update_badge(&name)) + 20.0
                 }
                 update::Status::Downloading => Canvas::text_width(7.0, &updating_badge(1.0)) + 20.0,
                 _ => 0.0,
@@ -4601,7 +4711,7 @@ impl State {
             c.hit(ax, chip_y, aw, chip_h, hit::Hit::Account);
         }
         let text = match self.updater.status() {
-            update::Status::Available { commit, .. } => update_badge(&commit),
+            update::Status::Available { name, .. } => update_badge(&name),
             update::Status::Downloading => updating_badge(self.updater.progress()),
             update::Status::Installed => {
                 if !self.can_restart() {
@@ -4873,6 +4983,10 @@ impl State {
                         .unwrap_or_default();
                     if library::is_map_archive(&path) {
                         self.import_osz(path, &name, false);
+                    } else if crate::tja_maps::is_tja_file(&path)
+                        || crate::tja_maps::holds_tja(&path)
+                    {
+                        self.import_tja(&path, &name);
                     } else {
                         let file = path
                             .file_name()
@@ -4882,6 +4996,21 @@ impl State {
                     }
                 }
             }
+        }
+    }
+
+    /// Copies a dropped TJA chart (or a folder holding one) into the TJA folder, then looks for
+    /// it there.
+    fn import_tja(&mut self, from: &Path, name: &str) {
+        let Some(root) = self.tja_dir.clone() else {
+            return;
+        };
+        match crate::tja_maps::import(from, &root) {
+            Ok(_) => {
+                self.toast(tr!("{name} added to the TJA charts", "{name}をTJA譜面に追加しました", "{name} добавлен в TJA-чарты"; [] [name]));
+                self.refresh_library(false);
+            }
+            Err(e) => self.toast(tr!("can't add {name}: {e}", "{name}を追加できません: {e}", "не получилось добавить {name}: {e}"; [] [name, e])),
         }
     }
 
@@ -6436,6 +6565,14 @@ impl State {
             dd.wheel(notches);
             return;
         }
+        // The wheel over the sort and filter panel doesn't scroll the list under it (beside it,
+        // it does: to see what the filters left).
+        if self.scene.is_select() && self.select.lens_ui.is_some() {
+            let (vx, vy) = self.mouse_virtual();
+            if matches!(self.hit_at(vx, vy), Some(hit::Hit::Lens(_))) {
+                return;
+            }
+        }
         if self.scene.screen_is::<Preview>() {
             let (vx, vy) = self.mouse_virtual();
             if self.preview_on_top(vx, vy) && self.preview.time_at(vx, vy).is_some() {
@@ -7259,6 +7396,23 @@ impl State {
                 self.select.menu = None;
                 return;
             }
+            // A click off the sort and filter panel closes it (the sort button does too, in
+            // `click`).
+            if self.select.lens_ui.is_some()
+                && self.scene.is_select()
+                && !matches!(
+                    hit,
+                    Some(
+                        hit::Hit::Lens(_)
+                            | hit::Hit::SortList
+                            | hit::Hit::SongSource(_)
+                            | hit::Hit::LensToken(_)
+                    )
+                )
+            {
+                self.select.lens_ui = None;
+                return;
+            }
             if let (true, Some(h @ hit::Hit::SplitList)) = (self.scene.is_select(), hit) {
                 // Twice in quick succession: back to the usual size.
                 let now = Instant::now();
@@ -7388,6 +7542,20 @@ impl State {
 
     fn pick_lobby_map(&mut self, entry: usize) {
         self.picking_lobby_map = false;
+        // A TJA chart is played in a lobby (the players without it get it from the host), but
+        // isn't a song to guess: mapguessr's songs are osu! maps.
+        if self.library[entry].is_tja() && self.mp.as_ref().is_some_and(|s| s.mapguessr) {
+            self.toast(
+                tr!(
+                    "TJA charts can't be guessed in mapguessr",
+                    "TJA譜面はマップ当てに使えません",
+                    "TJA-чарты нельзя угадывать в mapguessr"
+                )
+                .into(),
+            );
+            self.scene = Lobby::scene();
+            return;
+        }
         if let (Some(s), Some(g)) = (self.mp.as_ref().filter(|s| s.mapguessr), &mut self.guessr) {
             let e = &self.library[entry];
             if g.can_guess(s) {
@@ -8148,6 +8316,24 @@ impl State {
         }
     }
 
+    /// Whether plays on `e` go to the online leaderboards and song select shows its online
+    /// board: every map's do, a TJA chart's only on a server with TJA boards.
+    pub(crate) fn has_online_board(&self, e: &Entry) -> bool {
+        !e.is_tja() || self.tja_boards
+    }
+
+    /// Whether the live play is of a TJA chart (`Entry::is_tja`): a song played on its own, or
+    /// the lobby's map in a match.
+    pub(crate) fn live_is_tja(&self) -> bool {
+        self.behind_settings()
+            .unwrap_or(&self.scene)
+            .song_play()
+            .map(|p| p.0)
+            .or_else(|| self.mp.as_ref().and_then(|s| s.map_entry))
+            .and_then(|i| self.library.get(i))
+            .is_some_and(Entry::is_tja)
+    }
+
     /// The map of the live play, as the server is told it.
     fn live_map(&self) -> Option<online::PlayedMap> {
         let entry = self
@@ -8174,6 +8360,12 @@ impl State {
     /// restarted, from a start point, a lobby match), tells the server it was played, for the
     /// profile's play count and play time, and how it ended.
     fn track_play(&mut self) {
+        // A TJA chart's play stays on this computer.
+        if self.live_is_tja() {
+            self.playing = None;
+            self.play_attempt = None;
+            return;
+        }
         if let Some(ms) = self.live_play_ms() {
             let (before, map) = match self.playing.take() {
                 Some(playing) => playing,
@@ -8405,7 +8597,10 @@ impl State {
                         .retain(|d, _| !library::is_own_map(d));
                     self.select.custom_folder.extend(folders);
                 }
-                if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
+                if !self.select.filter.is_empty()
+                    || self.select.sort == ui::SortMode::Status
+                    || self.select.tabs.filters.statuses != 0
+                {
                     self.select.refilter(&self.library);
                 }
             }
@@ -8902,6 +9097,8 @@ impl State {
         let nominator = self.select.nominator;
         let admin = self.select.admin;
         let sort = self.select.sort;
+        let headings = self.select.headings;
+        let tabs = std::mem::take(&mut self.select.tabs);
         self.select = Select::new(&self.library);
         self.select
             .keep_converts(&self.library, self.cfg.show_converts);
@@ -8915,7 +9112,8 @@ impl State {
         self.select.nominator = nominator;
         self.select.admin = admin;
         self.select.sort = sort;
-        self.select.headings = self.cfg.song_headings;
+        self.select.headings = headings;
+        self.select.tabs = tabs;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self
             .library
@@ -8980,8 +9178,9 @@ impl State {
         let Some(info) = &self.mapinfo else { return };
         let finished = info.finished();
         // Sorting or searching by stars, length or BPM waits on the analysis.
-        let needs_info =
-            self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
+        let needs_info = self.select.sort.needs_info()
+            || self.select.tabs.needs_info()
+            || search::Query::parse(&self.select.filter).needs_info();
         if finished && !self.mapinfo_sorted {
             self.mapinfo_sorted = true;
             if needs_info {
@@ -9765,7 +9964,9 @@ impl State {
         let song = format!("{} - {}", e.meta.artist, e.meta.title);
         let mut details = Vec::new();
         if let Some(st) = self.map_stats(entry) {
-            if st.stars >= 0.0 {
+            if let Some(level) = e.meta.level {
+                details.push(format!("level {}", crate::style::level_text(level)));
+            } else if st.stars >= 0.0 {
                 details.push(format!("{:.2}*", st.stars));
             }
             if st.bpm > 0.0 {
@@ -9858,6 +10059,9 @@ impl State {
     /// can't tell graveyard from pending).
     fn map_status(&self, i: usize) -> Option<(&'static str, u32)> {
         let e = self.library.get(i)?;
+        if e.is_tja() {
+            return Some(("TJA", ui::TJA_COLOUR));
+        }
         // Never for a map in taiko.rs's own folder: osu! isn't asked about those.
         let edited = self.select.edited.contains(&e.path) && !e.is_own();
         // As the song list has it (`Select::status_of`): an edited copy is nobody's.
@@ -10075,8 +10279,9 @@ impl State {
             self.status_saved = now;
         }
         // The list sorted (or searched) by status follows what the mirrors have said since.
-        let by_status =
-            self.select.sort == ui::SortMode::Status || self.select.filter.contains("status");
+        let by_status = self.select.sort == ui::SortMode::Status
+            || self.select.filter.contains("status")
+            || self.select.tabs.filters.statuses != 0;
         if self.status_new
             && by_status
             && now.saturating_duration_since(self.status_resorted) >= Duration::from_secs(10)
@@ -10194,9 +10399,23 @@ impl State {
     }
 
     fn sort_changed(&mut self) {
-        self.cfg.sort = self.select.sort.name().to_string();
-        self.cfg.save();
+        self.lens_changed();
         self.toast(format!("sorted by {}", self.select.sort.name()));
+    }
+
+    /// Keeps song select's source and lenses in the config.
+    fn lens_changed(&mut self) {
+        self.select.write_lenses(&mut self.cfg);
+        self.cfg.save();
+    }
+
+    /// Ctrl+S, or the sort button: the sort and filter panel (on a phone, the sort list).
+    pub(crate) fn toggle_lens(&mut self) {
+        if mobile::active() {
+            self.open_sorts();
+        } else {
+            self.select.toggle_lens(&self.library);
+        }
     }
 
     fn open_sorts(&mut self) {
@@ -10633,6 +10852,17 @@ impl State {
         match admin::parse(text) {
             Ok(admin::Command::Op(op)) => self.admin_op(op),
             Ok(admin::Command::Watch(name)) => self.watch(name),
+            Ok(admin::Command::DeleteBoard(map)) => {
+                let map = map.or_else(|| {
+                    self.offset_entry()
+                        .and_then(|entry| self.library.get(entry))
+                        .map(|entry| entry.hash())
+                });
+                match map {
+                    Some(map) => self.admin_op(online::AdminOp::DeleteBoard { map }),
+                    None => self.toast("select a map, or give its hash: /delboard hash".into()),
+                }
+            }
             Ok(admin::Command::Help) => {
                 self.social.set_tab(social::Tab::Admin);
                 self.social.info = Some((
@@ -10905,6 +11135,10 @@ impl State {
                     }
                     // Plays it never answered go again now (`resend_unsent`).
                     self.submit_keys = features.iter().any(|f| f == online::SUBMIT_KEY_FEATURE);
+                    self.tja_boards = features.iter().any(|f| f == online::TJA_BOARDS_FEATURE);
+                    self.tja_lobby_files = features
+                        .iter()
+                        .any(|f| f == online::TJA_LOBBY_FILES_FEATURE);
                     self.resend_at = Instant::now();
                     self.social.connected = true;
                     self.social.me = Some(name);
@@ -12375,7 +12609,6 @@ impl State {
             self.preview.player = self.player.is_some();
             self.preview.menu = self.on_menu();
             self.preview.from_top &= self.preview.menu;
-            self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.mods = self.shown_mods();
@@ -12439,9 +12672,9 @@ impl State {
         }
         // A song started before the check came back keeps the machine to itself until it's over.
         if !self.in_song()
-            && let Some(commit) = self.updater.install_at_launch()
+            && let Some(name) = self.updater.install_at_launch()
         {
-            self.toast_download(&commit);
+            self.toast_download(&name);
         }
         self.poll_downloads();
         self.poll_score_link();
@@ -13346,9 +13579,14 @@ impl State {
     fn send_map_to(&mut self, to: u32) {
         let Some(s) = &self.mp else { return };
         let tx = s.client.bulk_sender();
-        let folder = s
-            .map_entry
-            .and_then(|i| self.library[i].path.parent().map(|p| p.to_path_buf()));
+        let entry = s.map_entry.map(|i| &self.library[i]);
+        let folder = entry.and_then(|e| e.path.parent().map(|p| p.to_path_buf()));
+        // A TJA chart: its file, sent with what it names rather than its whole folder.
+        let tja = entry
+            .filter(|e| e.is_tja())
+            .map(|e| crate::tja_maps::file_of(&e.path));
+        // The server says whether TJA charts (their music with them) may go through it.
+        let tja_allowed = self.tja_lobby_files;
         let roots = self.lobby_send_roots();
         std::thread::spawn(move || {
             // Stops by itself when the host picks another map.
@@ -13364,18 +13602,23 @@ impl State {
                 send(error("the host doesn't have the map either".into()));
                 return;
             };
-            if !download::is_set_folder(&folder, &roots) {
-                send(error(
-                    "the host's map isn't in a set folder of its own".into(),
-                ));
-                return;
-            }
-            let name = folder
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            match download::pack_folder(&folder) {
-                Ok(bytes) => {
+            let packed = if let Some(file) = tja {
+                if tja_allowed {
+                    download::pack_tja(&file)
+                } else {
+                    Err(download::TJA_NOT_PASSED.into())
+                }
+            } else if download::is_set_folder(&folder, &roots) {
+                let name = folder
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                download::pack_folder(&folder).map(|bytes| (name, bytes))
+            } else {
+                Err("the host's map isn't in a set folder of its own".into())
+            };
+            match packed {
+                Ok((name, bytes)) => {
                     let total = bytes.len() as u64;
                     for (k, chunk) in bytes.chunks(download::PART_BYTES).enumerate() {
                         let part = net::MapPart {
@@ -13403,6 +13646,19 @@ impl State {
             return;
         }
         if let Some(e) = part.error {
+            // A TJA chart the server won't pass on: no mirror has it either.
+            if e == download::TJA_NOT_PASSED {
+                self.stop_host_transfer();
+                self.toast(
+                    tr!(
+                        "the server doesn't pass the host's TJA chart on",
+                        "サーバーはホストのTJA譜面を中継しません",
+                        "сервер не передаёт TJA-чарт хоста"
+                    )
+                    .into(),
+                );
+                return;
+            }
             // Fall back to the mirrors.
             self.stop_host_transfer();
             self.toast(format!(
@@ -13441,6 +13697,7 @@ impl State {
                 m.hash,
                 self.songs_dir.clone(),
                 self.custom_dir.clone(),
+                self.tja_dir.clone(),
             );
             // A transfer that's still going is given up for this one.
             self.stop_host_transfer();
@@ -14561,14 +14818,19 @@ impl State {
                     p.list.queue.remove(row);
                 }
             }
-            Hit::PlayerSpeed(i) => {
+            Hit::PlayerDaycore => {
                 if let Some(p) = &mut self.player {
-                    p.toggle_speed(player::Speed::ALL[i]);
+                    p.toggle_daycore();
                 }
             }
-            Hit::PlayerPitch => {
+            Hit::PlayerRate => {
                 if let Some(p) = &mut self.player {
-                    p.semitones = 0;
+                    p.reset_rate();
+                }
+            }
+            Hit::PlayerKeepPitch => {
+                if let Some(p) = &mut self.player {
+                    p.toggle_keep_pitch();
                 }
             }
             Hit::Presets => self.open_dropdown(),
@@ -14589,6 +14851,7 @@ impl State {
             Hit::BackToSession => self.rejoin_mapping(),
             Hit::ForgetSession => self.left_mapping = None,
             Hit::ChatShot(id) => self.open_shot(id),
+            Hit::ChatMedals(key) => self.social.toggle_medal_run(key),
             Hit::SendShot => {
                 let row = self.social.row(self.mp.is_some());
                 self.send_shot(row);
@@ -14696,8 +14959,7 @@ impl State {
             | Hit::RateClose
             | Hit::RateStep(_)
             | Hit::RateSet(_)
-            | Hit::RateKeepPitch
-            | Hit::PitchStep(_) => self.mobile_rate(hit),
+            | Hit::RateKeepPitch => self.mobile_rate(hit),
             Hit::PlayerList => {
                 if let Some(p) = &mut self.player {
                     p.list_open = !p.list_open;
@@ -14760,7 +15022,23 @@ impl State {
                 self.settings_ui.clear_search();
                 self.settings_ui.cursor = settings::section_start(i);
             }
-            Hit::SortList => self.open_sorts(),
+            Hit::SortList => self.toggle_lens(),
+            Hit::Lens(item) => {
+                self.select.lens_pick(item, &self.library);
+                if item != ui::LensItem::Panel {
+                    self.lens_changed();
+                }
+            }
+            Hit::SongSource(i) => {
+                if let Some(&source) = ui::Source::ALL.get(i) {
+                    self.select.set_source(source, &self.library);
+                    self.lens_changed();
+                }
+            }
+            Hit::LensToken(token) => {
+                self.select.tabs.filters.clear(token);
+                self.select.refilter(&self.library);
+            }
             Hit::CollectionPick => self.open_collections(),
             Hit::PickRow(i) => self.pick_row(i),
             Hit::PickRowMore(i) => self.open_collection_menu(i.saturating_sub(1)),

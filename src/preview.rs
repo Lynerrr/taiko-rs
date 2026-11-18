@@ -56,8 +56,6 @@ struct Song {
     /// Speed it was prepared for (the track plays `rate` map ms per ms) and how.
     rate: f64,
     keep_pitch: bool,
-    /// How far its pitch is moved on top of that (the player's `[` `]`).
-    pitch: f64,
 }
 
 impl Song {
@@ -81,7 +79,12 @@ pub struct Details {
 
 impl Details {
     fn of(map: &Beatmap) -> Details {
-        let count = |k: Kind| map.notes.iter().filter(|n| n.kind == k).count();
+        // ADLibs and bombs aren't notes to hit.
+        let count = |k: Kind| {
+            (map.notes.iter())
+                .filter(|n| n.kind == k && !n.extra())
+                .count()
+        };
         let first = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let last = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
         let bpms: Vec<f64> = map
@@ -104,7 +107,26 @@ impl Details {
     }
 }
 
-type LoadedMap = (usize, Result<Beatmap, String>, Option<(Vec<f64>, f64, f64)>);
+type LoadedMap = (
+    usize,
+    Result<Beatmap, String>,
+    Option<(Vec<f64>, f64, f64)>,
+    [f32; 2],
+    Vec<taiko_logic::tja::Unsupported>,
+);
+
+/// What a TJA course leaves out, as its details list it: most used first, with how many times
+/// when it's more than once (`#NOTESPAWN x839, #BGAON`).
+pub(crate) fn left_out_text(left_out: &[taiko_logic::tja::Unsupported]) -> String {
+    left_out
+        .iter()
+        .map(|u| match u.times {
+            1 => u.what.clone(),
+            n => format!("{} x{n}", u.what),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 type StatCell = (&'static str, String, f32);
 type StatRow<'a> = Vec<&'a StatCell>;
 
@@ -117,7 +139,6 @@ pub struct Preview {
     map_rx: Job<LoadedMap>,
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
-    requested_pitch: f64,
     /// The fullscreen preview is paused: the music holds, and the notes with it.
     pub held: bool,
     /// After a speed change: map time to continue the music from once the new track is ready.
@@ -125,6 +146,9 @@ pub struct Preview {
     bg_rx: Job<(PathBuf, Option<Image>)>,
     audio_rx: Job<Decoded>,
     map: Option<(usize, Beatmap, Details, Graph)>,
+    /// For a TJA course (by library index), what it uses that isn't played as OpenTaiko does
+    /// (`left_out_text`): listed with its details.
+    left_out: Option<(usize, String)>,
     /// Waiting for the music to reach a seek target before rebuilding the autoplay preview.
     pending_seek: Option<f64>,
     /// Where the difficulty timeline was drawn (virtual units) and the time range it spans.
@@ -143,6 +167,9 @@ pub struct Preview {
     /// The entry whose autoplay has been ready: its music played.
     ready_for: Option<usize>,
     game: Option<Play>,
+    /// How far up and down (virtual units) the autoplay box shows: easing from the first band
+    /// to the second (the lane, or all a .tko map moves out of it) since the instant.
+    reach: ([f32; 2], [f32; 2], Option<Instant>),
     last_time: f64,
     bg_path: Option<PathBuf>,
     /// New background for the renderer: `Some(None)` clears it.
@@ -158,8 +185,6 @@ pub struct Preview {
     pub menu: bool,
     /// The next song came on by itself: it plays from its start, not its preview point.
     pub from_top: bool,
-    /// How far the player moves the music's pitch (1 = not at all).
-    pub pitch: f64,
     /// The last song decoded whole and its length in map ms, which no speed changes: while its
     /// quick part stands in after a new speed, that's still how long it is.
     known_length: Option<(PathBuf, f64)>,
@@ -352,7 +377,6 @@ impl Preview {
     pub fn cached_track(&self, e: &Entry, rate: f64, keep_pitch: bool) -> Option<Arc<Track>> {
         let same = |s: &&Song| {
             s.full
-                && s.pitch == 1.0
                 && s.path == audio_path(e)
                 && (s.rate - rate).abs() < 1e-6
                 && (s.keep_pitch == keep_pitch || (rate - 1.0).abs() < 1e-6)
@@ -370,9 +394,14 @@ impl Preview {
         self.bg_path = None;
     }
 
-    /// Makes sure the background shown is `e`'s (e.g. a multiplayer map picked by the host).
+    /// Makes sure the background shown is `e`'s (e.g. a multiplayer map picked by the host). A TJA
+    /// chart without a picture, or whose picture can't be read, gets one drawn (`backdrop`).
     pub fn show_background_for(&mut self, e: &Entry) {
-        let path = background_path(e);
+        let file = background_path(e);
+        let drawn = crate::tja_maps::is_course(&e.path).then(|| e.meta.clone());
+        let path = file
+            .clone()
+            .or_else(|| drawn.as_ref().map(crate::backdrop::key));
         if path == self.bg_path {
             return;
         }
@@ -380,7 +409,10 @@ impl Preview {
         match path {
             Some(p) => {
                 self.bg_rx = Job::spawn(move || {
-                    let img = load_image(&p);
+                    let img = file
+                        .as_deref()
+                        .and_then(load_image)
+                        .or_else(|| drawn.as_ref().map(crate::backdrop::image));
                     (p, img)
                 });
             }
@@ -413,9 +445,7 @@ impl Preview {
         };
         // A new speed changes the music and the strain curve: reload as if the selection
         // changed, carrying on from where the music was.
-        if (rate != self.requested_rate || self.pitch != self.requested_pitch)
-            && self.requested.is_some()
-        {
+        if rate != self.requested_rate && self.requested.is_some() {
             if self.audio_active && self.requested == selected {
                 // Where the music is now, in map time (the playing track's own speed).
                 let playing = engine
@@ -450,15 +480,21 @@ impl Preview {
         if self.seen != self.requested && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
             self.requested = self.seen;
             self.requested_rate = rate;
-            self.requested_pitch = self.pitch;
             self.game = None;
             let (speed, keep_pitch) = rate;
-            let shift = self.pitch;
             if let Some(i) = self.seen.filter(|&i| i < library.len()) {
                 let e = &library[i];
                 let path = e.path.clone();
                 self.map_rx = Job::spawn(move || {
-                    let map = beatmap::load(&path);
+                    // A TJA course with what it leaves out, from the one read of its file.
+                    let (map, left_out) = if crate::tja_maps::is_course(&path) {
+                        match crate::tja_maps::course(&path) {
+                            Ok(c) => (Ok(c.map), c.unsupported),
+                            Err(e) => (Err(e), Vec::new()),
+                        }
+                    } else {
+                        (beatmap::load(&path), Vec::new())
+                    };
                     let first = map
                         .as_ref()
                         .ok()
@@ -470,15 +506,17 @@ impl Preview {
                     })
                     .ok()
                     .flatten();
-                    (i, map, curve)
+                    let reach = map.as_ref().map(tko_reach).unwrap_or_else(|_| lane_reach());
+                    (i, map, curve, reach, left_out)
                 });
                 if !self.own_background {
                     self.show_background_for(e);
                 }
                 let song = audio_path(e);
-                let loaded = self.audio.as_ref().is_some_and(|s| {
-                    s.path == song && (s.rate, s.keep_pitch) == rate && s.pitch == shift
-                });
+                let loaded = self
+                    .audio
+                    .as_ref()
+                    .is_some_and(|s| s.path == song && (s.rate, s.keep_pitch) == rate);
                 if !loaded && let Some(sr) = engine.map(|a| a.rate) {
                     let (tx, rx) = mpsc::channel();
                     // Quick part first: from where the music was (speed change) or the preview point.
@@ -502,7 +540,7 @@ impl Preview {
                             let clip = audio::decode(&song, sr).ok().map(|t| {
                                 let base = (clip_at / 1000.0 * sr as f64 / speed).round() as i64;
                                 (
-                                    Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift)),
+                                    Arc::new(audio::change_rate(t, sr, speed, keep_pitch)),
                                     base,
                                     false,
                                 )
@@ -519,7 +557,7 @@ impl Preview {
                             if let Ok((part, base)) =
                                 audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed)))
                             {
-                                let part = audio::shifted(part, sr, speed, keep_pitch, shift);
+                                let part = audio::change_rate(part, sr, speed, keep_pitch);
                                 let base = (base as f64 / speed).round() as i64;
                                 if tx
                                     .send((song.clone(), Some((Arc::new(part), base, false))))
@@ -534,27 +572,19 @@ impl Preview {
                         let Some(_alone) = audio::prepare_alone() else {
                             return;
                         };
-                        // A long song plays as it's decoded, unless its pitch is being moved.
-                        if shift == 1.0 {
-                            let constant = crate::mods::Speed::constant(speed);
-                            if let Ok(Some(track)) =
-                                crate::stream::open(&song, sr, constant, keep_pitch)
-                            {
-                                if !wanted_now.load(Ordering::Relaxed) {
-                                    let _ = tx.send((song, Some((track, 0, true))));
-                                }
-                                return;
+                        // A long song plays as it's decoded.
+                        let constant = crate::mods::Speed::constant(speed);
+                        if let Ok(Some(track)) =
+                            crate::stream::open(&song, sr, constant, keep_pitch)
+                        {
+                            if !wanted_now.load(Ordering::Relaxed) {
+                                let _ = tx.send((song, Some((track, 0, true))));
                             }
+                            return;
                         }
-                        let track = audio::decode_shared(&song, sr).ok().map(|t| {
-                            let track = if shift == 1.0 {
-                                audio::with_rate(t, sr, speed, keep_pitch)
-                            } else {
-                                let t = audio::owned(t);
-                                Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift))
-                            };
-                            (track, 0, true)
-                        });
+                        let track = audio::decode_shared(&song, sr)
+                            .ok()
+                            .map(|t| (audio::with_rate(t, sr, speed, keep_pitch), 0, true));
                         if wanted_now.load(Ordering::Relaxed) {
                             return;
                         }
@@ -565,10 +595,11 @@ impl Preview {
             }
         }
 
-        if let Some((i, result, curve)) = self.map_rx.poll()
+        if let Some((i, result, curve, reach, left_out)) = self.map_rx.poll()
             && Some(i) == self.requested
             && let Ok(map) = result
         {
+            self.left_out = (!left_out.is_empty()).then(|| (i, left_out_text(&left_out)));
             let details = Details::of(&map);
             let mut graph = difficulty::analyze(&map);
             if let Some(curve) = curve {
@@ -579,6 +610,9 @@ impl Preview {
                 (!map.too_wild_to_preview()).then(|| new_preview_game(&map, self.requested_rate.0));
             self.last_time = f64::NEG_INFINITY;
             self.map = Some((i, map, details, graph));
+            if reach != self.reach.1 {
+                self.reach = (self.shown_reach(), reach, Some(Instant::now()));
+            }
         }
         if let Some((path, img)) = self.bg_rx.poll()
             && Some(&path) == self.bg_path.as_ref()
@@ -612,10 +646,7 @@ impl Preview {
             };
             // The full song takes over from the part that's already playing without a gap.
             let playing_part = self.audio.as_ref().is_some_and(|s| {
-                s.path == path
-                    && !s.full
-                    && (s.rate, s.keep_pitch) == (speed, keep_pitch)
-                    && s.pitch == self.requested_pitch
+                s.path == path && !s.full && (s.rate, s.keep_pitch) == (speed, keep_pitch)
             });
             if full && playing_part && self.audio_active && in_menu {
                 engine.swap(track.clone(), base);
@@ -637,7 +668,6 @@ impl Preview {
                 start,
                 rate: speed,
                 keep_pitch,
-                pitch: self.requested_pitch,
             });
         }
 
@@ -737,6 +767,19 @@ impl Preview {
 
     /// Jumps the preview music (and the autoplay) to map time `t`, and remembers it as the
     /// start point (the blue flag): wherever you last scrolled to is where "Play from" starts.
+    /// The band the autoplay box shows now (see `reach`).
+    fn shown_reach(&self) -> [f32; 2] {
+        let (from, to, at) = self.reach;
+        let Some(at) = at else {
+            return lane_reach();
+        };
+        let p = crate::render::progress(at, 400.0);
+        [
+            from[0] + (to[0] - from[0]) * p,
+            from[1] + (to[1] - from[1]) * p,
+        ]
+    }
+
     pub fn seek(&mut self, t: f64, engine: Option<&Engine>) {
         if let Some(t) = self.seek_music(t, engine) {
             self.marker = self.audio.as_ref().map(|s| (s.path.clone(), t));
@@ -1052,7 +1095,7 @@ impl Preview {
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
-        let mut stats: [Vec<StatCell>; 3] = [
+        let mut stats: [Vec<StatCell>; 4] = [
             // As it plays: EZ / HR / Precise, and the speed, which shrinks or grows the windows.
             vec![(
                 "OD",
@@ -1065,6 +1108,7 @@ impl Preview {
                 ),
                 1.0,
             )],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         ];
@@ -1096,11 +1140,19 @@ impl Preview {
             if d.swells > 0 {
                 stats[1].push(("Swells", d.swells.to_string(), fade));
             }
+            // What a TJA course uses that isn't supported yet: a row of its own.
+            if let Some((_, what)) = self.left_out.as_ref().filter(|(li, _)| *li == i) {
+                let label = left_out_label();
+                let room = iw - Canvas::text_width(8.0, &format!("{label} "));
+                stats[3].push((label, Canvas::fit(8.0, room, what), fade));
+            }
         }
         let cell_w =
             |(label, value, _): &StatCell| Canvas::text_width(8.0, &format!("{label} {value}"));
         let rows: Vec<Vec<StatRow<'_>>> = stats
             .iter()
+            // The first three always hold a row; what a TJA course leaves out only when it has some.
+            .take(if stats[3].is_empty() { 3 } else { 4 })
             .map(|group| {
                 let mut rows: Vec<StatRow<'_>> = vec![Vec::new()];
                 let mut used = 0.0;
@@ -1135,6 +1187,14 @@ impl Preview {
         // The lane fills the panel's width (at the size chosen), however little room the details
         // leave: the panel grows down, into the leaderboard's room, rather than the lane shrink.
         let k = k_full * wanted;
+        // A .tko map that moves things off the lane gets a taller box, as far as the room left
+        // under the panel goes (both ends drawn in alike when it doesn't all fit).
+        let [top, bottom] = self.shown_reach();
+        let extra = (bottom - top - band_h) * k;
+        let room = (h - head - band_h * k - after_box).max(0.0);
+        let fit = if extra > room { room / extra } else { 1.0 };
+        let band_top = band_top - (band_top - top) * fit;
+        let band_h = band_h + (bottom - top - band_h) * fit;
         let preview_h = band_h * k;
         let h = head + preview_h + after_box;
         self.panel_bottom = y + h;
@@ -1219,7 +1279,7 @@ impl Preview {
             &mapper,
         );
         cy += 13.0 + 6.0;
-        crate::style::star_pill(c, x + w - 14.0, cy + 3.0, 9.0, stars);
+        crate::style::map_pill(c, x + w - 14.0, cy + 3.0, 9.0, e.meta.level, stars);
         for line in &version {
             c.text(lx, cy + 3.0, 9.0, rgba(accent(), 1.0), line);
             cy += body_step;
@@ -1282,11 +1342,13 @@ impl Preview {
         }
         // What's over the panel goes last, on the way out with a lane or without.
         let tip = od_hovered.map(|at| {
-            let od = self.mods.od_with(e.meta.od, crate::od_override::get());
-            (
-                at,
-                crate::game::Windows::new(od).at_rate(self.requested_rate.0),
-            )
+            let windows = crate::game::Windows::for_map(
+                &e.meta,
+                self.mods,
+                crate::od_override::get(),
+                crate::game::WindowRule::Osu,
+            );
+            (at, windows.at_rate(self.requested_rate.0))
         });
         let Some(game) = self.game.as_mut().filter(|_| loaded && playing) else {
             if let Some((at, windows)) = tip {
@@ -1345,6 +1407,11 @@ pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
+
+/// The label of the row of what a TJA course leaves out, said plainly as the other details are.
+fn left_out_label() -> &'static str {
+    tr!("Not supported yet:", "未対応:", "Пока не поддерживается:")
+}
 
 /// `s` as up to `lines` lines of text `size` tall within `max_w`, broken at spaces (or mid-word
 /// when a word alone is too long); what still doesn't fit ends the last line with "...".
@@ -1533,6 +1600,112 @@ fn draw_play_button(
     Some([bx, y, bw, bh])
 }
 
+/// The lane's band (top, bottom; virtual units): all the autoplay box shows of a plain map.
+pub(crate) fn lane_reach() -> [f32; 2] {
+    let (top, h) = game::lane_only();
+    [top, top + h]
+}
+
+/// How far up and down (virtual units, within the 480 tall screen) anything of `map` is drawn
+/// over the song: the lane's band, widened by where a .tko map moves, turns, zooms or copies the
+/// playfield, flies its notes and puts its pictures and text. Worked out once, when the map is
+/// picked, so the box doesn't change size as it plays.
+pub(crate) fn tko_reach(map: &Beatmap) -> [f32; 2] {
+    use crate::game::{BIG_R, HIT_X, LANE_Y};
+    let mut reach = lane_reach();
+    if map.gimmick.is_none() || map.notes.is_empty() {
+        return reach;
+    }
+    let mut g = Game::new(
+        map.clone(),
+        Arc::new(Track {
+            samples: Vec::new(),
+            rate: 1.0,
+            stream: None,
+        }),
+        None,
+    );
+    let Some(rt) = g.tko_mut() else {
+        return reach;
+    };
+    let calm = crate::tko::calm();
+    let full = [0.0, VIRTUAL_HEIGHT];
+    let notes = &map.notes;
+    let end = notes.iter().map(|n| n.end_time).fold(0.0, f64::max) + 1000.0;
+    // The lane's far end swings furthest: as wide as the box ever shows.
+    let lane_w = SIXTEEN_NINE;
+    let mut t = notes[0].time - 3000.0;
+    while t < end && reach != full {
+        rt.prepare(t);
+        let fx = rt.field_with(t, calm);
+        // The playfield before it is moved: the lane, and the notes coming down it.
+        let mut local = lane_reach();
+        let first = notes.partition_point(|n| n.time < t);
+        for (i, n) in notes.iter().enumerate().skip(first) {
+            if n.time - t > 2500.0 {
+                break;
+            }
+            let Some(nfx) = rt.note(i, t).filter(|f| !f.hidden && f.opacity > 0.01) else {
+                continue;
+            };
+            // shortcut: how far along the lane a note is, guessed from its time (not its scroll
+            // speed); upgrade if notes on paths or swirls are under-measured.
+            let s = ((n.time - t) * 0.5) as f32;
+            let mut y = LANE_Y + nfx.dy + s * nfx.swirl.to_radians().sin();
+            if let Some(p) = rt.note_path(i, t, s, lane_w) {
+                y += p[1] * p[2];
+            }
+            let r = BIG_R * nfx.scale * nfx.stretch_y.abs();
+            local = [local[0].min(y - r), local[1].max(y + r)];
+        }
+        // Where that goes, turned and zoomed about the drum and moved: the playfield, its trail
+        // and its copies.
+        let pivot = [HIT_X, LANE_Y];
+        let mut place = |turn: f32, zoom: f32, sy: f32, dy: f32| {
+            let (sin, cos) = turn.to_radians().sin_cos();
+            for x in [0.0, lane_w] {
+                for y in local {
+                    let (px, py) = (x - pivot[0], (y - pivot[1]) * sy);
+                    let y = pivot[1] + (px * sin + py * cos) * zoom + dy;
+                    reach = [reach[0].min(y), reach[1].max(y)];
+                }
+            }
+        };
+        place(fx.rotation, fx.zoom, fx.stretch_y, fx.y);
+        for k in 1..=(fx.echo.clamp(0.0, 8.0).ceil() as i32) {
+            let k = k as f32;
+            place(
+                fx.rotation + fx.echo_rot * k,
+                fx.zoom * fx.echo_zoom.clamp(0.5, 1.5).powf(k),
+                fx.stretch_y,
+                fx.y + fx.echo_y * k,
+            );
+        }
+        for c in fx.copies.iter().filter(|c| c.show > 0.01) {
+            place(c.turn, c.zoom, 1.0, c.y);
+        }
+        if fx.slices >= 2.0 {
+            reach = [reach[0] - fx.slice_y.abs(), reach[1] + fx.slice_y.abs()];
+        }
+        // A kaleidoscope or a bent lane goes all over.
+        if fx.kaleido >= 1.5 || (fx.lane_shape > 0 && fx.lane_bend > 0.001) {
+            reach = full;
+        }
+        // Pictures and text, placed on the screen.
+        for (_, at) in rt.layers(t) {
+            let p = at.pose;
+            if p.alpha >= 0.01 {
+                let half = (p.size * at.scale / 2.0) as f32;
+                let y = p.y as f32;
+                reach = [reach[0].min(y - half), reach[1].max(y + half)];
+            }
+        }
+        reach = [reach[0].max(0.0), reach[1].min(VIRTUAL_HEIGHT)];
+        t += 100.0;
+    }
+    reach
+}
+
 fn new_preview_game(map: &Beatmap, rate: f64) -> Play {
     // No samples: the preview only borrows the music's clock; `rate` maps it to map time.
     let mut g = Game::new(
@@ -1599,6 +1772,39 @@ mod beat_tests {
         p.ready_for = Some(0);
         assert!(draw(&mut p).0);
         assert!(p.graph_rect.is_some());
+    }
+
+    #[test]
+    fn a_map_reaching_off_the_lane_grows_the_box_into_the_room_below() {
+        let map = beatmap::calibration_map(500.0, 4, 16);
+        let library = [Entry::new(
+            PathBuf::from("/nonexistent/a.osu"),
+            map.meta.clone(),
+        )];
+        let mut p = Preview {
+            seen: Some(0),
+            map: Some((0, map.clone(), Details::of(&map), difficulty::analyze(&map))),
+            ..Default::default()
+        };
+        let box_h = |p: &mut Preview, h: f32| {
+            let mut c = Canvas::default();
+            c.clear(853.3);
+            p.draw_panel(
+                &mut c, &library, 500.0, 40.0, 340.0, h, 1.0, None, None, None, None,
+            );
+            p.box_rect.unwrap()[3]
+        };
+        let plain = box_h(&mut p, 1000.0);
+        // Picked long ago: no easing left.
+        let lane = lane_reach();
+        let at = Instant::now() - Duration::from_secs(5);
+        p.reach = (lane, [lane[0] - 40.0, lane[1] + 60.0], Some(at));
+        let tall = box_h(&mut p, 1000.0);
+        let k = plain / (lane[1] - lane[0]);
+        assert!((tall - plain - 100.0 * k).abs() < 0.5, "{plain} -> {tall}");
+        // No room under the panel: the lane's height, no more.
+        let cramped = box_h(&mut p, 0.0);
+        assert!((cramped - plain).abs() < 0.5, "{plain} -> {cramped}");
     }
 
     #[test]
@@ -1734,5 +1940,66 @@ mod lane_fit_tests {
             "half of a short one"
         );
         assert!(played_long_enough(Some(t(2100)), now, 4000.0));
+    }
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use crate::beatmap::Meta;
+
+    /// The background asked for last, once it's read.
+    fn shown(p: &mut Preview) -> (PathBuf, Option<Image>) {
+        for _ in 0..500 {
+            if let Some(read) = p.bg_rx.poll() {
+                return read;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("no background read");
+    }
+
+    fn entry(path: &Path, title: &str, background: Option<&str>) -> Entry {
+        let meta = Meta {
+            title: title.into(),
+            background: background.map(Into::into),
+            ..Default::default()
+        };
+        Entry::new(path.to_path_buf(), meta)
+    }
+
+    #[test]
+    fn a_tja_chart_without_a_picture_gets_one_drawn_and_an_osu_map_none() {
+        let dir = std::env::temp_dir().join(format!("taiko-backdrop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([200, 10, 10, 255]))
+            .save(dir.join("bg.png"))
+            .unwrap();
+        let chart = dir.join("song.tja#oni");
+        let mut p = Preview::default();
+
+        // Its own picture, as the chart names it.
+        p.show_background_for(&entry(&chart, "Song", Some("bg.png")));
+        let (path, img) = shown(&mut p);
+        assert_eq!(path, dir.join("bg.png"));
+        assert_eq!(img.map(|i| (i.width, i.height)), Some((4, 2)));
+
+        // None, or one that isn't there: one drawn.
+        for named in [None, Some("missing.png")] {
+            let e = entry(&chart, "Song", named);
+            p.show_background_for(&e);
+            let (_, img) = shown(&mut p);
+            let img = img.expect("drawn");
+            assert_eq!(
+                (img.width, img.height),
+                (crate::backdrop::WIDTH, crate::backdrop::HEIGHT)
+            );
+        }
+
+        // An osu! map without one stays without.
+        p.show_background_for(&entry(&dir.join("a.osu"), "Song", None));
+        assert!(p.bg_path.is_none() && !p.has_background);
+        assert!(matches!(p.bg_upload, Some(None)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

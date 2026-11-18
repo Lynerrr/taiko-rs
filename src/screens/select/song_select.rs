@@ -8,6 +8,18 @@ use crate::*;
 /// Song select (and the main menu over it).
 pub(crate) struct SongSelect;
 
+/// The source tab Ctrl and a digit (1 to 4) go to, 0 first.
+fn source_digit(code: KeyCode) -> Option<usize> {
+    [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+    ]
+    .iter()
+    .position(|&k| k == code)
+}
+
 impl SongSelect {
     pub(crate) fn scene() -> Scene {
         Scene::Other(Box::new(SongSelect))
@@ -42,6 +54,18 @@ impl Screen for SongSelect {
         } = key;
         // Any key closes the row menu; Esc does nothing else.
         if state.select.menu.take().is_some() && code == KeyCode::Escape {
+            return;
+        }
+        if state.select.lens_ui.is_some() {
+            if state.modifiers_ctrl && code == KeyCode::KeyS {
+                state.select.lens_ui = None;
+            } else if let Some(n) = source_digit(code).filter(|_| state.modifiers_ctrl) {
+                if state.select.source_key(n, &state.library) {
+                    state.lens_changed();
+                }
+            } else if state.select.lens_key(code, &state.library) {
+                state.lens_changed();
+            }
             return;
         }
         if let Some(cursor) = state.select.picker {
@@ -120,9 +144,20 @@ impl Screen for SongSelect {
                 state.open_preview()
             }
             () if state.modifiers_ctrl && code == KeyCode::KeyD => state.open_download(),
+            // The sort and filter panel; with Shift, straight to the next sort.
             () if state.modifiers_ctrl && code == KeyCode::KeyS => {
-                let dir = if state.modifiers_shift { -1 } else { 1 };
-                state.cycle_sort(dir);
+                if state.modifiers_shift {
+                    state.cycle_sort(1);
+                } else {
+                    state.toggle_lens();
+                }
+            }
+            () if state.modifiers_ctrl && source_digit(code).is_some() => {
+                if let Some(n) = source_digit(code)
+                    && state.select.source_key(n, &state.library)
+                {
+                    state.lens_changed();
+                }
             }
             () if state.modifiers_ctrl && code == KeyCode::KeyL => state.open_collections(),
             () if state.modifiers_ctrl && code == KeyCode::KeyK => state.collect_selected(),
@@ -173,8 +208,10 @@ impl Screen for SongSelect {
             {
                 state.browse_songs_folder();
             }
+            // The search and the filters.
             () if state.modifiers_ctrl && code == KeyCode::Backspace => {
                 state.select.filter.clear();
+                state.select.tabs.filters = ui::Filters::default();
                 state.select.refilter(&state.library);
             }
             // In the search box Delete clears what's typed, as in the game's other boxes.
@@ -291,6 +328,12 @@ impl Screen for SongSelect {
             state.select.list_share = state.cfg.song_list_share;
             state.select.banner = state.pick_to_edit || state.picking_lobby_map;
             let phone = mobile::active();
+            // Under the open sort and filter panel nothing lights up for the pointer: it's on the
+            // panel, drawn over all this.
+            let pointer = canvas.mouse;
+            if state.select.lens_ui.is_some() {
+                canvas.mouse = (f32::MIN, f32::MIN);
+            }
             if phone {
                 state.draw_mobile_select(canvas);
             } else {
@@ -446,7 +489,8 @@ impl Screen for SongSelect {
                         }
                         state.board_rect =
                             Some([x, top + BOARD_HEAD, pw + 18.0, fits as f32 * BOARD_ROW]);
-                        if state.board_online {
+                        // TJA charts have online boards only on a server with TJA boards.
+                        if state.board_online && state.has_online_board(&state.library[i]) {
                             let board = state.online_board(hash, relax).cloned();
                             let total = board
                                 .as_ref()
@@ -597,6 +641,7 @@ impl Screen for SongSelect {
                     ),
                 );
             }
+            canvas.mouse = pointer;
             state.select.draw_popups(canvas, &state.library);
             if let Some(naming) = &state.select.naming {
                 super::collections::draw_collection_naming(canvas, naming);

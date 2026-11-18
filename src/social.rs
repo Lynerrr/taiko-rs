@@ -3,7 +3,7 @@
 //! Besides friends the overlay lists everyone online (to add them) and has a global chat.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::hit::{Canvas, Hit};
@@ -262,6 +262,9 @@ pub struct Social {
     /// Chat lines scrolled back from the newest, and the most that can be (set when drawn).
     pub chat_scroll: usize,
     chat_scroll_max: Cell<usize>,
+    /// Runs of medal lines in the chat opened by a click (`medal_run_key`): the rest show as
+    /// one row each.
+    open_medal_runs: HashSet<u64>,
     /// The activity last sent to the server.
     pub sent_activity: Option<Activity>,
     /// The account is an admin: the ADMIN tab and the admin commands.
@@ -767,6 +770,13 @@ impl Social {
         }
     }
 
+    /// Opens a run of medal lines in the chat, or closes it again.
+    pub fn toggle_medal_run(&mut self, key: u64) {
+        if !self.open_medal_runs.remove(&key) {
+            self.open_medal_runs.insert(key);
+        }
+    }
+
     /// How many drawn rows a new global chat line adds (scrolled back, the view stays put).
     pub fn global_rows_added(&self, line: &ChatLine) -> usize {
         let entry = |l: &ChatLine| {
@@ -780,15 +790,13 @@ impl Social {
             )
             .with_card(now_playing_in(&l.text).map(Card::NowPlaying))
         };
-        let last: Vec<ChatEntry> = self.global.last().map(entry).into_iter().collect();
-        let before = chat_rows(&last, chat_width(), banner_width()).len();
-        let after = chat_rows(
-            &last.into_iter().chain([entry(line)]).collect::<Vec<_>>(),
-            chat_width(),
-            banner_width(),
-        )
-        .len();
-        after - before
+        // All of them: a medal joins the run of medals before it, which may be closed.
+        let mut lines: Vec<ChatEntry> = self.global.iter().map(entry).collect();
+        let open = &self.open_medal_runs;
+        let before = chat_rows(&lines, chat_width(), banner_width(), open).len();
+        lines.push(entry(line));
+        let after = chat_rows(&lines, chat_width(), banner_width(), open).len();
+        after.saturating_sub(before)
     }
 
     /// The conversation shown: (title, key) for a friend, or the lobby.
@@ -2248,6 +2256,8 @@ struct ChatEntry {
     at: Option<u64>,
     /// It calls us by name.
     mention: bool,
+    /// The server announcing a medal: runs of them fold into one row (`ChatKind::MedalRun`).
+    medal: bool,
 }
 
 impl ChatEntry {
@@ -2259,8 +2269,9 @@ impl ChatEntry {
         at: Option<u64>,
         mention: bool,
     ) -> Self {
-        let banner = (from == online::SERVER_NAME)
-            .then(|| medal.map_or(SERVER_COLOUR, |m| online::medal_colour(m.tier, m.secret)));
+        let server = from == online::SERVER_NAME;
+        let banner =
+            server.then(|| medal.map_or(SERVER_COLOUR, |m| online::medal_colour(m.tier, m.secret)));
         Self {
             from: from.to_string(),
             text,
@@ -2269,6 +2280,7 @@ impl ChatEntry {
             banner,
             at,
             mention,
+            medal: server && medal.is_some(),
         }
     }
 
@@ -2293,8 +2305,11 @@ enum ChatKind {
     Shot(u128),
     /// A card (an invite, a map shared with `/np`).
     Card(Card),
-    /// A row of the server's line on its banner; `ends`: its last.
-    Banner { ends: bool },
+    /// A row of the server's line on its banner; `ends`: its last; `run`: the opened run of
+    /// medals it's in, which a click on it closes.
+    Banner { ends: bool, run: Option<u64> },
+    /// Medals announced one after another, as one row that opens them (`medal_run_key`).
+    MedalRun { key: u64, open: bool },
 }
 
 /// A chat row as it's drawn, one row of a wrapped `ChatEntry` (or the name over some).
@@ -2319,9 +2334,10 @@ impl ChatRow {
                 ChatKind::Shot(_) => Canvas::text_height(CHAT_SIZE) + 8.0,
                 ChatKind::Card(Card::Invite(..)) => INVITE_CARD_H + 3.0,
                 ChatKind::Card(Card::NowPlaying(_)) => NP_CARD_H + 3.0,
-                ChatKind::Banner { ends } => {
+                ChatKind::Banner { ends, .. } => {
                     Canvas::text_height(6.5) + if ends { 3.5 } else { 2.5 }
                 }
+                ChatKind::MedalRun { .. } => Canvas::text_height(6.5) + 3.5,
             }
     }
 }
@@ -2329,23 +2345,96 @@ impl ChatRow {
 /// Messages from one sender this close together share their name.
 const GROUP_SECS: u64 = 5 * 60;
 
+/// Medals announced one after another fold into one row from this many.
+const MEDAL_RUN: usize = 2;
+
+/// Which run of medal lines starts with `first`: the same while more medals join it.
+fn medal_run_key(first: &ChatEntry) -> u64 {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    (first.at, &first.text).hash(&mut h);
+    h.finish()
+}
+
+/// What a closed run of `n` medal lines says: how many, and nobody's name, since it stands for
+/// all of them.
+fn medal_run_label(n: usize) -> String {
+    tr!("{n} medals earned", "メダル獲得: {n}件", "получено медалей: {n}"; [] [n])
+}
+
+/// The banner rows of the server's `line` (the `entry`th), wrapped to `banner`; `run`: the
+/// opened run of medals it's in.
+fn banner_rows(
+    line: &ChatEntry,
+    colour: u32,
+    entry: usize,
+    gap: f32,
+    banner: usize,
+    run: Option<u64>,
+) -> Vec<ChatRow> {
+    let text = wrap(&line.text, banner);
+    let n = text.len();
+    text.into_iter()
+        .enumerate()
+        .map(|(k, text)| ChatRow {
+            text,
+            colour,
+            kind: ChatKind::Banner {
+                ends: k + 1 == n,
+                run,
+            },
+            gap: if k == 0 { gap } else { 0.0 },
+            entry,
+        })
+        .collect()
+}
+
 /// `lines` wrapped to `width` (`banner` for the server's): each sender's name over their
-/// messages (once for a run of them), the server's lines alone on a banner.
-fn chat_rows(lines: &[ChatEntry], width: usize, banner: usize) -> Vec<ChatRow> {
+/// messages (once for a run of them), the server's lines alone on a banner, and medals announced
+/// one after another as one row, which shows them when its key is in `open`.
+fn chat_rows(
+    lines: &[ChatEntry],
+    width: usize,
+    banner: usize,
+    open: &HashSet<u64>,
+) -> Vec<ChatRow> {
     let mut rows: Vec<ChatRow> = Vec::new();
     let mut last: Option<&ChatEntry> = None;
+    // Lines of a medal run already drawn (or folded) with its first.
+    let mut skip = 0;
     for (entry, line) in lines.iter().enumerate() {
+        if skip > 0 {
+            skip -= 1;
+            continue;
+        }
         let gap = if rows.is_empty() { 0.0 } else { 5.0 };
-        if let Some(colour) = line.banner {
-            let text = wrap(&line.text, banner);
-            let n = text.len();
-            rows.extend(text.into_iter().enumerate().map(|(k, text)| ChatRow {
-                text,
-                colour,
-                kind: ChatKind::Banner { ends: k + 1 == n },
-                gap: if k == 0 { gap } else { 0.0 },
+        let run = if line.medal {
+            lines[entry..].iter().take_while(|l| l.medal).count()
+        } else {
+            0
+        };
+        if run >= MEDAL_RUN {
+            let key = medal_run_key(line);
+            let opened = open.contains(&key);
+            rows.push(ChatRow {
+                text: medal_run_label(run),
+                colour: SERVER_COLOUR,
+                kind: ChatKind::MedalRun { key, open: opened },
+                gap,
                 entry,
-            }));
+            });
+            if opened {
+                for (k, l) in lines[entry..entry + run].iter().enumerate() {
+                    let colour = l.banner.unwrap_or(SERVER_COLOUR);
+                    rows.extend(banner_rows(l, colour, entry + k, 1.0, banner, Some(key)));
+                }
+            }
+            skip = run - 1;
+            last = None;
+            continue;
+        }
+        if let Some(colour) = line.banner {
+            rows.extend(banner_rows(line, colour, entry, gap, banner, None));
             last = None;
             continue;
         }
@@ -2425,7 +2514,7 @@ fn chat_lines(
     deletable: bool,
     a: f32,
 ) {
-    let rows = chat_rows(lines, width, banner_width());
+    let rows = chat_rows(lines, width, banner_width(), &s.open_medal_runs);
     let room = input_y - 6.0 - top;
     // How many of the newest rows fit, ending at `end`.
     let fitting = |end: usize| {
@@ -2523,14 +2612,37 @@ fn chat_lines(
                 c.text(tx, ly + 3.0, 6.0, rgba(SOFT_TEXT, a), hint);
                 c.hit(x, ly - 1.0, w, h - 1.0, Hit::ChatShot(id));
             }
-            &ChatKind::Banner { ends } => {
+            &ChatKind::Banner { ends, run } => {
                 let bh = if ends { h - 1.0 } else { h };
                 c.rect(inner, ly - 1.5, iw, bh, rgba(row.colour, 0.16 * a));
                 c.rect(inner, ly - 1.5, 2.0, bh, rgba(row.colour, a));
                 c.text(inner + 7.0, ly, 6.5, rgba(row.colour, a), &row.text);
+                if let Some(key) = run {
+                    c.hit(inner, ly - 1.5, iw, bh, Hit::ChatMedals(key));
+                }
+            }
+            &ChatKind::MedalRun { key, open } => {
+                let bh = h - 1.0;
+                let hover = c.hovered(inner, ly - 1.5, iw, bh);
+                let fill = if hover { 0.26 } else { 0.16 };
+                c.rect(inner, ly - 1.5, iw, bh, rgba(row.colour, fill * a));
+                c.rect(inner, ly - 1.5, 2.0, bh, rgba(row.colour, a));
+                c.text(inner + 7.0, ly, 6.5, rgba(row.colour, a), &row.text);
+                let hint = if open {
+                    tr!("click to hide", "クリックで閉じる", "нажмите, чтобы скрыть")
+                } else {
+                    tr!("click to show", "クリックで表示", "нажмите, чтобы показать")
+                };
+                let hx = inner + iw - 5.0 - Canvas::text_width(6.0, hint);
+                if hx > inner + 12.0 + Canvas::text_width(6.5, &row.text) {
+                    c.text(hx, ly + 0.5, 6.0, rgba(SOFT_TEXT, a), hint);
+                }
+                c.hit(inner, ly - 1.5, iw, bh, Hit::ChatMedals(key));
             }
         }
-        if deletable && c.hovered(inner, ly - 1.0, iw, h) {
+        // The run's row stands for several lines: each is taken down on its own, opened.
+        let one_line = !matches!(row.kind, ChatKind::MedalRun { .. });
+        if deletable && one_line && c.hovered(inner, ly - 1.0, iw, h) {
             button(
                 c,
                 inner + iw,
@@ -3045,8 +3157,9 @@ mod tests {
             card: None,
             banner: None,
             mention: false,
+            medal: false,
         };
-        let rows = chat_rows(&[entry(&url), entry("hi")], 40, 40);
+        let rows = chat_rows(&[entry(&url), entry("hi")], 40, 40, &HashSet::new());
         assert!(rows.iter().any(|r| r.kind == ChatKind::Shot(id)));
         assert!(
             !rows.iter().any(|r| r.text.contains("/shot/")),
@@ -3121,7 +3234,12 @@ mod tests {
             ChatEntry::new(from, "a b c d e f".into(), false, medal, None, false)
         };
 
-        let rows = chat_rows(&[said(online::SERVER_NAME, Some(&medal))], 40, 5);
+        let rows = chat_rows(
+            &[said(online::SERVER_NAME, Some(&medal))],
+            40,
+            5,
+            &HashSet::new(),
+        );
         assert_eq!(
             rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
             ["a b c", "d e f"],
@@ -3134,21 +3252,33 @@ mod tests {
         assert_eq!(
             rows.iter().map(|r| &r.kind).collect::<Vec<_>>(),
             [
-                &ChatKind::Banner { ends: false },
-                &ChatKind::Banner { ends: true }
+                &ChatKind::Banner {
+                    ends: false,
+                    run: None
+                },
+                &ChatKind::Banner {
+                    ends: true,
+                    run: None
+                }
             ]
         );
 
         assert_eq!(
-            chat_rows(&[said(online::SERVER_NAME, Some(&secret))], 40, 40)[0].colour,
+            chat_rows(
+                &[said(online::SERVER_NAME, Some(&secret))],
+                40,
+                40,
+                &HashSet::new()
+            )[0]
+            .colour,
             online::SECRET_COLOUR
         );
         assert_eq!(
-            chat_rows(&[said(online::SERVER_NAME, None)], 40, 40)[0].colour,
+            chat_rows(&[said(online::SERVER_NAME, None)], 40, 40, &HashSet::new())[0].colour,
             SERVER_COLOUR
         );
 
-        let person = chat_rows(&[said("auneu", Some(&medal))], 40, 5);
+        let person = chat_rows(&[said("auneu", Some(&medal))], 40, 5, &HashSet::new());
         assert_eq!(
             person.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
             ["auneu", "a b c d e f"],
@@ -3242,6 +3372,134 @@ mod tests {
         assert_ne!(group_colours("SOMETHING NEW"), group_colours("DEV"));
     }
 
+    /// The server announcing that `who` earned a medal, at `at`.
+    fn medal_line(who: &str, at: u64) -> ChatLine {
+        ChatLine {
+            from: online::SERVER_NAME.into(),
+            to: String::new(),
+            text: format!("{who} earned Headhunter · 10 of 226 have it"),
+            at,
+            medal: Some(online::ChatMedal {
+                player: who.into(),
+                name: [
+                    "Headhunter".into(),
+                    "Headhunter".into(),
+                    "Headhunter".into(),
+                ],
+                tier: 3,
+                holders: 10,
+                players: 226,
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn said_line(from: &str, at: u64) -> ChatLine {
+        ChatLine {
+            from: from.into(),
+            to: String::new(),
+            text: "gg".into(),
+            at,
+            medal: None,
+        }
+    }
+
+    fn entries(lines: &[ChatLine]) -> Vec<ChatEntry> {
+        lines
+            .iter()
+            .map(|l| {
+                ChatEntry::new(
+                    &l.from,
+                    l.shown(),
+                    false,
+                    l.medal.as_ref(),
+                    Some(l.at),
+                    false,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn medals_one_after_another_fold_into_one_row_that_names_nobody() {
+        let lines = [
+            said_line("ann", 100),
+            medal_line("mister_Andres", 101),
+            medal_line("nnia", 102),
+            medal_line("Fox", 103),
+            said_line("bob", 104),
+            medal_line("semfi", 105),
+        ];
+        let rows = chat_rows(&entries(&lines), 60, 200, &HashSet::new());
+        let runs: Vec<&ChatRow> = rows
+            .iter()
+            .filter(|r| matches!(r.kind, ChatKind::MedalRun { .. }))
+            .collect();
+        assert_eq!(runs.len(), 1, "{rows:#?}");
+        assert_eq!(runs[0].text, medal_run_label(3));
+        assert_eq!(runs[0].entry, 1, "it starts at the run's first line");
+        for name in ["mister_Andres", "nnia", "Fox"] {
+            assert!(
+                !rows.iter().any(|r| r.text.contains(name)),
+                "{name} is folded away, and the row doesn't name anyone"
+            );
+        }
+        assert!(
+            rows.iter().any(|r| r.kind
+                == ChatKind::Banner {
+                    ends: true,
+                    run: None
+                }
+                && r.text.contains("semfi")),
+            "a medal alone stays on its own banner"
+        );
+        assert!(rows.iter().any(|r| r.text == "bob"), "people's lines stay");
+    }
+
+    #[test]
+    fn a_click_opens_a_run_of_medals_and_another_closes_it() {
+        let lines = [medal_line("nnia", 102), medal_line("Fox", 103)];
+        let mut s = Social::default();
+        let key = medal_run_key(&entries(&lines)[0]);
+        let shown = |s: &Social| -> Vec<String> {
+            chat_rows(&entries(&lines), 60, 200, &s.open_medal_runs)
+                .into_iter()
+                .map(|r| r.text)
+                .collect()
+        };
+        assert_eq!(shown(&s), [medal_run_label(2)]);
+        s.toggle_medal_run(key);
+        let open = shown(&s);
+        assert_eq!(open.len(), 3, "{open:?}");
+        assert!(open[1].contains("nnia") && open[2].contains("Fox"));
+        let rows = chat_rows(&entries(&lines), 60, 200, &s.open_medal_runs);
+        assert_eq!(rows[0].kind, ChatKind::MedalRun { key, open: true });
+        assert!(
+            rows[1..]
+                .iter()
+                .all(|r| matches!(r.kind, ChatKind::Banner { run: Some(k), .. } if k == key)),
+            "a click on any of its medals closes it too"
+        );
+        s.toggle_medal_run(key);
+        assert_eq!(shown(&s), [medal_run_label(2)]);
+    }
+
+    #[test]
+    fn a_medal_joining_a_closed_run_adds_no_row_and_the_run_stays_as_it_was() {
+        let mut s = Social {
+            global: vec![medal_line("nnia", 102), medal_line("Fox", 103)],
+            ..Default::default()
+        };
+        let key = medal_run_key(&entries(&s.global)[0]);
+        assert_eq!(s.global_rows_added(&medal_line("Arti_Ni", 104)), 0);
+        assert!(s.global_rows_added(&said_line("bob", 104)) > 0);
+        // Opened, the newcomer shows there and keeps it open.
+        s.toggle_medal_run(key);
+        assert!(s.global_rows_added(&medal_line("Arti_Ni", 104)) > 0);
+        s.global.push(medal_line("Arti_Ni", 104));
+        assert_eq!(medal_run_key(&entries(&s.global)[0]), key);
+    }
+
     #[test]
     fn a_run_of_messages_from_one_sender_shares_the_name() {
         let line =
@@ -3256,6 +3514,7 @@ mod tests {
             ],
             40,
             40,
+            &HashSet::new(),
         );
         let names: Vec<&str> = rows
             .iter()

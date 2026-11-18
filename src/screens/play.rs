@@ -518,7 +518,8 @@ impl Screen for PlayScreen {
                 && !state.auto
                 && !game.mods().has(mods::Mod::Autoplay)
                 && state.editor_back.is_none();
-            if own && !state.cfg.online_token.is_empty() {
+            // TJA charts stay on this computer: nobody to tell.
+            if own && !state.cfg.online_token.is_empty() && !state.library[self.entry].is_tja() {
                 let e = &state.library[self.entry];
                 results.vote_on = Some(online::PlayedMap {
                     hash: e.hash(),
@@ -552,7 +553,9 @@ impl Screen for PlayScreen {
                 seed: game.seed(),
                 half: game.half(),
             };
-            results.no_pp = if game.mods().has(mods::Mod::OdOverride) {
+            results.no_pp = if state.library[self.entry].is_tja() {
+                Some("TJA charts give no pp")
+            } else if game.mods().has(mods::Mod::OdOverride) {
                 Some("OD Override gets no pp")
             } else if game.mods().unranked() {
                 Some("Autoplay gets no pp")
@@ -613,10 +616,12 @@ impl Screen for PlayScreen {
                 if self.from.is_none() && !game.mods().unranked() {
                     crate::ura::whole_play(&state.cfg, replay.accuracy);
                 }
-                // Whole plays go to the online leaderboards too, when logged in.
+                // Whole plays go to the online leaderboards too, when logged in; TJA charts'
+                // only to a server with TJA boards, else they stay on this computer.
                 if self.from.is_none()
                     && !state.cfg.online_token.is_empty()
                     && !game.mods().unranked()
+                    && (!e.is_tja() || state.tja_boards)
                 {
                     let m = &game.map().meta;
                     let play = online::ScoreSubmit {
@@ -649,6 +654,7 @@ impl Screen for PlayScreen {
                         inputs: replay.inputs.clone(),
                         rolls: Some(game.stats().roll_ticks),
                         operation_key: None,
+                        tja: None,
                         stars: None,
                         pp_version: online::PP_VERSION,
                         scroll_speed: Some(replay.scroll_speed),

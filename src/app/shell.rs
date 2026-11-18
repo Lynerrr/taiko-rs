@@ -144,7 +144,11 @@ pub(crate) fn run(
     let scan = if args.iter().any(|a| inputs.contains(a)) {
         start_scan(inputs)
     } else {
-        start_scan(library::with_custom(inputs, &config::custom_dir()))
+        start_scan(library::with_custom(
+            inputs,
+            &config::custom_dir(),
+            crate::tja_maps::folder_for(cfg.tja_folder.as_deref()).as_deref(),
+        ))
     };
 
     let audio = match Engine::new(cfg.audio_buffer) {

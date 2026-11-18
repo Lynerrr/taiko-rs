@@ -93,6 +93,33 @@ pub fn panel(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32) {
     );
 }
 
+/// An on/off switch's size: the settings'.
+pub const SWITCH: [f32; 2] = [22.0, 11.0];
+
+/// An on/off switch at `[x, y]`, as in the settings: the accent with the knob right when on.
+pub fn switch(c: &mut Canvas, [x, y]: [f32; 2], on: bool) {
+    let [w, h] = SWITCH;
+    let fill = if on { render::accent() } else { PANEL_EDGE };
+    c.round_rect(
+        [x, y],
+        [w, h],
+        h / 2.0,
+        rgba(fill, 1.0),
+        rgba(fill, 1.0),
+        0.0,
+    );
+    let knob = if on { x + w - h + 1.5 } else { x + 1.5 };
+    let white = rgba(0xffffff, 1.0);
+    c.round_rect(
+        [knob, y + 1.5],
+        [h - 3.0, h - 3.0],
+        (h - 3.0) / 2.0,
+        white,
+        white,
+        0.0,
+    );
+}
+
 /// The selector's colour now: the accent, or gold in a kiai.
 pub fn selector_colour() -> u32 {
     if kiai() > 0.5 { GOLD } else { render::accent() }
@@ -311,12 +338,78 @@ pub fn title(c: &mut Canvas, x: f32, y: f32, size: f32, col: u32, text: &str) ->
     c.text(x, y, size, rgba(col, 1.0), text)
 }
 
+/// Text split red and cyan by `split` either way, the glitch of a title coming on.
+pub fn glitch_text(c: &mut Canvas, x: f32, y: f32, size: f32, col: u32, text: &str, split: f32) {
+    if split > 0.2 {
+        c.text(x - split, y, size, rgba(GLITCH_RED, 0.9), text);
+        c.text(x + split, y, size, rgba(GLITCH_CYAN, 0.9), text);
+    }
+    c.text(x, y, size, rgba(col, 1.0), text);
+}
+
+/// A flicker across `rect` as a picture changes: thin red and cyan bands, gone at `t` = 1.
+pub fn glitch_bars(c: &mut Canvas, [x, y, w, h]: [f32; 4], t: f32) {
+    let fade = (1.0 - t).clamp(0.0, 1.0);
+    // Where the bands are jumps a few times on the way, the same on every run.
+    let step = (t * 4.0).floor();
+    for k in 0..4 {
+        let r = ((k as f32 * 7.31 + step * 3.17).sin() * 43_758.547)
+            .fract()
+            .abs();
+        let by = y + r * (h - 6.0);
+        let bh = 2.0 + (k % 3) as f32 * 2.0;
+        let col = if k % 2 == 0 { GLITCH_RED } else { GLITCH_CYAN };
+        let dx = (r - 0.5) * 24.0;
+        c.rect(
+            x + dx.max(0.0),
+            by,
+            w - dx.abs(),
+            bh,
+            rgba(col, 0.35 * fade),
+        );
+    }
+}
+
 /// A small star-rating pill ("4.82") in the spectrum colour, right-aligned at `right`.
 /// Returns its width. `None` draws a placeholder while it is being calculated.
 pub fn star_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f32>) -> f32 {
     let text = stars
         .map(|s| format!("{s:.2}"))
         .unwrap_or_else(|| "...".into());
+    rating_pill(c, right, y, size, stars, &text)
+}
+
+/// A map's rating pill: a TJA course's `level` (its charter's, "8" or "9.5") when it has one,
+/// else its star rating (`star_pill`).
+pub fn map_pill(
+    c: &mut Canvas,
+    right: f32,
+    y: f32,
+    size: f32,
+    level: Option<f32>,
+    stars: Option<f32>,
+) -> f32 {
+    match level {
+        Some(level) => rating_pill(c, right, y, size, Some(level), &level_text(level)),
+        None => star_pill(c, right, y, size, stars),
+    }
+}
+
+/// A TJA level as charters write it: whole, or with the fraction it was given.
+pub fn level_text(level: f32) -> String {
+    let text = format!("{level:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+fn rating_pill(
+    c: &mut Canvas,
+    right: f32,
+    y: f32,
+    size: f32,
+    stars: Option<f32>,
+    text: &str,
+) -> f32 {
+    let text = text.to_string();
     let tw = Canvas::text_width(size, &text);
     let (w, h) = (tw + size * 1.6 + 6.0, size + 6.0);
     let x = right - w;
