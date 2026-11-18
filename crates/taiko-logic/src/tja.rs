@@ -116,9 +116,9 @@ pub struct Course {
     pub map: Beatmap,
     /// Identifies the chart however the file was written (`BoardChart::hash`).
     pub hash: ChartHash,
-    /// What it uses that isn't played or shown as OpenTaiko does, most used first: the player
-    /// is told the chart may not look as it should. A file's slips (a missing `#END` or comma)
-    /// aren't in it: OpenTaiko reads past them alike.
+    /// What it uses that this game doesn't support yet, most used first, listed with the
+    /// chart's details. A file's slips (a missing `#END` or comma) aren't in it: OpenTaiko
+    /// reads past them alike.
     pub unsupported: Vec<Unsupported>,
 }
 

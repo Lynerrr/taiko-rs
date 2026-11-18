@@ -1401,9 +1401,9 @@ fn details_of(s: &mut State, now: &mut Instant, path: &Path) -> Vec<String> {
     panic!("the details of {} never showed", path.display());
 }
 
-/// A TJA course using what this game leaves out says so in its details, most used first, so a
-/// chart that looks wrong is no surprise; a course using none of it (the same file's other
-/// course, or one with only a file's slips) says nothing.
+/// A TJA course using what this game doesn't support yet lists it in its details, most used
+/// first; a course using none of it (the same file's other course, or one with only a file's
+/// slips) lists nothing.
 #[test]
 fn a_tja_course_using_what_isnt_played_says_so_in_its_details() {
     let f = Folders::new("left-out");
@@ -1432,14 +1432,14 @@ fn a_tja_course_using_what_isnt_played_says_so_in_its_details() {
     let texts = details_of(&mut s, &mut now, &course(&odd, Oni));
     let at = texts
         .iter()
-        .position(|t| t.starts_with("Not as in OpenTaiko:"))
+        .position(|t| t.starts_with("Not supported yet:"))
         .unwrap_or_else(|| panic!("said in the details: {texts:?}"));
     assert_eq!(texts[at + 1], "#NOTESPAWN x2, #BGAON", "most used first");
 
     for (file, kind) in [(&odd, Easy), (&sloppy, Easy), (&sloppy, Oni)] {
         let texts = details_of(&mut s, &mut now, &course(file, kind));
         assert!(
-            !texts.iter().any(|t| t.starts_with("Not as in OpenTaiko")),
+            !texts.iter().any(|t| t.starts_with("Not supported yet")),
             "{} {kind:?}: nothing left out: {texts:?}",
             file.display()
         );

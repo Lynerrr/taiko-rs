@@ -147,7 +147,7 @@ pub struct Preview {
     audio_rx: Job<Decoded>,
     map: Option<(usize, Beatmap, Details, Graph)>,
     /// For a TJA course (by library index), what it uses that isn't played as OpenTaiko does
-    /// (`left_out_text`): shown with its details, so a chart looking wrong is no surprise.
+    /// (`left_out_text`): listed with its details.
     left_out: Option<(usize, String)>,
     /// Waiting for the music to reach a seek target before rebuilding the autoplay preview.
     pending_seek: Option<f64>,
@@ -1140,7 +1140,7 @@ impl Preview {
             if d.swells > 0 {
                 stats[1].push(("Swells", d.swells.to_string(), fade));
             }
-            // A TJA course using what isn't played as OpenTaiko does: said in a row of its own.
+            // What a TJA course uses that isn't supported yet: a row of its own.
             if let Some((_, what)) = self.left_out.as_ref().filter(|(li, _)| *li == i) {
                 let label = left_out_label();
                 let room = iw - Canvas::text_width(8.0, &format!("{label} "));
@@ -1288,21 +1288,15 @@ impl Preview {
         // Muted labels, bright values.
         // The OD under the pointer: where its hit windows go, once all else is drawn.
         let mut od_hovered = None;
-        for (g, group) in rows.iter().enumerate() {
-            // The last group (what a TJA course leaves out) in the warning's colour.
-            let (muted, bright) = if g == 3 {
-                (LEFT_OUT_COLOUR, LEFT_OUT_COLOUR)
-            } else {
-                (0x8a8aa0, 0xe8e8f4)
-            };
+        for group in &rows {
             for row in group {
                 let mut sx = lx;
                 for cell @ (label, value, alpha) in row.iter().copied() {
                     if *label == "OD" && c.hovered(sx, cy - 2.0, cell_w(cell), row_h) {
                         od_hovered = Some((sx, cy + row_h));
                     }
-                    sx += c.text(sx, cy, 8.0, rgba(muted, *alpha), &format!("{label} "));
-                    sx += c.text(sx, cy, 8.0, rgba(bright, *alpha), value) + STAT_GAP;
+                    sx += c.text(sx, cy, 8.0, rgba(0x8a8aa0, *alpha), &format!("{label} "));
+                    sx += c.text(sx, cy, 8.0, rgba(0xe8e8f4, *alpha), value) + STAT_GAP;
                 }
                 cy += row_h;
             }
@@ -1414,15 +1408,10 @@ pub use crate::config::PREVIEW_SIZE;
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
 
-/// The row of what a TJA course leaves out: its label and colour (a warning's amber).
+/// The label of the row of what a TJA course leaves out, said plainly as the other details are.
 fn left_out_label() -> &'static str {
-    tr!(
-        "Not as in OpenTaiko:",
-        "OpenTaikoと違う:",
-        "Не как в OpenTaiko:"
-    )
+    tr!("Not supported yet:", "未対応:", "Пока не поддерживается:")
 }
-const LEFT_OUT_COLOUR: u32 = 0xffb347;
 
 /// `s` as up to `lines` lines of text `size` tall within `max_w`, broken at spaces (or mid-word
 /// when a word alone is too long); what still doesn't fit ends the last line with "...".
