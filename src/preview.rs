@@ -377,9 +377,14 @@ impl Preview {
         self.bg_path = None;
     }
 
-    /// Makes sure the background shown is `e`'s (e.g. a multiplayer map picked by the host).
+    /// Makes sure the background shown is `e`'s (e.g. a multiplayer map picked by the host). A TJA
+    /// chart without a picture, or whose picture can't be read, gets one drawn (`backdrop`).
     pub fn show_background_for(&mut self, e: &Entry) {
-        let path = background_path(e);
+        let file = background_path(e);
+        let drawn = crate::tja_maps::is_course(&e.path).then(|| e.meta.clone());
+        let path = file
+            .clone()
+            .or_else(|| drawn.as_ref().map(crate::backdrop::key));
         if path == self.bg_path {
             return;
         }
@@ -387,7 +392,10 @@ impl Preview {
         match path {
             Some(p) => {
                 self.bg_rx = Job::spawn(move || {
-                    let img = load_image(&p);
+                    let img = file
+                        .as_deref()
+                        .and_then(load_image)
+                        .or_else(|| drawn.as_ref().map(crate::backdrop::image));
                     (p, img)
                 });
             }
@@ -1892,5 +1900,66 @@ mod lane_fit_tests {
             "half of a short one"
         );
         assert!(played_long_enough(Some(t(2100)), now, 4000.0));
+    }
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use crate::beatmap::Meta;
+
+    /// The background asked for last, once it's read.
+    fn shown(p: &mut Preview) -> (PathBuf, Option<Image>) {
+        for _ in 0..500 {
+            if let Some(read) = p.bg_rx.poll() {
+                return read;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("no background read");
+    }
+
+    fn entry(path: &Path, title: &str, background: Option<&str>) -> Entry {
+        let meta = Meta {
+            title: title.into(),
+            background: background.map(Into::into),
+            ..Default::default()
+        };
+        Entry::new(path.to_path_buf(), meta)
+    }
+
+    #[test]
+    fn a_tja_chart_without_a_picture_gets_one_drawn_and_an_osu_map_none() {
+        let dir = std::env::temp_dir().join(format!("taiko-backdrop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        image::RgbaImage::from_pixel(4, 2, image::Rgba([200, 10, 10, 255]))
+            .save(dir.join("bg.png"))
+            .unwrap();
+        let chart = dir.join("song.tja#oni");
+        let mut p = Preview::default();
+
+        // Its own picture, as the chart names it.
+        p.show_background_for(&entry(&chart, "Song", Some("bg.png")));
+        let (path, img) = shown(&mut p);
+        assert_eq!(path, dir.join("bg.png"));
+        assert_eq!(img.map(|i| (i.width, i.height)), Some((4, 2)));
+
+        // None, or one that isn't there: one drawn.
+        for named in [None, Some("missing.png")] {
+            let e = entry(&chart, "Song", named);
+            p.show_background_for(&e);
+            let (_, img) = shown(&mut p);
+            let img = img.expect("drawn");
+            assert_eq!(
+                (img.width, img.height),
+                (crate::backdrop::WIDTH, crate::backdrop::HEIGHT)
+            );
+        }
+
+        // An osu! map without one stays without.
+        p.show_background_for(&entry(&dir.join("a.osu"), "Song", None));
+        assert!(p.bg_path.is_none() && !p.has_background);
+        assert!(matches!(p.bg_upload, Some(None)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

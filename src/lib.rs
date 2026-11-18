@@ -46,6 +46,7 @@ mod mapping_rejoin_tests;
 use taiko_logic::font;
 mod game;
 use taiko_logic::genres;
+mod backdrop;
 mod guide;
 mod hit;
 mod hud;

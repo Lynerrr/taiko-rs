@@ -88,7 +88,7 @@ pub const GENRES: [Genre; 17] = [
     Genre {
         name: "Pop",
         colour: 0xff5fa2,
-        words: &["pop", "j-pop", "jpop", "k-pop", "kpop", "denpa"],
+        words: &["pop", "j-pop", "jpop", "k-pop", "kpop", "denpa", "ポップス"],
     },
     Genre {
         name: "Rock",
@@ -113,7 +113,15 @@ pub const GENRES: [Genre; 17] = [
     Genre {
         name: "Game music",
         colour: 0x7bd88f,
-        words: &["vgm", "videogame", "video game", "game soundtrack", "ost"],
+        words: &[
+            "vgm",
+            "videogame",
+            "video game",
+            "game soundtrack",
+            "ost",
+            "game music",
+            "ゲームミュージック",
+        ],
     },
     Genre {
         name: "Touhou",
@@ -134,6 +142,7 @@ pub const GENRES: [Genre; 17] = [
             "orchestral",
             "symphony",
             "baroque",
+            "クラシック",
         ],
     },
     Genre {
