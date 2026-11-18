@@ -100,28 +100,14 @@ fn the_player_opens_from_the_menu_and_closes_with_it() {
     s.main_menu = Some(menu::Menu::new());
     s.music_control(player::Control::Open);
     assert!(s.player.is_some());
-    s.player.as_mut().unwrap().move_pitch(3);
-    assert!((s.player.as_ref().unwrap().pitch() - 2f64.powf(0.25)).abs() < 1e-9);
-    key(&mut s, KeyCode::BracketLeft);
-    assert_eq!(
-        s.player.as_ref().unwrap().semitones,
-        2,
-        "[ takes the pitch down"
-    );
-    s.player
-        .as_mut()
-        .unwrap()
-        .toggle_speed(player::Speed::Nightcore);
+    s.player.as_mut().unwrap().toggle_daycore();
     assert_eq!(
         s.preview_rate(),
-        (1.5, false),
+        (0.75, false),
         "the player's own speed, not the game's"
     );
     assert_eq!(s.cfg.rate, 1.0);
-    s.player
-        .as_mut()
-        .unwrap()
-        .toggle_speed(player::Speed::Nightcore);
+    s.player.as_mut().unwrap().toggle_daycore();
     key(&mut s, KeyCode::Space);
     assert!(s.music_paused, "Space pauses in the player");
     key(&mut s, KeyCode::KeyF);

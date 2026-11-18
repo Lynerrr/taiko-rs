@@ -344,8 +344,7 @@ fn assert_every_screen_fits() {
                     .map(|i| i % p.list.tracks.len().max(1))
                     .filter(|_| !p.list.tracks.is_empty()),
             );
-            p.semitones = -12;
-            p.speed = Some(player::Speed::Nightcore);
+            p.set_custom_rate(0.55, false);
             p.search("camellia".into());
         }
         check(&mut s, &format!("music player, paused {paused}"), &mut out);
