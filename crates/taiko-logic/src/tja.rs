@@ -12,7 +12,7 @@
 //! a negative `#SCROLL`) goes in the map's gimmick (`Gimmick::motion` and its shared scroll),
 //! never in its board chart: it changes how a chart looks, not how it plays or scores.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note, Special};
 use crate::tko::gimmick::{Gimmick, Motion, NoteMotion};
@@ -116,6 +116,19 @@ pub struct Course {
     pub map: Beatmap,
     /// Identifies the chart however the file was written (`BoardChart::hash`).
     pub hash: ChartHash,
+    /// What it uses that isn't played or shown as OpenTaiko does, most used first: the player
+    /// is told the chart may not look as it should. A file's slips (a missing `#END` or comma)
+    /// aren't in it: OpenTaiko reads past them alike.
+    pub unsupported: Vec<Unsupported>,
+}
+
+/// Something a course uses that this game leaves out (a command, a note symbol) or plays as
+/// something else (a `COURSE:` it doesn't know), and how many times.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unsupported {
+    /// As the chart writes it: `#BGAON`, `note H`, `COURSE:Dan`.
+    pub what: String,
+    pub times: usize,
 }
 
 /// SHA-256 of a normalized chart: the same for the same notes whatever the file's encoding,
@@ -192,6 +205,9 @@ struct Header {
     bg_image: String,
     /// `PREIMAGE:`, the song's picture in the song list (often its cover).
     pre_image: String,
+    /// The last `COURSE:` read when it named none this game plays (`Dan`, `Tower`): the
+    /// chart is read as the course before it.
+    unknown_course: Option<String>,
 }
 
 impl Default for Header {
@@ -217,6 +233,7 @@ impl Default for Header {
             branch_balloon: [None, None, None],
             bg_image: String::new(),
             pre_image: String::new(),
+            unknown_course: None,
         }
     }
 }
@@ -244,6 +261,9 @@ fn image_path(value: &str) -> String {
 struct Warnings {
     seen: HashSet<String>,
     list: Vec<String>,
+    /// What the chart being built uses that's left out (`Course::unsupported`), counted every
+    /// time it's met.
+    uses: BTreeMap<String, usize>,
 }
 
 impl Warnings {
@@ -252,6 +272,12 @@ impl Warnings {
         if self.seen.insert(text.clone()) {
             self.list.push(text);
         }
+    }
+
+    /// `what` met in the chart being built and left out: `text` said once, `what` counted.
+    fn left_out(&mut self, what: String, text: String) {
+        *self.uses.entry(what).or_default() += 1;
+        self.add(text);
     }
 }
 
@@ -335,7 +361,7 @@ pub fn parse(text: &str) -> Result<Song, String> {
 
     let mut courses = Vec::new();
     for chart in &picked {
-        let map = read_course(chart, &mut warnings);
+        let (map, uses) = read_course(chart, &mut warnings);
         if map.notes.is_empty() {
             warnings.add(format!(
                 "the {} chart has no notes",
@@ -361,11 +387,24 @@ pub fn parse(text: &str) -> Result<Song, String> {
                 map
             }
         };
+        let mut unsupported: Vec<Unsupported> = uses
+            .into_iter()
+            .map(|(what, times)| Unsupported { what, times })
+            .collect();
+        if let Some(course) = &chart.header.unknown_course {
+            unsupported.push(Unsupported {
+                what: format!("COURSE:{course}"),
+                times: 1,
+            });
+        }
+        // Most used first; the map keeps them by name otherwise.
+        unsupported.sort_by_key(|u| std::cmp::Reverse(u.times));
         courses.push(Course {
             kind: chart.header.course,
             level: chart.header.level as u32,
             map,
             hash,
+            unsupported,
         });
     }
     if courses.is_empty() {
@@ -449,10 +488,14 @@ fn read_header(h: &mut Header, key: &str, value: &str, warnings: &mut Warnings) 
                 h.level = 0.0;
                 h.designer = h.designers[kind as usize].clone();
                 h.in_course = true;
+                h.unknown_course = None;
                 h.balloon.clear();
                 h.branch_balloon = [None, None, None];
             }
-            None => warnings.add(format!("COURSE:{value} is not played: read as Oni")),
+            None => {
+                h.unknown_course = Some(value.trim().to_string());
+                warnings.add(format!("COURSE:{value} is not played: read as Oni"));
+            }
         },
         "COMPAT" => match value.to_ascii_lowercase().as_str() {
             "jiro1" | "jiro2" | "tmg" => (h.jiro_axes, h.lane_rolls) = (true, false),
@@ -1098,13 +1141,24 @@ impl Built {
     }
 }
 
-/// A course's chart: read once, or once per branch and merged when it branches.
-fn read_course(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
+/// A course's chart: read once, or once per branch and merged when it branches. With what it
+/// uses that's left out (`Warnings::left_out`), as often as the branch using it most has it.
+fn read_course(chart: &RawChart, warnings: &mut Warnings) -> (Beatmap, BTreeMap<String, usize>) {
+    warnings.uses.clear();
     if !branches(chart) {
-        return build(chart, 2, warnings).finish();
+        let map = build(chart, 2, warnings).finish();
+        return (map, std::mem::take(&mut warnings.uses));
     }
-    let passes: Vec<Built> = (0..3).map(|pass| build(chart, pass, warnings)).collect();
-    merge(passes, warnings)
+    let mut most = BTreeMap::new();
+    let mut passes = Vec::new();
+    for pass in 0..3 {
+        passes.push(build(chart, pass, warnings));
+        for (what, times) in std::mem::take(&mut warnings.uses) {
+            let n: &mut usize = most.entry(what).or_default();
+            *n = (*n).max(times);
+        }
+    }
+    (merge(passes, warnings), most)
 }
 
 /// One map from the three passes of a branching chart: Master's (its shared notes, timing and
@@ -1273,7 +1327,10 @@ fn build(chart: &RawChart, pass: usize, warnings: &mut Warnings) -> Built {
                         };
                         bar.push(Step::Symbol(c, p, *tag));
                     } else if !c.is_whitespace() {
-                        warnings.add(format!("unknown symbol {c:?} in the notes: skipped"));
+                        warnings.left_out(
+                            format!("note {c}"),
+                            format!("unknown symbol {c:?} in the notes: skipped"),
+                        );
                     }
                 }
             }
@@ -1545,7 +1602,10 @@ fn apply(
         "BARLINEON" | "BARLINEOFF" => cur.barlines = name == "BARLINEON",
         // Branch bookkeeping (pick_branch has chosen) and score rules: nothing to time.
         "SECTION" | "LEVELHOLD" => {}
-        _ => warnings.add(format!("#{name} is not supported: ignored")),
+        _ => warnings.left_out(
+            format!("#{name}"),
+            format!("#{name} is not supported: ignored"),
+        ),
     }
 }
 
@@ -1660,7 +1720,7 @@ fn note(
             }
             None => warnings.add("a roll end (8) with no roll: skipped"),
         },
-        _ => warnings.add(format!("unknown note {c:?}: skipped")),
+        _ => warnings.left_out(format!("note {c}"), format!("unknown note {c:?}: skipped")),
     }
     // A don or kat put down here (a roll's comes with its end).
     if notes.len() > before && c != '8' {
