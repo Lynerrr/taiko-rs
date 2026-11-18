@@ -733,13 +733,24 @@ impl Scroll {
         self.x_ahead(time, velocity, ahead)
     }
 
+    /// The same, `timed`: by its own time even under the shared scroll (see
+    /// `NoteMotion::timed`).
+    #[inline]
+    pub fn x_of(&self, time: f64, velocity: f64, timed: bool) -> f32 {
+        if timed {
+            self.x_ahead(time, velocity, time - self.t)
+        } else {
+            self.x(time, velocity)
+        }
+    }
+
     /// The same as it was at game time `then` (a note waiting to start moving holds that
     /// place); the mods bend it as they do now.
     #[inline]
-    pub fn x_as_of(&self, time: f64, velocity: f64, then: f64) -> f32 {
+    pub fn x_as_of(&self, time: f64, velocity: f64, then: f64, timed: bool) -> f32 {
         let ahead = match &self.shared {
-            Some((table, shift, _)) => table.x(time - shift) - table.x(then - shift),
-            None => time - then,
+            Some((table, shift, _)) if !timed => table.x(time - shift) - table.x(then - shift),
+            _ => time - then,
         };
         self.x_ahead(time, velocity, ahead)
     }

@@ -534,6 +534,39 @@ fn hbscroll_slows_every_note_on_screen_when_the_bpm_drops() {
     );
 }
 
+/// Turning #BMSCROLL on with no #BPMCHANGE there changes no note's speed: the note read after it
+/// moves as fast before the switch as after it, and as fast as in normal mode (a player's report,
+/// with OpenTaiko's author: each note's scroll mode is set where it is read, not when it plays).
+/// The song's BPM is 60 and the chart plays at 120, so scrolling by beats and by time would
+/// differ if the mode changed what is on screen.
+#[test]
+fn turning_bmscroll_on_changes_no_notes_speed() {
+    // A don at 0 (normal mode), the switch at 2000 and a don at 2500 (by beats).
+    let bm = "TITLE:Gimmicks\nBPM:60\nOFFSET:0\nCOURSE:Oni\n#START\n#BPMCHANGE 120\n1,\n#BMSCROLL\n0100,\n#END\n";
+    let plain = bm.replace("#BMSCROLL\n", "");
+    let at = [1900.0, 1950.0, 2050.0, 2100.0];
+    let far = |f: &Vec<Vec<f32>>, k: usize| *f[k].last().unwrap_or_else(|| panic!("{f:?}"));
+    let f = dons_drawn(bm, &[], &at);
+    let (before, after) = (far(&f, 0) - far(&f, 1), far(&f, 2) - far(&f, 3));
+    assert!(before > 0.0, "{f:?}");
+    assert!(
+        (before - after).abs() < 0.05,
+        "as fast before the switch as after it: {before} then {after}"
+    );
+    let p = dons_drawn(&plain, &[], &at);
+    assert!(
+        (far(&f, 0) - far(&p, 0)).abs() < 0.05 && (far(&f, 3) - far(&p, 3)).abs() < 0.05,
+        "where normal mode has it: {f:?} {p:?}"
+    );
+    let on_time = dons_drawn(bm, &[], &[2500.0]);
+    assert!(
+        on_time[0]
+            .iter()
+            .any(|&x| (x - taiko_logic::sim::HIT_X).abs() < 0.05),
+        "{on_time:?}"
+    );
+}
+
 /// #SUDDEN 1 0.5: a note isn't drawn until a second before its hit, then waits where it will be
 /// half a second before it, and moves from there like any other.
 #[test]
@@ -908,6 +941,79 @@ fn notes_come_in_from_any_side() {
             &format!("{scroll} half a second before"),
         );
     }
+}
+
+/// Where TJA chart `text`'s small roll heads are drawn at `t` (map ms), and the roll bodies'
+/// headings (radians).
+fn rolls_drawn_at(text: &str, t: f64) -> (Vec<(f32, f32)>, Vec<f32>) {
+    let (_, c) = drawn_at(text, t);
+    let roll = crate::render::rgba(0xFCB806, 1.0);
+    let is_roll = |f: [f32; 4]| (0..3).all(|k| (f[k] - roll[k]).abs() < 0.01);
+    let heads = c
+        .shapes
+        .iter()
+        .filter(|s| (s.half[0] - 31.0).abs() < 0.5 && (s.half[1] - 31.0).abs() < 0.5)
+        .filter(|s| is_roll(s.fill))
+        .map(|s| (s.center[0], s.center[1]))
+        .collect();
+    let bodies = c
+        .shapes
+        .iter()
+        .filter(|s| s.half[0] > s.half[1] + 1.0 && is_roll(s.fill))
+        .map(|s| s.angle)
+        .collect();
+    (heads, bodies)
+}
+
+/// #DIRECTION sends rolls in the way it sends notes, body and all, meeting the drum on time (a
+/// player's report: with a vertical scroll the rolls still came along the lane). Under
+/// COMPAT:tjap3 they stay on the lane, as TJAPlayer3 drew them.
+#[test]
+fn rolls_come_in_the_way_direction_sends_notes() {
+    let chart = |compat: &str, bar: &str| {
+        format!(
+            "TITLE:Gimmicks\nBPM:120\nOFFSET:0\n{compat}COURSE:Oni\n#START\n#DIRECTION 1\n0,\n{bar},\n#END\n"
+        )
+    };
+    // Where a don comes from half a second before its hit, and where it is hit.
+    let (dons, _) = drawn_at(&chart("", "1"), 1500.0);
+    assert_eq!(dons.len(), 1, "{dons:?}");
+    let (hits, _) = drawn_at(&chart("", "1"), 2000.0);
+    let ((nx, ny), (hx, hy)) = (dons[0], hits[0]);
+    assert!((nx - hx).abs() < 0.1 && ny < hy - 50.0, "{dons:?} {hits:?}");
+    let (heads, bodies) = rolls_drawn_at(&chart("", "5008"), 1500.0);
+    assert_eq!(heads.len(), 1, "{heads:?}");
+    assert!(
+        (heads[0].0 - nx).abs() < 0.1 && (heads[0].1 - ny).abs() < 0.1,
+        "the roll's head where the don would be: {heads:?}, not {nx}, {ny}"
+    );
+    assert!(!bodies.is_empty(), "a body");
+    assert!(
+        bodies
+            .iter()
+            .all(|a| (a.abs() - std::f32::consts::FRAC_PI_2).abs() < 0.01),
+        "its body up the screen: {bodies:?}"
+    );
+    let (heads, _) = rolls_drawn_at(&chart("", "5008"), 2000.0);
+    assert!(
+        (heads[0].0 - hx).abs() < 0.1 && (heads[0].1 - hy).abs() < 0.1,
+        "on the drum at its time: {heads:?}"
+    );
+    // A balloon comes that way too.
+    let (_, c) = drawn_at(&chart("", "7008"), 1500.0);
+    assert!(
+        c.shapes
+            .iter()
+            .any(|s| (s.center[0] - nx).abs() < 0.1 && (s.center[1] - ny).abs() < 0.1),
+        "the balloon where the don would be"
+    );
+    // TJAPlayer3's: along the lane from the right.
+    let (heads, _) = rolls_drawn_at(&chart("COMPAT:tjap3\n", "5008"), 1500.0);
+    assert_eq!(heads.len(), 1, "{heads:?}");
+    assert!(
+        (heads[0].1 - hy).abs() < 0.1 && heads[0].0 > hx + 50.0,
+        "{heads:?}"
+    );
 }
 
 /// Two bars of kats, then a branch picked by accuracy: Normal plays kats, Expert big kats,

@@ -182,6 +182,9 @@ struct Header {
     /// up, and `#DIRECTION` sets the way whole. OpenTaiko's own (and TJAPlayer3's), the default:
     /// it points down, and a `#DIRECTION` leaves a complex `#SCROLL`'s vertical part be.
     jiro_axes: bool,
+    /// `COMPAT:tjap3`: rolls and balloons stay on the lane whatever way the notes come, as
+    /// TJAPlayer3 drew them. Elsewhere (OpenTaiko's own, the default) they come that way too.
+    lane_rolls: bool,
     balloon: Vec<u32>,
     /// `BALLOONNOR` / `BALLOONEXP` / `BALLOONMAS`: per-branch lists that win over `BALLOON`.
     branch_balloon: [Option<Vec<u32>>; 3],
@@ -209,6 +212,7 @@ impl Default for Header {
             course: CourseKind::Oni,
             level: 0.0,
             jiro_axes: false,
+            lane_rolls: false,
             balloon: Vec::new(),
             branch_balloon: [None, None, None],
             bg_image: String::new(),
@@ -451,8 +455,9 @@ fn read_header(h: &mut Header, key: &str, value: &str, warnings: &mut Warnings) 
             None => warnings.add(format!("COURSE:{value} is not played: read as Oni")),
         },
         "COMPAT" => match value.to_ascii_lowercase().as_str() {
-            "jiro1" | "jiro2" | "tmg" => h.jiro_axes = true,
-            "oos" | "tjap3" => h.jiro_axes = false,
+            "jiro1" | "jiro2" | "tmg" => (h.jiro_axes, h.lane_rolls) = (true, false),
+            "oos" => (h.jiro_axes, h.lane_rolls) = (false, false),
+            "tjap3" => (h.jiro_axes, h.lane_rolls) = (false, true),
             _ => warnings.add(format!("COMPAT:{value} is not known: OpenTaiko's used")),
         },
         "LEVEL" => {
@@ -825,6 +830,8 @@ struct Cursor {
     direction: i64,
     /// The chart's `COMPAT` (see `Header::jiro_axes`).
     jiro_axes: bool,
+    /// See `Header::lane_rolls`.
+    lane_rolls: bool,
     /// Bar length in whole notes (`#MEASURE 3/4` = 0.75).
     measure: f64,
     gogo: bool,
@@ -842,13 +849,14 @@ struct Cursor {
     tag: Tag,
 }
 
-/// How notes scroll, as OpenTaiko places them.
+/// How notes scroll, as OpenTaiko places them. Each note keeps the mode it was read in: a later
+/// `#BMSCROLL` or `#NMSCROLL` changes how the notes after it move, never the ones before.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScrollMode {
     /// By time: each note at its own BPM × `#SCROLL`, fixed (osu! SV).
     Normal,
-    /// `#BMSCROLL`: by beats, the whole lane at the BPM of the moment (a change speeds up or
-    /// slows every note at once, and none overtakes another); `#SCROLL` is left out, and a
+    /// `#BMSCROLL`: by beats, on a lane going at the BPM of the moment (a change speeds up or
+    /// slows every such note at once, and none overtakes another); `#SCROLL` is left out, and a
     /// `#DELAY` stops the lane.
     Beats,
     /// `#HBSCROLL`: by beats like `#BMSCROLL`, with each note's `#SCROLL` on top.
@@ -872,12 +880,10 @@ impl Cursor {
         }
     }
 
-    /// How fast a lane scrolled by beats moves here: at the reference BPM, 1.
+    /// How fast the lane notes scrolled by beats go on moves here: at the reference BPM, 1. The
+    /// song's beats, whatever mode is on: notes read in normal mode don't go on it.
     fn lane_speed(&self, reference: f64) -> f64 {
-        match self.mode {
-            ScrollMode::Normal => 1.0,
-            _ => (self.bpm / reference).clamp(-MAX_SPEED, MAX_SPEED),
-        }
+        (self.bpm / reference).clamp(-MAX_SPEED, MAX_SPEED)
     }
 
     fn control_point(&self) -> ControlPoint {
@@ -952,6 +958,7 @@ impl Cursor {
             wait: self.wait,
             hide_long: self.hide_long,
             dir,
+            timed: self.mode == ScrollMode::Normal,
         }
     }
 }
@@ -961,8 +968,8 @@ struct Drawing {
     /// The song's BPM: a lane scrolled by beats moves at speed 1 at it, as fast as a note at
     /// `#SCROLL 1` does by time.
     reference: f64,
-    /// The lane's speed over the song (the shared scroll) for the beat-scrolled modes; 1 while
-    /// the chart scrolls by time.
+    /// The lane's speed over the song (the shared scroll): the BPM against `reference`, 0
+    /// through a `#DELAY`. Only notes read in a beat-scrolled mode go on it.
     speed: Track,
     /// A beat-scrolled mode was on somewhere.
     by_beats: bool,
@@ -970,6 +977,8 @@ struct Drawing {
     barlines: Vec<(f64, f64)>,
     /// Barlines coming in some other way than along the lane (see `Motion::barline_dirs`).
     barline_dirs: Vec<(f64, [f64; 2])>,
+    /// Barlines read in normal mode (see `Motion::timed_barlines`).
+    timed_barlines: Vec<f64>,
     /// `#JPOSSCROLL`s as written, in virtual units.
     moves: Vec<JudgeMove>,
     /// `#LYRIC` lines.
@@ -1023,6 +1032,7 @@ impl Drawing {
         self.notes.sort_by(|a, b| a.t.total_cmp(&b.t));
         self.barlines.sort_by(|a, b| a.0.total_cmp(&b.0));
         self.barline_dirs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.timed_barlines.sort_by(f64::total_cmp);
         Some(Gimmick {
             scroll: if self.by_beats {
                 self.speed
@@ -1034,6 +1044,12 @@ impl Drawing {
                 notes: self.notes,
                 barlines: self.barlines,
                 barline_dirs: self.barline_dirs,
+                // Without a shared scroll every barline goes by its own time anyway.
+                timed_barlines: if self.by_beats {
+                    self.timed_barlines
+                } else {
+                    Vec::new()
+                },
                 judge_x,
                 judge_y,
                 lyrics: self.lyrics,
@@ -1200,6 +1216,7 @@ fn build(chart: &RawChart, pass: usize, warnings: &mut Warnings) -> Built {
         scroll_im: 0.0,
         direction: 0,
         jiro_axes: h.jiro_axes,
+        lane_rolls: h.lane_rolls,
         measure: 1.0,
         gogo: false,
         barlines: true,
@@ -1226,6 +1243,7 @@ fn build(chart: &RawChart, pass: usize, warnings: &mut Warnings) -> Built {
         notes: Vec::new(),
         barlines: Vec::new(),
         barline_dirs: Vec::new(),
+        timed_barlines: Vec::new(),
         moves: Vec::new(),
         lyrics: Vec::new(),
     };
@@ -1281,6 +1299,9 @@ fn build(chart: &RawChart, pass: usize, warnings: &mut Warnings) -> Built {
                 drawing.barlines.push((cur.time, m.velocity));
                 if let Some(dir) = m.dir {
                     drawing.barline_dirs.push((cur.time, dir));
+                }
+                if m.timed {
+                    drawing.timed_barlines.push(cur.time);
                 }
             }
         };
@@ -1439,8 +1460,9 @@ fn apply(
         },
         "DELAY" => {
             if let Some(s) = number(warnings) {
-                // Scrolled by beats, the lane stops for it.
-                if cur.mode != ScrollMode::Normal && s > 0.0 {
+                // The lane notes scrolled by beats go on stops for it, whatever mode is on
+                // now: the notes read before it in a beat-scrolled mode stop too.
+                if s > 0.0 {
                     drawing.key_at(cur.time, 0.0);
                 }
                 cur.time += s * 1000.0;
@@ -1459,8 +1481,9 @@ fn apply(
                 "HBSCROLL" => ScrollMode::BeatsScrolled,
                 _ => ScrollMode::Normal,
             };
+            // The notes already read keep their own mode, and the lane goes at the song's
+            // beats whatever the mode: nothing on it changes here.
             drawing.by_beats |= cur.mode != ScrollMode::Normal;
-            drawing.key(cur);
         }
         "JPOSSCROLL" => {
             let mut parts = arg.split_whitespace();
@@ -1563,11 +1586,16 @@ fn note(
                     kind,
                     big,
                     velocity: cur.velocity(),
-                    // Rolls and balloons stay on the lane, coming in from the right whatever way
-                    // the notes come (as TJAPlayer3 draws them): as fast as they would.
-                    motion: NoteMotion {
-                        dir: None,
-                        ..cur.motion(cur.time, drawing.reference)
+                    // Rolls and balloons come the way the notes do, as OpenTaiko draws them,
+                    // except under COMPAT:tjap3: there they stay on the lane, coming in from the
+                    // right, as fast as they would.
+                    motion: if cur.lane_rolls {
+                        NoteMotion {
+                            dir: None,
+                            ..cur.motion(cur.time, drawing.reference)
+                        }
+                    } else {
+                        cur.motion(cur.time, drawing.reference)
                     },
                     tick_spacing: if kind == Kind::Roll {
                         tick_spacing(cur.bpm.abs())

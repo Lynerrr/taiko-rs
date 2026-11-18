@@ -650,6 +650,9 @@ pub struct Motion {
     /// Barlines coming in other than along the lane, ascending: their time and the way (as
     /// `NoteMotion::dir`). They lie across that way.
     pub barline_dirs: Vec<(f64, [f64; 2])>,
+    /// Barlines scrolling by their own time under the shared scroll, ascending (as
+    /// `NoteMotion::timed`).
+    pub timed_barlines: Vec<f64>,
     /// How far the hit target has moved from its place, in virtual units right and down (a TJA
     /// chart's `#JPOSSCROLL`): everything on the lane goes with it, so notes still meet it on
     /// time.
@@ -679,6 +682,11 @@ pub struct NoteMotion {
     /// `#DIRECTION`): a unit vector from the drum, right and down, `velocity` then the speed
     /// along it.
     pub dir: Option<[f64; 2]>,
+    /// It scrolls by its own time, ignoring the shared scroll: a TJA note read in `#NMSCROLL`
+    /// in a chart that scrolls others by beats (`#BMSCROLL`). OpenTaiko gives each note its
+    /// scroll mode where it is read, so a note keeps its speed whatever mode the notes after
+    /// it are in.
+    pub timed: bool,
 }
 
 impl NoteMotion {
@@ -691,6 +699,7 @@ impl NoteMotion {
             wait: f64::INFINITY,
             hide_long: false,
             dir: None,
+            timed: false,
         }
     }
 }
@@ -709,6 +718,7 @@ impl Motion {
         self.notes.is_empty()
             && self.barlines.is_empty()
             && self.barline_dirs.is_empty()
+            && self.timed_barlines.is_empty()
             && self.judge_x.is_empty()
             && self.judge_y.is_empty()
             && self.lyrics.is_empty()
@@ -717,6 +727,11 @@ impl Motion {
     /// The way the barline at time `t` comes in (see `barline_dirs`); None along the lane.
     pub fn barline_dir(&self, t: f64) -> Option<[f64; 2]> {
         at_time(&self.barline_dirs, t, |b| b.0).map(|b| b.1)
+    }
+
+    /// Whether the barline at time `t` scrolls by its own time (see `timed_barlines`).
+    pub fn barline_timed(&self, t: f64) -> bool {
+        at_time(&self.timed_barlines, t, |&b| b).is_some()
     }
 
     /// Where the hit target has moved at time `t` (see `judge_x`).
