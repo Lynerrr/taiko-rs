@@ -31,9 +31,13 @@ pub const ITEMS: [Item; 7] = [
 /// The editor's "NEW!" sticker and glow stay until this Unix time (2026-12-31 00:00 UTC).
 pub const NEW_UNTIL: u64 = 1_798_675_200;
 
-/// Whether the editor is still new at `now` (Unix seconds).
+/// The editor's sticker and glow are shown at all: off for now (the owner, 2026-11-18); set
+/// it back to bring them back until `NEW_UNTIL`.
+const EDITOR_NEW_SHOWN: bool = false;
+
+/// Whether the editor is still new at `now` (Unix seconds): its sticker and glow show.
 pub fn editor_is_new(now: u64) -> bool {
-    now < NEW_UNTIL
+    EDITOR_NEW_SHOWN && now < NEW_UNTIL
 }
 
 /// How long the menu takes to fade in, opened or come back to (ms).
@@ -1767,12 +1771,15 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_is_new_until_the_new_year_and_sits_after_play() {
+    fn the_editor_sits_after_play_with_no_new_sticker_or_glow_for_now() {
         assert_eq!(ITEMS[1], Item::Editor);
-        // 2026-12-31 00:00 UTC.
+        // 2026-12-31 00:00 UTC, should they come back.
         assert_eq!(NEW_UNTIL, 1_798_675_200);
-        assert!(editor_is_new(NEW_UNTIL - 1));
+        assert!(!editor_is_new(crate::setstatus::now()), "switched off");
+        assert!(!editor_is_new(NEW_UNTIL - 1));
         assert!(!editor_is_new(NEW_UNTIL));
+        let m = Menu::new();
+        assert!(!m.fresh, "the menu shows neither");
     }
 
     #[test]
