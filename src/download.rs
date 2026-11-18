@@ -2028,6 +2028,10 @@ fn zip_files(dir: &Path, files: &[PathBuf], size: u64) -> Result<Vec<u8>, String
     Ok(zip.finish().map_err(|e| e.to_string())?.into_inner())
 }
 
+/// What a lobby host answers for its TJA chart when the server doesn't list
+/// `online::TJA_LOBBY_FILES_FEATURE`; a player told it doesn't look on the mirrors.
+pub const TJA_NOT_PASSED: &str = "this server doesn't pass TJA charts on";
+
 /// A TJA chart file as a lobby host sends it: the `.tja` and the music and pictures it names
 /// (`tja_maps::files_named`: beside it or below, never above), not the rest of its folder,
 /// which can be a pack of other songs. With the name of the folder it goes into.

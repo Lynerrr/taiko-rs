@@ -1260,6 +1260,12 @@ pub const SUBMIT_KEY_FEATURE: &str = "submit-key/1";
 /// stay on this computer with a server that doesn't.
 pub const TJA_BOARDS_FEATURE: &str = "tja-boards/1";
 
+/// What a server lists in `Reply::Account::features` when lobby hosts may send a local TJA
+/// chart, with the music and pictures it names, to the players of their room (the room relays
+/// `MapFile` parts as for map sets). A host on a server that doesn't list it sends none: it's
+/// the server's switch for TJA charts going through it.
+pub const TJA_LOBBY_FILES_FEATURE: &str = "tja-lobby-files/1";
+
 /// The errors a server answers a play with when it can't take it just now, not because of the
 /// play: its database was briefly out of reach (as during a deploy), or too many plays came at
 /// once. taiko-rs/web words its `ProgressionError::Unavailable` and `Throttled` so.

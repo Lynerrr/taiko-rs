@@ -2915,10 +2915,12 @@ fn files_under(dir: &std::path::Path) -> Vec<String> {
 }
 
 /// A room of a host whose TJA folder holds `LOBBY_TJA` (beside a file it doesn't name) and a
-/// guest whose holds `guest_has` (path, contents), with the host picking its Oni course.
+/// guest whose holds `guest_has` (path, contents), with the host picking its Oni course;
+/// `tja_files`: the host's server lets TJA charts through.
 fn tja_lobby(
     tag: &str,
     guest_has: &[(&str, &[u8])],
+    tja_files: bool,
 ) -> (State, State, TjaPlayer, TjaPlayer, Instant) {
     let (host_dirs, guest_dirs) = (TjaPlayer::new(tag, "host"), TjaPlayer::new(tag, "guest"));
     // Named like an osu! set's folder, which it isn't.
@@ -2931,6 +2933,8 @@ fn tja_lobby(
     let mut now = Instant::now();
     let mut h = host_dirs.client(&mut now);
     let mut g = guest_dirs.client(&mut now);
+    // The server lets TJA charts through (`online::TJA_LOBBY_FILES_FEATURE`).
+    h.tja_lobby_files = tja_files;
     let server = net::host(0, false).unwrap();
     let room = format!("127.0.0.1:{}", server.port);
     let mut host = multiplayer::joined(
@@ -2979,7 +2983,7 @@ fn has_lobby_map(s: &State) -> bool {
 /// folder (the only place charts are read from), and can play it.
 #[test]
 fn a_tja_chart_comes_from_the_lobby_host_into_the_tja_folder() {
-    let (mut h, mut g, _host_dirs, guest_dirs, mut now) = tja_lobby("get", &[]);
+    let (mut h, mut g, _host_dirs, guest_dirs, mut now) = tja_lobby("get", &[], true);
     assert!(
         both_until(&mut h, &mut g, &mut now, Duration::from_secs(15), |_, g| {
             has_lobby_map(g)
@@ -3043,12 +3047,14 @@ fn a_tja_chart_comes_from_the_lobby_host_into_the_tja_folder() {
 #[test]
 fn a_guest_with_the_same_tja_chart_plays_it_without_a_transfer() {
     let copy = format!("// my copy\r\n{}", LOBBY_TJA.replace('\n', "\r\n"));
+    // On a server that passes no TJA charts on: none is needed.
     let (mut h, mut g, _host_dirs, guest_dirs, mut now) = tja_lobby(
         "have",
         &[
             ("Mine/chart.tja", copy.as_bytes()),
             ("Mine/song.ogg", &[7u8; 64 << 10]),
         ],
+        false,
     );
     assert!(
         both_until(&mut h, &mut g, &mut now, Duration::from_secs(10), |_, g| {
@@ -3061,6 +3067,39 @@ fn a_guest_with_the_same_tja_chart_plays_it_without_a_transfer() {
         files_under(&guest_dirs.tja()),
         ["Mine/chart.tja", "Mine/song.ogg"],
         "nothing came from the host"
+    );
+}
+
+/// On a server that doesn't list `TJA_LOBBY_FILES_FEATURE` (switched off) the host sends no TJA
+/// chart: the guest is told so, gets nothing, and doesn't look for it on the mirrors.
+#[test]
+fn a_host_sends_no_tja_chart_through_a_server_that_doesnt_pass_them_on() {
+    let (mut h, mut g, _host_dirs, guest_dirs, mut now) = tja_lobby("off", &[], false);
+    let told = "the server doesn't pass the host's TJA chart on";
+    let toast = |g: &State| g.toast.as_ref().map(|t| t.text.clone());
+    assert!(
+        both_until(&mut h, &mut g, &mut now, Duration::from_secs(10), |_, g| {
+            toast(g).as_deref() == Some(told)
+        }),
+        "the guest is told the host can't send it: {:?}",
+        toast(&g)
+    );
+    // A little longer: nothing more comes.
+    let _ = both_until(
+        &mut h,
+        &mut g,
+        &mut now,
+        Duration::from_millis(500),
+        |_, _| false,
+    );
+    assert!(!has_lobby_map(&g));
+    assert!(
+        files_under(&guest_dirs.tja()).is_empty(),
+        "nothing came from the host"
+    );
+    assert!(
+        g.downloads.is_empty() && g.host_transfer.is_none() && !g.lobby_lookup.is_busy(),
+        "no download, no mirror search"
     );
 }
 

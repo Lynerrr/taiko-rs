@@ -507,6 +507,9 @@ struct State {
     /// The server lists `online::TJA_BOARDS_FEATURE`: TJA plays go to its leaderboards, and
     /// song select shows them.
     tja_boards: bool,
+    /// The server lists `online::TJA_LOBBY_FILES_FEATURE`: as a lobby host we send our TJA
+    /// charts to the players without them.
+    pub(crate) tja_lobby_files: bool,
     /// The logged-in player's own pp total and rank online (for the account badge and the
     /// results' total), whose they are, and the fetch of them.
     me: Option<(f64, Option<u32>)>,
@@ -11133,6 +11136,9 @@ impl State {
                     // Plays it never answered go again now (`resend_unsent`).
                     self.submit_keys = features.iter().any(|f| f == online::SUBMIT_KEY_FEATURE);
                     self.tja_boards = features.iter().any(|f| f == online::TJA_BOARDS_FEATURE);
+                    self.tja_lobby_files = features
+                        .iter()
+                        .any(|f| f == online::TJA_LOBBY_FILES_FEATURE);
                     self.resend_at = Instant::now();
                     self.social.connected = true;
                     self.social.me = Some(name);
@@ -13579,6 +13585,8 @@ impl State {
         let tja = entry
             .filter(|e| e.is_tja())
             .map(|e| crate::tja_maps::file_of(&e.path));
+        // The server says whether TJA charts (their music with them) may go through it.
+        let tja_allowed = self.tja_lobby_files;
         let roots = self.lobby_send_roots();
         std::thread::spawn(move || {
             // Stops by itself when the host picks another map.
@@ -13595,7 +13603,11 @@ impl State {
                 return;
             };
             let packed = if let Some(file) = tja {
-                download::pack_tja(&file)
+                if tja_allowed {
+                    download::pack_tja(&file)
+                } else {
+                    Err(download::TJA_NOT_PASSED.into())
+                }
             } else if download::is_set_folder(&folder, &roots) {
                 let name = folder
                     .file_name()
@@ -13634,6 +13646,19 @@ impl State {
             return;
         }
         if let Some(e) = part.error {
+            // A TJA chart the server won't pass on: no mirror has it either.
+            if e == download::TJA_NOT_PASSED {
+                self.stop_host_transfer();
+                self.toast(
+                    tr!(
+                        "the server doesn't pass the host's TJA chart on",
+                        "サーバーはホストのTJA譜面を中継しません",
+                        "сервер не передаёт TJA-чарт хоста"
+                    )
+                    .into(),
+                );
+                return;
+            }
             // Fall back to the mirrors.
             self.stop_host_transfer();
             self.toast(format!(

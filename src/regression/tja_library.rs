@@ -275,6 +275,7 @@ fn server_for(admin: bool) -> (String, std::sync::Arc<std::sync::Mutex<Seen>>) {
                     features: vec![
                         online::SUBMIT_KEY_FEATURE.into(),
                         online::TJA_BOARDS_FEATURE.into(),
+                        online::TJA_LOBBY_FILES_FEATURE.into(),
                     ],
                     terms: 0,
                     server: None,
@@ -334,6 +335,10 @@ fn a_tja_play_goes_to_a_server_with_tja_boards_with_its_chart() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(s.tja_boards, "the server says it has TJA boards");
+    assert!(
+        s.tja_lobby_files,
+        "and that lobby hosts may send TJA charts through it"
+    );
     let oni = s
         .library
         .iter()
