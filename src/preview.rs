@@ -112,7 +112,21 @@ type LoadedMap = (
     Result<Beatmap, String>,
     Option<(Vec<f64>, f64, f64)>,
     [f32; 2],
+    Vec<taiko_logic::tja::Unsupported>,
 );
+
+/// What a TJA course leaves out, as its details list it: most used first, with how many times
+/// when it's more than once (`#NOTESPAWN x839, #BGAON`).
+pub(crate) fn left_out_text(left_out: &[taiko_logic::tja::Unsupported]) -> String {
+    left_out
+        .iter()
+        .map(|u| match u.times {
+            1 => u.what.clone(),
+            n => format!("{} x{n}", u.what),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 type StatCell = (&'static str, String, f32);
 type StatRow<'a> = Vec<&'a StatCell>;
 
@@ -132,6 +146,9 @@ pub struct Preview {
     bg_rx: Job<(PathBuf, Option<Image>)>,
     audio_rx: Job<Decoded>,
     map: Option<(usize, Beatmap, Details, Graph)>,
+    /// For a TJA course (by library index), what it uses that isn't played as OpenTaiko does
+    /// (`left_out_text`): listed with its details.
+    left_out: Option<(usize, String)>,
     /// Waiting for the music to reach a seek target before rebuilding the autoplay preview.
     pending_seek: Option<f64>,
     /// Where the difficulty timeline was drawn (virtual units) and the time range it spans.
@@ -469,7 +486,15 @@ impl Preview {
                 let e = &library[i];
                 let path = e.path.clone();
                 self.map_rx = Job::spawn(move || {
-                    let map = beatmap::load(&path);
+                    // A TJA course with what it leaves out, from the one read of its file.
+                    let (map, left_out) = if crate::tja_maps::is_course(&path) {
+                        match crate::tja_maps::course(&path) {
+                            Ok(c) => (Ok(c.map), c.unsupported),
+                            Err(e) => (Err(e), Vec::new()),
+                        }
+                    } else {
+                        (beatmap::load(&path), Vec::new())
+                    };
                     let first = map
                         .as_ref()
                         .ok()
@@ -482,7 +507,7 @@ impl Preview {
                     .ok()
                     .flatten();
                     let reach = map.as_ref().map(tko_reach).unwrap_or_else(|_| lane_reach());
-                    (i, map, curve, reach)
+                    (i, map, curve, reach, left_out)
                 });
                 if !self.own_background {
                     self.show_background_for(e);
@@ -570,10 +595,11 @@ impl Preview {
             }
         }
 
-        if let Some((i, result, curve, reach)) = self.map_rx.poll()
+        if let Some((i, result, curve, reach, left_out)) = self.map_rx.poll()
             && Some(i) == self.requested
             && let Ok(map) = result
         {
+            self.left_out = (!left_out.is_empty()).then(|| (i, left_out_text(&left_out)));
             let details = Details::of(&map);
             let mut graph = difficulty::analyze(&map);
             if let Some(curve) = curve {
@@ -1069,7 +1095,7 @@ impl Preview {
         let pill_w = Canvas::text_width(9.0, "0.00") + 9.0 * 1.6 + 6.0;
         let version = wrap(9.0, iw - pill_w - 8.0, &format!("[{}]", e.meta.version), 2);
         // Stats as label + value, flowed left to right; the first group is the map's, the second its notes.
-        let mut stats: [Vec<StatCell>; 3] = [
+        let mut stats: [Vec<StatCell>; 4] = [
             // As it plays: EZ / HR / Precise, and the speed, which shrinks or grows the windows.
             vec![(
                 "OD",
@@ -1082,6 +1108,7 @@ impl Preview {
                 ),
                 1.0,
             )],
+            Vec::new(),
             Vec::new(),
             Vec::new(),
         ];
@@ -1113,11 +1140,19 @@ impl Preview {
             if d.swells > 0 {
                 stats[1].push(("Swells", d.swells.to_string(), fade));
             }
+            // What a TJA course uses that isn't supported yet: a row of its own.
+            if let Some((_, what)) = self.left_out.as_ref().filter(|(li, _)| *li == i) {
+                let label = left_out_label();
+                let room = iw - Canvas::text_width(8.0, &format!("{label} "));
+                stats[3].push((label, Canvas::fit(8.0, room, what), fade));
+            }
         }
         let cell_w =
             |(label, value, _): &StatCell| Canvas::text_width(8.0, &format!("{label} {value}"));
         let rows: Vec<Vec<StatRow<'_>>> = stats
             .iter()
+            // The first three always hold a row; what a TJA course leaves out only when it has some.
+            .take(if stats[3].is_empty() { 3 } else { 4 })
             .map(|group| {
                 let mut rows: Vec<StatRow<'_>> = vec![Vec::new()];
                 let mut used = 0.0;
@@ -1372,6 +1407,11 @@ pub use crate::config::PREVIEW_SIZE;
 
 /// Space between the stats in the details.
 const STAT_GAP: f32 = 10.0;
+
+/// The label of the row of what a TJA course leaves out, said plainly as the other details are.
+fn left_out_label() -> &'static str {
+    tr!("Not supported yet:", "未対応:", "Пока не поддерживается:")
+}
 
 /// `s` as up to `lines` lines of text `size` tall within `max_w`, broken at spaces (or mid-word
 /// when a word alone is too long); what still doesn't fit ends the last line with "...".

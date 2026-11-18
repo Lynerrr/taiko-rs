@@ -1385,3 +1385,63 @@ fn notes_after_a_bar_of_zero_meet_the_drum_on_time() {
         "both on the drum at 500: {dons:?}"
     );
 }
+
+/// The texts of the map panel once it shows the details of the course at `path`, selected.
+fn details_of(s: &mut State, now: &mut Instant, path: &Path) -> Vec<String> {
+    select_map(s, *now, path);
+    for _ in 0..300 {
+        std::thread::sleep(Duration::from_millis(5));
+        *now += Duration::from_millis(50);
+        let c = frame(s, *now);
+        let texts: Vec<String> = c.texts.iter().map(|t| t.1.clone()).collect();
+        if texts.iter().any(|t| t.starts_with("Notes")) {
+            return texts;
+        }
+    }
+    panic!("the details of {} never showed", path.display());
+}
+
+/// A TJA course using what this game doesn't support yet lists it in its details, most used
+/// first; a course using none of it (the same file's other course, or one with only a file's
+/// slips) lists nothing.
+#[test]
+fn a_tja_course_using_what_isnt_played_says_so_in_its_details() {
+    let f = Folders::new("left-out");
+    let odd = put(
+        &f.tja,
+        "Odd",
+        "odd.tja",
+        &CHART.replace(
+            "#START\n1020,",
+            "#START\n#BGAON 1 0\n#NOTESPAWN 0 1\n1020,\n#NOTESPAWN 0 2",
+        ),
+    );
+    let sloppy = put(
+        &f.tja,
+        "Sloppy",
+        "sloppy.tja",
+        &CHART
+            .replace("Regression TJA", "Sloppy")
+            .replace("1000,\n#END", "1000\n#END"),
+    );
+    let (mut s, mut now) = client(&f, config());
+    refresh(&mut s, &mut now);
+    let course = |file: &Path, kind| tja_maps::course_path(file, kind);
+    use taiko_logic::tja::CourseKind::{Easy, Oni};
+
+    let texts = details_of(&mut s, &mut now, &course(&odd, Oni));
+    let at = texts
+        .iter()
+        .position(|t| t.starts_with("Not supported yet:"))
+        .unwrap_or_else(|| panic!("said in the details: {texts:?}"));
+    assert_eq!(texts[at + 1], "#NOTESPAWN x2, #BGAON", "most used first");
+
+    for (file, kind) in [(&odd, Easy), (&sloppy, Easy), (&sloppy, Oni)] {
+        let texts = details_of(&mut s, &mut now, &course(file, kind));
+        assert!(
+            !texts.iter().any(|t| t.starts_with("Not supported yet")),
+            "{} {kind:?}: nothing left out: {texts:?}",
+            file.display()
+        );
+    }
+}

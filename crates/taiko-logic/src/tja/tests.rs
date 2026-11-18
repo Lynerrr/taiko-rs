@@ -1422,3 +1422,47 @@ fn a_bar_of_zero_lasts_no_time() {
         .beatmap()
         .expect("a board chart it plays");
 }
+
+fn left_out(c: &Course) -> Vec<(&str, usize)> {
+    c.unsupported
+        .iter()
+        .map(|u| (u.what.as_str(), u.times))
+        .collect()
+}
+
+#[test]
+fn what_a_course_uses_and_isnt_played_is_counted_most_used_first() {
+    let c = one(&chart(
+        120.0,
+        "#BGAON 1 0\n1,\n#NOTESPAWN 0 1\n1Z1,\n#NOTESPAWN 0 2\n1,\n#NOTESPAWN 0 3\n1,",
+    ));
+    assert_eq!(
+        left_out(&c),
+        [("#NOTESPAWN", 3), ("#BGAON", 1), ("note Z", 1)]
+    );
+}
+
+#[test]
+fn a_file_s_slips_and_what_is_played_arent_left_out() {
+    // No closing comma, no #END, a gimmick played: nothing to tell the player.
+    let c =
+        one("TITLE:Test\nBPM:120\nCOURSE:Oni\n#START\n#SCROLL 2\n#GOGOSTART\n1,\n#BARLINEOFF\n1");
+    assert_eq!(left_out(&c), []);
+}
+
+#[test]
+fn a_branching_course_counts_what_it_leaves_out_as_its_busiest_branch_has_it() {
+    let c = one(&chart(
+        120.0,
+        "#BGAON 1 0\n1,\n#BRANCHSTART p,50,80\n#N\n#NOTESPAWN 0 1\n1,\n#E\n1,\n#M\n#NOTESPAWN 0 1\n1,\n#NOTESPAWN 0 2\n1,\n#BRANCHEND\n1,",
+    ));
+    assert_eq!(left_out(&c), [("#NOTESPAWN", 2), ("#BGAON", 1)]);
+}
+
+#[test]
+fn a_course_this_game_doesnt_play_is_said_to_be_read_as_another() {
+    let c = one("TITLE:Test\nBPM:120\nCOURSE:Dan\n#START\n1,\n#END\n");
+    assert_eq!(left_out(&c), [("COURSE:Dan", 1)]);
+    let c = one(&chart(120.0, "1,"));
+    assert_eq!(left_out(&c), [], "a known course is played as itself");
+}
