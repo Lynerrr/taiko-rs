@@ -3274,7 +3274,7 @@ impl State {
             Item::SongHeadings => {
                 self.select
                     .set_headings(!self.select.headings, &self.library);
-                self.cfg.song_headings = self.select.headings;
+                self.select.write_lenses(&mut self.cfg);
                 self.cfg.save();
                 return;
             }
@@ -7386,6 +7386,23 @@ impl State {
                 self.select.menu = None;
                 return;
             }
+            // A click off the sort and filter panel closes it (the sort button does too, in
+            // `click`).
+            if self.select.lens_ui.is_some()
+                && self.scene.is_select()
+                && !matches!(
+                    hit,
+                    Some(
+                        hit::Hit::Lens(_)
+                            | hit::Hit::SortList
+                            | hit::Hit::SongSource(_)
+                            | hit::Hit::LensToken(_)
+                    )
+                )
+            {
+                self.select.lens_ui = None;
+                return;
+            }
             if let (true, Some(h @ hit::Hit::SplitList)) = (self.scene.is_select(), hit) {
                 // Twice in quick succession: back to the usual size.
                 let now = Instant::now();
@@ -8567,7 +8584,10 @@ impl State {
                         .retain(|d, _| !library::is_own_map(d));
                     self.select.custom_folder.extend(folders);
                 }
-                if !self.select.filter.is_empty() || self.select.sort == ui::SortMode::Status {
+                if !self.select.filter.is_empty()
+                    || self.select.sort == ui::SortMode::Status
+                    || self.select.tabs.filters.statuses != 0
+                {
                     self.select.refilter(&self.library);
                 }
             }
@@ -9064,6 +9084,8 @@ impl State {
         let nominator = self.select.nominator;
         let admin = self.select.admin;
         let sort = self.select.sort;
+        let headings = self.select.headings;
+        let tabs = std::mem::take(&mut self.select.tabs);
         self.select = Select::new(&self.library);
         self.select
             .keep_converts(&self.library, self.cfg.show_converts);
@@ -9077,7 +9099,8 @@ impl State {
         self.select.nominator = nominator;
         self.select.admin = admin;
         self.select.sort = sort;
-        self.select.headings = self.cfg.song_headings;
+        self.select.headings = headings;
+        self.select.tabs = tabs;
         self.select.mods_label = self.cfg.mods.label();
         let maps = self
             .library
@@ -9142,8 +9165,9 @@ impl State {
         let Some(info) = &self.mapinfo else { return };
         let finished = info.finished();
         // Sorting or searching by stars, length or BPM waits on the analysis.
-        let needs_info =
-            self.select.sort.needs_info() || search::Query::parse(&self.select.filter).needs_info();
+        let needs_info = self.select.sort.needs_info()
+            || self.select.tabs.needs_info()
+            || search::Query::parse(&self.select.filter).needs_info();
         if finished && !self.mapinfo_sorted {
             self.mapinfo_sorted = true;
             if needs_info {
@@ -10242,8 +10266,9 @@ impl State {
             self.status_saved = now;
         }
         // The list sorted (or searched) by status follows what the mirrors have said since.
-        let by_status =
-            self.select.sort == ui::SortMode::Status || self.select.filter.contains("status");
+        let by_status = self.select.sort == ui::SortMode::Status
+            || self.select.filter.contains("status")
+            || self.select.tabs.filters.statuses != 0;
         if self.status_new
             && by_status
             && now.saturating_duration_since(self.status_resorted) >= Duration::from_secs(10)
@@ -10361,9 +10386,23 @@ impl State {
     }
 
     fn sort_changed(&mut self) {
-        self.cfg.sort = self.select.sort.name().to_string();
-        self.cfg.save();
+        self.lens_changed();
         self.toast(format!("sorted by {}", self.select.sort.name()));
+    }
+
+    /// Keeps song select's source and lenses in the config.
+    fn lens_changed(&mut self) {
+        self.select.write_lenses(&mut self.cfg);
+        self.cfg.save();
+    }
+
+    /// Ctrl+S, or the sort button: the sort and filter panel (on a phone, the sort list).
+    pub(crate) fn toggle_lens(&mut self) {
+        if mobile::active() {
+            self.open_sorts();
+        } else {
+            self.select.toggle_lens(&self.library);
+        }
     }
 
     fn open_sorts(&mut self) {
@@ -14942,7 +14981,23 @@ impl State {
                 self.settings_ui.clear_search();
                 self.settings_ui.cursor = settings::section_start(i);
             }
-            Hit::SortList => self.open_sorts(),
+            Hit::SortList => self.toggle_lens(),
+            Hit::Lens(item) => {
+                self.select.lens_pick(item, &self.library);
+                if item != ui::LensItem::Panel {
+                    self.lens_changed();
+                }
+            }
+            Hit::SongSource(i) => {
+                if let Some(&source) = ui::Source::ALL.get(i) {
+                    self.select.set_source(source, &self.library);
+                    self.lens_changed();
+                }
+            }
+            Hit::LensToken(token) => {
+                self.select.tabs.filters.clear(token);
+                self.select.refilter(&self.library);
+            }
             Hit::CollectionPick => self.open_collections(),
             Hit::PickRow(i) => self.pick_row(i),
             Hit::PickRowMore(i) => self.open_collection_menu(i.saturating_sub(1)),

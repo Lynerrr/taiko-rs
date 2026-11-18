@@ -26,7 +26,7 @@ pub struct Entry {
     /// In taiko.rs's own custom maps folder (`is_own_map`): a taiko.rs map, whatever osu! set
     /// its file names.
     own: bool,
-    /// A TJA course (`tja_maps::split`): its path names its chart file and course.
+    /// A TJA course (`song.tja#oni`): worked out once, song select asks for every map.
     tja: bool,
 }
 
@@ -122,7 +122,7 @@ impl Entry {
 
     /// A course of a TJA chart (`tja_maps`): played here only, never sent to the server.
     pub fn is_tja(&self) -> bool {
-        crate::tja_maps::is_course(&self.path)
+        self.tja
     }
 }
 

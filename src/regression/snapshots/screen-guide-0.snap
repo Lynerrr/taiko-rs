@@ -93,7 +93,7 @@ text  149,334  mouse
 text  641,421  Play
 text  158,441  Skip (Esc) 4
 text  627,441  Next > 4
-text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort
+text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort and filter
 hit   188,20     59x22   Tab(0)
 hit   254,20     82x22   Tab(1)
 hit   344,20    105x22   Tab(2)

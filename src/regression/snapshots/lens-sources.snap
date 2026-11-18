@@ -1,0 +1,59 @@
+tabs: ["All", "osu!", "TJA", "taiko.rs"], maps [11, 4, 6, 1]
+all sources, as the game starts:
+  [All: artist sort asc headings]
+  # A
+    Zebra Run [Easy] | Zebra Run [Oni]
+    Ame Agari [Oni]
+  # B
+    Apple Pie [Oni]
+  # G
+    Midnight [Hard]
+  # K
+    Kaze no Uta [Easy] | Kaze no Uta [Oni]
+  # M
+    Homemade [Oni]
+  # S
+    Hoshi Drive [Hard] | Hoshi Drive [Oni] | Hoshi Drive [Ura Oni]
+TJA: under the pack's folders the first time:
+  [TJA: folder sort asc headings]
+  # TJA
+    Ame Agari [Oni]
+    Hoshi Drive [Hard] | Hoshi Drive [Oni] | Hoshi Drive [Ura Oni]
+    Kaze no Uta [Easy] | Kaze no Uta [Oni]
+TJA by difficulty:
+  [TJA: difficulty sort asc headings]
+  # 3.00 - 3.99 stars
+    Kaze no Uta [Easy]
+  # 5.00 - 5.99 stars
+    Ame Agari [Oni]
+  # 6.00 - 6.99 stars
+    Hoshi Drive [Hard]
+  # 8.00 - 8.99 stars
+    Kaze no Uta [Oni]
+  # 9.00 - 9.99 stars
+    Hoshi Drive [Oni]
+  # 10+ stars
+    Hoshi Drive [Ura Oni]
+osu!: as all sources were:
+  [osu!: artist sort asc flat]
+    Zebra Run [Easy] | Zebra Run [Oni]
+    Apple Pie [Oni]
+    Midnight [Hard]
+taiko.rs's own, by status:
+  [taiko.rs: status sort asc headings]
+  # Not submitted
+    Homemade [Oni]
+back to TJA, still by difficulty:
+  [TJA: difficulty sort asc headings]
+  # 3.00 - 3.99 stars
+    Kaze no Uta [Easy]
+  # 5.00 - 5.99 stars
+    Ame Agari [Oni]
+  # 6.00 - 6.99 stars
+    Hoshi Drive [Hard]
+  # 8.00 - 8.99 stars
+    Kaze no Uta [Oni]
+  # 9.00 - 9.99 stars
+    Hoshi Drive [Oni]
+  # 10+ stars
+    Hoshi Drive [Ura Oni]
