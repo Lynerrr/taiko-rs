@@ -59,6 +59,10 @@ strip="$ndk/toolchains/llvm/prebuilt/$(ls "$ndk/toolchains/llvm/prebuilt" | head
 
 abis=${TAIKO_ABIS:-arm64-v8a}
 version_name=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+# A dev channel build (release.yml) is a test build of that version.
+if [ "${TAIKO_CHANNEL:-}" = dev ]; then
+    version_name="$version_name-dev"
+fi
 version_code=${TAIKO_VERSION_CODE:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 
 dev=${TAIKO_DEV:-}

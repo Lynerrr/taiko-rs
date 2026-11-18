@@ -2978,7 +2978,7 @@ impl State {
             Item::MenuNotes => on(c.menu_notes),
             Item::CheckUpdates => on(c.check_updates),
             Item::Update => {
-                let build = update::BUILD.map(update::short);
+                let build = update::this_build();
                 match (self.updater.status(), build) {
                     (_, None) => tr!(
                         "local build (no updates)",
@@ -2995,8 +2995,7 @@ impl State {
                     (update::Status::UpToDate, Some(b)) => {
                         tr!("{b}, up to date", "{b}、最新です", "{b}, последняя"; [] [b])
                     }
-                    (update::Status::Available { commit, .. }, Some(b)) => {
-                        let new = update::short(&commit);
+                    (update::Status::Available { name: new, .. }, Some(b)) => {
                         tr!("{b} -> {new}, Enter to install", "{b} -> {new}、Enterでインストール", "{b} -> {new}, Enter — установить"; [] [b, new])
                     }
                     (update::Status::Downloading, _) => {
@@ -4502,9 +4501,9 @@ impl State {
             return;
         }
         match self.updater.status() {
-            update::Status::Available { commit, .. } => {
+            update::Status::Available { name, .. } => {
                 self.updater.install();
-                self.toast_download(&commit);
+                self.toast_download(&name);
             }
             update::Status::Checking | update::Status::Downloading | update::Status::Installed => {}
             _ => {
@@ -4521,8 +4520,8 @@ impl State {
         }
     }
 
-    fn toast_download(&mut self, commit: &str) {
-        let build = update::short(commit);
+    /// Says the build called `build` (`Status::Available::name`) is on its way.
+    fn toast_download(&mut self, build: &str) {
         self.toast(
             tr!("downloading {build}...", "{build}をダウンロード中...", "загрузка {build}..."; [] [build]),
         );
@@ -4617,8 +4616,8 @@ impl State {
             && self.guide.page.is_none()
         {
             let badge = match self.updater.status() {
-                update::Status::Available { commit, .. } => {
-                    Canvas::text_width(7.0, &update_badge(&commit)) + 20.0
+                update::Status::Available { name, .. } => {
+                    Canvas::text_width(7.0, &update_badge(&name)) + 20.0
                 }
                 update::Status::Downloading => Canvas::text_width(7.0, &updating_badge(1.0)) + 20.0,
                 _ => 0.0,
@@ -4709,7 +4708,7 @@ impl State {
             c.hit(ax, chip_y, aw, chip_h, hit::Hit::Account);
         }
         let text = match self.updater.status() {
-            update::Status::Available { commit, .. } => update_badge(&commit),
+            update::Status::Available { name, .. } => update_badge(&name),
             update::Status::Downloading => updating_badge(self.updater.progress()),
             update::Status::Installed => {
                 if !self.can_restart() {
@@ -12664,9 +12663,9 @@ impl State {
         }
         // A song started before the check came back keeps the machine to itself until it's over.
         if !self.in_song()
-            && let Some(commit) = self.updater.install_at_launch()
+            && let Some(name) = self.updater.install_at_launch()
         {
-            self.toast_download(&commit);
+            self.toast_download(&name);
         }
         self.poll_downloads();
         self.poll_score_link();
