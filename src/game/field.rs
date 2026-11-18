@@ -719,6 +719,10 @@ impl Play {
         };
         // Distance along the lane of something at map time `time` scrolling at `vel`.
         let s_of = |time: f64, vel: f64| scroll.x(time, vel) - HIT_X;
+        // The same for note `i`, which may scroll by its own time under a shared scroll (a TJA
+        // note read in #NMSCROLL among ones scrolled by beats).
+        let timed = |i: usize| self.game.tko().is_some_and(|rt| rt.note_timed(i));
+        let note_s_at = |i: usize, time: f64, vel: f64| scroll.x_of(time, vel, timed(i)) - HIT_X;
         // Uncapped: extremely slow notes are common, so the whole map may be on screen at once,
         // its last object included (owner, 2026-10-28).
         // Keep the global bound for special objects and barlines; ordinary-note blocks also
@@ -786,12 +790,12 @@ impl Play {
             let n = &self.game.map().notes[i];
             // Waiting to start moving (#SUDDEN): where it will start from.
             if let Some(then) = self.game.tko().and_then(|rt| rt.note_waits(i, vt)) {
-                return scroll.x_as_of(n.time, n.velocity, then) - HIT_X;
+                return scroll.x_as_of(n.time, n.velocity, then, timed(i)) - HIT_X;
             }
-            let s = s_of(n.time, n.velocity);
+            let s = note_s_at(i, n.time, n.velocity);
             match self.view.lies.get(i) {
                 Some(&lie) if lie != n.time => {
-                    let fake = s_of(lie, n.velocity);
+                    let fake = note_s_at(i, lie, n.velocity);
                     s + (fake - s) * smooth(0.3, 0.55, (s / lane_len) as f64) as f32
                 }
                 _ => s,
@@ -1130,7 +1134,8 @@ impl Play {
             if b.time - vt > lookahead {
                 break;
             }
-            let s = s_of(b.time, b.velocity);
+            let timed = self.game.tko().is_some_and(|rt| rt.barline_timed(b.time));
+            let s = scroll.x_of(b.time, b.velocity, timed) - HIT_X;
             // A TJA barline coming in some other way: straight from the drum that way, lying
             // across it.
             let way = if crossfire {
@@ -1639,7 +1644,7 @@ impl Play {
                     let live = fake && pop.is_none();
                     let lands = n.time - n.fake_len;
                     let shift = if live { fake_freeze(n, vt) } else { 0.0 };
-                    let at = |time: f64| s_of(time + shift, n.velocity);
+                    let at = |time: f64| note_s_at(i, time + shift, n.velocity);
                     let s0 = pop.map_or_else(|| at(n.time), |p| p.0);
                     let mut fake_a = pop.map_or(1.0, |p| p.2);
                     let landed = live && vt >= lands;
@@ -1671,7 +1676,21 @@ impl Play {
                         fade_in(s0) * fake_a
                     };
                     let body_r = r * 0.86;
-                    if bent {
+                    // A TJA roll coming in some other way than along the lane (#DIRECTION, a
+                    // complex #SCROLL): straight from the drum that way, as its notes come.
+                    let way_at = self
+                        .game
+                        .tko()
+                        .and_then(|rt| rt.note_dir(i))
+                        .map(|[dx, dy]| {
+                            let (hx, hy, ..) = place(0.0, 0.0);
+                            move |s: f32| (hx + s * dx as f32, hy + s * dy as f32)
+                        });
+                    if let Some(way_at) = &way_at {
+                        for (rr, col) in [(body_r + 2.5, rgba(WHITE, a)), (body_r, rgba(ROLL, a))] {
+                            segment(c, way_at(s0), way_at(s1), rr, col);
+                        }
+                    } else if bent {
                         // The body follows the lane in short pieces (none across a portal). Where
                         // a body already lies, another adds nothing to see: gimmick maps stack
                         // hundreds along a long rail, millions of pieces a frame, more than a
@@ -1758,17 +1777,24 @@ impl Play {
                     // thousands on screen, more than a frame can hold.
                     let mut drawn_at = None;
                     for (k, hit) in st.ticks().iter().enumerate() {
-                        let ts = s_of(n.time + k as f64 * n.tick_spacing, n.velocity);
+                        let ts = note_s_at(i, n.time + k as f64 * n.tick_spacing, n.velocity);
                         let apart = drawn_at.is_none_or(|at| ts - at >= TICK_GAP);
                         if !hit && ts > s0 && ts <= s1 && ts < lane_len && apart {
                             drawn_at = Some(ts);
-                            let (x, y, ..) = place(ts, 0.0);
+                            let (x, y) = match &way_at {
+                                Some(way_at) => way_at(ts),
+                                None => {
+                                    let (x, y, ..) = place(ts, 0.0);
+                                    (x, y)
+                                }
+                            };
                             if !c.sprite(Sprite::RollTick, x, y, NOTE_R, rgba(WHITE, a)) {
                                 c.circle(x, y, 4.0, rgba(WHITE, 0.85 * a), rgba(WHITE, 0.0), 0.0);
                             }
                         }
                     }
                     let (x, y, _, size) = place(s0, 0.0);
+                    let (x, y) = way_at.as_ref().map_or((x, y), |way_at| way_at(s0));
                     if !skin_note(c, x, y, r * size, n.big, ROLL, a) {
                         c.circle(
                             x,
@@ -1802,7 +1828,7 @@ impl Play {
                         continue;
                     }
                     if vt < n.time {
-                        let s = s_of(n.time, n.velocity);
+                        let s = note_s_at(i, n.time, n.velocity);
                         let preempt =
                             stable_preempt(self.game.map().first_velocity * mods.scroll());
                         let a = note_alpha(s)
@@ -1810,6 +1836,14 @@ impl Play {
                             * swell_fade(preempt, n.time - vt);
                         if s < lane_len + r && a > 0.01 {
                             let (x, y, _, size) = place(s, 0.0);
+                            // A TJA balloon comes the way its notes do (#DIRECTION).
+                            let (x, y) = match self.game.tko().and_then(|rt| rt.note_dir(i)) {
+                                Some([dx, dy]) => {
+                                    let (hx, hy, ..) = place(0.0, 0.0);
+                                    (hx + s * dx as f32, hy + s * dy as f32)
+                                }
+                                None => (x, y),
+                            };
                             let r = r * size;
                             // A map shipping its own spinner-warning draws its swells as small notes.
                             let drawn =
@@ -1929,7 +1963,11 @@ impl Play {
                         (s, ROLL, if memory_over { 0.0 } else { pa })
                     }
                     Kind::Roll if !(n.fake_len > 0.0 && vt >= n.time - n.fake_len) => {
-                        let s = s_of(n.time, n.velocity);
+                        let s = note_s_at(i, n.time, n.velocity);
+                        // Its flash goes with a TJA roll coming in some other way.
+                        if let Some([dx, dy]) = self.game.tko().and_then(|rt| rt.note_dir(i)) {
+                            fx.path = Some([s * dx as f32, s * dy as f32, 1.0]);
+                        }
                         (s, ROLL, if memory_over { 0.0 } else { fade_in(s) })
                     }
                     _ => continue,

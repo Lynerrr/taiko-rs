@@ -1279,6 +1279,29 @@ impl Runtime {
         self.path_of(self.group_of(i)?, t, s, lane)
     }
 
+    /// The way note `i` comes in, when not along the lane (a TJA chart's complex `#SCROLL` or
+    /// `#DIRECTION`): a unit vector from the drum, right and down.
+    #[inline]
+    pub fn note_dir(&self, i: usize) -> Option<[f64; 2]> {
+        self.motion_of.get(i).copied().flatten()?.dir
+    }
+
+    /// Note `i` scrolls by its own time, not with the shared scroll (see `NoteMotion::timed`).
+    #[inline]
+    pub fn note_timed(&self, i: usize) -> bool {
+        self.motion_of
+            .get(i)
+            .copied()
+            .flatten()
+            .is_some_and(|m| m.timed)
+    }
+
+    /// The barline at map time `time` scrolls by its own time (see `Motion::timed_barlines`).
+    #[inline]
+    pub fn barline_timed(&self, time: f64) -> bool {
+        self.gimmick.motion.barline_timed(time - self.shift)
+    }
+
     /// The way the barline at map time `time` comes in, when not along the lane (a TJA chart's
     /// complex `#SCROLL` or `#DIRECTION`): a unit vector from the drum, right and down.
     #[inline]

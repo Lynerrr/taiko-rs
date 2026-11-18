@@ -838,14 +838,61 @@ fn nmscroll_goes_back_to_scrolling_by_time() {
         120.0,
         "#BMSCROLL\n1,\n#BPMCHANGE 240\n#NMSCROLL\n#SCROLL 2\n1,",
     ));
-    assert_eq!(lane_keys(&c), [(0.0, 1.0), (2000.0, 1.0)]);
-    let drawn: Vec<f64> = motion(&c)
-        .unwrap()
-        .notes
-        .iter()
-        .map(|n| n.velocity)
-        .collect();
-    close(&drawn, &[velocity(120.0, 1.0), velocity(240.0, 2.0)]);
+    // The lane goes at the song's beats whatever the mode: the note read by beats goes on it.
+    assert_eq!(lane_keys(&c), [(0.0, 1.0), (2000.0, 2.0)]);
+    let m = motion(&c).unwrap();
+    let drawn: Vec<(f64, bool)> = m.notes.iter().map(|n| (n.velocity, n.timed)).collect();
+    // The note read in normal mode goes by its own time, off the lane.
+    assert_eq!(drawn.iter().map(|d| d.1).collect::<Vec<_>>(), [false, true]);
+    close(
+        &drawn.iter().map(|d| d.0).collect::<Vec<_>>(),
+        &[velocity(120.0, 1.0), velocity(240.0, 2.0)],
+    );
+    // So do its barlines.
+    assert_eq!(m.timed_barlines, [2000.0]);
+}
+
+/// Each note keeps the scroll mode it was read in (OpenTaiko gives every note its mode where it
+/// is read): turning #BMSCROLL on changes nothing for the notes before it, and the lane notes
+/// scrolled by beats go on runs at the song's beats from the start, so no note on screen
+/// changes speed where the mode changes without a #BPMCHANGE.
+#[test]
+fn a_note_keeps_the_scroll_mode_it_was_read_in() {
+    let c = one(&chart(
+        120.0,
+        "#BPMCHANGE 240\n1,\n1,\n#BMSCROLL\n1,\n#HBSCROLL\n1,",
+    ));
+    close(&times(&c), &[0.0, 1000.0, 2000.0, 3000.0]);
+    // At 240 from the start, and no key where the mode changes.
+    assert_eq!(lane_keys(&c), [(0.0, 2.0)]);
+    let m = motion(&c).expect("a gimmick");
+    let timed: Vec<bool> = m.notes.iter().map(|n| n.timed).collect();
+    assert_eq!(timed, [true, true, false, false]);
+    // The ones by beats at the song's BPM, the lane at 2 doing the rest: as fast as the ones
+    // before them on screen.
+    let drawn: Vec<f64> = m.notes.iter().map(|n| n.velocity).collect();
+    close(
+        &drawn,
+        &[
+            velocity(240.0, 1.0),
+            velocity(240.0, 1.0),
+            velocity(120.0, 1.0),
+            velocity(120.0, 1.0),
+        ],
+    );
+    assert_eq!(m.timed_barlines, [0.0, 1000.0]);
+}
+
+/// A #DELAY stops the lane notes scrolled by beats go on even in normal mode: the ones read
+/// before it by beats stop through it.
+#[test]
+fn a_delay_in_normal_mode_still_stops_the_beat_lane() {
+    let c = one(&chart(
+        120.0,
+        "#BMSCROLL\n1,\n#NMSCROLL\n1,\n#DELAY 0.5\n1,",
+    ));
+    close(&times(&c), &[0.0, 2000.0, 4500.0]);
+    assert_eq!(lane_keys(&c), [(0.0, 1.0), (4000.0, 0.0), (4500.0, 1.0)]);
 }
 
 #[test]
@@ -1119,9 +1166,32 @@ fn taikojiro_axes_point_the_imaginary_part_up() {
     assert_eq!(ways(&c), [(Some([-h, h]), 1.414)]);
 }
 
+/// Rolls and balloons come the way the notes do, as OpenTaiko draws them (a player's report:
+/// with a vertical #DIRECTION the rolls still came along the lane).
 #[test]
-fn rolls_stay_on_the_lane_whatever_way_notes_come() {
+fn rolls_come_the_way_notes_come() {
+    let c = one(&chart(120.0, "#DIRECTION 1\n5008,\n7008,\n1,"));
+    let m = motion(&c).expect("a gimmick");
+    let dirs: Vec<Option<[f64; 2]>> = m.notes.iter().map(|n| n.dir).collect();
+    assert_eq!(
+        dirs,
+        [Some([0.0, -1.0]); 3],
+        "the roll, the balloon and the note"
+    );
     let c = one(&chart(120.0, "#SCROLL 2i\n5008,\n1,"));
+    let m = motion(&c).expect("a gimmick");
+    assert_eq!(m.notes[0].dir, Some([0.0, 1.0]), "the roll");
+    assert!((m.notes[0].velocity - velocity(120.0, 2.0)).abs() < 1e-9);
+}
+
+/// Under COMPAT:tjap3 rolls stay on the lane whatever way the notes come, as TJAPlayer3 drew
+/// them.
+#[test]
+fn tjap3_rolls_stay_on_the_lane() {
+    let c = one(&format!(
+        "COMPAT:tjap3\n{}",
+        chart(120.0, "#SCROLL 2i\n5008,\n1,")
+    ));
     let m = motion(&c).expect("a gimmick");
     assert_eq!(m.notes[0].dir, None, "the roll");
     assert!((m.notes[0].velocity - velocity(120.0, 2.0)).abs() < 1e-9);
