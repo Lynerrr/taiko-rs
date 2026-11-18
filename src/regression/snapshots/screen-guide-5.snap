@@ -88,7 +88,7 @@ text   44,332  Regression  |  mapped by tests
 text  641,421  Play
 text  178,441  < Back
 text  634,441  Next >
-text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort
+text   24,452  Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort and filter
 hit   188,20     59x22   Tab(0)
 hit   254,20     82x22   Tab(1)
 hit   344,20    105x22   Tab(2)

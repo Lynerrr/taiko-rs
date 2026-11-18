@@ -23,6 +23,7 @@ mod font_search;
 mod formats;
 mod gameplay;
 mod glyphs;
+mod lens;
 mod map_delete;
 mod music_player;
 mod network;

@@ -346,8 +346,18 @@ pub struct Config {
     pub notify_requests: bool,
     /// Discord application whose name the status shows (empty = the built-in one).
     pub discord_app_id: String,
-    /// Song select order (ui::SortMode name).
+    /// Song select order (ui::SortMode name): the lens of all sources' list, with
+    /// `song_headings` and `song_order`.
     pub sort: String,
+    /// The order under each heading of all sources' list (`ui::Order` name), and `desc` after it
+    /// for the other way round.
+    pub song_order: String,
+    /// The source song select lists (`ui::Source` name).
+    pub song_source: String,
+    /// Each other source's lens (`ui::Lens::text`; empty: the one it starts with).
+    pub lens_osu: String,
+    pub lens_tja: String,
+    pub lens_own: String,
     /// The collection song select shows, as `own:<name>` or `osu:<name>` (empty: all songs).
     pub collection: String,
     /// Countdown before play continues after the pause menu (ms).
@@ -554,6 +564,11 @@ impl Default for Config {
             check_updates: true,
             resume_delay_ms: 1000.0,
             sort: "artist".into(),
+            song_order: "sort".into(),
+            song_source: "all".into(),
+            lens_osu: String::new(),
+            lens_tja: String::new(),
+            lens_own: String::new(),
             collection: String::new(),
             kiai_effects: true,
             menu_glitch: true,
@@ -1276,6 +1291,11 @@ impl Config {
                 "guide_seen" => cfg.guide_seen = v == "true",
                 "check_updates" => cfg.check_updates = v != "false",
                 "sort" => cfg.sort = v.to_string(),
+                "song_order" => cfg.song_order = v.to_string(),
+                "song_source" => cfg.song_source = v.to_string(),
+                "lens_osu" => cfg.lens_osu = v.to_string(),
+                "lens_tja" => cfg.lens_tja = v.to_string(),
+                "lens_own" => cfg.lens_own = v.to_string(),
                 "collection" => cfg.collection = v.to_string(),
                 "kiai_effects" => cfg.kiai_effects = v != "false",
                 "menu_glitch" => cfg.menu_glitch = v != "false",
@@ -1862,6 +1882,10 @@ impl Config {
             self.show_converts
         ));
         out.push_str(&format!("# song select groups songs under headings (false: one list, by difficulty each difficulty on its own)\nsong_headings = {}\n", self.song_headings));
+        out.push_str(&format!(
+            "# song select's order under each heading (sort, title, artist, stars, length, bpm, added, played; desc after it: the other way round)\nsong_order = {}\n# the source song select lists: all, osu, tja or own (taiko.rs's maps)\nsong_source = {}\n# each source's sort, order, direction and headings (empty: the one it starts with)\nlens_osu = {}\nlens_tja = {}\nlens_own = {}\n",
+            self.song_order, self.song_source, self.lens_osu, self.lens_tja, self.lens_own
+        ));
         out.push_str(&format!("# during songs the background dims to black (false: the interface's grey)\nbg_dim_black = {}\n", self.bg_dim_black));
         out.push_str(&format!(
             "# the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators, ur, counts; ! before one that came later: not hidden) and its key\ninterface_hidden = {}\ninterface_hides = {}\ninterface_key = {}\n",

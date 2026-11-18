@@ -115,8 +115,15 @@ pub enum Hit {
     /// A download tab result row / its Download button.
     DlRow(usize),
     DlGet(usize),
-    /// Song select: next sort mode / open the collection list / a row of that list.
+    /// Song select: the sort and filter panel (on a phone, the sort list) / open the collection
+    /// list / a row of that list.
     SortList,
+    /// Something in song select's sort and filter panel.
+    Lens(crate::ui::LensItem),
+    /// A source tab over song select's list (`ui::Source::ALL` index).
+    SongSource(usize),
+    /// A filter's token in song select's search box: takes the filter off.
+    LensToken(crate::ui::Token),
     CollectionPick,
     PickRow(usize),
     /// The "..." on a collection's row: what can be done with it.

@@ -130,6 +130,9 @@ struct Section {
 #[cfg(test)]
 mod list_layout_tests;
 
+pub mod lens;
+pub use lens::{Filters, LensItem, LensUi, Order, Source, Tabs, Token, course_colour, star_bin};
+
 /// Where the song list's rows go, worked out from the headings alone: a song's place is
 /// arithmetic (every song row is the same height), so a library of any size costs the same per
 /// frame as a small one. `extras` are the few songs that are taller than a row (the open one's
@@ -318,6 +321,18 @@ pub struct Select {
     /// Songs are listed under headings (`sections`). Off: one list in the sort's order, each
     /// difficulty on its own row when sorting by difficulty.
     pub headings: bool,
+    /// The source listed, its order and filters, and each other source's lens as left.
+    pub tabs: Tabs,
+    /// Maps from each source (`Source::index`; all at 0) the list could show: not counting
+    /// converts while they're hidden.
+    pub source_maps: [usize; 4],
+    /// The maps listed but for the star filter, on each star bar (`star_bin`): counted while
+    /// the sort and filter panel is open.
+    pub star_bins: [u32; 10],
+    /// The sort and filter panel, while it's open.
+    pub lens_ui: Option<LensUi>,
+    /// When the source last changed: the list's rows come in for it.
+    source_switched: Option<std::time::Instant>,
     /// Songs (folders) listed: `groups` counts difficulties instead in a list without headings
     /// by difficulty.
     song_count: usize,
@@ -374,8 +389,9 @@ fn grade_colour(grade: &str) -> u32 {
     }
 }
 
-/// The filters on the song list: the search, the collection and whether converts show.
-type View = (String, Option<usize>, bool);
+/// The filters on the song list: the search, the collection, whether converts show, the source
+/// and the lens's filters.
+type View = (String, Option<usize>, bool, Source, Filters);
 
 /// Song list motion. Each selection change starts one eased transition from wherever things
 /// are to where they end up, so the scroll, the newly opened song, the closing one and the
@@ -539,6 +555,11 @@ impl Select {
             flipped_before_search: None,
             open_for: SortMode::Artist,
             headings: true,
+            tabs: Tabs::default(),
+            source_maps: [0; 4],
+            star_bins: [0; 10],
+            lens_ui: None,
+            source_switched: None,
             song_count: 0,
             cursor_label: None,
             auto_open: None,
@@ -620,6 +641,16 @@ impl Select {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        // The maps of each source, for its tab, and so the source shown.
+        let mut maps = [0; 4];
+        for e in library
+            .iter()
+            .filter(|e| !self.gone.contains(&e.path) && (self.show_converts || e.meta.mode == 1))
+        {
+            maps[0] += 1;
+            maps[Source::of(e).index()] += 1;
+        }
+        self.source_maps = maps;
         let info = self.info.as_ref().map(|i| i.lock().unwrap());
         let facts = |i: usize, e: &Entry| {
             let known = info.as_ref().and_then(|v| v.get(i).copied().flatten());
@@ -641,23 +672,54 @@ impl Select {
                 epic: asks_epic && self.is_epic(e),
             }
         };
-        self.visible = library
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| !self.gone.contains(&e.path))
-            .filter(|&(i, e)| {
-                self.pinned.contains(&e.path)
-                    || ((self.show_converts || e.meta.mode == 1)
-                        && only.is_none_or(|set| set.contains(&i))
-                        && by_collection.iter().all(|(negated, inside, set)| {
-                            (set.contains(&i) == *inside) != *negated
-                        })
-                        && (query.is_empty()
-                            || query.matches_text(&e.meta, e.text(), &facts(i, e))))
-            })
-            .map(|(i, _)| i)
-            .collect();
+        let listable =
+            |e: &Entry| !self.gone.contains(&e.path) && (self.show_converts || e.meta.mode == 1);
+        let source = self.shown_source();
+        let filters = self.tabs.filters;
+        let count_bins = self.lens_ui.is_some();
+        let mut bins = [0; 10];
+        let mut visible = Vec::new();
+        for (i, e) in library.iter().enumerate() {
+            if self.gone.contains(&e.path) {
+                continue;
+            }
+            if self.pinned.contains(&e.path) {
+                visible.push(i);
+                continue;
+            }
+            if !(listable(e)
+                && source.takes(e)
+                && only.is_none_or(|set| set.contains(&i))
+                && by_collection
+                    .iter()
+                    .all(|(negated, inside, set)| (set.contains(&i) == *inside) != *negated))
+            {
+                continue;
+            }
+            let lens = !filters.is_empty() || count_bins;
+            let known = (!query.is_empty() || lens).then(|| facts(i, e));
+            if let Some(f) = known.as_ref().filter(|_| !query.is_empty())
+                && !query.matches_text(&e.meta, e.text(), f)
+            {
+                continue;
+            }
+            if let Some(f) = known.as_ref().filter(|_| lens) {
+                let course = crate::tja_maps::split(&e.path).map(|(_, k)| k);
+                if count_bins
+                    && filters.keeps(f, course, false)
+                    && let Some(s) = f.stars
+                {
+                    bins[star_bin(s)] += 1;
+                }
+                if !filters.keeps(f, course, true) {
+                    continue;
+                }
+            }
+            visible.push(i);
+        }
         drop(info);
+        self.visible = visible;
+        self.star_bins = bins;
         self.sort_visible(library);
         self.regroup(library);
         match selected.and_then(|s| self.visible.iter().position(|&v| v == s)) {
@@ -780,6 +842,115 @@ impl Select {
     /// order). A song's value is its highest (longest, most recent...). By difficulty each is
     /// listed by its own stars: a song is there once per star heading its difficulties are under.
     fn sort_visible(&mut self, library: &[Entry]) {
+        self.sort_by_sort(library);
+        self.order_songs(library);
+    }
+
+    /// The songs as `regroup` cuts them: ranges of `visible`.
+    fn cuts(&self, library: &[Entry]) -> Vec<std::ops::Range<usize>> {
+        let each = self.split_difficulties();
+        let mut out = Vec::new();
+        let mut start = 0;
+        for i in 1..=self.visible.len() {
+            let split = i == self.visible.len()
+                || each
+                || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent()
+                // The last of one star heading and the first of the next can be the same song's.
+                || (self.sort == SortMode::Difficulty && star_heading(self.row_value[i]) != star_heading(self.row_value[i - 1]));
+            if split {
+                out.push(start..i);
+                start = i;
+            }
+        }
+        out
+    }
+
+    /// Orders the songs under each heading by the lens's order (all of them without headings),
+    /// the headings staying in the sort's order. Values not known go last either way.
+    fn order_songs(&mut self, library: &[Entry]) {
+        let (order, desc) = (self.tabs.order, self.tabs.desc);
+        if order == Order::Sort && !desc {
+            return;
+        }
+        let cuts = self.cuts(library);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        enum Key<'a> {
+            Text(&'a str, &'a str),
+            Value(f64),
+        }
+        let info = self.info.as_ref().map(|i| i.lock().unwrap());
+        let known = |i: usize| info.as_ref().and_then(|v| v.get(i).copied().flatten());
+        let most = |song: &std::ops::Range<usize>, value: &dyn Fn(usize) -> Option<f64>| {
+            self.visible[song.clone()]
+                .iter()
+                .filter_map(|&i| value(i))
+                .filter(|v| v.is_finite())
+                .fold(f64::NAN, |a, b| if a.is_nan() || b > a { b } else { a })
+        };
+        let mut headings: std::collections::HashMap<String, usize> = Default::default();
+        let mut keyed: Vec<(usize, Key, usize)> = Vec::with_capacity(cuts.len());
+        for (k, song) in cuts.iter().enumerate() {
+            let heading = if self.headings {
+                self.section_heading(library, song.start, now).0
+            } else {
+                String::new()
+            };
+            let n = headings.len();
+            let h = *headings.entry(heading).or_insert(n);
+            let e = &library[self.visible[song.start]];
+            let key = match order {
+                Order::Sort => Key::Value(k as f64),
+                Order::Title => Key::Text(&e.text().title, &e.text().artist),
+                Order::Artist => Key::Text(&e.text().artist, &e.text().title),
+                Order::Stars => Key::Value(most(song, &|i| {
+                    library[i]
+                        .meta
+                        .level
+                        .map(f64::from)
+                        .or(known(i).map(|x| x.stars as f64))
+                })),
+                Order::Length => Key::Value(most(song, &|i| known(i).map(|x| x.length_ms as f64))),
+                Order::Bpm => Key::Value(most(song, &|i| known(i).map(|x| x.bpm as f64))),
+                Order::Added => Key::Value(most(song, &|i| Some(library[i].modified as f64))),
+                Order::Played => Key::Value(most(song, &|i| {
+                    self.played.get(&library[i].path).map(|&t| t as f64)
+                })),
+            };
+            keyed.push((h, key, k));
+        }
+        keyed.sort_by(|a, b| {
+            let by_key = match (&a.1, &b.1) {
+                (Key::Text(x0, x1), Key::Text(y0, y1)) => {
+                    let o = (x0, x1).cmp(&(y0, y1));
+                    if desc { o.reverse() } else { o }
+                }
+                (Key::Value(x), Key::Value(y)) => match (x.is_nan(), y.is_nan()) {
+                    (true, true) => std::cmp::Ordering::Equal,
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ if desc => y.total_cmp(x),
+                    _ => x.total_cmp(y),
+                },
+                _ => std::cmp::Ordering::Equal,
+            };
+            a.0.cmp(&b.0).then(by_key).then(a.2.cmp(&b.2))
+        });
+        let order: Vec<usize> = keyed.into_iter().map(|(_, _, k)| k).collect();
+        drop(info);
+        let (mut visible, mut values) = (Vec::with_capacity(self.visible.len()), Vec::new());
+        for k in order {
+            visible.extend_from_slice(&self.visible[cuts[k].clone()]);
+            values.extend_from_slice(&self.row_value[cuts[k].clone()]);
+        }
+        self.visible = visible;
+        self.row_value = values;
+    }
+
+    /// Orders songs by the sort mode (`sort_visible`, before the lens's order).
+    fn sort_by_sort(&mut self, library: &[Entry]) {
         if self.sort == SortMode::Artist {
             // The library is already in artist / title order.
             self.row_value = vec![f64::NAN; self.visible.len()];
@@ -925,20 +1096,11 @@ impl Select {
         self.anim = ListAnim::default();
         self.groups.clear();
         self.group_of.clear();
-        let mut start = 0;
         let each = self.split_difficulties();
-        for i in 1..=self.visible.len() {
-            let split = i == self.visible.len()
-                || each
-                || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent()
-                // The last of one star heading and the first of the next can be the same song's.
-                || (self.sort == SortMode::Difficulty && star_heading(self.row_value[i]) != star_heading(self.row_value[i - 1]));
-            if split {
-                self.group_of
-                    .extend(std::iter::repeat_n(self.groups.len(), i - start));
-                self.groups.push(start..i);
-                start = i;
-            }
+        for song in self.cuts(library) {
+            self.group_of
+                .extend(std::iter::repeat_n(self.groups.len(), song.len()));
+            self.groups.push(song);
         }
         self.sections.clear();
         self.section_of.clear();
@@ -1145,11 +1307,20 @@ impl Select {
         &mut free.glide
     }
 
-    fn list_top(&self) -> f32 {
+    /// The top of the list's frame: the source tabs, where there are, then the list.
+    fn frame_top(&self) -> f32 {
         if self.legacy {
             LIST_TOP_LEGACY
         } else {
             LIST_TOP
+        }
+    }
+
+    fn list_top(&self) -> f32 {
+        if self.source_tabs().is_empty() {
+            self.frame_top()
+        } else {
+            self.frame_top() + lens::SOURCE_TAB_H + 3.0
         }
     }
 
@@ -1165,7 +1336,7 @@ impl Select {
 
     /// The top and bottom of the song list's frame, for the panel beside it to line up with.
     pub fn frame_span(&self) -> [f32; 2] {
-        [self.list_top() - 4.0, self.list_bottom() + 4.0]
+        [self.frame_top() - 4.0, self.list_bottom() + 4.0]
     }
 
     /// The wheel: moves the list `notches` on, the selection staying where it is.
@@ -1211,7 +1382,13 @@ impl Select {
 
     /// The filters a pin holds under.
     fn view(&self) -> View {
-        (self.filter.clone(), self.collection, self.show_converts)
+        (
+            self.filter.clone(),
+            self.collection,
+            self.show_converts,
+            self.tabs.source,
+            self.tabs.filters,
+        )
     }
 
     /// Lists `maps`, just added, even if the filters would hide them, which stay as they are
@@ -1970,10 +2147,20 @@ impl Select {
             ]
         };
         let sort = self.sort.name();
+        let then = match self.tabs.order {
+            Order::Sort => String::new(),
+            o => format!(", {}", o.label()),
+        };
+        let filters = self.tabs.filters.tokens().len();
+        let more = if filters > 0 {
+            format!(" +{filters}")
+        } else {
+            String::new()
+        };
         let mut buttons = vec![(
-            vec![format!("Sort: {sort}"), sort.to_string()],
+            vec![format!("Sort: {sort}{then}{more}"), format!("{sort}{more}")],
             Hit::SortList,
-            false,
+            filters > 0 || self.lens_ui.is_some(),
         )];
         if legacy {
             buttons.insert(
@@ -2038,7 +2225,18 @@ impl Select {
             edge,
             1.0,
         );
-        let room = search_w - 20.0;
+        // The filters on, as tokens at the start of the box: the text goes after them.
+        let token_room = search_w * 0.6;
+        let mut tokens_w = 0.0;
+        for (_, text, _) in self.tabs.filters.tokens() {
+            let tw = Canvas::text_width(7.0, &text) + 18.0;
+            if tokens_w + tw > token_room {
+                break;
+            }
+            tokens_w += tw + 4.0;
+        }
+        let text_x = left + 10.0 + tokens_w;
+        let room = search_w - 20.0 - tokens_w;
         let caret = "";
         let (search, search_col) = if self.filter.is_empty() {
             let (long, short) = if self.searching {
@@ -2064,7 +2262,7 @@ impl Select {
         if self.searching {
             c.input(
                 crate::text_input::Field::SongSearch,
-                [left + 10.0, row + 7.0, room, 12.0],
+                [text_x, row + 7.0, room, 12.0],
                 10.0,
                 &self.filter,
                 "type to search...",
@@ -2073,9 +2271,10 @@ impl Select {
                 true,
             );
         } else {
-            c.text(left + 10.0, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
+            c.text(text_x, row + 7.0, 10.0, rgba(search_col, 1.0), &search);
         }
         c.hit(left, row, search_w, 24.0, Hit::TextField);
+        self.draw_tokens(c, left + 6.0, row + 4.0, token_room);
 
         if let Some(n) = self.scanning {
             c.text_centered(
@@ -2346,7 +2545,21 @@ impl Select {
             let _ = sec;
         }
         // The main menu's look: one dark panel the list runs down, rows as lines on it.
-        crate::style::panel(c, 20.0, top - 4.0, lw + 8.0, bottom - top + 8.0);
+        let frame_top = self.frame_top();
+        crate::style::panel(c, 20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0);
+        let tabs = self.source_tabs();
+        if !tabs.is_empty() {
+            self.draw_source_tabs(c, 24.0, frame_top, lw, &tabs);
+        }
+        // A new source: its rows come in from the right, one after another, through a flicker.
+        let switch_ms = self
+            .source_switched
+            .map(|t| t.elapsed().as_secs_f32() * 1000.0)
+            .filter(|_| crate::render::animations());
+        if switch_ms.is_some_and(|ms| ms > 1000.0) {
+            self.source_switched = None;
+        }
+        let mut drawn = 0usize;
         let list_start = c.shapes.len();
         let hits_start = c.hits.len();
         let fit = |s: String, size: f32, room: f32| {
@@ -2357,6 +2570,8 @@ impl Select {
             if y + rh < top || y > bottom || *alpha < 0.02 {
                 continue;
             }
+            let row_start = c.shapes.len();
+            drawn += 1;
             match row {
                 Row::Section(si) => {
                     let sec = &self.sections[*si];
@@ -2505,6 +2720,31 @@ impl Select {
                             level,
                             sorted_by,
                         );
+                    } else if e.is_tja() {
+                        // A TJA chart's courses as the arcade's ladder: each in its colour with
+                        // its level.
+                        let mut right = 24.0 + lw - 12.0;
+                        for i in g.clone().rev() {
+                            let course = &library[self.visible[i]];
+                            let kind = crate::tja_maps::split(&course.path).map(|(_, k)| k);
+                            let colour = kind.map_or(0x8a8aa0, course_colour);
+                            let text = course
+                                .meta
+                                .level
+                                .map_or("?".to_string(), crate::style::level_text);
+                            let bw = (Canvas::text_width(6.0, &text) + 6.0).max(12.0);
+                            right -= bw;
+                            c.rect(right, diffs_y - 2.0, bw, 11.0, rgba(colour, 1.0));
+                            c.rect(right, diffs_y + 8.0, bw, 1.0, rgba(0x000000, 0.35));
+                            c.text_centered(
+                                right + bw / 2.0,
+                                diffs_y,
+                                6.0,
+                                rgba(0x15151d, 1.0),
+                                &text,
+                            );
+                            right -= 2.0;
+                        }
                     } else {
                         c.text_right(
                             24.0 + lw - 12.0,
@@ -2603,6 +2843,17 @@ impl Select {
                     );
                 }
             }
+            if let Some(ms) = switch_ms {
+                let t = ((ms - drawn as f32 * 18.0) / lens::SWITCH_MS).clamp(0.0, 1.0);
+                if t < 1.0 {
+                    let ease = 1.0 - (1.0 - t).powi(3);
+                    c.transform_since(row_start, [0.0, 0.0], 1.0, (1.0 - ease) * 28.0, 0.0);
+                    c.fade_since(row_start, ease, 1.0);
+                }
+            }
+        }
+        if let Some(ms) = switch_ms.filter(|&ms| ms < 160.0) {
+            crate::style::glitch_bars(c, [24.0, top, lw, bottom - top], ms / 160.0);
         }
 
         // The selection outline moves with the same transition.
@@ -2633,6 +2884,14 @@ impl Select {
                 1.0,
             );
             let total = final_y.max(view);
+            // Where each heading starts, as a mark on the track.
+            if self.headings && self.sections.len() > 1 {
+                for (si, sec) in self.sections.iter().enumerate() {
+                    let ty = top + final_layout.tops[si] / total * track;
+                    let col = sec.colour.unwrap_or(0x6f6f86);
+                    c.rect(track_x - 3.0, ty, 3.0, 1.0, rgba(col, 0.9));
+                }
+            }
             let thumb = (track * view / total).clamp(18.0, track);
             self.thumb = thumb;
             let pos = (scroll / (total - view).max(1.0)).clamp(0.0, 1.0);
@@ -2701,9 +2960,9 @@ impl Select {
         }
 
         let hints = tr!(
-            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort  Ctrl+L collection  Tab settings  Esc quit",
-            "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了",
-            "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка  Ctrl+L коллекция  Tab настройки  Esc выход"
+            "Enter play  Up/Down difficulty  Left/Right song  Wheel or right drag scroll  F1 mods  F2 random  [ ] rate  Ctrl+S sort and filter  Ctrl+L collection  Tab settings  Esc quit",
+            "Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替えと絞り込み  Ctrl+L コレクション  Tab 設定  Esc 終了",
+            "Enter играть  Вверх/вниз сложность  Влево/вправо песня  Колесо или правый драг: прокрутка  F1 моды  F2 случайная  [ ] рейт  Ctrl+S сортировка и фильтры  Ctrl+L коллекция  Tab настройки  Esc выход"
         );
         if legacy {
             c.text(
@@ -2737,6 +2996,7 @@ impl Select {
         if self.menu.is_some() {
             self.draw_menu(c, library);
         }
+        self.draw_lens(c, 20.0, self.frame_top() - 2.0);
     }
 }
 

@@ -170,6 +170,14 @@ custom_move_asked = true
 show_converts = true
 # song select groups songs under headings (false: one list, by difficulty each difficulty on its own)
 song_headings = true
+# song select's order under each heading (sort, title, artist, stars, length, bpm, added, played; desc after it: the other way round)
+song_order = title desc
+# the source song select lists: all, osu, tja or own (taiko.rs's maps)
+song_source = tja
+# each source's sort, order, direction and headings (empty: the one it starts with)
+lens_osu = status stars desc headings
+lens_tja = title bpm asc flat
+lens_own = recently_played added desc headings
 # during songs the background dims to black (false: the interface's grey)
 bg_dim_black = false
 # the interface during play: hidden or not, what hiding it hides (score, accuracy, pp, combo, progress, health, mods, hit_error, offset_hint, judgements, hit_animation, scoreboard, spectators, ur, counts; ! before one that came later: not hidden) and its key

@@ -338,6 +338,38 @@ pub fn title(c: &mut Canvas, x: f32, y: f32, size: f32, col: u32, text: &str) ->
     c.text(x, y, size, rgba(col, 1.0), text)
 }
 
+/// Text split red and cyan by `split` either way, the glitch of a title coming on.
+pub fn glitch_text(c: &mut Canvas, x: f32, y: f32, size: f32, col: u32, text: &str, split: f32) {
+    if split > 0.2 {
+        c.text(x - split, y, size, rgba(GLITCH_RED, 0.9), text);
+        c.text(x + split, y, size, rgba(GLITCH_CYAN, 0.9), text);
+    }
+    c.text(x, y, size, rgba(col, 1.0), text);
+}
+
+/// A flicker across `rect` as a picture changes: thin red and cyan bands, gone at `t` = 1.
+pub fn glitch_bars(c: &mut Canvas, [x, y, w, h]: [f32; 4], t: f32) {
+    let fade = (1.0 - t).clamp(0.0, 1.0);
+    // Where the bands are jumps a few times on the way, the same on every run.
+    let step = (t * 4.0).floor();
+    for k in 0..4 {
+        let r = ((k as f32 * 7.31 + step * 3.17).sin() * 43_758.547)
+            .fract()
+            .abs();
+        let by = y + r * (h - 6.0);
+        let bh = 2.0 + (k % 3) as f32 * 2.0;
+        let col = if k % 2 == 0 { GLITCH_RED } else { GLITCH_CYAN };
+        let dx = (r - 0.5) * 24.0;
+        c.rect(
+            x + dx.max(0.0),
+            by,
+            w - dx.abs(),
+            bh,
+            rgba(col, 0.35 * fade),
+        );
+    }
+}
+
 /// A small star-rating pill ("4.82") in the spectrum colour, right-aligned at `right`.
 /// Returns its width. `None` draws a placeholder while it is being calculated.
 pub fn star_pill(c: &mut Canvas, right: f32, y: f32, size: f32, stars: Option<f32>) -> f32 {
