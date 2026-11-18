@@ -2141,15 +2141,36 @@ impl Select {
         if legacy {
             crate::settings::tab_bar(c, 0, &summary);
         } else {
+            // The search row and the list are one window: the panel runs from above the row
+            // down the list, a line between them. Not while a mod's customization covers the
+            // top of the screen: it has the row's place.
+            if !self.covered {
+                let (top, bottom) = (row - 6.0, self.list_bottom() + 4.0);
+                crate::style::panel(c, 20.0, top, lw + 8.0, bottom - top);
+                c.rect(24.0, self.frame_top() - 5.0, lw, 1.0, rgba(0x3a3a4e, 1.0));
+            }
+            // The way back: an arrow and where it goes, as bare as the menu's icons.
             let back = if self.to_menu {
-                tr!("< MENU", "< メニュー", "< МЕНЮ")
+                tr!("Menu", "メニュー", "Меню")
             } else {
-                tr!("< BACK", "< 戻る", "< НАЗАД")
+                tr!("Back", "戻る", "Назад")
             };
+            left += 8.0;
             if self.covered {
-                left += Canvas::text_width(8.0, back) + 26.0;
+                left += crate::style::icon_button_width(back, None, 8.0) + 6.0;
             } else {
-                left += crate::settings::back_button(c, row + 2.0, back, Hit::ToMenu) + 6.0;
+                let at = [left, row + 12.0];
+                let bw = crate::style::icon_button(
+                    c,
+                    at,
+                    &crate::style::BACK,
+                    back,
+                    None,
+                    8.0,
+                    false,
+                    Hit::ToMenu,
+                );
+                left += bw + 6.0;
             }
             // Over the panel beside the list, where there is one.
             let (x, right) = (24.0 + lw + 12.0, w - 24.0);
@@ -2186,15 +2207,28 @@ impl Select {
         } else {
             String::new()
         };
+        // Outside the Legacy layout they're bare icons: the word on a small caption above, the
+        // value as the label.
+        let sort_labels = if legacy {
+            vec![format!("Sort: {sort}{then}{more}"), format!("{sort}{more}")]
+        } else {
+            vec![format!("{sort}{then}{more}"), format!("{sort}{more}")]
+        };
         let mut buttons = vec![(
-            vec![format!("Sort: {sort}{then}{more}"), format!("{sort}{more}")],
+            sort_labels,
             Hit::SortList,
             filters > 0 || self.lens_ui.is_some(),
+            (&crate::style::SORT, tr!("SORT", "ソート", "СОРТ")),
         )];
         if legacy {
             buttons.insert(
                 0,
-                (mods.clone(), Hit::ModsButton, !self.mods_label.is_empty()),
+                (
+                    mods.clone(),
+                    Hit::ModsButton,
+                    !self.mods_label.is_empty(),
+                    (&crate::style::SPARK, ""),
+                ),
             );
         }
         if !self.collections.is_empty() {
@@ -2202,20 +2236,35 @@ impl Select {
                 .collection
                 .and_then(|c| self.collections.get(c))
                 .map_or("all", |c| c.name.as_str());
+            let labels = if legacy {
+                vec![format!("Collection: {name}"), name.to_string()]
+            } else {
+                vec![name.to_string()]
+            };
             buttons.push((
-                vec![format!("Collection: {name}"), name.to_string()],
+                labels,
                 Hit::CollectionPick,
                 self.collection.is_some(),
+                (
+                    &crate::style::FOLDER,
+                    tr!("COLLECTION", "コレクション", "КОЛЛЕКЦИЯ"),
+                ),
             ));
         }
-        let width = |label: &str| Canvas::text_width(7.0, label) + 20.0;
+        let width = |label: &str, caption: &str| {
+            if legacy {
+                Canvas::text_width(7.0, label) + 20.0
+            } else {
+                crate::style::icon_button_width(label, Some(caption), 7.0)
+            }
+        };
         let budget = lw - (left - 24.0) - SEARCH_MIN - 6.0 * buttons.len() as f32;
         let mut pick = vec![0; buttons.len()];
         loop {
             let widths: Vec<f32> = buttons
                 .iter()
                 .zip(&pick)
-                .map(|((labels, ..), &k)| width(&labels[k]))
+                .map(|((labels, .., (_, cap)), &k)| width(&labels[k], cap))
                 .collect();
             if widths.iter().sum::<f32>() <= budget {
                 break;
@@ -2231,13 +2280,27 @@ impl Select {
             .zip(&pick)
             .map(|((labels, ..), &k)| labels[k].as_str())
             .collect();
-        let natural: Vec<f32> = labels.iter().map(|l| width(l)).collect();
+        let natural: Vec<f32> = labels
+            .iter()
+            .zip(&buttons)
+            .map(|(l, (.., (_, cap)))| width(l, cap))
+            .collect();
         let cap = shared_cap(&natural, budget);
-        let mut bx = 24.0 + lw;
-        for ((label, (_, hit, accent)), nw) in labels.iter().zip(&buttons).zip(natural) {
+        let mut bx = 24.0 + lw - if legacy { 0.0 } else { 6.0 };
+        for ((label, (_, hit, accent, (icon, caption))), nw) in
+            labels.iter().zip(&buttons).zip(natural)
+        {
             let bw = nw.min(cap);
             bx -= bw;
-            c.button(bx, row + 2.0, bw, 20.0, label, 7.0, *hit, *accent);
+            if legacy {
+                c.button(bx, row + 2.0, bw, 20.0, label, 7.0, *hit, *accent);
+            } else {
+                let room = bw - crate::style::icon_button_width("", None, 7.0);
+                let label = Canvas::fit(7.0, room, label);
+                let caption = Canvas::fit(5.0, room, caption);
+                let at = [bx + 6.0, row + 12.0];
+                crate::style::icon_button(c, at, icon, &label, Some(&caption), 7.0, *accent, *hit);
+            }
             bx -= 6.0;
         }
         let search_w = bx - left;
@@ -2246,14 +2309,20 @@ impl Select {
         } else {
             rgba(0x3a3a4e, 1.0)
         };
-        c.round_rect(
-            [left, row],
-            [search_w, 24.0],
-            6.0,
-            rgba(0x23232f, 0.9),
-            edge,
-            1.0,
-        );
+        if legacy {
+            c.round_rect(
+                [left, row],
+                [search_w, 24.0],
+                6.0,
+                rgba(0x23232f, 0.9),
+                edge,
+                1.0,
+            );
+        } else {
+            // No box: a line under the text, lit while typing.
+            let lit = if self.searching { 1.5 } else { 1.0 };
+            c.rect(left, row + 21.0, search_w, lit, edge);
+        }
         // The filters on, as tokens at the start of the box: the text goes after them.
         let token_room = search_w * 0.6;
         let mut tokens_w = 0.0;
@@ -2587,7 +2656,10 @@ impl Select {
         }
         // The main menu's look: one dark panel the list runs down, rows as lines on it.
         let frame_top = self.frame_top();
-        crate::style::panel(c, 20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0);
+        // Outside the Legacy layout it was drawn with the search row, unless that's covered.
+        if legacy || self.covered {
+            crate::style::panel(c, 20.0, frame_top - 4.0, lw + 8.0, bottom - frame_top + 8.0);
+        }
         let tabs = self.source_tabs();
         if !tabs.is_empty() {
             self.draw_source_tabs(c, 24.0, frame_top, lw, &tabs);

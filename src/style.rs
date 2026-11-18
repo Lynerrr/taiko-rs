@@ -315,6 +315,344 @@ pub fn note(c: &mut Canvas, x: f32, y: f32, r: f32, col: u32, lit: bool, brightn
     }
 }
 
+/// 16 x 16 pixels, a row to a string, `#` lit: the icons the main menu's notes carry, drawn bare
+/// on the buttons of the screens they open.
+pub type Icon = [&'static str; 16];
+
+/// Back: an arrow left.
+pub const BACK: Icon = [
+    "................",
+    "................",
+    "......##........",
+    ".....###........",
+    "....###.........",
+    "...###..........",
+    "..###########...",
+    ".############...",
+    ".############...",
+    "..###########...",
+    "...###..........",
+    "....###.........",
+    ".....###........",
+    "......##........",
+    "................",
+    "................",
+];
+/// Sort: bars getting shorter.
+pub const SORT: Icon = [
+    "................",
+    "................",
+    "................",
+    ".##############.",
+    ".##############.",
+    "................",
+    ".###########....",
+    ".###########....",
+    "................",
+    ".########.......",
+    ".########.......",
+    "................",
+    ".#####..........",
+    ".#####..........",
+    "................",
+    "................",
+];
+/// A collection: a folder.
+pub const FOLDER: Icon = [
+    "................",
+    "................",
+    "................",
+    ".######.........",
+    ".#######........",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    ".##############.",
+    "................",
+    "................",
+    "................",
+];
+/// Mods: a four-pointed spark.
+pub const SPARK: Icon = [
+    "................",
+    ".......##.......",
+    ".......##.......",
+    "......####......",
+    "......####......",
+    ".....######.....",
+    "...##########...",
+    ".##############.",
+    ".##############.",
+    "...##########...",
+    ".....######.....",
+    "......####......",
+    "......####......",
+    ".......##.......",
+    ".......##.......",
+    "................",
+];
+/// Random: a die.
+pub const DICE: Icon = [
+    "................",
+    "................",
+    "..############..",
+    ".##############.",
+    ".##..######..##.",
+    ".##..######..##.",
+    ".##############.",
+    ".######..######.",
+    ".######..######.",
+    ".##############.",
+    ".##..######..##.",
+    ".##..######..##.",
+    ".##############.",
+    "..############..",
+    "................",
+    "................",
+];
+/// Rankings: a podium.
+pub const PODIUM: Icon = [
+    "................",
+    "................",
+    "......####......",
+    "......####......",
+    "......####......",
+    "......####......",
+    "......####......",
+    ".####.####......",
+    ".####.####......",
+    ".####.####.####.",
+    ".####.####.####.",
+    ".####.####.####.",
+    ".####.####.####.",
+    ".####.####.####.",
+    "................",
+    "................",
+];
+/// Play: the main menu's own.
+pub const PLAY: Icon = [
+    "................",
+    "...##...........",
+    "...####.........",
+    "...######.......",
+    "...########.....",
+    "...##########...",
+    "...############.",
+    "...#############",
+    "...#############",
+    "...############.",
+    "...##########...",
+    "...########.....",
+    "...######.......",
+    "...####.........",
+    "...##...........",
+    "................",
+];
+
+/// An icon's lit pixels as rectangles (x, y, w, h in pixels): runs grown down while the rows
+/// below repeat them, so no seams show between rows.
+/// Rectangles of an icon's lit pixels: x, y, width and height in pixels.
+type IconRects = Vec<(usize, usize, usize, usize)>;
+
+fn icon_rects(icon: &Icon) -> IconRects {
+    let lit = |x: usize, y: usize| icon[y].as_bytes().get(x) == Some(&b'#');
+    let mut done = [[false; 16]; 16];
+    let mut out = Vec::new();
+    for y in 0..16 {
+        let mut x = 0;
+        while x < 16 {
+            if !lit(x, y) || done[y][x] {
+                x += 1;
+                continue;
+            }
+            let mut end = x + 1;
+            while end < 16 && lit(end, y) && !done[y][end] {
+                end += 1;
+            }
+            let mut h = 1;
+            while y + h < 16 && (x..end).all(|k| lit(k, y + h) && !done[y + h][k]) {
+                h += 1;
+            }
+            for row in &mut done[y..y + h] {
+                row[x..end].fill(true);
+            }
+            out.push((x, y, end - x, h));
+            x = end;
+        }
+    }
+    out
+}
+
+thread_local! {
+    static ICONS: RefCell<HashMap<usize, IconRects>> = RefCell::new(HashMap::new());
+}
+
+/// `icon` bare, `size` across, its middle at (`cx`, `cy`): its pixels in `col` over a dark
+/// shadow a pixel down and right, as on the menu's notes.
+pub fn icon(
+    c: &mut Canvas,
+    icon: &'static Icon,
+    [cx, cy]: [f32; 2],
+    size: f32,
+    col: u32,
+    alpha: f32,
+) {
+    if alpha <= 0.0 || size <= 0.0 {
+        return;
+    }
+    let px = pixel_size(size / 16.0);
+    let (left, top) = (snap_to_grid(cx - 8.0 * px), snap_to_grid(cy - 8.0 * px));
+    ICONS.with(|icons| {
+        let mut icons = icons.borrow_mut();
+        let rects = icons
+            .entry(std::ptr::from_ref(icon) as usize)
+            .or_insert_with(|| icon_rects(icon));
+        for (fill, by) in [(rgba(0x000000, 0.55 * alpha), px), (rgba(col, alpha), 0.0)] {
+            for &(x, y, w, h) in rects.iter() {
+                c.rect(
+                    left + x as f32 * px + by,
+                    top + y as f32 * px + by,
+                    w as f32 * px,
+                    h as f32 * px,
+                    fill,
+                );
+            }
+        }
+    });
+}
+
+/// How big a bare icon button's icon and label are, and how far apart.
+const ICON_BUTTON_ICON: f32 = 11.0;
+const ICON_BUTTON_GAP: f32 = 6.0;
+
+/// The width of `icon_button` with this label (and caption).
+pub fn icon_button_width(label: &str, caption: Option<&str>, size: f32) -> f32 {
+    let text = caption
+        .map_or(0.0, |c| Canvas::text_width(5.0, c))
+        .max(Canvas::text_width(size, label));
+    ICON_BUTTON_ICON + ICON_BUTTON_GAP + text + 12.0
+}
+
+/// A button as the main menu draws its notes' icons: `icon` bare and its `label` beside it,
+/// no box round them; under the pointer the label lights white and the selector's brackets close
+/// round it. `caption`: a small grey word above the label (what the label is the value of).
+/// `lit`: what it sets is on (gold). Its middle is at `y`, its left edge at `x`. Returns its width.
+#[allow(clippy::too_many_arguments)]
+pub fn icon_button(
+    c: &mut Canvas,
+    [x, y]: [f32; 2],
+    icon_art: &'static Icon,
+    label: &str,
+    caption: Option<&str>,
+    size: f32,
+    lit: bool,
+    hit: crate::hit::Hit,
+) -> f32 {
+    let w = icon_button_width(label, caption, size);
+    let rect = [x - 6.0, y - 12.0, w, 24.0];
+    let hover = c.hovered(rect[0], rect[1], rect[2], rect[3]);
+    let col = match (lit, hover) {
+        (true, _) => GOLD,
+        (false, true) => 0xffffff,
+        (false, false) => 0xc8c8d8,
+    };
+    let ink = if hover || lit { col } else { 0xe8e8f2 };
+    icon(
+        c,
+        icon_art,
+        [x + ICON_BUTTON_ICON / 2.0, y],
+        ICON_BUTTON_ICON,
+        ink,
+        1.0,
+    );
+    let lx = x + ICON_BUTTON_ICON + ICON_BUTTON_GAP;
+    let split = if lit { pulse() * 1.2 } else { 0.0 };
+    match caption {
+        Some(cap) => {
+            c.text(lx, y - 8.0, 5.0, rgba(0x6a6a88, 1.0), cap);
+            glitch_text(c, lx, y - 1.0, size, col, label, split);
+        }
+        None => glitch_text(c, lx, y - size / 2.0, size, col, label, split),
+    }
+    if hover {
+        brackets(c, rect, 0.9);
+    }
+    c.hit(rect[0], rect[1], rect[2], rect[3], hit);
+    w
+}
+
+thread_local! {
+    /// How lit each lane-end button is (0 to 1), easing towards whether the pointer is on it.
+    static LIGHTS: RefCell<HashMap<&'static str, f32>> = RefCell::new(HashMap::new());
+}
+
+/// The main action as the end of a lane: a bar of the accent colour from `x` to the screen's
+/// right edge, the ▶ and `label` on it in white. Under the pointer it lights up and glows (no
+/// frame round it), easing in and out.
+pub fn lane_end_button(
+    c: &mut Canvas,
+    key: &'static str,
+    [x, y, h]: [f32; 3],
+    label: &str,
+    hit: crate::hit::Hit,
+) {
+    use crate::menu::tint;
+    let w = c.width - x;
+    let hover = c.hovered(x, y, w, h);
+    let dt = c.dt_ms;
+    let g = LIGHTS.with(|l| {
+        let mut l = l.borrow_mut();
+        let g = l.entry(key).or_insert(0.0);
+        render::approach(g, if hover { 1.0 } else { 0.0 }, dt, 45.0);
+        *g
+    });
+    let col = render::accent();
+    for k in 1..=3 {
+        let by = k as f32 * 2.5 * g;
+        c.round_rect(
+            [x - by, y - by],
+            [w + by * 2.0, h + by * 2.0],
+            by,
+            rgba(col, 0.12 * g),
+            rgba(0, 0.0),
+            0.0,
+        );
+    }
+    let fill = tint(col, 0x000000, 0.5 - 0.5 * g);
+    c.rect(x, y, w, h, rgba(fill, 0.9 + 0.1 * pulse()));
+    let edge = rgba(tint(col, 0xffffff, 0.35 * g), 1.0);
+    c.rect(x, y, w, 1.5, edge);
+    c.rect(x, y + h - 1.5, w, 1.5, edge);
+    c.rect(x, y, 1.5, h, edge);
+    let line = rgba(tint(col, 0xffffff, 0.3), 0.3 + 0.3 * g);
+    c.rect(x, y + 4.0, w, 1.0, line);
+    c.rect(x, y + h - 5.0, w, 1.0, line);
+    let size = (h * 0.42).clamp(8.0, 11.0);
+    icon(
+        c,
+        &PLAY,
+        [x + 14.0 + size * 0.5, y + h / 2.0],
+        size * 1.1,
+        0xffffff,
+        1.0,
+    );
+    let room = w - (28.0 + size * 1.1) - 8.0;
+    glitch_text(
+        c,
+        x + 22.0 + size * 1.1,
+        y + (h - size) / 2.0,
+        size,
+        0xffffff,
+        &Canvas::fit(size, room, label),
+        pulse() * 0.8,
+    );
+    c.hit(x, y, w, h, hit);
+}
+
 /// A pill behind a label that's on: `col`'s fill, a faint white edge.
 pub fn pill(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32, col: u32) {
     c.round_rect(
@@ -521,6 +859,58 @@ mod tests {
             rects.len() < runs,
             "{} rectangles for {runs} row runs",
             rects.len()
+        );
+    }
+
+    #[test]
+    fn a_bare_icons_rectangles_cover_its_lit_pixels_exactly() {
+        for art in [&BACK, &SORT, &FOLDER, &SPARK, &DICE, &PODIUM, &PLAY] {
+            assert!(art.iter().all(|row| row.len() == 16), "16 pixels a row");
+            let mut painted = [[false; 16]; 16];
+            for (x, y, w, h) in icon_rects(art) {
+                for row in &mut painted[y..y + h] {
+                    for p in &mut row[x..x + w] {
+                        assert!(!*p, "painted twice");
+                        *p = true;
+                    }
+                }
+            }
+            for (y, row) in art.iter().enumerate() {
+                for (x, b) in row.bytes().enumerate() {
+                    assert_eq!(painted[y][x], b == b'#', "pixel {x},{y}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_lane_end_lights_up_under_the_pointer_with_no_frame() {
+        let draw = |mouse: (f32, f32)| {
+            let mut c = Canvas {
+                width: 853.3,
+                dt_ms: 1000.0,
+                mouse,
+                ..Default::default()
+            };
+            lane_end_button(
+                &mut c,
+                "test-play",
+                [700.0, 440.0, 26.0],
+                "Play",
+                crate::hit::Hit::ModsButton,
+            );
+            c
+        };
+        let away = draw((0.0, 0.0));
+        let over = draw((760.0, 450.0));
+        // No brackets: the same shapes, only brighter.
+        assert_eq!(away.shapes.len(), over.shapes.len());
+        let lum = |c: &Canvas| c.shapes.iter().map(|s| s.fill[0] * s.fill[3]).sum::<f32>();
+        assert!(lum(&over) > lum(&away), "lit under the pointer");
+        assert_eq!(over.hits.len(), 1);
+        assert!(
+            over.hits[0].rect[0] == 700.0 && over.hits[0].rect[2] > 150.0,
+            "to the screen's edge"
         );
     }
 

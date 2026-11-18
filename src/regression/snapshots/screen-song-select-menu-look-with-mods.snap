@@ -1,0 +1,83 @@
+text  723,7    log in
+text  778,7    what's new
+text  420,24   SORT
+text  104,27   click to search (ctrl+f)...
+text   49,28   Menu
+text  649,28   7 songs, 7 maps  |  taiko only
+text  420,31   artist
+text   44,58   basics
+text  494,60   basics
+text  416,63   1 diff
+text  739,65   Leaderboard
+text   44,72   Regression  |  mapped by tests
+text  494,79   Regression
+text   56,92   basics
+text  430,92   3.16
+text  494,98   mapped by tests
+text  731,98   NOT SUBMITTED
+text   44,114  big-notes
+text  495,117  [basics]
+text  780,117  3.16
+text  416,119  1 diff
+text   44,128  Regression  |  mapped by tests
+text  494,135  OD
+text  514,135  7.0
+text  545,135  BPM
+text  572,135  200
+text  603,135  Length
+text  651,135  0:09
+text  494,147  Notes
+text  535,147  64
+text  559,147  Don
+text  586,147  32
+text  610,147  Kat
+text  637,147  32
+text   44,148  rolls-and-swells
+text  416,153  1 diff
+text  494,159  SS
+text  515,159  130pp
+text  559,159  99%
+text  587,159  117pp
+text  630,159  98%
+text  658,159  99pp
+text   44,162  Regression  |  mapped by tests
+text   44,182  sv-and-kiai
+text  416,187  1 diff
+text   44,196  Regression  |  mapped by tests
+text   44,216  stream
+text  416,221  1 diff
+text   44,230  Regression  |  mapped by tests
+text   45,250  low-od
+text  416,255  1 diff
+text   44,264  Regression  |  mapped by tests
+text   44,284  high-od
+text  416,289  1 diff
+text  490,291  0:00 / 0:10
+text  675,291  peak 7.0 notes/s at 0:01
+text   44,298  Regression  |  mapped by tests
+text  508,307  click / drag / wheel to scroll - play from where you stop
+text  751,442  Play
+text  503,443  Mods HR HD
+text  616,443  Random
+hit    26,20     56x24   ToMenu
+hit   397,20     65x24   SortList
+hit    94,20    296x24   TextField
+hit    24,52    444x34   SongHeader(0)
+hit    44,86    424x22   SongRow(0)
+hit    24,108   444x34   SongHeader(1)
+hit    24,142   444x34   SongHeader(2)
+hit    24,176   444x34   SongHeader(3)
+hit    24,210   444x34   SongHeader(4)
+hit    24,244   444x34   SongHeader(5)
+hit    24,278   444x34   SongHeader(6)
+hit     4,52     20x402  SongScrollbar
+hit   701,95     16x13   SelectLike
+hit   490,177   330x61   Preview
+hit   488,244   334x44   Preview
+hit   716,56     95x24   BoardPage
+hit   480,435    98x24   ModsButton
+hit   593,435    70x24   Key(F2)
+hit   717,434   136x26   Key(Enter)
+hit   472,229     8x48   SplitList
+hit   771,2      74x14   Changelog
+hit   715,2      50x14   Account

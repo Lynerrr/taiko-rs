@@ -54,6 +54,29 @@ fn song_select() {
     assert_snapshot("screen-song-select-with-mods", &shot(&mut s, &mut now));
 }
 
+/// Song select in the main menu's look (the Legacy setting off): the way back an arrow, sort and
+/// collection bare icons, Mods and Random bare icons and Play the lit end of their lane.
+#[test]
+fn song_select_in_the_menus_look() {
+    let songs = Songs::new("screen-select-menu-look", &maps::all());
+    let cfg = Config {
+        main_menu: true,
+        ..harness::config()
+    };
+    let mut s = state_with(cfg, songs.entries());
+    let mut now = Instant::now();
+    ready(&mut s, &mut now);
+    assert!(!s.select.legacy && s.main_menu.is_none());
+    assert_snapshot("screen-song-select-menu-look", &shot(&mut s, &mut now));
+    // Mods on: their letters after the word, the button lit.
+    s.cfg.mods = Mods::parse("HD,HR");
+    s.select.mods_label = s.cfg.mods.label();
+    assert_snapshot(
+        "screen-song-select-menu-look-with-mods",
+        &shot(&mut s, &mut now),
+    );
+}
+
 #[test]
 fn song_select_sort_and_filter() {
     let (mut s, _songs, mut now) = client("screen-select-lens");
