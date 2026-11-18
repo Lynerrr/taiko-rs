@@ -26,6 +26,8 @@ pub struct Entry {
     /// In taiko.rs's own custom maps folder (`is_own_map`): a taiko.rs map, whatever osu! set
     /// its file names.
     own: bool,
+    /// A TJA course's chart file (`tja_maps::split`): its set, and what's on disk.
+    chart: Option<PathBuf>,
 }
 
 impl Entry {
@@ -41,6 +43,7 @@ impl Entry {
         );
         Entry {
             own: is_own_map(&path),
+            chart: crate::tja_maps::split(&path).map(|(file, _)| file),
             path,
             meta,
             size,
@@ -76,6 +79,20 @@ impl Entry {
                     .and_then(crate::download::set_id_of_folder)
             })
             .filter(|&id| id > 0)
+    }
+
+    /// What song select groups its set by: the folder of an osu! or taiko.rs map (a set to a
+    /// folder), the chart file of a TJA course (a song to a file: a pack often keeps many songs'
+    /// `.tja` files in one folder).
+    pub fn set_key(&self) -> &Path {
+        self.chart
+            .as_deref()
+            .unwrap_or_else(|| self.path.parent().unwrap_or(Path::new("")))
+    }
+
+    /// The file it's read from: a TJA course's `.tja` (its path names no file), else its path.
+    pub fn file(&self) -> &Path {
+        self.chart.as_deref().unwrap_or(&self.path)
     }
 
     /// Whether it's in taiko.rs's own custom maps folder.
@@ -1042,7 +1059,7 @@ fn entries_of(maps: Vec<CachedMap>) -> Vec<Entry> {
             (
                 e.meta.artist.to_lowercase(),
                 e.meta.title.to_lowercase(),
-                e.path.parent().map(|p| p.to_path_buf()),
+                e.set_key().to_path_buf(),
             )
         };
         key(a).cmp(&key(b)).then(a.size.cmp(&b.size))

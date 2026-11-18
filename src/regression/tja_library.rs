@@ -1044,3 +1044,217 @@ fn a_tja_chart_s_picture_is_its_background() {
     let entries = tja_maps::entries(&cover).unwrap();
     assert_eq!(entries[0].1.background.as_deref(), Some("cover.jpg"));
 }
+
+/// A pack song `title` playing `wave`, with the picture its genre's songs share.
+fn pack_chart(title: &str, wave: &str) -> String {
+    CHART
+        .replace("Regression TJA", title)
+        .replace("WAVE:song.ogg", &format!("WAVE:{wave}\nBGIMAGE:genre.png"))
+}
+
+/// Pack songs `titles` side by side in `dir` (below the TJA folder), each with its music,
+/// and the genre's picture: their chart files.
+fn pack_songs(f: &Folders, dir: &str, titles: &[&str]) -> Vec<PathBuf> {
+    let files = titles
+        .iter()
+        .map(|t| {
+            let name = t.to_lowercase();
+            let wave = format!("{name}.ogg");
+            std::fs::create_dir_all(f.tja.join(dir)).unwrap();
+            std::fs::write(f.tja.join(dir).join(&wave), b"ogg").unwrap();
+            put(&f.tja, dir, &format!("{name}.tja"), &pack_chart(t, &wave))
+        })
+        .collect();
+    std::fs::write(f.tja.join(dir).join("genre.png"), b"png").unwrap();
+    files
+}
+
+/// The chart files of the song select's songs, in order, each song's once.
+fn listed_songs(s: &State) -> Vec<Vec<PathBuf>> {
+    let rows = s.select.rows();
+    s.select
+        .song_groups()
+        .iter()
+        .map(|g| {
+            let mut files: Vec<PathBuf> = rows[g.clone()]
+                .iter()
+                .map(|&i| s.library[i].file().to_path_buf())
+                .collect();
+            files.dedup();
+            files
+        })
+        .collect()
+}
+
+/// Puts the cursor on the library map at `path`, looked for again if a frame moved the rows.
+fn select_map(s: &mut State, now: Instant, path: &Path) {
+    for _ in 0..5 {
+        let at = s
+            .select
+            .rows()
+            .iter()
+            .position(|&i| s.library[i].path == path)
+            .expect("the course is listed");
+        s.select.set_cursor(at);
+        frame(s, now);
+        if s.select.selected().map(|i| s.library[i].path.as_path()) == Some(path) {
+            return;
+        }
+    }
+    panic!("{} isn't selected", path.display());
+}
+
+/// Where `original` went in the tests' bin, by the note left beside it.
+fn in_bin(s: &State, original: &Path) -> Option<PathBuf> {
+    let map_trash::Bin::Folder(bin) = &s.map_bin else {
+        panic!("tests' maps go to a folder of their own");
+    };
+    std::fs::read_dir(bin).ok()?.flatten().find_map(|slot| {
+        let note = std::fs::read_to_string(slot.path().join(map_trash::FROM_NOTE)).ok()?;
+        (note.trim_end() == original.to_string_lossy())
+            .then(|| slot.path().join(original.file_name().unwrap()))
+    })
+}
+
+fn listed_course(s: &State, file: &Path) -> bool {
+    s.select.rows().iter().any(|&i| s.library[i].file() == file)
+}
+
+/// A pack keeping many songs' `.tja` files in one folder lists a song per file, each with its
+/// own courses, not the whole folder as one song with every course of every chart in it.
+#[test]
+fn a_folder_of_many_tja_files_is_a_song_per_file() {
+    let f = Folders::new("flat");
+    let (mut s, mut now) = client(&f, config());
+    let files = pack_songs(&f, "Pack/Genre", &["One", "Two", "Three"]);
+    refresh(&mut s, &mut now);
+    let mut songs = listed_songs(&s);
+    songs.sort();
+    let mut each: Vec<Vec<PathBuf>> = files.iter().map(|p| vec![p.clone()]).collect();
+    each.sort();
+    assert_eq!(songs, each, "a song a file");
+    for g in s.select.song_groups() {
+        assert_eq!(g.len(), 2, "each song with its own two courses");
+    }
+    // Right goes to the next song, not past the folder.
+    let first = s.select.rows()[0];
+    let first_file = s.library[first].file().to_path_buf();
+    let first_path = s.library[first].path.clone();
+    select_map(&mut s, now, &first_path);
+    press(&mut s, KeyCode::ArrowRight, now);
+    let next = s
+        .select
+        .selected()
+        .map(|i| s.library[i].file().to_path_buf());
+    assert!(
+        next.is_some_and(|n| n != first_file && files.contains(&n)),
+        "the next song of the same folder"
+    );
+    // A course can't be deleted alone (its chart file holds every course): the menu offers the
+    // song only.
+    s.select.menu = Some(ui::SongMenu {
+        row: s.select.cursor(),
+        header: false,
+        skin: false,
+        previous: None,
+        x: 100.0,
+        y: 100.0,
+    });
+    let actions: Vec<ui::MenuAction> = s
+        .select
+        .menu_items(&s.library)
+        .iter()
+        .map(|it| it.action)
+        .collect();
+    assert!(actions.contains(&ui::MenuAction::DeleteSet));
+    assert!(!actions.contains(&ui::MenuAction::DeleteDifficulty));
+}
+
+/// Deleting a song of a pack folder holding many takes its chart file and its music only: the
+/// folder, the picture the other songs show, and the other songs stay.
+#[test]
+fn deleting_a_tja_song_of_a_pack_folder_takes_only_its_files() {
+    let f = Folders::new("delete-flat");
+    let (mut s, mut now) = client(&f, config());
+    let files = pack_songs(&f, "Pack/Genre", &["One", "Two", "Three"]);
+    let genre = f.tja.join("Pack/Genre");
+    refresh(&mut s, &mut now);
+    let oni = tja_maps::course_path(&files[0], taiko_logic::tja::CourseKind::Oni);
+    select_map(&mut s, now, &oni);
+    // Delete without Shift: a TJA course is its whole song.
+    press(&mut s, KeyCode::Delete, now);
+    let ask = s.select.deleting.clone().expect("asked first");
+    assert!(ask.set && !ask.whole, "the song, not its folder");
+    assert_eq!(
+        ask.maps.len(),
+        2,
+        "its two courses, none of the other songs'"
+    );
+    press(&mut s, KeyCode::ArrowRight, now);
+    press(&mut s, KeyCode::Enter, now);
+    frame(&mut s, now);
+
+    assert!(!files[0].exists() && in_bin(&s, &files[0]).is_some());
+    let music = genre.join("one.ogg");
+    assert!(
+        !music.exists() && in_bin(&s, &music).is_some(),
+        "its music, no other chart's, goes too"
+    );
+    assert!(
+        genre.join("genre.png").is_file(),
+        "the picture the others name stays"
+    );
+    assert!(!listed_course(&s, &files[0]), "its rows go at once");
+    for (file, wave) in files[1..].iter().zip(["two.ogg", "three.ogg"]) {
+        assert!(file.is_file() && genre.join(wave).is_file());
+        assert!(listed_course(&s, file), "the other songs stay listed");
+    }
+}
+
+/// A song's folder with more songs in folders below it isn't taken whole with the song; a song
+/// alone in its folder is.
+#[test]
+fn a_tja_song_folder_goes_whole_only_with_no_other_song_in_it() {
+    let f = Folders::new("delete-nested");
+    let (mut s, mut now) = client(&f, config());
+    let top = pack_songs(&f, "Pack/Box", &["Top"]).remove(0);
+    let deep = pack_songs(&f, "Pack/Box/Genre/Song", &["Deep"]).remove(0);
+    refresh(&mut s, &mut now);
+
+    select_map(
+        &mut s,
+        now,
+        &tja_maps::course_path(&top, taiko_logic::tja::CourseKind::Oni),
+    );
+    s.modifiers_shift = true;
+    press(&mut s, KeyCode::Delete, now);
+    s.modifiers_shift = false;
+    let ask = s.select.deleting.clone().expect("asked first");
+    assert!(ask.set && !ask.whole, "a song below keeps the folder");
+    press(&mut s, KeyCode::ArrowRight, now);
+    press(&mut s, KeyCode::Enter, now);
+    frame(&mut s, now);
+    assert!(!top.exists() && in_bin(&s, &top).is_some());
+    assert!(
+        deep.is_file() && listed_course(&s, &deep),
+        "the song below stays"
+    );
+
+    select_map(
+        &mut s,
+        now,
+        &tja_maps::course_path(&deep, taiko_logic::tja::CourseKind::Easy),
+    );
+    press(&mut s, KeyCode::Delete, now);
+    let ask = s.select.deleting.clone().expect("asked first");
+    assert!(
+        ask.set && ask.whole,
+        "alone in its folder: the folder goes with it"
+    );
+    press(&mut s, KeyCode::ArrowRight, now);
+    press(&mut s, KeyCode::Enter, now);
+    frame(&mut s, now);
+    let folder = f.tja.join("Pack/Box/Genre/Song");
+    assert!(!folder.exists() && in_bin(&s, &folder).is_some());
+    assert!(f.tja.join("Pack/Box").is_dir());
+}

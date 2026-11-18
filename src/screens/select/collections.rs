@@ -169,11 +169,11 @@ impl State {
         };
         self.select.menu = None;
         let maps = if whole {
-            let dir = self.library[i].path.parent().map(Path::to_path_buf);
+            let song = self.library[i].set_key();
             self.library
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| e.path.parent().map(Path::to_path_buf) == dir)
+                .filter(|(_, e)| e.set_key() == song)
                 .map(|(j, _)| j)
                 .collect()
         } else {

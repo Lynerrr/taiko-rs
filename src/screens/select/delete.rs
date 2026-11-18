@@ -16,16 +16,17 @@ impl State {
         let Some(e) = self.library.get(entry) else {
             return;
         };
+        // A TJA chart's courses are one file: none goes alone.
+        let set = set || e.is_tja();
         let Some(folder) = e.path.parent().map(Path::to_path_buf) else {
             return;
         };
+        let song = e.set_key();
         let maps: Vec<usize> = if set {
             self.library
                 .iter()
                 .enumerate()
-                .filter(|(_, m)| {
-                    m.path.parent() == Some(folder.as_path()) && !self.select.gone.contains(&m.path)
-                })
+                .filter(|(_, m)| m.set_key() == song && !self.select.gone.contains(&m.path))
                 .map(|(i, _)| i)
                 .collect()
         } else {
@@ -40,14 +41,15 @@ impl State {
         let set_folder = self.is_set_folder(&folder);
         let others = charts_in(&folder)
             .iter()
-            .any(|p| !maps.iter().any(|&i| self.library[i].path == *p));
+            .any(|p| !maps.iter().any(|&i| self.library[i].file() == p));
         let name = if set {
             format!("{} - {}", e.meta.artist, e.meta.title)
         } else {
             format!("{} - {} [{}]", e.meta.artist, e.meta.title, e.meta.version)
         };
         self.select.deleting = Some(DeleteAsk {
-            whole: set_folder && (set || !others),
+            // An osu! set is its folder; a TJA song may share its folder with others.
+            whole: set_folder && (!others || (set && !e.is_tja())),
             set,
             osu: in_osu_songs(&e.path),
             system_bin: self.map_bin.is_system(),
@@ -145,6 +147,9 @@ impl State {
         roots.extend(library::song_inputs(&self.cfg));
         // taiko.rs's own maps folder is one too: a map lying loose in it never takes it along.
         roots.push(self.custom_dir.clone());
+        // And the TJA folder: a song alone in its folder takes it along, a pack's never goes
+        // (`charts_in` finds its other songs).
+        roots.extend(self.tja_dir.clone());
         let inside = roots
             .iter()
             .any(|r| folder.starts_with(r) && folder != r.as_path());
@@ -196,7 +201,7 @@ impl State {
         let targets = if ask.whole {
             vec![ask.folder.clone()]
         } else {
-            paths.clone()
+            files_to_bin(&paths, &ask.folder)
         };
         let mut own = false;
         let mut failed = None;
@@ -211,7 +216,7 @@ impl State {
         }
         let gone: Vec<PathBuf> = paths
             .iter()
-            .filter(|p| std::fs::symlink_metadata(p).is_err())
+            .filter(|p| std::fs::symlink_metadata(tja_maps::file_of(p)).is_err())
             .cloned()
             .collect();
         // A custom set's difficulty: the website still having it doesn't make the set outdated.
@@ -266,7 +271,9 @@ impl State {
         // What's kept by the song (its folder's name and music): only once none of it is left.
         let left = |library: &[Entry], gone_too: &std::collections::HashSet<PathBuf>, key: &str| {
             library.iter().any(|e| {
-                !gone_too.contains(&e.path) && playlist::favourite_key(e) == key && e.path.is_file()
+                !gone_too.contains(&e.path)
+                    && playlist::favourite_key(e) == key
+                    && e.file().is_file()
             })
         };
         let keys: Vec<String> = indices
@@ -304,29 +311,75 @@ impl State {
     }
 }
 
-/// The chart files (.osu, .tko) in a set's folder, and in its subfolders as the library reads
-/// them.
+/// The chart files in a set's folder as the library reads them: `.osu` and `.tko` in it and
+/// in its subfolders, `.tja` at any depth (a pack keeps its songs in folders below).
 fn charts_in(folder: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(rd) = std::fs::read_dir(folder) else {
-        return out;
+    charts_below(folder, 0, &mut out);
+    out
+}
+
+/// How many folders down `charts_in` looks for `.tja` files: as deep as the library does.
+const TJA_DEPTH: u32 = 12;
+
+fn charts_below(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
     };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
-            out.extend(
-                std::fs::read_dir(&p)
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .map(|e| e.path())
-                    .filter(|p| library::is_map_file(p)),
-            );
-        } else if library::is_map_file(&p) {
+            if depth < TJA_DEPTH {
+                charts_below(&p, depth + 1, out);
+            }
+        } else if (depth <= 1 && library::is_map_file(&p)) || tja_maps::is_tja_file(&p) {
             out.push(p);
         }
     }
-    out
+}
+
+/// What deleting the maps at `paths` (of the set in `folder`) takes off the disk: each map's
+/// file, a TJA chart's once for all its courses, with the music and pictures it names that no
+/// chart left in the folder names too (a pack can keep many songs in one folder).
+fn files_to_bin(paths: &[PathBuf], folder: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        let file = tja_maps::file_of(p);
+        if !files.contains(&file) {
+            files.push(file);
+        }
+    }
+    let charts: Vec<PathBuf> = files
+        .iter()
+        .filter(|f| tja_maps::is_tja_file(f))
+        .cloned()
+        .collect();
+    if charts.is_empty() {
+        return files;
+    }
+    let left: Vec<PathBuf> = charts_in(folder)
+        .into_iter()
+        .filter(|c| !files.contains(c))
+        .collect();
+    // An osu! chart beside them may play the same music: then it all stays.
+    if left.iter().any(|c| !tja_maps::is_tja_file(c)) {
+        return files;
+    }
+    // Told apart whatever their case: on Windows "Song.ogg" and "song.ogg" are one file.
+    let key = |p: &Path| p.to_string_lossy().to_lowercase();
+    let needed: std::collections::HashSet<String> = left
+        .iter()
+        .flat_map(|c| tja_maps::files_named(c))
+        .map(|p| key(&p))
+        .collect();
+    for chart in &charts {
+        for named in tja_maps::files_named(chart) {
+            if named.is_file() && !needed.contains(&key(&named)) && !files.contains(&named) {
+                files.push(named);
+            }
+        }
+    }
+    files
 }
 
 /// Whether the map at `path` is in an osu! install's Songs folder (osu!.db or osu!.exe a few

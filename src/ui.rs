@@ -824,10 +824,7 @@ impl Select {
             } else {
                 0
             };
-            (
-                library[i].path.parent().unwrap_or(std::path::Path::new("")),
-                stars,
-            )
+            (library[i].set_key(), stars)
         };
         let mut set_value: Vec<f64> = Vec::new();
         let mut keyed = Vec::with_capacity(self.visible.len());
@@ -930,7 +927,7 @@ impl Select {
         for i in 1..=self.visible.len() {
             let split = i == self.visible.len()
                 || each
-                || library[self.visible[i]].path.parent() != library[self.visible[i - 1]].path.parent()
+                || library[self.visible[i]].set_key() != library[self.visible[i - 1]].set_key()
                 // The last of one star heading and the first of the next can be the same song's.
                 || (self.sort == SortMode::Difficulty && star_heading(self.row_value[i]) != star_heading(self.row_value[i - 1]));
             if split {
@@ -955,7 +952,7 @@ impl Select {
         self.song_count = if each {
             self.visible
                 .iter()
-                .filter_map(|&i| library[i].path.parent())
+                .map(|&i| library[i].set_key())
                 .collect::<std::collections::HashSet<_>>()
                 .len()
         } else {
@@ -1127,9 +1124,9 @@ impl Select {
         }
     }
 
-    /// The selected song's folder.
+    /// The selected song's set (`Entry::set_key`).
     fn selected_folder<'a>(&self, library: &'a [Entry]) -> Option<&'a std::path::Path> {
-        self.selected().and_then(|i| library[i].path.parent())
+        self.selected().map(|i| library[i].set_key())
     }
 
     /// The list as moved by hand, from where it is now if it was following the selection.
@@ -1269,7 +1266,7 @@ impl Select {
             // Jump between beatmap sets.
             KeyCode::ArrowRight | KeyCode::ArrowLeft => {
                 if let Some(&cur) = self.visible.get(self.cursor) {
-                    let dir = library[cur].path.parent();
+                    let dir = library[cur].set_key();
                     let fwd = key == KeyCode::ArrowRight;
                     let mut i = self.cursor;
                     loop {
@@ -1284,14 +1281,14 @@ impl Select {
                             }
                             i -= 1
                         }
-                        if library[self.visible[i]].path.parent() != dir {
+                        if library[self.visible[i]].set_key() != dir {
                             break;
                         }
                     }
                     if !fwd {
                         // Land on the first difficulty of the previous set.
-                        let d = library[self.visible[i]].path.parent();
-                        while i > 0 && library[self.visible[i - 1]].path.parent() == d {
+                        let d = library[self.visible[i]].set_key();
+                        while i > 0 && library[self.visible[i - 1]].set_key() == d {
                             i -= 1;
                         }
                     }
@@ -1496,12 +1493,11 @@ impl Select {
             return;
         };
         let g = self.groups[g].clone();
-        let folder = library[self.visible[g.start]]
-            .path
-            .parent()
-            .map(|p| p.to_path_buf());
-        let remembered = folder
-            .and_then(|f| self.remembered.get(&f).copied())
+        let song = library[self.visible[g.start]].set_key();
+        let remembered = self
+            .remembered
+            .get(song)
+            .copied()
             .and_then(|i| self.visible[g.clone()].iter().position(|&v| v == i));
         match remembered {
             Some(pos) => {
@@ -1768,7 +1764,8 @@ impl Select {
             }
         }
         let label = tr!("Delete", "削除", "Удалить").to_string();
-        if !m.header {
+        // A TJA chart's courses are one file: they go together.
+        if !m.header && !e.is_tja() {
             add(
                 label.clone(),
                 one,
@@ -1894,11 +1891,11 @@ impl Select {
 
     /// Remembers the selected difficulty for its song (call once a frame).
     pub fn remember_selection(&mut self, library: &[Entry]) {
-        if let Some(&i) = self.visible.get(self.cursor)
-            && let Some(folder) = library[i].path.parent()
-            && self.remembered.get(folder) != Some(&i)
-        {
-            self.remembered.insert(folder.to_path_buf(), i);
+        if let Some(&i) = self.visible.get(self.cursor) {
+            let song = library[i].set_key();
+            if self.remembered.get(song) != Some(&i) {
+                self.remembered.insert(song.to_path_buf(), i);
+            }
         }
     }
 

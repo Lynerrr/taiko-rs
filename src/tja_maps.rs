@@ -89,6 +89,11 @@ pub fn split(path: &Path) -> Option<(PathBuf, CourseKind)> {
     Some((path.with_file_name(file), CourseKind::parse(course)?))
 }
 
+/// The file a library path is read from: a TJA course's chart file, else the path itself.
+pub fn file_of(path: &Path) -> PathBuf {
+    split(path).map_or_else(|| path.to_path_buf(), |(file, _)| file)
+}
+
 /// Whether `path` is a TJA course's entry path.
 pub fn is_course(path: &Path) -> bool {
     split(path).is_some()
@@ -139,6 +144,25 @@ pub fn board(path: &Path) -> Option<taiko_logic::tja::BoardChart> {
 /// copy of the chart, whatever the file's encoding or comments), 0 when it can't be read.
 pub fn hash(path: &Path) -> u64 {
     course(path).map_or(0, |c| c.hash.short())
+}
+
+/// The music and pictures the chart file `file` names that would be beside it or in a folder
+/// below it (never above), whether they're there or not; none when it can't be read.
+pub fn files_named(file: &Path) -> Vec<PathBuf> {
+    let Ok(song) = read(file) else {
+        return Vec::new();
+    };
+    std::iter::once(&song.wave)
+        .chain(&song.images)
+        .map(|named| named.replace('\\', "/"))
+        .filter(|named| {
+            !named.is_empty()
+                && Path::new(named)
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+        })
+        .map(|named| file.with_file_name(named))
+        .collect()
 }
 
 /// Whether `dir` is a folder with a `.tja` file in it, or in a folder in it.
