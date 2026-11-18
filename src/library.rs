@@ -26,8 +26,8 @@ pub struct Entry {
     /// In taiko.rs's own custom maps folder (`is_own_map`): a taiko.rs map, whatever osu! set
     /// its file names.
     own: bool,
-    /// A TJA course's chart file (`tja_maps::split`): its set, and what's on disk.
-    chart: Option<PathBuf>,
+    /// A TJA course (`tja_maps::split`): its path names its chart file and course.
+    tja: bool,
 }
 
 impl Entry {
@@ -43,7 +43,7 @@ impl Entry {
         );
         Entry {
             own: is_own_map(&path),
-            chart: crate::tja_maps::split(&path).map(|(file, _)| file),
+            tja: crate::tja_maps::is_course(&path),
             path,
             meta,
             size,
@@ -85,14 +85,25 @@ impl Entry {
     /// folder), the chart file of a TJA course (a song to a file: a pack often keeps many songs'
     /// `.tja` files in one folder).
     pub fn set_key(&self) -> &Path {
-        self.chart
-            .as_deref()
-            .unwrap_or_else(|| self.path.parent().unwrap_or(Path::new("")))
+        match self.chart_file() {
+            Some(file) => file,
+            None => self.path.parent().unwrap_or(Path::new("")),
+        }
     }
 
     /// The file it's read from: a TJA course's `.tja` (its path names no file), else its path.
     pub fn file(&self) -> &Path {
-        self.chart.as_deref().unwrap_or(&self.path)
+        self.chart_file().unwrap_or(&self.path)
+    }
+
+    /// A TJA course's chart file: its path up to the `#` before the course. Not kept apart, so
+    /// a library of many thousand maps isn't any bigger for it.
+    fn chart_file(&self) -> Option<&Path> {
+        if !self.tja {
+            return None;
+        }
+        let path = self.path.to_str()?;
+        path.rfind('#').map(|at| Path::new(&path[..at]))
     }
 
     /// Whether it's in taiko.rs's own custom maps folder.

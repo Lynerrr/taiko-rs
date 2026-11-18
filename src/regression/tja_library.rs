@@ -1194,7 +1194,9 @@ fn deleting_a_tja_song_of_a_pack_folder_takes_only_its_files() {
     press(&mut s, KeyCode::Enter, now);
     frame(&mut s, now);
 
-    assert!(!files[0].exists() && in_bin(&s, &files[0]).is_some());
+    let said = s.toast.as_ref().map(|t| t.text.clone());
+    assert!(!files[0].exists(), "its chart file went: {said:?}");
+    assert!(in_bin(&s, &files[0]).is_some(), "into the bin: {said:?}");
     let music = genre.join("one.ogg");
     assert!(
         !music.exists() && in_bin(&s, &music).is_some(),
@@ -1234,7 +1236,9 @@ fn a_tja_song_folder_goes_whole_only_with_no_other_song_in_it() {
     press(&mut s, KeyCode::ArrowRight, now);
     press(&mut s, KeyCode::Enter, now);
     frame(&mut s, now);
-    assert!(!top.exists() && in_bin(&s, &top).is_some());
+    let said = s.toast.as_ref().map(|t| t.text.clone());
+    assert!(!top.exists(), "its chart file went: {said:?}");
+    assert!(in_bin(&s, &top).is_some(), "into the bin: {said:?}");
     assert!(
         deep.is_file() && listed_course(&s, &deep),
         "the song below stays"
