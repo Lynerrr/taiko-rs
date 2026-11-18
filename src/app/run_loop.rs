@@ -1232,7 +1232,7 @@ impl State {
             splash,
             main_menu: None,
             menu_shift: None,
-            song_routes: (0.0, 0),
+            song_routes: Default::default(),
             song_routes_drain: None,
             play_icon_at: None,
             screen_fade: None,

@@ -119,7 +119,7 @@ fn title_y() -> f32 {
     lane_top() + lane_h() + title_gap()
 }
 /// Kiai: how long a beat's kick and the opening's flash last, and a spark's life (ms).
-const BEAT_MS: f32 = 300.0;
+pub const BEAT_MS: f32 = 300.0;
 const OPENING_MS: f32 = 420.0;
 const SPARK_MS: f32 = 750.0;
 /// How many sparks can be in the air, and how many a beat and the opening throw.
@@ -667,7 +667,7 @@ impl Menu {
         self.draw_lane(c, f.away);
         self.draw_drum(c);
         self.draw_burst(c);
-        self.draw_kiai(c);
+        self.draw_kiai(c, !f.shifting);
         // Over the panel's edge and the kiai's frame, which would cut through it.
         if let Some((x, y)) = self.chip.take() {
             self.new_chip(c, x, y, 11.0);
@@ -715,18 +715,34 @@ impl Menu {
         }
     }
 
-    /// ms since the menu opened, which the routes behind it drift by, and how far the universes
-    /// have moved along them: song select carries the routes on from there.
-    pub fn routes_at(&self) -> (f32, usize) {
-        (self.clock, self.universe)
+    /// ms since the menu opened, which the routes behind it drift by, how far the universes
+    /// have moved along them and how far into a kiai they swell: song select carries the routes
+    /// on from there.
+    pub fn routes_at(&self) -> crate::menu_notes::Drift {
+        crate::menu_notes::Drift {
+            clock: self.clock,
+            universe: self.universe,
+            kiai: self.kiai,
+        }
     }
 
     /// Comes back with the routes where song select left them (`routes_at`), all at once rather
     /// than out of black: the camera brings it into view.
-    pub fn resume(&mut self, (clock, universe): (f32, usize)) {
-        self.clock = clock;
-        self.universe = universe;
-        self.appear = clock - FADE_MS;
+    pub fn resume(&mut self, drift: crate::menu_notes::Drift) {
+        self.clock = drift.clock;
+        self.universe = drift.universe;
+        self.kiai = drift.kiai;
+        self.appear = drift.clock - FADE_MS;
+    }
+
+    /// How lit the kiai has the lane: its gold edge and fill (0 to 1 each), for the lane as the
+    /// camera carries it off (`menu_shift`), where the menu's own frame isn't drawn.
+    pub fn kiai_glow(&self) -> (f32, f32) {
+        let kick = self.kick();
+        (
+            self.kiai * (0.55 + kick * 0.45),
+            self.kiai * 0.05 + kick * 0.11,
+        )
     }
 
     /// The selected note's middle and radius (fully grown), as last drawn on a screen `width`
@@ -826,21 +842,27 @@ impl Menu {
     }
 
     /// Over the panel: the gold it takes on, the opening's flash and tears, the rings and sparks.
-    fn draw_kiai(&self, c: &mut Canvas) {
+    /// `framed`: the panel is the menu's own; while the camera moves (`menu_shift`) the lane is
+    /// drawn and lit by that instead, running on past the screen, and a frame round the screen's
+    /// width would cut across it.
+    fn draw_kiai(&self, c: &mut Canvas, framed: bool) {
         if self.kiai <= 0.0 && self.sparks.is_empty() {
             return;
         }
         let kick = self.kick();
         let px = pixel_size(LANE_PIXEL);
         let (left, w) = (panel_x(), c.width - 2.0 * panel_x());
-        c.round_rect(
-            [left, lane_top()],
-            [w, lane_h()],
-            10.0,
-            rgba(GOLD, self.kiai * 0.05 + kick * 0.11),
-            rgba(GOLD, self.kiai * (0.55 + kick * 0.45)),
-            2.0,
-        );
+        if framed {
+            let (edge, fill) = self.kiai_glow();
+            c.round_rect(
+                [left, lane_top()],
+                [w, lane_h()],
+                10.0,
+                rgba(GOLD, fill),
+                rgba(GOLD, edge),
+                2.0,
+            );
+        }
         if kick > 0.0 {
             let k = 1.0 - kick / self.kiai.max(0.01);
             let col = if self.beat_no.rem_euclid(2) == 0 {
@@ -859,7 +881,7 @@ impl Menu {
             );
         }
         let opening = 1.0 - (self.clock - self.kiai_at) / OPENING_MS;
-        if opening > 0.0 {
+        if opening > 0.0 && framed {
             c.round_rect(
                 [left, lane_top()],
                 [w, lane_h()],
@@ -1895,6 +1917,12 @@ mod tests {
 
     /// A frame of the menu on a 16:9 screen, `ms` after the last.
     fn frame(m: &mut Menu, ms: f32) -> Canvas {
+        frame_with(m, ms, false, false)
+    }
+
+    /// The same, the music in a kiai (`kiai`) or not, and the camera on its way to or from song
+    /// select (`shifting`) or not.
+    fn frame_with(m: &mut Menu, ms: f32, kiai: bool, shifting: bool) -> Canvas {
         let mut c = Canvas {
             width: 853.3,
             dt_ms: ms,
@@ -1902,7 +1930,7 @@ mod tests {
         };
         let f = Frame {
             beat: None,
-            kiai: false,
+            kiai,
             ghosts: None,
             lane_dim: 0.0,
             song: None,
@@ -1910,11 +1938,50 @@ mod tests {
             paused: false,
             session: (0.0, 0.0),
             glitch: m.glitch,
-            shifting: false,
+            shifting,
             away: None,
         };
         m.draw(&mut c, &f, &mut crate::eggs::MenuEggs::new(1));
         c
+    }
+
+    #[test]
+    fn while_the_camera_carries_the_lane_off_no_kiai_frame_cuts_across_it() {
+        // A gold box the panel's height and about the screen's width: the kiai's frame, or the
+        // opening's flash over it.
+        let gold_box = |c: &Canvas| {
+            c.shapes.iter().any(|s| {
+                let [r, g, b, _] = s.border;
+                (s.half[1] - lane_h() / 2.0).abs() < 1e-3
+                    && s.half[0] > 300.0
+                    && r > 0.0
+                    && g / r > 0.7
+                    && b / r < 0.5
+            })
+        };
+        // Without animations the menu doesn't join in a kiai at all: this thread draws with them.
+        crate::render::set_frame_theme(Some(crate::render::Theme {
+            animations: true,
+            ..crate::render::Theme::default()
+        }));
+        let mut m = Menu::new();
+        m.kiai = 1.0;
+        assert!(
+            gold_box(&frame_with(&mut m, 16.0, true, false)),
+            "the menu's own panel lit"
+        );
+        // The lane runs on past the screen as the camera moves: a frame the screen's width would
+        // end in the middle of it once the camera has gone on a little. The kiai has only just
+        // opened, too: no flash over where the panel was either.
+        m.kiai_at = m.clock;
+        let c = frame_with(&mut m, 16.0, true, true);
+        assert!(!gold_box(&c), "no frame, no flash over where the panel was");
+        let (edge, fill) = m.kiai_glow();
+        assert!(edge > 0.4 && fill > 0.03, "the lane takes the gold instead");
+        m.kiai = 0.0;
+        m.beat_at = f32::MIN;
+        assert_eq!(m.kiai_glow(), (0.0, 0.0));
+        crate::render::set_frame_theme(None);
     }
 
     /// Where each note's hit area is.

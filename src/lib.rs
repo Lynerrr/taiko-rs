@@ -424,7 +424,7 @@ struct State {
     menu_shift: Option<menu_shift::Shift>,
     /// Song select's routes behind it: where they drift to (carried on from the menu's, and back
     /// to it: `menu::Menu::routes_at`), and, leaving for the menu, how far they've cleared off.
-    song_routes: (f32, usize),
+    song_routes: menu_notes::Drift,
     song_routes_drain: Option<(f64, f32)>,
     /// Where song select's Play ▶ is (as drawn, before the camera moves it): the hit note lands
     /// there.
@@ -2573,9 +2573,10 @@ impl State {
             m.resume(self.song_routes);
             self.menu_shift = Some(menu_shift::Shift::back(from.as_ref()));
             // Song select's own routes clear off from where the song is now.
+            let playing = self.preview.playing_time();
             self.song_routes_drain = self
-                .preview
-                .map_time(self.menu_notes.entry())
+                .menu_notes
+                .time(playing, Instant::now())
                 .map(|t| (t, 0.0));
         }
         self.main_menu = Some(m);
@@ -12679,7 +12680,8 @@ impl State {
             self.stars.poll();
             self.stars.set_mods(self.cfg.mods, self.cfg.scroll_speed);
             let play_rate = self.play_speed().0;
-            if self.cfg.menu_notes && self.on_menu() {
+            // Song select keeps the song's notes behind it too, whichever song it's on.
+            if self.cfg.menu_notes && self.scene.is_select() {
                 let playing = self.preview_target();
                 self.menu_notes
                     .update(playing, &self.library, &mut self.stars, play_rate);

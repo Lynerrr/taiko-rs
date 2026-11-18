@@ -590,6 +590,29 @@ thread_local! {
     static LIGHTS: RefCell<HashMap<&'static str, f32>> = RefCell::new(HashMap::new());
 }
 
+/// A strip in the menu lane's look over `[x, y, w, h]`: the panel's fill and `lane_edges`.
+/// Running off the screen's right edge, it reads as a lane going on.
+pub fn lane_strip(c: &mut Canvas, rect: [f32; 4], closed: bool) {
+    let [x, y, w, h] = rect;
+    c.rect(x, y, w, h, rgba(PANEL, 0.95));
+    lane_edges(c, rect, closed);
+}
+
+/// The lines of a lane's strip, for over what's drawn in it: an edge along its top and bottom
+/// with a faint second line just inside each, its left end closed, and its right end too when
+/// it stops short of the screen's edge (`closed`).
+pub fn lane_edges(c: &mut Canvas, [x, y, w, h]: [f32; 4], closed: bool) {
+    let (edge, faint) = (rgba(PANEL_EDGE, 1.0), rgba(PANEL_EDGE, 0.25));
+    c.rect(x, y, w, 1.5, edge);
+    c.rect(x, y + h - 1.5, w, 1.5, edge);
+    c.rect(x, y + 4.0, w, 1.0, faint);
+    c.rect(x, y + h - 5.0, w, 1.0, faint);
+    c.rect(x, y, 1.5, h, edge);
+    if closed {
+        c.rect(x + w - 1.5, y, 1.5, h, edge);
+    }
+}
+
 /// The size of a lane-end button's ▶ at `[x, y, h]`, and its middle.
 pub fn lane_end_icon([x, y, h]: [f32; 3]) -> ([f32; 2], f32) {
     let size = (h * 0.42).clamp(8.0, 11.0);

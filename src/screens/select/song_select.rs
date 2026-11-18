@@ -257,8 +257,19 @@ impl Screen for SongSelect {
         if shift.is_none() {
             state.menu_shift = None;
         }
-        // Song select's routes drift on wherever they're drawn; leaving, they clear off.
-        state.song_routes.0 += dt;
+        // Song select's routes drift on wherever they're drawn, and swell with a kiai as the
+        // menu's do; leaving, they clear off.
+        state.song_routes.clock += dt;
+        if !state.on_menu() {
+            let kiai = state.cfg.kiai_effects && !state.music_paused && state.preview.kiai();
+            let ms = if kiai { 90.0 } else { 260.0 };
+            render::approach(
+                &mut state.song_routes.kiai,
+                f32::from(u8::from(kiai)),
+                dt,
+                ms,
+            );
+        }
         if let Some((_, e)) = &mut state.song_routes_drain {
             *e += dt / menu_notes::DRAIN_MS;
             if *e >= 1.0 {
@@ -269,11 +280,18 @@ impl Screen for SongSelect {
             Some((t, into, flying)) => draw_shift(state, canvas, frame, t, into, flying),
             None if frame.on_menu => {
                 let draining = state.song_routes_drain.is_some();
-                draw_crowd(state, canvas, false, if draining { 1.0 } else { 0.0 }, 0.0);
+                draw_crowd(
+                    state,
+                    canvas,
+                    frame.now,
+                    false,
+                    if draining { 1.0 } else { 0.0 },
+                    0.0,
+                );
                 draw_menu(state, canvas, frame, Layer::Whole);
             }
             None => {
-                draw_crowd(state, canvas, true, 1.0, 1.0);
+                draw_crowd(state, canvas, frame.now, true, 1.0, 1.0);
                 draw_songs(state, canvas, frame, None, false);
             }
         }
@@ -340,9 +358,10 @@ fn draw_menu(state: &mut State, canvas: &mut Canvas, frame: &Frame, layer: Layer
     } else if let Some(m) = menu {
         let kiai = state.cfg.kiai_effects && !paused && state.preview.kiai();
         let shows = state.cfg.menu_notes && render::animations();
+        let playing = state.preview.playing_time();
         let ghosts = state
-            .preview
-            .map_time(state.menu_notes.entry())
+            .menu_notes
+            .time(playing, frame.now)
             .filter(|_| shows)
             .and_then(|t| state.menu_notes.view(t));
         let frame = menu::Frame {
@@ -378,6 +397,11 @@ fn draw_menu(state: &mut State, canvas: &mut Canvas, frame: &Frame, layer: Layer
         canvas.transform_since(start, [0.0, 0.0], 1.0, dx, 0.0);
     }
 }
+
+/// The lane of actions under song select's preview in the main menu's look (all but Legacy):
+/// its height, and how much of the screen's width its Play end takes.
+const ACTIONS_H: f32 = 50.0;
+const PLAY_SHARE: f32 = 0.16;
 
 /// Song select itself. `shift`: the camera's on its way from or to the menu; `play_away`: the
 /// Play ▶ is still flying to its button.
@@ -502,10 +526,19 @@ fn draw_songs(
         // the button slides to.
         let t = state.mob.slide_board(canvas.dt_ms);
         let step = pw + 24.0;
-        // The page buttons sit under both pages, in what's left below the preview.
+        // The main menu's look (all but Legacy): no panel under the details, and the preview's
+        // lane runs on off the screen's right edge.
+        let bare = !state.select.legacy;
+        // Under both pages: Legacy's one button, or the lane the menu's look puts the actions on.
         const PAGE_BUTTON_H: f32 = 22.0;
-        let panel_h = panel_end - panel_top - PAGE_BUTTON_H - 8.0;
-        let clip = [x - 2.0, panel_top - 2.0, pw + 4.0, panel_h + 4.0];
+        let actions_h = if bare { ACTIONS_H } else { PAGE_BUTTON_H };
+        let panel_h = panel_end - panel_top - actions_h - 8.0;
+        let clip_w = if bare {
+            canvas.width - x + 4.0
+        } else {
+            pw + 4.0
+        };
+        let clip = [x - 2.0, panel_top - 2.0, clip_w, panel_h + 4.0];
         if t < 1.0 {
             let start = canvas.shapes.len();
             // The way to the leaderboard is where the way back is on the board (its
@@ -518,6 +551,7 @@ fn draw_songs(
                 style::icon_button_width(label, None, 7.0)
             };
             state.preview.title_room = bw + 10.0;
+            state.preview.bare = bare;
             if let Some(clip) = state.preview.draw_panel(
                 canvas,
                 &state.library,
@@ -534,6 +568,7 @@ fn draw_songs(
                 state.frame_clip = Some(clip);
             }
             state.preview.title_room = 0.0;
+            state.preview.bare = false;
             // An EPIC map: the music's spectrum round its pill, and on landing on it a
             // glint across the panel and sparks out of the pill.
             if let Some([ex, ey]) = state.preview.epic_at {
@@ -582,7 +617,9 @@ fn draw_songs(
         let (x, pw) = (page_x + 10.0, pw - 28.0);
         if let Some(i) = state.select.selected().filter(|_| t > 0.0) {
             let top = panel_top + 10.0;
-            let room = panel_end - 10.0 - top - BOARD_HEAD;
+            // Bare, the lane of actions is under the board: its rows stop above it.
+            let bottom = if bare { panel_top + panel_h } else { panel_end };
+            let room = bottom - 10.0 - top - BOARD_HEAD;
             let fits = (room / BOARD_ROW).floor().max(0.0) as usize;
             if fits > 0 {
                 let hash = state.library[i].hash();
@@ -652,16 +689,19 @@ fn draw_songs(
             tr!("Play", "プレイ", "Играть")
         };
         let mods = &state.select.mods_label;
-        let (by, bh) = (panel_end - PAGE_BUTTON_H, PAGE_BUTTON_H);
-        if state.select.legacy {
+        let (by, bh) = (panel_end - actions_h, actions_h);
+        if !bare {
             // The Legacy layout keeps its one button.
             let label = Canvas::fit(8.0, panel_w - 12.0, play);
             let hit = hit::Hit::Key(KeyCode::Enter);
             canvas.button(panel_x, by, panel_w, bh, &label, 8.0, hit, true);
         } else {
-            // The main menu's look: Mods and Random as bare icons, Play as the end of
-            // the lane they sit on, lit and running off the screen.
-            let play_x = panel_x + panel_w - (panel_w * 0.32).max(96.0);
+            // The main menu's look: a lane of its own from beside the list off the screen's
+            // right edge, Mods and Random bare icons on it, and Play its end, filled with the
+            // accent and running off the screen.
+            let w = canvas.width;
+            style::lane_strip(canvas, [panel_x, by, w - panel_x + 2.0, bh], false);
+            let play_x = w - (w * PLAY_SHARE).clamp(120.0, 200.0);
             let mid = by + bh / 2.0;
             let mods_word = tr!("Mods", "Mod", "Моды");
             // The mods that are on, two letters each, after the word.
@@ -673,7 +713,7 @@ fn draw_songs(
             } else {
                 format!("{mods_word} {}", on.join(" "))
             };
-            let mut bx = panel_x + 6.0;
+            let mut bx = panel_x + 16.0;
             let room = play_x - bx - style::icon_button_width("", None, 8.0) - 6.0;
             let mods_label = Canvas::fit(8.0, room, &mods_label);
             bx += style::icon_button(
@@ -687,12 +727,12 @@ fn draw_songs(
                 hit::Hit::ModsButton,
             );
             let random = tr!("Random", "ランダム", "Случайная");
-            if bx + 16.0 + style::icon_button_width(random, None, 8.0) < play_x {
+            if bx + 18.0 + style::icon_button_width(random, None, 8.0) < play_x {
                 // The menu's small mark between two notes.
-                canvas.rect(bx + 3.0, mid - 2.0, 4.0, 4.0, render::rgba(0x6a6a88, 0.8));
+                canvas.rect(bx + 4.0, mid - 2.0, 4.0, 4.0, render::rgba(0x6a6a88, 0.8));
                 style::icon_button(
                     canvas,
-                    [bx + 16.0, mid],
+                    [bx + 18.0, mid],
                     &style::DICE,
                     random,
                     None,
@@ -702,7 +742,7 @@ fn draw_songs(
                 );
             }
             let hit = hit::Hit::Key(KeyCode::Enter);
-            let bar = [play_x, by - 2.0, bh + 4.0];
+            let bar = [play_x, by, bh];
             state.play_icon_at = Some(style::lane_end_icon(bar));
             style::lane_end_button(canvas, "select-play", bar, play, hit, !play_away);
         }
@@ -791,26 +831,49 @@ fn draw_songs(
     }
 }
 
-/// The routes behind song select past the menu's own (and those too, `base`): `shown` of the way
-/// in, the camera `cam` of the way to song select, clearing off if it's leaving.
-fn draw_crowd(state: &mut State, canvas: &mut Canvas, base: bool, shown: f32, cam: f32) {
+/// The routes behind song select past the menu's own (and those too, `base`) in the frame at
+/// `now`: `shown` of the way in, the camera `cam` of the way to song select, clearing off if it's
+/// leaving.
+fn draw_crowd(
+    state: &mut State,
+    canvas: &mut Canvas,
+    now: Instant,
+    base: bool,
+    shown: f32,
+    cam: f32,
+) {
     let shows = state.cfg.menu_notes && render::animations();
+    let playing = state.preview.playing_time();
     let Some(view) = state
-        .preview
-        .map_time(state.menu_notes.entry())
+        .menu_notes
+        .time(playing, now)
         .filter(|_| shows)
         .and_then(|t| state.menu_notes.view(t))
     else {
         return;
     };
-    let (clock, universe) = state.song_routes;
+    let menu_notes::Drift {
+        clock,
+        universe,
+        kiai,
+    } = state.song_routes;
+    // In a kiai each beat kicks them, as on the menu.
+    let kick = state
+        .preview
+        .beat()
+        .filter(|_| kiai > 0.0)
+        .map_or(0.0, |(into, len)| {
+            (1.0 - (into.rem_euclid(len) as f32) / menu::BEAT_MS).clamp(0.0, 1.0) * kiai
+        });
     if base {
         let mut gold = menu_notes::Gold::default();
-        menu_notes::draw(canvas, &view, clock, 0.0, 0.0, universe, &mut gold);
+        menu_notes::draw(canvas, &view, clock, kiai, kick, universe, &mut gold);
     }
     let crowd = menu_notes::Crowd {
         shown,
         cam,
+        kiai,
+        kick,
         drain: state.song_routes_drain,
     };
     menu_notes::draw_more(canvas, &view, clock, universe, crowd);
@@ -832,12 +895,22 @@ fn draw_shift(
     let ph = menu_shift::phases(t);
     draw_menu(state, canvas, frame, Layer::Routes);
     let shown = if into { (t * 2.0).min(1.0) } else { 1.0 };
-    draw_crowd(state, canvas, false, shown, ph.cam);
+    draw_crowd(state, canvas, frame.now, false, shown, ph.cam);
     if ph.landed < 1.0 {
         let lw = Select::list_width(w, state.cfg.song_list_share);
         let top = state.select.frame_span()[0];
         let row = [20.0, 14.0, lw + 8.0, top - 14.0];
-        menu_shift::draw_lane(canvas, &menu_shift::lane(t, w, row), 1.0);
+        // A kiai on the menu stays on its lane as the camera carries it off, going out as the
+        // lane folds into the search row.
+        let (edge, fill) = state
+            .menu_shift
+            .as_ref()
+            .and_then(|s| s.menu.as_deref())
+            .or(state.main_menu.as_ref())
+            .map_or((0.0, 0.0), menu::Menu::kiai_glow);
+        let left = 1.0 - ph.fold;
+        let kiai = (edge * left, fill * left);
+        menu_shift::draw_lane(canvas, &menu_shift::lane(t, w, row), 1.0, kiai);
     }
     let in_air = flying.filter(|_| ph.flight > 0.0 && ph.flight < 1.0);
     let songs_hits = canvas.hits.len();
