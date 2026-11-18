@@ -55,6 +55,8 @@ pub enum Hit {
     /// A screenshot in the chat (`shots::shot_in`), and the button that sends one.
     ChatShot(u128),
     SendShot,
+    /// A run of medal lines in the chat: opens or closes it (`Social::toggle_medal_run`).
+    ChatMedals(u64),
     /// Song select's heart on the song it's showing.
     SelectLike,
     /// The song preview's autoplay box, seek graph and play button. It only marks the preview as
