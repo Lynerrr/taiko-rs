@@ -1422,8 +1422,10 @@ fn apply(
             });
             match parsed {
                 // A bar below 0 runs time back, as in OpenTaiko (a gimmick puts it with a BPM
-                // below 0, which runs it forward again).
-                Some((a, b)) if a != 0.0 && (a / b).is_finite() => cur.measure = a / b,
+                // below 0, which runs it forward again). A bar of 0 (`0/1`) lasts no time: its
+                // notes stand together, where the next bar starts (TaikoManyGimmicks charts
+                // stack notes so, hundreds of times).
+                Some((a, b)) if (a / b).is_finite() => cur.measure = a / b,
                 _ => warnings.add(format!("#MEASURE {arg}: not a time signature, ignored")),
             }
         }

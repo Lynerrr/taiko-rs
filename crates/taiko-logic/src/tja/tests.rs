@@ -1221,11 +1221,11 @@ fn a_negative_bpm_or_bar_alone_runs_time_back() {
 }
 
 #[test]
-fn a_zero_bpm_or_bar_is_still_ignored() {
+fn a_zero_bpm_or_a_bar_over_zero_is_still_ignored() {
     for (cmd, warning) in [
         ("#BPMCHANGE 0", "#BPMCHANGE 0"),
-        ("#MEASURE 0/4", "#MEASURE 0/4"),
         ("#MEASURE 4/0", "#MEASURE 4/0"),
+        ("#MEASURE 0/0", "#MEASURE 0/0"),
     ] {
         let song = parse(&chart(120.0, &format!("1,\n{cmd}\n1,"))).unwrap();
         assert!(
@@ -1329,4 +1329,26 @@ fn a_chart_names_its_pictures() {
     assert!(none.images.is_empty() && background(&none).is_none());
     // A picture isn't the chart: its board is the same.
     assert_eq!(both.courses[0].hash, none.courses[0].hash);
+}
+
+#[test]
+fn a_bar_of_zero_lasts_no_time() {
+    // As OpenTaiko times it: a 1/4 bar (500 ms at 120), then a 0/1 bar whose notes all stand at
+    // its start, then a 4/4 bar starting there too.
+    let song = parse(&chart(
+        120.0,
+        "#MEASURE 1/4\n1,\n#MEASURE 0/1\n12,\n#MEASURE 4/4\n1,\n1,",
+    ))
+    .unwrap();
+    assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+    close(
+        &times(&song.courses[0]),
+        &[0.0, 500.0, 500.0, 500.0, 2500.0],
+    );
+    // An empty one too.
+    let c = one(&chart(120.0, "1,\n#MEASURE 0/4\n,\n#MEASURE 4/4\n1,"));
+    close(&times(&c), &[0.0, 2000.0]);
+    BoardChart::of(c.kind, &c.map)
+        .beatmap()
+        .expect("a board chart it plays");
 }
