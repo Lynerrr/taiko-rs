@@ -954,3 +954,29 @@ fn a_branching_chart_is_listed_by_its_master_branch() {
     let b = mapinfo_of(&tja_maps::course_path(&plain, oni));
     assert_eq!(format!("{a:?}"), format!("{b:?}"));
 }
+
+/// A negative #BPMCHANGE (with a negative #MEASURE, so time runs on) sends its notes in from the
+/// left, as fast as from the right at that BPM, and they meet the drum on time; it was ignored,
+/// the notes coming from the right at the BPM before.
+#[test]
+fn a_negative_bpm_brings_notes_in_from_the_left() {
+    let plain = "TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0,\n1,\n#END\n";
+    let turned = plain.replace("0,\n1,", "0,\n#BPMCHANGE -120\n#MEASURE -4/4\n1,");
+    let at = |text: &str, t: f64| {
+        let (dons, _) = drawn_at(text, t);
+        assert_eq!(dons.len(), 1, "{dons:?}");
+        dons[0]
+    };
+    let hx = taiko_logic::sim::HIT_X;
+    let (rx, ry) = at(plain, 1700.0);
+    let (lx, ly) = at(&turned, 1700.0);
+    assert!(rx > hx + 50.0, "the plain one from the right: {rx}");
+    assert!(
+        (hx - lx - (rx - hx)).abs() < 0.1 && (ly - ry).abs() < 0.1,
+        "as far left of the drum as the plain one is right of it: {lx}, {rx}"
+    );
+    assert!(
+        (at(&turned, 2000.0).0 - hx).abs() < 0.05,
+        "on the drum at its hit"
+    );
+}
