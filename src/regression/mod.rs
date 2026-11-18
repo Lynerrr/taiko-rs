@@ -24,6 +24,7 @@ mod formats;
 mod gameplay;
 mod glyphs;
 mod map_delete;
+mod music_player;
 mod network;
 mod phone;
 mod pointer;

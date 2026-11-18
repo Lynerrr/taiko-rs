@@ -4,6 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use crate::config::RATE_RANGE;
 use crate::game::DON;
 use crate::genres::GENRES;
 use crate::hit::{Canvas, Hit};
@@ -86,7 +87,6 @@ const TALL_DISC_R: f32 = 66.0;
 const TALL_DISC_Y: f32 = 140.0;
 /// Rows the wheel moves.
 const WHEEL_ROWS: i32 = 3;
-const SEMITONE_RANGE: i32 = 12;
 const OUTLINE: u32 = 0x0f0f16;
 
 /// A button of the player, also in the main menu's "now playing".
@@ -124,42 +124,11 @@ fn genre_name(i: usize) -> &'static str {
     }
 }
 
-/// What a speed mod does to the music.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Speed {
-    DoubleTime,
-    Nightcore,
-    HalfTime,
-    Daycore,
-}
+/// Daycore: slower, the pitch going down with the speed.
+const DAYCORE: (f64, bool) = (0.75, false);
 
-impl Speed {
-    pub const ALL: [Speed; 4] = [
-        Speed::DoubleTime,
-        Speed::Nightcore,
-        Speed::HalfTime,
-        Speed::Daycore,
-    ];
-
-    fn name(self) -> &'static str {
-        match self {
-            Speed::DoubleTime => "DT",
-            Speed::Nightcore => "NC",
-            Speed::HalfTime => "HT",
-            Speed::Daycore => "DC",
-        }
-    }
-
-    /// The speed it plays at, and whether it keeps the pitch.
-    fn rate(self) -> (f64, bool) {
-        match self {
-            Speed::DoubleTime => (1.5, true),
-            Speed::Nightcore => (1.5, false),
-            Speed::HalfTime => (0.75, true),
-            Speed::Daycore => (0.75, false),
-        }
-    }
-}
+/// How far `[` `]` move the speed, as in song select (Shift: five times as far).
+const RATE_STEP: f64 = 0.05;
 
 /// What the pointer is dragging.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -441,14 +410,14 @@ pub struct Player {
     pub timeline: (f32, f32, f64),
     /// The volume's left edge and width as last drawn.
     pub volume_bar: (f32, f32),
-    /// The speed mod on, if any, and how many semitones the pitch is moved.
-    pub speed: Option<Speed>,
-    pub semitones: i32,
+    /// Daycore is on, over the speed picked by hand.
+    pub daycore: bool,
     /// The folders are showing, instead of the list.
     pub folders_open: bool,
     /// Upright: the list is up, over the player.
     pub list_open: bool,
-    /// The speed picked by hand and whether it keeps the pitch, with no speed mod on.
+    /// The speed picked by hand and whether it keeps the pitch, with Daycore off. The player's
+    /// own: the game's speed in the settings stays as it is.
     custom_rate: (f64, bool),
     /// The first row of the list on screen, and the track that was last scrolled to.
     scroll: usize,
@@ -501,8 +470,7 @@ impl Player {
             searching: false,
             timeline: (0.0, 1.0, 0.0),
             volume_bar: (0.0, 1.0),
-            speed: None,
-            semitones: 0,
+            daycore: false,
             folders_open: false,
             list_open: false,
             custom_rate: (1.0, true),
@@ -515,27 +483,44 @@ impl Player {
 
     /// The speed the music plays at, and whether that keeps its pitch.
     pub fn rate(&self) -> (f64, bool) {
-        self.speed.map_or(self.custom_rate, Speed::rate)
+        if self.daycore {
+            DAYCORE
+        } else {
+            self.custom_rate
+        }
     }
 
-    /// The speed picked by hand: the speed mods give way to it.
+    /// The speed picked by hand: Daycore gives way to it.
     pub fn set_custom_rate(&mut self, rate: f64, keep_pitch: bool) {
-        self.speed = None;
+        self.daycore = false;
+        let rate = ((rate * 100.0).round() / 100.0).clamp(RATE_RANGE.0, RATE_RANGE.1);
         self.custom_rate = (rate, keep_pitch);
     }
 
-    /// How far `[` `]` move the pitch.
-    pub fn pitch(&self) -> f64 {
-        2f64.powf(self.semitones as f64 / 12.0)
+    /// `[` `]`: `steps` of 0.05x from the speed playing, `far` (Shift) five times as many.
+    pub fn step_rate(&mut self, steps: i32, far: bool) {
+        let by = steps as f64 * RATE_STEP * if far { 5.0 } else { 1.0 };
+        self.set_custom_rate(self.rate().0 + by, self.custom_rate.1);
     }
 
-    pub fn move_pitch(&mut self, by: i32) {
-        self.semitones = (self.semitones + by).clamp(-SEMITONE_RANGE, SEMITONE_RANGE);
+    /// Keeping the pitch at the speed playing, or not.
+    pub fn toggle_keep_pitch(&mut self) {
+        let (rate, keep) = self.rate();
+        self.set_custom_rate(rate, !keep);
     }
 
-    /// One speed mod at a time; the one on again turns it off.
-    pub fn toggle_speed(&mut self, speed: Speed) {
-        self.speed = (self.speed != Some(speed)).then_some(speed);
+    pub fn toggle_daycore(&mut self) {
+        self.daycore = !self.daycore;
+    }
+
+    /// The speed back to 1x.
+    pub fn reset_rate(&mut self) {
+        self.set_custom_rate(1.0, self.custom_rate.1);
+    }
+
+    /// The speed isn't 1x.
+    fn rate_changed(&self) -> bool {
+        (self.rate().0 - 1.0).abs() > 1e-6
     }
 
     pub fn scroll_by(&mut self, rows: i32) {
@@ -752,43 +737,17 @@ impl Player {
             x += bw + gap;
         }
 
-        // The speed mods, the pitch and the heart.
+        // The heart, Daycore and the speed, which opens the speed panel.
         let (y, h) = (404.0, 28.0);
         let heart_w = 34.0;
         button(c, [0.0, y, heart_w, h], Control::Favourite, f.paused, loved);
         let mut x = heart_w + 5.0;
-        let speed_w = 46.0;
-        let chip = (w - x - speed_w - 5.0 * 4.0) / 4.0;
-        for (i, speed) in Speed::ALL.into_iter().enumerate() {
-            let on = self.speed == Some(speed);
-            let fill = if on {
-                crate::render::accent()
-            } else {
-                0x23232f
-            };
-            let edge = if on { 0xffffff } else { 0x3a3a4e };
-            c.round_rect(
-                [x, y],
-                [chip, h],
-                4.0,
-                rgba(fill, 1.0),
-                rgba(edge, 1.0),
-                1.0,
-            );
-            let ty = y + (h - TALL_SMALL) / 2.0;
-            c.text_centered(
-                x + chip / 2.0,
-                ty,
-                TALL_SMALL,
-                rgba(0xffffff, 1.0),
-                speed.name(),
-            );
-            c.hit(x, y, chip, h, Hit::PlayerSpeed(i));
-            x += chip + 5.0;
-        }
-        let label = format!("{:.2}x", self.rate().0);
-        let changed = (self.rate().0 - 1.0).abs() > 1e-6 || self.semitones != 0;
-        c.button(x, y, speed_w, h, &label, TALL_SMALL, Hit::RateOpen, changed);
+        let chip = 46.0;
+        self.daycore_chip(c, [x, y, chip, h], TALL_SMALL);
+        x += chip + 5.0;
+        let label = self.rate_label();
+        let changed = self.rate_changed();
+        c.button(x, y, w - x, h, &label, TALL_SMALL, Hit::RateOpen, changed);
 
         // The volume, and the way into the map.
         let (y, h) = (440.0, 34.0);
@@ -1181,34 +1140,66 @@ impl Player {
         }
     }
 
-    /// The bottom row: going to the map, the speed mods, the pitch, the volume.
+    /// Daycore's chip, lit while it's on.
+    fn daycore_chip(&self, c: &mut Canvas, [x, y, w, h]: [f32; 4], size: f32) {
+        let on = self.daycore;
+        let fill = if on {
+            crate::render::accent()
+        } else if c.hovered(x, y, w, h) {
+            0x34344a
+        } else {
+            0x23232f
+        };
+        c.round_rect(
+            [x, y],
+            [w, h],
+            4.0,
+            rgba(fill, 1.0),
+            rgba(if on { 0xffffff } else { 0x3a3a4e }, 1.0),
+            1.0,
+        );
+        c.text_centered(
+            x + w / 2.0,
+            y + (h - size) / 2.0,
+            size,
+            rgba(0xffffff, 1.0),
+            "DC",
+        );
+        c.hit(x, y, w, h, Hit::PlayerDaycore);
+    }
+
+    fn rate_label(&self) -> String {
+        format!("{:.2}x", self.rate().0)
+    }
+
+    /// The bottom row: going to the map, Daycore, the speed, keeping the pitch, the volume.
     fn draw_sound(&mut self, c: &mut Canvas, cx: f32, y: f32, volume: f32) {
+        const GAP: f32 = 6.0;
         let phone = crate::mobile::active();
         let h = crate::mobile::pick(18.0, 36.0);
-        let pitch = if self.semitones == 0 {
-            if phone {
-                tr!("pitch", "ピッチ", "питч").to_string()
-            } else {
-                tr!("pitch [ ]", "ピッチ [ ]", "питч [ ]").to_string()
-            }
+        let speed = if phone {
+            self.rate_label()
         } else {
-            if phone {
-                format!("{:+}", self.semitones)
-            } else {
-                format!("{:+} [ ]", self.semitones)
-            }
+            format!("{} [ ]", self.rate_label())
         };
+        let keep = tr!("keep pitch", "ピッチ維持", "сохранять питч");
         let play = tr!("play map", "譜面をプレイ", "сыграть карту");
         let play_w = Canvas::text_width(7.0, play) + 12.0;
-        let pitch_w = if phone {
+        let speed_w = if phone {
             76.0
         } else {
-            Canvas::text_width(7.0, &pitch) + 10.0
+            Canvas::text_width(7.0, &speed) + 6.0
+        };
+        // On a phone the speed panel keeps the pitch.
+        let keep_w = if phone {
+            0.0
+        } else {
+            Canvas::text_width(7.0, keep) + 6.0 + crate::style::SWITCH[0] + GAP
         };
         let mod_w = crate::mobile::pick(24.0, 40.0);
         let volume_w = crate::mobile::pick(62.0, 80.0);
-        const GAP: f32 = 6.0;
-        let total = play_w + GAP * 2.0 + (mod_w + GAP) * 4.0 + pitch_w + GAP * 2.0 + volume_w;
+        // Keeping the pitch comes with a gap of its own before it.
+        let total = play_w + GAP * 2.0 + mod_w + GAP + speed_w + keep_w + GAP * 2.0 + volume_w;
         let mut x = cx - total / 2.0;
         c.button(
             x,
@@ -1221,59 +1212,33 @@ impl Player {
             true,
         );
         x += play_w + GAP * 2.0;
-        for (i, speed) in Speed::ALL.into_iter().enumerate() {
-            let on = self.speed == Some(speed);
-            let hover = c.hovered(x, y, mod_w, h);
-            let fill = if on {
-                crate::render::accent()
-            } else if hover {
-                0x34344a
-            } else {
-                0x23232f
-            };
-            c.round_rect(
-                [x, y],
-                [mod_w, h],
-                4.0,
-                rgba(fill, 1.0),
-                rgba(if on { 0xffffff } else { 0x3a3a4e }, 1.0),
-                1.0,
-            );
-            c.text_centered(
-                x + mod_w / 2.0,
-                y + (h - 7.0) / 2.0,
-                7.0,
-                rgba(0xffffff, 1.0),
-                speed.name(),
-            );
-            c.hit(x, y, mod_w, h, Hit::PlayerSpeed(i));
-            x += mod_w + GAP;
-        }
-        if !phone {
-            c.text(
-                x + 3.0,
-                y + (h - 7.0) / 2.0,
-                7.0,
-                rgba(
-                    if self.semitones == 0 {
-                        0x9a9ab0
-                    } else {
-                        0xffffff
-                    },
-                    1.0,
-                ),
-                &pitch,
-            );
-        }
+        self.daycore_chip(c, [x, y, mod_w, h], 7.0);
+        x += mod_w + GAP;
         if phone {
-            // Over the label: on a phone it opens the speed panel, with the pitch in it.
-            let label = format!("{:.2}x", self.rate().0);
-            let changed = (self.rate().0 - 1.0).abs() > 1e-6 || self.semitones != 0;
-            c.button(x, y, pitch_w, h, &label, 7.0, Hit::RateOpen, changed);
+            // On a phone it opens the speed panel.
+            let changed = self.rate_changed();
+            c.button(x, y, speed_w, h, &speed, 7.0, Hit::RateOpen, changed);
+            x += speed_w;
         } else {
-            c.hit(x, y, pitch_w, h, Hit::PlayerPitch);
+            let col = if self.rate_changed() {
+                0xffffff
+            } else {
+                0x9a9ab0
+            };
+            c.text(x + 3.0, y + (h - 7.0) / 2.0, 7.0, rgba(col, 1.0), &speed);
+            // A click puts it back to 1x.
+            c.hit(x, y, speed_w, h, Hit::PlayerRate);
+            x += speed_w + GAP;
+            let on = self.rate().1;
+            let col = if on { 0xffffff } else { 0x9a9ab0 };
+            c.text(x + 3.0, y + (h - 7.0) / 2.0, 7.0, rgba(col, 1.0), keep);
+            let [sw, sh] = crate::style::SWITCH;
+            let sx = x + keep_w - GAP - sw;
+            crate::style::switch(c, [sx, y + (h - sh) / 2.0], on);
+            c.hit(x, y, keep_w - GAP, h, Hit::PlayerKeepPitch);
+            x += keep_w - GAP;
         }
-        x += pitch_w + GAP * 2.0;
+        x += GAP * 2.0;
         self.volume_bar = (x, volume_w);
         let step = pixel_size(4.0);
         let blocks = (volume_w / step) as usize;

@@ -47,7 +47,7 @@ pub enum Hit {
     Music(crate::player::Control),
     MusicBar,
     /// The player: its search box, a song (index into the list's tracks), its `+`, a row of the
-    /// queue, the volume, a speed mod (`player::Speed::ALL`) and the pitch (resets it).
+    /// queue, the volume, Daycore, the speed (back to 1x) and keeping the pitch.
     PlayerSearch,
     PlayerRow(usize),
     /// Its heart on a song, the folders button, and a folder (index into `Playlist::folders`).
@@ -61,13 +61,12 @@ pub enum Hit {
     /// the topmost thing there, so whatever is drawn over it takes the click instead.
     Preview,
     /// A phone's speed panel: opens it, closes it, moves the speed by hundredths or sets it, flips
-    /// keeping the pitch, moves the pitch by semitones.
+    /// keeping the pitch.
     RateOpen,
     RateClose,
     RateStep(i32),
     RateSet(i32),
     RateKeepPitch,
-    PitchStep(i32),
     /// The upright player: the list comes up or goes.
     PlayerList,
     /// A phone's song select: slides between the preview and the leaderboard.
@@ -77,8 +76,9 @@ pub enum Hit {
     PlayerQueue(usize),
     PlayerUnqueue(usize),
     PlayerVolume,
-    PlayerSpeed(usize),
-    PlayerPitch,
+    PlayerDaycore,
+    PlayerRate,
+    PlayerKeepPitch,
     /// A row of the song list (index into its visible list): a difficulty, or a song's own row
     /// (pointing at its first difficulty).
     SongRow(usize),

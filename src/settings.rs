@@ -2737,26 +2737,9 @@ impl SettingsUi {
         let shown = value(item);
         match (item.kind(), control(item)) {
             (_, Control::Switch(on)) => {
-                let (sw, sh) = (22.0, 11.0);
+                let [sw, sh] = crate::style::SWITCH;
                 let (sx, sy) = (right - sw, y + (ROW - 4.0 - sh) / 2.0);
-                let fill = if on { accent() } else { 0x3a3a4e };
-                c.round_rect(
-                    [sx, sy],
-                    [sw, sh],
-                    sh / 2.0,
-                    rgba(fill, 1.0),
-                    rgba(fill, 1.0),
-                    0.0,
-                );
-                let knob = if on { sx + sw - sh + 1.5 } else { sx + 1.5 };
-                c.round_rect(
-                    [knob, sy + 1.5],
-                    [sh - 3.0, sh - 3.0],
-                    (sh - 3.0) / 2.0,
-                    rgba(0xffffff, 1.0),
-                    rgba(0xffffff, 1.0),
-                    0.0,
-                );
+                crate::style::switch(c, [sx, sy], on);
                 // The rare switch with more to say than on or off.
                 if shown.chars().count() > 4 {
                     c.text_right(

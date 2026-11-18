@@ -1960,10 +1960,10 @@ impl State {
     }
 
     /// The share of the volume heard with the focus where it is: less while another window has
-    /// it.
+    /// it, unless that's the player playing music to listen to while doing something else.
     fn focus_level(&self) -> f32 {
         // A phone's other apps aren't beside it: the music plays on at its own volume.
-        if self.focused || mobile::active() {
+        if self.focused || mobile::active() || self.player.is_some() {
             1.0
         } else {
             self.cfg.unfocused_volume
@@ -2290,8 +2290,9 @@ impl State {
                 self.music_favourite(now);
             }
             (KeyCode::Tab, _) => p.folders_open = !p.folders_open,
-            (KeyCode::BracketLeft, _) => p.move_pitch(-1),
-            (KeyCode::BracketRight, _) => p.move_pitch(1),
+            // As in song select, but the player's own speed: the game's stays as it is.
+            (KeyCode::BracketLeft, _) => p.step_rate(-1, self.modifiers_shift),
+            (KeyCode::BracketRight, _) => p.step_rate(1, self.modifiers_shift),
             (KeyCode::ArrowUp, _) => p.scroll_by(-1),
             (KeyCode::ArrowDown, _) => p.scroll_by(1),
             (KeyCode::ArrowLeft, _) => self.music_seek_by(-MUSIC_SEEK_MS),
@@ -2318,6 +2319,7 @@ impl State {
                 if self.media.is_none() && !cfg!(test) {
                     self.media = Some(media::Media::start(self.window_handle));
                 }
+                self.apply_volume();
             }
             player::Control::Shuffle => {
                 if let Some(p) = &mut self.player {
@@ -2362,6 +2364,8 @@ impl State {
         if let Some(m) = &self.media {
             m.stopped();
         }
+        // Out of the player, the music is quieter again without the focus.
+        self.apply_volume();
     }
 
     /// Plays this track of the player's list.
@@ -12549,7 +12553,6 @@ impl State {
             self.preview.player = self.player.is_some();
             self.preview.menu = self.on_menu();
             self.preview.from_top &= self.preview.menu;
-            self.preview.pitch = self.player.as_ref().map_or(1.0, |p| p.pitch());
             // The splash has its own sound: the preview music waits for it.
             let in_menu = in_menu && self.splash.is_none();
             self.preview.mods = self.shown_mods();
@@ -14735,14 +14738,19 @@ impl State {
                     p.list.queue.remove(row);
                 }
             }
-            Hit::PlayerSpeed(i) => {
+            Hit::PlayerDaycore => {
                 if let Some(p) = &mut self.player {
-                    p.toggle_speed(player::Speed::ALL[i]);
+                    p.toggle_daycore();
                 }
             }
-            Hit::PlayerPitch => {
+            Hit::PlayerRate => {
                 if let Some(p) = &mut self.player {
-                    p.semitones = 0;
+                    p.reset_rate();
+                }
+            }
+            Hit::PlayerKeepPitch => {
+                if let Some(p) = &mut self.player {
+                    p.toggle_keep_pitch();
                 }
             }
             Hit::Presets => self.open_dropdown(),
@@ -14870,8 +14878,7 @@ impl State {
             | Hit::RateClose
             | Hit::RateStep(_)
             | Hit::RateSet(_)
-            | Hit::RateKeepPitch
-            | Hit::PitchStep(_) => self.mobile_rate(hit),
+            | Hit::RateKeepPitch => self.mobile_rate(hit),
             Hit::PlayerList => {
                 if let Some(p) = &mut self.player {
                     p.list_open = !p.list_open;

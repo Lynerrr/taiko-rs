@@ -56,8 +56,6 @@ struct Song {
     /// Speed it was prepared for (the track plays `rate` map ms per ms) and how.
     rate: f64,
     keep_pitch: bool,
-    /// How far its pitch is moved on top of that (the player's `[` `]`).
-    pitch: f64,
 }
 
 impl Song {
@@ -122,7 +120,6 @@ pub struct Preview {
     map_rx: Job<LoadedMap>,
     /// Speed (and keep-pitch) the loaded preview was prepared for.
     requested_rate: (f64, bool),
-    requested_pitch: f64,
     /// The fullscreen preview is paused: the music holds, and the notes with it.
     pub held: bool,
     /// After a speed change: map time to continue the music from once the new track is ready.
@@ -166,8 +163,6 @@ pub struct Preview {
     pub menu: bool,
     /// The next song came on by itself: it plays from its start, not its preview point.
     pub from_top: bool,
-    /// How far the player moves the music's pitch (1 = not at all).
-    pub pitch: f64,
     /// The last song decoded whole and its length in map ms, which no speed changes: while its
     /// quick part stands in after a new speed, that's still how long it is.
     known_length: Option<(PathBuf, f64)>,
@@ -360,7 +355,6 @@ impl Preview {
     pub fn cached_track(&self, e: &Entry, rate: f64, keep_pitch: bool) -> Option<Arc<Track>> {
         let same = |s: &&Song| {
             s.full
-                && s.pitch == 1.0
                 && s.path == audio_path(e)
                 && (s.rate - rate).abs() < 1e-6
                 && (s.keep_pitch == keep_pitch || (rate - 1.0).abs() < 1e-6)
@@ -421,9 +415,7 @@ impl Preview {
         };
         // A new speed changes the music and the strain curve: reload as if the selection
         // changed, carrying on from where the music was.
-        if (rate != self.requested_rate || self.pitch != self.requested_pitch)
-            && self.requested.is_some()
-        {
+        if rate != self.requested_rate && self.requested.is_some() {
             if self.audio_active && self.requested == selected {
                 // Where the music is now, in map time (the playing track's own speed).
                 let playing = engine
@@ -458,10 +450,8 @@ impl Preview {
         if self.seen != self.requested && self.changed_at.is_some_and(|t| now - t >= DEBOUNCE) {
             self.requested = self.seen;
             self.requested_rate = rate;
-            self.requested_pitch = self.pitch;
             self.game = None;
             let (speed, keep_pitch) = rate;
-            let shift = self.pitch;
             if let Some(i) = self.seen.filter(|&i| i < library.len()) {
                 let e = &library[i];
                 let path = e.path.clone();
@@ -485,9 +475,10 @@ impl Preview {
                     self.show_background_for(e);
                 }
                 let song = audio_path(e);
-                let loaded = self.audio.as_ref().is_some_and(|s| {
-                    s.path == song && (s.rate, s.keep_pitch) == rate && s.pitch == shift
-                });
+                let loaded = self
+                    .audio
+                    .as_ref()
+                    .is_some_and(|s| s.path == song && (s.rate, s.keep_pitch) == rate);
                 if !loaded && let Some(sr) = engine.map(|a| a.rate) {
                     let (tx, rx) = mpsc::channel();
                     // Quick part first: from where the music was (speed change) or the preview point.
@@ -511,7 +502,7 @@ impl Preview {
                             let clip = audio::decode(&song, sr).ok().map(|t| {
                                 let base = (clip_at / 1000.0 * sr as f64 / speed).round() as i64;
                                 (
-                                    Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift)),
+                                    Arc::new(audio::change_rate(t, sr, speed, keep_pitch)),
                                     base,
                                     false,
                                 )
@@ -528,7 +519,7 @@ impl Preview {
                             if let Ok((part, base)) =
                                 audio::decode_part(&song, sr, Some((part_from, SNIPPET_MS * speed)))
                             {
-                                let part = audio::shifted(part, sr, speed, keep_pitch, shift);
+                                let part = audio::change_rate(part, sr, speed, keep_pitch);
                                 let base = (base as f64 / speed).round() as i64;
                                 if tx
                                     .send((song.clone(), Some((Arc::new(part), base, false))))
@@ -543,27 +534,19 @@ impl Preview {
                         let Some(_alone) = audio::prepare_alone() else {
                             return;
                         };
-                        // A long song plays as it's decoded, unless its pitch is being moved.
-                        if shift == 1.0 {
-                            let constant = crate::mods::Speed::constant(speed);
-                            if let Ok(Some(track)) =
-                                crate::stream::open(&song, sr, constant, keep_pitch)
-                            {
-                                if !wanted_now.load(Ordering::Relaxed) {
-                                    let _ = tx.send((song, Some((track, 0, true))));
-                                }
-                                return;
+                        // A long song plays as it's decoded.
+                        let constant = crate::mods::Speed::constant(speed);
+                        if let Ok(Some(track)) =
+                            crate::stream::open(&song, sr, constant, keep_pitch)
+                        {
+                            if !wanted_now.load(Ordering::Relaxed) {
+                                let _ = tx.send((song, Some((track, 0, true))));
                             }
+                            return;
                         }
-                        let track = audio::decode_shared(&song, sr).ok().map(|t| {
-                            let track = if shift == 1.0 {
-                                audio::with_rate(t, sr, speed, keep_pitch)
-                            } else {
-                                let t = audio::owned(t);
-                                Arc::new(audio::shifted(t, sr, speed, keep_pitch, shift))
-                            };
-                            (track, 0, true)
-                        });
+                        let track = audio::decode_shared(&song, sr)
+                            .ok()
+                            .map(|t| (audio::with_rate(t, sr, speed, keep_pitch), 0, true));
                         if wanted_now.load(Ordering::Relaxed) {
                             return;
                         }
@@ -624,10 +607,7 @@ impl Preview {
             };
             // The full song takes over from the part that's already playing without a gap.
             let playing_part = self.audio.as_ref().is_some_and(|s| {
-                s.path == path
-                    && !s.full
-                    && (s.rate, s.keep_pitch) == (speed, keep_pitch)
-                    && s.pitch == self.requested_pitch
+                s.path == path && !s.full && (s.rate, s.keep_pitch) == (speed, keep_pitch)
             });
             if full && playing_part && self.audio_active && in_menu {
                 engine.swap(track.clone(), base);
@@ -649,7 +629,6 @@ impl Preview {
                 start,
                 rate: speed,
                 keep_pitch,
-                pitch: self.requested_pitch,
             });
         }
 

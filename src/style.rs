@@ -93,6 +93,33 @@ pub fn panel(c: &mut Canvas, x: f32, y: f32, w: f32, h: f32) {
     );
 }
 
+/// An on/off switch's size: the settings'.
+pub const SWITCH: [f32; 2] = [22.0, 11.0];
+
+/// An on/off switch at `[x, y]`, as in the settings: the accent with the knob right when on.
+pub fn switch(c: &mut Canvas, [x, y]: [f32; 2], on: bool) {
+    let [w, h] = SWITCH;
+    let fill = if on { render::accent() } else { PANEL_EDGE };
+    c.round_rect(
+        [x, y],
+        [w, h],
+        h / 2.0,
+        rgba(fill, 1.0),
+        rgba(fill, 1.0),
+        0.0,
+    );
+    let knob = if on { x + w - h + 1.5 } else { x + 1.5 };
+    let white = rgba(0xffffff, 1.0);
+    c.round_rect(
+        [knob, y + 1.5],
+        [h - 3.0, h - 3.0],
+        (h - 3.0) / 2.0,
+        white,
+        white,
+        0.0,
+    );
+}
+
 /// The selector's colour now: the accent, or gold in a kiai.
 pub fn selector_colour() -> u32 {
     if kiai() > 0.5 { GOLD } else { render::accent() }
