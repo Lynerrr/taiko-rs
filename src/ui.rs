@@ -20,10 +20,12 @@ pub enum SortMode {
     Status,
     Played,
     Added,
+    /// The folder a song came from: a TJA pack's folders, else taiko.rs's maps or osu!'s.
+    Folder,
 }
 
 impl SortMode {
-    pub const ALL: [SortMode; 10] = [
+    pub const ALL: [SortMode; 11] = [
         SortMode::Artist,
         SortMode::Title,
         SortMode::Difficulty,
@@ -34,6 +36,7 @@ impl SortMode {
         SortMode::Status,
         SortMode::Played,
         SortMode::Added,
+        SortMode::Folder,
     ];
 
     pub fn name(self) -> &'static str {
@@ -48,6 +51,7 @@ impl SortMode {
             SortMode::Status => "status",
             SortMode::Played => "recently played",
             SortMode::Added => "date added",
+            SortMode::Folder => "folder",
         }
     }
 
@@ -77,6 +81,43 @@ fn star_heading(stars: f64) -> i64 {
         (stars.floor() as i64).min(10)
     }
 }
+
+/// The folder map `e` came from, as the list sorted by folder heads it, with its place among
+/// them (TJA folders first). A TJA chart's is the folder its song's folder is in, below the TJA
+/// folder (`Pack / Genre`), so a pack's songs and genres stay together however deep they are.
+fn source_folder(e: &Entry) -> (u8, String) {
+    if e.is_tja() {
+        let file = crate::tja_maps::split(&e.path).map_or_else(|| e.path.clone(), |(f, _)| f);
+        let song = file.parent().unwrap_or(&file);
+        let group = song.parent().unwrap_or(song);
+        let names: Vec<String> = crate::tja_maps::root_of(&file)
+            .and_then(|root| {
+                group
+                    .strip_prefix(root)
+                    .ok()
+                    .map(std::path::Path::to_path_buf)
+            })
+            .map(|rel| {
+                rel.components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        return match names.is_empty() {
+            true => (0, "TJA".to_string()),
+            false => (0, names.join(" / ")),
+        };
+    }
+    if e.is_own() {
+        (1, "taiko.rs maps".to_string())
+    } else {
+        (2, "osu! Songs".to_string())
+    }
+}
+
+/// What a song is ordered by when sorted by folder: its folder (`source_folder`), then its title
+/// and artist.
+type FolderKey<'a> = ((u8, String), (&'a str, &'a str));
 
 /// A heading of the song list and the songs (`Select::groups` indices) under it.
 struct Section {
@@ -767,7 +808,7 @@ impl Select {
                     .map(|&t| t as f64)
                     .unwrap_or(f64::NAN),
                 SortMode::Added => library[i].modified as f64,
-                SortMode::Artist | SortMode::Title => 0.0,
+                SortMode::Artist | SortMode::Title | SortMode::Folder => 0.0,
             }
         };
         let mut folder_ids: std::collections::HashMap<(&std::path::Path, i64), usize> =
@@ -815,7 +856,14 @@ impl Select {
                 library[i].text().artist.as_str(),
             )
         };
-        if self.sort == SortMode::Title {
+        if self.sort == SortMode::Folder {
+            // By folder, TJA packs first, then by title within each.
+            let mut keys: Vec<Option<FolderKey>> = vec![None; folder_ids.len()];
+            for &(f, i) in &keyed {
+                keys[f].get_or_insert_with(|| (source_folder(&library[i]), title(i)));
+            }
+            keyed.sort_by(|a, b| keys[a.0].cmp(&keys[b.0]).then(a.0.cmp(&b.0)));
+        } else if self.sort == SortMode::Title {
             let titles: Vec<(&str, &str)> = {
                 let mut t = vec![("", ""); folder_ids.len()];
                 for &(f, i) in &keyed {
@@ -843,7 +891,7 @@ impl Select {
         self.row_value = keyed
             .iter()
             .map(|&(f, _)| {
-                if self.sort == SortMode::Title {
+                if matches!(self.sort, SortMode::Title | SortMode::Folder) {
                     f64::NAN
                 } else {
                     set_value[f]
@@ -963,6 +1011,7 @@ impl Select {
         let label = match self.sort {
             SortMode::Artist => initial(&e.meta.artist),
             SortMode::Title => initial(&e.meta.title),
+            SortMode::Folder => return (source_folder(e).1, None),
             // From the song's value the list was ordered by (its best difficulty's status), not from
             // the first difficulty's: a song of mixed statuses would split its heading in two.
             SortMode::Status => {

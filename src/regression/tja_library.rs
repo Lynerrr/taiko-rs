@@ -779,3 +779,83 @@ fn a_tja_course_shows_and_sorts_by_its_level() {
         "no star rating for them: {pills:?}"
     );
 }
+
+/// A TJA chart is found however many folders down it is (a pack, its genres, then the song), from
+/// the cache too, and a song added deep in a pack later shows up once the library is looked
+/// through again.
+#[test]
+fn tja_charts_are_found_at_any_depth() {
+    let f = Folders::new("deep");
+    let (mut s, mut now) = client(&f, config());
+    put(&f.tja, "Pack/Genre/Song", "song.tja", CHART);
+    put(&f.tja, "A/B/C/D/E/F", "deep.tja", CHART);
+    let titled = |s: &State| {
+        let mut files: Vec<PathBuf> = tja_entries(s)
+            .iter()
+            .filter_map(|e| tja_maps::split(&e.path).map(|(file, _)| file))
+            .collect();
+        files.sort();
+        files.dedup();
+        files
+    };
+    refresh(&mut s, &mut now);
+    let both = [
+        f.tja.join("A/B/C/D/E/F/deep.tja"),
+        f.tja.join("Pack/Genre/Song/song.tja"),
+    ];
+    assert_eq!(titled(&s), both, "two courses each, wherever they are");
+    // Again, from the cache.
+    refresh(&mut s, &mut now);
+    assert_eq!(titled(&s), both);
+    put(&f.tja, "Pack/Genre/Later", "later.tja", CHART);
+    refresh(&mut s, &mut now);
+    assert_eq!(
+        titled(&s),
+        [
+            f.tja.join("A/B/C/D/E/F/deep.tja"),
+            f.tja.join("Pack/Genre/Later/later.tja"),
+            f.tja.join("Pack/Genre/Song/song.tja"),
+        ]
+    );
+}
+
+/// Sorted by folder, TJA charts are headed by the folder their song's folder is in (a pack and
+/// its genre), packs first, then osu!'s songs.
+#[test]
+fn sorting_by_folder_heads_tja_charts_by_their_pack() {
+    let f = Folders::new("folders");
+    let (mut s, mut now) = client(&f, config());
+    let chart = |title: &str| CHART.replace("Regression TJA", title);
+    put(&f.tja, "Pack1/Genre A/One", "one.tja", &chart("One"));
+    put(&f.tja, "Pack1/Genre A/Two", "two.tja", &chart("Two"));
+    put(&f.tja, "Pack1/Genre B/Three", "three.tja", &chart("Three"));
+    put(&f.tja, "Pack2/Four", "four.tja", &chart("Four"));
+    put(&f.tja, "Five", "five.tja", &chart("Five"));
+    put(
+        &f.songs,
+        "1 Artist - Osu",
+        "osu.osu",
+        "osu file format v14\n\n[General]\nMode: 1\n\n[Metadata]\nTitle:Osu\nArtist:Artist\nVersion:Oni\n\n[TimingPoints]\n0,500,4,1,0,100,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n",
+    );
+    refresh(&mut s, &mut now);
+    s.select.headings = true;
+    s.select.set_sort(ui::SortMode::Folder, &s.library);
+    assert_eq!(
+        s.select.sections(),
+        [
+            ("Pack1 / Genre A".to_string(), 2),
+            ("Pack1 / Genre B".to_string(), 1),
+            ("Pack2".to_string(), 1),
+            ("TJA".to_string(), 1),
+            ("osu! Songs".to_string(), 1),
+        ]
+    );
+    let titles: Vec<&str> = s
+        .select
+        .songs()
+        .iter()
+        .map(|g| s.library[g[0]].meta.title.as_str())
+        .collect();
+    assert_eq!(titles, ["One", "Two", "Three", "Four", "Five", "Osu"]);
+    assert_eq!(ui::SortMode::parse("folder"), Some(ui::SortMode::Folder));
+}

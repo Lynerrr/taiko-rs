@@ -593,6 +593,36 @@ pub(crate) fn collect_map_files(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) 
     }
 }
 
+/// How many folders down from the TJA folder charts are looked for: deeper than any pack goes,
+/// and a folder linked into itself still ends.
+const TJA_DEPTH: u32 = 12;
+
+/// The folders from `dir` down (`depth` more levels) holding a `.tja` file, `dir` first.
+fn tja_folders(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut below = Vec::new();
+    let mut holds = false;
+    for e in rd.flatten() {
+        let p = e.path();
+        if is_dir(&e) {
+            below.push(p);
+        } else {
+            holds = holds || is_tja_here(&p);
+        }
+    }
+    if holds {
+        out.push(dir.to_path_buf());
+    }
+    if depth > 0 {
+        below.sort();
+        for p in below {
+            tja_folders(&p, depth - 1, out);
+        }
+    }
+}
+
 /// A `.tja` file in the TJA folder, the only place they're read from.
 fn is_tja_here(p: &Path) -> bool {
     crate::tja_maps::is_tja_file(p) && crate::tja_maps::in_folder(p)
@@ -806,8 +836,20 @@ pub(crate) fn scan_cached(
     let (mut cache, cache_state) = load_cache(cache_path);
     let cached_folders = cache.len();
     let keys: Vec<PathBuf> = inputs.iter().map(|i| folder_key(i)).collect();
-    // A folder of what's being scanned: the rest stay cached, but aren't ours to show or drop.
-    let scanned = |dir: &Path| dir.parent().is_some_and(|p| keys.contains(&folder_key(p)));
+    // A folder of what's being scanned: the rest stay cached, but aren't ours to show or drop. In
+    // a TJA folder, one any number of folders down.
+    let tja_keys: Vec<PathBuf> = inputs
+        .iter()
+        .filter(|i| crate::tja_maps::is_root(i))
+        .map(|i| folder_key(i))
+        .collect();
+    let scanned = |dir: &Path| {
+        dir.parent().is_some_and(|p| keys.contains(&folder_key(p)))
+            || dir
+                .ancestors()
+                .skip(1)
+                .any(|p| tja_keys.contains(&folder_key(p)))
+    };
     let loaded_ms = started.elapsed().as_millis();
     let cached: Vec<CachedMap> = cache
         .values()
@@ -843,31 +885,45 @@ pub(crate) fn scan_cached(
                 let Ok(rd) = std::fs::read_dir(input) else {
                     continue;
                 };
+                let tja_root = crate::tja_maps::is_root(input);
                 for e in rd.flatten() {
                     let p = e.path();
                     if is_dir(&e) {
-                        // The folder's own time: the copy Windows lists with the parent lags it.
-                        let modified = std::fs::metadata(&p)
-                            .ok()
-                            .and_then(|m| m.modified().ok())
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map_or(0, |d| d.as_nanos());
-                        let was = cache.remove(&folder_key(&p));
-                        match was {
-                            Some(f) if f.modified == modified && modified != 0 => {
-                                found.fetch_add(f.maps.len(), Ordering::Relaxed);
-                                kept.push(f);
-                            }
-                            was => {
-                                if was.is_some() {
-                                    moved += 1;
-                                } else {
-                                    unseen += 1;
+                        // In the TJA folder charts can be any number of folders down (a pack, its
+                        // genres, then the songs): each folder holding one is a set of its own.
+                        // Elsewhere, a set folder and the folders in it.
+                        let sets: Vec<(PathBuf, u32)> = if tja_root {
+                            let mut sets = Vec::new();
+                            tja_folders(&p, TJA_DEPTH, &mut sets);
+                            sets.into_iter().map(|d| (d, 0)).collect()
+                        } else {
+                            vec![(p, 1)]
+                        };
+                        for (p, depth) in sets {
+                            // The folder's own time: the copy Windows lists with the parent lags it.
+                            let modified = std::fs::metadata(&p)
+                                .ok()
+                                .and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map_or(0, |d| d.as_nanos());
+                            let was = cache.remove(&folder_key(&p));
+                            match was {
+                                Some(f) if f.modified == modified && modified != 0 => {
+                                    found.fetch_add(f.maps.len(), Ordering::Relaxed);
+                                    kept.push(f);
                                 }
-                                let mut found = Vec::new();
-                                collect_map_files(&p, 1, &mut found);
-                                files.extend(found.into_iter().map(|f| (Some(walked.len()), f)));
-                                walked.push((p, modified));
+                                was => {
+                                    if was.is_some() {
+                                        moved += 1;
+                                    } else {
+                                        unseen += 1;
+                                    }
+                                    let mut found = Vec::new();
+                                    collect_map_files(&p, depth, &mut found);
+                                    files
+                                        .extend(found.into_iter().map(|f| (Some(walked.len()), f)));
+                                    walked.push((p, modified));
+                                }
                             }
                         }
                     } else if is_map_file(&p) || is_tja_here(&p) {
