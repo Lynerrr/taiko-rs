@@ -81,6 +81,31 @@ impl Entry {
             .filter(|&id| id > 0)
     }
 
+    /// What song select groups its set by: the folder of an osu! or taiko.rs map (a set to a
+    /// folder), the chart file of a TJA course (a song to a file: a pack often keeps many songs'
+    /// `.tja` files in one folder).
+    pub fn set_key(&self) -> &Path {
+        match self.chart_file() {
+            Some(file) => file,
+            None => self.path.parent().unwrap_or(Path::new("")),
+        }
+    }
+
+    /// The file it's read from: a TJA course's `.tja` (its path names no file), else its path.
+    pub fn file(&self) -> &Path {
+        self.chart_file().unwrap_or(&self.path)
+    }
+
+    /// A TJA course's chart file: its path up to the `#` before the course. Not kept apart, so
+    /// a library of many thousand maps isn't any bigger for it.
+    fn chart_file(&self) -> Option<&Path> {
+        if !self.tja {
+            return None;
+        }
+        let path = self.path.to_str()?;
+        path.rfind('#').map(|at| Path::new(&path[..at]))
+    }
+
     /// Whether it's in taiko.rs's own custom maps folder.
     pub fn is_own(&self) -> bool {
         self.own
@@ -1045,7 +1070,7 @@ fn entries_of(maps: Vec<CachedMap>) -> Vec<Entry> {
             (
                 e.meta.artist.to_lowercase(),
                 e.meta.title.to_lowercase(),
-                e.path.parent().map(|p| p.to_path_buf()),
+                e.set_key().to_path_buf(),
             )
         };
         key(a).cmp(&key(b)).then(a.size.cmp(&b.size))
