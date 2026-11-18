@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{ChartHash, CourseKind, SLIDER_MULTIPLIER};
-use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note, WindowSource};
+use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note, Special, WindowSource};
 use crate::branch::{Branching, Measure};
 
 /// What `BoardChart::hash` hashes first: a new normalization gets a new tag, so old and new
@@ -39,6 +39,10 @@ pub struct BoardChart {
     /// for the rest, whose hash it leaves as it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branches: Option<Branching>,
+    /// OpenTaiko's notes (`Special`), as (note index, `special_id`), in note order. Absent for
+    /// a chart with none, whose hash it leaves as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specials: Option<Vec<(u32, u8)>>,
 }
 
 impl BoardChart {
@@ -75,6 +79,13 @@ impl BoardChart {
                 .collect(),
             first_velocity: map.first_velocity,
             branches: map.branching.as_deref().cloned(),
+            specials: {
+                let s: Vec<(u32, u8)> = (map.notes.iter().enumerate())
+                    .filter(|(_, n)| n.special != Special::None)
+                    .map(|(i, n)| (i as u32, special_id(n.special)))
+                    .collect();
+                (!s.is_empty()).then_some(s)
+            },
         }
     }
 
@@ -150,6 +161,14 @@ impl BoardChart {
                 }
             }
         }
+        if let Some(s) = &self.specials {
+            h.update(b"specials\n");
+            h.update((s.len() as u64).to_le_bytes());
+            for &(i, id) in s {
+                h.update(i.to_le_bytes());
+                h.update([id]);
+            }
+        }
         ChartHash(h.finalize().into())
     }
 
@@ -185,6 +204,21 @@ impl BoardChart {
         if !notes_ok || !bars_ok || !points_ok || !speed(self.first_velocity) {
             return Err("a time or speed out of range".into());
         }
+        if let Some(s) = &self.specials {
+            let mut last = None;
+            for &(i, id) in s {
+                let kind = self.notes.get(i as usize).map(|n| n.2);
+                let fits = match id {
+                    1..=3 => matches!(kind, Some(0 | 1)),
+                    4 => kind == Some(3),
+                    _ => false,
+                };
+                if !fits || last.is_some_and(|l| l >= i) {
+                    return Err("a special note out of place".into());
+                }
+                last = Some(i);
+            }
+        }
         if let Some(b) = &self.branches {
             b.check(self.notes.len())?;
             if b.resets.len() + b.holds.len() > MAX_ITEMS {
@@ -197,13 +231,18 @@ impl BoardChart {
         {
             return Err("out of order".into());
         }
+        let mut special = vec![Special::None; self.notes.len()];
+        for &(i, id) in self.specials.iter().flatten() {
+            special[i as usize] = SPECIALS[usize::from(id)];
+        }
         Ok(Beatmap {
             meta: meta(kind),
             notes: self
                 .notes
                 .iter()
+                .zip(special)
                 .map(
-                    |&(time, end_time, k, big, velocity, tick_spacing, hits)| Note {
+                    |(&(time, end_time, k, big, velocity, tick_spacing, hits), special)| Note {
                         time,
                         end_time,
                         kind: [Kind::Don, Kind::Kat, Kind::Roll, Kind::Swell][usize::from(k)],
@@ -216,6 +255,7 @@ impl BoardChart {
                         fake_length: 0.0,
                         tiny: false,
                         unhittable: false,
+                        special,
                     },
                 )
                 .collect(),
@@ -241,6 +281,27 @@ impl BoardChart {
             fakes: Vec::new(),
             branching: self.branches.clone().map(std::sync::Arc::new),
         })
+    }
+}
+
+/// `Special`s by their number in `BoardChart::specials` (0 is none).
+const SPECIALS: [Special; 5] = [
+    Special::None,
+    Special::Kadon,
+    Special::Adlib,
+    Special::Bomb,
+    Special::Fuse,
+];
+
+/// A special note's number in `BoardChart::specials` and the hash: fixed, whatever the enum's
+/// order.
+fn special_id(s: Special) -> u8 {
+    match s {
+        Special::None => 0,
+        Special::Kadon => 1,
+        Special::Adlib => 2,
+        Special::Bomb => 3,
+        Special::Fuse => 4,
     }
 }
 

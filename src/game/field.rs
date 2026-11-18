@@ -1458,7 +1458,22 @@ impl Play {
             let r = if n.big { BIG_R } else { NOTE_R };
             match n.kind {
                 Kind::Don | Kind::Kat => {
-                    let col = if n.kind == Kind::Don { don } else { kat };
+                    let col = match n.special {
+                        beatmap::Special::Kadon => KADON,
+                        beatmap::Special::Bomb => BOMB,
+                        beatmap::Special::Adlib => ADLIB,
+                        _ if n.kind == Kind::Don => don,
+                        _ => kat,
+                    };
+                    // An ADLib is hidden until it's hit (then it flies up like any hit note).
+                    if n.special == beatmap::Special::Adlib && st.judged().is_none() {
+                        continue;
+                    }
+                    // A bomb hit is gone in a burst round the drum.
+                    if n.special == beatmap::Special::Bomb && st.judged().is_some() {
+                        burst(c, t - st.judged_at());
+                        continue;
+                    }
                     match st.judged() {
                         // Hit: the note flies up out of the drum (unless the interface toggle hides it).
                         Some(Judge::Great | Judge::Ok)
@@ -1766,7 +1781,12 @@ impl Play {
                     }
                 }
                 Kind::Swell => {
+                    let fuse = n.special == beatmap::Special::Fuse;
                     if st.finished() {
+                        // A fuse balloon not popped blows up.
+                        if fuse && st.judged() == Some(Judge::Miss) {
+                            burst(c, t - st.judged_at());
+                        }
                         if st.judged() == Some(Judge::Great) {
                             let p = ((t - st.judged_at()) / 300.0).clamp(0.0, 1.0) as f32;
                             if p < 1.0 {
@@ -1804,10 +1824,13 @@ impl Play {
                                     );
                                     true
                                 } else {
-                                    c.sprite(Sprite::SpinnerWarning, x, y, r, rgba(WHITE, a))
+                                    // A fuse balloon in the bomb's colours.
+                                    let tint = if fuse { FUSE } else { WHITE };
+                                    c.sprite(Sprite::SpinnerWarning, x, y, r, rgba(tint, a))
                                 };
                             if !drawn {
-                                c.circle(x, y, r, rgba(SWELL, a), rgba(WHITE, a), r * 0.1);
+                                let fill = if fuse { BOMB } else { SWELL };
+                                c.circle(x, y, r, rgba(fill, a), rgba(WHITE, a), r * 0.1);
                                 c.ring(x, y, r * 0.55, rgba(WHITE, 0.8 * a), 3.0);
                             }
                         }
@@ -2413,6 +2436,8 @@ impl Play {
             .take_while(|n| n.time < next + next_len - 1.0)
         {
             let col = match n.kind {
+                // ADLibs are hidden, and bombs aren't there to hit.
+                _ if n.extra() => continue,
                 Kind::Don => uni.don(),
                 Kind::Kat => uni.kat(),
                 _ => continue,
@@ -3380,6 +3405,39 @@ pub(super) const KIAI_FLASH_REACH: f64 = 2.625;
 pub(super) const ROLL: u32 = 0xFCB806;
 
 pub(super) const SWELL: u32 = 0xF39A2B;
+/// A TJA Kadon (either colour hits it): OpenTaiko's purple.
+pub(super) const KADON: u32 = 0xA24BD8;
+/// A TJA bomb, and a fuse balloon's body.
+pub(super) const BOMB: u32 = 0x34343E;
+/// A fuse balloon's tint over the skin's balloon.
+pub(super) const FUSE: u32 = 0xE0503C;
+/// A TJA ADLib once it's hit (unhit, it isn't drawn).
+pub(super) const ADLIB: u32 = 0xE8E8F0;
+/// How long a bomb's burst round the drum lasts, in ms.
+const BURST_MS: f64 = 350.0;
+
+/// A bomb going off at the drum `ago` ms ago: a red ring widening and fading, with an orange
+/// one inside it.
+fn burst(c: &mut Canvas, ago: f64) {
+    let p = (ago / BURST_MS) as f32;
+    if !(0.0..1.0).contains(&p) {
+        return;
+    }
+    c.ring(
+        HIT_X,
+        LANE_Y,
+        30.0 + 60.0 * p,
+        rgba(FUSE, 1.0 - p),
+        8.0 * (1.0 - p) + 1.0,
+    );
+    c.ring(
+        HIT_X,
+        LANE_Y,
+        20.0 + 30.0 * p,
+        rgba(SWELL, 0.8 * (1.0 - p)),
+        4.0 * (1.0 - p) + 1.0,
+    );
+}
 
 pub(super) const WHITE: u32 = 0xFFFFFF;
 

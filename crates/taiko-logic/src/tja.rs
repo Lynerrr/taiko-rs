@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note};
+use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note, Special};
 use crate::tko::gimmick::{Gimmick, Motion, NoteMotion};
 use crate::tko::scroll::MAX_SPEED;
 use crate::tko::track::{Ease, Key, Track};
@@ -779,6 +779,8 @@ struct OpenRoll {
     /// How it is drawn moving: as its head says.
     motion: NoteMotion,
     tag: Tag,
+    /// A fuse balloon's `Special::Fuse`.
+    special: Special,
 }
 
 /// Where the chart is while it's read.
@@ -1500,7 +1502,7 @@ fn note(
     warnings: &mut Warnings,
 ) {
     let before = notes.len();
-    let hit = |kind: Kind, big: bool| {
+    let hit = |kind: Kind, big: bool, special: Special| {
         let note = Note {
             time: cur.time,
             end_time: cur.time,
@@ -1514,62 +1516,64 @@ fn note(
             fake_length: 0.0,
             tiny: false,
             unhittable: false,
+            special,
         };
         (note, cur.tag)
     };
-    let start = |kind: Kind, big: bool, hits: u32, roll: &mut Option<OpenRoll>| {
-        // A second head before the end is a blank, as in OpenTaiko.
-        if roll.is_none() {
-            *roll = Some(OpenRoll {
-                time: cur.time,
-                kind,
-                big,
-                velocity: cur.velocity(),
-                // Rolls and balloons stay on the lane, coming in from the right whatever way
-                // the notes come (as TJAPlayer3 draws them): as fast as they would.
-                motion: NoteMotion {
-                    dir: None,
-                    ..cur.motion(cur.time, drawing.reference)
-                },
-                tick_spacing: if kind == Kind::Roll {
-                    tick_spacing(cur.bpm.abs())
-                } else {
-                    0.0
-                },
-                hits,
-                tag: cur.tag,
-            });
-        }
-    };
+    let start =
+        |kind: Kind, big: bool, hits: u32, special: Special, roll: &mut Option<OpenRoll>| {
+            // A second head before the end is a blank, as in OpenTaiko.
+            if roll.is_none() {
+                *roll = Some(OpenRoll {
+                    time: cur.time,
+                    kind,
+                    big,
+                    velocity: cur.velocity(),
+                    // Rolls and balloons stay on the lane, coming in from the right whatever way
+                    // the notes come (as TJAPlayer3 draws them): as fast as they would.
+                    motion: NoteMotion {
+                        dir: None,
+                        ..cur.motion(cur.time, drawing.reference)
+                    },
+                    tick_spacing: if kind == Kind::Roll {
+                        tick_spacing(cur.bpm.abs())
+                    } else {
+                        0.0
+                    },
+                    hits,
+                    tag: cur.tag,
+                    special,
+                });
+            }
+        };
     match c {
         '0' => {}
-        '1' => notes.push(hit(Kind::Don, false)),
-        '2' => notes.push(hit(Kind::Kat, false)),
+        '1' => notes.push(hit(Kind::Don, false, Special::None)),
+        '2' => notes.push(hit(Kind::Kat, false, Special::None)),
         // Big notes; A/B are the two-player joint ones.
-        '3' | 'A' => notes.push(hit(Kind::Don, true)),
-        '4' | 'B' => notes.push(hit(Kind::Kat, true)),
-        // OpenTaiko's Kadon, hit with Don and Ka at once: there is no such note here.
-        'G' => {
-            warnings.add("Kadon notes (G) are played as big Ka");
-            notes.push(hit(Kind::Kat, true));
-        }
+        '3' | 'A' => notes.push(hit(Kind::Don, true, Special::None)),
+        '4' | 'B' => notes.push(hit(Kind::Kat, true, Special::None)),
+        // OpenTaiko's Kadon: a big note either colour hits (a big ka on the board, as it was).
+        'G' => notes.push(hit(Kind::Kat, true, Special::Kadon)),
+        // OpenTaiko's bomb and hidden ADLib: dons nothing judges as hit or miss.
+        'C' => notes.push(hit(Kind::Don, false, Special::Bomb)),
+        'F' => notes.push(hit(Kind::Don, false, Special::Adlib)),
         // Rolls; H and I are OpenTaiko's big and small coloured ones.
-        '5' | 'I' => start(Kind::Roll, false, 0, roll),
-        '6' | 'H' => start(Kind::Roll, true, 0, roll),
-        // D is OpenTaiko's fuse roll: a balloon with a bomb at its end, played as a balloon.
-        'D' => {
-            warnings.add("fuse rolls (D) are played as balloons");
-            start(
-                Kind::Swell,
-                false,
-                pops.unwrap_or(DEFAULT_BALLOON_HITS),
-                roll,
-            );
-        }
+        '5' | 'I' => start(Kind::Roll, false, 0, Special::None, roll),
+        '6' | 'H' => start(Kind::Roll, true, 0, Special::None, roll),
+        // D is OpenTaiko's fuse roll: a balloon that blows up if it isn't popped by its end.
+        'D' => start(
+            Kind::Swell,
+            false,
+            pops.unwrap_or(DEFAULT_BALLOON_HITS),
+            Special::Fuse,
+            roll,
+        ),
         '7' | '9' => start(
             Kind::Swell,
             false,
             pops.unwrap_or(DEFAULT_BALLOON_HITS),
+            Special::None,
             roll,
         ),
         '8' => match roll.take() {
@@ -1588,13 +1592,12 @@ fn note(
                     fake_length: 0.0,
                     tiny: false,
                     unhittable: false,
+                    special: r.special,
                 };
                 notes.push((note, r.tag));
             }
             None => warnings.add("a roll end (8) with no roll: skipped"),
         },
-        'C' => warnings.add("bombs (C) are not supported: skipped"),
-        'F' => warnings.add("ADLib notes (F) are not supported: skipped"),
         _ => warnings.add(format!("unknown note {c:?}: skipped")),
     }
     // A don or kat put down here (a roll's comes with its end).

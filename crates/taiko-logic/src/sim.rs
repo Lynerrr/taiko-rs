@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::beatmap::{self, Beatmap, Kind};
+use crate::beatmap::{self, Beatmap, Kind, Special};
 use crate::calibrate;
 use crate::clock::GameClock;
 use crate::defense::{Defense, DefenseAct, DefenseItem, TOWER_BARS, TeamState};
@@ -149,6 +149,10 @@ pub struct Stats {
     pub roll_ticks: u32,
     pub swells: u32,
     pub strong: u32,
+    /// TJA ADLibs hit.
+    pub adlib: u32,
+    /// TJA bombs hit, and fuse balloons let blow up.
+    pub bombs: u32,
     pub errors: Vec<f64>,
     /// Audio offset in effect when each error was measured, so suggestions stay right after the
     /// offset changes mid-song.
@@ -1139,9 +1143,7 @@ impl Game {
         // A branching chart's on the Normal branch, which plays the fewest.
         let hit_count = (map.notes.iter().enumerate())
             .filter(|&(i, n)| {
-                matches!(n.kind, Kind::Don | Kind::Kat)
-                    && !n.unhittable
-                    && map.branching.as_ref().is_none_or(|b| b.plays(i, |_| 0))
+                n.judged() && map.branching.as_ref().is_none_or(|b| b.plays(i, |_| 0))
             })
             .count();
         let hits = hit_count.max(1) as f64;
@@ -1589,11 +1591,7 @@ impl Game {
                 .notes
                 .iter()
                 .zip(&self.state)
-                .filter(|(n, st)| {
-                    matches!(n.kind, Kind::Don | Kind::Kat)
-                        && !n.unhittable
-                        && st.judged_at != f64::NEG_INFINITY
-                })
+                .filter(|(n, st)| n.judged() && st.judged_at != f64::NEG_INFINITY)
                 .count() as u32;
             let max = if scoring == Scoring::Lazer {
                 300.0 * (1..=n).map(lazer_combo_weight).sum::<f64>()
@@ -1746,11 +1744,9 @@ impl Game {
     pub(crate) fn auto_keys(&mut self) -> &[Vec<usize>] {
         let style = self.autoplay_style;
         if self.auto_plan.as_ref().is_none_or(|(s, _)| *s != style) {
+            // Autoplay lets ADLibs and bombs be.
             let hits: Vec<usize> = (0..self.map.notes.len())
-                .filter(|&i| {
-                    matches!(self.map.notes[i].kind, Kind::Don | Kind::Kat)
-                        && !self.map.notes[i].unhittable
-                })
+                .filter(|&i| self.map.notes[i].judged())
                 .collect();
             let notes: Vec<(f64, bool, bool)> = hits
                 .iter()
@@ -1763,10 +1759,20 @@ impl Game {
                 })
                 .collect();
             let mut plan = vec![Vec::new(); self.map.notes.len()];
-            for (&i, keys) in
+            for (&i, mut keys) in
                 hits.iter()
                     .zip(crate::autoplay::note_keys(&notes, self.main_beat, style))
             {
+                // A Kadon is played as written: a rim, then a centre with the other hand.
+                if self.map.notes[i].special == Special::Kadon && keys.len() == 2 {
+                    if keys[0] < 2 {
+                        keys[0] = 0;
+                        keys[1] = 2;
+                    } else {
+                        keys[0] = 3;
+                        keys[1] = 1;
+                    }
+                }
                 plan[i] = keys;
             }
             self.auto_plan = Some((style, plan));
@@ -1797,7 +1803,7 @@ impl Game {
             let (time, kind) = (n.time, n.kind);
             let st = &self.state[i];
             match kind {
-                Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
+                Kind::Don | Kind::Kat if st.judged.is_none() && n.judged() => {
                     for (j, key) in self.auto_keys()[i].clone().into_iter().enumerate() {
                         self.auto_hit(key, time, audio, (i, j));
                     }
@@ -1850,7 +1856,7 @@ impl Game {
             let (time, kind, big) = (n.time, n.kind, n.big);
             let st = &self.state[i];
             match kind {
-                Kind::Don | Kind::Kat if st.judged.is_none() && !n.unhittable => {
+                Kind::Don | Kind::Kat if st.judged.is_none() && n.judged() => {
                     let keys = self.auto_keys()[i].clone();
                     for (j, &key) in keys.iter().enumerate() {
                         if !self.auto_sched.insert((i, j)) {
@@ -1916,7 +1922,7 @@ impl Game {
         notes[notes.partition_point(|m| m.time < n.time)..]
             .iter()
             .take_while(|m| m.time <= n.end_time)
-            .any(|m| matches!(m.kind, Kind::Don | Kind::Kat) && !m.unhittable)
+            .any(|m| m.judged())
     }
 
     /// `id`: the note and key slot (or roll tick) this press is, to tell whether its sound went
@@ -2271,6 +2277,12 @@ impl Game {
             }
             let st = &mut self.state[i];
             match n.kind {
+                // An ADLib or a bomb let by is no miss: it's just gone.
+                Kind::Don | Kind::Kat if n.extra() => {
+                    if t - n.time > self.windows.ok {
+                        st.finished = true;
+                    }
+                }
                 // One before a NaN slider is never judged, not even a miss (owner, 2026-10-28).
                 Kind::Don | Kind::Kat => {
                     if st.judged.is_none() && !n.unhittable && t - n.time > self.windows.ok {
@@ -2285,8 +2297,14 @@ impl Game {
                 Kind::Swell => {
                     if !st.finished && t > n.end_time {
                         st.finished = true;
-                        // osu!lazer: a swell not cleared drains HP.
-                        if self.scoring == Scoring::Lazer && self.failed.is_none() {
+                        let (fuse, end) = (n.special == Special::Fuse && !n.unhittable, n.end_time);
+                        if fuse {
+                            // A fuse balloon not popped blows up.
+                            st.judged = Some(Judge::Miss);
+                            st.judged_at = end;
+                            self.explode(end);
+                        } else if self.scoring == Scoring::Lazer && self.failed.is_none() {
+                            // osu!lazer: a swell not cleared drains HP.
                             self.hp = (self.hp - LAZER_SWELL_MISS_HP * self.hp_miss).max(0.0);
                         }
                     }
@@ -2305,7 +2323,9 @@ impl Game {
             let n = &self.map.notes[self.cursor];
             let done = match n.kind {
                 Kind::Don | Kind::Kat => {
-                    st.judged.is_some() || (n.unhittable && t - n.time > self.windows.ok)
+                    st.judged.is_some()
+                        || st.finished
+                        || ((n.unhittable || n.extra()) && t - n.time > self.windows.ok)
                 }
                 Kind::Roll | Kind::Swell => st.finished,
             };
@@ -2564,11 +2584,13 @@ impl Game {
 
         if let Some(s) = &self.strong {
             let other_hand = (s.key < 2) != (key < 2);
-            if s.kat == kat
-                && other_hand
-                && (t - s.at).abs() <= STRONG_WINDOW
-                && self.state[s.note].judged.is_some()
-            {
+            // A Kadon's second hit is the other colour, either hand.
+            let second = if self.map.notes[s.note].special == Special::Kadon {
+                s.kat != kat
+            } else {
+                s.kat == kat && other_hand
+            };
+            if second && (t - s.at).abs() <= STRONG_WINDOW && self.state[s.note].judged.is_some() {
                 self.strong = None;
                 self.stats.strong += 1;
                 self.add_score(300.0);
@@ -2606,12 +2628,24 @@ impl Game {
             }
         }
 
+        // An ADLib or a bomb nearer the press than the next note takes it, either colour.
+        if let Some(e) = self.extra_near(t) {
+            let at = self.map.notes[e].time;
+            let nearer = self
+                .next_hittable(t)
+                .is_none_or(|i| (t - at).abs() < (t - self.map.notes[i].time).abs());
+            if nearer {
+                self.hit_extra(e, t);
+                return normal;
+            }
+        }
+
         if let Some(i) = self.next_hittable(t) {
             let hit = match self.mash {
                 Mash::Nearest => self.judge_nearest(i, kat, t),
                 legacy => {
                     let n = &self.map.notes[i];
-                    let wrong = (n.kind == Kind::Kat) != kat;
+                    let wrong = !n.takes(kat);
                     let judge = if wrong {
                         Judge::Miss
                     } else {
@@ -2686,7 +2720,7 @@ impl Game {
     /// after it is a note off, and alternating colours turn the rest of a stream into misses.
     pub(crate) fn judge_nearest(&mut self, i: usize, kat: bool, t: f64) -> Option<(usize, Judge)> {
         let notes = &self.map.notes;
-        let colour = |k: usize| (notes[k].kind == Kind::Kat) == kat;
+        let colour = |k: usize| notes[k].takes(kat);
         let err = |k: usize| t - notes[k].time;
         let ok = self.windows.ok;
         if colour(i) && err(i).abs() <= ok {
@@ -2711,6 +2745,64 @@ impl Game {
         aimed.then_some((i, Judge::Miss))
     }
 
+    /// The ADLib or bomb nearest `t` still there to hit, within the OK window of it.
+    pub(crate) fn extra_near(&self, t: f64) -> Option<usize> {
+        let ok = self.windows.ok;
+        let mut best: Option<usize> = None;
+        for i in self.cursor..self.map.notes.len() {
+            let n = &self.map.notes[i];
+            if n.time - t > ok {
+                break;
+            }
+            let st = &self.state[i];
+            if n.extra()
+                && !n.unhittable
+                && !st.finished
+                && st.judged.is_none()
+                && (t - n.time).abs() <= ok
+                && best.is_none_or(|b| (t - n.time).abs() < (t - self.map.notes[b].time).abs())
+            {
+                best = Some(i);
+            }
+        }
+        best
+    }
+
+    /// A press at `t` on ADLib or bomb `i`: an ADLib's bonus, or a bomb going off.
+    pub(crate) fn hit_extra(&mut self, i: usize, t: f64) {
+        let bomb = self.map.notes[i].special == Special::Bomb;
+        let st = &mut self.state[i];
+        st.finished = true;
+        st.judged = Some(if bomb { Judge::Miss } else { Judge::Great });
+        st.judged_at = t;
+        if self.failed.is_some() {
+            return;
+        }
+        if bomb {
+            self.explode(t);
+        } else {
+            self.stats.adlib += 1;
+            self.add_score(300.0);
+            self.add_bonus(LAZER_STRONG);
+        }
+    }
+
+    /// A bomb going off at `t` (hit, or a fuse balloon not popped): the combo breaks, with its
+    /// sound whatever its length, and HP drains as for a miss. Accuracy is untouched: a bomb is
+    /// no note to hit.
+    pub(crate) fn explode(&mut self, t: f64) {
+        if self.failed.is_some() {
+            return;
+        }
+        self.stats.bombs += 1;
+        self.stats.combo = 0;
+        self.combo_break = Some(t);
+        self.hp = (self.hp - self.hp_miss).clamp(0.0, 1.0);
+        if self.mods.has(Mod::SuddenDeath) || self.mods.has(Mod::Perfect) {
+            self.fail(t);
+        }
+    }
+
     /// The first unjudged don/kat after note `i` whose miss window has opened.
     pub(crate) fn next_unjudged(&self, i: usize, t: f64) -> Option<usize> {
         for k in i + 1..self.map.notes.len() {
@@ -2718,10 +2810,7 @@ impl Game {
             if n.time - t > self.windows.miss {
                 return None;
             }
-            if matches!(n.kind, Kind::Don | Kind::Kat)
-                && self.state[k].judged.is_none()
-                && !n.unhittable
-            {
+            if n.judged() && self.state[k].judged.is_none() {
                 return Some(k);
             }
         }
@@ -2735,7 +2824,7 @@ impl Game {
             if t - n.time > 2.0 * self.windows.miss {
                 return None;
             }
-            if matches!(n.kind, Kind::Don | Kind::Kat) && self.state[k].judged.is_some() {
+            if n.judged() && self.state[k].judged.is_some() {
                 return Some(k);
             }
         }
@@ -2749,11 +2838,9 @@ impl Game {
             if n.time - t > self.windows.miss {
                 return None;
             }
-            // An unhittable note (before a NaN slider) lets presses through and is never judged.
-            if matches!(n.kind, Kind::Don | Kind::Kat)
-                && self.state[i].judged.is_none()
-                && !n.unhittable
-            {
+            // An unhittable note (before a NaN slider) lets presses through and is never judged;
+            // ADLibs and bombs are `extra_near`'s.
+            if n.judged() && self.state[i].judged.is_none() {
                 return Some(i);
             }
         }
@@ -2765,7 +2852,7 @@ impl Game {
     pub(crate) fn note_under_swell(&self, t: f64, kat: Option<bool>) -> Option<usize> {
         self.next_hittable(t).filter(|&i| {
             let n = &self.map.notes[i];
-            kat.is_none_or(|k| (n.kind == Kind::Kat) == k) && self.timing(t - n.time) != Judge::Miss
+            kat.is_none_or(|k| n.takes(k)) && self.timing(t - n.time) != Judge::Miss
         })
     }
 

@@ -125,7 +125,7 @@ fn ghosts(path: &Path) -> Vec<Ghost> {
     };
     map.notes
         .iter()
-        .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat) && !n.unhittable)
+        .filter(|n| n.judged())
         .map(|n| Ghost {
             time: n.time,
             kat: n.kind == Kind::Kat,

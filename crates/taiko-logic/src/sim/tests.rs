@@ -1371,6 +1371,7 @@ fn stream(spacing: f64) -> Game {
             fake_length: 0.0,
             tiny: false,
             unhittable: false,
+            special: crate::beatmap::Special::None,
         })
         .collect();
     let mut map = beatmap::calibration_map(500.0, 4, 1);
@@ -1583,4 +1584,131 @@ fn note_speeds_change_with_the_speed_mods_and_no_others() {
             .collect();
         assert!(off.is_empty(), "{}: {off:?}", m.acronym());
     }
+}
+
+/// A one-course Oni TJA chart at 120 BPM (a bar is 2 s), `body` between #START and #END.
+fn tja_game(body: &str) -> Game {
+    let text = format!("TITLE:T\nBPM:120\nOFFSET:0\nCOURSE:Oni\nLEVEL:8\n\n#START\n{body}\n#END\n");
+    let mut song = crate::tja::parse(&text).expect("parses");
+    Game::new(song.courses.remove(0).map, Arc::new(Silence), None)
+}
+
+/// Presses `key` at each time, then plays the chart to its end.
+fn press_through(g: &mut Game, presses: &[(f64, usize)]) {
+    for &(t, key) in presses {
+        g.set_time(t - 1.0);
+        g.press_at(key, t, None);
+    }
+    let end = g.end_time + 2000.0;
+    g.set_time(end);
+}
+
+#[test]
+fn a_bomb_hit_breaks_the_combo_and_one_let_by_costs_nothing() {
+    // Dons at 0, 1000 and 2000, a bomb at 500.
+    let dons = [(0.0, 1), (1000.0, 1), (2000.0, 1)];
+    let mut hit = tja_game("1C10,\n1,");
+    press_through(&mut hit, &[dons[0], (500.0, 1), dons[1], dons[2]]);
+    let s = &hit.stats;
+    assert_eq!((s.great, s.miss, s.bombs, s.max_combo), (3, 0, 1, 2));
+    assert_eq!(s.accuracy(), 1.0, "a bomb is no note to hit");
+    // It drains HP as a miss does.
+    let mut hp = tja_game("1C10,\n1,");
+    hp.set_time(-1.0);
+    hp.press_at(1, 0.0, None);
+    let before = hp.hp;
+    hp.set_time(499.0);
+    hp.press_at(1, 500.0, None);
+    assert!(hp.hp < before, "{} after {before}", hp.hp);
+    // Either colour sets it off.
+    let mut rim = tja_game("1C10,\n1,");
+    press_through(&mut rim, &[dons[0], (500.0, 0), dons[1], dons[2]]);
+    assert_eq!(rim.stats.bombs, 1);
+    let mut by = tja_game("1C10,\n1,");
+    press_through(&mut by, &dons);
+    let s = &by.stats;
+    assert_eq!((s.great, s.miss, s.bombs, s.max_combo), (3, 0, 0, 3));
+    // A full combo past it scores as much as the chart without it.
+    let mut plain = tja_game("1010,\n1,");
+    press_through(&mut plain, &dons);
+    assert_eq!(by.stats.score, plain.stats.score);
+    // Sudden Death fails on one.
+    let map = hit.map.clone();
+    let mut sd = Game::with_mods(map, Arc::new(Silence), None, crate::mods::Mods::parse("SD"));
+    press_through(&mut sd, &[dons[0], (500.0, 1)]);
+    assert!(sd.failed.is_some());
+}
+
+#[test]
+fn an_adlib_hit_is_a_bonus_and_one_let_by_no_miss() {
+    let dons = [(0.0, 1), (1000.0, 1), (2000.0, 1)];
+    let mut hit = tja_game("1F10,\n1,");
+    press_through(&mut hit, &[dons[0], (520.0, 0), dons[1], dons[2]]);
+    let s = &hit.stats;
+    assert_eq!((s.great, s.miss, s.adlib, s.max_combo), (3, 0, 1, 3));
+    let mut by = tja_game("1F10,\n1,");
+    press_through(&mut by, &dons);
+    assert_eq!(
+        (by.stats.miss, by.stats.adlib, by.stats.max_combo),
+        (0, 0, 3)
+    );
+    assert!(hit.stats.score > by.stats.score, "the bonus");
+    // A press nearer the don (at 0) than the ADLib (at 250) goes to the don.
+    let mut near = tja_game("1F000000,");
+    press_through(&mut near, &[(20.0, 1)]);
+    assert_eq!((near.stats.great + near.stats.ok, near.stats.adlib), (1, 0));
+}
+
+#[test]
+fn a_kadon_takes_either_colour_and_the_other_one_after_for_the_finisher() {
+    for first in [0, 1] {
+        let other = if first == 0 { 2 } else { 3 };
+        let mut g = tja_game("G,");
+        press_through(&mut g, &[(0.0, first), (10.0, other)]);
+        assert_eq!(
+            (g.stats.great, g.stats.strong),
+            (1, 1),
+            "{first} then {other}"
+        );
+        // The same colour with the other hand is no finisher on it.
+        let same = if first == 0 { 3 } else { 2 };
+        let mut g = tja_game("G,");
+        press_through(&mut g, &[(0.0, first), (10.0, same)]);
+        assert_eq!(
+            (g.stats.great, g.stats.strong),
+            (1, 0),
+            "{first} then {same}"
+        );
+    }
+}
+
+#[test]
+fn a_fuse_balloon_not_popped_blows_up() {
+    // 5 pops (no BALLOON:), from 0 to 1500; a don at 2000.
+    let mut by = tja_game("D008,\n1,");
+    press_through(&mut by, &[(2000.0, 1)]);
+    assert_eq!((by.stats.bombs, by.stats.swells, by.stats.great), (1, 0, 1));
+    let mut popped = tja_game("D008,\n1,");
+    let pops: Vec<(f64, usize)> = (0..6).map(|k| (100.0 + 100.0 * k as f64, k % 2)).collect();
+    press_through(&mut popped, &[pops, vec![(2000.0, 1)]].concat());
+    assert_eq!((popped.stats.bombs, popped.stats.swells), (0, 1));
+    // A plain balloon left alone doesn't.
+    let mut plain = tja_game("7008,\n1,");
+    press_through(&mut plain, &[(2000.0, 1)]);
+    assert_eq!(plain.stats.bombs, 0);
+}
+
+#[test]
+fn autoplay_leaves_bombs_and_adlibs_and_plays_a_kadon_whole() {
+    let mut g = tja_game("1C2F,\nG,\n1,");
+    for k in 0..600 {
+        g.time = k as f64 * 10.0;
+        g.autoplay(None);
+        g.expire(g.time);
+    }
+    let s = &g.stats;
+    assert_eq!(
+        (s.great, s.miss, s.bombs, s.adlib, s.strong),
+        (4, 0, 0, 0, 1)
+    );
 }
