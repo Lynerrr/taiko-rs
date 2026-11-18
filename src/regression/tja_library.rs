@@ -859,3 +859,44 @@ fn sorting_by_folder_heads_tja_charts_by_their_pack() {
     assert_eq!(titles, ["One", "Two", "Three", "Four", "Five", "Osu"]);
     assert_eq!(ui::SortMode::parse("folder"), Some(ui::SortMode::Folder));
 }
+
+/// A complex #SCROLL and #DIRECTION send notes in from above, below and the corners, as fast as
+/// they would come along the lane and meeting the drum on time; OpenTaiko's own axes, an
+/// imaginary part pointing down.
+#[test]
+fn notes_come_in_from_any_side() {
+    let chart = |scroll: &str| {
+        format!("TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n{scroll}\n0,\n1,\n#END\n")
+    };
+    let at = |text: &str, t: f64| {
+        let (dons, _) = drawn_at(text, t);
+        assert_eq!(dons.len(), 1, "{dons:?}");
+        dons[0]
+    };
+    let plain = chart("");
+    let (hx, hy) = at(&plain, 2000.0);
+    let (px, _) = at(&plain, 1500.0);
+    let d = px - hx;
+    assert!(d > 50.0, "half a second of lane: {d}");
+    let near = |(x, y): (f32, f32), (ex, ey): (f32, f32), what: &str| {
+        assert!(
+            (x - ex).abs() < 0.1 && (y - ey).abs() < 0.1,
+            "{what}: at {x}, {y}, not {ex}, {ey}"
+        );
+    };
+    for (scroll, (ux, uy)) in [
+        ("#SCROLL i", (0.0, 1.0)),
+        ("#SCROLL -i", (0.0, -1.0)),
+        ("#SCROLL 1+i", (1.0, 1.0)),
+        ("#DIRECTION 1", (0.0, -1.0)),
+        ("#DIRECTION 7", (-1.0, 1.0)),
+    ] {
+        let text = chart(scroll);
+        near(at(&text, 2000.0), (hx, hy), &format!("{scroll} at its hit"));
+        near(
+            at(&text, 1500.0),
+            (hx + d * ux, hy + d * uy),
+            &format!("{scroll} half a second before"),
+        );
+    }
+}

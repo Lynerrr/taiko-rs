@@ -1271,7 +1271,19 @@ impl Runtime {
     /// from the drum, and how far it is off the lane onto the path. None off any path.
     #[inline]
     pub fn note_path(&self, i: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {
+        // A TJA note coming in some other way than along the lane: straight from it, as far as
+        // it is along the lane.
+        if let Some([dx, dy]) = self.motion_of.get(i).copied().flatten().and_then(|m| m.dir) {
+            return Some([s * dx as f32, s * dy as f32, 1.0]);
+        }
         self.path_of(self.group_of(i)?, t, s, lane)
+    }
+
+    /// The way the barline at map time `time` comes in, when not along the lane (a TJA chart's
+    /// complex `#SCROLL` or `#DIRECTION`): a unit vector from the drum, right and down.
+    #[inline]
+    pub fn barline_dir(&self, time: f64) -> Option<[f64; 2]> {
+        self.gimmick.motion.barline_dir(time - self.shift)
     }
 
     fn path_of(&self, gi: usize, t: f64, s: f32, lane: f32) -> Option<[f32; 3]> {

@@ -176,6 +176,10 @@ struct Header {
     course: CourseKind,
     /// `LEVEL:`; 0 when it has none. OpenTaiko writes some with a fraction (`9.5`).
     level: f32,
+    /// `COMPAT:` TaikoJiro's or TaikoManyGimmicks': a complex `#SCROLL`'s imaginary part points
+    /// up, and `#DIRECTION` sets the way whole. OpenTaiko's own (and TJAPlayer3's), the default:
+    /// it points down, and a `#DIRECTION` leaves a complex `#SCROLL`'s vertical part be.
+    jiro_axes: bool,
     balloon: Vec<u32>,
     /// `BALLOONNOR` / `BALLOONEXP` / `BALLOONMAS`: per-branch lists that win over `BALLOON`.
     branch_balloon: [Option<Vec<u32>>; 3],
@@ -198,6 +202,7 @@ impl Default for Header {
             // TJAPlayer3 reads a chart with no COURSE as Oni.
             course: CourseKind::Oni,
             level: 0.0,
+            jiro_axes: false,
             balloon: Vec::new(),
             branch_balloon: [None, None, None],
         }
@@ -415,6 +420,11 @@ fn read_header(h: &mut Header, key: &str, value: &str, warnings: &mut Warnings) 
                 h.branch_balloon = [None, None, None];
             }
             None => warnings.add(format!("COURSE:{value} is not played: read as Oni")),
+        },
+        "COMPAT" => match value.to_ascii_lowercase().as_str() {
+            "jiro1" | "jiro2" | "tmg" => h.jiro_axes = true,
+            "oos" | "tjap3" => h.jiro_axes = false,
+            _ => warnings.add(format!("COMPAT:{value} is not known: OpenTaiko's used")),
         },
         "LEVEL" => {
             h.level = value
@@ -749,10 +759,18 @@ struct OpenRoll {
 }
 
 /// Where the chart is while it's read.
+#[derive(Clone, Copy)]
 struct Cursor {
     time: f64,
     bpm: f64,
+    /// `#SCROLL`'s real part: the horizontal speed, what the board chart knows.
     scroll: f64,
+    /// Its imaginary part (`#SCROLL 1+2i`): drawn only.
+    scroll_im: f64,
+    /// `#DIRECTION`: 0 the usual way, 1-7 the others, as OpenTaiko numbers them.
+    direction: i64,
+    /// The chart's `COMPAT` (see `Header::jiro_axes`).
+    jiro_axes: bool,
     /// Bar length in whole notes (`#MEASURE 3/4` = 0.75).
     measure: f64,
     gogo: bool,
@@ -816,13 +834,61 @@ impl Cursor {
         }
     }
 
+    /// Where a note here sits for each unit it has to go, right and down from the drum, as
+    /// OpenTaiko places it (`CTja::ApplyNoteXYDirection`): `#SCROLL` as a complex number (left
+    /// out by `#BMSCROLL`), turned by `#DIRECTION`.
+    fn way(&self) -> (f64, f64) {
+        let (re, im) = match self.mode {
+            ScrollMode::Beats => (1.0, 0.0),
+            _ => (self.scroll, self.scroll_im),
+        };
+        let y = if self.jiro_axes { -im } else { im };
+        let (x, turned) = match self.direction {
+            1 => (0.0, -re),
+            2 => (0.0, re),
+            3 => (re, -re),
+            4 => (re, re),
+            5 => (-re, 0.0),
+            6 => (-re, -re),
+            7 => (-re, re),
+            _ => (re, y),
+        };
+        // OpenTaiko's own charts keep a complex #SCROLL's vertical part through a #DIRECTION.
+        let y = if !self.jiro_axes && y != 0.0 {
+            y
+        } else {
+            turned
+        };
+        (x, y)
+    }
+
+    /// How fast a note here goes for a scroll of `k` (its size, either way).
+    fn speed(&self, k: f64, reference: f64) -> f64 {
+        match self.mode {
+            ScrollMode::Normal => velocity(self.bpm, k),
+            ScrollMode::Beats => velocity(reference, 1.0) * k,
+            ScrollMode::BeatsScrolled => velocity(reference, k),
+        }
+    }
+
     fn motion(&self, t: f64, reference: f64) -> NoteMotion {
+        let (x, y) = self.way();
+        let (velocity, dir) = if self.direction == 0 && y == 0.0 {
+            (self.drawn_velocity(reference), None)
+        } else if y == 0.0 || x.hypot(y) == 0.0 {
+            let side = if x < 0.0 { -1.0 } else { 1.0 };
+            (side * self.speed(x.abs(), reference), None)
+        } else {
+            let k = x.hypot(y);
+            (self.speed(k, reference), Some([x / k, y / k]))
+        };
         NoteMotion {
             t,
-            velocity: self.drawn_velocity(reference),
+            velocity,
             show: self.show,
             wait: self.wait,
             hide_long: self.hide_long,
+            dir,
         }
     }
 }
@@ -839,6 +905,8 @@ struct Drawing {
     by_beats: bool,
     notes: Vec<NoteMotion>,
     barlines: Vec<(f64, f64)>,
+    /// Barlines coming in some other way than along the lane (see `Motion::barline_dirs`).
+    barline_dirs: Vec<(f64, [f64; 2])>,
     /// `#JPOSSCROLL`s as written, in virtual units.
     moves: Vec<JudgeMove>,
     /// `#LYRIC` lines.
@@ -874,11 +942,13 @@ impl Drawing {
 
     /// What the map's gimmick gets: None when every note is drawn as its board chart says.
     fn gimmick(mut self) -> Option<Gimmick> {
-        let plain =
-            |n: &NoteMotion| n.velocity >= 0.0 && n.show.is_infinite() && n.wait.is_infinite();
+        let plain = |n: &NoteMotion| {
+            n.velocity >= 0.0 && n.show.is_infinite() && n.wait.is_infinite() && n.dir.is_none()
+        };
         if !self.by_beats
             && self.notes.iter().all(plain)
             && self.barlines.iter().all(|b| b.1 >= 0.0)
+            && self.barline_dirs.is_empty()
             && self.moves.is_empty()
             && self.lyrics.is_empty()
         {
@@ -889,6 +959,7 @@ impl Drawing {
         // A negative #DELAY can set later notes before earlier ones.
         self.notes.sort_by(|a, b| a.t.total_cmp(&b.t));
         self.barlines.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.barline_dirs.sort_by(|a, b| a.0.total_cmp(&b.0));
         Some(Gimmick {
             scroll: if self.by_beats {
                 self.speed
@@ -899,6 +970,7 @@ impl Drawing {
                 map_clock: true,
                 notes: self.notes,
                 barlines: self.barlines,
+                barline_dirs: self.barline_dirs,
                 judge_x,
                 judge_y,
                 lyrics: self.lyrics,
@@ -919,6 +991,9 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         time: start,
         bpm,
         scroll: 1.0,
+        scroll_im: 0.0,
+        direction: 0,
+        jiro_axes: h.jiro_axes,
         measure: 1.0,
         gogo: false,
         barlines: true,
@@ -938,6 +1013,7 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         by_beats: false,
         notes: Vec::new(),
         barlines: Vec::new(),
+        barline_dirs: Vec::new(),
         moves: Vec::new(),
         lyrics: Vec::new(),
     };
@@ -989,9 +1065,11 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
                     time: cur.time,
                     velocity: cur.velocity(),
                 });
-                drawing
-                    .barlines
-                    .push((cur.time, cur.drawn_velocity(drawing.reference)));
+                let m = cur.motion(cur.time, drawing.reference);
+                drawing.barlines.push((cur.time, m.velocity));
+                if let Some(dir) = m.dir {
+                    drawing.barline_dirs.push((cur.time, dir));
+                }
             }
         };
         for step in bar {
@@ -1097,6 +1175,7 @@ fn apply(
         "SCROLL" => match scroll_value(arg) {
             Some(v) if v.is_finite() => {
                 cur.scroll = v;
+                cur.scroll_im = complex_value(arg).map_or(0.0, |c| c.1);
                 points.push(cur.control_point());
             }
             _ => warnings.add(format!("#SCROLL {arg}: not a number, ignored")),
@@ -1113,6 +1192,10 @@ fn apply(
                 drawing.key(cur);
             }
         }
+        "DIRECTION" => match arg.trim().parse::<f64>() {
+            Ok(v) if v.is_finite() => cur.direction = v as i64,
+            _ => warnings.add(format!("#DIRECTION {arg}: not a number, ignored")),
+        },
         "NMSCROLL" | "BMSCROLL" | "HBSCROLL" => {
             cur.mode = match name {
                 "BMSCROLL" => ScrollMode::Beats,
@@ -1218,7 +1301,12 @@ fn note(
                 kind,
                 big,
                 velocity: cur.velocity(),
-                motion: cur.motion(cur.time, drawing.reference),
+                // Rolls and balloons stay on the lane, coming in from the right whatever way
+                // the notes come (as TJAPlayer3 draws them): as fast as they would.
+                motion: NoteMotion {
+                    dir: None,
+                    ..cur.motion(cur.time, drawing.reference)
+                },
                 tick_spacing: if kind == Kind::Roll {
                     tick_spacing(cur.bpm)
                 } else {

@@ -1118,6 +1118,22 @@ impl Play {
                 break;
             }
             let s = s_of(b.time, b.velocity);
+            // A TJA barline coming in some other way: straight from the drum that way, lying
+            // across it.
+            let way = if crossfire {
+                None
+            } else {
+                self.game.tko().and_then(|rt| rt.barline_dir(b.time))
+            };
+            if let Some([dx, dy]) = way {
+                if s > -LANE_H && s < lane_len + 2.0 {
+                    let (hx, hy, ..) = place(0.0, 0.0);
+                    let (x, y) = (hx + s * dx as f32, hy + s * dy as f32);
+                    let a = (-dy as f32).atan2(dx as f32);
+                    lane_rect(c, (x, y, a), 1.6, LANE_H, rgba(WHITE, 0.28));
+                }
+                continue;
+            }
             let shown = if crossfire {
                 s > 0.0
             } else {
