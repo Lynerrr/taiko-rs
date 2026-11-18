@@ -14819,6 +14819,7 @@ impl State {
             Hit::BackToSession => self.rejoin_mapping(),
             Hit::ForgetSession => self.left_mapping = None,
             Hit::ChatShot(id) => self.open_shot(id),
+            Hit::ChatMedals(key) => self.social.toggle_medal_run(key),
             Hit::SendShot => {
                 let row = self.social.row(self.mp.is_some());
                 self.send_shot(row);
