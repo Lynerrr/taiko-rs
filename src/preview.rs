@@ -79,7 +79,12 @@ pub struct Details {
 
 impl Details {
     fn of(map: &Beatmap) -> Details {
-        let count = |k: Kind| map.notes.iter().filter(|n| n.kind == k).count();
+        // ADLibs and bombs aren't notes to hit.
+        let count = |k: Kind| {
+            (map.notes.iter())
+                .filter(|n| n.kind == k && !n.extra())
+                .count()
+        };
         let first = map.notes.first().map(|n| n.time).unwrap_or(0.0);
         let last = map.notes.iter().map(|n| n.end_time).fold(0.0, f64::max);
         let bpms: Vec<f64> = map

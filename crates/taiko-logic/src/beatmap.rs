@@ -30,6 +30,21 @@ pub enum Kind {
     Swell,
 }
 
+/// OpenTaiko's notes beyond osu!'s (in TJA charts), each on the kind it plays nearest to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Special {
+    #[default]
+    None,
+    /// `G`, a big don-and-ka: either colour hits it, and the other colour after makes it big.
+    Kadon,
+    /// `F`, a hidden note: hitting it is a bonus, missing it costs nothing.
+    Adlib,
+    /// `C`, a bomb: hitting it breaks the combo and drains HP; let by, it costs nothing.
+    Bomb,
+    /// `D`, a balloon with a fuse: not popped by its end, it blows up like a bomb hit.
+    Fuse,
+}
+
 #[derive(Clone, Debug)]
 pub struct Note {
     pub time: f64,
@@ -58,6 +73,29 @@ pub struct Note {
     pub tiny: bool,
     /// A don/kat right before a slider of length NaN: stable can't hit it (owner, 2026-10-28).
     pub unhittable: bool,
+    /// A TJA chart's OpenTaiko note (see `Special`): `None` for every other.
+    pub special: Special,
+}
+
+impl Note {
+    /// An ADLib or a bomb: a don/kat that is never a hit or a miss, and no part of the combo, the
+    /// accuracy or the score a play can get.
+    #[inline]
+    pub fn extra(&self) -> bool {
+        matches!(self.special, Special::Adlib | Special::Bomb)
+    }
+
+    /// A don or kat the play judges: a hit or a miss, part of the combo and the accuracy.
+    #[inline]
+    pub fn judged(&self) -> bool {
+        matches!(self.kind, Kind::Don | Kind::Kat) && !self.unhittable && !self.extra()
+    }
+
+    /// Whether a press of colour `kat` is this note's colour (a Kadon is either).
+    #[inline]
+    pub fn takes(&self, kat: bool) -> bool {
+        self.special == Special::Kadon || (self.kind == Kind::Kat) == kat
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -761,6 +799,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                     fake_length: (-raw_length).max(0.0) * spans as f64,
                     tiny: raw_length <= 0.1,
                     unhittable: false,
+                    special: crate::beatmap::Special::None,
                 });
             }
         } else if ty & 8 != 0 {
@@ -785,6 +824,7 @@ fn convert(map: &mut Beatmap, mut body: Body) {
                 fake_length: 0.0,
                 tiny: false,
                 unhittable: false,
+                special: crate::beatmap::Special::None,
             });
         } else if ty & 1 != 0 {
             notes.push(hit(time, sound, velocity));
@@ -887,6 +927,7 @@ fn hit(time: f64, sound: u32, velocity: f64) -> Note {
         fake_length: 0.0,
         tiny: false,
         unhittable: false,
+        special: crate::beatmap::Special::None,
     }
 }
 

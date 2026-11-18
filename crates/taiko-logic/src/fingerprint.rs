@@ -23,7 +23,9 @@ pub fn hit_pattern(map: &Beatmap) -> Option<String> {
     let master =
         |i: usize| (map.branching.as_ref()).is_none_or(|b| b.plays(i, |_| crate::branch::MASTER));
     let hits: Vec<(bool, bool)> = (map.notes.iter().enumerate())
-        .filter(|&(i, _)| master(i))
+        // ADLibs and bombs aren't part of it (a converter leaves them out), so a chart with
+        // them hashes as it did before they were played.
+        .filter(|&(i, note)| master(i) && !note.extra())
         .filter_map(|(_, note)| match note.kind {
             Kind::Don => Some((false, note.big)),
             Kind::Kat => Some((true, note.big)),

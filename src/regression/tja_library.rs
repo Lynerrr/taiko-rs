@@ -980,3 +980,47 @@ fn a_negative_bpm_brings_notes_in_from_the_left() {
         "on the drum at its hit"
     );
 }
+
+/// OpenTaiko's notes as they come in: a bomb dark, a Kadon purple, an ADLib not at all until
+/// it's hit; a bomb hit goes off in a burst round the drum.
+#[test]
+fn bombs_and_kadons_show_and_adlibs_stay_hidden() {
+    let text = |body: &str| {
+        format!("TITLE:Gimmicks\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n0,\n{body}\n#END\n")
+    };
+    // What is drawn coming in (300 ms ahead, well right of the drum), note-sized, by its fill.
+    let notes = |body: &str| {
+        let (_, c) = drawn_at(&text(body), 1700.0);
+        c.shapes
+            .iter()
+            .filter(|s| {
+                s.center[0] > taiko_logic::sim::HIT_X + 40.0
+                    && (25.0..60.0).contains(&s.half[0])
+                    && s.fill[3] > 0.5
+            })
+            .map(|s| s.fill)
+            .collect::<Vec<_>>()
+    };
+    let bomb = notes("C,");
+    assert!(
+        bomb.iter().any(|f| f[0] < 0.3 && f[1] < 0.3 && f[2] < 0.3),
+        "a dark bomb: {bomb:?}"
+    );
+    let kadon = notes("G,");
+    assert!(
+        kadon.iter().any(|f| f[0] > 0.5 && f[2] > 0.7 && f[1] < 0.4),
+        "a purple Kadon: {kadon:?}"
+    );
+    assert!(notes("F,").is_empty(), "the ADLib is hidden");
+    assert!(!notes("1,").is_empty(), "a don shows as ever");
+    // Hit, the bomb goes off: red rings round the drum.
+    let red = |c: &crate::hit::Canvas| {
+        c.shapes
+            .iter()
+            .any(|s| s.border[3] > 0.3 && s.border[0] > 0.8 && s.border[1] < 0.4)
+    };
+    let (_, hit) = drawn_played_at(&text("C,"), vec![(2000.0, 1)], 2100.0);
+    let (_, by) = drawn_played_at(&text("C,"), Vec::new(), 2100.0);
+    assert!(red(&hit), "the burst");
+    assert!(!red(&by), "nothing went off");
+}

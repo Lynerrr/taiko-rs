@@ -348,10 +348,11 @@ fn a_branch_section_without_master_plays_expert() {
 
 #[test]
 fn unknown_things_are_warnings() {
-    let song = parse(&chart(120.0, "#BGAON 1 0\n1C2F,\n#WHATEVER\nBALLOON:3\n1,")).unwrap();
+    // E is no note in OpenTaiko (C and F are its bomb and ADLib, played now).
+    let song = parse(&chart(120.0, "#BGAON 1 0\n1E2E,\n#WHATEVER\nBALLOON:3\n1,")).unwrap();
     let c = &song.courses[0];
     close(&times(c), &[0.0, 1000.0, 2000.0]);
-    for w in ["#BGAON", "bombs", "ADLib", "#WHATEVER", "header line"] {
+    for w in ["#BGAON", "'E'", "#WHATEVER", "header line"] {
         assert!(
             song.warnings.iter().any(|x| x.contains(w)),
             "{w}: {:?}",
@@ -627,8 +628,8 @@ fn fumen_corpus_matches_official_timing() {
 
 #[test]
 fn a_fuse_roll_is_a_balloon_and_takes_a_count() {
-    // OpenTaiko reads D as a balloon: it takes the next BALLOON: value, so the balloons after
-    // it keep theirs.
+    // OpenTaiko reads D as a balloon (one that blows up if it isn't popped): it takes the next
+    // BALLOON: value, so the balloons after it keep theirs.
     let text = chart(120.0, "D008,\n7008,").replace("LEVEL:8", "LEVEL:8\nBALLOON:10,20");
     let song = parse(&text).unwrap();
     let n = &song.courses[0].map.notes;
@@ -638,7 +639,9 @@ fn a_fuse_roll_is_a_balloon_and_takes_a_count() {
             .collect::<Vec<_>>(),
         [(Kind::Swell, 10), (Kind::Swell, 20)]
     );
-    assert!(song.warnings.iter().any(|w| w.contains("fuse")));
+    assert_eq!(n[0].special, Special::Fuse);
+    assert_eq!(n[1].special, Special::None);
+    assert!(song.warnings.is_empty(), "{:?}", song.warnings);
 }
 
 #[test]
@@ -1243,4 +1246,65 @@ fn a_negative_bpm_leaves_other_charts_boards_as_they_were() {
     ));
     assert!((c.map.notes[0].velocity - velocity(150.0, 1.0)).abs() < 1e-12);
     assert_eq!(velocity(-150.0, 1.0), velocity(150.0, 1.0));
+}
+
+#[test]
+fn opentaiko_notes_are_read_and_their_board_keeps_them() {
+    let song =
+        parse(&chart(120.0, "1GCF,\nD008,\n2,").replace("LEVEL:8", "LEVEL:8\nBALLOON:5")).unwrap();
+    assert!(song.warnings.is_empty(), "{:?}", song.warnings);
+    let c = &song.courses[0];
+    let specials: Vec<(Kind, bool, Special)> = c
+        .map
+        .notes
+        .iter()
+        .map(|n| (n.kind, n.big, n.special))
+        .collect();
+    assert_eq!(
+        specials,
+        [
+            (Kind::Don, false, Special::None),
+            (Kind::Kat, true, Special::Kadon),
+            (Kind::Don, false, Special::Bomb),
+            (Kind::Don, false, Special::Adlib),
+            (Kind::Swell, false, Special::Fuse),
+            (Kind::Kat, false, Special::None),
+        ]
+    );
+    let board = BoardChart::of(c.kind, &c.map);
+    assert_eq!(board.specials, Some(vec![(1, 1), (2, 3), (3, 2), (4, 4)]));
+    let back = board.beatmap().expect("a board chart it plays");
+    let kept: Vec<Special> = back.notes.iter().map(|n| n.special).collect();
+    assert_eq!(kept, specials.iter().map(|s| s.2).collect::<Vec<_>>());
+    // It goes over the wire and comes back the same.
+    let json = serde_json::to_string(&board).unwrap();
+    assert_eq!(serde_json::from_str::<BoardChart>(&json).unwrap(), board);
+}
+
+#[test]
+fn a_chart_without_opentaiko_notes_hashes_as_before() {
+    let c = one(&chart(120.0, "1020,\n7008,"));
+    let board = BoardChart::of(c.kind, &c.map);
+    assert_eq!(board.specials, None);
+    assert!(!serde_json::to_string(&board).unwrap().contains("specials"));
+    // A special note changes it: it plays otherwise.
+    let bomb = one(&chart(120.0, "1C20,\n7008,"));
+    let plain = one(&chart(120.0, "1020,\n7008,"));
+    assert_ne!(bomb.hash, plain.hash);
+}
+
+#[test]
+fn a_board_with_a_special_note_out_of_place_is_refused() {
+    let c = one(&chart(120.0, "1C20,\n7008,"));
+    let mut board = BoardChart::of(c.kind, &c.map);
+    for bad in [
+        vec![(3, 3)],
+        vec![(1, 4)],
+        vec![(1, 9)],
+        vec![(1, 3), (1, 3)],
+        vec![(99, 3)],
+    ] {
+        board.specials = Some(bad.clone());
+        assert!(board.beatmap().is_err(), "{bad:?}");
+    }
 }
