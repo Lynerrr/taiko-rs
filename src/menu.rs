@@ -63,7 +63,7 @@ const BURST_MS: f32 = 520.0;
 
 /// The panel of notes, with the selected section's name and what it is under it: the two
 /// together in the middle of the screen's height.
-fn lane_h() -> f32 {
+pub fn lane_h() -> f32 {
     crate::mobile::pick(124.0, 176.0)
 }
 fn title_gap() -> f32 {
@@ -76,11 +76,11 @@ fn title_h() -> f32 {
 fn lane_top() -> f32 {
     (render::VIRTUAL_HEIGHT - (lane_h() + title_gap() + title_h())) / 2.0
 }
-fn lane_mid() -> f32 {
+pub fn lane_mid() -> f32 {
     lane_top() + lane_h() / 2.0
 }
 /// The panel the notes sit on, in from the screen's sides.
-fn panel_x() -> f32 {
+pub fn panel_x() -> f32 {
     crate::mobile::pick(12.0, 0.0)
 }
 fn drum_w() -> f32 {
@@ -152,6 +152,8 @@ const ART: usize = 36;
 type Art = [[u32; ART]; ART];
 /// The note's radius in art pixels, and how far it sits from the art's top left corner.
 const NOTE_R: f32 = 15.5;
+/// The same, for what draws a note's icon over it: the icon is 16 of these art pixels across.
+pub const NOTE_ART_R: f32 = NOTE_R;
 const ART_MID: f32 = 17.5;
 /// One pixel of the hit circle and the drum (virtual units).
 const LANE_PIXEL: f32 = 2.0;
@@ -336,6 +338,11 @@ impl Item {
         }
     }
 
+    /// The icon on its note, to draw bare.
+    pub fn icon_art(self) -> &'static Icon {
+        self.icon()
+    }
+
     fn icon(self) -> &'static Icon {
         match self {
             Item::Play => &PLAY,
@@ -447,6 +454,11 @@ pub struct Frame<'a> {
     pub session: (f64, f64),
     /// Hit notes glitch as they spin, and the screen with them (the player's setting).
     pub glitch: bool,
+    /// The camera is on its way to or from song select (`menu_shift`): the background routes and
+    /// the panel are drawn by that, and the menu doesn't fade in out of black.
+    pub shifting: bool,
+    /// A note that has left its place (hit, flying to song select's button).
+    pub away: Option<Item>,
 }
 
 pub struct Menu {
@@ -638,27 +650,21 @@ impl Menu {
             c.dt_ms,
         );
 
-        if let Some(ghosts) = &f.ghosts {
-            crate::menu_notes::draw(
-                c,
-                ghosts,
-                self.clock,
-                self.kiai,
-                self.kick(),
-                self.universe,
-                &mut eggs.stray.gold,
-            );
+        if !f.shifting {
+            self.draw_routes(c, f, eggs);
         }
         crate::settings::brand_with(c, |c, x, y, size| eggs.draw_logo(c, x, y, size));
         draw_session(c, f.session);
         self.draw_flashes(c);
-        self.draw_panel(c);
+        if !f.shifting {
+            self.draw_panel(c);
+        }
         self.play_song(
             c,
             f.ghosts.map(|g| g.dimmed(f.lane_dim)).as_ref(),
             f.beat.map(|b| b.1),
         );
-        self.draw_lane(c);
+        self.draw_lane(c, f.away);
         self.draw_drum(c);
         self.draw_burst(c);
         self.draw_kiai(c);
@@ -677,7 +683,7 @@ impl Menu {
         }
         eggs.end(c);
         // Coming in out of black.
-        let shown = if render::animations() {
+        let shown = if render::animations() && !f.shifting {
             self.opacity()
         } else {
             1.0
@@ -691,6 +697,43 @@ impl Menu {
                 rgba(0x000000, 1.0 - shown),
             );
         }
+    }
+
+    /// The song's notes on their routes behind the menu (drawn first by `draw`; by itself while
+    /// the camera moves, so the routes stay where they are).
+    pub fn draw_routes(&self, c: &mut Canvas, f: &Frame, eggs: &mut crate::eggs::MenuEggs) {
+        if let Some(ghosts) = &f.ghosts {
+            crate::menu_notes::draw(
+                c,
+                ghosts,
+                self.clock,
+                self.kiai,
+                self.kick(),
+                self.universe,
+                &mut eggs.stray.gold,
+            );
+        }
+    }
+
+    /// ms since the menu opened, which the routes behind it drift by, and how far the universes
+    /// have moved along them: song select carries the routes on from there.
+    pub fn routes_at(&self) -> (f32, usize) {
+        (self.clock, self.universe)
+    }
+
+    /// Comes back with the routes where song select left them (`routes_at`), all at once rather
+    /// than out of black: the camera brings it into view.
+    pub fn resume(&mut self, (clock, universe): (f32, usize)) {
+        self.clock = clock;
+        self.universe = universe;
+        self.appear = clock - FADE_MS;
+    }
+
+    /// The selected note's middle and radius (fully grown), as last drawn on a screen `width`
+    /// wide: where the hit note flies from.
+    pub fn spot(&self, width: f32) -> ([f32; 2], f32) {
+        let (_, slot) = Self::slots(width);
+        (self.spot, note_max_r().min(slot * 0.36) * (1.0 + grow()))
     }
 
     /// What's left of this beat's kick, 1 to 0.
@@ -1006,7 +1049,7 @@ impl Menu {
         );
     }
 
-    fn draw_lane(&mut self, c: &mut Canvas) {
+    fn draw_lane(&mut self, c: &mut Canvas, away: Option<Item>) {
         let (left, slot) = Self::slots(c.width);
         let r = note_max_r().min(slot * 0.36);
         // Names stay where they are whichever note is grown.
@@ -1043,7 +1086,7 @@ impl Menu {
                 self.new_aura(c, x, grown, hop, near);
             }
             // It stands out: a glow of its colour behind it, the others dimmed.
-            if near > 0.01 {
+            if near > 0.01 && away != Some(*item) {
                 c.glow(
                     x,
                     note_y() - hop,
@@ -1054,6 +1097,7 @@ impl Menu {
             }
             let start = c.shapes.len();
             match spin {
+                _ if away == Some(*item) => {}
                 Some(k) => draw_spin(
                     c,
                     &self.arts[i],
@@ -1866,6 +1910,8 @@ mod tests {
             paused: false,
             session: (0.0, 0.0),
             glitch: m.glitch,
+            shifting: false,
+            away: None,
         };
         m.draw(&mut c, &f, &mut crate::eggs::MenuEggs::new(1));
         c

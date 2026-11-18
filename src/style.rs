@@ -590,15 +590,22 @@ thread_local! {
     static LIGHTS: RefCell<HashMap<&'static str, f32>> = RefCell::new(HashMap::new());
 }
 
+/// The size of a lane-end button's ▶ at `[x, y, h]`, and its middle.
+pub fn lane_end_icon([x, y, h]: [f32; 3]) -> ([f32; 2], f32) {
+    let size = (h * 0.42).clamp(8.0, 11.0);
+    ([x + 14.0 + size * 0.5, y + h / 2.0], size * 1.1)
+}
+
 /// The main action as the end of a lane: a bar of the accent colour from `x` to the screen's
 /// right edge, the ▶ and `label` on it in white. Under the pointer it lights up and glows (no
-/// frame round it), easing in and out.
+/// frame round it), easing in and out. `icon_shown`: the ▶ is in its place (not on its way).
 pub fn lane_end_button(
     c: &mut Canvas,
     key: &'static str,
     [x, y, h]: [f32; 3],
     label: &str,
     hit: crate::hit::Hit,
+    icon_shown: bool,
 ) {
     use crate::menu::tint;
     let w = c.width - x;
@@ -632,14 +639,10 @@ pub fn lane_end_button(
     c.rect(x, y + 4.0, w, 1.0, line);
     c.rect(x, y + h - 5.0, w, 1.0, line);
     let size = (h * 0.42).clamp(8.0, 11.0);
-    icon(
-        c,
-        &PLAY,
-        [x + 14.0 + size * 0.5, y + h / 2.0],
-        size * 1.1,
-        0xffffff,
-        1.0,
-    );
+    if icon_shown {
+        let (at, icon_size) = lane_end_icon([x, y, h]);
+        icon(c, &PLAY, at, icon_size, 0xffffff, 1.0);
+    }
     let room = w - (28.0 + size * 1.1) - 8.0;
     glitch_text(
         c,
@@ -898,6 +901,7 @@ mod tests {
                 [700.0, 440.0, 26.0],
                 "Play",
                 crate::hit::Hit::ModsButton,
+                true,
             );
             c
         };

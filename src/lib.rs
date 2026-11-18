@@ -69,6 +69,7 @@ mod medals;
 mod media;
 mod menu;
 mod menu_notes;
+mod menu_shift;
 mod mobile;
 mod mod_setup;
 use taiko_logic::mods;
@@ -419,6 +420,15 @@ struct State {
     splash: Option<splash::Splash>,
     /// The main menu, up over song select (`on_menu`).
     main_menu: Option<menu::Menu>,
+    /// The camera on its way between the main menu and song select.
+    menu_shift: Option<menu_shift::Shift>,
+    /// Song select's routes behind it: where they drift to (carried on from the menu's, and back
+    /// to it: `menu::Menu::routes_at`), and, leaving for the menu, how far they've cleared off.
+    song_routes: (f32, usize),
+    song_routes_drain: Option<(f64, f32)>,
+    /// Where song select's Play ▶ is (as drawn, before the camera moves it): the hit note lands
+    /// there.
+    play_icon_at: Option<([f32; 2], f32)>,
     /// Its easter eggs, which outlast it (`eggs`).
     menu_eggs: eggs::MenuEggs,
     /// One map started again and again, for a secret medal (`ura::Again`).
@@ -2513,11 +2523,13 @@ impl State {
     /// Opens the screen of the note that was hit. Coming back from those lands here again,
     /// except from the songs, which is what the menu is for leaving to.
     fn menu_open(&mut self, item: menu::Item) {
-        if !matches!(item, menu::Item::Exit) {
+        // Song select is reached by moving the camera (`menu_shift`), not out of black.
+        let shifts = item == menu::Item::Play && self.cfg.animations && menu_shift::animated();
+        if !matches!(item, menu::Item::Exit) && !shifts {
             self.screen_fade = Some(0.0);
         }
         match item {
-            menu::Item::Play => self.main_menu = None,
+            menu::Item::Play => self.leave_menu_for_songs(shifts),
             menu::Item::Multiplayer => self.open_multiplayer(),
             menu::Item::Download => self.open_download(),
             menu::Item::Medals => self.open_medals(self.mp_menu.account.clone()),
@@ -2525,6 +2537,48 @@ impl State {
             menu::Item::Settings => self.open_settings(),
             menu::Item::Exit => self.ask_quit(),
         }
+    }
+
+    /// Play on the menu: the camera moves on along its lane to song select (`shifts`), or song
+    /// select is simply there.
+    fn leave_menu_for_songs(&mut self, shifts: bool) {
+        let left = self.main_menu.take();
+        if !shifts {
+            self.menu_shift = None;
+            return;
+        }
+        if let Some(m) = &left {
+            self.song_routes = m.routes_at();
+        }
+        self.song_routes_drain = None;
+        let from = self.menu_shift.take().filter(|s| !s.into_songs);
+        self.menu_shift = Some(menu_shift::Shift::into_songs(
+            left,
+            menu::Item::Play,
+            from.as_ref(),
+        ));
+    }
+
+    /// Song select's way back to the main menu: the camera moves back along the menu's lane, the
+    /// menu where it was left if the camera hadn't got all the way yet.
+    fn back_to_menu(&mut self) {
+        let shifts = self.cfg.animations && menu_shift::animated();
+        // Not yet all the way to song select: the menu it was leaving comes back.
+        let (left, from) = match self.menu_shift.take() {
+            Some(mut s) if shifts && s.into_songs => (s.menu.take(), Some(s)),
+            _ => (None, None),
+        };
+        let mut m = left.map_or_else(menu::Menu::new, |m| *m);
+        if shifts {
+            m.resume(self.song_routes);
+            self.menu_shift = Some(menu_shift::Shift::back(from.as_ref()));
+            // Song select's own routes clear off from where the song is now.
+            self.song_routes_drain = self
+                .preview
+                .map_time(self.menu_notes.entry())
+                .map(|t| (t, 0.0));
+        }
+        self.main_menu = Some(m);
     }
 
     /// Logged in as krokodil_koban (their settings row shows).
@@ -12918,6 +12972,8 @@ impl State {
         }
         let on_menu = self.on_menu();
         if !self.scene.is_select() {
+            // Off to another screen: no camera left on its way.
+            self.menu_shift = None;
             self.select.menu = None;
             self.list_drag = None;
             self.select.cancel_drag();
@@ -15064,7 +15120,7 @@ impl State {
             Hit::ListBack => self.select.follow_selection(),
             Hit::ToMenu if self.select.to_menu => {
                 self.select.searching = false;
-                self.main_menu = Some(menu::Menu::new());
+                self.back_to_menu();
             }
             Hit::ToMenu => self.key_inner(KeyCode::Escape, false, None, Instant::now(), window),
             Hit::ModsButton => self.open_mod_select(),
