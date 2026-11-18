@@ -47,11 +47,15 @@ Notable ones: [wgpu](https://github.com/gfx-rs/wgpu) and [winit](https://github.
 [zip](https://github.com/zip-rs/zip2), [ureq](https://github.com/algesten/ureq),
 [serde](https://github.com/serde-rs/serde), and on the server [argon2](https://github.com/RustCrypto/password-hashes).
 
-## TJA reference material
+## TJA charts
 
-The TJA file format has no license tied to it, although some charts and documentation were used as reference material to understand the format itself. Under no circumstances has any official content, including Taiko no Tatsujin charts and OpenTaiko charts, been used as reference material.
-- [TJA documentation](https://iepiweidieng.github.io/TJAPlayer3/tja/) courtesy of @IepIweidieng
-
-These charters have agreed to use their own TJA charts as reference material. Their chart repositories can be found by clicking on their respective names:
-- [BeaniCraft](https://ese.tjadataba.se/BeaniCraft/BeaniCrafts-Charts)
-- [TFD500](https://ese.tjadataba.se/TFD500/TFD500-Charts)
+- The TJA format has no license of its own. Its commands are read as
+  [IepIweidieng's TJA documentation](https://iepiweidieng.github.io/TJAPlayer3/tja/) describes them,
+  and their behaviour follows [OpenTaiko](https://github.com/0auBSQ/OpenTaiko) (MIT-licensed),
+  so charts play as they do there.
+- It plays the TJA charts the player already has. No charts, songs or OpenTaiko assets are
+  bundled with it; the repository holds only small charts written for its own tests.
+- The parser was checked locally against charts from OpenTaiko's soundtrack (CC BY 4.0) and test
+  charts from OpenTaiko's issues; none of them are in the repository. BeaniCraft and TFD500 agreed to
+  their charts ([BeaniCraft](https://ese.tjadataba.se/BeaniCraft/BeaniCrafts-Charts),
+  [TFD500](https://ese.tjadataba.se/TFD500/TFD500-Charts)) being used the same way.
