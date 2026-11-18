@@ -2839,6 +2839,270 @@ fn a_new_lobby_map_comes_from_the_host_without_waiting_for_the_old_set() {
     assert_snapshot("network-new-lobby-map-skips-the-old-set", &log);
 }
 
+/// A TJA chart with two courses that plays `song.ogg`, as a host has it in its TJA folder.
+const LOBBY_TJA: &str = "TITLE:Lobby TJA\nSUBTITLE:--Tester\nBPM:120\nWAVE:song.ogg\nOFFSET:0\n\nCOURSE:Oni\nLEVEL:8\n#START\n1020,\n3040,\n#END\n\nCOURSE:Easy\nLEVEL:2\n#START\n1000,\n1000,\n#END\n";
+
+/// A client's map folders (osu!'s Songs, taiko.rs's custom maps, its TJA charts) under `root`,
+/// gone when the test is.
+struct TjaPlayer {
+    root: std::path::PathBuf,
+}
+
+impl TjaPlayer {
+    fn new(tag: &str, who: &str) -> TjaPlayer {
+        let root = std::env::temp_dir().join(format!(
+            "taiko-rs-regression-mp-tja-{tag}-{who}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for d in ["Songs", "Custom", "Tja"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        TjaPlayer { root }
+    }
+
+    fn songs(&self) -> std::path::PathBuf {
+        self.root.join("Songs")
+    }
+
+    fn tja(&self) -> std::path::PathBuf {
+        self.root.join("Tja")
+    }
+
+    /// Writes `bytes` as `Tja/<path>`.
+    fn put(&self, path: &str, bytes: &[u8]) {
+        let p = self.tja().join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+    }
+
+    /// A client looking through these folders.
+    fn client(&self, now: &mut Instant) -> State {
+        let mut s = state_with(harness::config(), Vec::new());
+        s.songs_dir = self.songs();
+        s.song_dirs = vec![self.songs()];
+        s.set_custom_dir(self.root.join("Custom"));
+        s.tja_dir = Some(self.tja());
+        ready(&mut s, now);
+        s.refresh_library(true);
+        assert!(wait_for(&mut s, now, |s| s.scan.is_none()), "the scan ends");
+        s
+    }
+}
+
+impl Drop for TjaPlayer {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// The files under `dir`, by their paths from it, sorted.
+fn files_under(dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            if e.path().is_dir() {
+                stack.push(e.path());
+            } else {
+                let rel = e.path().strip_prefix(dir).unwrap().to_path_buf();
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A room of a host whose TJA folder holds `LOBBY_TJA` (beside a file it doesn't name) and a
+/// guest whose holds `guest_has` (path, contents), with the host picking its Oni course;
+/// `tja_files`: the host's server lets TJA charts through.
+fn tja_lobby(
+    tag: &str,
+    guest_has: &[(&str, &[u8])],
+    tja_files: bool,
+) -> (State, State, TjaPlayer, TjaPlayer, Instant) {
+    let (host_dirs, guest_dirs) = (TjaPlayer::new(tag, "host"), TjaPlayer::new(tag, "guest"));
+    // Named like an osu! set's folder, which it isn't.
+    host_dirs.put("1234 Lobby Song/song.tja", LOBBY_TJA.as_bytes());
+    host_dirs.put("1234 Lobby Song/song.ogg", &[7u8; 64 << 10]);
+    host_dirs.put("1234 Lobby Song/notes.txt", b"not the chart's");
+    for (path, bytes) in guest_has {
+        guest_dirs.put(path, bytes);
+    }
+    let mut now = Instant::now();
+    let mut h = host_dirs.client(&mut now);
+    let mut g = guest_dirs.client(&mut now);
+    // The server lets TJA charts through (`online::TJA_LOBBY_FILES_FEATURE`).
+    h.tja_lobby_files = tja_files;
+    let server = net::host(0, false).unwrap();
+    let room = format!("127.0.0.1:{}", server.port);
+    let mut host = multiplayer::joined(
+        net::Client::connect(&room, "host", Some(server.token)).unwrap(),
+        "regression room",
+    );
+    host.server = Some(server);
+    h.mp = Some(host);
+    h.scene = crate::screens::lobby::Lobby::scene();
+    g.mp = Some(multiplayer::joined(
+        net::Client::connect(&room, "guest", None).unwrap(),
+        "regression room",
+    ));
+    g.scene = crate::screens::lobby::Lobby::scene();
+    let in_room = |s: &State| s.mp.as_ref().is_some_and(|m| m.players.len() == 2);
+    assert!(both_until(
+        &mut h,
+        &mut g,
+        &mut now,
+        Duration::from_secs(10),
+        |h, g| { in_room(h) && in_room(g) && h.mp.as_ref().unwrap().is_host() }
+    ));
+    press(&mut h, KeyCode::KeyM, now);
+    assert!(h.picking_lobby_map, "M opens the map picker");
+    let oni = h
+        .select
+        .rows()
+        .iter()
+        .position(|&i| h.library[i].is_tja() && h.library[i].meta.version == "Oni")
+        .expect("the host lists the chart's Oni course");
+    h.select.set_cursor(oni);
+    frame(&mut h, now);
+    press(&mut h, KeyCode::Enter, now);
+    assert_eq!(scene_name(&h), "Lobby", "a pick goes back to the lobby");
+    (h, g, host_dirs, guest_dirs, now)
+}
+
+/// Whether `s` has the lobby map and the room knows it.
+fn has_lobby_map(s: &State) -> bool {
+    s.mp.as_ref()
+        .is_some_and(|m| m.have_map && m.me().is_some_and(|p| p.has_map))
+}
+
+/// The host picks a course of a TJA chart the guest doesn't have: the guest gets it from the
+/// host like any lobby map, as the chart with the music and pictures it names, into its TJA
+/// folder (the only place charts are read from), and can play it.
+#[test]
+fn a_tja_chart_comes_from_the_lobby_host_into_the_tja_folder() {
+    let (mut h, mut g, _host_dirs, guest_dirs, mut now) = tja_lobby("get", &[], true);
+    assert!(
+        both_until(&mut h, &mut g, &mut now, Duration::from_secs(15), |_, g| {
+            has_lobby_map(g)
+        }),
+        "the guest gets the chart from the host"
+    );
+    let map =
+        h.mp.as_ref()
+            .and_then(|m| m.map.clone())
+            .expect("the lobby map");
+    let mut log = String::new();
+    let _ = writeln!(
+        log,
+        "lobby map: {} - {} [{}], osu! set: {:?}",
+        map.artist, map.title, map.version, map.set_id
+    );
+    let _ = writeln!(log, "guest has the map: true");
+    let _ = writeln!(
+        log,
+        "guest's TJA folder: {:?}",
+        files_under(&guest_dirs.tja())
+    );
+    let _ = writeln!(
+        log,
+        "guest's Songs folder: {:?}",
+        files_under(&guest_dirs.songs())
+    );
+    let got = &g.library[library::find_map(&g.library, &map).expect("in the guest's list")];
+    assert!(got.is_tja());
+    let _ = writeln!(
+        log,
+        "guest's entry: {} [{}], TJA: {}",
+        got.meta.title,
+        got.meta.version,
+        got.is_tja()
+    );
+    let host_entry = &h.library[library::find_map(&h.library, &map).unwrap()];
+    let times = |p: &std::path::Path| -> Vec<f64> {
+        beatmap::load(p)
+            .unwrap()
+            .notes
+            .iter()
+            .map(|n| n.time)
+            .collect()
+    };
+    assert_eq!(
+        times(&got.path),
+        times(&host_entry.path),
+        "the guest plays the host's chart"
+    );
+    // A match on it stays off the online server, like a TJA play on its own.
+    assert!(
+        h.live_is_tja() && g.live_is_tja(),
+        "the lobby's map is a TJA chart"
+    );
+    assert_snapshot("network-tja-chart-from-the-host", &log);
+}
+
+/// A guest with the same chart written otherwise (CRLF, a comment, another folder) has the
+/// host's course already: nothing is sent.
+#[test]
+fn a_guest_with_the_same_tja_chart_plays_it_without_a_transfer() {
+    let copy = format!("// my copy\r\n{}", LOBBY_TJA.replace('\n', "\r\n"));
+    // On a server that passes no TJA charts on: none is needed.
+    let (mut h, mut g, _host_dirs, guest_dirs, mut now) = tja_lobby(
+        "have",
+        &[
+            ("Mine/chart.tja", copy.as_bytes()),
+            ("Mine/song.ogg", &[7u8; 64 << 10]),
+        ],
+        false,
+    );
+    assert!(
+        both_until(&mut h, &mut g, &mut now, Duration::from_secs(10), |_, g| {
+            has_lobby_map(g)
+        }),
+        "the guest's own copy is the lobby's map"
+    );
+    assert!(g.host_transfer.is_none() && g.downloads.is_empty());
+    assert_eq!(
+        files_under(&guest_dirs.tja()),
+        ["Mine/chart.tja", "Mine/song.ogg"],
+        "nothing came from the host"
+    );
+}
+
+/// On a server that doesn't list `TJA_LOBBY_FILES_FEATURE` (switched off) the host sends no TJA
+/// chart: the guest is told so, gets nothing, and doesn't look for it on the mirrors.
+#[test]
+fn a_host_sends_no_tja_chart_through_a_server_that_doesnt_pass_them_on() {
+    let (mut h, mut g, _host_dirs, guest_dirs, mut now) = tja_lobby("off", &[], false);
+    let told = "the server doesn't pass the host's TJA chart on";
+    let toast = |g: &State| g.toast.as_ref().map(|t| t.text.clone());
+    assert!(
+        both_until(&mut h, &mut g, &mut now, Duration::from_secs(10), |_, g| {
+            toast(g).as_deref() == Some(told)
+        }),
+        "the guest is told the host can't send it: {:?}",
+        toast(&g)
+    );
+    // A little longer: nothing more comes.
+    let _ = both_until(
+        &mut h,
+        &mut g,
+        &mut now,
+        Duration::from_millis(500),
+        |_, _| false,
+    );
+    assert!(!has_lobby_map(&g));
+    assert!(
+        files_under(&guest_dirs.tja()).is_empty(),
+        "nothing came from the host"
+    );
+    assert!(
+        g.downloads.is_empty() && g.host_transfer.is_none() && !g.lobby_lookup.is_busy(),
+        "no download, no mirror search"
+    );
+}
+
 /// A difficulty as osu! serves it: its beatmap ID, the music it plays and `notes` notes.
 fn osu_diff(id: u32, version: &str, audio: &str, notes: usize) -> Vec<u8> {
     let mut text = format!(
