@@ -12,6 +12,7 @@ pub type ReadFile = fn(&std::path::Path) -> Option<Vec<u8>>;
 
 pub mod autoplay;
 pub mod beatmap;
+pub mod branch;
 pub mod calibrate;
 pub mod clock;
 pub mod defense;

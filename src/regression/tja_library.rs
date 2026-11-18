@@ -564,6 +564,15 @@ fn a_sudden_note_shows_up_late_and_waits_to_move() {
 /// The hit target's place and the small dons' along and across the lane at `t` (map ms) in
 /// TJA chart `text`.
 fn drawn_at(text: &str, t: f64) -> (Vec<(f32, f32)>, crate::hit::Canvas) {
+    drawn_played_at(text, Vec::new(), t)
+}
+
+/// The same, played with `inputs` (map ms, key).
+fn drawn_played_at(
+    text: &str,
+    inputs: Vec<(f64, u8)>,
+    t: f64,
+) -> (Vec<(f32, f32)>, crate::hit::Canvas) {
     use crate::game::{Look, Play, set_frame_look};
     use crate::hit::Canvas;
     crate::render::set_frame_theme(Some(crate::render::Theme {
@@ -573,7 +582,7 @@ fn drawn_at(text: &str, t: f64) -> (Vec<(f32, f32)>, crate::hit::Canvas) {
     set_frame_look(Some(Look::default()));
     crate::render::set_frame_time(Some(Instant::now()));
     let map = taiko_logic::tja::parse(text).unwrap().courses.remove(0).map;
-    let r = super::gameplay::replay(Vec::new(), &[], scores::new_version());
+    let r = super::gameplay::replay(inputs, &[], scores::new_version());
     let game = scores::replay_game(&map, &super::gameplay::silent_track(r.rate), &r);
     let mut play = Play::new(game);
     play.game.set_time(t);
@@ -899,4 +908,49 @@ fn notes_come_in_from_any_side() {
             &format!("{scroll} half a second before"),
         );
     }
+}
+
+/// Two bars of kats, then a branch picked by accuracy: Normal plays kats, Expert big kats,
+/// Master small dons; then a shared bar of kats.
+const BRANCHING: &str = "TITLE:Branches\nBPM:120\nOFFSET:0\nCOURSE:Oni\n#START\n2222,\n2222,\n#BRANCHSTART p,60,90\n#N\n2222,\n#E\n4444,\n#M\n1111,\n#BRANCHEND\n2222,\n#END\n";
+
+/// Every kat of the two bars before the branch hit on time (left rim).
+fn kats_hit() -> Vec<(f64, u8)> {
+    (0..8).map(|k| (k as f64 * 500.0, 0)).collect()
+}
+
+/// A branching chart plays the branch the player earned: picked a bar ahead (at 2000 here), it
+/// takes over where it starts (4000), and only its notes come in. Its name shows under the
+/// lane.
+#[test]
+fn a_branching_chart_plays_the_branch_earned_and_shows_it() {
+    let (dons, c) = drawn_played_at(BRANCHING, kats_hit(), 3500.0);
+    assert!(dons.len() >= 2, "Master's dons come in: {dons:?}");
+    assert!(shows(&c, "NORMAL"), "still Normal until the branch starts");
+    assert!(!shows(&c, "MASTER"));
+    let (_, c) = drawn_played_at(BRANCHING, kats_hit(), 4600.0);
+    assert!(shows(&c, "MASTER"));
+    // Nothing hit: Normal's kats come in, and none of Master's dons.
+    let (dons, c) = drawn_played_at(BRANCHING, Vec::new(), 3500.0);
+    assert!(dons.is_empty(), "{dons:?}");
+    let (_, after) = drawn_played_at(BRANCHING, Vec::new(), 4600.0);
+    assert!(shows(&c, "NORMAL") && shows(&after, "NORMAL"));
+    // A chart that doesn't branch shows no branch.
+    let (_, plain) = drawn_at(&BRANCHING.replace("#BRANCHSTART p,60,90\n", ""), 4600.0);
+    assert!(!shows(&plain, "NORMAL") && !shows(&plain, "MASTER"));
+}
+
+/// The song list rates a branching chart by its Master branch, as the arcade lists it.
+#[test]
+fn a_branching_chart_is_listed_by_its_master_branch() {
+    let f = Folders::new("branch-info");
+    let master_only = BRANCHING
+        .replace("#BRANCHSTART p,60,90\n#N\n2222,\n#E\n4444,\n#M\n", "")
+        .replace("#BRANCHEND\n", "");
+    let oni = taiko_logic::tja::CourseKind::Oni;
+    let branching = put(&f.tja, "A", "a.tja", BRANCHING);
+    let plain = put(&f.tja, "B", "b.tja", &master_only);
+    let a = mapinfo_of(&tja_maps::course_path(&branching, oni));
+    let b = mapinfo_of(&tja_maps::course_path(&plain, oni));
+    assert_eq!(format!("{a:?}"), format!("{b:?}"));
 }

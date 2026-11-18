@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::{ChartHash, CourseKind, SLIDER_MULTIPLIER};
 use crate::beatmap::{Barline, Beatmap, ControlPoint, Kind, Meta, Note, WindowSource};
+use crate::branch::{Branching, Measure};
 
 /// What `BoardChart::hash` hashes first: a new normalization gets a new tag, so old and new
 /// hashes never mix. v1 covered the notes only, so a chart with gogo time added would have
@@ -34,6 +35,10 @@ pub struct BoardChart {
     /// (time, beat origin, beat length, scroll, gogo).
     pub points: Vec<(f64, f64, f64, f64, bool)>,
     pub first_velocity: f64,
+    /// A branching chart's branches (`crate::branch`): `notes` has every branch's. Absent
+    /// for the rest, whose hash it leaves as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branches: Option<Branching>,
 }
 
 impl BoardChart {
@@ -69,6 +74,7 @@ impl BoardChart {
                 .map(|p| (p.time, p.beat_origin, p.beat_length, p.sv, p.kiai))
                 .collect(),
             first_velocity: map.first_velocity,
+            branches: map.branching.as_deref().cloned(),
         }
     }
 
@@ -116,6 +122,34 @@ impl BoardChart {
             h.update(q(scroll, 1e6));
             h.update([gogo as u8]);
         }
+        if let Some(b) = &self.branches {
+            h.update(b"branches\n");
+            for tag in &b.notes {
+                match tag {
+                    None => h.update([0xFF]),
+                    Some((point, branch)) => {
+                        h.update([*branch]);
+                        h.update(point.to_le_bytes());
+                    }
+                }
+            }
+            h.update((b.points.len() as u64).to_le_bytes());
+            for p in &b.points {
+                let c = &p.condition;
+                h.update(q(p.judge, 100.0));
+                h.update(q(p.start, 100.0));
+                h.update([measure_id(c.measure), c.big_only as u8, c.below as u8]);
+                h.update(q(c.expert, 1e4));
+                h.update(q(c.master, 1e4));
+                h.update(p.hold.map(u8::from));
+            }
+            for times in [&b.resets, &b.holds] {
+                h.update((times.len() as u64).to_le_bytes());
+                for &t in times {
+                    h.update(q(t, 100.0));
+                }
+            }
+        }
         ChartHash(h.finalize().into())
     }
 
@@ -150,6 +184,12 @@ impl BoardChart {
         });
         if !notes_ok || !bars_ok || !points_ok || !speed(self.first_velocity) {
             return Err("a time or speed out of range".into());
+        }
+        if let Some(b) = &self.branches {
+            b.check(self.notes.len())?;
+            if b.resets.len() + b.holds.len() > MAX_ITEMS {
+                return Err("too long a chart".into());
+            }
         }
         if !sorted(self.notes.iter().map(|n| n.0))
             || !sorted(self.barlines.iter().map(|b| b.0))
@@ -199,7 +239,23 @@ impl BoardChart {
             first_velocity: self.first_velocity,
             gimmick: None,
             fakes: Vec::new(),
+            branching: self.branches.clone().map(std::sync::Arc::new),
         })
+    }
+}
+
+/// A condition's number in the hash: fixed, whatever the enum's order.
+fn measure_id(m: Measure) -> u8 {
+    match m {
+        Measure::Keep => 0,
+        Measure::Accuracy => 1,
+        Measure::GreatShare => 2,
+        Measure::Greats => 3,
+        Measure::Oks => 4,
+        Measure::Misses => 5,
+        Measure::Rolls => 6,
+        Measure::BalloonHits => 7,
+        Measure::Score => 8,
     }
 }
 

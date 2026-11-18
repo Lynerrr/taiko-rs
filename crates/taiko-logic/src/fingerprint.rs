@@ -17,12 +17,14 @@ pub const MIN_HITS: usize = 50;
 pub const MIN_CHANGES: usize = 8;
 const TAG: &[u8] = b"taiko.rs hit pattern v1\n";
 
-/// `map`'s hit pattern, as lowercase hex; None when it's too short or plain to tell.
+/// `map`'s hit pattern, as lowercase hex; None when it's too short or plain to tell. A
+/// branching chart's is its Master branch's, which a converter writes out.
 pub fn hit_pattern(map: &Beatmap) -> Option<String> {
-    let hits: Vec<(bool, bool)> = map
-        .notes
-        .iter()
-        .filter_map(|note| match note.kind {
+    let master =
+        |i: usize| (map.branching.as_ref()).is_none_or(|b| b.plays(i, |_| crate::branch::MASTER));
+    let hits: Vec<(bool, bool)> = (map.notes.iter().enumerate())
+        .filter(|&(i, _)| master(i))
+        .filter_map(|(_, note)| match note.kind {
             Kind::Don => Some((false, note.big)),
             Kind::Kat => Some((true, note.big)),
             Kind::Roll | Kind::Swell => None,
@@ -103,6 +105,24 @@ mod tests {
         assert_ne!(hit_pattern(&tja(&kat)), pattern);
         assert_ne!(hit_pattern(&tja(&big)), pattern);
         assert_ne!(hit_pattern(&tja(&kat)), hit_pattern(&tja(&big)));
+    }
+
+    #[test]
+    fn a_branching_chart_has_its_master_branchs_pattern() {
+        // The last bar written three ways: Master's is the original.
+        let (head, last) = PATTERN.split_at(56);
+        let bars: Vec<String> = head
+            .as_bytes()
+            .chunks(8)
+            .map(|bar| format!("{},", String::from_utf8_lossy(bar)))
+            .collect();
+        let text = format!(
+            "TITLE:Test\nBPM:120\nOFFSET:0\nCOURSE:Oni\nLEVEL:8\n\n#START\n{}\n#BRANCHSTART p,50,80\n#N\n11111111,\n#E\n22222222,\n#M\n{last},\n#END\n",
+            bars.join("\n")
+        );
+        let map = crate::tja::parse(&text).unwrap().courses.remove(0).map;
+        assert!(map.branching.is_some());
+        assert_eq!(hit_pattern(&map), hit_pattern(&tja(PATTERN)));
     }
 
     #[test]

@@ -773,6 +773,10 @@ impl Play {
                 if n.end_time + n.fake_len < vt.min(t) - 3000.0 && n.kind != Kind::Swell {
                     continue;
                 }
+                // A branching TJA chart's notes off the branch played aren't there.
+                if !self.game.on_path(i) {
+                    continue;
+                }
                 self.view.visible.push(i);
             }
         }
@@ -991,6 +995,15 @@ impl Play {
         };
         let mut edge_col = rgba(0x3a3a4e, 1.0);
         let mut skin_lane_tint = rgba(WHITE, 1.0);
+        // A branching TJA chart's lane takes its branch's colour, as in the arcade, where the
+        // branch starts.
+        let branch = self.game.branch().map(|b| {
+            let fade = ((vt - b.since) / BRANCH_FADE_MS).clamp(0.0, 1.0) as f32;
+            (b.at(vt), if vt >= b.since { fade } else { 1.0 })
+        });
+        if let Some((b, k)) = branch.filter(|&(b, _)| b != taiko_logic::branch::NORMAL) {
+            lane_col = tint(lane_col, BRANCH_COLS[usize::from(b)], BRANCH_TINT * k);
+        }
         if radar {
             lane_col = if in_kiai {
                 rgba(0x17150d, 1.0)
@@ -2253,6 +2266,20 @@ impl Play {
                 c.rotate_since(from, pivot, angle, zoom, dest);
             }
         }
+        // A branching TJA chart's branch, under the lane at its left.
+        if let Some((b, k)) = branch {
+            let y = band_top + band_h + LYRIC_GAP;
+            let name = taiko_logic::branch::NAMES[usize::from(b)].to_uppercase();
+            let col = mix(WHITE, BRANCH_COLS[usize::from(b)], 0.6);
+            c.text(
+                BRANCH_LABEL_X + 1.0,
+                y + 1.0,
+                LYRIC_SIZE,
+                rgba(0, 0.8 * k),
+                &name,
+            );
+            c.text(BRANCH_LABEL_X, y, LYRIC_SIZE, rgba(col, k), &name);
+        }
         // A TJA chart's #LYRIC line, under the lane where the playfield usually is, upright
         // whatever moves it.
         if let Some(line) = self.game.tko().and_then(|rt| rt.lyric(vt)) {
@@ -3401,6 +3428,13 @@ pub(super) fn lane_stretch(rail: bool, len: f32, w: f32) -> f64 {
 
 /// How far ahead (ms) notes are looked for under a shared scroll, which may hold far notes near.
 pub(super) const SHARED_LOOKAHEAD_MS: f64 = 30_000.0;
+/// A branching TJA chart's branches' lane colours (Normal, Expert, Master), how far the lane
+/// goes to them, how fast, and where the branch's name sits.
+const BRANCH_COLS: [u32; 3] = [0x20202b, 0x3b7fd0, 0xb04ad8];
+const BRANCH_TINT: f32 = 0.35;
+const BRANCH_FADE_MS: f64 = 250.0;
+const BRANCH_LABEL_X: f32 = 10.0;
+
 /// A TJA chart's lyrics: their size, and how far under the lane band they sit.
 const LYRIC_SIZE: f32 = 13.0;
 const LYRIC_GAP: f32 = 6.0;
