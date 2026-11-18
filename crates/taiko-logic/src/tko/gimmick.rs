@@ -647,6 +647,9 @@ pub struct Motion {
     /// Per barline, ascending: its time and the velocity it is drawn with (below 0 from the
     /// left).
     pub barlines: Vec<(f64, f64)>,
+    /// Barlines coming in other than along the lane, ascending: their time and the way (as
+    /// `NoteMotion::dir`). They lie across that way.
+    pub barline_dirs: Vec<(f64, [f64; 2])>,
     /// How far the hit target has moved from its place, in virtual units right and down (a TJA
     /// chart's `#JPOSSCROLL`): everything on the lane goes with it, so notes still meet it on
     /// time.
@@ -672,6 +675,10 @@ pub struct NoteMotion {
     pub wait: f64,
     /// A roll or balloon is never drawn (TJAPlayer3's `#SUDDEN a 0`, which OpenTaiko keeps).
     pub hide_long: bool,
+    /// The way it comes in from, other than along the lane (a TJA chart's complex `#SCROLL` or
+    /// `#DIRECTION`): a unit vector from the drum, right and down, `velocity` then the speed
+    /// along it.
+    pub dir: Option<[f64; 2]>,
 }
 
 impl NoteMotion {
@@ -683,6 +690,7 @@ impl NoteMotion {
             show: f64::INFINITY,
             wait: f64::INFINITY,
             hide_long: false,
+            dir: None,
         }
     }
 }
@@ -700,9 +708,15 @@ impl Motion {
     pub fn is_empty(&self) -> bool {
         self.notes.is_empty()
             && self.barlines.is_empty()
+            && self.barline_dirs.is_empty()
             && self.judge_x.is_empty()
             && self.judge_y.is_empty()
             && self.lyrics.is_empty()
+    }
+
+    /// The way the barline at time `t` comes in (see `barline_dirs`); None along the lane.
+    pub fn barline_dir(&self, t: f64) -> Option<[f64; 2]> {
+        at_time(&self.barline_dirs, t, |b| b.0).map(|b| b.1)
     }
 
     /// Where the hit target has moved at time `t` (see `judge_x`).

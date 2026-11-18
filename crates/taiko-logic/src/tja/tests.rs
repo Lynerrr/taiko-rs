@@ -923,3 +923,98 @@ fn level_is_kept_apart_from_the_course_name() {
         ]
     );
 }
+
+/// Each note's way in (rounded) and speed against a `#SCROLL 1` note's.
+fn ways(c: &Course) -> Vec<(Option<[f64; 2]>, f64)> {
+    let m = motion(c).expect("a gimmick");
+    let round = |v: f64| (v * 1000.0).round() / 1000.0;
+    m.notes
+        .iter()
+        .map(|n| {
+            (
+                n.dir.map(|[x, y]| [round(x), round(y)]),
+                round(n.velocity / velocity(120.0, 1.0)),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn complex_scroll_and_direction_send_notes_in_from_any_side() {
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let h = (h * 1000.0).round() / 1000.0;
+    let c = one(&chart(
+        120.0,
+        "#SCROLL i\n1,\n#SCROLL -2i\n1,\n#SCROLL 1+i\n1,\n#SCROLL 1\n#DIRECTION 1\n1,\n#DIRECTION 3\n1,\n#DIRECTION 5\n1,\n#DIRECTION 0\n#SCROLL 0.5\n1,",
+    ));
+    assert_eq!(
+        ways(&c),
+        [
+            // OpenTaiko's own axes: an imaginary part points down, so the note comes up from
+            // under the drum.
+            (Some([0.0, 1.0]), 1.0),
+            (Some([0.0, -1.0]), 2.0),
+            (Some([h, h]), 1.414),
+            // #DIRECTION 1: down from above; 3: from up and right, as fast across as before.
+            (Some([0.0, -1.0]), 1.0),
+            (Some([h, -h]), 1.414),
+            // 5: from the left, along the lane.
+            (None, -1.0),
+            (None, 0.5),
+        ]
+    );
+    let barlines = &motion(&c).unwrap().barline_dirs;
+    assert_eq!(
+        barlines.len(),
+        5,
+        "only the ones off the lane: {barlines:?}"
+    );
+    assert!(
+        parse(&chart(120.0, "#DIRECTION 2\n1,"))
+            .unwrap()
+            .warnings
+            .is_empty()
+    );
+}
+
+#[test]
+fn taikojiro_axes_point_the_imaginary_part_up() {
+    let c = one(&format!(
+        "COMPAT:jiro2\n{}",
+        chart(120.0, "#SCROLL i\n1,\n#SCROLL 1+i\n#DIRECTION 5\n1,")
+    ));
+    // Jiro's #DIRECTION sets the way whole: 5 is plain from the left.
+    assert_eq!(ways(&c), [(Some([0.0, -1.0]), 1.0), (None, -1.0)]);
+    // OpenTaiko's keeps the complex #SCROLL's vertical part through it.
+    let c = one(&chart(120.0, "#SCROLL 1+i\n#DIRECTION 5\n1,"));
+    let h = (std::f64::consts::FRAC_1_SQRT_2 * 1000.0).round() / 1000.0;
+    assert_eq!(ways(&c), [(Some([-h, h]), 1.414)]);
+}
+
+#[test]
+fn rolls_stay_on_the_lane_whatever_way_notes_come() {
+    let c = one(&chart(120.0, "#SCROLL 2i\n5008,\n1,"));
+    let m = motion(&c).expect("a gimmick");
+    assert_eq!(m.notes[0].dir, None, "the roll");
+    assert!((m.notes[0].velocity - velocity(120.0, 2.0)).abs() < 1e-9);
+    assert_eq!(m.notes[1].dir, Some([0.0, 1.0]));
+}
+
+#[test]
+fn ways_in_leave_the_board_as_it_is() {
+    let body = "1020,\n#BPMCHANGE 200\n1111,\n5008,";
+    let base = one(&chart(150.0, &format!("#SCROLL 2\n{body}")));
+    for gimmick in [
+        "#SCROLL 2+3i",
+        "#SCROLL 2-i\n#DIRECTION 4",
+        "#SCROLL 2\n#DIRECTION 6",
+    ] {
+        let c = one(&chart(150.0, &format!("{gimmick}\n{body}")));
+        assert_eq!(c.hash, base.hash, "{gimmick}");
+        assert_eq!(
+            BoardChart::of(c.kind, &c.map),
+            BoardChart::of(base.kind, &base.map),
+            "{gimmick}"
+        );
+    }
+}
