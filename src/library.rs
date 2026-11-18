@@ -68,7 +68,8 @@ impl Entry {
     /// None for a map in taiko.rs's own custom maps folder: a custom map made from an osu! set
     /// keeps that set's IDs, but osu! has none of its difficulties.
     pub fn set_id(&self) -> Option<u32> {
-        if self.own {
+        // Nor for a TJA chart: its folder's name (`12345 Song`) isn't an osu! set's.
+        if self.own || self.tja {
             return None;
         }
         self.meta
