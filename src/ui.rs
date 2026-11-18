@@ -666,11 +666,13 @@ impl Select {
         let count_bins = self.lens_ui.is_some();
         let lens = !filters.is_empty() || count_bins;
         // One pass over the library: each source's maps (for its tab, and whether the picked one
-        // has any), and what passes everything but the source, with its source (None: pinned,
-        // listed whatever the source). The star bars are counted for each source and all.
+        // has any) and what passes. The star bars are counted for each source and all.
         let mut maps = [0; 4];
         let mut bins = [[0; 10]; 4];
-        let mut passed: Vec<(usize, Option<Source>)> = Vec::new();
+        let picked = self.tabs.source;
+        let mut visible = Vec::new();
+        // What the other sources have that passes, should the picked one have no maps.
+        let mut others = Vec::new();
         for (i, e) in library.iter().enumerate() {
             if self.gone.contains(&e.path) {
                 continue;
@@ -682,7 +684,7 @@ impl Select {
                 maps[s.index()] += 1;
             }
             if self.pinned.contains(&e.path) {
-                passed.push((i, None));
+                visible.push(i);
                 continue;
             }
             let Some(source) = source else {
@@ -715,16 +717,20 @@ impl Select {
                     continue;
                 }
             }
-            passed.push((i, Some(source)));
+            if picked.takes(source) {
+                visible.push(i);
+            } else {
+                others.push(i);
+            }
         }
         drop(info);
         self.source_maps = maps;
         let shown = self.shown_source();
-        self.visible = passed
-            .into_iter()
-            .filter(|&(_, s)| s.is_none_or(|s| shown.takes(s)))
-            .map(|(i, _)| i)
-            .collect();
+        if shown != picked {
+            visible.extend(others);
+            visible.sort_unstable();
+        }
+        self.visible = visible;
         self.star_bins = bins[shown.index()];
         self.sort_visible(library);
         self.regroup(library);
