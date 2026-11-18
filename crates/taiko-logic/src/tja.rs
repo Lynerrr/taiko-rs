@@ -662,7 +662,8 @@ fn pick_branch<'a>(chart: &RawChart<'a>, pass: usize, warnings: &mut Warnings) -
 
 /// Scroll velocity (osu!px per ms) at `bpm` and `#SCROLL scroll`: TJA notes move with both.
 pub fn velocity(bpm: f64, scroll: f64) -> f64 {
-    SLIDER_MULTIPLIER * TAIKO_VELOCITY_MULTIPLIER * 100.0 * scroll.abs().max(MIN_SCROLL) * bpm
+    // A negative BPM's notes are as fast as a positive one's (they only come the other way).
+    SLIDER_MULTIPLIER * TAIKO_VELOCITY_MULTIPLIER * 100.0 * scroll.abs().max(MIN_SCROLL) * bpm.abs()
         / 60_000.0
 }
 
@@ -833,7 +834,8 @@ impl Cursor {
     fn drawn_velocity(&self, reference: f64) -> f64 {
         let side = if self.scroll < 0.0 { -1.0 } else { 1.0 };
         match self.mode {
-            ScrollMode::Normal => side * self.velocity(),
+            // A negative BPM turns them round too, as OpenTaiko places notes at BPM × #SCROLL.
+            ScrollMode::Normal => side * self.bpm.signum() * self.velocity(),
             ScrollMode::Beats => velocity(reference, 1.0),
             ScrollMode::BeatsScrolled => side * velocity(reference, self.scroll),
         }
@@ -851,7 +853,8 @@ impl Cursor {
         ControlPoint {
             time: self.time,
             beat_origin: self.beat_origin,
-            beat_length: 60_000.0 / self.bpm,
+            // A negative BPM's beats are as long: it only turns time (and notes) round.
+            beat_length: 60_000.0 / self.bpm.abs(),
             sv: self.scroll.abs().max(MIN_SCROLL),
             kiai: self.gogo,
             volume: 1.0,
@@ -864,7 +867,12 @@ impl Cursor {
     fn way(&self) -> (f64, f64) {
         let (re, im) = match self.mode {
             ScrollMode::Beats => (1.0, 0.0),
-            _ => (self.scroll, self.scroll_im),
+            ScrollMode::BeatsScrolled => (self.scroll, self.scroll_im),
+            // Placed at BPM × #SCROLL: a negative BPM turns the way round.
+            ScrollMode::Normal => {
+                let s = self.bpm.signum();
+                (s * self.scroll, s * self.scroll_im)
+            }
         };
         let y = if self.jiro_axes { -im } else { im };
         let (x, turned) = match self.direction {
@@ -1363,13 +1371,15 @@ fn apply(
     };
     match name {
         "BPMCHANGE" => match number(warnings) {
-            Some(bpm) if bpm > 0.0 => {
+            // Below 0 (with a #MEASURE below 0, often) time runs back while it lasts, as in
+            // OpenTaiko, and notes come the other way.
+            Some(bpm) if bpm != 0.0 => {
                 cur.bpm = bpm;
                 cur.beat_origin = cur.time;
                 points.push(cur.control_point());
                 drawing.key(cur);
             }
-            Some(_) => warnings.add(format!("#BPMCHANGE {arg}: not above 0, ignored")),
+            Some(_) => warnings.add(format!("#BPMCHANGE {arg}: 0 BPM never ends, ignored")),
             None => {}
         },
         "MEASURE" => {
@@ -1377,7 +1387,9 @@ fn apply(
                 Some((a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?))
             });
             match parsed {
-                Some((a, b)) if a > 0.0 && b > 0.0 && (a / b).is_finite() => cur.measure = a / b,
+                // A bar below 0 runs time back, as in OpenTaiko (a gimmick puts it with a BPM
+                // below 0, which runs it forward again).
+                Some((a, b)) if a != 0.0 && (a / b).is_finite() => cur.measure = a / b,
                 _ => warnings.add(format!("#MEASURE {arg}: not a time signature, ignored")),
             }
         }
@@ -1520,7 +1532,7 @@ fn note(
                     ..cur.motion(cur.time, drawing.reference)
                 },
                 tick_spacing: if kind == Kind::Roll {
-                    tick_spacing(cur.bpm)
+                    tick_spacing(cur.bpm.abs())
                 } else {
                     0.0
                 },

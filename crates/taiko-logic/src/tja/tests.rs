@@ -1143,3 +1143,104 @@ fn ways_in_leave_the_board_as_it_is() {
         );
     }
 }
+
+/// The kinds of a course's notes, in time order (0 don, 1 kat).
+fn kinds(c: &Course) -> Vec<Kind> {
+    c.map.notes.iter().map(|n| n.kind).collect()
+}
+
+#[test]
+fn a_negative_bpm_and_bar_together_run_time_forward_and_notes_come_from_the_left() {
+    // OpenTaiko's clockwork gimmick: a bar of -1/4 at -120 BPM lasts +500 ms.
+    let c = one(&chart(
+        120.0,
+        "1,\n#MEASURE -1/4\n#BPMCHANGE -120\n2,\n#MEASURE 4/4\n#BPMCHANGE 120\n1,",
+    ));
+    assert!(
+        parse(&chart(120.0, "#BPMCHANGE -120\n1,"))
+            .unwrap()
+            .warnings
+            .is_empty()
+    );
+    assert_eq!(times(&c), [0.0, 2000.0, 2500.0]);
+    // As fast and with beats as long as at 120 BPM, for the board: only drawn the other way.
+    for n in &c.map.notes {
+        assert!((n.velocity - velocity(120.0, 1.0)).abs() < 1e-9, "{n:?}");
+    }
+    assert!(
+        c.map
+            .control_points
+            .iter()
+            .all(|p| (p.beat_length - 500.0).abs() < 1e-9)
+    );
+    let drawn: Vec<f64> = motion(&c)
+        .expect("a gimmick")
+        .notes
+        .iter()
+        .map(|n| n.velocity)
+        .collect();
+    assert_eq!(
+        drawn,
+        [
+            velocity(120.0, 1.0),
+            -velocity(120.0, 1.0),
+            velocity(120.0, 1.0)
+        ]
+    );
+    // Twice turned round, it comes from the right again.
+    let both = one(&chart(120.0, "#BPMCHANGE -120\n#SCROLL -1\n1,"));
+    assert!(motion(&both).is_none());
+    // The server takes its board.
+    BoardChart::of(c.kind, &c.map)
+        .beatmap()
+        .expect("a board chart it plays");
+}
+
+#[test]
+fn a_negative_bpm_or_bar_alone_runs_time_back() {
+    // A -1000 ms bar: its kat at 4000, the next bar back at 3000.
+    let c = one(&chart(
+        120.0,
+        "1,\n1,\n#BPMCHANGE -240\n2,\n#BPMCHANGE 240\n1,",
+    ));
+    assert_eq!(times(&c), [0.0, 2000.0, 3000.0, 4000.0]);
+    assert_eq!(kinds(&c), [Kind::Don, Kind::Don, Kind::Don, Kind::Kat]);
+    BoardChart::of(c.kind, &c.map)
+        .beatmap()
+        .expect("a board chart it plays");
+    // A -1/4 bar at 120: its kat at 2000, the next bar back at 1500.
+    let c = one(&chart(120.0, "1,\n#MEASURE -1/4\n2,\n#MEASURE 4/4\n1,"));
+    assert_eq!(times(&c), [0.0, 1500.0, 2000.0]);
+    assert_eq!(kinds(&c), [Kind::Don, Kind::Don, Kind::Kat]);
+    BoardChart::of(c.kind, &c.map)
+        .beatmap()
+        .expect("a board chart it plays");
+}
+
+#[test]
+fn a_zero_bpm_or_bar_is_still_ignored() {
+    for (cmd, warning) in [
+        ("#BPMCHANGE 0", "#BPMCHANGE 0"),
+        ("#MEASURE 0/4", "#MEASURE 0/4"),
+        ("#MEASURE 4/0", "#MEASURE 4/0"),
+    ] {
+        let song = parse(&chart(120.0, &format!("1,\n{cmd}\n1,"))).unwrap();
+        assert!(
+            song.warnings.iter().any(|w| w.starts_with(warning)),
+            "{cmd}: {:?}",
+            song.warnings
+        );
+        assert_eq!(times(&song.courses[0]), [0.0, 2000.0], "{cmd}");
+    }
+}
+
+#[test]
+fn a_negative_bpm_leaves_other_charts_boards_as_they_were() {
+    // Its notes are as fast as the positive BPM's, so a chart without one hashes as before.
+    let c = one(&chart(
+        150.0,
+        "1020,\n#BPMCHANGE 200\n#MEASURE 3/4\n1111,\n5008,",
+    ));
+    assert!((c.map.notes[0].velocity - velocity(150.0, 1.0)).abs() < 1e-12);
+    assert_eq!(velocity(-150.0, 1.0), velocity(150.0, 1.0));
+}
