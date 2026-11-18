@@ -1355,6 +1355,72 @@ fn hits(g: &mut Game, errors: &[f64], offset: f64) {
         .extend(std::iter::repeat_n(offset, errors.len()));
 }
 
+#[test]
+fn notes_under_a_long_roll_are_missed_once_and_not_looked_at_again() {
+    let mut g = stream(100.0);
+    let mut map = g.map.clone();
+    let first = map.notes[0].clone();
+    // A roll from before the stream to after it: it holds the cursor back the whole time.
+    map.notes.insert(
+        0,
+        beatmap::Note {
+            time: 1999.0,
+            end_time: 6000.0,
+            kind: Kind::Roll,
+            tick_spacing: 100.0,
+            ..first
+        },
+    );
+    g = Game::with_mods(map, Arc::new(Silence), None, Mods::parse("NF"));
+    // The dons and kats whose hit window has gone by at `t`.
+    let gone = |g: &Game, t: f64| {
+        (g.map.notes.iter())
+            .filter(|n| n.judged() && t - n.time > g.windows.ok)
+            .count() as u32
+    };
+    let t = 2000.0 + 10.0 * 100.0 + 500.0;
+    g.set_time(t);
+    let missed = gone(&g, t);
+    assert!(missed > 10, "{missed}");
+    assert_eq!(g.stats().miss, missed, "the notes whose window went by");
+    assert_eq!(g.cursor, 0, "the roll is still going");
+    assert_eq!(
+        g.expire_open[0], 0,
+        "the roll stays in play behind the scan"
+    );
+    assert!(
+        g.expire_open[1..]
+            .iter()
+            .all(|&i| t - g.map.notes[i].time <= g.windows.ok),
+        "and the notes that can still be hit, nothing else: {:?}",
+        g.expire_open
+    );
+    g.set_time(t);
+    assert_eq!(g.stats().miss, missed, "nothing is missed twice");
+    g.set_time(2000.0 + 23.0 * 100.0 + 500.0);
+    assert_eq!(g.stats().miss, 24);
+    g.set_time(6100.0);
+    assert_eq!(
+        g.cursor,
+        g.map.notes.len(),
+        "the roll over, every note is behind"
+    );
+    assert!(g.expire_open.is_empty());
+}
+
+#[test]
+fn a_note_in_its_hit_window_stays_in_play_until_it_is_missed() {
+    let mut g = stream(100.0);
+    g.set_time(2000.0 + 10.0);
+    assert_eq!(g.expire_open, [0], "the first note can still be hit");
+    assert_eq!(g.stats().miss, 0);
+    g.set_time(2000.0 + 400.0);
+    assert!(g.stats().miss > 0 && g.expire_open.len() <= 2);
+    // Played again from the start, every note is looked at anew.
+    g.rewind();
+    assert_eq!((g.expire_scan, g.expire_open.len()), (0, 0));
+}
+
 /// A stream of alternating dons and kats, `spacing` ms apart, at OD 5.
 fn stream(spacing: f64) -> Game {
     let notes = (0..24)
