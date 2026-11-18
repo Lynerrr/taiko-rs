@@ -51,7 +51,7 @@ text  490,297  0:00 / 0:10
 text  675,297  peak 7.0 notes/s at 0:01
 text  508,313  click / drag / wheel to scroll - play from where you stop
 text  641,421  プレイ
-text   24,452  Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替え  Ctrl+L コレクション  Tab 設定  Esc 終了
+text   24,452  Enter プレイ  上下 難易度  左右 曲  ホイールか右ドラッグ スクロール  F1 Mod  F2 ランダム  [ ] レート  Ctrl+S 並び替えと絞り込み  Ctrl+L コレクション  Tab 設定  Esc 終了
 hit   188,20     30x22   Tab(0)
 hit   226,20     41x22   Tab(1)
 hit   275,20     51x22   Tab(2)

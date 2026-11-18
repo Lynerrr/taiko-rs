@@ -1,0 +1,57 @@
+TJA star bars: [0, 0, 1, 0, 1, 1, 0, 1, 1, 1]
+stars 8 to 10+ ([(Stars, "stars 8+", 591926)]):
+  [TJA: folder sort asc headings]
+  # TJA
+    Hoshi Drive [Oni] | Hoshi Drive [Ura Oni]
+    Kaze no Uta [Oni]
+and Oni only:
+  [TJA: folder sort asc headings]
+  # TJA
+    Hoshi Drive [Oni]
+    Kaze no Uta [Oni]
+by folder, then by title backwards:
+  [TJA: folder title desc headings]
+  # TJA
+    Kaze no Uta [Easy] | Kaze no Uta [Oni]
+    Hoshi Drive [Hard] | Hoshi Drive [Oni] | Hoshi Drive [Ura Oni]
+    Ame Agari [Oni]
+one list, newest first:
+  [TJA: folder added desc flat]
+    Ame Agari [Oni]
+    Hoshi Drive [Hard] | Hoshi Drive [Oni] | Hoshi Drive [Ura Oni]
+    Kaze no Uta [Easy] | Kaze no Uta [Oni]
+reset:
+  [TJA: folder sort asc headings]
+  # TJA
+    Ame Agari [Oni]
+    Hoshi Drive [Hard] | Hoshi Drive [Oni] | Hoshi Drive [Ura Oni]
+    Kaze no Uta [Easy] | Kaze no Uta [Oni]
+all sources, ranked:
+  [All: artist sort asc headings]
+  # B
+    Apple Pie [Oni]
+ranked or loved:
+  [All: artist sort asc headings]
+  # B
+    Apple Pie [Oni]
+  # G
+    Midnight [Hard]
+and not played yet:
+  [All: artist sort asc headings]
+  # B
+    Apple Pie [Oni]
+tokens: ["Ranked Loved", "not played"]
+status token off:
+  [All: artist sort asc headings]
+  # A
+    Zebra Run [Easy] | Zebra Run [Oni]
+    Ame Agari [Oni]
+  # B
+    Apple Pie [Oni]
+  # K
+    Kaze no Uta [Easy] | Kaze no Uta [Oni]
+  # M
+    Homemade [Oni]
+  # S
+    Hoshi Drive [Hard] | Hoshi Drive [Oni] | Hoshi Drive [Ura Oni]
+a length filter before the lengths are known: nothing
