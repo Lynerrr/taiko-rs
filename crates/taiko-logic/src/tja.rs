@@ -6,7 +6,7 @@
 //! starts at, added up in `f64` with nothing rounded, so hundreds of `#BPMCHANGE`s don't drift.
 //! Commands take effect where they stand in the bar.
 //!
-//! Only the Master branch of a branching chart is read (playing branches is a task of its own).
+//! A branching chart has every branch's notes, each tagged with its branch (`crate::branch`).
 //!
 //! How notes are drawn moving beyond their own velocity (`#BMSCROLL` / `#HBSCROLL`, `#SUDDEN`,
 //! a negative `#SCROLL`) goes in the map's gimmick (`Gimmick::motion` and its shared scroll),
@@ -305,7 +305,7 @@ pub fn parse(text: &str) -> Result<Song, String> {
 
     let mut courses = Vec::new();
     for chart in &picked {
-        let map = build(chart, &mut warnings);
+        let map = read_course(chart, &mut warnings);
         if map.notes.is_empty() {
             warnings.add(format!(
                 "the {} chart has no notes",
@@ -467,13 +467,17 @@ fn balloon_list(value: &str) -> Vec<u32> {
         .collect()
 }
 
+/// Where a line of a chart is in its branches: None for one every branch shares, else the
+/// branch point (by number) it comes after and its branch.
+type Tag = Option<(u16, u8)>;
+
 /// A line of a chart once the branch to play is chosen.
 #[derive(Debug)]
 enum Item<'a> {
-    Command(String, &'a str),
+    Command(String, &'a str, Tag),
     /// Note data, with the pops of each balloon head on it in order (None for a head that
     /// starts nothing).
-    Data(&'a str, Vec<Option<u32>>),
+    Data(&'a str, Vec<Option<u32>>, Tag),
 }
 
 /// Branch letters: Normal, Expert, Master.
@@ -525,9 +529,18 @@ fn affected(branch: Option<usize>) -> Vec<usize> {
     branch.map_or_else(|| vec![0, 1, 2], |b| vec![b])
 }
 
-/// The chart's lines with only the Master branch kept (or the highest one a branch section
-/// has), each balloon given its pops.
-fn pick_branch<'a>(chart: &RawChart<'a>, warnings: &mut Warnings) -> Vec<Item<'a>> {
+/// Whether the chart branches.
+fn branches(chart: &RawChart) -> bool {
+    chart
+        .body
+        .iter()
+        .any(|line| command(line).is_some_and(|(name, _)| name == "BRANCHSTART"))
+}
+
+/// The chart's lines as branch `pass` plays them (a branch section without it plays the nearest
+/// one it has, the lower first), each balloon given its pops and each line its `Tag`.
+/// `#BRANCHSTART`s stay in, for `build` to time the branch points.
+fn pick_branch<'a>(chart: &RawChart<'a>, pass: usize, warnings: &mut Warnings) -> Vec<Item<'a>> {
     // The branches each #BRANCHSTART section has, and the balloons each branch plays (shared
     // lines count in all three).
     let mut sections: Vec<[bool; 3]> = Vec::new();
@@ -561,19 +574,26 @@ fn pick_branch<'a>(chart: &RawChart<'a>, warnings: &mut Warnings) -> Vec<Item<'a
     // lines once and each branch's own in turn (tja2fumen reads both ways the same).
     let shared_list =
         !sections.is_empty() && per_branch.iter().all(|&n| n == chart.header.balloon.len());
-    if !sections.is_empty() {
-        warnings.add("branches: only the Master branch is played");
-    }
-    let chosen_in = |s: &[bool; 3]| (0..3).rev().find(|&i| s[i]);
+    let chosen_in = |s: &[bool; 3]| {
+        (0..3)
+            .flat_map(|d| [pass.checked_sub(d), Some(pass + d).filter(|&b| b < 3)])
+            .flatten()
+            .find(|&b| s[b])
+    };
 
     let h = &chart.header;
     let mut out = Vec::new();
     let mut section: Option<usize> = None;
+    // A line in a branch is the pass's, whichever branch's lines stood in for it.
+    let tag = |branch: Option<usize>, section: Option<usize>| match (branch, section) {
+        (Some(_), Some(s)) => Some((s.min(u16::MAX as usize) as u16, pass as u8)),
+        _ => None,
+    };
     // Which branch the current lines belong to: None for lines every branch shares.
     branch = None;
     let mut chosen: Option<usize> = None;
-    // The branch played: the one chosen in the last section (Master before any).
-    let mut played = 2;
+    // The branch played: the one chosen in the last section (the pass's own before any).
+    let mut played = pass;
     // Balloons seen so far: in the whole chart (for BALLOON:) and per branch (BALLOONxxx:).
     let mut seen_all = 0usize;
     let mut seen_branch = [0usize; 3];
@@ -587,6 +607,7 @@ fn pick_branch<'a>(chart: &RawChart<'a>, warnings: &mut Warnings) -> Vec<Item<'a
                     chosen = sections.get(i).and_then(chosen_in);
                     played = chosen.unwrap_or(played);
                     branch = None;
+                    out.push(Item::Command(name, arg, None));
                     continue;
                 }
                 "BRANCHEND" => {
@@ -601,7 +622,7 @@ fn pick_branch<'a>(chart: &RawChart<'a>, warnings: &mut Warnings) -> Vec<Item<'a
                 _ => {}
             }
             if branch.is_none() || branch == chosen {
-                out.push(Item::Command(name, arg));
+                out.push(Item::Command(name, arg, tag(branch, section)));
             }
             continue;
         }
@@ -633,7 +654,7 @@ fn pick_branch<'a>(chart: &RawChart<'a>, warnings: &mut Warnings) -> Vec<Item<'a
             })));
         }
         if kept {
-            out.push(Item::Data(line, pops));
+            out.push(Item::Data(line, pops, tag(branch, section)));
         }
     }
     out
@@ -756,6 +777,7 @@ struct OpenRoll {
     hits: u32,
     /// How it is drawn moving: as its head says.
     motion: NoteMotion,
+    tag: Tag,
 }
 
 /// Where the chart is while it's read.
@@ -784,6 +806,8 @@ struct Cursor {
     /// Rolls and balloons aren't drawn: TJAPlayer3 hides them when only the first `#SUDDEN`
     /// number is set, and OpenTaiko kept that.
     hide_long: bool,
+    /// The branch the notes read now are in.
+    tag: Tag,
 }
 
 /// How notes scroll, as OpenTaiko places them.
@@ -980,7 +1004,150 @@ impl Drawing {
     }
 }
 
-fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
+/// A `#BRANCHSTART` as one pass met it.
+struct RawPoint {
+    /// Where it is (map ms).
+    start: f64,
+    /// The bar line before it (OpenTaiko picks the branch there, a bar ahead).
+    bar: f64,
+    /// The end of the last roll after that bar line, if any: roll conditions wait for it.
+    roll_end: Option<f64>,
+    /// A roll was still going at it: roll conditions are judged right at it.
+    roll_open: bool,
+    arg: String,
+}
+
+/// A chart read as one branch plays it (`build`).
+struct Built {
+    /// No gimmick yet: `drawing` makes it, once every pass's notes are in.
+    map: Beatmap,
+    /// Each note's `Tag`.
+    tags: Vec<Tag>,
+    /// Its notes' motions in the same order as the notes.
+    drawing: Drawing,
+    points: Vec<RawPoint>,
+    /// `#SECTION`s and `#LEVELHOLD`s outside the branches (map ms).
+    resets: Vec<f64>,
+    holds: Vec<f64>,
+    /// The branch points whose branch (this pass's) has a `#LEVELHOLD`.
+    level_holds: Vec<usize>,
+}
+
+impl Built {
+    /// The map, its gimmick made.
+    fn finish(self) -> Beatmap {
+        Beatmap {
+            gimmick: self.drawing.gimmick().map(std::sync::Arc::new),
+            ..self.map
+        }
+    }
+}
+
+/// A course's chart: read once, or once per branch and merged when it branches.
+fn read_course(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
+    if !branches(chart) {
+        return build(chart, 2, warnings).finish();
+    }
+    let passes: Vec<Built> = (0..3).map(|pass| build(chart, pass, warnings)).collect();
+    merge(passes, warnings)
+}
+
+/// One map from the three passes of a branching chart: Master's (its shared notes, timing and
+/// bar lines) and the other two's own notes, each tagged, with the branch points.
+fn merge(mut passes: Vec<Built>, warnings: &mut Warnings) -> Beatmap {
+    let count = passes[2].points.len();
+    let mut points = Vec::with_capacity(count);
+    let mut last_judge = f64::NEG_INFINITY;
+    for i in 0..count {
+        let master = &passes[2].points[i];
+        let raw: Vec<&RawPoint> = passes
+            .iter()
+            .map(|p| p.points.get(i).unwrap_or(master))
+            .collect();
+        let start = master.start;
+        let condition = crate::branch::Condition::parse(&master.arg).unwrap_or_else(|| {
+            warnings.add(format!(
+                "#BRANCHSTART {}: not a condition this game reads: the branch stays",
+                master.arg
+            ));
+            crate::branch::Condition::KEEP
+        });
+        let bar = raw.iter().map(|p| p.bar).fold(f64::NEG_INFINITY, f64::max);
+        let rolls = matches!(
+            condition.measure,
+            crate::branch::Measure::Rolls | crate::branch::Measure::BalloonHits
+        );
+        let judge = if rolls && raw.iter().any(|p| p.roll_open) {
+            start
+        } else if rolls {
+            raw.iter().filter_map(|p| p.roll_end).fold(bar, f64::max)
+        } else {
+            bar
+        };
+        let judge = judge.max(last_judge).min(start);
+        last_judge = judge;
+        points.push(crate::branch::Point {
+            judge,
+            start,
+            condition,
+            hold: std::array::from_fn(|b| passes[b].level_holds.contains(&i)),
+        });
+    }
+    if passes.iter().any(|p| p.points.len() != count) {
+        warnings.add("branches: the branches don't agree on the branch points");
+    }
+
+    // Master's notes, then the other branches' own, in time order (a branch's before a later
+    // one's on the same ms).
+    let master = passes.pop().expect("three passes");
+    let mut rows: Vec<(Note, Tag, NoteMotion)> = Vec::new();
+    for p in passes {
+        rows.extend(
+            (p.map.notes.into_iter().zip(p.tags).zip(p.drawing.notes))
+                .filter(|((_, tag), _)| tag.is_some())
+                .map(|((n, tag), m)| (n, tag, m)),
+        );
+    }
+    let Built {
+        mut map,
+        tags,
+        mut drawing,
+        resets,
+        holds,
+        ..
+    } = master;
+    rows.extend(
+        (std::mem::take(&mut map.notes).into_iter())
+            .zip(tags)
+            .zip(std::mem::take(&mut drawing.notes))
+            .map(|((n, tag), m)| (n, tag, m)),
+    );
+    rows.sort_by(|a, b| {
+        a.0.time
+            .total_cmp(&b.0.time)
+            .then(a.1.map(|t| t.1).cmp(&b.1.map(|t| t.1)))
+    });
+    let mut notes = Vec::with_capacity(rows.len());
+    let mut tags = Vec::with_capacity(rows.len());
+    for (n, tag, m) in rows {
+        notes.push(n);
+        tags.push(tag);
+        drawing.notes.push(m);
+    }
+    Beatmap {
+        notes,
+        gimmick: drawing.gimmick().map(std::sync::Arc::new),
+        branching: Some(std::sync::Arc::new(crate::branch::Branching {
+            notes: tags,
+            points,
+            resets,
+            holds,
+        })),
+        ..map
+    }
+}
+
+fn build(chart: &RawChart, pass: usize, warnings: &mut Warnings) -> Built {
     let h = &chart.header;
     let bpm = h.bpm.unwrap_or_else(|| {
         warnings.add("no BPM: 120 used");
@@ -1002,8 +1169,14 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         show: f64::INFINITY,
         wait: f64::INFINITY,
         hide_long: false,
+        tag: None,
     };
-    let mut notes: Vec<Note> = Vec::new();
+    let mut notes: Vec<(Note, Tag)> = Vec::new();
+    let mut raw_points: Vec<RawPoint> = Vec::new();
+    let (mut resets, mut holds, mut level_holds) = (Vec::new(), Vec::new(), Vec::new());
+    // The last bar line (shown or not) and roll end, for the branch points.
+    let mut last_bar: Option<f64> = None;
+    let mut last_roll_end = f64::NEG_INFINITY;
     let mut barlines: Vec<Barline> = Vec::new();
     let mut points: Vec<ControlPoint> = vec![cur.control_point()];
     let mut roll: Option<OpenRoll> = None;
@@ -1021,16 +1194,16 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
 
     // A bar: commands and note symbols in order, each symbol with its balloon pops if any.
     enum Step<'a> {
-        Command(&'a str, &'a str),
-        Symbol(char, Option<u32>),
+        Command(&'a str, &'a str, Tag),
+        Symbol(char, Option<u32>, Tag),
     }
-    let items = pick_branch(chart, warnings);
+    let items = pick_branch(chart, pass, warnings);
     let mut bar: Vec<Step> = Vec::new();
     let mut bars: Vec<Vec<Step>> = Vec::new();
     for item in &items {
         match item {
-            Item::Command(name, arg) => bar.push(Step::Command(name, arg)),
-            Item::Data(line, pops) => {
+            Item::Command(name, arg, tag) => bar.push(Step::Command(name, arg, *tag)),
+            Item::Data(line, pops, tag) => {
                 let mut pops = pops.iter().copied();
                 for c in line.chars() {
                     if c == ',' {
@@ -1041,7 +1214,7 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
                         } else {
                             None
                         };
-                        bar.push(Step::Symbol(c, p));
+                        bar.push(Step::Symbol(c, p, *tag));
                     } else if !c.is_whitespace() {
                         warnings.add(format!("unknown symbol {c:?} in the notes: skipped"));
                     }
@@ -1074,21 +1247,44 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         };
         for step in bar {
             match *step {
-                Step::Command(name, arg) => {
+                Step::Command("BRANCHSTART", arg, _) => raw_points.push(RawPoint {
+                    start: cur.time,
+                    // None before the first bar: OpenTaiko judges 4 beats before the chart.
+                    bar: last_bar.unwrap_or(start - 240_000.0 / bpm),
+                    roll_end: last_bar
+                        .is_none_or(|b| last_roll_end >= b)
+                        .then_some(last_roll_end)
+                        .filter(|t| t.is_finite()),
+                    roll_open: roll.is_some(),
+                    arg: arg.to_string(),
+                }),
+                Step::Command("SECTION", _, _) => resets.push(cur.time),
+                Step::Command("LEVELHOLD", _, tag) => match tag {
+                    Some((point, _)) => level_holds.push(usize::from(point)),
+                    None => holds.push(cur.time),
+                },
+                Step::Command(name, arg, _) => {
                     apply(name, arg, &mut cur, &mut points, &mut drawing, warnings);
                 }
-                Step::Symbol(c, pops) => {
+                Step::Symbol(c, pops, tag) => {
                     if barline_due {
                         put_barline(&cur, &mut barlines, &mut drawing);
+                        last_bar = Some(cur.time);
                         barline_due = false;
                     }
+                    cur.tag = tag;
+                    let open = roll.is_some();
                     note(c, pops, &cur, &mut roll, &mut notes, &mut drawing, warnings);
+                    if open && roll.is_none() {
+                        last_roll_end = cur.time;
+                    }
                     cur.time += 240_000.0 / cur.bpm * cur.measure / divisions as f64;
                 }
             }
         }
         if barline_due {
             put_barline(&cur, &mut barlines, &mut drawing);
+            last_bar = Some(cur.time);
         }
         if divisions == 0 {
             cur.time += 240_000.0 / cur.bpm * cur.measure;
@@ -1098,8 +1294,12 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         warnings.add("a roll or balloon has no end (8): dropped");
     }
 
-    // A negative #DELAY can set later notes before earlier ones.
-    notes.sort_by(|a, b| a.time.total_cmp(&b.time));
+    // A negative #DELAY can set later notes before earlier ones. Their motions go along.
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by(|&a, &b| notes[a].0.time.total_cmp(&notes[b].0.time));
+    let motions = std::mem::take(&mut drawing.notes);
+    drawing.notes = order.iter().map(|&i| motions[i]).collect();
+    let (notes, tags): (Vec<Note>, Vec<Tag>) = order.iter().map(|&i| notes[i].clone()).unzip();
     barlines.sort_by(|a, b| a.time.total_cmp(&b.time));
     points.sort_by(|a, b| a.time.total_cmp(&b.time));
     points.dedup_by(|later, earlier| {
@@ -1126,14 +1326,23 @@ fn build(chart: &RawChart, warnings: &mut Warnings) -> Beatmap {
         tags: h.genre.clone(),
         ..board::meta(h.course)
     };
-    Beatmap {
-        meta,
-        notes,
-        barlines,
-        control_points: points,
-        first_velocity: velocity(bpm, 1.0),
-        gimmick: drawing.gimmick().map(std::sync::Arc::new),
-        fakes: Vec::new(),
+    Built {
+        map: Beatmap {
+            meta,
+            notes,
+            barlines,
+            control_points: points,
+            first_velocity: velocity(bpm, 1.0),
+            gimmick: None,
+            fakes: Vec::new(),
+            branching: None,
+        },
+        tags,
+        drawing,
+        points: raw_points,
+        resets,
+        holds,
+        level_holds,
     }
 }
 
@@ -1274,24 +1483,27 @@ fn note(
     pops: Option<u32>,
     cur: &Cursor,
     roll: &mut Option<OpenRoll>,
-    notes: &mut Vec<Note>,
+    notes: &mut Vec<(Note, Tag)>,
     drawing: &mut Drawing,
     warnings: &mut Warnings,
 ) {
     let before = notes.len();
-    let hit = |kind: Kind, big: bool| Note {
-        time: cur.time,
-        end_time: cur.time,
-        kind,
-        big,
-        velocity: cur.velocity(),
-        tick_spacing: 0.0,
-        required_hits: 0,
-        fake_len: 0.0,
-        fake_fades: false,
-        fake_length: 0.0,
-        tiny: false,
-        unhittable: false,
+    let hit = |kind: Kind, big: bool| {
+        let note = Note {
+            time: cur.time,
+            end_time: cur.time,
+            kind,
+            big,
+            velocity: cur.velocity(),
+            tick_spacing: 0.0,
+            required_hits: 0,
+            fake_len: 0.0,
+            fake_fades: false,
+            fake_length: 0.0,
+            tiny: false,
+            unhittable: false,
+        };
+        (note, cur.tag)
     };
     let start = |kind: Kind, big: bool, hits: u32, roll: &mut Option<OpenRoll>| {
         // A second head before the end is a blank, as in OpenTaiko.
@@ -1313,6 +1525,7 @@ fn note(
                     0.0
                 },
                 hits,
+                tag: cur.tag,
             });
         }
     };
@@ -1350,7 +1563,7 @@ fn note(
         '8' => match roll.take() {
             Some(r) => {
                 drawing.notes.push(r.motion);
-                notes.push(Note {
+                let note = Note {
                     time: r.time,
                     end_time: cur.time.max(r.time),
                     kind: r.kind,
@@ -1363,7 +1576,8 @@ fn note(
                     fake_length: 0.0,
                     tiny: false,
                     unhittable: false,
-                });
+                };
+                notes.push((note, r.tag));
             }
             None => warnings.add("a roll end (8) with no roll: skipped"),
         },

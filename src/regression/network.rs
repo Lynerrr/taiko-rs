@@ -295,6 +295,7 @@ fn requests() -> Vec<Request> {
                     barlines: vec![(0.0, 0.49)],
                     points: vec![(0.0, 0.0, 500.0, 1.0, true)],
                     first_velocity: 0.49,
+                    branches: None,
                 }),
             }),
         },

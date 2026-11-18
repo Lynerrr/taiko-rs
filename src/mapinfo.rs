@@ -105,7 +105,9 @@ fn save_cache(cache: &Cache) {
 /// Star rating (taiko, converts included), drain length and BPM of one map.
 pub(crate) fn analyze(path: &Path) -> Option<Info> {
     if crate::tja_maps::is_course(path) {
-        return Info::of_chart(&crate::tja_maps::load(path).ok()?);
+        // A branching chart is told by its Master branch, as the arcade lists it.
+        let map = crate::tja_maps::load(path).ok()?;
+        return Info::of_chart(&map.branch_path(taiko_logic::branch::MASTER));
     }
     Info::of(&std::fs::read(path).ok()?)
 }

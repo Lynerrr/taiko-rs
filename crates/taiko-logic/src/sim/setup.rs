@@ -341,13 +341,24 @@ pub(crate) fn apply_to_map(map: &mut Beatmap, mods: Mods, seed: u64, half: crate
             .collect();
         let keep = crate::mods::half_keeps(&times, half, &beat_at);
         let mut k = 0;
-        map.notes.retain(|n| {
-            if !hit(n) {
-                return true;
-            }
-            k += 1;
-            keep[k - 1]
-        });
+        let kept: Vec<bool> = (map.notes.iter())
+            .map(|n| {
+                if !hit(n) {
+                    return true;
+                }
+                k += 1;
+                keep[k - 1]
+            })
+            .collect();
+        let mut kept_iter = kept.iter();
+        map.notes
+            .retain(|_| *kept_iter.next().expect("one per note"));
+        // A branching chart's branches keep a tag per note left.
+        if let Some(b) = &mut map.branching {
+            let b = std::sync::Arc::make_mut(b);
+            let mut kept_iter = kept.iter();
+            b.notes.retain(|_| *kept_iter.next().unwrap_or(&true));
+        }
     }
     for n in map.notes.iter_mut().filter(|n| hit(n)) {
         if mods.has(Mod::Swap) {

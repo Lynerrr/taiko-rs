@@ -245,6 +245,7 @@ mod tests {
             control_points,
             first_velocity: 0.0,
             fakes: Vec::new(),
+            branching: None,
             gimmick: None,
         }
     }

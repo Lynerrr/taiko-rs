@@ -71,7 +71,9 @@ pub trait Audio {
     fn position_ms(&self, now: Instant) -> Option<f64>;
 }
 
+mod branches;
 mod control;
+pub use branches::BranchNow;
 mod rails;
 mod read;
 mod setup;
@@ -610,6 +612,8 @@ pub struct Game {
     /// Multiverse's universes when the play brought its own (a lobby host's); None: the
     /// player's, as they set them up.
     universes: Option<[Universe; multiverse::COUNT]>,
+    /// A branching chart's branches as played (see `branches`).
+    branches: Option<branches::BranchRun>,
 }
 
 /// Overtime: how long (ms) he stays on screen.
@@ -1132,10 +1136,13 @@ impl Game {
                 .map_or(500.0, |s| s.0)
         };
         // osu!lazer's TaikoHealthProcessor.
-        let hit_count = map
-            .notes
-            .iter()
-            .filter(|n| matches!(n.kind, Kind::Don | Kind::Kat) && !n.unhittable)
+        // A branching chart's on the Normal branch, which plays the fewest.
+        let hit_count = (map.notes.iter().enumerate())
+            .filter(|&(i, n)| {
+                matches!(n.kind, Kind::Don | Kind::Kat)
+                    && !n.unhittable
+                    && map.branching.as_ref().is_none_or(|b| b.plays(i, |_| 0))
+            })
             .count();
         let hits = hit_count.max(1) as f64;
         let hp_drain = mods.hp(map.meta.hp);
@@ -1164,7 +1171,7 @@ impl Game {
         };
         let shapeshift = shapeshift::Config::default();
         let shape_order = shape_order(&map, mods, shapeshift);
-        Game {
+        let mut game = Game {
             seed,
             half,
             windows: Windows::for_map(
@@ -1253,7 +1260,10 @@ impl Game {
             shape_order,
             universes: None,
             defense: None,
-        }
+            branches: None,
+        };
+        game.start_branches();
+        game
     }
 
     /// Plays with the player's own settings: what Shapeshift and Tact play with and the OD
@@ -1701,6 +1711,7 @@ impl Game {
         let upto = self.last_frame_time.min(self.time);
         self.last_frame_time = self.time;
         self.expire(upto);
+        self.pick_branches(upto);
         self.play_combo_break(audio);
         self.play_scares(audio);
         self.outro_skipped || self.time > self.end_time + 1500.0 || raw > self.track_ms + 500.0
@@ -2185,6 +2196,7 @@ impl Game {
             *next = 0;
         }
         self.time = self.start;
+        self.start_branches();
     }
 
     /// Replays: the map time of every note the whole replay misses, judged ahead from the
@@ -2319,6 +2331,12 @@ impl Game {
         if self.failed.is_some() {
             return;
         }
+        // A note let go by counts when its last chance went, however late the frame saw it.
+        let counted_at = match error {
+            None if judge == Judge::Miss => t.min(self.map.notes[i].time + self.windows.ok),
+            _ => t,
+        };
+        self.count_for_branches(counted_at, i, Some(judge));
         let combo_mult = 1.0 + self.stats.combo.min(100) as f64 / 100.0;
         let combo_before = self.stats.combo;
         match judge {
@@ -2488,6 +2506,7 @@ impl Game {
         }
         self.feed_replay(None);
         self.expire(t);
+        self.pick_branches(t);
         self.play_combo_break(None);
         self.play_scares(None);
     }
@@ -2540,6 +2559,8 @@ impl Game {
         let normal = if kat { Sound::Kat } else { Sound::Don };
         let big = if kat { Sound::BigKat } else { Sound::BigDon };
         self.expire(t);
+        // Branch points before the press are passed first, live or played back at any pace.
+        self.pick_branches(t);
 
         if let Some(s) = &self.strong {
             let other_hand = (s.key < 2) != (key < 2);
@@ -2578,6 +2599,7 @@ impl Game {
                 if done {
                     self.add_bonus(LAZER_SWELL);
                 }
+                self.count_for_branches(t, i, None);
             }
             if !to_note {
                 return normal;
@@ -2632,6 +2654,8 @@ impl Game {
                 self.add_score(points);
                 self.add_bonus(bonus);
             }
+            // A branch condition counts every hit, as the arcade does, not just the ticks.
+            self.count_for_branches(t, i, None);
         }
         normal
     }

@@ -169,6 +169,9 @@ pub struct Beatmap {
     pub gimmick: Option<std::sync::Arc<crate::tko::gimmick::Gimmick>>,
     /// A `.tko` map's fake notes: drawn like notes, never judged (see `Gimmick::fakes`).
     pub fakes: Vec<Note>,
+    /// A branching TJA chart's branches: `notes` holds every branch's, and this says whose
+    /// each is (see `crate::branch`). None for every other map.
+    pub branching: Option<std::sync::Arc<crate::branch::Branching>>,
 }
 
 impl Meta {
@@ -390,6 +393,7 @@ pub fn from_text(text: &str) -> Result<Beatmap, String> {
         first_velocity: 0.0,
         gimmick,
         fakes: Vec::new(),
+        branching: None,
     };
     convert(&mut map, body);
     if map.notes.is_empty() {
@@ -411,6 +415,7 @@ pub fn parse_raw(text: &str) -> Beatmap {
         first_velocity: 0.0,
         gimmick: None,
         fakes: Vec::new(),
+        branching: None,
     };
     convert(&mut map, body);
     map
@@ -441,6 +446,26 @@ impl Beatmap {
         for cp in &mut self.control_points {
             cp.time += ms;
             cp.beat_origin += ms;
+        }
+        if let Some(b) = &mut self.branching {
+            std::sync::Arc::make_mut(b).shift(ms);
+        }
+    }
+
+    /// The chart as branch `branch` plays it from the start to the end (`crate::branch`
+    /// numbers): what its length, note count and stars are told from. The map itself when it
+    /// doesn't branch.
+    pub fn branch_path(&self, branch: u8) -> Beatmap {
+        let Some(b) = &self.branching else {
+            return self.clone();
+        };
+        Beatmap {
+            notes: (self.notes.iter().enumerate())
+                .filter(|&(i, _)| b.plays(i, |_| branch))
+                .map(|(_, n)| n.clone())
+                .collect(),
+            branching: None,
+            ..self.clone()
         }
     }
 }
@@ -843,6 +868,7 @@ pub fn calibration_map(beat_ms: f64, first_beat: u32, beats: u32) -> Beatmap {
         first_velocity: velocity,
         gimmick: None,
         fakes: Vec::new(),
+        branching: None,
     }
 }
 
