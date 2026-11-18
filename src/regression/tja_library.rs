@@ -1111,7 +1111,8 @@ fn in_bin(s: &State, original: &Path) -> Option<PathBuf> {
     };
     std::fs::read_dir(bin).ok()?.flatten().find_map(|slot| {
         let note = std::fs::read_to_string(slot.path().join(map_trash::FROM_NOTE)).ok()?;
-        (note.trim_end() == original.to_string_lossy())
+        // By its parts: on Windows "Pack/Genre" and "Pack\\Genre" are the same folder.
+        (Path::new(note.trim_end()) == original)
             .then(|| slot.path().join(original.file_name().unwrap()))
     })
 }
