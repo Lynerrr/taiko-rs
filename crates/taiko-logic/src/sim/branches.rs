@@ -194,6 +194,8 @@ impl Game {
         if let Some(i) = first_on {
             self.cursor = self.cursor.min(i);
         }
+        // Notes came into play or went out of it: `expire` looks at them again.
+        self.rescan_expiry();
         // What's left to hit changed: scores and autoplay work it out again.
         self.score_basis = None;
         self.auto_plan = None;

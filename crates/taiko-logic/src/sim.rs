@@ -466,6 +466,10 @@ pub struct Game {
     clock: GameClock,
     state: Vec<NoteState>,
     cursor: usize,
+    /// `expire` has looked at every note before this one: those still in play (a long roll
+    /// holding the cursor back, a note in its hit window) are in `expire_open`, in order.
+    expire_scan: usize,
+    expire_open: Vec<usize>,
     stats: Stats,
     windows: Windows,
     /// Gameplay time (ms) of the current frame.
@@ -1197,6 +1201,8 @@ impl Game {
             clock: GameClock::new(track_start, audio.is_some()),
             state,
             cursor: 0,
+            expire_scan: 0,
+            expire_open: Vec::new(),
             stats: Stats::default(),
             time: start,
             start,
@@ -2194,6 +2200,7 @@ impl Game {
             };
         }
         self.cursor = 0;
+        self.rescan_expiry();
         self.stats = Stats::default();
         self.score_basis = None;
         self.combo_points = 0.0;
@@ -2275,53 +2282,23 @@ impl Game {
     }
 
     pub fn expire(&mut self, t: f64) {
-        for i in self.cursor..self.map.notes.len() {
-            let n = &self.map.notes[i];
-            if n.time > t {
-                break;
+        // Each note up to `t` once, then only those still in play: a long roll holds the cursor
+        // back for its whole length, and the notes under it are not looked at again every frame.
+        let mut open = std::mem::take(&mut self.expire_open);
+        open.retain(|&i| {
+            self.expire_note(i, t);
+            !self.expired(i, t)
+        });
+        let mut i = self.expire_scan.max(self.cursor);
+        while i < self.map.notes.len() && self.map.notes[i].time <= t {
+            self.expire_note(i, t);
+            if !self.expired(i, t) {
+                open.push(i);
             }
-            // A tower takes it for us: a GREAT, on time.
-            if self.tower_takes(i) {
-                let at = n.time;
-                self.apply(i, Judge::Great, at, None);
-                continue;
-            }
-            let st = &mut self.state[i];
-            match n.kind {
-                // An ADLib or a bomb let by is no miss: it's just gone.
-                Kind::Don | Kind::Kat if n.extra() => {
-                    if t - n.time > self.windows.ok {
-                        st.finished = true;
-                    }
-                }
-                // One before a NaN slider is never judged, not even a miss (owner, 2026-10-28).
-                Kind::Don | Kind::Kat => {
-                    if st.judged.is_none() && !n.unhittable && t - n.time > self.windows.ok {
-                        self.apply(i, Judge::Miss, t, None);
-                    }
-                }
-                Kind::Roll => {
-                    if t > n.end_time + n.tick_spacing / 2.0 {
-                        st.finished = true;
-                    }
-                }
-                Kind::Swell => {
-                    if !st.finished && t > n.end_time {
-                        st.finished = true;
-                        let (fuse, end) = (n.special == Special::Fuse && !n.unhittable, n.end_time);
-                        if fuse {
-                            // A fuse balloon not popped blows up.
-                            st.judged = Some(Judge::Miss);
-                            st.judged_at = end;
-                            self.explode(end);
-                        } else if self.scoring == Scoring::Lazer && self.failed.is_none() {
-                            // osu!lazer: a swell not cleared drains HP.
-                            self.hp = (self.hp - LAZER_SWELL_MISS_HP * self.hp_miss).max(0.0);
-                        }
-                    }
-                }
-            }
+            i += 1;
         }
+        self.expire_scan = i;
+        self.expire_open = open;
         if self
             .strong
             .as_ref()
@@ -2329,21 +2306,73 @@ impl Game {
         {
             self.strong = None;
         }
-        while self.cursor < self.map.notes.len() {
-            let st = &self.state[self.cursor];
-            let n = &self.map.notes[self.cursor];
-            let done = match n.kind {
-                Kind::Don | Kind::Kat => {
-                    st.judged.is_some()
-                        || st.finished
-                        || ((n.unhittable || n.extra()) && t - n.time > self.windows.ok)
-                }
-                Kind::Roll | Kind::Swell => st.finished,
-            };
-            if !done {
-                break;
-            }
+        while self.cursor < self.map.notes.len() && self.expired(self.cursor, t) {
             self.cursor += 1;
+        }
+    }
+
+    /// `expire` looks at every note from the cursor again (notes came back into play).
+    pub(crate) fn rescan_expiry(&mut self) {
+        self.expire_scan = self.cursor;
+        self.expire_open.clear();
+    }
+
+    /// Note `i` has nothing more to happen at `t`: the cursor passes it, `expire` lets it be.
+    fn expired(&self, i: usize, t: f64) -> bool {
+        let (n, st) = (&self.map.notes[i], &self.state[i]);
+        match n.kind {
+            Kind::Don | Kind::Kat => {
+                st.judged.is_some()
+                    || st.finished
+                    || ((n.unhittable || n.extra()) && t - n.time > self.windows.ok)
+            }
+            Kind::Roll | Kind::Swell => st.finished,
+        }
+    }
+
+    /// What `t` does to note `i` (at or before it): a miss, a roll or swell over.
+    fn expire_note(&mut self, i: usize, t: f64) {
+        let n = &self.map.notes[i];
+        // A tower takes it for us: a GREAT, on time.
+        if self.tower_takes(i) {
+            let at = n.time;
+            self.apply(i, Judge::Great, at, None);
+            return;
+        }
+        let st = &mut self.state[i];
+        match n.kind {
+            // An ADLib or a bomb let by is no miss: it's just gone.
+            Kind::Don | Kind::Kat if n.extra() => {
+                if t - n.time > self.windows.ok {
+                    st.finished = true;
+                }
+            }
+            // One before a NaN slider is never judged, not even a miss (owner, 2026-10-28).
+            Kind::Don | Kind::Kat => {
+                if st.judged.is_none() && !n.unhittable && t - n.time > self.windows.ok {
+                    self.apply(i, Judge::Miss, t, None);
+                }
+            }
+            Kind::Roll => {
+                if t > n.end_time + n.tick_spacing / 2.0 {
+                    st.finished = true;
+                }
+            }
+            Kind::Swell => {
+                if !st.finished && t > n.end_time {
+                    st.finished = true;
+                    let (fuse, end) = (n.special == Special::Fuse && !n.unhittable, n.end_time);
+                    if fuse {
+                        // A fuse balloon not popped blows up.
+                        st.judged = Some(Judge::Miss);
+                        st.judged_at = end;
+                        self.explode(end);
+                    } else if self.scoring == Scoring::Lazer && self.failed.is_none() {
+                        // osu!lazer: a swell not cleared drains HP.
+                        self.hp = (self.hp - LAZER_SWELL_MISS_HP * self.hp_miss).max(0.0);
+                    }
+                }
+            }
         }
     }
 
