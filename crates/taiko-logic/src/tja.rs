@@ -97,6 +97,8 @@ pub struct Song {
     pub subtitle: String,
     /// The audio file, relative to the chart.
     pub wave: String,
+    /// The pictures it names (`BGIMAGE`, `PREIMAGE`), relative to the chart.
+    pub images: Vec<String>,
     pub genre: String,
     pub maker: String,
     /// One chart per course found, easiest first.
@@ -183,6 +185,10 @@ struct Header {
     balloon: Vec<u32>,
     /// `BALLOONNOR` / `BALLOONEXP` / `BALLOONMAS`: per-branch lists that win over `BALLOON`.
     branch_balloon: [Option<Vec<u32>>; 3],
+    /// `BGIMAGE:`, the picture behind the play, relative to the chart (`image_path`).
+    bg_image: String,
+    /// `PREIMAGE:`, the song's picture in the song list (often its cover).
+    pre_image: String,
 }
 
 impl Default for Header {
@@ -205,8 +211,28 @@ impl Default for Header {
             jiro_axes: false,
             balloon: Vec::new(),
             branch_balloon: [None, None, None],
+            bg_image: String::new(),
+            pre_image: String::new(),
         }
     }
+}
+
+impl Header {
+    /// The pictures the chart names, the one for behind the play first.
+    fn images(&self) -> Vec<String> {
+        let mut images = Vec::new();
+        for image in [&self.bg_image, &self.pre_image] {
+            if !image.is_empty() && !images.contains(image) {
+                images.push(image.clone());
+            }
+        }
+        images
+    }
+}
+
+/// A file a chart names, relative to it: Windows' `\` read as `/`, which every system takes.
+fn image_path(value: &str) -> String {
+    value.trim().replace('\\', "/")
 }
 
 /// Warnings, each said once.
@@ -346,6 +372,7 @@ pub fn parse(text: &str) -> Result<Song, String> {
         title: first.title.clone(),
         subtitle: first.subtitle.clone(),
         wave: first.wave.clone(),
+        images: first.images(),
         genre: first.genre.clone(),
         maker: first.maker.clone(),
         courses,
@@ -401,6 +428,8 @@ fn read_header(h: &mut Header, key: &str, value: &str, warnings: &mut Warnings) 
                 .to_string()
         }
         "WAVE" => h.wave = value.to_string(),
+        "BGIMAGE" => h.bg_image = image_path(value),
+        "PREIMAGE" => h.pre_image = image_path(value),
         "GENRE" => h.genre = value.to_string(),
         "MAKER" => h.maker = value.to_string(),
         "BPM" => {
@@ -1332,6 +1361,9 @@ fn build(chart: &RawChart, pass: usize, warnings: &mut Warnings) -> Built {
         level: (h.level > 0.0).then_some(h.level),
         audio_file: h.wave.clone(),
         preview_time: h.demo_start * 1000.0,
+        // Behind the play and in the song list alike: the background if it has one, else its
+        // picture for the list.
+        background: h.images().into_iter().next(),
         genres: crate::genres::of(&h.genre),
         tags: h.genre.clone(),
         ..board::meta(h.course)

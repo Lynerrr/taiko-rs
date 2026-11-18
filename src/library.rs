@@ -651,8 +651,8 @@ struct CachedFolder {
 
 /// How TJA courses are read: when it goes up, a cached folder holding one is read again (and
 /// only those, a whole osu! library staying as it is). 1: the course's own charter and its
-/// `LEVEL` apart from its name.
-const TJA_READ: u32 = 1;
+/// `LEVEL` apart from its name. 2: its pictures (`BGIMAGE`, `PREIMAGE`).
+const TJA_READ: u32 = 2;
 
 /// Named for what its maps hold: a new field needs every map read again, once.
 fn library_cache() -> PathBuf {

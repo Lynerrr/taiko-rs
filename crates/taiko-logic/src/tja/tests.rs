@@ -1308,3 +1308,25 @@ fn a_board_with_a_special_note_out_of_place_is_refused() {
         assert!(board.beatmap().is_err(), "{bad:?}");
     }
 }
+
+/// `BGIMAGE` is the picture behind the play, `PREIMAGE` the song's in the list: the background
+/// is the first it has, a Windows path read as any system takes it.
+#[test]
+fn a_chart_names_its_pictures() {
+    let chart = |header: &str| {
+        parse(&format!(
+            "TITLE:T\nBPM:120\n{header}COURSE:Oni\n#START\n1,\n#END\n"
+        ))
+        .unwrap()
+    };
+    let both = chart("PREIMAGE:cover.jpg\nBGIMAGE: img\\bg.png\n");
+    assert_eq!(both.images, ["img/bg.png", "cover.jpg"]);
+    let background = |song: &Song| song.courses[0].map.meta.background.clone();
+    assert_eq!(background(&both).as_deref(), Some("img/bg.png"));
+    let cover = chart("PREIMAGE:cover.jpg\n");
+    assert_eq!(background(&cover).as_deref(), Some("cover.jpg"));
+    let none = chart("");
+    assert!(none.images.is_empty() && background(&none).is_none());
+    // A picture isn't the chart: its board is the same.
+    assert_eq!(both.courses[0].hash, none.courses[0].hash);
+}

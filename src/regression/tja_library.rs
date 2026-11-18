@@ -1024,3 +1024,23 @@ fn bombs_and_kadons_show_and_adlibs_stay_hidden() {
     assert!(red(&hit), "the burst");
     assert!(!red(&by), "nothing went off");
 }
+
+/// A chart's picture (`BGIMAGE`, else `PREIMAGE`) is its background in the library, with a
+/// Windows path read as any system takes it.
+#[test]
+fn a_tja_chart_s_picture_is_its_background() {
+    let f = Folders::new("tja-picture");
+    let text =
+        "TITLE:A\nBPM:120\nPREIMAGE:cover.jpg\nBGIMAGE:img\\bg.png\nCOURSE:Oni\n#START\n1,\n#END\n";
+    let chart = put(&f.tja, "A", "a.tja", text);
+    let entries = tja_maps::entries(&chart).unwrap();
+    assert_eq!(entries[0].1.background.as_deref(), Some("img/bg.png"));
+    let cover = put(
+        &f.tja,
+        "B",
+        "b.tja",
+        &text.replace("BGIMAGE:img\\bg.png\n", ""),
+    );
+    let entries = tja_maps::entries(&cover).unwrap();
+    assert_eq!(entries[0].1.background.as_deref(), Some("cover.jpg"));
+}

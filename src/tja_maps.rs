@@ -191,15 +191,14 @@ pub fn import(from: &Path, root: &Path) -> Result<PathBuf, String> {
             .map_err(|e| format!("{}: {e}", src.display()))
     };
     copy(from, &to.join(file_name))?;
-    // Its audio, where the chart says it is (beside it, or in a folder below).
-    let wave = Path::new(&song.wave);
-    let below = wave
-        .components()
-        .all(|c| matches!(c, std::path::Component::Normal(_)));
-    if !song.wave.is_empty() && below {
-        let audio = from.with_file_name(wave);
-        if audio.is_file() {
-            copy(&audio, &to.join(wave))?;
+    // Its audio and pictures, where the chart says they are (beside it, or in a folder below).
+    for named in std::iter::once(&song.wave).chain(&song.images) {
+        let file = Path::new(named);
+        let below = file
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)));
+        if !named.is_empty() && below && from.with_file_name(file).is_file() {
+            copy(&from.with_file_name(file), &to.join(file))?;
         }
     }
     Ok(to)
@@ -261,14 +260,17 @@ mod tests {
         let chart = from.join("Song.tja");
         std::fs::write(
             &chart,
-            "TITLE:Song\nBPM:120\nWAVE:snd/song.ogg\nCOURSE:Oni\n#START\n1,\n#END\n",
+            "TITLE:Song\nBPM:120\nWAVE:snd/song.ogg\nBGIMAGE:snd\\bg.png\nPREIMAGE:cover.jpg\nCOURSE:Oni\n#START\n1,\n#END\n",
         )
         .unwrap();
         std::fs::write(from.join("snd/song.ogg"), b"ogg").unwrap();
+        std::fs::write(from.join("snd/bg.png"), b"png").unwrap();
+        std::fs::write(from.join("cover.jpg"), b"jpg").unwrap();
         std::fs::write(from.join("other.txt"), b"not copied").unwrap();
         let to = import(&chart, &root).unwrap();
         assert_eq!(to, root.join("Song"));
         assert!(to.join("Song.tja").is_file() && to.join("snd/song.ogg").is_file());
+        assert!(to.join("snd/bg.png").is_file() && to.join("cover.jpg").is_file());
         assert!(!to.join("other.txt").exists());
         // Again: beside it, not over it.
         assert_eq!(import(&chart, &root).unwrap(), root.join("Song (2)"));
